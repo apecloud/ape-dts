@@ -37,7 +37,7 @@ bytes = "1.0"
 configparser = "3.0.2"
 async-mutex = "1.4.0"
 project-root = "0.2.2"
-strum = { version = "0.25.0", features = ["derive"] }
+strum = { version = "0.26.2", features = ["derive"] }
 regex = "1.5.4"
 rdkafka = { version = "0.35.0", features = ["libz-static"] }
 kafka = "0.10.0"
