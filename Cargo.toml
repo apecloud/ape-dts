@@ -54,4 +54,4 @@ redis =  { version = "0.23.1", features = ["tokio-comp"] }
 thiserror = "1.0.44"
 async-std = "1.12.0"
 apache-avro =  { version = "0.16.0", features = ["derive"]}
-ratelimit = "0.7.1"
+ratelimit = "0.9.0"
