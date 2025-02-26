@@ -66,3 +66,4 @@ openssl-sys = { version = "0.9", features = ["vendored"]}
 actix-web = "4.9.0"
 hex = "0.4.3"
 clickhouse = "0.13.1"
+databend-driver = {git = "https://github.com/databendlabs/BendSQL", branch = "main"}

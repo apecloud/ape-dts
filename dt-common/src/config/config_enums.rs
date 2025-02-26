@@ -26,6 +26,8 @@ pub enum DbType {
     Foxlake,
     #[strum(serialize = "tidb")]
     Tidb,
+    #[strum(serialize = "databend")]
+    Databend,
 }
 
 #[derive(Display, EnumString, IntoStaticStr, Debug, Clone)]

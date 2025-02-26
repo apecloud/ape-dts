@@ -489,6 +489,22 @@ impl TaskConfig {
                 _ => bail! { not_supported_err },
             },
 
+            DbType::Databend => match sink_type {
+                SinkType::Write => SinkerConfig::Databend { url, batch_size },
+
+                SinkType::Struct => SinkerConfig::DatabendStruct {
+                    url,
+                    conflict_policy,
+                    engine: loader.get_with_default(
+                        SINKER,
+                        "engine",
+                        "ReplacingMergeTree".to_string(),
+                    ),
+                },
+
+                _ => bail! { not_supported_err },
+            },
+
             DbType::Foxlake => {
                 let s3_config = S3Config {
                     bucket: loader.get_optional(SINKER, "s3_bucket"),

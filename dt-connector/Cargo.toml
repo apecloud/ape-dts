@@ -48,3 +48,4 @@ orc-format = { workspace = true }
 rust_decimal = { workspace = true }
 hex = { workspace = true }
 clickhouse = { workspace = true }
+databend-driver.workspace = true

@@ -110,6 +110,17 @@ pub enum SinkerConfig {
         engine: String,
     },
 
+    Databend {
+        url: String,
+        batch_size: usize,
+    },
+
+    DatabendStruct {
+        url: String,
+        conflict_policy: ConflictPolicyEnum,
+        engine: String,
+    },
+
     Foxlake {
         url: String,
         batch_size: usize,

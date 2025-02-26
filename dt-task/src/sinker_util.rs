@@ -30,6 +30,9 @@ use dt_connector::{
         clickhouse::{
             clickhouse_sinker::ClickhouseSinker, clickhouse_struct_sinker::ClickhouseStructSinker,
         },
+        databend::{
+            databend_sinker::DatabendSinker, databend_struct_sinker::DatabendStructSinker,
+        },
         dummy_sinker::DummySinker,
         foxlake::{
             foxlake_merger::FoxlakeMerger, foxlake_pusher::FoxlakePusher,
@@ -512,6 +515,42 @@ impl SinkerUtil {
                     .await?
                     .unwrap();
                 let sinker = ClickhouseStructSinker {
+                    client,
+                    conflict_policy,
+                    engine,
+                    filter,
+                    router,
+                    extractor_meta_manager,
+                };
+                sub_sinkers.push(Arc::new(async_mutex::Mutex::new(Box::new(sinker))));
+            }
+
+            SinkerConfig::Databend { url, batch_size } => {
+                for _ in 0..parallel_size {
+                    let url_info = Url::parse(&url)?;
+                    let client = databend_driver::Client::new(&url)?;
+                    let sinker = DatabendSinker {
+                        client,
+                        batch_size,
+                        monitor: monitor.clone(),
+                        sync_timestamp: Utc::now().timestamp_millis(),
+                    };
+                    sub_sinkers.push(Arc::new(async_mutex::Mutex::new(Box::new(sinker))));
+                }
+            }
+
+            SinkerConfig::DatabendStruct {
+                url,
+                conflict_policy,
+                engine,
+            } => {
+                let client = databend_driver::Client::new(&url)?;
+                let filter = RdbFilter::from_config(&task_config.filter, &DbType::Mysql)?;
+                let router = RdbRouter::from_config(&task_config.router, &DbType::Mysql)?;
+                let extractor_meta_manager = ExtractorUtil::get_extractor_meta_manager(task_config)
+                    .await?
+                    .unwrap();
+                let sinker = DatabendStructSinker {
                     client,
                     conflict_policy,
                     engine,
