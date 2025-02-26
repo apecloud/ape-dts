@@ -63,6 +63,8 @@ use crate::extractor_util::ExtractorUtil;
 
 use super::task_util::TaskUtil;
 
+use databend_driver;
+
 type Sinkers = Vec<Arc<async_mutex::Mutex<Box<dyn Sinker + Send>>>>;
 
 pub struct SinkerUtil {}
@@ -528,7 +530,7 @@ impl SinkerUtil {
             SinkerConfig::Databend { url, batch_size } => {
                 for _ in 0..parallel_size {
                     let url_info = Url::parse(&url)?;
-                    let client = databend_driver::Client::new(&url)?;
+                    let client = databend_driver::Client::new(url.clone());
                     let sinker = DatabendSinker {
                         client,
                         batch_size,
@@ -544,7 +546,7 @@ impl SinkerUtil {
                 conflict_policy,
                 engine,
             } => {
-                let client = databend_driver::Client::new(&url)?;
+                let client = databend_driver::Client::new(url);
                 let filter = RdbFilter::from_config(&task_config.filter, &DbType::Mysql)?;
                 let router = RdbRouter::from_config(&task_config.router, &DbType::Mysql)?;
                 let extractor_meta_manager = ExtractorUtil::get_extractor_meta_manager(task_config)

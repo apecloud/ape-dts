@@ -15,9 +15,9 @@ use std::{
 use dt_common::{
     log_debug,
     meta::{
-        adaptor::mysql_col_value_convertor::MysqlColValueConvertor, col_value::ColValue,
-        dt_data::DtData, mysql::mysql_meta_manager::MysqlMetaManager, position::Position,
-        row_data::RowData, row_type::RowType, syncer::Syncer,
+    adaptor::mysql_col_value_convertor::MysqlColValueConvertor, col_value::ColValue,
+    dt_data::DtData, mysql::mysql_meta_manager::MysqlMetaManager, position::Position,
+    row_data::RowData, row_type::RowType, syncer::Syncer,
     },
 };
 use mysql_binlog_connector_rust::{

@@ -194,7 +194,7 @@ impl DatabendStructSinker {
             }
 
             MysqlColType::Time { .. } => "String",
-            MysqlColType::Date => "Date32",
+            MysqlColType::Date { .. } => "Date32",
             MysqlColType::DateTime { .. } => "DateTime64(6)",
             MysqlColType::Timestamp { .. } => "DateTime64(6)",
             MysqlColType::Year => "Int32",

@@ -187,7 +187,7 @@ impl DatabendSinker {
     async fn execute_sql(&self, sql: &str) -> anyhow::Result<()> {
         match self.client.get_conn().await?.exec(sql, ()).await {
             Ok(_) => Ok(()),
-            Err(e) => bail!(anyhow::Error::msg(e.to_string())), 
+            Err(e) => bail!(anyhow::Error::msg(e.to_string())),
         }
     }
 }

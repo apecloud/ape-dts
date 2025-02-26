@@ -39,3 +39,4 @@ redis = { workspace = true }
 ratelimit = { workspace = true }
 anyhow = { workspace = true }
 clickhouse = { workspace = true }
+databend-driver = { workspace = true }
