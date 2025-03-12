@@ -5,6 +5,8 @@ pre-build = [                                  # additional commands to run prio
     "dpkg --add-architecture $CROSS_DEB_ARCH", 
     "apt-get update && apt-get -y install pkg-config libssl-dev:$CROSS_DEB_ARCH zlib1g-dev:$CROSS_DEB_ARCH libsasl2-dev:$CROSS_DEB_ARCH cmake libclang-dev",
 ]
+# https://github.com/cross-rs/cross/issues/1529
+env.passthrough = ["CMAKE_TOOLCHAIN_FILE_aarch64_unknown_linux_gnu"]
 
 [target.x86_64-unknown-linux-gnu]
 linker = "x86_64-linux-gnu-gcc"
