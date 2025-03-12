@@ -3,7 +3,7 @@
 default-target = "x86_64-unknown-linux-gnu"   # use this target if none is explicitly provided
 pre-build = [                                  # additional commands to run prior to building the package
     "dpkg --add-architecture $CROSS_DEB_ARCH", 
-    "apt-get update && apt-get -y install pkg-config libssl-dev:$CROSS_DEB_ARCH zlib1g-dev:$CROSS_DEB_ARCH cmake libclang-dev",
+    "apt-get update && apt-get -y install pkg-config libssl-dev:$CROSS_DEB_ARCH zlib1g-dev:$CROSS_DEB_ARCH libsasl2-dev:$CROSS_DEB_ARCH cmake libclang-dev",
 ]
 
 [target.x86_64-unknown-linux-gnu]
