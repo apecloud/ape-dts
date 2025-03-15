@@ -1,0 +1,229 @@
+appenders:
+  stdout:
+    kind: console
+
+  default_appender:
+    kind: rolling_file
+    append: true
+    path: "LOG_DIR_PLACEHODLER/default.log"
+    encoder:
+      pattern: "{d(%Y-%m-%d %H:%M:%S.%6f)(utc)} - {level} - [{i}] - {m}{n}"
+    policy:
+      kind: compound
+      trigger:
+        kind: size
+        limit: 100mb
+      roller:
+        kind: fixed_window
+        base: 1
+        count: 10
+        pattern: "LOG_DIR_PLACEHODLER/default{}.log"
+
+  commit_appender:
+    kind: rolling_file
+    append: true
+    path: "LOG_DIR_PLACEHODLER/commit.log"
+    encoder:
+      pattern: "{d(%Y-%m-%d %H:%M:%S.%6f)(utc)} - {level} - [{i}] - {m}{n}"
+    policy:
+      kind: compound
+      trigger:
+        kind: size
+        limit: 100mb
+      roller:
+        kind: fixed_window
+        base: 1
+        count: 10
+        pattern: "LOG_DIR_PLACEHODLER/commit{}.log"
+
+  position_appender:
+    kind: rolling_file
+    append: true
+    path: "LOG_DIR_PLACEHODLER/position.log"
+    encoder:
+      pattern: "{d(%Y-%m-%d %H:%M:%S.%6f)(utc)} | {m}{n}"
+    policy:
+      kind: compound
+      trigger:
+        kind: size
+        limit: 1mb
+      roller:
+        kind: fixed_window
+        base: 1
+        count: 10
+        pattern: "LOG_DIR_PLACEHODLER/position{}.log"
+
+  monitor_appender:
+    kind: rolling_file
+    append: true
+    path: "LOG_DIR_PLACEHODLER/monitor.log"
+    encoder:
+      pattern: "{d(%Y-%m-%d %H:%M:%S.%6f)(utc)} | {m}{n}"
+    policy:
+      kind: compound
+      trigger:
+        kind: size
+        limit: 100mb
+      roller:
+        kind: fixed_window
+        base: 1
+        count: 10
+        pattern: "LOG_DIR_PLACEHODLER/monitor{}.log"
+
+  miss_appender:
+    kind: rolling_file
+    append: true
+    path: "CHECK_LOG_DIR_PLACEHODLER/miss.log"
+    encoder:
+      pattern: "{m}{n}"
+    policy:
+      kind: compound
+      trigger:
+        kind: size
+        limit: 100mb
+      roller:
+        kind: fixed_window
+        base: 1
+        count: 10
+        pattern: "CHECK_LOG_DIR_PLACEHODLER/miss{}.log"
+
+  diff_appender:
+    kind: rolling_file
+    append: true
+    path: "CHECK_LOG_DIR_PLACEHODLER/diff.log"
+    encoder:
+      pattern: "{m}{n}"
+    policy:
+      kind: compound
+      trigger:
+        kind: size
+        limit: 100mb
+      roller:
+        kind: fixed_window
+        base: 1
+        count: 10
+        pattern: "CHECK_LOG_DIR_PLACEHODLER/diff{}.log"
+
+  extra_appender:
+    kind: rolling_file
+    append: true
+    path: "CHECK_LOG_DIR_PLACEHODLER/extra.log"
+    encoder:
+      pattern: "{m}{n}"
+    policy:
+      kind: compound
+      trigger:
+        kind: size
+        limit: 100mb
+      roller:
+        kind: fixed_window
+        base: 1
+        count: 10
+        pattern: "CHECK_LOG_DIR_PLACEHODLER/extra{}.log"
+
+  statistic_appender:
+    kind: rolling_file
+    append: true
+    path: "STATISTIC_LOG_DIR_PLACEHODLER/statistic.log"
+    encoder:
+      pattern: "{m}{n}"
+    policy:
+      kind: compound
+      trigger:
+        kind: size
+        limit: 100mb
+      roller:
+        kind: fixed_window
+        base: 1
+        count: 10
+        pattern: "STATISTIC_LOG_DIR_PLACEHODLER/statistic{}.log"
+
+  finished_appender:
+    kind: rolling_file
+    append: true
+    path: "LOG_DIR_PLACEHODLER/finished.log"
+    encoder:
+      pattern: "{d(%Y-%m-%d %H:%M:%S.%6f)(utc)} | {m}{n}"
+    policy:
+      kind: compound
+      trigger:
+        kind: size
+        limit: 100mb
+      roller:
+        kind: fixed_window
+        base: 1
+        count: 10
+        pattern: "LOG_DIR_PLACEHODLER/finished{}.log"
+  
+  sql_appender:
+    kind: rolling_file
+    append: true
+    path: "LOG_DIR_PLACEHODLER/sql.log"
+    encoder:
+      pattern: "{m}{n}"
+    policy:
+      kind: compound
+      trigger:
+        kind: size
+        limit: 100mb
+      roller:
+        kind: fixed_window
+        base: 1
+        count: 10
+        pattern: "LOG_DIR_PLACEHODLER/sql{}.log"
+
+loggers:
+  default_logger:
+    level: LOG_LEVEL_PLACEHODLER
+    appenders: 
+      - default_appender
+
+  commit_logger:
+    level: LOG_LEVEL_PLACEHODLER
+    appenders: 
+      - commit_appender
+
+  position_logger:
+    level: LOG_LEVEL_PLACEHODLER
+    appenders: 
+      - position_appender
+
+  monitor_logger:
+    level: LOG_LEVEL_PLACEHODLER
+    appenders: 
+      - monitor_appender
+
+  miss_logger: 
+    level: LOG_LEVEL_PLACEHODLER
+    appenders: 
+      - miss_appender
+
+  diff_logger: 
+    level: LOG_LEVEL_PLACEHODLER
+    appenders: 
+      - diff_appender
+
+  extra_logger: 
+    level: LOG_LEVEL_PLACEHODLER
+    appenders: 
+      - extra_appender
+
+  statistic_logger: 
+    level: LOG_LEVEL_PLACEHODLER
+    appenders: 
+      - statistic_appender
+
+  finished_logger: 
+    level: LOG_LEVEL_PLACEHODLER
+    appenders: 
+      - finished_appender
+
+  sql_logger: 
+    level: LOG_LEVEL_PLACEHODLER
+    appenders: 
+      - sql_appender
+
+root:
+  level: LOG_LEVEL_PLACEHODLER
+  appenders:
+    - stdout

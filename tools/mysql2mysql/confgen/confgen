@@ -1,0 +1,61 @@
+#!/bin/sh
+
+test "$#" -lt 3 && cat <<- EOT
+  Usage: 
+     $ ./confgen <src_db> <src_host> <dst_host> [src_user] [dst_user] [src_password] [dst_password] [src_port] [dst_port]
+     or
+     $ ./confgen <src_db> <src_host> <dst_host>  # using default username/password/port set in the script.
+
+  The generated configure files would be save to ./<src_db>/. Change working directoy to <src_db>, run ape-dts xxx.ini.
+
+EOT
+
+db=$1
+shost=$2
+dhost=$3
+suser=$4
+duser=$5
+spwd=$6
+dpwd=$7
+sport=$8
+dport=$9
+
+test -z "$db" && echo 'no db provided, exit' && exit 128
+test -z "$shost" && echo 'no src host provided, exit' && exit 128
+test -z "$dhost" && echo 'no dst host provided, exit' && exit 128
+
+dfuser="<replace_with_your_default_user>"
+dfpwd="<replace_with_your_default_password>"
+
+dfsusr="$dfuser"
+dfspwd="$dfpwd"
+dfdusr="$dfuser"
+dfdpwd="$dfpwd"
+dfsport=3306
+dfdport=3306
+vb="$VERBOSE"
+
+test -z "$suser" && suser="$dfsusr" && test -n "$vb" && echo "no src user provided, [$suser] as default."
+test -z "$duser" && duser="$dfdusr" && test -n "$vb" && echo "no dst user provided, [$duser] as default."
+
+test -z "$spwd" && spwd="$dfspwd" && test -n "$vb" && echo "no src pwd provided, [$spwd] as default."
+test -z "$dpwd" && dpwd="$dfdpwd" && test -n "$vb" && echo "no dst pwd provided, [$dpwd] as default."
+
+test -z "$sport" && sport=$dfsport && test -n "$vb" && echo "no src port provided, [$sport] as default."
+test -z "$dport" && dport=$dfdport && test -n "$vb" && echo "no dst port provided, [$dport] as default."
+
+mkdir "$db" 2>/dev/null
+for i in tpl/*;do
+  f="${i##tpl/}"
+  echo "generate $f ..."
+  sed -e "s/<opdb>/${db}/g" \
+      -e "s/<srchost>/${shost}/g" \
+      -e "s/<dsthost>/${dhost}/g" \
+      -e "s/<srcport>/${sport}/g" \
+      -e "s/<dstport>/${dport}/g" \
+      -e "s/<srcuser>/${suser}/g" \
+      -e "s/<dstuser>/${duser}/g" \
+      -e "s/<srcpwd>/${spwd}/g" \
+      -e "s/<dstpwd>/${dpwd}/g" \
+      "$i"  > "${db}/${f}"
+done
