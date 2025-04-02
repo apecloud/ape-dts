@@ -14,6 +14,7 @@
 
 #![allow(clippy::uninlined_format_args)]
 
+mod ape_dts_parser;
 mod decimal;
 mod display;
 mod parser;

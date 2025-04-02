@@ -1,0 +1,3005 @@
+---------- Input ----------
+create table aaa.bbb (id int)
+---------- Output ---------
+CREATE TABLE aaa.bbb (id Int32)
+---------- AST ------------
+CreateTable(
+    CreateTableStmt {
+        create_option: Create,
+        catalog: None,
+        database: Some(
+            Identifier {
+                span: Some(
+                    13..16,
+                ),
+                name: "aaa",
+                quote: None,
+                ident_type: None,
+            },
+        ),
+        table: Identifier {
+            span: Some(
+                17..20,
+            ),
+            name: "bbb",
+            quote: None,
+            ident_type: None,
+        },
+        source: Some(
+            Columns(
+                [
+                    ColumnDefinition {
+                        name: Identifier {
+                            span: Some(
+                                22..24,
+                            ),
+                            name: "id",
+                            quote: None,
+                            ident_type: None,
+                        },
+                        data_type: Int32,
+                        expr: None,
+                        comment: None,
+                    },
+                ],
+                None,
+            ),
+        ),
+        engine: None,
+        uri_location: None,
+        cluster_by: None,
+        table_options: {},
+        as_query: None,
+        table_type: Normal,
+    },
+)
+
+
+---------- Input ----------
+create table `aaa`.`bbb` (id int)
+---------- Output ---------
+CREATE TABLE `aaa`.`bbb` (id Int32)
+---------- AST ------------
+CreateTable(
+    CreateTableStmt {
+        create_option: Create,
+        catalog: None,
+        database: Some(
+            Identifier {
+                span: Some(
+                    13..18,
+                ),
+                name: "aaa",
+                quote: Some(
+                    '`',
+                ),
+                ident_type: None,
+            },
+        ),
+        table: Identifier {
+            span: Some(
+                19..24,
+            ),
+            name: "bbb",
+            quote: Some(
+                '`',
+            ),
+            ident_type: None,
+        },
+        source: Some(
+            Columns(
+                [
+                    ColumnDefinition {
+                        name: Identifier {
+                            span: Some(
+                                26..28,
+                            ),
+                            name: "id",
+                            quote: None,
+                            ident_type: None,
+                        },
+                        data_type: Int32,
+                        expr: None,
+                        comment: None,
+                    },
+                ],
+                None,
+            ),
+        ),
+        engine: None,
+        uri_location: None,
+        cluster_by: None,
+        table_options: {},
+        as_query: None,
+        table_type: Normal,
+    },
+)
+
+
+---------- Input ----------
+create   table  aaa . bbb   (id int)
+---------- Output ---------
+CREATE TABLE aaa.bbb (id Int32)
+---------- AST ------------
+CreateTable(
+    CreateTableStmt {
+        create_option: Create,
+        catalog: None,
+        database: Some(
+            Identifier {
+                span: Some(
+                    16..19,
+                ),
+                name: "aaa",
+                quote: None,
+                ident_type: None,
+            },
+        ),
+        table: Identifier {
+            span: Some(
+                22..25,
+            ),
+            name: "bbb",
+            quote: None,
+            ident_type: None,
+        },
+        source: Some(
+            Columns(
+                [
+                    ColumnDefinition {
+                        name: Identifier {
+                            span: Some(
+                                29..31,
+                            ),
+                            name: "id",
+                            quote: None,
+                            ident_type: None,
+                        },
+                        data_type: Int32,
+                        expr: None,
+                        comment: None,
+                    },
+                ],
+                None,
+            ),
+        ),
+        engine: None,
+        uri_location: None,
+        cluster_by: None,
+        table_options: {},
+        as_query: None,
+        table_type: Normal,
+    },
+)
+
+
+---------- Input ----------
+create   table  `aaa` . `bbb`   (id int)
+---------- Output ---------
+CREATE TABLE `aaa`.`bbb` (id Int32)
+---------- AST ------------
+CreateTable(
+    CreateTableStmt {
+        create_option: Create,
+        catalog: None,
+        database: Some(
+            Identifier {
+                span: Some(
+                    16..21,
+                ),
+                name: "aaa",
+                quote: Some(
+                    '`',
+                ),
+                ident_type: None,
+            },
+        ),
+        table: Identifier {
+            span: Some(
+                24..29,
+            ),
+            name: "bbb",
+            quote: Some(
+                '`',
+            ),
+            ident_type: None,
+        },
+        source: Some(
+            Columns(
+                [
+                    ColumnDefinition {
+                        name: Identifier {
+                            span: Some(
+                                33..35,
+                            ),
+                            name: "id",
+                            quote: None,
+                            ident_type: None,
+                        },
+                        data_type: Int32,
+                        expr: None,
+                        comment: None,
+                    },
+                ],
+                None,
+            ),
+        ),
+        engine: None,
+        uri_location: None,
+        cluster_by: None,
+        table_options: {},
+        as_query: None,
+        table_type: Normal,
+    },
+)
+
+
+---------- Input ----------
+create table if  not  exists `aaa`.`bbb` (id int)
+---------- Output ---------
+CREATE TABLE IF NOT EXISTS `aaa`.`bbb` (id Int32)
+---------- AST ------------
+CreateTable(
+    CreateTableStmt {
+        create_option: CreateIfNotExists,
+        catalog: None,
+        database: Some(
+            Identifier {
+                span: Some(
+                    29..34,
+                ),
+                name: "aaa",
+                quote: Some(
+                    '`',
+                ),
+                ident_type: None,
+            },
+        ),
+        table: Identifier {
+            span: Some(
+                35..40,
+            ),
+            name: "bbb",
+            quote: Some(
+                '`',
+            ),
+            ident_type: None,
+        },
+        source: Some(
+            Columns(
+                [
+                    ColumnDefinition {
+                        name: Identifier {
+                            span: Some(
+                                42..44,
+                            ),
+                            name: "id",
+                            quote: None,
+                            ident_type: None,
+                        },
+                        data_type: Int32,
+                        expr: None,
+                        comment: None,
+                    },
+                ],
+                None,
+            ),
+        ),
+        engine: None,
+        uri_location: None,
+        cluster_by: None,
+        table_options: {},
+        as_query: None,
+        table_type: Normal,
+    },
+)
+
+
+---------- Input ----------
+create /*some comments,*/table/*some comments*/ `aaa`.`bbb` (id int)
+---------- Output ---------
+CREATE TABLE `aaa`.`bbb` (id Int32)
+---------- AST ------------
+CreateTable(
+    CreateTableStmt {
+        create_option: Create,
+        catalog: None,
+        database: Some(
+            Identifier {
+                span: Some(
+                    48..53,
+                ),
+                name: "aaa",
+                quote: Some(
+                    '`',
+                ),
+                ident_type: None,
+            },
+        ),
+        table: Identifier {
+            span: Some(
+                54..59,
+            ),
+            name: "bbb",
+            quote: Some(
+                '`',
+            ),
+            ident_type: None,
+        },
+        source: Some(
+            Columns(
+                [
+                    ColumnDefinition {
+                        name: Identifier {
+                            span: Some(
+                                61..63,
+                            ),
+                            name: "id",
+                            quote: None,
+                            ident_type: None,
+                        },
+                        data_type: Int32,
+                        expr: None,
+                        comment: None,
+                    },
+                ],
+                None,
+            ),
+        ),
+        engine: None,
+        uri_location: None,
+        cluster_by: None,
+        table_options: {},
+        as_query: None,
+        table_type: Normal,
+    },
+)
+
+
+---------- Input ----------
+create /*some comments,*/table/*some comments*/ if  not  exists  `aaa` .  `bbb` (id int)
+---------- Output ---------
+CREATE TABLE IF NOT EXISTS `aaa`.`bbb` (id Int32)
+---------- AST ------------
+CreateTable(
+    CreateTableStmt {
+        create_option: CreateIfNotExists,
+        catalog: None,
+        database: Some(
+            Identifier {
+                span: Some(
+                    65..70,
+                ),
+                name: "aaa",
+                quote: Some(
+                    '`',
+                ),
+                ident_type: None,
+            },
+        ),
+        table: Identifier {
+            span: Some(
+                74..79,
+            ),
+            name: "bbb",
+            quote: Some(
+                '`',
+            ),
+            ident_type: None,
+        },
+        source: Some(
+            Columns(
+                [
+                    ColumnDefinition {
+                        name: Identifier {
+                            span: Some(
+                                81..83,
+                            ),
+                            name: "id",
+                            quote: None,
+                            ident_type: None,
+                        },
+                        data_type: Int32,
+                        expr: None,
+                        comment: None,
+                    },
+                ],
+                None,
+            ),
+        ),
+        engine: None,
+        uri_location: None,
+        cluster_by: None,
+        table_options: {},
+        as_query: None,
+        table_type: Normal,
+    },
+)
+
+
+---------- Input ----------
+CREATE TABLE IF NOT EXISTS `test_db_*.*`.bbb(id int);
+---------- Output ---------
+CREATE TABLE IF NOT EXISTS `test_db_*.*`.bbb (id Int32)
+---------- AST ------------
+CreateTable(
+    CreateTableStmt {
+        create_option: CreateIfNotExists,
+        catalog: None,
+        database: Some(
+            Identifier {
+                span: Some(
+                    27..40,
+                ),
+                name: "test_db_*.*",
+                quote: Some(
+                    '`',
+                ),
+                ident_type: None,
+            },
+        ),
+        table: Identifier {
+            span: Some(
+                41..44,
+            ),
+            name: "bbb",
+            quote: None,
+            ident_type: None,
+        },
+        source: Some(
+            Columns(
+                [
+                    ColumnDefinition {
+                        name: Identifier {
+                            span: Some(
+                                45..47,
+                            ),
+                            name: "id",
+                            quote: None,
+                            ident_type: None,
+                        },
+                        data_type: Int32,
+                        expr: None,
+                        comment: None,
+                    },
+                ],
+                None,
+            ),
+        ),
+        engine: None,
+        uri_location: None,
+        cluster_by: None,
+        table_options: {},
+        as_query: None,
+        table_type: Normal,
+    },
+)
+
+
+---------- Input ----------
+CREATE TABLE IF NOT EXISTS `中文.others*&^%$#@!+_)(&^%#`.`中文!@$#$%^&*&(_+)`(id int);
+---------- Output ---------
+CREATE TABLE IF NOT EXISTS `中文.others*&^%$#@!+_)(&^%#`.`中文!@$#$%^&*&(_+)` (id Int32)
+---------- AST ------------
+CreateTable(
+    CreateTableStmt {
+        create_option: CreateIfNotExists,
+        catalog: None,
+        database: Some(
+            Identifier {
+                span: Some(
+                    27..58,
+                ),
+                name: "中文.others*&^%$#@!+_)(&^%#",
+                quote: Some(
+                    '`',
+                ),
+                ident_type: None,
+            },
+        ),
+        table: Identifier {
+            span: Some(
+                59..81,
+            ),
+            name: "中文!@$#$%^&*&(_+)",
+            quote: Some(
+                '`',
+            ),
+            ident_type: None,
+        },
+        source: Some(
+            Columns(
+                [
+                    ColumnDefinition {
+                        name: Identifier {
+                            span: Some(
+                                82..84,
+                            ),
+                            name: "id",
+                            quote: None,
+                            ident_type: None,
+                        },
+                        data_type: Int32,
+                        expr: None,
+                        comment: None,
+                    },
+                ],
+                None,
+            ),
+        ),
+        engine: None,
+        uri_location: None,
+        cluster_by: None,
+        table_options: {},
+        as_query: None,
+        table_type: Normal,
+    },
+)
+
+
+---------- Input ----------
+create table bbb (id int)
+---------- Output ---------
+CREATE TABLE bbb (id Int32)
+---------- AST ------------
+CreateTable(
+    CreateTableStmt {
+        create_option: Create,
+        catalog: None,
+        database: None,
+        table: Identifier {
+            span: Some(
+                13..16,
+            ),
+            name: "bbb",
+            quote: None,
+            ident_type: None,
+        },
+        source: Some(
+            Columns(
+                [
+                    ColumnDefinition {
+                        name: Identifier {
+                            span: Some(
+                                18..20,
+                            ),
+                            name: "id",
+                            quote: None,
+                            ident_type: None,
+                        },
+                        data_type: Int32,
+                        expr: None,
+                        comment: None,
+                    },
+                ],
+                None,
+            ),
+        ),
+        engine: None,
+        uri_location: None,
+        cluster_by: None,
+        table_options: {},
+        as_query: None,
+        table_type: Normal,
+    },
+)
+
+
+---------- Input ----------
+create table `bbb` (id int)
+---------- Output ---------
+CREATE TABLE `bbb` (id Int32)
+---------- AST ------------
+CreateTable(
+    CreateTableStmt {
+        create_option: Create,
+        catalog: None,
+        database: None,
+        table: Identifier {
+            span: Some(
+                13..18,
+            ),
+            name: "bbb",
+            quote: Some(
+                '`',
+            ),
+            ident_type: None,
+        },
+        source: Some(
+            Columns(
+                [
+                    ColumnDefinition {
+                        name: Identifier {
+                            span: Some(
+                                20..22,
+                            ),
+                            name: "id",
+                            quote: None,
+                            ident_type: None,
+                        },
+                        data_type: Int32,
+                        expr: None,
+                        comment: None,
+                    },
+                ],
+                None,
+            ),
+        ),
+        engine: None,
+        uri_location: None,
+        cluster_by: None,
+        table_options: {},
+        as_query: None,
+        table_type: Normal,
+    },
+)
+
+
+---------- Input ----------
+create   table  bbb   (id int)
+---------- Output ---------
+CREATE TABLE bbb (id Int32)
+---------- AST ------------
+CreateTable(
+    CreateTableStmt {
+        create_option: Create,
+        catalog: None,
+        database: None,
+        table: Identifier {
+            span: Some(
+                16..19,
+            ),
+            name: "bbb",
+            quote: None,
+            ident_type: None,
+        },
+        source: Some(
+            Columns(
+                [
+                    ColumnDefinition {
+                        name: Identifier {
+                            span: Some(
+                                23..25,
+                            ),
+                            name: "id",
+                            quote: None,
+                            ident_type: None,
+                        },
+                        data_type: Int32,
+                        expr: None,
+                        comment: None,
+                    },
+                ],
+                None,
+            ),
+        ),
+        engine: None,
+        uri_location: None,
+        cluster_by: None,
+        table_options: {},
+        as_query: None,
+        table_type: Normal,
+    },
+)
+
+
+---------- Input ----------
+create   table   `bbb`   (id int)
+---------- Output ---------
+CREATE TABLE `bbb` (id Int32)
+---------- AST ------------
+CreateTable(
+    CreateTableStmt {
+        create_option: Create,
+        catalog: None,
+        database: None,
+        table: Identifier {
+            span: Some(
+                17..22,
+            ),
+            name: "bbb",
+            quote: Some(
+                '`',
+            ),
+            ident_type: None,
+        },
+        source: Some(
+            Columns(
+                [
+                    ColumnDefinition {
+                        name: Identifier {
+                            span: Some(
+                                26..28,
+                            ),
+                            name: "id",
+                            quote: None,
+                            ident_type: None,
+                        },
+                        data_type: Int32,
+                        expr: None,
+                        comment: None,
+                    },
+                ],
+                None,
+            ),
+        ),
+        engine: None,
+        uri_location: None,
+        cluster_by: None,
+        table_options: {},
+        as_query: None,
+        table_type: Normal,
+    },
+)
+
+
+---------- Input ----------
+create table if  not  exists `bbb` (id int)
+---------- Output ---------
+CREATE TABLE IF NOT EXISTS `bbb` (id Int32)
+---------- AST ------------
+CreateTable(
+    CreateTableStmt {
+        create_option: CreateIfNotExists,
+        catalog: None,
+        database: None,
+        table: Identifier {
+            span: Some(
+                29..34,
+            ),
+            name: "bbb",
+            quote: Some(
+                '`',
+            ),
+            ident_type: None,
+        },
+        source: Some(
+            Columns(
+                [
+                    ColumnDefinition {
+                        name: Identifier {
+                            span: Some(
+                                36..38,
+                            ),
+                            name: "id",
+                            quote: None,
+                            ident_type: None,
+                        },
+                        data_type: Int32,
+                        expr: None,
+                        comment: None,
+                    },
+                ],
+                None,
+            ),
+        ),
+        engine: None,
+        uri_location: None,
+        cluster_by: None,
+        table_options: {},
+        as_query: None,
+        table_type: Normal,
+    },
+)
+
+
+---------- Input ----------
+create /*some comments,*/table/*some comments*/ `bbb` (id int)
+---------- Output ---------
+CREATE TABLE `bbb` (id Int32)
+---------- AST ------------
+CreateTable(
+    CreateTableStmt {
+        create_option: Create,
+        catalog: None,
+        database: None,
+        table: Identifier {
+            span: Some(
+                48..53,
+            ),
+            name: "bbb",
+            quote: Some(
+                '`',
+            ),
+            ident_type: None,
+        },
+        source: Some(
+            Columns(
+                [
+                    ColumnDefinition {
+                        name: Identifier {
+                            span: Some(
+                                55..57,
+                            ),
+                            name: "id",
+                            quote: None,
+                            ident_type: None,
+                        },
+                        data_type: Int32,
+                        expr: None,
+                        comment: None,
+                    },
+                ],
+                None,
+            ),
+        ),
+        engine: None,
+        uri_location: None,
+        cluster_by: None,
+        table_options: {},
+        as_query: None,
+        table_type: Normal,
+    },
+)
+
+
+---------- Input ----------
+create /*some comments,*/table/*some comments*/ if  not  exists    `bbb` (id int)
+---------- Output ---------
+CREATE TABLE IF NOT EXISTS `bbb` (id Int32)
+---------- AST ------------
+CreateTable(
+    CreateTableStmt {
+        create_option: CreateIfNotExists,
+        catalog: None,
+        database: None,
+        table: Identifier {
+            span: Some(
+                67..72,
+            ),
+            name: "bbb",
+            quote: Some(
+                '`',
+            ),
+            ident_type: None,
+        },
+        source: Some(
+            Columns(
+                [
+                    ColumnDefinition {
+                        name: Identifier {
+                            span: Some(
+                                74..76,
+                            ),
+                            name: "id",
+                            quote: None,
+                            ident_type: None,
+                        },
+                        data_type: Int32,
+                        expr: None,
+                        comment: None,
+                    },
+                ],
+                None,
+            ),
+        ),
+        engine: None,
+        uri_location: None,
+        cluster_by: None,
+        table_options: {},
+        as_query: None,
+        table_type: Normal,
+    },
+)
+
+
+---------- Input ----------
+drop table aaa.bbb
+---------- Output ---------
+DROP TABLE aaa.bbb
+---------- AST ------------
+DropTable(
+    DropTableStmt {
+        if_exists: false,
+        catalog: None,
+        database: Some(
+            Identifier {
+                span: Some(
+                    11..14,
+                ),
+                name: "aaa",
+                quote: None,
+                ident_type: None,
+            },
+        ),
+        table: Identifier {
+            span: Some(
+                15..18,
+            ),
+            name: "bbb",
+            quote: None,
+            ident_type: None,
+        },
+        all: false,
+    },
+)
+
+
+---------- Input ----------
+drop table `aaa`.`bbb`
+---------- Output ---------
+DROP TABLE `aaa`.`bbb`
+---------- AST ------------
+DropTable(
+    DropTableStmt {
+        if_exists: false,
+        catalog: None,
+        database: Some(
+            Identifier {
+                span: Some(
+                    11..16,
+                ),
+                name: "aaa",
+                quote: Some(
+                    '`',
+                ),
+                ident_type: None,
+            },
+        ),
+        table: Identifier {
+            span: Some(
+                17..22,
+            ),
+            name: "bbb",
+            quote: Some(
+                '`',
+            ),
+            ident_type: None,
+        },
+        all: false,
+    },
+)
+
+
+---------- Input ----------
+drop   table  aaa . bbb
+---------- Output ---------
+DROP TABLE aaa.bbb
+---------- AST ------------
+DropTable(
+    DropTableStmt {
+        if_exists: false,
+        catalog: None,
+        database: Some(
+            Identifier {
+                span: Some(
+                    14..17,
+                ),
+                name: "aaa",
+                quote: None,
+                ident_type: None,
+            },
+        ),
+        table: Identifier {
+            span: Some(
+                20..23,
+            ),
+            name: "bbb",
+            quote: None,
+            ident_type: None,
+        },
+        all: false,
+    },
+)
+
+
+---------- Input ----------
+drop   table  `aaa` . `bbb`
+---------- Output ---------
+DROP TABLE `aaa`.`bbb`
+---------- AST ------------
+DropTable(
+    DropTableStmt {
+        if_exists: false,
+        catalog: None,
+        database: Some(
+            Identifier {
+                span: Some(
+                    14..19,
+                ),
+                name: "aaa",
+                quote: Some(
+                    '`',
+                ),
+                ident_type: None,
+            },
+        ),
+        table: Identifier {
+            span: Some(
+                22..27,
+            ),
+            name: "bbb",
+            quote: Some(
+                '`',
+            ),
+            ident_type: None,
+        },
+        all: false,
+    },
+)
+
+
+---------- Input ----------
+drop table if  exists `aaa`.`bbb`
+---------- Output ---------
+DROP TABLE IF EXISTS `aaa`.`bbb`
+---------- AST ------------
+DropTable(
+    DropTableStmt {
+        if_exists: true,
+        catalog: None,
+        database: Some(
+            Identifier {
+                span: Some(
+                    22..27,
+                ),
+                name: "aaa",
+                quote: Some(
+                    '`',
+                ),
+                ident_type: None,
+            },
+        ),
+        table: Identifier {
+            span: Some(
+                28..33,
+            ),
+            name: "bbb",
+            quote: Some(
+                '`',
+            ),
+            ident_type: None,
+        },
+        all: false,
+    },
+)
+
+
+---------- Input ----------
+drop /*some comments,*/table/*some comments*/ `aaa`.`bbb`
+---------- Output ---------
+DROP TABLE `aaa`.`bbb`
+---------- AST ------------
+DropTable(
+    DropTableStmt {
+        if_exists: false,
+        catalog: None,
+        database: Some(
+            Identifier {
+                span: Some(
+                    46..51,
+                ),
+                name: "aaa",
+                quote: Some(
+                    '`',
+                ),
+                ident_type: None,
+            },
+        ),
+        table: Identifier {
+            span: Some(
+                52..57,
+            ),
+            name: "bbb",
+            quote: Some(
+                '`',
+            ),
+            ident_type: None,
+        },
+        all: false,
+    },
+)
+
+
+---------- Input ----------
+drop /*some comments,*/table/*some comments*/ if  exists  `aaa` .  `bbb`
+---------- Output ---------
+DROP TABLE IF EXISTS `aaa`.`bbb`
+---------- AST ------------
+DropTable(
+    DropTableStmt {
+        if_exists: true,
+        catalog: None,
+        database: Some(
+            Identifier {
+                span: Some(
+                    58..63,
+                ),
+                name: "aaa",
+                quote: Some(
+                    '`',
+                ),
+                ident_type: None,
+            },
+        ),
+        table: Identifier {
+            span: Some(
+                67..72,
+            ),
+            name: "bbb",
+            quote: Some(
+                '`',
+            ),
+            ident_type: None,
+        },
+        all: false,
+    },
+)
+
+
+---------- Input ----------
+drop table bbb
+---------- Output ---------
+DROP TABLE bbb
+---------- AST ------------
+DropTable(
+    DropTableStmt {
+        if_exists: false,
+        catalog: None,
+        database: None,
+        table: Identifier {
+            span: Some(
+                11..14,
+            ),
+            name: "bbb",
+            quote: None,
+            ident_type: None,
+        },
+        all: false,
+    },
+)
+
+
+---------- Input ----------
+drop table `bbb`
+---------- Output ---------
+DROP TABLE `bbb`
+---------- AST ------------
+DropTable(
+    DropTableStmt {
+        if_exists: false,
+        catalog: None,
+        database: None,
+        table: Identifier {
+            span: Some(
+                11..16,
+            ),
+            name: "bbb",
+            quote: Some(
+                '`',
+            ),
+            ident_type: None,
+        },
+        all: false,
+    },
+)
+
+
+---------- Input ----------
+drop   table   bbb
+---------- Output ---------
+DROP TABLE bbb
+---------- AST ------------
+DropTable(
+    DropTableStmt {
+        if_exists: false,
+        catalog: None,
+        database: None,
+        table: Identifier {
+            span: Some(
+                15..18,
+            ),
+            name: "bbb",
+            quote: None,
+            ident_type: None,
+        },
+        all: false,
+    },
+)
+
+
+---------- Input ----------
+drop   table   `bbb`
+---------- Output ---------
+DROP TABLE `bbb`
+---------- AST ------------
+DropTable(
+    DropTableStmt {
+        if_exists: false,
+        catalog: None,
+        database: None,
+        table: Identifier {
+            span: Some(
+                15..20,
+            ),
+            name: "bbb",
+            quote: Some(
+                '`',
+            ),
+            ident_type: None,
+        },
+        all: false,
+    },
+)
+
+
+---------- Input ----------
+drop table if  exists `bbb`
+---------- Output ---------
+DROP TABLE IF EXISTS `bbb`
+---------- AST ------------
+DropTable(
+    DropTableStmt {
+        if_exists: true,
+        catalog: None,
+        database: None,
+        table: Identifier {
+            span: Some(
+                22..27,
+            ),
+            name: "bbb",
+            quote: Some(
+                '`',
+            ),
+            ident_type: None,
+        },
+        all: false,
+    },
+)
+
+
+---------- Input ----------
+drop /*some comments,*/table/*some comments*/ `bbb`
+---------- Output ---------
+DROP TABLE `bbb`
+---------- AST ------------
+DropTable(
+    DropTableStmt {
+        if_exists: false,
+        catalog: None,
+        database: None,
+        table: Identifier {
+            span: Some(
+                46..51,
+            ),
+            name: "bbb",
+            quote: Some(
+                '`',
+            ),
+            ident_type: None,
+        },
+        all: false,
+    },
+)
+
+
+---------- Input ----------
+drop /*some comments,*/table/*some comments*/ if  exists    `bbb`
+---------- Output ---------
+DROP TABLE IF EXISTS `bbb`
+---------- AST ------------
+DropTable(
+    DropTableStmt {
+        if_exists: true,
+        catalog: None,
+        database: None,
+        table: Identifier {
+            span: Some(
+                60..65,
+            ),
+            name: "bbb",
+            quote: Some(
+                '`',
+            ),
+            ident_type: None,
+        },
+        all: false,
+    },
+)
+
+
+---------- Input ----------
+alter table aaa.bbb add column value int
+---------- Output ---------
+ALTER TABLE aaa.bbb ADD COLUMN value Int32
+---------- AST ------------
+AlterTable(
+    AlterTableStmt {
+        if_exists: false,
+        table_reference: Table {
+            span: Some(
+                12..19,
+            ),
+            catalog: None,
+            database: Some(
+                Identifier {
+                    span: Some(
+                        12..15,
+                    ),
+                    name: "aaa",
+                    quote: None,
+                    ident_type: None,
+                },
+            ),
+            table: Identifier {
+                span: Some(
+                    16..19,
+                ),
+                name: "bbb",
+                quote: None,
+                ident_type: None,
+            },
+            alias: None,
+            temporal: None,
+            with_options: None,
+            pivot: None,
+            unpivot: None,
+            sample: None,
+        },
+        action: AddColumn {
+            column: ColumnDefinition {
+                name: Identifier {
+                    span: Some(
+                        31..36,
+                    ),
+                    name: "value",
+                    quote: None,
+                    ident_type: None,
+                },
+                data_type: Int32,
+                expr: None,
+                comment: None,
+            },
+            option: End,
+        },
+    },
+)
+
+
+---------- Input ----------
+alter table `aaa`.`bbb` add column value int
+---------- Output ---------
+ALTER TABLE `aaa`.`bbb` ADD COLUMN value Int32
+---------- AST ------------
+AlterTable(
+    AlterTableStmt {
+        if_exists: false,
+        table_reference: Table {
+            span: Some(
+                12..23,
+            ),
+            catalog: None,
+            database: Some(
+                Identifier {
+                    span: Some(
+                        12..17,
+                    ),
+                    name: "aaa",
+                    quote: Some(
+                        '`',
+                    ),
+                    ident_type: None,
+                },
+            ),
+            table: Identifier {
+                span: Some(
+                    18..23,
+                ),
+                name: "bbb",
+                quote: Some(
+                    '`',
+                ),
+                ident_type: None,
+            },
+            alias: None,
+            temporal: None,
+            with_options: None,
+            pivot: None,
+            unpivot: None,
+            sample: None,
+        },
+        action: AddColumn {
+            column: ColumnDefinition {
+                name: Identifier {
+                    span: Some(
+                        35..40,
+                    ),
+                    name: "value",
+                    quote: None,
+                    ident_type: None,
+                },
+                data_type: Int32,
+                expr: None,
+                comment: None,
+            },
+            option: End,
+        },
+    },
+)
+
+
+---------- Input ----------
+alter   table  aaa . bbb   add column value int
+---------- Output ---------
+ALTER TABLE aaa.bbb ADD COLUMN value Int32
+---------- AST ------------
+AlterTable(
+    AlterTableStmt {
+        if_exists: false,
+        table_reference: Table {
+            span: Some(
+                15..24,
+            ),
+            catalog: None,
+            database: Some(
+                Identifier {
+                    span: Some(
+                        15..18,
+                    ),
+                    name: "aaa",
+                    quote: None,
+                    ident_type: None,
+                },
+            ),
+            table: Identifier {
+                span: Some(
+                    21..24,
+                ),
+                name: "bbb",
+                quote: None,
+                ident_type: None,
+            },
+            alias: None,
+            temporal: None,
+            with_options: None,
+            pivot: None,
+            unpivot: None,
+            sample: None,
+        },
+        action: AddColumn {
+            column: ColumnDefinition {
+                name: Identifier {
+                    span: Some(
+                        38..43,
+                    ),
+                    name: "value",
+                    quote: None,
+                    ident_type: None,
+                },
+                data_type: Int32,
+                expr: None,
+                comment: None,
+            },
+            option: End,
+        },
+    },
+)
+
+
+---------- Input ----------
+alter   table  `aaa` . `bbb`   add column value int
+---------- Output ---------
+ALTER TABLE `aaa`.`bbb` ADD COLUMN value Int32
+---------- AST ------------
+AlterTable(
+    AlterTableStmt {
+        if_exists: false,
+        table_reference: Table {
+            span: Some(
+                15..28,
+            ),
+            catalog: None,
+            database: Some(
+                Identifier {
+                    span: Some(
+                        15..20,
+                    ),
+                    name: "aaa",
+                    quote: Some(
+                        '`',
+                    ),
+                    ident_type: None,
+                },
+            ),
+            table: Identifier {
+                span: Some(
+                    23..28,
+                ),
+                name: "bbb",
+                quote: Some(
+                    '`',
+                ),
+                ident_type: None,
+            },
+            alias: None,
+            temporal: None,
+            with_options: None,
+            pivot: None,
+            unpivot: None,
+            sample: None,
+        },
+        action: AddColumn {
+            column: ColumnDefinition {
+                name: Identifier {
+                    span: Some(
+                        42..47,
+                    ),
+                    name: "value",
+                    quote: None,
+                    ident_type: None,
+                },
+                data_type: Int32,
+                expr: None,
+                comment: None,
+            },
+            option: End,
+        },
+    },
+)
+
+
+---------- Input ----------
+alter table `aaa`.`bbb` add column value int
+---------- Output ---------
+ALTER TABLE `aaa`.`bbb` ADD COLUMN value Int32
+---------- AST ------------
+AlterTable(
+    AlterTableStmt {
+        if_exists: false,
+        table_reference: Table {
+            span: Some(
+                12..23,
+            ),
+            catalog: None,
+            database: Some(
+                Identifier {
+                    span: Some(
+                        12..17,
+                    ),
+                    name: "aaa",
+                    quote: Some(
+                        '`',
+                    ),
+                    ident_type: None,
+                },
+            ),
+            table: Identifier {
+                span: Some(
+                    18..23,
+                ),
+                name: "bbb",
+                quote: Some(
+                    '`',
+                ),
+                ident_type: None,
+            },
+            alias: None,
+            temporal: None,
+            with_options: None,
+            pivot: None,
+            unpivot: None,
+            sample: None,
+        },
+        action: AddColumn {
+            column: ColumnDefinition {
+                name: Identifier {
+                    span: Some(
+                        35..40,
+                    ),
+                    name: "value",
+                    quote: None,
+                    ident_type: None,
+                },
+                data_type: Int32,
+                expr: None,
+                comment: None,
+            },
+            option: End,
+        },
+    },
+)
+
+
+---------- Input ----------
+alter /*some comments,*/table/*some comments*/ `aaa`.`bbb` add column value int
+---------- Output ---------
+ALTER TABLE `aaa`.`bbb` ADD COLUMN value Int32
+---------- AST ------------
+AlterTable(
+    AlterTableStmt {
+        if_exists: false,
+        table_reference: Table {
+            span: Some(
+                47..58,
+            ),
+            catalog: None,
+            database: Some(
+                Identifier {
+                    span: Some(
+                        47..52,
+                    ),
+                    name: "aaa",
+                    quote: Some(
+                        '`',
+                    ),
+                    ident_type: None,
+                },
+            ),
+            table: Identifier {
+                span: Some(
+                    53..58,
+                ),
+                name: "bbb",
+                quote: Some(
+                    '`',
+                ),
+                ident_type: None,
+            },
+            alias: None,
+            temporal: None,
+            with_options: None,
+            pivot: None,
+            unpivot: None,
+            sample: None,
+        },
+        action: AddColumn {
+            column: ColumnDefinition {
+                name: Identifier {
+                    span: Some(
+                        70..75,
+                    ),
+                    name: "value",
+                    quote: None,
+                    ident_type: None,
+                },
+                data_type: Int32,
+                expr: None,
+                comment: None,
+            },
+            option: End,
+        },
+    },
+)
+
+
+---------- Input ----------
+alter /*some comments,*/table/*some comments*/   `aaa` .  `bbb`   add column value int
+---------- Output ---------
+ALTER TABLE `aaa`.`bbb` ADD COLUMN value Int32
+---------- AST ------------
+AlterTable(
+    AlterTableStmt {
+        if_exists: false,
+        table_reference: Table {
+            span: Some(
+                49..63,
+            ),
+            catalog: None,
+            database: Some(
+                Identifier {
+                    span: Some(
+                        49..54,
+                    ),
+                    name: "aaa",
+                    quote: Some(
+                        '`',
+                    ),
+                    ident_type: None,
+                },
+            ),
+            table: Identifier {
+                span: Some(
+                    58..63,
+                ),
+                name: "bbb",
+                quote: Some(
+                    '`',
+                ),
+                ident_type: None,
+            },
+            alias: None,
+            temporal: None,
+            with_options: None,
+            pivot: None,
+            unpivot: None,
+            sample: None,
+        },
+        action: AddColumn {
+            column: ColumnDefinition {
+                name: Identifier {
+                    span: Some(
+                        77..82,
+                    ),
+                    name: "value",
+                    quote: None,
+                    ident_type: None,
+                },
+                data_type: Int32,
+                expr: None,
+                comment: None,
+            },
+            option: End,
+        },
+    },
+)
+
+
+---------- Input ----------
+alter table bbb add column value int
+---------- Output ---------
+ALTER TABLE bbb ADD COLUMN value Int32
+---------- AST ------------
+AlterTable(
+    AlterTableStmt {
+        if_exists: false,
+        table_reference: Table {
+            span: Some(
+                12..15,
+            ),
+            catalog: None,
+            database: None,
+            table: Identifier {
+                span: Some(
+                    12..15,
+                ),
+                name: "bbb",
+                quote: None,
+                ident_type: None,
+            },
+            alias: None,
+            temporal: None,
+            with_options: None,
+            pivot: None,
+            unpivot: None,
+            sample: None,
+        },
+        action: AddColumn {
+            column: ColumnDefinition {
+                name: Identifier {
+                    span: Some(
+                        27..32,
+                    ),
+                    name: "value",
+                    quote: None,
+                    ident_type: None,
+                },
+                data_type: Int32,
+                expr: None,
+                comment: None,
+            },
+            option: End,
+        },
+    },
+)
+
+
+---------- Input ----------
+alter table `bbb` add column value int
+---------- Output ---------
+ALTER TABLE `bbb` ADD COLUMN value Int32
+---------- AST ------------
+AlterTable(
+    AlterTableStmt {
+        if_exists: false,
+        table_reference: Table {
+            span: Some(
+                12..17,
+            ),
+            catalog: None,
+            database: None,
+            table: Identifier {
+                span: Some(
+                    12..17,
+                ),
+                name: "bbb",
+                quote: Some(
+                    '`',
+                ),
+                ident_type: None,
+            },
+            alias: None,
+            temporal: None,
+            with_options: None,
+            pivot: None,
+            unpivot: None,
+            sample: None,
+        },
+        action: AddColumn {
+            column: ColumnDefinition {
+                name: Identifier {
+                    span: Some(
+                        29..34,
+                    ),
+                    name: "value",
+                    quote: None,
+                    ident_type: None,
+                },
+                data_type: Int32,
+                expr: None,
+                comment: None,
+            },
+            option: End,
+        },
+    },
+)
+
+
+---------- Input ----------
+alter   table   bbb   add column value int
+---------- Output ---------
+ALTER TABLE bbb ADD COLUMN value Int32
+---------- AST ------------
+AlterTable(
+    AlterTableStmt {
+        if_exists: false,
+        table_reference: Table {
+            span: Some(
+                16..19,
+            ),
+            catalog: None,
+            database: None,
+            table: Identifier {
+                span: Some(
+                    16..19,
+                ),
+                name: "bbb",
+                quote: None,
+                ident_type: None,
+            },
+            alias: None,
+            temporal: None,
+            with_options: None,
+            pivot: None,
+            unpivot: None,
+            sample: None,
+        },
+        action: AddColumn {
+            column: ColumnDefinition {
+                name: Identifier {
+                    span: Some(
+                        33..38,
+                    ),
+                    name: "value",
+                    quote: None,
+                    ident_type: None,
+                },
+                data_type: Int32,
+                expr: None,
+                comment: None,
+            },
+            option: End,
+        },
+    },
+)
+
+
+---------- Input ----------
+alter   table   `bbb`   add column value int
+---------- Output ---------
+ALTER TABLE `bbb` ADD COLUMN value Int32
+---------- AST ------------
+AlterTable(
+    AlterTableStmt {
+        if_exists: false,
+        table_reference: Table {
+            span: Some(
+                16..21,
+            ),
+            catalog: None,
+            database: None,
+            table: Identifier {
+                span: Some(
+                    16..21,
+                ),
+                name: "bbb",
+                quote: Some(
+                    '`',
+                ),
+                ident_type: None,
+            },
+            alias: None,
+            temporal: None,
+            with_options: None,
+            pivot: None,
+            unpivot: None,
+            sample: None,
+        },
+        action: AddColumn {
+            column: ColumnDefinition {
+                name: Identifier {
+                    span: Some(
+                        35..40,
+                    ),
+                    name: "value",
+                    quote: None,
+                    ident_type: None,
+                },
+                data_type: Int32,
+                expr: None,
+                comment: None,
+            },
+            option: End,
+        },
+    },
+)
+
+
+---------- Input ----------
+alter /*some comments,*/table/*some comments*/ `bbb` add column value int
+---------- Output ---------
+ALTER TABLE `bbb` ADD COLUMN value Int32
+---------- AST ------------
+AlterTable(
+    AlterTableStmt {
+        if_exists: false,
+        table_reference: Table {
+            span: Some(
+                47..52,
+            ),
+            catalog: None,
+            database: None,
+            table: Identifier {
+                span: Some(
+                    47..52,
+                ),
+                name: "bbb",
+                quote: Some(
+                    '`',
+                ),
+                ident_type: None,
+            },
+            alias: None,
+            temporal: None,
+            with_options: None,
+            pivot: None,
+            unpivot: None,
+            sample: None,
+        },
+        action: AddColumn {
+            column: ColumnDefinition {
+                name: Identifier {
+                    span: Some(
+                        64..69,
+                    ),
+                    name: "value",
+                    quote: None,
+                    ident_type: None,
+                },
+                data_type: Int32,
+                expr: None,
+                comment: None,
+            },
+            option: End,
+        },
+    },
+)
+
+
+---------- Input ----------
+alter /*some comments,*/table/*some comments*/    `bbb`   add column value int
+---------- Output ---------
+ALTER TABLE `bbb` ADD COLUMN value Int32
+---------- AST ------------
+AlterTable(
+    AlterTableStmt {
+        if_exists: false,
+        table_reference: Table {
+            span: Some(
+                50..55,
+            ),
+            catalog: None,
+            database: None,
+            table: Identifier {
+                span: Some(
+                    50..55,
+                ),
+                name: "bbb",
+                quote: Some(
+                    '`',
+                ),
+                ident_type: None,
+            },
+            alias: None,
+            temporal: None,
+            with_options: None,
+            pivot: None,
+            unpivot: None,
+            sample: None,
+        },
+        action: AddColumn {
+            column: ColumnDefinition {
+                name: Identifier {
+                    span: Some(
+                        69..74,
+                    ),
+                    name: "value",
+                    quote: None,
+                    ident_type: None,
+                },
+                data_type: Int32,
+                expr: None,
+                comment: None,
+            },
+            option: End,
+        },
+    },
+)
+
+
+---------- Input ----------
+alter table tb_2 rename to tb_3
+---------- Output ---------
+ALTER TABLE tb_2 RENAME TO tb_3
+---------- AST ------------
+AlterTable(
+    AlterTableStmt {
+        if_exists: false,
+        table_reference: Table {
+            span: Some(
+                12..16,
+            ),
+            catalog: None,
+            database: None,
+            table: Identifier {
+                span: Some(
+                    12..16,
+                ),
+                name: "tb_2",
+                quote: None,
+                ident_type: None,
+            },
+            alias: None,
+            temporal: None,
+            with_options: None,
+            pivot: None,
+            unpivot: None,
+            sample: None,
+        },
+        action: RenameTable {
+            new_table: Identifier {
+                span: Some(
+                    27..31,
+                ),
+                name: "tb_3",
+                quote: None,
+                ident_type: None,
+            },
+        },
+    },
+)
+
+
+---------- Input ----------
+create database aaa
+---------- Output ---------
+CREATE DATABASE aaa
+---------- AST ------------
+CreateDatabase(
+    CreateDatabaseStmt {
+        create_option: Create,
+        database: DatabaseRef {
+            catalog: None,
+            database: Identifier {
+                span: Some(
+                    16..19,
+                ),
+                name: "aaa",
+                quote: None,
+                ident_type: None,
+            },
+        },
+        engine: None,
+        options: [],
+    },
+)
+
+
+---------- Input ----------
+create database `aaa`
+---------- Output ---------
+CREATE DATABASE `aaa`
+---------- AST ------------
+CreateDatabase(
+    CreateDatabaseStmt {
+        create_option: Create,
+        database: DatabaseRef {
+            catalog: None,
+            database: Identifier {
+                span: Some(
+                    16..21,
+                ),
+                name: "aaa",
+                quote: Some(
+                    '`',
+                ),
+                ident_type: None,
+            },
+        },
+        engine: None,
+        options: [],
+    },
+)
+
+
+---------- Input ----------
+create   database   aaa
+---------- Output ---------
+CREATE DATABASE aaa
+---------- AST ------------
+CreateDatabase(
+    CreateDatabaseStmt {
+        create_option: Create,
+        database: DatabaseRef {
+            catalog: None,
+            database: Identifier {
+                span: Some(
+                    20..23,
+                ),
+                name: "aaa",
+                quote: None,
+                ident_type: None,
+            },
+        },
+        engine: None,
+        options: [],
+    },
+)
+
+
+---------- Input ----------
+create   database   `aaa`
+---------- Output ---------
+CREATE DATABASE `aaa`
+---------- AST ------------
+CreateDatabase(
+    CreateDatabaseStmt {
+        create_option: Create,
+        database: DatabaseRef {
+            catalog: None,
+            database: Identifier {
+                span: Some(
+                    20..25,
+                ),
+                name: "aaa",
+                quote: Some(
+                    '`',
+                ),
+                ident_type: None,
+            },
+        },
+        engine: None,
+        options: [],
+    },
+)
+
+
+---------- Input ----------
+create database if  not  exists `aaa`
+---------- Output ---------
+CREATE DATABASE IF NOT EXISTS `aaa`
+---------- AST ------------
+CreateDatabase(
+    CreateDatabaseStmt {
+        create_option: CreateIfNotExists,
+        database: DatabaseRef {
+            catalog: None,
+            database: Identifier {
+                span: Some(
+                    32..37,
+                ),
+                name: "aaa",
+                quote: Some(
+                    '`',
+                ),
+                ident_type: None,
+            },
+        },
+        engine: None,
+        options: [],
+    },
+)
+
+
+---------- Input ----------
+create /*some comments,*/database/*some comments*/ `aaa`
+---------- Output ---------
+CREATE DATABASE `aaa`
+---------- AST ------------
+CreateDatabase(
+    CreateDatabaseStmt {
+        create_option: Create,
+        database: DatabaseRef {
+            catalog: None,
+            database: Identifier {
+                span: Some(
+                    51..56,
+                ),
+                name: "aaa",
+                quote: Some(
+                    '`',
+                ),
+                ident_type: None,
+            },
+        },
+        engine: None,
+        options: [],
+    },
+)
+
+
+---------- Input ----------
+create /*some comments,*/database/*some comments*/ if  not  exists    `aaa`
+---------- Output ---------
+CREATE DATABASE IF NOT EXISTS `aaa`
+---------- AST ------------
+CreateDatabase(
+    CreateDatabaseStmt {
+        create_option: CreateIfNotExists,
+        database: DatabaseRef {
+            catalog: None,
+            database: Identifier {
+                span: Some(
+                    70..75,
+                ),
+                name: "aaa",
+                quote: Some(
+                    '`',
+                ),
+                ident_type: None,
+            },
+        },
+        engine: None,
+        options: [],
+    },
+)
+
+
+---------- Input ----------
+CREATE DATABASE IF NOT EXISTS `test_db_*.*`;
+---------- Output ---------
+CREATE DATABASE IF NOT EXISTS `test_db_*.*`
+---------- AST ------------
+CreateDatabase(
+    CreateDatabaseStmt {
+        create_option: CreateIfNotExists,
+        database: DatabaseRef {
+            catalog: None,
+            database: Identifier {
+                span: Some(
+                    30..43,
+                ),
+                name: "test_db_*.*",
+                quote: Some(
+                    '`',
+                ),
+                ident_type: None,
+            },
+        },
+        engine: None,
+        options: [],
+    },
+)
+
+
+---------- Input ----------
+CREATE DATABASE IF NOT EXISTS `中文.others*&^%$#@!+_)(&^%#`;
+---------- Output ---------
+CREATE DATABASE IF NOT EXISTS `中文.others*&^%$#@!+_)(&^%#`
+---------- AST ------------
+CreateDatabase(
+    CreateDatabaseStmt {
+        create_option: CreateIfNotExists,
+        database: DatabaseRef {
+            catalog: None,
+            database: Identifier {
+                span: Some(
+                    30..61,
+                ),
+                name: "中文.others*&^%$#@!+_)(&^%#",
+                quote: Some(
+                    '`',
+                ),
+                ident_type: None,
+            },
+        },
+        engine: None,
+        options: [],
+    },
+)
+
+
+---------- Input ----------
+drop database aaa
+---------- Output ---------
+DROP DATABASE aaa
+---------- AST ------------
+DropDatabase(
+    DropDatabaseStmt {
+        if_exists: false,
+        catalog: None,
+        database: Identifier {
+            span: Some(
+                14..17,
+            ),
+            name: "aaa",
+            quote: None,
+            ident_type: None,
+        },
+    },
+)
+
+
+---------- Input ----------
+drop database `aaa`
+---------- Output ---------
+DROP DATABASE `aaa`
+---------- AST ------------
+DropDatabase(
+    DropDatabaseStmt {
+        if_exists: false,
+        catalog: None,
+        database: Identifier {
+            span: Some(
+                14..19,
+            ),
+            name: "aaa",
+            quote: Some(
+                '`',
+            ),
+            ident_type: None,
+        },
+    },
+)
+
+
+---------- Input ----------
+drop   database   aaa
+---------- Output ---------
+DROP DATABASE aaa
+---------- AST ------------
+DropDatabase(
+    DropDatabaseStmt {
+        if_exists: false,
+        catalog: None,
+        database: Identifier {
+            span: Some(
+                18..21,
+            ),
+            name: "aaa",
+            quote: None,
+            ident_type: None,
+        },
+    },
+)
+
+
+---------- Input ----------
+drop   database   `aaa`
+---------- Output ---------
+DROP DATABASE `aaa`
+---------- AST ------------
+DropDatabase(
+    DropDatabaseStmt {
+        if_exists: false,
+        catalog: None,
+        database: Identifier {
+            span: Some(
+                18..23,
+            ),
+            name: "aaa",
+            quote: Some(
+                '`',
+            ),
+            ident_type: None,
+        },
+    },
+)
+
+
+---------- Input ----------
+drop database if  exists `aaa`
+---------- Output ---------
+DROP DATABASE IF EXISTS `aaa`
+---------- AST ------------
+DropDatabase(
+    DropDatabaseStmt {
+        if_exists: true,
+        catalog: None,
+        database: Identifier {
+            span: Some(
+                25..30,
+            ),
+            name: "aaa",
+            quote: Some(
+                '`',
+            ),
+            ident_type: None,
+        },
+    },
+)
+
+
+---------- Input ----------
+drop /*some comments,*/database/*some comments*/ `aaa`
+---------- Output ---------
+DROP DATABASE `aaa`
+---------- AST ------------
+DropDatabase(
+    DropDatabaseStmt {
+        if_exists: false,
+        catalog: None,
+        database: Identifier {
+            span: Some(
+                49..54,
+            ),
+            name: "aaa",
+            quote: Some(
+                '`',
+            ),
+            ident_type: None,
+        },
+    },
+)
+
+
+---------- Input ----------
+drop /*some comments,*/database/*some comments*/ if  exists    `aaa`
+---------- Output ---------
+DROP DATABASE IF EXISTS `aaa`
+---------- AST ------------
+DropDatabase(
+    DropDatabaseStmt {
+        if_exists: true,
+        catalog: None,
+        database: Identifier {
+            span: Some(
+                63..68,
+            ),
+            name: "aaa",
+            quote: Some(
+                '`',
+            ),
+            ident_type: None,
+        },
+    },
+)
+
+
+---------- Input ----------
+truncate table aaa.bbb
+---------- Output ---------
+TRUNCATE TABLE aaa.bbb
+---------- AST ------------
+TruncateTable(
+    TruncateTableStmt {
+        catalog: None,
+        database: Some(
+            Identifier {
+                span: Some(
+                    15..18,
+                ),
+                name: "aaa",
+                quote: None,
+                ident_type: None,
+            },
+        ),
+        table: Identifier {
+            span: Some(
+                19..22,
+            ),
+            name: "bbb",
+            quote: None,
+            ident_type: None,
+        },
+    },
+)
+
+
+---------- Input ----------
+truncate table `aaa`.`bbb`
+---------- Output ---------
+TRUNCATE TABLE `aaa`.`bbb`
+---------- AST ------------
+TruncateTable(
+    TruncateTableStmt {
+        catalog: None,
+        database: Some(
+            Identifier {
+                span: Some(
+                    15..20,
+                ),
+                name: "aaa",
+                quote: Some(
+                    '`',
+                ),
+                ident_type: None,
+            },
+        ),
+        table: Identifier {
+            span: Some(
+                21..26,
+            ),
+            name: "bbb",
+            quote: Some(
+                '`',
+            ),
+            ident_type: None,
+        },
+    },
+)
+
+
+---------- Input ----------
+truncate   table  aaa . bbb
+---------- Output ---------
+TRUNCATE TABLE aaa.bbb
+---------- AST ------------
+TruncateTable(
+    TruncateTableStmt {
+        catalog: None,
+        database: Some(
+            Identifier {
+                span: Some(
+                    18..21,
+                ),
+                name: "aaa",
+                quote: None,
+                ident_type: None,
+            },
+        ),
+        table: Identifier {
+            span: Some(
+                24..27,
+            ),
+            name: "bbb",
+            quote: None,
+            ident_type: None,
+        },
+    },
+)
+
+
+---------- Input ----------
+truncate   table  `aaa` . `bbb`
+---------- Output ---------
+TRUNCATE TABLE `aaa`.`bbb`
+---------- AST ------------
+TruncateTable(
+    TruncateTableStmt {
+        catalog: None,
+        database: Some(
+            Identifier {
+                span: Some(
+                    18..23,
+                ),
+                name: "aaa",
+                quote: Some(
+                    '`',
+                ),
+                ident_type: None,
+            },
+        ),
+        table: Identifier {
+            span: Some(
+                26..31,
+            ),
+            name: "bbb",
+            quote: Some(
+                '`',
+            ),
+            ident_type: None,
+        },
+    },
+)
+
+
+---------- Input ----------
+truncate /*some comments,*/table/*some comments*/ `aaa`.`bbb`
+---------- Output ---------
+TRUNCATE TABLE `aaa`.`bbb`
+---------- AST ------------
+TruncateTable(
+    TruncateTableStmt {
+        catalog: None,
+        database: Some(
+            Identifier {
+                span: Some(
+                    50..55,
+                ),
+                name: "aaa",
+                quote: Some(
+                    '`',
+                ),
+                ident_type: None,
+            },
+        ),
+        table: Identifier {
+            span: Some(
+                56..61,
+            ),
+            name: "bbb",
+            quote: Some(
+                '`',
+            ),
+            ident_type: None,
+        },
+    },
+)
+
+
+---------- Input ----------
+truncate /*some comments,*/table/*some comments*/   `aaa` .  `bbb`
+---------- Output ---------
+TRUNCATE TABLE `aaa`.`bbb`
+---------- AST ------------
+TruncateTable(
+    TruncateTableStmt {
+        catalog: None,
+        database: Some(
+            Identifier {
+                span: Some(
+                    52..57,
+                ),
+                name: "aaa",
+                quote: Some(
+                    '`',
+                ),
+                ident_type: None,
+            },
+        ),
+        table: Identifier {
+            span: Some(
+                61..66,
+            ),
+            name: "bbb",
+            quote: Some(
+                '`',
+            ),
+            ident_type: None,
+        },
+    },
+)
+
+
+---------- Input ----------
+truncate table bbb
+---------- Output ---------
+TRUNCATE TABLE bbb
+---------- AST ------------
+TruncateTable(
+    TruncateTableStmt {
+        catalog: None,
+        database: None,
+        table: Identifier {
+            span: Some(
+                15..18,
+            ),
+            name: "bbb",
+            quote: None,
+            ident_type: None,
+        },
+    },
+)
+
+
+---------- Input ----------
+truncate table `bbb`
+---------- Output ---------
+TRUNCATE TABLE `bbb`
+---------- AST ------------
+TruncateTable(
+    TruncateTableStmt {
+        catalog: None,
+        database: None,
+        table: Identifier {
+            span: Some(
+                15..20,
+            ),
+            name: "bbb",
+            quote: Some(
+                '`',
+            ),
+            ident_type: None,
+        },
+    },
+)
+
+
+---------- Input ----------
+truncate   table   bbb
+---------- Output ---------
+TRUNCATE TABLE bbb
+---------- AST ------------
+TruncateTable(
+    TruncateTableStmt {
+        catalog: None,
+        database: None,
+        table: Identifier {
+            span: Some(
+                19..22,
+            ),
+            name: "bbb",
+            quote: None,
+            ident_type: None,
+        },
+    },
+)
+
+
+---------- Input ----------
+truncate   table   `bbb`
+---------- Output ---------
+TRUNCATE TABLE `bbb`
+---------- AST ------------
+TruncateTable(
+    TruncateTableStmt {
+        catalog: None,
+        database: None,
+        table: Identifier {
+            span: Some(
+                19..24,
+            ),
+            name: "bbb",
+            quote: Some(
+                '`',
+            ),
+            ident_type: None,
+        },
+    },
+)
+
+
+---------- Input ----------
+truncate /*some comments,*/table/*some comments*/ `bbb`
+---------- Output ---------
+TRUNCATE TABLE `bbb`
+---------- AST ------------
+TruncateTable(
+    TruncateTableStmt {
+        catalog: None,
+        database: None,
+        table: Identifier {
+            span: Some(
+                50..55,
+            ),
+            name: "bbb",
+            quote: Some(
+                '`',
+            ),
+            ident_type: None,
+        },
+    },
+)
+
+
+---------- Input ----------
+truncate /*some comments,*/table/*some comments*/     `bbb`
+---------- Output ---------
+TRUNCATE TABLE `bbb`
+---------- AST ------------
+TruncateTable(
+    TruncateTableStmt {
+        catalog: None,
+        database: None,
+        table: Identifier {
+            span: Some(
+                54..59,
+            ),
+            name: "bbb",
+            quote: Some(
+                '`',
+            ),
+            ident_type: None,
+        },
+    },
+)
+
+
+---------- Input ----------
+rename table aaa.bbb to aaa.ccc
+---------- Output ---------
+RENAME TABLE aaa.bbb TO aaa.ccc
+---------- AST ------------
+RenameTable(
+    RenameTableStmt {
+        if_exists: false,
+        catalog: None,
+        database: Some(
+            Identifier {
+                span: Some(
+                    13..16,
+                ),
+                name: "aaa",
+                quote: None,
+                ident_type: None,
+            },
+        ),
+        table: Identifier {
+            span: Some(
+                17..20,
+            ),
+            name: "bbb",
+            quote: None,
+            ident_type: None,
+        },
+        new_catalog: None,
+        new_database: Some(
+            Identifier {
+                span: Some(
+                    24..27,
+                ),
+                name: "aaa",
+                quote: None,
+                ident_type: None,
+            },
+        ),
+        new_table: Identifier {
+            span: Some(
+                28..31,
+            ),
+            name: "ccc",
+            quote: None,
+            ident_type: None,
+        },
+    },
+)
+
+
+---------- Input ----------
+rename table `aaa`.`bbb` to aaa.ccc
+---------- Output ---------
+RENAME TABLE `aaa`.`bbb` TO aaa.ccc
+---------- AST ------------
+RenameTable(
+    RenameTableStmt {
+        if_exists: false,
+        catalog: None,
+        database: Some(
+            Identifier {
+                span: Some(
+                    13..18,
+                ),
+                name: "aaa",
+                quote: Some(
+                    '`',
+                ),
+                ident_type: None,
+            },
+        ),
+        table: Identifier {
+            span: Some(
+                19..24,
+            ),
+            name: "bbb",
+            quote: Some(
+                '`',
+            ),
+            ident_type: None,
+        },
+        new_catalog: None,
+        new_database: Some(
+            Identifier {
+                span: Some(
+                    28..31,
+                ),
+                name: "aaa",
+                quote: None,
+                ident_type: None,
+            },
+        ),
+        new_table: Identifier {
+            span: Some(
+                32..35,
+            ),
+            name: "ccc",
+            quote: None,
+            ident_type: None,
+        },
+    },
+)
+
+
+---------- Input ----------
+rename   table  aaa . bbb   to aaa.ccc
+---------- Output ---------
+RENAME TABLE aaa.bbb TO aaa.ccc
+---------- AST ------------
+RenameTable(
+    RenameTableStmt {
+        if_exists: false,
+        catalog: None,
+        database: Some(
+            Identifier {
+                span: Some(
+                    16..19,
+                ),
+                name: "aaa",
+                quote: None,
+                ident_type: None,
+            },
+        ),
+        table: Identifier {
+            span: Some(
+                22..25,
+            ),
+            name: "bbb",
+            quote: None,
+            ident_type: None,
+        },
+        new_catalog: None,
+        new_database: Some(
+            Identifier {
+                span: Some(
+                    31..34,
+                ),
+                name: "aaa",
+                quote: None,
+                ident_type: None,
+            },
+        ),
+        new_table: Identifier {
+            span: Some(
+                35..38,
+            ),
+            name: "ccc",
+            quote: None,
+            ident_type: None,
+        },
+    },
+)
+
+
+---------- Input ----------
+rename   table  `aaa` . `bbb`   to aaa.ccc
+---------- Output ---------
+RENAME TABLE `aaa`.`bbb` TO aaa.ccc
+---------- AST ------------
+RenameTable(
+    RenameTableStmt {
+        if_exists: false,
+        catalog: None,
+        database: Some(
+            Identifier {
+                span: Some(
+                    16..21,
+                ),
+                name: "aaa",
+                quote: Some(
+                    '`',
+                ),
+                ident_type: None,
+            },
+        ),
+        table: Identifier {
+            span: Some(
+                24..29,
+            ),
+            name: "bbb",
+            quote: Some(
+                '`',
+            ),
+            ident_type: None,
+        },
+        new_catalog: None,
+        new_database: Some(
+            Identifier {
+                span: Some(
+                    35..38,
+                ),
+                name: "aaa",
+                quote: None,
+                ident_type: None,
+            },
+        ),
+        new_table: Identifier {
+            span: Some(
+                39..42,
+            ),
+            name: "ccc",
+            quote: None,
+            ident_type: None,
+        },
+    },
+)
+
+

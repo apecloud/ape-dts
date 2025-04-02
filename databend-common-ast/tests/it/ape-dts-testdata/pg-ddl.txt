@@ -1,0 +1,1080 @@
+---------- Input ----------
+CREATE TABLE -- some comments
+IF NOT EXISTS 
+db_1.tb_1 
+(id int,
+value int);
+---------- Output ---------
+CREATE TABLE IF NOT EXISTS db_1.tb_1 (id Int32, value Int32)
+---------- AST ------------
+CreateTable(
+    CreateTableStmt {
+        create_option: CreateIfNotExists,
+        catalog: None,
+        database: Some(
+            Identifier {
+                span: Some(
+                    45..49,
+                ),
+                name: "db_1",
+                quote: None,
+                ident_type: None,
+            },
+        ),
+        table: Identifier {
+            span: Some(
+                50..54,
+            ),
+            name: "tb_1",
+            quote: None,
+            ident_type: None,
+        },
+        source: Some(
+            Columns(
+                [
+                    ColumnDefinition {
+                        name: Identifier {
+                            span: Some(
+                                57..59,
+                            ),
+                            name: "id",
+                            quote: None,
+                            ident_type: None,
+                        },
+                        data_type: Int32,
+                        expr: None,
+                        comment: None,
+                    },
+                    ColumnDefinition {
+                        name: Identifier {
+                            span: Some(
+                                65..70,
+                            ),
+                            name: "value",
+                            quote: None,
+                            ident_type: None,
+                        },
+                        data_type: Int32,
+                        expr: None,
+                        comment: None,
+                    },
+                ],
+                None,
+            ),
+        ),
+        engine: None,
+        uri_location: None,
+        cluster_by: None,
+        table_options: {},
+        as_query: None,
+        table_type: Normal,
+    },
+)
+
+
+---------- Input ----------
+CREATE TABLE IF NOT EXISTS Test_DB.Test_TB(id int, "Value" int);
+---------- Output ---------
+CREATE TABLE IF NOT EXISTS Test_DB.Test_TB (id Int32, "Value" Int32)
+---------- AST ------------
+CreateTable(
+    CreateTableStmt {
+        create_option: CreateIfNotExists,
+        catalog: None,
+        database: Some(
+            Identifier {
+                span: Some(
+                    27..34,
+                ),
+                name: "Test_DB",
+                quote: None,
+                ident_type: None,
+            },
+        ),
+        table: Identifier {
+            span: Some(
+                35..42,
+            ),
+            name: "Test_TB",
+            quote: None,
+            ident_type: None,
+        },
+        source: Some(
+            Columns(
+                [
+                    ColumnDefinition {
+                        name: Identifier {
+                            span: Some(
+                                43..45,
+                            ),
+                            name: "id",
+                            quote: None,
+                            ident_type: None,
+                        },
+                        data_type: Int32,
+                        expr: None,
+                        comment: None,
+                    },
+                    ColumnDefinition {
+                        name: Identifier {
+                            span: Some(
+                                51..58,
+                            ),
+                            name: "Value",
+                            quote: Some(
+                                '"',
+                            ),
+                            ident_type: None,
+                        },
+                        data_type: Int32,
+                        expr: None,
+                        comment: None,
+                    },
+                ],
+                None,
+            ),
+        ),
+        engine: None,
+        uri_location: None,
+        cluster_by: None,
+        table_options: {},
+        as_query: None,
+        table_type: Normal,
+    },
+)
+
+
+---------- Input ----------
+CREATE TABLE IF NOT EXISTS "Test_DB".Test_TB(id int, "Value" int);
+---------- Output ---------
+CREATE TABLE IF NOT EXISTS "Test_DB".Test_TB (id Int32, "Value" Int32)
+---------- AST ------------
+CreateTable(
+    CreateTableStmt {
+        create_option: CreateIfNotExists,
+        catalog: None,
+        database: Some(
+            Identifier {
+                span: Some(
+                    27..36,
+                ),
+                name: "Test_DB",
+                quote: Some(
+                    '"',
+                ),
+                ident_type: None,
+            },
+        ),
+        table: Identifier {
+            span: Some(
+                37..44,
+            ),
+            name: "Test_TB",
+            quote: None,
+            ident_type: None,
+        },
+        source: Some(
+            Columns(
+                [
+                    ColumnDefinition {
+                        name: Identifier {
+                            span: Some(
+                                45..47,
+                            ),
+                            name: "id",
+                            quote: None,
+                            ident_type: None,
+                        },
+                        data_type: Int32,
+                        expr: None,
+                        comment: None,
+                    },
+                    ColumnDefinition {
+                        name: Identifier {
+                            span: Some(
+                                53..60,
+                            ),
+                            name: "Value",
+                            quote: Some(
+                                '"',
+                            ),
+                            ident_type: None,
+                        },
+                        data_type: Int32,
+                        expr: None,
+                        comment: None,
+                    },
+                ],
+                None,
+            ),
+        ),
+        engine: None,
+        uri_location: None,
+        cluster_by: None,
+        table_options: {},
+        as_query: None,
+        table_type: Normal,
+    },
+)
+
+
+---------- Input ----------
+CREATE TABLE IF NOT EXISTS "Test_DB"."Test_TB"(id int, "Value" int);
+---------- Output ---------
+CREATE TABLE IF NOT EXISTS "Test_DB"."Test_TB" (id Int32, "Value" Int32)
+---------- AST ------------
+CreateTable(
+    CreateTableStmt {
+        create_option: CreateIfNotExists,
+        catalog: None,
+        database: Some(
+            Identifier {
+                span: Some(
+                    27..36,
+                ),
+                name: "Test_DB",
+                quote: Some(
+                    '"',
+                ),
+                ident_type: None,
+            },
+        ),
+        table: Identifier {
+            span: Some(
+                37..46,
+            ),
+            name: "Test_TB",
+            quote: Some(
+                '"',
+            ),
+            ident_type: None,
+        },
+        source: Some(
+            Columns(
+                [
+                    ColumnDefinition {
+                        name: Identifier {
+                            span: Some(
+                                47..49,
+                            ),
+                            name: "id",
+                            quote: None,
+                            ident_type: None,
+                        },
+                        data_type: Int32,
+                        expr: None,
+                        comment: None,
+                    },
+                    ColumnDefinition {
+                        name: Identifier {
+                            span: Some(
+                                55..62,
+                            ),
+                            name: "Value",
+                            quote: Some(
+                                '"',
+                            ),
+                            ident_type: None,
+                        },
+                        data_type: Int32,
+                        expr: None,
+                        comment: None,
+                    },
+                ],
+                None,
+            ),
+        ),
+        engine: None,
+        uri_location: None,
+        cluster_by: None,
+        table_options: {},
+        as_query: None,
+        table_type: Normal,
+    },
+)
+
+
+---------- Input ----------
+CREATE TABLE IF NOT EXISTS "test_db_*.*".bbb(id int);
+---------- Output ---------
+CREATE TABLE IF NOT EXISTS "test_db_*.*".bbb (id Int32)
+---------- AST ------------
+CreateTable(
+    CreateTableStmt {
+        create_option: CreateIfNotExists,
+        catalog: None,
+        database: Some(
+            Identifier {
+                span: Some(
+                    27..40,
+                ),
+                name: "test_db_*.*",
+                quote: Some(
+                    '"',
+                ),
+                ident_type: None,
+            },
+        ),
+        table: Identifier {
+            span: Some(
+                41..44,
+            ),
+            name: "bbb",
+            quote: None,
+            ident_type: None,
+        },
+        source: Some(
+            Columns(
+                [
+                    ColumnDefinition {
+                        name: Identifier {
+                            span: Some(
+                                45..47,
+                            ),
+                            name: "id",
+                            quote: None,
+                            ident_type: None,
+                        },
+                        data_type: Int32,
+                        expr: None,
+                        comment: None,
+                    },
+                ],
+                None,
+            ),
+        ),
+        engine: None,
+        uri_location: None,
+        cluster_by: None,
+        table_options: {},
+        as_query: None,
+        table_type: Normal,
+    },
+)
+
+
+---------- Input ----------
+CREATE TABLE IF NOT EXISTS "中文.others*&^%$#@!+_)(&^%#"."中文!@$#$%^&*&(_+)"(id int);
+---------- Output ---------
+CREATE TABLE IF NOT EXISTS "中文.others*&^%$#@!+_)(&^%#"."中文!@$#$%^&*&(_+)" (id Int32)
+---------- AST ------------
+CreateTable(
+    CreateTableStmt {
+        create_option: CreateIfNotExists,
+        catalog: None,
+        database: Some(
+            Identifier {
+                span: Some(
+                    27..58,
+                ),
+                name: "中文.others*&^%$#@!+_)(&^%#",
+                quote: Some(
+                    '"',
+                ),
+                ident_type: None,
+            },
+        ),
+        table: Identifier {
+            span: Some(
+                59..81,
+            ),
+            name: "中文!@$#$%^&*&(_+)",
+            quote: Some(
+                '"',
+            ),
+            ident_type: None,
+        },
+        source: Some(
+            Columns(
+                [
+                    ColumnDefinition {
+                        name: Identifier {
+                            span: Some(
+                                82..84,
+                            ),
+                            name: "id",
+                            quote: None,
+                            ident_type: None,
+                        },
+                        data_type: Int32,
+                        expr: None,
+                        comment: None,
+                    },
+                ],
+                None,
+            ),
+        ),
+        engine: None,
+        uri_location: None,
+        cluster_by: None,
+        table_options: {},
+        as_query: None,
+        table_type: Normal,
+    },
+)
+
+
+---------- Input ----------
+create TEMPORARY table tb_2(ts TIMESTAMP);
+---------- Output ---------
+CREATE TEMPORARY  TABLE tb_2 (ts TIMESTAMP)
+---------- AST ------------
+CreateTable(
+    CreateTableStmt {
+        create_option: Create,
+        catalog: None,
+        database: None,
+        table: Identifier {
+            span: Some(
+                23..27,
+            ),
+            name: "tb_2",
+            quote: None,
+            ident_type: None,
+        },
+        source: Some(
+            Columns(
+                [
+                    ColumnDefinition {
+                        name: Identifier {
+                            span: Some(
+                                28..30,
+                            ),
+                            name: "ts",
+                            quote: None,
+                            ident_type: None,
+                        },
+                        data_type: Timestamp,
+                        expr: None,
+                        comment: None,
+                    },
+                ],
+                None,
+            ),
+        ),
+        engine: None,
+        uri_location: None,
+        cluster_by: None,
+        table_options: {},
+        as_query: None,
+        table_type: Temporary,
+    },
+)
+
+
+---------- Input ----------
+create temp table tb_3(ts TIMESTAMP);
+---------- Output ---------
+CREATE TEMPORARY  TABLE tb_3 (ts TIMESTAMP)
+---------- AST ------------
+CreateTable(
+    CreateTableStmt {
+        create_option: Create,
+        catalog: None,
+        database: None,
+        table: Identifier {
+            span: Some(
+                18..22,
+            ),
+            name: "tb_3",
+            quote: None,
+            ident_type: None,
+        },
+        source: Some(
+            Columns(
+                [
+                    ColumnDefinition {
+                        name: Identifier {
+                            span: Some(
+                                23..25,
+                            ),
+                            name: "ts",
+                            quote: None,
+                            ident_type: None,
+                        },
+                        data_type: Timestamp,
+                        expr: None,
+                        comment: None,
+                    },
+                ],
+                None,
+            ),
+        ),
+        engine: None,
+        uri_location: None,
+        cluster_by: None,
+        table_options: {},
+        as_query: None,
+        table_type: Temporary,
+    },
+)
+
+
+---------- Input ----------
+alter /*some comments,*/table/*some comments*/   "aaa" .  "bbb"   add column value int
+---------- Output ---------
+ALTER TABLE "aaa"."bbb" ADD COLUMN value Int32
+---------- AST ------------
+AlterTable(
+    AlterTableStmt {
+        if_exists: false,
+        table_reference: Table {
+            span: Some(
+                49..63,
+            ),
+            catalog: None,
+            database: Some(
+                Identifier {
+                    span: Some(
+                        49..54,
+                    ),
+                    name: "aaa",
+                    quote: Some(
+                        '"',
+                    ),
+                    ident_type: None,
+                },
+            ),
+            table: Identifier {
+                span: Some(
+                    58..63,
+                ),
+                name: "bbb",
+                quote: Some(
+                    '"',
+                ),
+                ident_type: None,
+            },
+            alias: None,
+            temporal: None,
+            with_options: None,
+            pivot: None,
+            unpivot: None,
+            sample: None,
+        },
+        action: AddColumn {
+            column: ColumnDefinition {
+                name: Identifier {
+                    span: Some(
+                        77..82,
+                    ),
+                    name: "value",
+                    quote: None,
+                    ident_type: None,
+                },
+                data_type: Int32,
+                expr: None,
+                comment: None,
+            },
+            option: End,
+        },
+    },
+)
+
+
+---------- Input ----------
+alter table bbb add column value int
+---------- Output ---------
+ALTER TABLE bbb ADD COLUMN value Int32
+---------- AST ------------
+AlterTable(
+    AlterTableStmt {
+        if_exists: false,
+        table_reference: Table {
+            span: Some(
+                12..15,
+            ),
+            catalog: None,
+            database: None,
+            table: Identifier {
+                span: Some(
+                    12..15,
+                ),
+                name: "bbb",
+                quote: None,
+                ident_type: None,
+            },
+            alias: None,
+            temporal: None,
+            with_options: None,
+            pivot: None,
+            unpivot: None,
+            sample: None,
+        },
+        action: AddColumn {
+            column: ColumnDefinition {
+                name: Identifier {
+                    span: Some(
+                        27..32,
+                    ),
+                    name: "value",
+                    quote: None,
+                    ident_type: None,
+                },
+                data_type: Int32,
+                expr: None,
+                comment: None,
+            },
+            option: End,
+        },
+    },
+)
+
+
+---------- Input ----------
+alter table `bbb` add column value int
+---------- Output ---------
+ALTER TABLE `bbb` ADD COLUMN value Int32
+---------- AST ------------
+AlterTable(
+    AlterTableStmt {
+        if_exists: false,
+        table_reference: Table {
+            span: Some(
+                12..17,
+            ),
+            catalog: None,
+            database: None,
+            table: Identifier {
+                span: Some(
+                    12..17,
+                ),
+                name: "bbb",
+                quote: Some(
+                    '`',
+                ),
+                ident_type: None,
+            },
+            alias: None,
+            temporal: None,
+            with_options: None,
+            pivot: None,
+            unpivot: None,
+            sample: None,
+        },
+        action: AddColumn {
+            column: ColumnDefinition {
+                name: Identifier {
+                    span: Some(
+                        29..34,
+                    ),
+                    name: "value",
+                    quote: None,
+                    ident_type: None,
+                },
+                data_type: Int32,
+                expr: None,
+                comment: None,
+            },
+            option: End,
+        },
+    },
+)
+
+
+---------- Input ----------
+alter   table   bbb   add column value int
+---------- Output ---------
+ALTER TABLE bbb ADD COLUMN value Int32
+---------- AST ------------
+AlterTable(
+    AlterTableStmt {
+        if_exists: false,
+        table_reference: Table {
+            span: Some(
+                16..19,
+            ),
+            catalog: None,
+            database: None,
+            table: Identifier {
+                span: Some(
+                    16..19,
+                ),
+                name: "bbb",
+                quote: None,
+                ident_type: None,
+            },
+            alias: None,
+            temporal: None,
+            with_options: None,
+            pivot: None,
+            unpivot: None,
+            sample: None,
+        },
+        action: AddColumn {
+            column: ColumnDefinition {
+                name: Identifier {
+                    span: Some(
+                        33..38,
+                    ),
+                    name: "value",
+                    quote: None,
+                    ident_type: None,
+                },
+                data_type: Int32,
+                expr: None,
+                comment: None,
+            },
+            option: End,
+        },
+    },
+)
+
+
+---------- Input ----------
+alter   table   `bbb`   add column value int
+---------- Output ---------
+ALTER TABLE `bbb` ADD COLUMN value Int32
+---------- AST ------------
+AlterTable(
+    AlterTableStmt {
+        if_exists: false,
+        table_reference: Table {
+            span: Some(
+                16..21,
+            ),
+            catalog: None,
+            database: None,
+            table: Identifier {
+                span: Some(
+                    16..21,
+                ),
+                name: "bbb",
+                quote: Some(
+                    '`',
+                ),
+                ident_type: None,
+            },
+            alias: None,
+            temporal: None,
+            with_options: None,
+            pivot: None,
+            unpivot: None,
+            sample: None,
+        },
+        action: AddColumn {
+            column: ColumnDefinition {
+                name: Identifier {
+                    span: Some(
+                        35..40,
+                    ),
+                    name: "value",
+                    quote: None,
+                    ident_type: None,
+                },
+                data_type: Int32,
+                expr: None,
+                comment: None,
+            },
+            option: End,
+        },
+    },
+)
+
+
+---------- Input ----------
+alter /*some comments,*/table/*some comments*/ `bbb` add column value int
+---------- Output ---------
+ALTER TABLE `bbb` ADD COLUMN value Int32
+---------- AST ------------
+AlterTable(
+    AlterTableStmt {
+        if_exists: false,
+        table_reference: Table {
+            span: Some(
+                47..52,
+            ),
+            catalog: None,
+            database: None,
+            table: Identifier {
+                span: Some(
+                    47..52,
+                ),
+                name: "bbb",
+                quote: Some(
+                    '`',
+                ),
+                ident_type: None,
+            },
+            alias: None,
+            temporal: None,
+            with_options: None,
+            pivot: None,
+            unpivot: None,
+            sample: None,
+        },
+        action: AddColumn {
+            column: ColumnDefinition {
+                name: Identifier {
+                    span: Some(
+                        64..69,
+                    ),
+                    name: "value",
+                    quote: None,
+                    ident_type: None,
+                },
+                data_type: Int32,
+                expr: None,
+                comment: None,
+            },
+            option: End,
+        },
+    },
+)
+
+
+---------- Input ----------
+alter /*some comments,*/table/*some comments*/    `bbb`   add column value int
+---------- Output ---------
+ALTER TABLE `bbb` ADD COLUMN value Int32
+---------- AST ------------
+AlterTable(
+    AlterTableStmt {
+        if_exists: false,
+        table_reference: Table {
+            span: Some(
+                50..55,
+            ),
+            catalog: None,
+            database: None,
+            table: Identifier {
+                span: Some(
+                    50..55,
+                ),
+                name: "bbb",
+                quote: Some(
+                    '`',
+                ),
+                ident_type: None,
+            },
+            alias: None,
+            temporal: None,
+            with_options: None,
+            pivot: None,
+            unpivot: None,
+            sample: None,
+        },
+        action: AddColumn {
+            column: ColumnDefinition {
+                name: Identifier {
+                    span: Some(
+                        69..74,
+                    ),
+                    name: "value",
+                    quote: None,
+                    ident_type: None,
+                },
+                data_type: Int32,
+                expr: None,
+                comment: None,
+            },
+            option: End,
+        },
+    },
+)
+
+
+---------- Input ----------
+ALTER TABLE tb_1 RENAME TO tb_2
+---------- Output ---------
+ALTER TABLE tb_1 RENAME TO tb_2
+---------- AST ------------
+AlterTable(
+    AlterTableStmt {
+        if_exists: false,
+        table_reference: Table {
+            span: Some(
+                12..16,
+            ),
+            catalog: None,
+            database: None,
+            table: Identifier {
+                span: Some(
+                    12..16,
+                ),
+                name: "tb_1",
+                quote: None,
+                ident_type: None,
+            },
+            alias: None,
+            temporal: None,
+            with_options: None,
+            pivot: None,
+            unpivot: None,
+            sample: None,
+        },
+        action: RenameTable {
+            new_table: Identifier {
+                span: Some(
+                    27..31,
+                ),
+                name: "tb_2",
+                quote: None,
+                ident_type: None,
+            },
+        },
+    },
+)
+
+
+---------- Input ----------
+alter table tb_1 rename to tb_2
+---------- Output ---------
+ALTER TABLE tb_1 RENAME TO tb_2
+---------- AST ------------
+AlterTable(
+    AlterTableStmt {
+        if_exists: false,
+        table_reference: Table {
+            span: Some(
+                12..16,
+            ),
+            catalog: None,
+            database: None,
+            table: Identifier {
+                span: Some(
+                    12..16,
+                ),
+                name: "tb_1",
+                quote: None,
+                ident_type: None,
+            },
+            alias: None,
+            temporal: None,
+            with_options: None,
+            pivot: None,
+            unpivot: None,
+            sample: None,
+        },
+        action: RenameTable {
+            new_table: Identifier {
+                span: Some(
+                    27..31,
+                ),
+                name: "tb_2",
+                quote: None,
+                ident_type: None,
+            },
+        },
+    },
+)
+
+
+---------- Input ----------
+alter table "schema_1".tb_1 rename to tb_2
+---------- Output ---------
+ALTER TABLE "schema_1".tb_1 RENAME TO tb_2
+---------- AST ------------
+AlterTable(
+    AlterTableStmt {
+        if_exists: false,
+        table_reference: Table {
+            span: Some(
+                12..27,
+            ),
+            catalog: None,
+            database: Some(
+                Identifier {
+                    span: Some(
+                        12..22,
+                    ),
+                    name: "schema_1",
+                    quote: Some(
+                        '"',
+                    ),
+                    ident_type: None,
+                },
+            ),
+            table: Identifier {
+                span: Some(
+                    23..27,
+                ),
+                name: "tb_1",
+                quote: None,
+                ident_type: None,
+            },
+            alias: None,
+            temporal: None,
+            with_options: None,
+            pivot: None,
+            unpivot: None,
+            sample: None,
+        },
+        action: RenameTable {
+            new_table: Identifier {
+                span: Some(
+                    38..42,
+                ),
+                name: "tb_2",
+                quote: None,
+                ident_type: None,
+            },
+        },
+    },
+)
+
+
+---------- Input ----------
+truncate table aaa.bbb
+---------- Output ---------
+TRUNCATE TABLE aaa.bbb
+---------- AST ------------
+TruncateTable(
+    TruncateTableStmt {
+        catalog: None,
+        database: Some(
+            Identifier {
+                span: Some(
+                    15..18,
+                ),
+                name: "aaa",
+                quote: None,
+                ident_type: None,
+            },
+        ),
+        table: Identifier {
+            span: Some(
+                19..22,
+            ),
+            name: "bbb",
+            quote: None,
+            ident_type: None,
+        },
+    },
+)
+
+
+---------- Input ----------
+truncate /*some comments,*/table/*some comments*/   "aaa" .  "bbb"
+---------- Output ---------
+TRUNCATE TABLE "aaa"."bbb"
+---------- AST ------------
+TruncateTable(
+    TruncateTableStmt {
+        catalog: None,
+        database: Some(
+            Identifier {
+                span: Some(
+                    52..57,
+                ),
+                name: "aaa",
+                quote: Some(
+                    '"',
+                ),
+                ident_type: None,
+            },
+        ),
+        table: Identifier {
+            span: Some(
+                61..66,
+            ),
+            name: "bbb",
+            quote: Some(
+                '"',
+            ),
+            ident_type: None,
+        },
+    },
+)
+
+
