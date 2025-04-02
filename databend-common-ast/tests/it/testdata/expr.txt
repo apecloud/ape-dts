@@ -1,0 +1,5400 @@
+---------- Input ----------
+a
+---------- Output ---------
+a
+---------- AST ------------
+ColumnRef {
+    span: Some(
+        0..1,
+    ),
+    column: ColumnRef {
+        database: None,
+        table: None,
+        column: Name(
+            Identifier {
+                span: Some(
+                    0..1,
+                ),
+                name: "a",
+                quote: None,
+                ident_type: None,
+            },
+        ),
+    },
+}
+
+
+---------- Input ----------
+?
+---------- Output ---------
+?
+---------- AST ------------
+Placeholder {
+    span: Some(
+        0..1,
+    ),
+}
+
+
+---------- Input ----------
+'I''m who I\'m.'
+---------- Output ---------
+'I\'m who I\'m.'
+---------- AST ------------
+Literal {
+    span: Some(
+        0..16,
+    ),
+    value: String(
+        "I'm who I'm.",
+    ),
+}
+
+
+---------- Input ----------
+'\776 \n \t \u0053 \xaa'
+---------- Output ---------
+'Ǿ \n \t S ª'
+---------- AST ------------
+Literal {
+    span: Some(
+        0..24,
+    ),
+    value: String(
+        "Ǿ \n \t S ª",
+    ),
+}
+
+
+---------- Input ----------
+char(0xD0, 0xBF, 0xD1)
+---------- Output ---------
+char(208, 191, 209)
+---------- AST ------------
+FunctionCall {
+    span: Some(
+        0..22,
+    ),
+    func: FunctionCall {
+        distinct: false,
+        name: Identifier {
+            span: Some(
+                0..4,
+            ),
+            name: "char",
+            quote: None,
+            ident_type: None,
+        },
+        args: [
+            Literal {
+                span: Some(
+                    5..9,
+                ),
+                value: UInt64(
+                    208,
+                ),
+            },
+            Literal {
+                span: Some(
+                    11..15,
+                ),
+                value: UInt64(
+                    191,
+                ),
+            },
+            Literal {
+                span: Some(
+                    17..21,
+                ),
+                value: UInt64(
+                    209,
+                ),
+            },
+        ],
+        params: [],
+        order_by: [],
+        window: None,
+        lambda: None,
+    },
+}
+
+
+---------- Input ----------
+[42, 3.5, 4., .001, 5e2, 1.925e-3, .38e+7, 1.e-01, 0xfff, x'deedbeef']
+---------- Output ---------
+[42, 3.5, 4, 0.001, 500, 0.001925, 3800000, 0.1, 4095, 3740122863]
+---------- AST ------------
+Array {
+    span: Some(
+        0..70,
+    ),
+    exprs: [
+        Literal {
+            span: Some(
+                1..3,
+            ),
+            value: UInt64(
+                42,
+            ),
+        },
+        Literal {
+            span: Some(
+                5..8,
+            ),
+            value: Decimal256 {
+                value: 35,
+                precision: 76,
+                scale: 1,
+            },
+        },
+        Literal {
+            span: Some(
+                10..12,
+            ),
+            value: Decimal256 {
+                value: 4,
+                precision: 76,
+                scale: 0,
+            },
+        },
+        Literal {
+            span: Some(
+                14..18,
+            ),
+            value: Decimal256 {
+                value: 1,
+                precision: 76,
+                scale: 3,
+            },
+        },
+        Literal {
+            span: Some(
+                20..23,
+            ),
+            value: Decimal256 {
+                value: 500,
+                precision: 76,
+                scale: 0,
+            },
+        },
+        Literal {
+            span: Some(
+                25..33,
+            ),
+            value: Decimal256 {
+                value: 1925,
+                precision: 76,
+                scale: 6,
+            },
+        },
+        Literal {
+            span: Some(
+                35..41,
+            ),
+            value: Decimal256 {
+                value: 3800000,
+                precision: 76,
+                scale: 0,
+            },
+        },
+        Literal {
+            span: Some(
+                43..49,
+            ),
+            value: Decimal256 {
+                value: 1,
+                precision: 76,
+                scale: 1,
+            },
+        },
+        Literal {
+            span: Some(
+                51..56,
+            ),
+            value: UInt64(
+                4095,
+            ),
+        },
+        Literal {
+            span: Some(
+                58..69,
+            ),
+            value: UInt64(
+                3740122863,
+            ),
+        },
+    ],
+}
+
+
+---------- Input ----------
+123456789012345678901234567890
+---------- Output ---------
+123456789012345678901234567890
+---------- AST ------------
+Literal {
+    span: Some(
+        0..30,
+    ),
+    value: Decimal256 {
+        value: 123456789012345678901234567890,
+        precision: 76,
+        scale: 0,
+    },
+}
+
+
+---------- Input ----------
+$$ab123c$$
+---------- Output ---------
+'ab123c'
+---------- AST ------------
+Literal {
+    span: Some(
+        0..10,
+    ),
+    value: String(
+        "ab123c",
+    ),
+}
+
+
+---------- Input ----------
+x'123456789012345678901234567890'
+---------- Output ---------
+94522879687365475552814062743484560
+---------- AST ------------
+Literal {
+    span: Some(
+        0..33,
+    ),
+    value: Decimal256 {
+        value: 94522879687365475552814062743484560,
+        precision: 76,
+        scale: 0,
+    },
+}
+
+
+---------- Input ----------
+1e100000000000000
+---------- Output ---------
+'+INFINITY'::FLOAT64
+---------- AST ------------
+Literal {
+    span: Some(
+        0..17,
+    ),
+    value: Float64(
+        inf,
+    ),
+}
+
+
+---------- Input ----------
+100_100_000
+---------- Output ---------
+100100000
+---------- AST ------------
+Literal {
+    span: Some(
+        0..11,
+    ),
+    value: UInt64(
+        100100000,
+    ),
+}
+
+
+---------- Input ----------
+1_12200_00
+---------- Output ---------
+11220000
+---------- AST ------------
+Literal {
+    span: Some(
+        0..10,
+    ),
+    value: UInt64(
+        11220000,
+    ),
+}
+
+
+---------- Input ----------
+.1
+---------- Output ---------
+0.1
+---------- AST ------------
+Literal {
+    span: Some(
+        0..2,
+    ),
+    value: Decimal256 {
+        value: 1,
+        precision: 76,
+        scale: 1,
+    },
+}
+
+
+---------- Input ----------
+-1
+---------- Output ---------
+- 1
+---------- AST ------------
+UnaryOp {
+    span: Some(
+        0..1,
+    ),
+    op: Minus,
+    expr: Literal {
+        span: Some(
+            1..2,
+        ),
+        value: UInt64(
+            1,
+        ),
+    },
+}
+
+
+---------- Input ----------
+(1)
+---------- Output ---------
+1
+---------- AST ------------
+Literal {
+    span: Some(
+        1..2,
+    ),
+    value: UInt64(
+        1,
+    ),
+}
+
+
+---------- Input ----------
+(1,)
+---------- Output ---------
+(1,)
+---------- AST ------------
+Tuple {
+    span: Some(
+        0..4,
+    ),
+    exprs: [
+        Literal {
+            span: Some(
+                1..2,
+            ),
+            value: UInt64(
+                1,
+            ),
+        },
+    ],
+}
+
+
+---------- Input ----------
+(1,2)
+---------- Output ---------
+(1, 2)
+---------- AST ------------
+Tuple {
+    span: Some(
+        0..5,
+    ),
+    exprs: [
+        Literal {
+            span: Some(
+                1..2,
+            ),
+            value: UInt64(
+                1,
+            ),
+        },
+        Literal {
+            span: Some(
+                3..4,
+            ),
+            value: UInt64(
+                2,
+            ),
+        },
+    ],
+}
+
+
+---------- Input ----------
+(1,2,)
+---------- Output ---------
+(1, 2)
+---------- AST ------------
+Tuple {
+    span: Some(
+        0..6,
+    ),
+    exprs: [
+        Literal {
+            span: Some(
+                1..2,
+            ),
+            value: UInt64(
+                1,
+            ),
+        },
+        Literal {
+            span: Some(
+                3..4,
+            ),
+            value: UInt64(
+                2,
+            ),
+        },
+    ],
+}
+
+
+---------- Input ----------
+[1]
+---------- Output ---------
+[1]
+---------- AST ------------
+Array {
+    span: Some(
+        0..3,
+    ),
+    exprs: [
+        Literal {
+            span: Some(
+                1..2,
+            ),
+            value: UInt64(
+                1,
+            ),
+        },
+    ],
+}
+
+
+---------- Input ----------
+[1,]
+---------- Output ---------
+[1]
+---------- AST ------------
+Array {
+    span: Some(
+        0..4,
+    ),
+    exprs: [
+        Literal {
+            span: Some(
+                1..2,
+            ),
+            value: UInt64(
+                1,
+            ),
+        },
+    ],
+}
+
+
+---------- Input ----------
+[[1]]
+---------- Output ---------
+[[1]]
+---------- AST ------------
+Array {
+    span: Some(
+        0..5,
+    ),
+    exprs: [
+        Array {
+            span: Some(
+                1..4,
+            ),
+            exprs: [
+                Literal {
+                    span: Some(
+                        2..3,
+                    ),
+                    value: UInt64(
+                        1,
+                    ),
+                },
+            ],
+        },
+    ],
+}
+
+
+---------- Input ----------
+[[1],[2]]
+---------- Output ---------
+[[1], [2]]
+---------- AST ------------
+Array {
+    span: Some(
+        0..9,
+    ),
+    exprs: [
+        Array {
+            span: Some(
+                1..4,
+            ),
+            exprs: [
+                Literal {
+                    span: Some(
+                        2..3,
+                    ),
+                    value: UInt64(
+                        1,
+                    ),
+                },
+            ],
+        },
+        Array {
+            span: Some(
+                5..8,
+            ),
+            exprs: [
+                Literal {
+                    span: Some(
+                        6..7,
+                    ),
+                    value: UInt64(
+                        2,
+                    ),
+                },
+            ],
+        },
+    ],
+}
+
+
+---------- Input ----------
+[[[1,2,3],[4,5,6]],[[7,8,9]]][0][1][2]
+---------- Output ---------
+[[[1, 2, 3], [4, 5, 6]], [[7, 8, 9]]][0][1][2]
+---------- AST ------------
+MapAccess {
+    span: Some(
+        35..38,
+    ),
+    expr: MapAccess {
+        span: Some(
+            32..35,
+        ),
+        expr: MapAccess {
+            span: Some(
+                29..32,
+            ),
+            expr: Array {
+                span: Some(
+                    0..29,
+                ),
+                exprs: [
+                    Array {
+                        span: Some(
+                            1..18,
+                        ),
+                        exprs: [
+                            Array {
+                                span: Some(
+                                    2..9,
+                                ),
+                                exprs: [
+                                    Literal {
+                                        span: Some(
+                                            3..4,
+                                        ),
+                                        value: UInt64(
+                                            1,
+                                        ),
+                                    },
+                                    Literal {
+                                        span: Some(
+                                            5..6,
+                                        ),
+                                        value: UInt64(
+                                            2,
+                                        ),
+                                    },
+                                    Literal {
+                                        span: Some(
+                                            7..8,
+                                        ),
+                                        value: UInt64(
+                                            3,
+                                        ),
+                                    },
+                                ],
+                            },
+                            Array {
+                                span: Some(
+                                    10..17,
+                                ),
+                                exprs: [
+                                    Literal {
+                                        span: Some(
+                                            11..12,
+                                        ),
+                                        value: UInt64(
+                                            4,
+                                        ),
+                                    },
+                                    Literal {
+                                        span: Some(
+                                            13..14,
+                                        ),
+                                        value: UInt64(
+                                            5,
+                                        ),
+                                    },
+                                    Literal {
+                                        span: Some(
+                                            15..16,
+                                        ),
+                                        value: UInt64(
+                                            6,
+                                        ),
+                                    },
+                                ],
+                            },
+                        ],
+                    },
+                    Array {
+                        span: Some(
+                            19..28,
+                        ),
+                        exprs: [
+                            Array {
+                                span: Some(
+                                    20..27,
+                                ),
+                                exprs: [
+                                    Literal {
+                                        span: Some(
+                                            21..22,
+                                        ),
+                                        value: UInt64(
+                                            7,
+                                        ),
+                                    },
+                                    Literal {
+                                        span: Some(
+                                            23..24,
+                                        ),
+                                        value: UInt64(
+                                            8,
+                                        ),
+                                    },
+                                    Literal {
+                                        span: Some(
+                                            25..26,
+                                        ),
+                                        value: UInt64(
+                                            9,
+                                        ),
+                                    },
+                                ],
+                            },
+                        ],
+                    },
+                ],
+            },
+            accessor: Bracket {
+                key: Literal {
+                    span: Some(
+                        30..31,
+                    ),
+                    value: UInt64(
+                        0,
+                    ),
+                },
+            },
+        },
+        accessor: Bracket {
+            key: Literal {
+                span: Some(
+                    33..34,
+                ),
+                value: UInt64(
+                    1,
+                ),
+            },
+        },
+    },
+    accessor: Bracket {
+        key: Literal {
+            span: Some(
+                36..37,
+            ),
+            value: UInt64(
+                2,
+            ),
+        },
+    },
+}
+
+
+---------- Input ----------
+((1 = 1) or 1)
+---------- Output ---------
+1 = 1 OR 1
+---------- AST ------------
+BinaryOp {
+    span: Some(
+        9..11,
+    ),
+    op: Or,
+    left: BinaryOp {
+        span: Some(
+            4..5,
+        ),
+        op: Eq,
+        left: Literal {
+            span: Some(
+                2..3,
+            ),
+            value: UInt64(
+                1,
+            ),
+        },
+        right: Literal {
+            span: Some(
+                6..7,
+            ),
+            value: UInt64(
+                1,
+            ),
+        },
+    },
+    right: Literal {
+        span: Some(
+            12..13,
+        ),
+        value: UInt64(
+            1,
+        ),
+    },
+}
+
+
+---------- Input ----------
+typeof(1 + 2)
+---------- Output ---------
+typeof(1 + 2)
+---------- AST ------------
+FunctionCall {
+    span: Some(
+        0..13,
+    ),
+    func: FunctionCall {
+        distinct: false,
+        name: Identifier {
+            span: Some(
+                0..6,
+            ),
+            name: "typeof",
+            quote: None,
+            ident_type: None,
+        },
+        args: [
+            BinaryOp {
+                span: Some(
+                    9..10,
+                ),
+                op: Plus,
+                left: Literal {
+                    span: Some(
+                        7..8,
+                    ),
+                    value: UInt64(
+                        1,
+                    ),
+                },
+                right: Literal {
+                    span: Some(
+                        11..12,
+                    ),
+                    value: UInt64(
+                        2,
+                    ),
+                },
+            },
+        ],
+        params: [],
+        order_by: [],
+        window: None,
+        lambda: None,
+    },
+}
+
+
+---------- Input ----------
+- - + + - 1 + + - 2
+---------- Output ---------
+- - + + - 1 + + - 2
+---------- AST ------------
+BinaryOp {
+    span: Some(
+        12..13,
+    ),
+    op: Plus,
+    left: UnaryOp {
+        span: Some(
+            0..1,
+        ),
+        op: Minus,
+        expr: UnaryOp {
+            span: Some(
+                2..3,
+            ),
+            op: Minus,
+            expr: UnaryOp {
+                span: Some(
+                    4..5,
+                ),
+                op: Plus,
+                expr: UnaryOp {
+                    span: Some(
+                        6..7,
+                    ),
+                    op: Plus,
+                    expr: UnaryOp {
+                        span: Some(
+                            8..9,
+                        ),
+                        op: Minus,
+                        expr: Literal {
+                            span: Some(
+                                10..11,
+                            ),
+                            value: UInt64(
+                                1,
+                            ),
+                        },
+                    },
+                },
+            },
+        },
+    },
+    right: UnaryOp {
+        span: Some(
+            14..15,
+        ),
+        op: Plus,
+        expr: UnaryOp {
+            span: Some(
+                16..17,
+            ),
+            op: Minus,
+            expr: Literal {
+                span: Some(
+                    18..19,
+                ),
+                value: UInt64(
+                    2,
+                ),
+            },
+        },
+    },
+}
+
+
+---------- Input ----------
+0XFF + 0xff + 0xa + x'ffff'
+---------- Output ---------
+255 + 255 + 10 + 65535
+---------- AST ------------
+BinaryOp {
+    span: Some(
+        18..19,
+    ),
+    op: Plus,
+    left: BinaryOp {
+        span: Some(
+            12..13,
+        ),
+        op: Plus,
+        left: BinaryOp {
+            span: Some(
+                5..6,
+            ),
+            op: Plus,
+            left: Literal {
+                span: Some(
+                    0..4,
+                ),
+                value: UInt64(
+                    255,
+                ),
+            },
+            right: Literal {
+                span: Some(
+                    7..11,
+                ),
+                value: UInt64(
+                    255,
+                ),
+            },
+        },
+        right: Literal {
+            span: Some(
+                14..17,
+            ),
+            value: UInt64(
+                10,
+            ),
+        },
+    },
+    right: Literal {
+        span: Some(
+            20..27,
+        ),
+        value: UInt64(
+            65535,
+        ),
+    },
+}
+
+
+---------- Input ----------
+1 - -(- - -1)
+---------- Output ---------
+1 - - - - - 1
+---------- AST ------------
+BinaryOp {
+    span: Some(
+        2..3,
+    ),
+    op: Minus,
+    left: Literal {
+        span: Some(
+            0..1,
+        ),
+        value: UInt64(
+            1,
+        ),
+    },
+    right: UnaryOp {
+        span: Some(
+            4..5,
+        ),
+        op: Minus,
+        expr: UnaryOp {
+            span: Some(
+                6..7,
+            ),
+            op: Minus,
+            expr: UnaryOp {
+                span: Some(
+                    8..9,
+                ),
+                op: Minus,
+                expr: UnaryOp {
+                    span: Some(
+                        10..11,
+                    ),
+                    op: Minus,
+                    expr: Literal {
+                        span: Some(
+                            11..12,
+                        ),
+                        value: UInt64(
+                            1,
+                        ),
+                    },
+                },
+            },
+        },
+    },
+}
+
+
+---------- Input ----------
+1 + a * c.d
+---------- Output ---------
+1 + a * c.d
+---------- AST ------------
+BinaryOp {
+    span: Some(
+        2..3,
+    ),
+    op: Plus,
+    left: Literal {
+        span: Some(
+            0..1,
+        ),
+        value: UInt64(
+            1,
+        ),
+    },
+    right: BinaryOp {
+        span: Some(
+            6..7,
+        ),
+        op: Multiply,
+        left: ColumnRef {
+            span: Some(
+                4..5,
+            ),
+            column: ColumnRef {
+                database: None,
+                table: None,
+                column: Name(
+                    Identifier {
+                        span: Some(
+                            4..5,
+                        ),
+                        name: "a",
+                        quote: None,
+                        ident_type: None,
+                    },
+                ),
+            },
+        },
+        right: ColumnRef {
+            span: Some(
+                8..9,
+            ),
+            column: ColumnRef {
+                database: None,
+                table: Some(
+                    Identifier {
+                        span: Some(
+                            8..9,
+                        ),
+                        name: "c",
+                        quote: None,
+                        ident_type: None,
+                    },
+                ),
+                column: Name(
+                    Identifier {
+                        span: Some(
+                            10..11,
+                        ),
+                        name: "d",
+                        quote: None,
+                        ident_type: None,
+                    },
+                ),
+            },
+        },
+    },
+}
+
+
+---------- Input ----------
+number % 2
+---------- Output ---------
+number % 2
+---------- AST ------------
+BinaryOp {
+    span: Some(
+        7..8,
+    ),
+    op: Modulo,
+    left: ColumnRef {
+        span: Some(
+            0..6,
+        ),
+        column: ColumnRef {
+            database: None,
+            table: None,
+            column: Name(
+                Identifier {
+                    span: Some(
+                        0..6,
+                    ),
+                    name: "number",
+                    quote: None,
+                    ident_type: None,
+                },
+            ),
+        },
+    },
+    right: Literal {
+        span: Some(
+            9..10,
+        ),
+        value: UInt64(
+            2,
+        ),
+    },
+}
+
+
+---------- Input ----------
+"t":k1.k2
+---------- Output ---------
+"t":k1:k2
+---------- AST ------------
+MapAccess {
+    span: Some(
+        6..9,
+    ),
+    expr: MapAccess {
+        span: Some(
+            3..6,
+        ),
+        expr: ColumnRef {
+            span: Some(
+                0..3,
+            ),
+            column: ColumnRef {
+                database: None,
+                table: None,
+                column: Name(
+                    Identifier {
+                        span: Some(
+                            0..3,
+                        ),
+                        name: "t",
+                        quote: Some(
+                            '"',
+                        ),
+                        ident_type: None,
+                    },
+                ),
+            },
+        },
+        accessor: Colon {
+            key: Identifier {
+                span: Some(
+                    4..6,
+                ),
+                name: "k1",
+                quote: None,
+                ident_type: None,
+            },
+        },
+    },
+    accessor: Colon {
+        key: Identifier {
+            span: Some(
+                7..9,
+            ),
+            name: "k2",
+            quote: None,
+            ident_type: None,
+        },
+    },
+}
+
+
+---------- Input ----------
+"t":k1.k2.0
+---------- Output ---------
+"t":k1:k2.0
+---------- AST ------------
+MapAccess {
+    span: Some(
+        9..11,
+    ),
+    expr: MapAccess {
+        span: Some(
+            6..9,
+        ),
+        expr: MapAccess {
+            span: Some(
+                3..6,
+            ),
+            expr: ColumnRef {
+                span: Some(
+                    0..3,
+                ),
+                column: ColumnRef {
+                    database: None,
+                    table: None,
+                    column: Name(
+                        Identifier {
+                            span: Some(
+                                0..3,
+                            ),
+                            name: "t",
+                            quote: Some(
+                                '"',
+                            ),
+                            ident_type: None,
+                        },
+                    ),
+                },
+            },
+            accessor: Colon {
+                key: Identifier {
+                    span: Some(
+                        4..6,
+                    ),
+                    name: "k1",
+                    quote: None,
+                    ident_type: None,
+                },
+            },
+        },
+        accessor: Colon {
+            key: Identifier {
+                span: Some(
+                    7..9,
+                ),
+                name: "k2",
+                quote: None,
+                ident_type: None,
+            },
+        },
+    },
+    accessor: DotNumber {
+        key: 0,
+    },
+}
+
+
+---------- Input ----------
+t.0
+---------- Output ---------
+t.0
+---------- AST ------------
+MapAccess {
+    span: Some(
+        1..3,
+    ),
+    expr: ColumnRef {
+        span: Some(
+            0..1,
+        ),
+        column: ColumnRef {
+            database: None,
+            table: None,
+            column: Name(
+                Identifier {
+                    span: Some(
+                        0..1,
+                    ),
+                    name: "t",
+                    quote: None,
+                    ident_type: None,
+                },
+            ),
+        },
+    },
+    accessor: DotNumber {
+        key: 0,
+    },
+}
+
+
+---------- Input ----------
+(NULL,).0
+---------- Output ---------
+(NULL,).0
+---------- AST ------------
+MapAccess {
+    span: Some(
+        7..9,
+    ),
+    expr: Tuple {
+        span: Some(
+            0..7,
+        ),
+        exprs: [
+            Literal {
+                span: Some(
+                    1..5,
+                ),
+                value: Null,
+            },
+        ],
+    },
+    accessor: DotNumber {
+        key: 0,
+    },
+}
+
+
+---------- Input ----------
+col1 not between 1 and 2
+---------- Output ---------
+col1 NOT BETWEEN 1 AND 2
+---------- AST ------------
+Between {
+    span: Some(
+        5..24,
+    ),
+    expr: ColumnRef {
+        span: Some(
+            0..4,
+        ),
+        column: ColumnRef {
+            database: None,
+            table: None,
+            column: Name(
+                Identifier {
+                    span: Some(
+                        0..4,
+                    ),
+                    name: "col1",
+                    quote: None,
+                    ident_type: None,
+                },
+            ),
+        },
+    },
+    low: Literal {
+        span: Some(
+            17..18,
+        ),
+        value: UInt64(
+            1,
+        ),
+    },
+    high: Literal {
+        span: Some(
+            23..24,
+        ),
+        value: UInt64(
+            2,
+        ),
+    },
+    not: true,
+}
+
+
+---------- Input ----------
+sum(col1)
+---------- Output ---------
+sum(col1)
+---------- AST ------------
+FunctionCall {
+    span: Some(
+        0..9,
+    ),
+    func: FunctionCall {
+        distinct: false,
+        name: Identifier {
+            span: Some(
+                0..3,
+            ),
+            name: "sum",
+            quote: None,
+            ident_type: None,
+        },
+        args: [
+            ColumnRef {
+                span: Some(
+                    4..8,
+                ),
+                column: ColumnRef {
+                    database: None,
+                    table: None,
+                    column: Name(
+                        Identifier {
+                            span: Some(
+                                4..8,
+                            ),
+                            name: "col1",
+                            quote: None,
+                            ident_type: None,
+                        },
+                    ),
+                },
+            },
+        ],
+        params: [],
+        order_by: [],
+        window: None,
+        lambda: None,
+    },
+}
+
+
+---------- Input ----------
+"random"()
+---------- Output ---------
+"random"()
+---------- AST ------------
+FunctionCall {
+    span: Some(
+        0..10,
+    ),
+    func: FunctionCall {
+        distinct: false,
+        name: Identifier {
+            span: Some(
+                0..8,
+            ),
+            name: "random",
+            quote: Some(
+                '"',
+            ),
+            ident_type: None,
+        },
+        args: [],
+        params: [],
+        order_by: [],
+        window: None,
+        lambda: None,
+    },
+}
+
+
+---------- Input ----------
+random(distinct)
+---------- Output ---------
+random(DISTINCT )
+---------- AST ------------
+FunctionCall {
+    span: Some(
+        0..16,
+    ),
+    func: FunctionCall {
+        distinct: true,
+        name: Identifier {
+            span: Some(
+                0..6,
+            ),
+            name: "random",
+            quote: None,
+            ident_type: None,
+        },
+        args: [],
+        params: [],
+        order_by: [],
+        window: None,
+        lambda: None,
+    },
+}
+
+
+---------- Input ----------
+covar_samp(number, number)
+---------- Output ---------
+covar_samp(number, number)
+---------- AST ------------
+FunctionCall {
+    span: Some(
+        0..26,
+    ),
+    func: FunctionCall {
+        distinct: false,
+        name: Identifier {
+            span: Some(
+                0..10,
+            ),
+            name: "covar_samp",
+            quote: None,
+            ident_type: None,
+        },
+        args: [
+            ColumnRef {
+                span: Some(
+                    11..17,
+                ),
+                column: ColumnRef {
+                    database: None,
+                    table: None,
+                    column: Name(
+                        Identifier {
+                            span: Some(
+                                11..17,
+                            ),
+                            name: "number",
+                            quote: None,
+                            ident_type: None,
+                        },
+                    ),
+                },
+            },
+            ColumnRef {
+                span: Some(
+                    19..25,
+                ),
+                column: ColumnRef {
+                    database: None,
+                    table: None,
+                    column: Name(
+                        Identifier {
+                            span: Some(
+                                19..25,
+                            ),
+                            name: "number",
+                            quote: None,
+                            ident_type: None,
+                        },
+                    ),
+                },
+            },
+        ],
+        params: [],
+        order_by: [],
+        window: None,
+        lambda: None,
+    },
+}
+
+
+---------- Input ----------
+CAST(col1 AS BIGINT UNSIGNED)
+---------- Output ---------
+CAST(col1 AS UInt64)
+---------- AST ------------
+Cast {
+    span: Some(
+        0..29,
+    ),
+    expr: ColumnRef {
+        span: Some(
+            5..9,
+        ),
+        column: ColumnRef {
+            database: None,
+            table: None,
+            column: Name(
+                Identifier {
+                    span: Some(
+                        5..9,
+                    ),
+                    name: "col1",
+                    quote: None,
+                    ident_type: None,
+                },
+            ),
+        },
+    },
+    target_type: UInt64,
+    pg_style: false,
+}
+
+
+---------- Input ----------
+TRY_CAST(col1 AS BIGINT UNSIGNED)
+---------- Output ---------
+TRY_CAST(col1 AS UInt64)
+---------- AST ------------
+TryCast {
+    span: Some(
+        0..33,
+    ),
+    expr: ColumnRef {
+        span: Some(
+            9..13,
+        ),
+        column: ColumnRef {
+            database: None,
+            table: None,
+            column: Name(
+                Identifier {
+                    span: Some(
+                        9..13,
+                    ),
+                    name: "col1",
+                    quote: None,
+                    ident_type: None,
+                },
+            ),
+        },
+    },
+    target_type: UInt64,
+}
+
+
+---------- Input ----------
+TRY_CAST(col1 AS TUPLE(BIGINT UNSIGNED NULL, BOOLEAN))
+---------- Output ---------
+TRY_CAST(col1 AS TUPLE(UInt64 NULL, BOOLEAN))
+---------- AST ------------
+TryCast {
+    span: Some(
+        0..54,
+    ),
+    expr: ColumnRef {
+        span: Some(
+            9..13,
+        ),
+        column: ColumnRef {
+            database: None,
+            table: None,
+            column: Name(
+                Identifier {
+                    span: Some(
+                        9..13,
+                    ),
+                    name: "col1",
+                    quote: None,
+                    ident_type: None,
+                },
+            ),
+        },
+    },
+    target_type: Tuple {
+        fields_name: None,
+        fields_type: [
+            Nullable(
+                UInt64,
+            ),
+            Boolean,
+        ],
+    },
+}
+
+
+---------- Input ----------
+trim(leading 'abc' from 'def')
+---------- Output ---------
+TRIM(LEADING 'abc' FROM 'def')
+---------- AST ------------
+Trim {
+    span: Some(
+        0..30,
+    ),
+    expr: Literal {
+        span: Some(
+            24..29,
+        ),
+        value: String(
+            "def",
+        ),
+    },
+    trim_where: Some(
+        (
+            Leading,
+            Literal {
+                span: Some(
+                    13..18,
+                ),
+                value: String(
+                    "abc",
+                ),
+            },
+        ),
+    ),
+}
+
+
+---------- Input ----------
+trim('aa','bb')
+---------- Output ---------
+trim('aa', 'bb')
+---------- AST ------------
+FunctionCall {
+    span: Some(
+        0..15,
+    ),
+    func: FunctionCall {
+        distinct: false,
+        name: Identifier {
+            span: Some(
+                0..4,
+            ),
+            name: "trim",
+            quote: None,
+            ident_type: None,
+        },
+        args: [
+            Literal {
+                span: Some(
+                    5..9,
+                ),
+                value: String(
+                    "aa",
+                ),
+            },
+            Literal {
+                span: Some(
+                    10..14,
+                ),
+                value: String(
+                    "bb",
+                ),
+            },
+        ],
+        params: [],
+        order_by: [],
+        window: None,
+        lambda: None,
+    },
+}
+
+
+---------- Input ----------
+timestamp()
+---------- Output ---------
+timestamp()
+---------- AST ------------
+FunctionCall {
+    span: Some(
+        0..11,
+    ),
+    func: FunctionCall {
+        distinct: false,
+        name: Identifier {
+            span: Some(
+                0..9,
+            ),
+            name: "timestamp",
+            quote: None,
+            ident_type: None,
+        },
+        args: [],
+        params: [],
+        order_by: [],
+        window: None,
+        lambda: None,
+    },
+}
+
+
+---------- Input ----------
+extract(year from d)
+---------- Output ---------
+EXTRACT(YEAR FROM d)
+---------- AST ------------
+Extract {
+    span: Some(
+        0..20,
+    ),
+    kind: Year,
+    expr: ColumnRef {
+        span: Some(
+            18..19,
+        ),
+        column: ColumnRef {
+            database: None,
+            table: None,
+            column: Name(
+                Identifier {
+                    span: Some(
+                        18..19,
+                    ),
+                    name: "d",
+                    quote: None,
+                    ident_type: None,
+                },
+            ),
+        },
+    },
+}
+
+
+---------- Input ----------
+date_part(year, d)
+---------- Output ---------
+DATE_PART(YEAR, d)
+---------- AST ------------
+DatePart {
+    span: Some(
+        0..18,
+    ),
+    kind: Year,
+    expr: ColumnRef {
+        span: Some(
+            16..17,
+        ),
+        column: ColumnRef {
+            database: None,
+            table: None,
+            column: Name(
+                Identifier {
+                    span: Some(
+                        16..17,
+                    ),
+                    name: "d",
+                    quote: None,
+                    ident_type: None,
+                },
+            ),
+        },
+    },
+}
+
+
+---------- Input ----------
+position('a' in str)
+---------- Output ---------
+POSITION('a' IN str)
+---------- AST ------------
+Position {
+    span: Some(
+        0..20,
+    ),
+    substr_expr: Literal {
+        span: Some(
+            9..12,
+        ),
+        value: String(
+            "a",
+        ),
+    },
+    str_expr: ColumnRef {
+        span: Some(
+            16..19,
+        ),
+        column: ColumnRef {
+            database: None,
+            table: None,
+            column: Name(
+                Identifier {
+                    span: Some(
+                        16..19,
+                    ),
+                    name: "str",
+                    quote: None,
+                    ident_type: None,
+                },
+            ),
+        },
+    },
+}
+
+
+---------- Input ----------
+substring(a from b for c)
+---------- Output ---------
+SUBSTRING(a FROM b FOR c)
+---------- AST ------------
+Substring {
+    span: Some(
+        0..25,
+    ),
+    expr: ColumnRef {
+        span: Some(
+            10..11,
+        ),
+        column: ColumnRef {
+            database: None,
+            table: None,
+            column: Name(
+                Identifier {
+                    span: Some(
+                        10..11,
+                    ),
+                    name: "a",
+                    quote: None,
+                    ident_type: None,
+                },
+            ),
+        },
+    },
+    substring_from: ColumnRef {
+        span: Some(
+            17..18,
+        ),
+        column: ColumnRef {
+            database: None,
+            table: None,
+            column: Name(
+                Identifier {
+                    span: Some(
+                        17..18,
+                    ),
+                    name: "b",
+                    quote: None,
+                    ident_type: None,
+                },
+            ),
+        },
+    },
+    substring_for: Some(
+        ColumnRef {
+            span: Some(
+                23..24,
+            ),
+            column: ColumnRef {
+                database: None,
+                table: None,
+                column: Name(
+                    Identifier {
+                        span: Some(
+                            23..24,
+                        ),
+                        name: "c",
+                        quote: None,
+                        ident_type: None,
+                    },
+                ),
+            },
+        },
+    ),
+}
+
+
+---------- Input ----------
+substring(a, b, c)
+---------- Output ---------
+SUBSTRING(a FROM b FOR c)
+---------- AST ------------
+Substring {
+    span: Some(
+        0..18,
+    ),
+    expr: ColumnRef {
+        span: Some(
+            10..11,
+        ),
+        column: ColumnRef {
+            database: None,
+            table: None,
+            column: Name(
+                Identifier {
+                    span: Some(
+                        10..11,
+                    ),
+                    name: "a",
+                    quote: None,
+                    ident_type: None,
+                },
+            ),
+        },
+    },
+    substring_from: ColumnRef {
+        span: Some(
+            13..14,
+        ),
+        column: ColumnRef {
+            database: None,
+            table: None,
+            column: Name(
+                Identifier {
+                    span: Some(
+                        13..14,
+                    ),
+                    name: "b",
+                    quote: None,
+                    ident_type: None,
+                },
+            ),
+        },
+    },
+    substring_for: Some(
+        ColumnRef {
+            span: Some(
+                16..17,
+            ),
+            column: ColumnRef {
+                database: None,
+                table: None,
+                column: Name(
+                    Identifier {
+                        span: Some(
+                            16..17,
+                        ),
+                        name: "c",
+                        quote: None,
+                        ident_type: None,
+                    },
+                ),
+            },
+        },
+    ),
+}
+
+
+---------- Input ----------
+col1::UInt8
+---------- Output ---------
+col1::UInt8
+---------- AST ------------
+Cast {
+    span: Some(
+        4..11,
+    ),
+    expr: ColumnRef {
+        span: Some(
+            0..4,
+        ),
+        column: ColumnRef {
+            database: None,
+            table: None,
+            column: Name(
+                Identifier {
+                    span: Some(
+                        0..4,
+                    ),
+                    name: "col1",
+                    quote: None,
+                    ident_type: None,
+                },
+            ),
+        },
+    },
+    target_type: UInt8,
+    pg_style: true,
+}
+
+
+---------- Input ----------
+(arr[0]:a).b
+---------- Output ---------
+arr[0]:a:b
+---------- AST ------------
+MapAccess {
+    span: Some(
+        10..12,
+    ),
+    expr: MapAccess {
+        span: Some(
+            7..9,
+        ),
+        expr: MapAccess {
+            span: Some(
+                4..7,
+            ),
+            expr: ColumnRef {
+                span: Some(
+                    1..4,
+                ),
+                column: ColumnRef {
+                    database: None,
+                    table: None,
+                    column: Name(
+                        Identifier {
+                            span: Some(
+                                1..4,
+                            ),
+                            name: "arr",
+                            quote: None,
+                            ident_type: None,
+                        },
+                    ),
+                },
+            },
+            accessor: Bracket {
+                key: Literal {
+                    span: Some(
+                        5..6,
+                    ),
+                    value: UInt64(
+                        0,
+                    ),
+                },
+            },
+        },
+        accessor: Colon {
+            key: Identifier {
+                span: Some(
+                    8..9,
+                ),
+                name: "a",
+                quote: None,
+                ident_type: None,
+            },
+        },
+    },
+    accessor: Colon {
+        key: Identifier {
+            span: Some(
+                11..12,
+            ),
+            name: "b",
+            quote: None,
+            ident_type: None,
+        },
+    },
+}
+
+
+---------- Input ----------
+arr[4]["k"]
+---------- Output ---------
+arr[4]["k"]
+---------- AST ------------
+MapAccess {
+    span: Some(
+        6..11,
+    ),
+    expr: MapAccess {
+        span: Some(
+            3..6,
+        ),
+        expr: ColumnRef {
+            span: Some(
+                0..3,
+            ),
+            column: ColumnRef {
+                database: None,
+                table: None,
+                column: Name(
+                    Identifier {
+                        span: Some(
+                            0..3,
+                        ),
+                        name: "arr",
+                        quote: None,
+                        ident_type: None,
+                    },
+                ),
+            },
+        },
+        accessor: Bracket {
+            key: Literal {
+                span: Some(
+                    4..5,
+                ),
+                value: UInt64(
+                    4,
+                ),
+            },
+        },
+    },
+    accessor: Bracket {
+        key: ColumnRef {
+            span: Some(
+                7..10,
+            ),
+            column: ColumnRef {
+                database: None,
+                table: None,
+                column: Name(
+                    Identifier {
+                        span: Some(
+                            7..10,
+                        ),
+                        name: "k",
+                        quote: Some(
+                            '"',
+                        ),
+                        ident_type: None,
+                    },
+                ),
+            },
+        },
+    },
+}
+
+
+---------- Input ----------
+a rlike '^11'
+---------- Output ---------
+a RLIKE '^11'
+---------- AST ------------
+BinaryOp {
+    span: Some(
+        2..7,
+    ),
+    op: RLike,
+    left: ColumnRef {
+        span: Some(
+            0..1,
+        ),
+        column: ColumnRef {
+            database: None,
+            table: None,
+            column: Name(
+                Identifier {
+                    span: Some(
+                        0..1,
+                    ),
+                    name: "a",
+                    quote: None,
+                    ident_type: None,
+                },
+            ),
+        },
+    },
+    right: Literal {
+        span: Some(
+            8..13,
+        ),
+        value: String(
+            "^11",
+        ),
+    },
+}
+
+
+---------- Input ----------
+'中文'::text not in ('a', 'b')
+---------- Output ---------
+'中文'::STRING NOT IN('a', 'b')
+---------- AST ------------
+InList {
+    span: Some(
+        15..32,
+    ),
+    expr: Cast {
+        span: Some(
+            8..14,
+        ),
+        expr: Literal {
+            span: Some(
+                0..8,
+            ),
+            value: String(
+                "中文",
+            ),
+        },
+        target_type: String,
+        pg_style: true,
+    },
+    list: [
+        Literal {
+            span: Some(
+                23..26,
+            ),
+            value: String(
+                "a",
+            ),
+        },
+        Literal {
+            span: Some(
+                28..31,
+            ),
+            value: String(
+                "b",
+            ),
+        },
+    ],
+    not: true,
+}
+
+
+---------- Input ----------
+G.E.B IS NOT NULL AND col1 not between col2 and (1 + col3) DIV sum(col4)
+---------- Output ---------
+G.E.B IS NOT NULL AND col1 NOT BETWEEN col2 AND (1 + col3) DIV sum(col4)
+---------- AST ------------
+BinaryOp {
+    span: Some(
+        18..21,
+    ),
+    op: And,
+    left: IsNull {
+        span: Some(
+            6..17,
+        ),
+        expr: ColumnRef {
+            span: Some(
+                0..1,
+            ),
+            column: ColumnRef {
+                database: Some(
+                    Identifier {
+                        span: Some(
+                            0..1,
+                        ),
+                        name: "G",
+                        quote: None,
+                        ident_type: None,
+                    },
+                ),
+                table: Some(
+                    Identifier {
+                        span: Some(
+                            2..3,
+                        ),
+                        name: "E",
+                        quote: None,
+                        ident_type: None,
+                    },
+                ),
+                column: Name(
+                    Identifier {
+                        span: Some(
+                            4..5,
+                        ),
+                        name: "B",
+                        quote: None,
+                        ident_type: None,
+                    },
+                ),
+            },
+        },
+        not: true,
+    },
+    right: Between {
+        span: Some(
+            27..72,
+        ),
+        expr: ColumnRef {
+            span: Some(
+                22..26,
+            ),
+            column: ColumnRef {
+                database: None,
+                table: None,
+                column: Name(
+                    Identifier {
+                        span: Some(
+                            22..26,
+                        ),
+                        name: "col1",
+                        quote: None,
+                        ident_type: None,
+                    },
+                ),
+            },
+        },
+        low: ColumnRef {
+            span: Some(
+                39..43,
+            ),
+            column: ColumnRef {
+                database: None,
+                table: None,
+                column: Name(
+                    Identifier {
+                        span: Some(
+                            39..43,
+                        ),
+                        name: "col2",
+                        quote: None,
+                        ident_type: None,
+                    },
+                ),
+            },
+        },
+        high: BinaryOp {
+            span: Some(
+                59..62,
+            ),
+            op: Div,
+            left: BinaryOp {
+                span: Some(
+                    51..52,
+                ),
+                op: Plus,
+                left: Literal {
+                    span: Some(
+                        49..50,
+                    ),
+                    value: UInt64(
+                        1,
+                    ),
+                },
+                right: ColumnRef {
+                    span: Some(
+                        53..57,
+                    ),
+                    column: ColumnRef {
+                        database: None,
+                        table: None,
+                        column: Name(
+                            Identifier {
+                                span: Some(
+                                    53..57,
+                                ),
+                                name: "col3",
+                                quote: None,
+                                ident_type: None,
+                            },
+                        ),
+                    },
+                },
+            },
+            right: FunctionCall {
+                span: Some(
+                    63..72,
+                ),
+                func: FunctionCall {
+                    distinct: false,
+                    name: Identifier {
+                        span: Some(
+                            63..66,
+                        ),
+                        name: "sum",
+                        quote: None,
+                        ident_type: None,
+                    },
+                    args: [
+                        ColumnRef {
+                            span: Some(
+                                67..71,
+                            ),
+                            column: ColumnRef {
+                                database: None,
+                                table: None,
+                                column: Name(
+                                    Identifier {
+                                        span: Some(
+                                            67..71,
+                                        ),
+                                        name: "col4",
+                                        quote: None,
+                                        ident_type: None,
+                                    },
+                                ),
+                            },
+                        },
+                    ],
+                    params: [],
+                    order_by: [],
+                    window: None,
+                    lambda: None,
+                },
+            },
+        },
+        not: true,
+    },
+}
+
+
+---------- Input ----------
+sum(CASE WHEN n2.n_name = 'GERMANY' THEN ol_amount ELSE 0 END) / CASE WHEN sum(ol_amount) = 0 THEN 1 ELSE sum(ol_amount) END
+---------- Output ---------
+sum(CASE WHEN n2.n_name = 'GERMANY' THEN ol_amount ELSE 0 END) / CASE WHEN sum(ol_amount) = 0 THEN 1 ELSE sum(ol_amount) END
+---------- AST ------------
+BinaryOp {
+    span: Some(
+        63..64,
+    ),
+    op: Divide,
+    left: FunctionCall {
+        span: Some(
+            0..62,
+        ),
+        func: FunctionCall {
+            distinct: false,
+            name: Identifier {
+                span: Some(
+                    0..3,
+                ),
+                name: "sum",
+                quote: None,
+                ident_type: None,
+            },
+            args: [
+                Case {
+                    span: Some(
+                        4..61,
+                    ),
+                    operand: None,
+                    conditions: [
+                        BinaryOp {
+                            span: Some(
+                                24..25,
+                            ),
+                            op: Eq,
+                            left: ColumnRef {
+                                span: Some(
+                                    14..16,
+                                ),
+                                column: ColumnRef {
+                                    database: None,
+                                    table: Some(
+                                        Identifier {
+                                            span: Some(
+                                                14..16,
+                                            ),
+                                            name: "n2",
+                                            quote: None,
+                                            ident_type: None,
+                                        },
+                                    ),
+                                    column: Name(
+                                        Identifier {
+                                            span: Some(
+                                                17..23,
+                                            ),
+                                            name: "n_name",
+                                            quote: None,
+                                            ident_type: None,
+                                        },
+                                    ),
+                                },
+                            },
+                            right: Literal {
+                                span: Some(
+                                    26..35,
+                                ),
+                                value: String(
+                                    "GERMANY",
+                                ),
+                            },
+                        },
+                    ],
+                    results: [
+                        ColumnRef {
+                            span: Some(
+                                41..50,
+                            ),
+                            column: ColumnRef {
+                                database: None,
+                                table: None,
+                                column: Name(
+                                    Identifier {
+                                        span: Some(
+                                            41..50,
+                                        ),
+                                        name: "ol_amount",
+                                        quote: None,
+                                        ident_type: None,
+                                    },
+                                ),
+                            },
+                        },
+                    ],
+                    else_result: Some(
+                        Literal {
+                            span: Some(
+                                56..57,
+                            ),
+                            value: UInt64(
+                                0,
+                            ),
+                        },
+                    ),
+                },
+            ],
+            params: [],
+            order_by: [],
+            window: None,
+            lambda: None,
+        },
+    },
+    right: Case {
+        span: Some(
+            65..124,
+        ),
+        operand: None,
+        conditions: [
+            BinaryOp {
+                span: Some(
+                    90..91,
+                ),
+                op: Eq,
+                left: FunctionCall {
+                    span: Some(
+                        75..89,
+                    ),
+                    func: FunctionCall {
+                        distinct: false,
+                        name: Identifier {
+                            span: Some(
+                                75..78,
+                            ),
+                            name: "sum",
+                            quote: None,
+                            ident_type: None,
+                        },
+                        args: [
+                            ColumnRef {
+                                span: Some(
+                                    79..88,
+                                ),
+                                column: ColumnRef {
+                                    database: None,
+                                    table: None,
+                                    column: Name(
+                                        Identifier {
+                                            span: Some(
+                                                79..88,
+                                            ),
+                                            name: "ol_amount",
+                                            quote: None,
+                                            ident_type: None,
+                                        },
+                                    ),
+                                },
+                            },
+                        ],
+                        params: [],
+                        order_by: [],
+                        window: None,
+                        lambda: None,
+                    },
+                },
+                right: Literal {
+                    span: Some(
+                        92..93,
+                    ),
+                    value: UInt64(
+                        0,
+                    ),
+                },
+            },
+        ],
+        results: [
+            Literal {
+                span: Some(
+                    99..100,
+                ),
+                value: UInt64(
+                    1,
+                ),
+            },
+        ],
+        else_result: Some(
+            FunctionCall {
+                span: Some(
+                    106..120,
+                ),
+                func: FunctionCall {
+                    distinct: false,
+                    name: Identifier {
+                        span: Some(
+                            106..109,
+                        ),
+                        name: "sum",
+                        quote: None,
+                        ident_type: None,
+                    },
+                    args: [
+                        ColumnRef {
+                            span: Some(
+                                110..119,
+                            ),
+                            column: ColumnRef {
+                                database: None,
+                                table: None,
+                                column: Name(
+                                    Identifier {
+                                        span: Some(
+                                            110..119,
+                                        ),
+                                        name: "ol_amount",
+                                        quote: None,
+                                        ident_type: None,
+                                    },
+                                ),
+                            },
+                        },
+                    ],
+                    params: [],
+                    order_by: [],
+                    window: None,
+                    lambda: None,
+                },
+            },
+        ),
+    },
+}
+
+
+---------- Input ----------
+p_partkey = l_partkey
+AND p_brand = 'Brand#12'
+AND p_container IN ('SM CASE', 'SM BOX', 'SM PACK', 'SM PKG')
+AND l_quantity >= CAST (1 AS smallint) AND l_quantity <= CAST (1 + 10 AS smallint)
+AND p_size BETWEEN CAST (1 AS smallint) AND CAST (5 AS smallint)
+AND l_shipmode IN ('AIR', 'AIR REG')
+AND l_shipinstruct = 'DELIVER IN PERSON'
+---------- Output ---------
+p_partkey = l_partkey AND p_brand = 'Brand#12' AND p_container IN('SM CASE', 'SM BOX', 'SM PACK', 'SM PKG') AND l_quantity >= CAST(1 AS Int16) AND l_quantity <= CAST(1 + 10 AS Int16) AND p_size BETWEEN CAST(1 AS Int16) AND CAST(5 AS Int16) AND l_shipmode IN('AIR', 'AIR REG') AND l_shipinstruct = 'DELIVER IN PERSON'
+---------- AST ------------
+BinaryOp {
+    span: Some(
+        294..297,
+    ),
+    op: And,
+    left: BinaryOp {
+        span: Some(
+            257..260,
+        ),
+        op: And,
+        left: BinaryOp {
+            span: Some(
+                192..195,
+            ),
+            op: And,
+            left: BinaryOp {
+                span: Some(
+                    148..151,
+                ),
+                op: And,
+                left: BinaryOp {
+                    span: Some(
+                        109..112,
+                    ),
+                    op: And,
+                    left: BinaryOp {
+                        span: Some(
+                            47..50,
+                        ),
+                        op: And,
+                        left: BinaryOp {
+                            span: Some(
+                                22..25,
+                            ),
+                            op: And,
+                            left: BinaryOp {
+                                span: Some(
+                                    10..11,
+                                ),
+                                op: Eq,
+                                left: ColumnRef {
+                                    span: Some(
+                                        0..9,
+                                    ),
+                                    column: ColumnRef {
+                                        database: None,
+                                        table: None,
+                                        column: Name(
+                                            Identifier {
+                                                span: Some(
+                                                    0..9,
+                                                ),
+                                                name: "p_partkey",
+                                                quote: None,
+                                                ident_type: None,
+                                            },
+                                        ),
+                                    },
+                                },
+                                right: ColumnRef {
+                                    span: Some(
+                                        12..21,
+                                    ),
+                                    column: ColumnRef {
+                                        database: None,
+                                        table: None,
+                                        column: Name(
+                                            Identifier {
+                                                span: Some(
+                                                    12..21,
+                                                ),
+                                                name: "l_partkey",
+                                                quote: None,
+                                                ident_type: None,
+                                            },
+                                        ),
+                                    },
+                                },
+                            },
+                            right: BinaryOp {
+                                span: Some(
+                                    34..35,
+                                ),
+                                op: Eq,
+                                left: ColumnRef {
+                                    span: Some(
+                                        26..33,
+                                    ),
+                                    column: ColumnRef {
+                                        database: None,
+                                        table: None,
+                                        column: Name(
+                                            Identifier {
+                                                span: Some(
+                                                    26..33,
+                                                ),
+                                                name: "p_brand",
+                                                quote: None,
+                                                ident_type: None,
+                                            },
+                                        ),
+                                    },
+                                },
+                                right: Literal {
+                                    span: Some(
+                                        36..46,
+                                    ),
+                                    value: String(
+                                        "Brand#12",
+                                    ),
+                                },
+                            },
+                        },
+                        right: InList {
+                            span: Some(
+                                63..108,
+                            ),
+                            expr: ColumnRef {
+                                span: Some(
+                                    51..62,
+                                ),
+                                column: ColumnRef {
+                                    database: None,
+                                    table: None,
+                                    column: Name(
+                                        Identifier {
+                                            span: Some(
+                                                51..62,
+                                            ),
+                                            name: "p_container",
+                                            quote: None,
+                                            ident_type: None,
+                                        },
+                                    ),
+                                },
+                            },
+                            list: [
+                                Literal {
+                                    span: Some(
+                                        67..76,
+                                    ),
+                                    value: String(
+                                        "SM CASE",
+                                    ),
+                                },
+                                Literal {
+                                    span: Some(
+                                        78..86,
+                                    ),
+                                    value: String(
+                                        "SM BOX",
+                                    ),
+                                },
+                                Literal {
+                                    span: Some(
+                                        88..97,
+                                    ),
+                                    value: String(
+                                        "SM PACK",
+                                    ),
+                                },
+                                Literal {
+                                    span: Some(
+                                        99..107,
+                                    ),
+                                    value: String(
+                                        "SM PKG",
+                                    ),
+                                },
+                            ],
+                            not: false,
+                        },
+                    },
+                    right: BinaryOp {
+                        span: Some(
+                            124..126,
+                        ),
+                        op: Gte,
+                        left: ColumnRef {
+                            span: Some(
+                                113..123,
+                            ),
+                            column: ColumnRef {
+                                database: None,
+                                table: None,
+                                column: Name(
+                                    Identifier {
+                                        span: Some(
+                                            113..123,
+                                        ),
+                                        name: "l_quantity",
+                                        quote: None,
+                                        ident_type: None,
+                                    },
+                                ),
+                            },
+                        },
+                        right: Cast {
+                            span: Some(
+                                127..147,
+                            ),
+                            expr: Literal {
+                                span: Some(
+                                    133..134,
+                                ),
+                                value: UInt64(
+                                    1,
+                                ),
+                            },
+                            target_type: Int16,
+                            pg_style: false,
+                        },
+                    },
+                },
+                right: BinaryOp {
+                    span: Some(
+                        163..165,
+                    ),
+                    op: Lte,
+                    left: ColumnRef {
+                        span: Some(
+                            152..162,
+                        ),
+                        column: ColumnRef {
+                            database: None,
+                            table: None,
+                            column: Name(
+                                Identifier {
+                                    span: Some(
+                                        152..162,
+                                    ),
+                                    name: "l_quantity",
+                                    quote: None,
+                                    ident_type: None,
+                                },
+                            ),
+                        },
+                    },
+                    right: Cast {
+                        span: Some(
+                            166..191,
+                        ),
+                        expr: BinaryOp {
+                            span: Some(
+                                174..175,
+                            ),
+                            op: Plus,
+                            left: Literal {
+                                span: Some(
+                                    172..173,
+                                ),
+                                value: UInt64(
+                                    1,
+                                ),
+                            },
+                            right: Literal {
+                                span: Some(
+                                    176..178,
+                                ),
+                                value: UInt64(
+                                    10,
+                                ),
+                            },
+                        },
+                        target_type: Int16,
+                        pg_style: false,
+                    },
+                },
+            },
+            right: Between {
+                span: Some(
+                    203..256,
+                ),
+                expr: ColumnRef {
+                    span: Some(
+                        196..202,
+                    ),
+                    column: ColumnRef {
+                        database: None,
+                        table: None,
+                        column: Name(
+                            Identifier {
+                                span: Some(
+                                    196..202,
+                                ),
+                                name: "p_size",
+                                quote: None,
+                                ident_type: None,
+                            },
+                        ),
+                    },
+                },
+                low: Cast {
+                    span: Some(
+                        211..231,
+                    ),
+                    expr: Literal {
+                        span: Some(
+                            217..218,
+                        ),
+                        value: UInt64(
+                            1,
+                        ),
+                    },
+                    target_type: Int16,
+                    pg_style: false,
+                },
+                high: Cast {
+                    span: Some(
+                        236..256,
+                    ),
+                    expr: Literal {
+                        span: Some(
+                            242..243,
+                        ),
+                        value: UInt64(
+                            5,
+                        ),
+                    },
+                    target_type: Int16,
+                    pg_style: false,
+                },
+                not: false,
+            },
+        },
+        right: InList {
+            span: Some(
+                272..293,
+            ),
+            expr: ColumnRef {
+                span: Some(
+                    261..271,
+                ),
+                column: ColumnRef {
+                    database: None,
+                    table: None,
+                    column: Name(
+                        Identifier {
+                            span: Some(
+                                261..271,
+                            ),
+                            name: "l_shipmode",
+                            quote: None,
+                            ident_type: None,
+                        },
+                    ),
+                },
+            },
+            list: [
+                Literal {
+                    span: Some(
+                        276..281,
+                    ),
+                    value: String(
+                        "AIR",
+                    ),
+                },
+                Literal {
+                    span: Some(
+                        283..292,
+                    ),
+                    value: String(
+                        "AIR REG",
+                    ),
+                },
+            ],
+            not: false,
+        },
+    },
+    right: BinaryOp {
+        span: Some(
+            313..314,
+        ),
+        op: Eq,
+        left: ColumnRef {
+            span: Some(
+                298..312,
+            ),
+            column: ColumnRef {
+                database: None,
+                table: None,
+                column: Name(
+                    Identifier {
+                        span: Some(
+                            298..312,
+                        ),
+                        name: "l_shipinstruct",
+                        quote: None,
+                        ident_type: None,
+                    },
+                ),
+            },
+        },
+        right: Literal {
+            span: Some(
+                315..334,
+            ),
+            value: String(
+                "DELIVER IN PERSON",
+            ),
+        },
+    },
+}
+
+
+---------- Input ----------
+nullif(1, 1)
+---------- Output ---------
+nullif(1, 1)
+---------- AST ------------
+FunctionCall {
+    span: Some(
+        0..12,
+    ),
+    func: FunctionCall {
+        distinct: false,
+        name: Identifier {
+            span: Some(
+                0..6,
+            ),
+            name: "nullif",
+            quote: None,
+            ident_type: None,
+        },
+        args: [
+            Literal {
+                span: Some(
+                    7..8,
+                ),
+                value: UInt64(
+                    1,
+                ),
+            },
+            Literal {
+                span: Some(
+                    10..11,
+                ),
+                value: UInt64(
+                    1,
+                ),
+            },
+        ],
+        params: [],
+        order_by: [],
+        window: None,
+        lambda: None,
+    },
+}
+
+
+---------- Input ----------
+nullif(a, b)
+---------- Output ---------
+nullif(a, b)
+---------- AST ------------
+FunctionCall {
+    span: Some(
+        0..12,
+    ),
+    func: FunctionCall {
+        distinct: false,
+        name: Identifier {
+            span: Some(
+                0..6,
+            ),
+            name: "nullif",
+            quote: None,
+            ident_type: None,
+        },
+        args: [
+            ColumnRef {
+                span: Some(
+                    7..8,
+                ),
+                column: ColumnRef {
+                    database: None,
+                    table: None,
+                    column: Name(
+                        Identifier {
+                            span: Some(
+                                7..8,
+                            ),
+                            name: "a",
+                            quote: None,
+                            ident_type: None,
+                        },
+                    ),
+                },
+            },
+            ColumnRef {
+                span: Some(
+                    10..11,
+                ),
+                column: ColumnRef {
+                    database: None,
+                    table: None,
+                    column: Name(
+                        Identifier {
+                            span: Some(
+                                10..11,
+                            ),
+                            name: "b",
+                            quote: None,
+                            ident_type: None,
+                        },
+                    ),
+                },
+            },
+        ],
+        params: [],
+        order_by: [],
+        window: None,
+        lambda: None,
+    },
+}
+
+
+---------- Input ----------
+coalesce(1, 2, 3)
+---------- Output ---------
+coalesce(1, 2, 3)
+---------- AST ------------
+FunctionCall {
+    span: Some(
+        0..17,
+    ),
+    func: FunctionCall {
+        distinct: false,
+        name: Identifier {
+            span: Some(
+                0..8,
+            ),
+            name: "coalesce",
+            quote: None,
+            ident_type: None,
+        },
+        args: [
+            Literal {
+                span: Some(
+                    9..10,
+                ),
+                value: UInt64(
+                    1,
+                ),
+            },
+            Literal {
+                span: Some(
+                    12..13,
+                ),
+                value: UInt64(
+                    2,
+                ),
+            },
+            Literal {
+                span: Some(
+                    15..16,
+                ),
+                value: UInt64(
+                    3,
+                ),
+            },
+        ],
+        params: [],
+        order_by: [],
+        window: None,
+        lambda: None,
+    },
+}
+
+
+---------- Input ----------
+coalesce(a, b, c)
+---------- Output ---------
+coalesce(a, b, c)
+---------- AST ------------
+FunctionCall {
+    span: Some(
+        0..17,
+    ),
+    func: FunctionCall {
+        distinct: false,
+        name: Identifier {
+            span: Some(
+                0..8,
+            ),
+            name: "coalesce",
+            quote: None,
+            ident_type: None,
+        },
+        args: [
+            ColumnRef {
+                span: Some(
+                    9..10,
+                ),
+                column: ColumnRef {
+                    database: None,
+                    table: None,
+                    column: Name(
+                        Identifier {
+                            span: Some(
+                                9..10,
+                            ),
+                            name: "a",
+                            quote: None,
+                            ident_type: None,
+                        },
+                    ),
+                },
+            },
+            ColumnRef {
+                span: Some(
+                    12..13,
+                ),
+                column: ColumnRef {
+                    database: None,
+                    table: None,
+                    column: Name(
+                        Identifier {
+                            span: Some(
+                                12..13,
+                            ),
+                            name: "b",
+                            quote: None,
+                            ident_type: None,
+                        },
+                    ),
+                },
+            },
+            ColumnRef {
+                span: Some(
+                    15..16,
+                ),
+                column: ColumnRef {
+                    database: None,
+                    table: None,
+                    column: Name(
+                        Identifier {
+                            span: Some(
+                                15..16,
+                            ),
+                            name: "c",
+                            quote: None,
+                            ident_type: None,
+                        },
+                    ),
+                },
+            },
+        ],
+        params: [],
+        order_by: [],
+        window: None,
+        lambda: None,
+    },
+}
+
+
+---------- Input ----------
+ifnull(1, 1)
+---------- Output ---------
+ifnull(1, 1)
+---------- AST ------------
+FunctionCall {
+    span: Some(
+        0..12,
+    ),
+    func: FunctionCall {
+        distinct: false,
+        name: Identifier {
+            span: Some(
+                0..6,
+            ),
+            name: "ifnull",
+            quote: None,
+            ident_type: None,
+        },
+        args: [
+            Literal {
+                span: Some(
+                    7..8,
+                ),
+                value: UInt64(
+                    1,
+                ),
+            },
+            Literal {
+                span: Some(
+                    10..11,
+                ),
+                value: UInt64(
+                    1,
+                ),
+            },
+        ],
+        params: [],
+        order_by: [],
+        window: None,
+        lambda: None,
+    },
+}
+
+
+---------- Input ----------
+ifnull(a, b)
+---------- Output ---------
+ifnull(a, b)
+---------- AST ------------
+FunctionCall {
+    span: Some(
+        0..12,
+    ),
+    func: FunctionCall {
+        distinct: false,
+        name: Identifier {
+            span: Some(
+                0..6,
+            ),
+            name: "ifnull",
+            quote: None,
+            ident_type: None,
+        },
+        args: [
+            ColumnRef {
+                span: Some(
+                    7..8,
+                ),
+                column: ColumnRef {
+                    database: None,
+                    table: None,
+                    column: Name(
+                        Identifier {
+                            span: Some(
+                                7..8,
+                            ),
+                            name: "a",
+                            quote: None,
+                            ident_type: None,
+                        },
+                    ),
+                },
+            },
+            ColumnRef {
+                span: Some(
+                    10..11,
+                ),
+                column: ColumnRef {
+                    database: None,
+                    table: None,
+                    column: Name(
+                        Identifier {
+                            span: Some(
+                                10..11,
+                            ),
+                            name: "b",
+                            quote: None,
+                            ident_type: None,
+                        },
+                    ),
+                },
+            },
+        ],
+        params: [],
+        order_by: [],
+        window: None,
+        lambda: None,
+    },
+}
+
+
+---------- Input ----------
+1 is distinct from 2
+---------- Output ---------
+1 IS DISTINCT FROM 2
+---------- AST ------------
+IsDistinctFrom {
+    span: Some(
+        2..18,
+    ),
+    left: Literal {
+        span: Some(
+            0..1,
+        ),
+        value: UInt64(
+            1,
+        ),
+    },
+    right: Literal {
+        span: Some(
+            19..20,
+        ),
+        value: UInt64(
+            2,
+        ),
+    },
+    not: false,
+}
+
+
+---------- Input ----------
+a is distinct from b
+---------- Output ---------
+a IS DISTINCT FROM b
+---------- AST ------------
+IsDistinctFrom {
+    span: Some(
+        2..18,
+    ),
+    left: ColumnRef {
+        span: Some(
+            0..1,
+        ),
+        column: ColumnRef {
+            database: None,
+            table: None,
+            column: Name(
+                Identifier {
+                    span: Some(
+                        0..1,
+                    ),
+                    name: "a",
+                    quote: None,
+                    ident_type: None,
+                },
+            ),
+        },
+    },
+    right: ColumnRef {
+        span: Some(
+            19..20,
+        ),
+        column: ColumnRef {
+            database: None,
+            table: None,
+            column: Name(
+                Identifier {
+                    span: Some(
+                        19..20,
+                    ),
+                    name: "b",
+                    quote: None,
+                    ident_type: None,
+                },
+            ),
+        },
+    },
+    not: false,
+}
+
+
+---------- Input ----------
+1 is not distinct from null
+---------- Output ---------
+1 IS NOT DISTINCT FROM NULL
+---------- AST ------------
+IsDistinctFrom {
+    span: Some(
+        2..22,
+    ),
+    left: Literal {
+        span: Some(
+            0..1,
+        ),
+        value: UInt64(
+            1,
+        ),
+    },
+    right: Literal {
+        span: Some(
+            23..27,
+        ),
+        value: Null,
+    },
+    not: true,
+}
+
+
+---------- Input ----------
+{'k1':1,'k2':2}
+---------- Output ---------
+{'k1':1,'k2':2}
+---------- AST ------------
+Map {
+    span: Some(
+        0..15,
+    ),
+    kvs: [
+        (
+            String(
+                "k1",
+            ),
+            Literal {
+                span: Some(
+                    6..7,
+                ),
+                value: UInt64(
+                    1,
+                ),
+            },
+        ),
+        (
+            String(
+                "k2",
+            ),
+            Literal {
+                span: Some(
+                    13..14,
+                ),
+                value: UInt64(
+                    2,
+                ),
+            },
+        ),
+    ],
+}
+
+
+---------- Input ----------
+LISTAGG(salary, '|') WITHIN GROUP (ORDER BY salary DESC NULLS LAST)
+---------- Output ---------
+LISTAGG(salary, '|') WITHIN GROUP ( ORDER BY salary DESC NULLS LAST )
+---------- AST ------------
+FunctionCall {
+    span: Some(
+        0..67,
+    ),
+    func: FunctionCall {
+        distinct: false,
+        name: Identifier {
+            span: Some(
+                0..7,
+            ),
+            name: "LISTAGG",
+            quote: None,
+            ident_type: None,
+        },
+        args: [
+            ColumnRef {
+                span: Some(
+                    8..14,
+                ),
+                column: ColumnRef {
+                    database: None,
+                    table: None,
+                    column: Name(
+                        Identifier {
+                            span: Some(
+                                8..14,
+                            ),
+                            name: "salary",
+                            quote: None,
+                            ident_type: None,
+                        },
+                    ),
+                },
+            },
+            Literal {
+                span: Some(
+                    16..19,
+                ),
+                value: String(
+                    "|",
+                ),
+            },
+        ],
+        params: [],
+        order_by: [
+            OrderByExpr {
+                expr: ColumnRef {
+                    span: Some(
+                        44..50,
+                    ),
+                    column: ColumnRef {
+                        database: None,
+                        table: None,
+                        column: Name(
+                            Identifier {
+                                span: Some(
+                                    44..50,
+                                ),
+                                name: "salary",
+                                quote: None,
+                                ident_type: None,
+                            },
+                        ),
+                    },
+                },
+                asc: Some(
+                    false,
+                ),
+                nulls_first: Some(
+                    false,
+                ),
+            },
+        ],
+        window: None,
+        lambda: None,
+    },
+}
+
+
+---------- Input ----------
+ROW_NUMBER() OVER (ORDER BY salary DESC)
+---------- Output ---------
+ROW_NUMBER() OVER (ORDER BY salary DESC)
+---------- AST ------------
+FunctionCall {
+    span: Some(
+        0..40,
+    ),
+    func: FunctionCall {
+        distinct: false,
+        name: Identifier {
+            span: Some(
+                0..10,
+            ),
+            name: "ROW_NUMBER",
+            quote: None,
+            ident_type: None,
+        },
+        args: [],
+        params: [],
+        order_by: [],
+        window: Some(
+            WindowDesc {
+                ignore_nulls: None,
+                window: WindowSpec(
+                    WindowSpec {
+                        existing_window_name: None,
+                        partition_by: [],
+                        order_by: [
+                            OrderByExpr {
+                                expr: ColumnRef {
+                                    span: Some(
+                                        28..34,
+                                    ),
+                                    column: ColumnRef {
+                                        database: None,
+                                        table: None,
+                                        column: Name(
+                                            Identifier {
+                                                span: Some(
+                                                    28..34,
+                                                ),
+                                                name: "salary",
+                                                quote: None,
+                                                ident_type: None,
+                                            },
+                                        ),
+                                    },
+                                },
+                                asc: Some(
+                                    false,
+                                ),
+                                nulls_first: None,
+                            },
+                        ],
+                        window_frame: None,
+                    },
+                ),
+            },
+        ),
+        lambda: None,
+    },
+}
+
+
+---------- Input ----------
+SUM(salary) OVER ()
+---------- Output ---------
+SUM(salary) OVER ()
+---------- AST ------------
+FunctionCall {
+    span: Some(
+        0..19,
+    ),
+    func: FunctionCall {
+        distinct: false,
+        name: Identifier {
+            span: Some(
+                0..3,
+            ),
+            name: "SUM",
+            quote: None,
+            ident_type: None,
+        },
+        args: [
+            ColumnRef {
+                span: Some(
+                    4..10,
+                ),
+                column: ColumnRef {
+                    database: None,
+                    table: None,
+                    column: Name(
+                        Identifier {
+                            span: Some(
+                                4..10,
+                            ),
+                            name: "salary",
+                            quote: None,
+                            ident_type: None,
+                        },
+                    ),
+                },
+            },
+        ],
+        params: [],
+        order_by: [],
+        window: Some(
+            WindowDesc {
+                ignore_nulls: None,
+                window: WindowSpec(
+                    WindowSpec {
+                        existing_window_name: None,
+                        partition_by: [],
+                        order_by: [],
+                        window_frame: None,
+                    },
+                ),
+            },
+        ),
+        lambda: None,
+    },
+}
+
+
+---------- Input ----------
+AVG(salary) OVER (PARTITION BY department)
+---------- Output ---------
+AVG(salary) OVER (PARTITION BY department)
+---------- AST ------------
+FunctionCall {
+    span: Some(
+        0..42,
+    ),
+    func: FunctionCall {
+        distinct: false,
+        name: Identifier {
+            span: Some(
+                0..3,
+            ),
+            name: "AVG",
+            quote: None,
+            ident_type: None,
+        },
+        args: [
+            ColumnRef {
+                span: Some(
+                    4..10,
+                ),
+                column: ColumnRef {
+                    database: None,
+                    table: None,
+                    column: Name(
+                        Identifier {
+                            span: Some(
+                                4..10,
+                            ),
+                            name: "salary",
+                            quote: None,
+                            ident_type: None,
+                        },
+                    ),
+                },
+            },
+        ],
+        params: [],
+        order_by: [],
+        window: Some(
+            WindowDesc {
+                ignore_nulls: None,
+                window: WindowSpec(
+                    WindowSpec {
+                        existing_window_name: None,
+                        partition_by: [
+                            ColumnRef {
+                                span: Some(
+                                    31..41,
+                                ),
+                                column: ColumnRef {
+                                    database: None,
+                                    table: None,
+                                    column: Name(
+                                        Identifier {
+                                            span: Some(
+                                                31..41,
+                                            ),
+                                            name: "department",
+                                            quote: None,
+                                            ident_type: None,
+                                        },
+                                    ),
+                                },
+                            },
+                        ],
+                        order_by: [],
+                        window_frame: None,
+                    },
+                ),
+            },
+        ),
+        lambda: None,
+    },
+}
+
+
+---------- Input ----------
+SUM(salary) OVER (PARTITION BY department ORDER BY salary DESC ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)
+---------- Output ---------
+SUM(salary) OVER (PARTITION BY department ORDER BY salary DESC ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)
+---------- AST ------------
+FunctionCall {
+    span: Some(
+        0..112,
+    ),
+    func: FunctionCall {
+        distinct: false,
+        name: Identifier {
+            span: Some(
+                0..3,
+            ),
+            name: "SUM",
+            quote: None,
+            ident_type: None,
+        },
+        args: [
+            ColumnRef {
+                span: Some(
+                    4..10,
+                ),
+                column: ColumnRef {
+                    database: None,
+                    table: None,
+                    column: Name(
+                        Identifier {
+                            span: Some(
+                                4..10,
+                            ),
+                            name: "salary",
+                            quote: None,
+                            ident_type: None,
+                        },
+                    ),
+                },
+            },
+        ],
+        params: [],
+        order_by: [],
+        window: Some(
+            WindowDesc {
+                ignore_nulls: None,
+                window: WindowSpec(
+                    WindowSpec {
+                        existing_window_name: None,
+                        partition_by: [
+                            ColumnRef {
+                                span: Some(
+                                    31..41,
+                                ),
+                                column: ColumnRef {
+                                    database: None,
+                                    table: None,
+                                    column: Name(
+                                        Identifier {
+                                            span: Some(
+                                                31..41,
+                                            ),
+                                            name: "department",
+                                            quote: None,
+                                            ident_type: None,
+                                        },
+                                    ),
+                                },
+                            },
+                        ],
+                        order_by: [
+                            OrderByExpr {
+                                expr: ColumnRef {
+                                    span: Some(
+                                        51..57,
+                                    ),
+                                    column: ColumnRef {
+                                        database: None,
+                                        table: None,
+                                        column: Name(
+                                            Identifier {
+                                                span: Some(
+                                                    51..57,
+                                                ),
+                                                name: "salary",
+                                                quote: None,
+                                                ident_type: None,
+                                            },
+                                        ),
+                                    },
+                                },
+                                asc: Some(
+                                    false,
+                                ),
+                                nulls_first: None,
+                            },
+                        ],
+                        window_frame: Some(
+                            WindowFrame {
+                                units: Rows,
+                                start_bound: Preceding(
+                                    None,
+                                ),
+                                end_bound: CurrentRow,
+                            },
+                        ),
+                    },
+                ),
+            },
+        ),
+        lambda: None,
+    },
+}
+
+
+---------- Input ----------
+AVG(salary) OVER (PARTITION BY department ORDER BY hire_date ROWS BETWEEN 2 PRECEDING AND CURRENT ROW)
+---------- Output ---------
+AVG(salary) OVER (PARTITION BY department ORDER BY hire_date ROWS BETWEEN 2 PRECEDING AND CURRENT ROW)
+---------- AST ------------
+FunctionCall {
+    span: Some(
+        0..102,
+    ),
+    func: FunctionCall {
+        distinct: false,
+        name: Identifier {
+            span: Some(
+                0..3,
+            ),
+            name: "AVG",
+            quote: None,
+            ident_type: None,
+        },
+        args: [
+            ColumnRef {
+                span: Some(
+                    4..10,
+                ),
+                column: ColumnRef {
+                    database: None,
+                    table: None,
+                    column: Name(
+                        Identifier {
+                            span: Some(
+                                4..10,
+                            ),
+                            name: "salary",
+                            quote: None,
+                            ident_type: None,
+                        },
+                    ),
+                },
+            },
+        ],
+        params: [],
+        order_by: [],
+        window: Some(
+            WindowDesc {
+                ignore_nulls: None,
+                window: WindowSpec(
+                    WindowSpec {
+                        existing_window_name: None,
+                        partition_by: [
+                            ColumnRef {
+                                span: Some(
+                                    31..41,
+                                ),
+                                column: ColumnRef {
+                                    database: None,
+                                    table: None,
+                                    column: Name(
+                                        Identifier {
+                                            span: Some(
+                                                31..41,
+                                            ),
+                                            name: "department",
+                                            quote: None,
+                                            ident_type: None,
+                                        },
+                                    ),
+                                },
+                            },
+                        ],
+                        order_by: [
+                            OrderByExpr {
+                                expr: ColumnRef {
+                                    span: Some(
+                                        51..60,
+                                    ),
+                                    column: ColumnRef {
+                                        database: None,
+                                        table: None,
+                                        column: Name(
+                                            Identifier {
+                                                span: Some(
+                                                    51..60,
+                                                ),
+                                                name: "hire_date",
+                                                quote: None,
+                                                ident_type: None,
+                                            },
+                                        ),
+                                    },
+                                },
+                                asc: None,
+                                nulls_first: None,
+                            },
+                        ],
+                        window_frame: Some(
+                            WindowFrame {
+                                units: Rows,
+                                start_bound: Preceding(
+                                    Some(
+                                        Literal {
+                                            span: Some(
+                                                74..75,
+                                            ),
+                                            value: UInt64(
+                                                2,
+                                            ),
+                                        },
+                                    ),
+                                ),
+                                end_bound: CurrentRow,
+                            },
+                        ),
+                    },
+                ),
+            },
+        ),
+        lambda: None,
+    },
+}
+
+
+---------- Input ----------
+COUNT() OVER (ORDER BY hire_date RANGE BETWEEN INTERVAL '7' DAY PRECEDING AND CURRENT ROW)
+---------- Output ---------
+COUNT() OVER (ORDER BY hire_date RANGE BETWEEN INTERVAL '7' DAY PRECEDING AND CURRENT ROW)
+---------- AST ------------
+FunctionCall {
+    span: Some(
+        0..90,
+    ),
+    func: FunctionCall {
+        distinct: false,
+        name: Identifier {
+            span: Some(
+                0..5,
+            ),
+            name: "COUNT",
+            quote: None,
+            ident_type: None,
+        },
+        args: [],
+        params: [],
+        order_by: [],
+        window: Some(
+            WindowDesc {
+                ignore_nulls: None,
+                window: WindowSpec(
+                    WindowSpec {
+                        existing_window_name: None,
+                        partition_by: [],
+                        order_by: [
+                            OrderByExpr {
+                                expr: ColumnRef {
+                                    span: Some(
+                                        23..32,
+                                    ),
+                                    column: ColumnRef {
+                                        database: None,
+                                        table: None,
+                                        column: Name(
+                                            Identifier {
+                                                span: Some(
+                                                    23..32,
+                                                ),
+                                                name: "hire_date",
+                                                quote: None,
+                                                ident_type: None,
+                                            },
+                                        ),
+                                    },
+                                },
+                                asc: None,
+                                nulls_first: None,
+                            },
+                        ],
+                        window_frame: Some(
+                            WindowFrame {
+                                units: Range,
+                                start_bound: Preceding(
+                                    Some(
+                                        Interval {
+                                            span: Some(
+                                                47..63,
+                                            ),
+                                            expr: Literal {
+                                                span: Some(
+                                                    56..59,
+                                                ),
+                                                value: String(
+                                                    "7",
+                                                ),
+                                            },
+                                            unit: Day,
+                                        },
+                                    ),
+                                ),
+                                end_bound: CurrentRow,
+                            },
+                        ),
+                    },
+                ),
+            },
+        ),
+        lambda: None,
+    },
+}
+
+
+---------- Input ----------
+COUNT() OVER (ORDER BY hire_date ROWS UNBOUNDED PRECEDING)
+---------- Output ---------
+COUNT() OVER (ORDER BY hire_date ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)
+---------- AST ------------
+FunctionCall {
+    span: Some(
+        0..58,
+    ),
+    func: FunctionCall {
+        distinct: false,
+        name: Identifier {
+            span: Some(
+                0..5,
+            ),
+            name: "COUNT",
+            quote: None,
+            ident_type: None,
+        },
+        args: [],
+        params: [],
+        order_by: [],
+        window: Some(
+            WindowDesc {
+                ignore_nulls: None,
+                window: WindowSpec(
+                    WindowSpec {
+                        existing_window_name: None,
+                        partition_by: [],
+                        order_by: [
+                            OrderByExpr {
+                                expr: ColumnRef {
+                                    span: Some(
+                                        23..32,
+                                    ),
+                                    column: ColumnRef {
+                                        database: None,
+                                        table: None,
+                                        column: Name(
+                                            Identifier {
+                                                span: Some(
+                                                    23..32,
+                                                ),
+                                                name: "hire_date",
+                                                quote: None,
+                                                ident_type: None,
+                                            },
+                                        ),
+                                    },
+                                },
+                                asc: None,
+                                nulls_first: None,
+                            },
+                        ],
+                        window_frame: Some(
+                            WindowFrame {
+                                units: Rows,
+                                start_bound: Preceding(
+                                    None,
+                                ),
+                                end_bound: CurrentRow,
+                            },
+                        ),
+                    },
+                ),
+            },
+        ),
+        lambda: None,
+    },
+}
+
+
+---------- Input ----------
+COUNT() OVER (ORDER BY hire_date ROWS CURRENT ROW)
+---------- Output ---------
+COUNT() OVER (ORDER BY hire_date ROWS BETWEEN CURRENT ROW AND CURRENT ROW)
+---------- AST ------------
+FunctionCall {
+    span: Some(
+        0..50,
+    ),
+    func: FunctionCall {
+        distinct: false,
+        name: Identifier {
+            span: Some(
+                0..5,
+            ),
+            name: "COUNT",
+            quote: None,
+            ident_type: None,
+        },
+        args: [],
+        params: [],
+        order_by: [],
+        window: Some(
+            WindowDesc {
+                ignore_nulls: None,
+                window: WindowSpec(
+                    WindowSpec {
+                        existing_window_name: None,
+                        partition_by: [],
+                        order_by: [
+                            OrderByExpr {
+                                expr: ColumnRef {
+                                    span: Some(
+                                        23..32,
+                                    ),
+                                    column: ColumnRef {
+                                        database: None,
+                                        table: None,
+                                        column: Name(
+                                            Identifier {
+                                                span: Some(
+                                                    23..32,
+                                                ),
+                                                name: "hire_date",
+                                                quote: None,
+                                                ident_type: None,
+                                            },
+                                        ),
+                                    },
+                                },
+                                asc: None,
+                                nulls_first: None,
+                            },
+                        ],
+                        window_frame: Some(
+                            WindowFrame {
+                                units: Rows,
+                                start_bound: CurrentRow,
+                                end_bound: CurrentRow,
+                            },
+                        ),
+                    },
+                ),
+            },
+        ),
+        lambda: None,
+    },
+}
+
+
+---------- Input ----------
+COUNT() OVER (ORDER BY hire_date ROWS 3 PRECEDING)
+---------- Output ---------
+COUNT() OVER (ORDER BY hire_date ROWS BETWEEN 3 PRECEDING AND CURRENT ROW)
+---------- AST ------------
+FunctionCall {
+    span: Some(
+        0..50,
+    ),
+    func: FunctionCall {
+        distinct: false,
+        name: Identifier {
+            span: Some(
+                0..5,
+            ),
+            name: "COUNT",
+            quote: None,
+            ident_type: None,
+        },
+        args: [],
+        params: [],
+        order_by: [],
+        window: Some(
+            WindowDesc {
+                ignore_nulls: None,
+                window: WindowSpec(
+                    WindowSpec {
+                        existing_window_name: None,
+                        partition_by: [],
+                        order_by: [
+                            OrderByExpr {
+                                expr: ColumnRef {
+                                    span: Some(
+                                        23..32,
+                                    ),
+                                    column: ColumnRef {
+                                        database: None,
+                                        table: None,
+                                        column: Name(
+                                            Identifier {
+                                                span: Some(
+                                                    23..32,
+                                                ),
+                                                name: "hire_date",
+                                                quote: None,
+                                                ident_type: None,
+                                            },
+                                        ),
+                                    },
+                                },
+                                asc: None,
+                                nulls_first: None,
+                            },
+                        ],
+                        window_frame: Some(
+                            WindowFrame {
+                                units: Rows,
+                                start_bound: Preceding(
+                                    Some(
+                                        Literal {
+                                            span: Some(
+                                                38..39,
+                                            ),
+                                            value: UInt64(
+                                                3,
+                                            ),
+                                        },
+                                    ),
+                                ),
+                                end_bound: CurrentRow,
+                            },
+                        ),
+                    },
+                ),
+            },
+        ),
+        lambda: None,
+    },
+}
+
+
+---------- Input ----------
+QUANTILE_CONT(0.5)(salary) OVER (PARTITION BY department ORDER BY hire_date)
+---------- Output ---------
+QUANTILE_CONT(0.5)(salary) OVER (PARTITION BY department ORDER BY hire_date)
+---------- AST ------------
+FunctionCall {
+    span: Some(
+        0..76,
+    ),
+    func: FunctionCall {
+        distinct: false,
+        name: Identifier {
+            span: Some(
+                0..13,
+            ),
+            name: "QUANTILE_CONT",
+            quote: None,
+            ident_type: None,
+        },
+        args: [
+            ColumnRef {
+                span: Some(
+                    19..25,
+                ),
+                column: ColumnRef {
+                    database: None,
+                    table: None,
+                    column: Name(
+                        Identifier {
+                            span: Some(
+                                19..25,
+                            ),
+                            name: "salary",
+                            quote: None,
+                            ident_type: None,
+                        },
+                    ),
+                },
+            },
+        ],
+        params: [
+            Literal {
+                span: Some(
+                    14..17,
+                ),
+                value: Decimal256 {
+                    value: 5,
+                    precision: 76,
+                    scale: 1,
+                },
+            },
+        ],
+        order_by: [],
+        window: Some(
+            WindowDesc {
+                ignore_nulls: None,
+                window: WindowSpec(
+                    WindowSpec {
+                        existing_window_name: None,
+                        partition_by: [
+                            ColumnRef {
+                                span: Some(
+                                    46..56,
+                                ),
+                                column: ColumnRef {
+                                    database: None,
+                                    table: None,
+                                    column: Name(
+                                        Identifier {
+                                            span: Some(
+                                                46..56,
+                                            ),
+                                            name: "department",
+                                            quote: None,
+                                            ident_type: None,
+                                        },
+                                    ),
+                                },
+                            },
+                        ],
+                        order_by: [
+                            OrderByExpr {
+                                expr: ColumnRef {
+                                    span: Some(
+                                        66..75,
+                                    ),
+                                    column: ColumnRef {
+                                        database: None,
+                                        table: None,
+                                        column: Name(
+                                            Identifier {
+                                                span: Some(
+                                                    66..75,
+                                                ),
+                                                name: "hire_date",
+                                                quote: None,
+                                                ident_type: None,
+                                            },
+                                        ),
+                                    },
+                                },
+                                asc: None,
+                                nulls_first: None,
+                            },
+                        ],
+                        window_frame: None,
+                    },
+                ),
+            },
+        ),
+        lambda: None,
+    },
+}
+
+
+---------- Input ----------
+ARRAY_APPLY([1,2,3], x -> x + 1)
+---------- Output ---------
+ARRAY_APPLY([1, 2, 3], x -> x + 1)
+---------- AST ------------
+FunctionCall {
+    span: Some(
+        0..32,
+    ),
+    func: FunctionCall {
+        distinct: false,
+        name: Identifier {
+            span: Some(
+                0..11,
+            ),
+            name: "ARRAY_APPLY",
+            quote: None,
+            ident_type: None,
+        },
+        args: [
+            Array {
+                span: Some(
+                    12..19,
+                ),
+                exprs: [
+                    Literal {
+                        span: Some(
+                            13..14,
+                        ),
+                        value: UInt64(
+                            1,
+                        ),
+                    },
+                    Literal {
+                        span: Some(
+                            15..16,
+                        ),
+                        value: UInt64(
+                            2,
+                        ),
+                    },
+                    Literal {
+                        span: Some(
+                            17..18,
+                        ),
+                        value: UInt64(
+                            3,
+                        ),
+                    },
+                ],
+            },
+        ],
+        params: [],
+        order_by: [],
+        window: None,
+        lambda: Some(
+            Lambda {
+                params: [
+                    Identifier {
+                        span: Some(
+                            21..22,
+                        ),
+                        name: "x",
+                        quote: None,
+                        ident_type: None,
+                    },
+                ],
+                expr: BinaryOp {
+                    span: Some(
+                        28..29,
+                    ),
+                    op: Plus,
+                    left: ColumnRef {
+                        span: Some(
+                            26..27,
+                        ),
+                        column: ColumnRef {
+                            database: None,
+                            table: None,
+                            column: Name(
+                                Identifier {
+                                    span: Some(
+                                        26..27,
+                                    ),
+                                    name: "x",
+                                    quote: None,
+                                    ident_type: None,
+                                },
+                            ),
+                        },
+                    },
+                    right: Literal {
+                        span: Some(
+                            30..31,
+                        ),
+                        value: UInt64(
+                            1,
+                        ),
+                    },
+                },
+            },
+        ),
+    },
+}
+
+
+---------- Input ----------
+ARRAY_FILTER(col, y -> y % 2 = 0)
+---------- Output ---------
+ARRAY_FILTER(col, y -> y % 2 = 0)
+---------- AST ------------
+FunctionCall {
+    span: Some(
+        0..33,
+    ),
+    func: FunctionCall {
+        distinct: false,
+        name: Identifier {
+            span: Some(
+                0..12,
+            ),
+            name: "ARRAY_FILTER",
+            quote: None,
+            ident_type: None,
+        },
+        args: [
+            ColumnRef {
+                span: Some(
+                    13..16,
+                ),
+                column: ColumnRef {
+                    database: None,
+                    table: None,
+                    column: Name(
+                        Identifier {
+                            span: Some(
+                                13..16,
+                            ),
+                            name: "col",
+                            quote: None,
+                            ident_type: None,
+                        },
+                    ),
+                },
+            },
+        ],
+        params: [],
+        order_by: [],
+        window: None,
+        lambda: Some(
+            Lambda {
+                params: [
+                    Identifier {
+                        span: Some(
+                            18..19,
+                        ),
+                        name: "y",
+                        quote: None,
+                        ident_type: None,
+                    },
+                ],
+                expr: BinaryOp {
+                    span: Some(
+                        29..30,
+                    ),
+                    op: Eq,
+                    left: BinaryOp {
+                        span: Some(
+                            25..26,
+                        ),
+                        op: Modulo,
+                        left: ColumnRef {
+                            span: Some(
+                                23..24,
+                            ),
+                            column: ColumnRef {
+                                database: None,
+                                table: None,
+                                column: Name(
+                                    Identifier {
+                                        span: Some(
+                                            23..24,
+                                        ),
+                                        name: "y",
+                                        quote: None,
+                                        ident_type: None,
+                                    },
+                                ),
+                            },
+                        },
+                        right: Literal {
+                            span: Some(
+                                27..28,
+                            ),
+                            value: UInt64(
+                                2,
+                            ),
+                        },
+                    },
+                    right: Literal {
+                        span: Some(
+                            31..32,
+                        ),
+                        value: UInt64(
+                            0,
+                        ),
+                    },
+                },
+            },
+        ),
+    },
+}
+
+
+---------- Input ----------
+(current_timestamp, current_timestamp(), now())
+---------- Output ---------
+(current_timestamp(), current_timestamp(), now())
+---------- AST ------------
+Tuple {
+    span: Some(
+        0..47,
+    ),
+    exprs: [
+        FunctionCall {
+            span: Some(
+                1..18,
+            ),
+            func: FunctionCall {
+                distinct: false,
+                name: Identifier {
+                    span: Some(
+                        1..18,
+                    ),
+                    name: "current_timestamp",
+                    quote: None,
+                    ident_type: None,
+                },
+                args: [],
+                params: [],
+                order_by: [],
+                window: None,
+                lambda: None,
+            },
+        },
+        FunctionCall {
+            span: Some(
+                20..39,
+            ),
+            func: FunctionCall {
+                distinct: false,
+                name: Identifier {
+                    span: Some(
+                        20..37,
+                    ),
+                    name: "current_timestamp",
+                    quote: None,
+                    ident_type: None,
+                },
+                args: [],
+                params: [],
+                order_by: [],
+                window: None,
+                lambda: None,
+            },
+        },
+        FunctionCall {
+            span: Some(
+                41..46,
+            ),
+            func: FunctionCall {
+                distinct: false,
+                name: Identifier {
+                    span: Some(
+                        41..44,
+                    ),
+                    name: "now",
+                    quote: None,
+                    ident_type: None,
+                },
+                args: [],
+                params: [],
+                order_by: [],
+                window: None,
+                lambda: None,
+            },
+        },
+    ],
+}
+
+
+---------- Input ----------
+ARRAY_REDUCE([1,2,3], (acc,t) -> acc + t)
+---------- Output ---------
+ARRAY_REDUCE([1, 2, 3], (acc, t) -> acc + t)
+---------- AST ------------
+FunctionCall {
+    span: Some(
+        0..41,
+    ),
+    func: FunctionCall {
+        distinct: false,
+        name: Identifier {
+            span: Some(
+                0..12,
+            ),
+            name: "ARRAY_REDUCE",
+            quote: None,
+            ident_type: None,
+        },
+        args: [
+            Array {
+                span: Some(
+                    13..20,
+                ),
+                exprs: [
+                    Literal {
+                        span: Some(
+                            14..15,
+                        ),
+                        value: UInt64(
+                            1,
+                        ),
+                    },
+                    Literal {
+                        span: Some(
+                            16..17,
+                        ),
+                        value: UInt64(
+                            2,
+                        ),
+                    },
+                    Literal {
+                        span: Some(
+                            18..19,
+                        ),
+                        value: UInt64(
+                            3,
+                        ),
+                    },
+                ],
+            },
+        ],
+        params: [],
+        order_by: [],
+        window: None,
+        lambda: Some(
+            Lambda {
+                params: [
+                    Identifier {
+                        span: Some(
+                            23..26,
+                        ),
+                        name: "acc",
+                        quote: None,
+                        ident_type: None,
+                    },
+                    Identifier {
+                        span: Some(
+                            27..28,
+                        ),
+                        name: "t",
+                        quote: None,
+                        ident_type: None,
+                    },
+                ],
+                expr: BinaryOp {
+                    span: Some(
+                        37..38,
+                    ),
+                    op: Plus,
+                    left: ColumnRef {
+                        span: Some(
+                            33..36,
+                        ),
+                        column: ColumnRef {
+                            database: None,
+                            table: None,
+                            column: Name(
+                                Identifier {
+                                    span: Some(
+                                        33..36,
+                                    ),
+                                    name: "acc",
+                                    quote: None,
+                                    ident_type: None,
+                                },
+                            ),
+                        },
+                    },
+                    right: ColumnRef {
+                        span: Some(
+                            39..40,
+                        ),
+                        column: ColumnRef {
+                            database: None,
+                            table: None,
+                            column: Name(
+                                Identifier {
+                                    span: Some(
+                                        39..40,
+                                    ),
+                                    name: "t",
+                                    quote: None,
+                                    ident_type: None,
+                                },
+                            ),
+                        },
+                    },
+                },
+            },
+        ),
+    },
+}
+
+
+---------- Input ----------
+MAP_FILTER({1:1,2:2,3:4}, (k, v) -> k > v)
+---------- Output ---------
+MAP_FILTER({1:1,2:2,3:4}, (k, v) -> k > v)
+---------- AST ------------
+FunctionCall {
+    span: Some(
+        0..42,
+    ),
+    func: FunctionCall {
+        distinct: false,
+        name: Identifier {
+            span: Some(
+                0..10,
+            ),
+            name: "MAP_FILTER",
+            quote: None,
+            ident_type: None,
+        },
+        args: [
+            Map {
+                span: Some(
+                    11..24,
+                ),
+                kvs: [
+                    (
+                        UInt64(
+                            1,
+                        ),
+                        Literal {
+                            span: Some(
+                                14..15,
+                            ),
+                            value: UInt64(
+                                1,
+                            ),
+                        },
+                    ),
+                    (
+                        UInt64(
+                            2,
+                        ),
+                        Literal {
+                            span: Some(
+                                18..19,
+                            ),
+                            value: UInt64(
+                                2,
+                            ),
+                        },
+                    ),
+                    (
+                        UInt64(
+                            3,
+                        ),
+                        Literal {
+                            span: Some(
+                                22..23,
+                            ),
+                            value: UInt64(
+                                4,
+                            ),
+                        },
+                    ),
+                ],
+            },
+        ],
+        params: [],
+        order_by: [],
+        window: None,
+        lambda: Some(
+            Lambda {
+                params: [
+                    Identifier {
+                        span: Some(
+                            27..28,
+                        ),
+                        name: "k",
+                        quote: None,
+                        ident_type: None,
+                    },
+                    Identifier {
+                        span: Some(
+                            30..31,
+                        ),
+                        name: "v",
+                        quote: None,
+                        ident_type: None,
+                    },
+                ],
+                expr: BinaryOp {
+                    span: Some(
+                        38..39,
+                    ),
+                    op: Gt,
+                    left: ColumnRef {
+                        span: Some(
+                            36..37,
+                        ),
+                        column: ColumnRef {
+                            database: None,
+                            table: None,
+                            column: Name(
+                                Identifier {
+                                    span: Some(
+                                        36..37,
+                                    ),
+                                    name: "k",
+                                    quote: None,
+                                    ident_type: None,
+                                },
+                            ),
+                        },
+                    },
+                    right: ColumnRef {
+                        span: Some(
+                            40..41,
+                        ),
+                        column: ColumnRef {
+                            database: None,
+                            table: None,
+                            column: Name(
+                                Identifier {
+                                    span: Some(
+                                        40..41,
+                                    ),
+                                    name: "v",
+                                    quote: None,
+                                    ident_type: None,
+                                },
+                            ),
+                        },
+                    },
+                },
+            },
+        ),
+    },
+}
+
+
+---------- Input ----------
+MAP_TRANSFORM_KEYS({1:10,2:20,3:30}, (k, v) -> k + 1)
+---------- Output ---------
+MAP_TRANSFORM_KEYS({1:10,2:20,3:30}, (k, v) -> k + 1)
+---------- AST ------------
+FunctionCall {
+    span: Some(
+        0..53,
+    ),
+    func: FunctionCall {
+        distinct: false,
+        name: Identifier {
+            span: Some(
+                0..18,
+            ),
+            name: "MAP_TRANSFORM_KEYS",
+            quote: None,
+            ident_type: None,
+        },
+        args: [
+            Map {
+                span: Some(
+                    19..35,
+                ),
+                kvs: [
+                    (
+                        UInt64(
+                            1,
+                        ),
+                        Literal {
+                            span: Some(
+                                22..24,
+                            ),
+                            value: UInt64(
+                                10,
+                            ),
+                        },
+                    ),
+                    (
+                        UInt64(
+                            2,
+                        ),
+                        Literal {
+                            span: Some(
+                                27..29,
+                            ),
+                            value: UInt64(
+                                20,
+                            ),
+                        },
+                    ),
+                    (
+                        UInt64(
+                            3,
+                        ),
+                        Literal {
+                            span: Some(
+                                32..34,
+                            ),
+                            value: UInt64(
+                                30,
+                            ),
+                        },
+                    ),
+                ],
+            },
+        ],
+        params: [],
+        order_by: [],
+        window: None,
+        lambda: Some(
+            Lambda {
+                params: [
+                    Identifier {
+                        span: Some(
+                            38..39,
+                        ),
+                        name: "k",
+                        quote: None,
+                        ident_type: None,
+                    },
+                    Identifier {
+                        span: Some(
+                            41..42,
+                        ),
+                        name: "v",
+                        quote: None,
+                        ident_type: None,
+                    },
+                ],
+                expr: BinaryOp {
+                    span: Some(
+                        49..50,
+                    ),
+                    op: Plus,
+                    left: ColumnRef {
+                        span: Some(
+                            47..48,
+                        ),
+                        column: ColumnRef {
+                            database: None,
+                            table: None,
+                            column: Name(
+                                Identifier {
+                                    span: Some(
+                                        47..48,
+                                    ),
+                                    name: "k",
+                                    quote: None,
+                                    ident_type: None,
+                                },
+                            ),
+                        },
+                    },
+                    right: Literal {
+                        span: Some(
+                            51..52,
+                        ),
+                        value: UInt64(
+                            1,
+                        ),
+                    },
+                },
+            },
+        ),
+    },
+}
+
+
+---------- Input ----------
+MAP_TRANSFORM_VALUES({1:10,2:20,3:30}, (k, v) -> v + 1)
+---------- Output ---------
+MAP_TRANSFORM_VALUES({1:10,2:20,3:30}, (k, v) -> v + 1)
+---------- AST ------------
+FunctionCall {
+    span: Some(
+        0..55,
+    ),
+    func: FunctionCall {
+        distinct: false,
+        name: Identifier {
+            span: Some(
+                0..20,
+            ),
+            name: "MAP_TRANSFORM_VALUES",
+            quote: None,
+            ident_type: None,
+        },
+        args: [
+            Map {
+                span: Some(
+                    21..37,
+                ),
+                kvs: [
+                    (
+                        UInt64(
+                            1,
+                        ),
+                        Literal {
+                            span: Some(
+                                24..26,
+                            ),
+                            value: UInt64(
+                                10,
+                            ),
+                        },
+                    ),
+                    (
+                        UInt64(
+                            2,
+                        ),
+                        Literal {
+                            span: Some(
+                                29..31,
+                            ),
+                            value: UInt64(
+                                20,
+                            ),
+                        },
+                    ),
+                    (
+                        UInt64(
+                            3,
+                        ),
+                        Literal {
+                            span: Some(
+                                34..36,
+                            ),
+                            value: UInt64(
+                                30,
+                            ),
+                        },
+                    ),
+                ],
+            },
+        ],
+        params: [],
+        order_by: [],
+        window: None,
+        lambda: Some(
+            Lambda {
+                params: [
+                    Identifier {
+                        span: Some(
+                            40..41,
+                        ),
+                        name: "k",
+                        quote: None,
+                        ident_type: None,
+                    },
+                    Identifier {
+                        span: Some(
+                            43..44,
+                        ),
+                        name: "v",
+                        quote: None,
+                        ident_type: None,
+                    },
+                ],
+                expr: BinaryOp {
+                    span: Some(
+                        51..52,
+                    ),
+                    op: Plus,
+                    left: ColumnRef {
+                        span: Some(
+                            49..50,
+                        ),
+                        column: ColumnRef {
+                            database: None,
+                            table: None,
+                            column: Name(
+                                Identifier {
+                                    span: Some(
+                                        49..50,
+                                    ),
+                                    name: "v",
+                                    quote: None,
+                                    ident_type: None,
+                                },
+                            ),
+                        },
+                    },
+                    right: Literal {
+                        span: Some(
+                            53..54,
+                        ),
+                        value: UInt64(
+                            1,
+                        ),
+                    },
+                },
+            },
+        ),
+    },
+}
+
+
+---------- Input ----------
+INTERVAL '1 YEAR'
+---------- Output ---------
+CAST('1 YEAR' AS INTERVAL)
+---------- AST ------------
+Cast {
+    span: Some(
+        0..17,
+    ),
+    expr: Literal {
+        span: Some(
+            9..17,
+        ),
+        value: String(
+            "1 YEAR",
+        ),
+    },
+    target_type: Interval,
+    pg_style: false,
+}
+
+
+---------- Input ----------
+(?, ?)
+---------- Output ---------
+(?, ?)
+---------- AST ------------
+Tuple {
+    span: Some(
+        0..6,
+    ),
+    exprs: [
+        Placeholder {
+            span: Some(
+                1..2,
+            ),
+        },
+        Placeholder {
+            span: Some(
+                4..5,
+            ),
+        },
+    ],
+}
+
+

@@ -1,0 +1,110 @@
+---------- Input ----------
+select * from customer join where a = b
+---------- Output ---------
+error: 
+  --> SQL:1:24
+  |
+1 | select * from customer join where a = b
+  | ------                 ^^^^ expecting an operand
+  | |                       
+  | while parsing `SELECT ...`
+
+
+---------- Input ----------
+from t1 select * from t2
+---------- Output ---------
+error: 
+  --> SQL:1:1
+  |
+1 | from t1 select * from t2
+  | ^^^^
+  | |
+  | duplicated FROM clause
+  | while parsing `SELECT ...`
+
+
+---------- Input ----------
+from t1 select * from t2 where a = b
+---------- Output ---------
+error: 
+  --> SQL:1:1
+  |
+1 | from t1 select * from t2 where a = b
+  | ^^^^
+  | |
+  | duplicated FROM clause
+  | while parsing `SELECT ...`
+
+
+---------- Input ----------
+select * from join customer
+---------- Output ---------
+error: 
+  --> SQL:1:15
+  |
+1 | select * from join customer
+  | ------        ^^^^ missing lhs or rhs for the binary operator
+  | |              
+  | while parsing `SELECT ...`
+
+
+---------- Input ----------
+select * from customer natural inner join orders on a = b
+---------- Output ---------
+error: 
+  --> SQL:1:50
+  |
+1 | select * from customer natural inner join orders on a = b
+  | ------                                           ^^ join condition conflicting with NATURAL
+  | |                                                 
+  | while parsing `SELECT ...`
+
+
+---------- Input ----------
+select * order a
+---------- Output ---------
+error: 
+  --> SQL:1:16
+  |
+1 | select * order a
+  | ------         ^ unexpected `a`, expecting `BY`
+  | |               
+  | while parsing `SELECT ...`
+
+
+---------- Input ----------
+select * order
+---------- Output ---------
+error: 
+  --> SQL:1:15
+  |
+1 | select * order
+  | ------        ^ unexpected end of input, expecting `BY`
+  | |             
+  | while parsing `SELECT ...`
+
+
+---------- Input ----------
+select number + 5 as a, cast(number as float(255))
+---------- Output ---------
+error: 
+  --> SQL:1:45
+  |
+1 | select number + 5 as a, cast(number as float(255))
+  | ------                  ----                ^ unexpected `(`, expecting `)`, `NULL`, or `NOT`
+  | |                       |                    
+  | |                       while parsing `CAST(... AS ...)`
+  | |                       while parsing expression
+  | while parsing `SELECT ...`
+
+
+---------- Input ----------
+select 1 1
+---------- Output ---------
+error: 
+  --> SQL:1:10
+  |
+1 | select 1 1
+  |          ^ unexpected `1`, expecting <Ident>, <LiteralString>, `IDENTIFIER`, `AS`, `,`, `FROM`, `WHERE`, `GROUP`, `HAVING`, `WINDOW`, `QUALIFY`, `(`, `WITH`, `UNION`, `EXCEPT`, `INTERSECT`, `SELECT`, `VALUES`, `ORDER`, `LIMIT`, `OFFSET`, or `IGNORE_RESULT`
+
+

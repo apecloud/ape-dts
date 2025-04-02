@@ -1,0 +1,21 @@
+[package]
+name = "databend-fuzz"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# cargo can't build fuzz targets with afl
+# split `fuzz` into separate workspace can help resolve this.
+# add an empty `[workspace]` table to the package's manifest.
+[workspace]
+
+[[bin]]
+name = "fuzz_parse_sql"
+path = "fuzz_targets/fuzz_parse_sql.rs"
+doctest = false
+test = true
+
+[dependencies]
+databend-common-ast = { workspace = true }
+
+afl = "0.12"
