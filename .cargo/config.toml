@@ -1,3 +1,6 @@
+[net]
+git-fetch-with-cli = true
+
 # NOTES: `cargo search` will not work as crates source has been overwritten, need to specify `--registry` flag, 
 # i.e., `cargo search <CRATE> --registry crates-io` 
 [source.crates-io]

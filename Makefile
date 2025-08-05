@@ -88,12 +88,12 @@ build-debug: ## Build
 build-release: ## Build release
 	cargo build --release $(CARGO_BUILD_ARGS)
 
-.PHONE: clean
+.PHONY: clean
 clean: ## Clean
 	cargo clean
 
-.PHONE: lint
-lint:
+.PHONY: lint
+lint: ## Run code linting
 	cargo clippy --workspace
 
 .PHONY: test 

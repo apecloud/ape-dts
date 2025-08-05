@@ -4,17 +4,17 @@ on:
   workflow_dispatch:
     inputs:
       docker_repository:
-        description: "Docker registry repository"
+        description: 'Docker repository to push to'
         required: true
         type: string
         default: apecloud-registry.cn-zhangjiakou.cr.aliyuncs.com
       image_tag:
-        description: "Docker image tag"
+        description: 'Docker image tag'
         required: true
         type: string
         default: apecloud/ape-dts:latest
       platforms:
-        description: "Target platforms for multi-arch build"
+        description: 'Target platforms for Docker image'
         required: true
         type: string
         default: linux/arm64,linux/amd64
@@ -28,10 +28,15 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set up rust
-        uses: dtolnay/rust-toolchain@1.85.0
+        uses: dtolnay/rust-toolchain@stable
 
-      - name: Install cross
-        run: cargo install cross --version 0.2.5
+      - name: Setup cross-compilation
+        uses: taiki-e/setup-cross-action@v1
+
+      - name: Setup Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: docker-build-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Build for x86_64
         if: contains(inputs.platforms, 'linux/amd64')

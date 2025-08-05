@@ -1,0 +1,176 @@
+name: E2E Tests
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+      - "LICENSE*"
+  pull_request:
+    branches: [main]
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+      - "LICENSE*"
+  workflow_dispatch:
+
+# Cancel old runs for the same branch/PR
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  integration-tests:
+    name: End-to-End Tests with Docker Compose
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      matrix:
+        test-suite:
+          - mysql_to_mysql
+          - pg_to_pg
+          - redis_to_redis
+          - mongo_to_mongo
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: integration-${{ matrix.test-suite }}-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            integration-${{ matrix.test-suite }}-${{ runner.os }}-
+            integration-${{ runner.os }}-
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          cache-on-failure: true
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
+
+      - name: Start database services
+        run: |
+          echo "🚀 Starting database services for ${{ matrix.test-suite }}..."
+          cd dt-tests
+          docker-compose -f docker-compose.ci.yml up -d
+          
+          echo "⏳ Waiting for services to be healthy..."
+          timeout 300s bash -c '
+            while true; do
+              if docker-compose -f docker-compose.ci.yml ps | grep -E "(unhealthy|starting)" | wc -l | grep -q "^0$"; then
+                echo "✅ All services are healthy"
+                break
+              fi
+              echo "Still waiting for services..."
+              sleep 10
+            done
+          '
+          
+          echo "📊 Final service status:"
+          docker-compose -f docker-compose.ci.yml ps
+
+      - name: Setup test environment
+        run: |
+          # Copy CI environment file
+          cp dt-tests/.env.ci dt-tests/tests/.env
+          
+          echo "🔍 Verifying database connections..."
+          
+          # Wait a bit more for services to be fully ready
+          sleep 10
+          
+          # Test database connections based on test suite
+          case "${{ matrix.test-suite }}" in
+            "mysql_to_mysql")
+              echo "Testing MySQL connections..."
+              mysql -h 127.0.0.1 -P 3307 -u root -p123456 -e "SELECT 'MySQL ready'" > /dev/null
+              mysql -h 127.0.0.1 -P 3308 -u root -p123456 -e "SELECT 'MySQL ready'" > /dev/null
+              ;;
+            "pg_to_pg")
+              echo "Testing PostgreSQL connections..."
+              PGPASSWORD=postgres psql -h 127.0.0.1 -p 5433 -U postgres -d postgres -c "SELECT 'PostgreSQL ready'" > /dev/null
+              PGPASSWORD=postgres psql -h 127.0.0.1 -p 5434 -U postgres -d postgres -c "SELECT 'PostgreSQL ready'" > /dev/null
+              ;;
+            "redis_to_redis")
+              echo "Testing Redis connections..."
+              redis-cli -h 127.0.0.1 -p 6380 -a 123456 ping > /dev/null
+              redis-cli -h 127.0.0.1 -p 6390 -a 123456 ping > /dev/null
+              ;;
+            "mongo_to_mongo")
+              echo "Testing MongoDB connections..."
+              timeout 10s mongo --host 127.0.0.1:27017 --eval "db.adminCommand('ping')" > /dev/null
+              timeout 10s mongo --host 127.0.0.1:27018 -u ape_dts -p 123456 --eval "db.adminCommand('ping')" > /dev/null
+              ;;
+          esac
+          
+          echo "✅ Database connections verified"
+
+      - name: Run integration tests
+        run: |
+          echo "🧪 Running ${{ matrix.test-suite }} E2E tests..."
+          
+          case "${{ matrix.test-suite }}" in
+            "mysql_to_mysql")
+              cargo nextest run \
+                --package dt-tests \
+                --test integration_test \
+                --test-timeout 120s \
+                --no-fail-fast \
+                'mysql_to_mysql::'
+              ;;
+            "pg_to_pg")
+              cargo nextest run \
+                --package dt-tests \
+                --test integration_test \
+                --test-timeout 120s \
+                --no-fail-fast \
+                'pg_to_pg::'
+              ;;
+            "redis_to_redis")
+              cargo nextest run \
+                --package dt-tests \
+                --test integration_test \
+                --test-timeout 120s \
+                --no-fail-fast \
+                'redis_to_redis::'
+              ;;
+            "mongo_to_mongo")
+              cargo nextest run \
+                --package dt-tests \
+                --test integration_test \
+                --test-timeout 120s \
+                --no-fail-fast \
+                'mongo_to_mongo::'
+              ;;
+          esac
+
+      - name: Upload test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: e2e-test-results-${{ matrix.test-suite }}-${{ github.run_number }}
+          path: |
+            target/nextest/
+            dt-tests/tests/.env
+          retention-days: 7
+
+      - name: Cleanup
+        if: always()
+        run: |
+          echo "🧹 Cleaning up..."
+          cd dt-tests
+          docker-compose -f docker-compose.ci.yml logs --tail=50
+          docker-compose -f docker-compose.ci.yml down -v
+          docker system prune -f
