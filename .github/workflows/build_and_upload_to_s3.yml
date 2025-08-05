@@ -7,17 +7,17 @@ on:
         description: 'AWS S3 endpoint URL'
         required: true
         type: string
-        default: 'https://s3.amazonaws.com'
+        default: https://s3.ap-northeast-1.amazonaws.com
       aws_bucket:
         description: 'AWS S3 bucket name'
         required: true
         type: string
-        default: 'ape-dts-artifacts'
+        default: foxlake
       aws_destination_dir:
         description: 'S3 destination directory path'
         required: true
         type: string
-        default: 'builds'
+        default: ape-dts/latest
 
 jobs:
   build:
