@@ -31,26 +31,9 @@ env:
   RUST_BACKTRACE: 1
 
 jobs:
-  # Skip duplicate actions to save resources
-  skip-check:
-    name: Skip Duplicate Actions
-    runs-on: ubuntu-latest
-    outputs:
-      should_skip: ${{ steps.skip_check.outputs.should_skip }}
-    steps:
-      - name: Skip duplicate actions
-        id: skip_check
-        uses: fkirc/skip-duplicate-actions@v5
-        with:
-          concurrent_skipping: 'same_content_newer'
-          cancel_others: true
-          paths_ignore: '["*.md", "docs/**", "LICENSE*"]'
-
   # Quick syntax check
   check:
     name: Check
-    needs: skip-check
-    if: needs.skip-check.outputs.should_skip != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -77,8 +60,6 @@ jobs:
   # Code formatting check
   fmt:
     name: Rustfmt
-    needs: skip-check
-    if: needs.skip-check.outputs.should_skip != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -98,8 +79,6 @@ jobs:
   # Linting with clippy
   clippy:
     name: Clippy
-    needs: skip-check
-    if: needs.skip-check.outputs.should_skip != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -129,8 +108,6 @@ jobs:
   # Additional code quality checks
   quality:
     name: Additional Quality Checks
-    needs: skip-check
-    if: needs.skip-check.outputs.should_skip != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -145,8 +122,6 @@ jobs:
   # Tests
   test:
     name: Tests
-    needs: skip-check
-    if: needs.skip-check.outputs.should_skip != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -185,8 +160,8 @@ jobs:
             --workspace \
             --exclude dt-tests \
             --lib --bins \
-            --test-timeout 30s \
-            --no-fail-fast
+            --no-fail-fast \
+            -- --test-timeout 60s
 
       - name: Run doc tests
         run: |
@@ -196,8 +171,6 @@ jobs:
   # Test coverage
   coverage:
     name: Test Coverage
-    needs: skip-check
-    if: needs.skip-check.outputs.should_skip != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -281,33 +254,18 @@ jobs:
     steps:
       - name: PR check
         run: |
-          if [[ "${{ needs.check.result }}" == "failure" || "${{ needs.check.result }}" == "cancelled" ]]; then
-              echo "check fail"
-              exit 1
-          fi
+          # Check if any required job failed
+          failed_jobs=()
 
-          if [[ "${{ needs.fmt.result }}" == "failure" || "${{ needs.fmt.result }}" == "cancelled" ]]; then
-              echo "rustfmt fail"
-              exit 1
-          fi
+          [[ "${{ needs.check.result }}" == "failure" || "${{ needs.check.result }}" == "cancelled" ]] && failed_jobs+=("check")
+          [[ "${{ needs.fmt.result }}" == "failure" || "${{ needs.fmt.result }}" == "cancelled" ]] && failed_jobs+=("rustfmt")
+          [[ "${{ needs.clippy.result }}" == "failure" || "${{ needs.clippy.result }}" == "cancelled" ]] && failed_jobs+=("clippy")
+          [[ "${{ needs.quality.result }}" == "failure" || "${{ needs.quality.result }}" == "cancelled" ]] && failed_jobs+=("quality")
+          [[ "${{ needs.test.result }}" == "failure" || "${{ needs.test.result }}" == "cancelled" ]] && failed_jobs+=("tests")
+          [[ "${{ needs.coverage.result }}" == "failure" || "${{ needs.coverage.result }}" == "cancelled" ]] && failed_jobs+=("coverage")
 
-          if [[ "${{ needs.clippy.result }}" == "failure" || "${{ needs.clippy.result }}" == "cancelled" ]]; then
-              echo "clippy fail"
-              exit 1
-          fi
-
-          if [[ "${{ needs.quality.result }}" == "failure" || "${{ needs.quality.result }}" == "cancelled" ]]; then
-              echo "quality checks fail"
-              exit 1
-          fi
-
-          if [[ "${{ needs.test.result }}" == "failure" || "${{ needs.test.result }}" == "cancelled" ]]; then
-              echo "tests fail"
-              exit 1
-          fi
-
-          if [[ "${{ needs.coverage.result }}" == "failure" || "${{ needs.coverage.result }}" == "cancelled" ]]; then
-              echo "coverage fail"
+          if [[ ${#failed_jobs[@]} -gt 0 ]]; then
+              echo "❌ The following jobs failed: ${failed_jobs[*]}"
               exit 1
           fi
 

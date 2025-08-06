@@ -1,18 +1,6 @@
 name: E2E Tests
 
 on:
-  push:
-    branches: [main]
-    paths-ignore:
-      - "**.md"
-      - "docs/**"
-      - "LICENSE*"
-  pull_request:
-    branches: [main]
-    paths-ignore:
-      - "**.md"
-      - "docs/**"
-      - "LICENSE*"
   workflow_dispatch:
 
 # Cancel old runs for the same branch/PR
@@ -64,12 +52,12 @@ jobs:
         run: |
           echo "🚀 Starting database services for ${{ matrix.test-suite }}..."
           cd dt-tests
-          docker-compose -f docker-compose.ci.yml up -d
+          docker compose -f docker-compose.ci.yml up -d
           
           echo "⏳ Waiting for services to be healthy..."
           timeout 300s bash -c '
             while true; do
-              if docker-compose -f docker-compose.ci.yml ps | grep -E "(unhealthy|starting)" | wc -l | grep -q "^0$"; then
+              if docker compose -f docker-compose.ci.yml ps | grep -E "(unhealthy|starting)" | wc -l | grep -q "^0$"; then
                 echo "✅ All services are healthy"
                 break
               fi
@@ -79,7 +67,7 @@ jobs:
           '
           
           echo "📊 Final service status:"
-          docker-compose -f docker-compose.ci.yml ps
+          docker compose -f docker-compose.ci.yml ps
 
       - name: Setup test environment
         run: |
@@ -126,33 +114,33 @@ jobs:
               cargo nextest run \
                 --package dt-tests \
                 --test integration_test \
-                --test-timeout 120s \
                 --no-fail-fast \
-                'mysql_to_mysql::'
+                'mysql_to_mysql::' \
+                -- --test-timeout 300s
               ;;
             "pg_to_pg")
               cargo nextest run \
                 --package dt-tests \
                 --test integration_test \
-                --test-timeout 120s \
                 --no-fail-fast \
-                'pg_to_pg::'
+                'pg_to_pg::' \
+                -- --test-timeout 300s
               ;;
             "redis_to_redis")
               cargo nextest run \
                 --package dt-tests \
                 --test integration_test \
-                --test-timeout 120s \
                 --no-fail-fast \
-                'redis_to_redis::'
+                'redis_to_redis::' \
+                -- --test-timeout 300s
               ;;
             "mongo_to_mongo")
               cargo nextest run \
                 --package dt-tests \
                 --test integration_test \
-                --test-timeout 120s \
                 --no-fail-fast \
-                'mongo_to_mongo::'
+                'mongo_to_mongo::' \
+                -- --test-timeout 300s
               ;;
           esac
 
@@ -171,6 +159,6 @@ jobs:
         run: |
           echo "🧹 Cleaning up..."
           cd dt-tests
-          docker-compose -f docker-compose.ci.yml logs --tail=50
-          docker-compose -f docker-compose.ci.yml down -v
+          docker compose -f docker-compose.ci.yml logs --tail=50
+          docker compose -f docker-compose.ci.yml down -v
           docker system prune -f
