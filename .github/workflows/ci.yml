@@ -21,7 +21,6 @@ on:
       - '**/*.svg'
   workflow_dispatch:
 
-# Cancel old runs for the same branch/PR
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -31,54 +30,8 @@ env:
   RUST_BACKTRACE: 1
 
 jobs:
-  # Quick syntax check
-  check:
-    name: Check
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          submodules: true
-
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@1.85.0
-
-      - name: Setup Rust cache
-        uses: Swatinem/rust-cache@v2
-        with:
-          key: check-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            check-${{ runner.os }}-
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-          cache-on-failure: true
-
-      - name: Check workspace
-        run: cargo check --workspace --all-targets --all-features
-
-  # Code formatting check
-  fmt:
-    name: Rustfmt
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          submodules: true
-
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@1.85.0
-        with:
-          components: rustfmt
-
-      - name: Check formatting
-        run: cargo fmt --all --check
-
-  # Linting with clippy
-  clippy:
-    name: Clippy
+  lint:
+    name: Lint & Static Checks
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -87,41 +40,33 @@ jobs:
         with:
           submodules: true
 
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@1.85.0
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
         with:
-          components: clippy
+          components: rustfmt, clippy
 
       - name: Setup Rust cache
         uses: Swatinem/rust-cache@v2
         with:
-          key: clippy-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            clippy-${{ runner.os }}-
-            check-${{ runner.os }}-
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-          cache-on-failure: true
+          # Use a unified cache key to allow sharing across jobs
+          key: lint-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
 
-      - name: Run clippy
+      - name: Check formatting (rustfmt)
+        run: cargo fmt --all --check
+
+      - name: Check for typos
+        uses: crate-ci/typos@v1.23.0
+
+      - name: Run Clippy
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
-  # Additional code quality checks
-  quality:
-    name: Additional Quality Checks
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          submodules: true
+      - name: Run cargo check
+        run: cargo check --workspace --all-targets --all-features
 
-      - name: Check typos
-        uses: crate-ci/typos@v1
-
-  # Tests
+  # Run unit and documentation tests
   test:
     name: Tests
+    needs: lint
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -130,47 +75,36 @@ jobs:
         with:
           submodules: true
 
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@1.85.0
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
 
       - name: Setup Rust cache
         uses: Swatinem/rust-cache@v2
         with:
           key: test-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            test-${{ runner.os }}-
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-          cache-on-failure: true
+            lint-${{ runner.os }}-
 
       - name: Install cargo-nextest
         uses: taiki-e/install-action@v2
         with:
           tool: cargo-nextest
 
-      - name: Verify nextest installation
+      - name: Run unit tests with nextest
         run: |
-          # Verify nextest is properly installed
-          cargo nextest --version
-          echo "✅ cargo-nextest is ready"
-
-      - name: Run unit tests
-        run: |
-          # Use nextest for better parallelism and output
           cargo nextest run \
             --workspace \
             --exclude dt-tests \
             --lib --bins \
-            --no-fail-fast \
-            -- --test-timeout 60s
+            --no-fail-fast
 
       - name: Run doc tests
-        run: |
-          # Doc tests still use cargo test (nextest doesn't support --doc)
-          cargo test --workspace --doc --exclude dt-tests
+        run: cargo test --workspace --doc --exclude dt-tests
 
-  # Test coverage
+  # Generate test coverage report
   coverage:
     name: Test Coverage
+    needs: lint
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -179,8 +113,8 @@ jobs:
         with:
           submodules: true
 
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@1.85.0
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
         with:
           components: llvm-tools-preview
 
@@ -189,84 +123,43 @@ jobs:
         with:
           key: coverage-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            coverage-${{ runner.os }}-
             test-${{ runner.os }}-
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-          cache-on-failure: true
+            lint-${{ runner.os }}-
 
-      - name: Install cargo-llvm-cov
+      - name: Install coverage tools
         uses: taiki-e/install-action@v2
         with:
-          tool: cargo-llvm-cov
-
-      - name: Install cargo-nextest
-        uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-nextest
+          tool: cargo-llvm-cov, cargo-nextest
 
       - name: Generate coverage report
         run: |
-          # Generate coverage for unit tests only (excluding dt-tests)
           cargo llvm-cov nextest \
             --workspace \
             --exclude dt-tests \
             --lcov \
             --output-path coverage.lcov
 
-          # Generate HTML coverage report
-          cargo llvm-cov nextest \
-            --workspace \
-            --exclude dt-tests \
-            --html \
-            --output-dir coverage-html
-
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v4
         with:
-          file: coverage.lcov
+          file: ./coverage.lcov
           flags: unittests
           name: codecov-umbrella
           fail_ci_if_error: false
         env:
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
 
-      - name: Upload coverage artifacts
+      - name: Generate HTML coverage report for artifact upload
+        run: |
+          cargo llvm-cov nextest \
+            --workspace \
+            --exclude dt-tests \
+            --html \
+            --output-dir coverage-html
+
+      - name: Upload coverage artifact
         uses: actions/upload-artifact@v4
         with:
           name: coverage-report-${{ github.run_number }}
-          path: |
-            coverage.lcov
-            coverage-html/
-          retention-days: 30
-
-  # PR check - ensure all required jobs passed
-  pr-check:
-    name: PR Check
-    needs:
-      - check
-      - fmt
-      - clippy
-      - quality
-      - test
-      - coverage
-    if: ${{ always() }}
-    runs-on: ubuntu-latest
-    steps:
-      - name: PR check
-        run: |
-          # Check if any required job failed
-          failed_jobs=()
-
-          [[ "${{ needs.check.result }}" == "failure" || "${{ needs.check.result }}" == "cancelled" ]] && failed_jobs+=("check")
-          [[ "${{ needs.fmt.result }}" == "failure" || "${{ needs.fmt.result }}" == "cancelled" ]] && failed_jobs+=("rustfmt")
-          [[ "${{ needs.clippy.result }}" == "failure" || "${{ needs.clippy.result }}" == "cancelled" ]] && failed_jobs+=("clippy")
-          [[ "${{ needs.quality.result }}" == "failure" || "${{ needs.quality.result }}" == "cancelled" ]] && failed_jobs+=("quality")
-          [[ "${{ needs.test.result }}" == "failure" || "${{ needs.test.result }}" == "cancelled" ]] && failed_jobs+=("tests")
-          [[ "${{ needs.coverage.result }}" == "failure" || "${{ needs.coverage.result }}" == "cancelled" ]] && failed_jobs+=("coverage")
-
-          if [[ ${#failed_jobs[@]} -gt 0 ]]; then
-              echo "❌ The following jobs failed: ${failed_jobs[*]}"
-              exit 1
-          fi
-
-          echo "✅ All PR checks passed!"
+          path: coverage-html/
+          retention-days: 7

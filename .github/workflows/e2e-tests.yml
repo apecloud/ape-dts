@@ -3,7 +3,9 @@ name: E2E Tests
 on:
   workflow_dispatch:
 
-# Cancel old runs for the same branch/PR
+  schedule:
+    - cron: '0 0 * * *'
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -18,6 +20,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 90
     strategy:
+      # Run a separate job for each test suite in the matrix
       matrix:
         test-suite:
           - mysql_to_mysql
@@ -55,6 +58,7 @@ jobs:
           docker compose -f docker-compose.ci.yml up -d
           
           echo "⏳ Waiting for services to be healthy..."
+          # Wait up to 5 minutes for all services to pass their health checks
           timeout 300s bash -c '
             while true; do
               if docker compose -f docker-compose.ci.yml ps | grep -E "(unhealthy|starting)" | wc -l | grep -q "^0$"; then
@@ -108,41 +112,12 @@ jobs:
       - name: Run integration tests
         run: |
           echo "🧪 Running ${{ matrix.test-suite }} E2E tests..."
-          
-          case "${{ matrix.test-suite }}" in
-            "mysql_to_mysql")
-              cargo nextest run \
-                --package dt-tests \
-                --test integration_test \
-                --no-fail-fast \
-                'mysql_to_mysql::' \
-                -- --test-timeout 300s
-              ;;
-            "pg_to_pg")
-              cargo nextest run \
-                --package dt-tests \
-                --test integration_test \
-                --no-fail-fast \
-                'pg_to_pg::' \
-                -- --test-timeout 300s
-              ;;
-            "redis_to_redis")
-              cargo nextest run \
-                --package dt-tests \
-                --test integration_test \
-                --no-fail-fast \
-                'redis_to_redis::' \
-                -- --test-timeout 300s
-              ;;
-            "mongo_to_mongo")
-              cargo nextest run \
-                --package dt-tests \
-                --test integration_test \
-                --no-fail-fast \
-                'mongo_to_mongo::' \
-                -- --test-timeout 300s
-              ;;
-          esac
+          cargo nextest run \
+            --package dt-tests \
+            --test integration_test \
+            --no-fail-fast \
+            '${{ matrix.test-suite }}::' \
+            -- --test-timeout 300s
 
       - name: Upload test results
         uses: actions/upload-artifact@v4
