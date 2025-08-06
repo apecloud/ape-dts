@@ -118,27 +118,3 @@ jobs:
 
       - name: Run doc tests
         run: cargo test --workspace --doc --exclude dt-tests
-
-  # PR check - ensure all required jobs passed
-  pr-check:
-    name: PR Check
-    needs:
-      - lint
-      - test
-    if: ${{ always() }}
-    runs-on: ubuntu-latest
-    steps:
-      - name: PR check
-        run: |
-          # Check if any required job failed
-          failed_jobs=()
-
-          [[ "${{ needs.lint.result }}" == "failure" || "${{ needs.lint.result }}" == "cancelled" ]] && failed_jobs+=("lint")
-          [[ "${{ needs.test.result }}" == "failure" || "${{ needs.test.result }}" == "cancelled" ]] && failed_jobs+=("test")
-
-          if [[ ${#failed_jobs[@]} -gt 0 ]]; then
-              echo "❌ The following jobs failed: ${failed_jobs[*]}"
-              exit 1
-          fi
-
-          echo "✅ All PR checks passed!"
