@@ -54,16 +54,32 @@ jobs:
       - name: Check formatting (rustfmt)
         run: cargo fmt --all --check
 
-      - name: Check for typos
-        uses: crate-ci/typos@v1.23.0
-        continue-on-error: true
-
-      - name: Run Clippy
-        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
-        continue-on-error: true
+      - name: Run lint checks
+        id: lint
+        run: make lint
 
       - name: Run cargo check
         run: cargo check --workspace --all-targets --all-features
+
+      - name: Summarize lint issues
+        if: always()
+        run: |
+          echo "## 🔍 Lint Check Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # Check if there were any issues
+          if [ "${{ steps.lint.outcome }}" == "failure" ]; then
+            echo "❌ **Issues found during linting:**" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "- **Clippy:** Found code quality issues" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "📋 **Next steps:**" >> $GITHUB_STEP_SUMMARY
+            echo "1. Review the detailed logs above" >> $GITHUB_STEP_SUMMARY
+            echo "2. Fix the identified issues" >> $GITHUB_STEP_SUMMARY
+            echo "3. Re-run the CI to verify fixes" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "✅ **All lint checks passed!**" >> $GITHUB_STEP_SUMMARY
+          fi
 
   # Run unit and documentation tests
   test:
@@ -103,65 +119,26 @@ jobs:
       - name: Run doc tests
         run: cargo test --workspace --doc --exclude dt-tests
 
-  # Generate test coverage report
-  coverage:
-    name: Test Coverage
-    needs: lint
+  # PR check - ensure all required jobs passed
+  pr-check:
+    name: PR Check
+    needs:
+      - lint
+      - test
+    if: ${{ always() }}
     runs-on: ubuntu-latest
-    timeout-minutes: 30
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          submodules: true
-
-      - name: Setup Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: llvm-tools-preview
-
-      - name: Setup Rust cache
-        uses: Swatinem/rust-cache@v2
-        with:
-          key: coverage-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            test-${{ runner.os }}-
-            lint-${{ runner.os }}-
-
-      - name: Install coverage tools
-        uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-llvm-cov, cargo-nextest
-
-      - name: Generate coverage report
+      - name: PR check
         run: |
-          cargo llvm-cov nextest \
-            --workspace \
-            --exclude dt-tests \
-            --lcov \
-            --output-path coverage.lcov
+          # Check if any required job failed
+          failed_jobs=()
 
-      - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v4
-        with:
-          file: ./coverage.lcov
-          flags: unittests
-          name: codecov-umbrella
-          fail_ci_if_error: false
-        env:
-          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+          [[ "${{ needs.lint.result }}" == "failure" || "${{ needs.lint.result }}" == "cancelled" ]] && failed_jobs+=("lint")
+          [[ "${{ needs.test.result }}" == "failure" || "${{ needs.test.result }}" == "cancelled" ]] && failed_jobs+=("test")
 
-      - name: Generate HTML coverage report for artifact upload
-        run: |
-          cargo llvm-cov nextest \
-            --workspace \
-            --exclude dt-tests \
-            --html \
-            --output-dir coverage-html
+          if [[ ${#failed_jobs[@]} -gt 0 ]]; then
+              echo "❌ The following jobs failed: ${failed_jobs[*]}"
+              exit 1
+          fi
 
-      - name: Upload coverage artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: coverage-report-${{ github.run_number }}
-          path: coverage-html/
-          retention-days: 7
+          echo "✅ All PR checks passed!"
