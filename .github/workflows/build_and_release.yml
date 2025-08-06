@@ -66,7 +66,7 @@ jobs:
 
       - name: Upload Release Asset
         id: upload_release_asset
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ inputs.tag_name }}
           files: ape-dts-${{ github.run_id }}-${{ matrix.target }}.tar.gz
