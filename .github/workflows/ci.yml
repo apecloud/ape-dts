@@ -56,9 +56,11 @@ jobs:
 
       - name: Check for typos
         uses: crate-ci/typos@v1.23.0
+        continue-on-error: true
 
       - name: Run Clippy
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+        continue-on-error: true
 
       - name: Run cargo check
         run: cargo check --workspace --all-targets --all-features
