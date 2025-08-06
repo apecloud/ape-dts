@@ -28,6 +28,7 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
+  RUST_CACHE_KEY_PREFIX: ${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
 
 jobs:
   lint:
@@ -41,50 +42,63 @@ jobs:
           submodules: true
 
       - name: Setup Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.85.0
         with:
           components: rustfmt, clippy
 
       - name: Setup Rust cache
         uses: Swatinem/rust-cache@v2
         with:
-          # Use a unified cache key to allow sharing across jobs
-          key: lint-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          # Use the shared cache key prefix
+          key: lint-${{ env.RUST_CACHE_KEY_PREFIX }}
 
       - name: Check formatting (rustfmt)
+        id: fmt
         run: cargo fmt --all --check
 
-      - name: Run lint checks
+      - name: Run lint checks (clippy)
         id: lint
+        # Assuming 'make lint' runs 'cargo clippy'
         run: make lint
 
+      - name: Check for typos
+        id: typos
+        # Assuming 'make typos' runs the typos checker
+        run: make typos
+
       - name: Run cargo check
+        id: check
         run: cargo check --workspace --all-targets --all-features
 
       - name: Summarize lint issues
         if: always()
         run: |
-          echo "## 🔍 Lint Check Summary" >> $GITHUB_STEP_SUMMARY
+          echo "## 🔍 Lint & Static Check Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
 
-          # Check if there were any issues
-          if [ "${{ steps.lint.outcome }}" == "failure" ]; then
-            echo "❌ **Issues found during linting:**" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "- **Clippy:** Found code quality issues" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "📋 **Next steps:**" >> $GITHUB_STEP_SUMMARY
-            echo "1. Review the detailed logs above" >> $GITHUB_STEP_SUMMARY
-            echo "2. Fix the identified issues" >> $GITHUB_STEP_SUMMARY
-            echo "3. Re-run the CI to verify fixes" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "✅ **All lint checks passed!**" >> $GITHUB_STEP_SUMMARY
+          # Overall status check
+          if [ "${{ steps.fmt.outcome }}" == "success" ] && \
+             [ "${{ steps.lint.outcome }}" == "success" ] && \
+             [ "${{ steps.typos.outcome }}" == "success" ] && \
+             [ "${{ steps.check.outcome }}" == "success" ]; then
+            echo "✅ **All checks passed!**" >> $GITHUB_STEP_SUMMARY
+            exit 0
           fi
 
-  # Run unit and documentation tests
+          echo "❌ **One or more checks failed.**" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # Individual check results
+          [ "${{ steps.fmt.outcome }}" == "failure" ] && echo "❌ **rustfmt:** Code formatting issues detected." >> $GITHUB_STEP_SUMMARY
+          [ "${{ steps.lint.outcome }}" == "failure" ] && echo "❌ **Clippy:** Code quality issues detected." >> $GITHUB_STEP_SUMMARY
+          [ "${{ steps.typos.outcome }}" == "failure" ] && echo "❌ **Typos:** Spelling errors detected." >> $GITHUB_STEP_SUMMARY
+          [ "${{ steps.check.outcome }}" == "failure" ] && echo "❌ **cargo check:** Compilation errors detected." >> $GITHUB_STEP_SUMMARY
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "📋 **Next steps:** Review the logs for details and correct the identified issues." >> $GITHUB_STEP_SUMMARY
+
   test:
     name: Tests
-    needs: lint
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -94,14 +108,14 @@ jobs:
           submodules: true
 
       - name: Setup Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.85.0
 
       - name: Setup Rust cache
         uses: Swatinem/rust-cache@v2
         with:
-          key: test-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          key: test-${{ env.RUST_CACHE_KEY_PREFIX }}
           restore-keys: |
-            lint-${{ runner.os }}-
+            lint-${{ env.RUST_CACHE_KEY_PREFIX }}
 
       - name: Install cargo-nextest
         uses: taiki-e/install-action@v2
