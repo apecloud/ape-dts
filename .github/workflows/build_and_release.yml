@@ -4,13 +4,12 @@ on:
   workflow_dispatch:
     inputs:
       tag_name:
-        description: 'Existing tag name to upload artifacts to'
+        description: "Tag name"
         required: true
         type: string
       targets:
         description: 'JSON array of target platforms to build [{"os": "ubuntu-latest", "target": "x86_64-unknown-linux-gnu"}, ...]'
         required: true
-        type: string
         default: '[{"os": "ubuntu-latest", "target": "x86_64-unknown-linux-gnu"}, {"os": "ubuntu-latest", "target": "aarch64-unknown-linux-gnu"}, {"os": "macos-latest", "target": "x86_64-apple-darwin"}]'
 
 jobs:
@@ -27,29 +26,31 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Get Release Upload URL
+        id: get_upload_url
+        run: |
+          tag_info=$(curl -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            "https://api.github.com/repos/${{ github.repository }}/releases/tags/${{ inputs.tag_name }}")
+          echo "tag_info: ${tag_info}"
+          upload_url=$(echo $tag_info | jq -r '.upload_url')
+          echo "upload_url: ${upload_url}"
+          if [ -z "$upload_url" ] || [ "$upload_url" == "null" ]; then
+            echo "Upload URL is null or empty. Exiting workflow."
+            exit 1
+          fi
+          echo "UPLOAD_URL=${upload_url}" >> $GITHUB_ENV
+
       - name: Set up Rust toolchain
         uses: dtolnay/rust-toolchain@1.85.0
-
-      - name: Setup Rust cache
-        uses: Swatinem/rust-cache@v2
-        with:
-          key: release-build-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            release-build-${{ matrix.target }}-
-            release-build-
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-          cache-on-failure: true
-
-      - name: Setup cross-compilation
-        uses: taiki-e/setup-cross-action@v1
-        if: matrix.target == 'x86_64-unknown-linux-gnu' || matrix.target == 'aarch64-unknown-linux-gnu' || matrix.target == 'x86_64-pc-windows-gnu'
 
       # Build linux targets by cross, otherwise there may be runtime errors when running on other linux versions:
       # ./ape-dts: /lib/x86_64-linux-gnu/libm.so.6: version `GLIBC_2.38' not found (required by ./ape-dts)
       # ./ape-dts: /lib/x86_64-linux-gnu/libc.so.6: version `GLIBC_2.38' not found (required by ./ape-dts)
       - name: Cross build
         if: matrix.target == 'x86_64-unknown-linux-gnu' || matrix.target == 'aarch64-unknown-linux-gnu' || matrix.target == 'x86_64-pc-windows-gnu'
-        run: cross build --release --target=${{ matrix.target }}
+        run: |
+          cargo install cross --version 0.2.5
+          cross build --release --target=${{ matrix.target }}
 
       - name: Local build
         if: matrix.target == 'x86_64-apple-darwin'
@@ -66,9 +67,11 @@ jobs:
 
       - name: Upload Release Asset
         id: upload_release_asset
-        uses: softprops/action-gh-release@v2
+        uses: actions/upload-release-asset@v1
         with:
-          tag_name: ${{ inputs.tag_name }}
-          files: ape-dts-${{ github.run_id }}-${{ matrix.target }}.tar.gz
+          upload_url: ${{ env.UPLOAD_URL }}
+          asset_path: ape-dts-${{ github.run_id }}-${{ matrix.target }}.tar.gz
+          asset_name: ape-dts-${{ github.run_id }}-${{ matrix.target }}.tar.gz
+          asset_content_type: application/gzip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
