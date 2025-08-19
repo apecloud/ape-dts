@@ -1415,6 +1415,7 @@ dependencies = [
  "mongodb",
  "mysql-binlog-connector-rust",
  "orc-format",
+ "percent-encoding",
  "postgres-protocol",
  "postgres-types",
  "rdkafka",
