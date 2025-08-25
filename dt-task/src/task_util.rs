@@ -257,11 +257,11 @@ impl TaskUtil {
         while let Some(row) = rows.try_next().await.unwrap() {
             let schema: String = row.try_get(0)?;
             let tb: String = row.try_get(1)?;
-            let records: i64 = row.try_get(2)?;
+            let records: u64 = row.try_get(2)?;
             if filter.filter_tb(&schema, &tb) {
                 continue;
             }
-            total_records += if records < 0 { 0 } else { records as u64 };
+            total_records += records;
         }
         conn_pool.close().await;
 
