@@ -4,7 +4,6 @@ use async_std::net::TcpStream;
 use async_std::prelude::*;
 use async_trait::async_trait;
 use futures::executor::block_on;
-use percent_encoding::percent_decode;
 use url::Url;
 
 use super::redis_resp_reader::RedisRespReader;
@@ -40,16 +39,22 @@ impl RedisClient {
             stream: BufReader::new(stream),
         };
 
-        if let Some(password) = password {
+        if let Some(pwd) = password {
             let mut cmd = RedisCmd::new();
             cmd.add_str_arg("AUTH");
             if !username.is_empty() {
-                let decoded_username = percent_decode(username.as_bytes()).decode_utf8()?;
-                cmd.add_str_arg(&decoded_username);
+                cmd.add_str_arg(
+                    &percent_encoding::percent_decode_str(username)
+                        .decode_utf8()
+                        .map_err(|e| Error::ConfigError(format!("username parse failed: {}", e)))?,
+                );
             }
 
-            let decoded_password = percent_decode(password.as_bytes()).decode_utf8()?;
-            cmd.add_str_arg(&decoded_password);
+            cmd.add_str_arg(
+                &percent_encoding::percent_decode_str(pwd)
+                    .decode_utf8()
+                    .map_err(|e| Error::ConfigError(format!("password parse failed: {}", e)))?,
+            );
 
             me.send(&cmd).await?;
             if let Ok(Value::Okay) = me.read().await {
@@ -138,4 +143,3 @@ impl RedisClient {
         Ok(results)
     }
 }
-
