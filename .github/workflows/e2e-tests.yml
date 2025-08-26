@@ -1,0 +1,196 @@
+name: E2E Tests
+
+on:
+  workflow_dispatch:
+    inputs:
+      test_suite:
+        description: 'Test suite to run (e.g., mysql_to_mysql). Runs all suites if empty.'
+        required: false
+        type: string
+        default: ''
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  # Define the path to the single, consolidated Docker Compose file.
+  COMPOSE_FILE: ./dt-tests/docker/docker-compose.yml
+  # Tool versions
+  RUST_TOOLCHAIN: "1.85.0"
+  NEXTEST_VERSION: "0.9.100"
+
+jobs:
+  # This job dynamically builds the test matrix.
+  # If an input suite is provided, it uses that directly.
+  # Otherwise, it discovers all available test suites.
+  list-test-suites:
+    name: Discover E2E Test Suites
+    runs-on: ubuntu-latest
+    outputs:
+      suites: ${{ steps.set-matrix.outputs.suites }}
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Install jq
+        run: sudo apt-get update && sudo apt-get install -y jq
+
+      - name: Generate Test Suite Matrix
+        id: set-matrix
+        # This working directory should match the path where your test suites are located.
+        working-directory: ./dt-tests/tests
+        run: |
+          # Check if a specific test suite was provided via workflow_dispatch input.
+          if [[ -n "${{ github.event.inputs.test_suite }}" ]]; then
+            # If a suite is provided, create a JSON array containing only that suite.
+            # This overrides the dynamic discovery and ensures only the requested suite runs.
+            SUITES=$(echo "${{ github.event.inputs.test_suite }}" | jq -R . | jq -s . | jq -c .)
+            echo "✅ A specific suite was provided. Running for: $SUITES"
+          else
+            # If no suite is specified, discover all available suites by listing directories.
+            # Exclude non-test directories like test_runner and log_reader, then format into a JSON array.
+            echo "ℹ️ No specific suite provided. Discovering all available test suites..."
+            SUITES=$(ls -d */ | grep -v -E 'test_runner|log_reader' | sed 's/\///' | jq -R . | jq -s . | jq -c .)
+            echo "Discovered suites: $SUITES"
+          fi
+          echo "suites=$SUITES" >> $GITHUB_OUTPUT
+
+  # This job runs the E2E tests in parallel for each suite defined in the matrix.
+  run-e2e-tests:
+    name: E2E - ${{ matrix.test-suite }}
+    needs: list-test-suites
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        # The matrix is populated from the output of the 'list-test-suites' job.
+        # This will be either a single suite or all discovered suites.
+        test-suite: ${{ fromJson(needs.list-test-suites.outputs.suites) }}
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Setup Rust Toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+
+      - name: Cache Rust Dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: integration-${{ matrix.test-suite }}-${{ runner.os }}
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest@${{ env.NEXTEST_VERSION }}
+
+      - name: Start Required Services
+        run: |
+          # Precisely determine which services to start based on the test suite name.
+          SERVICES_TO_START=""
+          case "${{ matrix.test-suite }}" in
+            mongo_to_mongo)
+              SERVICES_TO_START="mongo-src mongo-dst"
+              ;;
+            mysql_to_clickhouse)
+              SERVICES_TO_START="mysql-src clickhouse"
+              ;;
+            mysql_to_doris)
+              SERVICES_TO_START="mysql-src doris"
+              ;;
+            mysql_to_foxlake)
+              SERVICES_TO_START="mysql-src foxlake minio"
+              ;;
+            mysql_to_kafka_to_mysql)
+              SERVICES_TO_START="mysql-src mysql-dst kafka zookeeper"
+              ;;
+            mysql_to_mysql | mysql_to_mysql_lua)
+              SERVICES_TO_START="mysql-src mysql-dst mysql-meta"
+              ;;
+            mysql_to_mysql_case_sensitive)
+              SERVICES_TO_START="mysql-case-src mysql-case-dst"
+              ;;
+            mysql_to_redis)
+              SERVICES_TO_START="mysql-src redis-dst"
+              ;;
+            mysql_to_starrocks)
+              SERVICES_TO_START="mysql-src starrocks"
+              ;;
+            mysql_to_tidb)
+              SERVICES_TO_START="mysql-src tidb"
+              ;;
+            pg_to_clickhouse)
+              SERVICES_TO_START="postgres-src clickhouse"
+              ;;
+            pg_to_doris)
+              SERVICES_TO_START="postgres-src doris"
+              ;;
+            pg_to_kafka_to_pg)
+              SERVICES_TO_START="postgres-src postgres-dst kafka zookeeper"
+              ;;
+            pg_to_pg | pg_to_pg_lua)
+              SERVICES_TO_START="postgres-src postgres-dst postgres-cycle"
+              ;;
+            pg_to_starrocks)
+              SERVICES_TO_START="postgres-src starrocks"
+              ;;
+            redis_to_redis)
+              SERVICES_TO_START="redis-src redis-dst redis-cycle-node3"
+              ;;
+            *)
+              echo "No service definition found for test suite '${{ matrix.test-suite }}'. Skipping."
+              exit 0
+              ;;
+          esac
+
+          echo "🚀 Starting services for ${{ matrix.test-suite }}: $SERVICES_TO_START"
+          # Use --wait to ensure services are healthy before proceeding. Timeout set to 10 minutes.
+          docker compose -f $COMPOSE_FILE up --detach --wait --timeout 600 $SERVICES_TO_START
+
+          echo "✅ Services are running."
+          docker compose -f $COMPOSE_FILE ps
+
+      - name: Run E2E Tests
+        # This step is automatically skipped if the previous step fails or exits.
+        run: |
+          echo "🧪 Running ${{ matrix.test-suite }} E2E tests..."
+          # The filter ensures only the tests relevant to the current matrix suite are executed.
+          cargo nextest run \
+            --package dt-tests \
+            --test integration_test \
+            --no-fail-fast \
+            --test-threads 1 \
+            '${{ matrix.test-suite }}::'
+
+      - name: Upload Test Artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-test-results-${{ matrix.test-suite }}
+          path: |
+            target/nextest/
+          retention-days: 7
+
+      - name: Cleanup Services
+        if: always()
+        run: |
+          # This check prevents trying to run 'docker compose down' when no services were started.
+          if [[ -z "$(docker ps -q)" ]]; then
+            echo "No services were started for this suite, skipping cleanup."
+            exit 0
+          fi
+
+          echo "🧹 Cleaning up docker resources for ${{ matrix.test-suite }}..."
+          if [[ ${{ job.status }} == 'failure' ]]; then
+            echo "🚨 Job failed. Dumping service logs:"
+            docker compose -f $COMPOSE_FILE logs --tail 200 || true
+          fi
+          docker compose -f $COMPOSE_FILE down --volumes --remove-orphans || true

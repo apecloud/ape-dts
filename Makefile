@@ -88,12 +88,12 @@ build-debug: ## Build
 build-release: ## Build release
 	cargo build --release $(CARGO_BUILD_ARGS)
 
-.PHONE: clean
+.PHONY: clean
 clean: ## Clean
 	cargo clean
 
-.PHONE: lint
-lint:
+.PHONY: lint
+lint: ## Run code linting
 	cargo clippy --workspace
 
 .PHONY: test 
@@ -148,3 +148,11 @@ grcov: ## Download grcov locally if necessary.
 ifeq (, $(shell ls $(which grcov) 2>/dev/null))
 	cargo install grcov
 endif
+
+.PHONY: typos
+typos: ## Check for typos
+ifeq (, $(shell which typos 2>/dev/null))
+	@echo "typos not found, installing..."
+	cargo install typos-cli
+endif
+	typos --exclude "*.sql"

@@ -4,14 +4,17 @@ on:
   workflow_dispatch:
     inputs:
       aws_endpoint:
+        description: "S3 endpoint"
         required: true
         type: string
         default: https://s3.ap-northeast-1.amazonaws.com
       aws_bucket:
+        description: "S3 bucket"
         required: true
         type: string
         default: foxlake
       aws_destination_dir:
+        description: "S3 destination directory"
         required: true
         type: string
         default: ape-dts/latest

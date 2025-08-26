@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       tag_name:
+        description: "Tag name"
         required: true
         type: string
-        default:
       targets:
         description: 'JSON array of target platforms to build [{"os": "ubuntu-latest", "target": "x86_64-unknown-linux-gnu"}, ...]'
         required: true
