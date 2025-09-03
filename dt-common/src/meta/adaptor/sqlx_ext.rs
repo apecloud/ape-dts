@@ -29,7 +29,14 @@ impl<'q> SqlxPgExt<'q> for Query<'q, Postgres, PgArguments> {
                 ColValue::String(v) => self.bind(v),
                 ColValue::Json2(v) => self.bind(v),
                 ColValue::RawString(v) => self.bind(v),
-                ColValue::Blob(v) => self.bind(v),
+                ColValue::Blob(v) => {
+                    if col_type.value_type == PgValueType::Bytes {
+                        let bytea_str = format!(r#"\x{}"#, hex::encode(v));
+                        self.bind(bytea_str)
+                    } else {
+                        self.bind(v)
+                    }
+                }
                 ColValue::Set2(v) => self.bind(v),
                 ColValue::Enum2(v) => self.bind(v),
                 ColValue::Json(v) => self.bind(v),
