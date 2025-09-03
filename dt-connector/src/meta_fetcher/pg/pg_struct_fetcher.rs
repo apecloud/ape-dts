@@ -419,6 +419,15 @@ impl PgStructFetcher {
         };
 
         let oid = fetcher.get_oid(&self.schema, tb).await?;
+
+        if oid.is_empty() {
+            anyhow::bail!(
+                "Invalid OID: cannot be empty for schema: {} and table: {}",
+                self.schema,
+                tb
+            );
+        }
+
         let sql = format!(
             "SELECT a.attname AS column_name, 
                 pg_catalog.format_type(a.atttypid, a.atttypmod) AS column_type

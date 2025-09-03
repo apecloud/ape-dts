@@ -25,6 +25,13 @@ impl PgStructCheckFetcher {
     /// refer: https://www.postgresql.org/docs/current/app-psql.html
     pub async fn fetch_table(&self, schema: &str, tb: &str) -> anyhow::Result<PgCheckTableInfo> {
         let oid = self.get_oid(schema, tb).await?;
+        if oid.is_empty() {
+            anyhow::bail!(
+                "Invalid OID: cannot be empty for schema: {} and table: {}",
+                schema,
+                tb
+            );
+        }
         let summary = self.get_table_summary(&oid).await?;
         let columns = self.get_table_columns(&oid).await?;
         let indexes = self.get_table_indexes(&oid).await?;
