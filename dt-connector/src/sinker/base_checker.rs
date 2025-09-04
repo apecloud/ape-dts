@@ -18,7 +18,7 @@ pub struct BaseChecker {}
 
 impl BaseChecker {
     #[inline(always)]
-    pub async fn batch_compare_row_datas(
+    pub async fn batch_compare_row_data_items(
         src_data: &[RowData],
         dst_row_data_map: &HashMap<u128, RowData>,
         start_index: usize,

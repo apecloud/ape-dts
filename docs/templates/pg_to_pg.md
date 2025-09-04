@@ -3,6 +3,7 @@
 Refer to [config details](/docs/en/config.md) for explanations of common fields.
 
 # Struct
+
 ```
 [extractor]
 extract_type=struct
@@ -42,6 +43,7 @@ buffer_size=100
 ```
 
 # Snapshot
+
 ```
 [extractor]
 db_type=pg
@@ -83,6 +85,7 @@ log_dir=./logs
 ```
 
 # CDC
+
 ```
 [extractor]
 db_type=pg
@@ -126,10 +129,10 @@ log4rs_file=./log4rs.yaml
 
 - [extractor]
 
-| Config | Description | Example | Default |
-| :-------- | :-------- | :-------- | :-------- |
-| slot_name | the slot name to pull wal, required | ape_test | - |
-| start_lsn | the starting lsn to pull wal from, required | 0/406DE430 | - |
+| Config    | Description                                 | Example    | Default |
+| :-------- | :------------------------------------------ | :--------- | :------ |
+| slot_name | the slot name to pull wal, required         | ape_test   | -       |
+| start_lsn | the starting lsn to pull wal from, required | 0/406DE430 | -       |
 
 - refer to [create slot and get starting lsn](/docs/en/tutorial/snapshot_and_cdc_without_data_loss.md)
 
@@ -149,17 +152,18 @@ do_ddls=create_schema,drop_schema,alter_schema,create_table,alter_table,drop_tab
 
 - [extractor]
 
-| Config | Description | Example | Default |
-| :-------- | :-------- | :-------- | :-------- |
-| ddl_meta_tb | the meta table you created to store the captured ddl info | - | - |
+| Config      | Description                                               | Example | Default |
+| :---------- | :-------------------------------------------------------- | :------ | :------ |
+| ddl_meta_tb | the meta table you created to store the captured ddl info | -       | -       |
 
 - [filter]
 
-| Config | Description | Example | Default |
-| :-------- | :-------- | :-------- | :-------- |
-| do_ddls | the ddl types to capture and sync to target, it shoud be one or more among "create_schema, drop_schema, alter_schema, create_table, alter_table, drop_table, create_index, drop_index, truncate_table, rename_table" | create_table,alter_table,drop_table | empty, which means ignore all ddls |
+| Config  | Description                                                                                                                                                                                                           | Example                             | Default                            |
+| :------ | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :---------------------------------- | :--------------------------------- |
+| do_ddls | the ddl types to capture and sync to target, it should be one or more among "create_schema, drop_schema, alter_schema, create_table, alter_table, drop_table, create_index, drop_index, truncate_table, rename_table" | create_table,alter_table,drop_table | empty, which means ignore all ddls |
 
 # Struct check
+
 ```
 [extractor]
 db_type=pg
@@ -199,6 +203,7 @@ log_dir=./logs
 - the output will be in {log_dir}/check/
 
 # Data check
+
 ```
 [extractor]
 db_type=pg
@@ -241,6 +246,7 @@ log_dir=./logs
 - the output will be in {log_dir}/check/
 
 # Data revise
+
 ```
 [extractor]
 db_type=pg
@@ -283,11 +289,12 @@ log_dir=./logs
 
 - [extractor]
 
-| Config | Description | Example | Default |
-| :-------- | :-------- | :-------- | :-------- |
-| check_log_dir | the directory of check log, required | ./check_task/logs/check | - |
+| Config        | Description                          | Example                 | Default |
+| :------------ | :----------------------------------- | :---------------------- | :------ |
+| check_log_dir | the directory of check log, required | ./check_task/logs/check | -       |
 
 # Data review
+
 ```
 [extractor]
 db_type=pg
@@ -331,6 +338,7 @@ log_dir=./logs
 - the output will be in {log_dir}/check/
 
 # CDC to sqls
+
 ```
 [extractor]
 db_type=pg
@@ -366,6 +374,7 @@ log_dir=./logs
 - the output will be in {log_dir}/sql.log
 
 # CDC to reverse sqls
+
 ```
 [extractor]
 db_type=pg

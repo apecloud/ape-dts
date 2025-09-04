@@ -141,7 +141,7 @@ impl PgChecker {
             dst_row_data_map.insert(hash_code, row_data);
         }
 
-        let (miss, diff) = BaseChecker::batch_compare_row_datas(
+        let (miss, diff) = BaseChecker::batch_compare_row_data_items(
             data,
             &dst_row_data_map,
             start_index,

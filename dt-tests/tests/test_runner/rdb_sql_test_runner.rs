@@ -52,8 +52,8 @@ impl RdbSqlTestRunner {
 
         // 1, clear src and dst
         // 2, execute src_to_sql/src_test_sqls in src
-        // 3, execute gernerated_sqls in dst
-        // 4, compare src and dst, make sure src_test_sqls and gernerated_sqls generate same data
+        // 3, execute generated_sqls in dst
+        // 4, compare src and dst, make sure src_test_sqls and generated_sqls generate same data
         let (src_db_tbs, dst_db_tbs) = self.src_to_dst_runner.get_compare_db_tbs()?;
         let (src_insert_sqls, src_update_sqls, src_delete_sqls) =
             RdbTestRunner::split_dml_sqls(&self.src_to_sql_runner.base.src_test_sqls);

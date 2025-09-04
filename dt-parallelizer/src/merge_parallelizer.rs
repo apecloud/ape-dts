@@ -57,17 +57,17 @@ impl Parallelizer for MergeParallelizer {
     ) -> anyhow::Result<DataSize> {
         let mut data_size = DataSize::default();
         // no need to check foreign key since foreign key checks were disabled in MySQL/Postgres connections
-        let mut tb_merged_datas = self.merger.merge(data).await?;
+        let mut tb_merged_data = self.merger.merge(data).await?;
         data_size.add(
-            self.sink_dml_internal(&mut tb_merged_datas, sinkers, MergeType::Delete)
+            self.sink_dml_internal(&mut tb_merged_data, sinkers, MergeType::Delete)
                 .await?,
         );
         data_size.add(
-            self.sink_dml_internal(&mut tb_merged_datas, sinkers, MergeType::Insert)
+            self.sink_dml_internal(&mut tb_merged_data, sinkers, MergeType::Insert)
                 .await?,
         );
         data_size.add(
-            self.sink_dml_internal(&mut tb_merged_datas, sinkers, MergeType::Unmerged)
+            self.sink_dml_internal(&mut tb_merged_data, sinkers, MergeType::Unmerged)
                 .await?,
         );
         Ok(data_size)
@@ -83,7 +83,7 @@ impl Parallelizer for MergeParallelizer {
             bytes: data.iter().map(|v| v.get_data_size()).sum(),
         };
 
-        // ddl should always be excuted serially
+        // ddl should always be executed serially
         self.base_parallelizer
             .sink_ddl(vec![data], sinkers, 1, false)
             .await?;
@@ -112,13 +112,13 @@ impl Parallelizer for MergeParallelizer {
 impl MergeParallelizer {
     async fn sink_dml_internal(
         &self,
-        tb_merged_datas: &mut [TbMergedData],
+        tb_merged_data_items: &mut [TbMergedData],
         sinkers: &[Arc<async_mutex::Mutex<Box<dyn Sinker + Send>>>],
         merge_type: MergeType,
     ) -> anyhow::Result<DataSize> {
         let mut futures = Vec::new();
         let mut data_size = DataSize::default();
-        for tb_merged_data in tb_merged_datas.iter_mut() {
+        for tb_merged_data in tb_merged_data_items.iter_mut() {
             let data: Vec<RowData> = match merge_type {
                 MergeType::Delete => tb_merged_data.delete_rows.drain(..).collect(),
                 MergeType::Insert => tb_merged_data.insert_rows.drain(..).collect(),

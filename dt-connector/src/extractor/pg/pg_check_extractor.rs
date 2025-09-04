@@ -60,14 +60,18 @@ impl BatchCheckExtractor for PgCheckExtractor {
         let tb = &check_logs[0].tb;
         let log_type = &check_logs[0].log_type;
         let tb_meta = self.meta_manager.get_tb_meta(schema, tb).await?.to_owned();
-        let check_row_datas = self.build_check_row_datas(check_logs, &tb_meta)?;
+        let check_row_data_items = self.build_check_row_data_items(check_logs, &tb_meta)?;
 
         let ignore_cols = self.filter.get_ignore_cols(schema, tb);
         let query_builder = RdbQueryBuilder::new_for_pg(&tb_meta, ignore_cols);
         let query_info = if check_logs.len() == 1 {
-            query_builder.get_select_query(&check_row_datas[0])?
+            query_builder.get_select_query(&check_row_data_items[0])?
         } else {
-            query_builder.get_batch_select_query(&check_row_datas, 0, check_row_datas.len())?
+            query_builder.get_batch_select_query(
+                &check_row_data_items,
+                0,
+                check_row_data_items.len(),
+            )?
         };
         let query = query_builder.create_pg_query(&query_info);
 
@@ -90,7 +94,7 @@ impl BatchCheckExtractor for PgCheckExtractor {
 }
 
 impl PgCheckExtractor {
-    fn build_check_row_datas(
+    fn build_check_row_data_items(
         &mut self,
         check_logs: &[CheckLog],
         tb_meta: &PgTbMeta,

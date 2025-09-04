@@ -213,7 +213,7 @@ impl PrometheusMetrics {
             App::new()
                 .wrap(Logger::default())
                 .app_data(web::Data::new(registry.clone()))
-                .service(web::resource("/metrics").route(web::get().to(metrics_hander)))
+                .service(web::resource("/metrics").route(web::get().to(metrics_handler)))
                 .service(web::resource("/healthz").route(web::get().to(healthz_handler)))
                 .default_service(web::route().to(not_found_handler))
         })
@@ -227,7 +227,7 @@ impl PrometheusMetrics {
     }
 }
 
-async fn metrics_hander(registry: web::Data<Arc<Registry>>) -> impl Responder {
+async fn metrics_handler(registry: web::Data<Arc<Registry>>) -> impl Responder {
     let mut buffer = String::new();
     let encoder = TextEncoder::new();
 

@@ -141,7 +141,7 @@ impl PgCdcExtractor {
         // refer: https://www.postgresql.org/docs/10/protocol-replication.html to get WAL data details
         loop {
             if self.base_extractor.time_filter.ended {
-                // cdc stream will be dropped automaticaly if postgres receives no keepalive ack
+                // cdc stream will be dropped automatically if postgres receives no keepalive ack
                 return Ok(());
             }
 

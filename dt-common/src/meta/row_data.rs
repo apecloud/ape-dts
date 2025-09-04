@@ -185,7 +185,7 @@ impl RowData {
         for col in tb_meta.id_cols.iter() {
             let col_hash_code = col_values.get(col).unwrap().hash_code();
             // col_hash_code is 0 if col_value is ColValue::None,
-            // consider fowlling case,
+            // consider following case,
             // create table a(id int, value int, unique key(id, value));
             // insert into a values(1, NULL);
             // delete from a where (id, value) in ((1, NULL));  // this won't work

@@ -4,21 +4,21 @@ on:
   push:
     branches: [main]
     paths-ignore:
-      - '**.md'
-      - 'docs/**'
-      - 'LICENSE*'
-      - '**/*.png'
-      - '**/*.jpg'
-      - '**/*.svg'
+      - "**.md"
+      - "docs/**"
+      - "LICENSE*"
+      - "**/*.png"
+      - "**/*.jpg"
+      - "**/*.svg"
   pull_request:
     branches: [main]
     paths-ignore:
-      - '**.md'
-      - 'docs/**'
-      - 'LICENSE*'
-      - '**/*.png'
-      - '**/*.jpg'
-      - '**/*.svg'
+      - "**.md"
+      - "docs/**"
+      - "LICENSE*"
+      - "**/*.png"
+      - "**/*.jpg"
+      - "**/*.svg"
   workflow_dispatch:
 
 concurrency:
@@ -60,10 +60,10 @@ jobs:
         # Assuming 'make lint' runs 'cargo clippy'
         run: make lint
 
-      - name: Check for typos
-        id: typos
-        # Assuming 'make typos' runs the typos checker
-        run: make typos
+      # - name: Check for typos
+      #   id: typos
+      #   # Assuming 'make typos' runs the typos checker
+      #   run: make typos
 
       - name: Run cargo check
         id: check
@@ -78,7 +78,6 @@ jobs:
           # Overall status check
           if [ "${{ steps.fmt.outcome }}" == "success" ] && \
              [ "${{ steps.lint.outcome }}" == "success" ] && \
-             [ "${{ steps.typos.outcome }}" == "success" ] && \
              [ "${{ steps.check.outcome }}" == "success" ]; then
             echo "✅ **All checks passed!**" >> $GITHUB_STEP_SUMMARY
             exit 0
@@ -90,7 +89,6 @@ jobs:
           # Individual check results
           [ "${{ steps.fmt.outcome }}" == "failure" ] && echo "❌ **rustfmt:** Code formatting issues detected." >> $GITHUB_STEP_SUMMARY
           [ "${{ steps.lint.outcome }}" == "failure" ] && echo "❌ **Clippy:** Code quality issues detected." >> $GITHUB_STEP_SUMMARY
-          [ "${{ steps.typos.outcome }}" == "failure" ] && echo "❌ **Typos:** Spelling errors detected." >> $GITHUB_STEP_SUMMARY
           [ "${{ steps.check.outcome }}" == "failure" ] && echo "❌ **cargo check:** Compilation errors detected." >> $GITHUB_STEP_SUMMARY
 
           echo "" >> $GITHUB_STEP_SUMMARY

@@ -14,7 +14,7 @@ use dt_connector::Sinker;
 
 #[derive(Default)]
 pub struct BaseParallelizer {
-    pub poped_data: VecDeque<DtItem>,
+    pub popped_data: VecDeque<DtItem>,
     pub monitor: Arc<Monitor>,
     pub rps_limiter: Option<Ratelimiter>,
 }
@@ -22,12 +22,12 @@ pub struct BaseParallelizer {
 impl BaseParallelizer {
     pub async fn drain(&mut self, buffer: &DtQueue) -> anyhow::Result<Vec<DtItem>> {
         let mut data = Vec::new();
-        while let Some(item) = self.poped_data.pop_front() {
+        while let Some(item) = self.popped_data.pop_front() {
             data.push(item);
         }
 
         let mut record_size_counter = Counter::new(0, 0);
-        // ddls and dmls should be drained seperately
+        // ddls and dmls should be drained separately
         while let Ok(item) = self.pop(buffer, &mut record_size_counter).await {
             if data.is_empty()
                 || (data[0].is_ddl() == item.is_ddl()
@@ -36,7 +36,7 @@ impl BaseParallelizer {
             {
                 data.push(item);
             } else {
-                self.poped_data.push_back(item);
+                self.popped_data.push_back(item);
                 break;
             }
         }
@@ -103,14 +103,14 @@ impl BaseParallelizer {
 
     pub async fn sink_dml(
         &self,
-        mut sub_datas: Vec<Vec<RowData>>,
+        mut sub_data_items: Vec<Vec<RowData>>,
         sinkers: &[Arc<async_mutex::Mutex<Box<dyn Sinker + Send>>>],
         parallel_size: usize,
         batch: bool,
     ) -> anyhow::Result<()> {
         let mut join_set = tokio::task::JoinSet::new();
-        for i in 0..sub_datas.len() {
-            let data = sub_datas.remove(0);
+        for i in 0..sub_data_items.len() {
+            let data = sub_data_items.remove(0);
             let sinker = sinkers[i % parallel_size].clone();
             join_set.spawn(async move { sinker.lock().await.sink_dml(data, batch).await });
         }
@@ -122,14 +122,14 @@ impl BaseParallelizer {
 
     pub async fn sink_ddl(
         &self,
-        mut sub_datas: Vec<Vec<DdlData>>,
+        mut sub_data_items: Vec<Vec<DdlData>>,
         sinkers: &[Arc<async_mutex::Mutex<Box<dyn Sinker + Send>>>],
         parallel_size: usize,
         batch: bool,
     ) -> anyhow::Result<()> {
         let mut join_set = tokio::task::JoinSet::new();
-        for i in 0..sub_datas.len() {
-            let data = sub_datas.remove(0);
+        for i in 0..sub_data_items.len() {
+            let data = sub_data_items.remove(0);
             let sinker = sinkers[i % parallel_size].clone();
             join_set.spawn(async move { sinker.lock().await.sink_ddl(data, batch).await });
         }
@@ -141,14 +141,14 @@ impl BaseParallelizer {
 
     pub async fn sink_dcl(
         &self,
-        mut sub_datas: Vec<Vec<DclData>>,
+        mut sub_data_items: Vec<Vec<DclData>>,
         sinkers: &[Arc<async_mutex::Mutex<Box<dyn Sinker + Send>>>],
         parallel_size: usize,
         batch: bool,
     ) -> anyhow::Result<()> {
         let mut futures = Vec::new();
-        for i in 0..sub_datas.len() {
-            let data = sub_datas.remove(0);
+        for i in 0..sub_data_items.len() {
+            let data = sub_data_items.remove(0);
             let sinker = sinkers[i % parallel_size].clone();
             let future =
                 tokio::spawn(
@@ -165,14 +165,14 @@ impl BaseParallelizer {
 
     pub async fn sink_raw(
         &self,
-        mut sub_datas: Vec<Vec<DtItem>>,
+        mut sub_data_items: Vec<Vec<DtItem>>,
         sinkers: &[Arc<async_mutex::Mutex<Box<dyn Sinker + Send>>>],
         parallel_size: usize,
         batch: bool,
     ) -> anyhow::Result<()> {
         let mut join_set = tokio::task::JoinSet::new();
-        for i in 0..sub_datas.len() {
-            let data = sub_datas.remove(0);
+        for i in 0..sub_data_items.len() {
+            let data = sub_data_items.remove(0);
             let sinker = sinkers[i % parallel_size].clone();
             join_set.spawn(async move { sinker.lock().await.sink_raw(data, batch).await });
         }

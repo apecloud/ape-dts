@@ -5,7 +5,7 @@ appenders:
   default_appender:
     kind: rolling_file
     append: true
-    path: "LOG_DIR_PLACEHODLER/default.log"
+    path: "LOG_DIR_PLACEHOLDER/default.log"
     encoder:
       pattern: "{d(%Y-%m-%d %H:%M:%S.%6f)(utc)} - {level} - [{i}] - {m}{n}"
     policy:
@@ -17,12 +17,12 @@ appenders:
         kind: fixed_window
         base: 1
         count: 10
-        pattern: "LOG_DIR_PLACEHODLER/default{}.log"
+        pattern: "LOG_DIR_PLACEHOLDER/default{}.log"
 
   commit_appender:
     kind: rolling_file
     append: true
-    path: "LOG_DIR_PLACEHODLER/commit.log"
+    path: "LOG_DIR_PLACEHOLDER/commit.log"
     encoder:
       pattern: "{d(%Y-%m-%d %H:%M:%S.%6f)(utc)} - {level} - [{i}] - {m}{n}"
     policy:
@@ -34,12 +34,12 @@ appenders:
         kind: fixed_window
         base: 1
         count: 10
-        pattern: "LOG_DIR_PLACEHODLER/commit{}.log"
+        pattern: "LOG_DIR_PLACEHOLDER/commit{}.log"
 
   position_appender:
     kind: rolling_file
     append: true
-    path: "LOG_DIR_PLACEHODLER/position.log"
+    path: "LOG_DIR_PLACEHOLDER/position.log"
     encoder:
       pattern: "{d(%Y-%m-%d %H:%M:%S.%6f)(utc)} | {m}{n}"
     policy:
@@ -51,12 +51,12 @@ appenders:
         kind: fixed_window
         base: 1
         count: 10
-        pattern: "LOG_DIR_PLACEHODLER/position{}.log"
+        pattern: "LOG_DIR_PLACEHOLDER/position{}.log"
 
   monitor_appender:
     kind: rolling_file
     append: true
-    path: "LOG_DIR_PLACEHODLER/monitor.log"
+    path: "LOG_DIR_PLACEHOLDER/monitor.log"
     encoder:
       pattern: "{d(%Y-%m-%d %H:%M:%S.%6f)(utc)} | {m}{n}"
     policy:
@@ -68,12 +68,12 @@ appenders:
         kind: fixed_window
         base: 1
         count: 10
-        pattern: "LOG_DIR_PLACEHODLER/monitor{}.log"
+        pattern: "LOG_DIR_PLACEHOLDER/monitor{}.log"
 
   miss_appender:
     kind: rolling_file
     append: true
-    path: "CHECK_LOG_DIR_PLACEHODLER/miss.log"
+    path: "CHECK_LOG_DIR_PLACEHOLDER/miss.log"
     encoder:
       pattern: "{m}{n}"
     policy:
@@ -85,12 +85,12 @@ appenders:
         kind: fixed_window
         base: 1
         count: 10
-        pattern: "CHECK_LOG_DIR_PLACEHODLER/miss{}.log"
+        pattern: "CHECK_LOG_DIR_PLACEHOLDER/miss{}.log"
 
   diff_appender:
     kind: rolling_file
     append: true
-    path: "CHECK_LOG_DIR_PLACEHODLER/diff.log"
+    path: "CHECK_LOG_DIR_PLACEHOLDER/diff.log"
     encoder:
       pattern: "{m}{n}"
     policy:
@@ -102,12 +102,12 @@ appenders:
         kind: fixed_window
         base: 1
         count: 10
-        pattern: "CHECK_LOG_DIR_PLACEHODLER/diff{}.log"
+        pattern: "CHECK_LOG_DIR_PLACEHOLDER/diff{}.log"
 
   extra_appender:
     kind: rolling_file
     append: true
-    path: "CHECK_LOG_DIR_PLACEHODLER/extra.log"
+    path: "CHECK_LOG_DIR_PLACEHOLDER/extra.log"
     encoder:
       pattern: "{m}{n}"
     policy:
@@ -119,12 +119,12 @@ appenders:
         kind: fixed_window
         base: 1
         count: 10
-        pattern: "CHECK_LOG_DIR_PLACEHODLER/extra{}.log"
+        pattern: "CHECK_LOG_DIR_PLACEHOLDER/extra{}.log"
 
   statistic_appender:
     kind: rolling_file
     append: true
-    path: "STATISTIC_LOG_DIR_PLACEHODLER/statistic.log"
+    path: "STATISTIC_LOG_DIR_PLACEHOLDER/statistic.log"
     encoder:
       pattern: "{m}{n}"
     policy:
@@ -136,12 +136,12 @@ appenders:
         kind: fixed_window
         base: 1
         count: 10
-        pattern: "STATISTIC_LOG_DIR_PLACEHODLER/statistic{}.log"
+        pattern: "STATISTIC_LOG_DIR_PLACEHOLDER/statistic{}.log"
 
   finished_appender:
     kind: rolling_file
     append: true
-    path: "LOG_DIR_PLACEHODLER/finished.log"
+    path: "LOG_DIR_PLACEHOLDER/finished.log"
     encoder:
       pattern: "{d(%Y-%m-%d %H:%M:%S.%6f)(utc)} | {m}{n}"
     policy:
@@ -153,12 +153,12 @@ appenders:
         kind: fixed_window
         base: 1
         count: 10
-        pattern: "LOG_DIR_PLACEHODLER/finished{}.log"
+        pattern: "LOG_DIR_PLACEHOLDER/finished{}.log"
   
   sql_appender:
     kind: rolling_file
     append: true
-    path: "LOG_DIR_PLACEHODLER/sql.log"
+    path: "LOG_DIR_PLACEHOLDER/sql.log"
     encoder:
       pattern: "{m}{n}"
     policy:
@@ -170,12 +170,12 @@ appenders:
         kind: fixed_window
         base: 1
         count: 10
-        pattern: "LOG_DIR_PLACEHODLER/sql{}.log"
+        pattern: "LOG_DIR_PLACEHOLDER/sql{}.log"
 
   task_appender:
     kind: rolling_file
     append: true
-    path: "LOG_DIR_PLACEHODLER/task.log"
+    path: "LOG_DIR_PLACEHOLDER/task.log"
     encoder:
       pattern: "{m}{n}"   
     policy:
@@ -189,7 +189,7 @@ appenders:
   http_appender:
     kind: rolling_file
     append: true
-    path: "LOG_DIR_PLACEHODLER/http.log"
+    path: "LOG_DIR_PLACEHOLDER/http.log"
     encoder:
       pattern: "{d(%Y-%m-%d %H:%M:%S.%6f)(utc)} - {level} - [{i}] - {m}{n}"
     policy:
@@ -201,71 +201,71 @@ appenders:
         kind: fixed_window
         base: 1
         count: 10
-        pattern: "LOG_DIR_PLACEHODLER/http{}.log"
+        pattern: "LOG_DIR_PLACEHOLDER/http{}.log"
 
 loggers:
   mysql_binlog_connector_rust:  # crate: mysql-binlog-connector-rust
-    level: LOG_LEVEL_PLACEHODLER
+    level: LOG_LEVEL_PLACEHOLDER
     appenders:
       - default_appender
 
   sqlx:  # crate: sqlx
-    level: LOG_LEVEL_PLACEHODLER
+    level: LOG_LEVEL_PLACEHOLDER
     appenders:
       - default_appender
 
   default_logger:
-    level: LOG_LEVEL_PLACEHODLER
+    level: LOG_LEVEL_PLACEHOLDER
     appenders: 
       - default_appender
 
   commit_logger:
-    level: LOG_LEVEL_PLACEHODLER
+    level: LOG_LEVEL_PLACEHOLDER
     appenders: 
       - commit_appender
 
   position_logger:
-    level: LOG_LEVEL_PLACEHODLER
+    level: LOG_LEVEL_PLACEHOLDER
     appenders: 
       - position_appender
 
   monitor_logger:
-    level: LOG_LEVEL_PLACEHODLER
+    level: LOG_LEVEL_PLACEHOLDER
     appenders: 
       - monitor_appender
 
   miss_logger: 
-    level: LOG_LEVEL_PLACEHODLER
+    level: LOG_LEVEL_PLACEHOLDER
     appenders: 
       - miss_appender
 
   diff_logger: 
-    level: LOG_LEVEL_PLACEHODLER
+    level: LOG_LEVEL_PLACEHOLDER
     appenders: 
       - diff_appender
 
   extra_logger: 
-    level: LOG_LEVEL_PLACEHODLER
+    level: LOG_LEVEL_PLACEHOLDER
     appenders: 
       - extra_appender
 
   statistic_logger: 
-    level: LOG_LEVEL_PLACEHODLER
+    level: LOG_LEVEL_PLACEHOLDER
     appenders: 
       - statistic_appender
 
   finished_logger: 
-    level: LOG_LEVEL_PLACEHODLER
+    level: LOG_LEVEL_PLACEHOLDER
     appenders: 
       - finished_appender
 
   sql_logger: 
-    level: LOG_LEVEL_PLACEHODLER
+    level: LOG_LEVEL_PLACEHOLDER
     appenders: 
       - sql_appender
 
   task_logger: 
-    level: LOG_LEVEL_PLACEHODLER
+    level: LOG_LEVEL_PLACEHOLDER
     appenders: 
       - task_appender
     additive: false  
@@ -291,6 +291,6 @@ loggers:
     additive: false  
 
 root:
-  level: LOG_LEVEL_PLACEHODLER
+  level: LOG_LEVEL_PLACEHOLDER
   appenders:
     - stdout

@@ -22,7 +22,7 @@ pub struct DataMarker {
 
     pub data_origin_node: String,
     pub filter: bool,
-    pub reseted: bool,
+    pub reset: bool,
 }
 
 const DATA_ORIGIN_NODE: &str = "data_origin_node";
@@ -69,7 +69,7 @@ impl DataMarker {
         self.data_origin_node = self.src_node.clone();
         // by default, no filter
         self.filter = false;
-        self.reseted = true;
+        self.reset = true;
     }
 
     pub fn is_marker_info(&self, dt_data: &DtData) -> bool {
@@ -119,7 +119,7 @@ impl DataMarker {
         // update filter
         self.filter = self.ignore_nodes.contains(&self.data_origin_node)
             || !self.do_nodes.contains(&self.data_origin_node);
-        self.reseted = false;
+        self.reset = false;
     }
 
     pub fn filter(&self) -> bool {

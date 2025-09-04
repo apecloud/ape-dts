@@ -1713,7 +1713,7 @@ mod test_pg {
             r#"alter /*some comments,*/table
             if exists
             only
-            -- some commets
+            -- some comments
             "aaa" .  "bbb"  
             add column 
             value int"#,

@@ -56,7 +56,7 @@ impl BinlogUtil {
             let binlog_start_timestamp =
                 Self::get_binlog_start_timestamp(url, server_id, &binlogs[0]).await?;
             log_info!(
-                "start_time is ealier than the first binlog: {}, binlog_start_time: {}",
+                "start_time is earlier than the first binlog: {}, binlog_start_time: {}",
                 &binlogs[0],
                 TimeUtil::timestamp_to_str(binlog_start_timestamp)?
             );

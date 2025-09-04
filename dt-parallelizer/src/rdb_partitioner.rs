@@ -11,22 +11,22 @@ impl RdbPartitioner {
         data: Vec<RowData>,
         partition_count: usize,
     ) -> anyhow::Result<Vec<Vec<RowData>>> {
-        let mut sub_datas = Vec::new();
+        let mut sub_data_items = Vec::new();
         if partition_count <= 1 {
-            sub_datas.push(data);
-            return Ok(sub_datas);
+            sub_data_items.push(data);
+            return Ok(sub_data_items);
         }
 
         for _ in 0..partition_count {
-            sub_datas.push(Vec::new());
+            sub_data_items.push(Vec::new());
         }
 
         for row_data in data {
             let partition = self.get_partition_index(&row_data, partition_count).await?;
-            sub_datas[partition].push(row_data);
+            sub_data_items[partition].push(row_data);
         }
 
-        Ok(sub_datas)
+        Ok(sub_data_items)
     }
 
     pub async fn can_be_partitioned(&mut self, row_data: &RowData) -> anyhow::Result<bool> {
@@ -48,7 +48,7 @@ impl RdbPartitioner {
         // if partitioned by 2,
         // partition 1: [insert (1, 1), update((1, 1) -> (1, 3))]
         // partition 2: [insert (2, 2), update((2, 2) -> (2, 1))]
-        // partitions will be sinked parallely, the below case may happen:
+        // partitions will be sinked parallelly, the below case may happen:
         // partition 1 sinked: [insert (1, 1)]
         // partition 2 sinked: [insert (2, 2)]
         // if partition 2 sinking: [update((2, 2) -> (2, 1))] happens before
@@ -70,7 +70,7 @@ impl RdbPartitioner {
                 }
             }
         }
-        // no need to check parition_col if key_map is not empty,
+        // no need to check partition_col if key_map is not empty,
         // in which case partition_col is one of the key cols and has been checked
         if tb_meta.key_map.is_empty()
             && before.get(&tb_meta.partition_col) != after.get(&tb_meta.partition_col)

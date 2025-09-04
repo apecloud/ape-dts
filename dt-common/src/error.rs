@@ -15,7 +15,7 @@ pub enum Error {
     SinkerError(String),
 
     #[error("heartbeat error: {0}")]
-    HearbeatError(String),
+    HeartbeatError(String),
 
     #[error("pull mysql binlog error: {0}")]
     BinlogError(#[from] mysql_binlog_connector_rust::binlog_error::BinlogError),

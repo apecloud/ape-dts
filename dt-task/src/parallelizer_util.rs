@@ -36,7 +36,7 @@ impl ParallelizerUtil {
         let parallel_size = config.parallelizer.parallel_size;
         let parallel_type = &config.parallelizer.parallel_type;
         let base_parallelizer = BaseParallelizer {
-            poped_data: VecDeque::new(),
+            popped_data: VecDeque::new(),
             monitor,
             rps_limiter,
         };

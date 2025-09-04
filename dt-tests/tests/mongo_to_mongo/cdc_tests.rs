@@ -12,7 +12,7 @@ mod test {
 
     #[tokio::test]
     #[serial]
-    async fn cdc_change_steram_test() {
+    async fn cdc_change_stream_test() {
         TestBase::run_mongo_cdc_test("mongo_to_mongo/cdc/change_stream_test", 3000, 3000).await;
     }
 

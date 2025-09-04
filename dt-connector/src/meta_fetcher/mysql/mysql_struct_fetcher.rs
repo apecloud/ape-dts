@@ -391,7 +391,7 @@ impl MysqlStructFetcher {
             String::new()
         };
 
-        let constraint_type_str = ConstraintType::Foregin.to_str(DbType::Mysql);
+        let constraint_type_str = ConstraintType::Foreign.to_str(DbType::Mysql);
         let sql = format!(
             "SELECT
                 kcu.CONSTRAINT_NAME,
@@ -429,7 +429,7 @@ impl MysqlStructFetcher {
                 schema_name: String::new(),
                 table_name: table_name.clone(),
                 constraint_name,
-                constraint_type: ConstraintType::Foregin,
+                constraint_type: ConstraintType::Foreign,
                 definition,
             };
             self.push_to_results(&mut results, &table_name, constraint);

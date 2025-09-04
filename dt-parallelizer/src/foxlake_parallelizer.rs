@@ -49,11 +49,11 @@ impl Parallelizer for FoxlakeParallelizer {
                 // to avoid generating too many small orc files, each sub_data size
                 // should be as big as possible(smaller than sinker batch_memory_mb)
                 if *batch_memory_mb > 0 {
-                    let sub_datas =
+                    let sub_data_items =
                         Self::partition(data, sinkers.len(), batch_memory_mb * 1024 * 1024)?;
                     self.snapshot_parallelizer
                         .base_parallelizer
-                        .sink_raw(sub_datas, sinkers, sinkers.len(), true)
+                        .sink_raw(sub_data_items, sinkers, sinkers.len(), true)
                         .await?
                 }
             }
@@ -74,7 +74,7 @@ impl FoxlakeParallelizer {
 
         let mut last_push_epoch = 0;
         let mut first_sequencer_id = 0;
-        if let Some(item) = base.poped_data.front() {
+        if let Some(item) = base.popped_data.front() {
             if let DtData::Foxlake { file_meta } = &item.dt_data {
                 first_sequencer_id = file_meta.sequencer_id
             }
@@ -85,7 +85,7 @@ impl FoxlakeParallelizer {
             if let DtData::Foxlake { file_meta } = &item.dt_data {
                 last_push_epoch = file_meta.push_epoch;
                 let sequencer_id = file_meta.sequencer_id;
-                base.poped_data.push_back(item);
+                base.popped_data.push_back(item);
 
                 if first_sequencer_id == 0 {
                     first_sequencer_id = sequencer_id;
@@ -96,7 +96,7 @@ impl FoxlakeParallelizer {
             }
         }
 
-        while let Some(item) = base.poped_data.front() {
+        while let Some(item) = base.popped_data.front() {
             if let DtData::Foxlake { file_meta } = &item.dt_data {
                 // To improve foxlake performance:
                 // 1, the batch should NOT contain duplicate data, so
@@ -107,14 +107,14 @@ impl FoxlakeParallelizer {
 
                 // 2, all orc files of the same push_epoch must be merged in the same batch.
                 // we choose to not merge the files of last_push_epoch
-                // since we are not sure whether all the files of last_push_epoch exist in poped_data.
+                // since we are not sure whether all the files of last_push_epoch exist in popped_data.
 
                 // 3. the push_epoch of finished is i64::MAX, which ensures all orc files
-                // in poped_data will be merged once the finished file exists in poped_data.
+                // in popped_data will be merged once the finished file exists in popped_data.
                 if file_meta.sequencer_id == first_sequencer_id
                     && file_meta.push_epoch < last_push_epoch
                 {
-                    data.push(base.poped_data.pop_front().unwrap())
+                    data.push(base.popped_data.pop_front().unwrap())
                 } else {
                     break;
                 }
@@ -130,26 +130,26 @@ impl FoxlakeParallelizer {
         parallele_size: usize,
         sinker_batch_memory_bytes: usize,
     ) -> anyhow::Result<Vec<Vec<DtItem>>> {
-        let mut sub_datas = Vec::new();
-        sub_datas.push(Vec::new());
+        let mut sub_data_items = Vec::new();
+        sub_data_items.push(Vec::new());
 
         if parallele_size <= 1 {
-            sub_datas[0] = data;
-            return Ok(sub_datas);
+            sub_data_items[0] = data;
+            return Ok(sub_data_items);
         }
 
         let mut i = 0;
         let mut sub_data_size = 0;
         for item in data {
             if sub_data_size + item.dt_data.get_data_size() > sinker_batch_memory_bytes as u64 {
-                sub_datas.push(Vec::new());
+                sub_data_items.push(Vec::new());
                 i += 1;
                 sub_data_size = 0;
             }
 
             sub_data_size += item.dt_data.get_data_size();
-            sub_datas[i].push(item);
+            sub_data_items[i].push(item);
         }
-        Ok(sub_datas)
+        Ok(sub_data_items)
     }
 }

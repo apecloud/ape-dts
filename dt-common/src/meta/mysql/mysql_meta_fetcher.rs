@@ -89,7 +89,7 @@ impl MysqlMetaFetcher {
             let (order_col, partition_col, id_cols) =
                 RdbMetaManager::parse_rdb_cols(&key_map, &cols)?;
             // disable get_foreign_keys since we don't support foreign key check,
-            // also quering them is very slow, which may casue terrible performance issue if there were many tables in a CDC task.
+            // also querying them is very slow, which may cause terrible performance issue if there were many tables in a CDC task.
             let (foreign_keys, ref_by_foreign_keys) = (vec![], vec![]);
             // let (foreign_keys, ref_by_foreign_keys) =
             //     Self::get_foreign_keys(&self.conn_pool, &self.db_type, schema, tb).await?;
@@ -171,7 +171,7 @@ impl MysqlMetaFetcher {
         let data_type: String = row.try_get(DATA_TYPE)?;
         let is_nullable = row.try_get::<String, _>(IS_NULLABLE)?.to_lowercase() == "yes";
 
-        let parse_precesion = || {
+        let parse_precision = || {
             let precision = if column_type.contains('(') {
                 // "datetime(6)", "timestamp(6)"
                 column_type
@@ -224,7 +224,7 @@ impl MysqlMetaFetcher {
             // and then sqx will write it into dst server by UTC,
             // and then dst server will convert the received UTC timestamp into its own timezone.
             "timestamp" => MysqlColType::Timestamp {
-                precision: parse_precesion(),
+                precision: parse_precision(),
                 timezone_offset: 0,
                 is_nullable,
             },
@@ -283,13 +283,13 @@ impl MysqlMetaFetcher {
             }
 
             "datetime" => MysqlColType::DateTime {
-                precision: parse_precesion(),
+                precision: parse_precision(),
                 is_nullable,
             },
 
             "date" => MysqlColType::Date { is_nullable },
             "time" => MysqlColType::Time {
-                precision: parse_precesion(),
+                precision: parse_precision(),
             },
             "year" => MysqlColType::Year,
             "bit" => MysqlColType::Bit,

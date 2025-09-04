@@ -15,7 +15,7 @@ pub enum ConstraintType {
     Primary,
     Unique,
     Check,
-    Foregin,
+    Foreign,
     Unknown,
 }
 
@@ -26,7 +26,7 @@ impl ConstraintType {
                 "PRIMARY KEY" => Self::Primary,
                 "UNIQUE" => Self::Unique,
                 "CHECK" => Self::Check,
-                "FOREIGN KEY" => Self::Foregin,
+                "FOREIGN KEY" => Self::Foreign,
                 _ => Self::Unknown,
             },
 
@@ -34,7 +34,7 @@ impl ConstraintType {
                 "p" | "112" => Self::Primary,
                 "u" | "117" => Self::Unique,
                 "c" | "99" => Self::Check,
-                "f" | "102" => Self::Foregin,
+                "f" | "102" => Self::Foreign,
                 _ => Self::Unknown,
             },
 
@@ -47,7 +47,7 @@ impl ConstraintType {
             DbType::Mysql => match self {
                 Self::Primary => "PRIMARY KEY",
                 Self::Unique => "UNIQUE",
-                Self::Foregin => "FOREIGN KEY",
+                Self::Foreign => "FOREIGN KEY",
                 Self::Check => "CHECK",
                 Self::Unknown => "unknown",
             },
@@ -55,7 +55,7 @@ impl ConstraintType {
             DbType::Pg => match self {
                 Self::Primary => "p",
                 Self::Unique => "u",
-                Self::Foregin => "f",
+                Self::Foreign => "f",
                 Self::Check => "c",
                 Self::Unknown => "unknown",
             },

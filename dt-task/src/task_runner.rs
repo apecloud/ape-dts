@@ -68,12 +68,12 @@ pub struct TaskRunner {
     prometheus_metrics: Arc<PrometheusMetrics>,
 }
 
-const CHECK_LOG_DIR_PLACEHODLER: &str = "CHECK_LOG_DIR_PLACEHODLER";
-const STATISTIC_LOG_DIR_PLACEHODLER: &str = "STATISTIC_LOG_DIR_PLACEHODLER";
-const LOG_LEVEL_PLACEHODLER: &str = "LOG_LEVEL_PLACEHODLER";
-const LOG_DIR_PLACEHODLER: &str = "LOG_DIR_PLACEHODLER";
-const DEFAULT_CHECK_LOG_DIR_PLACEHODLER: &str = "LOG_DIR_PLACEHODLER/check";
-const DEFAULT_STATISTIC_LOG_DIR_PLACEHODLER: &str = "LOG_DIR_PLACEHODLER/statistic";
+const CHECK_LOG_DIR_PLACEHOLDER: &str = "CHECK_LOG_DIR_PLACEHOLDER";
+const STATISTIC_LOG_DIR_PLACEHOLDER: &str = "STATISTIC_LOG_DIR_PLACEHOLDER";
+const LOG_LEVEL_PLACEHOLDER: &str = "LOG_LEVEL_PLACEHOLDER";
+const LOG_DIR_PLACEHOLDER: &str = "LOG_DIR_PLACEHOLDER";
+const DEFAULT_CHECK_LOG_DIR_PLACEHOLDER: &str = "LOG_DIR_PLACEHOLDER/check";
+const DEFAULT_STATISTIC_LOG_DIR_PLACEHOLDER: &str = "LOG_DIR_PLACEHOLDER/statistic";
 
 impl TaskRunner {
     pub fn new(task_config_file: &str) -> anyhow::Result<Self> {
@@ -687,7 +687,7 @@ impl TaskRunner {
             SinkerConfig::MysqlCheck { check_log_dir, .. }
             | SinkerConfig::PgCheck { check_log_dir, .. } => {
                 if !check_log_dir.is_empty() {
-                    config_str = config_str.replace(CHECK_LOG_DIR_PLACEHODLER, check_log_dir);
+                    config_str = config_str.replace(CHECK_LOG_DIR_PLACEHOLDER, check_log_dir);
                 }
             }
 
@@ -696,7 +696,7 @@ impl TaskRunner {
             } => {
                 if !statistic_log_dir.is_empty() {
                     config_str =
-                        config_str.replace(STATISTIC_LOG_DIR_PLACEHODLER, statistic_log_dir);
+                        config_str.replace(STATISTIC_LOG_DIR_PLACEHOLDER, statistic_log_dir);
                 }
             }
 
@@ -704,13 +704,13 @@ impl TaskRunner {
         }
 
         config_str = config_str
-            .replace(CHECK_LOG_DIR_PLACEHODLER, DEFAULT_CHECK_LOG_DIR_PLACEHODLER)
+            .replace(CHECK_LOG_DIR_PLACEHOLDER, DEFAULT_CHECK_LOG_DIR_PLACEHOLDER)
             .replace(
-                STATISTIC_LOG_DIR_PLACEHODLER,
-                DEFAULT_STATISTIC_LOG_DIR_PLACEHODLER,
+                STATISTIC_LOG_DIR_PLACEHOLDER,
+                DEFAULT_STATISTIC_LOG_DIR_PLACEHOLDER,
             )
-            .replace(LOG_DIR_PLACEHODLER, &self.config.runtime.log_dir)
-            .replace(LOG_LEVEL_PLACEHODLER, &self.config.runtime.log_level);
+            .replace(LOG_DIR_PLACEHOLDER, &self.config.runtime.log_dir)
+            .replace(LOG_LEVEL_PLACEHOLDER, &self.config.runtime.log_level);
 
         let config: RawConfig = serde_yaml::from_str(&config_str)?;
         log4rs::init_raw_config(config)?;

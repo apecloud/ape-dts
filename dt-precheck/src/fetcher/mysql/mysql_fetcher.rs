@@ -135,7 +135,7 @@ impl Fetcher for MysqlFetcher {
         let mut results: Vec<Constraint> = vec![];
         let sys_dbs = MysqlFetcher::get_system_databases();
 
-        let query_constaint = format!(
+        let query_constraint = format!(
             "SELECT
               kcu.CONSTRAINT_NAME,
               tc.CONSTRAINT_TYPE,
@@ -158,7 +158,7 @@ impl Fetcher for MysqlFetcher {
                 .join(",")
         );
 
-        let rows_result = self.fetch_row(query_constaint.as_str(), "mysql query constraints sql:");
+        let rows_result = self.fetch_row(query_constraint.as_str(), "mysql query constraints sql:");
         match rows_result {
             Ok(mut rows) => {
                 while let Some(row) = rows.try_next().await.unwrap() {
