@@ -95,8 +95,10 @@ impl RdbMetaManager {
         if id_cols.is_empty() {
             id_cols = cols.to_owned();
         }
-
-        let partition_col = id_cols[0].clone();
+        let mut partition_col = String::new();
+        if !id_cols.is_empty() {
+            partition_col = id_cols[0].clone();
+        }
         Ok((order_col, partition_col, id_cols))
     }
 }

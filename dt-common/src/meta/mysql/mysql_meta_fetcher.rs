@@ -145,7 +145,7 @@ impl MysqlMetaFetcher {
             sqlx::query(&sql).bind(schema).bind(tb).fetch(conn_pool)
         } else {
             // for starrocks
-            sqlx::query(&sql).disable_arguments().fetch(conn_pool)
+            sqlx::query(&sql).fetch(conn_pool)
         };
 
         while let Some(row) = rows.try_next().await? {
@@ -320,7 +320,7 @@ impl MysqlMetaFetcher {
     ) -> anyhow::Result<HashMap<String, Vec<String>>> {
         let mut key_map: HashMap<String, Vec<String>> = HashMap::new();
         let sql = format!("SHOW INDEXES FROM `{}`.`{}`", schema, tb);
-        let mut rows = sqlx::query(&sql).disable_arguments().fetch(conn_pool);
+        let mut rows = sqlx::query(&sql).fetch(conn_pool);
         while let Some(row) = rows.try_next().await? {
             let non_unique: i8 = row.try_get("Non_unique")?;
             if non_unique == 1 {
@@ -417,7 +417,7 @@ impl MysqlMetaFetcher {
 
     async fn init_version(&mut self) -> anyhow::Result<()> {
         let sql = "SELECT VERSION()";
-        let mut rows = sqlx::query(sql).disable_arguments().fetch(&self.conn_pool);
+        let mut rows = sqlx::query(sql).fetch(&self.conn_pool);
         if let Some(row) = rows.try_next().await? {
             let version: String = row.get_unchecked(0);
             self.version = version.trim().into();

@@ -343,7 +343,7 @@ impl StarrocksStructSinker {
     async fn get_backend_count(&self) -> anyhow::Result<i32> {
         let sql = "SHOW BACKENDS";
         let mut count = 0;
-        let mut rows = sqlx::query(sql).disable_arguments().fetch(&self.conn_pool);
+        let mut rows = sqlx::query(sql).fetch(&self.conn_pool);
         while (rows.try_next().await?).is_some() {
             count += 1;
         }
@@ -352,7 +352,7 @@ impl StarrocksStructSinker {
 
     async fn execute_sql(&self, sql: &str) -> anyhow::Result<()> {
         log_info!("ddl begin: {}", sql);
-        let query = sqlx::query(sql).disable_arguments();
+        let query = sqlx::query(sql);
         match query.execute(&self.conn_pool).await {
             Ok(_) => {
                 log_info!("ddl succeed");

@@ -113,7 +113,7 @@ impl PgSinker {
         let mut tx = self.conn_pool.begin().await?;
         if let Some(sql) = self.get_data_marker_sql() {
             sqlx::query(&sql)
-                .execute(&mut tx)
+                .execute(tx.as_mut())
                 .await
                 .with_context(|| format!("failed to execute data marker sql: [{}]", sql))?;
         }
@@ -126,7 +126,7 @@ impl PgSinker {
             let query_info = query_builder.get_query_info(row_data, self.replace)?;
             let query = query_builder.create_pg_query(&query_info);
             query
-                .execute(&mut tx)
+                .execute(tx.as_mut())
                 .await
                 .with_context(|| format!("serial sink failed, row_data: [{}]", row_data))?;
         }
@@ -152,8 +152,8 @@ impl PgSinker {
 
         if let Some(sql) = self.get_data_marker_sql() {
             let mut tx = self.conn_pool.begin().await?;
-            sqlx::query(&sql).execute(&mut tx).await?;
-            query.execute(&mut tx).await?;
+            sqlx::query(&sql).execute(tx.as_mut()).await?;
+            query.execute(tx.as_mut()).await?;
             tx.commit().await?;
         } else {
             query.execute(&self.conn_pool).await?;
@@ -183,8 +183,8 @@ impl PgSinker {
 
         let exec_error = if let Some(sql) = self.get_data_marker_sql() {
             let mut tx = self.conn_pool.begin().await?;
-            sqlx::query(&sql).execute(&mut tx).await?;
-            query.execute(&mut tx).await?;
+            sqlx::query(&sql).execute(tx.as_mut()).await?;
+            query.execute(tx.as_mut()).await?;
             tx.commit().await
         } else {
             match query.execute(&self.conn_pool).await {

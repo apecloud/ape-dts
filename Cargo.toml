@@ -16,7 +16,8 @@ members = [
 assigning_clones = "allow"
 
 [workspace.dependencies]
-sqlx = {git = "https://github.com/apecloud/sqlx", features = ["runtime-async-std-rustls", "mysql", "postgres", "bigdecimal", "ipnetwork", "mac_address", "bit-vec", "time", "chrono", "json", "uuid"]}
+sqlx = {version = "0.8.6", features = ["runtime-async-std-rustls", "mysql", "postgres", "bigdecimal", "ipnetwork", "mac_address", "bit-vec", "time", "chrono", "json", "uuid"]}
+# sqlx = {git = "https://github.com/apecloud/sqlx", features = ["runtime-async-std-rustls", "mysql", "postgres", "bigdecimal", "ipnetwork", "mac_address", "bit-vec", "time", "chrono", "json", "uuid"]}
 futures = "0.3.25"
 mysql-binlog-connector-rust = "0.3.2"
 serde = {version = "1", features = ["derive"]}

@@ -98,7 +98,7 @@ impl Sinker for MysqlSinker {
         for dcl_data in data {
             let sql = dcl_data.to_sql();
             log_info!("sink dcl: {}", &sql);
-            let query = sqlx::query(&sql).persistent(false).disable_arguments();
+            let query = sqlx::query(&sql).persistent(false);
             query.execute(&self.conn_pool).await?;
         }
         Ok(())
@@ -125,7 +125,7 @@ impl MysqlSinker {
         let mut tx = self.conn_pool.begin().await?;
         if let Some(sql) = self.get_data_marker_sql() {
             sqlx::query(&sql)
-                .execute(&mut tx)
+                .execute(tx.as_mut())
                 .await
                 .with_context(|| format!("failed to execute data marker sql: [{}]", sql))?;
         }
@@ -137,7 +137,7 @@ impl MysqlSinker {
             let query_info = query_builder.get_query_info(row_data, self.replace)?;
             let query = query_builder.create_mysql_query(&query_info);
             query
-                .execute(&mut tx)
+                .execute(tx.as_mut())
                 .await
                 .with_context(|| format!("serial sink failed, row_data: [{}]", row_data))?;
         }
@@ -166,8 +166,8 @@ impl MysqlSinker {
 
         if let Some(sql) = self.get_data_marker_sql() {
             let mut tx = self.conn_pool.begin().await?;
-            sqlx::query(&sql).execute(&mut tx).await?;
-            query.execute(&mut tx).await?;
+            sqlx::query(&sql).execute(tx.as_mut()).await?;
+            query.execute(tx.as_mut()).await?;
             tx.commit().await?;
         } else {
             query.execute(&self.conn_pool).await?;
@@ -197,8 +197,8 @@ impl MysqlSinker {
 
         let exec_error = if let Some(sql) = self.get_data_marker_sql() {
             let mut tx = self.conn_pool.begin().await?;
-            sqlx::query(&sql).execute(&mut tx).await?;
-            query.execute(&mut tx).await?;
+            sqlx::query(&sql).execute(tx.as_mut()).await?;
+            query.execute(tx.as_mut()).await?;
             match tx.commit().await {
                 Err(e) => Some(e),
                 _ => None,

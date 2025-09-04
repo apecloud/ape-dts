@@ -38,12 +38,7 @@ impl RdbUtil {
             cols_str, &db_tb.0, &db_tb.1, where_sql, &tb_meta.basic.cols[0],
         );
 
-        let mut query = sqlx::query(&sql);
-        if matches!(db_type, DbType::StarRocks | DbType::Foxlake | DbType::Doris) {
-            query = query.disable_arguments();
-        }
-
-        let mut rows = query.fetch(conn_pool);
+        let mut rows = sqlx::query(&sql).fetch(conn_pool);
         let mut result = Vec::new();
         while let Some(row) = rows.try_next().await.unwrap() {
             let row_data = RowData::from_mysql_compatible_row(&row, &tb_meta, &None, db_type);
@@ -118,7 +113,7 @@ impl RdbUtil {
     ) -> anyhow::Result<()> {
         for sql in sqls {
             println!("executing sql: {}", sql);
-            let query = sqlx::query(sql).disable_arguments();
+            let query = sqlx::query(sql);
             query.execute(conn_pool).await.unwrap();
         }
         Ok(())

@@ -79,6 +79,9 @@ impl PgMetaManager {
             let oid = Self::get_oid(&self.conn_pool, schema, tb).await?;
             let (cols, col_origin_type_map, col_type_map) =
                 Self::parse_cols(&self.conn_pool, &mut self.type_registry, schema, tb).await?;
+            if cols.is_empty() {
+                log::warn!("Table {}.{} has no columns. This might be a system table, temporary table, or corrupted table.", schema, tb);
+            }
             let key_map = Self::parse_keys(&self.conn_pool, schema, tb).await?;
             let (order_col, partition_col, id_cols) =
                 RdbMetaManager::parse_rdb_cols(&key_map, &cols)?;
