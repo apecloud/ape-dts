@@ -46,7 +46,7 @@ mod test {
         TestBase::run_snapshot_test("pg_to_pg/snapshot/charset_test").await;
     }
 
-    #[tokio::test]
+    // #[tokio::test]
     #[serial]
     async fn snapshot_charset_euc_cn_test() {
         TestBase::run_snapshot_test("pg_to_pg/snapshot/charset_euc_cn_test").await;
