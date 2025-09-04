@@ -36,25 +36,26 @@ impl Parallelizer for CheckParallelizer {
     ) -> anyhow::Result<DataSize> {
         let mut data_size = DataSize::default();
 
-        let mut merged_datas = self.merger.merge(data).await?;
-        for tb_merged_data in merged_datas.drain(..) {
+        let mut merged_data_items = self.merger.merge(data).await?;
+        for tb_merged_data in merged_data_items.drain(..) {
             let batch_data = tb_merged_data.insert_rows;
             data_size
                 .add_count(batch_data.len() as u64)
                 .add_bytes(batch_data.iter().map(|v| v.get_data_size()).sum());
-            let batch_sub_datas = SnapshotParallelizer::partition(batch_data, self.parallel_size)?;
+            let batch_sub_data_items =
+                SnapshotParallelizer::partition(batch_data, self.parallel_size)?;
             self.base_parallelizer
-                .sink_dml(batch_sub_datas, sinkers, self.parallel_size, true)
+                .sink_dml(batch_sub_data_items, sinkers, self.parallel_size, true)
                 .await?;
 
             let serial_data = tb_merged_data.unmerged_rows;
             data_size
                 .add_count(serial_data.len() as u64)
                 .add_bytes(serial_data.iter().map(|v| v.get_data_size()).sum());
-            let serial_sub_datas =
+            let serial_sub_data_items =
                 SnapshotParallelizer::partition(serial_data, self.parallel_size)?;
             self.base_parallelizer
-                .sink_dml(serial_sub_datas, sinkers, self.parallel_size, false)
+                .sink_dml(serial_sub_data_items, sinkers, self.parallel_size, false)
                 .await?;
         }
 

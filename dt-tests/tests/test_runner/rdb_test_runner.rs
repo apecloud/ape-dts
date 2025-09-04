@@ -188,8 +188,8 @@ impl RdbTestRunner {
 
         self.execute_src_sqls(&self.base.src_test_sqls).await?;
 
-        // run_ddl_test: start cdc task BEFORE src_test_sqls excuted
-        // run_ddl_meta_center_test: start cdc task AFTER src_test_sqls excuted
+        // run_ddl_test: start cdc task BEFORE src_test_sqls executed
+        // run_ddl_meta_center_test: start cdc task AFTER src_test_sqls executed
         let task: JoinHandle<()> = self.base.spawn_task().await?;
         self.base.wait_task_finish(&task).await?;
 
@@ -586,7 +586,7 @@ impl RdbTestRunner {
             if filtered_db_tbs.contains(&src_db_tbs[i]) {
                 let dst_data = self.fetch_data(&dst_db_tbs[i], DST).await?;
                 if !dst_data.is_empty() {
-                    println!("tb: {:?} is filtered but dst is not emtpy", dst_db_tbs[i]);
+                    println!("tb: {:?} is filtered but dst is not empty", dst_db_tbs[i]);
                     panic!()
                 }
             } else {

@@ -229,7 +229,7 @@ impl RedisPsyncExtractor {
             i64::MIN
         };
 
-        // start hearbeat
+        // start heartbeat
         if heartbeat_db_key.len() == 2 {
             self.start_heartbeat(
                 heartbeat_db_id,
@@ -296,7 +296,7 @@ impl RedisPsyncExtractor {
                     // in two-way sync scenario, we must push both DtData::Begin and DtData::Commit
                     // to buf to make sure:
                     // 1, only the first command following MULTI be considered as data marker info.
-                    // 2, data_marker will be reset follwing EXEC.
+                    // 2, data_marker will be reset following EXEC.
                     self.base_extractor
                         .refresh_and_check_data_marker(&DtData::Begin {});
                     // ignore MULTI & EXEC
@@ -424,7 +424,7 @@ impl RedisPsyncExtractor {
     }
 
     async fn heartbeat(key: &str, conn: &mut RedisClient) -> anyhow::Result<()> {
-        // send `SET heartbeat_key current_timestamp` by another connecion to generate timestamp
+        // send `SET heartbeat_key current_timestamp` by another connection to generate timestamp
         let since_epoch = SystemTime::now().duration_since(UNIX_EPOCH)?;
         let timestamp =
             since_epoch.as_secs() * 1000 + since_epoch.subsec_nanos() as u64 / 1_000_000;

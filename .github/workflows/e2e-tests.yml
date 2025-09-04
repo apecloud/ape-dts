@@ -1,0 +1,96 @@
+name: E2E Tests
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 0 * * *'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  integration-tests:
+    name: E2E - ${{ matrix.test-suite }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      # Fail fast is disabled to allow all test suites to complete
+      # so we can see the full test result picture.
+      fail-fast: false
+      matrix:
+        test-suite:
+          - mysql_to_mysql
+          - pg_to_pg
+          - redis_to_redis
+          - mongo_to_mongo
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Setup Rust Toolchain
+        uses: dtolnay/rust-toolchain@1.85.0
+
+      - name: Cache Rust Dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: integration-${{ matrix.test-suite }}-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            integration-${{ matrix.test-suite }}-${{ runner.os }}-
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
+
+      - name: Start Services & Setup Environment
+        working-directory: ./dt-tests
+        run: |
+          echo "🚀 Starting services for ${{ matrix.test-suite }}..."
+          # Use --wait to let Docker Compose handle waiting for services to be healthy.
+          # This requires that services in docker-compose.ci.yml have `healthcheck` configured.
+          # The --timeout flag prevents this step from running indefinitely.
+          docker compose -f docker-compose.ci.yml up --detach --wait --timeout 300
+
+          echo "✅ All services are healthy and running."
+          docker compose -f docker-compose.ci.yml ps
+
+          echo "📝 Setting up test environment..."
+          cp .env.ci tests/.env
+
+      - name: Run E2E Tests
+        run: |
+          echo "🧪 Running ${{ matrix.test-suite }} E2E tests..."
+          cargo nextest run \
+            --package dt-tests \
+            --test integration_test \
+            --no-fail-fast \
+            '${{ matrix.test-suite }}::' \
+            -- --test-timeout 300s
+
+      - name: Upload Test Artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-test-results-${{ matrix.test-suite }}-${{ github.run_id }}
+          path: |
+            target/nextest/
+            dt-tests/tests/.env
+          retention-days: 7
+
+      - name: Cleanup Services
+        if: always()
+        working-directory: ./dt-tests
+        run: |
+          echo "🧹 Cleaning up docker resources..."
+          echo "Service logs:"
+          docker compose -f docker-compose.ci.yml logs --tail 100
+          echo "Stopping services..."
+          docker compose -f docker-compose.ci.yml down --volumes

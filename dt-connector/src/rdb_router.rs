@@ -84,7 +84,7 @@ impl RdbRouter {
         if let Some(topic) = self.topic_map.get(&(schema.into(), "*".into())) {
             return topic;
         }
-        // shoud always has a default topic map
+        // should always has a default topic map
         self.topic_map.get(&("*".into(), "*".into())).unwrap()
     }
 

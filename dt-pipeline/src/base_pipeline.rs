@@ -102,7 +102,7 @@ impl Pipeline for BasePipeline {
                 }
             }
 
-            // process all row_datas in buffer at a time
+            // process all row_data_items in buffer at a time
             let (data_size, last_received, last_commit) = match self.get_sink_method(&data) {
                 SinkMethod::Ddl => self.sink_ddl(data).await?,
                 SinkMethod::Dcl => self.sink_dcl(data).await?,

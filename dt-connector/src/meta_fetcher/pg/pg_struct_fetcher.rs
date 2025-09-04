@@ -217,7 +217,7 @@ impl PgStructFetcher {
             owned_sequence_names.insert(sequence.sequence_name.clone());
         }
 
-        let mut independent_squence_names = Vec::new();
+        let mut independent_sequence_names = Vec::new();
         for column in table.columns.iter() {
             if let Some(ColumnDefault::Literal(default_value)) = &column.column_default {
                 let (schema, sequence_name) =
@@ -257,13 +257,13 @@ impl PgStructFetcher {
                     schema,
                     sequence_name
                 );
-                independent_squence_names.push(sequence_name);
+                independent_sequence_names.push(sequence_name);
             }
         }
 
-        if !independent_squence_names.is_empty() {
+        if !independent_sequence_names.is_empty() {
             let independent_squences = self
-                .get_independent_sequences(&independent_squence_names)
+                .get_independent_sequences(&independent_sequence_names)
                 .await?;
             table_sequences.extend_from_slice(&independent_squences);
         }

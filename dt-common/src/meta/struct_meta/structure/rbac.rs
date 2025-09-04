@@ -19,7 +19,7 @@ pub struct PgRoleMember {
     pub role: String,
     pub member: String,
     pub admin_option: bool,
-    // Todo: inherit_option and set_option are not supportted before 16.0
+    // Todo: inherit_option and set_option are not supported before 16.0
     // pub inherit_option: bool,
     // pub set_option: bool,
 }

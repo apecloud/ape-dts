@@ -72,9 +72,9 @@ impl Parallelizer for PartitionParallelizer {
             bytes: data.iter().map(|v| v.get_data_size()).sum(),
         };
 
-        let sub_datas = self.partitioner.partition(data, self.parallel_size).await?;
+        let sub_data = self.partitioner.partition(data, self.parallel_size).await?;
         self.base_parallelizer
-            .sink_dml(sub_datas, sinkers, self.parallel_size, false)
+            .sink_dml(sub_data, sinkers, self.parallel_size, false)
             .await?;
 
         Ok(data_size)

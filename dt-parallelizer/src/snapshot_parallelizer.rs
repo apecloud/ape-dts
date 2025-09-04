@@ -50,9 +50,9 @@ impl Parallelizer for SnapshotParallelizer {
             bytes: data.iter().map(|v| v.get_data_size()).sum(),
         };
 
-        let sub_datas = Self::partition(data, self.parallel_size)?;
+        let sub_data_items = Self::partition(data, self.parallel_size)?;
         self.base_parallelizer
-            .sink_raw(sub_datas, sinkers, self.parallel_size, true)
+            .sink_raw(sub_data_items, sinkers, self.parallel_size, true)
             .await?;
 
         Ok(data_size)
@@ -61,24 +61,24 @@ impl Parallelizer for SnapshotParallelizer {
 
 impl SnapshotParallelizer {
     pub fn partition<T>(data: Vec<T>, parallele_size: usize) -> anyhow::Result<Vec<Vec<T>>> {
-        let mut sub_datas = Vec::new();
+        let mut sub_data_items = Vec::new();
         if parallele_size <= 1 {
-            sub_datas.push(data);
-            return Ok(sub_datas);
+            sub_data_items.push(data);
+            return Ok(sub_data_items);
         }
 
         let avg_size = data.len() / parallele_size + 1;
         for _ in 0..parallele_size {
-            sub_datas.push(Vec::with_capacity(avg_size));
+            sub_data_items.push(Vec::with_capacity(avg_size));
         }
 
         let mut i = 0;
         for item in data {
-            sub_datas[i].push(item);
-            if sub_datas[i].len() >= avg_size {
+            sub_data_items[i].push(item);
+            if sub_data_items[i].len() >= avg_size {
                 i += 1;
             }
         }
-        Ok(sub_datas)
+        Ok(sub_data_items)
     }
 }

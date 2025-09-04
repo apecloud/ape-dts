@@ -17,7 +17,7 @@ impl DecimalUtil {
     ) -> Result<String, Error> {
         let mut cursor = Cursor::new(buf);
         // Given a column to be DECIMAL(13,4), the numbers mean:
-        // 13: precision, the maximum number of digits, the maximum precesion for DECIMAL is 65.
+        // 13: precision, the maximum number of digits, the maximum precision for DECIMAL is 65.
         // 4: scale, the number of digits to the right of the decimal point.
         // 13 - 4: integral, the maximum number of digits to the left of the decimal point.
         let integral = precision - scale;
@@ -324,7 +324,7 @@ mod tests {
     }
 
     fn generate_decimal_values(precision: u8, scale: u8) -> Vec<String> {
-        // given precesion = 10, scale = 4, integral = 6
+        // given precision = 10, scale = 4, integral = 6
         let integral = precision - scale;
         let mut tmp_values = Vec::new();
 

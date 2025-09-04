@@ -162,7 +162,7 @@ impl MysqlColValueConvertor {
 
             // char, varchar, binary, varbinary
             ColumnValue::String(v) => {
-                // when the type is binary(length), the value shoud be right-padded with '\0' to the specified length,
+                // when the type is binary(length), the value should be right-padded with '\0' to the specified length,
                 // refer: https://dev.mysql.com/doc/refman/8.0/en/binary-varbinary.html
                 match *col_type {
                     // binary

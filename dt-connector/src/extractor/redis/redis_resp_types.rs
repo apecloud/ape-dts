@@ -1,7 +1,7 @@
 use anyhow::bail;
 use thiserror::Error;
 
-/// Represents a redis RESP protcol response
+/// Represents a redis RESP protocol response
 /// https://redis.io/topics/protocol#resp-protocol-description
 #[derive(PartialEq, Eq, Clone, Debug)]
 pub enum Value {
@@ -14,7 +14,7 @@ pub enum Value {
     Int(i64),
     /// A simple string response.
     Status(String),
-    /// An arbitary binary data.
+    /// An arbitrary binary data.
     Data(Vec<u8>),
     /// A bulk response of more data.  This is generally used by redis
     /// to express nested structures.

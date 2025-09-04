@@ -1,0 +1,206 @@
+version: '3.8'
+
+services:
+  # MySQL instances for testing
+  mysql-src:
+    image: mysql:5.7
+    container_name: mysql-src-ci
+    environment:
+      MYSQL_ROOT_PASSWORD: 123456
+      MYSQL_DATABASE: test_db
+    ports:
+      - "3307:3306"
+    command:
+      - mysqld
+      - --server-id=1
+      - --log-bin=mysql-bin
+      - --binlog-format=ROW
+      - --gtid-mode=ON
+      - --enforce-gtid-consistency=ON
+      - --log-slave-updates=ON
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p123456"]
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+      interval: 5s
+
+  mysql-dst:
+    image: mysql:5.7
+    container_name: mysql-dst-ci
+    environment:
+      MYSQL_ROOT_PASSWORD: 123456
+      MYSQL_DATABASE: test_db
+    ports:
+      - "3308:3306"
+    command:
+      - mysqld
+      - --server-id=2
+      - --log-bin=mysql-bin
+      - --binlog-format=ROW
+      - --gtid-mode=ON
+      - --enforce-gtid-consistency=ON
+      - --log-slave-updates=ON
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p123456"]
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+      interval: 5s
+
+  mysql-meta:
+    image: mysql:5.7
+    container_name: mysql-meta-ci
+    environment:
+      MYSQL_ROOT_PASSWORD: 123456
+      MYSQL_DATABASE: test_db
+    ports:
+      - "3309:3306"
+    command:
+      - mysqld
+      - --server-id=3
+      - --log-bin=mysql-bin
+      - --binlog-format=ROW
+      - --gtid-mode=ON
+      - --enforce-gtid-consistency=ON
+      - --log-slave-updates=ON
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p123456"]
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+      interval: 5s
+
+  # PostgreSQL instances
+  postgres-src:
+    image: postgres:13
+    container_name: postgres-src-ci
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: postgres
+    ports:
+      - "5433:5432"
+    command:
+      - postgres
+      - -c
+      - wal_level=logical
+      - -c
+      - max_wal_senders=10
+      - -c
+      - max_replication_slots=10
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+      interval: 5s
+
+  postgres-dst:
+    image: postgres:13
+    container_name: postgres-dst-ci
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: postgres
+    ports:
+      - "5434:5432"
+    command:
+      - postgres
+      - -c
+      - wal_level=logical
+      - -c
+      - max_wal_senders=10
+      - -c
+      - max_replication_slots=10
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+      interval: 5s
+
+  # MongoDB instances
+  mongo-src:
+    image: mongo:4.4
+    container_name: mongo-src-ci
+    ports:
+      - "27017:27017"
+    command: mongod --replSet rs0
+    healthcheck:
+      test: ["CMD", "mongo", "--eval", "db.adminCommand('ping')"]
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+      interval: 5s
+
+  mongo-dst:
+    image: mongo:4.4
+    container_name: mongo-dst-ci
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ape_dts
+      MONGO_INITDB_ROOT_PASSWORD: 123456
+    ports:
+      - "27018:27017"
+    command: mongod --replSet rs1 --auth
+    healthcheck:
+      test: ["CMD", "mongo", "--eval", "db.adminCommand('ping')"]
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+      interval: 5s
+
+  # Redis instances
+  redis-src:
+    image: redis:7.0
+    container_name: redis-src-ci
+    ports:
+      - "6380:6379"
+    command: redis-server --requirepass 123456 --save 60 1 --loglevel warning
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "123456", "ping"]
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+      interval: 3s
+
+  redis-dst:
+    image: redis:7.0
+    container_name: redis-dst-ci
+    ports:
+      - "6390:6379"
+    command: redis-server --requirepass 123456 --save 60 1 --loglevel warning
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "123456", "ping"]
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+      interval: 3s
+
+  # ClickHouse for testing
+  clickhouse:
+    image: yandex/clickhouse-server:21.8
+    container_name: clickhouse-ci
+    environment:
+      CLICKHOUSE_USER: admin
+      CLICKHOUSE_PASSWORD: 123456
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
+    ports:
+      - "8123:8123"
+      - "9000:9000"
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8123/ping"]
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+      interval: 5s
+
+networks:
+  default:
+    name: ape-dts-ci-network

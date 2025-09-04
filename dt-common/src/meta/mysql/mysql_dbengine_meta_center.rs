@@ -42,7 +42,7 @@ impl MysqlDbEngineMetaCenter {
             &db,
             &ddl_data.query
         );
-        // create a tmp connection with databse since sqlx conn pool does NOT support `USE db`
+        // create a tmp connection with database since sqlx conn pool does NOT support `USE db`
         let mut conn_options = MySqlConnectOptions::from_str(&self.url)?;
         if !db.is_empty() {
             match ddl_data.ddl_type {

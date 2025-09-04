@@ -24,7 +24,7 @@ mod test {
     //     TestBase::run_check_test("mysql_to_mysql/check/basic_struct_test").await;
     // }
 
-    // this should run seperately from other tests since it has a different check log dir,
+    // this should run separately from other tests since it has a different check log dir,
     // all tests will be run in one progress, the log4rs will only be initialized once, it makes this test fails
     #[tokio::test]
     #[ignore]

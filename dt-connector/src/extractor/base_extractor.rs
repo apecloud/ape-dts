@@ -87,7 +87,7 @@ impl BaseExtractor {
         if let Some(data_marker) = &mut self.data_marker {
             if dt_data.is_begin() || dt_data.is_commit() {
                 data_marker.reset();
-            } else if data_marker.reseted {
+            } else if data_marker.reset {
                 if data_marker.is_marker_info(dt_data) {
                     data_marker.refresh(dt_data);
                     // after data_marker refreshed, discard the marker data itself
@@ -95,10 +95,10 @@ impl BaseExtractor {
                 } else {
                     // the first dml/ddl after the last transaction commit is NOT marker_info,
                     // then current transaction should NOT be filtered by default.
-                    // set reseted = false, just to make sure is_marker_info won't be called again
+                    // set reset = false, just to make sure is_marker_info won't be called again
                     // in current transaction
                     data_marker.filter = false;
-                    data_marker.reseted = false;
+                    data_marker.reset = false;
                 }
             }
 
@@ -248,7 +248,7 @@ impl BaseExtractor {
     }
 
     pub async fn wait_task_finish(&mut self) -> anyhow::Result<()> {
-        // wait all data to be transfered
+        // wait all data to be transferred
         while !self.buffer.is_empty() {
             TimeUtil::sleep_millis(1).await;
         }

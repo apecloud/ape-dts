@@ -37,9 +37,9 @@ impl Parallelizer for TableParallelizer {
             bytes: data.iter().map(|v| v.data_size as u64).sum(),
         };
 
-        let sub_datas = Self::partition_dml(data)?;
+        let sub_data = Self::partition_dml(data)?;
         self.base_parallelizer
-            .sink_dml(sub_datas, sinkers, self.parallel_size, false)
+            .sink_dml(sub_data, sinkers, self.parallel_size, false)
             .await?;
 
         Ok(data_size)
@@ -55,9 +55,9 @@ impl Parallelizer for TableParallelizer {
             bytes: data.iter().map(|v| v.get_data_size()).sum(),
         };
 
-        let sub_datas = Self::partition_raw(data)?;
+        let sub_data = Self::partition_raw(data)?;
         self.base_parallelizer
-            .sink_raw(sub_datas, sinkers, self.parallel_size, false)
+            .sink_raw(sub_data, sinkers, self.parallel_size, false)
             .await?;
 
         Ok(data_size)

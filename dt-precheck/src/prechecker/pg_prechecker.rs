@@ -339,7 +339,7 @@ impl Prechecker for PostgresqlPrechecker {
                         || c.constraint_type == ConstraintTypeEnum::Unique.to_str().unwrap()
                     {
                         has_pkuk_tables.insert(schema_table_name);
-                    } else if c.constraint_type == ConstraintTypeEnum::Foregin.to_str().unwrap()
+                    } else if c.constraint_type == ConstraintTypeEnum::Foreign.to_str().unwrap()
                         && self
                             .fetcher
                             .filter

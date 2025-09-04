@@ -305,7 +305,7 @@ impl FoxlakePusher {
                         match Self::get_col_value(row_data, col) {
                             Some(ColValue::Decimal(v)) => {
                                 let decimal = Decimal::from_str(v)
-                                    .with_context(|| format!("invalide decimal: {}", v))?;
+                                    .with_context(|| format!("invalid decimal: {}", v))?;
                                 field_data.write_i128(decimal.mantissa())
                             }
                             _ => field_data.write_null(),

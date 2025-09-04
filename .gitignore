@@ -33,3 +33,8 @@ Session.vim
 /**/pkg/*
 
 /release
+
+## AI
+.cursor
+.claude
+context_portal

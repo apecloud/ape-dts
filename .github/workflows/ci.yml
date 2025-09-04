@@ -1,0 +1,133 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+      - "LICENSE*"
+      - "**/*.png"
+      - "**/*.jpg"
+      - "**/*.svg"
+  pull_request:
+    branches: [main]
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+      - "LICENSE*"
+      - "**/*.png"
+      - "**/*.jpg"
+      - "**/*.svg"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  lint:
+    name: Lint & Static Checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@1.85.0
+        with:
+          components: rustfmt, clippy
+
+      - name: Setup Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          # Use a unified cache key to allow sharing across jobs
+          key: lint-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Check formatting (rustfmt)
+        id: fmt
+        run: cargo fmt --all --check
+
+      - name: Run lint checks (clippy)
+        id: lint
+        # Assuming 'make lint' runs 'cargo clippy'
+        run: make lint
+
+      # - name: Check for typos
+      #   id: typos
+      #   # Assuming 'make typos' runs the typos checker
+      #   run: make typos
+
+      - name: Run cargo check
+        id: check
+        run: cargo check --workspace --all-targets --all-features
+
+      - name: Summarize lint issues
+        if: always()
+        run: |
+          echo "## 🔍 Lint & Static Check Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # Overall status check
+          if [ "${{ steps.fmt.outcome }}" == "success" ] && \
+             [ "${{ steps.lint.outcome }}" == "success" ] && \
+             [ "${{ steps.check.outcome }}" == "success" ]; then
+            echo "✅ **All checks passed!**" >> $GITHUB_STEP_SUMMARY
+            exit 0
+          fi
+
+          echo "❌ **One or more checks failed.**" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # Individual check results
+          [ "${{ steps.fmt.outcome }}" == "failure" ] && echo "❌ **rustfmt:** Code formatting issues detected." >> $GITHUB_STEP_SUMMARY
+          [ "${{ steps.lint.outcome }}" == "failure" ] && echo "❌ **Clippy:** Code quality issues detected." >> $GITHUB_STEP_SUMMARY
+          [ "${{ steps.check.outcome }}" == "failure" ] && echo "❌ **cargo check:** Compilation errors detected." >> $GITHUB_STEP_SUMMARY
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "📋 **Next steps:** Review the logs for details and correct the identified issues." >> $GITHUB_STEP_SUMMARY
+
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@1.85.0
+
+      - name: Setup Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          # Use a unified cache key to allow sharing across jobs
+          key: test-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          # Also allow restoring from the lint cache if available
+          restore-keys: |
+            lint-${{ runner.os }}-
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
+
+      - name: Run unit tests with nextest
+        run: |
+          cargo nextest run \
+            --workspace \
+            --exclude dt-tests \
+            --lib --bins \
+            --no-fail-fast
+
+      - name: Run doc tests
+        run: cargo test --workspace --doc --exclude dt-tests

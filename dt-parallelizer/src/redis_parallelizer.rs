@@ -57,9 +57,9 @@ impl Parallelizer for RedisParallelizer {
             }
         }
 
-        let mut node_datas = Vec::new();
+        let mut node_data_items = Vec::new();
         for _ in 0..sinkers.len() {
-            node_datas.push(Vec::new());
+            node_data_items.push(Vec::new());
         }
 
         // for redis cluster
@@ -87,7 +87,7 @@ impl Parallelizer for RedisParallelizer {
             // example: SWAPDB 0 1
             // sink to all nodes
             if slots.is_empty() {
-                for node_data in node_datas.iter_mut() {
+                for node_data in node_data_items.iter_mut() {
                     node_data.push(dt_item.clone());
                 }
                 continue;
@@ -96,12 +96,12 @@ impl Parallelizer for RedisParallelizer {
             // find the dst node for entry by slot
             let node = *self.slot_node_map.get(&slots[0]).unwrap();
             let sinker_index = *self.node_sinker_index_map.get(node).unwrap();
-            node_datas[sinker_index].push(dt_item);
+            node_data_items[sinker_index].push(dt_item);
         }
 
         let mut futures = Vec::new();
-        for sinker in sinkers.iter().take(node_datas.len()) {
-            let node_data = node_datas.remove(0);
+        for sinker in sinkers.iter().take(node_data_items.len()) {
+            let node_data = node_data_items.remove(0);
             let sinker = sinker.clone();
             let future = tokio::spawn(async move {
                 sinker

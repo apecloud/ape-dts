@@ -84,7 +84,7 @@ impl RdbMerger {
             }
 
             RowType::Update => {
-                // if uk change found in any row_data, for safety, all following row_datas won't be merged
+                // if uk change found in any row_data, for safety, all following row_data won't be merged
                 if Self::check_uk_changed(tb_meta, &row_data) {
                     merged.unmerged_rows.push(row_data);
                     return Ok(());

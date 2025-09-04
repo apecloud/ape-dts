@@ -3,6 +3,7 @@
 Refer to [config details](/docs/en/config.md) for explanations of common fields.
 
 # Struct
+
 ```
 [extractor]
 extract_type=struct
@@ -41,19 +42,20 @@ checkpoint_interval_secs=10
 buffer_size=100
 ```
 
-- [fiter]
+- [filter]
 
-| Config | Description | Example | Default |
-| :-------- | :-------- | :-------- | :-------- |
+| Config          | Description        | Example   | Default   |
+| :-------------- | :----------------- | :-------- | :-------- |
 | conflict_policy | interrupt / ignore | interrupt | interrupt |
 
 - [sinker]
 
-| Config | Description | Example | Default |
-| :-------- | :-------- | :-------- | :-------- |
-| do_structures |  one or multiple in [database,table,constraint,sequence,comment,index]| database,table | *, which means all |
+| Config        | Description                                                           | Example        | Default             |
+| :------------ | :-------------------------------------------------------------------- | :------------- | :------------------ |
+| do_structures | one or multiple in [database,table,constraint,sequence,comment,index] | database,table | \*, which means all |
 
 # Snapshot
+
 ```
 [extractor]
 db_type=mysql
@@ -95,6 +97,7 @@ log_dir=./logs
 ```
 
 # CDC
+
 ```
 [extractor]
 db_type=mysql
@@ -139,13 +142,14 @@ log4rs_file=./log4rs.yaml
 
 - [extractor]
 
-| Config | Description | Example | Default |
-| :-------- | :-------- | :-------- | :-------- |
-| binlog_filename | the starting binlog file, if empty,  will pull binlog from the last position of the last file | mysql-bin.000035 | empty |
-| binlog_position | the starting position in binlog_file to pull binlog, only works when binlog_filename is NOT empty | 5299302 | 0 |
-| server_id | the identifier of current ape-dts instance in the MySQL replication group, with a value from 1 to 2^32 - 1, required  | 2000 | - |
+| Config          | Description                                                                                                          | Example          | Default |
+| :-------------- | :------------------------------------------------------------------------------------------------------------------- | :--------------- | :------ |
+| binlog_filename | the starting binlog file, if empty, will pull binlog from the last position of the last file                         | mysql-bin.000035 | empty   |
+| binlog_position | the starting position in binlog_file to pull binlog, only works when binlog_filename is NOT empty                    | 5299302          | 0       |
+| server_id       | the identifier of current ape-dts instance in the MySQL replication group, with a value from 1 to 2^32 - 1, required | 2000             | -       |
 
 # CDC with gtid
+
 ```
 [extractor]
 db_type=mysql
@@ -190,10 +194,10 @@ log4rs_file=./log4rs.yaml
 
 - [extractor]
 
-| Config | Description | Example | Default |
-| :-------- | :-------- | :-------- | :-------- |
-| gtid_enabled | use Gtid_Set to pull binlog | true | false |
-| gtid_set | the starting Gtid_Set to pull binlog from | 6d3960f6-4b36-11ef-8614-0242ac110002:1-10 | empty, which means from the latest Executed_Gtid_Set |
+| Config       | Description                               | Example                                   | Default                                              |
+| :----------- | :---------------------------------------- | :---------------------------------------- | :--------------------------------------------------- |
+| gtid_enabled | use Gtid_Set to pull binlog               | true                                      | false                                                |
+| gtid_set     | the starting Gtid_Set to pull binlog from | 6d3960f6-4b36-11ef-8614-0242ac110002:1-10 | empty, which means from the latest Executed_Gtid_Set |
 
 # CDC with ddl capture
 
@@ -206,11 +210,12 @@ do_ddls=create_database,drop_database,alter_database,create_table,alter_table,dr
 
 - [filter]
 
-| Config | Description | Example | Default |
-| :-------- | :-------- | :-------- | :-------- |
-| do_ddls | the ddl types to capture and sync to target, it shoud be one or more among "create_database, drop_database, alter_database, create_table, alter_table, drop_table, create_index, drop_index, truncate_table, rename_table" | create_table,alter_table,drop_table | empty, which means ignore all ddls |
+| Config  | Description                                                                                                                                                                                                                 | Example                             | Default                            |
+| :------ | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :---------------------------------- | :--------------------------------- |
+| do_ddls | the ddl types to capture and sync to target, it should be one or more among "create_database, drop_database, alter_database, create_table, alter_table, drop_table, create_index, drop_index, truncate_table, rename_table" | create_table,alter_table,drop_table | empty, which means ignore all ddls |
 
 # Struct check
+
 ```
 [extractor]
 db_type=mysql
@@ -251,6 +256,7 @@ log_dir=./logs
 - the output will be in {log_dir}/check/
 
 # Data check
+
 ```
 [extractor]
 db_type=mysql
@@ -293,6 +299,7 @@ log_dir=./logs
 - the output will be in {log_dir}/check/
 
 # Data revise
+
 ```
 [extractor]
 db_type=mysql
@@ -335,11 +342,12 @@ log_dir=./logs
 
 - [extractor]
 
-| Config | Description | Example | Default |
-| :-------- | :-------- | :-------- | :-------- |
-| check_log_dir | the directory of check log, required | ./check_task/logs/check | - |
+| Config        | Description                          | Example                 | Default |
+| :------------ | :----------------------------------- | :---------------------- | :------ |
+| check_log_dir | the directory of check log, required | ./check_task/logs/check | -       |
 
 # Data review
+
 ```
 [extractor]
 db_type=mysql
@@ -383,6 +391,7 @@ log_dir=./logs
 - the output will be in {log_dir}/check/
 
 # CDC to sqls
+
 ```
 [extractor]
 db_type=mysql
@@ -419,6 +428,7 @@ log_dir=./logs
 - the output will be in {log_dir}/sql.log
 
 # CDC to reverse sqls
+
 ```
 [extractor]
 db_type=mysql
