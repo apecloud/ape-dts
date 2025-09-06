@@ -53,6 +53,11 @@ impl Extractor for PgSnapshotExtractor {
 
 impl PgSnapshotExtractor {
     async fn extract_internal(&mut self) -> anyhow::Result<()> {
+        if !self.check_if_has_data().await? {
+            log_info!(r#"no data found in "{}"."{}""#, self.schema, self.tb);
+            return Ok(());
+        }
+
         let tb_meta = self
             .meta_manager
             .get_tb_meta(&self.schema, &self.tb)
@@ -173,6 +178,15 @@ impl PgSnapshotExtractor {
             extracted_count
         );
         Ok(())
+    }
+
+    async fn check_if_has_data(&mut self) -> anyhow::Result<bool> {
+        let sql = format!(r#"SELECT 1 FROM "{}"."{}" LIMIT 1"#, self.schema, self.tb);
+        let mut rows = sqlx::query(&sql).fetch(&self.conn_pool);
+        if let Some(_row) = rows.try_next().await? {
+            return Ok(true);
+        }
+        Ok(false)
     }
 
     fn build_extract_sql(
