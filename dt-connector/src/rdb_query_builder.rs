@@ -566,13 +566,17 @@ impl RdbQueryBuilder<'_> {
     fn get_placeholder(&self, index: usize, col: &str) -> anyhow::Result<String> {
         if let Some(tb_meta) = self.pg_tb_meta {
             let col_type = tb_meta.get_col_type(col)?;
-            // TODO: workaround for types like bit(3)
-            let col_type_name = if col_type.alias == "bit" {
-                "varbit"
+            // workaround for types like bit(3)
+            if col_type.alias == "bytea" {
+                return Ok(format!("${}", index));
             } else {
-                &col_type.alias
-            };
-            return Ok(format!("${}::{}", index, col_type_name));
+                let col_type_name = if col_type.alias == "bit" {
+                    "varbit"
+                } else {
+                    &col_type.alias
+                };
+                return Ok(format!("${}::{}", index, col_type_name));
+            }
         }
 
         Ok("?".to_string())

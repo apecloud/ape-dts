@@ -124,6 +124,7 @@ impl PgSinker {
             let query_builder = RdbQueryBuilder::new_for_pg(tb_meta, None);
 
             let query_info = query_builder.get_query_info(row_data, self.replace)?;
+            log::info!("query_info: {}", query_info.sql);
             let query = query_builder.create_pg_query(&query_info);
             query
                 .execute(tx.as_mut())
@@ -179,6 +180,7 @@ impl PgSinker {
 
         let (query_info, data_size) =
             query_builder.get_batch_insert_query(data, start_index, batch_size, self.replace)?;
+        log::info!("batch query_info: {}", query_info.sql);
         let query = query_builder.create_pg_query(&query_info);
 
         let exec_error = if let Some(sql) = self.get_data_marker_sql() {
