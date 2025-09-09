@@ -197,10 +197,7 @@ impl RdbFilter {
         }
 
         let mut pattern = pattern.to_string();
-        if pattern.starts_with("r#") {
-            // support raw regex strings starting with `r#`.
-            pattern = pattern.trim_start_matches("r#").to_string();
-        } else {
+        if !pattern.starts_with("r#") {
             // only support 2 wildchars : '*' and '?', '.' is NOT supported
             // * : matching multiple chars
             // ? : for matching 0-1 chars
@@ -208,6 +205,9 @@ impl RdbFilter {
                 .replace('.', "\\.")
                 .replace('*', ".*")
                 .replace('?', ".?");
+        } else {
+            // support raw regex strings starting with `r#`.
+            pattern.drain(..2);
         }
         pattern = format!(r"^{}$", pattern);
 
