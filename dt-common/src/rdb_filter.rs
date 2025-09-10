@@ -197,7 +197,7 @@ impl RdbFilter {
         }
 
         let mut pattern = pattern.to_string();
-        if !pattern.starts_with("r#") {
+        if !pattern.starts_with("r#") || !pattern.ends_with("#") {
             // only support 2 wildchars : '*' and '?', '.' is NOT supported
             // * : matching multiple chars
             // ? : for matching 0-1 chars
@@ -206,8 +206,11 @@ impl RdbFilter {
                 .replace('*', ".*")
                 .replace('?', ".?");
         } else {
-            // support raw regex strings starting with `r#`.
+            // support raw regex expression.
+            // a raw regex expression string should be wrapped by `r#` and `#`.
+            // eg: `r#.*#` indicates the regex expression `.*`
             pattern.drain(..2);
+            pattern.pop();
         }
         pattern = format!(r"^{}$", pattern);
 
@@ -333,19 +336,19 @@ mod tests {
         assert!(!RdbFilter::match_token("h.llo", "h.lo", &escape_pairs));
         assert!(!RdbFilter::match_token("h.llo", "hello", &escape_pairs));
 
-        // match with raw regex strings starting with `r#`
-        assert!(RdbFilter::match_token("r#hello", "hello", &escape_pairs));
-        assert!(RdbFilter::match_token("r#he?llo", "hllo", &escape_pairs));
-        assert!(RdbFilter::match_token("r#he?llo", "hello", &escape_pairs));
-        assert!(RdbFilter::match_token("r#he*llo", "hllo", &escape_pairs));
+        // match with `r#` and `#`
+        assert!(RdbFilter::match_token("r#hello#", "hello", &escape_pairs));
+        assert!(RdbFilter::match_token("r#he?llo#", "hllo", &escape_pairs));
+        assert!(RdbFilter::match_token("r#he?llo#", "hello", &escape_pairs));
+        assert!(RdbFilter::match_token("r#he*llo#", "hllo", &escape_pairs));
         assert!(RdbFilter::match_token(
-            "r#he*llo",
+            "r#he*llo#",
             "heeeeeeeello",
             &escape_pairs
         ));
-        assert!(RdbFilter::match_token("r#h.?llo", "htllo", &escape_pairs));
+        assert!(RdbFilter::match_token("r#h.?llo#", "htllo", &escape_pairs));
         assert!(RdbFilter::match_token(
-            "r#h.*llo",
+            "r#h.*llo#",
             "htestllo",
             &escape_pairs
         ));
@@ -401,56 +404,68 @@ mod tests {
         assert!(!RdbFilter::match_token("`h.llo`", "`h.lo`", &escape_pairs));
         assert!(!RdbFilter::match_token("`h.llo`", "`hello`", &escape_pairs));
 
-        // match with strings starting with `r#`, should also be exactly match
+        // match with `r#` and `#`, should also be exactly match
         assert!(RdbFilter::match_token(
-            "`r#hello`",
-            "r#hello",
+            "`r#hello#`",
+            "r#hello#",
             &escape_pairs
         ));
-        assert!(!RdbFilter::match_token("`r#hello`", "hello", &escape_pairs));
-
-        assert!(RdbFilter::match_token(
-            "`r#he?llo`",
-            "r#he?llo",
-            &escape_pairs
-        ));
-        assert!(!RdbFilter::match_token("`r#he?llo`", "hllo", &escape_pairs));
         assert!(!RdbFilter::match_token(
-            "`r#he?llo`",
+            "`r#hello#`",
             "hello",
             &escape_pairs
         ));
 
         assert!(RdbFilter::match_token(
-            "`r#he*llo`",
-            "r#he*llo",
+            "`r#he?llo#`",
+            "r#he?llo#",
             &escape_pairs
         ));
-        assert!(!RdbFilter::match_token("`r#he*llo`", "hllo", &escape_pairs));
         assert!(!RdbFilter::match_token(
-            "`r#he*llo`",
+            "`r#he?llo#`",
+            "hllo",
+            &escape_pairs
+        ));
+        assert!(!RdbFilter::match_token(
+            "`r#he?llo#`",
+            "hello",
+            &escape_pairs
+        ));
+
+        assert!(RdbFilter::match_token(
+            "`r#he*llo#`",
+            "r#he*llo#",
+            &escape_pairs
+        ));
+        assert!(!RdbFilter::match_token(
+            "`r#he*llo#`",
+            "hllo",
+            &escape_pairs
+        ));
+        assert!(!RdbFilter::match_token(
+            "`r#he*llo#`",
             "heeeeeeeello",
             &escape_pairs
         ));
 
         assert!(RdbFilter::match_token(
-            "`r#h.?llo`",
-            "r#h.?llo",
+            "`r#h.?llo#`",
+            "r#h.?llo#",
             &escape_pairs
         ));
         assert!(!RdbFilter::match_token(
-            "`r#h.?llo`",
+            "`r#h.?llo#`",
             "htllo",
             &escape_pairs
         ));
 
         assert!(RdbFilter::match_token(
-            "`r#h.*llo`",
-            "r#h.*llo",
+            "`r#h.*llo#`",
+            "r#h.*llo#",
             &escape_pairs
         ));
         assert!(!RdbFilter::match_token(
-            "`r#h.*llo`",
+            "`r#h.*llo#`",
             "htestllo",
             &escape_pairs
         ));
@@ -542,68 +557,68 @@ mod tests {
             &escape_pairs
         ));
 
-        // match with raw regex strings starting with `r#`, should also be exactly match
+        // match with `r#` and `#`, should also be exactly match
         assert!(RdbFilter::match_token(
-            r#""r#hello""#,
-            r#""r#hello""#,
+            r#""r#hello#""#,
+            r#""r#hello#""#,
             &escape_pairs
         ));
         assert!(!RdbFilter::match_token(
-            r#""r#hello""#,
+            r#""r#hello#""#,
             "hello",
             &escape_pairs
         ));
 
         assert!(RdbFilter::match_token(
-            r#""r#he?llo""#,
-            r#""r#he?llo""#,
+            r#""r#he?llo#""#,
+            r#""r#he?llo#""#,
             &escape_pairs
         ));
         assert!(!RdbFilter::match_token(
-            r#""r#he?llo""#,
+            r#""r#he?llo#""#,
             "hllo",
             &escape_pairs
         ));
         assert!(!RdbFilter::match_token(
-            r#""r#he?llo""#,
+            r#""r#he?llo#""#,
             "hello",
             &escape_pairs
         ));
 
         assert!(RdbFilter::match_token(
-            r#""r#he*llo""#,
-            r#""r#he*llo""#,
+            r#""r#he*llo#""#,
+            r#""r#he*llo#""#,
             &escape_pairs
         ));
         assert!(!RdbFilter::match_token(
-            r#""r#he*llo""#,
+            r#""r#he*llo#""#,
             "hllo",
             &escape_pairs
         ));
         assert!(!RdbFilter::match_token(
-            r#""r#he*llo""#,
+            r#""r#he*llo#""#,
             "heeeeeello",
             &escape_pairs
         ));
 
         assert!(RdbFilter::match_token(
-            r#""r#h.?llo""#,
-            r#""r#h.?llo""#,
+            r#""r#h.?llo#""#,
+            r#""r#h.?llo#""#,
             &escape_pairs
         ));
         assert!(!RdbFilter::match_token(
-            r#""r#h.?llo""#,
+            r#""r#h.?llo#""#,
             "htllo",
             &escape_pairs
         ));
 
         assert!(RdbFilter::match_token(
-            r#""r#h.*llo""#,
-            r#""r#h.*llo""#,
+            r#""r#h.*llo#""#,
+            r#""r#h.*llo#""#,
             &escape_pairs
         ));
         assert!(!RdbFilter::match_token(
-            r#""r#h.*llo""#,
+            r#""r#h.*llo#""#,
             "htestllo",
             &escape_pairs
         ));

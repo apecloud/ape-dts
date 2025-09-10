@@ -4,6 +4,8 @@ use crate::{error::Error, utils::sql_util::SqlUtil};
 
 use super::config_enums::DbType;
 
+const REGEX_ESCAPE_PAIR: (&str, char) = ("r#", '#');
+
 pub struct ConfigTokenParser {}
 
 impl ConfigTokenParser {
@@ -68,9 +70,23 @@ impl ConfigTokenParser {
                     start_index,
                     (*escape_left, *escape_right),
                 );
+            } else if Self::match_prefix(chars, start_index, REGEX_ESCAPE_PAIR.0) {
+                return Self::read_token_with_regex_escape(chars, start_index);
             }
         }
         Self::read_token_to_delimiter(chars, start_index, delimiters)
+    }
+
+    fn match_prefix(chars: &[char], start_index: usize, prefix: &str) -> bool {
+        for (i, c) in prefix.chars().enumerate() {
+            if start_index + i >= chars.len() {
+                return false;
+            }
+            if chars[start_index + i] != c {
+                return false;
+            }
+        }
+        true
     }
 
     fn read_token_to_delimiter(
@@ -122,6 +138,22 @@ impl ConfigTokenParser {
         let next_index = start_index + read_count;
         (token, next_index)
     }
+
+    fn read_token_with_regex_escape(chars: &[char], start_index: usize) -> (String, usize) {
+        let mut token = String::new();
+        let prefix_len = REGEX_ESCAPE_PAIR.0.len();
+        let mut read_count = 0;
+        for c in chars.iter().skip(start_index) {
+            token.push(*c);
+            read_count += 1;
+            if read_count > prefix_len && *c == REGEX_ESCAPE_PAIR.1 {
+                break;
+            }
+        }
+
+        let next_index = start_index + read_count;
+        (token, next_index)
+    }
 }
 
 #[cfg(test)]
@@ -131,12 +163,12 @@ mod tests {
 
     #[test]
     fn test_parse_mysql_filter_config_tokens() {
-        let config = r#"db_1.tb_1,`db.2`.`tb.2`,`db"3`.tb_3,db_4.`tb"4`,db_5.*,`db.6`.*,db_7*.*,`db.8*`.*,*.*,`*`.`*`"#;
+        let config = r#"db_1.tb_1,`db.2`.`tb.2`,`db"3`.tb_3,db_4.`tb"4`,db_5.*,`db.6`.*,db_7*.*,`db.8*`.*,*.*,`*`.`*`,r#.*#.r#.?#,`r#.*#`.`r#.?#`"#;
         let delimiters = vec!['.', ','];
         let escape_pairs = vec![('`', '`')];
 
         let tokens = ConfigTokenParser::parse(config, &delimiters, &escape_pairs);
-        assert_eq!(tokens.len(), 20);
+        assert_eq!(tokens.len(), 24);
         assert_eq!(tokens[0], "db_1");
         assert_eq!(tokens[1], "tb_1");
         assert_eq!(tokens[2], "`db.2`");
@@ -157,6 +189,10 @@ mod tests {
         assert_eq!(tokens[17], "*");
         assert_eq!(tokens[18], "`*`");
         assert_eq!(tokens[19], "`*`");
+        assert_eq!(tokens[20], "r#.*#");
+        assert_eq!(tokens[21], "r#.?#");
+        assert_eq!(tokens[22], "`r#.*#`");
+        assert_eq!(tokens[23], "`r#.?#`");
     }
 
     #[test]
