@@ -4,8 +4,11 @@ use super::{base_test_runner::BaseTestRunner, redis_cluster_connection::RedisClu
 use anyhow::bail;
 use dt_common::{
     config::{
-        config_enums::DbType, config_token_parser::ConfigTokenParser,
-        extractor_config::ExtractorConfig, sinker_config::SinkerConfig, task_config::TaskConfig,
+        config_enums::DbType,
+        config_token_parser::{ConfigTokenParser, TokenEscapePair},
+        extractor_config::ExtractorConfig,
+        sinker_config::SinkerConfig,
+        task_config::TaskConfig,
     },
     error::Error,
     rdb_filter::RdbFilter,
@@ -108,7 +111,9 @@ impl RedisTestRunner {
         let heartbeat_db_key = ConfigTokenParser::parse(
             &heartbeat_key,
             &['.'],
-            &SqlUtil::get_escape_pairs(&DbType::Redis),
+            &TokenEscapePair::char_to_token_escape_pairs(&SqlUtil::get_escape_pairs(
+                &DbType::Redis,
+            )),
         );
         let db_id: i64 = heartbeat_db_key[0].parse().unwrap();
         let key = &heartbeat_db_key[1];

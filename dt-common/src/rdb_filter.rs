@@ -8,7 +8,9 @@ use serde::{Deserialize, Serialize};
 use crate::meta::dcl_meta::dcl_type::DclType;
 use crate::{
     config::{
-        config_enums::DbType, config_token_parser::ConfigTokenParser, filter_config::FilterConfig,
+        config_enums::DbType,
+        config_token_parser::{ConfigTokenParser, TokenEscapePair},
+        filter_config::FilterConfig,
     },
     meta::{
         ddl_meta::ddl_type::DdlType, row_type::RowType,
@@ -21,6 +23,8 @@ type IgnoreCols = HashMap<(String, String), HashSet<String>>;
 type WhereConditions = HashMap<(String, String), String>;
 
 const JSON_PREFIX: &str = "json:";
+
+const REGEX_ESCAPE_PAIR: (&str, &str) = ("r#", "#");
 
 #[derive(Debug, Clone)]
 pub struct RdbFilter {
@@ -197,7 +201,7 @@ impl RdbFilter {
         }
 
         let mut pattern = pattern.to_string();
-        if !pattern.starts_with("r#") || !pattern.ends_with("#") {
+        if !pattern.starts_with(REGEX_ESCAPE_PAIR.0) || !pattern.ends_with(REGEX_ESCAPE_PAIR.1) {
             // only support 2 wildchars : '*' and '?', '.' is NOT supported
             // * : matching multiple chars
             // ? : for matching 0-1 chars
@@ -207,7 +211,7 @@ impl RdbFilter {
                 .replace('?', ".?");
         } else {
             // support raw regex expression.
-            // a raw regex expression string should be wrapped by `r#` and `#`.
+            // a raw regex expression string should be enclosed by `r#` and `#` as escape pair
             // eg: `r#.*#` indicates the regex expression `.*`
             pattern.drain(..2);
             pattern.pop();
@@ -242,7 +246,16 @@ impl RdbFilter {
 
     fn parse_config(config_str: &str, db_type: &DbType) -> anyhow::Result<Vec<String>> {
         let delimiters = vec![',', '.'];
-        ConfigTokenParser::parse_config(config_str, db_type, &delimiters)
+        let custom_escape_pairs = vec![TokenEscapePair::String((
+            REGEX_ESCAPE_PAIR.0.to_string(),
+            REGEX_ESCAPE_PAIR.1.to_string(),
+        ))];
+        ConfigTokenParser::parse_config(
+            config_str,
+            db_type,
+            &delimiters,
+            Some(&custom_escape_pairs),
+        )
     }
 
     fn parse_ignore_cols(config_str: &str) -> anyhow::Result<IgnoreCols> {
