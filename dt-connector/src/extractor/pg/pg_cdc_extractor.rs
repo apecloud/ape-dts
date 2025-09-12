@@ -116,7 +116,8 @@ impl PgCdcExtractor {
         tokio::pin!(stream);
 
         // setup ddl capture
-        let ddl_meta = ConfigTokenParser::parse_config(&self.ddl_meta_tb, &DbType::Pg, &['.'])?;
+        let ddl_meta =
+            ConfigTokenParser::parse_config(&self.ddl_meta_tb, &DbType::Pg, &['.'], None)?;
         if ddl_meta.len() == 2 {
             self.filter.add_do_tb(&ddl_meta[0], &ddl_meta[1]);
         }

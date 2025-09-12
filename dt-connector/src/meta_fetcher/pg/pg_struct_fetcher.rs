@@ -1039,7 +1039,7 @@ impl PgStructFetcher {
             .trim_end_matches('\'');
 
         let escape_pair = SqlUtil::get_escape_pairs(&DbType::Pg)[0];
-        if let Ok(tokens) = ConfigTokenParser::parse_config(value, &DbType::Pg, &['.']) {
+        if let Ok(tokens) = ConfigTokenParser::parse_config(value, &DbType::Pg, &['.'], None) {
             if tokens.len() == 1 {
                 return (String::new(), SqlUtil::unescape(&tokens[0], &escape_pair));
             } else if tokens.len() == 2 {
