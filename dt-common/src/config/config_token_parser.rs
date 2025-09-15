@@ -4,22 +4,10 @@ use crate::{error::Error, utils::sql_util::SqlUtil};
 
 use super::config_enums::DbType;
 
+#[derive(Debug, Clone)]
 pub enum TokenEscapePair {
     Char((char, char)),
     String((String, String)),
-}
-
-impl Clone for TokenEscapePair {
-    fn clone(&self) -> Self {
-        match self {
-            TokenEscapePair::Char((escape_left, escape_right)) => {
-                TokenEscapePair::Char((escape_left.clone(), escape_right.clone()))
-            }
-            TokenEscapePair::String((escape_left, escape_right)) => {
-                TokenEscapePair::String((escape_left.clone(), escape_right.clone()))
-            }
-        }
-    }
 }
 
 impl TokenEscapePair {
