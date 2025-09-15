@@ -17,6 +17,7 @@ pub struct PgStructExtractor {
     pub base_extractor: BaseExtractor,
     pub conn_pool: Pool<Postgres>,
     pub schema: String,
+    pub schemas: Vec<String>,
     pub do_global_structs: bool,
     pub filter: RdbFilter,
 }
@@ -24,8 +25,13 @@ pub struct PgStructExtractor {
 #[async_trait]
 impl Extractor for PgStructExtractor {
     async fn extract(&mut self) -> anyhow::Result<()> {
-        log_info!("PgStructExtractor starts, schema: {}", self.schema);
-        self.extract_internal().await?;
+        log_info!(
+            "PgStructExtractor starts, schemas: {}",
+            self.schemas.join(",")
+        );
+        for schema in self.schemas.clone().iter() {
+            self.extract_internal(schema).await?;
+        }
         self.base_extractor.wait_task_finish().await
     }
 
@@ -35,10 +41,10 @@ impl Extractor for PgStructExtractor {
 }
 
 impl PgStructExtractor {
-    pub async fn extract_internal(&mut self) -> anyhow::Result<()> {
+    pub async fn extract_internal(&mut self, schema: &String) -> anyhow::Result<()> {
         let mut pg_fetcher = PgStructFetcher {
             conn_pool: self.conn_pool.to_owned(),
-            schema: self.schema.clone(),
+            schema: schema.clone(),
             filter: Some(self.filter.to_owned()),
         };
 

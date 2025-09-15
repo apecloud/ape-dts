@@ -218,6 +218,25 @@ impl TaskRunner {
                     }
                     extractor_configs
                 }
+                ExtractorConfig::PgStruct {
+                    url,
+                    schema,
+                    batch_size,
+                    ..
+                } => {
+                    let mut extractor_configs = Vec::new();
+                    for (flag, schema_chunk) in schema_chunks.iter().enumerate() {
+                        let extractor_config = ExtractorConfig::PgStruct {
+                            url: url.clone(),
+                            schema: schema.clone(),
+                            schemas: schema_chunk.clone(),
+                            do_global_structs: flag == 0,
+                            batch_size: *batch_size,
+                        };
+                        extractor_configs.push(extractor_config);
+                    }
+                    extractor_configs
+                }
                 _ => vec![],
             };
             for extractor_config in &extractor_configs {
@@ -231,50 +250,24 @@ impl TaskRunner {
                     )
                     .await?;
             }
-        }
-        // TODO: Need to limit resources when starting tasks concurrently at schema level.
-        //       Currently connection count, rate limit, buffer size, etc. are controlled at single task level,
-        //       which in multi-task mode will amplify these resources by at least schema count times
-        for (flag, schema) in schemas.iter().enumerate() {
-            // start a task for each schema
-            let schema_extractor_config = match &self.config.extractor {
-                ExtractorConfig::PgStruct {
-                    url, batch_size, ..
-                } => Some(ExtractorConfig::PgStruct {
-                    url: url.clone(),
-                    schema: schema.clone(),
-                    do_global_structs: flag == 0,
-                    batch_size: *batch_size,
-                }),
-
-                _ => None,
-            };
-
-            if let Some(extractor_config) = schema_extractor_config {
-                self.clone()
-                    .start_single_task(
-                        &extractor_config,
-                        router,
-                        snapshot_resumer,
-                        cdc_resumer,
-                        true,
-                    )
-                    .await?;
-                continue;
-            }
-
-            // find pending tables
-            let tbs = TaskUtil::list_tbs(url, schema, db_type).await?;
-            for tb in tbs.iter() {
-                if snapshot_resumer.check_finished(schema, tb) {
-                    log_info!("schema: {}, tb: {}, already finished", schema, tb);
-                    continue;
+        } else {
+            // TODO: Need to limit resources when starting tasks concurrently at schema level.
+            //       Currently connection count, rate limit, buffer size, etc. are controlled at single task level,
+            //       which in multi-task mode will amplify these resources by at least schema count times
+            for schema in schemas.iter() {
+                // find pending tables
+                let tbs = TaskUtil::list_tbs(url, schema, db_type).await?;
+                for tb in tbs.iter() {
+                    if snapshot_resumer.check_finished(schema, tb) {
+                        log_info!("schema: {}, tb: {}, already finished", schema, tb);
+                        continue;
+                    }
+                    if filter.filter_event(schema, tb, &RowType::Insert) {
+                        log_info!("schema: {}, tb: {}, insert events filtered", schema, tb);
+                        continue;
+                    }
+                    pending_tbs.push_back((schema.to_owned(), tb.to_owned()));
                 }
-                if filter.filter_event(schema, tb, &RowType::Insert) {
-                    log_info!("schema: {}, tb: {}, insert events filtered", schema, tb);
-                    continue;
-                }
-                pending_tbs.push_back((schema.to_owned(), tb.to_owned()));
             }
         }
 

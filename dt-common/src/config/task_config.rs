@@ -235,6 +235,7 @@ impl TaskConfig {
                 ExtractType::Struct => ExtractorConfig::PgStruct {
                     url,
                     schema: String::new(),
+                    schemas: Vec::new(),
                     do_global_structs: false,
                     batch_size: loader.get_with_default(EXTRACTOR, BATCH_SIZE, 1),
                 },

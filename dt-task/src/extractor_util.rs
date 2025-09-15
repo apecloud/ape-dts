@@ -349,8 +349,9 @@ impl ExtractorUtil {
             ExtractorConfig::PgStruct {
                 url,
                 schema,
+                schemas,
                 do_global_structs,
-                batch_size,
+                ..
             } => {
                 // TODO, pass max_connections as parameter
                 let conn_pool =
@@ -358,6 +359,7 @@ impl ExtractorUtil {
                 let extractor = PgStructExtractor {
                     conn_pool,
                     schema,
+                    schemas,
                     do_global_structs,
                     filter,
                     base_extractor,

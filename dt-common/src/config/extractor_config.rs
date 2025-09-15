@@ -15,6 +15,7 @@ pub enum ExtractorConfig {
     PgStruct {
         url: String,
         schema: String,
+        schemas: Vec<String>,
         do_global_structs: bool,
         batch_size: usize,
     },
