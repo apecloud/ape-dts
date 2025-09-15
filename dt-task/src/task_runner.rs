@@ -191,12 +191,12 @@ impl TaskRunner {
             | ExtractorConfig::PgStruct { batch_size, .. } => Some(*batch_size),
             _ => None,
         };
-        if let Some(batch_size) = struct_batch_size {
-            if batch_size <= 0 {
+        if let Some(struct_batch_size) = struct_batch_size {
+            if struct_batch_size == 0 {
                 bail!("batch_size must be greater than 0")
             }
             let schema_chunks: Vec<Vec<String>> = schemas
-                .chunks(batch_size)
+                .chunks(struct_batch_size)
                 .map(|chunk| chunk.to_vec())
                 .collect();
             let extractor_configs: Vec<ExtractorConfig> = match &self.config.extractor {

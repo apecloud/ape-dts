@@ -50,4 +50,10 @@ mod test {
         runner.run_struct_test_without_check().await.unwrap();
         TestBase::run_dcl_check_test("pg_to_pg/struct/rbac_test").await;
     }
+
+    #[tokio::test]
+    #[serial]
+    async fn struct_batch_test() {
+        TestBase::run_pg_struct_test("pg_to_pg/struct/batch_test").await;
+    }
 }

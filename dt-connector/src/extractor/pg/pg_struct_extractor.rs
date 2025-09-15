@@ -29,8 +29,8 @@ impl Extractor for PgStructExtractor {
             "PgStructExtractor starts, schemas: {}",
             self.schemas.join(",")
         );
-        for schema in self.schemas.clone().iter() {
-            self.extract_internal(schema).await?;
+        for (flag, schema) in self.schemas.clone().iter().enumerate() {
+            self.extract_internal(schema, self.do_global_structs && flag == 0).await?;
         }
         self.base_extractor.wait_task_finish().await
     }
@@ -41,7 +41,7 @@ impl Extractor for PgStructExtractor {
 }
 
 impl PgStructExtractor {
-    pub async fn extract_internal(&mut self, schema: &String) -> anyhow::Result<()> {
+    pub async fn extract_internal(&mut self, schema: &String, do_global_structs: bool) -> anyhow::Result<()> {
         let mut pg_fetcher = PgStructFetcher {
             conn_pool: self.conn_pool.to_owned(),
             schema: schema.clone(),
@@ -59,7 +59,7 @@ impl PgStructExtractor {
                 .await?;
         }
 
-        if self.do_global_structs && !self.filter.filter_structure(&StructureType::Rbac) {
+        if do_global_structs && !self.filter.filter_structure(&StructureType::Rbac) {
             // do rbac init
             let rbac_statements = pg_fetcher.get_create_rbac_statements().await?;
             for statement in rbac_statements {
