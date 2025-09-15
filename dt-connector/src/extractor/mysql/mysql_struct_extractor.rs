@@ -18,14 +18,20 @@ pub struct MysqlStructExtractor {
     pub base_extractor: BaseExtractor,
     pub conn_pool: Pool<MySql>,
     pub db: String,
+    pub dbs: Vec<String>,
     pub filter: RdbFilter,
 }
 
 #[async_trait]
 impl Extractor for MysqlStructExtractor {
     async fn extract(&mut self) -> anyhow::Result<()> {
-        log_info!("MysqlStructExtractor starts, schema: {}", self.db,);
-        self.extract_internal().await?;
+        log_info!(
+            "MysqlStructExtractor starts, schemas: {}",
+            self.dbs.join(",")
+        );
+        for db in self.dbs.clone().iter() {
+            self.extract_internal(db).await?;
+        }
         self.base_extractor.wait_task_finish().await
     }
 
@@ -35,11 +41,11 @@ impl Extractor for MysqlStructExtractor {
 }
 
 impl MysqlStructExtractor {
-    pub async fn extract_internal(&mut self) -> anyhow::Result<()> {
+    pub async fn extract_internal(&mut self, db: &String) -> anyhow::Result<()> {
         let meta_manager = MysqlMetaManager::new(self.conn_pool.clone()).await?;
         let mut fetcher = MysqlStructFetcher {
             conn_pool: self.conn_pool.to_owned(),
-            db: self.db.clone(),
+            db: db.clone(),
             filter: Some(self.filter.to_owned()),
             meta_manager,
         };

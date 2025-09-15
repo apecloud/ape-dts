@@ -186,22 +186,65 @@ impl TaskRunner {
             self.task_monitor
                 .add_no_window_metrics(TaskMetricsType::ExtractorPlanRecords, record_count);
         }
-
+        let struct_batch_size = match &self.config.extractor {
+            ExtractorConfig::MysqlStruct { batch_size, .. }
+            | ExtractorConfig::PgStruct { batch_size, .. } => Some(*batch_size),
+            _ => None,
+        };
+        if let Some(batch_size) = struct_batch_size {
+            if batch_size <= 0 {
+                bail!("batch_size must be greater than 0")
+            }
+            let schema_chunks: Vec<Vec<String>> = schemas
+                .chunks(batch_size)
+                .map(|chunk| chunk.to_vec())
+                .collect();
+            let extractor_configs: Vec<ExtractorConfig> = match &self.config.extractor {
+                ExtractorConfig::MysqlStruct {
+                    url,
+                    db,
+                    batch_size,
+                    ..
+                } => {
+                    let mut extractor_configs = Vec::new();
+                    for schema_chunk in schema_chunks.iter() {
+                        let extractor_config = ExtractorConfig::MysqlStruct {
+                            url: url.clone(),
+                            db: db.clone(),
+                            dbs: schema_chunk.clone(),
+                            batch_size: *batch_size,
+                        };
+                        extractor_configs.push(extractor_config);
+                    }
+                    extractor_configs
+                }
+                _ => vec![],
+            };
+            for extractor_config in &extractor_configs {
+                self.clone()
+                    .start_single_task(
+                        extractor_config,
+                        router,
+                        snapshot_resumer,
+                        cdc_resumer,
+                        true,
+                    )
+                    .await?;
+            }
+        }
         // TODO: Need to limit resources when starting tasks concurrently at schema level.
         //       Currently connection count, rate limit, buffer size, etc. are controlled at single task level,
         //       which in multi-task mode will amplify these resources by at least schema count times
         for (flag, schema) in schemas.iter().enumerate() {
             // start a task for each schema
             let schema_extractor_config = match &self.config.extractor {
-                ExtractorConfig::MysqlStruct { url, .. } => Some(ExtractorConfig::MysqlStruct {
-                    url: url.clone(),
-                    db: schema.clone(),
-                }),
-
-                ExtractorConfig::PgStruct { url, .. } => Some(ExtractorConfig::PgStruct {
+                ExtractorConfig::PgStruct {
+                    url, batch_size, ..
+                } => Some(ExtractorConfig::PgStruct {
                     url: url.clone(),
                     schema: schema.clone(),
                     do_global_structs: flag == 0,
+                    batch_size: *batch_size,
                 }),
 
                 _ => None,

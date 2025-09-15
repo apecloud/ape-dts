@@ -176,6 +176,8 @@ impl TaskConfig {
                 ExtractType::Struct => ExtractorConfig::MysqlStruct {
                     url,
                     db: String::new(),
+                    dbs: Vec::new(),
+                    batch_size: loader.get_with_default(EXTRACTOR, BATCH_SIZE, 1),
                 },
 
                 ExtractType::FoxlakeS3 => {
@@ -234,6 +236,7 @@ impl TaskConfig {
                     url,
                     schema: String::new(),
                     do_global_structs: false,
+                    batch_size: loader.get_with_default(EXTRACTOR, BATCH_SIZE, 1),
                 },
 
                 _ => bail! { not_supported_err },
