@@ -18,46 +18,31 @@ impl TokenEscapePair {
     }
 
     pub fn match_escape_left(&self, chars: &[char], start_index: usize) -> bool {
-        match self {
-            TokenEscapePair::Char((escape_left, _)) => {
-                if start_index >= chars.len() {
-                    return false;
-                }
-                if chars[start_index] != *escape_left {
-                    return false;
-                }
-                true
-            }
-            TokenEscapePair::String((escape_left, _)) => {
-                if start_index + escape_left.len() > chars.len() {
-                    return false;
-                }
-                for (i, char_to_match) in escape_left.chars().enumerate() {
-                    if chars[start_index + i] != char_to_match {
-                        return false;
-                    }
-                }
-                true
-            }
-        }
+        self.match_escape_side(chars, start_index, true)
     }
 
     pub fn match_escape_right(&self, chars: &[char], start_index: usize) -> bool {
+        self.match_escape_side(chars, start_index, false)
+    }
+
+    fn match_escape_side(&self, chars: &[char], start_index: usize, is_left: bool) -> bool {
         match self {
-            TokenEscapePair::Char((_, escape_right)) => {
+            TokenEscapePair::Char((escape_left, escape_right)) => {
+                let escape = if is_left { escape_left } else { escape_right };
                 if start_index >= chars.len() {
                     return false;
                 }
-                if chars[start_index] != *escape_right {
+                if chars[start_index] != *escape {
                     return false;
                 }
                 true
             }
-            TokenEscapePair::String((_, escape_right)) => {
-                if start_index + escape_right.len() > chars.len() {
+            TokenEscapePair::String((escape_left, escape_right)) => {
+                let escape = if is_left { escape_left } else { escape_right };
+                if start_index + escape.len() > chars.len() {
                     return false;
                 }
-                for (i, char_to_match) in escape_right.chars().enumerate() {
+                for (i, char_to_match) in escape.chars().enumerate() {
                     if chars[start_index + i] != char_to_match {
                         return false;
                     }
