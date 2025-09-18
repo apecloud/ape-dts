@@ -231,7 +231,7 @@ impl BaseExtractor {
         let schema_tb = ConfigTokenParser::parse(
             heartbeat_tb,
             &['.'],
-            &TokenEscapePair::char_to_token_escape_pairs(&SqlUtil::get_escape_pairs(&db_type)),
+            &TokenEscapePair::from_char_pairs(SqlUtil::get_escape_pairs(&db_type)),
         );
 
         if schema_tb.len() < 2 {

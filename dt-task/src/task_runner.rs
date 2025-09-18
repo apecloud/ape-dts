@@ -767,7 +767,7 @@ impl TaskRunner {
             | ExtractorConfig::PgCdc { heartbeat_tb, .. } => ConfigTokenParser::parse(
                 heartbeat_tb,
                 &['.'],
-                &TokenEscapePair::char_to_token_escape_pairs(&SqlUtil::get_escape_pairs(
+                &TokenEscapePair::from_char_pairs(SqlUtil::get_escape_pairs(
                     &self.config.extractor_basic.db_type,
                 )),
             ),

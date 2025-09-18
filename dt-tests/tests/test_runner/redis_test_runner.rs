@@ -111,9 +111,7 @@ impl RedisTestRunner {
         let heartbeat_db_key = ConfigTokenParser::parse(
             &heartbeat_key,
             &['.'],
-            &TokenEscapePair::char_to_token_escape_pairs(&SqlUtil::get_escape_pairs(
-                &DbType::Redis,
-            )),
+            &TokenEscapePair::from_char_pairs(SqlUtil::get_escape_pairs(&DbType::Redis)),
         );
         let db_id: i64 = heartbeat_db_key[0].parse().unwrap();
         let key = &heartbeat_db_key[1];

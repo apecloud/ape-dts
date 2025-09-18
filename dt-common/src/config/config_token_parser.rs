@@ -10,11 +10,21 @@ pub enum TokenEscapePair {
     String((String, String)),
 }
 
+impl From<(char, char)> for TokenEscapePair {
+    fn from(value: (char, char)) -> Self {
+        Self::Char(value)
+    }
+}
+
+impl From<(String, String)> for TokenEscapePair {
+    fn from(value: (String, String)) -> Self {
+        Self::String(value)
+    }
+}
+
 impl TokenEscapePair {
-    pub fn char_to_token_escape_pairs(e: &[(char, char)]) -> Vec<TokenEscapePair> {
-        e.into_iter()
-            .map(|(escape_left, escape_right)| Self::Char((*escape_left, *escape_right)))
-            .collect()
+    pub fn from_char_pairs(char_pairs: Vec<(char, char)>) -> Vec<Self> {
+        char_pairs.into_iter().map(|e| Self::from(e)).collect()
     }
 
     pub fn match_escape_left(&self, chars: &[char], start_index: usize) -> bool {
@@ -67,9 +77,9 @@ impl ConfigTokenParser {
         }
 
         let escape_pairs = SqlUtil::get_escape_pairs(db_type);
-        let mut token_escape_pairs = TokenEscapePair::char_to_token_escape_pairs(&escape_pairs);
-        if let Some(e) = custom_escape_pairs {
-            token_escape_pairs.extend_from_slice(e);
+        let mut token_escape_pairs = TokenEscapePair::from_char_pairs(escape_pairs.clone());
+        if let Some(pairs) = custom_escape_pairs {
+            token_escape_pairs.extend_from_slice(pairs);
         }
         let tokens = Self::parse(config_str, delimiters, &token_escape_pairs);
         for token in tokens.iter() {

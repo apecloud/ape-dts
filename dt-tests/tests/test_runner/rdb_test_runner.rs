@@ -404,7 +404,7 @@ impl RdbTestRunner {
         let tokens = ConfigTokenParser::parse(
             &heartbeat_tb,
             &['.'],
-            &TokenEscapePair::char_to_token_escape_pairs(&SqlUtil::get_escape_pairs(&db_type)),
+            &TokenEscapePair::from_char_pairs(SqlUtil::get_escape_pairs(&db_type)),
         );
         let db_tb = (tokens[0].clone(), tokens[1].clone());
 
@@ -811,7 +811,7 @@ impl RdbTestRunner {
         let tokens = ConfigTokenParser::parse(
             full_tb_name,
             &['.'],
-            &TokenEscapePair::char_to_token_escape_pairs(&escape_pairs),
+            &TokenEscapePair::from_char_pairs(escape_pairs.clone()),
         );
         let (db, tb) = if tokens.len() > 1 {
             (tokens[0].to_string(), tokens[1].to_string())

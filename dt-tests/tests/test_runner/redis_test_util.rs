@@ -157,7 +157,7 @@ impl RedisTestUtil {
         for arg in ConfigTokenParser::parse(
             cmd,
             &DELIMITERS,
-            &TokenEscapePair::char_to_token_escape_pairs(&self.escape_pairs),
+            &TokenEscapePair::from_char_pairs(self.escape_pairs.clone()),
         ) {
             let mut arg = arg.clone();
             for (left, right) in &self.escape_pairs {
@@ -175,7 +175,7 @@ impl RedisTestUtil {
         let tokens = ConfigTokenParser::parse(
             cmd,
             &DELIMITERS,
-            &TokenEscapePair::char_to_token_escape_pairs(&self.escape_pairs),
+            &TokenEscapePair::from_char_pairs(self.escape_pairs.clone()),
         );
         let mut args = Vec::new();
         for token in tokens.iter() {

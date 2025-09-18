@@ -221,9 +221,7 @@ impl RedisPsyncExtractor {
         let heartbeat_db_key = ConfigTokenParser::parse(
             &self.heartbeat_key,
             &['.'],
-            &TokenEscapePair::char_to_token_escape_pairs(&SqlUtil::get_escape_pairs(
-                &DbType::Redis,
-            )),
+            &TokenEscapePair::from_char_pairs(SqlUtil::get_escape_pairs(&DbType::Redis)),
         );
         let heartbeat_db_id = if heartbeat_db_key.len() == 2 {
             heartbeat_db_key[0].parse()?

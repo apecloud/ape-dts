@@ -246,7 +246,7 @@ impl RdbFilter {
 
     fn parse_config(config_str: &str, db_type: &DbType) -> anyhow::Result<Vec<String>> {
         let delimiters = vec![',', '.'];
-        let custom_escape_pairs = vec![TokenEscapePair::String((
+        let custom_escape_pairs = vec![TokenEscapePair::from((
             REGEX_ESCAPE_PAIR.0.to_string(),
             REGEX_ESCAPE_PAIR.1.to_string(),
         ))];
