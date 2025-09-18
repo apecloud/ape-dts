@@ -159,7 +159,7 @@ impl RdbFilter {
                 return false;
             }
         }
-        pattern.contains("*") || pattern.contains("?") || pattern.starts_with("r#")
+        pattern.contains("*") || pattern.contains("?") || pattern.starts_with(REGEX_ESCAPE_PAIR.0)
     }
 
     fn match_all(set: &HashSet<String>) -> bool {
