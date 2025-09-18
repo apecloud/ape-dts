@@ -8,7 +8,9 @@ use serde::{Deserialize, Serialize};
 use crate::meta::dcl_meta::dcl_type::DclType;
 use crate::{
     config::{
-        config_enums::DbType, config_token_parser::ConfigTokenParser, filter_config::FilterConfig,
+        config_enums::DbType,
+        config_token_parser::{ConfigTokenParser, TokenEscapePair},
+        filter_config::FilterConfig,
     },
     meta::{
         ddl_meta::ddl_type::DdlType, row_type::RowType,
@@ -21,6 +23,8 @@ type IgnoreCols = HashMap<(String, String), HashSet<String>>;
 type WhereConditions = HashMap<(String, String), String>;
 
 const JSON_PREFIX: &str = "json:";
+
+const REGEX_ESCAPE_PAIR: (&str, &str) = ("r#", "#");
 
 #[derive(Debug, Clone)]
 pub struct RdbFilter {
@@ -155,7 +159,7 @@ impl RdbFilter {
                 return false;
             }
         }
-        pattern.contains("*") || pattern.contains("?")
+        pattern.contains("*") || pattern.contains("?") || pattern.starts_with(REGEX_ESCAPE_PAIR.0)
     }
 
     fn match_all(set: &HashSet<String>) -> bool {
@@ -195,13 +199,23 @@ impl RdbFilter {
                 return pattern == SqlUtil::escape(item, escape_pair);
             }
         }
-        // only support 2 wildchars : '*' and '?', '.' is NOT supported
-        // * : matching multiple chars
-        // ? : for matching 0-1 chars
-        let mut pattern = pattern
-            .replace('.', "\\.")
-            .replace('*', ".*")
-            .replace('?', ".?");
+
+        let mut pattern = pattern.to_string();
+        if !pattern.starts_with(REGEX_ESCAPE_PAIR.0) || !pattern.ends_with(REGEX_ESCAPE_PAIR.1) {
+            // only support 2 wildchars : '*' and '?', '.' is NOT supported
+            // * : matching multiple chars
+            // ? : for matching 0-1 chars
+            pattern = pattern
+                .replace('.', "\\.")
+                .replace('*', ".*")
+                .replace('?', ".?");
+        } else {
+            // support raw regex expression.
+            // a raw regex expression string should be enclosed by `r#` and `#` as escape pair
+            // eg: `r#.*#` indicates the regex expression `.*`
+            pattern.drain(..2);
+            pattern.pop();
+        }
         pattern = format!(r"^{}$", pattern);
 
         Regex::new(&pattern)
@@ -232,7 +246,16 @@ impl RdbFilter {
 
     fn parse_config(config_str: &str, db_type: &DbType) -> anyhow::Result<Vec<String>> {
         let delimiters = vec![',', '.'];
-        ConfigTokenParser::parse_config(config_str, db_type, &delimiters)
+        let custom_escape_pairs = vec![TokenEscapePair::from((
+            REGEX_ESCAPE_PAIR.0.to_string(),
+            REGEX_ESCAPE_PAIR.1.to_string(),
+        ))];
+        ConfigTokenParser::parse_config(
+            config_str,
+            db_type,
+            &delimiters,
+            Some(&custom_escape_pairs),
+        )
     }
 
     fn parse_ignore_cols(config_str: &str) -> anyhow::Result<IgnoreCols> {
@@ -325,6 +348,23 @@ mod tests {
         assert!(!RdbFilter::match_token("h.llo", "he.llo", &escape_pairs));
         assert!(!RdbFilter::match_token("h.llo", "h.lo", &escape_pairs));
         assert!(!RdbFilter::match_token("h.llo", "hello", &escape_pairs));
+
+        // match with `r#` and `#`
+        assert!(RdbFilter::match_token("r#hello#", "hello", &escape_pairs));
+        assert!(RdbFilter::match_token("r#he?llo#", "hllo", &escape_pairs));
+        assert!(RdbFilter::match_token("r#he?llo#", "hello", &escape_pairs));
+        assert!(RdbFilter::match_token("r#he*llo#", "hllo", &escape_pairs));
+        assert!(RdbFilter::match_token(
+            "r#he*llo#",
+            "heeeeeeeello",
+            &escape_pairs
+        ));
+        assert!(RdbFilter::match_token("r#h.?llo#", "htllo", &escape_pairs));
+        assert!(RdbFilter::match_token(
+            "r#h.*llo#",
+            "htestllo",
+            &escape_pairs
+        ));
     }
 
     #[test]
@@ -376,6 +416,72 @@ mod tests {
         ));
         assert!(!RdbFilter::match_token("`h.llo`", "`h.lo`", &escape_pairs));
         assert!(!RdbFilter::match_token("`h.llo`", "`hello`", &escape_pairs));
+
+        // match with `r#` and `#`, should also be exactly match
+        assert!(RdbFilter::match_token(
+            "`r#hello#`",
+            "r#hello#",
+            &escape_pairs
+        ));
+        assert!(!RdbFilter::match_token(
+            "`r#hello#`",
+            "hello",
+            &escape_pairs
+        ));
+
+        assert!(RdbFilter::match_token(
+            "`r#he?llo#`",
+            "r#he?llo#",
+            &escape_pairs
+        ));
+        assert!(!RdbFilter::match_token(
+            "`r#he?llo#`",
+            "hllo",
+            &escape_pairs
+        ));
+        assert!(!RdbFilter::match_token(
+            "`r#he?llo#`",
+            "hello",
+            &escape_pairs
+        ));
+
+        assert!(RdbFilter::match_token(
+            "`r#he*llo#`",
+            "r#he*llo#",
+            &escape_pairs
+        ));
+        assert!(!RdbFilter::match_token(
+            "`r#he*llo#`",
+            "hllo",
+            &escape_pairs
+        ));
+        assert!(!RdbFilter::match_token(
+            "`r#he*llo#`",
+            "heeeeeeeello",
+            &escape_pairs
+        ));
+
+        assert!(RdbFilter::match_token(
+            "`r#h.?llo#`",
+            "r#h.?llo#",
+            &escape_pairs
+        ));
+        assert!(!RdbFilter::match_token(
+            "`r#h.?llo#`",
+            "htllo",
+            &escape_pairs
+        ));
+
+        assert!(RdbFilter::match_token(
+            "`r#h.*llo#`",
+            "r#h.*llo#",
+            &escape_pairs
+        ));
+        assert!(!RdbFilter::match_token(
+            "`r#h.*llo#`",
+            "htestllo",
+            &escape_pairs
+        ));
     }
 
     #[test]
@@ -461,6 +567,72 @@ mod tests {
         assert!(!RdbFilter::match_token(
             r#""h.llo""#,
             r#""hello""#,
+            &escape_pairs
+        ));
+
+        // match with `r#` and `#`, should also be exactly match
+        assert!(RdbFilter::match_token(
+            r#""r#hello#""#,
+            r#""r#hello#""#,
+            &escape_pairs
+        ));
+        assert!(!RdbFilter::match_token(
+            r#""r#hello#""#,
+            "hello",
+            &escape_pairs
+        ));
+
+        assert!(RdbFilter::match_token(
+            r#""r#he?llo#""#,
+            r#""r#he?llo#""#,
+            &escape_pairs
+        ));
+        assert!(!RdbFilter::match_token(
+            r#""r#he?llo#""#,
+            "hllo",
+            &escape_pairs
+        ));
+        assert!(!RdbFilter::match_token(
+            r#""r#he?llo#""#,
+            "hello",
+            &escape_pairs
+        ));
+
+        assert!(RdbFilter::match_token(
+            r#""r#he*llo#""#,
+            r#""r#he*llo#""#,
+            &escape_pairs
+        ));
+        assert!(!RdbFilter::match_token(
+            r#""r#he*llo#""#,
+            "hllo",
+            &escape_pairs
+        ));
+        assert!(!RdbFilter::match_token(
+            r#""r#he*llo#""#,
+            "heeeeeello",
+            &escape_pairs
+        ));
+
+        assert!(RdbFilter::match_token(
+            r#""r#h.?llo#""#,
+            r#""r#h.?llo#""#,
+            &escape_pairs
+        ));
+        assert!(!RdbFilter::match_token(
+            r#""r#h.?llo#""#,
+            "htllo",
+            &escape_pairs
+        ));
+
+        assert!(RdbFilter::match_token(
+            r#""r#h.*llo#""#,
+            r#""r#h.*llo#""#,
+            &escape_pairs
+        ));
+        assert!(!RdbFilter::match_token(
+            r#""r#h.*llo#""#,
+            "htestllo",
             &escape_pairs
         ));
     }

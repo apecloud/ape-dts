@@ -6,7 +6,10 @@ use std::sync::{
 use anyhow::bail;
 
 use dt_common::{
-    config::{config_enums::DbType, config_token_parser::ConfigTokenParser},
+    config::{
+        config_enums::DbType,
+        config_token_parser::{ConfigTokenParser, TokenEscapePair},
+    },
     error::Error,
     log_debug, log_error, log_info, log_warn,
     meta::{
@@ -225,8 +228,11 @@ impl BaseExtractor {
             return vec![];
         }
 
-        let schema_tb =
-            ConfigTokenParser::parse(heartbeat_tb, &['.'], &SqlUtil::get_escape_pairs(&db_type));
+        let schema_tb = ConfigTokenParser::parse(
+            heartbeat_tb,
+            &['.'],
+            &TokenEscapePair::from_char_pairs(SqlUtil::get_escape_pairs(&db_type)),
+        );
 
         if schema_tb.len() < 2 {
             log_warn!("heartbeat disabled, heartbeat_tb should be like schema.tb");

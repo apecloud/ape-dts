@@ -15,7 +15,7 @@ use crate::extractor::redis::StreamReader;
 use crate::extractor::resumer::cdc_resumer::CdcResumer;
 use crate::Extractor;
 use dt_common::config::config_enums::{DbType, ExtractType};
-use dt_common::config::config_token_parser::ConfigTokenParser;
+use dt_common::config::config_token_parser::{ConfigTokenParser, TokenEscapePair};
 use dt_common::meta::dt_data::DtData;
 use dt_common::meta::position::Position;
 use dt_common::meta::redis::redis_entry::RedisEntry;
@@ -221,7 +221,7 @@ impl RedisPsyncExtractor {
         let heartbeat_db_key = ConfigTokenParser::parse(
             &self.heartbeat_key,
             &['.'],
-            &SqlUtil::get_escape_pairs(&DbType::Redis),
+            &TokenEscapePair::from_char_pairs(SqlUtil::get_escape_pairs(&DbType::Redis)),
         );
         let heartbeat_db_id = if heartbeat_db_key.len() == 2 {
             heartbeat_db_key[0].parse()?

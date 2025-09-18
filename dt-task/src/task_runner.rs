@@ -22,7 +22,7 @@ use crate::task_util::TaskUtil;
 use dt_common::{
     config::{
         config_enums::{build_task_type, DbType, PipelineType},
-        config_token_parser::ConfigTokenParser,
+        config_token_parser::{ConfigTokenParser, TokenEscapePair},
         extractor_config::ExtractorConfig,
         sinker_config::SinkerConfig,
         task_config::TaskConfig,
@@ -767,7 +767,9 @@ impl TaskRunner {
             | ExtractorConfig::PgCdc { heartbeat_tb, .. } => ConfigTokenParser::parse(
                 heartbeat_tb,
                 &['.'],
-                &SqlUtil::get_escape_pairs(&self.config.extractor_basic.db_type),
+                &TokenEscapePair::from_char_pairs(SqlUtil::get_escape_pairs(
+                    &self.config.extractor_basic.db_type,
+                )),
             ),
             _ => vec![],
         };
