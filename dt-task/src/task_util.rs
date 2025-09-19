@@ -486,4 +486,9 @@ WHERE
 
         S3Client::new_with(rusoto_core::HttpClient::new().unwrap(), credentials, region)
     }
+
+    pub fn is_valid_db_batch_size(_db_type: &DbType, batch_size: usize) -> bool {
+        // TODO: add check for different db types
+        batch_size > 0 && batch_size <= 50
+    }
 }

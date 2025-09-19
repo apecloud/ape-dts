@@ -797,6 +797,9 @@ impl TaskRunner {
             _ => None,
         };
         if let Some(db_batch_size) = db_batch_size {
+            if !TaskUtil::is_valid_db_batch_size(db_type, db_batch_size) {
+                bail! {Error::ConfigError(format!(r#"unsupported db_batch_size {} for {}"#, db_batch_size, db_type))}
+            }
             let schema_chunks: Vec<Vec<String>> = schemas
                 .chunks(db_batch_size)
                 .map(|chunk| chunk.to_vec())

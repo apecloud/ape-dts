@@ -29,10 +29,7 @@ impl Extractor for PgStructExtractor {
             "PgStructExtractor starts, schemas: {}",
             self.schemas.join(",")
         );
-        for (flag, schema) in self.schemas.clone().iter().enumerate() {
-            self.extract_internal(schema, self.do_global_structs && flag == 0)
-                .await?;
-        }
+        self.extract_internal().await?;
         self.base_extractor.wait_task_finish().await
     }
 
@@ -42,29 +39,27 @@ impl Extractor for PgStructExtractor {
 }
 
 impl PgStructExtractor {
-    pub async fn extract_internal(
-        &mut self,
-        schema: &String,
-        do_global_structs: bool,
-    ) -> anyhow::Result<()> {
+    pub async fn extract_internal(&mut self) -> anyhow::Result<()> {
         let mut pg_fetcher = PgStructFetcher {
             conn_pool: self.conn_pool.to_owned(),
-            schema: schema.clone(),
+            schema: self.schema.clone(),
+            schemas: self.schemas.iter().cloned().collect(),
             filter: Some(self.filter.to_owned()),
         };
 
-        // schema
-        let schema_statement = pg_fetcher.get_create_schema_statement().await?;
-        self.push_dt_data(StructStatement::PgCreateSchema(schema_statement))
-            .await?;
+        // schemas
+        for schema_statement in pg_fetcher.get_create_schema_statements("").await? {
+            self.push_dt_data(StructStatement::PgCreateSchema(schema_statement))
+                .await?;
+        }
 
         // tables
-        for table_statement in pg_fetcher.get_create_table_statements("").await? {
+        for table_statement in pg_fetcher.get_create_table_statements("", "").await? {
             self.push_dt_data(StructStatement::PgCreateTable(table_statement))
                 .await?;
         }
 
-        if do_global_structs && !self.filter.filter_structure(&StructureType::Rbac) {
+        if self.do_global_structs && !self.filter.filter_structure(&StructureType::Rbac) {
             // do rbac init
             let rbac_statements = pg_fetcher.get_create_rbac_statements().await?;
             for statement in rbac_statements {
