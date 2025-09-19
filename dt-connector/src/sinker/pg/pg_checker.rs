@@ -1,4 +1,8 @@
-use std::{cmp, collections::HashMap, sync::Arc};
+use std::{
+    cmp,
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 
 use async_trait::async_trait;
 use futures::TryStreamExt;
@@ -168,24 +172,30 @@ impl PgChecker {
 
             let mut struct_fetcher = PgStructFetcher {
                 conn_pool: self.conn_pool.to_owned(),
-                schema,
+                schema: schema.clone(),
+                schemas: HashSet::from([schema.clone()]),
                 filter: None,
             };
 
             let mut dst_statement = match &src_statement {
                 StructStatement::PgCreateSchema(_) => {
-                    let dst_statement = struct_fetcher.get_create_schema_statement().await?;
-                    StructStatement::PgCreateSchema(dst_statement)
+                    let mut dst_statements =
+                        struct_fetcher.get_create_schema_statements(&schema).await?;
+                    if dst_statements.is_empty() {
+                        StructStatement::Unknown
+                    } else {
+                        StructStatement::PgCreateSchema(dst_statements.remove(0))
+                    }
                 }
 
                 StructStatement::PgCreateTable(statement) => {
-                    let mut dst_statement = struct_fetcher
-                        .get_create_table_statements(&statement.table.table_name)
+                    let mut dst_statements = struct_fetcher
+                        .get_create_table_statements(&schema, &statement.table.table_name)
                         .await?;
-                    if dst_statement.is_empty() {
+                    if dst_statements.is_empty() {
                         StructStatement::Unknown
                     } else {
-                        StructStatement::PgCreateTable(dst_statement.remove(0))
+                        StructStatement::PgCreateTable(dst_statements.remove(0))
                     }
                 }
 

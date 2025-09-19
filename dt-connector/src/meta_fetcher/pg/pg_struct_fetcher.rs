@@ -34,6 +34,7 @@ use super::pg_struct_check_fetcher::PgStructCheckFetcher;
 pub struct PgStructFetcher {
     pub conn_pool: Pool<Postgres>,
     pub schema: String,
+    pub schemas: HashSet<String>,
     pub filter: Option<RdbFilter>,
 }
 
@@ -43,35 +44,42 @@ enum ColType {
 }
 
 impl PgStructFetcher {
-    pub async fn get_create_schema_statement(&mut self) -> anyhow::Result<PgCreateSchemaStatement> {
-        let schema = self.get_schema().await?;
-        Ok(PgCreateSchemaStatement { schema })
+    pub async fn get_create_schema_statements(
+        &mut self,
+        sch: &str,
+    ) -> anyhow::Result<Vec<PgCreateSchemaStatement>> {
+        let schemas = self.get_schemas(sch).await?;
+        Ok(schemas
+            .into_iter()
+            .map(|s| PgCreateSchemaStatement { schema: s })
+            .collect())
     }
 
     pub async fn get_create_table_statements(
         &mut self,
+        sch: &str,
         tb: &str,
     ) -> anyhow::Result<Vec<PgCreateTableStatement>> {
         let mut results = Vec::new();
 
-        let tables = self.get_tables(tb).await?;
-        let mut sequences = self.get_sequences(tb).await?;
-        let mut sequence_owners = self.get_sequence_owners(tb).await?;
-        let mut constraints = self.get_constraints(tb).await?;
-        let mut indexes = self.get_indexes(tb).await?;
-        let mut column_comments = self.get_column_comments(tb).await?;
-        let mut table_comments = self.get_table_comments(tb).await?;
+        let tables = self.get_tables(sch, tb).await?;
+        let mut sequences = self.get_sequences(sch, tb).await?;
+        let mut sequence_owners = self.get_sequence_owners(sch, tb).await?;
+        let mut constraints = self.get_constraints(sch, tb).await?;
+        let mut indexes = self.get_indexes(sch, tb).await?;
+        let mut column_comments = self.get_column_comments(sch, tb).await?;
+        let mut table_comments = self.get_table_comments(sch, tb).await?;
 
-        for (table_name, table) in tables {
+        for (schema_table_name, table) in tables {
             let table_sequences = self.get_table_sequences(&table, &mut sequences).await?;
             let statement = PgCreateTableStatement {
                 table,
                 sequences: table_sequences,
-                sequence_owners: self.get_result(&mut sequence_owners, &table_name),
-                constraints: self.get_result(&mut constraints, &table_name),
-                indexes: self.get_result(&mut indexes, &table_name),
-                column_comments: self.get_result(&mut column_comments, &table_name),
-                table_comments: self.get_result(&mut table_comments, &table_name),
+                sequence_owners: self.get_result(&mut sequence_owners, &schema_table_name),
+                constraints: self.get_result(&mut constraints, &schema_table_name),
+                indexes: self.get_result(&mut indexes, &schema_table_name),
+                column_comments: self.get_result(&mut column_comments, &schema_table_name),
+                table_comments: self.get_result(&mut table_comments, &schema_table_name),
             };
             results.push(statement);
         }
@@ -91,34 +99,82 @@ impl PgStructFetcher {
         }])
     }
 
-    async fn get_schema(&mut self) -> anyhow::Result<Schema> {
+    async fn get_schemas(&mut self, sch: &str) -> anyhow::Result<Vec<Schema>> {
+        let (sch_filter, target_schemas) = if !sch.is_empty() {
+            if !self.schemas.contains(sch) {
+                return Ok(Vec::new());
+            }
+            (
+                format!("schema_name = '{}'", sch),
+                HashSet::from([sch.to_string()]),
+            )
+        } else if !self.schemas.is_empty() {
+            (
+                format!("schema_name in ({})", self.get_schemas_str()),
+                self.schemas.clone(),
+            )
+        } else {
+            return Ok(Vec::new());
+        };
+
         let sql = format!(
             "SELECT schema_name 
             FROM information_schema.schemata
-            WHERE schema_name='{}'",
-            self.schema
+            WHERE {}",
+            sch_filter
         );
 
         let mut rows = sqlx::query(&sql).fetch(&self.conn_pool);
+        let mut schemas = HashSet::new();
         if let Some(row) = rows.try_next().await? {
             let schema_name = Self::get_str_with_null(&row, "schema_name")?;
-            let schema = Schema { name: schema_name };
-            return Ok(schema);
+            schemas.insert(schema_name);
         }
-
-        bail! {Error::StructError(format!(
-            "schema: {} not found",
-            self.schema
-        ))}
+        let filtered_schemas: Vec<String> = target_schemas
+            .iter()
+            .filter(|&s| !schemas.contains(s))
+            .cloned()
+            .collect();
+        if !filtered_schemas.is_empty() {
+            bail! {Error::StructError(format!(
+                "schemas: {} not found",
+                filtered_schemas.join(",")
+            ))}
+        } else {
+            Ok(schemas.into_iter().map(|s| Schema { name: s }).collect())
+        }
     }
 
-    async fn get_sequences(&mut self, tb: &str) -> anyhow::Result<HashMap<String, Vec<Sequence>>> {
-        let mut results: HashMap<String, Vec<Sequence>> = HashMap::new();
+    async fn get_sequences(
+        &mut self,
+        sch: &str,
+        tb: &str,
+    ) -> anyhow::Result<HashMap<(String, String), Vec<Sequence>>> {
+        let mut results = HashMap::new();
 
-        let tb_filter = if !tb.is_empty() {
-            format!("AND tab.relname = '{}'", tb)
+        let (sch_filter, tb_filter) = if !sch.is_empty() {
+            if !self.schemas.contains(sch) {
+                return Ok(results);
+            }
+            if !tb.is_empty() {
+                (
+                    format!("ns.nspname = '{}'", sch),
+                    format!("obj.sequence_schema='{}' AND tab.relname = '{}'", sch, tb),
+                )
+            } else {
+                (
+                    format!("ns.nspname = '{}'", sch),
+                    format!("obj.sequence_schema = '{}'", sch),
+                )
+            }
+        } else if !self.schemas.is_empty() {
+            let schemas_str = &self.get_schemas_str();
+            (
+                format!("ns.nspname in ({})", schemas_str),
+                format!("obj.sequence_schema in ({})", schemas_str),
+            )
         } else {
-            String::new()
+            return Ok(results);
         };
 
         let sql = format!(
@@ -141,10 +197,10 @@ impl PgStructFetcher {
                 ON (seq.oid = dep.objid)
             JOIN pg_class AS tab
                 ON (dep.refobjid = tab.oid)
-            WHERE ns.nspname='{}' 
-            AND obj.sequence_schema='{}' {} 
+            WHERE {} 
+            AND {} 
             AND dep.deptype='a'",
-            &self.schema, &self.schema, tb_filter
+            sch_filter, tb_filter
         );
 
         let mut rows = sqlx::query(&sql).fetch(&self.conn_pool);
@@ -158,7 +214,7 @@ impl PgStructFetcher {
             let sequence = Sequence {
                 sequence_name,
                 database_name: Self::get_str_with_null(&row, "sequence_catalog")?,
-                schema_name: sequence_schema,
+                schema_name: sequence_schema.clone(),
                 data_type: Self::get_str_with_null(&row, "data_type")?,
                 start_value: row.get("start_value"),
                 increment: row.get("increment"),
@@ -166,7 +222,7 @@ impl PgStructFetcher {
                 maximum_value: row.get("maximum_value"),
                 cycle_option: Self::get_str_with_null(&row, "cycle_option")?,
             };
-            self.push_to_results(&mut results, &table_name, sequence);
+            self.push_to_results(&mut results, &sequence_schema, &table_name, sequence);
         }
 
         Ok(results)
@@ -175,6 +231,7 @@ impl PgStructFetcher {
     async fn get_independent_sequences(
         &mut self,
         sequence_names: &[String],
+        table_schema: &str,
     ) -> anyhow::Result<Vec<Sequence>> {
         let filter_names: Vec<String> = sequence_names.iter().map(|i| format!("'{}'", i)).collect();
         let filter = format!("AND sequence_name IN ({})", filter_names.join(","));
@@ -182,7 +239,7 @@ impl PgStructFetcher {
             "SELECT *
             FROM information_schema.sequences
             WHERE sequence_schema='{}' {}",
-            self.schema, filter
+            table_schema, filter
         );
 
         let mut results = Vec::new();
@@ -208,9 +265,12 @@ impl PgStructFetcher {
     async fn get_table_sequences(
         &mut self,
         table: &Table,
-        sequences: &mut HashMap<String, Vec<Sequence>>,
+        sequences: &mut HashMap<(String, String), Vec<Sequence>>,
     ) -> anyhow::Result<Vec<Sequence>> {
-        let mut table_sequences = self.get_result(sequences, &table.table_name);
+        let mut table_sequences = self.get_result(
+            sequences,
+            &(table.schema_name.clone(), table.table_name.clone()),
+        );
 
         let mut owned_sequence_names = HashSet::new();
         for sequence in table_sequences.iter() {
@@ -235,7 +295,7 @@ impl PgStructFetcher {
                 }
 
                 // sequence and table should be in the same schema, otherwise we don't support
-                if !schema.is_empty() && schema != self.schema {
+                if !schema.is_empty() && schema != table.schema_name {
                     log_error!(
                         "table: {}.{} is using sequence: {}.{} from a different schema",
                         table.schema_name,
@@ -263,7 +323,7 @@ impl PgStructFetcher {
 
         if !independent_sequence_names.is_empty() {
             let independent_squences = self
-                .get_independent_sequences(&independent_sequence_names)
+                .get_independent_sequences(&independent_sequence_names, &table.schema_name)
                 .await?;
             table_sequences.extend_from_slice(&independent_squences);
         }
@@ -273,14 +333,24 @@ impl PgStructFetcher {
 
     async fn get_sequence_owners(
         &mut self,
+        sch: &str,
         tb: &str,
-    ) -> anyhow::Result<HashMap<String, Vec<SequenceOwner>>> {
+    ) -> anyhow::Result<HashMap<(String, String), Vec<SequenceOwner>>> {
         let mut results = HashMap::new();
 
-        let tb_filter = if !tb.is_empty() {
-            format!("AND tab.relname = '{}'", tb)
+        let tb_filter = if !sch.is_empty() {
+            if !self.schemas.contains(sch) {
+                return Ok(results);
+            }
+            if !tb.is_empty() {
+                format!("ns.nspname='{}' AND tab.relname = '{}'", sch, tb)
+            } else {
+                format!("ns.nspname = '{}'", sch)
+            }
+        } else if !self.schemas.is_empty() {
+            format!("ns.nspname in ({})", self.get_schemas_str())
         } else {
-            String::new()
+            return Ok(results);
         };
 
         let sql = format!(
@@ -299,8 +369,8 @@ impl PgStructFetcher {
                 ON (attr.attnum = dep.refobjsubid AND attr.attrelid = dep.refobjid)
             WHERE dep.deptype='a'
                 AND seq.relkind='S'
-                AND ns.nspname = '{}' {}",
-            &self.schema, tb_filter
+                AND {}",
+            tb_filter
         );
 
         let mut rows = sqlx::query(&sql).fetch(&self.conn_pool);
@@ -315,23 +385,36 @@ impl PgStructFetcher {
             let sequence_owner = SequenceOwner {
                 sequence_name: seq_name,
                 database_name: String::new(),
-                schema_name,
+                schema_name: schema_name.clone(),
                 table_name: table_name.clone(),
                 column_name: Self::get_str_with_null(&row, "column_name")?,
             };
-            self.push_to_results(&mut results, &table_name, sequence_owner);
+            self.push_to_results(&mut results, &schema_name, &table_name, sequence_owner);
         }
 
         Ok(results)
     }
 
-    async fn get_tables(&mut self, tb: &str) -> anyhow::Result<BTreeMap<String, Table>> {
-        let mut results: BTreeMap<String, Table> = BTreeMap::new();
+    async fn get_tables(
+        &mut self,
+        sch: &str,
+        tb: &str,
+    ) -> anyhow::Result<BTreeMap<(String, String), Table>> {
+        let mut results: BTreeMap<(String, String), Table> = BTreeMap::new();
 
-        let tb_filter = if !tb.is_empty() {
-            format!("AND c.table_name = '{}'", tb)
+        let tb_filter = if !sch.is_empty() {
+            if !self.schemas.contains(sch) {
+                return Ok(results);
+            }
+            if !tb.is_empty() {
+                format!("c.table_schema = '{}' AND c.table_name = '{}'", sch, tb)
+            } else {
+                format!("c.table_schema = '{}'", sch)
+            }
+        } else if !self.schemas.is_empty() {
+            format!("c.table_schema in ({})", self.get_schemas_str())
         } else {
-            String::new()
+            return Ok(results);
         };
 
         let sql = format!(
@@ -352,10 +435,10 @@ impl PgStructFetcher {
             JOIN information_schema.tables t 
                 ON c.table_schema = t.table_schema 
                 AND c.table_name = t.table_name
-            WHERE c.table_schema ='{}' {} 
+            WHERE {} 
                 AND t.table_type = 'BASE TABLE'
             ORDER BY c.table_schema, c.table_name, c.ordinal_position",
-            &self.schema, tb_filter
+            tb_filter
         );
 
         let mut rows = sqlx::query(&sql).fetch(&self.conn_pool);
@@ -365,7 +448,8 @@ impl PgStructFetcher {
                 Self::get_str_with_null(&row, "table_name")?,
             );
 
-            if self.filter_tb(&self.schema.clone(), &table_name) {
+            if !self.schemas.contains(&table_schema) || !self.filter_tb(&table_schema, &table_name)
+            {
                 continue;
             }
 
@@ -386,11 +470,11 @@ impl PgStructFetcher {
                 ..Default::default()
             };
 
-            if let Some(table) = results.get_mut(&table_name) {
+            if let Some(table) = results.get_mut(&(table_schema.clone(), table_name.clone())) {
                 table.columns.push(column);
             } else {
                 results.insert(
-                    table_name.clone(),
+                    (table_schema.clone(), table_name.clone()),
                     Table {
                         database_name: table_schema.clone(),
                         schema_name: table_schema,
@@ -403,8 +487,8 @@ impl PgStructFetcher {
         }
 
         // get column types
-        for (table_name, table) in results.iter_mut() {
-            let column_types = self.get_column_types(table_name).await?;
+        for ((table_schema, table_name), table) in results.iter_mut() {
+            let column_types = self.get_column_types(table_schema, table_name).await?;
             for column in table.columns.iter_mut() {
                 column.column_type = column_types.get(&column.column_name).unwrap().to_owned();
             }
@@ -413,17 +497,21 @@ impl PgStructFetcher {
         Ok(results)
     }
 
-    async fn get_column_types(&mut self, tb: &str) -> anyhow::Result<HashMap<String, String>> {
+    async fn get_column_types(
+        &mut self,
+        schema: &str,
+        tb: &str,
+    ) -> anyhow::Result<HashMap<String, String>> {
         let fetcher = PgStructCheckFetcher {
             conn_pool: self.conn_pool.clone(),
         };
 
-        let oid = fetcher.get_oid(&self.schema, tb).await?;
+        let oid = fetcher.get_oid(schema, tb).await?;
 
         if oid.is_empty() {
             anyhow::bail!(
                 "Invalid OID: cannot be empty for schema: {} and table: {}",
-                self.schema,
+                schema,
                 tb
             );
         }
@@ -449,14 +537,24 @@ impl PgStructFetcher {
 
     async fn get_constraints(
         &mut self,
+        sch: &str,
         tb: &str,
-    ) -> anyhow::Result<HashMap<String, Vec<Constraint>>> {
+    ) -> anyhow::Result<HashMap<(String, String), Vec<Constraint>>> {
         let mut results = HashMap::new();
 
-        let tb_filter = if !tb.is_empty() {
-            format!("AND rel.relname = '{}'", tb)
+        let tb_filter = if !sch.is_empty() {
+            if !self.schemas.contains(sch) {
+                return Ok(results);
+            }
+            if !tb.is_empty() {
+                format!("nsp.nspname='{}' AND rel.relname = '{}'", sch, tb)
+            } else {
+                format!("nsp.nspname = '{}'", sch)
+            }
+        } else if !self.schemas.is_empty() {
+            format!("nsp.nspname in ({})", self.get_schemas_str())
         } else {
-            String::new()
+            return Ok(results);
         };
 
         let sql = format!(
@@ -470,9 +568,9 @@ impl PgStructFetcher {
                 ON rel.oid = con.conrelid
             JOIN pg_catalog.pg_namespace nsp
                 ON nsp.oid = connamespace
-            WHERE nsp.nspname ='{}' {} 
+            WHERE {} 
             ORDER BY nsp.nspname,rel.relname",
-            &self.schema, tb_filter
+            tb_filter
         );
 
         let mut rows = sqlx::query(&sql).fetch(&self.conn_pool);
@@ -488,19 +586,43 @@ impl PgStructFetcher {
                 constraint_type: ConstraintType::from_str(&constraint_type, DbType::Pg),
                 definition: Self::get_str_with_null(&row, "constraint_definition")?,
             };
-            self.push_to_results(&mut results, &table_name, constraint);
+            self.push_to_results(
+                &mut results,
+                &constraint.schema_name.clone(),
+                &table_name,
+                constraint,
+            );
         }
 
         Ok(results)
     }
 
-    async fn get_indexes(&mut self, tb: &str) -> anyhow::Result<HashMap<String, Vec<Index>>> {
+    async fn get_indexes(
+        &mut self,
+        sch: &str,
+        tb: &str,
+    ) -> anyhow::Result<HashMap<(String, String), Vec<Index>>> {
         let mut results = HashMap::new();
 
-        let tb_filter = if !tb.is_empty() {
-            format!("AND tablename = '{}'", tb)
+        let tb_filter = if !sch.is_empty() {
+            if !self.schemas.contains(sch) {
+                return Ok(results);
+            }
+            if !tb.is_empty() {
+                format!("schemaname='{}' AND tablename = '{}'", sch, tb)
+            } else {
+                format!("schemaname = '{}'", sch)
+            }
+        } else if !self.schemas.is_empty() {
+            let schemas_str = self
+                .schemas
+                .iter()
+                .map(|s| format!("'{}'", s))
+                .collect::<Vec<_>>()
+                .join(",");
+            format!("schemaname in ({})", schemas_str)
         } else {
-            String::new()
+            return Ok(results);
         };
 
         let sql = format!(
@@ -509,8 +631,8 @@ impl PgStructFetcher {
                 indexdef,
                 COALESCE(tablespace, 'pg_default') AS tablespace, indexname
             FROM pg_indexes
-            WHERE schemaname = '{}' {}",
-            &self.schema, tb_filter
+            WHERE {}",
+            tb_filter
         );
 
         let mut rows = sqlx::query(&sql).fetch(&self.conn_pool);
@@ -527,7 +649,7 @@ impl PgStructFetcher {
                 definition,
                 ..Default::default()
             };
-            self.push_to_results(&mut results, &table_name, index);
+            self.push_to_results(&mut results, &index.schema_name.clone(), &table_name, index);
         }
 
         Ok(results)
@@ -535,14 +657,24 @@ impl PgStructFetcher {
 
     async fn get_table_comments(
         &mut self,
+        sch: &str,
         tb: &str,
-    ) -> anyhow::Result<HashMap<String, Vec<Comment>>> {
+    ) -> anyhow::Result<HashMap<(String, String), Vec<Comment>>> {
         let mut results = HashMap::new();
 
-        let tb_filter = if !tb.is_empty() {
-            format!("AND c.relname = '{}'", tb)
+        let tb_filter = if !sch.is_empty() {
+            if !self.schemas.contains(sch) {
+                return Ok(results);
+            }
+            if !tb.is_empty() {
+                format!("n.nspname='{}' AND c.relname = '{}'", sch, tb)
+            } else {
+                format!("n.nspname = '{}'", sch)
+            }
+        } else if !self.schemas.is_empty() {
+            format!("n.nspname in ({})", self.get_schemas_str())
         } else {
-            String::new()
+            return Ok(results);
         };
 
         let sql = format!(
@@ -554,9 +686,9 @@ impl PgStructFetcher {
                 ON n.oid = c.relnamespace
             LEFT JOIN pg_description d
                 ON c.oid = d.objoid  AND d.objsubid = 0
-            WHERE n.nspname ='{}' {}
+            WHERE {} 
             AND d.description IS NOT null",
-            &self.schema, tb_filter
+            tb_filter
         );
 
         let mut rows = sqlx::query(&sql).fetch(&self.conn_pool);
@@ -569,12 +701,12 @@ impl PgStructFetcher {
             let comment = Comment {
                 comment_type: CommentType::Table,
                 database_name: String::new(),
-                schema_name,
+                schema_name: schema_name.clone(),
                 table_name: table_name.clone(),
                 column_name: String::new(),
                 comment: Self::get_str_with_null(&row, "description")?,
             };
-            self.push_to_results(&mut results, &table_name, comment);
+            self.push_to_results(&mut results, &schema_name, &table_name, comment);
         }
 
         Ok(results)
@@ -582,14 +714,24 @@ impl PgStructFetcher {
 
     async fn get_column_comments(
         &mut self,
+        sch: &str,
         tb: &str,
-    ) -> anyhow::Result<HashMap<String, Vec<Comment>>> {
+    ) -> anyhow::Result<HashMap<(String, String), Vec<Comment>>> {
         let mut results = HashMap::new();
 
-        let tb_filter = if !tb.is_empty() {
-            format!("AND c.relname = '{}'", tb)
+        let tb_filter = if !sch.is_empty() {
+            if !self.schemas.contains(sch) {
+                return Ok(results);
+            }
+            if !tb.is_empty() {
+                format!("n.nspname='{}' AND c.relname = '{}'", sch, tb)
+            } else {
+                format!("n.nspname = '{}'", sch)
+            }
+        } else if !self.schemas.is_empty() {
+            format!("n.nspname in ({})", self.get_schemas_str())
         } else {
-            String::new()
+            return Ok(results);
         };
 
         let sql = format!(
@@ -604,10 +746,10 @@ impl PgStructFetcher {
                 ON a.attrelid =c.oid
             LEFT JOIN pg_namespace n
                 ON n.oid = c.relnamespace
-            WHERE n.nspname ='{}' {}
+            WHERE {} 
                 AND a.attnum >0
                 AND col_description(a.attrelid, a.attnum) is NOT null",
-            &self.schema, tb_filter
+            tb_filter
         );
 
         let mut rows = sqlx::query(&sql).fetch(&self.conn_pool);
@@ -621,12 +763,12 @@ impl PgStructFetcher {
             let comment = Comment {
                 comment_type: CommentType::Column,
                 database_name: String::new(),
-                schema_name,
+                schema_name: schema_name.clone(),
                 table_name: table_name.clone(),
                 column_name,
                 comment: Self::get_str_with_null(&row, "comment")?,
             };
-            self.push_to_results(&mut results, &table_name, comment);
+            self.push_to_results(&mut results, &schema_name, &table_name, comment);
         }
 
         Ok(results)
@@ -892,7 +1034,7 @@ impl PgStructFetcher {
     async fn get_sequence_privilege(&mut self) -> anyhow::Result<Vec<PgPrivilege>> {
         let mut results = Vec::new();
 
-        let tables = self.get_tables("").await?;
+        let tables = self.get_tables("", "").await?;
         let mut sequence_map: HashMap<String, HashSet<String>> = HashMap::new();
         for table in tables.values() {
             for column in &table.columns {
@@ -1068,23 +1210,36 @@ impl PgStructFetcher {
 
     fn push_to_results<T>(
         &mut self,
-        results: &mut HashMap<String, Vec<T>>,
+        results: &mut HashMap<(String, String), Vec<T>>,
+        schema_name: &str,
         table_name: &str,
         item: T,
     ) {
-        if self.filter_tb(&self.schema.clone(), table_name) {
+        if !self.schemas.contains(schema_name) || self.filter_tb(schema_name, table_name) {
             return;
         }
 
-        if let Some(exists) = results.get_mut(table_name) {
+        if let Some(exists) = results.get_mut(&(schema_name.to_owned(), table_name.to_owned())) {
             exists.push(item);
         } else {
-            results.insert(table_name.into(), vec![item]);
+            results.insert((schema_name.into(), table_name.into()), vec![item]);
         }
     }
 
-    fn get_result<T>(&self, results: &mut HashMap<String, Vec<T>>, table_name: &str) -> Vec<T> {
-        results.remove(table_name).unwrap_or_default()
+    fn get_result<T>(
+        &self,
+        results: &mut HashMap<(String, String), Vec<T>>,
+        key: &(String, String),
+    ) -> Vec<T> {
+        results.remove(key).unwrap_or_default()
+    }
+
+    fn get_schemas_str(&self) -> String {
+        self.schemas
+            .iter()
+            .map(|s| format!("'{}'", s))
+            .collect::<Vec<_>>()
+            .join(",")
     }
 }
 

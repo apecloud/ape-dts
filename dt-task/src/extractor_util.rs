@@ -332,13 +332,14 @@ impl ExtractorUtil {
                 Box::new(extractor)
             }
 
-            ExtractorConfig::MysqlStruct { url, db } => {
+            ExtractorConfig::MysqlStruct { url, db, dbs, .. } => {
                 // TODO, pass max_connections as parameter
                 let conn_pool =
                     TaskUtil::create_mysql_conn_pool(&url, 2, enable_sqlx_log, false).await?;
                 let extractor = MysqlStructExtractor {
                     conn_pool,
                     db,
+                    dbs,
                     filter,
                     base_extractor,
                 };
@@ -348,7 +349,9 @@ impl ExtractorUtil {
             ExtractorConfig::PgStruct {
                 url,
                 schema,
+                schemas,
                 do_global_structs,
+                ..
             } => {
                 // TODO, pass max_connections as parameter
                 let conn_pool =
@@ -356,6 +359,7 @@ impl ExtractorUtil {
                 let extractor = PgStructExtractor {
                     conn_pool,
                     schema,
+                    schemas,
                     do_global_structs,
                     filter,
                     base_extractor,

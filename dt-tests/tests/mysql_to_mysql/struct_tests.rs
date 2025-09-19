@@ -48,4 +48,10 @@ mod test {
     async fn struct_8_0_basic_test() {
         TestBase::run_mysql_struct_test("mysql_to_mysql/struct/8_0_basic_test").await;
     }
+
+    #[tokio::test]
+    #[serial]
+    async fn struct_batch_test() {
+        TestBase::run_mysql_struct_test("mysql_to_mysql/struct/batch_test").await;
+    }
 }

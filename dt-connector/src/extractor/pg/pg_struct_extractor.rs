@@ -17,6 +17,7 @@ pub struct PgStructExtractor {
     pub base_extractor: BaseExtractor,
     pub conn_pool: Pool<Postgres>,
     pub schema: String,
+    pub schemas: Vec<String>,
     pub do_global_structs: bool,
     pub filter: RdbFilter,
 }
@@ -24,7 +25,10 @@ pub struct PgStructExtractor {
 #[async_trait]
 impl Extractor for PgStructExtractor {
     async fn extract(&mut self) -> anyhow::Result<()> {
-        log_info!("PgStructExtractor starts, schema: {}", self.schema);
+        log_info!(
+            "PgStructExtractor starts, schemas: {}",
+            self.schemas.join(",")
+        );
         self.extract_internal().await?;
         self.base_extractor.wait_task_finish().await
     }
@@ -39,16 +43,18 @@ impl PgStructExtractor {
         let mut pg_fetcher = PgStructFetcher {
             conn_pool: self.conn_pool.to_owned(),
             schema: self.schema.clone(),
+            schemas: self.schemas.iter().cloned().collect(),
             filter: Some(self.filter.to_owned()),
         };
 
-        // schema
-        let schema_statement = pg_fetcher.get_create_schema_statement().await?;
-        self.push_dt_data(StructStatement::PgCreateSchema(schema_statement))
-            .await?;
+        // schemas
+        for schema_statement in pg_fetcher.get_create_schema_statements("").await? {
+            self.push_dt_data(StructStatement::PgCreateSchema(schema_statement))
+                .await?;
+        }
 
         // tables
-        for table_statement in pg_fetcher.get_create_table_statements("").await? {
+        for table_statement in pg_fetcher.get_create_table_statements("", "").await? {
             self.push_dt_data(StructStatement::PgCreateTable(table_statement))
                 .await?;
         }

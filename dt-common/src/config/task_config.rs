@@ -176,6 +176,7 @@ impl TaskConfig {
                 ExtractType::Struct => ExtractorConfig::MysqlStruct {
                     url,
                     db: String::new(),
+                    dbs: Vec::new(),
                 },
 
                 ExtractType::FoxlakeS3 => {
@@ -233,6 +234,7 @@ impl TaskConfig {
                 ExtractType::Struct => ExtractorConfig::PgStruct {
                     url,
                     schema: String::new(),
+                    schemas: Vec::new(),
                     do_global_structs: false,
                 },
 
@@ -607,6 +609,9 @@ impl TaskConfig {
                 "./log4rs.yaml".to_string(),
             ),
             tb_parallel_size: loader.get_with_default(RUNTIME, "tb_parallel_size", 1),
+            task_parallel_size: loader.get_with_default(RUNTIME, "task_parallel_size", 1),
+            tb_batch_size: loader.get_with_default(RUNTIME, "tb_batch_size", 1),
+            db_batch_size: loader.get_with_default(RUNTIME, "db_batch_size", 1),
         })
     }
 

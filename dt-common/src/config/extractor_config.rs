@@ -8,11 +8,13 @@ pub enum ExtractorConfig {
     MysqlStruct {
         url: String,
         db: String,
+        dbs: Vec<String>,
     },
 
     PgStruct {
         url: String,
         schema: String,
+        schemas: Vec<String>,
         do_global_structs: bool,
     },
 
