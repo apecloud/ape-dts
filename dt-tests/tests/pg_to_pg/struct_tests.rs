@@ -53,7 +53,7 @@ mod test {
 
     #[tokio::test]
     #[serial]
-    async fn struct_batch_test() {
-        TestBase::run_pg_struct_test("pg_to_pg/struct/batch_test").await;
+    async fn struct_parallel_test() {
+        TestBase::run_pg_struct_test("pg_to_pg/struct/parallel_test").await;
     }
 }

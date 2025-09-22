@@ -1,5 +1,6 @@
 use std::{str::FromStr, time::Duration};
 
+use anyhow::bail;
 use dt_common::config::config_enums::TaskType;
 use dt_common::config::extractor_config::ExtractorConfig;
 use dt_common::config::s3_config::S3Config;
@@ -7,6 +8,7 @@ use dt_common::config::{
     config_enums::DbType, meta_center_config::MetaCenterConfig, sinker_config::SinkerConfig,
     task_config::TaskConfig,
 };
+use dt_common::error::Error;
 use dt_common::log_info;
 use dt_common::meta::mysql::mysql_dbengine_meta_center::MysqlDbEngineMetaCenter;
 use dt_common::meta::{
@@ -487,8 +489,12 @@ WHERE
         S3Client::new_with(rusoto_core::HttpClient::new().unwrap(), credentials, region)
     }
 
-    pub fn is_valid_db_batch_size(_db_type: &DbType, batch_size: usize) -> bool {
+    pub fn validate_db_batch_size(_db_type: &DbType, db_batch_size: usize) -> anyhow::Result<()> {
         // TODO: add check for different db types
-        batch_size > 0 && batch_size <= 50
+        if db_batch_size > 0 && db_batch_size <= 50 {
+            Ok(())
+        } else {
+            bail! {Error::ConfigError(format!(r#"db_batch_size {} is not valid, should be in range (0, 50]"#, db_batch_size))}
+        }
     }
 }

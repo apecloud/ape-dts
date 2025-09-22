@@ -110,7 +110,7 @@ impl PgStructFetcher {
             )
         } else if !self.schemas.is_empty() {
             (
-                format!("schema_name in ({})", self.get_schemas_str()),
+                format!("schema_name IN ({})", self.get_schemas_str()),
                 self.schemas.clone(),
             )
         } else {
@@ -126,7 +126,7 @@ impl PgStructFetcher {
 
         let mut rows = sqlx::query(&sql).fetch(&self.conn_pool);
         let mut schemas = HashSet::new();
-        if let Some(row) = rows.try_next().await? {
+        while let Some(row) = rows.try_next().await? {
             let schema_name = Self::get_str_with_null(&row, "schema_name")?;
             schemas.insert(schema_name);
         }
@@ -170,8 +170,8 @@ impl PgStructFetcher {
         } else if !self.schemas.is_empty() {
             let schemas_str = &self.get_schemas_str();
             (
-                format!("ns.nspname in ({})", schemas_str),
-                format!("obj.sequence_schema in ({})", schemas_str),
+                format!("ns.nspname IN ({})", schemas_str),
+                format!("obj.sequence_schema IN ({})", schemas_str),
             )
         } else {
             return Ok(results);
@@ -348,7 +348,7 @@ impl PgStructFetcher {
                 format!("ns.nspname = '{}'", sch)
             }
         } else if !self.schemas.is_empty() {
-            format!("ns.nspname in ({})", self.get_schemas_str())
+            format!("ns.nspname IN ({})", self.get_schemas_str())
         } else {
             return Ok(results);
         };
@@ -412,7 +412,7 @@ impl PgStructFetcher {
                 format!("c.table_schema = '{}'", sch)
             }
         } else if !self.schemas.is_empty() {
-            format!("c.table_schema in ({})", self.get_schemas_str())
+            format!("c.table_schema IN ({})", self.get_schemas_str())
         } else {
             return Ok(results);
         };
@@ -448,8 +448,7 @@ impl PgStructFetcher {
                 Self::get_str_with_null(&row, "table_name")?,
             );
 
-            if !self.schemas.contains(&table_schema) || !self.filter_tb(&table_schema, &table_name)
-            {
+            if !self.schemas.contains(&table_schema) || self.filter_tb(&table_schema, &table_name) {
                 continue;
             }
 
@@ -552,7 +551,7 @@ impl PgStructFetcher {
                 format!("nsp.nspname = '{}'", sch)
             }
         } else if !self.schemas.is_empty() {
-            format!("nsp.nspname in ({})", self.get_schemas_str())
+            format!("nsp.nspname IN ({})", self.get_schemas_str())
         } else {
             return Ok(results);
         };
@@ -620,7 +619,7 @@ impl PgStructFetcher {
                 .map(|s| format!("'{}'", s))
                 .collect::<Vec<_>>()
                 .join(",");
-            format!("schemaname in ({})", schemas_str)
+            format!("schemaname IN ({})", schemas_str)
         } else {
             return Ok(results);
         };
@@ -672,7 +671,7 @@ impl PgStructFetcher {
                 format!("n.nspname = '{}'", sch)
             }
         } else if !self.schemas.is_empty() {
-            format!("n.nspname in ({})", self.get_schemas_str())
+            format!("n.nspname IN ({})", self.get_schemas_str())
         } else {
             return Ok(results);
         };
@@ -729,7 +728,7 @@ impl PgStructFetcher {
                 format!("n.nspname = '{}'", sch)
             }
         } else if !self.schemas.is_empty() {
-            format!("n.nspname in ({})", self.get_schemas_str())
+            format!("n.nspname IN ({})", self.get_schemas_str())
         } else {
             return Ok(results);
         };

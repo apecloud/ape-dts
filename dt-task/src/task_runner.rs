@@ -196,7 +196,7 @@ impl TaskRunner {
             .await
         });
 
-        let task_parallel_size = self.config.runtime.task_parallel_size;
+        let task_parallel_size = self.get_task_parallel_size();
         let semaphore = Arc::new(tokio::sync::Semaphore::new(task_parallel_size));
         let mut join_set: JoinSet<(String, anyhow::Result<()>)> = JoinSet::new();
 
@@ -797,9 +797,7 @@ impl TaskRunner {
             _ => None,
         };
         if let Some(db_batch_size) = db_batch_size {
-            if !TaskUtil::is_valid_db_batch_size(db_type, db_batch_size) {
-                bail! {Error::ConfigError(format!(r#"unsupported db_batch_size {} for {}"#, db_batch_size, db_type))}
-            }
+            TaskUtil::validate_db_batch_size(db_type, db_batch_size)?;
             let schema_chunks: Vec<Vec<String>> = schemas
                 .chunks(db_batch_size)
                 .map(|chunk| chunk.to_vec())
@@ -908,5 +906,25 @@ impl TaskRunner {
             }
         }
         Ok(pending_tasks)
+    }
+
+    fn get_task_parallel_size(&self) -> usize {
+        match &self.config.extractor {
+            ExtractorConfig::MysqlSnapshot { .. }
+            | ExtractorConfig::PgSnapshot { .. }
+            | ExtractorConfig::FoxlakeS3 { .. }
+            | ExtractorConfig::MongoSnapshot { .. } => {
+                if self.config.runtime.task_parallel_size >= 1 {
+                    self.config.runtime.task_parallel_size
+                } else {
+                    // compatible with legacy config
+                    self.config.runtime.tb_parallel_size
+                }
+            }
+            ExtractorConfig::MysqlStruct { .. } | ExtractorConfig::PgStruct { .. } => {
+                self.config.runtime.task_parallel_size
+            }
+            _ => 1,
+        }
     }
 }
