@@ -35,12 +35,12 @@ impl Extractor for PgStructExtractor {
             .chunks(self.db_batch_size)
             .map(|chunk| chunk.to_vec())
             .collect();
-        for schema_chunk in schema_chunks {
+        for (flag, schema_chunk) in schema_chunks.into_iter().enumerate() {
             log_info!(
                 "PgStructExtractor extracts schemas: {}",
                 schema_chunk.join(",")
             );
-            self.extract_internal(schema_chunk.into_iter().collect())
+            self.extract_internal(schema_chunk.into_iter().collect(), flag == 0)
                 .await?;
         }
         self.base_extractor.wait_task_finish().await
@@ -52,7 +52,11 @@ impl Extractor for PgStructExtractor {
 }
 
 impl PgStructExtractor {
-    pub async fn extract_internal(&mut self, schemas: HashSet<String>) -> anyhow::Result<()> {
+    pub async fn extract_internal(
+        &mut self,
+        schemas: HashSet<String>,
+        do_global_structs: bool,
+    ) -> anyhow::Result<()> {
         let mut pg_fetcher = PgStructFetcher {
             conn_pool: self.conn_pool.to_owned(),
             schemas: schemas,
@@ -71,7 +75,7 @@ impl PgStructExtractor {
                 .await?;
         }
 
-        if self.do_global_structs && !self.filter.filter_structure(&StructureType::Rbac) {
+        if do_global_structs && !self.filter.filter_structure(&StructureType::Rbac) {
             // do rbac init
             let rbac_statements = pg_fetcher.get_create_rbac_statements().await?;
             for statement in rbac_statements {
