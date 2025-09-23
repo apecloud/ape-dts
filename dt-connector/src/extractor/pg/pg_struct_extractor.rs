@@ -1,4 +1,8 @@
+use std::collections::HashSet;
+
+use anyhow::bail;
 use async_trait::async_trait;
+use dt_common::error::Error;
 use dt_common::meta::struct_meta::struct_data::StructData;
 use dt_common::{log_info, rdb_filter::RdbFilter};
 
@@ -16,20 +20,29 @@ use crate::{
 pub struct PgStructExtractor {
     pub base_extractor: BaseExtractor,
     pub conn_pool: Pool<Postgres>,
-    pub schema: String,
     pub schemas: Vec<String>,
     pub do_global_structs: bool,
     pub filter: RdbFilter,
+    pub db_batch_size: usize,
 }
 
 #[async_trait]
 impl Extractor for PgStructExtractor {
     async fn extract(&mut self) -> anyhow::Result<()> {
-        log_info!(
-            "PgStructExtractor starts, schemas: {}",
-            self.schemas.join(",")
-        );
-        self.extract_internal().await?;
+        log_info!("PgStructExtractor starts...");
+        let schema_chunks: Vec<Vec<String>> = self
+            .schemas
+            .chunks(self.db_batch_size)
+            .map(|chunk| chunk.to_vec())
+            .collect();
+        for schema_chunk in schema_chunks {
+            log_info!(
+                "PgStructExtractor extracts schemas: {}",
+                schema_chunk.join(",")
+            );
+            self.extract_internal(schema_chunk.into_iter().collect())
+                .await?;
+        }
         self.base_extractor.wait_task_finish().await
     }
 
@@ -39,11 +52,10 @@ impl Extractor for PgStructExtractor {
 }
 
 impl PgStructExtractor {
-    pub async fn extract_internal(&mut self) -> anyhow::Result<()> {
+    pub async fn extract_internal(&mut self, schemas: HashSet<String>) -> anyhow::Result<()> {
         let mut pg_fetcher = PgStructFetcher {
             conn_pool: self.conn_pool.to_owned(),
-            schema: self.schema.clone(),
-            schemas: self.schemas.iter().cloned().collect(),
+            schemas: schemas,
             filter: Some(self.filter.to_owned()),
         };
 
@@ -73,9 +85,19 @@ impl PgStructExtractor {
 
     pub async fn push_dt_data(&mut self, statement: StructStatement) -> anyhow::Result<()> {
         let struct_data = StructData {
-            schema: self.schema.clone(),
+            schema: "".to_string(),
             statement,
         };
         self.base_extractor.push_struct(struct_data).await
+    }
+
+    pub fn validate_db_batch_size(db_batch_size: usize) -> anyhow::Result<()> {
+        let max_db_batch_size = 100;
+        let min_db_batch_size = 1;
+        if db_batch_size < min_db_batch_size || db_batch_size > max_db_batch_size {
+            bail! {Error::ConfigError(format!(r#"db_batch_size {} is not valid, should be in range ({}, {})"#, db_batch_size, min_db_batch_size, max_db_batch_size))}
+        } else {
+            Ok(())
+        }
     }
 }

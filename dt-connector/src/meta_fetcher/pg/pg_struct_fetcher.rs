@@ -33,7 +33,6 @@ use super::pg_struct_check_fetcher::PgStructCheckFetcher;
 
 pub struct PgStructFetcher {
     pub conn_pool: Pool<Postgres>,
-    pub schema: String,
     pub schemas: HashSet<String>,
     pub filter: Option<RdbFilter>,
 }

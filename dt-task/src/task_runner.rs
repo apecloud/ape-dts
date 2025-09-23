@@ -140,9 +140,26 @@ impl TaskRunner {
             .await;
 
         match &self.config.extractor {
-            ExtractorConfig::MysqlStruct { url, .. }
-            | ExtractorConfig::PgStruct { url, .. }
-            | ExtractorConfig::MysqlSnapshot { url, .. }
+            ExtractorConfig::MysqlStruct { url, .. } | ExtractorConfig::PgStruct { url, .. } => {
+                let mut pending_task = self
+                    .build_pending_tasks(url, &router, &snapshot_resumer, &cdc_resumer, false)
+                    .await?;
+                if !pending_task.is_empty() {
+                    if let Some(task_context) = pending_task.pop_front() {
+                        self.clone()
+                            .start_single_task(
+                                &task_context.extractor_config,
+                                &router,
+                                &snapshot_resumer,
+                                &cdc_resumer,
+                                false,
+                            )
+                            .await?
+                    }
+                }
+            }
+
+            ExtractorConfig::MysqlSnapshot { url, .. }
             | ExtractorConfig::PgSnapshot { url, .. }
             | ExtractorConfig::MongoSnapshot { url, .. }
             | ExtractorConfig::FoxlakeS3 { url, .. } => {
@@ -175,7 +192,7 @@ impl TaskRunner {
         cdc_resumer: &CdcResumer,
     ) -> anyhow::Result<()> {
         let mut pending_tasks = self
-            .build_pending_tasks(url, router, snapshot_resumer, cdc_resumer)
+            .build_pending_tasks(url, router, snapshot_resumer, cdc_resumer, true)
             .await?;
 
         // start a thread to flush global monitors
@@ -768,13 +785,10 @@ impl TaskRunner {
         router: &'a RdbRouter,
         snapshot_resumer: &'a SnapshotResumer,
         cdc_resumer: &'a CdcResumer,
+        is_multi_task: bool,
     ) -> anyhow::Result<VecDeque<TaskContext<'a>>> {
         let db_type = &self.config.extractor_basic.db_type;
         let filter = RdbFilter::from_config(&self.config.filter, db_type)?;
-        let task_type_option = build_task_type(
-            &self.config.extractor_basic.extract_type,
-            &self.config.sinker_basic.sink_type,
-        );
 
         let schemas = TaskUtil::list_schemas(url, db_type)
             .await?
@@ -782,51 +796,63 @@ impl TaskRunner {
             .filter(|schema| !filter.filter_schema(schema))
             .map(|s| s.to_owned())
             .collect::<Vec<_>>();
-        if let Some(task_type) = task_type_option {
-            let record_count =
-                TaskUtil::estimate_record_count(&task_type, url, db_type, &schemas, &filter)
-                    .await?;
-            self.task_monitor
-                .add_no_window_metrics(TaskMetricsType::ExtractorPlanRecords, record_count);
+
+        if is_multi_task {
+            let task_type_option = build_task_type(
+                &self.config.extractor_basic.extract_type,
+                &self.config.sinker_basic.sink_type,
+            );
+            if let Some(task_type) = task_type_option {
+                let record_count =
+                    TaskUtil::estimate_record_count(&task_type, url, db_type, &schemas, &filter)
+                        .await?;
+                self.task_monitor
+                    .add_no_window_metrics(TaskMetricsType::ExtractorPlanRecords, record_count);
+            }
         }
+
         let mut pending_tasks = VecDeque::new();
-        let db_batch_size = match &self.config.extractor {
-            ExtractorConfig::MysqlStruct { .. } | ExtractorConfig::PgStruct { .. } => {
-                Some(self.config.runtime.db_batch_size)
-            }
-            _ => None,
+        let is_db_extractor_config = match &self.config.extractor {
+            ExtractorConfig::MysqlStruct { .. } | ExtractorConfig::PgStruct { .. } => true,
+            _ => false,
         };
-        if let Some(db_batch_size) = db_batch_size {
-            TaskUtil::validate_db_batch_size(db_type, db_batch_size)?;
-            let schema_chunks: Vec<Vec<String>> = schemas
-                .chunks(db_batch_size)
-                .map(|chunk| chunk.to_vec())
-                .collect();
-            for (flag, schema_chunk) in schema_chunks.iter().enumerate() {
-                let db_extractor_config = match &self.config.extractor {
-                    ExtractorConfig::MysqlStruct { url, db, .. } => ExtractorConfig::MysqlStruct {
-                        url: url.clone(),
-                        db: db.clone(),
-                        dbs: schema_chunk.clone(),
-                    },
-                    ExtractorConfig::PgStruct { url, schema, .. } => ExtractorConfig::PgStruct {
-                        url: url.clone(),
-                        schema: schema.clone(),
-                        schemas: schema_chunk.clone(),
-                        do_global_structs: flag == 0,
-                    },
-                    _ => {
-                        bail! {Error::ConfigError("unsupported extractor config for `runtime.db_batch_size`".into())}
-                    }
-                };
-                pending_tasks.push_back(TaskContext {
-                    extractor_config: db_extractor_config,
-                    router: router,
-                    snapshot_resumer: snapshot_resumer,
-                    cdc_resumer: cdc_resumer,
-                    id: schema_chunk.join(","),
-                });
-            }
+        if is_db_extractor_config {
+            let db_extractor_config = match &self.config.extractor {
+                ExtractorConfig::MysqlStruct {
+                    url,
+                    db,
+                    db_batch_size,
+                    ..
+                } => ExtractorConfig::MysqlStruct {
+                    url: url.clone(),
+                    db: db.clone(),
+                    dbs: schemas.clone(),
+                    db_batch_size: db_batch_size.clone(),
+                },
+                ExtractorConfig::PgStruct {
+                    url,
+                    schema,
+                    do_global_structs,
+                    db_batch_size,
+                    ..
+                } => ExtractorConfig::PgStruct {
+                    url: url.clone(),
+                    schema: schema.clone(),
+                    schemas: schemas,
+                    do_global_structs: do_global_structs.clone(),
+                    db_batch_size: db_batch_size.clone(),
+                },
+                _ => {
+                    bail! {Error::ConfigError("unsupported extractor config type".into())}
+                }
+            };
+            pending_tasks.push_back(TaskContext {
+                extractor_config: db_extractor_config,
+                router: router,
+                snapshot_resumer: snapshot_resumer,
+                cdc_resumer: cdc_resumer,
+                id: "".to_string(),
+            });
         } else {
             for schema in schemas.iter() {
                 // find pending tables
@@ -892,7 +918,7 @@ impl TaskRunner {
                         },
 
                         _ => {
-                            bail! {Error::ConfigError("unsupported extractor config for `runtime.task_parallel_size`".into())};
+                            bail! {Error::ConfigError("unsupported extractor config for `runtime.tb_parallel_size`".into())};
                         }
                     };
                     pending_tasks.push_back(TaskContext {
@@ -913,17 +939,7 @@ impl TaskRunner {
             ExtractorConfig::MysqlSnapshot { .. }
             | ExtractorConfig::PgSnapshot { .. }
             | ExtractorConfig::FoxlakeS3 { .. }
-            | ExtractorConfig::MongoSnapshot { .. } => {
-                if self.config.runtime.task_parallel_size >= 1 {
-                    self.config.runtime.task_parallel_size
-                } else {
-                    // compatible with legacy config
-                    self.config.runtime.tb_parallel_size
-                }
-            }
-            ExtractorConfig::MysqlStruct { .. } | ExtractorConfig::PgStruct { .. } => {
-                self.config.runtime.task_parallel_size
-            }
+            | ExtractorConfig::MongoSnapshot { .. } => self.config.runtime.tb_parallel_size,
             _ => 1,
         }
     }

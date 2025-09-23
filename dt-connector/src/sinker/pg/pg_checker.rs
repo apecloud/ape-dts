@@ -172,7 +172,6 @@ impl PgChecker {
 
             let mut struct_fetcher = PgStructFetcher {
                 conn_pool: self.conn_pool.to_owned(),
-                schema: schema.clone(),
                 schemas: HashSet::from([schema.clone()]),
                 filter: None,
             };

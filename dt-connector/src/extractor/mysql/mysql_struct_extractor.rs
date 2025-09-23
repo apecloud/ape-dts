@@ -20,6 +20,7 @@ pub struct MysqlStructExtractor {
     pub db: String,
     pub dbs: Vec<String>,
     pub filter: RdbFilter,
+    pub db_batch_size: usize,
 }
 
 #[async_trait]
