@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, sync::Arc};
+use std::{cmp, collections::BTreeMap, sync::Arc};
 
 use async_trait::async_trait;
 use dashmap::DashMap;
@@ -335,11 +335,26 @@ impl TaskMonitor {
         }
         calc_nowindow_metrics(&self.no_window_metrics_map, calc_monitors);
 
+        let mut total_progress_count = 0;
+        let mut finished_progress_count = 0;
         for item in self.no_window_metrics_map.iter() {
             metrics.insert(*item.key(), *item.value());
+            match item.key() {
+                TaskMetricsType::TotalProgressCount => {
+                    total_progress_count = *item.value();
+                }
+                TaskMetricsType::FinishedProgressCount => {
+                    finished_progress_count = *item.value();
+                }
+                _ => {}
+            }
             #[cfg(feature = "metrics")]
             self.prometheus_metrics.set_metrics(&metrics);
         }
+        metrics.insert(
+            TaskMetricsType::Progress,
+            cmp::min(finished_progress_count * 100 / total_progress_count, 100),
+        );
 
         Some(metrics)
     }
