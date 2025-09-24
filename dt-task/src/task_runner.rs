@@ -11,8 +11,13 @@ use anyhow::{bail, Context};
 use log4rs::config::RawConfig;
 use ratelimit::Ratelimiter;
 use tokio::{
-    fs::metadata, fs::File, io::AsyncReadExt, sync::Mutex, sync::RwLock, task::JoinSet,
-    time::Duration, try_join,
+    fs::{metadata, File},
+    io::AsyncReadExt,
+    select,
+    sync::{Mutex, RwLock},
+    task::JoinSet,
+    time::Duration,
+    try_join,
 };
 
 use super::{
@@ -180,9 +185,12 @@ impl TaskRunner {
             .map(|s| s.to_owned())
             .collect::<Vec<_>>();
         if let Some(task_type) = task_type_option {
+            log_info!("begin to estimate record count");
             let record_count =
                 TaskUtil::estimate_record_count(&task_type, url, db_type, &schemas, &filter)
                     .await?;
+            log_info!("estimate record count: {}", record_count);
+
             self.task_monitor
                 .add_no_window_metrics(TaskMetricsType::ExtractorPlanRecords, record_count);
         }
@@ -222,9 +230,15 @@ impl TaskRunner {
 
             // find pending tables
             let tbs = TaskUtil::list_tbs(url, schema, db_type).await?;
+
+            self.task_monitor
+                .add_no_window_metrics(TaskMetricsType::TotalProgressCount, tbs.len() as u64);
+
+            let mut finished_tbs = 0;
             for tb in tbs.iter() {
                 if snapshot_resumer.check_finished(schema, tb) {
                     log_info!("schema: {}, tb: {}, already finished", schema, tb);
+                    finished_tbs += 1;
                     continue;
                 }
                 if filter.filter_event(schema, tb, &RowType::Insert) {
@@ -233,6 +247,8 @@ impl TaskRunner {
                 }
                 pending_tbs.push_back((schema.to_owned(), tb.to_owned()));
             }
+            self.task_monitor
+                .add_no_window_metrics(TaskMetricsType::FinishedProgressCount, finished_tbs as u64);
         }
 
         // start a thread to flush global monitors
@@ -573,6 +589,8 @@ impl TaskRunner {
                 }
                 .to_string()
             );
+            self.task_monitor
+                .add_no_window_metrics(TaskMetricsType::FinishedProgressCount, 1);
         }
 
         // remove monitors from global monitors
@@ -726,38 +744,62 @@ impl TaskRunner {
         T1: FlushableMonitor + Send + Sync + 'static,
         T2: FlushableMonitor + Send + Sync + 'static,
     {
+        let mut interval = tokio::time::interval(Duration::from_secs(interval_secs));
+        interval.tick().await;
+
         loop {
-            // do an extra flush before exit if task finished
-            let finished = shut_down.load(Ordering::Acquire);
-            if !finished {
-                TimeUtil::sleep_millis(interval_secs * 1000).await;
-            }
-
-            let t1_futures = t1_monitors
-                .iter()
-                .map(|monitor| {
-                    let monitor = monitor.clone();
-                    async move { monitor.flush().await }
-                })
-                .collect::<Vec<_>>();
-
-            let t2_futures = t2_monitors
-                .iter()
-                .map(|monitor| {
-                    let monitor = monitor.clone();
-                    async move { monitor.flush().await }
-                })
-                .collect::<Vec<_>>();
-
-            tokio::join!(
-                futures::future::join_all(t1_futures),
-                futures::future::join_all(t2_futures)
-            );
-
-            if finished {
+            if shut_down.load(Ordering::Acquire) {
+                Self::do_flush_monitors(t1_monitors, t2_monitors).await;
                 break;
             }
+
+            select! {
+                _ = interval.tick() => {
+                    Self::do_flush_monitors(t1_monitors, t2_monitors).await;
+                }
+                _ = Self::wait_for_shutdown(shut_down.clone()) => {
+                    log_info!("task shutdown detected, do final flush");
+                    Self::do_flush_monitors(t1_monitors, t2_monitors).await;
+                    break;
+                }
+            }
         }
+    }
+
+    async fn wait_for_shutdown(shut_down: Arc<AtomicBool>) {
+        loop {
+            if shut_down.load(Ordering::Acquire) {
+                break;
+            }
+            TimeUtil::sleep_millis(100).await;
+        }
+    }
+
+    async fn do_flush_monitors<T1, T2>(t1_monitors: &[Arc<T1>], t2_monitors: &[Arc<T2>])
+    where
+        T1: FlushableMonitor + Send + Sync + 'static,
+        T2: FlushableMonitor + Send + Sync + 'static,
+    {
+        let t1_futures = t1_monitors
+            .iter()
+            .map(|monitor| {
+                let monitor = monitor.clone();
+                async move { monitor.flush().await }
+            })
+            .collect::<Vec<_>>();
+
+        let t2_futures = t2_monitors
+            .iter()
+            .map(|monitor| {
+                let monitor = monitor.clone();
+                async move { monitor.flush().await }
+            })
+            .collect::<Vec<_>>();
+
+        tokio::join!(
+            futures::future::join_all(t1_futures),
+            futures::future::join_all(t2_futures)
+        );
     }
 
     async fn pre_single_task(&self, sinker_data_marker: Option<DataMarker>) -> anyhow::Result<()> {
