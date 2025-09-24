@@ -351,10 +351,12 @@ impl TaskMonitor {
             #[cfg(feature = "metrics")]
             self.prometheus_metrics.set_metrics(&metrics);
         }
-        metrics.insert(
-            TaskMetricsType::Progress,
-            cmp::min(finished_progress_count * 100 / total_progress_count, 100),
-        );
+        if total_progress_count > 0 {
+            metrics.insert(
+                TaskMetricsType::Progress,
+                cmp::min(finished_progress_count * 100 / total_progress_count, 100),
+            );
+        }
 
         Some(metrics)
     }
