@@ -897,7 +897,7 @@ impl TaskRunner {
                 self.task_monitor
                     .add_no_window_metrics(TaskMetricsType::TotalProgressCount, tbs.len() as u64);
                 let mut finished_tbs = 0;
-                
+
                 for tb in tbs.iter() {
                     if snapshot_resumer.check_finished(schema, tb) {
                         log_info!("schema: {}, tb: {}, already finished", schema, tb);
@@ -971,9 +971,11 @@ impl TaskRunner {
                         id: format!("{}.{}", schema, tb),
                     });
                 }
-                
-                self.task_monitor
-                .add_no_window_metrics(TaskMetricsType::FinishedProgressCount, finished_tbs as u64);
+
+                self.task_monitor.add_no_window_metrics(
+                    TaskMetricsType::FinishedProgressCount,
+                    finished_tbs as u64,
+                );
             }
         }
         Ok(pending_tasks)
