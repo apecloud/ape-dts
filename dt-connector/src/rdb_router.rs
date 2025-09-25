@@ -284,7 +284,7 @@ impl RdbRouter {
 
     fn parse_config(config_str: &str, db_type: &DbType) -> anyhow::Result<Vec<String>> {
         let delimiters = vec![',', '.', ':'];
-        let tokens = ConfigTokenParser::parse_config(config_str, db_type, &delimiters)?;
+        let tokens = ConfigTokenParser::parse_config(config_str, db_type, &delimiters, None)?;
         let escape_pairs = SqlUtil::get_escape_pairs(db_type);
         let mut results = Vec::new();
         for t in tokens {

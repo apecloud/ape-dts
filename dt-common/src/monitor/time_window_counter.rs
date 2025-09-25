@@ -19,10 +19,10 @@ impl Default for WindowCounterStatistics {
         Self {
             sum: 0,
             max: 0,
-            min: u64::MAX,
+            min: 0,
             avg_by_count: 0,
             max_by_sec: 0,
-            min_by_sec: u64::MAX,
+            min_by_sec: 0,
             avg_by_sec: 0,
             count: 0,
         }
@@ -72,12 +72,12 @@ impl TimeWindowCounter {
         self.refresh_window();
 
         if self.counters.is_empty() {
-            return WindowCounterStatistics {
-                ..Default::default()
-            };
+            return WindowCounterStatistics::default();
         }
 
         let mut statistics = WindowCounterStatistics::default();
+        statistics.min = u64::MAX;
+        statistics.min_by_sec = u64::MAX;
 
         let mut sum_in_current_sec = 0;
         let mut current_elapsed_secs = None;

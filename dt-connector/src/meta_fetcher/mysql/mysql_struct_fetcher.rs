@@ -88,10 +88,10 @@ impl MysqlStructFetcher {
         };
 
         let sql = format!(
-            "SELECT 
-            SCHEMA_NAME, 
-            DEFAULT_CHARACTER_SET_NAME, 
-            DEFAULT_COLLATION_NAME 
+            "SELECT
+            SCHEMA_NAME,
+            DEFAULT_CHARACTER_SET_NAME,
+            DEFAULT_COLLATION_NAME
             FROM information_schema.schemata
             WHERE {}",
             db_filter
@@ -154,20 +154,20 @@ impl MysqlStructFetcher {
         // refer: https://dev.mysql.com/doc/refman/8.0/en/information-schema-tables-table.html
         let sql = format!(
             "SELECT t.TABLE_SCHEMA,
-                t.TABLE_NAME, 
-                t.ENGINE, 
-                t.TABLE_COMMENT, 
+                t.TABLE_NAME,
+                t.ENGINE,
+                t.TABLE_COMMENT,
                 t.TABLE_COLLATION,
-                c.COLUMN_NAME, 
-                c.ORDINAL_POSITION, 
-                c.COLUMN_DEFAULT, 
-                c.IS_NULLABLE, 
-                c.COLUMN_TYPE, 
-                c.COLUMN_KEY, 
-                c.EXTRA, 
-                c.COLUMN_COMMENT, 
-                c.CHARACTER_SET_NAME, 
-                c.COLLATION_NAME 
+                c.COLUMN_NAME,
+                c.ORDINAL_POSITION,
+                c.COLUMN_DEFAULT,
+                c.IS_NULLABLE,
+                c.COLUMN_TYPE,
+                c.COLUMN_KEY,
+                c.EXTRA,
+                c.COLUMN_COMMENT,
+                c.CHARACTER_SET_NAME,
+                c.COLLATION_NAME
             FROM information_schema.tables t
             LEFT JOIN information_schema.columns c
             ON t.TABLE_SCHEMA = c.TABLE_SCHEMA AND t.TABLE_NAME = c.TABLE_NAME
@@ -267,7 +267,7 @@ impl MysqlStructFetcher {
         // |f              | (rand() * rand()) | DEFAULT_GENERATED |
         // |j              | json_array()      | DEFAULT_GENERATED |
         if extra.starts_with("DEFAULT_GENERATED") || extra.to_lowercase().contains("on update") {
-            if str.to_uppercase().eq("CURRENT_TIMESTAMP")
+            if str.to_uppercase().starts_with("CURRENT_TIMESTAMP")
                 || (str.starts_with("(") && str.ends_with(")"))
             {
                 return Ok(ColumnDefault::Expression(str));
@@ -284,7 +284,7 @@ impl MysqlStructFetcher {
         // such as NOW() or CURRENT_DATE. The exception is that, for TIMESTAMP and DATETIME columns,
         // you can specify CURRENT_TIMESTAMP as the default.
         // 8.0: function or expression will also cause EXTRA to be 'DEFAULT_GENERATED'
-        if str.to_uppercase().eq("CURRENT_TIMESTAMP")
+        if str.to_uppercase().starts_with("CURRENT_TIMESTAMP")
             && matches!(
                 col_type,
                 MysqlColType::DateTime { .. } | MysqlColType::Timestamp { .. }
@@ -417,9 +417,9 @@ impl MysqlStructFetcher {
         let constraint_type_str = ConstraintType::Check.to_str(DbType::Mysql);
         let sql = format!(
             "SELECT
-                tc.CONSTRAINT_SCHEMA, 
-                tc.TABLE_NAME, 
-                tc.CONSTRAINT_NAME, 
+                tc.CONSTRAINT_SCHEMA,
+                tc.TABLE_NAME,
+                tc.CONSTRAINT_NAME,
                 tc.CONSTRAINT_TYPE,
                 cc.CHECK_CLAUSE 
             FROM information_schema.table_constraints tc 

@@ -3,9 +3,12 @@ use std::{collections::HashSet, str::FromStr};
 use chrono::{Duration, Utc};
 use dt_common::{
     config::{
-        config_enums::DbType, config_token_parser::ConfigTokenParser,
-        extractor_config::ExtractorConfig, meta_center_config::MetaCenterConfig,
-        sinker_config::SinkerConfig, task_config::TaskConfig,
+        config_enums::DbType,
+        config_token_parser::{ConfigTokenParser, TokenEscapePair},
+        extractor_config::ExtractorConfig,
+        meta_center_config::MetaCenterConfig,
+        sinker_config::SinkerConfig,
+        task_config::TaskConfig,
     },
     meta::{ddl_meta::ddl_type::DdlType, time::dt_utc_time::DtNaiveTime},
     rdb_filter::RdbFilter,
@@ -398,8 +401,11 @@ impl RdbTestRunner {
             _ => (String::new(), DbType::Mysql),
         };
 
-        let tokens =
-            ConfigTokenParser::parse(&heartbeat_tb, &['.'], &SqlUtil::get_escape_pairs(&db_type));
+        let tokens = ConfigTokenParser::parse(
+            &heartbeat_tb,
+            &['.'],
+            &TokenEscapePair::from_char_pairs(SqlUtil::get_escape_pairs(&db_type)),
+        );
         let db_tb = (tokens[0].clone(), tokens[1].clone());
 
         self.execute_prepare_sqls().await?;
@@ -802,7 +808,11 @@ impl RdbTestRunner {
 
     pub fn parse_full_tb_name(full_tb_name: &str, db_type: &DbType) -> (String, String) {
         let escape_pairs = SqlUtil::get_escape_pairs(db_type);
-        let tokens = ConfigTokenParser::parse(full_tb_name, &['.'], &escape_pairs);
+        let tokens = ConfigTokenParser::parse(
+            full_tb_name,
+            &['.'],
+            &TokenEscapePair::from_char_pairs(escape_pairs.clone()),
+        );
         let (db, tb) = if tokens.len() > 1 {
             (tokens[0].to_string(), tokens[1].to_string())
         } else {
@@ -878,7 +888,8 @@ impl RdbTestRunner {
         if BaseTestRunner::check_path_exists(&filtered_tbs_file) {
             let lines = BaseTestRunner::load_file(&filtered_tbs_file);
             for line in lines.iter() {
-                let db_tb = ConfigTokenParser::parse_config(line, db_type, &delimiters).unwrap();
+                let db_tb =
+                    ConfigTokenParser::parse_config(line, db_type, &delimiters, None).unwrap();
                 if db_tb.len() == 2 {
                     let db = SqlUtil::unescape(&db_tb[0], &escape_pairs[0]);
                     let tb = SqlUtil::unescape(&db_tb[1], &escape_pairs[0]);

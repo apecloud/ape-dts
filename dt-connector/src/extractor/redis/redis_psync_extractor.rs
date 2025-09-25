@@ -15,7 +15,7 @@ use crate::extractor::redis::StreamReader;
 use crate::extractor::resumer::cdc_resumer::CdcResumer;
 use crate::Extractor;
 use dt_common::config::config_enums::{DbType, ExtractType};
-use dt_common::config::config_token_parser::ConfigTokenParser;
+use dt_common::config::config_token_parser::{ConfigTokenParser, TokenEscapePair};
 use dt_common::meta::dt_data::DtData;
 use dt_common::meta::position::Position;
 use dt_common::meta::redis::redis_entry::RedisEntry;
@@ -25,7 +25,7 @@ use dt_common::rdb_filter::RdbFilter;
 use dt_common::utils::sql_util::SqlUtil;
 use dt_common::utils::time_util::TimeUtil;
 use dt_common::{error::Error, log_info};
-use dt_common::{log_debug, log_error, log_position, log_warn};
+use dt_common::{log_debug, log_error, log_position};
 
 pub struct RedisPsyncExtractor {
     pub base_extractor: BaseExtractor,
@@ -221,7 +221,7 @@ impl RedisPsyncExtractor {
         let heartbeat_db_key = ConfigTokenParser::parse(
             &self.heartbeat_key,
             &['.'],
-            &SqlUtil::get_escape_pairs(&DbType::Redis),
+            &TokenEscapePair::from_char_pairs(SqlUtil::get_escape_pairs(&DbType::Redis)),
         );
         let heartbeat_db_id = if heartbeat_db_key.len() == 2 {
             heartbeat_db_key[0].parse()?
@@ -238,7 +238,7 @@ impl RedisPsyncExtractor {
             )
             .await?;
         } else {
-            log_warn!("heartbeat disabled, heartbeat_tb should be like db.key");
+            log_info!("heartbeat disabled, heartbeat_tb should be like db.key");
         }
 
         let mut heartbeat_timestamp = String::new();
@@ -391,7 +391,7 @@ impl RedisPsyncExtractor {
         );
 
         if self.heartbeat_interval_secs == 0 || db_id == i64::MIN || key.is_empty() {
-            log_warn!("heartbeat disabled, heartbeat_tb should be like db_id.key");
+            log_info!("heartbeat disabled, heartbeat_tb should be like db_id.key");
             return Ok(());
         }
 

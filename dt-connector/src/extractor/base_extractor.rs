@@ -6,9 +6,12 @@ use std::sync::{
 use anyhow::bail;
 
 use dt_common::{
-    config::{config_enums::DbType, config_token_parser::ConfigTokenParser},
+    config::{
+        config_enums::DbType,
+        config_token_parser::{ConfigTokenParser, TokenEscapePair},
+    },
     error::Error,
-    log_debug, log_error, log_info, log_warn,
+    log_debug, log_error, log_info,
     meta::{
         dcl_meta::{dcl_data::DclData, dcl_parser::DclParser},
         ddl_meta::ddl_data::DdlData,
@@ -217,7 +220,7 @@ impl BaseExtractor {
         );
 
         if heartbeat_interval_secs == 0 || heartbeat_tb.is_empty() {
-            log_warn!(
+            log_info!(
                 "heartbeat disabled, heartbeat_tb: {}, heartbeat_interval_secs: {}",
                 heartbeat_tb,
                 heartbeat_interval_secs
@@ -225,11 +228,14 @@ impl BaseExtractor {
             return vec![];
         }
 
-        let schema_tb =
-            ConfigTokenParser::parse(heartbeat_tb, &['.'], &SqlUtil::get_escape_pairs(&db_type));
+        let schema_tb = ConfigTokenParser::parse(
+            heartbeat_tb,
+            &['.'],
+            &TokenEscapePair::from_char_pairs(SqlUtil::get_escape_pairs(&db_type)),
+        );
 
         if schema_tb.len() < 2 {
-            log_warn!("heartbeat disabled, heartbeat_tb should be like schema.tb");
+            log_info!("heartbeat disabled, heartbeat_tb should be like schema.tb");
             return vec![];
         }
         schema_tb

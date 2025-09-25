@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use dt_common::config::config_token_parser::TokenEscapePair;
 use dt_common::meta::redis::command::cmd_encoder::CmdEncoder;
 use dt_common::meta::redis::redis_object::RedisCmd;
 use dt_common::{config::config_token_parser::ConfigTokenParser, utils::sql_util::SqlUtil};
@@ -153,7 +154,11 @@ impl RedisTestUtil {
     fn pack_cmd(&self, cmd: &str) -> Vec<u8> {
         // parse cmd args
         let mut redis_cmd = RedisCmd::new();
-        for arg in ConfigTokenParser::parse(cmd, &DELIMITERS, &self.escape_pairs) {
+        for arg in ConfigTokenParser::parse(
+            cmd,
+            &DELIMITERS,
+            &TokenEscapePair::from_char_pairs(self.escape_pairs.clone()),
+        ) {
             let mut arg = arg.clone();
             for (left, right) in &self.escape_pairs {
                 arg = arg
@@ -167,7 +172,11 @@ impl RedisTestUtil {
     }
 
     fn get_cmd_args(&self, cmd: &str) -> Vec<String> {
-        let tokens = ConfigTokenParser::parse(cmd, &DELIMITERS, &self.escape_pairs);
+        let tokens = ConfigTokenParser::parse(
+            cmd,
+            &DELIMITERS,
+            &TokenEscapePair::from_char_pairs(self.escape_pairs.clone()),
+        );
         let mut args = Vec::new();
         for token in tokens.iter() {
             let arg = SqlUtil::unescape(token, &self.escape_pairs[0]);
