@@ -67,4 +67,15 @@ mod test {
         runner.run_struct_test_without_check().await.unwrap();
         // TestBase::run_check_test("pg_to_pg/struct/batch_test/bench_test_1/check").await;
     }
+
+    #[tokio::test]
+    #[serial]
+    async fn struct_batch_bench_test_2() {
+        let mut runner =
+            RdbStructTestRunner::new("pg_to_pg/struct/batch_test/bench_test_2/src_to_dst")
+                .await
+                .unwrap();
+        runner.run_struct_test_without_check().await.unwrap();
+        // TestBase::run_check_test("pg_to_pg/struct/batch_test/bench_test_2/check").await;
+    }
 }

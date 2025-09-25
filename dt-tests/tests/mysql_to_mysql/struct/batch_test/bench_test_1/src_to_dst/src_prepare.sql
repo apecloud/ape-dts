@@ -10,7 +10,7 @@ BEGIN
     DECLARE i INT DEFAULT 1;
     DECLARE db_name VARCHAR(255);
 
-    WHILE i <= 10 DO
+    WHILE i <= 100 DO
         -- Construct the database name, e.g., 'struct_it_mysql2mysql_1'
         SET db_name = CONCAT('struct_it_mysql2mysql_', i);
 
