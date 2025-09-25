@@ -31,5 +31,7 @@ BEGIN
         -- Increment the loop counter.
         SET i = i + 1;
     END WHILE;
-END
+END;
+
+CALL SetupTestDatabases();
 ```
