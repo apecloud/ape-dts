@@ -468,11 +468,12 @@ impl PgStructFetcher {
                 ..Default::default()
             };
 
-            if let Some(table) = results.get_mut(&(table_schema.clone(), table_name.clone())) {
+            let key = (table_schema.clone(), table_name.clone());
+            if let Some(table) = results.get_mut(&key) {
                 table.columns.push(column);
             } else {
                 results.insert(
-                    (table_schema.clone(), table_name.clone()),
+                    key,
                     Table {
                         database_name: table_schema.clone(),
                         schema_name: table_schema,
@@ -1217,10 +1218,11 @@ impl PgStructFetcher {
             return;
         }
 
-        if let Some(exists) = results.get_mut(&(schema_name.to_owned(), table_name.to_owned())) {
+        let key = (schema_name.into(), table_name.into());
+        if let Some(exists) = results.get_mut(&key) {
             exists.push(item);
         } else {
-            results.insert((schema_name.into(), table_name.into()), vec![item]);
+            results.insert(key, vec![item]);
         }
     }
 

@@ -334,17 +334,16 @@ impl ExtractorUtil {
 
             ExtractorConfig::MysqlStruct {
                 url,
-                db,
                 dbs,
                 db_batch_size,
                 ..
             } => {
+                MysqlStructExtractor::validate_db_batch_size(db_batch_size)?;
                 // TODO, pass max_connections as parameter
                 let conn_pool =
                     TaskUtil::create_mysql_conn_pool(&url, 2, enable_sqlx_log, false).await?;
                 let extractor = MysqlStructExtractor {
                     conn_pool,
-                    db,
                     dbs,
                     filter,
                     base_extractor,

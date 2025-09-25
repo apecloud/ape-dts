@@ -96,7 +96,7 @@ impl PgStructExtractor {
     }
 
     pub fn validate_db_batch_size(db_batch_size: usize) -> anyhow::Result<()> {
-        let max_db_batch_size = 100;
+        let max_db_batch_size = 1000;
         let min_db_batch_size = 1;
         if db_batch_size < min_db_batch_size || db_batch_size > max_db_batch_size {
             bail! {Error::ConfigError(format!(r#"db_batch_size {} is not valid, should be in range ({}, {})"#, db_batch_size, min_db_batch_size, max_db_batch_size))}
