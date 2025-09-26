@@ -151,27 +151,18 @@ impl PgStructFetcher {
     ) -> anyhow::Result<HashMap<(String, String), Vec<Sequence>>> {
         let mut results = HashMap::new();
 
-        let (sch_filter, tb_filter) = if !sch.is_empty() {
+        let tb_filter = if !sch.is_empty() {
             if !self.schemas.contains(sch) {
                 return Ok(results);
             }
             if !tb.is_empty() {
-                (
-                    format!("ns.nspname = '{}'", sch),
-                    format!("obj.sequence_schema='{}' AND tab.relname = '{}'", sch, tb),
-                )
+                format!("obj.sequence_schema='{}' AND tab.relname = '{}'", sch, tb)
             } else {
-                (
-                    format!("ns.nspname = '{}'", sch),
-                    format!("obj.sequence_schema = '{}'", sch),
-                )
+                format!("obj.sequence_schema = '{}'", sch)
             }
         } else if !self.schemas.is_empty() {
             let schemas_str = &self.get_schemas_str();
-            (
-                format!("ns.nspname IN ({})", schemas_str),
-                format!("obj.sequence_schema IN ({})", schemas_str),
-            )
+            format!("obj.sequence_schema IN ({})", schemas_str)
         } else {
             return Ok(results);
         };
@@ -197,9 +188,9 @@ impl PgStructFetcher {
             JOIN pg_class AS tab
                 ON (dep.refobjid = tab.oid)
             WHERE {} 
-            AND {} 
+            AND ns.nspname = obj.sequence_schema 
             AND dep.deptype='a'",
-            sch_filter, tb_filter
+            tb_filter
         );
 
         let mut rows = sqlx::query(&sql).fetch(&self.conn_pool);
