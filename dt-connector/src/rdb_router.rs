@@ -213,7 +213,6 @@ impl RdbRouter {
             _ => {}
         }
 
-        struct_data.schema = self.get_schema_map(&struct_data.schema).into();
         struct_data
     }
 
