@@ -247,7 +247,13 @@ impl MysqlCreateTableStatement {
             .columns
             .iter()
             .filter(|x| !x.column_name.is_empty())
-            .map(|x| format!("`{}`", x.column_name))
+            .map(|x| {
+                if let Some(prefix_length) = x.prefix_length {
+                    format!("`{}`({})", x.column_name, prefix_length)
+                } else {
+                    format!("`{}`", x.column_name)
+                }
+            })
             .collect::<Vec<String>>()
             .join(",")
     }
