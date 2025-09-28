@@ -338,7 +338,8 @@ impl ExtractorUtil {
                 db_batch_size,
                 ..
             } => {
-                MysqlStructExtractor::validate_db_batch_size(db_batch_size)?;
+                let db_batch_size_validated =
+                    MysqlStructExtractor::validate_db_batch_size(db_batch_size)?;
                 // TODO, pass max_connections as parameter
                 let conn_pool =
                     TaskUtil::create_mysql_conn_pool(&url, 2, enable_sqlx_log, false).await?;
@@ -347,7 +348,7 @@ impl ExtractorUtil {
                     dbs,
                     filter,
                     base_extractor,
-                    db_batch_size,
+                    db_batch_size: db_batch_size_validated,
                 };
                 Box::new(extractor)
             }
@@ -359,7 +360,8 @@ impl ExtractorUtil {
                 db_batch_size,
                 ..
             } => {
-                PgStructExtractor::validate_db_batch_size(db_batch_size)?;
+                let db_batch_size_validated =
+                    PgStructExtractor::validate_db_batch_size(db_batch_size)?;
                 // TODO, pass max_connections as parameter
                 let conn_pool =
                     TaskUtil::create_pg_conn_pool(&url, 2, enable_sqlx_log, false).await?;
@@ -369,7 +371,7 @@ impl ExtractorUtil {
                     do_global_structs,
                     filter,
                     base_extractor,
-                    db_batch_size,
+                    db_batch_size: db_batch_size_validated,
                 };
                 Box::new(extractor)
             }

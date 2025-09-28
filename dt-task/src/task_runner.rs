@@ -146,21 +146,19 @@ impl TaskRunner {
 
         match &self.config.extractor {
             ExtractorConfig::MysqlStruct { url, .. } | ExtractorConfig::PgStruct { url, .. } => {
-                let mut pending_task = self
+                let mut pending_tasks = self
                     .build_pending_tasks(url, &router, &snapshot_resumer, &cdc_resumer, false)
                     .await?;
-                if !pending_task.is_empty() {
-                    if let Some(task_context) = pending_task.pop_front() {
-                        self.clone()
-                            .start_single_task(
-                                &task_context.extractor_config,
-                                &router,
-                                &snapshot_resumer,
-                                &cdc_resumer,
-                                false,
-                            )
-                            .await?
-                    }
+                if let Some(task_context) = pending_tasks.pop_front() {
+                    self.clone()
+                        .start_single_task(
+                            &task_context.extractor_config,
+                            &router,
+                            &snapshot_resumer,
+                            &cdc_resumer,
+                            false,
+                        )
+                        .await?
                 }
             }
 
@@ -862,7 +860,7 @@ impl TaskRunner {
                 } => ExtractorConfig::MysqlStruct {
                     url: url.clone(),
                     db: db.clone(),
-                    dbs: schemas.clone(),
+                    dbs: schemas,
                     db_batch_size: db_batch_size.clone(),
                 },
                 ExtractorConfig::PgStruct {

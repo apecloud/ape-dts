@@ -1,20 +1,21 @@
 use std::collections::HashSet;
 
-use anyhow::bail;
 use async_trait::async_trait;
-use dt_common::error::Error;
-use dt_common::meta::struct_meta::struct_data::StructData;
-use dt_common::{log_info, rdb_filter::RdbFilter};
-
-use dt_common::meta::struct_meta::statement::struct_statement::StructStatement;
-use dt_common::meta::struct_meta::structure::structure_type::StructureType;
-
 use sqlx::{Pool, Postgres};
 
 use crate::close_conn_pool;
 use crate::{
     extractor::base_extractor::BaseExtractor, meta_fetcher::pg::pg_struct_fetcher::PgStructFetcher,
     Extractor,
+};
+use dt_common::{
+    config::task_config::DEFAULT_DB_BATCH_SIZE,
+    log_info,
+    meta::struct_meta::{
+        statement::struct_statement::StructStatement, struct_data::StructData,
+        structure::structure_type::StructureType,
+    },
+    rdb_filter::RdbFilter,
 };
 
 pub struct PgStructExtractor {
@@ -99,13 +100,11 @@ impl PgStructExtractor {
         self.base_extractor.push_struct(struct_data).await
     }
 
-    pub fn validate_db_batch_size(db_batch_size: usize) -> anyhow::Result<()> {
-        let max_db_batch_size = 1000;
-        let min_db_batch_size = 1;
-        if db_batch_size < min_db_batch_size || db_batch_size > max_db_batch_size {
-            bail! {Error::ConfigError(format!(r#"db_batch_size {} is not valid, should be in range ({}, {})"#, db_batch_size, min_db_batch_size, max_db_batch_size))}
+    pub fn validate_db_batch_size(db_batch_size: usize) -> anyhow::Result<usize> {
+        if db_batch_size < 1 || db_batch_size > 1000 {
+            Ok(DEFAULT_DB_BATCH_SIZE)
         } else {
-            Ok(())
+            Ok(db_batch_size)
         }
     }
 }
