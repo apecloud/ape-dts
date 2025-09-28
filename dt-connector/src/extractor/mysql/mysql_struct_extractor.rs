@@ -10,7 +10,7 @@ use crate::{
 };
 use dt_common::{
     config::task_config::DEFAULT_DB_BATCH_SIZE,
-    log_info,
+    log_info, log_warn,
     meta::{
         mysql::mysql_meta_manager::MysqlMetaManager,
         struct_meta::{statement::struct_statement::StructStatement, struct_data::StructData},
@@ -53,7 +53,7 @@ impl MysqlStructExtractor {
         let meta_manager = MysqlMetaManager::new(self.conn_pool.clone()).await?;
         let mut fetcher = MysqlStructFetcher {
             conn_pool: self.conn_pool.to_owned(),
-            dbs: dbs,
+            dbs,
             filter: Some(self.filter.to_owned()),
             meta_manager,
         };
@@ -83,6 +83,11 @@ impl MysqlStructExtractor {
 
     pub fn validate_db_batch_size(db_batch_size: usize) -> anyhow::Result<usize> {
         if db_batch_size < 1 || db_batch_size > 1000 {
+            log_warn!(
+                "db_batch_size {} is not valid, using default value: {}",
+                db_batch_size,
+                DEFAULT_DB_BATCH_SIZE
+            );
             Ok(DEFAULT_DB_BATCH_SIZE)
         } else {
             Ok(db_batch_size)
