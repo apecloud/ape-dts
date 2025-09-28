@@ -1,4 +1,8 @@
-use std::{cmp, collections::HashMap, sync::Arc};
+use std::{
+    cmp,
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 
 use async_trait::async_trait;
 use futures::TryStreamExt;
@@ -168,20 +172,21 @@ impl MysqlChecker {
 
             let mut struct_fetcher = MysqlStructFetcher {
                 conn_pool: self.conn_pool.to_owned(),
-                db,
+                dbs: HashSet::from([db.clone()]),
                 filter: None,
                 meta_manager: self.meta_manager.clone(),
             };
 
             let mut dst_statement = match &src_statement {
                 StructStatement::MysqlCreateDatabase(_) => {
-                    let dst_statement = struct_fetcher.get_create_database_statement().await?;
-                    StructStatement::MysqlCreateDatabase(dst_statement)
+                    let mut dst_statement =
+                        struct_fetcher.get_create_database_statements(&db).await?;
+                    StructStatement::MysqlCreateDatabase(dst_statement.remove(0))
                 }
 
                 StructStatement::MysqlCreateTable(s) => {
                     let mut dst_statement = struct_fetcher
-                        .get_create_table_statements(&s.table.table_name)
+                        .get_create_table_statements(&s.table.database_name, &s.table.table_name)
                         .await?;
                     if dst_statement.is_empty() {
                         StructStatement::Unknown

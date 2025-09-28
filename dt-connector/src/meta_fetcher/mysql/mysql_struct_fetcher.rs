@@ -26,38 +26,42 @@ use sqlx::{mysql::MySqlRow, MySql, Pool, Row};
 
 pub struct MysqlStructFetcher {
     pub conn_pool: Pool<MySql>,
-    pub db: String,
+    pub dbs: HashSet<String>,
     pub filter: Option<RdbFilter>,
     pub meta_manager: MysqlMetaManager,
 }
 
 impl MysqlStructFetcher {
-    pub async fn get_create_database_statement(
+    pub async fn get_create_database_statements(
         &mut self,
-    ) -> anyhow::Result<MysqlCreateDatabaseStatement> {
-        let database = self.get_database().await?;
-        Ok(MysqlCreateDatabaseStatement { database })
+        db: &str,
+    ) -> anyhow::Result<Vec<MysqlCreateDatabaseStatement>> {
+        let databases = self.get_databases(db).await?;
+        Ok(databases
+            .into_iter()
+            .map(|d| MysqlCreateDatabaseStatement { database: d })
+            .collect())
     }
 
     pub async fn get_create_table_statements(
         &mut self,
+        db: &str,
         tb: &str,
     ) -> anyhow::Result<Vec<MysqlCreateTableStatement>> {
         let mut results = Vec::new();
 
-        let tables = self.get_tables(tb).await?;
-        let mut indexes = self.get_indexes(tb).await?;
-        let mut check_constraints = self.get_check_constraints(tb).await?;
-        let mut foreign_key_constraints = self.get_foreign_key_constraints(tb).await?;
+        let tables = self.get_tables(db, tb).await?;
+        let mut indexes = self.get_indexes(db, tb).await?;
+        let mut check_constraints = self.get_check_constraints(db, tb).await?;
+        let mut foreign_key_constraints = self.get_foreign_key_constraints(db, tb).await?;
 
-        for (table_name, table) in tables {
-            let mut constraints = self.get_result(&mut check_constraints, &table_name);
-            constraints
-                .extend_from_slice(&self.get_result(&mut foreign_key_constraints, &table_name));
+        for (key, table) in tables {
+            let mut constraints = self.get_result(&mut check_constraints, &key);
+            constraints.extend_from_slice(&self.get_result(&mut foreign_key_constraints, &key));
             let statement = MysqlCreateTableStatement {
                 table,
                 constraints,
-                indexes: self.get_result(&mut indexes, &table_name),
+                indexes: self.get_result(&mut indexes, &key),
             };
             results.push(statement);
         }
@@ -65,42 +69,85 @@ impl MysqlStructFetcher {
     }
 
     // Create Database: https://dev.mysql.com/doc/refman/8.0/en/create-database.html
-    async fn get_database(&mut self) -> anyhow::Result<Database> {
+    async fn get_databases(&mut self, db: &str) -> anyhow::Result<Vec<Database>> {
+        let (db_filter, target_dbs) = if !db.is_empty() {
+            if !self.dbs.contains(db) {
+                return Ok(Vec::new());
+            }
+            (
+                format!("SCHEMA_NAME = '{}'", db),
+                HashSet::from([db.to_string()]),
+            )
+        } else if !self.dbs.is_empty() {
+            (
+                format!("SCHEMA_NAME IN ({})", self.get_dbs_str()),
+                self.dbs.clone(),
+            )
+        } else {
+            return Ok(Vec::new());
+        };
+
         let sql = format!(
             "SELECT
             SCHEMA_NAME,
             DEFAULT_CHARACTER_SET_NAME,
             DEFAULT_COLLATION_NAME
             FROM information_schema.schemata
-            WHERE SCHEMA_NAME = '{}'",
-            self.db
+            WHERE {}",
+            db_filter
         );
 
         let mut rows = sqlx::query(&sql).fetch(&self.conn_pool);
-        if let Some(row) = rows.try_next().await? {
+        let mut dbs = HashMap::new();
+        while let Some(row) = rows.try_next().await? {
             let schema_name = Self::get_str_with_null(&row, "SCHEMA_NAME")?;
             let default_character_set_name =
                 Self::get_str_with_null(&row, "DEFAULT_CHARACTER_SET_NAME")?;
             let default_collation_name = Self::get_str_with_null(&row, "DEFAULT_COLLATION_NAME")?;
             let database = Database {
-                name: schema_name,
+                name: schema_name.clone(),
                 default_character_set_name,
                 default_collation_name,
             };
-            return Ok(database);
+            dbs.insert(schema_name.clone(), database);
         }
 
-        bail! {Error::StructError(format!("db: {} not found", self.db))}
+        let filtered_dbs: Vec<String> = target_dbs
+            .iter()
+            .filter(|&s| !dbs.contains_key(s))
+            .cloned()
+            .collect();
+        if !filtered_dbs.is_empty() {
+            bail! {Error::StructError(format!(
+                "dbs: {} not found",
+                filtered_dbs.join(",")
+            ))}
+        }
+
+        Ok(dbs.into_iter().map(|(_, v)| v).collect())
     }
 
-    async fn get_tables(&mut self, tb: &str) -> anyhow::Result<BTreeMap<String, Table>> {
-        let mut results: BTreeMap<String, Table> = BTreeMap::new();
+    async fn get_tables(
+        &mut self,
+        db: &str,
+        tb: &str,
+    ) -> anyhow::Result<BTreeMap<(String, String), Table>> {
+        let mut results: BTreeMap<(String, String), Table> = BTreeMap::new();
 
         // Create Table: https://dev.mysql.com/doc/refman/8.0/en/create-table.html
-        let tb_filter = if !tb.is_empty() {
-            format!("AND t.TABLE_NAME = '{}'", tb)
+        let tb_filter = if !db.is_empty() {
+            if !self.dbs.contains(db) {
+                return Ok(results);
+            }
+            if !tb.is_empty() {
+                format!("t.TABLE_SCHEMA = '{}' AND t.TABLE_NAME = '{}'", db, tb)
+            } else {
+                format!("t.TABLE_SCHEMA = '{}'", db)
+            }
+        } else if !self.dbs.is_empty() {
+            format!("t.TABLE_SCHEMA IN ({})", self.get_dbs_str())
         } else {
-            String::new()
+            return Ok(results);
         };
 
         // BASE TABLE for a table, VIEW for a view, or SYSTEM VIEW for an INFORMATION_SCHEMA table.
@@ -124,10 +171,10 @@ impl MysqlStructFetcher {
             FROM information_schema.tables t
             LEFT JOIN information_schema.columns c
             ON t.TABLE_SCHEMA = c.TABLE_SCHEMA AND t.TABLE_NAME = c.TABLE_NAME
-            WHERE t.TABLE_SCHEMA ='{}' {}
-            AND t.TABLE_TYPE = 'BASE TABLE'
+            WHERE {} 
+            AND t.TABLE_TYPE = 'BASE TABLE' 
             ORDER BY t.TABLE_SCHEMA, t.TABLE_NAME, c.ORDINAL_POSITION",
-            self.db, tb_filter
+            tb_filter
         );
 
         let mut rows = sqlx::query(&sql).fetch(&self.conn_pool);
@@ -137,10 +184,8 @@ impl MysqlStructFetcher {
                 Self::get_str_with_null(&row, "TABLE_NAME")?,
             );
 
-            if let Some(filter) = &mut self.filter {
-                if filter.filter_tb(&db, &tb) {
-                    continue;
-                }
+            if self.filter_tb(&db, &tb) {
+                continue;
             }
 
             let engine_name = Self::get_str_with_null(&row, "ENGINE")?;
@@ -170,15 +215,16 @@ impl MysqlStructFetcher {
                 generated: None,
             };
 
-            if let Some(table) = results.get_mut(&tb) {
+            let key = (db.clone(), tb.clone());
+            if let Some(table) = results.get_mut(&key) {
                 table.columns.push(column);
             } else {
                 let table_collation = Self::get_str_with_null(&row, "TABLE_COLLATION")?;
                 let charset = Self::get_charset_by_collation(&table_collation);
                 results.insert(
-                    tb.clone(),
+                    key,
                     Table {
-                        database_name: db.clone(),
+                        database_name: db,
                         schema_name: String::new(),
                         table_name: tb,
                         engine_name,
@@ -250,14 +296,28 @@ impl MysqlStructFetcher {
         Ok(ColumnDefault::Literal(str))
     }
 
-    async fn get_indexes(&mut self, tb: &str) -> anyhow::Result<HashMap<String, Vec<Index>>> {
-        let mut index_map: HashMap<(String, String), Index> = HashMap::new();
+    async fn get_indexes(
+        &mut self,
+        db: &str,
+        tb: &str,
+    ) -> anyhow::Result<HashMap<(String, String), Vec<Index>>> {
+        let mut results: HashMap<(String, String), Vec<Index>> = HashMap::new();
+        let mut index_map: HashMap<(String, String, String), Index> = HashMap::new();
 
         // Create Index: https://dev.mysql.com/doc/refman/8.0/en/create-index.html
-        let tb_filter = if !tb.is_empty() {
-            format!("AND TABLE_NAME = '{}'", tb)
+        let tb_filter = if !db.is_empty() {
+            if !self.dbs.contains(db) {
+                return Ok(results);
+            }
+            if !tb.is_empty() {
+                format!("TABLE_SCHEMA = '{}' AND TABLE_NAME = '{}'", db, tb)
+            } else {
+                format!("TABLE_SCHEMA = '{}'", db)
+            }
+        } else if !self.dbs.is_empty() {
+            format!("TABLE_SCHEMA IN ({})", self.get_dbs_str())
         } else {
-            String::new()
+            return Ok(results);
         };
 
         let sql = format!(
@@ -270,14 +330,15 @@ impl MysqlStructFetcher {
                 INDEX_TYPE,
                 COMMENT
             FROM information_schema.statistics
-            WHERE INDEX_NAME != '{}' AND TABLE_SCHEMA ='{}' {}
+            WHERE INDEX_NAME != '{}' AND {}
             ORDER BY TABLE_SCHEMA, TABLE_NAME, INDEX_NAME, SEQ_IN_INDEX",
-            "PRIMARY", self.db, tb_filter
+            "PRIMARY", tb_filter
         );
 
         let mut rows = sqlx::query(&sql).fetch(&self.conn_pool);
         while let Some(row) = rows.try_next().await? {
-            let (table_name, index_name) = (
+            let (table_schema, table_name, index_name) = (
+                Self::get_str_with_null(&row, "TABLE_SCHEMA")?,
                 Self::get_str_with_null(&row, "TABLE_NAME")?,
                 Self::get_str_with_null(&row, "INDEX_NAME")?,
             );
@@ -292,7 +353,7 @@ impl MysqlStructFetcher {
                 seq_in_index,
             };
 
-            let key = (table_name.clone(), index_name.clone());
+            let key = (table_schema.clone(), table_name.clone(), index_name.clone());
             if let Some(index) = index_map.get_mut(&key) {
                 index.columns.push(column);
             } else {
@@ -314,9 +375,8 @@ impl MysqlStructFetcher {
             }
         }
 
-        let mut results: HashMap<String, Vec<Index>> = HashMap::new();
-        for ((tb, _index_name), index) in index_map {
-            self.push_to_results(&mut results, &tb, index);
+        for ((db, tb, _index_name), index) in index_map {
+            self.push_to_results(&mut results, &db, &tb, index);
         }
 
         Ok(results)
@@ -324,9 +384,10 @@ impl MysqlStructFetcher {
 
     async fn get_check_constraints(
         &mut self,
+        db: &str,
         tb: &str,
-    ) -> anyhow::Result<HashMap<String, Vec<Constraint>>> {
-        let mut results: HashMap<String, Vec<Constraint>> = HashMap::new();
+    ) -> anyhow::Result<HashMap<(String, String), Vec<Constraint>>> {
+        let mut results: HashMap<(String, String), Vec<Constraint>> = HashMap::new();
         // information_schema.check_constraints was introduced from MySQL 8.0.16
         // also, many MySQL-like databases: PolarDB/PolarX doesn't have check_constraints
         let info_tbs = self.get_information_schema_tables().await?;
@@ -335,10 +396,22 @@ impl MysqlStructFetcher {
         }
 
         // Check Constraint: https://dev.mysql.com/doc/refman/8.0/en/create-table-check-constraints.html
-        let tb_filter = if !tb.is_empty() {
-            format!("AND tc.TABLE_NAME = '{}'", tb)
+        let tb_filter = if !db.is_empty() {
+            if !self.dbs.contains(db) {
+                return Ok(results);
+            }
+            if !tb.is_empty() {
+                format!(
+                    "tc.CONSTRAINT_SCHEMA = '{}' AND tc.TABLE_NAME = '{}'",
+                    db, tb
+                )
+            } else {
+                format!("tc.CONSTRAINT_SCHEMA = '{}'", db)
+            }
+        } else if !self.dbs.is_empty() {
+            format!("tc.CONSTRAINT_SCHEMA IN ({})", self.get_dbs_str())
         } else {
-            String::new()
+            return Ok(results);
         };
 
         let constraint_type_str = ConstraintType::Check.to_str(DbType::Mysql);
@@ -348,13 +421,13 @@ impl MysqlStructFetcher {
                 tc.TABLE_NAME,
                 tc.CONSTRAINT_NAME,
                 tc.CONSTRAINT_TYPE,
-                cc.CHECK_CLAUSE
-            FROM information_schema.table_constraints tc
-            LEFT JOIN information_schema.check_constraints cc
-            ON tc.CONSTRAINT_SCHEMA = cc.CONSTRAINT_SCHEMA AND tc.CONSTRAINT_NAME = cc.CONSTRAINT_NAME
-            WHERE tc.CONSTRAINT_SCHEMA = '{}' {}
-            AND tc.CONSTRAINT_TYPE='{}' ",
-            self.db, tb_filter, constraint_type_str
+                cc.CHECK_CLAUSE 
+            FROM information_schema.table_constraints tc 
+            LEFT JOIN information_schema.check_constraints cc 
+            ON tc.CONSTRAINT_SCHEMA = cc.CONSTRAINT_SCHEMA AND tc.CONSTRAINT_NAME = cc.CONSTRAINT_NAME 
+            WHERE {} 
+            AND tc.CONSTRAINT_TYPE='{}' ", 
+            tb_filter, constraint_type_str
         );
 
         let mut rows = sqlx::query(&sql).fetch(&self.conn_pool);
@@ -365,14 +438,14 @@ impl MysqlStructFetcher {
             let check_clause = Self::get_str_with_null(&row, "CHECK_CLAUSE")?;
             let definition = self.unescape(check_clause).await?;
             let constraint = Constraint {
-                database_name,
+                database_name: database_name.clone(),
                 schema_name: String::new(),
                 table_name: table_name.clone(),
                 constraint_name,
                 constraint_type: ConstraintType::Check,
                 definition,
             };
-            self.push_to_results(&mut results, &table_name, constraint);
+            self.push_to_results(&mut results, &database_name, &table_name, constraint);
         }
 
         Ok(results)
@@ -380,15 +453,28 @@ impl MysqlStructFetcher {
 
     async fn get_foreign_key_constraints(
         &mut self,
+        db: &str,
         tb: &str,
-    ) -> anyhow::Result<HashMap<String, Vec<Constraint>>> {
-        let mut results: HashMap<String, Vec<Constraint>> = HashMap::new();
+    ) -> anyhow::Result<HashMap<(String, String), Vec<Constraint>>> {
+        let mut results: HashMap<(String, String), Vec<Constraint>> = HashMap::new();
 
         // Check Constraint: https://dev.mysql.com/doc/refman/8.0/en/create-table-check-constraints.html
-        let tb_filter = if !tb.is_empty() {
-            format!("AND kcu.TABLE_NAME = '{}'", tb)
+        let tb_filter = if !db.is_empty() {
+            if !self.dbs.contains(db) {
+                return Ok(results);
+            }
+            if !tb.is_empty() {
+                format!(
+                    "kcu.CONSTRAINT_SCHEMA = '{}' AND kcu.TABLE_NAME = '{}'",
+                    db, tb
+                )
+            } else {
+                format!("kcu.CONSTRAINT_SCHEMA = '{}'", db)
+            }
+        } else if !self.dbs.is_empty() {
+            format!("kcu.CONSTRAINT_SCHEMA IN ({})", self.get_dbs_str())
         } else {
-            String::new()
+            return Ok(results);
         };
 
         let constraint_type_str = ConstraintType::Foreign.to_str(DbType::Mysql);
@@ -406,10 +492,10 @@ impl MysqlStructFetcher {
             JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
             ON kcu.CONSTRAINT_NAME = tc.CONSTRAINT_NAME AND kcu.CONSTRAINT_SCHEMA=tc.CONSTRAINT_SCHEMA
             WHERE
-                kcu.CONSTRAINT_SCHEMA = '{}'
-                AND kcu.REFERENCED_TABLE_SCHEMA = '{}' {}
+                {} 
+                AND kcu.REFERENCED_TABLE_SCHEMA = kcu.CONSTRAINT_SCHEMA 
                 AND tc.CONSTRAINT_TYPE = '{}'",
-            self.db, self.db, tb_filter, constraint_type_str,
+            tb_filter, constraint_type_str,
         );
 
         let mut rows = sqlx::query(&sql).fetch(&self.conn_pool);
@@ -425,14 +511,14 @@ impl MysqlStructFetcher {
                 column_name, database_name, referenced_table_name, referenced_column_name
             );
             let constraint = Constraint {
-                database_name,
+                database_name: database_name.clone(),
                 schema_name: String::new(),
                 table_name: table_name.clone(),
                 constraint_name,
                 constraint_type: ConstraintType::Foreign,
                 definition,
             };
-            self.push_to_results(&mut results, &table_name, constraint);
+            self.push_to_results(&mut results, &database_name, &table_name, constraint);
         }
         Ok(results)
     }
@@ -455,9 +541,12 @@ impl MysqlStructFetcher {
         Ok(String::new())
     }
 
-    fn filter_tb(&mut self, tb: &str) -> bool {
+    fn filter_tb(&mut self, db: &str, tb: &str) -> bool {
+        if !self.dbs.contains(db) {
+            return true;
+        }
         if let Some(filter) = &mut self.filter {
-            return filter.filter_tb(&self.db, tb);
+            return filter.filter_tb(db, tb);
         }
         false
     }
@@ -509,22 +598,36 @@ impl MysqlStructFetcher {
 
     fn push_to_results<T>(
         &mut self,
-        results: &mut HashMap<String, Vec<T>>,
+        results: &mut HashMap<(String, String), Vec<T>>,
+        table_schema: &str,
         table_name: &str,
         item: T,
     ) {
-        if self.filter_tb(table_name) {
+        if self.filter_tb(table_schema, table_name) {
             return;
         }
 
-        if let Some(exists) = results.get_mut(table_name) {
+        let key = (table_schema.into(), table_name.into());
+        if let Some(exists) = results.get_mut(&key) {
             exists.push(item);
         } else {
-            results.insert(table_name.into(), vec![item]);
+            results.insert(key, vec![item]);
         }
     }
 
-    fn get_result<T>(&self, results: &mut HashMap<String, Vec<T>>, table_name: &str) -> Vec<T> {
-        results.remove(table_name).unwrap_or_default()
+    fn get_result<T>(
+        &self,
+        results: &mut HashMap<(String, String), Vec<T>>,
+        key: &(String, String),
+    ) -> Vec<T> {
+        results.remove(key).unwrap_or_default()
+    }
+
+    fn get_dbs_str(&self) -> String {
+        self.dbs
+            .iter()
+            .map(|s| format!("'{}'", s))
+            .collect::<Vec<_>>()
+            .join(",")
     }
 }
