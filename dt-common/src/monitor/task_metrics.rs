@@ -20,6 +20,9 @@ pub enum TaskMetricsType {
     // TODO:
     Delay,
     Timestamp,
+    Progress,
+    TotalProgressCount,
+    FinishedProgressCount,
 
     // TODO: These metrics describe the records and bytes pulled by extractor, different from ExtractorPushed*, which describe the overall traffic before filtering
     ExtractorRpsMax,

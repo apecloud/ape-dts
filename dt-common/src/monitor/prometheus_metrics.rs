@@ -179,6 +179,11 @@ impl PrometheusMetrics {
                         "the records estimated by extractor plan",
                         TaskMetricsType::ExtractorPlanRecords,
                     );
+                    register_handler(
+                        "progress",
+                        "the progress of task",
+                        TaskMetricsType::Progress,
+                    );
                 }
                 TaskType::Cdc => {
                     register_handler(

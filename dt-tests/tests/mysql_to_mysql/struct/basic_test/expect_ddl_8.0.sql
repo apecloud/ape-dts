@@ -105,6 +105,9 @@ CREATE TABLE `full_index_type` (
   `f_11` varchar(10) CHARACTER SET utf8mb3 COLLATE utf8mb3_general_ci DEFAULT NULL,
   `f_12` varchar(10) CHARACTER SET utf8mb3 COLLATE utf8mb3_general_ci DEFAULT NULL,
   `f_13` varchar(10) CHARACTER SET utf8mb3 COLLATE utf8mb3_general_ci DEFAULT NULL,
+  `f_14` text CHARACTER SET utf8mb3 COLLATE utf8mb3_general_ci,
+  `f_15` blob,
+  `f_16` varchar(10) CHARACTER SET utf8mb3 COLLATE utf8mb3_general_ci DEFAULT NULL,
   PRIMARY KEY (`id`),
   UNIQUE KEY `idx_unique_1` (`f_1`,`f_2`,`f_3`),
   UNIQUE KEY `idx_unique_2` (`f_3`),
@@ -113,7 +116,9 @@ CREATE TABLE `full_index_type` (
   FULLTEXT KEY `idx_full_text_2` (`f_8`),
   KEY `idx_btree_text_1` (`f_10`),
   KEY `idx_btree_text_2` (`f_11`),
-  KEY `idx_btree_text_3` (`f_13`,`f_12`)
+  KEY `idx_btree_text_3` (`f_13`,`f_12`),
+  KEY `idx_prefix_1` (`f_14`(10),`f_15`(12)),
+  KEY `idx_prefix_2` (`f_16`(3))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb3
 
 struct_it_mysql2mysql_1.constraint_table

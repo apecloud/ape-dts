@@ -49,4 +49,6 @@ pub enum IndexType {
 pub struct IndexColumn {
     pub column_name: String,
     pub seq_in_index: u32,
+    // For example, in MySQL, indexes on BLOB and TEXT fields must specify a size, which is recorded in prefix_length
+    pub prefix_length: Option<u64>,
 }

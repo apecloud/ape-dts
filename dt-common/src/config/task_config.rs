@@ -50,6 +50,8 @@ pub struct TaskConfig {
     pub metrics: MetricsConfig,
 }
 
+pub const DEFAULT_DB_BATCH_SIZE: usize = 100;
+
 // sections
 const EXTRACTOR: &str = "extractor";
 const SINKER: &str = "sinker";
@@ -176,6 +178,12 @@ impl TaskConfig {
                 ExtractType::Struct => ExtractorConfig::MysqlStruct {
                     url,
                     db: String::new(),
+                    dbs: Vec::new(),
+                    db_batch_size: loader.get_with_default(
+                        EXTRACTOR,
+                        "db_batch_size",
+                        DEFAULT_DB_BATCH_SIZE,
+                    ),
                 },
 
                 ExtractType::FoxlakeS3 => {
@@ -233,7 +241,13 @@ impl TaskConfig {
                 ExtractType::Struct => ExtractorConfig::PgStruct {
                     url,
                     schema: String::new(),
+                    schemas: Vec::new(),
                     do_global_structs: false,
+                    db_batch_size: loader.get_with_default(
+                        EXTRACTOR,
+                        "db_batch_size",
+                        DEFAULT_DB_BATCH_SIZE,
+                    ),
                 },
 
                 _ => bail! { not_supported_err },
