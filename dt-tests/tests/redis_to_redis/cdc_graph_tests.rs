@@ -6,7 +6,6 @@ mod test {
     #[tokio::test]
     #[serial]
     async fn cdc_cmds_test() {
-        TestBase::run_redis_graph_cdc_test("redis_to_redis/cdc/graph/cmds_test", 2000, 10000)
-            .await;
+        TestBase::run_redis_graph_cdc_test("redis_to_redis/cdc/graph/cmds_test", 2000, 10000).await;
     }
 }
