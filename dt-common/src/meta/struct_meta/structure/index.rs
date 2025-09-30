@@ -9,6 +9,7 @@ pub struct Index {
     pub index_kind: IndexKind,
     pub index_type: IndexType,
     pub comment: String,
+    // TODO: table space is not currently supported.
     pub table_space: String,
     pub definition: String,
     pub columns: Vec<IndexColumn>,
