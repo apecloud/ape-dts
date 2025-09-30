@@ -183,6 +183,37 @@ services:
       start_period: 10s
       interval: 3s
 
+  # FalkorDB (RedisGraph) instances
+  falkordb-src:
+    image: falkordb/falkordb:v4.12.5
+    container_name: falkordb-src-ci
+    ports:
+      - "6381:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "123456", "ping"]
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+      interval: 3s
+    environment:
+      - REDIS_ARGS=--requirepass 123456 --save 60 1 --loglevel warning
+      - FALKORDB_ARGS=MAX_INFO_QUERIES 0
+
+  falkordb-dst:
+    image: falkordb/falkordb:v4.12.5
+    container_name: falkordb-dst-ci
+    ports:
+      - "6391:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "123456", "ping"]
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+      interval: 3s
+    environment:
+      - REDIS_ARGS=--requirepass 123456 --save 60 1 --loglevel warning
+      - FALKORDB_ARGS=MAX_INFO_QUERIES 0
+
   # ClickHouse for testing
   clickhouse:
     image: yandex/clickhouse-server:21.8

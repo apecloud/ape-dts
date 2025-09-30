@@ -213,6 +213,11 @@ impl TestBase {
         runner.run_snapshot_test().await.unwrap();
     }
 
+    pub async fn run_redis_graph_snapshot_test(test_dir: &str) {
+        let mut runner = RedisTestRunner::new_default(test_dir).await.unwrap();
+        runner.run_snapshot_test().await.unwrap();
+    }
+
     pub async fn run_redis_cdc_test(test_dir: &str, start_millis: u64, parse_millis: u64) {
         let mut runner = RedisTestRunner::new_default(test_dir).await.unwrap();
         runner
@@ -233,6 +238,14 @@ impl TestBase {
         let mut runner = RedisTestRunner::new(test_dir, vec![('\'', '\'')])
             .await
             .unwrap();
+        runner
+            .run_cdc_test(start_millis, parse_millis)
+            .await
+            .unwrap();
+    }
+
+    pub async fn run_redis_graph_cdc_test(test_dir: &str, start_millis: u64, parse_millis: u64) {
+        let mut runner = RedisTestRunner::new_default(test_dir).await.unwrap();
         runner
             .run_cdc_test(start_millis, parse_millis)
             .await
