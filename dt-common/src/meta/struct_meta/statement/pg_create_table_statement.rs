@@ -187,8 +187,7 @@ impl PgCreateTableStatement {
                 s.tb = index.table_name.clone();
                 s.if_not_exists = true;
             }
-            let sql = format!("{} TABLESPACE {}", ddl_data.to_sql(), index.table_space);
-            Ok(sql)
+            Ok(ddl_data.to_sql())
         } else {
             bail! {Error::Unexpected( format!(
                 "failed to parse index, schema: {}, tb: {}, definition: {}",
