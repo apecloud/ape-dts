@@ -456,12 +456,15 @@ impl RedisPsyncExtractor {
         position: Position,
     ) -> anyhow::Result<()> {
         // currently only support db filter
+        entry.data_size = entry.get_data_malloc_size();
         if filter.filter_schema(&entry.db_id.to_string()) {
+            base_extractor
+                .record_filtered_dt_data(DtData::Redis { entry })
+                .await;
             base_extractor
                 .push_dt_data(DtData::Heartbeat {}, position)
                 .await
         } else {
-            entry.data_size = entry.get_data_malloc_size();
             base_extractor
                 .push_dt_data(DtData::Redis { entry }, position)
                 .await

@@ -447,11 +447,14 @@ impl MongoCdcExtractor {
             .filter_event(&row_data.schema, &row_data.tb, &row_data.row_type)
         {
             self.base_extractor
+                .record_filtered_dt_data(DtData::Dml { row_data })
+                .await;
+            return self
+                .base_extractor
                 .push_dt_data(DtData::Heartbeat {}, position)
-                .await
-        } else {
-            self.base_extractor.push_row(row_data, position).await
+                .await;
         }
+        self.base_extractor.push_row(row_data, position).await
     }
 
     fn parse_start_timestamp(&mut self) -> Timestamp {

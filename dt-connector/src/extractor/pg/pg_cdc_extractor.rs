@@ -317,18 +317,20 @@ impl PgCdcExtractor {
         let tb_meta = self
             .meta_manager
             .get_tb_meta_by_oid(event.rel_id() as i32)?;
-        if self.filter_event(&tb_meta, RowType::Insert) {
-            return Ok(());
-        }
-
         let col_values = self.parse_row_data(&tb_meta, event.tuple().tuple_data())?;
         let row_data = RowData::new(
-            tb_meta.basic.schema,
-            tb_meta.basic.tb,
+            tb_meta.basic.schema.clone(),
+            tb_meta.basic.tb.clone(),
             RowType::Insert,
             None,
             Some(col_values),
         );
+        if self.filter_event(&tb_meta, RowType::Insert) {
+            self.base_extractor
+                .record_filtered_dt_data(DtData::Dml { row_data })
+                .await;
+            return Ok(());
+        }
 
         if ddl_meta.len() == 2 && row_data.schema == ddl_meta[0] && row_data.tb == ddl_meta[1] {
             return self.decode_ddl(&row_data, position).await;
@@ -345,10 +347,6 @@ impl PgCdcExtractor {
         let tb_meta = self
             .meta_manager
             .get_tb_meta_by_oid(event.rel_id() as i32)?;
-        if self.filter_event(&tb_meta, RowType::Update) {
-            return Ok(());
-        }
-
         let basic = &tb_meta.basic;
         let col_values_after = self.parse_row_data(&tb_meta, event.new_tuple().tuple_data())?;
         let col_values_before = if let Some(old_tuple) = event.old_tuple() {
@@ -372,6 +370,12 @@ impl PgCdcExtractor {
             Some(col_values_before),
             Some(col_values_after),
         );
+        if self.filter_event(&tb_meta, RowType::Update) {
+            self.base_extractor
+                .record_filtered_dt_data(DtData::Dml { row_data })
+                .await;
+            return Ok(());
+        }
         self.push_row_to_buf(row_data, position.clone()).await
     }
 
@@ -383,10 +387,6 @@ impl PgCdcExtractor {
         let tb_meta = self
             .meta_manager
             .get_tb_meta_by_oid(event.rel_id() as i32)?;
-        if self.filter_event(&tb_meta, RowType::Delete) {
-            return Ok(());
-        }
-
         let col_values = if let Some(old_tuple) = event.old_tuple() {
             self.parse_row_data(&tb_meta, old_tuple.tuple_data())?
         } else if let Some(key_tuple) = event.key_tuple() {
@@ -396,12 +396,18 @@ impl PgCdcExtractor {
         };
 
         let row_data = RowData::new(
-            tb_meta.basic.schema,
-            tb_meta.basic.tb,
+            tb_meta.basic.schema.clone(),
+            tb_meta.basic.tb.clone(),
             RowType::Delete,
             Some(col_values),
             None,
         );
+        if self.filter_event(&tb_meta, RowType::Delete) {
+            self.base_extractor
+                .record_filtered_dt_data(DtData::Dml { row_data })
+                .await;
+            return Ok(());
+        }
         self.push_row_to_buf(row_data, position.clone()).await
     }
 

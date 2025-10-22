@@ -11,6 +11,7 @@
 ## Source
 
 ```
+POSTGRES_IMAGE=postgres:16.10-alpine3.22
 docker run --name some-postgres-1 \
 -p 5433:5432 \
 -e POSTGRES_PASSWORD=postgres \

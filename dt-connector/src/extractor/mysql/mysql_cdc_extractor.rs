@@ -221,10 +221,6 @@ impl MysqlCdcExtractor {
             EventData::WriteRows(mut w) => {
                 for event in w.rows.iter_mut() {
                     let table_map_event = ctx.table_map_event_map.get(&w.table_id).unwrap();
-                    if self.filter_event(table_map_event, RowType::Insert) {
-                        continue;
-                    }
-
                     let col_values = self
                         .parse_row_data(table_map_event, &w.included_columns, event)
                         .await?;
@@ -235,6 +231,12 @@ impl MysqlCdcExtractor {
                         None,
                         Some(col_values),
                     );
+                    if self.filter_event(table_map_event, RowType::Insert) {
+                        self.base_extractor
+                            .record_filtered_dt_data(DtData::Dml { row_data })
+                            .await;
+                        continue;
+                    }
                     self.push_row_to_buf(row_data, position.clone()).await?;
                 }
             }
@@ -242,10 +244,6 @@ impl MysqlCdcExtractor {
             EventData::UpdateRows(mut u) => {
                 for event in u.rows.iter_mut() {
                     let table_map_event = ctx.table_map_event_map.get(&u.table_id).unwrap();
-                    if self.filter_event(table_map_event, RowType::Update) {
-                        continue;
-                    }
-
                     let col_values_before = self
                         .parse_row_data(table_map_event, &u.included_columns_before, &mut event.0)
                         .await?;
@@ -259,6 +257,12 @@ impl MysqlCdcExtractor {
                         Some(col_values_before),
                         Some(col_values_after),
                     );
+                    if self.filter_event(table_map_event, RowType::Update) {
+                        self.base_extractor
+                            .record_filtered_dt_data(DtData::Dml { row_data })
+                            .await;
+                        continue;
+                    }
                     self.push_row_to_buf(row_data, position.clone()).await?;
                 }
             }
@@ -266,10 +270,6 @@ impl MysqlCdcExtractor {
             EventData::DeleteRows(mut d) => {
                 for event in d.rows.iter_mut() {
                     let table_map_event = ctx.table_map_event_map.get(&d.table_id).unwrap();
-                    if self.filter_event(table_map_event, RowType::Delete) {
-                        continue;
-                    }
-
                     let col_values = self
                         .parse_row_data(table_map_event, &d.included_columns, event)
                         .await?;
@@ -280,6 +280,12 @@ impl MysqlCdcExtractor {
                         Some(col_values),
                         None,
                     );
+                    if self.filter_event(table_map_event, RowType::Delete) {
+                        self.base_extractor
+                            .record_filtered_dt_data(DtData::Dml { row_data })
+                            .await;
+                        continue;
+                    }
                     self.push_row_to_buf(row_data, position.clone()).await?;
                 }
             }

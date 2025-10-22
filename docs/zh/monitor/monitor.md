@@ -66,6 +66,11 @@ counter_time_window_secs=60
 | sum | 窗口内，总共拉取数据条数 |
 | max_by_sec | 窗口内，每秒最大拉取数据条数 |
 
+任务指标中同时会提供两组吞吐相关的指标：
+
+- `extractor_rps_*` / `extractor_bps_*`：记录抽取端在过滤前的原始行数和字节速率。
+- `extractor_pushed_rps_*` / `extractor_pushed_bps_*`：记录过滤后、准备进入队列的数据量。
+
 <br/>
 
 - data_bytes

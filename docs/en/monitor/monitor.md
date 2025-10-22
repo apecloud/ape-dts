@@ -61,6 +61,11 @@ counter_time_window_secs=60
 | sum | Number of entries pulled in time window |
 | max_by_sec | Maximum number of entries pulled per second in time window |
 
+Task metrics also expose two groups of throughput gauges:
+
+- `extractor_rps_*` / `extractor_bps_*`: raw rows and bytes pulled from upstream before any task-level filtering.
+- `extractor_pushed_rps_*` / `extractor_pushed_bps_*`: rows and bytes that remain after filtering and are ready to be queued.
+
 <br/>
 
 - data_bytes
