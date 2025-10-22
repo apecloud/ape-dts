@@ -24,7 +24,7 @@ impl From<(String, String)> for TokenEscapePair {
 
 impl TokenEscapePair {
     pub fn from_char_pairs(char_pairs: Vec<(char, char)>) -> Vec<Self> {
-        char_pairs.into_iter().map(|e| Self::from(e)).collect()
+        char_pairs.into_iter().map(Self::from).collect()
     }
 
     pub fn match_escape_left(&self, chars: &[char], start_index: usize) -> bool {
@@ -188,7 +188,7 @@ impl ConfigTokenParser {
                     token.push(*c);
                     read_count += 1;
                     if read_count > prefix_len
-                        && escape_pair.match_escape_right(&chars, start_index + read_count - 1)
+                        && escape_pair.match_escape_right(chars, start_index + read_count - 1)
                     {
                         break;
                     }

@@ -124,7 +124,7 @@ impl MysqlStructFetcher {
             ))}
         }
 
-        Ok(dbs.into_iter().map(|(_, v)| v).collect())
+        Ok(dbs.into_values().collect())
     }
 
     async fn get_tables(

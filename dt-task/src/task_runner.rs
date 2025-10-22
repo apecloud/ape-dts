@@ -861,10 +861,10 @@ impl TaskRunner {
             TaskUtil::create_connection_clients(&self.config).await?;
 
         let mut pending_tasks = VecDeque::new();
-        let is_db_extractor_config = match &self.config.extractor {
-            ExtractorConfig::MysqlStruct { .. } | ExtractorConfig::PgStruct { .. } => true,
-            _ => false,
-        };
+        let is_db_extractor_config = matches!(
+            &self.config.extractor,
+            ExtractorConfig::MysqlStruct { .. } | ExtractorConfig::PgStruct { .. }
+        );
 
         if is_db_extractor_config {
             let db_extractor_config = match &self.config.extractor {
@@ -877,7 +877,7 @@ impl TaskRunner {
                     url: url.clone(),
                     db: db.clone(),
                     dbs: schemas,
-                    db_batch_size: db_batch_size.clone(),
+                    db_batch_size: *db_batch_size,
                 },
                 ExtractorConfig::PgStruct {
                     url,
@@ -888,9 +888,9 @@ impl TaskRunner {
                 } => ExtractorConfig::PgStruct {
                     url: url.clone(),
                     schema: schema.clone(),
-                    schemas: schemas,
-                    do_global_structs: do_global_structs.clone(),
-                    db_batch_size: db_batch_size.clone(),
+                    schemas,
+                    do_global_structs: *do_global_structs,
+                    db_batch_size: *db_batch_size,
                 },
                 _ => {
                     bail! {Error::ConfigError("unsupported extractor config type".into())}
@@ -898,12 +898,12 @@ impl TaskRunner {
             };
             pending_tasks.push_back(TaskCtx {
                 extractor_config: db_extractor_config,
-                router: router,
-                snapshot_resumer: snapshot_resumer,
-                cdc_resumer: cdc_resumer,
+                router,
+                snapshot_resumer,
+                cdc_resumer,
                 id: "".to_string(),
-                extractor_client: extractor_client,
-                sinker_client: sinker_client,
+                extractor_client,
+                sinker_client,
             });
         } else {
             for schema in schemas.iter() {
@@ -981,9 +981,9 @@ impl TaskRunner {
                     };
                     pending_tasks.push_back(TaskCtx {
                         extractor_config: tb_extractor_config,
-                        router: router,
-                        snapshot_resumer: snapshot_resumer,
-                        cdc_resumer: cdc_resumer,
+                        router,
+                        snapshot_resumer,
+                        cdc_resumer,
                         id: format!("{}.{}", schema, tb),
                         extractor_client: extractor_client.clone(),
                         sinker_client: sinker_client.clone(),
