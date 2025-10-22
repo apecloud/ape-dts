@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use anyhow::bail;
 use async_trait::async_trait;
-use dt_common::rdb_filter::RdbFilter;
+use dt_common::{config::task_config::DEFAULT_MAX_CONNECTIONS, rdb_filter::RdbFilter};
 use dt_task::task_util::TaskUtil;
 use mongodb::{
     bson::{doc, Bson, Document},
@@ -24,7 +24,8 @@ pub struct MongoFetcher {
 #[async_trait]
 impl Fetcher for MongoFetcher {
     async fn build_connection(&mut self) -> anyhow::Result<()> {
-        self.pool = Some(TaskUtil::create_mongo_client(&self.url, "").await?);
+        self.pool =
+            Some(TaskUtil::create_mongo_client(&self.url, "", DEFAULT_MAX_CONNECTIONS).await?);
         Ok(())
     }
 

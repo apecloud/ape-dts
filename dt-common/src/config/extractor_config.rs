@@ -165,4 +165,5 @@ pub struct BasicExtractorConfig {
     pub db_type: DbType,
     pub extract_type: ExtractType,
     pub url: String,
+    pub max_connections: u32,
 }

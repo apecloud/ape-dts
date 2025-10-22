@@ -10,16 +10,13 @@ use dt_common::{
     config::{
         config_enums::{DbType, ExtractType},
         extractor_config::ExtractorConfig,
-        task_config::TaskConfig,
+        task_config::{TaskConfig, DEFAULT_MAX_CONNECTIONS},
     },
     meta::{
-        avro::avro_converter::AvroConverter, mongo::mongo_cdc_source::MongoCdcSource,
-        pg::pg_meta_manager::PgMetaManager, redis::redis_statistic_type::RedisStatisticType,
-        syncer::Syncer,
-    },
-    meta::{
-        dt_queue::DtQueue, mysql::mysql_meta_manager::MysqlMetaManager,
-        rdb_meta_manager::RdbMetaManager,
+        avro::avro_converter::AvroConverter, dt_queue::DtQueue,
+        mongo::mongo_cdc_source::MongoCdcSource, mysql::mysql_meta_manager::MysqlMetaManager,
+        pg::pg_meta_manager::PgMetaManager, rdb_meta_manager::RdbMetaManager,
+        redis::redis_statistic_type::RedisStatisticType, syncer::Syncer,
     },
     monitor::monitor::Monitor,
     rdb_filter::RdbFilter,
@@ -58,6 +55,8 @@ use dt_connector::{
     Extractor,
 };
 
+use crate::task_util::ConnClient;
+
 use super::task_util::TaskUtil;
 
 pub struct ExtractorUtil {}
@@ -66,6 +65,7 @@ impl ExtractorUtil {
     pub async fn create_extractor(
         config: &TaskConfig,
         extractor_config: &ExtractorConfig,
+        extractor_client: ConnClient,
         buffer: Arc<DtQueue>,
         shut_down: Arc<AtomicBool>,
         syncer: Arc<Mutex<Syncer>>,
@@ -96,11 +96,6 @@ impl ExtractorUtil {
                 parallel_size,
                 batch_size,
             } => {
-                // max_connections: 1 for extracting data from table, 1 for db-meta-manager
-                let max_connections = cmp::max(2, parallel_size as u32 + 1);
-                let conn_pool =
-                    TaskUtil::create_mysql_conn_pool(&url, max_connections, enable_sqlx_log, false)
-                        .await?;
                 let meta_manager = TaskUtil::create_mysql_meta_manager(
                     &url,
                     &config.runtime.log_level,
@@ -108,8 +103,20 @@ impl ExtractorUtil {
                     config.meta_center.clone(),
                 )
                 .await?;
+                let conn_pool = match extractor_client {
+                    ConnClient::MySQL(conn_pool) => conn_pool,
+                    _ => {
+                        TaskUtil::create_mysql_conn_pool(
+                            &url,
+                            DEFAULT_MAX_CONNECTIONS,
+                            enable_sqlx_log,
+                            false,
+                        )
+                        .await?
+                    }
+                };
                 let extractor = MysqlSnapshotExtractor {
-                    conn_pool: conn_pool.clone(),
+                    conn_pool,
                     meta_manager,
                     resumer: snapshot_resumer,
                     db,
@@ -200,8 +207,18 @@ impl ExtractorUtil {
                 sample_interval,
                 batch_size,
             } => {
-                let conn_pool =
-                    TaskUtil::create_pg_conn_pool(&url, 2, enable_sqlx_log, false).await?;
+                let conn_pool = match extractor_client {
+                    ConnClient::PostgreSQL(conn_pool) => conn_pool,
+                    _ => {
+                        TaskUtil::create_pg_conn_pool(
+                            &url,
+                            DEFAULT_MAX_CONNECTIONS,
+                            enable_sqlx_log,
+                            false,
+                        )
+                        .await?
+                    }
+                };
                 let meta_manager = PgMetaManager::new(conn_pool.clone()).await?;
                 let extractor = PgSnapshotExtractor {
                     conn_pool,
@@ -279,7 +296,13 @@ impl ExtractorUtil {
                 db,
                 tb,
             } => {
-                let mongo_client = TaskUtil::create_mongo_client(&url, &app_name).await?;
+                let mongo_client = match extractor_client {
+                    ConnClient::MongoDB(mongo_client) => mongo_client,
+                    _ => {
+                        TaskUtil::create_mongo_client(&url, &app_name, DEFAULT_MAX_CONNECTIONS)
+                            .await?
+                    }
+                };
                 let extractor = MongoSnapshotExtractor {
                     resumer: snapshot_resumer,
                     db,
@@ -299,7 +322,8 @@ impl ExtractorUtil {
                 heartbeat_interval_secs,
                 heartbeat_tb,
             } => {
-                let mongo_client = TaskUtil::create_mongo_client(&url, &app_name).await?;
+                let mongo_client =
+                    TaskUtil::create_mongo_client(&url, &app_name, DEFAULT_MAX_CONNECTIONS).await?;
                 let extractor = MongoCdcExtractor {
                     filter,
                     resume_token,
@@ -322,7 +346,8 @@ impl ExtractorUtil {
                 check_log_dir,
                 batch_size,
             } => {
-                let mongo_client = TaskUtil::create_mongo_client(&url, &app_name).await?;
+                let mongo_client =
+                    TaskUtil::create_mongo_client(&url, &app_name, DEFAULT_MAX_CONNECTIONS).await?;
                 let extractor = MongoCheckExtractor {
                     mongo_client,
                     check_log_dir,

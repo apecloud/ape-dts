@@ -23,7 +23,7 @@ use tokio::{
 use super::{
     extractor_util::ExtractorUtil, parallelizer_util::ParallelizerUtil, sinker_util::SinkerUtil,
 };
-use crate::task_util::TaskUtil;
+use crate::task_util::{ConnClient, TaskUtil};
 use dt_common::{
     config::{
         config_enums::{build_task_type, DbType, PipelineType},
@@ -63,9 +63,11 @@ use dt_pipeline::{
 use dt_common::monitor::prometheus_metrics::PrometheusMetrics;
 
 #[derive(Clone)]
-pub struct TaskContext<'a> {
+pub struct TaskCtx<'a> {
     pub id: String,
     pub extractor_config: ExtractorConfig,
+    pub extractor_client: ConnClient,
+    pub sinker_client: ConnClient,
     pub router: &'a RdbRouter,
     pub snapshot_resumer: &'a SnapshotResumer,
     pub cdc_resumer: &'a CdcResumer,
@@ -153,6 +155,8 @@ impl TaskRunner {
                     self.clone()
                         .start_single_task(
                             &task_context.extractor_config,
+                            task_context.extractor_client,
+                            task_context.sinker_client,
                             &router,
                             &snapshot_resumer,
                             &cdc_resumer,
@@ -174,6 +178,8 @@ impl TaskRunner {
                 self.clone()
                     .start_single_task(
                         &self.config.extractor,
+                        ConnClient::default(),
+                        ConnClient::default(),
                         &router,
                         &snapshot_resumer,
                         &cdc_resumer,
@@ -255,7 +261,7 @@ impl TaskRunner {
 
     async fn spawn_single_task(
         self,
-        task_context: TaskContext<'_>,
+        task_context: TaskCtx<'_>,
         join_set: &mut JoinSet<(String, anyhow::Result<()>)>,
         semaphore: &Arc<tokio::sync::Semaphore>,
     ) -> anyhow::Result<()> {
@@ -271,6 +277,8 @@ impl TaskRunner {
             let res = me
                 .start_single_task(
                     &extractor_config,
+                    task_context.extractor_client,
+                    task_context.sinker_client,
                     &router,
                     &snapshot_resumer,
                     &cdc_resumer,
@@ -285,6 +293,8 @@ impl TaskRunner {
     async fn start_single_task(
         self,
         extractor_config: &ExtractorConfig,
+        extractor_client: ConnClient,
+        sinker_client: ConnClient,
         router: &RdbRouter,
         snapshot_resumer: &SnapshotResumer,
         cdc_resumer: &CdcResumer,
@@ -338,6 +348,7 @@ impl TaskRunner {
         let mut extractor = ExtractorUtil::create_extractor(
             &self.config,
             extractor_config,
+            extractor_client,
             buffer.clone(),
             shut_down.clone(),
             syncer.clone(),
@@ -360,6 +371,7 @@ impl TaskRunner {
         let sinkers = SinkerUtil::create_sinkers(
             &self.config,
             extractor_config,
+            sinker_client,
             sinker_monitor.clone(),
             rw_sinker_data_marker.clone(),
         )
@@ -817,7 +829,7 @@ impl TaskRunner {
         snapshot_resumer: &'a SnapshotResumer,
         cdc_resumer: &'a CdcResumer,
         is_multi_task: bool,
-    ) -> anyhow::Result<VecDeque<TaskContext<'a>>> {
+    ) -> anyhow::Result<VecDeque<TaskCtx<'a>>> {
         let db_type = &self.config.extractor_basic.db_type;
         let filter = RdbFilter::from_config(&self.config.filter, db_type)?;
 
@@ -845,11 +857,15 @@ impl TaskRunner {
             }
         }
 
+        let (extractor_client, sinker_client) =
+            TaskUtil::create_connection_clients(&self.config).await?;
+
         let mut pending_tasks = VecDeque::new();
         let is_db_extractor_config = match &self.config.extractor {
             ExtractorConfig::MysqlStruct { .. } | ExtractorConfig::PgStruct { .. } => true,
             _ => false,
         };
+
         if is_db_extractor_config {
             let db_extractor_config = match &self.config.extractor {
                 ExtractorConfig::MysqlStruct {
@@ -880,12 +896,14 @@ impl TaskRunner {
                     bail! {Error::ConfigError("unsupported extractor config type".into())}
                 }
             };
-            pending_tasks.push_back(TaskContext {
+            pending_tasks.push_back(TaskCtx {
                 extractor_config: db_extractor_config,
                 router: router,
                 snapshot_resumer: snapshot_resumer,
                 cdc_resumer: cdc_resumer,
                 id: "".to_string(),
+                extractor_client: extractor_client,
+                sinker_client: sinker_client,
             });
         } else {
             for schema in schemas.iter() {
@@ -961,12 +979,14 @@ impl TaskRunner {
                             bail! {Error::ConfigError("unsupported extractor config for `runtime.tb_parallel_size`".into())};
                         }
                     };
-                    pending_tasks.push_back(TaskContext {
+                    pending_tasks.push_back(TaskCtx {
                         extractor_config: tb_extractor_config,
                         router: router,
                         snapshot_resumer: snapshot_resumer,
                         cdc_resumer: cdc_resumer,
                         id: format!("{}.{}", schema, tb),
+                        extractor_client: extractor_client.clone(),
+                        sinker_client: sinker_client.clone(),
                     });
                 }
 

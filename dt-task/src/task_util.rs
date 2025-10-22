@@ -3,6 +3,7 @@ use std::{str::FromStr, time::Duration};
 use dt_common::config::config_enums::TaskType;
 use dt_common::config::extractor_config::ExtractorConfig;
 use dt_common::config::s3_config::S3Config;
+use dt_common::config::task_config::DEFAULT_MAX_CONNECTIONS;
 use dt_common::config::{
     config_enums::DbType, meta_center_config::MetaCenterConfig, sinker_config::SinkerConfig,
     task_config::TaskConfig,
@@ -28,6 +29,16 @@ use sqlx::{
 
 const MYSQL_SYS_DBS: [&str; 4] = ["information_schema", "mysql", "performance_schema", "sys"];
 const PG_SYS_SCHEMAS: [&str; 2] = ["pg_catalog", "information_schema"];
+
+#[derive(Default, Clone)]
+pub enum ConnClient {
+    MySQL(Pool<MySql>),
+    PostgreSQL(Pool<Postgres>),
+    MongoDB(mongodb::Client),
+    S3(S3Client),
+    #[default]
+    None,
+}
 
 pub struct TaskUtil {}
 
@@ -175,11 +186,16 @@ impl TaskUtil {
         PgMetaManager::new(conn_pool.clone()).await
     }
 
-    pub async fn create_mongo_client(url: &str, app_name: &str) -> anyhow::Result<mongodb::Client> {
+    pub async fn create_mongo_client(
+        url: &str,
+        app_name: &str,
+        max_pool_size: u32,
+    ) -> anyhow::Result<mongodb::Client> {
         let mut client_options = ClientOptions::parse_async(url).await?;
         // app_name only for debug usage
         client_options.app_name = Some(app_name.to_string());
         client_options.direct_connection = Some(true);
+        client_options.max_pool_size = Some(max_pool_size);
         Ok(mongodb::Client::with_options(client_options)?)
     }
 
@@ -449,14 +465,14 @@ WHERE
     }
 
     async fn list_mongo_dbs(url: &str) -> anyhow::Result<Vec<String>> {
-        let client = Self::create_mongo_client(url, "").await?;
+        let client = Self::create_mongo_client(url, "", DEFAULT_MAX_CONNECTIONS).await?;
         let dbs = client.list_database_names(None, None).await?;
         client.shutdown().await;
         Ok(dbs)
     }
 
     async fn list_mongo_tbs(url: &str, db: &str) -> anyhow::Result<Vec<String>> {
-        let client = Self::create_mongo_client(url, "").await?;
+        let client = Self::create_mongo_client(url, "", DEFAULT_MAX_CONNECTIONS).await?;
         // filter views and system tables
         let tbs = client
             .database(db)
@@ -485,5 +501,58 @@ WHERE
         );
 
         S3Client::new_with(rusoto_core::HttpClient::new().unwrap(), credentials, region)
+    }
+
+    pub async fn create_connection_clients(
+        task_config: &TaskConfig,
+    ) -> anyhow::Result<(ConnClient, ConnClient)> {
+        let enable_sqlx_log = TaskUtil::check_enable_sqlx_log(&task_config.runtime.log_level);
+        let extractor_max_connections = task_config.extractor_basic.max_connections;
+        let sinker_max_connections = task_config.sinker_basic.max_connections;
+
+        let extractor_client = match &task_config.extractor {
+            ExtractorConfig::MysqlSnapshot { url, .. } => ConnClient::MySQL(
+                TaskUtil::create_mysql_conn_pool(
+                    url,
+                    extractor_max_connections,
+                    enable_sqlx_log,
+                    false,
+                )
+                .await?,
+            ),
+            ExtractorConfig::PgSnapshot { url, .. } => ConnClient::PostgreSQL(
+                TaskUtil::create_pg_conn_pool(
+                    url,
+                    extractor_max_connections,
+                    enable_sqlx_log,
+                    false,
+                )
+                .await?,
+            ),
+            ExtractorConfig::MongoSnapshot { url, app_name, .. } => ConnClient::MongoDB(
+                TaskUtil::create_mongo_client(url, app_name, extractor_max_connections).await?,
+            ),
+            _ => ConnClient::None,
+        };
+        let sinker_client = match &task_config.sinker {
+            SinkerConfig::Mysql { url, .. } => ConnClient::MySQL(
+                TaskUtil::create_mysql_conn_pool(
+                    url,
+                    sinker_max_connections,
+                    enable_sqlx_log,
+                    false,
+                )
+                .await?,
+            ),
+            SinkerConfig::Pg { url, .. } => ConnClient::PostgreSQL(
+                TaskUtil::create_pg_conn_pool(url, sinker_max_connections, enable_sqlx_log, false)
+                    .await?,
+            ),
+            SinkerConfig::Mongo { url, app_name, .. } => ConnClient::MongoDB(
+                TaskUtil::create_mongo_client(url, app_name, sinker_max_connections).await?,
+            ),
+            _ => ConnClient::None,
+        };
+        Ok((extractor_client, sinker_client))
     }
 }
