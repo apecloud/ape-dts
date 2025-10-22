@@ -90,7 +90,8 @@ CREATE TABLE struct_it_pg2pg_1.full_index_type (
   simple_index_col VARCHAR(255), 
   composite_index_col1 VARCHAR(255), 
   composite_index_col2 VARCHAR(255), 
-  composite_index_col3 VARCHAR(255)
+  composite_index_col3 VARCHAR(255),
+  where_col VARCHAR(10)
 );
 ```
 
@@ -110,6 +111,8 @@ CREATE INDEX composite_index ON struct_it_pg2pg_1.full_index_type (
   composite_index_col3
 );
 ```
+
+CREATE INDEX index_where ON struct_it_pg2pg_1.full_index_type (where_col) WHERE where_col = 'test';
 
 -- table comments:
 COMMENT ON TABLE struct_it_pg2pg_1.full_column_type IS 'Comment on full_column_type.';

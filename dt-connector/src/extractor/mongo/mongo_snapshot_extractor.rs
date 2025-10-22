@@ -1,22 +1,26 @@
+use std::collections::HashMap;
+
 use async_trait::async_trait;
-use dt_common::meta::{
-    col_value::ColValue,
-    mongo::{mongo_constant::MongoConstants, mongo_key::MongoKey},
-    position::Position,
-    row_data::RowData,
-    row_type::RowType,
-};
-use dt_common::{config::config_enums::DbType, log_info};
 use mongodb::{
     bson::{doc, oid::ObjectId, Bson, Document},
     options::FindOptions,
     Client,
 };
-use std::collections::HashMap;
 
 use crate::{
     extractor::{base_extractor::BaseExtractor, resumer::snapshot_resumer::SnapshotResumer},
     Extractor,
+};
+use dt_common::{
+    config::config_enums::DbType,
+    log_error, log_info,
+    meta::{
+        col_value::ColValue,
+        mongo::{mongo_constant::MongoConstants, mongo_key::MongoKey},
+        position::Position,
+        row_data::RowData,
+        row_type::RowType,
+    },
 };
 
 pub struct MongoSnapshotExtractor {
@@ -71,7 +75,15 @@ impl MongoSnapshotExtractor {
             .collection::<Document>(&self.tb);
         let mut cursor = collection.find(filter, find_options).await?;
         while cursor.advance().await? {
-            let doc = cursor.deserialize_current()?;
+            let doc = cursor.deserialize_current().map_err(|e| {
+                log_error!(
+                    "error deserializing {}.{} document: {}",
+                    self.db,
+                    self.tb,
+                    e
+                );
+                e
+            })?;
             let object_id = Self::get_object_id(&doc);
 
             let mut after = HashMap::new();

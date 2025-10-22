@@ -195,6 +195,8 @@ impl RedisTestRunner {
         let mut topk_keys = Vec::new();
         // time series
         let mut tsdb_keys = Vec::new();
+        // graph
+        let mut graph_keys = Vec::new();
 
         let keys = self.redis_util.list_keys(&mut self.src_conn, "*");
         for i in keys.iter() {
@@ -219,6 +221,7 @@ impl RedisTestRunner {
                 "tdis-type" => tdigest_keys.push(key),
                 "topk-type" => topk_keys.push(key),
                 "tsdb-type" => tsdb_keys.push(key),
+                "graphdata" => graph_keys.push(key),
                 _ => {
                     println!("unknown type: {} for key: {}", key_type, key);
                     string_keys.push(key)
@@ -239,6 +242,7 @@ impl RedisTestRunner {
         self.compare_tdigest_entries(db, &tdigest_keys);
         self.compare_topk_entries(db, &topk_keys);
         self.compare_tsdb_entries(db, &tsdb_keys);
+        self.compare_graph_entries(db, &graph_keys);
         self.check_expire(&keys);
         Ok(())
     }
@@ -278,7 +282,7 @@ impl RedisTestRunner {
     fn compare_string_entries(&mut self, db: &str, keys: &Vec<String>) {
         for key in keys {
             let cmd = format!("GET {}", self.redis_util.escape_key(key));
-            self.compare_cmd_results(&cmd, db, key);
+            self.compare_cmd_results(&cmd, db, key, None);
         }
     }
 
@@ -304,56 +308,56 @@ impl RedisTestRunner {
     fn compare_list_entries(&mut self, db: &str, keys: &Vec<String>) {
         for key in keys {
             let cmd = format!("LRANGE {} 0 -1", self.redis_util.escape_key(key));
-            self.compare_cmd_results(&cmd, db, key);
+            self.compare_cmd_results(&cmd, db, key, None);
         }
     }
 
     fn compare_set_entries(&mut self, db: &str, keys: &Vec<String>) {
         for key in keys {
             let cmd = format!("SORT {} ALPHA", self.redis_util.escape_key(key));
-            self.compare_cmd_results(&cmd, db, key);
+            self.compare_cmd_results(&cmd, db, key, None);
         }
     }
 
     fn compare_zset_entries(&mut self, db: &str, keys: &Vec<String>) {
         for key in keys {
             let cmd = format!("ZRANGE {} 0 -1 WITHSCORES", self.redis_util.escape_key(key));
-            self.compare_cmd_results(&cmd, db, key);
+            self.compare_cmd_results(&cmd, db, key, None);
         }
     }
 
     fn compare_stream_entries(&mut self, db: &str, keys: &Vec<String>) {
         for key in keys {
             let cmd = format!("XRANGE {} - +", self.redis_util.escape_key(key));
-            self.compare_cmd_results(&cmd, db, key);
+            self.compare_cmd_results(&cmd, db, key, None);
         }
     }
 
     fn compare_rejson_entries(&mut self, db: &str, keys: &Vec<String>) {
         for key in keys {
             let cmd = format!("JSON.GET {}", self.redis_util.escape_key(key));
-            self.compare_cmd_results(&cmd, db, key);
+            self.compare_cmd_results(&cmd, db, key, None);
         }
     }
 
     fn compare_bf_bloom_entries(&mut self, db: &str, keys: &Vec<String>) {
         for key in keys {
             let cmd = format!("BF.DEBUG {}", self.redis_util.escape_key(key));
-            self.compare_cmd_results(&cmd, db, key);
+            self.compare_cmd_results(&cmd, db, key, None);
         }
     }
 
     fn compare_cf_bloom_entries(&mut self, db: &str, keys: &Vec<String>) {
         for key in keys {
             let cmd = format!("CF.DEBUG {}", self.redis_util.escape_key(key));
-            self.compare_cmd_results(&cmd, db, key);
+            self.compare_cmd_results(&cmd, db, key, None);
         }
     }
 
     fn compare_cmsk_entries(&mut self, db: &str, keys: &Vec<String>) {
         for key in keys {
             let cmd = format!("CMS.INFO {}", self.redis_util.escape_key(key));
-            self.compare_cmd_results(&cmd, db, key);
+            self.compare_cmd_results(&cmd, db, key, None);
         }
     }
 
@@ -363,42 +367,71 @@ impl RedisTestRunner {
                 "TDIGEST.QUANTILE {} 0.1 0.25 0.5 0.75 0.9 0.95 0.99",
                 self.redis_util.escape_key(key)
             );
-            self.compare_cmd_results(&cmd, db, key);
+            self.compare_cmd_results(&cmd, db, key, None);
         }
     }
 
     fn compare_topk_entries(&mut self, db: &str, keys: &Vec<String>) {
         for key in keys {
             let cmd = format!("TOPK.LIST {} WITHCOUNT", self.redis_util.escape_key(key));
-            self.compare_cmd_results(&cmd, db, key);
+            self.compare_cmd_results(&cmd, db, key, None);
         }
     }
 
     fn compare_tsdb_entries(&mut self, db: &str, keys: &Vec<String>) {
         for key in keys {
             let cmd = format!("TS.RANGE {} - +", self.redis_util.escape_key(key));
-            self.compare_cmd_results(&cmd, db, key);
+            self.compare_cmd_results(&cmd, db, key, None);
         }
     }
 
-    fn compare_cmd_results(&mut self, cmd: &str, db: &str, key: &str) {
+    fn compare_graph_entries(&mut self, db: &str, keys: &Vec<String>) {
+        for key in keys {
+            let cmd = format!(
+                "GRAPH.QUERY {} \"MATCH (n) RETURN n\"",
+                self.redis_util.escape_key(key)
+            );
+            self.compare_cmd_results(&cmd, db, key, Some(1));
+        }
+    }
+
+    fn compare_cmd_results(&mut self, cmd: &str, db: &str, key: &str, result_index: Option<usize>) {
         let src_result = self.redis_util.execute_cmd(&mut self.src_conn, cmd);
         let dst_result = self
             .redis_util
             .execute_cmd_in_one_cluster_node(&mut self.dst_conn, cmd);
+
+        let (src_to_compare, dst_to_compare) = if let Some(idx) = result_index {
+            match (&src_result, &dst_result) {
+                (Value::Array(src_arr), Value::Array(dst_arr)) => {
+                    let src_elem = src_arr.get(idx as usize).unwrap_or(&Value::Nil);
+                    let dst_elem = dst_arr.get(idx as usize).unwrap_or(&Value::Nil);
+                    (src_elem, dst_elem)
+                }
+                (Value::Set(src_set), Value::Set(dst_set)) => {
+                    let src_elem = src_set.get(idx as usize).unwrap_or(&Value::Nil);
+                    let dst_elem = dst_set.get(idx as usize).unwrap_or(&Value::Nil);
+                    (src_elem, dst_elem)
+                }
+                _ => (&src_result, &dst_result),
+            }
+        } else {
+            (&src_result, &dst_result)
+        };
+
         println!(
             "compare results for cmd: {}, \r\n src_kvs: {:?} \r\n dst_kvs: {:?}",
-            cmd, src_result, dst_result
+            cmd, src_to_compare, dst_to_compare
         );
 
         if self.filter.filter_schema(db) {
             println!("filtered, db: {}, key: {}", db, key);
-            match dst_result {
-                Value::Array(v) | Value::Set(v) => assert_eq!(v, vec![]),
-                _ => assert_eq!(dst_result, Value::Nil),
+            match dst_to_compare {
+                Value::Array(v) | Value::Set(v) => assert_eq!(v, &[]),
+                _ => assert_eq!(dst_to_compare, &Value::Nil),
             }
         } else {
-            assert_eq!(src_result, dst_result);
+            assert_eq!(src_to_compare, dst_to_compare);
         }
     }
 

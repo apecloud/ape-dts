@@ -327,6 +327,7 @@ impl MysqlStructFetcher {
                 INDEX_NAME,
                 SEQ_IN_INDEX,
                 COLUMN_NAME,
+                SUB_PART,
                 INDEX_TYPE,
                 COMMENT
             FROM information_schema.statistics
@@ -343,14 +344,23 @@ impl MysqlStructFetcher {
                 Self::get_str_with_null(&row, "INDEX_NAME")?,
             );
 
+            let index_type_str = Self::get_str_with_null(&row, "INDEX_TYPE")?;
+            let index_type = IndexType::from_str(&index_type_str)?;
+
             // in mysql 5.*, SEQ_IN_INDEX: bigint(2)
             // in mysql 8.*, SEQ_IN_INDEX: int unsigned
             let seq_in_index = row
                 .try_get_unchecked::<u32, &str>("SEQ_IN_INDEX")
                 .unwrap_or_default();
+            // SUB_PART contains the prefix length for BLOB/TEXT columns
+            let sub_part: Option<u64> = match index_type {
+                IndexType::Btree => row.try_get_unchecked::<u64, &str>("SUB_PART").ok(),
+                _ => None,
+            };
             let column = IndexColumn {
                 column_name: Self::get_str_with_null(&row, "COLUMN_NAME")?,
                 seq_in_index,
+                prefix_length: sub_part,
             };
 
             let key = (table_schema.clone(), table_name.clone(), index_name.clone());
@@ -358,8 +368,6 @@ impl MysqlStructFetcher {
                 index.columns.push(column);
             } else {
                 let non_unique = row.try_get("NON_UNIQUE")?;
-                let index_type_str = Self::get_str_with_null(&row, "INDEX_TYPE")?;
-                let index_type = IndexType::from_str(&index_type_str)?;
                 let index_kind = Self::get_index_kind(non_unique, &index_type);
                 let index = Index {
                     database_name: Self::get_str_with_null(&row, "TABLE_SCHEMA")?,

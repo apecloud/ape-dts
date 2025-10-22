@@ -117,6 +117,9 @@ CREATE TABLE struct_it_mysql2mysql_1.full_index_type(
     f_11 varchar(10),
     f_12 varchar(10),
     f_13 varchar(10),
+    f_14 TEXT,
+    f_15 BLOB,
+    f_16 varchar(10),
     KEY idx_btree_text_1 (f_10)
 );
 ```
@@ -143,6 +146,10 @@ CREATE SPATIAL INDEX idx_spatial_1 ON struct_it_mysql2mysql_1.full_index_type(f_
 CREATE INDEX idx_btree_text_2 ON struct_it_mysql2mysql_1.full_index_type(f_11);
 
 CREATE INDEX idx_btree_text_3 ON struct_it_mysql2mysql_1.full_index_type(f_13, f_12);
+
+-- index with prefix length
+CREATE INDEX idx_prefix_1 ON struct_it_mysql2mysql_1.full_index_type(f_14(10), f_15(12));
+CREATE INDEX idx_prefix_2 ON struct_it_mysql2mysql_1.full_index_type(f_16(3));
 
 -- full constraint
 ```
