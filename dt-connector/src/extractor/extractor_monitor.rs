@@ -62,18 +62,14 @@ impl ExtractorMonitor {
             || pushed_record_count >= self.count_window
             || self.last_flush_time.elapsed().as_secs() >= self.time_window_secs
         {
-            if extracted_record_count > 0 {
-                self.monitor
-                    .add_counter(CounterType::ExtractedRecords, extracted_record_count);
-            }
-            if extracted_record_size > 0 {
-                self.monitor
-                    .add_counter(CounterType::ExtractedBytes, extracted_record_size);
-            }
             self.monitor
                 .add_counter(CounterType::RecordCount, pushed_record_count)
                 .await
                 .add_counter(CounterType::DataBytes, pushed_record_size)
+                .await
+                .add_counter(CounterType::ExtractedBytes, extracted_record_size)
+                .await
+                .add_counter(CounterType::ExtractedRecords, extracted_record_count)
                 .await;
 
             self.last_flush_time = Instant::now();

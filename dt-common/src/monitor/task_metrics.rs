@@ -17,14 +17,14 @@ use strum::{Display, EnumString, IntoStaticStr};
 )]
 #[serde(rename_all = "snake_case")]
 pub enum TaskMetricsType {
-    // task-level general metrics
+    // TODO
     Delay,
     Timestamp,
     Progress,
     TotalProgressCount,
     FinishedProgressCount,
 
-    // Extractor raw throughput (pre-filter)
+    // describe the overall traffic before filtering
     ExtractorRpsMax,
     ExtractorRpsMin,
     ExtractorRpsAvg,
@@ -34,6 +34,7 @@ pub enum TaskMetricsType {
 
     ExtractorPlanRecords,
 
+    // describe the overall traffic after filtering
     ExtractorPushedRpsMax,
     ExtractorPushedRpsMin,
     ExtractorPushedRpsAvg,

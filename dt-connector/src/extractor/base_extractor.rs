@@ -81,9 +81,9 @@ mod tests {
         let row_data = RowData::new("db".into(), "tb".into(), RowType::Insert, None, Some(after));
         let expected_size = row_data.data_size as u64;
 
-        base_extractor
-            .record_filtered_dt_data(DtData::Dml { row_data })
-            .await;
+        // Manually record extracted metrics (simulating extractor behavior)
+        base_extractor.record_extracted_metrics(&DtData::Dml { row_data });
+        base_extractor.monitor.try_flush(true).await;
 
         assert_eq!(base_extractor.monitor.counters.extracted_record_count, 1);
         assert_eq!(
@@ -123,8 +123,6 @@ impl BaseExtractor {
         dt_data: DtData,
         position: Position,
     ) -> anyhow::Result<()> {
-        self.record_extracted_metrics(&dt_data);
-
         if !self.time_filter.started {
             self.monitor.try_flush(false).await;
             return Ok(());
@@ -154,24 +152,9 @@ impl BaseExtractor {
         self.buffer.push(item).await
     }
 
-    pub async fn record_filtered_dt_data(&mut self, dt_data: DtData) {
-        self.record_extracted_metrics(&dt_data);
-        self.monitor.try_flush(false).await;
-    }
-
-    fn record_extracted_metrics(&mut self, dt_data: &DtData) {
-        match dt_data {
-            DtData::Dml { .. }
-            | DtData::Ddl { .. }
-            | DtData::Dcl { .. }
-            | DtData::Redis { .. }
-            | DtData::Struct { .. }
-            | DtData::Foxlake { .. } => {
-                self.monitor.counters.extracted_record_count += dt_data.get_data_count() as u64;
-                self.monitor.counters.extracted_data_size += dt_data.get_data_size();
-            }
-            _ => {}
-        }
+    pub fn record_extracted_metrics(&mut self, dt_data: &DtData) {
+        self.monitor.counters.extracted_record_count += dt_data.get_data_count() as u64;
+        self.monitor.counters.extracted_data_size += dt_data.get_data_size();
     }
 
     pub fn refresh_and_check_data_marker(&mut self, dt_data: &DtData) -> bool {
