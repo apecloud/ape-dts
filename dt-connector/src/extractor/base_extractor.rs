@@ -44,72 +44,6 @@ pub struct BaseExtractor {
     pub time_filter: TimeFilter,
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use dt_common::{
-        meta::{
-            col_value::ColValue, dt_data::DtData, dt_queue::DtQueue, row_data::RowData,
-            row_type::RowType,
-        },
-        monitor::{counter_type::CounterType, monitor::Monitor},
-    };
-    use std::{collections::HashMap, sync::atomic::AtomicBool};
-
-    #[tokio::test]
-    async fn record_filtered_dt_data_updates_raw_counters() {
-        let monitor = Arc::new(Monitor::new("extractor", "extractor", 1, 100, 1));
-        let extractor_monitor = ExtractorMonitor::new(monitor.clone()).await;
-        let base_buffer = Arc::new(DtQueue::new(16, 0));
-        let base_router = RdbRouter {
-            schema_map: HashMap::new(),
-            tb_map: HashMap::new(),
-            col_map: HashMap::new(),
-            topic_map: HashMap::new(),
-        };
-        let mut base_extractor = BaseExtractor {
-            buffer: base_buffer,
-            router: base_router,
-            shut_down: Arc::new(AtomicBool::new(false)),
-            monitor: extractor_monitor,
-            data_marker: None,
-            time_filter: TimeFilter::default(),
-        };
-
-        let mut after = HashMap::new();
-        after.insert("id".into(), ColValue::String("1".into()));
-        let row_data = RowData::new("db".into(), "tb".into(), RowType::Insert, None, Some(after));
-        let expected_size = row_data.data_size as u64;
-
-        // Manually record extracted metrics (simulating extractor behavior)
-        base_extractor.record_extracted_metrics(&DtData::Dml { row_data });
-        base_extractor.monitor.try_flush(true).await;
-
-        assert_eq!(base_extractor.monitor.counters.extracted_record_count, 1);
-        assert_eq!(
-            base_extractor.monitor.counters.extracted_data_size,
-            expected_size
-        );
-
-        let mut records_counter = base_extractor
-            .monitor
-            .monitor
-            .time_window_counters
-            .get_mut(&CounterType::ExtractedRecords)
-            .expect("records counter");
-        assert_eq!(records_counter.statistics().sum, 1);
-        drop(records_counter);
-
-        let mut bytes_counter = base_extractor
-            .monitor
-            .monitor
-            .time_window_counters
-            .get_mut(&CounterType::ExtractedBytes)
-            .expect("bytes counter");
-        assert_eq!(bytes_counter.statistics().sum, expected_size);
-    }
-}
-
 impl BaseExtractor {
     pub fn is_data_marker_info(&self, schema: &str, tb: &str) -> bool {
         if let Some(data_marker) = &self.data_marker {
@@ -152,10 +86,6 @@ impl BaseExtractor {
         self.buffer.push(item).await
     }
 
-    pub fn record_extracted_metrics(&mut self, dt_data: &DtData) {
-        self.monitor.counters.extracted_record_count += dt_data.get_data_count() as u64;
-        self.monitor.counters.extracted_data_size += dt_data.get_data_size();
-    }
 
     pub fn refresh_and_check_data_marker(&mut self, dt_data: &DtData) -> bool {
         // data_marker does not support DDL event yet.

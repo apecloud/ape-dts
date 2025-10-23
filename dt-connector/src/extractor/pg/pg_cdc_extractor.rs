@@ -326,9 +326,6 @@ impl PgCdcExtractor {
             Some(col_values),
         );
         if self.filter_event(&tb_meta, RowType::Insert) {
-            self.base_extractor
-                .record_filtered_dt_data(DtData::Dml { row_data })
-                .await;
             return Ok(());
         }
 
@@ -371,9 +368,6 @@ impl PgCdcExtractor {
             Some(col_values_after),
         );
         if self.filter_event(&tb_meta, RowType::Update) {
-            self.base_extractor
-                .record_filtered_dt_data(DtData::Dml { row_data })
-                .await;
             return Ok(());
         }
         self.push_row_to_buf(row_data, position.clone()).await
@@ -403,9 +397,6 @@ impl PgCdcExtractor {
             None,
         );
         if self.filter_event(&tb_meta, RowType::Delete) {
-            self.base_extractor
-                .record_filtered_dt_data(DtData::Dml { row_data })
-                .await;
             return Ok(());
         }
         self.push_row_to_buf(row_data, position.clone()).await

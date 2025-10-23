@@ -446,9 +446,6 @@ impl MongoCdcExtractor {
             .filter
             .filter_event(&row_data.schema, &row_data.tb, &row_data.row_type)
         {
-            self.base_extractor
-                .record_filtered_dt_data(DtData::Dml { row_data })
-                .await;
             return self
                 .base_extractor
                 .push_dt_data(DtData::Heartbeat {}, position)
