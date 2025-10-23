@@ -46,7 +46,7 @@ impl MongoTestRunner {
             | ExtractorConfig::MongoCdc { url, app_name, .. }
             | ExtractorConfig::MongoCheck { url, app_name, .. } => {
                 src_mongo_client = Some(
-                    TaskUtil::create_mongo_client(&url, &app_name, 10)
+                    TaskUtil::create_mongo_client(&url, &app_name, None)
                         .await
                         .unwrap(),
                 );
@@ -58,7 +58,7 @@ impl MongoTestRunner {
             SinkerConfig::Mongo { url, app_name, .. }
             | SinkerConfig::MongoCheck { url, app_name, .. } => {
                 dst_mongo_client = Some(
-                    TaskUtil::create_mongo_client(&url, &app_name, 10)
+                    TaskUtil::create_mongo_client(&url, &app_name, None)
                         .await
                         .unwrap(),
                 );

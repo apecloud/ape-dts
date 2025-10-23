@@ -51,7 +51,6 @@ impl Sinker for MongoSinker {
     }
 
     async fn close(&mut self) -> anyhow::Result<()> {
-        self.mongo_client.clone().shutdown().await;
         Ok(())
     }
 }

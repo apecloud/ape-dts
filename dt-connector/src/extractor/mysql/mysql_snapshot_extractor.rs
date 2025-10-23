@@ -12,7 +12,6 @@ use sqlx::{MySql, Pool};
 use tokio::{sync::Mutex, task::JoinHandle};
 
 use crate::{
-    close_conn_pool,
     extractor::{base_extractor::BaseExtractor, resumer::snapshot_resumer::SnapshotResumer},
     rdb_query_builder::RdbQueryBuilder,
     rdb_router::RdbRouter,
@@ -68,7 +67,8 @@ impl Extractor for MysqlSnapshotExtractor {
     }
 
     async fn close(&mut self) -> anyhow::Result<()> {
-        close_conn_pool!(self)
+        self.meta_manager.close().await?;
+        Ok(())
     }
 }
 

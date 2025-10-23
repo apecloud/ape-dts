@@ -9,10 +9,8 @@ use tokio::sync::{Mutex, RwLock};
 
 use dt_common::{
     config::{
-        config_enums::DbType,
-        extractor_config::ExtractorConfig,
-        sinker_config::SinkerConfig,
-        task_config::{TaskConfig, DEFAULT_MAX_CONNECTIONS},
+        config_enums::DbType, extractor_config::ExtractorConfig, sinker_config::SinkerConfig,
+        task_config::TaskConfig,
     },
     meta::{
         avro::avro_converter::AvroConverter,
@@ -242,7 +240,10 @@ impl SinkerUtil {
                 let router = create_router!(task_config, Mongo);
                 let mongo_client = match sinker_client {
                     ConnClient::MongoDB(mongo_client) => mongo_client,
-                    _ => TaskUtil::create_mongo_client(&url, &app_name, parallel_size * 2).await?,
+                    _ => {
+                        TaskUtil::create_mongo_client(&url, &app_name, Some(parallel_size * 2))
+                            .await?
+                    }
                 };
                 for _ in 0..parallel_size {
                     let sinker = MongoSinker {
@@ -263,9 +264,7 @@ impl SinkerUtil {
             } => {
                 let reverse_router = create_router!(task_config, Mongo).reverse();
                 for _ in 0..parallel_size {
-                    let mongo_client =
-                        TaskUtil::create_mongo_client(&url, &app_name, DEFAULT_MAX_CONNECTIONS)
-                            .await?;
+                    let mongo_client = TaskUtil::create_mongo_client(&url, &app_name, None).await?;
                     let sinker = MongoChecker {
                         batch_size,
                         reverse_router: reverse_router.clone(),

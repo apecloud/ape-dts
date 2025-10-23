@@ -1,5 +1,4 @@
 use std::{
-    cmp,
     str::FromStr,
     sync::{atomic::AtomicBool, Arc},
 };
@@ -298,10 +297,7 @@ impl ExtractorUtil {
             } => {
                 let mongo_client = match extractor_client {
                     ConnClient::MongoDB(mongo_client) => mongo_client,
-                    _ => {
-                        TaskUtil::create_mongo_client(&url, &app_name, DEFAULT_MAX_CONNECTIONS)
-                            .await?
-                    }
+                    _ => TaskUtil::create_mongo_client(&url, &app_name, None).await?,
                 };
                 let extractor = MongoSnapshotExtractor {
                     resumer: snapshot_resumer,
@@ -322,8 +318,7 @@ impl ExtractorUtil {
                 heartbeat_interval_secs,
                 heartbeat_tb,
             } => {
-                let mongo_client =
-                    TaskUtil::create_mongo_client(&url, &app_name, DEFAULT_MAX_CONNECTIONS).await?;
+                let mongo_client = TaskUtil::create_mongo_client(&url, &app_name, None).await?;
                 let extractor = MongoCdcExtractor {
                     filter,
                     resume_token,
@@ -346,8 +341,7 @@ impl ExtractorUtil {
                 check_log_dir,
                 batch_size,
             } => {
-                let mongo_client =
-                    TaskUtil::create_mongo_client(&url, &app_name, DEFAULT_MAX_CONNECTIONS).await?;
+                let mongo_client = TaskUtil::create_mongo_client(&url, &app_name, None).await?;
                 let extractor = MongoCheckExtractor {
                     mongo_client,
                     check_log_dir,

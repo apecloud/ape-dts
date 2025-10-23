@@ -9,7 +9,7 @@ use sqlx::{
 use tokio::{sync::RwLock, time::Instant};
 
 use crate::{
-    call_batch_fn, close_conn_pool, data_marker::DataMarker, rdb_query_builder::RdbQueryBuilder,
+    call_batch_fn, data_marker::DataMarker, rdb_query_builder::RdbQueryBuilder,
     rdb_router::RdbRouter, sinker::base_sinker::BaseSinker, Sinker,
 };
 use dt_common::{
@@ -116,8 +116,7 @@ impl Sinker for MysqlSinker {
     }
 
     async fn close(&mut self) -> anyhow::Result<()> {
-        self.meta_manager.close().await?;
-        return close_conn_pool!(self);
+        Ok(())
     }
 
     async fn refresh_meta(&mut self, data: Vec<DdlData>) -> anyhow::Result<()> {

@@ -1,13 +1,14 @@
 use std::{str::FromStr, time::Duration};
 
+use anyhow::bail;
 use dt_common::config::config_enums::TaskType;
 use dt_common::config::extractor_config::ExtractorConfig;
 use dt_common::config::s3_config::S3Config;
-use dt_common::config::task_config::DEFAULT_MAX_CONNECTIONS;
 use dt_common::config::{
     config_enums::DbType, meta_center_config::MetaCenterConfig, sinker_config::SinkerConfig,
     task_config::TaskConfig,
 };
+use dt_common::error::Error;
 use dt_common::log_info;
 use dt_common::meta::mysql::mysql_dbengine_meta_center::MysqlDbEngineMetaCenter;
 use dt_common::meta::{
@@ -29,16 +30,6 @@ use sqlx::{
 
 const MYSQL_SYS_DBS: [&str; 4] = ["information_schema", "mysql", "performance_schema", "sys"];
 const PG_SYS_SCHEMAS: [&str; 2] = ["pg_catalog", "information_schema"];
-
-#[derive(Default, Clone)]
-pub enum ConnClient {
-    MySQL(Pool<MySql>),
-    PostgreSQL(Pool<Postgres>),
-    MongoDB(mongodb::Client),
-    S3(S3Client),
-    #[default]
-    None,
-}
 
 pub struct TaskUtil {}
 
@@ -189,13 +180,13 @@ impl TaskUtil {
     pub async fn create_mongo_client(
         url: &str,
         app_name: &str,
-        max_pool_size: u32,
+        max_pool_size: Option<u32>,
     ) -> anyhow::Result<mongodb::Client> {
         let mut client_options = ClientOptions::parse_async(url).await?;
         // app_name only for debug usage
         client_options.app_name = Some(app_name.to_string());
         client_options.direct_connection = Some(true);
-        client_options.max_pool_size = Some(max_pool_size);
+        client_options.max_pool_size = max_pool_size;
         Ok(mongodb::Client::with_options(client_options)?)
     }
 
@@ -465,14 +456,14 @@ WHERE
     }
 
     async fn list_mongo_dbs(url: &str) -> anyhow::Result<Vec<String>> {
-        let client = Self::create_mongo_client(url, "", DEFAULT_MAX_CONNECTIONS).await?;
+        let client = Self::create_mongo_client(url, "", None).await?;
         let dbs = client.list_database_names(None, None).await?;
         client.shutdown().await;
         Ok(dbs)
     }
 
     async fn list_mongo_tbs(url: &str, db: &str) -> anyhow::Result<Vec<String>> {
-        let client = Self::create_mongo_client(url, "", DEFAULT_MAX_CONNECTIONS).await?;
+        let client = Self::create_mongo_client(url, "", None).await?;
         // filter views and system tables
         let tbs = client
             .database(db)
@@ -502,13 +493,33 @@ WHERE
 
         S3Client::new_with(rusoto_core::HttpClient::new().unwrap(), credentials, region)
     }
+}
 
-    pub async fn create_connection_clients(
-        task_config: &TaskConfig,
-    ) -> anyhow::Result<(ConnClient, ConnClient)> {
+#[derive(Default, Clone)]
+pub enum ConnClient {
+    MySQL(Pool<MySql>),
+    PostgreSQL(Pool<Postgres>),
+    MongoDB(mongodb::Client),
+    S3(S3Client),
+    #[default]
+    None,
+}
+
+impl ConnClient {
+    pub async fn from_config(task_config: &TaskConfig) -> anyhow::Result<(Self, Self)> {
         let enable_sqlx_log = TaskUtil::check_enable_sqlx_log(&task_config.runtime.log_level);
         let extractor_max_connections = task_config.extractor_basic.max_connections;
         let sinker_max_connections = task_config.sinker_basic.max_connections;
+        if extractor_max_connections < 1 {
+            bail!(Error::ConfigError(
+                "`extractor.max_connections` must be greater than 0".into()
+            ));
+        }
+        if sinker_max_connections < 1 {
+            bail!(Error::ConfigError(
+                "`sinker.max_connections` must be greater than 0".into()
+            ));
+        }
 
         let extractor_client = match &task_config.extractor {
             ExtractorConfig::MysqlSnapshot { url, .. } => ConnClient::MySQL(
@@ -530,7 +541,8 @@ WHERE
                 .await?,
             ),
             ExtractorConfig::MongoSnapshot { url, app_name, .. } => ConnClient::MongoDB(
-                TaskUtil::create_mongo_client(url, app_name, extractor_max_connections).await?,
+                TaskUtil::create_mongo_client(url, app_name, Some(extractor_max_connections))
+                    .await?,
             ),
             _ => ConnClient::None,
         };
@@ -549,10 +561,30 @@ WHERE
                     .await?,
             ),
             SinkerConfig::Mongo { url, app_name, .. } => ConnClient::MongoDB(
-                TaskUtil::create_mongo_client(url, app_name, sinker_max_connections).await?,
+                TaskUtil::create_mongo_client(url, app_name, Some(sinker_max_connections)).await?,
             ),
             _ => ConnClient::None,
         };
         Ok((extractor_client, sinker_client))
+    }
+
+    pub async fn close(&self) -> anyhow::Result<()> {
+        match self {
+            ConnClient::MySQL(pool) => {
+                if !pool.is_closed() {
+                    pool.close().await;
+                }
+            }
+            ConnClient::PostgreSQL(pool) => {
+                if !pool.is_closed() {
+                    pool.close().await;
+                }
+            }
+            ConnClient::MongoDB(client) => {
+                client.clone().shutdown().await;
+            }
+            _ => {}
+        }
+        Ok(())
     }
 }
