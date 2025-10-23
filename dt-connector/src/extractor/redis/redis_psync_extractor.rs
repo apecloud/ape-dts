@@ -1,31 +1,42 @@
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::{
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+    time::{SystemTime, UNIX_EPOCH},
+};
 
-use super::redis_client::RedisClient;
 use anyhow::bail;
 use async_trait::async_trait;
 use tokio::{sync::Mutex, time::Instant};
 
-use crate::extractor::base_extractor::BaseExtractor;
-use crate::extractor::redis::rdb::rdb_parser::RdbParser;
-use crate::extractor::redis::rdb::reader::rdb_reader::RdbReader;
-use crate::extractor::redis::redis_resp_types::Value;
-use crate::extractor::redis::StreamReader;
-use crate::extractor::resumer::cdc_resumer::CdcResumer;
+use super::redis_client::RedisClient;
+use crate::extractor::{
+    base_extractor::BaseExtractor,
+    redis::{
+        rdb::{rdb_parser::RdbParser, reader::rdb_reader::RdbReader},
+        redis_resp_types::Value,
+        StreamReader,
+    },
+    resumer::recovery::Recovery,
+};
 use crate::Extractor;
-use dt_common::config::config_enums::{DbType, ExtractType};
-use dt_common::config::config_token_parser::{ConfigTokenParser, TokenEscapePair};
-use dt_common::meta::dt_data::DtData;
-use dt_common::meta::position::Position;
-use dt_common::meta::redis::redis_entry::RedisEntry;
-use dt_common::meta::redis::redis_object::RedisCmd;
-use dt_common::meta::syncer::Syncer;
-use dt_common::rdb_filter::RdbFilter;
-use dt_common::utils::sql_util::SqlUtil;
-use dt_common::utils::time_util::TimeUtil;
-use dt_common::{error::Error, log_info};
-use dt_common::{log_debug, log_error, log_position};
+use dt_common::{
+    config::{
+        config_enums::{DbType, ExtractType},
+        config_token_parser::{ConfigTokenParser, TokenEscapePair},
+    },
+    error::Error,
+    log_debug, log_error, log_info, log_position,
+    meta::{
+        dt_data::DtData,
+        position::Position,
+        redis::{redis_entry::RedisEntry, redis_object::RedisCmd},
+        syncer::Syncer,
+    },
+    rdb_filter::RdbFilter,
+    utils::{sql_util::SqlUtil, time_util::TimeUtil},
+};
 
 pub struct RedisPsyncExtractor {
     pub base_extractor: BaseExtractor,
@@ -39,8 +50,8 @@ pub struct RedisPsyncExtractor {
     pub heartbeat_key: String,
     pub syncer: Arc<Mutex<Syncer>>,
     pub filter: RdbFilter,
-    pub resumer: CdcResumer,
     pub extract_type: ExtractType,
+    pub recovery: Option<Arc<dyn Recovery + Send + Sync>>,
 }
 
 #[async_trait]

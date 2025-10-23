@@ -2,7 +2,17 @@ use serde::{Deserialize, Serialize};
 use strum::{Display, EnumString, IntoStaticStr};
 
 #[derive(
-    Clone, Display, EnumString, IntoStaticStr, Debug, PartialEq, Eq, Default, Serialize, Deserialize,
+    Clone,
+    Display,
+    EnumString,
+    IntoStaticStr,
+    Debug,
+    PartialEq,
+    Eq,
+    Default,
+    Serialize,
+    Deserialize,
+    Hash,
 )]
 pub enum DbType {
     #[default]
@@ -28,7 +38,7 @@ pub enum DbType {
     Tidb,
 }
 
-#[derive(Display, EnumString, IntoStaticStr, Debug, Clone)]
+#[derive(Display, EnumString, IntoStaticStr, Debug, Clone, Hash)]
 pub enum ExtractType {
     #[strum(serialize = "snapshot")]
     Snapshot,
@@ -50,7 +60,7 @@ pub enum ExtractType {
     FoxlakeS3,
 }
 
-#[derive(Display, EnumString, IntoStaticStr, Clone, Debug, Default)]
+#[derive(Display, EnumString, IntoStaticStr, Clone, Debug, Default, Hash)]
 pub enum SinkType {
     #[default]
     #[strum(serialize = "dummy")]
@@ -128,6 +138,19 @@ pub enum TaskType {
     Cdc,
     #[strum(serialize = "check")]
     Check,
+}
+
+#[derive(Display, EnumString, IntoStaticStr, PartialEq, Default)]
+pub enum ResumeType {
+    #[strum(serialize = "from_log")]
+    FromLog,
+    #[strum(serialize = "from_target")]
+    FromTarget,
+    #[strum(serialize = "from_db")]
+    FromDB,
+    #[default]
+    #[strum(serialize = "dummy")]
+    Dummy,
 }
 
 pub fn build_task_type(extract_type: &ExtractType, sink_type: &SinkType) -> Option<TaskType> {

@@ -18,7 +18,7 @@ mod test {
         TestBase::run_mongo_snapshot_test("mongo_to_mongo/snapshot/route_test").await;
     }
 
-    // #[tokio::test]
+    #[tokio::test]
     #[serial]
     async fn snapshot_resume_test() {
         let mut dst_expected_counts = HashMap::new();

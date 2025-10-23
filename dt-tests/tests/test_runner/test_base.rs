@@ -37,8 +37,10 @@ impl TestBase {
         let assert_dst_count = |db_tb: &(String, String), count: usize| {
             let dst_data = block_on(runner.fetch_data(db_tb, DST)).unwrap();
             println!(
-                "check dst table {:?} record count, expect: {}",
-                db_tb, count
+                "check dst table {:?} record count, expect: {}, actual: {}",
+                db_tb,
+                count,
+                dst_data.len()
             );
             assert_eq!(dst_data.len(), count);
         };

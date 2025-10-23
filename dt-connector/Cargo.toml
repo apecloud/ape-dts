@@ -49,3 +49,4 @@ rust_decimal = { workspace = true }
 hex = { workspace = true }
 clickhouse = { workspace = true }
 percent-encoding = { workspace = true }
+dashmap = {workspace = true}

@@ -48,7 +48,7 @@ use dt_connector::{
             redis_scan_extractor::RedisScanExtractor,
             redis_snapshot_file_extractor::RedisSnapshotFileExtractor,
         },
-        resumer::{cdc_resumer::CdcResumer, snapshot_resumer::SnapshotResumer},
+        resumer::recovery::Recovery,
     },
     rdb_router::RdbRouter,
     Extractor,
@@ -71,8 +71,7 @@ impl ExtractorUtil {
         monitor: Arc<Monitor>,
         data_marker: Option<DataMarker>,
         router: RdbRouter,
-        snapshot_resumer: SnapshotResumer,
-        cdc_resumer: CdcResumer,
+        recovery: Option<Arc<dyn Recovery + Send + Sync>>,
     ) -> anyhow::Result<Box<dyn Extractor + Send>> {
         let mut base_extractor = BaseExtractor {
             buffer,
@@ -118,7 +117,6 @@ impl ExtractorUtil {
                 let extractor = MysqlSnapshotExtractor {
                     conn_pool,
                     meta_manager,
-                    resumer: snapshot_resumer,
                     db,
                     tb,
                     batch_size,
@@ -126,6 +124,7 @@ impl ExtractorUtil {
                     parallel_size,
                     base_extractor,
                     filter,
+                    recovery,
                 };
                 Box::new(extractor)
             }
@@ -195,9 +194,9 @@ impl ExtractorUtil {
                     heartbeat_tb,
                     syncer,
                     base_extractor,
-                    resumer: cdc_resumer,
                     gtid_enabled,
                     gtid_set,
+                    recovery,
                 };
                 Box::new(extractor)
             }
@@ -226,13 +225,13 @@ impl ExtractorUtil {
                 let extractor = PgSnapshotExtractor {
                     conn_pool,
                     meta_manager,
-                    resumer: snapshot_resumer,
                     batch_size,
                     sample_interval,
                     schema,
                     tb,
                     base_extractor,
                     filter,
+                    recovery,
                 };
                 Box::new(extractor)
             }
@@ -287,8 +286,8 @@ impl ExtractorUtil {
                     heartbeat_interval_secs,
                     heartbeat_tb,
                     ddl_meta_tb,
-                    resumer: cdc_resumer,
                     base_extractor,
+                    recovery,
                 };
                 Box::new(extractor)
             }
@@ -304,11 +303,11 @@ impl ExtractorUtil {
                     _ => TaskUtil::create_mongo_client(&url, &app_name, None).await?,
                 };
                 let extractor = MongoSnapshotExtractor {
-                    resumer: snapshot_resumer,
                     db,
                     tb,
                     mongo_client,
                     base_extractor,
+                    recovery,
                 };
                 Box::new(extractor)
             }
@@ -334,7 +333,7 @@ impl ExtractorUtil {
                     heartbeat_interval_secs,
                     heartbeat_tb,
                     syncer,
-                    resumer: cdc_resumer,
+                    recovery,
                 };
                 Box::new(extractor)
             }
@@ -405,7 +404,6 @@ impl ExtractorUtil {
                     syncer,
                     repl_port,
                     filter,
-                    resumer: cdc_resumer,
                     base_extractor,
                     extract_type: ExtractType::Snapshot,
                     repl_id: String::new(),
@@ -414,6 +412,7 @@ impl ExtractorUtil {
                     keepalive_interval_secs: 0,
                     heartbeat_interval_secs: 0,
                     heartbeat_key: String::new(),
+                    recovery,
                 };
                 Box::new(extractor)
             }
@@ -465,9 +464,9 @@ impl ExtractorUtil {
                     repl_port,
                     now_db_id,
                     filter,
-                    resumer: cdc_resumer,
                     base_extractor,
                     extract_type: ExtractType::Cdc,
+                    recovery,
                 };
                 Box::new(extractor)
             }
@@ -485,7 +484,6 @@ impl ExtractorUtil {
                     syncer,
                     repl_port,
                     filter,
-                    resumer: cdc_resumer,
                     base_extractor,
                     extract_type: ExtractType::SnapshotAndCdc,
                     repl_id,
@@ -494,6 +492,7 @@ impl ExtractorUtil {
                     keepalive_interval_secs,
                     heartbeat_interval_secs,
                     heartbeat_key,
+                    recovery,
                 };
                 Box::new(extractor)
             }
@@ -525,8 +524,8 @@ impl ExtractorUtil {
                     ack_interval_secs,
                     avro_converter,
                     syncer,
-                    resumer: cdc_resumer,
                     base_extractor,
+                    recovery,
                 };
                 Box::new(extractor)
             }
@@ -544,9 +543,9 @@ impl ExtractorUtil {
                     tb,
                     s3_client,
                     s3_config,
-                    resumer: snapshot_resumer,
                     base_extractor,
                     batch_size,
+                    recovery,
                 };
                 Box::new(extractor)
             }

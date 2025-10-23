@@ -16,15 +16,14 @@ use tokio::{sync::Mutex, time::Instant};
 use crate::{
     close_conn_pool,
     extractor::{
-        base_extractor::BaseExtractor, mysql::binlog_util::BinlogUtil,
-        resumer::cdc_resumer::CdcResumer,
+        base_extractor::BaseExtractor, mysql::binlog_util::BinlogUtil, resumer::recovery::Recovery,
     },
     Extractor,
 };
 use dt_common::{
     config::config_enums::DbType,
     error::Error,
-    log_debug, log_error, log_info,
+    log_debug, log_error, log_info, log_warn,
     meta::{
         adaptor::mysql_col_value_convertor::MysqlColValueConvertor, col_value::ColValue,
         dt_data::DtData, mysql::mysql_meta_manager::MysqlMetaManager, position::Position,
@@ -58,7 +57,7 @@ pub struct MysqlCdcExtractor {
     pub heartbeat_interval_secs: u64,
     pub heartbeat_tb: String,
     pub syncer: Arc<Mutex<Syncer>>,
-    pub resumer: CdcResumer,
+    pub recovery: Option<Arc<dyn Recovery + Send + Sync>>,
 }
 
 struct Context {
@@ -82,23 +81,33 @@ impl Extractor for MysqlCdcExtractor {
             .await?;
         }
 
-        if let Position::MysqlCdc {
-            binlog_filename,
-            next_event_position,
-            gtid_set,
-            ..
-        } = &self.resumer.checkpoint_position
-        {
-            self.binlog_filename = binlog_filename.to_owned();
-            self.binlog_position = next_event_position.to_owned();
-            self.gtid_set = gtid_set.to_owned();
-            log_info!("resume from: {}", self.resumer.checkpoint_position);
-            self.base_extractor
-                .push_dt_data(
-                    DtData::Heartbeat {},
-                    self.resumer.checkpoint_position.clone(),
-                )
-                .await?;
+        if let Some(recovery) = &self.recovery {
+            if let Some(position) = recovery.get_cdc_resume_position().await {
+                match &position {
+                    Position::MysqlCdc {
+                        binlog_filename,
+                        next_event_position,
+                        gtid_set,
+                        ..
+                    } => {
+                        self.binlog_filename = binlog_filename.to_owned();
+                        self.binlog_position = next_event_position.to_owned();
+                        self.gtid_set = gtid_set.to_owned();
+                        log_info!(
+                            "cdc recovery from binlogfile:[{}], binlog_position:[{}], gtid_set:[{}]",
+                            binlog_filename,
+                            next_event_position,
+                            gtid_set
+                        );
+                        self.base_extractor
+                            .push_dt_data(DtData::Heartbeat {}, position)
+                            .await?;
+                    }
+                    _ => {
+                        log_warn!("position:{} is not a valid mysql cdc position", position);
+                    }
+                }
+            }
         }
 
         log_info!(

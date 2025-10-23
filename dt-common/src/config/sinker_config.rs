@@ -145,7 +145,7 @@ pub enum SinkerConfig {
     },
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, Hash)]
 pub struct BasicSinkerConfig {
     pub sink_type: SinkType,
     pub db_type: DbType,

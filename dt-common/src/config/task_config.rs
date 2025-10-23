@@ -9,7 +9,11 @@ use anyhow::{bail, Ok};
 
 #[cfg(feature = "metrics")]
 use crate::config::metrics_config::MetricsConfig;
-use crate::error::Error;
+use crate::{
+    config::{config_enums::ResumeType, global_config::GlobalConfig},
+    error::Error,
+    utils::task_util::TaskUtil,
+};
 
 use super::{
     config_enums::{
@@ -33,6 +37,7 @@ use super::{
 
 #[derive(Clone)]
 pub struct TaskConfig {
+    pub global: GlobalConfig,
     pub extractor_basic: BasicExtractorConfig,
     pub extractor: ExtractorConfig,
     pub sinker_basic: BasicSinkerConfig,
@@ -53,6 +58,7 @@ pub struct TaskConfig {
 pub const DEFAULT_DB_BATCH_SIZE: usize = 100;
 pub const DEFAULT_MAX_CONNECTIONS: u32 = 10;
 // sections
+const GLOBAL: &str = "global";
 const EXTRACTOR: &str = "extractor";
 const SINKER: &str = "sinker";
 const PIPELINE: &str = "pipeline";
@@ -81,9 +87,15 @@ const PARALLEL_SIZE: &str = "parallel_size";
 const DDL_CONFLICT_POLICY: &str = "ddl_conflict_policy";
 const REPLACE: &str = "replace";
 const DISABLE_FOREIGN_KEY_CHECKS: &str = "disable_foreign_key_checks";
+const RESUME_TYPE: &str = "resume_type";
+// deprecated keys
+const RESUME_FROM_LOG: &str = "resume_from_log";
+const RESUME_LOG_DIR: &str = "resume_log_dir";
+const RESUME_CONFIG_FILE: &str = "resume_config_file";
 // default values
 const APE_DTS: &str = "APE_DTS";
 const ASTRISK: &str = "*";
+const RESUMER_CONNECTION_LIMIT_DEFAULT: usize = 5;
 
 impl TaskConfig {
     pub fn new(task_config_file: &str) -> anyhow::Result<Self> {
@@ -91,10 +103,19 @@ impl TaskConfig {
 
         let pipeline = Self::load_pipeline_config(&loader);
         let runtime = Self::load_runtime_config(&loader)?;
-        let resumer = Self::load_resumer_config(&loader, &runtime)?;
-        let (extractor_basic, extractor) = Self::load_extractor_config(&loader, &pipeline)?;
         let (sinker_basic, sinker) = Self::load_sinker_config(&loader)?;
+        let resumer = Self::load_resumer_config(&loader, &runtime, &sinker_basic)?;
+        let (extractor_basic, extractor) = Self::load_extractor_config(&loader, &pipeline)?;
+        let filter = Self::load_filter_config(&loader)?;
+        let router = Self::load_router_config(&loader)?;
         Ok(Self {
+            global: Self::load_global_config(
+                &loader,
+                &extractor_basic,
+                &sinker_basic,
+                &filter,
+                &router,
+            )?,
             extractor_basic,
             extractor,
             parallelizer: Self::load_parallelizer_config(&loader)?,
@@ -102,14 +123,30 @@ impl TaskConfig {
             sinker_basic,
             sinker,
             runtime,
-            filter: Self::load_filter_config(&loader)?,
-            router: Self::load_router_config(&loader)?,
+            filter,
+            router,
             resumer,
             data_marker: Self::load_data_marker_config(&loader)?,
             processor: Self::load_processor_config(&loader)?,
             meta_center: Self::load_meta_center_config(&loader)?,
             #[cfg(feature = "metrics")]
             metrics: Self::load_metrics_config(&loader)?,
+        })
+    }
+
+    fn load_global_config(
+        loader: &IniLoader,
+        extractor_basic: &BasicExtractorConfig,
+        sinker_basic: &BasicSinkerConfig,
+        filter: &FilterConfig,
+        router: &RouterConfig,
+    ) -> anyhow::Result<GlobalConfig> {
+        Ok(GlobalConfig {
+            task_id: loader.get_with_default(
+                GLOBAL,
+                "task_id",
+                TaskUtil::generate_task_id(extractor_basic, sinker_basic, filter, router),
+            ),
         })
     }
 
@@ -659,13 +696,61 @@ impl TaskConfig {
     fn load_resumer_config(
         loader: &IniLoader,
         runtime: &RuntimeConfig,
+        sinker_basic: &BasicSinkerConfig,
     ) -> anyhow::Result<ResumerConfig> {
-        let resume_log_dir: String =
-            loader.get_with_default(RESUMER, "resume_log_dir", runtime.log_dir.clone());
-        Ok(ResumerConfig {
-            resume_config_file: loader.get_optional(RESUMER, "resume_config_file"),
-            resume_from_log: loader.get_optional(RESUMER, "resume_from_log"),
-            resume_log_dir,
+        // compatible with older versions
+        if let Some(config) = Self::load_resumer_config_deprecated(loader, runtime) {
+            return Ok(config);
+        }
+
+        let resume_type = loader.get_with_default(RESUMER, RESUME_TYPE, ResumeType::Dummy);
+        match resume_type {
+            ResumeType::FromLog => Ok(ResumerConfig::FromLog {
+                log_dir: loader.get_with_default(RESUMER, "log_dir", runtime.log_dir.clone()),
+                config_file: loader.get_optional(RESUMER, "config_file"),
+            }),
+            ResumeType::FromTarget => Ok(ResumerConfig::FromDB {
+                url: sinker_basic.url.clone(),
+                db_type: sinker_basic.db_type.clone(),
+                table_full_name: loader.get_optional(RESUMER, "table_full_name"),
+                connection_limit: loader.get_with_default(
+                    RESUMER,
+                    "connection_limit",
+                    RESUMER_CONNECTION_LIMIT_DEFAULT,
+                ),
+            }),
+            ResumeType::FromDB => Ok(ResumerConfig::FromDB {
+                url: loader.get_required(RESUMER, URL),
+                db_type: loader.get_required(RESUMER, DB_TYPE),
+                table_full_name: loader.get_optional(RESUMER, "table_full_name"),
+                connection_limit: loader.get_with_default(
+                    RESUMER,
+                    "connection_limit",
+                    RESUMER_CONNECTION_LIMIT_DEFAULT,
+                ),
+            }),
+            _ => Ok(ResumerConfig::Dummy),
+        }
+    }
+
+    fn load_resumer_config_deprecated(
+        loader: &IniLoader,
+        runtime: &RuntimeConfig,
+    ) -> Option<ResumerConfig> {
+        if !loader.contains(RESUMER, RESUME_FROM_LOG) && !loader.contains(RESUMER, RESUME_LOG_DIR)
+            || !loader.contains(RESUMER, RESUME_CONFIG_FILE)
+        {
+            return None;
+        }
+        let resume_from_log = loader.get_with_default(RESUMER, RESUME_FROM_LOG, false);
+        let log_dir = if resume_from_log {
+            loader.get_with_default(RESUMER, RESUME_LOG_DIR, runtime.log_dir.clone())
+        } else {
+            String::new()
+        };
+        Some(ResumerConfig::FromLog {
+            log_dir,
+            config_file: loader.get_optional(RESUMER, RESUME_CONFIG_FILE),
         })
     }
 

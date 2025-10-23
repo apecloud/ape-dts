@@ -9,7 +9,7 @@ use tokio::{sync::Mutex, sync::RwLock, time::Instant};
 use crate::{lua_processor::LuaProcessor, Pipeline};
 use dt_common::{
     config::sinker_config::SinkerConfig,
-    log_info, log_position,
+    log_error, log_info, log_position,
     meta::{
         dcl_meta::dcl_data::DclData,
         ddl_meta::ddl_data::DdlData,
@@ -22,7 +22,7 @@ use dt_common::{
     monitor::{counter_type::CounterType, monitor::Monitor},
     utils::time_util::TimeUtil,
 };
-use dt_connector::{data_marker::DataMarker, Sinker};
+use dt_connector::{data_marker::DataMarker, extractor::resumer::recorder::Recorder, Sinker};
 use dt_parallelizer::{DataSize, Parallelizer};
 
 pub struct BasePipeline {
@@ -37,6 +37,7 @@ pub struct BasePipeline {
     pub monitor: Arc<Monitor>,
     pub data_marker: Option<Arc<RwLock<DataMarker>>>,
     pub lua_processor: Option<LuaProcessor>,
+    pub recorder: Option<Arc<dyn Recorder + Send + Sync>>,
 }
 
 enum SinkMethod {
@@ -376,6 +377,18 @@ impl BasePipeline {
 
         log_position!("current_position | {}", last_received_position.to_string());
         log_position!("checkpoint_position | {}", last_commit_position.to_string());
+
+        // record position for recovery if necessary
+        if let Some(handler) = &self.recorder {
+            let record_position = if matches!(last_commit_position, Position::None) {
+                last_received_position
+            } else {
+                last_commit_position
+            };
+            if let Err(e) = handler.record_position(record_position).await {
+                log_error!("failed to record position: {}, err: {}", record_position, e);
+            }
+        }
 
         if !matches!(last_commit_position, Position::None) {
             self.syncer.lock().await.committed_position = last_commit_position.to_owned();

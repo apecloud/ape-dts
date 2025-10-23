@@ -1,4 +1,4 @@
-use std::{cmp, path::PathBuf, str::FromStr};
+use std::{cmp, path::PathBuf, str::FromStr, sync::Arc};
 
 use anyhow::Context;
 use async_trait::async_trait;
@@ -12,7 +12,7 @@ use rusoto_s3::{GetObjectRequest, ListObjectsV2Request, S3Client, S3};
 use tokio::io::AsyncReadExt;
 
 use crate::{
-    extractor::{base_extractor::BaseExtractor, resumer::snapshot_resumer::SnapshotResumer},
+    extractor::{base_extractor::BaseExtractor, resumer::recovery::Recovery},
     Extractor,
 };
 
@@ -20,10 +20,10 @@ pub struct FoxlakeS3Extractor {
     pub s3_client: S3Client,
     pub s3_config: S3Config,
     pub base_extractor: BaseExtractor,
-    pub resumer: SnapshotResumer,
     pub batch_size: usize,
     pub schema: String,
     pub tb: String,
+    pub recovery: Option<Arc<dyn Recovery + Send + Sync>>,
 }
 
 const FINISHED: &str = "finished";
@@ -45,10 +45,25 @@ impl Extractor for FoxlakeS3Extractor {
 
 impl FoxlakeS3Extractor {
     async fn extract_internal(&mut self) -> anyhow::Result<()> {
-        let mut start_after = self
-            .resumer
-            .get_resume_value(&self.schema, &self.tb, "", false);
-        log_info!("start extracting from: {:?}", start_after);
+        let mut start_after = if let Some(handler) = &self.recovery {
+            if let Some(value) = handler
+                .get_snapshot_resume_position(&self.schema, &self.tb, "", false)
+                .await
+            {
+                log_info!(
+                    "[{}.{}] recovery from [{}]:[{}]",
+                    self.schema,
+                    self.tb,
+                    "",
+                    value
+                );
+                Some(value)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
         loop {
             let mut finished = false;
             let meta_files = self.list_meta_file(&start_after).await?;

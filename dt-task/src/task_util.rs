@@ -1,31 +1,41 @@
-use std::{str::FromStr, time::Duration};
+use std::{str::FromStr, sync::Arc, time::Duration};
 
 use anyhow::bail;
-use dt_common::config::config_enums::TaskType;
-use dt_common::config::extractor_config::ExtractorConfig;
-use dt_common::config::s3_config::S3Config;
-use dt_common::config::{
-    config_enums::DbType, meta_center_config::MetaCenterConfig, sinker_config::SinkerConfig,
-    task_config::TaskConfig,
-};
-use dt_common::error::Error;
-use dt_common::log_info;
-use dt_common::meta::mysql::mysql_dbengine_meta_center::MysqlDbEngineMetaCenter;
-use dt_common::meta::{
-    mysql::mysql_meta_manager::MysqlMetaManager, pg::pg_meta_manager::PgMetaManager,
-    rdb_meta_manager::RdbMetaManager,
-};
-use dt_common::rdb_filter::RdbFilter;
 use futures::TryStreamExt;
-use mongodb::bson::doc;
-use mongodb::options::ClientOptions;
+use mongodb::{bson::doc, options::ClientOptions};
 use rusoto_core::Region;
 use rusoto_s3::S3Client;
-use sqlx::Executor;
 use sqlx::{
     mysql::{MySqlConnectOptions, MySqlPoolOptions},
     postgres::{PgConnectOptions, PgPoolOptions},
-    ConnectOptions, MySql, Pool, Postgres, Row,
+    ConnectOptions, Executor, MySql, Pool, Postgres, Row,
+};
+
+use dt_common::{
+    config::{
+        config_enums::{DbType, TaskType},
+        extractor_config::ExtractorConfig,
+        global_config::GlobalConfig,
+        meta_center_config::MetaCenterConfig,
+        resumer_config::ResumerConfig,
+        s3_config::S3Config,
+        sinker_config::SinkerConfig,
+        task_config::TaskConfig,
+    },
+    error::Error,
+    log_info,
+    meta::{
+        mysql::{
+            mysql_dbengine_meta_center::MysqlDbEngineMetaCenter,
+            mysql_meta_manager::MysqlMetaManager,
+        },
+        pg::pg_meta_manager::PgMetaManager,
+        rdb_meta_manager::RdbMetaManager,
+    },
+    rdb_filter::RdbFilter,
+};
+use dt_connector::extractor::resumer::{
+    build_recorder, build_recovery, recorder::Recorder, recovery::Recovery, utils::ResumerUtil,
 };
 
 const MYSQL_SYS_DBS: [&str; 4] = ["information_schema", "mysql", "performance_schema", "sys"];
@@ -504,6 +514,39 @@ WHERE
         );
 
         S3Client::new_with(rusoto_core::HttpClient::new().unwrap(), credentials, region)
+    }
+
+    pub async fn build_resumer(
+        task_type: TaskType,
+        global_config: &GlobalConfig,
+        resumer_config: &ResumerConfig,
+    ) -> anyhow::Result<(
+        Option<Arc<dyn Recorder + Send + Sync>>,
+        Option<Arc<dyn Recovery + Send + Sync>>,
+    )> {
+        let recorder_pool = match resumer_config {
+            ResumerConfig::FromDB {
+                url,
+                db_type,
+                connection_limit,
+                ..
+            } => {
+                let pool = ResumerUtil::create_pool(url, db_type, *connection_limit as u32).await?;
+                Some(pool)
+            }
+            _ => None,
+        };
+        let recovery_pool = recorder_pool.clone();
+        let recorder =
+            build_recorder(&global_config.task_id, resumer_config, recorder_pool).await?;
+        let recovery = build_recovery(
+            &global_config.task_id,
+            task_type,
+            resumer_config,
+            recovery_pool,
+        )
+        .await?;
+        Ok((recorder, recovery))
     }
 }
 

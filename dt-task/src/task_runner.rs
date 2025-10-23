@@ -26,7 +26,7 @@ use super::{
 use crate::task_util::{ConnClient, TaskUtil};
 use dt_common::{
     config::{
-        config_enums::{build_task_type, DbType, PipelineType},
+        config_enums::{build_task_type, DbType, PipelineType, TaskType},
         config_token_parser::{ConfigTokenParser, TokenEscapePair},
         extractor_config::ExtractorConfig,
         sinker_config::SinkerConfig,
@@ -50,7 +50,7 @@ use dt_common::{
 };
 use dt_connector::{
     data_marker::DataMarker,
-    extractor::resumer::{cdc_resumer::CdcResumer, snapshot_resumer::SnapshotResumer},
+    extractor::resumer::{recorder::Recorder, recovery::Recovery},
     rdb_router::RdbRouter,
     Sinker,
 };
@@ -69,12 +69,13 @@ pub struct TaskContext {
     pub extractor_client: ConnClient,
     pub sinker_client: ConnClient,
     pub router: Arc<RdbRouter>,
-    pub snapshot_resumer: Arc<SnapshotResumer>,
-    pub cdc_resumer: Arc<CdcResumer>,
+    pub recorder: Option<Arc<dyn Recorder + Send + Sync>>,
+    pub recovery: Option<Arc<dyn Recovery + Send + Sync>>,
 }
 
 #[derive(Clone)]
 pub struct TaskRunner {
+    task_type: Option<TaskType>,
     config: TaskConfig,
     extractor_monitor: Arc<GroupMonitor>,
     pipeline_monitor: Arc<GroupMonitor>,
@@ -122,6 +123,7 @@ impl TaskRunner {
             task_monitor,
             #[cfg(feature = "metrics")]
             prometheus_metrics,
+            task_type,
         })
     }
 
@@ -137,17 +139,27 @@ impl TaskRunner {
 
         let db_type = &self.config.extractor_basic.db_type;
         let router = Arc::new(RdbRouter::from_config(&self.config.router, db_type)?);
-        let snapshot_resumer = Arc::new(SnapshotResumer::from_config(&self.config)?);
-        let cdc_resumer = Arc::new(CdcResumer::from_config(&self.config)?);
+        let (recorder, recovery) = match &self.task_type {
+            Some(task_type) => {
+                TaskUtil::build_resumer(
+                    task_type.to_owned(),
+                    &self.config.global,
+                    &self.config.resumer,
+                )
+                .await?
+            }
+            None => (None, None),
+        };
         let (extractor_client, sinker_client) = ConnClient::from_config(&self.config).await?;
+
         let task_context = TaskContext {
             id: String::new(),
             extractor_config: self.config.extractor.clone(),
             extractor_client: extractor_client.clone(),
             sinker_client: sinker_client.clone(),
             router,
-            snapshot_resumer,
-            cdc_resumer,
+            recorder,
+            recovery,
         };
 
         #[cfg(feature = "metrics")]
@@ -252,8 +264,8 @@ impl TaskRunner {
             extractor_client: task_context.extractor_client,
             sinker_client: task_context.sinker_client,
             router: task_context.router,
-            snapshot_resumer: task_context.snapshot_resumer,
-            cdc_resumer: task_context.cdc_resumer,
+            recorder: task_context.recorder,
+            recovery: task_context.recovery,
         };
         let me = self.clone();
         join_set.spawn(async move {
@@ -273,8 +285,8 @@ impl TaskRunner {
         let extractor_client = task_context.extractor_client;
         let sinker_client = task_context.sinker_client;
         let router = (*task_context.router).clone();
-        let snapshot_resumer = (*task_context.snapshot_resumer).clone();
-        let cdc_resumer = (*task_context.cdc_resumer).clone();
+        let recorder = task_context.recorder.clone();
+        let recovery = task_context.recovery.clone();
 
         let max_bytes = self.config.pipeline.buffer_memory_mb * 1024 * 1024;
         let buffer = Arc::new(DtQueue::new(
@@ -331,8 +343,7 @@ impl TaskRunner {
             extractor_monitor.clone(),
             extractor_data_marker,
             router,
-            snapshot_resumer,
-            cdc_resumer,
+            recovery,
         )
         .await?;
 
@@ -370,6 +381,7 @@ impl TaskRunner {
                 sinkers,
                 pipeline_monitor.clone(),
                 rw_sinker_data_marker.clone(),
+                recorder,
             )
             .await?;
 
@@ -486,6 +498,7 @@ impl TaskRunner {
         sinkers: Vec<Arc<async_mutex::Mutex<Box<dyn Sinker + Send>>>>,
         monitor: Arc<Monitor>,
         data_marker: Option<Arc<RwLock<DataMarker>>>,
+        recorder: Option<Arc<dyn Recorder + Send + Sync>>,
     ) -> anyhow::Result<Box<dyn Pipeline + Send>> {
         match self.config.pipeline.pipeline_type {
             PipelineType::Basic => {
@@ -527,6 +540,7 @@ impl TaskRunner {
                     monitor,
                     data_marker,
                     lua_processor,
+                    recorder,
                 };
                 Ok(Box::new(pipeline))
             }
@@ -815,11 +829,7 @@ impl TaskRunner {
             .collect::<Vec<_>>();
 
         if is_multi_task {
-            let task_type_option = build_task_type(
-                &self.config.extractor_basic.extract_type,
-                &self.config.sinker_basic.sink_type,
-            );
-            if let Some(task_type) = task_type_option {
+            if let Some(task_type) = &self.task_type {
                 log_info!("begin to estimate record count");
                 let record_count =
                     TaskUtil::estimate_record_count(&task_type, url, db_type, &schemas, &filter)
@@ -832,8 +842,6 @@ impl TaskRunner {
         }
 
         let router = original_task_context.router.clone();
-        let snapshot_resumer = original_task_context.snapshot_resumer.clone();
-        let cdc_resumer = original_task_context.cdc_resumer.clone();
         let extractor_client = original_task_context.extractor_client.clone();
         let sinker_client = original_task_context.sinker_client.clone();
 
@@ -875,12 +883,12 @@ impl TaskRunner {
             };
             pending_tasks.push_back(TaskContext {
                 extractor_config: db_extractor_config,
-                router,
-                snapshot_resumer,
-                cdc_resumer,
+                router: router,
                 id: "".to_string(),
                 extractor_client,
                 sinker_client,
+                recorder: original_task_context.recorder.clone(),
+                recovery: original_task_context.recovery.clone(),
             });
         } else {
             for schema in schemas.iter() {
@@ -892,11 +900,14 @@ impl TaskRunner {
                 let mut finished_tbs = 0;
 
                 for tb in tbs.iter() {
-                    if snapshot_resumer.check_finished(schema, tb) {
-                        log_info!("schema: {}, tb: {}, already finished", schema, tb);
-                        finished_tbs += 1;
-                        continue;
+                    if let Some(recovery_handler) = original_task_context.recovery.as_ref() {
+                        if recovery_handler.check_snapshot_finished(schema, tb).await {
+                            log_info!("schema: {}, tb: {}, already finished", schema, tb);
+                            finished_tbs += 1;
+                            continue;
+                        }
                     }
+
                     if filter.filter_event(schema, tb, &RowType::Insert) {
                         log_info!("schema: {}, tb: {}, insert events filtered", schema, tb);
                         continue;
@@ -959,11 +970,11 @@ impl TaskRunner {
                     pending_tasks.push_back(TaskContext {
                         extractor_config: tb_extractor_config,
                         router: router.clone(),
-                        snapshot_resumer: snapshot_resumer.clone(),
-                        cdc_resumer: cdc_resumer.clone(),
                         id: format!("{}.{}", schema, tb),
                         extractor_client: extractor_client.clone(),
                         sinker_client: sinker_client.clone(),
+                        recorder: original_task_context.recorder.clone(),
+                        recovery: original_task_context.recovery.clone(),
                     });
                 }
 
