@@ -46,7 +46,6 @@ impl Extractor for PgSnapshotExtractor {
     }
 
     async fn close(&mut self) -> anyhow::Result<()> {
-        self.meta_manager.close().await?;
         Ok(())
     }
 }

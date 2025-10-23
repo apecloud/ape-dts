@@ -105,7 +105,8 @@ impl TaskUtil {
         let meta_manager = match &config.sinker {
             SinkerConfig::Mysql { url, .. } | SinkerConfig::MysqlCheck { url, .. } => {
                 let mysql_meta_manager =
-                    Self::create_mysql_meta_manager(url, log_level, DbType::Mysql, None).await?;
+                    Self::create_mysql_meta_manager(url, log_level, DbType::Mysql, None, None)
+                        .await?;
                 RdbMetaManager::from_mysql(mysql_meta_manager)
             }
 
@@ -114,9 +115,14 @@ impl TaskUtil {
             SinkerConfig::StarRocks { .. } | SinkerConfig::Doris { .. } => {
                 match &config.extractor {
                     ExtractorConfig::MysqlCdc { url, .. } => {
-                        let mysql_meta_manager =
-                            Self::create_mysql_meta_manager(url, log_level, DbType::Mysql, None)
-                                .await?;
+                        let mysql_meta_manager = Self::create_mysql_meta_manager(
+                            url,
+                            log_level,
+                            DbType::Mysql,
+                            None,
+                            None,
+                        )
+                        .await?;
                         RdbMetaManager::from_mysql(mysql_meta_manager)
                     }
                     ExtractorConfig::PgCdc { url, .. } => {
@@ -144,9 +150,13 @@ impl TaskUtil {
         log_level: &str,
         db_type: DbType,
         meta_center_config: Option<MetaCenterConfig>,
+        conn_pool_opt: Option<Pool<MySql>>,
     ) -> anyhow::Result<MysqlMetaManager> {
         let enable_sqlx_log = Self::check_enable_sqlx_log(log_level);
-        let conn_pool = Self::create_mysql_conn_pool(url, 1, enable_sqlx_log, false).await?;
+        let conn_pool = match &conn_pool_opt {
+            Some(conn_pool) => conn_pool.clone(),
+            None => Self::create_mysql_conn_pool(url, 1, enable_sqlx_log, false).await?,
+        };
         let mut meta_manager = MysqlMetaManager::new_mysql_compatible(conn_pool, db_type).await?;
 
         if let Some(MetaCenterConfig::MySqlDbEngine {
@@ -155,8 +165,10 @@ impl TaskUtil {
             ..
         }) = &meta_center_config
         {
-            let meta_center_conn_pool =
-                Self::create_mysql_conn_pool(url, 1, enable_sqlx_log, false).await?;
+            let meta_center_conn_pool = match &conn_pool_opt {
+                Some(conn_pool) => conn_pool.clone(),
+                None => Self::create_mysql_conn_pool(url, 1, enable_sqlx_log, false).await?,
+            };
             let meta_center = MysqlDbEngineMetaCenter::new(
                 url.clone(),
                 meta_center_conn_pool,

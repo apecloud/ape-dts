@@ -95,13 +95,6 @@ impl ExtractorUtil {
                 parallel_size,
                 batch_size,
             } => {
-                let meta_manager = TaskUtil::create_mysql_meta_manager(
-                    &url,
-                    &config.runtime.log_level,
-                    DbType::Mysql,
-                    config.meta_center.clone(),
-                )
-                .await?;
                 let conn_pool = match extractor_client {
                     ConnClient::MySQL(conn_pool) => conn_pool,
                     _ => {
@@ -114,6 +107,14 @@ impl ExtractorUtil {
                         .await?
                     }
                 };
+                let meta_manager = TaskUtil::create_mysql_meta_manager(
+                    &url,
+                    &config.runtime.log_level,
+                    DbType::Mysql,
+                    config.meta_center.clone(),
+                    Some(conn_pool.clone()),
+                )
+                .await?;
                 let extractor = MysqlSnapshotExtractor {
                     conn_pool,
                     meta_manager,
@@ -141,6 +142,7 @@ impl ExtractorUtil {
                     &config.runtime.log_level,
                     DbType::Mysql,
                     config.meta_center.clone(),
+                    None,
                 )
                 .await?;
                 let extractor = MysqlCheckExtractor {
@@ -175,6 +177,7 @@ impl ExtractorUtil {
                     &config.runtime.log_level,
                     DbType::Mysql,
                     config.meta_center.clone(),
+                    None,
                 )
                 .await?;
                 base_extractor.time_filter = TimeFilter::new(&start_time_utc, &end_time_utc)?;
@@ -218,7 +221,8 @@ impl ExtractorUtil {
                         .await?
                     }
                 };
-                let meta_manager = PgMetaManager::new(conn_pool.clone()).await?;
+                let meta_manager =
+                    TaskUtil::create_pg_meta_manager(&url, &config.runtime.log_level).await?;
                 let extractor = PgSnapshotExtractor {
                     conn_pool,
                     meta_manager,
