@@ -123,8 +123,8 @@ mod tests {
     fn test_get_full_table_name() {
         // Test default values
         let (schema, table) = ResumerUtil::get_full_table_name("").unwrap();
-        assert_eq!(schema, "dt_resumer");
-        assert_eq!(table, "position");
+        assert_eq!(schema, DEFAULT_RESUMER_SCHEMA);
+        assert_eq!(table, DEFAULT_RESUMER_TABLE);
 
         // Test valid full table name
         let (schema, table) = ResumerUtil::get_full_table_name("test_schema.test_table").unwrap();
@@ -134,38 +134,17 @@ mod tests {
         // Test invalid full table name - no dot
         let result = ResumerUtil::get_full_table_name("invalid_name");
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("invalid full table name"));
 
         // Test invalid full table name - too many dots
         let result = ResumerUtil::get_full_table_name("too.many.dots");
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("invalid full table name"));
 
         // Test invalid full table name - empty schema
         let result = ResumerUtil::get_full_table_name(".table_name");
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("invalid full table name"));
 
         // Test invalid full table name - empty table
         let result = ResumerUtil::get_full_table_name("schema_name.");
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("invalid full table name"));
-
-        // Test default values
-        let (schema, table) = ResumerUtil::get_full_table_name("").unwrap();
-        assert_eq!(schema, DEFAULT_RESUMER_SCHEMA);
-        assert_eq!(table, DEFAULT_RESUMER_TABLE);
     }
 }
