@@ -304,6 +304,10 @@ impl MysqlCdcExtractor {
         row_data: RowData,
         position: Position,
     ) -> anyhow::Result<()> {
+        if self.filter_event(&row_data.schema, &row_data.tb, &row_data.row_type) {
+            self.base_extractor.record_extracted_metrics_row(&row_data);
+            return Ok(());
+        }
         self.base_extractor.push_row(row_data, position).await
     }
 
@@ -407,14 +411,11 @@ impl MysqlCdcExtractor {
         Ok(())
     }
 
-    fn filter_event(&mut self, table_map_event: &TableMapEvent, row_type: RowType) -> bool {
-        let db = &table_map_event.database_name;
-        let tb = &table_map_event.table_name;
-        let filtered = self.filter.filter_event(db, tb, &row_type);
-        if filtered {
-            return !self.base_extractor.is_data_marker_info(db, tb);
+    fn filter_event(&mut self, schema: &str, tb: &str, row_type: &RowType) -> bool {
+        if self.filter.filter_event(schema, tb, row_type) {
+            return !self.base_extractor.is_data_marker_info(schema, tb);
         }
-        filtered
+        false
     }
 
     fn start_heartbeat(&mut self, shut_down: Arc<AtomicBool>) -> anyhow::Result<()> {

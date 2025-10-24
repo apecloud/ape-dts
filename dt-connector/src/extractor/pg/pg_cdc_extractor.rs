@@ -325,15 +325,9 @@ impl PgCdcExtractor {
             None,
             Some(col_values),
         );
-        if self.filter_event(&tb_meta, RowType::Insert) {
-            return Ok(());
-        }
 
-        if ddl_meta.len() == 2 && row_data.schema == ddl_meta[0] && row_data.tb == ddl_meta[1] {
-            return self.decode_ddl(&row_data, position).await;
-        }
-
-        self.push_row_to_buf(row_data, position.clone()).await
+        self.push_row_to_buf(row_data, position.clone(), Some(ddl_meta))
+            .await
     }
 
     async fn decode_update(
@@ -367,10 +361,7 @@ impl PgCdcExtractor {
             Some(col_values_before),
             Some(col_values_after),
         );
-        if self.filter_event(&tb_meta, RowType::Update) {
-            return Ok(());
-        }
-        self.push_row_to_buf(row_data, position.clone()).await
+        self.push_row_to_buf(row_data, position.clone(), None).await
     }
 
     async fn decode_delete(
@@ -396,10 +387,7 @@ impl PgCdcExtractor {
             Some(col_values),
             None,
         );
-        if self.filter_event(&tb_meta, RowType::Delete) {
-            return Ok(());
-        }
-        self.push_row_to_buf(row_data, position.clone()).await
+        self.push_row_to_buf(row_data, position.clone(), None).await
     }
 
     async fn decode_ddl(&mut self, row_data: &RowData, position: &Position) -> anyhow::Result<()> {
@@ -462,6 +450,10 @@ impl PgCdcExtractor {
         tb_meta: &PgTbMeta,
         tuple_data: &[TupleData],
     ) -> anyhow::Result<HashMap<String, ColValue>> {
+        if !self.base_extractor.time_filter.started {
+            return Ok(HashMap::new());
+        }
+
         let ignore_cols = self
             .filter
             .get_ignore_cols(&tb_meta.basic.schema, &tb_meta.basic.tb);
@@ -499,18 +491,35 @@ impl PgCdcExtractor {
         &mut self,
         row_data: RowData,
         position: Position,
+        ddl_meta: Option<&[String]>,
     ) -> anyhow::Result<()> {
-        self.base_extractor.push_row(row_data, position).await
-    }
-
-    fn filter_event(&mut self, tb_meta: &PgTbMeta, row_type: RowType) -> bool {
-        let schema = &tb_meta.basic.schema;
-        let tb = &tb_meta.basic.tb;
-        let filtered = self.filter.filter_event(schema, tb, &row_type);
-        if filtered {
-            return !self.base_extractor.is_data_marker_info(schema, tb);
+        // First check business filter (exclude data_marker which is special)
+        if self
+            .filter
+            .filter_event(&row_data.schema, &row_data.tb, &row_data.row_type)
+            && !self
+                .base_extractor
+                .is_data_marker_info(&row_data.schema, &row_data.tb)
+        {
+            self.base_extractor.record_extracted_metrics_row(&row_data);
+            return Ok(());
         }
-        filtered
+
+        // Then check if this is DDL metadata table data, decode DDL if so
+        // Only INSERT events on DDL metadata table need to be decoded
+        if let Some(ddl_meta) = ddl_meta {
+            if row_data.row_type == RowType::Insert
+                && ddl_meta.len() == 2
+                && row_data.schema == ddl_meta[0]
+                && row_data.tb == ddl_meta[1]
+            {
+                self.base_extractor.record_extracted_metrics_row(&row_data);
+                return self.decode_ddl(&row_data, &position).await;
+            }
+        }
+
+        // Finally push normal data to buffer
+        self.base_extractor.push_row(row_data, position).await
     }
 
     fn mock_pg_tb_meta(schema: &str, tb: &str, oid: i32) -> PgTbMeta {
