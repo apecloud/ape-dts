@@ -52,12 +52,14 @@ mod tests {
             db_type: DbType::Mysql,
             extract_type: ExtractType::Snapshot,
             url: "mysql://localhost:3306/test".to_string(),
+            max_connections: 10,
         };
         let sinker_config = BasicSinkerConfig {
             db_type: DbType::Mysql,
             sink_type: SinkType::Write,
             url: "mysql://localhost:3307/test".to_string(),
             batch_size: 0,
+            max_connections: 10,
         };
         let mut filter_config = FilterConfig {
             do_schemas: "db1,db2".to_string(),

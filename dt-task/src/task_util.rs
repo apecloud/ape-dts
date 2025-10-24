@@ -528,10 +528,10 @@ WHERE
             ResumerConfig::FromDB {
                 url,
                 db_type,
-                connection_limit,
+                max_connections,
                 ..
             } => {
-                let pool = ResumerUtil::create_pool(url, db_type, *connection_limit as u32).await?;
+                let pool = ResumerUtil::create_pool(url, db_type, *max_connections as u32).await?;
                 Some(pool)
             }
             _ => None,

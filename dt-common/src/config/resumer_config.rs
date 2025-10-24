@@ -15,7 +15,7 @@ pub enum ResumerConfig {
         db_type: DbType,
         // such as public.ape_task_position or database1.table1
         table_full_name: String,
-        connection_limit: usize,
+        max_connections: usize,
     },
     Dummy,
 }

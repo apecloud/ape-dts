@@ -832,7 +832,7 @@ impl TaskRunner {
             if let Some(task_type) = &self.task_type {
                 log_info!("begin to estimate record count");
                 let record_count =
-                    TaskUtil::estimate_record_count(&task_type, url, db_type, &schemas, &filter)
+                    TaskUtil::estimate_record_count(task_type, url, db_type, &schemas, &filter)
                         .await?;
                 log_info!("estimate record count: {}", record_count);
 
@@ -850,7 +850,6 @@ impl TaskRunner {
             &self.config.extractor,
             ExtractorConfig::MysqlStruct { .. } | ExtractorConfig::PgStruct { .. }
         );
-
         if is_db_extractor_config {
             let db_extractor_config = match &self.config.extractor {
                 ExtractorConfig::MysqlStruct {
@@ -883,7 +882,7 @@ impl TaskRunner {
             };
             pending_tasks.push_back(TaskContext {
                 extractor_config: db_extractor_config,
-                router: router,
+                router,
                 id: "".to_string(),
                 extractor_client,
                 sinker_client,

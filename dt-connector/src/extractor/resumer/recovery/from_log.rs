@@ -213,12 +213,7 @@ impl Recovery for LogRecovery {
             } else {
                 &self.snapshot_cache.checkpoint_tb_positions
             };
-
-        if let Some(value) = tb_positions.get(&key) {
-            Some(value.to_owned())
-        } else {
-            None
-        }
+        tb_positions.get(&key).map(|value| value.to_owned())
     }
 
     async fn get_cdc_resume_position(&self) -> Option<Position> {

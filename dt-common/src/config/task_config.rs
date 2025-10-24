@@ -713,9 +713,9 @@ impl TaskConfig {
                 url: sinker_basic.url.clone(),
                 db_type: sinker_basic.db_type.clone(),
                 table_full_name: loader.get_optional(RESUMER, "table_full_name"),
-                connection_limit: loader.get_with_default(
+                max_connections: loader.get_with_default(
                     RESUMER,
-                    "connection_limit",
+                    MAX_CONNECTIONS,
                     RESUMER_CONNECTION_LIMIT_DEFAULT,
                 ),
             }),
@@ -723,9 +723,9 @@ impl TaskConfig {
                 url: loader.get_required(RESUMER, URL),
                 db_type: loader.get_required(RESUMER, DB_TYPE),
                 table_full_name: loader.get_optional(RESUMER, "table_full_name"),
-                connection_limit: loader.get_with_default(
+                max_connections: loader.get_with_default(
                     RESUMER,
-                    "connection_limit",
+                    MAX_CONNECTIONS,
                     RESUMER_CONNECTION_LIMIT_DEFAULT,
                 ),
             }),

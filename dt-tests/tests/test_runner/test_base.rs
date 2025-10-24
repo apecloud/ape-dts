@@ -147,13 +147,15 @@ impl TestBase {
         let runner = MongoTestRunner::new(test_dir).await.unwrap();
         runner.run_snapshot_test(false).await.unwrap();
 
-        let assert_dst_count = |db: &str, tb: &str, count: usize| {
-            let dst_data = block_on(runner.fetch_data(db, tb, DST));
-            assert_eq!(dst_data.len(), count);
-        };
-
         for ((db, tb), count) in dst_expected_counts.iter() {
-            assert_dst_count(db, tb, *count);
+            let dst_data = runner.fetch_data(db, tb, DST).await;
+            println!(
+                "check dst table {:?} record count, expect: {}, actual: {}",
+                (db, tb),
+                count,
+                dst_data.len()
+            );
+            assert_eq!(dst_data.len(), *count);
         }
     }
 
