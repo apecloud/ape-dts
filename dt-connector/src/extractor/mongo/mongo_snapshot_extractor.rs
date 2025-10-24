@@ -44,7 +44,6 @@ impl Extractor for MongoSnapshotExtractor {
     }
 
     async fn close(&mut self) -> anyhow::Result<()> {
-        self.mongo_client.clone().shutdown().await;
         Ok(())
     }
 }

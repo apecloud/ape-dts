@@ -3,6 +3,7 @@ use std::{cmp, collections::LinkedList};
 use super::counter::Counter;
 use crate::utils::limit_queue::LimitedQueue;
 
+#[derive(Default)]
 pub struct WindowCounterStatistics {
     pub sum: u64,
     pub max: u64,
@@ -12,21 +13,6 @@ pub struct WindowCounterStatistics {
     pub min_by_sec: u64,
     pub avg_by_sec: u64,
     pub count: u64,
-}
-
-impl Default for WindowCounterStatistics {
-    fn default() -> Self {
-        Self {
-            sum: 0,
-            max: 0,
-            min: 0,
-            avg_by_count: 0,
-            max_by_sec: 0,
-            min_by_sec: 0,
-            avg_by_sec: 0,
-            count: 0,
-        }
-    }
 }
 
 #[derive(Clone)]

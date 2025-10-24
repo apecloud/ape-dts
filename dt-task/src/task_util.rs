@@ -1,5 +1,6 @@
 use std::{str::FromStr, time::Duration};
 
+use anyhow::bail;
 use dt_common::config::config_enums::TaskType;
 use dt_common::config::extractor_config::ExtractorConfig;
 use dt_common::config::s3_config::S3Config;
@@ -7,6 +8,7 @@ use dt_common::config::{
     config_enums::DbType, meta_center_config::MetaCenterConfig, sinker_config::SinkerConfig,
     task_config::TaskConfig,
 };
+use dt_common::error::Error;
 use dt_common::log_info;
 use dt_common::meta::mysql::mysql_dbengine_meta_center::MysqlDbEngineMetaCenter;
 use dt_common::meta::{
@@ -103,7 +105,8 @@ impl TaskUtil {
         let meta_manager = match &config.sinker {
             SinkerConfig::Mysql { url, .. } | SinkerConfig::MysqlCheck { url, .. } => {
                 let mysql_meta_manager =
-                    Self::create_mysql_meta_manager(url, log_level, DbType::Mysql, None).await?;
+                    Self::create_mysql_meta_manager(url, log_level, DbType::Mysql, None, None)
+                        .await?;
                 RdbMetaManager::from_mysql(mysql_meta_manager)
             }
 
@@ -112,9 +115,14 @@ impl TaskUtil {
             SinkerConfig::StarRocks { .. } | SinkerConfig::Doris { .. } => {
                 match &config.extractor {
                     ExtractorConfig::MysqlCdc { url, .. } => {
-                        let mysql_meta_manager =
-                            Self::create_mysql_meta_manager(url, log_level, DbType::Mysql, None)
-                                .await?;
+                        let mysql_meta_manager = Self::create_mysql_meta_manager(
+                            url,
+                            log_level,
+                            DbType::Mysql,
+                            None,
+                            None,
+                        )
+                        .await?;
                         RdbMetaManager::from_mysql(mysql_meta_manager)
                     }
                     ExtractorConfig::PgCdc { url, .. } => {
@@ -142,9 +150,13 @@ impl TaskUtil {
         log_level: &str,
         db_type: DbType,
         meta_center_config: Option<MetaCenterConfig>,
+        conn_pool_opt: Option<Pool<MySql>>,
     ) -> anyhow::Result<MysqlMetaManager> {
         let enable_sqlx_log = Self::check_enable_sqlx_log(log_level);
-        let conn_pool = Self::create_mysql_conn_pool(url, 1, enable_sqlx_log, false).await?;
+        let conn_pool = match &conn_pool_opt {
+            Some(conn_pool) => conn_pool.clone(),
+            None => Self::create_mysql_conn_pool(url, 1, enable_sqlx_log, false).await?,
+        };
         let mut meta_manager = MysqlMetaManager::new_mysql_compatible(conn_pool, db_type).await?;
 
         if let Some(MetaCenterConfig::MySqlDbEngine {
@@ -153,8 +165,10 @@ impl TaskUtil {
             ..
         }) = &meta_center_config
         {
-            let meta_center_conn_pool =
-                Self::create_mysql_conn_pool(url, 1, enable_sqlx_log, false).await?;
+            let meta_center_conn_pool = match &conn_pool_opt {
+                Some(conn_pool) => conn_pool.clone(),
+                None => Self::create_mysql_conn_pool(url, 1, enable_sqlx_log, false).await?,
+            };
             let meta_center = MysqlDbEngineMetaCenter::new(
                 url.clone(),
                 meta_center_conn_pool,
@@ -175,11 +189,16 @@ impl TaskUtil {
         PgMetaManager::new(conn_pool.clone()).await
     }
 
-    pub async fn create_mongo_client(url: &str, app_name: &str) -> anyhow::Result<mongodb::Client> {
+    pub async fn create_mongo_client(
+        url: &str,
+        app_name: &str,
+        max_pool_size: Option<u32>,
+    ) -> anyhow::Result<mongodb::Client> {
         let mut client_options = ClientOptions::parse_async(url).await?;
         // app_name only for debug usage
         client_options.app_name = Some(app_name.to_string());
         client_options.direct_connection = Some(true);
+        client_options.max_pool_size = max_pool_size;
         Ok(mongodb::Client::with_options(client_options)?)
     }
 
@@ -449,14 +468,14 @@ WHERE
     }
 
     async fn list_mongo_dbs(url: &str) -> anyhow::Result<Vec<String>> {
-        let client = Self::create_mongo_client(url, "").await?;
+        let client = Self::create_mongo_client(url, "", None).await?;
         let dbs = client.list_database_names(None, None).await?;
         client.shutdown().await;
         Ok(dbs)
     }
 
     async fn list_mongo_tbs(url: &str, db: &str) -> anyhow::Result<Vec<String>> {
-        let client = Self::create_mongo_client(url, "").await?;
+        let client = Self::create_mongo_client(url, "", None).await?;
         // filter views and system tables
         let tbs = client
             .database(db)
@@ -485,5 +504,99 @@ WHERE
         );
 
         S3Client::new_with(rusoto_core::HttpClient::new().unwrap(), credentials, region)
+    }
+}
+
+#[derive(Default, Clone)]
+pub enum ConnClient {
+    MySQL(Pool<MySql>),
+    PostgreSQL(Pool<Postgres>),
+    MongoDB(mongodb::Client),
+    S3(S3Client),
+    #[default]
+    None,
+}
+
+impl ConnClient {
+    pub async fn from_config(task_config: &TaskConfig) -> anyhow::Result<(Self, Self)> {
+        let enable_sqlx_log = TaskUtil::check_enable_sqlx_log(&task_config.runtime.log_level);
+        let extractor_max_connections = task_config.extractor_basic.max_connections;
+        let sinker_max_connections = task_config.sinker_basic.max_connections;
+        if extractor_max_connections < 1 {
+            bail!(Error::ConfigError(
+                "`extractor.max_connections` must be greater than 0".into()
+            ));
+        }
+        if sinker_max_connections < 1 {
+            bail!(Error::ConfigError(
+                "`sinker.max_connections` must be greater than 0".into()
+            ));
+        }
+
+        let extractor_client = match &task_config.extractor {
+            ExtractorConfig::MysqlSnapshot { url, .. } => ConnClient::MySQL(
+                TaskUtil::create_mysql_conn_pool(
+                    url,
+                    extractor_max_connections,
+                    enable_sqlx_log,
+                    false,
+                )
+                .await?,
+            ),
+            ExtractorConfig::PgSnapshot { url, .. } => ConnClient::PostgreSQL(
+                TaskUtil::create_pg_conn_pool(
+                    url,
+                    extractor_max_connections,
+                    enable_sqlx_log,
+                    false,
+                )
+                .await?,
+            ),
+            ExtractorConfig::MongoSnapshot { url, app_name, .. } => ConnClient::MongoDB(
+                TaskUtil::create_mongo_client(url, app_name, Some(extractor_max_connections))
+                    .await?,
+            ),
+            _ => ConnClient::None,
+        };
+        let sinker_client = match &task_config.sinker {
+            SinkerConfig::Mysql { url, .. } => ConnClient::MySQL(
+                TaskUtil::create_mysql_conn_pool(
+                    url,
+                    sinker_max_connections,
+                    enable_sqlx_log,
+                    false,
+                )
+                .await?,
+            ),
+            SinkerConfig::Pg { url, .. } => ConnClient::PostgreSQL(
+                TaskUtil::create_pg_conn_pool(url, sinker_max_connections, enable_sqlx_log, false)
+                    .await?,
+            ),
+            SinkerConfig::Mongo { url, app_name, .. } => ConnClient::MongoDB(
+                TaskUtil::create_mongo_client(url, app_name, Some(sinker_max_connections)).await?,
+            ),
+            _ => ConnClient::None,
+        };
+        Ok((extractor_client, sinker_client))
+    }
+
+    pub async fn close(&self) -> anyhow::Result<()> {
+        match self {
+            ConnClient::MySQL(pool) => {
+                if !pool.is_closed() {
+                    pool.close().await;
+                }
+            }
+            ConnClient::PostgreSQL(pool) => {
+                if !pool.is_closed() {
+                    pool.close().await;
+                }
+            }
+            ConnClient::MongoDB(client) => {
+                client.clone().shutdown().await;
+            }
+            _ => {}
+        }
+        Ok(())
     }
 }

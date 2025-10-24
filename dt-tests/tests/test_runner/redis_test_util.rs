@@ -116,7 +116,8 @@ impl RedisTestUtil {
         }
     }
 
-    pub fn execute_cmd(&self, conn: &mut Connection, cmd: &str) -> Value {        println!("execute cmd: {:?}", cmd);
+    pub fn execute_cmd(&self, conn: &mut Connection, cmd: &str) -> Value {
+        println!("execute cmd: {:?}", cmd);
         let packed_cmd = self.pack_cmd(cmd);
         conn.req_packed_command(&packed_cmd).unwrap()
     }

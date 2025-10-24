@@ -14,7 +14,6 @@ use dt_common::meta::{
     row_data::RowData,
 };
 
-use crate::close_conn_pool;
 use crate::{
     extractor::{base_extractor::BaseExtractor, resumer::snapshot_resumer::SnapshotResumer},
     rdb_query_builder::RdbQueryBuilder,
@@ -47,7 +46,7 @@ impl Extractor for PgSnapshotExtractor {
     }
 
     async fn close(&mut self) -> anyhow::Result<()> {
-        close_conn_pool!(self)
+        Ok(())
     }
 }
 

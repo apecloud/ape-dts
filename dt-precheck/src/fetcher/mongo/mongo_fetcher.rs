@@ -24,7 +24,7 @@ pub struct MongoFetcher {
 #[async_trait]
 impl Fetcher for MongoFetcher {
     async fn build_connection(&mut self) -> anyhow::Result<()> {
-        self.pool = Some(TaskUtil::create_mongo_client(&self.url, "").await?);
+        self.pool = Some(TaskUtil::create_mongo_client(&self.url, "", None).await?);
         Ok(())
     }
 
