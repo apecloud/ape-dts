@@ -381,7 +381,7 @@ impl TaskRunner {
                 sinkers,
                 pipeline_monitor.clone(),
                 rw_sinker_data_marker.clone(),
-                recorder,
+                recorder.clone(),
             )
             .await?;
 
@@ -451,17 +451,20 @@ impl TaskRunner {
             _ => (String::new(), String::new()),
         };
         if !tb.is_empty() {
-            log_finished!(
-                "{}",
-                Position::RdbSnapshotFinished {
-                    db_type: self.config.extractor_basic.db_type.to_string(),
-                    schema,
-                    tb,
-                }
-                .to_string()
-            );
+            let finish_position = Position::RdbSnapshotFinished {
+                db_type: self.config.extractor_basic.db_type.to_string(),
+                schema,
+                tb,
+            };
+            log_finished!("{}", finish_position.to_string());
             self.task_monitor
                 .add_no_window_metrics(TaskMetricsType::FinishedProgressCount, 1);
+
+            if let Some(handler) = &recorder {
+                if let Err(e) = handler.record_position(&finish_position).await {
+                    log_error!("failed to record position: {}, err: {}", finish_position, e);
+                }
+            }
         }
 
         // remove monitors from global monitors

@@ -577,7 +577,9 @@ impl ConnClient {
         }
 
         let extractor_client = match &task_config.extractor {
-            ExtractorConfig::MysqlSnapshot { url, .. } => ConnClient::MySQL(
+            ExtractorConfig::MysqlSnapshot { url, .. }
+            | ExtractorConfig::MysqlStruct { url, .. }
+            | ExtractorConfig::MysqlCheck { url, .. } => ConnClient::MySQL(
                 TaskUtil::create_mysql_conn_pool(
                     url,
                     extractor_max_connections,
@@ -586,7 +588,9 @@ impl ConnClient {
                 )
                 .await?,
             ),
-            ExtractorConfig::PgSnapshot { url, .. } => ConnClient::PostgreSQL(
+            ExtractorConfig::PgSnapshot { url, .. }
+            | ExtractorConfig::PgStruct { url, .. }
+            | ExtractorConfig::PgCheck { url, .. } => ConnClient::PostgreSQL(
                 TaskUtil::create_pg_conn_pool(
                     url,
                     extractor_max_connections,

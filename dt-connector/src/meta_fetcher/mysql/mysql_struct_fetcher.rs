@@ -4,25 +4,30 @@ use std::{
 };
 
 use anyhow::bail;
-use dt_common::meta::{
-    mysql::{mysql_col_type::MysqlColType, mysql_meta_manager::MysqlMetaManager},
-    struct_meta::{
-        statement::{
-            mysql_create_database_statement::MysqlCreateDatabaseStatement,
-            mysql_create_table_statement::MysqlCreateTableStatement,
-        },
-        structure::{
-            column::{Column, ColumnDefault},
-            constraint::{Constraint, ConstraintType},
-            database::Database,
-            index::{Index, IndexColumn, IndexKind, IndexType},
-            table::Table,
-        },
-    },
-};
-use dt_common::{config::config_enums::DbType, error::Error, rdb_filter::RdbFilter};
 use futures::TryStreamExt;
 use sqlx::{mysql::MySqlRow, MySql, Pool, Row};
+
+use dt_common::{
+    config::config_enums::DbType,
+    error::Error,
+    meta::{
+        mysql::{mysql_col_type::MysqlColType, mysql_meta_manager::MysqlMetaManager},
+        struct_meta::{
+            statement::{
+                mysql_create_database_statement::MysqlCreateDatabaseStatement,
+                mysql_create_table_statement::MysqlCreateTableStatement,
+            },
+            structure::{
+                column::{Column, ColumnDefault},
+                constraint::{Constraint, ConstraintType},
+                database::Database,
+                index::{Index, IndexColumn, IndexKind, IndexType},
+                table::Table,
+            },
+        },
+    },
+    rdb_filter::RdbFilter,
+};
 
 pub struct MysqlStructFetcher {
     pub conn_pool: Pool<MySql>,
@@ -193,9 +198,10 @@ impl MysqlStructFetcher {
             let is_nullable = Self::get_str_with_null(&row, "IS_NULLABLE")?.to_lowercase() == "yes";
             let extra = Self::get_str_with_null(&row, "EXTRA")?;
             let column_name = Self::get_str_with_null(&row, "COLUMN_NAME")?;
+            let column_type = Self::get_str_with_null(&row, "COLUMN_TYPE")?;
             let column_default = if let Some(column_default_str) = row.get("COLUMN_DEFAULT") {
                 Some(
-                    self.parse_column_default(&db, &tb, &column_name, column_default_str, &extra)
+                    self.parse_column_default(&column_type, column_default_str, &extra)
                         .await?,
                 )
             } else {
@@ -206,7 +212,7 @@ impl MysqlStructFetcher {
                 ordinal_position: row.try_get("ORDINAL_POSITION")?,
                 column_default,
                 is_nullable,
-                column_type: Self::get_str_with_null(&row, "COLUMN_TYPE")?,
+                column_type,
                 column_key: Self::get_str_with_null(&row, "COLUMN_KEY")?,
                 extra,
                 column_comment: Self::get_str_with_null(&row, "COLUMN_COMMENT")?,
@@ -242,9 +248,7 @@ impl MysqlStructFetcher {
 
     async fn parse_column_default(
         &mut self,
-        schema: &str,
-        tb: &str,
-        col: &str,
+        col_type: &str,
         column_default_str: &str,
         extra: &str,
     ) -> anyhow::Result<ColumnDefault> {
@@ -276,17 +280,16 @@ impl MysqlStructFetcher {
             }
         }
 
-        let tb_meta = self.meta_manager.get_tb_meta(schema, tb).await?;
-        let col_type = tb_meta.get_col_type(col)?;
         // 5.7: the default value specified in a DEFAULT clause must be a literal constant;
         // it cannot be a function or an expression. This means, for example,
         // that you cannot set the default for a date column to be the value of a function
         // such as NOW() or CURRENT_DATE. The exception is that, for TIMESTAMP and DATETIME columns,
         // you can specify CURRENT_TIMESTAMP as the default.
         // 8.0: function or expression will also cause EXTRA to be 'DEFAULT_GENERATED'
+        let simple_mysql_col_type = self.meta_manager.to_simple_mysql_col_type(col_type);
         if str.to_uppercase().starts_with("CURRENT_TIMESTAMP")
             && matches!(
-                col_type,
+                simple_mysql_col_type,
                 MysqlColType::DateTime { .. } | MysqlColType::Timestamp { .. }
             )
         {

@@ -134,8 +134,18 @@ impl ExtractorUtil {
                 check_log_dir,
                 batch_size,
             } => {
-                let conn_pool =
-                    TaskUtil::create_mysql_conn_pool(&url, 2, enable_sqlx_log, false).await?;
+                let conn_pool = match extractor_client {
+                    ConnClient::MySQL(conn_pool) => conn_pool,
+                    _ => {
+                        TaskUtil::create_mysql_conn_pool(
+                            &url,
+                            DEFAULT_MAX_CONNECTIONS,
+                            enable_sqlx_log,
+                            false,
+                        )
+                        .await?
+                    }
+                };
                 let meta_manager = TaskUtil::create_mysql_meta_manager(
                     &url,
                     &config.runtime.log_level,
@@ -169,14 +179,16 @@ impl ExtractorUtil {
                 start_time_utc,
                 end_time_utc,
             } => {
-                let conn_pool =
-                    TaskUtil::create_mysql_conn_pool(&url, 2, enable_sqlx_log, false).await?;
+                let conn_pool = match extractor_client {
+                    ConnClient::MySQL(conn_pool) => conn_pool,
+                    _ => TaskUtil::create_mysql_conn_pool(&url, 2, enable_sqlx_log, false).await?,
+                };
                 let meta_manager = TaskUtil::create_mysql_meta_manager(
                     &url,
                     &config.runtime.log_level,
                     DbType::Mysql,
                     config.meta_center.clone(),
-                    None,
+                    Some(conn_pool.clone()),
                 )
                 .await?;
                 base_extractor.time_filter = TimeFilter::new(&start_time_utc, &end_time_utc)?;
@@ -241,8 +253,18 @@ impl ExtractorUtil {
                 check_log_dir,
                 batch_size,
             } => {
-                let conn_pool =
-                    TaskUtil::create_pg_conn_pool(&url, 2, enable_sqlx_log, false).await?;
+                let conn_pool = match extractor_client {
+                    ConnClient::PostgreSQL(conn_pool) => conn_pool,
+                    _ => {
+                        TaskUtil::create_pg_conn_pool(
+                            &url,
+                            DEFAULT_MAX_CONNECTIONS,
+                            enable_sqlx_log,
+                            false,
+                        )
+                        .await?
+                    }
+                };
                 let meta_manager = PgMetaManager::new(conn_pool.clone()).await?;
                 let extractor = PgCheckExtractor {
                     conn_pool,
@@ -268,8 +290,10 @@ impl ExtractorUtil {
                 start_time_utc,
                 end_time_utc,
             } => {
-                let conn_pool =
-                    TaskUtil::create_pg_conn_pool(&url, 2, enable_sqlx_log, false).await?;
+                let conn_pool = match extractor_client {
+                    ConnClient::PostgreSQL(conn_pool) => conn_pool,
+                    _ => TaskUtil::create_pg_conn_pool(&url, 2, enable_sqlx_log, false).await?,
+                };
                 let meta_manager = PgMetaManager::new(conn_pool.clone()).await?;
                 base_extractor.time_filter = TimeFilter::new(&start_time_utc, &end_time_utc)?;
                 let extractor = PgCdcExtractor {
@@ -321,7 +345,10 @@ impl ExtractorUtil {
                 heartbeat_interval_secs,
                 heartbeat_tb,
             } => {
-                let mongo_client = TaskUtil::create_mongo_client(&url, &app_name, None).await?;
+                let mongo_client = match extractor_client {
+                    ConnClient::MongoDB(mongo_client) => mongo_client,
+                    _ => TaskUtil::create_mongo_client(&url, &app_name, None).await?,
+                };
                 let extractor = MongoCdcExtractor {
                     filter,
                     resume_token,
@@ -344,7 +371,10 @@ impl ExtractorUtil {
                 check_log_dir,
                 batch_size,
             } => {
-                let mongo_client = TaskUtil::create_mongo_client(&url, &app_name, None).await?;
+                let mongo_client = match extractor_client {
+                    ConnClient::MongoDB(mongo_client) => mongo_client,
+                    _ => TaskUtil::create_mongo_client(&url, &app_name, None).await?,
+                };
                 let extractor = MongoCheckExtractor {
                     mongo_client,
                     check_log_dir,
@@ -360,11 +390,20 @@ impl ExtractorUtil {
                 db_batch_size,
                 ..
             } => {
+                let conn_pool = match extractor_client {
+                    ConnClient::MySQL(conn_pool) => conn_pool,
+                    _ => {
+                        TaskUtil::create_mysql_conn_pool(
+                            &url,
+                            DEFAULT_MAX_CONNECTIONS,
+                            enable_sqlx_log,
+                            false,
+                        )
+                        .await?
+                    }
+                };
                 let db_batch_size_validated =
                     MysqlStructExtractor::validate_db_batch_size(db_batch_size)?;
-                // TODO, pass max_connections as parameter
-                let conn_pool =
-                    TaskUtil::create_mysql_conn_pool(&url, 2, enable_sqlx_log, false).await?;
                 let extractor = MysqlStructExtractor {
                     conn_pool,
                     dbs,
@@ -382,11 +421,20 @@ impl ExtractorUtil {
                 db_batch_size,
                 ..
             } => {
+                let conn_pool = match extractor_client {
+                    ConnClient::PostgreSQL(conn_pool) => conn_pool,
+                    _ => {
+                        TaskUtil::create_pg_conn_pool(
+                            &url,
+                            DEFAULT_MAX_CONNECTIONS,
+                            enable_sqlx_log,
+                            false,
+                        )
+                        .await?
+                    }
+                };
                 let db_batch_size_validated =
                     PgStructExtractor::validate_db_batch_size(db_batch_size)?;
-                // TODO, pass max_connections as parameter
-                let conn_pool =
-                    TaskUtil::create_pg_conn_pool(&url, 2, enable_sqlx_log, false).await?;
                 let extractor = PgStructExtractor {
                     conn_pool,
                     schemas,

@@ -144,13 +144,18 @@ impl SinkerUtil {
                     .await?
                     .unwrap();
 
-                let conn_pool = TaskUtil::create_mysql_conn_pool(
-                    &url,
-                    parallel_size * 2,
-                    enable_sqlx_log,
-                    false,
-                )
-                .await?;
+                let conn_pool = match sinker_client {
+                    ConnClient::MySQL(conn_pool) => conn_pool,
+                    _ => {
+                        TaskUtil::create_mysql_conn_pool(
+                            &url,
+                            parallel_size * 2,
+                            enable_sqlx_log,
+                            false,
+                        )
+                        .await?
+                    }
+                };
                 let meta_manager = MysqlMetaManager::new(conn_pool.clone()).await?;
 
                 for _ in 0..parallel_size {
@@ -213,9 +218,18 @@ impl SinkerUtil {
                     .await?
                     .unwrap();
 
-                let conn_pool =
-                    TaskUtil::create_pg_conn_pool(&url, parallel_size * 2, enable_sqlx_log, false)
-                        .await?;
+                let conn_pool = match sinker_client {
+                    ConnClient::PostgreSQL(conn_pool) => conn_pool,
+                    _ => {
+                        TaskUtil::create_pg_conn_pool(
+                            &url,
+                            parallel_size * 2,
+                            enable_sqlx_log,
+                            false,
+                        )
+                        .await?
+                    }
+                };
                 let meta_manager = PgMetaManager::new(conn_pool.clone()).await?;
 
                 for _ in 0..parallel_size {
@@ -263,12 +277,18 @@ impl SinkerUtil {
                 ..
             } => {
                 let reverse_router = create_router!(task_config, Mongo).reverse();
+                let mongo_client = match sinker_client {
+                    ConnClient::MongoDB(mongo_client) => mongo_client,
+                    _ => {
+                        TaskUtil::create_mongo_client(&url, &app_name, Some(parallel_size * 2))
+                            .await?
+                    }
+                };
                 for _ in 0..parallel_size {
-                    let mongo_client = TaskUtil::create_mongo_client(&url, &app_name, None).await?;
                     let sinker = MongoChecker {
                         batch_size,
                         reverse_router: reverse_router.clone(),
-                        mongo_client,
+                        mongo_client: mongo_client.clone(),
                         monitor: monitor.clone(),
                     };
                     sub_sinkers.push(Arc::new(async_mutex::Mutex::new(Box::new(sinker))));
@@ -325,15 +345,21 @@ impl SinkerUtil {
             } => {
                 let filter = create_filter!(task_config, Mysql);
                 let router = create_router!(task_config, Mysql);
-                let conn_pool = TaskUtil::create_mysql_conn_pool(
-                    &url,
-                    parallel_size * 2,
-                    enable_sqlx_log,
-                    false,
-                )
-                .await?;
+
+                let conn_pool = match sinker_client {
+                    ConnClient::MySQL(conn_pool) => conn_pool,
+                    _ => {
+                        TaskUtil::create_mysql_conn_pool(
+                            &url,
+                            parallel_size * 2,
+                            enable_sqlx_log,
+                            false,
+                        )
+                        .await?
+                    }
+                };
                 let sinker = MysqlStructSinker {
-                    conn_pool: conn_pool.clone(),
+                    conn_pool,
                     conflict_policy: conflict_policy.clone(),
                     filter: filter.clone(),
                     router,
@@ -347,11 +373,21 @@ impl SinkerUtil {
             } => {
                 let filter = create_filter!(task_config, Pg);
                 let router = create_router!(task_config, Pg);
-                let conn_pool =
-                    TaskUtil::create_pg_conn_pool(&url, parallel_size * 2, enable_sqlx_log, false)
-                        .await?;
+
+                let conn_pool = match sinker_client {
+                    ConnClient::PostgreSQL(conn_pool) => conn_pool,
+                    _ => {
+                        TaskUtil::create_pg_conn_pool(
+                            &url,
+                            parallel_size * 2,
+                            enable_sqlx_log,
+                            false,
+                        )
+                        .await?
+                    }
+                };
                 let sinker = PgStructSinker {
-                    conn_pool: conn_pool.clone(),
+                    conn_pool,
                     conflict_policy: conflict_policy.clone(),
                     filter: filter.clone(),
                     router,
