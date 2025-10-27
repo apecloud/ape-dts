@@ -9,12 +9,12 @@ pub enum CounterType {
     SerialWrites,
     #[strum(serialize = "record_count")]
     RecordCount,
+    #[strum(serialize = "data_bytes")]
+    DataBytes,
     #[strum(serialize = "extracted_records")]
     ExtractedRecords,
     #[strum(serialize = "extracted_bytes")]
     ExtractedBytes,
-    #[strum(serialize = "data_bytes")]
-    DataBytes,
 
     // time window counter, aggregate by: sum, avg/max/min by count
     #[strum(serialize = "records_per_query")]

@@ -41,7 +41,8 @@ impl Extractor for PgStructExtractor {
                 "PgStructExtractor extracts schemas: {}",
                 schema_chunk.join(",")
             );
-            self.extract_internal(schema_chunk.into_iter().collect(), idx == last_idx)
+            let do_global_struct = idx == last_idx && self.do_global_structs;
+            self.extract_internal(schema_chunk.into_iter().collect(), do_global_struct)
                 .await?;
         }
         self.base_extractor.wait_task_finish().await

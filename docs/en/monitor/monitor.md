@@ -14,9 +14,9 @@ This type of counter is an array of sub-counters. During task execution, wheneve
 | :-------- | :-------- | :-------- | 
 | sum | sum of sub-counters | count of synchronized entries in last 10 seconds |
 | avg | sum of sub-counters / number of sub-counters | average time cost for each write to target in last 10 seconds |
-| avg_by_sec | sum of all sub-counters / time window (seconds) | average number of entries written to target per second within the last 10 seconds |
+| avg_by_sec | sum of all sub-counters / time window | average number of entries written to target per second in last 10 seconds |
 | max | the sub-counter with the maximum value | maximum number of entries written to target in a single batch in last 10 seconds |
-| max_by_sec | sum sub-counters for each second and pick the second with the maximum sum | Maximum number of entries written to target in any single second within the last 10 seconds |
+| max_by_sec | sums the sub-counters for each second, and finds the second with the maximum sum | Maximum number of entries written to target in a single second |
 
 # No window counter
 
@@ -47,49 +47,34 @@ counter_time_window_secs=60
 2024-02-29 01:25:09.554391 | extractor | extracted_data_bytes | avg_by_sec=900 | sum=900 | max_by_sec=900
 ```
 
-### Prometheus metrics
-```
-# Traffic from source data arriving at ape-dts server's network interface (current statistics may not be fully accurate)
-extractor_rps_avg 77
-extractor_rps_max 77
-extractor_rps_min 77
-extractor_bps_avg 3438
-extractor_bps_max 3438
-extractor_bps_min 3438
-
-# Traffic after data processing, pushed to pipeline, already converted to DtData
-extractor_pushed_rps_avg 77
-extractor_pushed_rps_max 77
-extractor_pushed_rps_min 77
-extractor_pushed_bps_avg 3438
-extractor_pushed_bps_max 3438
-extractor_pushed_bps_min 3438
-```
-
 ### counters
-| Counter | Counter Type | Description |
-| :-------- | :-------- | :-------- |
-| record_count | time window | Number of data entries pushed to queue (after filtering) |
-| data_bytes | time window | Data bytes pushed to queue (after filtering) |
-| extracted_record_count | time window | Number of data entries extracted from source (including filtered data) |
-| extracted_data_bytes | time window | Data bytes extracted from source (including filtered data) |
+| Counter              | Counter Type | Description                                  |
+| :------------------- | :----------- | :------------------------------------------- |
+| record_count         | time window  | Number of data entries pulled                |
+| data_bytes           | time window  | Data bytes pulled                            |
+| extracted_records    | time window  | Number of data entries extracted from source |
+| extracted_data_bytes | time window  | Data bytes extracted from source             |
 
 <br/>
 
-**Filtering and Metrics Explanation:**
+### Prometheus Metrics
+```
+# Traffic from source data arriving at ape-dts server's network interface (current statistics may not be fully accurate)
+extractor_rps_avg 13 
+extractor_rps_max 13
+extractor_rps_min 13
+extractor_bps_avg 586
+extractor_bps_max 586
+extractor_bps_min 586
 
-The Extractor implements two levels of filtering:
-
-1. **Time Filter**: Filters data with timestamps earlier than configured `start_time_utc`
-   - This data is **NOT** recorded in metrics
-   - Purpose: Avoid unnecessary parsing, optimize performance
-
-2. **Business Filter**: Filters data based on `filter_event` / `filter_schema` configuration rules
-   - This data **IS** recorded in `extracted_*` metrics
-   - But **NOT** recorded in `record_count` / `data_bytes` metrics
-   - Purpose: Understand the actual impact of filter rules
-
-**Prometheus Metrics:**
+# Traffic after data processing, pushed to pipeline, already converted to DtData
+extractor_pushed_rps_avg 20
+extractor_pushed_rps_max 20
+extractor_pushed_rps_min 20
+extractor_pushed_bps_avg 900 
+extractor_pushed_bps_max 900 
+extractor_pushed_bps_min 900 
+```
 
 Task metrics expose two groups of throughput gauges for real-time monitoring:
 
@@ -110,9 +95,9 @@ By comparing these two metric groups, you can observe the actual effect of filte
 
 | Aggregation | Description |
 | :-------- | :-------- |
-| avg_by_sec | Average entries pushed per second within the window |
-| sum | Total entries pushed within the window |
-| max_by_sec | Peak entries pushed in any one second within the window |
+| avg_by_sec | Average entries pulled from source per second within the window |
+| sum | Total entries pulled from source  within the window |
+| max_by_sec | Peak entries pulled from source  in any one second within the window |
 
 <br/>
 
@@ -120,9 +105,9 @@ By comparing these two metric groups, you can observe the actual effect of filte
 
 | Aggregation | Description                                         |
 | :---------- | :-------------------------------------------------- |
-| avg_by_sec  | Average bytes pushed per second within the window |
-| sum         | Total bytes pushed within the window              |
-| max_by_sec  | Peak bytes pushed in any one second within the window |
+| avg_by_sec  | Average bytes pulled from source  per second within the window |
+| sum         | Total bytes pulled from source  within the window              |
+| max_by_sec  | Peak bytes pulled from source  in any one second within the window |
 
 <br/>
 
@@ -130,9 +115,9 @@ By comparing these two metric groups, you can observe the actual effect of filte
 
 | Aggregation | Description                                                                             |
 | :---------- | :-------------------------------------------------------------------------------------- |
-| avg_by_sec  | Average entries extracted per second within the window (including filtered data) |
-| sum         | Total entries extracted within the window (including filtered data)              |
-| max_by_sec  | Peak entries extracted in any one second within the window (including filtered data) |
+| avg_by_sec  | Average entries extracted and pushed to pipeline per second within the window (including filtered data) |
+| sum         | Total entries extracted and pushed to pipeline within the window (including filtered data)              |
+| max_by_sec  | Peak entries extracted and pushed to pipeline in any one second within the window (including filtered data) |
 
 <br/>
 
@@ -140,9 +125,9 @@ By comparing these two metric groups, you can observe the actual effect of filte
 
 | Aggregation | Description |
 | :-------- | :-------- |
-| avg_by_sec | Average bytes extracted per second within the window (including filtered data) |
-| sum | Total bytes extracted within the window (including filtered data) |
-| max_by_sec | Peak bytes extracted in any one second within the window (including filtered data) |
+| avg_by_sec | Average bytes extracted and pushed to pipeline per second within the window (including filtered data) |
+| sum | Total bytes extracted and pushed to pipeline within the window (including filtered data) |
+| max_by_sec | Peak bytes extracted and pushed to pipeline in any one second within the window (including filtered data) |
 
 ## sinker
 
