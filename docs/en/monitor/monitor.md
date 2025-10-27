@@ -12,11 +12,11 @@ This type of counter is an array of sub-counters. During task execution, wheneve
 
 | Aggregation | Description | Example |
 | :-------- | :-------- | :-------- | 
-| sum | sum of sub-counters | count of synchronized entries in last 10 seconds |
-| avg | sum of sub-counters / number of sub-counters | average time cost for each write to target in last 10 seconds |
-| avg_by_sec | sum of all sub-counters / time window | average number of entries written to target per second in last 10 seconds |
-| max | the sub-counter with the maximum value | maximum number of entries written to target in a single batch in last 10 seconds |
-| max_by_sec | sums the sub-counters for each second, and finds the second with the maximum sum | Maximum number of entries written to target in a single second |
+| sum | sum of sub-counters | count of synchronized entries in the last 10 seconds |
+| avg | sum of sub-counters / number of sub-counters | average time cost for each write to target in the last 10 seconds |
+| avg_by_sec | sum of all sub-counters / time window | average number of entries written to target per second in the last 10 seconds |
+| max | the sub-counter with the maximum value | maximum number of entries written to target in a single batch in the last 10 seconds |
+| max_by_sec | sums the sub-counters for each second, and finds the second with the maximum sum | maximum number of entries written to target in a single second in the last 10 seconds |
 
 # No window counter
 
@@ -115,9 +115,9 @@ By comparing these two metric groups, you can observe the actual effect of filte
 
 | Aggregation | Description                                                                             |
 | :---------- | :-------------------------------------------------------------------------------------- |
-| avg_by_sec  | Average entries extracted and pushed to pipeline per second within the window (including filtered data) |
-| sum         | Total entries extracted and pushed to pipeline within the window (including filtered data)              |
-| max_by_sec  | Peak entries extracted and pushed to pipeline in any one second within the window (including filtered data) |
+| avg_by_sec  | Average entries extracted and pushed to pipeline per second within the window |
+| sum         | Total entries extracted and pushed to pipeline within the window              |
+| max_by_sec  | Peak entries extracted and pushed to pipeline in any one second within the window |
 
 <br/>
 
@@ -125,9 +125,9 @@ By comparing these two metric groups, you can observe the actual effect of filte
 
 | Aggregation | Description |
 | :-------- | :-------- |
-| avg_by_sec | Average bytes extracted and pushed to pipeline per second within the window (including filtered data) |
-| sum | Total bytes extracted and pushed to pipeline within the window (including filtered data) |
-| max_by_sec | Peak bytes extracted and pushed to pipeline in any one second within the window (including filtered data) |
+| avg_by_sec | Average bytes extracted and pushed to pipeline per second within the window |
+| sum | Total bytes extracted and pushed to pipeline within the window |
+| max_by_sec | Peak bytes extracted and pushed to pipeline in any one second within the window |
 
 ## sinker
 
