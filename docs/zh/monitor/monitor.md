@@ -19,9 +19,9 @@
 | :-------- | :-------- | :-------- | 
 | sum | 所有 sub counter 的总和 | 最近 10s 内，同步的数据总条数 |
 | avg | 所有 sub counter 的总和 / sub counter 的个数 | 最近 10s 内，平均每次写入到目标库的耗时 |
-| avg_by_sec | 所有 sub counter 的总和 / 时间窗口 | 最近 10s 内，平均每秒写入目标库的数据条数 |
+| avg_by_sec | 所有 sub counter 的总和 / 时间窗口（单位：秒） | 最近 10s 内，每秒平均写入目标库的数据条数 |
 | max | sub counter 中具有最大值的那一个 | 最近 10s 内，单次写入目标库的最大数据条数 |
-| max_by_sec | 将 sub counter 按时间顺序分布到每一秒，并对属于同一秒的 sub counter 各自取和，然后找出具有最大取和的那一秒的数据 | 单秒内从源库拉取的最大数据条数 |
+| max_by_sec | 将 sub counter 按秒聚合后，选择总和最大的那一秒 | 最近 10s 内，单秒写入目标库的最大数据条数 |
 
 # 无窗口 counter
 
@@ -46,15 +46,69 @@ counter_time_window_secs=60
 ## extractor
 ### monitor.log
 ```
+2024-02-29 01:25:09.554350 | extractor | extracted_record_count | avg_by_sec=20 | sum=20 | max_by_sec=20
+2024-02-29 01:25:09.554391 | extractor | extracted_data_bytes | avg_by_sec=900 | sum=900 | max_by_sec=900
 2024-02-29 01:25:09.554271 | extractor | record_count | avg_by_sec=13 | sum=13 | max_by_sec=13
 2024-02-29 01:25:09.554311 | extractor | data_bytes | avg_by_sec=586 | sum=586 | max_by_sec=586
+
+```
+
+### Prometheus 监控指标
+```
+# 源端数据进到ape-dts运行机器网卡的流量（目前统计得还不太准确）
+extractor_rps_avg 77
+extractor_rps_max 77
+extractor_rps_min 77
+extractor_bps_avg 3438
+extractor_bps_max 3438
+extractor_bps_min 3438
+
+# 数据经过处理后推送到pipeline的流量，已转为DtData
+extractor_pushed_rps_avg 77
+extractor_pushed_rps_max 77
+extractor_pushed_rps_min 77
+extractor_pushed_bps_avg 3438
+extractor_pushed_bps_max 3438
+extractor_pushed_bps_min 3438
 ```
 
 ### counter 说明
 | counter | counter 类型 | 说明 |
 | :-------- | :-------- | :-------- |
-| record_count | 时间窗口 | 拉取数据条数 |
-| data_bytes | 时间窗口 | 拉取数据 bytes |
+| extracted_record_count | 时间窗口 | 从源端提取的数据条数（包含被过滤的数据） |
+| extracted_data_bytes | 时间窗口 | 从源端提取的数据 bytes（包含被过滤的数据） |
+| record_count | 时间窗口 | 推送到队列的数据条数（过滤后） |
+| data_bytes | 时间窗口 | 推送到队列的数据 bytes（过滤后） |
+
+<br/>
+
+**过滤与 Metrics 说明：**
+
+对于 Extractor，存在两层过滤逻辑：
+
+1. **时间过滤（Time Filter）**：当数据时间戳早于配置的 `start_time_utc` 时被过滤
+   - 这类数据**不会**被记录到 metrics 中
+   - 目的：避免无效数据解析，优化性能
+
+2. **业务过滤（Business Filter）**：通过 `filter_event` / `filter_schema` 等配置规则过滤
+   - 这类数据**会**被记录到 `extracted_*` metrics 中
+   - 但**不会**被记录到 `record_count` / `data_bytes` metrics 中
+   - 目的：了解过滤规则的实际影响
+
+**Prometheus 监控指标：**
+
+任务指标中同时会提供两组吞吐相关的指标用于实时监控：
+
+- `extractor_rps_*` / `extractor_bps_*`：源端数据进到 ape-dts 运行机器网卡的流量（包含被业务规则过滤的数据，不包含时间过滤的数据）
+  - `extractor_rps_avg`, `extractor_rps_max`, `extractor_rps_min`：每秒记录数
+  - `extractor_bps_avg`, `extractor_bps_max`, `extractor_bps_min`：每秒字节数
+  - 注意：目前统计得还不太准确
+
+- `extractor_pushed_rps_*` / `extractor_pushed_bps_*`：数据经过处理后推送到 pipeline 的流量，已转为 DtData
+  - `extractor_pushed_rps_avg`, `extractor_pushed_rps_max`, `extractor_pushed_rps_min`：每秒记录数
+  - `extractor_pushed_bps_avg`, `extractor_pushed_bps_max`, `extractor_pushed_bps_min`：每秒字节数
+
+通过对比这两组指标，可以观察到过滤规则的实际效果。
 
 <br/>
 
@@ -62,24 +116,39 @@ counter_time_window_secs=60
 
 | 聚合方式 | 说明 |
 | :-------- | :-------- |
-| avg_by_sec | 窗口内，平均每秒拉取数据条数 |
-| sum | 窗口内，总共拉取数据条数 |
-| max_by_sec | 窗口内，每秒最大拉取数据条数 |
-
-任务指标中同时会提供两组吞吐相关的指标：
-
-- `extractor_rps_*` / `extractor_bps_*`：记录抽取端在过滤前的原始行数和字节速率。
-- `extractor_pushed_rps_*` / `extractor_pushed_bps_*`：记录过滤后、准备进入队列的数据量。
+| avg_by_sec | 窗口内，每秒平均推送数据条数 |
+| sum | 窗口内，总计推送数据条数 |
+| max_by_sec | 窗口内，单秒推送数据条数峰值 |
 
 <br/>
 
 - data_bytes
 
+| 聚合方式   | 说明                           |
+| :--------- | :----------------------------- |
+| avg_by_sec | 窗口内，每秒平均推送数据 bytes |
+| sum        | 窗口内，总计推送数据 bytes     |
+| max_by_sec | 窗口内，单秒推送数据 bytes 峰值 |
+
+<br/>
+
+- extracted_record_count
+
+| 聚合方式   | 说明                                           |
+| :--------- | :--------------------------------------------- |
+| avg_by_sec | 窗口内，每秒平均拉取并处理的数据条数 |
+| sum        | 窗口内，总计拉取并处理的数据条数（包含被过滤数据） |
+| max_by_sec | 窗口内，单秒拉取并处理的数据条数峰值（包含被过滤数据） |
+
+<br/>
+
+- extracted_data_bytes
+
 | 聚合方式 | 说明 |
 | :-------- | :-------- |
-| avg_by_sec | 窗口内，每秒平均拉取数据 bytes |
-| sum | 窗口内，总共拉取数据 bytes |
-| max_by_sec | 窗口内，每秒最大拉取数据 bytes |
+| avg_by_sec | 窗口内，每秒平均拉取并处理的数据 bytes（包含被过滤数据） |
+| sum | 窗口内，总计拉取并处理的数据 bytes（包含被过滤数据） |
+| max_by_sec | 窗口内，单秒拉取并处理的数据 bytes 峰值（包含被过滤数据） |
 
 ## sinker
 
@@ -117,9 +186,9 @@ counter_time_window_secs=60
 
 | 聚合方式 | 说明 |
 | :-------- | :-------- |
-| avg_by_sec | 窗口内，平均每秒写入数据条数 |
-| sum | 窗口内，写入总条数 |
-| max_by_sec | 窗口内，最大每秒写入数据条数 |
+| avg_by_sec | 窗口内，每秒平均写入数据条数 |
+| sum | 窗口内，总计写入数据条数 |
+| max_by_sec | 窗口内，单秒写入数据条数峰值 |
 
 <br/>
 
@@ -127,9 +196,9 @@ counter_time_window_secs=60
 
 | 聚合方式 | 说明 |
 | :-------- | :-------- |
-| avg_by_sec | 窗口内，平均每秒写入 bytes |
-| sum | 窗口内，写入总 bytes |
-| max_by_sec | 窗口内，最大每秒写入 bytes |
+| avg_by_sec | 窗口内，每秒平均写入 bytes |
+| sum | 窗口内，总计写入 bytes |
+| max_by_sec | 窗口内，单秒写入 bytes 峰值 |
 
 <br/>
 
@@ -137,9 +206,9 @@ counter_time_window_secs=60
 
 | 聚合方式 | 说明 |
 | :-------- | :-------- |
-| avg | 窗口内，平均每次写入数据条数 |
-| sum | 窗口内，写入总条数 |
-| max | 窗口内，最大每次写入数据条数 |
+| avg | 窗口内，每次写入数据条数平均值 |
+| sum | 窗口内，总计写入数据条数 |
+| max | 窗口内，单次写入数据条数峰值 |
 
 
 ## pipeline

@@ -142,21 +142,6 @@ impl MongoCdcExtractor {
             let ts = doc.get("ts");
             let ns = doc.get("ns");
 
-            let ts_value = ts.unwrap().as_timestamp().unwrap();
-            BaseExtractor::update_time_filter(
-                &mut self.base_extractor.time_filter,
-                ts_value.time,
-                &Position::MongoCdc {
-                    resume_token: String::new(),
-                    operation_time: ts_value.time,
-                    timestamp: Position::format_timestamp_millis(ts_value.time as i64 * 1000),
-                },
-            );
-
-            if !self.base_extractor.time_filter.started {
-                continue;
-            }
-
             match op.as_str() {
                 "i" => {
                     after.insert(
@@ -380,19 +365,13 @@ impl MongoCdcExtractor {
             if let Some(doc) = result {
                 let resume_token = doc.id;
                 let position = if let Some(operation_time) = doc.cluster_time {
-                    let pos = Position::MongoCdc {
+                    Position::MongoCdc {
                         resume_token: json!(resume_token).to_string(),
                         operation_time: operation_time.time,
                         timestamp: Position::format_timestamp_millis(
                             operation_time.time as i64 * 1000,
                         ),
-                    };
-                    BaseExtractor::update_time_filter(
-                        &mut self.base_extractor.time_filter,
-                        operation_time.time,
-                        &pos,
-                    );
-                    pos
+                    }
                 } else {
                     Position::MongoCdc {
                         resume_token: json!(resume_token).to_string(),
@@ -400,10 +379,6 @@ impl MongoCdcExtractor {
                         timestamp: String::new(),
                     }
                 };
-
-                if !self.base_extractor.time_filter.started {
-                    continue;
-                }
 
                 let (mut db, mut tb) = (String::new(), String::new());
                 if let Some(ns) = doc.ns {

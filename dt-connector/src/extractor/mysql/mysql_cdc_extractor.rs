@@ -221,6 +221,10 @@ impl MysqlCdcExtractor {
             EventData::WriteRows(mut w) => {
                 for event in w.rows.iter_mut() {
                     let table_map_event = ctx.table_map_event_map.get(&w.table_id).unwrap();
+                    if self.filter_event(table_map_event, RowType::Insert) {
+                        continue;
+                    }
+
                     let col_values = self
                         .parse_row_data(table_map_event, &w.included_columns, event)
                         .await?;
@@ -238,6 +242,9 @@ impl MysqlCdcExtractor {
             EventData::UpdateRows(mut u) => {
                 for event in u.rows.iter_mut() {
                     let table_map_event = ctx.table_map_event_map.get(&u.table_id).unwrap();
+                    if self.filter_event(table_map_event, RowType::Update) {
+                        continue;
+                    }
                     let col_values_before = self
                         .parse_row_data(table_map_event, &u.included_columns_before, &mut event.0)
                         .await?;
@@ -258,6 +265,9 @@ impl MysqlCdcExtractor {
             EventData::DeleteRows(mut d) => {
                 for event in d.rows.iter_mut() {
                     let table_map_event = ctx.table_map_event_map.get(&d.table_id).unwrap();
+                    if self.filter_event(table_map_event, RowType::Update) {
+                        continue;
+                    }
                     let col_values = self
                         .parse_row_data(table_map_event, &d.included_columns, event)
                         .await?;
@@ -304,10 +314,6 @@ impl MysqlCdcExtractor {
         row_data: RowData,
         position: Position,
     ) -> anyhow::Result<()> {
-        if self.filter_event(&row_data.schema, &row_data.tb, &row_data.row_type) {
-            self.base_extractor.record_extracted_metrics_row(&row_data);
-            return Ok(());
-        }
         self.base_extractor.push_row(row_data, position).await
     }
 
@@ -411,11 +417,14 @@ impl MysqlCdcExtractor {
         Ok(())
     }
 
-    fn filter_event(&mut self, schema: &str, tb: &str, row_type: &RowType) -> bool {
-        if self.filter.filter_event(schema, tb, row_type) {
-            return !self.base_extractor.is_data_marker_info(schema, tb);
+    fn filter_event(&mut self, table_map_event: &TableMapEvent, row_type: RowType) -> bool {
+        let db = &table_map_event.database_name;
+        let tb = &table_map_event.table_name;
+        let filtered = self.filter.filter_event(db, tb, &row_type);
+        if filtered {
+            return !self.base_extractor.is_data_marker_info(db, tb);
         }
-        false
+        filtered
     }
 
     fn start_heartbeat(&mut self, shut_down: Arc<AtomicBool>) -> anyhow::Result<()> {

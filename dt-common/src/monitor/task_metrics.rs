@@ -25,6 +25,7 @@ pub enum TaskMetricsType {
     FinishedProgressCount,
 
     // describe the overall traffic before filtering
+    // TODO: some traffic need to be decoded first, e.g., sqlx row data which fields not directly map to dt row data, which need to track the size of tcp stream
     ExtractorRpsMax,
     ExtractorRpsMin,
     ExtractorRpsAvg,
