@@ -3,13 +3,14 @@ use std::{
     sync::{atomic::AtomicBool, Arc},
 };
 
+use anyhow::bail;
 use tokio::sync::Mutex;
 
 use dt_common::{
     config::{
         config_enums::{DbType, ExtractType},
         extractor_config::ExtractorConfig,
-        task_config::{TaskConfig, DEFAULT_MAX_CONNECTIONS},
+        task_config::TaskConfig,
     },
     meta::{
         avro::avro_converter::AvroConverter, dt_queue::DtQueue,
@@ -82,7 +83,6 @@ impl ExtractorUtil {
             time_filter: TimeFilter::default(),
         };
 
-        let enable_sqlx_log = TaskUtil::check_enable_sqlx_log(&config.runtime.log_level);
         let filter = RdbFilter::from_config(&config.filter, &config.extractor_basic.db_type)?;
 
         let extractor: Box<dyn Extractor + Send> = match extractor_config.to_owned() {
@@ -97,13 +97,7 @@ impl ExtractorUtil {
                 let conn_pool = match extractor_client {
                     ConnClient::MySQL(conn_pool) => conn_pool,
                     _ => {
-                        TaskUtil::create_mysql_conn_pool(
-                            &url,
-                            DEFAULT_MAX_CONNECTIONS,
-                            enable_sqlx_log,
-                            false,
-                        )
-                        .await?
+                        bail!("connection pool not found");
                     }
                 };
                 let meta_manager = TaskUtil::create_mysql_meta_manager(
@@ -137,13 +131,7 @@ impl ExtractorUtil {
                 let conn_pool = match extractor_client {
                     ConnClient::MySQL(conn_pool) => conn_pool,
                     _ => {
-                        TaskUtil::create_mysql_conn_pool(
-                            &url,
-                            DEFAULT_MAX_CONNECTIONS,
-                            enable_sqlx_log,
-                            false,
-                        )
-                        .await?
+                        bail!("connection pool not found");
                     }
                 };
                 let meta_manager = TaskUtil::create_mysql_meta_manager(
@@ -181,7 +169,7 @@ impl ExtractorUtil {
             } => {
                 let conn_pool = match extractor_client {
                     ConnClient::MySQL(conn_pool) => conn_pool,
-                    _ => TaskUtil::create_mysql_conn_pool(&url, 2, enable_sqlx_log, false).await?,
+                    _ => bail!("connection pool not found"),
                 };
                 let meta_manager = TaskUtil::create_mysql_meta_manager(
                     &url,
@@ -223,13 +211,7 @@ impl ExtractorUtil {
                 let conn_pool = match extractor_client {
                     ConnClient::PostgreSQL(conn_pool) => conn_pool,
                     _ => {
-                        TaskUtil::create_pg_conn_pool(
-                            &url,
-                            DEFAULT_MAX_CONNECTIONS,
-                            enable_sqlx_log,
-                            false,
-                        )
-                        .await?
+                        bail!("connection pool not found");
                     }
                 };
                 let meta_manager =
@@ -249,20 +231,14 @@ impl ExtractorUtil {
             }
 
             ExtractorConfig::PgCheck {
-                url,
                 check_log_dir,
                 batch_size,
+                ..
             } => {
                 let conn_pool = match extractor_client {
                     ConnClient::PostgreSQL(conn_pool) => conn_pool,
                     _ => {
-                        TaskUtil::create_pg_conn_pool(
-                            &url,
-                            DEFAULT_MAX_CONNECTIONS,
-                            enable_sqlx_log,
-                            false,
-                        )
-                        .await?
+                        bail!("connection pool not found");
                     }
                 };
                 let meta_manager = PgMetaManager::new(conn_pool.clone()).await?;
@@ -292,7 +268,7 @@ impl ExtractorUtil {
             } => {
                 let conn_pool = match extractor_client {
                     ConnClient::PostgreSQL(conn_pool) => conn_pool,
-                    _ => TaskUtil::create_pg_conn_pool(&url, 2, enable_sqlx_log, false).await?,
+                    _ => bail!("connection pool not found"),
                 };
                 let meta_manager = PgMetaManager::new(conn_pool.clone()).await?;
                 base_extractor.time_filter = TimeFilter::new(&start_time_utc, &end_time_utc)?;
@@ -316,15 +292,10 @@ impl ExtractorUtil {
                 Box::new(extractor)
             }
 
-            ExtractorConfig::MongoSnapshot {
-                url,
-                app_name,
-                db,
-                tb,
-            } => {
+            ExtractorConfig::MongoSnapshot { db, tb, .. } => {
                 let mongo_client = match extractor_client {
                     ConnClient::MongoDB(mongo_client) => mongo_client,
-                    _ => TaskUtil::create_mongo_client(&url, &app_name, None).await?,
+                    _ => bail!("connection pool not found"),
                 };
                 let extractor = MongoSnapshotExtractor {
                     db,
@@ -337,17 +308,17 @@ impl ExtractorUtil {
             }
 
             ExtractorConfig::MongoCdc {
-                url,
                 app_name,
                 resume_token,
                 start_timestamp,
                 source,
                 heartbeat_interval_secs,
                 heartbeat_tb,
+                ..
             } => {
                 let mongo_client = match extractor_client {
                     ConnClient::MongoDB(mongo_client) => mongo_client,
-                    _ => TaskUtil::create_mongo_client(&url, &app_name, None).await?,
+                    _ => bail!("connection pool not found"),
                 };
                 let extractor = MongoCdcExtractor {
                     filter,
@@ -366,14 +337,13 @@ impl ExtractorUtil {
             }
 
             ExtractorConfig::MongoCheck {
-                url,
-                app_name,
                 check_log_dir,
                 batch_size,
+                ..
             } => {
                 let mongo_client = match extractor_client {
                     ConnClient::MongoDB(mongo_client) => mongo_client,
-                    _ => TaskUtil::create_mongo_client(&url, &app_name, None).await?,
+                    _ => bail!("connection pool not found"),
                 };
                 let extractor = MongoCheckExtractor {
                     mongo_client,
@@ -385,21 +355,12 @@ impl ExtractorUtil {
             }
 
             ExtractorConfig::MysqlStruct {
-                url,
-                dbs,
-                db_batch_size,
-                ..
+                dbs, db_batch_size, ..
             } => {
                 let conn_pool = match extractor_client {
                     ConnClient::MySQL(conn_pool) => conn_pool,
                     _ => {
-                        TaskUtil::create_mysql_conn_pool(
-                            &url,
-                            DEFAULT_MAX_CONNECTIONS,
-                            enable_sqlx_log,
-                            false,
-                        )
-                        .await?
+                        bail!("connection pool not found");
                     }
                 };
                 let db_batch_size_validated =
@@ -415,7 +376,6 @@ impl ExtractorUtil {
             }
 
             ExtractorConfig::PgStruct {
-                url,
                 schemas,
                 do_global_structs,
                 db_batch_size,
@@ -424,13 +384,7 @@ impl ExtractorUtil {
                 let conn_pool = match extractor_client {
                     ConnClient::PostgreSQL(conn_pool) => conn_pool,
                     _ => {
-                        TaskUtil::create_pg_conn_pool(
-                            &url,
-                            DEFAULT_MAX_CONNECTIONS,
-                            enable_sqlx_log,
-                            false,
-                        )
-                        .await?
+                        bail!("connection pool not found");
                     }
                 };
                 let db_batch_size_validated =

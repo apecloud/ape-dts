@@ -26,7 +26,6 @@ use tokio::{sync::Mutex, time::Duration, time::Instant};
 use tokio_postgres::replication::LogicalReplicationStream;
 
 use crate::{
-    close_conn_pool,
     extractor::{
         base_extractor::BaseExtractor, pg::pg_cdc_client::PgCdcClient, resumer::recovery::Recovery,
     },
@@ -105,8 +104,7 @@ impl Extractor for PgCdcExtractor {
     }
 
     async fn close(&mut self) -> anyhow::Result<()> {
-        self.meta_manager.close().await?;
-        close_conn_pool!(self)
+        self.meta_manager.close().await
     }
 }
 

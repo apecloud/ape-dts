@@ -1,6 +1,6 @@
 use std::{str::FromStr, sync::Arc};
 
-use anyhow::Context;
+use anyhow::{bail, Context};
 use kafka::producer::{Producer, RequiredAcks};
 use reqwest::{redirect::Policy, Url};
 use rusoto_s3::S3Client;
@@ -86,6 +86,7 @@ impl SinkerUtil {
         let log_level = &task_config.runtime.log_level;
         let enable_sqlx_log = TaskUtil::check_enable_sqlx_log(log_level);
         let parallel_size = task_config.parallelizer.parallel_size as u32;
+        let monitor_interval = task_config.pipeline.checkpoint_interval_secs;
 
         let mut sub_sinkers: Sinkers = Vec::new();
         match task_config.sinker.clone() {
@@ -100,19 +101,13 @@ impl SinkerUtil {
                 url,
                 batch_size,
                 replace,
-                disable_foreign_key_checks,
+                ..
             } => {
                 let router = create_router!(task_config, Mysql);
                 let conn_pool = match sinker_client {
                     ConnClient::MySQL(conn_pool) => conn_pool,
                     _ => {
-                        TaskUtil::create_mysql_conn_pool(
-                            &url,
-                            parallel_size * 2,
-                            enable_sqlx_log,
-                            disable_foreign_key_checks,
-                        )
-                        .await?
+                        bail!("connection pool not found");
                     }
                 };
                 let meta_manager = MysqlMetaManager::new(conn_pool.clone()).await?;
@@ -129,14 +124,13 @@ impl SinkerUtil {
                         monitor: monitor.clone(),
                         data_marker: data_marker.clone(),
                         replace,
+                        monitor_interval,
                     };
                     sub_sinkers.push(Arc::new(async_mutex::Mutex::new(Box::new(sinker))));
                 }
             }
 
-            SinkerConfig::MysqlCheck {
-                url, batch_size, ..
-            } => {
+            SinkerConfig::MysqlCheck { batch_size, .. } => {
                 // checker needs the reverse router
                 let reverse_router = create_router!(task_config, Mysql).reverse();
                 let filter = create_filter!(task_config, Mysql);
@@ -147,13 +141,7 @@ impl SinkerUtil {
                 let conn_pool = match sinker_client {
                     ConnClient::MySQL(conn_pool) => conn_pool,
                     _ => {
-                        TaskUtil::create_mysql_conn_pool(
-                            &url,
-                            parallel_size * 2,
-                            enable_sqlx_log,
-                            false,
-                        )
-                        .await?
+                        bail!("connection pool not found");
                     }
                 };
                 let meta_manager = MysqlMetaManager::new(conn_pool.clone()).await?;
@@ -176,19 +164,13 @@ impl SinkerUtil {
                 url,
                 batch_size,
                 replace,
-                disable_foreign_key_checks,
+                ..
             } => {
                 let router = create_router!(task_config, Pg);
                 let conn_pool = match sinker_client {
                     ConnClient::PostgreSQL(conn_pool) => conn_pool,
                     _ => {
-                        TaskUtil::create_pg_conn_pool(
-                            &url,
-                            parallel_size * 2,
-                            enable_sqlx_log,
-                            disable_foreign_key_checks,
-                        )
-                        .await?
+                        bail!("connection pool not found");
                     }
                 };
                 let meta_manager = PgMetaManager::new(conn_pool.clone()).await?;
@@ -203,14 +185,13 @@ impl SinkerUtil {
                         monitor: monitor.clone(),
                         data_marker: data_marker.clone(),
                         replace,
+                        monitor_interval,
                     };
                     sub_sinkers.push(Arc::new(async_mutex::Mutex::new(Box::new(sinker))));
                 }
             }
 
-            SinkerConfig::PgCheck {
-                url, batch_size, ..
-            } => {
+            SinkerConfig::PgCheck { batch_size, .. } => {
                 // checker needs the reverse router
                 let reverse_router = create_router!(task_config, Pg).reverse();
                 let filter = create_filter!(task_config, Pg);
@@ -221,13 +202,7 @@ impl SinkerUtil {
                 let conn_pool = match sinker_client {
                     ConnClient::PostgreSQL(conn_pool) => conn_pool,
                     _ => {
-                        TaskUtil::create_pg_conn_pool(
-                            &url,
-                            parallel_size * 2,
-                            enable_sqlx_log,
-                            false,
-                        )
-                        .await?
+                        bail!("connection pool not found");
                     }
                 };
                 let meta_manager = PgMetaManager::new(conn_pool.clone()).await?;
@@ -246,17 +221,12 @@ impl SinkerUtil {
                 }
             }
 
-            SinkerConfig::Mongo {
-                url,
-                app_name,
-                batch_size,
-            } => {
+            SinkerConfig::Mongo { batch_size, .. } => {
                 let router = create_router!(task_config, Mongo);
                 let mongo_client = match sinker_client {
                     ConnClient::MongoDB(mongo_client) => mongo_client,
                     _ => {
-                        TaskUtil::create_mongo_client(&url, &app_name, Some(parallel_size * 2))
-                            .await?
+                        bail!("connection pool not found");
                     }
                 };
                 for _ in 0..parallel_size {
@@ -265,23 +235,18 @@ impl SinkerUtil {
                         router: router.clone(),
                         mongo_client: mongo_client.clone(),
                         monitor: monitor.clone(),
+                        monitor_interval,
                     };
                     sub_sinkers.push(Arc::new(async_mutex::Mutex::new(Box::new(sinker))));
                 }
             }
 
-            SinkerConfig::MongoCheck {
-                url,
-                app_name,
-                batch_size,
-                ..
-            } => {
+            SinkerConfig::MongoCheck { batch_size, .. } => {
                 let reverse_router = create_router!(task_config, Mongo).reverse();
                 let mongo_client = match sinker_client {
                     ConnClient::MongoDB(mongo_client) => mongo_client,
                     _ => {
-                        TaskUtil::create_mongo_client(&url, &app_name, Some(parallel_size * 2))
-                            .await?
+                        bail!("connection pool not found");
                     }
                 };
                 for _ in 0..parallel_size {
@@ -340,8 +305,7 @@ impl SinkerUtil {
             }
 
             SinkerConfig::MysqlStruct {
-                url,
-                conflict_policy,
+                conflict_policy, ..
             } => {
                 let filter = create_filter!(task_config, Mysql);
                 let router = create_router!(task_config, Mysql);
@@ -349,13 +313,7 @@ impl SinkerUtil {
                 let conn_pool = match sinker_client {
                     ConnClient::MySQL(conn_pool) => conn_pool,
                     _ => {
-                        TaskUtil::create_mysql_conn_pool(
-                            &url,
-                            parallel_size * 2,
-                            enable_sqlx_log,
-                            false,
-                        )
-                        .await?
+                        bail!("connection pool not found");
                     }
                 };
                 let sinker = MysqlStructSinker {
@@ -363,13 +321,14 @@ impl SinkerUtil {
                     conflict_policy: conflict_policy.clone(),
                     filter: filter.clone(),
                     router,
+                    monitor: monitor.clone(),
+                    monitor_interval,
                 };
                 sub_sinkers.push(Arc::new(async_mutex::Mutex::new(Box::new(sinker))));
             }
 
             SinkerConfig::PgStruct {
-                url,
-                conflict_policy,
+                conflict_policy, ..
             } => {
                 let filter = create_filter!(task_config, Pg);
                 let router = create_router!(task_config, Pg);
@@ -377,13 +336,7 @@ impl SinkerUtil {
                 let conn_pool = match sinker_client {
                     ConnClient::PostgreSQL(conn_pool) => conn_pool,
                     _ => {
-                        TaskUtil::create_pg_conn_pool(
-                            &url,
-                            parallel_size * 2,
-                            enable_sqlx_log,
-                            false,
-                        )
-                        .await?
+                        bail!("connection pool not found");
                     }
                 };
                 let sinker = PgStructSinker {
@@ -391,6 +344,8 @@ impl SinkerUtil {
                     conflict_policy: conflict_policy.clone(),
                     filter: filter.clone(),
                     router,
+                    monitor: monitor.clone(),
+                    monitor_interval,
                 };
                 sub_sinkers.push(Arc::new(async_mutex::Mutex::new(Box::new(sinker))));
             }
@@ -789,6 +744,8 @@ impl SinkerUtil {
                     filter,
                     router,
                     engine,
+                    monitor: monitor.clone(),
+                    monitor_interval,
                 };
                 sub_sinkers.push(Arc::new(async_mutex::Mutex::new(Box::new(sinker))));
             }

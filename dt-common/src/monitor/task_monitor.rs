@@ -49,7 +49,7 @@ impl FlushableMonitor for TaskMonitor {
         }
 
         self.reset_before_calc();
-        if let Some(metrics) = self.calc() {
+        if let Some(metrics) = self.calc().await {
             log_task!("{}", serde_json::to_string(&metrics).unwrap());
             #[cfg(feature = "metrics")]
             self.prometheus_metrics.set_metrics(&metrics);
@@ -136,8 +136,9 @@ impl TaskMonitor {
             .or_insert(value);
     }
 
-    fn calc(&self) -> Option<BTreeMap<TaskMetricsType, u64>> {
+    async fn calc(&self) -> Option<BTreeMap<TaskMetricsType, u64>> {
         self.task_type.as_ref()?;
+
         let mut metrics: BTreeMap<TaskMetricsType, u64> = BTreeMap::new();
         let mut calc_handler =
             |calc_type: CalcType, task_metrics_type: TaskMetricsType, val: u64| match calc_type {
@@ -163,15 +164,21 @@ impl TaskMonitor {
             };
 
         let mut calc_monitors = Vec::new();
-        for item in self.extractors.iter() {
-            calc_monitors.push((MonitorType::Extractor, item.value().clone()));
+
+        let extractors: Vec<Arc<Monitor>> = self
+            .extractors
+            .iter()
+            .map(|item| item.value().clone())
+            .collect();
+
+        for monitor in extractors {
+            calc_monitors.push((MonitorType::Extractor, monitor.clone()));
             // extractor rps
-            if let Some(mut counter) = item
-                .value()
+            if let Some(counter) = monitor
                 .time_window_counters
-                .get_mut(&CounterType::ExtractedRecords)
+                .get(&CounterType::ExtractedRecords)
             {
-                let statics = counter.statistics();
+                let statics = counter.statistics().await;
                 calc_handler(
                     CalcType::Min,
                     TaskMetricsType::ExtractorRpsMin,
@@ -189,12 +196,11 @@ impl TaskMonitor {
                 );
             }
             // extractor bps
-            if let Some(mut counter) = item
-                .value()
+            if let Some(counter) = monitor
                 .time_window_counters
-                .get_mut(&CounterType::ExtractedBytes)
+                .get(&CounterType::ExtractedBytes)
             {
-                let statics = counter.statistics();
+                let statics = counter.statistics().await;
                 calc_handler(
                     CalcType::Min,
                     TaskMetricsType::ExtractorBpsMin,
@@ -212,12 +218,8 @@ impl TaskMonitor {
                 );
             }
             // extractor pushed records
-            if let Some(mut counter) = item
-                .value()
-                .time_window_counters
-                .get_mut(&CounterType::RecordCount)
-            {
-                let statics = counter.statistics();
+            if let Some(counter) = monitor.time_window_counters.get(&CounterType::RecordCount) {
+                let statics = counter.statistics().await;
                 calc_handler(
                     CalcType::Min,
                     TaskMetricsType::ExtractorPushedRpsMin,
@@ -235,12 +237,8 @@ impl TaskMonitor {
                 );
             }
             // extractor pushed bytes
-            if let Some(mut counter) = item
-                .value()
-                .time_window_counters
-                .get_mut(&CounterType::DataBytes)
-            {
-                let statics = counter.statistics();
+            if let Some(counter) = monitor.time_window_counters.get(&CounterType::DataBytes) {
+                let statics = counter.statistics().await;
                 calc_handler(
                     CalcType::Min,
                     TaskMetricsType::ExtractorPushedBpsMin,
@@ -258,18 +256,28 @@ impl TaskMonitor {
                 );
             }
         }
-        for item in self.pipelines.iter() {
-            calc_monitors.push((MonitorType::Pipeline, item.value().clone()));
+
+        let pipelines: Vec<Arc<Monitor>> = self
+            .pipelines
+            .iter()
+            .map(|item| item.value().clone())
+            .collect();
+
+        for monitor in pipelines {
+            calc_monitors.push((MonitorType::Pipeline, monitor.clone()));
         }
-        for item in self.sinkers.iter() {
-            calc_monitors.push((MonitorType::Sinker, item.value().clone()));
+
+        let sinkers: Vec<Arc<Monitor>> = self
+            .sinkers
+            .iter()
+            .map(|item| item.value().clone())
+            .collect();
+
+        for monitor in sinkers {
+            calc_monitors.push((MonitorType::Sinker, monitor.clone()));
             // sinker rt
-            if let Some(mut counter) = item
-                .value()
-                .time_window_counters
-                .get_mut(&CounterType::RtPerQuery)
-            {
-                let statics = counter.statistics();
+            if let Some(counter) = monitor.time_window_counters.get(&CounterType::RtPerQuery) {
+                let statics = counter.statistics().await;
                 calc_handler(
                     CalcType::Min,
                     TaskMetricsType::SinkerRtMin,
@@ -287,12 +295,11 @@ impl TaskMonitor {
                 );
             }
             // sinker rps
-            if let Some(mut counter) = item
-                .value()
+            if let Some(counter) = monitor
                 .time_window_counters
-                .get_mut(&CounterType::RecordsPerQuery)
+                .get(&CounterType::RecordsPerQuery)
             {
-                let statics = counter.statistics();
+                let statics = counter.statistics().await;
                 calc_handler(
                     CalcType::Min,
                     TaskMetricsType::SinkerRpsMin,
@@ -310,12 +317,8 @@ impl TaskMonitor {
                 );
             }
             // sinker bps
-            if let Some(mut counter) = item
-                .value()
-                .time_window_counters
-                .get_mut(&CounterType::DataBytes)
-            {
-                let statics = counter.statistics();
+            if let Some(counter) = monitor.time_window_counters.get(&CounterType::DataBytes) {
+                let statics = counter.statistics().await;
                 calc_handler(
                     CalcType::Min,
                     TaskMetricsType::SinkerBpsMin,

@@ -14,7 +14,6 @@ use sqlx::{mysql::MySqlArguments, query::Query, MySql, Pool};
 use tokio::{sync::Mutex, time::Instant};
 
 use crate::{
-    close_conn_pool,
     extractor::{
         base_extractor::BaseExtractor, mysql::binlog_util::BinlogUtil, resumer::recovery::Recovery,
     },
@@ -124,8 +123,7 @@ impl Extractor for MysqlCdcExtractor {
     }
 
     async fn close(&mut self) -> anyhow::Result<()> {
-        self.meta_manager.close().await?;
-        return close_conn_pool!(self);
+        self.meta_manager.close().await
     }
 }
 

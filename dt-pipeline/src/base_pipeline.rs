@@ -75,7 +75,8 @@ impl Pipeline for BasePipeline {
             // to avoid too many sub counters, only add counter when buffer is not empty
             if !self.buffer.is_empty() {
                 self.monitor
-                    .add_counter(CounterType::BufferSize, self.buffer.len() as u64);
+                    .add_counter(CounterType::BufferSize, self.buffer.len() as u64)
+                    .await;
             }
             if record_time.elapsed().as_secs() > 1 {
                 let len = self.buffer.len() as u64;
@@ -130,7 +131,9 @@ impl Pipeline for BasePipeline {
 
             self.monitor
                 .add_counter(CounterType::SinkedRecordTotal, data_size.count)
-                .add_counter(CounterType::SinkedByteTotal, data_size.bytes);
+                .await
+                .add_counter(CounterType::SinkedByteTotal, data_size.bytes)
+                .await;
 
             // sleep 1 millis for data preparing
             TimeUtil::sleep_millis(1).await;
@@ -211,7 +214,8 @@ impl BasePipeline {
                 sinker.lock().await.refresh_meta(data.clone()).await?;
             }
             self.monitor
-                .add_counter(CounterType::DDLRecordTotal, data_size.count);
+                .add_counter(CounterType::DDLRecordTotal, data_size.count)
+                .await;
             Ok((data_size, last_received_position, last_commit_position))
         } else {
             Ok((

@@ -216,11 +216,14 @@ impl TaskUtil {
         log_level == "debug" || log_level == "trace"
     }
 
-    pub async fn list_schemas(url: &str, db_type: &DbType) -> anyhow::Result<Vec<String>> {
+    pub async fn list_schemas(
+        conn_pool: &ConnClient,
+        db_type: &DbType,
+    ) -> anyhow::Result<Vec<String>> {
         let mut dbs = match db_type {
-            DbType::Mysql => Self::list_mysql_dbs(url).await?,
-            DbType::Pg => Self::list_pg_schemas(url).await?,
-            DbType::Mongo => Self::list_mongo_dbs(url).await?,
+            DbType::Mysql => Self::list_mysql_dbs(conn_pool).await?,
+            DbType::Pg => Self::list_pg_schemas(conn_pool).await?,
+            DbType::Mongo => Self::list_mongo_dbs(conn_pool).await?,
             _ => Vec::new(),
         };
         dbs.sort();
@@ -228,14 +231,14 @@ impl TaskUtil {
     }
 
     pub async fn list_tbs(
-        url: &str,
+        conn_client: &ConnClient,
         schema: &str,
         db_type: &DbType,
     ) -> anyhow::Result<Vec<String>> {
         let mut tbs = match db_type {
-            DbType::Mysql => Self::list_mysql_tbs(url, schema).await?,
-            DbType::Pg => Self::list_pg_tbs(url, schema).await?,
-            DbType::Mongo => Self::list_mongo_tbs(url, schema).await?,
+            DbType::Mysql => Self::list_mysql_tbs(conn_client, schema).await?,
+            DbType::Pg => Self::list_pg_tbs(conn_client, schema).await?,
+            DbType::Mongo => Self::list_mongo_tbs(conn_client, schema).await?,
             _ => Vec::new(),
         };
         tbs.sort();
@@ -244,15 +247,15 @@ impl TaskUtil {
 
     pub async fn estimate_record_count(
         task_type: &TaskType,
-        url: &str,
+        conn_pool: &ConnClient,
         db_type: &DbType,
         schemas: &[String],
         filter: &RdbFilter,
     ) -> anyhow::Result<u64> {
         match task_type {
             TaskType::Snapshot => match db_type {
-                DbType::Mysql => Self::estimate_mysql_snapshot(url, schemas, filter).await,
-                DbType::Pg => Self::estimate_pg_snapshot(url, schemas, filter).await,
+                DbType::Mysql => Self::estimate_mysql_snapshot(conn_pool, schemas, filter).await,
+                DbType::Pg => Self::estimate_pg_snapshot(conn_pool, schemas, filter).await,
                 _ => Ok(0),
             },
             _ => Ok(0),
@@ -260,11 +263,16 @@ impl TaskUtil {
     }
 
     async fn estimate_mysql_snapshot(
-        url: &str,
+        conn_pool: &ConnClient,
         schemas: &[String],
         filter: &RdbFilter,
     ) -> anyhow::Result<u64> {
-        let conn_pool = Self::create_mysql_conn_pool(url, 1, false, false).await?;
+        let conn_pool = match conn_pool {
+            ConnClient::MySQL(conn_pool) => conn_pool,
+            _ => {
+                bail!("conn_pool is not found")
+            }
+        };
 
         let mut sql = String::from("select table_schema, table_name, TABLE_ROWS from information_schema.TABLES where table_type = 'BASE TABLE'");
         if schemas.len() <= 100 {
@@ -282,7 +290,7 @@ impl TaskUtil {
         }
 
         let mut total_records = 0;
-        let mut rows = sqlx::query(&sql).fetch(&conn_pool);
+        let mut rows = sqlx::query(&sql).fetch(conn_pool);
         while let Some(row) = rows.try_next().await.unwrap() {
             let schema: String = row.try_get(0)?;
             let tb: String = row.try_get(1)?;
@@ -292,17 +300,21 @@ impl TaskUtil {
             }
             total_records += records;
         }
-        conn_pool.close().await;
 
         Ok(total_records)
     }
 
     async fn estimate_pg_snapshot(
-        url: &str,
+        conn_pool: &ConnClient,
         schemas: &[String],
         filter: &RdbFilter,
     ) -> anyhow::Result<u64> {
-        let conn_pool = TaskUtil::create_pg_conn_pool(url, 1, false, false).await?;
+        let conn_pool = match conn_pool {
+            ConnClient::PostgreSQL(conn_pool) => conn_pool,
+            _ => {
+                bail!("conn_pool is not found")
+            }
+        };
 
         let mut sql = String::from(
             "SELECT
@@ -332,7 +344,7 @@ WHERE
         }
 
         let mut total_length = 0;
-        let mut rows = sqlx::query(&sql).fetch(&conn_pool);
+        let mut rows = sqlx::query(&sql).fetch(conn_pool);
         while let Some(row) = rows.try_next().await.unwrap() {
             let schema: String = row.try_get(0)?;
             let table_name: String = row.try_get(1)?;
@@ -344,28 +356,27 @@ WHERE
             let row_count_u64 = if row_count < 0 { 0 } else { row_count as u64 };
             total_length += row_count_u64;
         }
-        conn_pool.close().await;
 
         Ok(total_length)
     }
 
     pub async fn check_tb_exist(
-        url: &str,
+        conn_client: &ConnClient,
         schema: &str,
         tb: &str,
         db_type: &DbType,
     ) -> anyhow::Result<bool> {
-        let schemas = Self::list_schemas(url, db_type).await?;
+        let schemas = Self::list_schemas(conn_client, db_type).await?;
         if !schemas.contains(&schema.to_string()) {
             return Ok(false);
         }
 
-        let tbs = Self::list_tbs(url, schema, db_type).await?;
+        let tbs = Self::list_tbs(conn_client, schema, db_type).await?;
         Ok(tbs.contains(&tb.to_string()))
     }
 
     pub async fn check_and_create_tb(
-        url: &str,
+        conn_client: &ConnClient,
         schema: &str,
         tb: &str,
         schema_sql: &str,
@@ -379,38 +390,37 @@ WHERE
             schema_sql,
             tb_sql
         );
-        if TaskUtil::check_tb_exist(url, schema, tb, db_type).await? {
+        if TaskUtil::check_tb_exist(conn_client, schema, tb, db_type).await? {
             return Ok(());
         }
 
-        match db_type {
-            DbType::Mysql => {
-                let conn_pool = Self::create_mysql_conn_pool(url, 1, true, false).await?;
-                sqlx::query(schema_sql).execute(&conn_pool).await?;
-                sqlx::query(tb_sql).execute(&conn_pool).await?;
-                conn_pool.close().await
+        match conn_client {
+            ConnClient::MySQL(conn_pool) => {
+                sqlx::query(schema_sql).execute(conn_pool).await?;
+                sqlx::query(tb_sql).execute(conn_pool).await?;
             }
-
-            DbType::Pg => {
-                let conn_pool = Self::create_pg_conn_pool(url, 1, true, false).await?;
-                sqlx::query(schema_sql).execute(&conn_pool).await?;
-                sqlx::query(tb_sql).execute(&conn_pool).await?;
-                conn_pool.close().await
+            ConnClient::PostgreSQL(conn_pool) => {
+                sqlx::query(schema_sql).execute(conn_pool).await?;
+                sqlx::query(tb_sql).execute(conn_pool).await?;
             }
-
             _ => {}
         }
         Ok(())
     }
 
-    async fn list_pg_schemas(url: &str) -> anyhow::Result<Vec<String>> {
+    async fn list_pg_schemas(conn_client: &ConnClient) -> anyhow::Result<Vec<String>> {
         let mut schemas = Vec::new();
-        let conn_pool = TaskUtil::create_pg_conn_pool(url, 1, false, false).await?;
+        let conn_pool = match conn_client {
+            ConnClient::PostgreSQL(conn_pool) => conn_pool,
+            _ => {
+                bail!("conn_pool is not found")
+            }
+        };
 
         let sql = "SELECT schema_name
             FROM information_schema.schemata
             WHERE catalog_name = current_database()";
-        let mut rows = sqlx::query(sql).fetch(&conn_pool);
+        let mut rows = sqlx::query(sql).fetch(conn_pool);
         while let Some(row) = rows.try_next().await.unwrap() {
             let schema: String = row.try_get(0)?;
             if PG_SYS_SCHEMAS.contains(&schema.as_str()) {
@@ -418,13 +428,18 @@ WHERE
             }
             schemas.push(schema);
         }
-        conn_pool.close().await;
+
         Ok(schemas)
     }
 
-    async fn list_pg_tbs(url: &str, schema: &str) -> anyhow::Result<Vec<String>> {
+    async fn list_pg_tbs(conn_client: &ConnClient, schema: &str) -> anyhow::Result<Vec<String>> {
         let mut tbs = Vec::new();
-        let conn_pool = TaskUtil::create_pg_conn_pool(url, 1, false, false).await?;
+        let conn_pool = match conn_client {
+            ConnClient::PostgreSQL(conn_pool) => conn_pool,
+            _ => {
+                bail!("conn_pool is not found")
+            }
+        };
 
         let sql = format!(
             "SELECT table_name 
@@ -434,21 +449,26 @@ WHERE
             AND table_type = 'BASE TABLE'",
             schema
         );
-        let mut rows = sqlx::query(&sql).fetch(&conn_pool);
+        let mut rows = sqlx::query(&sql).fetch(conn_pool);
         while let Some(row) = rows.try_next().await.unwrap() {
             let tb: String = row.try_get(0)?;
             tbs.push(tb);
         }
-        conn_pool.close().await;
+
         Ok(tbs)
     }
 
-    async fn list_mysql_dbs(url: &str) -> anyhow::Result<Vec<String>> {
+    async fn list_mysql_dbs(conn_client: &ConnClient) -> anyhow::Result<Vec<String>> {
         let mut dbs = Vec::new();
-        let conn_pool = TaskUtil::create_mysql_conn_pool(url, 1, false, false).await?;
+        let conn_pool = match conn_client {
+            ConnClient::MySQL(conn_pool) => conn_pool,
+            _ => {
+                bail!("conn_pool is not found")
+            }
+        };
 
         let sql = "SHOW DATABASES";
-        let mut rows = sqlx::query(sql).fetch(&conn_pool);
+        let mut rows = sqlx::query(sql).fetch(conn_pool);
         while let Some(row) = rows.try_next().await.unwrap() {
             let db: String = row.try_get(0)?;
             if MYSQL_SYS_DBS.contains(&db.as_str()) {
@@ -456,16 +476,21 @@ WHERE
             }
             dbs.push(db);
         }
-        conn_pool.close().await;
+
         Ok(dbs)
     }
 
-    async fn list_mysql_tbs(url: &str, db: &str) -> anyhow::Result<Vec<String>> {
+    async fn list_mysql_tbs(conn_client: &ConnClient, db: &str) -> anyhow::Result<Vec<String>> {
         let mut tbs = Vec::new();
-        let conn_pool = Self::create_mysql_conn_pool(url, 1, false, false).await?;
+        let conn_pool = match conn_client {
+            ConnClient::MySQL(conn_pool) => conn_pool,
+            _ => {
+                bail!("conn_pool is not found")
+            }
+        };
 
         let sql = format!("SHOW FULL TABLES IN `{}`", db);
-        let mut rows = sqlx::query(&sql).fetch(&conn_pool);
+        let mut rows = sqlx::query(&sql).fetch(conn_pool);
         while let Some(row) = rows.try_next().await.unwrap() {
             let tb: String = row.try_get(0)?;
             let tb_type: String = row.try_get(1)?;
@@ -473,19 +498,28 @@ WHERE
                 tbs.push(tb);
             }
         }
-        conn_pool.close().await;
+
         Ok(tbs)
     }
 
-    async fn list_mongo_dbs(url: &str) -> anyhow::Result<Vec<String>> {
-        let client = Self::create_mongo_client(url, "", None).await?;
+    async fn list_mongo_dbs(conn_client: &ConnClient) -> anyhow::Result<Vec<String>> {
+        let client = match conn_client {
+            ConnClient::MongoDB(client) => client,
+            _ => {
+                bail!("client is not found")
+            }
+        };
         let dbs = client.list_database_names(None, None).await?;
-        client.shutdown().await;
         Ok(dbs)
     }
 
-    async fn list_mongo_tbs(url: &str, db: &str) -> anyhow::Result<Vec<String>> {
-        let client = Self::create_mongo_client(url, "", None).await?;
+    async fn list_mongo_tbs(conn_client: &ConnClient, db: &str) -> anyhow::Result<Vec<String>> {
+        let client = match conn_client {
+            ConnClient::MongoDB(client) => client,
+            _ => {
+                bail!("client is not found")
+            }
+        };
         // filter views and system tables
         let tbs = client
             .database(db)
@@ -494,7 +528,6 @@ WHERE
             .into_iter()
             .filter(|name| !name.starts_with("system."))
             .collect();
-        client.shutdown().await;
         Ok(tbs)
     }
 

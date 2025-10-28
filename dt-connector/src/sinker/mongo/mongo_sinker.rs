@@ -25,6 +25,7 @@ pub struct MongoSinker {
     pub batch_size: usize,
     pub mongo_client: Client,
     pub monitor: Arc<Monitor>,
+    pub monitor_interval: u64,
 }
 
 #[async_trait]
@@ -58,10 +59,18 @@ impl Sinker for MongoSinker {
 impl MongoSinker {
     async fn serial_sink(&mut self, mut data: Vec<RowData>) -> anyhow::Result<()> {
         let mut rts = LimitedQueue::new(cmp::min(100, data.len()));
+        let monitor_interval = if self.monitor_interval > 0 {
+            self.monitor_interval
+        } else {
+            10
+        };
         let mut data_size = 0;
+        let mut data_len = 0;
+        let mut last_monitor_time = Instant::now();
 
         for row_data in data.iter_mut() {
             data_size += row_data.data_size;
+            data_len += 1;
 
             let collection = self
                 .mongo_client
@@ -121,11 +130,24 @@ impl MongoSinker {
                     }
                 }
             }
+
+            if last_monitor_time.elapsed().as_secs() >= monitor_interval {
+                BaseSinker::update_serial_monitor(&self.monitor, data_len as u64, data_size as u64)
+                    .await?;
+                BaseSinker::update_monitor_rt(&self.monitor, &rts).await?;
+                rts.clear();
+                data_size = 0;
+                data_len = 0;
+                last_monitor_time = Instant::now();
+            }
         }
 
-        BaseSinker::update_serial_monitor(&self.monitor, data.len() as u64, data_size as u64)
-            .await?;
-        BaseSinker::update_monitor_rt(&self.monitor, &rts).await
+        if data_len > 0 || data_size > 0 {
+            BaseSinker::update_serial_monitor(&self.monitor, data_len as u64, data_size as u64)
+                .await?;
+            BaseSinker::update_monitor_rt(&self.monitor, &rts).await?;
+        }
+        Ok(())
     }
 
     async fn batch_delete(
