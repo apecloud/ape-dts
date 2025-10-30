@@ -86,7 +86,7 @@ impl MysqlMetaFetcher {
             let (cols, col_origin_type_map, col_type_map) =
                 Self::parse_cols(&self.conn_pool, &self.db_type, schema, tb).await?;
             let key_map = Self::parse_keys(&self.conn_pool, schema, tb).await?;
-            let (order_col, partition_col, id_cols) =
+            let (order_col, order_cols, partition_col, partition_cols, id_cols) =
                 RdbMetaManager::parse_rdb_cols(&key_map, &cols)?;
             // disable get_foreign_keys since we don't support foreign key check,
             // also querying them is very slow, which may cause terrible performance issue if there were many tables in a CDC task.
@@ -101,7 +101,9 @@ impl MysqlMetaFetcher {
                 col_origin_type_map,
                 key_map,
                 order_col,
+                order_cols,
                 partition_col,
+                partition_cols,
                 id_cols,
                 foreign_keys,
                 ref_by_foreign_keys,

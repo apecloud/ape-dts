@@ -1,3 +1,4 @@
+use anyhow::bail;
 use async_trait::async_trait;
 use dt_common::rdb_filter::RdbFilter;
 use futures::TryStreamExt;
@@ -58,7 +59,8 @@ impl PgSnapshotExtractor {
             .await?
             .to_owned();
 
-        if let Some(order_col) = &tb_meta.basic.order_col {
+        if PgSnapshotExtractor::can_extract_by_batch(&tb_meta) {
+            let order_col = tb_meta.basic.order_col.as_ref().unwrap();
             let order_col_type = tb_meta.get_col_type(order_col)?;
 
             let resume_value = if let Some(value) =
@@ -121,15 +123,16 @@ impl PgSnapshotExtractor {
 
         let mut extracted_count = 0;
         let mut start_value = resume_value;
-        let sql_1 = self.build_extract_sql(tb_meta, false)?;
-        let sql_2 = self.build_extract_sql(tb_meta, true)?;
+        let sql_from_beginning = self.build_extract_sql(tb_meta, false)?;
+        let sql_from_value = self.build_extract_sql(tb_meta, true)?;
         let ignore_cols = self.filter.get_ignore_cols(&self.schema, &self.tb);
         loop {
             let start_value_for_bind = start_value.clone();
             let query = if let ColValue::None = start_value {
-                sqlx::query(&sql_1)
+                sqlx::query(&sql_from_beginning)
             } else {
-                sqlx::query(&sql_2).bind_col_value(Some(&start_value_for_bind), order_col_type)
+                sqlx::query(&sql_from_value)
+                    .bind_col_value(Some(&start_value_for_bind), order_col_type)
             };
 
             let mut rows = query.fetch(&self.conn_pool);
@@ -185,20 +188,25 @@ impl PgSnapshotExtractor {
         let where_sql = BaseExtractor::get_where_sql(&self.filter, &self.schema, &self.tb, "");
 
         // SELECT col_1, col_2::text FROM tb_1 WHERE col_1 > $1 ORDER BY col_1;
-        if let Some(order_col) = &tb_meta.basic.order_col {
+        if PgSnapshotExtractor::can_extract_by_batch(tb_meta) {
+            let order_by_clause = PgSnapshotExtractor::build_order_by_clause(tb_meta)?;
             if has_start_value {
-                let order_col_type = tb_meta.get_col_type(order_col)?;
-                let condition = format!(r#""{}" > $1::{}"#, order_col, order_col_type.alias);
-                let where_sql =
-                    BaseExtractor::get_where_sql(&self.filter, &self.schema, &self.tb, &condition);
+                let key_comparison_condition =
+                    PgSnapshotExtractor::build_key_comparison_condition(tb_meta)?;
+                let where_sql = BaseExtractor::get_where_sql(
+                    &self.filter,
+                    &self.schema,
+                    &self.tb,
+                    &key_comparison_condition,
+                );
                 Ok(format!(
-                    r#"SELECT {} FROM "{}"."{}" {} ORDER BY "{}" ASC LIMIT {}"#,
-                    cols_str, self.schema, self.tb, where_sql, order_col, self.batch_size
+                    r#"SELECT {} FROM "{}"."{}" {} ORDER BY {} LIMIT {}"#,
+                    cols_str, self.schema, self.tb, where_sql, order_by_clause, self.batch_size
                 ))
             } else {
                 Ok(format!(
-                    r#"SELECT {} FROM "{}"."{}" {} ORDER BY "{}" ASC LIMIT {}"#,
-                    cols_str, self.schema, self.tb, where_sql, order_col, self.batch_size
+                    r#"SELECT {} FROM "{}"."{}" {} ORDER BY {} LIMIT {}"#,
+                    cols_str, self.schema, self.tb, where_sql, order_by_clause, self.batch_size
                 ))
             }
         } else {
@@ -206,6 +214,49 @@ impl PgSnapshotExtractor {
                 r#"SELECT {} FROM "{}"."{}" {}"#,
                 cols_str, self.schema, self.tb, where_sql
             ))
+        }
+    }
+
+    fn can_extract_by_batch(tb_meta: &PgTbMeta) -> bool {
+        tb_meta.basic.order_cols.len() > 0
+    }
+
+    fn build_key_comparison_condition(tb_meta: &PgTbMeta) -> anyhow::Result<String> {
+        let order_cols = &tb_meta.basic.order_cols;
+        let mut values = Vec::new();
+        for (i, order_col) in order_cols.iter().enumerate() {
+            let order_col_type = tb_meta.get_col_type(order_col)?;
+            values.push(format!(r#"${}::{}"#, i + 1, order_col_type.alias));
+        }
+        if order_cols.len() == 0 {
+            bail!("order cols is empty");
+        } else if order_cols.len() == 1 {
+            Ok(format!(r#""{}" > {}"#, &order_cols[0], &values[0]))
+        } else {
+            Ok(format!(
+                r#"({}) > ({})"#,
+                order_cols
+                    .iter()
+                    .map(|s| format!(r#""{}""#, s))
+                    .collect::<Vec<String>>()
+                    .join(", "),
+                values.join(", ")
+            ))
+        }
+    }
+
+    fn build_order_by_clause(tb_meta: &PgTbMeta) -> anyhow::Result<String> {
+        let order_cols = &tb_meta.basic.order_cols;
+        if order_cols.len() == 0 {
+            bail!("order cols is empty");
+        } else if order_cols.len() == 1 {
+            Ok(format!(r#""{}" ASC"#, &order_cols[0]))
+        } else {
+            Ok(order_cols
+                .iter()
+                .map(|s| format!(r#""{}" ASC"#, s))
+                .collect::<Vec<String>>()
+                .join(", "))
         }
     }
 }
