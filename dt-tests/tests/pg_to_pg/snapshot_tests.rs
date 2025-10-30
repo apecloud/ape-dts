@@ -54,7 +54,7 @@ mod test {
 
     #[tokio::test]
     #[serial]
-    async fn snapshot_resume_test() {
+    async fn snapshot_resume_from_log_test() {
         let mut dst_expected_counts = HashMap::new();
         dst_expected_counts.insert("public.resume_table_1", 1);
         dst_expected_counts.insert("public.resume_table_2", 1);
@@ -68,7 +68,27 @@ mod test {
         dst_expected_counts.insert(r#""test_db_*.*"."in_finished_log_table_*$2""#, 0);
 
         TestBase::run_snapshot_test_and_check_dst_count(
-            "pg_to_pg/snapshot/resume_test",
+            "pg_to_pg/snapshot/resume_log_test",
+            &DbType::Pg,
+            dst_expected_counts,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn snapshot_resume_from_db_test() {
+        let mut dst_expected_counts = HashMap::new();
+        dst_expected_counts.insert("public.resume_table_1", 1);
+        dst_expected_counts.insert("public.resume_table_2", 1);
+        dst_expected_counts.insert("public.resume_table_3", 2);
+        dst_expected_counts.insert("public.resume_table_*$4", 1);
+        dst_expected_counts.insert(r#""test_db_*.*"."resume_table_*$5""#, 1);
+        dst_expected_counts.insert(r#""test_db_*.*"."finished_table_*$1""#, 0);
+        dst_expected_counts.insert(r#""test_db_*.*"."finished_table_*$2""#, 0);
+
+        TestBase::run_snapshot_test_and_check_dst_count(
+            "pg_to_pg/snapshot/resume_db_test",
             &DbType::Pg,
             dst_expected_counts,
         )

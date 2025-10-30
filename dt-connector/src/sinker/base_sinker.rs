@@ -15,8 +15,11 @@ impl BaseSinker {
     ) -> anyhow::Result<()> {
         monitor
             .add_counter(CounterType::RecordsPerQuery, batch_size)
+            .await
             .add_counter(CounterType::RecordCount, batch_size)
-            .add_counter(CounterType::DataBytes, data_size);
+            .await
+            .add_counter(CounterType::DataBytes, data_size)
+            .await;
         Ok(())
     }
 
@@ -27,9 +30,13 @@ impl BaseSinker {
     ) -> anyhow::Result<()> {
         monitor
             .add_batch_counter(CounterType::RecordsPerQuery, record_count, record_count)
+            .await
             .add_counter(CounterType::RecordCount, record_count)
+            .await
             .add_counter(CounterType::SerialWrites, record_count)
-            .add_batch_counter(CounterType::DataBytes, data_size, record_count);
+            .await
+            .add_batch_counter(CounterType::DataBytes, data_size, record_count)
+            .await;
         Ok(())
     }
 
@@ -37,7 +44,9 @@ impl BaseSinker {
         monitor: &Arc<Monitor>,
         rts: &LimitedQueue<(u64, u64)>,
     ) -> anyhow::Result<()> {
-        monitor.add_multi_counter(CounterType::RtPerQuery, rts);
+        monitor
+            .add_multi_counter(CounterType::RtPerQuery, rts)
+            .await;
         Ok(())
     }
 }

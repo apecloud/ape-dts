@@ -26,26 +26,26 @@ use tokio::{sync::Mutex, time::Duration, time::Instant};
 use tokio_postgres::replication::LogicalReplicationStream;
 
 use crate::{
-    close_conn_pool,
     extractor::{
-        base_extractor::BaseExtractor, pg::pg_cdc_client::PgCdcClient,
-        resumer::cdc_resumer::CdcResumer,
+        base_extractor::BaseExtractor, pg::pg_cdc_client::PgCdcClient, resumer::recovery::Recovery,
     },
     Extractor,
 };
 use dt_common::{
     config::{config_enums::DbType, config_token_parser::ConfigTokenParser},
     error::Error,
-    log_error, log_info,
-    meta::adaptor::pg_col_value_convertor::PgColValueConvertor,
-    meta::col_value::ColValue,
-    meta::dt_data::DtData,
-    meta::pg::{pg_meta_manager::PgMetaManager, pg_tb_meta::PgTbMeta},
-    meta::position::Position,
-    meta::rdb_tb_meta::RdbTbMeta,
-    meta::row_data::RowData,
-    meta::row_type::RowType,
-    meta::syncer::Syncer,
+    log_error, log_info, log_warn,
+    meta::{
+        adaptor::pg_col_value_convertor::PgColValueConvertor,
+        col_value::ColValue,
+        dt_data::DtData,
+        pg::{pg_meta_manager::PgMetaManager, pg_tb_meta::PgTbMeta},
+        position::Position,
+        rdb_tb_meta::RdbTbMeta,
+        row_data::RowData,
+        row_type::RowType,
+        syncer::Syncer,
+    },
     rdb_filter::RdbFilter,
     utils::time_util::TimeUtil,
 };
@@ -65,7 +65,7 @@ pub struct PgCdcExtractor {
     pub heartbeat_tb: String,
     pub ddl_meta_tb: String,
     pub syncer: Arc<Mutex<Syncer>>,
-    pub resumer: CdcResumer,
+    pub recovery: Option<Arc<dyn Recovery + Send + Sync>>,
 }
 
 const SECS_FROM_1970_TO_2000: i64 = 946_684_800;
@@ -73,16 +73,22 @@ const SECS_FROM_1970_TO_2000: i64 = 946_684_800;
 #[async_trait]
 impl Extractor for PgCdcExtractor {
     async fn extract(&mut self) -> anyhow::Result<()> {
-        if let Position::PgCdc { lsn, .. } = &self.resumer.checkpoint_position {
-            self.start_lsn = lsn.to_owned();
-            log_info!("resume from: {}", self.resumer.checkpoint_position);
-            self.base_extractor
-                .push_dt_data(
-                    DtData::Heartbeat {},
-                    self.resumer.checkpoint_position.clone(),
-                )
-                .await?;
-        };
+        if let Some(recovery) = &self.recovery {
+            if let Some(position) = recovery.get_cdc_resume_position().await {
+                match &position {
+                    Position::PgCdc { lsn, .. } => {
+                        self.start_lsn = lsn.to_owned();
+                        log_info!("cdc recovery from lsn:[{}]", lsn);
+                        self.base_extractor
+                            .push_dt_data(DtData::Heartbeat {}, position)
+                            .await?;
+                    }
+                    _ => {
+                        log_warn!("position:{} is not a valid pg cdc position", position);
+                    }
+                }
+            }
+        }
 
         log_info!(
             "PgCdcExtractor starts, slot_name: {}, start_lsn: {}, keepalive_interval_secs: {}, heartbeat_interval_secs: {}, heartbeat_tb: {}, ddl_meta_tb: {}",
@@ -98,8 +104,7 @@ impl Extractor for PgCdcExtractor {
     }
 
     async fn close(&mut self) -> anyhow::Result<()> {
-        self.meta_manager.close().await?;
-        close_conn_pool!(self)
+        self.meta_manager.close().await
     }
 }
 

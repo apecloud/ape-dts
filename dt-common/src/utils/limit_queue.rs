@@ -1,4 +1,4 @@
-use std::collections::VecDeque;
+use std::collections::{vec_deque, VecDeque};
 
 pub struct LimitedQueue<T> {
     data: VecDeque<T>,
@@ -28,7 +28,11 @@ impl<T> LimitedQueue<T> {
         self.data.is_empty()
     }
 
-    pub fn iter(&self) -> std::collections::vec_deque::Iter<T> {
+    pub fn iter(&self) -> vec_deque::Iter<T> {
         self.data.iter()
+    }
+
+    pub fn clear(&mut self) {
+        self.data.clear();
     }
 }

@@ -10,7 +10,7 @@ use sqlx::{Pool, Postgres};
 use tokio::time::Instant;
 
 use crate::{
-    call_batch_fn, close_conn_pool,
+    call_batch_fn,
     meta_fetcher::pg::pg_struct_fetcher::PgStructFetcher,
     rdb_query_builder::RdbQueryBuilder,
     rdb_router::RdbRouter,
@@ -57,8 +57,7 @@ impl Sinker for PgChecker {
 
     async fn close(&mut self) -> anyhow::Result<()> {
         self.meta_manager.close().await?;
-        self.extractor_meta_manager.close().await?;
-        return close_conn_pool!(self);
+        self.extractor_meta_manager.close().await
     }
 
     async fn sink_struct(&mut self, data: Vec<StructData>) -> anyhow::Result<()> {

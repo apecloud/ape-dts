@@ -5,8 +5,8 @@ use std::{
 };
 
 use dt_common::config::{
-    extractor_config::ExtractorConfig, ini_loader::IniLoader, sinker_config::SinkerConfig,
-    task_config::TaskConfig,
+    extractor_config::ExtractorConfig, ini_loader::IniLoader, resumer_config::ResumerConfig,
+    sinker_config::SinkerConfig, task_config::TaskConfig,
 };
 
 pub struct TestConfigUtil {}
@@ -104,20 +104,23 @@ impl TestConfigUtil {
         update_configs.push((RUNTIME.to_string(), "log_dir".to_string(), log_dir.clone()));
 
         // resumer/resume_log_dir
-        let resume_log_dir = format!("{}/{}", project_root, config.resumer.resume_log_dir);
-        update_configs.push((
-            RESUMER.to_string(),
-            "resume_log_dir".to_string(),
-            resume_log_dir,
-        ));
-
-        // resumer/resume_config_file
-        let resume_config_file = format!("{}/{}", project_root, config.resumer.resume_config_file);
-        update_configs.push((
-            RESUMER.to_string(),
-            "resume_config_file".to_string(),
-            resume_config_file,
-        ));
+        match config.resumer {
+            ResumerConfig::FromLog {
+                log_dir,
+                config_file,
+            } => {
+                let resume_log_dir = format!("{}/{}", project_root, log_dir);
+                update_configs.push((RESUMER.to_string(), "log_dir".to_string(), resume_log_dir));
+                // resumer/resume_config_file
+                let resume_config_file = format!("{}/{}", project_root, config_file);
+                update_configs.push((
+                    RESUMER.to_string(),
+                    "config_file".to_string(),
+                    resume_config_file,
+                ));
+            }
+            _ => {}
+        }
 
         // extractor/check_log_dir
         match config.extractor {

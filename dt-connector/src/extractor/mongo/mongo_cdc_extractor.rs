@@ -12,19 +12,21 @@ use serde_json::json;
 use tokio::{sync::Mutex, time::Instant};
 
 use crate::{
-    extractor::{base_extractor::BaseExtractor, resumer::cdc_resumer::CdcResumer},
+    extractor::{base_extractor::BaseExtractor, resumer::recovery::Recovery},
     Extractor,
 };
 use dt_common::{
     config::config_enums::DbType,
-    log_error, log_info,
-    meta::col_value::ColValue,
-    meta::dt_data::DtData,
-    meta::mongo::{mongo_cdc_source::MongoCdcSource, mongo_constant::MongoConstants},
-    meta::position::Position,
-    meta::row_data::RowData,
-    meta::row_type::RowType,
-    meta::syncer::Syncer,
+    log_error, log_info, log_warn,
+    meta::{
+        col_value::ColValue,
+        dt_data::DtData,
+        mongo::{mongo_cdc_source::MongoCdcSource, mongo_constant::MongoConstants},
+        position::Position,
+        row_data::RowData,
+        row_type::RowType,
+        syncer::Syncer,
+    },
     rdb_filter::RdbFilter,
     utils::time_util::TimeUtil,
 };
@@ -48,28 +50,37 @@ pub struct MongoCdcExtractor {
     pub heartbeat_interval_secs: u64,
     pub heartbeat_tb: String,
     pub syncer: Arc<Mutex<Syncer>>,
-    pub resumer: CdcResumer,
+    pub recovery: Option<Arc<dyn Recovery + Send + Sync>>,
 }
 
 #[async_trait]
 impl Extractor for MongoCdcExtractor {
     async fn extract(&mut self) -> anyhow::Result<()> {
-        if let Position::MongoCdc {
-            resume_token,
-            operation_time,
-            ..
-        } = &self.resumer.current_position
-        {
-            self.resume_token = resume_token.to_owned();
-            self.start_timestamp = operation_time.to_owned();
-            log_info!("resume from: {}", self.resumer.current_position);
-            self.base_extractor
-                .push_dt_data(
-                    DtData::Heartbeat {},
-                    self.resumer.checkpoint_position.clone(),
-                )
-                .await?;
-        };
+        if let Some(recovery) = &self.recovery {
+            if let Some(position) = recovery.get_cdc_resume_position().await {
+                match &position {
+                    Position::MongoCdc {
+                        resume_token,
+                        operation_time,
+                        ..
+                    } => {
+                        self.resume_token = resume_token.to_owned();
+                        self.start_timestamp = operation_time.to_owned();
+                        log_info!(
+                            "cdc recovery from resume_token:[{}], operation_time:[{}]",
+                            resume_token,
+                            operation_time
+                        );
+                        self.base_extractor
+                            .push_dt_data(DtData::Heartbeat {}, position)
+                            .await?;
+                    }
+                    _ => {
+                        log_warn!("position:{} is not a valid mongo cdc position", position);
+                    }
+                }
+            }
+        }
 
         log_info!(
             "MongoCdcExtractor starts, resume_token: {}, start_timestamp: {}, source: {:?} ",

@@ -196,7 +196,9 @@ async fn fetch_new(
     pipeline
         .monitor
         .add_counter(CounterType::BufferSize, pipeline.buffer.len() as u64)
-        .add_counter(CounterType::SinkedRecordTotal, response.data.len() as u64);
+        .await
+        .add_counter(CounterType::SinkedRecordTotal, response.data.len() as u64)
+        .await;
 
     // update pending_ack_data & pending_ack_positions
     let batch_id = response.batch_id;

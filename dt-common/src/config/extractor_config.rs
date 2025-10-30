@@ -160,7 +160,7 @@ pub enum ExtractorConfig {
     },
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Hash)]
 pub struct BasicExtractorConfig {
     pub db_type: DbType,
     pub extract_type: ExtractType,

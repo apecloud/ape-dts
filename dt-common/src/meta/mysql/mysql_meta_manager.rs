@@ -1,10 +1,13 @@
+use std::collections::HashMap;
+
+use sqlx::{MySql, Pool};
+
 use super::{
     mysql_dbengine_meta_center::MysqlDbEngineMetaCenter, mysql_meta_fetcher::MysqlMetaFetcher,
     mysql_tb_meta::MysqlTbMeta,
 };
-use crate::meta::row_data::RowData;
+use crate::meta::{mysql::mysql_col_type::MysqlColType, row_data::RowData};
 use crate::{config::config_enums::DbType, meta::ddl_meta::ddl_data::DdlData};
-use sqlx::{MySql, Pool};
 
 #[derive(Clone)]
 pub struct MysqlMetaManager {
@@ -64,5 +67,89 @@ impl MysqlMetaManager {
             }
         }
         self.meta_fetcher.get_tb_meta(schema, tb).await
+    }
+
+    pub fn to_simple_mysql_col_type(&self, col_type_str: &str) -> MysqlColType {
+        match col_type_str {
+            "tinyint" => MysqlColType::TinyInt { unsigned: false },
+            "smallint" => MysqlColType::SmallInt { unsigned: false },
+            "bigint" => MysqlColType::BigInt { unsigned: false },
+            "mediumint" => MysqlColType::MediumInt { unsigned: false },
+            "int" => MysqlColType::Int { unsigned: false },
+
+            "varbinary" => MysqlColType::VarBinary { length: 0u16 },
+            "binary" => MysqlColType::Binary { length: 0u8 },
+
+            "char" => MysqlColType::Char {
+                length: 0u64,
+                charset: String::new(),
+            },
+            "varchar" => MysqlColType::Varchar {
+                length: 0u64,
+                charset: String::new(),
+            },
+            "tinytext" => MysqlColType::TinyText {
+                length: 0u64,
+                charset: String::new(),
+            },
+            "mediumtext" => MysqlColType::MediumText {
+                length: 0u64,
+                charset: String::new(),
+            },
+            "longtext" => MysqlColType::LongText {
+                length: 0u64,
+                charset: String::new(),
+            },
+            "text" => MysqlColType::Text {
+                length: 0u64,
+                charset: String::new(),
+            },
+
+            // as a client of mysql, sqlx's client timezone is UTC by default,
+            // so no matter what timezone of src/dst server is,
+            // src server will convert the timestamp field into UTC for sqx,
+            // and then sqx will write it into dst server by UTC,
+            // and then dst server will convert the received UTC timestamp into its own timezone.
+            "timestamp" => MysqlColType::Timestamp {
+                precision: 0u32,
+                timezone_offset: 0,
+                is_nullable: false,
+            },
+
+            "tinyblob" => MysqlColType::TinyBlob,
+            "mediumblob" => MysqlColType::MediumBlob,
+            "longblob" => MysqlColType::LongBlob,
+            "blob" => MysqlColType::Blob,
+
+            "float" => MysqlColType::Float,
+            "double" => MysqlColType::Double,
+
+            "decimal" => MysqlColType::Decimal {
+                precision: 0u32,
+                scale: 0u32,
+            },
+
+            "enum" => MysqlColType::Enum { items: Vec::new() },
+
+            "set" => MysqlColType::Set {
+                items: HashMap::new(),
+            },
+
+            "datetime" => MysqlColType::DateTime {
+                precision: 0u32,
+                is_nullable: false,
+            },
+
+            "date" => MysqlColType::Date { is_nullable: false },
+            "time" => MysqlColType::Time { precision: 0u32 },
+            "year" => MysqlColType::Year,
+            "bit" => MysqlColType::Bit,
+            "json" => MysqlColType::Json,
+
+            // TODO
+            // "geometry": "geometrycollection": "linestring": "multilinestring":
+            // "multipoint": "multipolygon": "polygon": "point"
+            _ => MysqlColType::Unknown,
+        }
     }
 }

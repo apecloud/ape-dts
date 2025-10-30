@@ -15,7 +15,6 @@ use std::collections::HashMap;
 
 use crate::{
     check_log::{check_log::CheckLog, log_type::LogType},
-    close_conn_pool,
     extractor::{base_check_extractor::BaseCheckExtractor, base_extractor::BaseExtractor},
     rdb_query_builder::RdbQueryBuilder,
     BatchCheckExtractor, Extractor,
@@ -43,7 +42,7 @@ impl Extractor for MysqlCheckExtractor {
     }
 
     async fn close(&mut self) -> anyhow::Result<()> {
-        close_conn_pool!(self)
+        Ok(())
     }
 }
 
