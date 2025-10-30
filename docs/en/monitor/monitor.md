@@ -12,11 +12,11 @@ This type of counter is an array of sub-counters. During task execution, wheneve
 
 | Aggregation | Description | Example |
 | :-------- | :-------- | :-------- | 
-| sum | sum of sub-counters | count of synchronized entries in last 10 seconds |
-| avg | sum of sub-counters / number of sub-counters | average time cost for each write to target in last 10 seconds |
-| avg_by_sec | sum of all sub-counters / time window | average number of entries written to target per second in last 10 seconds |
-| max | the sub-counter with the maximum value | maximum number of entries written to target in a single batch in last 10 seconds |
-| max_by_sec | sums the sub-counters for each second, and finds the second with the maximum sum | Maximum number of entries written to target in a single second |
+| sum | sum of sub-counters | count of synchronized entries in the last 10 seconds |
+| avg | sum of sub-counters / number of sub-counters | average time cost for each write to target in the last 10 seconds |
+| avg_by_sec | sum of all sub-counters / time window | average number of entries written to target per second in the last 10 seconds |
+| max | the sub-counter with the maximum value | maximum number of entries written to target in a single batch in the last 10 seconds |
+| max_by_sec | sums the sub-counters for each second, and finds the second with the maximum sum | maximum number of entries written to target in a single second in the last 10 seconds |
 
 # No window counter
 
@@ -43,13 +43,51 @@ counter_time_window_secs=60
 ```
 2024-02-29 01:25:09.554271 | extractor | record_count | avg_by_sec=13 | sum=13 | max_by_sec=13
 2024-02-29 01:25:09.554311 | extractor | data_bytes | avg_by_sec=586 | sum=586 | max_by_sec=586
+2024-02-29 01:25:09.554350 | extractor | extracted_record_count | avg_by_sec=20 | sum=20 | max_by_sec=20
+2024-02-29 01:25:09.554391 | extractor | extracted_data_bytes | avg_by_sec=900 | sum=900 | max_by_sec=900
 ```
 
 ### counters
-| Counter | Counter Type | Description |
-| :-------- | :-------- | :-------- |
-| record_count | time window | Number of data entries pulled |
-| data_bytes | time window | Data bytes pulled |
+| Counter              | Counter Type | Description                                  |
+| :------------------- | :----------- | :------------------------------------------- |
+| record_count         | time window  | Number of data entries pulled                |
+| data_bytes           | time window  | Data bytes pulled                            |
+| extracted_records    | time window  | Number of data entries extracted from source |
+| extracted_data_bytes | time window  | Data bytes extracted from source             |
+
+<br/>
+
+### Prometheus Metrics
+```
+# Traffic from source data arriving at ape-dts server's network interface (current statistics may not be fully accurate)
+extractor_rps_avg 13 
+extractor_rps_max 13
+extractor_rps_min 13
+extractor_bps_avg 586
+extractor_bps_max 586
+extractor_bps_min 586
+
+# Traffic after data processing, pushed to pipeline, already converted to DtData
+extractor_pushed_rps_avg 20
+extractor_pushed_rps_max 20
+extractor_pushed_rps_min 20
+extractor_pushed_bps_avg 900 
+extractor_pushed_bps_max 900 
+extractor_pushed_bps_min 900 
+```
+
+Task metrics expose two groups of throughput gauges for real-time monitoring:
+
+- `extractor_rps_*` / `extractor_bps_*`: Traffic from source data arriving at ape-dts server's network interface (including business-filtered data, excluding time-filtered data)
+  - `extractor_rps_avg`, `extractor_rps_max`, `extractor_rps_min`: Records per second
+  - `extractor_bps_avg`, `extractor_bps_max`, `extractor_bps_min`: Bytes per second
+  - Note: Current statistics may not be fully accurate
+
+- `extractor_pushed_rps_*` / `extractor_pushed_bps_*`: Traffic after data processing and filtering, pushed to pipeline (already converted to DtData)
+  - `extractor_pushed_rps_avg`, `extractor_pushed_rps_max`, `extractor_pushed_rps_min`: Records per second
+  - `extractor_pushed_bps_avg`, `extractor_pushed_bps_max`, `extractor_pushed_bps_min`: Bytes per second
+
+By comparing these two metric groups, you can observe the actual effect of filtering rules.
 
 <br/>
 
@@ -57,19 +95,39 @@ counter_time_window_secs=60
 
 | Aggregation | Description |
 | :-------- | :-------- |
-| avg_by_sec | Average number of entries pulled per second in time window |
-| sum | Number of entries pulled in time window |
-| max_by_sec | Maximum number of entries pulled per second in time window |
+| avg_by_sec | Average entries pulled from source per second within the window |
+| sum | Total entries pulled from source  within the window |
+| max_by_sec | Peak entries pulled from source  in any one second within the window |
 
 <br/>
 
 - data_bytes
 
+| Aggregation | Description                                         |
+| :---------- | :-------------------------------------------------- |
+| avg_by_sec  | Average bytes pulled from source  per second within the window |
+| sum         | Total bytes pulled from source  within the window              |
+| max_by_sec  | Peak bytes pulled from source  in any one second within the window |
+
+<br/>
+
+- extracted_record_count
+
+| Aggregation | Description                                                                             |
+| :---------- | :-------------------------------------------------------------------------------------- |
+| avg_by_sec  | Average entries extracted and pushed to pipeline per second within the window |
+| sum         | Total entries extracted and pushed to pipeline within the window              |
+| max_by_sec  | Peak entries extracted and pushed to pipeline in any one second within the window |
+
+<br/>
+
+- extracted_data_bytes
+
 | Aggregation | Description |
 | :-------- | :-------- |
-| avg_by_sec | Average data bytes pulled per second in time window |
-| sum | Data bytes pulled in time window |
-| max_by_sec | Maximum data bytes pulled per second in window |
+| avg_by_sec | Average bytes extracted and pushed to pipeline per second within the window |
+| sum | Total bytes extracted and pushed to pipeline within the window |
+| max_by_sec | Peak bytes extracted and pushed to pipeline in any one second within the window |
 
 ## sinker
 
@@ -107,9 +165,9 @@ counter_time_window_secs=60
 
 | Aggregation | Description |
 | :-------- | :-------- |
-| avg_by_sec | Average number of entries written per second in window |
-| sum | Total number of entries written in window |
-| max_by_sec | Maximum number of entries written per second in window |
+| avg_by_sec | Average entries written per second within the window |
+| sum | Total entries written within the window |
+| max_by_sec | Peak entries written in any one second within the window |
 
 <br/>
 
@@ -117,9 +175,9 @@ counter_time_window_secs=60
 
 | Aggregation | Description |
 | :-------- | :-------- |
-| avg_by_sec | Average bytes written per second in window |
-| sum | Total bytes written in window |
-| max_by_sec |Maximum bytes written per second in window |
+| avg_by_sec | Average bytes written per second within the window |
+| sum | Total bytes written within the window |
+| max_by_sec | Peak bytes written in any one second within the window |
 
 <br/>
 
@@ -127,9 +185,9 @@ counter_time_window_secs=60
 
 | Aggregation | Description |
 | :-------- | :-------- |
-| avg | Average number of entries per query in window |
-| sum | Total number of entries written in window |
-| max | Maximum number of entries written per query in window |
+| avg | Average entries written per query within the window |
+| sum | Total entries written within the window |
+| max | Peak entries written per query within the window |
 
 
 ## pipeline

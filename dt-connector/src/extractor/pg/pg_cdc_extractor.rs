@@ -1,5 +1,6 @@
 use std::{
     collections::HashMap,
+    mem::size_of_val,
     pin::Pin,
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -318,6 +319,8 @@ impl PgCdcExtractor {
             .meta_manager
             .get_tb_meta_by_oid(event.rel_id() as i32)?;
         if self.filter_event(&tb_meta, RowType::Insert) {
+            self.base_extractor
+                .record_extracted_metrics(1, size_of_val(event) as u64);
             return Ok(());
         }
 
@@ -331,6 +334,8 @@ impl PgCdcExtractor {
         );
 
         if ddl_meta.len() == 2 && row_data.schema == ddl_meta[0] && row_data.tb == ddl_meta[1] {
+            self.base_extractor
+                .record_extracted_metrics(1, size_of_val(event) as u64);
             return self.decode_ddl(&row_data, position).await;
         }
 
@@ -346,6 +351,8 @@ impl PgCdcExtractor {
             .meta_manager
             .get_tb_meta_by_oid(event.rel_id() as i32)?;
         if self.filter_event(&tb_meta, RowType::Update) {
+            self.base_extractor
+                .record_extracted_metrics(1, size_of_val(event) as u64);
             return Ok(());
         }
 
@@ -384,6 +391,8 @@ impl PgCdcExtractor {
             .meta_manager
             .get_tb_meta_by_oid(event.rel_id() as i32)?;
         if self.filter_event(&tb_meta, RowType::Delete) {
+            self.base_extractor
+                .record_extracted_metrics(1, size_of_val(event) as u64);
             return Ok(());
         }
 

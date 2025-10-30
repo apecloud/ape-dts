@@ -57,15 +57,18 @@ impl BaseExtractor {
         dt_data: DtData,
         position: Position,
     ) -> anyhow::Result<()> {
+        self.record_extracted_metrics(dt_data.get_data_count() as u64, dt_data.get_data_size());
         if !self.time_filter.started {
+            self.monitor.try_flush(false).await;
             return Ok(());
         }
 
         if self.refresh_and_check_data_marker(&dt_data) {
+            self.monitor.try_flush(false).await;
             return Ok(());
         }
 
-        self.monitor.counters.pushed_record_count += 1;
+        self.monitor.counters.pushed_record_count += dt_data.get_data_count() as u64;
         self.monitor.counters.pushed_data_size += dt_data.get_data_size();
         self.monitor.try_flush(false).await;
 
@@ -135,6 +138,17 @@ impl BaseExtractor {
         let struct_data = self.router.route_struct(struct_data);
         self.push_dt_data(DtData::Struct { struct_data }, Position::None)
             .await
+    }
+
+    #[inline(always)]
+    pub fn record_extracted_metrics(&mut self, records: u64, bytes: u64) {
+        self.monitor.counters.extracted_record_count += records;
+        self.monitor.counters.extracted_data_size += bytes;
+    }
+
+    #[inline(always)]
+    pub fn record_extracted_metrics_row(&mut self, row_data: &RowData) {
+        self.record_extracted_metrics(1, row_data.data_size as u64);
     }
 
     pub async fn parse_ddl(
