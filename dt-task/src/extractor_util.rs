@@ -538,12 +538,12 @@ impl ExtractorUtil {
                 batch_size,
                 ..
             } => {
-                let s3_client = TaskUtil::create_s3_client(&s3_config);
+                let s3_client = TaskUtil::create_s3_client(&s3_config)?;
                 let extractor = FoxlakeS3Extractor {
                     schema,
                     tb,
-                    s3_client,
                     s3_config,
+                    s3_client,
                     resumer: snapshot_resumer,
                     base_extractor,
                     batch_size,

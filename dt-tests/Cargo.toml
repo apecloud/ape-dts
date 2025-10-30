@@ -13,10 +13,6 @@ dt-connector = {path = "../dt-connector", version = "0.1.0"}
 dt-precheck = {path = "../dt-precheck", version = "0.1.0"}
 
 sqlx = { workspace = true }
-rusoto_core = { workspace = true }
-rusoto_sqs = { workspace = true }
-rusoto_s3 = { workspace = true }
-rusoto_credential = { workspace = true }
 mongodb = { workspace = true }
 tokio = { workspace = true }
 futures = { workspace = true }

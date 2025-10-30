@@ -13,10 +13,6 @@ sqlx = { workspace = true }
 async-trait = { workspace = true }
 async-recursion = { workspace = true }
 async-mutex = { workspace = true }
-rusoto_core = { workspace = true }
-rusoto_sqs = { workspace = true }
-rusoto_s3 = { workspace = true }
-rusoto_credential = { workspace = true }
 tokio-postgres = { workspace = true }
 postgres-protocol = { workspace = true }
 postgres-types= { workspace = true }
@@ -49,3 +45,4 @@ rust_decimal = { workspace = true }
 hex = { workspace = true }
 clickhouse = { workspace = true }
 percent-encoding = { workspace = true }
+opendal = { workspace = true }
