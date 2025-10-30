@@ -36,7 +36,6 @@ impl MysqlMetaFetcher {
     }
 
     pub async fn close(&self) -> anyhow::Result<()> {
-        self.conn_pool.close().await;
         Ok(())
     }
 

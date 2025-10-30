@@ -34,6 +34,7 @@ pub struct PgSinker {
     pub monitor: Arc<Monitor>,
     pub data_marker: Option<Arc<RwLock<DataMarker>>>,
     pub replace: bool,
+    pub monitor_interval: u64,
 }
 
 #[async_trait]
@@ -61,11 +62,19 @@ impl Sinker for PgSinker {
 
     async fn sink_ddl(&mut self, data: Vec<DdlData>, _batch: bool) -> anyhow::Result<()> {
         let mut rts = LimitedQueue::new(cmp::min(100, data.len()));
+        let monitor_interval = if self.monitor_interval > 0 {
+            self.monitor_interval
+        } else {
+            10
+        };
         let mut data_size = 0;
+        let mut data_len = 0;
+        let mut last_monitor_time = Instant::now();
 
         for ddl_data in data.iter() {
             let (schema, _tb) = ddl_data.get_schema_tb();
             data_size += ddl_data.get_data_size();
+            data_len += 1;
             let conn_options = PgConnectOptions::from_str(&self.url)?;
             let mut pool_options = PgPoolOptions::new().max_connections(1);
             let sql = format!("SET search_path = '{}';", schema);
@@ -88,18 +97,31 @@ impl Sinker for PgSinker {
             let sql = ddl_data.to_sql();
             log_info!("sink ddl, schema: {}, sql: {}", schema, sql);
 
+            let start_time = Instant::now();
+
             let conn_pool = pool_options.connect_with(conn_options).await?;
             let query = sqlx::query(&sql);
-
-            let start_time = Instant::now();
             query.execute(&conn_pool).await?;
-            rts.push((start_time.elapsed().as_millis() as u64, 1));
 
+            rts.push((start_time.elapsed().as_millis() as u64, 1));
             conn_pool.close().await;
+
+            if last_monitor_time.elapsed().as_secs() >= monitor_interval {
+                BaseSinker::update_serial_monitor(&self.monitor, data_len as u64, data_size)
+                    .await?;
+                BaseSinker::update_monitor_rt(&self.monitor, &rts).await?;
+                rts.clear();
+                data_size = 0;
+                data_len = 0;
+                last_monitor_time = Instant::now();
+            }
         }
 
-        BaseSinker::update_serial_monitor(&self.monitor, data.len() as u64, data_size).await?;
-        BaseSinker::update_monitor_rt(&self.monitor, &rts).await
+        if data_len > 0 || data_size > 0 {
+            BaseSinker::update_serial_monitor(&self.monitor, data_len as u64, data_size).await?;
+            BaseSinker::update_monitor_rt(&self.monitor, &rts).await?;
+        }
+        Ok(())
     }
 
     async fn refresh_meta(&mut self, data: Vec<DdlData>) -> anyhow::Result<()> {
@@ -116,7 +138,14 @@ impl Sinker for PgSinker {
 
 impl PgSinker {
     async fn serial_sink(&mut self, data: &[RowData]) -> anyhow::Result<()> {
+        let monitor_interval = if self.monitor_interval > 0 {
+            self.monitor_interval
+        } else {
+            10
+        };
         let mut data_size = 0;
+        let mut data_len = 0;
+        let mut last_monitor_time = Instant::now();
 
         let mut tx = self.conn_pool.begin().await?;
         if let Some(sql) = self.get_data_marker_sql().await {
@@ -140,13 +169,26 @@ impl PgSinker {
                 .execute(&mut tx)
                 .await
                 .with_context(|| format!("serial sink failed, row_data: [{}]", row_data))?;
+
             rts.push((start_time.elapsed().as_millis() as u64, 1));
+            if last_monitor_time.elapsed().as_secs() >= monitor_interval {
+                BaseSinker::update_serial_monitor(&self.monitor, data_len as u64, data_size as u64)
+                    .await?;
+                BaseSinker::update_monitor_rt(&self.monitor, &rts).await?;
+                rts.clear();
+                data_size = 0;
+                data_len = 0;
+                last_monitor_time = Instant::now();
+            }
         }
         tx.commit().await?;
 
-        BaseSinker::update_serial_monitor(&self.monitor, data.len() as u64, data_size as u64)
-            .await?;
-        BaseSinker::update_monitor_rt(&self.monitor, &rts).await
+        if data_len > 0 || data_size > 0 {
+            BaseSinker::update_serial_monitor(&self.monitor, data_len as u64, data_size as u64)
+                .await?;
+            BaseSinker::update_monitor_rt(&self.monitor, &rts).await?;
+        }
+        Ok(())
     }
 
     async fn batch_delete(

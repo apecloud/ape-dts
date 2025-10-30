@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::Arc};
 
 use async_trait::async_trait;
 use mongodb::{
@@ -8,7 +8,7 @@ use mongodb::{
 };
 
 use crate::{
-    extractor::{base_extractor::BaseExtractor, resumer::snapshot_resumer::SnapshotResumer},
+    extractor::{base_extractor::BaseExtractor, resumer::recovery::Recovery},
     Extractor,
 };
 use dt_common::{
@@ -25,10 +25,10 @@ use dt_common::{
 
 pub struct MongoSnapshotExtractor {
     pub base_extractor: BaseExtractor,
-    pub resumer: SnapshotResumer,
     pub db: String,
     pub tb: String,
     pub mongo_client: Client,
+    pub recovery: Option<Arc<dyn Recovery + Send + Sync>>,
 }
 
 #[async_trait]
@@ -52,13 +52,23 @@ impl MongoSnapshotExtractor {
     pub async fn extract_internal(&mut self) -> anyhow::Result<()> {
         log_info!("start extracting data from {}.{}", self.db, self.tb);
 
-        let filter = if let Some(resume_value) =
-            self.resumer
-                .get_resume_value(&self.db, &self.tb, MongoConstants::ID, false)
-        {
-            let start_id = ObjectId::parse_str(resume_value)?;
-            log_info!("start_id: {}", start_id.to_string());
-            Some(doc! {MongoConstants::ID: {"$gt": start_id}})
+        let filter = if let Some(handler) = &self.recovery {
+            if let Some(value) = handler
+                .get_snapshot_resume_position(&self.db, &self.tb, MongoConstants::ID, false)
+                .await
+            {
+                let value = ObjectId::parse_str(&value)?;
+                log_info!(
+                    "[{}.{}] recovery from [{}]:[{}]",
+                    self.db,
+                    self.tb,
+                    MongoConstants::ID,
+                    value
+                );
+                Some(doc! {MongoConstants::ID: {"$gt": value}})
+            } else {
+                None
+            }
         } else {
             None
         };

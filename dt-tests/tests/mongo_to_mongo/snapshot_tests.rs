@@ -18,15 +18,18 @@ mod test {
         TestBase::run_mongo_snapshot_test("mongo_to_mongo/snapshot/route_test").await;
     }
 
-    // #[tokio::test]
+    #[tokio::test]
     #[serial]
     async fn snapshot_resume_test() {
         let mut dst_expected_counts = HashMap::new();
-        dst_expected_counts.insert(("test_db_1", "tb_1"), 2);
-        dst_expected_counts.insert(("test_db_1", "tb_2"), 5);
+        dst_expected_counts.insert(("test_db_1", "finish_tb_1"), 0);
+        dst_expected_counts.insert(("test_db_1", "resume_tb_1"), 1);
+        dst_expected_counts.insert(("test_db_1", "non_resume_tb_1"), 3);
+        dst_expected_counts.insert(("test_db_1", "finish_tb_in_log_1"), 0);
+        dst_expected_counts.insert(("test_db_1", "resume_tb_in_log_1"), 1);
 
         TestBase::run_mongo_snapshot_test_and_check_dst_count(
-            "mongo_to_mongo/snapshot/resume_test",
+            "mongo_to_mongo/snapshot/resume_log_test",
             dst_expected_counts,
         )
         .await;

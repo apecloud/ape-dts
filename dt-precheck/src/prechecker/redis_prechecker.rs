@@ -25,7 +25,6 @@ use dt_connector::{
         base_extractor::BaseExtractor,
         extractor_monitor::ExtractorMonitor,
         redis::{redis_client::RedisClient, redis_psync_extractor::RedisPsyncExtractor},
-        resumer::cdc_resumer::CdcResumer,
     },
     rdb_router::RdbRouter,
 };
@@ -103,10 +102,10 @@ impl Prechecker for RedisPrechecker {
             base_extractor,
             extract_type: ExtractType::Snapshot,
             syncer: Arc::new(Mutex::new(Syncer::default())),
-            resumer: CdcResumer::default(),
             keepalive_interval_secs: 0,
             heartbeat_interval_secs: 0,
             heartbeat_key: String::new(),
+            recovery: None,
         };
 
         if let Err(error) = psyncer.start_psync().await {

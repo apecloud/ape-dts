@@ -1,24 +1,25 @@
-use anyhow::bail;
-use async_trait::async_trait;
-use dt_common::rdb_filter::RdbFilter;
-use futures::TryStreamExt;
+use std::sync::Arc;
 
+use async_trait::async_trait;
+use futures::TryStreamExt;
 use sqlx::{Pool, Postgres};
 
-use dt_common::{config::config_enums::DbType, log_info};
-
-use dt_common::meta::{
-    adaptor::{pg_col_value_convertor::PgColValueConvertor, sqlx_ext::SqlxPgExt},
-    col_value::ColValue,
-    pg::{pg_col_type::PgColType, pg_meta_manager::PgMetaManager, pg_tb_meta::PgTbMeta},
-    position::Position,
-    row_data::RowData,
-};
-
 use crate::{
-    extractor::{base_extractor::BaseExtractor, resumer::snapshot_resumer::SnapshotResumer},
+    extractor::{base_extractor::BaseExtractor, resumer::recovery::Recovery},
     rdb_query_builder::RdbQueryBuilder,
     Extractor,
+};
+use dt_common::{
+    config::config_enums::DbType,
+    log_info,
+    meta::{
+        adaptor::{pg_col_value_convertor::PgColValueConvertor, sqlx_ext::SqlxPgExt},
+        col_value::ColValue,
+        pg::{pg_col_type::PgColType, pg_meta_manager::PgMetaManager, pg_tb_meta::PgTbMeta},
+        position::Position,
+        row_data::RowData,
+    },
+    rdb_filter::RdbFilter,
 };
 
 pub struct PgSnapshotExtractor {
@@ -26,11 +27,11 @@ pub struct PgSnapshotExtractor {
     pub conn_pool: Pool<Postgres>,
     pub meta_manager: PgMetaManager,
     pub filter: RdbFilter,
-    pub resumer: SnapshotResumer,
     pub batch_size: usize,
     pub sample_interval: usize,
     pub schema: String,
     pub tb: String,
+    pub recovery: Option<Arc<dyn Recovery + Send + Sync>>,
 }
 
 #[async_trait]
@@ -63,11 +64,22 @@ impl PgSnapshotExtractor {
             let order_col = tb_meta.basic.order_col.as_ref().unwrap();
             let order_col_type = tb_meta.get_col_type(order_col)?;
 
-            let resume_value = if let Some(value) =
-                self.resumer
-                    .get_resume_value(&self.schema, &self.tb, order_col, false)
-            {
-                PgColValueConvertor::from_str(order_col_type, &value, &mut self.meta_manager)?
+            let resume_value = if let Some(handler) = &self.recovery {
+                if let Some(value) = handler
+                    .get_snapshot_resume_position(&self.schema, &self.tb, order_col, false)
+                    .await
+                {
+                    log_info!(
+                        "[{}.{}] recovery from [{}]:[{}]",
+                        self.schema,
+                        self.tb,
+                        order_col,
+                        value
+                    );
+                    PgColValueConvertor::from_str(order_col_type, &value, &mut self.meta_manager)?
+                } else {
+                    ColValue::None
+                }
             } else {
                 ColValue::None
             };

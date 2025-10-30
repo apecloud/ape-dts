@@ -19,7 +19,6 @@ use dt_common::{
     rdb_filter::RdbFilter,
 };
 
-use crate::close_conn_pool;
 use crate::{
     check_log::{check_log::CheckLog, log_type::LogType},
     extractor::{base_check_extractor::BaseCheckExtractor, base_extractor::BaseExtractor},
@@ -49,7 +48,7 @@ impl Extractor for PgCheckExtractor {
     }
 
     async fn close(&mut self) -> anyhow::Result<()> {
-        close_conn_pool!(self)
+        Ok(())
     }
 }
 

@@ -322,14 +322,19 @@ impl MongoTestRunner {
         let re = Regex::new(r"db.(\w+).insert(One|Many)\(([\w\W]+)\)").unwrap();
         let cap = re.captures(sql).unwrap();
         let tb = cap.get(1).unwrap().as_str();
-        let doc_content = cap.get(3).unwrap().as_str();
+        let mut doc_content = cap.get(3).unwrap().as_str().to_string();
+
+        let oid_re = Regex::new(r#"ObjectId\("([a-fA-F0-9]{24})"\)"#).unwrap();
+        doc_content = oid_re
+            .replace_all(&doc_content, r#"{"$$oid": "$1"}"#)
+            .to_string();
 
         let coll = client.database(db).collection::<Document>(tb);
         if sql.contains("insertOne") {
-            let doc: Document = serde_json::from_str(doc_content).unwrap();
+            let doc: Document = serde_json::from_str(&doc_content).unwrap();
             coll.insert_one(doc, None).await.unwrap();
         } else {
-            let docs: Vec<Document> = serde_json::from_str(doc_content).unwrap();
+            let docs: Vec<Document> = serde_json::from_str(&doc_content).unwrap();
             coll.insert_many(docs, None).await.unwrap();
         }
         Ok(())

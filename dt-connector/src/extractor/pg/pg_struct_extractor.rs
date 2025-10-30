@@ -3,7 +3,6 @@ use std::collections::HashSet;
 use async_trait::async_trait;
 use sqlx::{Pool, Postgres};
 
-use crate::close_conn_pool;
 use crate::{
     extractor::base_extractor::BaseExtractor, meta_fetcher::pg::pg_struct_fetcher::PgStructFetcher,
     Extractor,
@@ -52,7 +51,7 @@ impl Extractor for PgStructExtractor {
     }
 
     async fn close(&mut self) -> anyhow::Result<()> {
-        close_conn_pool!(self)
+        Ok(())
     }
 }
 
