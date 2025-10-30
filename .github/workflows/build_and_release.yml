@@ -49,7 +49,7 @@ jobs:
       - name: Cross build
         if: matrix.target == 'x86_64-unknown-linux-gnu' || matrix.target == 'aarch64-unknown-linux-gnu' || matrix.target == 'x86_64-pc-windows-gnu'
         run: |
-          cargo install cross --version 0.2.5
+          cargo install cross --git https://github.com/cross-rs/cross
           cross build --release --target=${{ matrix.target }}
 
       - name: Local build
