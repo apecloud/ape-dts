@@ -1,4 +1,4 @@
-use std::str::FromStr;
+use std::{collections::HashMap, str::FromStr};
 
 use anyhow::Context;
 use chrono::{DateTime, NaiveDateTime};
@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use crate::log_error;
+use crate::utils::serialize_util::SerializeUtil;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(tag = "type")]
@@ -23,6 +24,8 @@ pub enum Position {
         tb: String,
         order_col: String,
         value: String,
+        #[serde(serialize_with = "SerializeUtil::ordered_map")]
+        order_col_values: HashMap<String, Option<String>>,
     },
     RdbSnapshotFinished {
         db_type: String,
@@ -183,6 +186,7 @@ mod test {
             tb,
             order_col,
             value,
+            order_col_values,
         } = Position::from_log(log2)
         {
             assert_eq!(db_type, "mysql");
@@ -190,6 +194,7 @@ mod test {
             assert_eq!(tb, "one_pk_no_uk");
             assert_eq!(order_col, "f_0");
             assert_eq!(value, "9");
+            assert_eq!(order_col_values, HashMap::new());
         } else {
             panic!()
         }

@@ -1,5 +1,6 @@
 use std::{
     cmp,
+    collections::HashMap,
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
         Arc,
@@ -219,6 +220,7 @@ impl MysqlSnapshotExtractor {
                         tb: self.tb.clone(),
                         order_col: order_col.into(),
                         value,
+                        order_col_values: HashMap::new(),
                     }
                 } else {
                     Position::None
@@ -438,6 +440,7 @@ impl MysqlSnapshotExtractor {
                 tb: tb.into(),
                 order_col: order_col.into(),
                 value,
+                order_col_values: HashMap::new(),
             }
         } else {
             Position::None

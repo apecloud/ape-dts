@@ -1,4 +1,5 @@
-use std::sync::Arc;
+use anyhow::bail;
+use std::{collections::HashMap, sync::Arc};
 
 use async_trait::async_trait;
 use futures::TryStreamExt;
@@ -61,31 +62,7 @@ impl PgSnapshotExtractor {
             .to_owned();
 
         if PgSnapshotExtractor::can_extract_by_batch(&tb_meta) {
-            let order_col = tb_meta.basic.order_col.as_ref().unwrap();
-            let order_col_type = tb_meta.get_col_type(order_col)?;
-
-            let resume_value = if let Some(handler) = &self.recovery {
-                if let Some(value) = handler
-                    .get_snapshot_resume_position(&self.schema, &self.tb, order_col, false)
-                    .await
-                {
-                    log_info!(
-                        "[{}.{}] recovery from [{}]:[{}]",
-                        self.schema,
-                        self.tb,
-                        order_col,
-                        value
-                    );
-                    PgColValueConvertor::from_str(order_col_type, &value, &mut self.meta_manager)?
-                } else {
-                    ColValue::None
-                }
-            } else {
-                ColValue::None
-            };
-
-            self.extract_by_batch(&tb_meta, order_col, order_col_type, resume_value)
-                .await?;
+            self.extract_by_batch(&tb_meta).await?;
         } else {
             self.extract_all(&tb_meta).await?;
         }
@@ -118,13 +95,13 @@ impl PgSnapshotExtractor {
         Ok(())
     }
 
-    async fn extract_by_batch(
-        &mut self,
-        tb_meta: &PgTbMeta,
-        order_col: &str,
-        order_col_type: &PgColType,
-        resume_value: ColValue,
-    ) -> anyhow::Result<()> {
+    async fn extract_by_batch(&mut self, tb_meta: &PgTbMeta) -> anyhow::Result<()> {
+        let order_col = tb_meta.basic.order_col.as_ref().unwrap();
+        let order_col_type = tb_meta.get_col_type(order_col)?;
+        let resume_value = self
+            .get_resume_value(tb_meta, order_col, order_col_type)
+            .await?;
+
         log_info!(
             r#"start extracting data from "{}"."{}" by batch, order_col: {}, start_value: {}"#,
             self.schema,
@@ -166,6 +143,7 @@ impl PgSnapshotExtractor {
                         tb: self.tb.clone(),
                         order_col: order_col.into(),
                         value,
+                        order_col_values: HashMap::new(),
                     }
                 } else {
                     Position::None
@@ -269,6 +247,34 @@ impl PgSnapshotExtractor {
                 .map(|s| format!(r#""{}" ASC"#, s))
                 .collect::<Vec<String>>()
                 .join(", "))
+        }
+    }
+
+    async fn get_resume_value(
+        &mut self,
+        tb_meta: &PgTbMeta,
+        order_col: &str,
+        order_col_type: &PgColType,
+    ) -> anyhow::Result<ColValue> {
+        if let Some(handler) = &self.recovery {
+            if let Some(value) = handler
+                .get_snapshot_resume_position(&self.schema, &self.tb, order_col, false)
+                .await
+            {
+                log_info!(
+                    "[{}.{}] recovery from [{}]:[{}]",
+                    self.schema,
+                    self.tb,
+                    order_col,
+                    value
+                );
+
+                PgColValueConvertor::from_str(order_col_type, &value, &mut self.meta_manager)
+            } else {
+                Ok(ColValue::None)
+            }
+        } else {
+            Ok(ColValue::None)
         }
     }
 }

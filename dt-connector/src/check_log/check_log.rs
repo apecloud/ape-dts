@@ -1,11 +1,9 @@
-use std::{
-    collections::{BTreeMap, HashMap},
-    str::FromStr,
-};
+use std::{collections::HashMap, str::FromStr};
 
 use anyhow::Context;
 use dt_common::error::Error;
-use serde::{Deserialize, Serialize, Serializer};
+use dt_common::utils::serialize_util::SerializeUtil;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use super::log_type::LogType;
@@ -15,9 +13,9 @@ pub struct CheckLog {
     pub log_type: LogType,
     pub schema: String,
     pub tb: String,
-    #[serde(serialize_with = "ordered_map")]
+    #[serde(serialize_with = "SerializeUtil::ordered_map")]
     pub id_col_values: HashMap<String, Option<String>>,
-    #[serde(serialize_with = "ordered_map")]
+    #[serde(serialize_with = "SerializeUtil::ordered_map")]
     pub diff_col_values: HashMap<String, DiffColValue>,
 }
 
@@ -41,16 +39,4 @@ impl FromStr for CheckLog {
             .unwrap();
         Ok(me)
     }
-}
-
-/// For use with serde's [serialize_with] attribute
-pub fn ordered_map<S, K: Ord + Serialize, V: Serialize>(
-    value: &HashMap<K, V>,
-    serializer: S,
-) -> Result<S::Ok, S::Error>
-where
-    S: Serializer,
-{
-    let ordered: BTreeMap<_, _> = value.iter().collect();
-    ordered.serialize(serializer)
 }

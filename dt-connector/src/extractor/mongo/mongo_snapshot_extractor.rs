@@ -116,6 +116,7 @@ impl MongoSnapshotExtractor {
                 tb: self.tb.clone(),
                 order_col: MongoConstants::ID.into(),
                 value: object_id,
+                order_col_values: HashMap::new(),
             };
 
             self.base_extractor.push_row(row_data, position).await?;
