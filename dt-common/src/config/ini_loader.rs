@@ -58,6 +58,10 @@ impl IniLoader {
         default
     }
 
+    pub fn contains(&self, section: &str, key: &str) -> bool {
+        self.ini.get(section, key).is_some()
+    }
+
     fn parse_value<T>(section: &str, key: &str, value: &str) -> anyhow::Result<T>
     where
         T: FromStr,

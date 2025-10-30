@@ -54,7 +54,9 @@ impl ExtractorMonitor {
         {
             self.monitor
                 .add_counter(CounterType::RecordCount, pushed_record_count)
-                .add_counter(CounterType::DataBytes, pushed_record_size);
+                .await
+                .add_counter(CounterType::DataBytes, pushed_record_size)
+                .await;
 
             self.last_flush_time = Instant::now();
             self.flushed_counters = self.counters.clone();

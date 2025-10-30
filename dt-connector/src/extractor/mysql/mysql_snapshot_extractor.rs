@@ -12,7 +12,7 @@ use sqlx::{MySql, Pool};
 use tokio::{sync::Mutex, task::JoinHandle};
 
 use crate::{
-    extractor::{base_extractor::BaseExtractor, resumer::snapshot_resumer::SnapshotResumer},
+    extractor::{base_extractor::BaseExtractor, resumer::recovery::Recovery},
     rdb_query_builder::RdbQueryBuilder,
     rdb_router::RdbRouter,
     Extractor,
@@ -40,12 +40,12 @@ pub struct MysqlSnapshotExtractor {
     pub conn_pool: Pool<MySql>,
     pub meta_manager: MysqlMetaManager,
     pub filter: RdbFilter,
-    pub resumer: SnapshotResumer,
     pub batch_size: usize,
     pub parallel_size: usize,
     pub sample_interval: usize,
     pub db: String,
     pub tb: String,
+    pub recovery: Option<Arc<dyn Recovery + Send + Sync>>,
 }
 
 struct ExtractColValue {
@@ -90,11 +90,22 @@ impl MysqlSnapshotExtractor {
                         | MysqlColType::MediumInt { .. }
                 );
 
-            let resume_value = if let Some(value) =
-                self.resumer
-                    .get_resume_value(&self.db, &self.tb, order_col, parallel_extract)
-            {
-                MysqlColValueConvertor::from_str(order_col_type, &value)?
+            let resume_value = if let Some(handler) = &self.recovery {
+                if let Some(value) = handler
+                    .get_snapshot_resume_position(&self.db, &self.tb, order_col, parallel_extract)
+                    .await
+                {
+                    log_info!(
+                        "[{}.{}] recovery from [{}]:[{}]",
+                        self.db,
+                        self.tb,
+                        order_col,
+                        value
+                    );
+                    MysqlColValueConvertor::from_str(order_col_type, &value)?
+                } else {
+                    ColValue::None
+                }
             } else {
                 ColValue::None
             };

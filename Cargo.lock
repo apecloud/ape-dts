@@ -1436,6 +1436,7 @@ dependencies = [
  "chrono",
  "clickhouse",
  "concurrent-queue",
+ "dashmap",
  "dt-common",
  "futures",
  "hex",

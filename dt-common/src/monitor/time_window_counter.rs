@@ -1,5 +1,7 @@
 use std::{cmp, collections::LinkedList};
 
+use tokio::sync::RwLock;
+
 use super::counter::Counter;
 use crate::utils::limit_queue::LimitedQueue;
 
@@ -15,11 +17,10 @@ pub struct WindowCounterStatistics {
     pub count: u64,
 }
 
-#[derive(Clone)]
 pub struct TimeWindowCounter {
     pub time_window_secs: u64,
     pub max_sub_count: u64,
-    pub counters: LinkedList<Counter>,
+    pub counters: RwLock<LinkedList<Counter>>,
     pub description: String,
 }
 
@@ -28,48 +29,80 @@ impl TimeWindowCounter {
         Self {
             time_window_secs,
             max_sub_count,
-            counters: LinkedList::new(),
+            counters: RwLock::new(LinkedList::new()),
             description: String::new(),
         }
     }
 
     #[inline(always)]
-    pub fn adds(&mut self, values: &LimitedQueue<(u64, u64)>) -> &Self {
+    pub async fn adds(&mut self, values: &LimitedQueue<(u64, u64)>) -> &Self {
+        if values.is_empty() {
+            return self;
+        }
+
+        let mut counters = self.counters.write().await;
+        while let Some(front) = counters.front() {
+            if front.timestamp.elapsed().as_secs() >= self.time_window_secs {
+                counters.pop_front();
+            } else {
+                break;
+            }
+        }
+
+        while counters.len() as u64 + values.len() as u64 >= self.max_sub_count {
+            counters.pop_front();
+        }
+
         for (value, count) in values.iter() {
             if *count == 0 {
                 continue;
             }
-            self.add(*value, *count);
+            counters.push_back(Counter::new(*value, *count));
         }
         self
     }
 
     #[inline(always)]
-    pub fn add(&mut self, value: u64, count: u64) -> &Self {
-        while self.counters.len() as u64 > self.max_sub_count {
-            self.counters.pop_front();
+    pub async fn add(&mut self, value: u64, count: u64) -> &Self {
+        let mut counters = self.counters.write().await;
+
+        while let Some(front) = counters.front() {
+            if front.timestamp.elapsed().as_secs() >= self.time_window_secs {
+                counters.pop_front();
+            } else {
+                break;
+            }
         }
-        self.counters.push_back(Counter::new(value, count));
+
+        while counters.len() as u64 >= self.max_sub_count {
+            counters.pop_front();
+        }
+        counters.push_back(Counter::new(value, count));
         self
     }
 
     #[inline(always)]
-    pub fn statistics(&mut self) -> WindowCounterStatistics {
-        self.refresh_window();
-
-        if self.counters.is_empty() {
+    pub async fn statistics(&self) -> WindowCounterStatistics {
+        let counters = self.counters.read().await;
+        if counters.is_empty() {
             return WindowCounterStatistics::default();
         }
 
-        let mut statistics = WindowCounterStatistics::default();
-        statistics.min = u64::MAX;
-        statistics.min_by_sec = u64::MAX;
+        let mut statistics = WindowCounterStatistics {
+            min: u64::MAX,
+            min_by_sec: u64::MAX,
+            ..Default::default()
+        };
 
         let mut sum_in_current_sec = 0;
         let mut current_elapsed_secs = None;
         let mut sec_sums = LimitedQueue::new(1000);
 
-        for counter in self.counters.iter() {
+        for counter in counters.iter() {
+            if counter.timestamp.elapsed().as_secs() >= self.time_window_secs {
+                continue;
+            }
+
             statistics.sum += counter.value;
             statistics.count += counter.count;
             statistics.max = cmp::max(statistics.max, counter.value);
@@ -121,21 +154,5 @@ impl TimeWindowCounter {
         }
 
         statistics
-    }
-
-    #[inline(always)]
-    pub fn refresh_window(&mut self) {
-        let mut outdate_count = 0;
-        for counter in self.counters.iter() {
-            if counter.timestamp.elapsed().as_secs() >= self.time_window_secs {
-                outdate_count += 1;
-            } else {
-                break;
-            }
-        }
-
-        for _ in 0..outdate_count {
-            self.counters.pop_front();
-        }
     }
 }

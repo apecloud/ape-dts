@@ -1,95 +1,80 @@
 # 断点续传
 
-增量任务进度会定期记录在 position.log。
-
-任务中断后，需要用户手动重启，默认重启后任务将根据 task_config.ini 中 [extractor] 的配置开始同步。
-
-为避免重复同步已完成的数据，可根据 position.log 进行断点续传。
-
-由于断点续传依赖 position.log，故如果你有多个任务，**必须为每个任务设置独立的日志目录**。
+任务启动时，可以基于配置获取到上次执行中最新的任务位点，从而继续任务而不需要从头开始
 
 ## 支持范围
+
 - MySQL 源端
 - Postgres 源端
 - Mongo 源端
 
+## 位点记录
+
+增量任务进度会定期记录在 position.log 中。任务进度记录频率取决于 `pipeline.checkpoint_interval_secs` 配置，默认值 10s
+
+无论你是否启用断点续传，任务运行过程中都会以日志的方式记录位点信息，位置在 logs 目录(`runtime.log_dir`)下的 position.log
+
+此外，你可以通过配置将任务位点持久化在 `目标数据库` 或 `指定数据库`，往数据库记录位点大约会花费 `150byte`存储。
+为确保位点信息不被其他任务影响，建议通过配置文件指定 task_id: `global.task_id`
+**该功能仅支持目标数据库/指定数据库是 MySQL 或 PG**
+**需要目标账号具备创建 MySQL database/PG schema 以及创建 table 的权限**
+
+## 位点读取
+
+你可以通过配置选择 `从日志`、`从目标库`或`从指定数据库`读取位点
+
 # 进度日志
+
 详细解释可参考 [位点信息](../monitor/position.md)
 
 ## MySQL position.log
-```
-2024-10-10 08:01:09.308022 | checkpoint_position | {"type":"MysqlCdc","server_id":"","binlog_filename":"mysql-bin.000036","next_event_position":773,"gtid_set":"","timestamp":"2024-10-10 08:00:58.000"}
-```
-
-## Postgres position.log
-```
-2024-10-10 09:09:52.260052 | checkpoint_position | {"type":"PgCdc","lsn":"0/406E2C30","timestamp":"2024-10-10 08:12:31.421"}
-```
-
-## Mongo position.log 
-### op_log
-```
-2024-10-10 09:17:14.825459 | current_position | {"type":"MongoCdc","resume_token":"","operation_time":1728551829,"timestamp":"2024-10-10 09:17:09.000"}
-```
-
-### change_stream
-```
-2024-10-10 08:46:34.218284 | current_position | {"type":"MongoCdc","resume_token":"{\"_data\":\"8267079350000000012B022C0100296E5A1004B4A9FD2BFD9C44609366CD4CD6A3D98E46645F696400646707935067D762990668C8CE0004\"}","operation_time":1728549712,"timestamp":"2024-10-10 08:41:52.000"}
-```
 
 # 配置
 
-增量任务断点续传配置和 [全量任务](../snapshot/resume.md) 类似，请先阅读以了解其原理。
+## 使用目标库断点续传
 
-不同点：
-- MySQL/Postgres 增量位点信息取自 position.log 中的 checkpoint_position。
-- Mongo 增量取位点信息取自 current_position。
-
-# 例子 1（推荐使用）
-
-- task_config.ini
 ```
-[extractor]
-db_type=mysql
-extract_type=cdc
-binlog_position=73351
-binlog_filename=mysql-bin.000004
+[global]
+//[可选]
+task_id=task1
 
 [resumer]
-resume_from_log=true
+resume_type=from_target
+//[可选]默认值是apecloud_metadata.apedts_task_position
+table_full_name=apecloud_resumer_test.ape_task_position
+max_connections=1
 ```
 
-- 任务中断前产生的 position.log
-```
-2024-10-18 05:21:45.207788 | checkpoint_position | {"type":"MysqlCdc","server_id":"","binlog_filename":"mysql-bin.000004","next_event_position":73685,"gtid_set":"","timestamp":"2024-10-18 05:21:44.000"}
-```
+任务启动时会自动确保目标存在配置中的`apecloud_resumer_test.ape_task_position`库表，初始化一个最大连接数是 1 的连接池，用于后续的 resume 相关位点记录和查询
 
-- 任务启动后，default.log 中有如下日志：
-```
-2024-10-18 07:34:29.702024 - INFO - [1256892] - resume from: {"type":"MysqlCdc","server_id":"","binlog_filename":"mysql-bin.000004","next_event_position":73685,"gtid_set":"","timestamp":"2024-10-18 05:21:44.000"}
-2024-10-18 07:34:29.702621 - INFO - [1256892] - MysqlCdcExtractor starts, binlog_filename: mysql-bin.000004, binlog_position: 73685, gtid_enabled: false, gtid_set: , heartbeat_interval_secs: 1, heartbeat_tb: heartbeat_db.ape_dts_heartbeat
-```
+## 使用指定数据库断点续传
 
-# 例子 2
-- task_config.ini
 ```
-[extractor]
-db_type=mysql
-extract_type=cdc
-binlog_position=73351
-binlog_filename=mysql-bin.000004
+[global]
+//[可选]
+task_id=task1
 
 [resumer]
-resume_config_file=./resume.config
+resume_type=from_db
+url=mysql://xxx:xxx@127.0.0.1:3306
+db_type=mysql
+//[可选]默认值是apecloud_metadata.apedts_task_position
+table_full_name=apecloud_resumer_test.ape_task_position
+max_connections=1
 ```
 
-- ./resume.config（需由用户写入）
+任务启动时会初始化一个最大连接数是 1 的连接池，自动确保配置数据库实例中存在配置中的`apecloud_resumer_test.ape_task_position`库表，用于后续的 resume 相关位点记录和查询
+
+## 使用日志断点续传
+
 ```
-2024-10-18 05:21:45.207788 | checkpoint_position | {"type":"MysqlCdc","server_id":"","binlog_filename":"mysql-bin.000004","next_event_position":73685,"gtid_set":"","timestamp":"2024-10-18 05:21:44.000"}
+[runtime]
+log_dir=/logs
+
+[resumer]
+resume_type=from_log
+//[可选]默认使用runtime.log_dir
+log_dir=/other_logs
 ```
 
-- 任务启动后，default.log 中有如下日志：
-```
-2024-10-18 07:40:02.283542 - INFO - [1267442] - resume from: {"type":"MysqlCdc","server_id":"","binlog_filename":"mysql-bin.000004","next_event_position":73685,"gtid_set":"","timestamp":"2024-10-18 05:21:44.000"}
-2024-10-18 07:40:02.284100 - INFO - [1267442] - MysqlCdcExtractor starts, binlog_filename: mysql-bin.000004, binlog_position: 73685, gtid_enabled: false, gtid_set: , heartbeat_interval_secs: 1, heartbeat_tb: heartbeat_db.ape_dts_heartbeat
-```
+从`/other_logs`下寻找 position.log 做断点续传

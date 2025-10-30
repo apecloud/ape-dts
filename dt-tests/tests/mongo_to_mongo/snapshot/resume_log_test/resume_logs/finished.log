@@ -1,0 +1,1 @@
+2024-04-01 07:08:05.459594 | {"type":"RdbSnapshotFinished","db_type":"mongo","schema":"test_db_1","tb":"finish_tb_in_log_1","order_col":"_id","value":""}

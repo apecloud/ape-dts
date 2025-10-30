@@ -4,12 +4,14 @@ use std::sync::Arc;
 use anyhow::bail;
 use ratelimit::Ratelimiter;
 
-use dt_common::meta::dcl_meta::dcl_data::DclData;
-use dt_common::meta::ddl_meta::ddl_data::DdlData;
-use dt_common::meta::{dt_data::DtItem, dt_queue::DtQueue, row_data::RowData};
-use dt_common::monitor::counter::Counter;
-use dt_common::monitor::counter_type::CounterType;
-use dt_common::{error::Error, monitor::monitor::Monitor};
+use dt_common::{
+    error::Error,
+    meta::{
+        dcl_meta::dcl_data::DclData, ddl_meta::ddl_data::DdlData, dt_data::DtItem,
+        dt_queue::DtQueue, row_data::RowData,
+    },
+    monitor::{counter::Counter, counter_type::CounterType, monitor::Monitor},
+};
 use dt_connector::Sinker;
 
 #[derive(Default)]
@@ -93,11 +95,13 @@ impl BaseParallelizer {
 
     pub async fn update_monitor(&self, record_size_counter: &Counter) {
         if record_size_counter.value > 0 {
-            self.monitor.add_batch_counter(
-                CounterType::RecordSize,
-                record_size_counter.value,
-                record_size_counter.count,
-            );
+            self.monitor
+                .add_batch_counter(
+                    CounterType::RecordSize,
+                    record_size_counter.value,
+                    record_size_counter.count,
+                )
+                .await;
         }
     }
 

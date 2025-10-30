@@ -1,0 +1,1 @@
+2024-03-29 07:02:24.463776 | current_position | {"type":"RdbSnapshot","db_type":"mongo","schema":"test_db_1","tb":"resume_tb_in_log_1","order_col":"_id","value":"648195af9aa9cadd41a9dcb2"}

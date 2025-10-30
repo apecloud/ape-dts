@@ -26,7 +26,7 @@ use super::{
 use crate::task_util::{ConnClient, TaskUtil};
 use dt_common::{
     config::{
-        config_enums::{build_task_type, DbType, PipelineType},
+        config_enums::{build_task_type, DbType, PipelineType, TaskType},
         config_token_parser::{ConfigTokenParser, TokenEscapePair},
         extractor_config::ExtractorConfig,
         sinker_config::SinkerConfig,
@@ -50,7 +50,7 @@ use dt_common::{
 };
 use dt_connector::{
     data_marker::DataMarker,
-    extractor::resumer::{cdc_resumer::CdcResumer, snapshot_resumer::SnapshotResumer},
+    extractor::resumer::{recorder::Recorder, recovery::Recovery},
     rdb_router::RdbRouter,
     Sinker,
 };
@@ -69,12 +69,13 @@ pub struct TaskContext {
     pub extractor_client: ConnClient,
     pub sinker_client: ConnClient,
     pub router: Arc<RdbRouter>,
-    pub snapshot_resumer: Arc<SnapshotResumer>,
-    pub cdc_resumer: Arc<CdcResumer>,
+    pub recorder: Option<Arc<dyn Recorder + Send + Sync>>,
+    pub recovery: Option<Arc<dyn Recovery + Send + Sync>>,
 }
 
 #[derive(Clone)]
 pub struct TaskRunner {
+    task_type: Option<TaskType>,
     config: TaskConfig,
     extractor_monitor: Arc<GroupMonitor>,
     pipeline_monitor: Arc<GroupMonitor>,
@@ -122,6 +123,7 @@ impl TaskRunner {
             task_monitor,
             #[cfg(feature = "metrics")]
             prometheus_metrics,
+            task_type,
         })
     }
 
@@ -137,17 +139,27 @@ impl TaskRunner {
 
         let db_type = &self.config.extractor_basic.db_type;
         let router = Arc::new(RdbRouter::from_config(&self.config.router, db_type)?);
-        let snapshot_resumer = Arc::new(SnapshotResumer::from_config(&self.config)?);
-        let cdc_resumer = Arc::new(CdcResumer::from_config(&self.config)?);
+        let (recorder, recovery) = match &self.task_type {
+            Some(task_type) => {
+                TaskUtil::build_resumer(
+                    task_type.to_owned(),
+                    &self.config.global,
+                    &self.config.resumer,
+                )
+                .await?
+            }
+            None => (None, None),
+        };
         let (extractor_client, sinker_client) = ConnClient::from_config(&self.config).await?;
+
         let task_context = TaskContext {
             id: String::new(),
             extractor_config: self.config.extractor.clone(),
             extractor_client: extractor_client.clone(),
             sinker_client: sinker_client.clone(),
             router,
-            snapshot_resumer,
-            cdc_resumer,
+            recorder,
+            recovery,
         };
 
         #[cfg(feature = "metrics")]
@@ -252,8 +264,8 @@ impl TaskRunner {
             extractor_client: task_context.extractor_client,
             sinker_client: task_context.sinker_client,
             router: task_context.router,
-            snapshot_resumer: task_context.snapshot_resumer,
-            cdc_resumer: task_context.cdc_resumer,
+            recorder: task_context.recorder,
+            recovery: task_context.recovery,
         };
         let me = self.clone();
         join_set.spawn(async move {
@@ -273,8 +285,8 @@ impl TaskRunner {
         let extractor_client = task_context.extractor_client;
         let sinker_client = task_context.sinker_client;
         let router = (*task_context.router).clone();
-        let snapshot_resumer = (*task_context.snapshot_resumer).clone();
-        let cdc_resumer = (*task_context.cdc_resumer).clone();
+        let recorder = task_context.recorder.clone();
+        let recovery = task_context.recovery.clone();
 
         let max_bytes = self.config.pipeline.buffer_memory_mb * 1024 * 1024;
         let buffer = Arc::new(DtQueue::new(
@@ -324,15 +336,14 @@ impl TaskRunner {
         let mut extractor = ExtractorUtil::create_extractor(
             &self.config,
             &extractor_config,
-            extractor_client,
+            extractor_client.clone(),
             buffer.clone(),
             shut_down.clone(),
             syncer.clone(),
             extractor_monitor.clone(),
             extractor_data_marker,
             router,
-            snapshot_resumer,
-            cdc_resumer,
+            recovery,
         )
         .await?;
 
@@ -347,7 +358,7 @@ impl TaskRunner {
         let sinkers = SinkerUtil::create_sinkers(
             &self.config,
             &extractor_config,
-            sinker_client,
+            sinker_client.clone(),
             sinker_monitor.clone(),
             rw_sinker_data_marker.clone(),
         )
@@ -370,6 +381,7 @@ impl TaskRunner {
                 sinkers,
                 pipeline_monitor.clone(),
                 rw_sinker_data_marker.clone(),
+                recorder.clone(),
             )
             .await?;
 
@@ -400,7 +412,12 @@ impl TaskRunner {
         );
 
         // do pre operations before task starts
-        self.pre_single_task(sinker_data_marker).await?;
+        self.pre_single_task(
+            extractor_client.clone(),
+            sinker_client.clone(),
+            sinker_data_marker,
+        )
+        .await?;
 
         // start threads
         let f1 = tokio::spawn(async move {
@@ -439,17 +456,20 @@ impl TaskRunner {
             _ => (String::new(), String::new()),
         };
         if !tb.is_empty() {
-            log_finished!(
-                "{}",
-                Position::RdbSnapshotFinished {
-                    db_type: self.config.extractor_basic.db_type.to_string(),
-                    schema,
-                    tb,
-                }
-                .to_string()
-            );
+            let finish_position = Position::RdbSnapshotFinished {
+                db_type: self.config.extractor_basic.db_type.to_string(),
+                schema,
+                tb,
+            };
+            log_finished!("{}", finish_position.to_string());
             self.task_monitor
                 .add_no_window_metrics(TaskMetricsType::FinishedProgressCount, 1);
+
+            if let Some(handler) = &recorder {
+                if let Err(e) = handler.record_position(&finish_position).await {
+                    log_error!("failed to record position: {}, err: {}", finish_position, e);
+                }
+            }
         }
 
         // remove monitors from global monitors
@@ -486,6 +506,7 @@ impl TaskRunner {
         sinkers: Vec<Arc<async_mutex::Mutex<Box<dyn Sinker + Send>>>>,
         monitor: Arc<Monitor>,
         data_marker: Option<Arc<RwLock<DataMarker>>>,
+        recorder: Option<Arc<dyn Recorder + Send + Sync>>,
     ) -> anyhow::Result<Box<dyn Pipeline + Send>> {
         match self.config.pipeline.pipeline_type {
             PipelineType::Basic => {
@@ -527,6 +548,7 @@ impl TaskRunner {
                     monitor,
                     data_marker,
                     lua_processor,
+                    recorder,
                 };
                 Ok(Box::new(pipeline))
             }
@@ -661,9 +683,14 @@ impl TaskRunner {
         );
     }
 
-    async fn pre_single_task(&self, sinker_data_marker: Option<DataMarker>) -> anyhow::Result<()> {
+    async fn pre_single_task(
+        &self,
+        extractor_client: ConnClient,
+        sinker_client: ConnClient,
+        sinker_data_marker: Option<DataMarker>,
+    ) -> anyhow::Result<()> {
         // create heartbeat table
-        let schema_tb = match &self.config.extractor {
+        let heartbeat_schema_tb = match &self.config.extractor {
             ExtractorConfig::MysqlCdc { heartbeat_tb, .. }
             | ExtractorConfig::PgCdc { heartbeat_tb, .. } => ConfigTokenParser::parse(
                 heartbeat_tb,
@@ -675,10 +702,11 @@ impl TaskRunner {
             _ => vec![],
         };
 
-        if schema_tb.len() == 2 {
+        if heartbeat_schema_tb.len() == 2 {
             match &self.config.extractor {
-                ExtractorConfig::MysqlCdc { url, .. } => {
-                    let db_sql = format!("CREATE DATABASE IF NOT EXISTS `{}`", schema_tb[0]);
+                ExtractorConfig::MysqlCdc { .. } => {
+                    let db_sql =
+                        format!("CREATE DATABASE IF NOT EXISTS `{}`", heartbeat_schema_tb[0]);
                     let tb_sql = format!(
                         "CREATE TABLE IF NOT EXISTS `{}`.`{}`(
                         server_id INT UNSIGNED,
@@ -691,13 +719,13 @@ impl TaskRunner {
                         flushed_timestamp VARCHAR(255),
                         PRIMARY KEY(server_id)
                     )",
-                        schema_tb[0], schema_tb[1]
+                        heartbeat_schema_tb[0], heartbeat_schema_tb[1]
                     );
 
                     TaskUtil::check_and_create_tb(
-                        url,
-                        &schema_tb[0],
-                        &schema_tb[1],
+                        &extractor_client.clone(),
+                        &heartbeat_schema_tb[0],
+                        &heartbeat_schema_tb[1],
                         &db_sql,
                         &tb_sql,
                         &DbType::Mysql,
@@ -705,8 +733,11 @@ impl TaskRunner {
                     .await?
                 }
 
-                ExtractorConfig::PgCdc { url, .. } => {
-                    let schema_sql = format!(r#"CREATE SCHEMA IF NOT EXISTS "{}""#, schema_tb[0]);
+                ExtractorConfig::PgCdc { .. } => {
+                    let schema_sql = format!(
+                        r#"CREATE SCHEMA IF NOT EXISTS "{}""#,
+                        heartbeat_schema_tb[0]
+                    );
                     let tb_sql = format!(
                         r#"CREATE TABLE IF NOT EXISTS "{}"."{}"(
                         slot_name character varying(64) not null,
@@ -717,13 +748,13 @@ impl TaskRunner {
                         flushed_timestamp character varying(64),
                         primary key(slot_name)
                     )"#,
-                        schema_tb[0], schema_tb[1]
+                        heartbeat_schema_tb[0], heartbeat_schema_tb[1]
                     );
 
                     TaskUtil::check_and_create_tb(
-                        url,
-                        &schema_tb[0],
-                        &schema_tb[1],
+                        &extractor_client.clone(),
+                        &heartbeat_schema_tb[0],
+                        &heartbeat_schema_tb[1],
                         &schema_sql,
                         &tb_sql,
                         &DbType::Pg,
@@ -738,7 +769,7 @@ impl TaskRunner {
         // create data marker table
         if let Some(data_marker) = sinker_data_marker {
             match &self.config.sinker {
-                SinkerConfig::Mysql { url, .. } => {
+                SinkerConfig::Mysql { .. } => {
                     let db_sql = format!(
                         "CREATE DATABASE IF NOT EXISTS `{}`",
                         data_marker.marker_schema
@@ -755,7 +786,7 @@ impl TaskRunner {
                     );
 
                     TaskUtil::check_and_create_tb(
-                        url,
+                        &sinker_client.clone(),
                         &data_marker.marker_schema,
                         &data_marker.marker_tb,
                         &db_sql,
@@ -765,7 +796,7 @@ impl TaskRunner {
                     .await?
                 }
 
-                SinkerConfig::Pg { url, .. } => {
+                SinkerConfig::Pg { .. } => {
                     let schema_sql = format!(
                         r#"CREATE SCHEMA IF NOT EXISTS "{}""#,
                         data_marker.marker_schema
@@ -782,7 +813,7 @@ impl TaskRunner {
                     );
 
                     TaskUtil::check_and_create_tb(
-                        url,
+                        &sinker_client.clone(),
                         &data_marker.marker_schema,
                         &data_marker.marker_tb,
                         &schema_sql,
@@ -803,27 +834,28 @@ impl TaskRunner {
         original_task_context: TaskContext,
         is_multi_task: bool,
     ) -> anyhow::Result<VecDeque<TaskContext>> {
-        let url = &self.config.extractor_basic.url;
         let db_type = &self.config.extractor_basic.db_type;
         let filter = RdbFilter::from_config(&self.config.filter, db_type)?;
 
-        let schemas = TaskUtil::list_schemas(url, db_type)
-            .await?
-            .iter()
-            .filter(|schema| !filter.filter_schema(schema))
-            .map(|s| s.to_owned())
-            .collect::<Vec<_>>();
+        let schemas =
+            TaskUtil::list_schemas(&original_task_context.extractor_client.clone(), db_type)
+                .await?
+                .iter()
+                .filter(|schema| !filter.filter_schema(schema))
+                .map(|s| s.to_owned())
+                .collect::<Vec<_>>();
 
         if is_multi_task {
-            let task_type_option = build_task_type(
-                &self.config.extractor_basic.extract_type,
-                &self.config.sinker_basic.sink_type,
-            );
-            if let Some(task_type) = task_type_option {
+            if let Some(task_type) = &self.task_type {
                 log_info!("begin to estimate record count");
-                let record_count =
-                    TaskUtil::estimate_record_count(&task_type, url, db_type, &schemas, &filter)
-                        .await?;
+                let record_count = TaskUtil::estimate_record_count(
+                    task_type,
+                    &original_task_context.extractor_client.clone(),
+                    db_type,
+                    &schemas,
+                    &filter,
+                )
+                .await?;
                 log_info!("estimate record count: {}", record_count);
 
                 self.task_monitor
@@ -832,8 +864,6 @@ impl TaskRunner {
         }
 
         let router = original_task_context.router.clone();
-        let snapshot_resumer = original_task_context.snapshot_resumer.clone();
-        let cdc_resumer = original_task_context.cdc_resumer.clone();
         let extractor_client = original_task_context.extractor_client.clone();
         let sinker_client = original_task_context.sinker_client.clone();
 
@@ -842,7 +872,6 @@ impl TaskRunner {
             &self.config.extractor,
             ExtractorConfig::MysqlStruct { .. } | ExtractorConfig::PgStruct { .. }
         );
-
         if is_db_extractor_config {
             let db_extractor_config = match &self.config.extractor {
                 ExtractorConfig::MysqlStruct {
@@ -876,27 +905,35 @@ impl TaskRunner {
             pending_tasks.push_back(TaskContext {
                 extractor_config: db_extractor_config,
                 router,
-                snapshot_resumer,
-                cdc_resumer,
                 id: "".to_string(),
                 extractor_client,
                 sinker_client,
+                recorder: original_task_context.recorder.clone(),
+                recovery: original_task_context.recovery.clone(),
             });
         } else {
             for schema in schemas.iter() {
                 // find pending tables
-                let tbs = TaskUtil::list_tbs(url, schema, db_type).await?;
+                let tbs = TaskUtil::list_tbs(
+                    &original_task_context.extractor_client.clone(),
+                    schema,
+                    db_type,
+                )
+                .await?;
 
                 self.task_monitor
                     .add_no_window_metrics(TaskMetricsType::TotalProgressCount, tbs.len() as u64);
                 let mut finished_tbs = 0;
 
                 for tb in tbs.iter() {
-                    if snapshot_resumer.check_finished(schema, tb) {
-                        log_info!("schema: {}, tb: {}, already finished", schema, tb);
-                        finished_tbs += 1;
-                        continue;
+                    if let Some(recovery_handler) = original_task_context.recovery.as_ref() {
+                        if recovery_handler.check_snapshot_finished(schema, tb).await {
+                            log_info!("schema: {}, tb: {}, already finished", schema, tb);
+                            finished_tbs += 1;
+                            continue;
+                        }
                     }
+
                     if filter.filter_event(schema, tb, &RowType::Insert) {
                         log_info!("schema: {}, tb: {}, insert events filtered", schema, tb);
                         continue;
@@ -959,11 +996,11 @@ impl TaskRunner {
                     pending_tasks.push_back(TaskContext {
                         extractor_config: tb_extractor_config,
                         router: router.clone(),
-                        snapshot_resumer: snapshot_resumer.clone(),
-                        cdc_resumer: cdc_resumer.clone(),
                         id: format!("{}.{}", schema, tb),
                         extractor_client: extractor_client.clone(),
                         sinker_client: sinker_client.clone(),
+                        recorder: original_task_context.recorder.clone(),
+                        recovery: original_task_context.recovery.clone(),
                     });
                 }
 

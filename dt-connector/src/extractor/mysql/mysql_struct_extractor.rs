@@ -3,7 +3,6 @@ use std::collections::HashSet;
 use async_trait::async_trait;
 use sqlx::{MySql, Pool};
 
-use crate::close_conn_pool;
 use crate::{
     extractor::base_extractor::BaseExtractor,
     meta_fetcher::mysql::mysql_struct_fetcher::MysqlStructFetcher, Extractor,
@@ -44,7 +43,7 @@ impl Extractor for MysqlStructExtractor {
     }
 
     async fn close(&mut self) -> anyhow::Result<()> {
-        close_conn_pool!(self)
+        Ok(())
     }
 }
 

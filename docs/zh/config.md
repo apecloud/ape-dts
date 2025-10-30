@@ -10,6 +10,7 @@
 | db_type | 源库类型| mysql | - |
 | extract_type | 拉取类型（全量：snapshot，增量：cdc） | snapshot | - |
 | url | 源库连接信息 | mysql://root:123456@127.0.0.1:3307 | - |
+| max_connections | 最大连接数 | 10 | 目前是10，未来可能会动态适配 |
 | batch_size | 批量拉取数据条数 | 10000 | 和 [pipeline] buffer_size 一致 |
 
 ## url 转义
@@ -27,6 +28,7 @@ url=mysql://user1:abc%25%24%23%3F%40@127.0.0.1:3307?ssl-mode=disabled
 | sink_type | 拉取类型（写入：write，校验：check） | write | write |
 | url | 目标库连接信息 | mysql://root:123456@127.0.0.1:3308 | - |
 | batch_size | 批量写入数据条数，1 代表串行 | 200 | 200 |
+| max_connections | 最大连接数 | 10 | 目前是10，未来可能会动态适配 |
 | replace | 插入数据时，如果已存在于目标库，是否强行替换，适用于 mysql/pg 的全量/增量任务 | false | true |
 
 # [filter]

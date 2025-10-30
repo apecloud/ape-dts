@@ -46,3 +46,4 @@ hex = { workspace = true }
 clickhouse = { workspace = true }
 percent-encoding = { workspace = true }
 opendal = { workspace = true }
+dashmap = {workspace = true}

@@ -1,4 +1,4 @@
-#[derive(Clone, Default)]
+#[derive(Clone, Default, Hash)]
 pub struct FilterConfig {
     pub do_schemas: String,
     pub ignore_schemas: String,

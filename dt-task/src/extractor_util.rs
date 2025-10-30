@@ -3,13 +3,14 @@ use std::{
     sync::{atomic::AtomicBool, Arc},
 };
 
+use anyhow::bail;
 use tokio::sync::Mutex;
 
 use dt_common::{
     config::{
         config_enums::{DbType, ExtractType},
         extractor_config::ExtractorConfig,
-        task_config::{TaskConfig, DEFAULT_MAX_CONNECTIONS},
+        task_config::TaskConfig,
     },
     meta::{
         avro::avro_converter::AvroConverter, dt_queue::DtQueue,
@@ -48,7 +49,7 @@ use dt_connector::{
             redis_scan_extractor::RedisScanExtractor,
             redis_snapshot_file_extractor::RedisSnapshotFileExtractor,
         },
-        resumer::{cdc_resumer::CdcResumer, snapshot_resumer::SnapshotResumer},
+        resumer::recovery::Recovery,
     },
     rdb_router::RdbRouter,
     Extractor,
@@ -71,8 +72,7 @@ impl ExtractorUtil {
         monitor: Arc<Monitor>,
         data_marker: Option<DataMarker>,
         router: RdbRouter,
-        snapshot_resumer: SnapshotResumer,
-        cdc_resumer: CdcResumer,
+        recovery: Option<Arc<dyn Recovery + Send + Sync>>,
     ) -> anyhow::Result<Box<dyn Extractor + Send>> {
         let mut base_extractor = BaseExtractor {
             buffer,
@@ -83,7 +83,6 @@ impl ExtractorUtil {
             time_filter: TimeFilter::default(),
         };
 
-        let enable_sqlx_log = TaskUtil::check_enable_sqlx_log(&config.runtime.log_level);
         let filter = RdbFilter::from_config(&config.filter, &config.extractor_basic.db_type)?;
 
         let extractor: Box<dyn Extractor + Send> = match extractor_config.to_owned() {
@@ -98,13 +97,7 @@ impl ExtractorUtil {
                 let conn_pool = match extractor_client {
                     ConnClient::MySQL(conn_pool) => conn_pool,
                     _ => {
-                        TaskUtil::create_mysql_conn_pool(
-                            &url,
-                            DEFAULT_MAX_CONNECTIONS,
-                            enable_sqlx_log,
-                            false,
-                        )
-                        .await?
+                        bail!("connection pool not found");
                     }
                 };
                 let meta_manager = TaskUtil::create_mysql_meta_manager(
@@ -118,7 +111,6 @@ impl ExtractorUtil {
                 let extractor = MysqlSnapshotExtractor {
                     conn_pool,
                     meta_manager,
-                    resumer: snapshot_resumer,
                     db,
                     tb,
                     batch_size,
@@ -126,6 +118,7 @@ impl ExtractorUtil {
                     parallel_size,
                     base_extractor,
                     filter,
+                    recovery,
                 };
                 Box::new(extractor)
             }
@@ -135,8 +128,12 @@ impl ExtractorUtil {
                 check_log_dir,
                 batch_size,
             } => {
-                let conn_pool =
-                    TaskUtil::create_mysql_conn_pool(&url, 2, enable_sqlx_log, false).await?;
+                let conn_pool = match extractor_client {
+                    ConnClient::MySQL(conn_pool) => conn_pool,
+                    _ => {
+                        bail!("connection pool not found");
+                    }
+                };
                 let meta_manager = TaskUtil::create_mysql_meta_manager(
                     &url,
                     &config.runtime.log_level,
@@ -170,14 +167,16 @@ impl ExtractorUtil {
                 start_time_utc,
                 end_time_utc,
             } => {
-                let conn_pool =
-                    TaskUtil::create_mysql_conn_pool(&url, 2, enable_sqlx_log, false).await?;
+                let conn_pool = match extractor_client {
+                    ConnClient::MySQL(conn_pool) => conn_pool,
+                    _ => bail!("connection pool not found"),
+                };
                 let meta_manager = TaskUtil::create_mysql_meta_manager(
                     &url,
                     &config.runtime.log_level,
                     DbType::Mysql,
                     config.meta_center.clone(),
-                    None,
+                    Some(conn_pool.clone()),
                 )
                 .await?;
                 base_extractor.time_filter = TimeFilter::new(&start_time_utc, &end_time_utc)?;
@@ -195,9 +194,9 @@ impl ExtractorUtil {
                     heartbeat_tb,
                     syncer,
                     base_extractor,
-                    resumer: cdc_resumer,
                     gtid_enabled,
                     gtid_set,
+                    recovery,
                 };
                 Box::new(extractor)
             }
@@ -212,13 +211,7 @@ impl ExtractorUtil {
                 let conn_pool = match extractor_client {
                     ConnClient::PostgreSQL(conn_pool) => conn_pool,
                     _ => {
-                        TaskUtil::create_pg_conn_pool(
-                            &url,
-                            DEFAULT_MAX_CONNECTIONS,
-                            enable_sqlx_log,
-                            false,
-                        )
-                        .await?
+                        bail!("connection pool not found");
                     }
                 };
                 let meta_manager =
@@ -226,24 +219,28 @@ impl ExtractorUtil {
                 let extractor = PgSnapshotExtractor {
                     conn_pool,
                     meta_manager,
-                    resumer: snapshot_resumer,
                     batch_size,
                     sample_interval,
                     schema,
                     tb,
                     base_extractor,
                     filter,
+                    recovery,
                 };
                 Box::new(extractor)
             }
 
             ExtractorConfig::PgCheck {
-                url,
                 check_log_dir,
                 batch_size,
+                ..
             } => {
-                let conn_pool =
-                    TaskUtil::create_pg_conn_pool(&url, 2, enable_sqlx_log, false).await?;
+                let conn_pool = match extractor_client {
+                    ConnClient::PostgreSQL(conn_pool) => conn_pool,
+                    _ => {
+                        bail!("connection pool not found");
+                    }
+                };
                 let meta_manager = PgMetaManager::new(conn_pool.clone()).await?;
                 let extractor = PgCheckExtractor {
                     conn_pool,
@@ -269,8 +266,10 @@ impl ExtractorUtil {
                 start_time_utc,
                 end_time_utc,
             } => {
-                let conn_pool =
-                    TaskUtil::create_pg_conn_pool(&url, 2, enable_sqlx_log, false).await?;
+                let conn_pool = match extractor_client {
+                    ConnClient::PostgreSQL(conn_pool) => conn_pool,
+                    _ => bail!("connection pool not found"),
+                };
                 let meta_manager = PgMetaManager::new(conn_pool.clone()).await?;
                 base_extractor.time_filter = TimeFilter::new(&start_time_utc, &end_time_utc)?;
                 let extractor = PgCdcExtractor {
@@ -287,42 +286,40 @@ impl ExtractorUtil {
                     heartbeat_interval_secs,
                     heartbeat_tb,
                     ddl_meta_tb,
-                    resumer: cdc_resumer,
                     base_extractor,
+                    recovery,
                 };
                 Box::new(extractor)
             }
 
-            ExtractorConfig::MongoSnapshot {
-                url,
-                app_name,
-                db,
-                tb,
-            } => {
+            ExtractorConfig::MongoSnapshot { db, tb, .. } => {
                 let mongo_client = match extractor_client {
                     ConnClient::MongoDB(mongo_client) => mongo_client,
-                    _ => TaskUtil::create_mongo_client(&url, &app_name, None).await?,
+                    _ => bail!("connection pool not found"),
                 };
                 let extractor = MongoSnapshotExtractor {
-                    resumer: snapshot_resumer,
                     db,
                     tb,
                     mongo_client,
                     base_extractor,
+                    recovery,
                 };
                 Box::new(extractor)
             }
 
             ExtractorConfig::MongoCdc {
-                url,
                 app_name,
                 resume_token,
                 start_timestamp,
                 source,
                 heartbeat_interval_secs,
                 heartbeat_tb,
+                ..
             } => {
-                let mongo_client = TaskUtil::create_mongo_client(&url, &app_name, None).await?;
+                let mongo_client = match extractor_client {
+                    ConnClient::MongoDB(mongo_client) => mongo_client,
+                    _ => bail!("connection pool not found"),
+                };
                 let extractor = MongoCdcExtractor {
                     filter,
                     resume_token,
@@ -334,18 +331,20 @@ impl ExtractorUtil {
                     heartbeat_interval_secs,
                     heartbeat_tb,
                     syncer,
-                    resumer: cdc_resumer,
+                    recovery,
                 };
                 Box::new(extractor)
             }
 
             ExtractorConfig::MongoCheck {
-                url,
-                app_name,
                 check_log_dir,
                 batch_size,
+                ..
             } => {
-                let mongo_client = TaskUtil::create_mongo_client(&url, &app_name, None).await?;
+                let mongo_client = match extractor_client {
+                    ConnClient::MongoDB(mongo_client) => mongo_client,
+                    _ => bail!("connection pool not found"),
+                };
                 let extractor = MongoCheckExtractor {
                     mongo_client,
                     check_log_dir,
@@ -356,16 +355,16 @@ impl ExtractorUtil {
             }
 
             ExtractorConfig::MysqlStruct {
-                url,
-                dbs,
-                db_batch_size,
-                ..
+                dbs, db_batch_size, ..
             } => {
+                let conn_pool = match extractor_client {
+                    ConnClient::MySQL(conn_pool) => conn_pool,
+                    _ => {
+                        bail!("connection pool not found");
+                    }
+                };
                 let db_batch_size_validated =
                     MysqlStructExtractor::validate_db_batch_size(db_batch_size)?;
-                // TODO, pass max_connections as parameter
-                let conn_pool =
-                    TaskUtil::create_mysql_conn_pool(&url, 2, enable_sqlx_log, false).await?;
                 let extractor = MysqlStructExtractor {
                     conn_pool,
                     dbs,
@@ -377,17 +376,19 @@ impl ExtractorUtil {
             }
 
             ExtractorConfig::PgStruct {
-                url,
                 schemas,
                 do_global_structs,
                 db_batch_size,
                 ..
             } => {
+                let conn_pool = match extractor_client {
+                    ConnClient::PostgreSQL(conn_pool) => conn_pool,
+                    _ => {
+                        bail!("connection pool not found");
+                    }
+                };
                 let db_batch_size_validated =
                     PgStructExtractor::validate_db_batch_size(db_batch_size)?;
-                // TODO, pass max_connections as parameter
-                let conn_pool =
-                    TaskUtil::create_pg_conn_pool(&url, 2, enable_sqlx_log, false).await?;
                 let extractor = PgStructExtractor {
                     conn_pool,
                     schemas,
@@ -405,7 +406,6 @@ impl ExtractorUtil {
                     syncer,
                     repl_port,
                     filter,
-                    resumer: cdc_resumer,
                     base_extractor,
                     extract_type: ExtractType::Snapshot,
                     repl_id: String::new(),
@@ -414,6 +414,7 @@ impl ExtractorUtil {
                     keepalive_interval_secs: 0,
                     heartbeat_interval_secs: 0,
                     heartbeat_key: String::new(),
+                    recovery,
                 };
                 Box::new(extractor)
             }
@@ -465,9 +466,9 @@ impl ExtractorUtil {
                     repl_port,
                     now_db_id,
                     filter,
-                    resumer: cdc_resumer,
                     base_extractor,
                     extract_type: ExtractType::Cdc,
+                    recovery,
                 };
                 Box::new(extractor)
             }
@@ -485,7 +486,6 @@ impl ExtractorUtil {
                     syncer,
                     repl_port,
                     filter,
-                    resumer: cdc_resumer,
                     base_extractor,
                     extract_type: ExtractType::SnapshotAndCdc,
                     repl_id,
@@ -494,6 +494,7 @@ impl ExtractorUtil {
                     keepalive_interval_secs,
                     heartbeat_interval_secs,
                     heartbeat_key,
+                    recovery,
                 };
                 Box::new(extractor)
             }
@@ -525,8 +526,8 @@ impl ExtractorUtil {
                     ack_interval_secs,
                     avro_converter,
                     syncer,
-                    resumer: cdc_resumer,
                     base_extractor,
+                    recovery,
                 };
                 Box::new(extractor)
             }
@@ -544,9 +545,9 @@ impl ExtractorUtil {
                     tb,
                     s3_config,
                     s3_client,
-                    resumer: snapshot_resumer,
                     base_extractor,
                     batch_size,
+                    recovery,
                 };
                 Box::new(extractor)
             }

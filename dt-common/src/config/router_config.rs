@@ -1,4 +1,4 @@
-#[derive(Clone)]
+#[derive(Clone, Hash)]
 pub enum RouterConfig {
     Rdb {
         schema_map: String,
