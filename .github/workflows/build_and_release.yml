@@ -43,6 +43,12 @@ jobs:
       - name: Set up Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Install cross
+        if: matrix.target == 'x86_64-unknown-linux-gnu' || matrix.target == 'aarch64-unknown-linux-gnu' || matrix.target == 'x86_64-pc-windows-gnu'
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cross
+
       # Build linux targets by cross, otherwise there may be runtime errors when running on other linux versions:
       # ./ape-dts: /lib/x86_64-linux-gnu/libm.so.6: version `GLIBC_2.38' not found (required by ./ape-dts)
       # ./ape-dts: /lib/x86_64-linux-gnu/libc.so.6: version `GLIBC_2.38' not found (required by ./ape-dts)
