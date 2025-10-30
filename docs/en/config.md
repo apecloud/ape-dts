@@ -10,6 +10,7 @@ Different tasks may require extra configs, refer to [task templates](/docs/templ
 | db_type | source database type| mysql | - |
 | extract_type | snapshot, cdc | snapshot | - |
 | url | database url | mysql://root:123456@127.0.0.1:3307 | - |
+| max_connections | max connections for source database | 10 | currently 10, may be dynamically adjusted in the future |
 | batch_size | number of extracted records in a batch | 10000 | same as [pipeline] buffer_size |
 
 ## URL escaping
@@ -26,6 +27,7 @@ url=mysql://user1:abc%25%24%23%3F%40@127.0.0.1:3307?ssl-mode=disabled
 | db_type | target database type | mysql | - |
 | sink_type | write, check | write | write |
 | url | database url | mysql://root:123456@127.0.0.1:3308 | - |
+| max_connections | max connections for source database | 10 | currently 10, may be dynamically adjusted in the future |
 | batch_size | number of records written in a batch, 1 for serial | 200 | 200 |
 | replace | when inserting data, whether to force replacement if data already exists in target database, used in snapshot/cdc tasks for MySQL/PG | false | true |
 

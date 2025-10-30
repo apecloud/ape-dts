@@ -612,7 +612,8 @@ impl ConnClient {
         let extractor_client = match &task_config.extractor {
             ExtractorConfig::MysqlSnapshot { url, .. }
             | ExtractorConfig::MysqlStruct { url, .. }
-            | ExtractorConfig::MysqlCheck { url, .. } => ConnClient::MySQL(
+            | ExtractorConfig::MysqlCheck { url, .. }
+            | ExtractorConfig::MysqlCdc { url, .. } => ConnClient::MySQL(
                 TaskUtil::create_mysql_conn_pool(
                     url,
                     extractor_max_connections,
@@ -623,7 +624,8 @@ impl ConnClient {
             ),
             ExtractorConfig::PgSnapshot { url, .. }
             | ExtractorConfig::PgStruct { url, .. }
-            | ExtractorConfig::PgCheck { url, .. } => ConnClient::PostgreSQL(
+            | ExtractorConfig::PgCheck { url, .. }
+            | ExtractorConfig::PgCdc { url, .. } => ConnClient::PostgreSQL(
                 TaskUtil::create_pg_conn_pool(
                     url,
                     extractor_max_connections,
@@ -632,14 +634,18 @@ impl ConnClient {
                 )
                 .await?,
             ),
-            ExtractorConfig::MongoSnapshot { url, app_name, .. } => ConnClient::MongoDB(
+            ExtractorConfig::MongoSnapshot { url, app_name, .. }
+            | ExtractorConfig::MongoCheck { url, app_name, .. }
+            | ExtractorConfig::MongoCdc { url, app_name, .. } => ConnClient::MongoDB(
                 TaskUtil::create_mongo_client(url, app_name, Some(extractor_max_connections))
                     .await?,
             ),
             _ => ConnClient::None,
         };
         let sinker_client = match &task_config.sinker {
-            SinkerConfig::Mysql { url, .. } => ConnClient::MySQL(
+            SinkerConfig::Mysql { url, .. }
+            | SinkerConfig::MysqlStruct { url, .. }
+            | SinkerConfig::MysqlCheck { url, .. } => ConnClient::MySQL(
                 TaskUtil::create_mysql_conn_pool(
                     url,
                     sinker_max_connections,
@@ -648,11 +654,14 @@ impl ConnClient {
                 )
                 .await?,
             ),
-            SinkerConfig::Pg { url, .. } => ConnClient::PostgreSQL(
+            SinkerConfig::Pg { url, .. }
+            | SinkerConfig::PgStruct { url, .. }
+            | SinkerConfig::PgCheck { url, .. } => ConnClient::PostgreSQL(
                 TaskUtil::create_pg_conn_pool(url, sinker_max_connections, enable_sqlx_log, false)
                     .await?,
             ),
-            SinkerConfig::Mongo { url, app_name, .. } => ConnClient::MongoDB(
+            SinkerConfig::Mongo { url, app_name, .. }
+            | SinkerConfig::MongoCheck { url, app_name, .. } => ConnClient::MongoDB(
                 TaskUtil::create_mongo_client(url, app_name, Some(sinker_max_connections)).await?,
             ),
             _ => ConnClient::None,
