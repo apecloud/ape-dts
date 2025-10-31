@@ -10,7 +10,6 @@ use dt_common::{
 };
 use opendal::options::ListOptions;
 use opendal::Operator;
-use tokio::io::AsyncReadExt;
 
 use crate::{
     extractor::{base_extractor::BaseExtractor, resumer::recovery::Recovery},

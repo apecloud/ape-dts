@@ -539,7 +539,7 @@ WHERE
             .bucket(&s3_config.bucket)
             .endpoint(&s3_config.endpoint);
 
-        Ok(builder.build()?)
+        Ok(Operator::new(builder)?.finish())
     }
 
     pub async fn build_resumer(
