@@ -2897,9 +2897,8 @@ dependencies = [
 
 [[package]]
 name = "mysql-binlog-connector-rust"
-version = "0.3.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c8f744687497026987f8e63b69b0f85d8b3199de798ef1f072248e142eb9e9c0"
+version = "0.3.3"
+source = "git+https://github.com/apecloud/mysql-binlog-connector-rust?tag=v0.3.3#35534a20f7ddd1db4593145026706cb339057d82"
 dependencies = [
  "async-recursion",
  "async-std",
@@ -2916,6 +2915,7 @@ dependencies = [
  "serial_test",
  "sha1",
  "sha2 0.10.9",
+ "socket2 0.6.1",
  "thiserror 1.0.69",
  "url",
  "zstd 0.13.3",
@@ -4535,6 +4535,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "socket2"
+version = "0.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "17129e116933cf371d018bb80ae557e889637989d8638274fb25622827b03881"
+dependencies = [
+ "libc",
+ "windows-sys 0.60.2",
+]
+
+[[package]]
 name = "spin"
 version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5616,6 +5626,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1e38bc4d79ed67fd075bcc251a1c39b32a1776bbe92e5bef1f0bf1f8c531853b"
 dependencies = [
  "windows-targets 0.52.6",
+]
+
+[[package]]
+name = "windows-sys"
+version = "0.60.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f2f500e4d28234f72040990ec9d39e3a6b950f9f22d3dba18416c35882612bcb"
+dependencies = [
+ "windows-targets 0.53.2",
 ]
 
 [[package]]
