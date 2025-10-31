@@ -206,6 +206,16 @@ impl TaskConfig {
                     ),
                     heartbeat_interval_secs,
                     heartbeat_tb,
+                    keepalive_idle_secs: loader.get_with_default(
+                        EXTRACTOR,
+                        "keepalive_idle_secs",
+                        60,
+                    ),
+                    keepalive_interval_secs: loader.get_with_default(
+                        EXTRACTOR,
+                        "keepalive_interval_secs",
+                        10,
+                    ),
                     start_time_utc: loader.get_optional(EXTRACTOR, "start_time_utc"),
                     end_time_utc: loader.get_optional(EXTRACTOR, "end_time_utc"),
                 },
