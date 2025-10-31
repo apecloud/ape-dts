@@ -35,17 +35,15 @@ impl Extractor for PgStructExtractor {
             .chunks(self.db_batch_size)
             .map(|chunk| chunk.to_vec())
             .collect();
-        let do_global_structs = schema_chunks.len() - 1;
-        for (flag, schema_chunk) in schema_chunks.into_iter().enumerate() {
+        let last_idx = schema_chunks.len().saturating_sub(1);
+        for (idx, schema_chunk) in schema_chunks.into_iter().enumerate() {
             log_info!(
                 "PgStructExtractor extracts schemas: {}",
                 schema_chunk.join(",")
             );
-            self.extract_internal(
-                schema_chunk.into_iter().collect(),
-                flag == do_global_structs,
-            )
-            .await?;
+            let do_global_struct = idx == last_idx && self.do_global_structs;
+            self.extract_internal(schema_chunk.into_iter().collect(), do_global_struct)
+                .await?;
         }
         self.base_extractor.wait_task_finish().await
     }

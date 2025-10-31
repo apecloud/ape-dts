@@ -222,6 +222,8 @@ impl MysqlCdcExtractor {
                 for event in w.rows.iter_mut() {
                     let table_map_event = ctx.table_map_event_map.get(&w.table_id).unwrap();
                     if self.filter_event(table_map_event, RowType::Insert) {
+                        self.base_extractor
+                            .record_extracted_metrics(1, size_of_val(event) as u64);
                         continue;
                     }
 
@@ -243,6 +245,8 @@ impl MysqlCdcExtractor {
                 for event in u.rows.iter_mut() {
                     let table_map_event = ctx.table_map_event_map.get(&u.table_id).unwrap();
                     if self.filter_event(table_map_event, RowType::Update) {
+                        self.base_extractor
+                            .record_extracted_metrics(1, size_of_val(event) as u64);
                         continue;
                     }
 
@@ -267,6 +271,8 @@ impl MysqlCdcExtractor {
                 for event in d.rows.iter_mut() {
                     let table_map_event = ctx.table_map_event_map.get(&d.table_id).unwrap();
                     if self.filter_event(table_map_event, RowType::Delete) {
+                        self.base_extractor
+                            .record_extracted_metrics(1, size_of_val(event) as u64);
                         continue;
                     }
 

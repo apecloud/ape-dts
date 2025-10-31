@@ -28,10 +28,12 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set up rust
-        uses: dtolnay/rust-toolchain@1.85.0
+        uses: dtolnay/rust-toolchain@stable
 
       - name: Install cross
-        run: cargo install cross --version 0.2.5
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cross
 
       - name: Build for x86_64
         if: contains(inputs.platforms, 'linux/amd64')

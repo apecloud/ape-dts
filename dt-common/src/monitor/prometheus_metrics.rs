@@ -39,37 +39,36 @@ impl PrometheusMetrics {
                 self.metrics.insert(metrics_type, metrics);
             };
 
-        // TODO: support these metrics:
-        // register_handler(
-        //     "extractor_rps_max",
-        //     "the max records per second of extractor",
-        //     TaskMetricsType::ExtractorRpsMax,
-        // );
-        // register_handler(
-        //     "extractor_rps_min",
-        //     "the min records per second of extractor",
-        //     TaskMetricsType::ExtractorRpsMin,
-        // );
-        // register_handler(
-        //     "extractor_rps_avg",
-        //     "the average records per second of extractor",
-        //     TaskMetricsType::ExtractorRpsAvg,
-        // );
-        // register_handler(
-        //     "extractor_bps_max",
-        //     "the max bytes per second of extractor",
-        //     TaskMetricsType::ExtractorBpsMax,
-        // );
-        // register_handler(
-        //     "extractor_bps_min",
-        //     "the min bytes per second of extractor",
-        //     TaskMetricsType::ExtractorBpsMin,
-        // );
-        // register_handler(
-        //     "extractor_bps_avg",
-        //     "the average bytes per second of extractor",
-        //     TaskMetricsType::ExtractorBpsAvg,
-        // );
+        register_handler(
+            "extractor_rps_max",
+            "the max records per second of extractor",
+            TaskMetricsType::ExtractorRpsMax,
+        );
+        register_handler(
+            "extractor_rps_min",
+            "the min records per second of extractor",
+            TaskMetricsType::ExtractorRpsMin,
+        );
+        register_handler(
+            "extractor_rps_avg",
+            "the average records per second of extractor",
+            TaskMetricsType::ExtractorRpsAvg,
+        );
+        register_handler(
+            "extractor_bps_max",
+            "the max bytes per second of extractor",
+            TaskMetricsType::ExtractorBpsMax,
+        );
+        register_handler(
+            "extractor_bps_min",
+            "the min bytes per second of extractor",
+            TaskMetricsType::ExtractorBpsMin,
+        );
+        register_handler(
+            "extractor_bps_avg",
+            "the average bytes per second of extractor",
+            TaskMetricsType::ExtractorBpsAvg,
+        );
 
         register_handler(
             "extractor_pushed_rps_max",

@@ -2,33 +2,31 @@ use strum::{Display, EnumString, IntoStaticStr};
 
 #[derive(EnumString, IntoStaticStr, Display, PartialEq, Eq, Hash, Clone)]
 pub enum CounterType {
-    // time window counter, aggregate by: sum by window
+    // time window counter, aggregate by: sum, avg/max/min by second
     #[strum(serialize = "batch_write_failures")]
     BatchWriteFailures,
     #[strum(serialize = "serial_writes")]
     SerialWrites,
-
-    // time window counter, aggregate by: avg by window
     #[strum(serialize = "record_count")]
     RecordCount,
+    #[strum(serialize = "data_bytes")]
+    DataBytes,
+    #[strum(serialize = "extracted_records")]
+    ExtractedRecords,
+    #[strum(serialize = "extracted_bytes")]
+    ExtractedBytes,
 
-    // time window counter, aggregate by: avg by count
+    // time window counter, aggregate by: sum, avg/max/min by count
     #[strum(serialize = "records_per_query")]
     RecordsPerQuery,
     #[strum(serialize = "rt_per_query")]
     RtPerQuery,
     #[strum(serialize = "buffer_size")]
     BufferSize,
-    #[strum(serialize = "data_bytes")]
-    DataBytes,
+
+    // time window counter, aggregate by: avg by count
     #[strum(serialize = "record_size")]
     RecordSize,
-
-    // TODO:
-    #[strum(serialize = "extracted_records")]
-    ExtractedRecords,
-    #[strum(serialize = "extracted_bytes")]
-    ExtractedBytes,
 
     // no window counter
     #[strum(serialize = "plan_records")]
