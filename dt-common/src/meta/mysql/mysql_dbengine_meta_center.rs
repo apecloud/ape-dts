@@ -60,7 +60,7 @@ impl MysqlDbEngineMetaCenter {
         let query = sqlx::query(&ddl_data.query);
         if let Err(error) = query.execute(&conn_pool).await {
             if self.ddl_conflict_policy == ConflictPolicyEnum::Ignore {
-                log_error!("failed to sync dll to meta_center: {}", error);
+                log_error!("failed to sync ddl to meta_center: {}", error);
             } else {
                 conn_pool.close().await;
                 bail!(error);

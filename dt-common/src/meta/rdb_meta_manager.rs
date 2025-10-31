@@ -72,7 +72,13 @@ impl RdbMetaManager {
     pub fn parse_rdb_cols(
         key_map: &HashMap<String, Vec<String>>,
         cols: &[String],
-    ) -> anyhow::Result<(Option<String>, String, Vec<String>)> {
+    ) -> anyhow::Result<(
+        Option<String>,
+        Vec<String>,
+        String,
+        Vec<String>,
+        Vec<String>,
+    )> {
         let mut id_cols = Vec::new();
         if let Some(cols) = key_map.get("primary") {
             // use primary key
@@ -92,11 +98,24 @@ impl RdbMetaManager {
             None
         };
 
+        let (order_cols, partition_cols) = if id_cols.is_empty() {
+            (Vec::new(), Vec::new())
+        } else {
+            (id_cols.clone(), id_cols.clone())
+        };
+
         if id_cols.is_empty() {
             id_cols = cols.to_owned();
         }
 
         let partition_col = id_cols[0].clone();
-        Ok((order_col, partition_col, id_cols))
+
+        Ok((
+            order_col,
+            order_cols,
+            partition_col,
+            partition_cols,
+            id_cols,
+        ))
     }
 }
