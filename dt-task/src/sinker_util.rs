@@ -3,7 +3,6 @@ use std::{str::FromStr, sync::Arc};
 use anyhow::{bail, Context};
 use kafka::producer::{Producer, RequiredAcks};
 use reqwest::{redirect::Policy, Url};
-use rusoto_s3::S3Client;
 use sqlx::types::chrono::Utc;
 use tokio::sync::{Mutex, RwLock};
 
@@ -600,7 +599,7 @@ impl SinkerUtil {
                     false,
                 )
                 .await?;
-                let s3_client = TaskUtil::create_s3_client(&s3_config);
+                let s3_client = TaskUtil::create_s3_client(&s3_config)?;
                 let orc_sequencer = Arc::new(Mutex::new(OrcSequencer::new()));
 
                 for _ in 0..parallel_size {
@@ -665,7 +664,7 @@ impl SinkerUtil {
                     false,
                 )
                 .await?;
-                let s3_client: S3Client = TaskUtil::create_s3_client(&s3_config);
+                let s3_client = TaskUtil::create_s3_client(&s3_config)?;
                 let reverse_router = create_router!(task_config, Mysql).reverse();
                 let orc_sequencer = Arc::new(Mutex::new(OrcSequencer::new()));
 
@@ -709,7 +708,7 @@ impl SinkerUtil {
                     false,
                 )
                 .await?;
-                let s3_client = TaskUtil::create_s3_client(&s3_config);
+                let s3_client = TaskUtil::create_s3_client(&s3_config)?;
 
                 for _ in 0..parallel_size {
                     let sinker = FoxlakeMerger {

@@ -8,8 +8,8 @@ use dt_common::{
     meta::{dt_data::DtData, foxlake::s3_file_meta::S3FileMeta, position::Position},
     utils::time_util::TimeUtil,
 };
-use rusoto_s3::{GetObjectRequest, ListObjectsV2Request, S3Client, S3};
-use tokio::io::AsyncReadExt;
+use opendal::options::ListOptions;
+use opendal::Operator;
 
 use crate::{
     extractor::{base_extractor::BaseExtractor, resumer::recovery::Recovery},
@@ -17,8 +17,8 @@ use crate::{
 };
 
 pub struct FoxlakeS3Extractor {
-    pub s3_client: S3Client,
     pub s3_config: S3Config,
+    pub s3_client: Operator,
     pub base_extractor: BaseExtractor,
     pub batch_size: usize,
     pub schema: String,
@@ -117,22 +117,13 @@ impl FoxlakeS3Extractor {
     }
 
     async fn get_meta(&self, key: &str) -> anyhow::Result<S3FileMeta> {
-        let request = GetObjectRequest {
-            bucket: self.s3_config.bucket.clone(),
-            key: key.to_string(),
-            ..Default::default()
-        };
         let output = self
             .s3_client
-            .get_object(request)
+            .read(key)
             .await
             .with_context(|| format!("failed to get s3 object, key: {}", &key))?;
 
-        let mut content = String::new();
-        if let Some(body) = output.body {
-            body.into_async_read().read_to_string(&mut content).await?;
-        }
-
+        let content = String::from_utf8(output.to_vec())?;
         S3FileMeta::from_str(&content).with_context(|| format!("invalid s3 file meta: [{}]", key))
     }
 
@@ -147,16 +138,17 @@ impl FoxlakeS3Extractor {
             &prefix,
             start_after
         );
-        let request = ListObjectsV2Request {
-            bucket: self.s3_config.bucket.clone(),
-            max_keys: Some(self.batch_size as i64),
-            prefix: Some(prefix.clone()),
-            start_after: start_after.clone(),
-            ..Default::default()
-        };
-        let output = self
+
+        let contents = self
             .s3_client
-            .list_objects_v2(request)
+            .list_options(
+                &prefix,
+                ListOptions {
+                    start_after: start_after.clone(),
+                    limit: Some(self.batch_size),
+                    ..Default::default()
+                },
+            )
             .await
             .with_context(|| {
                 format!(
@@ -166,12 +158,9 @@ impl FoxlakeS3Extractor {
             })?;
 
         let mut file_names = Vec::new();
-        if let Some(contents) = output.contents {
-            for i in contents {
-                if let Some(key) = i.key {
-                    file_names.push(key);
-                }
-            }
+        for entry in contents {
+            let (path, _) = entry.into_parts();
+            file_names.push(path);
         }
 
         log_debug!(
@@ -179,6 +168,7 @@ impl FoxlakeS3Extractor {
             file_names.len(),
             file_names.last()
         );
+
         Ok(file_names)
     }
 

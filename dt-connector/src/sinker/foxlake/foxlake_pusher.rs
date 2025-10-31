@@ -3,12 +3,11 @@ use std::{cmp, str::FromStr, sync::Arc};
 use anyhow::{Context, Ok};
 use async_trait::async_trait;
 use chrono::{DateTime, Datelike, Timelike, Utc};
+use opendal::Operator;
 use orc_format::{
     schema::{Field, Schema},
     writer::{data::GenericData, Config, Writer},
 };
-use rusoto_core::ByteStream;
-use rusoto_s3::{PutObjectRequest, S3Client, S3};
 use rust_decimal::Decimal;
 use tokio::{sync::Mutex, time::Instant};
 use uuid::Uuid;
@@ -44,7 +43,7 @@ pub struct FoxlakePusher {
     pub batch_size: usize,
     pub meta_manager: MysqlMetaManager,
     pub monitor: Arc<Monitor>,
-    pub s3_client: S3Client,
+    pub s3_client: Operator,
     pub s3_config: S3Config,
     pub extract_type: ExtractType,
     pub batch_memory_bytes: usize,
@@ -72,13 +71,7 @@ impl Sinker for FoxlakePusher {
         if let Some(schema) = &self.schema {
             if let Some(tb) = &self.tb {
                 let finished_meta = self.get_finished_meta_info(schema, tb);
-                Self::put_to_s3(
-                    &self.s3_client,
-                    &self.s3_config.bucket,
-                    &finished_meta,
-                    Vec::new(),
-                )
-                .await?;
+                Self::put_to_s3(&self.s3_client, &finished_meta, Vec::new()).await?;
             }
         }
 
@@ -105,7 +98,6 @@ impl FoxlakePusher {
         items: Vec<DtItem>,
         async_push: bool,
     ) -> anyhow::Result<(Vec<S3FileMeta>, usize)> {
-        let bucket = self.s3_config.bucket.clone();
         let mut s3_file_metas = Vec::new();
         let mut futures = Vec::new();
 
@@ -184,17 +176,16 @@ impl FoxlakePusher {
             // push to s3
             if async_push {
                 let s3_client = self.s3_client.clone();
-                let bucket = bucket.clone();
                 let s3_file_meta = s3_file_meta.clone();
                 let future = tokio::spawn(async move {
-                    Self::push(&s3_client, &bucket, &s3_file_meta, orc_data)
+                    Self::push(&s3_client, &s3_file_meta, orc_data)
                         .await
                         .unwrap();
                 });
                 futures.push(future);
             } else {
                 let start_time = Instant::now();
-                Self::push(&self.s3_client, &bucket, &s3_file_meta, orc_data).await?;
+                Self::push(&self.s3_client, &s3_file_meta, orc_data).await?;
                 rts.push((start_time.elapsed().as_millis() as u64, 1));
             }
 
@@ -218,15 +209,13 @@ impl FoxlakePusher {
     }
 
     async fn push(
-        s3_client: &S3Client,
-        bucket: &str,
+        s3_client: &Operator,
         s3_file_meta: &S3FileMeta,
         orc_data: Vec<u8>,
     ) -> anyhow::Result<()> {
-        Self::put_to_s3(s3_client, bucket, &s3_file_meta.data_file_name, orc_data).await?;
+        Self::put_to_s3(s3_client, &s3_file_meta.data_file_name, orc_data).await?;
         Self::put_to_s3(
             s3_client,
-            bucket,
             &s3_file_meta.meta_file_name,
             s3_file_meta.to_string().as_bytes().to_vec(),
         )
@@ -549,25 +538,12 @@ impl FoxlakePusher {
         dir
     }
 
-    async fn put_to_s3(
-        s3_client: &S3Client,
-        bucket: &str,
-        key: &str,
-        data: Vec<u8>,
-    ) -> anyhow::Result<()> {
-        let byte_stream = ByteStream::from(data);
-        let request = PutObjectRequest {
-            bucket: bucket.to_string(),
-            key: key.to_string(),
-            body: Some(byte_stream),
-            ..Default::default()
-        };
-
+    async fn put_to_s3(s3_client: &Operator, key: &str, data: Vec<u8>) -> anyhow::Result<()> {
         s3_client
-            .put_object(request)
+            .write(key, data)
             .await
-            .with_context(|| format!("failed to push: {}", key))?;
-        log_info!("pushed: {}", key);
+            .with_context(|| format!("failed to push: {key}"))?;
+        log_info!("pushed: {key}");
         Ok(())
     }
 }

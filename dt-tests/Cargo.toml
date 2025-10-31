@@ -10,33 +10,29 @@ workspace = true
 metrics = ["dt-task/metrics"]
 
 [dependencies]
-dt-common = {path = "../dt-common", version = "0.1.0"}
-dt-connector = {path = "../dt-connector", version = "0.1.0"}
-dt-precheck = {path = "../dt-precheck", version = "0.1.0"}
-dt-task = {path = "../dt-task", version = "0.1.0"}
+dt-common = { path = "../dt-common", version = "0.1.0" }
+dt-connector = { path = "../dt-connector", version = "0.1.0" }
+dt-precheck = { path = "../dt-precheck", version = "0.1.0" }
+dt-task = { path = "../dt-task", version = "0.1.0" }
 
-anyhow = {workspace = true}
-chrono = {workspace = true}
-clickhouse = {workspace = true, features = ["time"]}
-concurrent-queue = {workspace = true}
-configparser = {workspace = true}
-dotenv = {workspace = true}
-futures = {workspace = true}
-hex = {workspace = true}
-log = {workspace = true}
-log4rs = {workspace = true}
-mongodb = {workspace = true}
-project-root = {workspace = true}
-rdkafka = {workspace = true}
-redis = {workspace = true}
-regex = {workspace = true}
-rusoto_core = {workspace = true}
-rusoto_credential = {workspace = true}
-rusoto_s3 = {workspace = true}
-rusoto_sqs = {workspace = true}
-serde = {workspace = true}
-serde_json = {workspace = true}
-serial_test = {workspace = true}
-sqlx = {workspace = true}
-tokio = {workspace = true}
-url = {workspace = true}
+anyhow = { workspace = true }
+chrono = { workspace = true }
+clickhouse = { workspace = true, features = ["time"] }
+concurrent-queue = { workspace = true }
+configparser = { workspace = true }
+dotenv = { workspace = true }
+futures = { workspace = true }
+hex = { workspace = true }
+log = { workspace = true }
+log4rs = { workspace = true }
+mongodb = { workspace = true }
+project-root = { workspace = true }
+rdkafka = { workspace = true }
+redis = { workspace = true }
+regex = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+serial_test = { workspace = true }
+sqlx = { workspace = true }
+tokio = { workspace = true }
+url = { workspace = true }
