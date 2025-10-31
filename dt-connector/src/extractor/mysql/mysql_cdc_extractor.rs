@@ -157,7 +157,7 @@ impl MysqlCdcExtractor {
             gtid_set: None,
         };
         if self.gtid_enabled {
-            ctx.gtid_set = Some(GtidSet::new(&self.gtid_set.as_str())?);
+            ctx.gtid_set = Some(GtidSet::new(self.gtid_set.as_str())?);
         }
 
         // start heartbeat
