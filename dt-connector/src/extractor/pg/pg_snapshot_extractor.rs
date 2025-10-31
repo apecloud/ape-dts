@@ -16,11 +16,12 @@ use dt_common::{
     meta::{
         adaptor::{pg_col_value_convertor::PgColValueConvertor, sqlx_ext::SqlxPgExt},
         col_value::ColValue,
-        pg::{pg_col_type::PgColType, pg_meta_manager::PgMetaManager, pg_tb_meta::PgTbMeta},
+        pg::{pg_meta_manager::PgMetaManager, pg_tb_meta::PgTbMeta},
         position::Position,
         row_data::RowData,
     },
     rdb_filter::RdbFilter,
+    utils::serialize_util::SerializeUtil,
 };
 
 pub struct PgSnapshotExtractor {
@@ -62,7 +63,8 @@ impl PgSnapshotExtractor {
             .to_owned();
 
         if PgSnapshotExtractor::can_extract_by_batch(&tb_meta) {
-            self.extract_by_batch(&tb_meta).await?;
+            let resume_values = self.get_resume_values(&tb_meta).await?;
+            self.extract_by_batch(&tb_meta, resume_values).await?;
         } else {
             self.extract_all(&tb_meta).await?;
         }
@@ -95,39 +97,63 @@ impl PgSnapshotExtractor {
         Ok(())
     }
 
-    async fn extract_by_batch(&mut self, tb_meta: &PgTbMeta) -> anyhow::Result<()> {
-        let order_col = tb_meta.basic.order_col.as_ref().unwrap();
-        let order_col_type = tb_meta.get_col_type(order_col)?;
-        let resume_value = self
-            .get_resume_value(tb_meta, order_col, order_col_type)
-            .await?;
-
+    async fn extract_by_batch(
+        &mut self,
+        tb_meta: &PgTbMeta,
+        mut resume_values: HashMap<String, ColValue>,
+    ) -> anyhow::Result<()> {
+        let mut start_from_beginning = false;
+        if resume_values.len() != tb_meta.basic.order_cols.len() {
+            log_info!(
+                r#"resume values not match order cols, extract data from "{}"."{}" from beginning"#,
+                self.schema,
+                self.tb
+            );
+            resume_values = tb_meta
+                .basic
+                .order_cols
+                .iter()
+                .map(|col| (col.clone(), ColValue::None))
+                .collect();
+            start_from_beginning = true;
+        }
+        let mut start_values = resume_values;
         log_info!(
-            r#"start extracting data from "{}"."{}" by batch, order_col: {}, start_value: {}"#,
+            r#"start extracting data from "{}"."{}" by batch, order_cols: {}"#,
             self.schema,
             self.tb,
-            order_col,
-            resume_value.to_string()
+            SerializeUtil::serialize_hashmap_to_json(&start_values)?
         );
 
         let mut extracted_count = 0;
-        let mut start_value = resume_value;
         let sql_from_beginning = self.build_extract_sql(tb_meta, false)?;
         let sql_from_value = self.build_extract_sql(tb_meta, true)?;
         let ignore_cols = self.filter.get_ignore_cols(&self.schema, &self.tb);
         loop {
-            let start_value_for_bind = start_value.clone();
-            let query = if let ColValue::None = start_value {
+            let bind_values = start_values.clone();
+            let query = if start_from_beginning {
+                start_from_beginning = false;
                 sqlx::query(&sql_from_beginning)
             } else {
-                sqlx::query(&sql_from_value)
-                    .bind_col_value(Some(&start_value_for_bind), order_col_type)
+                let mut query = sqlx::query(&sql_from_value);
+                for order_col in tb_meta.basic.order_cols.iter() {
+                    let order_col_type = tb_meta.get_col_type(order_col)?;
+                    query = query.bind_col_value(bind_values.get(order_col), order_col_type)
+                }
+                query
             };
 
             let mut rows = query.fetch(&self.conn_pool);
             let mut slice_count = 0usize;
             while let Some(row) = rows.try_next().await? {
-                start_value = PgColValueConvertor::from_query(&row, order_col, order_col_type)?;
+                for order_col in tb_meta.basic.order_cols.iter() {
+                    let order_col_type = tb_meta.get_col_type(order_col)?;
+                    if let Some(value) = start_values.get_mut(order_col) {
+                        *value = PgColValueConvertor::from_query(&row, order_col, order_col_type)?;
+                    } else {
+                        bail!("order col {} not found", order_col);
+                    }
+                }
                 slice_count += 1;
                 extracted_count += 1;
                 // sampling may be used in check scenario
@@ -136,19 +162,7 @@ impl PgSnapshotExtractor {
                 }
 
                 let row_data = RowData::from_pg_row(&row, tb_meta, &ignore_cols);
-                let position = if let Some(value) = start_value.to_option_string() {
-                    Position::RdbSnapshot {
-                        db_type: DbType::Pg.to_string(),
-                        schema: self.schema.clone(),
-                        tb: self.tb.clone(),
-                        order_col: order_col.into(),
-                        value,
-                        order_col_values: HashMap::new(),
-                    }
-                } else {
-                    Position::None
-                };
-
+                let position = self.build_position(tb_meta, &bind_values);
                 self.base_extractor.push_row(row_data, position).await?;
             }
 
@@ -213,24 +227,36 @@ impl PgSnapshotExtractor {
 
     fn build_key_comparison_condition(tb_meta: &PgTbMeta) -> anyhow::Result<String> {
         let order_cols = &tb_meta.basic.order_cols;
-        let mut values = Vec::new();
-        for (i, order_col) in order_cols.iter().enumerate() {
-            let order_col_type = tb_meta.get_col_type(order_col)?;
-            values.push(format!(r#"${}::{}"#, i + 1, order_col_type.alias));
-        }
         if order_cols.len() == 0 {
             bail!("order cols is empty");
         } else if order_cols.len() == 1 {
-            Ok(format!(r#""{}" > {}"#, &order_cols[0], &values[0]))
+            // col_1 > $1::col_1_type
+            Ok(format!(
+                r#""{}" > {}"#,
+                &order_cols[0],
+                format!(
+                    r#"$1::{}"#,
+                    tb_meta.get_col_type(&order_cols[0]).unwrap().alias
+                )
+            ))
         } else {
+            // (col_1, col_2, col_3) > ($1::col_1_type, $2::col_2_type, $3::col_3_type)
             Ok(format!(
                 r#"({}) > ({})"#,
                 order_cols
                     .iter()
-                    .map(|s| format!(r#""{}""#, s))
+                    .map(|col| format!(r#""{}""#, col))
                     .collect::<Vec<String>>()
                     .join(", "),
-                values.join(", ")
+                order_cols
+                    .iter()
+                    .enumerate()
+                    .map(|(i, col)| {
+                        let col_type = tb_meta.get_col_type(col).unwrap();
+                        format!(r#"${}::{}"#, i + 1, col_type.alias)
+                    })
+                    .collect::<Vec<String>>()
+                    .join(", ")
             ))
         }
     }
@@ -242,39 +268,71 @@ impl PgSnapshotExtractor {
         } else if order_cols.len() == 1 {
             Ok(format!(r#""{}" ASC"#, &order_cols[0]))
         } else {
+            // col_1 ASC, col_2 ASC, col_3 ASC
+            // (col_1, col_2, col_3) ASC does not trigger index scan
             Ok(order_cols
                 .iter()
-                .map(|s| format!(r#""{}" ASC"#, s))
+                .map(|col| format!(r#""{}" ASC"#, col))
                 .collect::<Vec<String>>()
                 .join(", "))
         }
     }
 
-    async fn get_resume_value(
+    async fn get_resume_values(
         &mut self,
         tb_meta: &PgTbMeta,
-        order_col: &str,
-        order_col_type: &PgColType,
-    ) -> anyhow::Result<ColValue> {
+    ) -> anyhow::Result<HashMap<String, ColValue>> {
+        let mut resume_values: HashMap<String, ColValue> = HashMap::new();
         if let Some(handler) = &self.recovery {
-            if let Some(value) = handler
-                .get_snapshot_resume_position(&self.schema, &self.tb, order_col, false)
-                .await
-            {
-                log_info!(
-                    "[{}.{}] recovery from [{}]:[{}]",
-                    self.schema,
-                    self.tb,
-                    order_col,
-                    value
-                );
-
-                PgColValueConvertor::from_str(order_col_type, &value, &mut self.meta_manager)
-            } else {
-                Ok(ColValue::None)
+            for order_col in &tb_meta.basic.order_cols {
+                if let Some(value) = handler
+                    .get_snapshot_resume_position(&self.schema, &self.tb, order_col, false)
+                    .await
+                {
+                    resume_values.insert(
+                        order_col.to_string(),
+                        PgColValueConvertor::from_str(
+                            tb_meta.get_col_type(order_col)?,
+                            &value,
+                            &mut self.meta_manager,
+                        )?,
+                    );
+                }
             }
-        } else {
-            Ok(ColValue::None)
+        }
+        if resume_values.len() == 0 {
+            return Ok(HashMap::new());
+        }
+        log_info!(
+            "[{}.{}] recovery from [{}]",
+            self.schema,
+            self.tb,
+            SerializeUtil::serialize_hashmap_to_json(&resume_values)?
+        );
+        Ok(resume_values)
+    }
+
+    fn build_position(
+        &self,
+        tb_meta: &PgTbMeta,
+        bind_values: &HashMap<String, ColValue>,
+    ) -> Position {
+        let mut order_col_values = HashMap::new();
+        for order_col in &tb_meta.basic.order_cols {
+            if let Some(value) = bind_values.get(order_col) {
+                order_col_values.insert(order_col.to_string(), value.to_option_string());
+            } else {
+                // Do not record rows whose composite unique columns have NULL values.
+                return Position::None;
+            }
+        }
+        Position::RdbSnapshot {
+            db_type: DbType::Pg.to_string(),
+            schema: self.schema.clone(),
+            tb: self.tb.clone(),
+            order_col: String::new(),
+            value: String::new(),
+            order_col_values,
         }
     }
 }
