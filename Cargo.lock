@@ -2928,9 +2928,8 @@ dependencies = [
 
 [[package]]
 name = "mysql-binlog-connector-rust"
-version = "0.3.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c8f744687497026987f8e63b69b0f85d8b3199de798ef1f072248e142eb9e9c0"
+version = "0.3.3"
+source = "git+https://github.com/apecloud/mysql-binlog-connector-rust?tag=v0.3.3#35534a20f7ddd1db4593145026706cb339057d82"
 dependencies = [
  "async-recursion",
  "async-std",
@@ -2947,6 +2946,7 @@ dependencies = [
  "serial_test",
  "sha1",
  "sha2 0.10.9",
+ "socket2 0.6.1",
  "thiserror 1.0.69",
  "url",
  "zstd 0.13.3",
@@ -5879,15 +5879,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f2f500e4d28234f72040990ec9d39e3a6b950f9f22d3dba18416c35882612bcb"
 dependencies = [
  "windows-targets 0.53.2",
-]
-
-[[package]]
-name = "windows-sys"
-version = "0.61.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ae137229bcbd6cdf0f7b80a31df61766145077ddf49416a728b02cb3921ff3fc"
-dependencies = [
- "windows-link 0.2.1",
 ]
 
 [[package]]

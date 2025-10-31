@@ -5,6 +5,7 @@ use std::{
         atomic::{AtomicBool, Ordering},
         Arc,
     },
+    time::Duration,
 };
 
 use anyhow::bail;
@@ -12,6 +13,15 @@ use async_recursion::async_recursion;
 use async_trait::async_trait;
 use sqlx::{mysql::MySqlArguments, query::Query, MySql, Pool};
 use tokio::{sync::Mutex, time::Instant};
+
+use mysql_binlog_connector_rust::{
+    binlog_client::{BinlogClient, StartPosition},
+    command::gtid_set::GtidSet,
+    event::{
+        event_data::EventData, event_header::EventHeader, query_event::QueryEvent,
+        row_event::RowEvent, table_map_event::TableMapEvent,
+    },
+};
 
 use crate::{
     extractor::{
@@ -31,14 +41,6 @@ use dt_common::{
     rdb_filter::RdbFilter,
     utils::time_util::TimeUtil,
 };
-use mysql_binlog_connector_rust::{
-    binlog_client::BinlogClient,
-    command::gtid_set::GtidSet,
-    event::{
-        event_data::EventData, event_header::EventHeader, query_event::QueryEvent,
-        row_event::RowEvent, table_map_event::TableMapEvent,
-    },
-};
 
 pub struct MysqlCdcExtractor {
     pub base_extractor: BaseExtractor,
@@ -55,6 +57,8 @@ pub struct MysqlCdcExtractor {
     pub binlog_timeout_secs: u64,
     pub heartbeat_interval_secs: u64,
     pub heartbeat_tb: String,
+    pub keepalive_idle_secs: u64,
+    pub keepalive_interval_secs: u64,
     pub syncer: Arc<Mutex<Syncer>>,
     pub recovery: Option<Arc<dyn Recovery + Send + Sync>>,
 }
@@ -129,17 +133,23 @@ impl Extractor for MysqlCdcExtractor {
 
 impl MysqlCdcExtractor {
     async fn extract_internal(&mut self) -> anyhow::Result<()> {
-        let mut client = BinlogClient {
-            url: self.url.clone(),
-            binlog_filename: self.binlog_filename.clone(),
-            binlog_position: self.binlog_position,
-            server_id: self.server_id,
-            gtid_enabled: self.gtid_enabled,
-            gtid_set: self.gtid_set.clone(),
-            heartbeat_interval_secs: self.binlog_heartbeat_interval_secs,
-            timeout_secs: self.binlog_timeout_secs,
+        let start_position = if self.gtid_enabled && !self.gtid_set.is_empty() {
+            StartPosition::Gtid(self.gtid_set.clone())
+        } else if !self.binlog_filename.is_empty() && self.binlog_position > 0 {
+            StartPosition::BinlogPosition(self.binlog_filename.clone(), self.binlog_position)
+        } else {
+            StartPosition::Latest {}
         };
-        let mut stream = client.connect().await?;
+
+        let mut stream = BinlogClient::new(&self.url, self.server_id, start_position)
+            .with_master_heartbeat(Duration::from_secs(self.binlog_heartbeat_interval_secs))
+            .with_read_timeout(Duration::from_secs(self.binlog_timeout_secs))
+            .with_keepalive(
+                Duration::from_secs(self.keepalive_idle_secs),
+                Duration::from_secs(self.keepalive_interval_secs),
+            )
+            .connect()
+            .await?;
 
         let mut ctx = Context {
             binlog_filename: self.binlog_filename.clone(),
@@ -147,7 +157,7 @@ impl MysqlCdcExtractor {
             gtid_set: None,
         };
         if self.gtid_enabled {
-            ctx.gtid_set = Some(GtidSet::new(&client.gtid_set)?);
+            ctx.gtid_set = Some(GtidSet::new(self.gtid_set.as_str())?);
         }
 
         // start heartbeat

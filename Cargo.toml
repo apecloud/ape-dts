@@ -18,7 +18,7 @@ assigning_clones = "allow"
 [workspace.dependencies]
 sqlx = {git = "https://github.com/apecloud/sqlx", features = ["runtime-async-std-rustls", "mysql", "postgres", "bigdecimal", "ipnetwork", "mac_address", "bit-vec", "time", "chrono", "json", "uuid"]}
 futures = "0.3.25"
-mysql-binlog-connector-rust = "0.3.2"
+mysql-binlog-connector-rust = {git = "https://github.com/apecloud/mysql-binlog-connector-rust", tag = "v0.3.3"}
 serde = {version = "1", features = ["derive"]}
 serde_json = "1.0.87"
 chrono = "0.4.38"

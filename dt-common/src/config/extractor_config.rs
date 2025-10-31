@@ -42,6 +42,8 @@ pub enum ExtractorConfig {
         heartbeat_tb: String,
         start_time_utc: String,
         end_time_utc: String,
+        keepalive_idle_secs: u64,
+        keepalive_interval_secs: u64,
     },
 
     MysqlCheck {

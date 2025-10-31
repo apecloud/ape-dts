@@ -164,6 +164,8 @@ impl ExtractorUtil {
                 binlog_timeout_secs,
                 heartbeat_interval_secs,
                 heartbeat_tb,
+                keepalive_idle_secs,
+                keepalive_interval_secs,
                 start_time_utc,
                 end_time_utc,
             } => {
@@ -192,6 +194,8 @@ impl ExtractorUtil {
                     binlog_timeout_secs,
                     heartbeat_interval_secs,
                     heartbeat_tb,
+                    keepalive_idle_secs,
+                    keepalive_interval_secs,
                     syncer,
                     base_extractor,
                     gtid_enabled,
