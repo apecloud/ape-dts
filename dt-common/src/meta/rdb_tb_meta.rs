@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use serde::Serialize;
 
@@ -9,6 +9,7 @@ pub struct RdbTbMeta {
     pub schema: String,
     pub tb: String,
     pub cols: Vec<String>,
+    pub nullable_cols: HashSet<String>,
     pub col_origin_type_map: HashMap<String, String>,
     pub key_map: HashMap<String, Vec<String>>,
     pub order_col: Option<String>,

@@ -162,7 +162,7 @@ impl PgSnapshotExtractor {
                 }
 
                 let row_data = RowData::from_pg_row(&row, tb_meta, &ignore_cols);
-                let position = self.build_position(tb_meta, &bind_values);
+                let position = self.build_position(tb_meta, &start_values);
                 self.base_extractor.push_row(row_data, position).await?;
             }
 
@@ -195,13 +195,12 @@ impl PgSnapshotExtractor {
         if PgSnapshotExtractor::can_extract_by_batch(tb_meta) {
             let order_by_clause = PgSnapshotExtractor::build_order_by_clause(tb_meta)?;
             if has_start_value {
-                let key_comparison_condition =
-                    PgSnapshotExtractor::build_key_comparison_condition(tb_meta)?;
+                let key_predicate = PgSnapshotExtractor::build_key_predicate(tb_meta)?;
                 let where_sql = BaseExtractor::get_where_sql(
                     &self.filter,
                     &self.schema,
                     &self.tb,
-                    &key_comparison_condition,
+                    &key_predicate,
                 );
                 Ok(format!(
                     r#"SELECT {} FROM "{}"."{}" {} ORDER BY {} LIMIT {}"#,
@@ -222,19 +221,27 @@ impl PgSnapshotExtractor {
     }
 
     fn can_extract_by_batch(tb_meta: &PgTbMeta) -> bool {
-        tb_meta.basic.order_cols.len() > 0
+        !tb_meta.basic.order_cols.is_empty() && !PgSnapshotExtractor::order_col_is_nullable(tb_meta)
     }
 
-    fn build_key_comparison_condition(tb_meta: &PgTbMeta) -> anyhow::Result<String> {
+    fn order_col_is_nullable(tb_meta: &PgTbMeta) -> bool {
+        tb_meta
+            .basic
+            .order_cols
+            .iter()
+            .any(|col| tb_meta.basic.nullable_cols.contains(col))
+    }
+
+    fn build_key_predicate(tb_meta: &PgTbMeta) -> anyhow::Result<String> {
         let order_cols = &tb_meta.basic.order_cols;
-        if order_cols.len() == 0 {
+        if order_cols.is_empty() {
             bail!("order cols is empty");
         } else if order_cols.len() == 1 {
             // col_1 > $1::col_1_type
             Ok(format!(
                 r#""{}" > {}"#,
                 &order_cols[0],
-                format!(
+                format_args!(
                     r#"$1::{}"#,
                     tb_meta.get_col_type(&order_cols[0]).unwrap().alias
                 )
@@ -263,13 +270,13 @@ impl PgSnapshotExtractor {
 
     fn build_order_by_clause(tb_meta: &PgTbMeta) -> anyhow::Result<String> {
         let order_cols = &tb_meta.basic.order_cols;
-        if order_cols.len() == 0 {
+        if order_cols.is_empty() {
             bail!("order cols is empty");
         } else if order_cols.len() == 1 {
             Ok(format!(r#""{}" ASC"#, &order_cols[0]))
         } else {
             // col_1 ASC, col_2 ASC, col_3 ASC
-            // (col_1, col_2, col_3) ASC does not trigger index scan
+            // (col_1, col_2, col_3) ASC does not trigger index scan sometimes
             Ok(order_cols
                 .iter()
                 .map(|col| format!(r#""{}" ASC"#, col))
@@ -300,7 +307,7 @@ impl PgSnapshotExtractor {
                 }
             }
         }
-        if resume_values.len() == 0 {
+        if resume_values.is_empty() {
             return Ok(HashMap::new());
         }
         log_info!(
@@ -315,11 +322,11 @@ impl PgSnapshotExtractor {
     fn build_position(
         &self,
         tb_meta: &PgTbMeta,
-        bind_values: &HashMap<String, ColValue>,
+        col_values: &HashMap<String, ColValue>,
     ) -> Position {
         let mut order_col_values = HashMap::new();
         for order_col in &tb_meta.basic.order_cols {
-            if let Some(value) = bind_values.get(order_col) {
+            if let Some(value) = col_values.get(order_col) {
                 order_col_values.insert(order_col.to_string(), value.to_option_string());
             } else {
                 // Do not record rows whose composite unique columns have NULL values.

@@ -75,15 +75,8 @@ impl ResumerUtil {
 
     pub fn get_key_from_position(position: &Position) -> String {
         match position {
-            Position::RdbSnapshot {
-                schema,
-                tb,
-                order_col,
-                ..
-            } => {
-                format!("{}-{}-{}", schema, tb, order_col)
-            }
-            Position::RdbSnapshotFinished { schema, tb, .. }
+            Position::RdbSnapshot { schema, tb, .. }
+            | Position::RdbSnapshotFinished { schema, tb, .. }
             | Position::FoxlakeS3 { schema, tb, .. } => {
                 format!("{}-{}", schema, tb)
             }
@@ -97,14 +90,11 @@ impl ResumerUtil {
     }
 
     pub fn get_key_from_base(
-        (schema, tb, col): (String, String, String),
+        (schema, tb, _col): (String, String, String),
         resumer_type: ResumerType,
     ) -> String {
         match resumer_type {
-            ResumerType::SnapshotDoing => {
-                format!("{}-{}-{}", schema, tb, col)
-            }
-            ResumerType::SnapshotFinished => {
+            ResumerType::SnapshotDoing | ResumerType::SnapshotFinished => {
                 format!("{}-{}", schema, tb)
             }
             _ => DEFAULT_POSITION_KEY.to_string(),

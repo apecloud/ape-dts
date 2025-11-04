@@ -29,7 +29,6 @@ pub enum Position {
         #[serde(skip_serializing_if = "String::is_empty")]
         value: String,
         #[serde(default)]
-        #[serde(skip_serializing_if = "HashMap::is_empty")]
         #[serde(serialize_with = "SerializeUtil::ordered_map")]
         order_col_values: HashMap<String, Option<String>>,
     },
@@ -95,7 +94,8 @@ impl FromStr for Position {
 
 impl Position {
     pub fn from_log(log: &str) -> Position {
-        // 2024-03-29 07:02:24.463776 | current_position | {"type":"RdbSnapshot","db_type":"mysql","schema":"test_db_1","tb":"one_pk_no_uk","order_col":"f_0","value":"9"}
+        // deprecated format: 2024-03-29 07:02:24.463776 | current_position | {"type":"RdbSnapshot","db_type":"mysql","schema":"test_db_1","tb":"one_pk_no_uk","order_col":"f_0","value":"9"}
+        // new format: 2024-03-29 07:02:24.463776 | current_position | {"type":"RdbSnapshot","db_type":"mysql","schema":"test_db_1","tb":"one_pk_no_uk","order_col_values":{"f_0":"9"}}
         // 2024-04-01 03:25:18.701725 | {"type":"RdbSnapshotFinished","db_type":"mysql","schema":"test_db_1","tb":"one_pk_no_uk"}
         if log.trim().is_empty() {
             return Position::None;
@@ -158,13 +158,22 @@ mod test {
     fn test_from_str() {
         let strs = [
             r#"{"type":"None"}"#,
+            // for compatibility
             r#"{"type":"RdbSnapshot","db_type":"mysql","schema":"test_db_1","tb":"numeric_table","order_col":"f_0","value":"127"}"#,
+            r#"{"type":"RdbSnapshot","db_type":"mysql","schema":"test_db_1","tb":"numeric_table","order_col":"f_0","value":"127","order_col_values":{}}"#,
             r#"{"type":"RdbSnapshot","db_type":"mysql","schema":"test_db_1","tb":"numeric_table","order_col_values":{"f_0":"127","f_1":"128"}}"#,
         ];
 
-        for str in strs {
+        let expected = [
+            r#"{"type":"None"}"#,
+            r#"{"type":"RdbSnapshot","db_type":"mysql","schema":"test_db_1","tb":"numeric_table","order_col":"f_0","value":"127","order_col_values":{}}"#,
+            r#"{"type":"RdbSnapshot","db_type":"mysql","schema":"test_db_1","tb":"numeric_table","order_col":"f_0","value":"127","order_col_values":{}}"#,
+            r#"{"type":"RdbSnapshot","db_type":"mysql","schema":"test_db_1","tb":"numeric_table","order_col_values":{"f_0":"127","f_1":"128"}}"#,
+        ];
+
+        for (str, expected) in strs.iter().zip(expected.iter()) {
             let position = Position::from_str(str).unwrap();
-            assert_eq!(str, &position.to_string());
+            assert_eq!(expected, &position.to_string());
         }
     }
 

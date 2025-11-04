@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::{error::Error, meta::ddl_meta::ddl_data::DdlData};
 use anyhow::{bail, Context};
@@ -76,11 +76,11 @@ impl PgMetaManager {
         let full_name = format!(r#""{}"."{}""#, schema, tb);
         if !self.name_to_tb_meta.contains_key(&full_name) {
             let oid = Self::get_oid(&self.conn_pool, schema, tb).await?;
-            let (cols, col_origin_type_map, col_type_map) =
+            let (cols, col_origin_type_map, col_type_map, nullable_cols) =
                 Self::parse_cols(&self.conn_pool, &mut self.type_registry, schema, tb).await?;
             let key_map = Self::parse_keys(&self.conn_pool, schema, tb).await?;
             let (order_col, order_cols, partition_col, partition_cols, id_cols) =
-                RdbMetaManager::parse_rdb_cols(&key_map, &cols)?;
+                RdbMetaManager::parse_rdb_cols(&key_map, &cols, &nullable_cols)?;
             // disable get_foreign_keys since we don't support foreign key check
             let (foreign_keys, ref_by_foreign_keys) = (vec![], vec![]);
             // let (foreign_keys, ref_by_foreign_keys) =
@@ -90,6 +90,7 @@ impl PgMetaManager {
                 schema: schema.to_string(),
                 tb: tb.to_string(),
                 cols,
+                nullable_cols,
                 col_origin_type_map,
                 key_map,
                 order_col,
@@ -135,14 +136,16 @@ impl PgMetaManager {
         Vec<String>,
         HashMap<String, String>,
         HashMap<String, PgColType>,
+        HashSet<String>,
     )> {
         let mut cols = Vec::new();
         let mut col_origin_type_map = HashMap::new();
         let mut col_type_map = HashMap::new();
+        let mut nullable_cols = HashSet::new();
 
         // get cols of the table
         let sql = format!(
-            "SELECT column_name FROM information_schema.columns 
+            "SELECT column_name, is_nullable FROM information_schema.columns 
             WHERE table_schema='{}' AND table_name = '{}' 
             ORDER BY ordinal_position;",
             schema, tb
@@ -150,7 +153,12 @@ impl PgMetaManager {
         let mut rows = sqlx::query(&sql).fetch(conn_pool);
         while let Some(row) = rows.try_next().await? {
             let col: String = row.try_get("column_name")?;
-            cols.push(col);
+            cols.push(col.clone());
+
+            let is_nullable = row.try_get::<String, _>("is_nullable")?.to_lowercase() == "yes";
+            if is_nullable {
+                nullable_cols.insert(col);
+            }
         }
 
         // get col_type_oid of the table
@@ -180,7 +188,7 @@ impl PgMetaManager {
             col_type_map.insert(col, col_type);
         }
 
-        Ok((cols, col_origin_type_map, col_type_map))
+        Ok((cols, col_origin_type_map, col_type_map, nullable_cols))
     }
 
     async fn parse_keys(

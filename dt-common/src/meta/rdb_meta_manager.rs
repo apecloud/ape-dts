@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use anyhow::bail;
 
@@ -72,6 +72,7 @@ impl RdbMetaManager {
     pub fn parse_rdb_cols(
         key_map: &HashMap<String, Vec<String>>,
         cols: &[String],
+        nullable_cols: &HashSet<String>,
     ) -> anyhow::Result<(
         Option<String>,
         Vec<String>,
@@ -84,10 +85,25 @@ impl RdbMetaManager {
             // use primary key
             id_cols = cols.clone();
         } else if !key_map.is_empty() {
-            // use the unique key with least cols
-            for key_cols in key_map.values() {
-                if id_cols.is_empty() || id_cols.len() > key_cols.len() {
-                    id_cols = key_cols.clone();
+            // use unique key
+            // priority 1: use unique key with all non-nullable and least cols
+            let non_nullable_keys = key_map
+                .iter()
+                .filter(|(_, cols)| !cols.iter().any(|col| nullable_cols.contains(col)))
+                .map(|(_, cols)| cols)
+                .collect::<Vec<&Vec<String>>>();
+
+            for cols in non_nullable_keys {
+                if id_cols.is_empty() || id_cols.len() > cols.len() {
+                    id_cols = cols.clone();
+                }
+            }
+            // priority 2: use unique key with nullable cols
+            if id_cols.is_empty() {
+                for key_cols in key_map.values() {
+                    if id_cols.is_empty() || id_cols.len() > key_cols.len() {
+                        id_cols = key_cols.clone();
+                    }
                 }
             }
         }

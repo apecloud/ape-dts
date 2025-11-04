@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::{config::config_enums::DbType, error::Error, meta::ddl_meta::ddl_data::DdlData};
 use anyhow::{bail, Ok};
@@ -82,11 +82,11 @@ impl MysqlMetaFetcher {
     ) -> anyhow::Result<&'a MysqlTbMeta> {
         let full_name = format!("{}.{}", schema, tb);
         if !self.cache.contains_key(&full_name) {
-            let (cols, col_origin_type_map, col_type_map) =
+            let (cols, col_origin_type_map, col_type_map, nullable_cols) =
                 Self::parse_cols(&self.conn_pool, &self.db_type, schema, tb).await?;
             let key_map = Self::parse_keys(&self.conn_pool, schema, tb).await?;
             let (order_col, order_cols, partition_col, partition_cols, id_cols) =
-                RdbMetaManager::parse_rdb_cols(&key_map, &cols)?;
+                RdbMetaManager::parse_rdb_cols(&key_map, &cols, &nullable_cols)?;
             // disable get_foreign_keys since we don't support foreign key check,
             // also querying them is very slow, which may cause terrible performance issue if there were many tables in a CDC task.
             let (foreign_keys, ref_by_foreign_keys) = (vec![], vec![]);
@@ -97,6 +97,7 @@ impl MysqlMetaFetcher {
                 schema: schema.to_string(),
                 tb: tb.to_string(),
                 cols,
+                nullable_cols,
                 col_origin_type_map,
                 key_map,
                 order_col,
@@ -125,10 +126,12 @@ impl MysqlMetaFetcher {
         Vec<String>,
         HashMap<String, String>,
         HashMap<String, MysqlColType>,
+        HashSet<String>,
     )> {
         let mut cols = Vec::new();
         let mut col_origin_type_map = HashMap::new();
         let mut col_type_map = HashMap::new();
+        let mut nullable_cols = HashSet::new();
 
         let sql = if matches!(db_type, DbType::Mysql) {
             "SELECT * FROM information_schema.columns
@@ -155,7 +158,12 @@ impl MysqlMetaFetcher {
             cols.push(col.clone());
             let (origin_type, col_type) = Self::get_col_type(&row).await?;
             col_origin_type_map.insert(col.clone(), origin_type);
-            col_type_map.insert(col, col_type);
+            col_type_map.insert(col.clone(), col_type);
+
+            let is_nullable = row.try_get::<String, _>(IS_NULLABLE)?.to_lowercase() == "yes";
+            if is_nullable {
+                nullable_cols.insert(col);
+            }
         }
 
         if cols.is_empty() {
@@ -164,7 +172,7 @@ impl MysqlMetaFetcher {
                 schema, tb
             )) }
         }
-        Ok((cols, col_origin_type_map, col_type_map))
+        Ok((cols, col_origin_type_map, col_type_map, nullable_cols))
     }
 
     async fn get_col_type(row: &MySqlRow) -> anyhow::Result<(String, MysqlColType)> {

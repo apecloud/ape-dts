@@ -230,7 +230,16 @@ impl Recovery for DatabaseRecovery {
         let position_str = self.resumer_doing.get(&resumer_key).map(|p| p.to_owned());
         if let Some(position_str) = position_str {
             match Position::from_log(&position_str) {
-                Position::RdbSnapshot { value, .. } => return Some(value),
+                Position::RdbSnapshot {
+                    value,
+                    order_col_values,
+                    ..
+                } => {
+                    if let Some(order_col_value) = order_col_values.get(col) {
+                        return order_col_value.clone();
+                    }
+                    return Some(value);
+                }
                 Position::FoxlakeS3 { s3_meta_file, .. } => return Some(s3_meta_file),
                 _ => return None,
             }

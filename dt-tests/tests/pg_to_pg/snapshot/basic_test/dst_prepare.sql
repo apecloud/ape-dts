@@ -93,3 +93,12 @@ CREATE TABLE Upper_Case_DB.Upper_Case_TB (
 CREATE TABLE test_db_1.where_condition_1 ( f_0 int, f_1 int ); 
 CREATE TABLE test_db_1.where_condition_2 ( f_0 int, f_1 int, PRIMARY KEY (f_0) ); 
 CREATE TABLE test_db_1.where_condition_3 ( f_0 int, f_1 int ); 
+
+-- test composite primary key
+CREATE TABLE test_db_1.composite_pk_table (pk1 int, pk2 varchar(10), val int, PRIMARY KEY(pk1, pk2));
+
+-- test non-nullable composite unique key
+CREATE TABLE test_db_1.composite_unique_key_table (uk1 int not null, uk2 varchar(10) not null, val int, UNIQUE(uk1, uk2));
+
+--test nullable composite unique key
+CREATE TABLE test_db_1.composite_unique_key_table_2 (uk1 int, uk2 varchar(10), val int, UNIQUE(uk1, uk2));
