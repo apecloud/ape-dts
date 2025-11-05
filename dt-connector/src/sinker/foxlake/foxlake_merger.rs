@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use anyhow::Context;
 use async_trait::async_trait;
-use rusoto_s3::S3Client;
+use opendal::Operator;
 use sqlx::{MySql, Pool};
 use tokio::time::Instant;
 
@@ -18,7 +18,7 @@ use dt_common::{
 pub struct FoxlakeMerger {
     pub batch_size: usize,
     pub monitor: Arc<Monitor>,
-    pub s3_client: S3Client,
+    pub s3_client: Operator,
     pub s3_config: S3Config,
     pub conn_pool: Pool<MySql>,
     pub extract_type: ExtractType,

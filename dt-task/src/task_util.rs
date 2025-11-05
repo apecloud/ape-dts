@@ -2,9 +2,9 @@ use std::{str::FromStr, sync::Arc, time::Duration};
 
 use anyhow::bail;
 use futures::TryStreamExt;
-use mongodb::{bson::doc, options::ClientOptions};
-use rusoto_core::Region;
-use rusoto_s3::S3Client;
+use mongodb::bson::doc;
+use mongodb::options::ClientOptions;
+use opendal::{Builder, Operator};
 use sqlx::{
     mysql::{MySqlConnectOptions, MySqlPoolOptions},
     postgres::{PgConnectOptions, PgPoolOptions},
@@ -531,22 +531,15 @@ WHERE
         Ok(tbs)
     }
 
-    pub fn create_s3_client(s3_config: &S3Config) -> S3Client {
-        let region = if s3_config.endpoint.is_empty() {
-            Region::from_str(&s3_config.region).unwrap()
-        } else {
-            Region::Custom {
-                name: s3_config.region.clone(),
-                endpoint: s3_config.endpoint.clone(),
-            }
-        };
+    pub fn create_s3_client(s3_config: &S3Config) -> anyhow::Result<Operator> {
+        let builder = opendal::services::S3::default()
+            .access_key_id(&s3_config.access_key)
+            .secret_access_key(&s3_config.secret_key)
+            .region(&s3_config.region)
+            .bucket(&s3_config.bucket)
+            .endpoint(&s3_config.endpoint);
 
-        let credentials = rusoto_credential::StaticProvider::new_minimal(
-            s3_config.access_key.to_owned(),
-            s3_config.secret_key.to_owned(),
-        );
-
-        S3Client::new_with(rusoto_core::HttpClient::new().unwrap(), credentials, region)
+        Ok(Operator::new(builder)?.finish())
     }
 
     pub async fn build_resumer(
@@ -585,12 +578,12 @@ WHERE
 
 #[derive(Default, Clone)]
 pub enum ConnClient {
+    #[default]
+    None,
     MySQL(Pool<MySql>),
     PostgreSQL(Pool<Postgres>),
     MongoDB(mongodb::Client),
-    S3(S3Client),
-    #[default]
-    None,
+    S3(Operator),
 }
 
 impl ConnClient {
