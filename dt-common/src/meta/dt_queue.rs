@@ -1,8 +1,7 @@
 use std::sync::atomic::{AtomicU64, Ordering};
+use tokio::task::yield_now;
 
 use concurrent_queue::{ConcurrentQueue, PopError};
-
-use crate::utils::time_util::TimeUtil;
 
 use super::dt_data::DtItem;
 
@@ -46,12 +45,12 @@ impl DtQueue {
     #[inline(always)]
     pub async fn push(&self, item: DtItem) -> anyhow::Result<()> {
         while self.queue.is_full() {
-            TimeUtil::sleep_millis(1).await;
+            yield_now().await;
         }
 
         if self.check_memory {
             while self.cur_bytes.load(Ordering::Acquire) > self.max_bytes {
-                TimeUtil::sleep_millis(1).await;
+                yield_now().await;
             }
         }
         self.cur_bytes

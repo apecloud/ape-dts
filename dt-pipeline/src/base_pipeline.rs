@@ -4,7 +4,11 @@ use std::sync::{
 };
 
 use async_trait::async_trait;
-use tokio::{sync::Mutex, sync::RwLock, time::Instant};
+use tokio::{
+    sync::{Mutex, RwLock},
+    task::yield_now,
+    time::Instant,
+};
 
 use crate::{lua_processor::LuaProcessor, Pipeline};
 use dt_common::{
@@ -135,8 +139,7 @@ impl Pipeline for BasePipeline {
                 .add_counter(CounterType::SinkedByteTotal, data_size.bytes)
                 .await;
 
-            // sleep 1 millis for data preparing
-            TimeUtil::sleep_millis(1).await;
+            yield_now().await;
         }
 
         self.record_checkpoint(None, &last_received_position, &last_commit_position)
