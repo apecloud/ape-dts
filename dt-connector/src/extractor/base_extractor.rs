@@ -4,6 +4,7 @@ use std::sync::{
 };
 
 use anyhow::bail;
+use tokio::task::yield_now;
 
 use dt_common::{
     config::{
@@ -124,7 +125,7 @@ impl BaseExtractor {
     pub async fn push_ddl(&mut self, ddl_data: DdlData, position: Position) -> anyhow::Result<()> {
         let ddl_data = self.router.route_ddl(ddl_data);
         while !self.buffer.is_empty() {
-            TimeUtil::sleep_millis(1).await;
+            yield_now().await;
         }
         self.push_dt_data(DtData::Ddl { ddl_data }, position).await
     }
@@ -270,7 +271,7 @@ impl BaseExtractor {
     pub async fn wait_task_finish(&mut self) -> anyhow::Result<()> {
         // wait all data to be transferred
         while !self.buffer.is_empty() {
-            TimeUtil::sleep_millis(1).await;
+            yield_now().await;
         }
 
         self.monitor.try_flush(true).await;
