@@ -1,6 +1,10 @@
 use std::collections::{HashMap, HashSet};
 
-use crate::{config::config_enums::DbType, error::Error, meta::ddl_meta::ddl_data::DdlData};
+use crate::{
+    config::config_enums::DbType,
+    error::Error,
+    meta::{ddl_meta::ddl_data::DdlData, rdb_meta_manager::RDB_PRIMARY_KEY_FLAG},
+};
 use anyhow::{bail, Ok};
 use futures::TryStreamExt;
 
@@ -348,7 +352,10 @@ impl MysqlMetaFetcher {
             // | a     |          0 | PRIMARY      |            2 | value       | A         |           0 |     NULL | NULL   |      | BTREE      |         |               |
             // | a     |          0 | some_uk_name |            1 | value       | A         |           0 |     NULL | NULL   |      | BTREE      |         |               |
             // +-------+------------+--------------+--------------+-------------+-----------+-------------+----------+--------+------+------------+---------+---------------+
-            let key_name: String = row.try_get("Key_name")?;
+            let mut key_name: String = row.try_get("Key_name")?;
+            if key_name == "PRIMARY" {
+                key_name = RDB_PRIMARY_KEY_FLAG.to_string();
+            }
             let col_name: String = row.try_get("Column_name")?;
             if let Some(key_cols) = key_map.get_mut(&key_name) {
                 key_cols.push(col_name);

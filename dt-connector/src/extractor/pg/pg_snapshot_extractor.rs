@@ -18,6 +18,7 @@ use dt_common::{
         col_value::ColValue,
         pg::{pg_meta_manager::PgMetaManager, pg_tb_meta::PgTbMeta},
         position::Position,
+        rdb_tb_meta::RdbTbMeta,
         row_data::RowData,
     },
     rdb_filter::RdbFilter,
@@ -62,8 +63,22 @@ impl PgSnapshotExtractor {
             .await?
             .to_owned();
 
-        if PgSnapshotExtractor::can_extract_by_batch(&tb_meta) {
+        if tb_meta.basic.can_extract_by_batch() {
             let resume_values = self.get_resume_values(&tb_meta).await?;
+            if resume_values.is_empty() {
+                log_info!(
+                    r#"start extracting data from "{}"."{}" by batch from beginning"#,
+                    self.schema,
+                    self.tb
+                );
+            } else {
+                log_info!(
+                    r#"start extracting data from "{}"."{}" by batch, start_values: {}"#,
+                    self.schema,
+                    self.tb,
+                    SerializeUtil::serialize_hashmap_to_json(&resume_values)?
+                );
+            }
             self.extract_by_batch(&tb_meta, resume_values).await?;
         } else {
             self.extract_all(&tb_meta).await?;
@@ -103,12 +118,7 @@ impl PgSnapshotExtractor {
         mut resume_values: HashMap<String, ColValue>,
     ) -> anyhow::Result<()> {
         let mut start_from_beginning = false;
-        if resume_values.len() != tb_meta.basic.order_cols.len() {
-            log_info!(
-                r#"resume values not match order cols, extract data from "{}"."{}" from beginning"#,
-                self.schema,
-                self.tb
-            );
+        if resume_values.is_empty() {
             resume_values = tb_meta
                 .basic
                 .order_cols
@@ -117,14 +127,8 @@ impl PgSnapshotExtractor {
                 .collect();
             start_from_beginning = true;
         }
-        let mut start_values = resume_values;
-        log_info!(
-            r#"start extracting data from "{}"."{}" by batch, order_cols: {}"#,
-            self.schema,
-            self.tb,
-            SerializeUtil::serialize_hashmap_to_json(&start_values)?
-        );
 
+        let mut start_values = resume_values;
         let mut extracted_count = 0;
         let sql_from_beginning = self.build_extract_sql(tb_meta, false)?;
         let sql_from_value = self.build_extract_sql(tb_meta, true)?;
@@ -151,7 +155,12 @@ impl PgSnapshotExtractor {
                     if let Some(value) = start_values.get_mut(order_col) {
                         *value = PgColValueConvertor::from_query(&row, order_col, order_col_type)?;
                     } else {
-                        bail!("order col {} not found", order_col);
+                        bail!(
+                            r#""{}"."{}" order col {} not found"#,
+                            self.schema,
+                            self.tb,
+                            order_col
+                        );
                     }
                 }
                 slice_count += 1;
@@ -162,7 +171,7 @@ impl PgSnapshotExtractor {
                 }
 
                 let row_data = RowData::from_pg_row(&row, tb_meta, &ignore_cols);
-                let position = self.build_position(tb_meta, &start_values);
+                let position = tb_meta.basic.build_position(&DbType::Pg, &start_values);
                 self.base_extractor.push_row(row_data, position).await?;
             }
 
@@ -192,8 +201,8 @@ impl PgSnapshotExtractor {
         let where_sql = BaseExtractor::get_where_sql(&self.filter, &self.schema, &self.tb, "");
 
         // SELECT col_1, col_2::text FROM tb_1 WHERE col_1 > $1 ORDER BY col_1;
-        if PgSnapshotExtractor::can_extract_by_batch(tb_meta) {
-            let order_by_clause = PgSnapshotExtractor::build_order_by_clause(tb_meta)?;
+        if tb_meta.basic.can_extract_by_batch() {
+            let order_by_clause = PgSnapshotExtractor::build_order_by_clause(&tb_meta.basic)?;
             if has_start_value {
                 let key_predicate = PgSnapshotExtractor::build_key_predicate(tb_meta)?;
                 let where_sql = BaseExtractor::get_where_sql(
@@ -218,18 +227,6 @@ impl PgSnapshotExtractor {
                 cols_str, self.schema, self.tb, where_sql
             ))
         }
-    }
-
-    fn can_extract_by_batch(tb_meta: &PgTbMeta) -> bool {
-        !tb_meta.basic.order_cols.is_empty() && !PgSnapshotExtractor::order_col_is_nullable(tb_meta)
-    }
-
-    fn order_col_is_nullable(tb_meta: &PgTbMeta) -> bool {
-        tb_meta
-            .basic
-            .order_cols
-            .iter()
-            .any(|col| tb_meta.basic.nullable_cols.contains(col))
     }
 
     fn build_key_predicate(tb_meta: &PgTbMeta) -> anyhow::Result<String> {
@@ -268,8 +265,8 @@ impl PgSnapshotExtractor {
         }
     }
 
-    fn build_order_by_clause(tb_meta: &PgTbMeta) -> anyhow::Result<String> {
-        let order_cols = &tb_meta.basic.order_cols;
+    fn build_order_by_clause(tb_meta: &RdbTbMeta) -> anyhow::Result<String> {
+        let order_cols = &tb_meta.order_cols;
         if order_cols.is_empty() {
             bail!("order cols is empty");
         } else if order_cols.len() == 1 {
@@ -307,39 +304,20 @@ impl PgSnapshotExtractor {
                 }
             }
         }
-        if resume_values.is_empty() {
+        if resume_values.is_empty() || resume_values.len() != tb_meta.basic.order_cols.len() {
+            log_info!(
+                r#""{}"."{}" resume values not match order cols"#,
+                self.schema,
+                self.tb
+            );
             return Ok(HashMap::new());
         }
         log_info!(
-            "[{}.{}] recovery from [{}]",
+            r#"["{}"."{}"] recovery from [{}]"#,
             self.schema,
             self.tb,
             SerializeUtil::serialize_hashmap_to_json(&resume_values)?
         );
         Ok(resume_values)
-    }
-
-    fn build_position(
-        &self,
-        tb_meta: &PgTbMeta,
-        col_values: &HashMap<String, ColValue>,
-    ) -> Position {
-        let mut order_col_values = HashMap::new();
-        for order_col in &tb_meta.basic.order_cols {
-            if let Some(value) = col_values.get(order_col) {
-                order_col_values.insert(order_col.to_string(), value.to_option_string());
-            } else {
-                // Do not record rows whose composite unique columns have NULL values.
-                return Position::None;
-            }
-        }
-        Position::RdbSnapshot {
-            db_type: DbType::Pg.to_string(),
-            schema: self.schema.clone(),
-            tb: self.tb.clone(),
-            order_col: String::new(),
-            value: String::new(),
-            order_col_values,
-        }
     }
 }

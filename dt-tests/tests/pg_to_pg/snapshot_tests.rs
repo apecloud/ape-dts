@@ -58,7 +58,7 @@ mod test {
         let mut dst_expected_counts = HashMap::new();
         dst_expected_counts.insert("public.resume_table_1", 1);
         dst_expected_counts.insert("public.resume_table_2", 1);
-        dst_expected_counts.insert("public.resume_table_3", 2);
+        dst_expected_counts.insert("public.resume_table_3", 1);
         dst_expected_counts.insert("public.resume_table_*$4", 1);
         dst_expected_counts.insert(r#""test_db_*.*"."resume_table_*$5""#, 1);
         dst_expected_counts.insert(r#""test_db_*.*"."finished_table_*$1""#, 0);
@@ -81,7 +81,7 @@ mod test {
         let mut dst_expected_counts = HashMap::new();
         dst_expected_counts.insert("public.resume_table_1", 1);
         dst_expected_counts.insert("public.resume_table_2", 1);
-        dst_expected_counts.insert("public.resume_table_3", 2);
+        dst_expected_counts.insert("public.resume_table_3", 1);
         dst_expected_counts.insert("public.resume_table_*$4", 1);
         dst_expected_counts.insert(r#""test_db_*.*"."resume_table_*$5""#, 1);
         dst_expected_counts.insert(r#""test_db_*.*"."finished_table_*$1""#, 0);

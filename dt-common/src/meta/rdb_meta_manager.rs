@@ -9,6 +9,8 @@ use super::{
     pg::pg_meta_manager::PgMetaManager, rdb_tb_meta::RdbTbMeta,
 };
 
+pub const RDB_PRIMARY_KEY_FLAG: &str = "primary";
+
 #[derive(Clone)]
 pub struct RdbMetaManager {
     pub mysql_meta_manager: Option<MysqlMetaManager>,
@@ -81,7 +83,7 @@ impl RdbMetaManager {
         Vec<String>,
     )> {
         let mut id_cols = Vec::new();
-        if let Some(cols) = key_map.get("primary") {
+        if let Some(cols) = key_map.get(RDB_PRIMARY_KEY_FLAG) {
             // use primary key
             id_cols = cols.clone();
         } else if !key_map.is_empty() {

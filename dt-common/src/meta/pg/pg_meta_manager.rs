@@ -1,6 +1,9 @@
 use std::collections::{HashMap, HashSet};
 
-use crate::{error::Error, meta::ddl_meta::ddl_data::DdlData};
+use crate::{
+    error::Error,
+    meta::{ddl_meta::ddl_data::DdlData, rdb_meta_manager::RDB_PRIMARY_KEY_FLAG},
+};
 use anyhow::{bail, Context};
 use futures::TryStreamExt;
 use sqlx::{Pool, Postgres, Row};
@@ -224,7 +227,7 @@ impl PgMetaManager {
             let constraint_type: String = row.try_get("constraint_type")?;
             let mut key_name: String = row.try_get("constraint_name")?;
             if constraint_type == "PRIMARY KEY" {
-                key_name = "primary".to_string();
+                key_name = RDB_PRIMARY_KEY_FLAG.to_string();
             }
 
             // key_map
