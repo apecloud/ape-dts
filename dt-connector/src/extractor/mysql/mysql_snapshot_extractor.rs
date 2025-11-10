@@ -9,7 +9,6 @@ use std::{
 
 use anyhow::bail;
 use async_trait::async_trait;
-use clickhouse::sql;
 use futures::TryStreamExt;
 use sqlx::{MySql, Pool};
 use tokio::{sync::Mutex, task::JoinHandle};
@@ -85,7 +84,7 @@ impl MysqlSnapshotExtractor {
             .await?
             .to_owned();
 
-        if tb_meta.basic.can_extract_by_batch() {
+        if Self::can_extract_by_batch(&tb_meta) {
             let parallel_extract = self.can_parallel_extract(&tb_meta)?;
             let resume_values = self.get_resume_values(&tb_meta, parallel_extract).await?;
             if resume_values.is_empty() {
@@ -154,12 +153,7 @@ impl MysqlSnapshotExtractor {
     ) -> anyhow::Result<u64> {
         let mut start_from_beginning = false;
         if resume_values.is_empty() {
-            resume_values = tb_meta
-                .basic
-                .order_cols
-                .iter()
-                .map(|col| (col.clone(), ColValue::None))
-                .collect();
+            resume_values = tb_meta.basic.get_default_order_col_values();
             start_from_beginning = true;
         }
         let mut extracted_count = 0;
@@ -228,12 +222,7 @@ impl MysqlSnapshotExtractor {
     ) -> anyhow::Result<u64> {
         let mut start_from_beginning = false;
         if resume_values.is_empty() {
-            resume_values = tb_meta
-                .basic
-                .order_cols
-                .iter()
-                .map(|col| (col.clone(), ColValue::None))
-                .collect();
+            resume_values = tb_meta.basic.get_default_order_col_values();
             start_from_beginning = true;
         }
 
@@ -452,6 +441,7 @@ impl MysqlSnapshotExtractor {
         query_builder.build_extract_cols_str()
     }
 
+    #[inline(always)]
     fn can_parallel_extract(&self, tb_meta: &MysqlTbMeta) -> anyhow::Result<bool> {
         Ok(tb_meta.basic.order_cols.len() == 1
             && self.parallel_size > 1
@@ -461,6 +451,11 @@ impl MysqlSnapshotExtractor {
                     | MysqlColType::BigInt { .. }
                     | MysqlColType::MediumInt { .. }
             ))
+    }
+
+    #[inline(always)]
+    pub fn can_extract_by_batch(tb_meta: &MysqlTbMeta) -> bool {
+        !tb_meta.basic.order_cols.is_empty() && !tb_meta.basic.order_cols_are_nullable()
     }
 
     async fn get_resume_values(
@@ -508,8 +503,8 @@ impl MysqlSnapshotExtractor {
         let cols_str = self.build_extract_cols_str(tb_meta)?;
         let condition_str = match sql_type {
             1 => "".to_string(),
-            2 => Self::build_key_predicate_range(tb_meta)?,
-            3 => Self::build_key_predicate_upper(tb_meta)?,
+            2 => Self::build_order_col_predicate_range(tb_meta)?,
+            3 => Self::build_order_col_predicate_upper(tb_meta)?,
             _ => bail!("unsupported sql_type: {}", sql_type),
         };
         let where_sql =
@@ -520,13 +515,14 @@ impl MysqlSnapshotExtractor {
             self.db,
             self.tb,
             where_sql,
-            MysqlSnapshotExtractor::build_order_by_clause(&tb_meta.basic)?,
+            Self::build_order_by_clause(&tb_meta.basic)?,
             batch_size,
         );
         Ok(sql)
     }
 
-    fn build_order_col_str(order_cols: &Vec<String>) -> String {
+    #[inline(always)]
+    fn build_order_col_str(order_cols: &[String]) -> String {
         order_cols
             .iter()
             .map(|col| format!(r#"`{}`"#, col))
@@ -534,7 +530,8 @@ impl MysqlSnapshotExtractor {
             .join(", ")
     }
 
-    fn build_place_holder_str(order_cols: &Vec<String>) -> String {
+    #[inline(always)]
+    fn build_place_holder_str(order_cols: &[String]) -> String {
         order_cols
             .iter()
             .map(|_| "?".to_string())
@@ -542,7 +539,7 @@ impl MysqlSnapshotExtractor {
             .join(", ")
     }
 
-    fn build_key_predicate_range(tb_meta: &MysqlTbMeta) -> anyhow::Result<String> {
+    fn build_order_col_predicate_range(tb_meta: &MysqlTbMeta) -> anyhow::Result<String> {
         let order_cols = &tb_meta.basic.order_cols;
         if order_cols.is_empty() {
             bail!("order cols is empty");
@@ -563,7 +560,7 @@ impl MysqlSnapshotExtractor {
         }
     }
 
-    fn build_key_predicate_upper(tb_meta: &MysqlTbMeta) -> anyhow::Result<String> {
+    fn build_order_col_predicate_upper(tb_meta: &MysqlTbMeta) -> anyhow::Result<String> {
         let order_cols = &tb_meta.basic.order_cols;
         if order_cols.is_empty() {
             bail!("order cols is empty");

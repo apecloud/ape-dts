@@ -63,7 +63,7 @@ impl PgSnapshotExtractor {
             .await?
             .to_owned();
 
-        if tb_meta.basic.can_extract_by_batch() {
+        if Self::can_extract_by_batch(&tb_meta) {
             let resume_values = self.get_resume_values(&tb_meta).await?;
             if resume_values.is_empty() {
                 log_info!(
@@ -119,12 +119,7 @@ impl PgSnapshotExtractor {
     ) -> anyhow::Result<()> {
         let mut start_from_beginning = false;
         if resume_values.is_empty() {
-            resume_values = tb_meta
-                .basic
-                .order_cols
-                .iter()
-                .map(|col| (col.clone(), ColValue::None))
-                .collect();
+            resume_values = tb_meta.basic.get_default_order_col_values();
             start_from_beginning = true;
         }
 
@@ -190,6 +185,11 @@ impl PgSnapshotExtractor {
         Ok(())
     }
 
+    #[inline(always)]
+    pub fn can_extract_by_batch(tb_meta: &PgTbMeta) -> bool {
+        !tb_meta.basic.order_cols.is_empty() && !tb_meta.basic.order_cols_are_nullable()
+    }
+
     fn build_extract_sql(
         &mut self,
         tb_meta: &PgTbMeta,
@@ -201,10 +201,10 @@ impl PgSnapshotExtractor {
         let where_sql = BaseExtractor::get_where_sql(&self.filter, &self.schema, &self.tb, "");
 
         // SELECT col_1, col_2::text FROM tb_1 WHERE col_1 > $1 ORDER BY col_1;
-        if tb_meta.basic.can_extract_by_batch() {
-            let order_by_clause = PgSnapshotExtractor::build_order_by_clause(&tb_meta.basic)?;
+        if Self::can_extract_by_batch(tb_meta) {
+            let order_by_clause = Self::build_order_by_clause(&tb_meta.basic)?;
             if has_start_value {
-                let key_predicate = PgSnapshotExtractor::build_key_predicate(tb_meta)?;
+                let key_predicate = Self::build_order_col_predicate(tb_meta)?;
                 let where_sql = BaseExtractor::get_where_sql(
                     &self.filter,
                     &self.schema,
@@ -229,7 +229,7 @@ impl PgSnapshotExtractor {
         }
     }
 
-    fn build_key_predicate(tb_meta: &PgTbMeta) -> anyhow::Result<String> {
+    fn build_order_col_predicate(tb_meta: &PgTbMeta) -> anyhow::Result<String> {
         let order_cols = &tb_meta.basic.order_cols;
         if order_cols.is_empty() {
             bail!("order cols is empty");

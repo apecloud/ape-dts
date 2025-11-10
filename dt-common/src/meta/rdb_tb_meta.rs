@@ -15,24 +15,26 @@ pub struct RdbTbMeta {
     pub nullable_cols: HashSet<String>,
     pub col_origin_type_map: HashMap<String, String>,
     pub key_map: HashMap<String, Vec<String>>,
-    pub order_col: Option<String>,
     pub order_cols: Vec<String>,
     pub partition_col: String,
-    pub partition_cols: Vec<String>,
     pub id_cols: Vec<String>,
     pub foreign_keys: Vec<ForeignKey>,
     pub ref_by_foreign_keys: Vec<ForeignKey>,
 }
 
 impl RdbTbMeta {
-    pub fn order_col_is_nullable(&self) -> bool {
+    pub fn order_cols_are_nullable(&self) -> bool {
         self.order_cols
             .iter()
             .any(|col| self.nullable_cols.contains(col))
     }
 
-    pub fn can_extract_by_batch(&self) -> bool {
-        !self.order_cols.is_empty() && !self.order_col_is_nullable()
+    #[inline(always)]
+    pub fn get_default_order_col_values(&self) -> HashMap<String, ColValue> {
+        self.order_cols
+            .iter()
+            .map(|col| (col.clone(), ColValue::None))
+            .collect()
     }
 
     pub fn build_position(

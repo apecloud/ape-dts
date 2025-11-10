@@ -82,7 +82,7 @@ impl PgMetaManager {
             let (cols, col_origin_type_map, col_type_map, nullable_cols) =
                 Self::parse_cols(&self.conn_pool, &mut self.type_registry, schema, tb).await?;
             let key_map = Self::parse_keys(&self.conn_pool, schema, tb).await?;
-            let (order_col, order_cols, partition_col, partition_cols, id_cols) =
+            let (order_cols, partition_col, id_cols) =
                 RdbMetaManager::parse_rdb_cols(&key_map, &cols, &nullable_cols)?;
             // disable get_foreign_keys since we don't support foreign key check
             let (foreign_keys, ref_by_foreign_keys) = (vec![], vec![]);
@@ -96,10 +96,8 @@ impl PgMetaManager {
                 nullable_cols,
                 col_origin_type_map,
                 key_map,
-                order_col,
                 order_cols,
                 partition_col,
-                partition_cols,
                 id_cols,
                 foreign_keys,
                 ref_by_foreign_keys,

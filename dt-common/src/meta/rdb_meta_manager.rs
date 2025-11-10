@@ -75,13 +75,7 @@ impl RdbMetaManager {
         key_map: &HashMap<String, Vec<String>>,
         cols: &[String],
         nullable_cols: &HashSet<String>,
-    ) -> anyhow::Result<(
-        Option<String>,
-        Vec<String>,
-        String,
-        Vec<String>,
-        Vec<String>,
-    )> {
+    ) -> anyhow::Result<(Vec<String>, String, Vec<String>)> {
         let mut id_cols = Vec::new();
         if let Some(cols) = key_map.get(RDB_PRIMARY_KEY_FLAG) {
             // use primary key
@@ -110,16 +104,10 @@ impl RdbMetaManager {
             }
         }
 
-        let order_col = if id_cols.len() == 1 {
-            Some(id_cols.first().unwrap().clone())
+        let order_cols = if id_cols.is_empty() {
+            Vec::new()
         } else {
-            None
-        };
-
-        let (order_cols, partition_cols) = if id_cols.is_empty() {
-            (Vec::new(), Vec::new())
-        } else {
-            (id_cols.clone(), id_cols.clone())
+            id_cols.clone()
         };
 
         if id_cols.is_empty() {
@@ -128,12 +116,6 @@ impl RdbMetaManager {
 
         let partition_col = id_cols[0].clone();
 
-        Ok((
-            order_col,
-            order_cols,
-            partition_col,
-            partition_cols,
-            id_cols,
-        ))
+        Ok((order_cols, partition_col, id_cols))
     }
 }

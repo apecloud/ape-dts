@@ -8,7 +8,6 @@ pub mod data_marker;
 pub mod extractor;
 pub mod meta_fetcher;
 pub mod rdb_query_builder;
-pub mod rdb_query_util;
 pub mod rdb_router;
 pub mod sinker;
 
