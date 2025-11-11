@@ -165,6 +165,32 @@ When set to `true`, the checker appends `src_row` and `dst_row` to every diff lo
 }
 ```
 
+## Output revise SQL
+
+If you prefer to fix data manually, enable SQL generation in the `[sinker]` section:
+
+```
+[sinker]
+output_revise_sql=true
+# optional: force WHERE clause to match the whole row
+revise_match_full_row=true
+```
+
+When `output_revise_sql` is `true`, every miss/diff log contains an extra `revise_sql` field. The checker automatically builds `INSERT` statements for missing rows and `UPDATE` statements for diffs. With `revise_match_full_row=true`, the `UPDATE` statement matches the entire target row even if a primary/unique key exists.
+
+Example:
+
+```json
+{
+  "log_type": "Diff",
+  "schema": "test_db_1",
+  "tb": "one_pk_no_uk",
+  "id_col_values": {"f_0": "4"},
+  "diff_col_values": {"f_1": {"src": "2", "dst": "1"}},
+  "revise_sql": "UPDATE `test_db_1`.`one_pk_no_uk` SET `f_1`='2' WHERE `f_0` = 4;"
+}
+```
+
 # Other configurations
 
 - For [filter] and [router], refer to [config details](../config.md).
