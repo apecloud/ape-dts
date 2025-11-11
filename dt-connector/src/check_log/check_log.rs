@@ -1,9 +1,11 @@
-use std::{collections::HashMap, str::FromStr};
+use std::{
+    collections::{BTreeMap, HashMap},
+    str::FromStr,
+};
 
 use anyhow::Context;
-use dt_common::error::Error;
-use dt_common::utils::serialize_util::SerializeUtil;
-use serde::{Deserialize, Serialize};
+use dt_common::{error::Error, meta::col_value::ColValue};
+use serde::{Deserialize, Serialize, Serializer};
 use serde_json::json;
 
 use super::log_type::LogType;
@@ -13,10 +15,22 @@ pub struct CheckLog {
     pub log_type: LogType,
     pub schema: String,
     pub tb: String,
-    #[serde(serialize_with = "SerializeUtil::ordered_map")]
+    #[serde(serialize_with = "ordered_map")]
     pub id_col_values: HashMap<String, Option<String>>,
-    #[serde(serialize_with = "SerializeUtil::ordered_map")]
+    #[serde(serialize_with = "ordered_map")]
     pub diff_col_values: HashMap<String, DiffColValue>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "ordered_option_map"
+    )]
+    pub src_row: Option<HashMap<String, ColValue>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "ordered_option_map"
+    )]
+    pub dst_row: Option<HashMap<String, ColValue>>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -38,5 +52,75 @@ impl FromStr for CheckLog {
             .with_context(|| format!("invalid check log: [{}]", str))
             .unwrap();
         Ok(me)
+    }
+}
+
+/// For use with serde's [serialize_with] attribute
+pub fn ordered_map<S, K: Ord + Serialize, V: Serialize>(
+    value: &HashMap<K, V>,
+    serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    let ordered: BTreeMap<_, _> = value.iter().collect();
+    ordered.serialize(serializer)
+}
+
+/// Like `ordered_map` but works with optional maps so that serde can skip them when None.
+pub fn ordered_option_map<S, K: Ord + Serialize, V: Serialize>(
+    value: &Option<HashMap<K, V>>,
+    serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    match value {
+        Some(map) => {
+            let ordered: BTreeMap<_, _> = map.iter().collect();
+            ordered.serialize(serializer)
+        }
+        None => serializer.serialize_none(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    fn sample_log() -> CheckLog {
+        let mut id_col_values = HashMap::new();
+        id_col_values.insert("id".to_string(), Some("1".to_string()));
+        CheckLog {
+            log_type: LogType::Diff,
+            schema: "s".into(),
+            tb: "t".into(),
+            id_col_values,
+            diff_col_values: HashMap::new(),
+            src_row: None,
+            dst_row: None,
+        }
+    }
+
+    #[test]
+    fn skips_row_fields_when_absent() {
+        let log = sample_log();
+        let value = serde_json::to_value(&log).unwrap();
+        assert!(value.get("src_row").is_none());
+        assert!(value.get("dst_row").is_none());
+    }
+
+    #[test]
+    fn serializes_row_fields_when_present() {
+        let mut log = sample_log();
+        let mut row = HashMap::new();
+        row.insert("f_0".to_string(), ColValue::Long(5));
+        row.insert("f_1".to_string(), ColValue::String("ok".into()));
+        log.src_row = Some(row.clone());
+        log.dst_row = Some(row);
+        let value = serde_json::to_value(&log).unwrap();
+        assert_eq!(value["src_row"]["f_0"], 5);
+        assert_eq!(value["dst_row"]["f_1"], "ok");
     }
 }

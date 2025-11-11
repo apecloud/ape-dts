@@ -38,6 +38,7 @@ pub struct MysqlChecker {
     pub batch_size: usize,
     pub monitor: Arc<Monitor>,
     pub filter: RdbFilter,
+    pub output_full_row: bool,
 }
 
 #[async_trait]
@@ -95,9 +96,11 @@ impl MysqlChecker {
                 if !diff_col_values.is_empty() {
                     let diff_log = BaseChecker::build_diff_log(
                         src_row_data,
+                        &dst_row_data,
                         diff_col_values,
                         &mut self.extractor_meta_manager,
                         &self.reverse_router,
+                        self.output_full_row,
                     )
                     .await?;
                     diff.push(diff_log);
@@ -107,6 +110,7 @@ impl MysqlChecker {
                     src_row_data,
                     &mut self.extractor_meta_manager,
                     &self.reverse_router,
+                    self.output_full_row,
                 )
                 .await?;
                 miss.push(miss_log);
@@ -152,6 +156,7 @@ impl MysqlChecker {
             &tb_meta.basic,
             &mut self.extractor_meta_manager,
             &self.reverse_router,
+            self.output_full_row,
         )
         .await?;
         BaseChecker::log_dml(miss, diff);

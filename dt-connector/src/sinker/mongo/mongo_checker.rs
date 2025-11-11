@@ -32,6 +32,7 @@ pub struct MongoChecker {
     pub batch_size: usize,
     pub mongo_client: Client,
     pub monitor: Arc<Monitor>,
+    pub output_full_row: bool,
 }
 
 #[async_trait]
@@ -114,15 +115,21 @@ impl MongoChecker {
                 if !diff_col_values.is_empty() {
                     let diff_log = BaseChecker::build_mongo_diff_log(
                         src_row_data,
+                        dst_row_data,
                         diff_col_values,
                         &tb_meta,
                         &self.reverse_router,
+                        self.output_full_row,
                     );
                     diff.push(diff_log);
                 }
             } else {
-                let miss_log =
-                    BaseChecker::build_mongo_miss_log(src_row_data, &tb_meta, &self.reverse_router);
+                let miss_log = BaseChecker::build_mongo_miss_log(
+                    src_row_data,
+                    &tb_meta,
+                    &self.reverse_router,
+                    self.output_full_row,
+                );
                 miss.push(miss_log);
             };
         }

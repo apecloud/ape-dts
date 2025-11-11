@@ -1,7 +1,8 @@
 use std::collections::HashMap;
 
 use dt_common::meta::{
-    rdb_meta_manager::RdbMetaManager, rdb_tb_meta::RdbTbMeta, row_data::RowData,
+    col_value::ColValue, rdb_meta_manager::RdbMetaManager, rdb_tb_meta::RdbTbMeta,
+    row_data::RowData, row_type::RowType,
     struct_meta::statement::struct_statement::StructStatement,
 };
 use dt_common::{log_diff, log_extra, log_miss, rdb_filter::RdbFilter};
@@ -26,6 +27,7 @@ impl BaseChecker {
         dst_tb_meta: &RdbTbMeta,
         extractor_meta_manager: &mut RdbMetaManager,
         reverse_router: &RdbRouter,
+        output_full_row: bool,
     ) -> anyhow::Result<(Vec<CheckLog>, Vec<CheckLog>)> {
         let mut miss = Vec::new();
         let mut diff = Vec::new();
@@ -37,17 +39,23 @@ impl BaseChecker {
                 if !diff_col_values.is_empty() {
                     let diff_log = Self::build_diff_log(
                         src_row_data,
+                        dst_row_data,
                         diff_col_values,
                         extractor_meta_manager,
                         reverse_router,
+                        output_full_row,
                     )
                     .await?;
                     diff.push(diff_log);
                 }
             } else {
-                let miss_log =
-                    Self::build_miss_log(src_row_data, extractor_meta_manager, reverse_router)
-                        .await?;
+                let miss_log = Self::build_miss_log(
+                    src_row_data,
+                    extractor_meta_manager,
+                    reverse_router,
+                    output_full_row,
+                )
+                .await?;
                 miss.push(miss_log);
             }
         }
@@ -136,6 +144,7 @@ impl BaseChecker {
         src_row_data: &RowData,
         extractor_meta_manager: &mut RdbMetaManager,
         reverse_router: &RdbRouter,
+        output_full_row: bool,
     ) -> anyhow::Result<CheckLog> {
         // route src_row_data back since we need origin extracted row_data in check log
         let reverse_src_row_data = reverse_router.route_row(src_row_data.clone());
@@ -144,25 +153,39 @@ impl BaseChecker {
             .await?;
 
         let id_col_values = Self::build_id_col_values(&reverse_src_row_data, src_tb_meta);
+        let src_row = if output_full_row {
+            Self::clone_row_values(&reverse_src_row_data)
+        } else {
+            None
+        };
         let miss_log = CheckLog {
             log_type: LogType::Miss,
             schema: reverse_src_row_data.schema.clone(),
             tb: reverse_src_row_data.tb.clone(),
             id_col_values,
             diff_col_values: HashMap::new(),
+            src_row,
+            dst_row: None,
         };
         Ok(miss_log)
     }
 
     pub async fn build_diff_log(
         src_row_data: &RowData,
+        dst_row_data: &RowData,
         diff_col_values: HashMap<String, DiffColValue>,
         extractor_meta_manager: &mut RdbMetaManager,
         reverse_router: &RdbRouter,
+        output_full_row: bool,
     ) -> anyhow::Result<CheckLog> {
         // share same logic to fill basic CheckLog fields as miss log
-        let miss_log =
-            Self::build_miss_log(src_row_data, extractor_meta_manager, reverse_router).await?;
+        let miss_log = Self::build_miss_log(
+            src_row_data,
+            extractor_meta_manager,
+            reverse_router,
+            output_full_row,
+        )
+        .await?;
         let diff_col_values = if let Some(col_map) =
             reverse_router.get_col_map(&src_row_data.schema, &src_row_data.tb)
         {
@@ -176,13 +199,19 @@ impl BaseChecker {
             diff_col_values
         };
 
-        let diff_log = CheckLog {
+        let mut diff_log = CheckLog {
             log_type: LogType::Diff,
             schema: miss_log.schema,
             tb: miss_log.tb,
             id_col_values: miss_log.id_col_values,
             diff_col_values,
+            src_row: miss_log.src_row,
+            dst_row: None,
         };
+        if output_full_row {
+            let reverse_dst_row_data = reverse_router.route_row(dst_row_data.clone());
+            diff_log.dst_row = Self::clone_row_values(&reverse_dst_row_data);
+        }
         Ok(diff_log)
     }
 
@@ -190,29 +219,51 @@ impl BaseChecker {
         src_row_data: RowData,
         tb_meta: &RdbTbMeta,
         reverse_router: &RdbRouter,
+        output_full_row: bool,
     ) -> CheckLog {
         let reverse_src_row_data = reverse_router.route_row(src_row_data);
         let id_col_values = Self::build_id_col_values(&reverse_src_row_data, tb_meta);
+        let src_row = if output_full_row {
+            Self::clone_row_values(&reverse_src_row_data)
+        } else {
+            None
+        };
         CheckLog {
             log_type: LogType::Miss,
             schema: reverse_src_row_data.schema,
             tb: reverse_src_row_data.tb,
             id_col_values,
             diff_col_values: HashMap::new(),
+            src_row,
+            dst_row: None,
         }
     }
 
     pub fn build_mongo_diff_log(
         src_row_data: RowData,
+        dst_row_data: RowData,
         diff_col_values: HashMap<String, DiffColValue>,
         tb_meta: &RdbTbMeta,
         reverse_router: &RdbRouter,
+        output_full_row: bool,
     ) -> CheckLog {
-        let mut diff_log = Self::build_mongo_miss_log(src_row_data, tb_meta, reverse_router);
+        let mut diff_log =
+            Self::build_mongo_miss_log(src_row_data, tb_meta, reverse_router, output_full_row);
         diff_log.diff_col_values = diff_col_values;
+        if output_full_row {
+            let reverse_dst_row_data = reverse_router.route_row(dst_row_data);
+            diff_log.dst_row = Self::clone_row_values(&reverse_dst_row_data);
+        }
         diff_log.log_type = LogType::Diff;
         // no col map in mongo
         diff_log
+    }
+
+    fn clone_row_values(row_data: &RowData) -> Option<HashMap<String, ColValue>> {
+        match row_data.row_type {
+            RowType::Insert | RowType::Update => row_data.after.clone(),
+            RowType::Delete => row_data.before.clone(),
+        }
     }
 
     fn build_id_col_values(
