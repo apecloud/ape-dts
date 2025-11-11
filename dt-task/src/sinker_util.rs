@@ -131,6 +131,8 @@ impl SinkerUtil {
             SinkerConfig::MysqlCheck {
                 batch_size,
                 output_full_row,
+                output_revise_sql,
+                revise_match_full_row,
                 ..
             } => {
                 // checker needs the reverse router
@@ -158,6 +160,8 @@ impl SinkerUtil {
                         batch_size,
                         monitor: monitor.clone(),
                         output_full_row,
+                        output_revise_sql,
+                        revise_match_full_row,
                     };
                     sub_sinkers.push(Arc::new(async_mutex::Mutex::new(Box::new(sinker))));
                 }
@@ -197,6 +201,8 @@ impl SinkerUtil {
             SinkerConfig::PgCheck {
                 batch_size,
                 output_full_row,
+                output_revise_sql,
+                revise_match_full_row,
                 ..
             } => {
                 // checker needs the reverse router
@@ -224,6 +230,8 @@ impl SinkerUtil {
                         batch_size,
                         monitor: monitor.clone(),
                         output_full_row,
+                        output_revise_sql,
+                        revise_match_full_row,
                     };
                     sub_sinkers.push(Arc::new(async_mutex::Mutex::new(Box::new(sinker))));
                 }

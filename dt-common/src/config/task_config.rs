@@ -76,6 +76,8 @@ const META_CENTER: &str = "metacenter";
 // keys
 const CHECK_LOG_DIR: &str = "check_log_dir";
 const OUTPUT_FULL_ROW: &str = "output_full_row";
+const OUTPUT_REVISE_SQL: &str = "output_revise_sql";
+const REVISE_MATCH_FULL_ROW: &str = "revise_match_full_row";
 const DB_TYPE: &str = "db_type";
 const URL: &str = "url";
 const BATCH_SIZE: &str = "batch_size";
@@ -455,6 +457,9 @@ impl TaskConfig {
                     batch_size,
                     check_log_dir: loader.get_optional(SINKER, CHECK_LOG_DIR),
                     output_full_row: loader.get_with_default(SINKER, OUTPUT_FULL_ROW, false),
+                    output_revise_sql: loader.get_with_default(SINKER, OUTPUT_REVISE_SQL, false),
+                    revise_match_full_row: loader
+                        .get_with_default(SINKER, REVISE_MATCH_FULL_ROW, false),
                 },
 
                 SinkType::Struct => SinkerConfig::MysqlStruct {
@@ -486,6 +491,9 @@ impl TaskConfig {
                     batch_size,
                     check_log_dir: loader.get_optional(SINKER, CHECK_LOG_DIR),
                     output_full_row: loader.get_with_default(SINKER, OUTPUT_FULL_ROW, false),
+                    output_revise_sql: loader.get_with_default(SINKER, OUTPUT_REVISE_SQL, false),
+                    revise_match_full_row: loader
+                        .get_with_default(SINKER, REVISE_MATCH_FULL_ROW, false),
                 },
 
                 SinkType::Struct => SinkerConfig::PgStruct {
