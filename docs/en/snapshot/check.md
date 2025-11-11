@@ -127,6 +127,44 @@ Example:
 }
 ```
 
+## Output complete rows
+
+When the business needs the full row content for troubleshooting, enable full-row logging in the `[sinker]` section:
+
+```
+[sinker]
+output_full_row=true
+```
+
+When set to `true`, the checker appends `src_row` and `dst_row` to every diff log, and `src_row` to every miss log (full rows are currently available for MySQL, PostgreSQL, and MongoDB; Redis is not supported yet). Example:
+
+```
+{
+  "log_type": "Diff",
+  "schema": "test_db_1",
+  "tb": "one_pk_multi_uk",
+  "id_col_values": {
+    "f_0": "5"
+  },
+  "diff_col_values": {
+    "f_1": {
+      "src": "5",
+      "dst": "5000"
+    }
+  },
+  "src_row": {
+    "f_0": 5,
+    "f_1": 5,
+    "f_2": "ok"
+  },
+  "dst_row": {
+    "f_0": 5,
+    "f_1": 5000,
+    "f_2": "after manual update"
+  }
+}
+```
+
 # Other configurations
 
 - For [filter] and [router], refer to [config details](../config.md).
