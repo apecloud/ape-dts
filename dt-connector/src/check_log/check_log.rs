@@ -31,6 +31,8 @@ pub struct CheckLog {
         serialize_with = "ordered_option_map"
     )]
     pub dst_row: Option<HashMap<String, ColValue>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub revise_sql: Option<String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -100,6 +102,7 @@ mod tests {
             diff_col_values: HashMap::new(),
             src_row: None,
             dst_row: None,
+            revise_sql: None,
         }
     }
 
