@@ -1,12 +1,19 @@
 use std::{collections::HashMap, str::FromStr};
 
 use anyhow::Context;
-use dt_common::{error::Error, meta::col_value::ColValue, utils::serialize_util::SerializeUtil};
+use dt_common::{
+    error::Error,
+    meta::col_value::ColValue,
+    utils::serialize_util::SerializeUtil,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-#[derive(Serialize, Deserialize)]
+use super::log_type::LogType;
+
+#[derive(Debug, Serialize, Deserialize)]
 pub struct CheckLog {
+    pub log_type: LogType,
     pub schema: String,
     pub tb: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -34,9 +41,11 @@ pub struct CheckLog {
         serialize_with = "SerializeUtil::ordered_option_map"
     )]
     pub dst_row: Option<HashMap<String, ColValue>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub revise_sql: Option<String>,
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DiffColValue {
     pub src: Option<String>,
     pub dst: Option<String>,
@@ -126,6 +135,7 @@ mod tests {
         let mut id_col_values = HashMap::new();
         id_col_values.insert("id".to_string(), Some("1".to_string()));
         CheckLog {
+            log_type: LogType::Diff,
             schema: "s".into(),
             tb: "t".into(),
             target_schema: None,
@@ -134,6 +144,7 @@ mod tests {
             diff_col_values: HashMap::new(),
             src_row: None,
             dst_row: None,
+            revise_sql: None,
         }
     }
 

@@ -1,10 +1,15 @@
-use anyhow::{Context, Ok};
+use anyhow::Context;
 use mongodb::bson::Document;
 use std::borrow::Cow;
 use std::collections::{BTreeSet, HashMap};
+use std::future::Future;
+use tokio::time::{sleep, Duration};
 
 use crate::{
-    check_log::check_log::{CheckLog, DiffColValue, StructCheckLog},
+    check_log::{
+        check_log::{CheckLog, DiffColValue, StructCheckLog},
+        log_type::LogType,
+    },
     rdb_query_builder::RdbQueryBuilder,
     rdb_router::RdbRouter,
     sinker::mongo::mongo_cmd,
@@ -26,6 +31,24 @@ pub enum ReviseSqlMeta<'a> {
 pub struct ReviseSqlContext<'a> {
     pub meta: ReviseSqlMeta<'a>,
     pub match_full_row: bool,
+}
+
+#[derive(Clone, Copy)]
+pub struct DoubleCheckConfig {
+    pub delay_ms: u64,
+    pub times: u32,
+}
+
+pub enum CheckResult {
+    Ok,
+    Miss,
+    Diff(HashMap<String, DiffColValue>),
+}
+
+impl CheckResult {
+    pub fn is_inconsistent(&self) -> bool {
+        !matches!(self, CheckResult::Ok)
+    }
 }
 
 impl<'a> ReviseSqlContext<'a> {
@@ -182,12 +205,18 @@ pub struct BatchCompareContext<'ctx> {
 }
 
 impl BaseChecker {
-    pub async fn batch_compare_row_data_items(
+    pub async fn batch_compare_row_data_items<F, Fut>(
         src_data: &[RowData],
-        dst_row_data_map: &HashMap<u128, RowData>,
+        mut dst_row_data_map: HashMap<u128, RowData>,
         range: BatchCompareRange,
         ctx: BatchCompareContext<'_>,
-    ) -> anyhow::Result<(Vec<CheckLog>, Vec<CheckLog>, usize)> {
+        retry_config: DoubleCheckConfig,
+        fetch_latest_row: F,
+    ) -> anyhow::Result<(Vec<CheckLog>, Vec<CheckLog>, usize)>
+    where
+        F: Fn(u128, &RowData) -> Fut,
+        Fut: Future<Output = anyhow::Result<Option<RowData>>>,
+    {
         let BatchCompareContext {
             dst_tb_meta,
             extractor_meta_manager,
@@ -210,59 +239,120 @@ impl BaseChecker {
 
         for src_row_data in target_slice {
             let hash_code = src_row_data.get_hash_code(dst_tb_meta)?;
-            // src_row_data is already routed, so here we call get_hash_code by dst_tb_meta
-            match dst_row_data_map.get(&hash_code) {
-                Some(dst_row_data) => {
-                    let diff_col_values = Self::compare_row_data(src_row_data, dst_row_data)?;
-                    if diff_col_values.is_empty() {
-                        continue;
-                    }
+            let dst_row_data = dst_row_data_map.remove(&hash_code);
 
-                    if let Some(revise_sql) = revise_ctx
+            let (check_result, final_dst_row) = Self::check_row_with_retry(
+                src_row_data,
+                dst_row_data,
+                retry_config,
+                |row| fetch_latest_row(hash_code, row),
+            )
+            .await?;
+
+            match check_result {
+                CheckResult::Diff(diff_col_values) => {
+                    let dst_row = final_dst_row
                         .as_ref()
-                        .map(|ctx| ctx.build_diff_sql(src_row_data, dst_row_data, &diff_col_values))
+                        .expect("diff result should have a dst row");
+
+                    let revise_sql = revise_ctx
+                        .as_ref()
+                        .map(|ctx| ctx.build_diff_sql(src_row_data, dst_row, &diff_col_values))
                         .transpose()?
-                        .flatten()
-                    {
+                        .flatten();
+
+                    if let Some(revise_sql) = &revise_sql {
                         log_sql!("{}", revise_sql);
                         sql_count += 1;
                     }
 
-                    let diff_log = Self::build_diff_log(
+                    let mut diff_log = Self::build_diff_log(
                         src_row_data,
-                        dst_row_data,
+                        dst_row,
                         diff_col_values,
                         extractor_meta_manager,
                         reverse_router,
                         output_full_row,
                     )
                     .await?;
+                    diff_log.revise_sql = revise_sql;
                     diff.push(diff_log);
                 }
-                None => {
-                    if let Some(revise_sql) = revise_ctx
+                CheckResult::Miss => {
+                    let revise_sql = revise_ctx
                         .as_ref()
                         .map(|ctx| ctx.build_miss_sql(src_row_data))
                         .transpose()?
-                        .flatten()
-                    {
+                        .flatten();
+
+                    if let Some(revise_sql) = &revise_sql {
                         log_sql!("{}", revise_sql);
                         sql_count += 1;
                     }
 
-                    let miss_log = Self::build_miss_log(
+                    let mut miss_log = Self::build_miss_log(
                         src_row_data,
                         extractor_meta_manager,
                         reverse_router,
                         output_full_row,
                     )
                     .await?;
+                    miss_log.revise_sql = revise_sql;
                     miss.push(miss_log);
                 }
+                CheckResult::Ok => {}
             }
         }
 
         Ok((miss, diff, sql_count))
+    }
+
+    pub async fn check_row_with_retry<F, Fut>(
+        src_row: &RowData,
+        mut dst_row: Option<RowData>,
+        retry_config: DoubleCheckConfig,
+        fetch_latest: F,
+    ) -> anyhow::Result<(CheckResult, Option<RowData>)>
+    where
+        F: Fn(&RowData) -> Fut,
+        Fut: Future<Output = anyhow::Result<Option<RowData>>>,
+    {
+        let mut check_result = Self::compare_src_dst(src_row, dst_row.as_ref())?;
+
+        if check_result.is_inconsistent() && retry_config.times > 0 {
+            for _ in 0..retry_config.times {
+                if retry_config.delay_ms > 0 {
+                    sleep(Duration::from_millis(retry_config.delay_ms)).await;
+                }
+
+                if let Some(latest) = fetch_latest(src_row).await? {
+                    dst_row = Some(latest);
+                }
+
+                check_result = Self::compare_src_dst(src_row, dst_row.as_ref())?;
+                if !check_result.is_inconsistent() {
+                    break;
+                }
+            }
+        }
+
+        Ok((check_result, dst_row))
+    }
+
+    fn compare_src_dst(
+        src_row: &RowData,
+        dst_row: Option<&RowData>,
+    ) -> anyhow::Result<CheckResult> {
+        if let Some(dst_row) = dst_row {
+            let diffs = Self::compare_row_data(src_row, dst_row)?;
+            if diffs.is_empty() {
+                Ok(CheckResult::Ok)
+            } else {
+                Ok(CheckResult::Diff(diffs))
+            }
+        } else {
+            Ok(CheckResult::Miss)
+        }
     }
 
     pub fn compare_row_data(
@@ -455,6 +545,7 @@ impl BaseChecker {
             .flatten();
 
         Ok(CheckLog {
+            log_type: LogType::Miss,
             schema: schema_for_meta,
             tb: tb_for_meta,
             target_schema,
@@ -463,6 +554,7 @@ impl BaseChecker {
             diff_col_values: HashMap::new(),
             src_row,
             dst_row: None,
+            revise_sql: None,
         })
     }
 
@@ -496,6 +588,8 @@ impl BaseChecker {
         };
 
         log.diff_col_values = mapped_diff_values;
+        log.log_type = LogType::Diff;
+        log.revise_sql = None;
 
         if output_full_row {
             let has_col_map = reverse_router
@@ -547,6 +641,7 @@ impl BaseChecker {
         };
 
         Ok(CheckLog {
+            log_type: LogType::Miss,
             schema: schema_for_log,
             tb: tb_for_log,
             target_schema: schema_changed.then(|| src_row_data.schema.clone()),
@@ -555,6 +650,7 @@ impl BaseChecker {
             diff_col_values: HashMap::new(),
             src_row,
             dst_row: None,
+            revise_sql: None,
         })
     }
 
@@ -570,6 +666,8 @@ impl BaseChecker {
             Self::build_mongo_miss_log(src_row_data, tb_meta, reverse_router, output_full_row)?;
 
         diff_log.diff_col_values = diff_col_values;
+        diff_log.log_type = LogType::Diff;
+        diff_log.revise_sql = None;
 
         if output_full_row {
             let has_col_map = reverse_router
