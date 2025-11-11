@@ -127,7 +127,13 @@ impl PgSnapshotExtractor {
         let mut extracted_count = 0;
         let sql_from_beginning = self.build_extract_sql(tb_meta, false)?;
         let sql_from_value = self.build_extract_sql(tb_meta, true)?;
+        let sql_for_null = if tb_meta.basic.order_cols_are_nullable {
+            self.build_extract_null_sql(tb_meta, true)?
+        } else {
+            String::new()
+        };
         let ignore_cols = self.filter.get_ignore_cols(&self.schema, &self.tb);
+
         loop {
             let bind_values = start_values.clone();
             let query = if start_from_beginning {
@@ -176,6 +182,18 @@ impl PgSnapshotExtractor {
             }
         }
 
+        // extract rows with NULL
+        if tb_meta.basic.order_cols_are_nullable && !sql_for_null.is_empty() {
+            let mut rows = sqlx::query(&sql_for_null).fetch(&self.conn_pool);
+            while let Some(row) = rows.try_next().await? {
+                extracted_count += 1;
+                let row_data = RowData::from_pg_row(&row, tb_meta, &ignore_cols);
+                self.base_extractor
+                    .push_row(row_data, Position::None)
+                    .await?;
+            }
+        }
+
         log_info!(
             r#"end extracting data from "{}"."{}"", all count: {}"#,
             self.schema,
@@ -187,7 +205,13 @@ impl PgSnapshotExtractor {
 
     #[inline(always)]
     pub fn can_extract_by_batch(tb_meta: &PgTbMeta) -> bool {
-        !tb_meta.basic.order_cols.is_empty() && !tb_meta.basic.order_cols_are_nullable()
+        !tb_meta.basic.order_cols.is_empty()
+    }
+
+    fn build_extract_cols_str(&mut self, tb_meta: &PgTbMeta) -> anyhow::Result<String> {
+        let ignore_cols = self.filter.get_ignore_cols(&self.schema, &self.tb);
+        let query_builder = RdbQueryBuilder::new_for_pg(tb_meta, ignore_cols);
+        query_builder.build_extract_cols_str()
     }
 
     fn build_extract_sql(
@@ -195,21 +219,25 @@ impl PgSnapshotExtractor {
         tb_meta: &PgTbMeta,
         has_start_value: bool,
     ) -> anyhow::Result<String> {
-        let ignore_cols = self.filter.get_ignore_cols(&self.schema, &self.tb);
-        let query_builder = RdbQueryBuilder::new_for_pg(tb_meta, ignore_cols);
-        let cols_str = query_builder.build_extract_cols_str()?;
+        let cols_str = self.build_extract_cols_str(tb_meta)?;
         let where_sql = BaseExtractor::get_where_sql(&self.filter, &self.schema, &self.tb, "");
 
         // SELECT col_1, col_2::text FROM tb_1 WHERE col_1 > $1 ORDER BY col_1;
         if Self::can_extract_by_batch(tb_meta) {
             let order_by_clause = Self::build_order_by_clause(&tb_meta.basic)?;
             if has_start_value {
-                let key_predicate = Self::build_order_col_predicate(tb_meta)?;
+                let mut where_clause = Self::build_order_col_predicate(tb_meta)?;
+                if tb_meta.basic.order_cols_are_nullable {
+                    let not_null_predicate = Self::build_null_predicate(&tb_meta.basic, false)?;
+                    if !not_null_predicate.is_empty() {
+                        where_clause = format!("{} AND {}", where_clause, not_null_predicate);
+                    }
+                }
                 let where_sql = BaseExtractor::get_where_sql(
                     &self.filter,
                     &self.schema,
                     &self.tb,
-                    &key_predicate,
+                    &where_clause,
                 );
                 Ok(format!(
                     r#"SELECT {} FROM "{}"."{}" {} ORDER BY {} LIMIT {}"#,
@@ -227,6 +255,23 @@ impl PgSnapshotExtractor {
                 cols_str, self.schema, self.tb, where_sql
             ))
         }
+    }
+
+    fn build_extract_null_sql(
+        &mut self,
+        tb_meta: &PgTbMeta,
+        is_null: bool,
+    ) -> anyhow::Result<String> {
+        let cols_str = self.build_extract_cols_str(tb_meta)?;
+        let order_by_clause = Self::build_order_by_clause(&tb_meta.basic)?;
+        let null_predicate = Self::build_null_predicate(&tb_meta.basic, is_null)?;
+        let where_sql =
+            BaseExtractor::get_where_sql(&self.filter, &self.schema, &self.tb, &null_predicate);
+
+        Ok(format!(
+            r#"SELECT {} FROM "{}"."{}" {} ORDER BY {}"#,
+            cols_str, self.schema, self.tb, where_sql, order_by_clause
+        ))
     }
 
     fn build_order_col_predicate(tb_meta: &PgTbMeta) -> anyhow::Result<String> {
@@ -279,6 +324,24 @@ impl PgSnapshotExtractor {
                 .map(|col| format!(r#""{}" ASC"#, col))
                 .collect::<Vec<String>>()
                 .join(", "))
+        }
+    }
+
+    fn build_null_predicate(tb_meta: &RdbTbMeta, is_null: bool) -> anyhow::Result<String> {
+        let order_cols = &tb_meta.order_cols;
+        let null_check = if is_null { "IS NULL" } else { "IS NOT NULL" };
+        let join_str = if is_null { "OR" } else { "AND" };
+        if order_cols.is_empty() {
+            bail!("order cols is empty");
+        } else {
+            // col_1 IS NOT NULL AND col_2 IS NOT NULL AND col_3 IS NOT NULL
+            // col_1 IS NULL OR col_2 IS NULL OR col_3 IS NULL
+            Ok(order_cols
+                .iter()
+                .filter(|&col| tb_meta.nullable_cols.contains(col))
+                .map(|col| format!(r#""{}" {}"#, col, null_check))
+                .collect::<Vec<String>>()
+                .join(&format!(" {} ", join_str)))
         }
     }
 

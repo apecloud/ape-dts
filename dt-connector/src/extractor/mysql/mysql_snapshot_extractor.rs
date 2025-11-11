@@ -158,9 +158,14 @@ impl MysqlSnapshotExtractor {
         }
         let mut extracted_count = 0;
         let mut start_values = resume_values;
-        let ignore_cols = self.filter.get_ignore_cols(&self.db, &self.tb);
         let sql_from_beginning = self.build_extract_sql(tb_meta, self.batch_size, 1)?;
         let sql_from_value = self.build_extract_sql(tb_meta, self.batch_size, 3)?;
+        let sql_for_null = if tb_meta.basic.order_cols_are_nullable {
+            self.build_extract_null_sql(tb_meta, true)?
+        } else {
+            String::new()
+        };
+        let ignore_cols = self.filter.get_ignore_cols(&self.db, &self.tb);
 
         loop {
             let bind_values = start_values.clone();
@@ -209,6 +214,18 @@ impl MysqlSnapshotExtractor {
             // all data extracted
             if slice_count < self.batch_size {
                 break;
+            }
+        }
+
+        // extract rows with NULL
+        if tb_meta.basic.order_cols_are_nullable && !sql_for_null.is_empty() {
+            let mut rows = sqlx::query(&sql_for_null).fetch(&self.conn_pool);
+            while let Some(row) = rows.try_next().await? {
+                extracted_count += 1;
+                let row_data = RowData::from_mysql_row(&row, tb_meta, &ignore_cols);
+                self.base_extractor
+                    .push_row(row_data, Position::None)
+                    .await?;
             }
         }
 
@@ -444,6 +461,7 @@ impl MysqlSnapshotExtractor {
     #[inline(always)]
     fn can_parallel_extract(&self, tb_meta: &MysqlTbMeta) -> anyhow::Result<bool> {
         Ok(tb_meta.basic.order_cols.len() == 1
+            && !tb_meta.basic.order_cols_are_nullable
             && self.parallel_size > 1
             && matches!(
                 tb_meta.get_col_type(&tb_meta.basic.order_cols[0])?,
@@ -455,7 +473,25 @@ impl MysqlSnapshotExtractor {
 
     #[inline(always)]
     pub fn can_extract_by_batch(tb_meta: &MysqlTbMeta) -> bool {
-        !tb_meta.basic.order_cols.is_empty() && !tb_meta.basic.order_cols_are_nullable()
+        !tb_meta.basic.order_cols.is_empty()
+    }
+
+    fn build_null_predicate(tb_meta: &RdbTbMeta, is_null: bool) -> anyhow::Result<String> {
+        let order_cols = &tb_meta.order_cols;
+        let null_check = if is_null { "IS NULL" } else { "IS NOT NULL" };
+        let join_str = if is_null { "OR" } else { "AND" };
+        if order_cols.is_empty() {
+            bail!("order cols is empty");
+        } else {
+            // col_1 IS NOT NULL AND col_2 IS NOT NULL AND col_3 IS NOT NULL
+            // col_1 IS NULL OR col_2 IS NULL OR col_3 IS NULL
+            Ok(order_cols
+                .iter()
+                .filter(|&col| tb_meta.nullable_cols.contains(col))
+                .map(|col| format!(r#"`{}` {}"#, col, null_check))
+                .collect::<Vec<String>>()
+                .join(&format!(" {} ", join_str)))
+        }
     }
 
     async fn get_resume_values(
@@ -501,12 +537,23 @@ impl MysqlSnapshotExtractor {
         sql_type: u8,
     ) -> anyhow::Result<String> {
         let cols_str = self.build_extract_cols_str(tb_meta)?;
-        let condition_str = match sql_type {
+        let mut condition_str = match sql_type {
             1 => "".to_string(),
             2 => Self::build_order_col_predicate_range(tb_meta)?,
             3 => Self::build_order_col_predicate_upper(tb_meta)?,
             _ => bail!("unsupported sql_type: {}", sql_type),
         };
+
+        if tb_meta.basic.order_cols_are_nullable {
+            let not_null_predicate = Self::build_null_predicate(&tb_meta.basic, false)?;
+            if !not_null_predicate.is_empty() {
+                condition_str = if condition_str.is_empty() {
+                    not_null_predicate
+                } else {
+                    format!("{} AND {}", condition_str, not_null_predicate)
+                };
+            }
+        }
         let where_sql =
             BaseExtractor::get_where_sql(&self.filter, &self.db, &self.tb, &condition_str);
         let sql = format!(
@@ -519,6 +566,23 @@ impl MysqlSnapshotExtractor {
             batch_size,
         );
         Ok(sql)
+    }
+
+    fn build_extract_null_sql(
+        &mut self,
+        tb_meta: &MysqlTbMeta,
+        is_null: bool,
+    ) -> anyhow::Result<String> {
+        let cols_str = self.build_extract_cols_str(tb_meta)?;
+        let order_by_clause = Self::build_order_by_clause(&tb_meta.basic)?;
+        let null_predicate = Self::build_null_predicate(&tb_meta.basic, is_null)?;
+        let where_sql =
+            BaseExtractor::get_where_sql(&self.filter, &self.db, &self.tb, &null_predicate);
+
+        Ok(format!(
+            r#"SELECT {} FROM `{}`.`{}` {} ORDER BY {}"#,
+            cols_str, self.db, self.tb, where_sql, order_by_clause
+        ))
     }
 
     #[inline(always)]

@@ -97,7 +97,7 @@ INSERT INTO test_db_1.composite_pk_table VALUES(1, '1', 1),(2, '2', 2),(3, '3', 
 INSERT INTO test_db_1.composite_unique_key_table VALUES(1, '1', 1),(2, '2', 2),(3, '3', 3),(4, '4', 4),(5, '5', 5),(6, '6', 6),(7, '7', 7),(8, '8', 8),(9, '9', 9),(10, '10', 10);
 
 --test nullable composite unique key
--- INSERT INTO test_db_1.composite_unique_key_table_2 VALUES(1, '1', 1),(2, '2', 2),(3, '3', 3),(4, '4', 4),(5, '5', 5),(6, '6', 6),(7, NULL, 7),(NULL, '8', 8),(NULL, 'null', 9),(NULL, NULL, 10),(NULL, NULL, NULL),(NULL, NULL, NULL);
+INSERT INTO test_db_1.composite_unique_key_table_2 VALUES(1, '1', 1),(2, '2', 2),(3, '3', 3),(4, '4', 4),(5, '5', 5),(6, '6', 6),(7, NULL, 7),(8, '8', NULL),(9, 'null', NULL),(10, NULL, NULL),(NULL, NULL, NULL),(NULL, NULL, NULL);
 
 --test multi primary and single unique key
 INSERT INTO test_db_1.multi_primary_and_single_unique_table VALUES(1, '1', 1, '1', 1),(2, '2', 2, '2', 2),(3, '3', 3, '3', 3),(4, '4', 4, '4', 4),(5, '5', 5, '5', 5),(6, '6', 6, '6', 6),(7, '7', 7, '7', 7),(8, '8', 8, '8', 8),(9, '9', 9, '9', 9),(10, '10', 10, '10', 10);

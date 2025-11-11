@@ -13,7 +13,7 @@ use crate::{
     rdb_router::RdbRouter, sinker::base_sinker::BaseSinker, Sinker,
 };
 use dt_common::{
-    log_error, log_info,
+    log_error, log_info, log_sql,
     meta::{
         ddl_meta::{ddl_data::DdlData, ddl_type::DdlType},
         pg::pg_meta_manager::PgMetaManager,
@@ -237,7 +237,11 @@ impl PgSinker {
         let (query_info, data_size) =
             query_builder.get_batch_insert_query(data, start_index, batch_size, self.replace)?;
         let query = query_builder.create_pg_query(&query_info);
-
+        log_sql!(
+            "batch insert sql: {}, batch_size: {}",
+            query_info.sql,
+            batch_size
+        );
         let start_time = Instant::now();
         let mut rts = LimitedQueue::new(1);
         let exec_error = if let Some(sql) = self.get_data_marker_sql().await {

@@ -16,6 +16,7 @@ pub struct RdbTbMeta {
     pub col_origin_type_map: HashMap<String, String>,
     pub key_map: HashMap<String, Vec<String>>,
     pub order_cols: Vec<String>,
+    pub order_cols_are_nullable: bool,
     pub partition_col: String,
     pub id_cols: Vec<String>,
     pub foreign_keys: Vec<ForeignKey>,
@@ -23,12 +24,6 @@ pub struct RdbTbMeta {
 }
 
 impl RdbTbMeta {
-    pub fn order_cols_are_nullable(&self) -> bool {
-        self.order_cols
-            .iter()
-            .any(|col| self.nullable_cols.contains(col))
-    }
-
     #[inline(always)]
     pub fn get_default_order_col_values(&self) -> HashMap<String, ColValue> {
         self.order_cols

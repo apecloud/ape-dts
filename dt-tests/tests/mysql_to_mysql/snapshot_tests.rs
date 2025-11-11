@@ -6,7 +6,7 @@ mod test {
     use dt_common::config::config_enums::DbType;
     use serial_test::serial;
 
-    use crate::test_runner::test_base::TestBase;
+    use crate::test_runner::{rdb_test_runner::RdbTestRunner, test_base::TestBase};
 
     #[tokio::test]
     #[serial]
@@ -49,6 +49,7 @@ mod test {
         dst_expected_counts.insert("test_db_1.one_pk_multi_uk", 4);
         dst_expected_counts.insert("test_db_1.one_pk_no_uk", 4);
         dst_expected_counts.insert("test_db_1.multi_pk", 1);
+        dst_expected_counts.insert("test_db_1.nullable_composite_unique_key_table", 6);
         // with special characters in db && tb && col names
         dst_expected_counts.insert("test_db_@.resume_table_*$4", 1);
 
@@ -79,6 +80,7 @@ mod test {
         dst_expected_counts.insert("test_db_1.one_pk_multi_uk", 4);
         dst_expected_counts.insert("test_db_1.one_pk_no_uk", 4);
         dst_expected_counts.insert("test_db_1.multi_pk", 1);
+        dst_expected_counts.insert("test_db_1.nullable_composite_unique_key_table", 6);
         // with special characters in db && tb && col names
         dst_expected_counts.insert("test_db_@.resume_table_*$4", 1);
 
@@ -123,5 +125,15 @@ mod test {
         // [runtime]
         // tb_parallel_size=3
         TestBase::run_snapshot_test("mysql_to_mysql/snapshot/tb_parallel_test").await;
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn snapshot_deadlock_test() {
+        let runner = RdbTestRunner::new("mysql_to_mysql/snapshot/deadlock_test")
+            .await
+            .unwrap();
+        runner.run_snapshot_test(false).await.unwrap();
+        runner.close().await.unwrap();
     }
 }

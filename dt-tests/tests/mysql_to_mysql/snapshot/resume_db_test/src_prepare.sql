@@ -18,6 +18,9 @@ CREATE TABLE test_db_1.one_pk_multi_uk ( f_0 tinyint, f_1 smallint, f_2 mediumin
 
 CREATE TABLE test_db_1.multi_pk(f_0 integer, f_1 integer, PRIMARY KEY(f_0, f_1));
 
+-- test nullable composite unique key
+CREATE TABLE test_db_1.nullable_composite_unique_key_table (uk1 int, uk2 varchar(10), val int, UNIQUE(uk1, uk2));
+
 CREATE TABLE `test_db_@`.`resume_table_*$4`(`p.k` serial, val numeric(20,8), PRIMARY KEY(`p.k`));
 
 CREATE TABLE `test_db_@`.`finished_table_*$1`(`p.k` serial, val numeric(20,8), PRIMARY KEY(`p.k`));

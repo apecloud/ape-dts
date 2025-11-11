@@ -50,6 +50,8 @@ INSERT INTO test_db_1.one_pk_multi_uk VALUES (9, NULL, NULL, NULL, NULL, NULL, N
 
 INSERT INTO test_db_1.multi_pk(f_0, f_1) VALUES (1, 30),(2, 30);
 
+INSERT INTO test_db_1.nullable_composite_unique_key_table VALUES(1, '1', 1),(2, '2', 2),(3, '3', 3),(4, '4', 4),(5, '5', 5),(6, '6', 6),(7, NULL, 7),(NULL, '8', 8),(NULL, 'null', 9),(NULL, NULL, 10),(NULL, NULL, NULL),(NULL, NULL, NULL);
+
 INSERT INTO `test_db_@`.`resume_table_*$4`(`p.k`, val) VALUES (1, 30),(2, 30);
 
 INSERT INTO `test_db_@`.`finished_table_*$1`(`p.k`, val) VALUES (1, 30),(2,30);

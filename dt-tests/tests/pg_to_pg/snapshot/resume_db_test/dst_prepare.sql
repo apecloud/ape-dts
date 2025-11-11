@@ -11,6 +11,10 @@ CREATE TABLE resume_table_2("p.k" serial, val numeric(20,8), PRIMARY KEY("p.k"))
 DROP TABLE IF EXISTS resume_table_3;
 CREATE TABLE resume_table_3(f_0 integer, f_1 integer, PRIMARY KEY(f_0, f_1));
 
+-- test nullable composite unique key
+DROP TABLE IF EXISTS nullable_composite_unique_key_table;
+CREATE TABLE nullable_composite_unique_key_table (uk1 int, uk2 varchar(10), val int, UNIQUE(uk1, uk2));
+
 DROP TABLE IF EXISTS "resume_table_*$4";
 CREATE TABLE "resume_table_*$4"("p.k" serial, val numeric(20,8), PRIMARY KEY("p.k"));
 
@@ -44,5 +48,6 @@ insert into apecloud_resumer_test.ape_task_position (task_id, resumer_type, posi
 insert into apecloud_resumer_test.ape_task_position (task_id, resumer_type, position_key, position_data) values ('resume_db_test_1', 'SnapshotDoing', 'public-resume_table_1', '{"type":"RdbSnapshot","db_type":"pg","schema":"public","tb":"resume_table_1","order_col":"pk","value":"1"}');
 insert into apecloud_resumer_test.ape_task_position (task_id, resumer_type, position_key, position_data) values ('resume_db_test_1', 'SnapshotDoing', 'public-resume_table_2', '{"type":"RdbSnapshot","db_type":"pg","schema":"public","tb":"resume_table_2","order_col":"p.k","value":"1"}');
 insert into apecloud_resumer_test.ape_task_position (task_id, resumer_type, position_key, position_data) values ('resume_db_test_1', 'SnapshotDoing', 'public-resume_table_3', '{"type":"RdbSnapshot","db_type":"pg","schema":"public","tb":"resume_table_3","order_col_values":{"f_0":"1","f_1":"30"}}');
+insert into apecloud_resumer_test.ape_task_position (task_id, resumer_type, position_key, position_data) values ('resume_db_test_1', 'SnapshotDoing', 'public-nullable_composite_unique_key_table', '{"type":"RdbSnapshot","db_type":"pg","schema":"public","tb":"nullable_composite_unique_key_table","order_col_values":{"uk1":"6","uk2":"6"}}');
 insert into apecloud_resumer_test.ape_task_position (task_id, resumer_type, position_key, position_data) values ('resume_db_test_1', 'SnapshotDoing', 'public-resume_table_*$4', '{"type":"RdbSnapshot","db_type":"pg","schema":"public","tb":"resume_table_*$4","order_col":"p.k","value":"1"}');
 insert into apecloud_resumer_test.ape_task_position (task_id, resumer_type, position_key, position_data) values ('resume_db_test_1', 'SnapshotDoing', 'test_db_*.*-resume_table_*$5', '{"type":"RdbSnapshot","db_type":"pg","schema":"test_db_*.*","tb":"resume_table_*$5","order_col":"p.k","value":"1"}');

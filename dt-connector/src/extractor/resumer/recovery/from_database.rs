@@ -231,6 +231,7 @@ impl Recovery for DatabaseRecovery {
         if let Some(position_str) = position_str {
             match Position::from_log(&position_str) {
                 Position::RdbSnapshot {
+                    order_col,
                     value,
                     order_col_values,
                     ..
@@ -238,7 +239,9 @@ impl Recovery for DatabaseRecovery {
                     if let Some(order_col_value) = order_col_values.get(col) {
                         return order_col_value.clone();
                     }
-                    return Some(value);
+                    if order_col == col {
+                        return Some(value);
+                    }
                 }
                 Position::FoxlakeS3 { s3_meta_file, .. } => return Some(s3_meta_file),
                 _ => return None,

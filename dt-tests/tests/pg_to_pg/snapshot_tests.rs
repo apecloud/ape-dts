@@ -60,6 +60,7 @@ mod test {
         dst_expected_counts.insert("public.resume_table_2", 1);
         dst_expected_counts.insert("public.resume_table_3", 1);
         dst_expected_counts.insert("public.resume_table_*$4", 1);
+        dst_expected_counts.insert("public.nullable_composite_unique_key_table", 6);
         dst_expected_counts.insert(r#""test_db_*.*"."resume_table_*$5""#, 1);
         dst_expected_counts.insert(r#""test_db_*.*"."finished_table_*$1""#, 0);
         dst_expected_counts.insert(r#""test_db_*.*"."finished_table_*$2""#, 0);
@@ -83,6 +84,7 @@ mod test {
         dst_expected_counts.insert("public.resume_table_2", 1);
         dst_expected_counts.insert("public.resume_table_3", 1);
         dst_expected_counts.insert("public.resume_table_*$4", 1);
+        dst_expected_counts.insert("public.nullable_composite_unique_key_table", 6);
         dst_expected_counts.insert(r#""test_db_*.*"."resume_table_*$5""#, 1);
         dst_expected_counts.insert(r#""test_db_*.*"."finished_table_*$1""#, 0);
         dst_expected_counts.insert(r#""test_db_*.*"."finished_table_*$2""#, 0);
