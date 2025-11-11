@@ -1,8 +1,13 @@
 use std::collections::HashMap;
 
 use dt_common::meta::{
-    col_value::ColValue, rdb_meta_manager::RdbMetaManager, rdb_tb_meta::RdbTbMeta,
-    row_data::RowData, row_type::RowType,
+    col_value::ColValue,
+    mysql::mysql_tb_meta::MysqlTbMeta,
+    pg::pg_tb_meta::PgTbMeta,
+    rdb_meta_manager::RdbMetaManager,
+    rdb_tb_meta::RdbTbMeta,
+    row_data::RowData,
+    row_type::RowType,
     struct_meta::statement::struct_statement::StructStatement,
 };
 use dt_common::{log_diff, log_extra, log_miss, rdb_filter::RdbFilter};
@@ -12,8 +17,239 @@ use crate::{
         check_log::{CheckLog, DiffColValue},
         log_type::LogType,
     },
+    rdb_query_builder::RdbQueryBuilder,
     rdb_router::RdbRouter,
 };
+
+pub enum ReviseSqlMeta<'a> {
+    Mysql(&'a MysqlTbMeta),
+    Pg(&'a PgTbMeta),
+}
+
+pub struct ReviseSqlContext<'a> {
+    pub meta: ReviseSqlMeta<'a>,
+    pub match_full_row: bool,
+}
+
+impl<'a> ReviseSqlContext<'a> {
+    pub fn mysql(meta: &'a MysqlTbMeta, match_full_row: bool) -> Self {
+        Self {
+            meta: ReviseSqlMeta::Mysql(meta),
+            match_full_row,
+        }
+    }
+
+    pub fn pg(meta: &'a PgTbMeta, match_full_row: bool) -> Self {
+        Self {
+            meta: ReviseSqlMeta::Pg(meta),
+            match_full_row,
+        }
+    }
+
+    pub fn build_miss_sql(&self, src_row_data: &RowData) -> anyhow::Result<Option<String>> {
+        let after = match &src_row_data.after {
+            Some(after) if !after.is_empty() => after.clone(),
+            _ => return Ok(None),
+        };
+        let mut insert_row = RowData::new(
+            src_row_data.schema.clone(),
+            src_row_data.tb.clone(),
+            RowType::Insert,
+            None,
+            Some(after),
+        );
+        insert_row.refresh_data_size();
+        let sql = self.build_insert_query(&insert_row)?;
+        Ok(Some(sql))
+    }
+
+    pub fn build_diff_sql(
+        &self,
+        src_row_data: &RowData,
+        dst_row_data: &RowData,
+        diff_col_values: &HashMap<String, DiffColValue>,
+    ) -> anyhow::Result<Option<String>> {
+        if diff_col_values.is_empty() {
+            return Ok(None);
+        }
+
+        let src_after = match &src_row_data.after {
+            Some(after) => after,
+            None => return Ok(None),
+        };
+        let mut update_after = HashMap::new();
+        for col in diff_col_values.keys() {
+            if let Some(value) = src_after.get(col) {
+                update_after.insert(col.clone(), value.clone());
+            }
+        }
+        if update_after.is_empty() {
+            return Ok(None);
+        }
+
+        let update_before = dst_row_data
+            .after
+            .as_ref()
+            .cloned()
+            .or_else(|| dst_row_data.before.clone());
+        let update_before = match update_before {
+            Some(before) if !before.is_empty() => before,
+            _ => return Ok(None),
+        };
+
+        let mut update_row = RowData::new(
+            src_row_data.schema.clone(),
+            src_row_data.tb.clone(),
+            RowType::Update,
+            Some(update_before),
+            Some(update_after),
+        );
+        update_row.refresh_data_size();
+        let sql = self.build_update_query(&update_row)?;
+        Ok(Some(sql))
+    }
+
+    fn build_insert_query(&self, row_data: &RowData) -> anyhow::Result<String> {
+        match self.meta {
+            ReviseSqlMeta::Mysql(tb_meta) => {
+                RdbQueryBuilder::new_for_mysql(tb_meta, None).get_query_sql(row_data, false)
+            }
+            ReviseSqlMeta::Pg(tb_meta) => {
+                RdbQueryBuilder::new_for_pg(tb_meta, None).get_query_sql(row_data, false)
+            }
+        }
+    }
+
+    fn build_update_query(&self, row_data: &RowData) -> anyhow::Result<String> {
+        match self.meta {
+            ReviseSqlMeta::Mysql(tb_meta) => {
+                if self.match_full_row {
+                    let mut owned = tb_meta.clone();
+                    owned.basic.id_cols = owned.basic.cols.clone();
+                    RdbQueryBuilder::new_for_mysql(&owned, None).get_query_sql(row_data, false)
+                } else {
+                    RdbQueryBuilder::new_for_mysql(tb_meta, None).get_query_sql(row_data, false)
+                }
+            }
+            ReviseSqlMeta::Pg(tb_meta) => {
+                if self.match_full_row {
+                    let mut owned = tb_meta.clone();
+                    owned.basic.id_cols = owned.basic.cols.clone();
+                    RdbQueryBuilder::new_for_pg(&owned, None).get_query_sql(row_data, false)
+                } else {
+                    RdbQueryBuilder::new_for_pg(tb_meta, None).get_query_sql(row_data, false)
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use dt_common::meta::{
+        col_value::ColValue,
+        mysql::mysql_col_type::MysqlColType,
+        rdb_tb_meta::RdbTbMeta,
+    };
+    use std::collections::HashMap;
+
+    fn build_tb_meta() -> MysqlTbMeta {
+        let mut col_type_map = HashMap::new();
+        col_type_map.insert("id".into(), MysqlColType::Int { unsigned: false });
+        col_type_map.insert(
+            "name".into(),
+            MysqlColType::Varchar {
+                length: 255,
+                charset: "utf8mb4".into(),
+            },
+        );
+        MysqlTbMeta {
+            basic: RdbTbMeta {
+                schema: "test_db".into(),
+                tb: "test_tb".into(),
+                cols: vec!["id".into(), "name".into()],
+                col_origin_type_map: HashMap::new(),
+                key_map: HashMap::new(),
+                order_col: None,
+                partition_col: "id".into(),
+                id_cols: vec!["id".into()],
+                foreign_keys: Vec::new(),
+                ref_by_foreign_keys: Vec::new(),
+            },
+            col_type_map,
+        }
+    }
+
+    fn build_row_data(id: i64, name: &str) -> RowData {
+        let mut after = HashMap::new();
+        after.insert("id".into(), ColValue::LongLong(id));
+        after.insert("name".into(), ColValue::String(name.into()));
+        RowData::new("test_db".into(), "test_tb".into(), RowType::Insert, None, Some(after))
+    }
+
+    #[test]
+    fn mysql_builds_insert_sql() {
+        let meta = build_tb_meta();
+        let ctx = ReviseSqlContext::mysql(&meta, false);
+        let row = build_row_data(1, "new_name");
+        let sql = ctx.build_miss_sql(&row).unwrap().unwrap();
+        assert!(sql.starts_with("INSERT INTO `test_db`.`test_tb`"));
+        assert!(sql.contains("VALUES"));
+        assert!(sql.contains("'new_name'"));
+    }
+
+    #[test]
+    fn mysql_builds_update_sql_with_pk_match() {
+        let meta = build_tb_meta();
+        let ctx = ReviseSqlContext::mysql(&meta, false);
+
+        let src_row = build_row_data(1, "fresh");
+        let dst_row = build_row_data(1, "stale");
+
+        let mut diff_cols = HashMap::new();
+        diff_cols.insert(
+            "name".into(),
+            DiffColValue {
+                src: Some("fresh".into()),
+                dst: Some("stale".into()),
+            },
+        );
+
+        let sql = ctx
+            .build_diff_sql(&src_row, &dst_row, &diff_cols)
+            .unwrap()
+            .unwrap();
+        assert!(sql.starts_with("UPDATE `test_db`.`test_tb`"));
+        assert!(sql.contains("SET `name`='fresh'"));
+        assert!(sql.contains("WHERE `id` = 1"));
+    }
+
+    #[test]
+    fn mysql_builds_update_sql_with_full_row_match() {
+        let meta = build_tb_meta();
+        let ctx = ReviseSqlContext::mysql(&meta, true);
+
+        let src_row = build_row_data(1, "fixed");
+        let dst_row = build_row_data(1, "broken");
+
+        let mut diff_cols = HashMap::new();
+        diff_cols.insert(
+            "name".into(),
+            DiffColValue {
+                src: Some("fixed".into()),
+                dst: Some("broken".into()),
+            },
+        );
+
+        let sql = ctx
+            .build_diff_sql(&src_row, &dst_row, &diff_cols)
+            .unwrap()
+            .unwrap();
+        assert!(sql.contains("SET `name`='fixed'"));
+        assert!(sql.contains("WHERE `id` = 1 AND `name` = 'broken'"));
+    }
+}
 
 pub struct BaseChecker {}
 
@@ -28,6 +264,7 @@ impl BaseChecker {
         extractor_meta_manager: &mut RdbMetaManager,
         reverse_router: &RdbRouter,
         output_full_row: bool,
+        revise_ctx: Option<&ReviseSqlContext<'_>>,
     ) -> anyhow::Result<(Vec<CheckLog>, Vec<CheckLog>)> {
         let mut miss = Vec::new();
         let mut diff = Vec::new();
@@ -44,6 +281,7 @@ impl BaseChecker {
                         extractor_meta_manager,
                         reverse_router,
                         output_full_row,
+                        revise_ctx,
                     )
                     .await?;
                     diff.push(diff_log);
@@ -54,6 +292,7 @@ impl BaseChecker {
                     extractor_meta_manager,
                     reverse_router,
                     output_full_row,
+                    revise_ctx,
                 )
                 .await?;
                 miss.push(miss_log);
@@ -145,7 +384,12 @@ impl BaseChecker {
         extractor_meta_manager: &mut RdbMetaManager,
         reverse_router: &RdbRouter,
         output_full_row: bool,
+        revise_ctx: Option<&ReviseSqlContext<'_>>,
     ) -> anyhow::Result<CheckLog> {
+        let revise_sql = match revise_ctx {
+            Some(ctx) => ctx.build_miss_sql(src_row_data)?,
+            None => None,
+        };
         // route src_row_data back since we need origin extracted row_data in check log
         let reverse_src_row_data = reverse_router.route_row(src_row_data.clone());
         let src_tb_meta = extractor_meta_manager
@@ -166,6 +410,7 @@ impl BaseChecker {
             diff_col_values: HashMap::new(),
             src_row,
             dst_row: None,
+            revise_sql,
         };
         Ok(miss_log)
     }
@@ -177,13 +422,19 @@ impl BaseChecker {
         extractor_meta_manager: &mut RdbMetaManager,
         reverse_router: &RdbRouter,
         output_full_row: bool,
+        revise_ctx: Option<&ReviseSqlContext<'_>>,
     ) -> anyhow::Result<CheckLog> {
+        let revise_sql = match revise_ctx {
+            Some(ctx) => ctx.build_diff_sql(src_row_data, dst_row_data, &diff_col_values)?,
+            None => None,
+        };
         // share same logic to fill basic CheckLog fields as miss log
         let miss_log = Self::build_miss_log(
             src_row_data,
             extractor_meta_manager,
             reverse_router,
             output_full_row,
+            revise_ctx,
         )
         .await?;
         let diff_col_values = if let Some(col_map) =
@@ -207,11 +458,13 @@ impl BaseChecker {
             diff_col_values,
             src_row: miss_log.src_row,
             dst_row: None,
+            revise_sql: None,
         };
         if output_full_row {
             let reverse_dst_row_data = reverse_router.route_row(dst_row_data.clone());
             diff_log.dst_row = Self::clone_row_values(&reverse_dst_row_data);
         }
+        diff_log.revise_sql = revise_sql;
         Ok(diff_log)
     }
 
@@ -236,6 +489,7 @@ impl BaseChecker {
             diff_col_values: HashMap::new(),
             src_row,
             dst_row: None,
+            revise_sql: None,
         }
     }
 
@@ -255,6 +509,7 @@ impl BaseChecker {
             diff_log.dst_row = Self::clone_row_values(&reverse_dst_row_data);
         }
         diff_log.log_type = LogType::Diff;
+        diff_log.revise_sql = None;
         // no col map in mongo
         diff_log
     }

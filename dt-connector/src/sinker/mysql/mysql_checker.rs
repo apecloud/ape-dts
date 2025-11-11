@@ -14,7 +14,10 @@ use crate::{
     meta_fetcher::mysql::mysql_struct_fetcher::MysqlStructFetcher,
     rdb_query_builder::RdbQueryBuilder,
     rdb_router::RdbRouter,
-    sinker::{base_checker::BaseChecker, base_sinker::BaseSinker},
+    sinker::{
+        base_checker::{BaseChecker, ReviseSqlContext},
+        base_sinker::BaseSinker,
+    },
     Sinker,
 };
 use dt_common::{
@@ -39,6 +42,8 @@ pub struct MysqlChecker {
     pub monitor: Arc<Monitor>,
     pub filter: RdbFilter,
     pub output_full_row: bool,
+    pub output_revise_sql: bool,
+    pub revise_match_full_row: bool,
 }
 
 #[async_trait]
@@ -77,6 +82,9 @@ impl MysqlChecker {
             return Ok(());
         }
         let tb_meta = self.meta_manager.get_tb_meta_by_row_data(&data[0]).await?;
+        let revise_ctx = self
+            .output_revise_sql
+            .then_some(ReviseSqlContext::mysql(tb_meta, self.revise_match_full_row));
 
         let mut miss = Vec::new();
         let mut diff = Vec::new();
@@ -101,6 +109,7 @@ impl MysqlChecker {
                         &mut self.extractor_meta_manager,
                         &self.reverse_router,
                         self.output_full_row,
+                        revise_ctx.as_ref(),
                     )
                     .await?;
                     diff.push(diff_log);
@@ -111,6 +120,7 @@ impl MysqlChecker {
                     &mut self.extractor_meta_manager,
                     &self.reverse_router,
                     self.output_full_row,
+                    revise_ctx.as_ref(),
                 )
                 .await?;
                 miss.push(miss_log);
@@ -130,6 +140,9 @@ impl MysqlChecker {
     ) -> anyhow::Result<()> {
         let tb_meta = self.meta_manager.get_tb_meta_by_row_data(&data[0]).await?;
         let query_builder = RdbQueryBuilder::new_for_mysql(tb_meta, None);
+        let revise_ctx = self
+            .output_revise_sql
+            .then_some(ReviseSqlContext::mysql(tb_meta, self.revise_match_full_row));
 
         // build fetch dst sql
         let query_info = query_builder.get_batch_select_query(data, start_index, batch_size)?;
@@ -157,6 +170,7 @@ impl MysqlChecker {
             &mut self.extractor_meta_manager,
             &self.reverse_router,
             self.output_full_row,
+            revise_ctx.as_ref(),
         )
         .await?;
         BaseChecker::log_dml(miss, diff);

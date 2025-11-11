@@ -34,6 +34,8 @@ pub enum SinkerConfig {
         batch_size: usize,
         check_log_dir: String,
         output_full_row: bool,
+        output_revise_sql: bool,
+        revise_match_full_row: bool,
     },
 
     PgCheck {
@@ -41,6 +43,8 @@ pub enum SinkerConfig {
         batch_size: usize,
         check_log_dir: String,
         output_full_row: bool,
+        output_revise_sql: bool,
+        revise_match_full_row: bool,
     },
 
     MongoCheck {
