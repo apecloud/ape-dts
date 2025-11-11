@@ -4,7 +4,7 @@ use anyhow::bail;
 use futures::TryStreamExt;
 use mongodb::bson::doc;
 use mongodb::options::ClientOptions;
-use opendal::{Builder, Operator};
+use opendal::Operator;
 use sqlx::{
     mysql::{MySqlConnectOptions, MySqlPoolOptions},
     postgres::{PgConnectOptions, PgPoolOptions},
