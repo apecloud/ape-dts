@@ -75,6 +75,7 @@ const PROCESSOR: &str = "processor";
 const META_CENTER: &str = "metacenter";
 // keys
 const CHECK_LOG_DIR: &str = "check_log_dir";
+const OUTPUT_FULL_ROW: &str = "output_full_row";
 const DB_TYPE: &str = "db_type";
 const URL: &str = "url";
 const BATCH_SIZE: &str = "batch_size";
@@ -453,6 +454,7 @@ impl TaskConfig {
                     url,
                     batch_size,
                     check_log_dir: loader.get_optional(SINKER, CHECK_LOG_DIR),
+                    output_full_row: loader.get_with_default(SINKER, OUTPUT_FULL_ROW, false),
                 },
 
                 SinkType::Struct => SinkerConfig::MysqlStruct {
@@ -483,6 +485,7 @@ impl TaskConfig {
                     url,
                     batch_size,
                     check_log_dir: loader.get_optional(SINKER, CHECK_LOG_DIR),
+                    output_full_row: loader.get_with_default(SINKER, OUTPUT_FULL_ROW, false),
                 },
 
                 SinkType::Struct => SinkerConfig::PgStruct {
@@ -512,6 +515,7 @@ impl TaskConfig {
                         app_name,
                         batch_size,
                         check_log_dir: loader.get_optional(SINKER, CHECK_LOG_DIR),
+                        output_full_row: loader.get_with_default(SINKER, OUTPUT_FULL_ROW, false),
                     },
 
                     _ => bail! { not_supported_err },
