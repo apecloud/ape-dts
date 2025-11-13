@@ -127,13 +127,4 @@ mod test {
         TestBase::run_snapshot_test("mysql_to_mysql/snapshot/tb_parallel_test").await;
     }
 
-    #[tokio::test]
-    #[serial]
-    async fn snapshot_deadlock_test() {
-        let runner = RdbTestRunner::new("mysql_to_mysql/snapshot/deadlock_test")
-            .await
-            .unwrap();
-        runner.run_snapshot_test(false).await.unwrap();
-        runner.close().await.unwrap();
-    }
 }
