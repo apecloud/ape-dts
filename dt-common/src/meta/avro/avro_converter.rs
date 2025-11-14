@@ -57,7 +57,7 @@ impl AvroConverter {
     pub async fn row_data_to_avro_key(&mut self, row_data: &RowData) -> anyhow::Result<String> {
         if let Some(tb_meta) = self.get_tb_meta(row_data).await? {
             let convert = |col_values: &HashMap<String, ColValue>| {
-                if let Some(col) = &tb_meta.order_col {
+                if let Some(col) = tb_meta.order_cols.first() {
                     if let Some(value) = col_values.get(col) {
                         return value.to_option_string();
                     }

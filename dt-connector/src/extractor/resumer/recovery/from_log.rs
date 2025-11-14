@@ -66,9 +66,18 @@ impl LogRecovery {
                 tb,
                 order_col,
                 value,
+                order_col_values,
                 ..
             } => {
-                tb_positions.insert((schema, tb, order_col), value);
+                if !order_col.is_empty() {
+                    tb_positions.insert((schema.clone(), tb.clone(), order_col), value);
+                }
+                if !order_col_values.is_empty() {
+                    for (col, value) in order_col_values {
+                        tb_positions
+                            .insert((schema.clone(), tb.clone(), col), value.unwrap_or_default());
+                    }
+                }
             }
 
             Position::FoxlakeS3 {

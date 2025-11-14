@@ -11,6 +11,10 @@ CREATE TABLE resume_table_2("p.k" serial, val numeric(20,8), PRIMARY KEY("p.k"))
 DROP TABLE IF EXISTS resume_table_3;
 CREATE TABLE resume_table_3(f_0 integer, f_1 integer, PRIMARY KEY(f_0, f_1));
 
+-- test nullable composite unique key
+DROP TABLE IF EXISTS nullable_composite_unique_key_table;
+CREATE TABLE nullable_composite_unique_key_table (uk1 int, uk2 varchar(10), val int, UNIQUE(uk1, uk2));
+
 DROP TABLE IF EXISTS "resume_table_*$4";
 CREATE TABLE "resume_table_*$4"("p.k" serial, val numeric(20,8), PRIMARY KEY("p.k"));
 

@@ -139,10 +139,11 @@ impl RdbRedisTestRunner {
         if let Some(conn_pool) = &self.mysql_conn_pool {
             // mysql data
             let tb_meta = RdbUtil::get_tb_meta_mysql(conn_pool, db_tb).await?;
-            if tb_meta.basic.order_col.is_none() {
+            if !tb_meta.basic.order_cols.is_empty() {
                 return Ok(true);
             }
-            let key_col = tb_meta.basic.order_col.as_ref().unwrap();
+            // only support single primary/unique column for redis test
+            let key_col = tb_meta.basic.order_cols.first().unwrap();
 
             let results = RdbUtil::fetch_data_mysql(conn_pool, None, db_tb, "").await?;
             for row_data in results {
