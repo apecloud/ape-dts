@@ -104,6 +104,7 @@ impl SinkerUtil {
                 ..
             } => {
                 let router = create_router!(task_config, Mysql);
+
                 let conn_pool = match sinker_client {
                     ConnClient::MySQL(conn_pool) => conn_pool,
                     _ => {
@@ -111,9 +112,7 @@ impl SinkerUtil {
                     }
                 };
                 let meta_manager = MysqlMetaManager::new(conn_pool.clone()).await?;
-                // to avoid contention for monitor write lock between sinker threads,
-                // create a monitor for each sinker instead of sharing a single monitor between sinkers,
-                // sometimes a sinker may cost several millis to get write lock for a global monitor.
+
                 for _ in 0..parallel_size {
                     let sinker = MysqlSinker {
                         url: url.to_string(),
@@ -453,7 +452,7 @@ impl SinkerUtil {
                         &url,
                         parallel_size * 2,
                         enable_sqlx_log,
-                        false,
+                        None,
                     )
                     .await?;
                     let meta_manager = MysqlMetaManager::new_mysql_compatible(
@@ -492,7 +491,7 @@ impl SinkerUtil {
                 conflict_policy,
             } => {
                 let conn_pool =
-                    TaskUtil::create_mysql_conn_pool(&url, 2, enable_sqlx_log, false).await?;
+                    TaskUtil::create_mysql_conn_pool(&url, 2, enable_sqlx_log, None).await?;
                 let filter = create_filter!(task_config, Mysql);
                 let router = create_router!(task_config, Mysql);
                 let extractor_meta_manager = ExtractorUtil::get_extractor_meta_manager(task_config)
@@ -597,7 +596,7 @@ impl SinkerUtil {
                     &url,
                     parallel_size * 2,
                     enable_sqlx_log,
-                    false,
+                    None,
                 )
                 .await?;
                 let s3_client = TaskUtil::create_s3_client(&s3_config);
@@ -662,7 +661,7 @@ impl SinkerUtil {
                     &url,
                     parallel_size * 2,
                     enable_sqlx_log,
-                    false,
+                    None,
                 )
                 .await?;
                 let s3_client: S3Client = TaskUtil::create_s3_client(&s3_config);
@@ -706,7 +705,7 @@ impl SinkerUtil {
                     &url,
                     parallel_size * 2,
                     enable_sqlx_log,
-                    false,
+                    None,
                 )
                 .await?;
                 let s3_client = TaskUtil::create_s3_client(&s3_config);
@@ -735,7 +734,7 @@ impl SinkerUtil {
                     &url,
                     parallel_size * 2,
                     enable_sqlx_log,
-                    false,
+                    None,
                 )
                 .await?;
                 let sinker = FoxlakeStructSinker {

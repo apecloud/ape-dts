@@ -2,7 +2,7 @@ use super::{
     config_enums::{ConflictPolicyEnum, DbType},
     s3_config::S3Config,
 };
-use crate::config::config_enums::SinkType;
+use crate::config::config_enums::{RdbTransactionIsolation, SinkType};
 
 #[derive(Clone, Debug)]
 pub enum SinkerConfig {
@@ -13,6 +13,7 @@ pub enum SinkerConfig {
         batch_size: usize,
         replace: bool,
         disable_foreign_key_checks: bool,
+        transaction_isolation: RdbTransactionIsolation,
     },
 
     Pg {

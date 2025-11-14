@@ -13,7 +13,7 @@ use sqlx::{
 
 use dt_common::{
     config::{
-        config_enums::{DbType, TaskType},
+        config_enums::{DbType, RdbTransactionIsolation, TaskType},
         extractor_config::ExtractorConfig,
         global_config::GlobalConfig,
         meta_center_config::MetaCenterConfig,
@@ -48,7 +48,7 @@ impl TaskUtil {
         url: &str,
         max_connections: u32,
         enable_sqlx_log: bool,
-        disable_foreign_key_checks: bool,
+        after_connect_settings: Option<Vec<&'static str>>,
     ) -> anyhow::Result<Pool<MySql>> {
         let mut conn_options = MySqlConnectOptions::from_str(url)?;
         // The default character set is `utf8mb4`
@@ -60,20 +60,57 @@ impl TaskUtil {
             conn_options.disable_statement_logging();
         }
 
-        let conn_pool = MySqlPoolOptions::new()
-            .max_connections(max_connections)
-            .after_connect(move |conn, _meta| {
-                Box::pin(async move {
-                    if disable_foreign_key_checks {
-                        conn.execute(sqlx::query("SET foreign_key_checks = 0;"))
-                            .await?;
-                    }
-                    Ok(())
+        let mut conn_pool = MySqlPoolOptions::new().max_connections(max_connections);
+        if let Some(settings) = after_connect_settings {
+            if !settings.is_empty() {
+                conn_pool = conn_pool.after_connect(move |conn, _meta| {
+                    let additions = settings.clone();
+                    Box::pin(async move {
+                        log_info!(
+                            "execute addition settings after create new connection: {:?}",
+                            additions
+                        );
+                        for addition in additions {
+                            conn.execute(sqlx::query(addition)).await?;
+                        }
+                        Ok(())
+                    })
                 })
-            })
-            .connect_with(conn_options)
-            .await?;
-        Ok(conn_pool)
+            }
+        }
+
+        Ok(conn_pool.connect_with(conn_options).await?)
+    }
+
+    pub fn build_mysql_conn_settings(
+        disable_foreign_key_checks: bool,
+        transaction_isolation: &RdbTransactionIsolation,
+    ) -> Option<Vec<&'static str>> {
+        let mut settings: Vec<&'static str> = Vec::new();
+
+        if disable_foreign_key_checks {
+            settings.push("SET FOREIGN_KEY_CHECKS=0");
+        }
+        match transaction_isolation {
+            RdbTransactionIsolation::ReadUncommitted => {
+                settings.push("SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED")
+            }
+            RdbTransactionIsolation::ReadCommitted => {
+                settings.push("SET TRANSACTION ISOLATION LEVEL READ COMMITTED")
+            }
+            RdbTransactionIsolation::RepeatableRead => {
+                settings.push("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
+            }
+            RdbTransactionIsolation::Serializable => {
+                settings.push("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE")
+            }
+            _ => {}
+        }
+        if settings.is_empty() {
+            None
+        } else {
+            Some(settings)
+        }
     }
 
     pub async fn create_pg_conn_pool(
@@ -165,7 +202,7 @@ impl TaskUtil {
         let enable_sqlx_log = Self::check_enable_sqlx_log(log_level);
         let conn_pool = match &conn_pool_opt {
             Some(conn_pool) => conn_pool.clone(),
-            None => Self::create_mysql_conn_pool(url, 1, enable_sqlx_log, false).await?,
+            None => Self::create_mysql_conn_pool(url, 1, enable_sqlx_log, None).await?,
         };
         let mut meta_manager = MysqlMetaManager::new_mysql_compatible(conn_pool, db_type).await?;
 
@@ -177,7 +214,7 @@ impl TaskUtil {
         {
             let meta_center_conn_pool = match &conn_pool_opt {
                 Some(conn_pool) => conn_pool.clone(),
-                None => Self::create_mysql_conn_pool(url, 1, enable_sqlx_log, false).await?,
+                None => Self::create_mysql_conn_pool(url, 1, enable_sqlx_log, None).await?,
             };
             let meta_center = MysqlDbEngineMetaCenter::new(
                 url.clone(),
@@ -618,7 +655,7 @@ impl ConnClient {
                     url,
                     extractor_max_connections,
                     enable_sqlx_log,
-                    false,
+                    None,
                 )
                 .await?,
             ),
@@ -643,17 +680,37 @@ impl ConnClient {
             _ => ConnClient::None,
         };
         let sinker_client = match &task_config.sinker {
-            SinkerConfig::Mysql { url, .. }
-            | SinkerConfig::MysqlStruct { url, .. }
-            | SinkerConfig::MysqlCheck { url, .. } => ConnClient::MySQL(
-                TaskUtil::create_mysql_conn_pool(
-                    url,
-                    sinker_max_connections,
-                    enable_sqlx_log,
-                    false,
+            SinkerConfig::Mysql {
+                url,
+                disable_foreign_key_checks,
+                transaction_isolation,
+                ..
+            } => {
+                let conn_settings = TaskUtil::build_mysql_conn_settings(
+                    *disable_foreign_key_checks,
+                    transaction_isolation,
+                );
+                ConnClient::MySQL(
+                    TaskUtil::create_mysql_conn_pool(
+                        url,
+                        sinker_max_connections,
+                        enable_sqlx_log,
+                        conn_settings,
+                    )
+                    .await?,
                 )
-                .await?,
-            ),
+            }
+            SinkerConfig::MysqlStruct { url, .. } | SinkerConfig::MysqlCheck { url, .. } => {
+                ConnClient::MySQL(
+                    TaskUtil::create_mysql_conn_pool(
+                        url,
+                        sinker_max_connections,
+                        enable_sqlx_log,
+                        None,
+                    )
+                    .await?,
+                )
+            }
             SinkerConfig::Pg { url, .. }
             | SinkerConfig::PgStruct { url, .. }
             | SinkerConfig::PgCheck { url, .. } => ConnClient::PostgreSQL(
