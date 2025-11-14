@@ -22,7 +22,7 @@ pub struct MysqlFetcher {
 #[async_trait]
 impl Fetcher for MysqlFetcher {
     async fn build_connection(&mut self) -> anyhow::Result<()> {
-        self.pool = Some(TaskUtil::create_mysql_conn_pool(&self.url, 1, true, false).await?);
+        self.pool = Some(TaskUtil::create_mysql_conn_pool(&self.url, 1, true, None).await?);
         Ok(())
     }
 

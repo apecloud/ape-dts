@@ -24,7 +24,6 @@ use dt_common::{
         syncer::Syncer,
     },
     monitor::{counter_type::CounterType, monitor::Monitor},
-    utils::time_util::TimeUtil,
 };
 use dt_connector::{data_marker::DataMarker, extractor::resumer::recorder::Recorder, Sinker};
 use dt_parallelizer::{DataSize, Parallelizer};
