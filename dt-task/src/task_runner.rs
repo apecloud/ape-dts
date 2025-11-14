@@ -137,6 +137,12 @@ impl TaskRunner {
             log_error!("panic: {}\nbacktrace:\n{}", panic_info, backtrace);
         }));
 
+        log_info!(
+            "start task: [taskID: {}, taskType: {:?}]",
+            &self.config.global.task_id,
+            &self.task_type
+        );
+
         let db_type = &self.config.extractor_basic.db_type;
         let router = Arc::new(RdbRouter::from_config(&self.config.router, db_type)?);
         let (recorder, recovery) = match &self.task_type {

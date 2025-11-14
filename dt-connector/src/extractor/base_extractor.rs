@@ -20,7 +20,7 @@ use dt_common::{
         struct_meta::struct_data::StructData,
     },
     rdb_filter::RdbFilter,
-    utils::{sql_util::SqlUtil, time_util::TimeUtil},
+    utils::sql_util::SqlUtil,
 };
 use dt_common::{
     meta::{

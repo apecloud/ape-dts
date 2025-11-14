@@ -66,10 +66,19 @@ impl RdbTestRunner {
         let src_url = &config.extractor_basic.url;
         let dst_url = &config.sinker_basic.url;
 
+        let mysql_conn_settings = Some(vec!["SET FOREIGN_KEY_CHECKS=0"]);
+
         match src_db_type {
             DbType::Mysql => {
-                src_conn_pool_mysql =
-                    Some(TaskUtil::create_mysql_conn_pool(src_url, 1, false, true).await?);
+                src_conn_pool_mysql = Some(
+                    TaskUtil::create_mysql_conn_pool(
+                        src_url,
+                        1,
+                        false,
+                        mysql_conn_settings.clone(),
+                    )
+                    .await?,
+                );
             }
             DbType::Pg => {
                 src_conn_pool_pg =
@@ -85,8 +94,15 @@ impl RdbTestRunner {
                 | DbType::StarRocks
                 | DbType::Doris
                 | DbType::Tidb => {
-                    dst_conn_pool_mysql =
-                        Some(TaskUtil::create_mysql_conn_pool(dst_url, 1, false, true).await?);
+                    dst_conn_pool_mysql = Some(
+                        TaskUtil::create_mysql_conn_pool(
+                            dst_url,
+                            1,
+                            false,
+                            mysql_conn_settings.clone(),
+                        )
+                        .await?,
+                    );
                 }
                 DbType::Pg => {
                     dst_conn_pool_pg =
@@ -101,7 +117,7 @@ impl RdbTestRunner {
         let filter = RdbFilter::from_config(&config.filter, dst_db_type).unwrap();
         let meta_center_pool_mysql = match &config.meta_center {
             Some(MetaCenterConfig::MySqlDbEngine { url, .. }) => Some(
-                TaskUtil::create_mysql_conn_pool(url, 1, false, true)
+                TaskUtil::create_mysql_conn_pool(url, 1, false, mysql_conn_settings.clone())
                     .await
                     .unwrap(),
             ),

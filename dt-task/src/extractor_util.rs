@@ -566,7 +566,7 @@ impl ExtractorUtil {
         let meta_manager = match task_config.extractor_basic.db_type {
             DbType::Mysql => {
                 let conn_pool =
-                    TaskUtil::create_mysql_conn_pool(extractor_url, 1, true, false).await?;
+                    TaskUtil::create_mysql_conn_pool(extractor_url, 1, true, None).await?;
                 let meta_manager = MysqlMetaManager::new(conn_pool.clone()).await?;
                 Some(RdbMetaManager::from_mysql(meta_manager))
             }

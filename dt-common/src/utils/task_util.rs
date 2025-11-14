@@ -3,12 +3,9 @@ use std::{
     hash::{Hash, Hasher},
 };
 
-use crate::{
-    config::{
-        extractor_config::BasicExtractorConfig, filter_config::FilterConfig,
-        router_config::RouterConfig, sinker_config::BasicSinkerConfig,
-    },
-    log_info,
+use crate::config::{
+    extractor_config::BasicExtractorConfig, filter_config::FilterConfig,
+    router_config::RouterConfig, sinker_config::BasicSinkerConfig,
 };
 
 pub struct TaskUtil {}
@@ -26,9 +23,7 @@ impl TaskUtil {
         filter.hash(&mut hasher);
         router.hash(&mut hasher);
 
-        let task_id = format!("{:x}", hasher.finish());
-        log_info!("generate task id: {}", task_id);
-        task_id
+        format!("{:x}", hasher.finish())
     }
 }
 

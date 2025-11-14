@@ -153,6 +153,21 @@ pub enum ResumeType {
     Dummy,
 }
 
+#[derive(Display, EnumString, IntoStaticStr, PartialEq, Default, Clone, Debug)]
+pub enum RdbTransactionIsolation {
+    #[strum(serialize = "read_uncommitted")]
+    ReadUncommitted,
+    #[strum(serialize = "read_committed")]
+    ReadCommitted,
+    #[strum(serialize = "repeatable_read")]
+    RepeatableRead,
+    #[strum(serialize = "serializable")]
+    Serializable,
+    #[default]
+    #[strum(serialize = "default")]
+    Default,
+}
+
 pub fn build_task_type(extract_type: &ExtractType, sink_type: &SinkType) -> Option<TaskType> {
     match (extract_type, sink_type) {
         (ExtractType::Struct, SinkType::Struct) => Some(TaskType::Struct),
