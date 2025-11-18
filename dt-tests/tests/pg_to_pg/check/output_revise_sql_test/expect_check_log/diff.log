@@ -1,0 +1,1 @@
+{"log_type":"Diff","schema":"test_schema_1","tb":"test_table","id_col_values":{"id":"2"},"diff_col_values":{"age":{"src":"25","dst":"99"},"email":{"src":"bob@example.com","dst":"bob_updated@example.com"}},"revise_sql":"UPDATE \"test_schema_1\".\"test_table\" SET \"age\"=25,\"email\"='bob@example.com' WHERE \"id\" = 2"}

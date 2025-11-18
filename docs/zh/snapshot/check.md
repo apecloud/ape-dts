@@ -42,6 +42,8 @@ parallel_type=rdb_check
 {"log_type":"Diff","schema":"test_db_1","tb":"one_pk_no_uk","id_col_values":{"f_0":"6"},"diff_col_values":{"f_1":{"src":null,"dst":"1"}}}
 ```
 
+在存在路由改名的场景下，日志还会补充 `target_schema`/`target_tb` 来标识目的端真实库表；`schema`、`tb` 依旧表示源端，方便排查。
+
 ## 缺失日志（miss.log）
 
 缺失日志包括库（schema）、表（tb）和主键/唯一键（id_col_values），diff_col_values 为空。
@@ -63,7 +65,7 @@ output_revise_sql=true
 revise_match_full_row=true
 ```
 
-开启后，diff/miss 日志会追加 `revise_sql` 字段。缺失记录会生成 `INSERT` 语句，差异记录会生成 `UPDATE` 语句。`revise_match_full_row=true` 时，即使表存在主键也会使用整行数据生成 WHERE 条件，以便通过完整行值定位目标数据。
+开启后，diff/miss 日志会追加 `revise_sql` 字段。缺失记录会生成 `INSERT` 语句，差异记录会生成 `UPDATE` 语句。`revise_match_full_row=true` 时，即使表存在主键也会使用整行数据生成 WHERE 条件，以便通过完整行值定位目标数据。若存在路由改名，记得参考日志里的 `target_schema`、`target_tb` 决定 SQL 应执行的表。
 
 示例：
 
@@ -72,6 +74,8 @@ revise_match_full_row=true
   "log_type": "Diff",
   "schema": "test_db_1",
   "tb": "one_pk_no_uk",
+  "target_schema": "target_db",
+  "target_tb": "target_tb",
   "id_col_values": {"f_0": "4"},
   "diff_col_values": {"f_1": {"src": "2", "dst": "1"}},
   "revise_sql": "UPDATE `test_db_1`.`one_pk_no_uk` SET `f_1`='2' WHERE `f_0` = 4;"

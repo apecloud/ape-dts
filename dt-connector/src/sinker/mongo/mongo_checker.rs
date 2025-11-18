@@ -33,6 +33,7 @@ pub struct MongoChecker {
     pub mongo_client: Client,
     pub monitor: Arc<Monitor>,
     pub output_full_row: bool,
+    pub output_revise_cmd: bool,
 }
 
 #[async_trait]
@@ -120,6 +121,7 @@ impl MongoChecker {
                         &tb_meta,
                         &self.reverse_router,
                         self.output_full_row,
+                        self.output_revise_cmd,
                     );
                     diff.push(diff_log);
                 }
@@ -129,6 +131,7 @@ impl MongoChecker {
                     &tb_meta,
                     &self.reverse_router,
                     self.output_full_row,
+                    self.output_revise_cmd,
                 );
                 miss.push(miss_log);
             };
