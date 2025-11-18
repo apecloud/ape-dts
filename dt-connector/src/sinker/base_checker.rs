@@ -1,13 +1,8 @@
 use std::collections::HashMap;
 
 use dt_common::meta::{
-    col_value::ColValue,
-    mysql::mysql_tb_meta::MysqlTbMeta,
-    pg::pg_tb_meta::PgTbMeta,
-    rdb_meta_manager::RdbMetaManager,
-    rdb_tb_meta::RdbTbMeta,
-    row_data::RowData,
-    row_type::RowType,
+    col_value::ColValue, mysql::mysql_tb_meta::MysqlTbMeta, pg::pg_tb_meta::PgTbMeta,
+    rdb_meta_manager::RdbMetaManager, rdb_tb_meta::RdbTbMeta, row_data::RowData, row_type::RowType,
     struct_meta::statement::struct_statement::StructStatement,
 };
 use dt_common::{log_diff, log_extra, log_miss, rdb_filter::RdbFilter};
@@ -150,6 +145,7 @@ mod tests {
     use dt_common::meta::{
         col_value::ColValue,
         mysql::mysql_col_type::MysqlColType,
+        pg::{pg_col_type::PgColType, pg_tb_meta::PgTbMeta, pg_value_type::PgValueType},
         rdb_tb_meta::RdbTbMeta,
     };
     use std::collections::HashMap;
@@ -185,7 +181,59 @@ mod tests {
         let mut after = HashMap::new();
         after.insert("id".into(), ColValue::LongLong(id));
         after.insert("name".into(), ColValue::String(name.into()));
-        RowData::new("test_db".into(), "test_tb".into(), RowType::Insert, None, Some(after))
+        RowData::new(
+            "test_db".into(),
+            "test_tb".into(),
+            RowType::Insert,
+            None,
+            Some(after),
+        )
+    }
+
+    fn build_pg_tb_meta() -> PgTbMeta {
+        let mut col_type_map = HashMap::new();
+        col_type_map.insert(
+            "id".into(),
+            PgColType {
+                value_type: PgValueType::Int64,
+                name: "int8".into(),
+                alias: "int8".into(),
+                oid: 20,
+                parent_oid: 0,
+                element_oid: 0,
+                category: "N".into(),
+                enum_values: None,
+            },
+        );
+        col_type_map.insert(
+            "name".into(),
+            PgColType {
+                value_type: PgValueType::String,
+                name: "varchar".into(),
+                alias: "varchar".into(),
+                oid: 1043,
+                parent_oid: 0,
+                element_oid: 0,
+                category: "S".into(),
+                enum_values: None,
+            },
+        );
+        PgTbMeta {
+            basic: RdbTbMeta {
+                schema: "pg_db".into(),
+                tb: "pg_tb".into(),
+                cols: vec!["id".into(), "name".into()],
+                col_origin_type_map: HashMap::new(),
+                key_map: HashMap::new(),
+                order_col: None,
+                partition_col: "id".into(),
+                id_cols: vec!["id".into()],
+                foreign_keys: Vec::new(),
+                ref_by_foreign_keys: Vec::new(),
+            },
+            oid: 0,
+            col_type_map,
+        }
     }
 
     #[test]
@@ -248,6 +296,38 @@ mod tests {
             .unwrap();
         assert!(sql.contains("SET `name`='fixed'"));
         assert!(sql.contains("WHERE `id` = 1 AND `name` = 'broken'"));
+    }
+
+    #[test]
+    fn pg_builds_insert_sql() {
+        let meta = build_pg_tb_meta();
+        let ctx = ReviseSqlContext::pg(&meta, false);
+        let row = build_row_data(10, "pg_name");
+        let sql = ctx.build_miss_sql(&row).unwrap().unwrap();
+        assert!(sql.starts_with("INSERT INTO \"pg_db\".\"pg_tb\""));
+        assert!(sql.contains("VALUES"));
+    }
+
+    #[test]
+    fn pg_full_row_match_includes_where_clause() {
+        let meta = build_pg_tb_meta();
+        let ctx = ReviseSqlContext::pg(&meta, true);
+        let src_row = build_row_data(2, "fresh");
+        let dst_row = build_row_data(2, "stale");
+        let mut diff_cols = HashMap::new();
+        diff_cols.insert(
+            "name".into(),
+            DiffColValue {
+                src: Some("fresh".into()),
+                dst: Some("stale".into()),
+            },
+        );
+        let sql = ctx
+            .build_diff_sql(&src_row, &dst_row, &diff_cols)
+            .unwrap()
+            .unwrap();
+        assert!(sql.contains("SET \"name\"='fresh'"));
+        assert!(sql.contains("WHERE \"id\" = 2 AND \"name\" = 'stale'"));
     }
 }
 
@@ -390,6 +470,8 @@ impl BaseChecker {
             Some(ctx) => ctx.build_miss_sql(src_row_data)?,
             None => None,
         };
+        let target_schema = Some(src_row_data.schema.clone());
+        let target_tb = Some(src_row_data.tb.clone());
         // route src_row_data back since we need origin extracted row_data in check log
         let reverse_src_row_data = reverse_router.route_row(src_row_data.clone());
         let src_tb_meta = extractor_meta_manager
@@ -406,6 +488,8 @@ impl BaseChecker {
             log_type: LogType::Miss,
             schema: reverse_src_row_data.schema.clone(),
             tb: reverse_src_row_data.tb.clone(),
+            target_schema,
+            target_tb,
             id_col_values,
             diff_col_values: HashMap::new(),
             src_row,
@@ -454,6 +538,8 @@ impl BaseChecker {
             log_type: LogType::Diff,
             schema: miss_log.schema,
             tb: miss_log.tb,
+            target_schema: miss_log.target_schema.clone(),
+            target_tb: miss_log.target_tb.clone(),
             id_col_values: miss_log.id_col_values,
             diff_col_values,
             src_row: miss_log.src_row,
@@ -473,11 +559,19 @@ impl BaseChecker {
         tb_meta: &RdbTbMeta,
         reverse_router: &RdbRouter,
         output_full_row: bool,
+        output_revise_cmd: bool,
     ) -> CheckLog {
-        let reverse_src_row_data = reverse_router.route_row(src_row_data);
+        let target_schema = Some(src_row_data.schema.clone());
+        let target_tb = Some(src_row_data.tb.clone());
+        let reverse_src_row_data = reverse_router.route_row(src_row_data.clone());
         let id_col_values = Self::build_id_col_values(&reverse_src_row_data, tb_meta);
         let src_row = if output_full_row {
             Self::clone_row_values(&reverse_src_row_data)
+        } else {
+            None
+        };
+        let revise_sql = if output_revise_cmd {
+            Self::build_mongo_insert_cmd(&src_row_data)
         } else {
             None
         };
@@ -485,11 +579,13 @@ impl BaseChecker {
             log_type: LogType::Miss,
             schema: reverse_src_row_data.schema,
             tb: reverse_src_row_data.tb,
+            target_schema,
+            target_tb,
             id_col_values,
             diff_col_values: HashMap::new(),
             src_row,
             dst_row: None,
-            revise_sql: None,
+            revise_sql,
         }
     }
 
@@ -500,16 +596,27 @@ impl BaseChecker {
         tb_meta: &RdbTbMeta,
         reverse_router: &RdbRouter,
         output_full_row: bool,
+        output_revise_cmd: bool,
     ) -> CheckLog {
-        let mut diff_log =
-            Self::build_mongo_miss_log(src_row_data, tb_meta, reverse_router, output_full_row);
+        let revise_sql = if output_revise_cmd {
+            Self::build_mongo_update_cmd(&src_row_data, &diff_col_values)
+        } else {
+            None
+        };
+        let mut diff_log = Self::build_mongo_miss_log(
+            src_row_data,
+            tb_meta,
+            reverse_router,
+            output_full_row,
+            false, // Don't generate insert cmd for diff log
+        );
         diff_log.diff_col_values = diff_col_values;
         if output_full_row {
             let reverse_dst_row_data = reverse_router.route_row(dst_row_data);
             diff_log.dst_row = Self::clone_row_values(&reverse_dst_row_data);
         }
         diff_log.log_type = LogType::Diff;
-        diff_log.revise_sql = None;
+        diff_log.revise_sql = revise_sql;
         // no col map in mongo
         diff_log
     }
@@ -531,5 +638,73 @@ impl BaseChecker {
             id_col_values.insert(col.to_owned(), after.get(col).unwrap().to_option_string());
         }
         id_col_values
+    }
+
+    /// Build MongoDB insertOne command for miss logs
+    fn build_mongo_insert_cmd(src_row_data: &RowData) -> Option<String> {
+        use dt_common::meta::mongo::mongo_constant::MongoConstants;
+
+        let after = src_row_data.after.as_ref()?;
+        let doc = after.get(MongoConstants::DOC)?;
+
+        if let ColValue::MongoDoc(bson_doc) = doc {
+            // Generate MongoDB insertOne command
+            let cmd = format!("db.{}.insertOne({})", src_row_data.tb, bson_doc);
+            Some(cmd)
+        } else {
+            None
+        }
+    }
+
+    /// Build MongoDB updateOne command for diff logs
+    fn build_mongo_update_cmd(
+        src_row_data: &RowData,
+        diff_col_values: &HashMap<String, DiffColValue>,
+    ) -> Option<String> {
+        use dt_common::meta::mongo::mongo_constant::MongoConstants;
+
+        let after = src_row_data.after.as_ref()?;
+        let doc = after.get(MongoConstants::DOC)?;
+
+        if let ColValue::MongoDoc(bson_doc) = doc {
+            // Extract _id for filter
+            let id = bson_doc.get(MongoConstants::ID)?;
+
+            // Build $set document with only changed fields
+            let mut set_fields = Vec::new();
+            for (col, diff_value) in diff_col_values {
+                if col == MongoConstants::DOC || col == MongoConstants::ID {
+                    continue;
+                }
+                if let Some(src_col_value) = after.get(col) {
+                    if let Ok(json_value) = serde_json::to_string(src_col_value) {
+                        set_fields.push(format!("\"{}\": {}", col, json_value));
+                    } else {
+                        log_extra!(
+                            "failed to serialize column {} for revise command",
+                            col
+                        );
+                    }
+                } else if let Some(src_val) = &diff_value.src {
+                    set_fields.push(format!("\"{}\": {}", col, src_val));
+                }
+            }
+
+            // If we have the full document, we can use it
+            let update_doc = if set_fields.is_empty() {
+                // Use the full document from source
+                format!("$set: {}", bson_doc)
+            } else {
+                format!("$set: {{ {} }}", set_fields.join(", "))
+            };
+
+            let cmd = format!(
+                "db.{}.updateOne({{ \"_id\": {} }}, {{ {} }})",
+                src_row_data.tb, id, update_doc
+            );
+            Some(cmd)
+        } else {
+            None
+        }
     }
 }

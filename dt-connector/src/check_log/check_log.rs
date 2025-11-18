@@ -15,6 +15,10 @@ pub struct CheckLog {
     pub log_type: LogType,
     pub schema: String,
     pub tb: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_schema: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_tb: Option<String>,
     #[serde(serialize_with = "ordered_map")]
     pub id_col_values: HashMap<String, Option<String>>,
     #[serde(serialize_with = "ordered_map")]
@@ -98,6 +102,8 @@ mod tests {
             log_type: LogType::Diff,
             schema: "s".into(),
             tb: "t".into(),
+            target_schema: None,
+            target_tb: None,
             id_col_values,
             diff_col_values: HashMap::new(),
             src_row: None,
@@ -125,5 +131,15 @@ mod tests {
         let value = serde_json::to_value(&log).unwrap();
         assert_eq!(value["src_row"]["f_0"], 5);
         assert_eq!(value["dst_row"]["f_1"], "ok");
+    }
+
+    #[test]
+    fn serializes_target_fields_when_present() {
+        let mut log = sample_log();
+        log.target_schema = Some("dst_schema".into());
+        log.target_tb = Some("dst_tb".into());
+        let value = serde_json::to_value(&log).unwrap();
+        assert_eq!(value["target_schema"], "dst_schema");
+        assert_eq!(value["target_tb"], "dst_tb");
     }
 }

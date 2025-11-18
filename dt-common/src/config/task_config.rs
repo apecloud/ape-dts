@@ -458,8 +458,11 @@ impl TaskConfig {
                     check_log_dir: loader.get_optional(SINKER, CHECK_LOG_DIR),
                     output_full_row: loader.get_with_default(SINKER, OUTPUT_FULL_ROW, false),
                     output_revise_sql: loader.get_with_default(SINKER, OUTPUT_REVISE_SQL, false),
-                    revise_match_full_row: loader
-                        .get_with_default(SINKER, REVISE_MATCH_FULL_ROW, false),
+                    revise_match_full_row: loader.get_with_default(
+                        SINKER,
+                        REVISE_MATCH_FULL_ROW,
+                        false,
+                    ),
                 },
 
                 SinkType::Struct => SinkerConfig::MysqlStruct {
@@ -492,8 +495,11 @@ impl TaskConfig {
                     check_log_dir: loader.get_optional(SINKER, CHECK_LOG_DIR),
                     output_full_row: loader.get_with_default(SINKER, OUTPUT_FULL_ROW, false),
                     output_revise_sql: loader.get_with_default(SINKER, OUTPUT_REVISE_SQL, false),
-                    revise_match_full_row: loader
-                        .get_with_default(SINKER, REVISE_MATCH_FULL_ROW, false),
+                    revise_match_full_row: loader.get_with_default(
+                        SINKER,
+                        REVISE_MATCH_FULL_ROW,
+                        false,
+                    ),
                 },
 
                 SinkType::Struct => SinkerConfig::PgStruct {
@@ -524,6 +530,7 @@ impl TaskConfig {
                         batch_size,
                         check_log_dir: loader.get_optional(SINKER, CHECK_LOG_DIR),
                         output_full_row: loader.get_with_default(SINKER, OUTPUT_FULL_ROW, false),
+                        output_revise_cmd: loader.get_with_default(SINKER, "output_revise_cmd", false),
                     },
 
                     _ => bail! { not_supported_err },

@@ -180,8 +180,7 @@ impl Serialize for ColValue {
             ColValue::Json(v) => serializer.serialize_bytes(v),
             ColValue::Json2(v) => serializer.serialize_str(v),
             ColValue::Json3(v) => v.serialize(serializer),
-            // not supported
-            ColValue::MongoDoc(_) => serializer.serialize_none(),
+            ColValue::MongoDoc(v) => v.serialize(serializer),
             ColValue::None => serializer.serialize_none(),
         }
     }

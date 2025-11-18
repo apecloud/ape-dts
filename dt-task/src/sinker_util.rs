@@ -260,6 +260,7 @@ impl SinkerUtil {
             SinkerConfig::MongoCheck {
                 batch_size,
                 output_full_row,
+                output_revise_cmd,
                 ..
             } => {
                 let reverse_router = create_router!(task_config, Mongo).reverse();
@@ -276,6 +277,7 @@ impl SinkerUtil {
                         mongo_client: mongo_client.clone(),
                         monitor: monitor.clone(),
                         output_full_row,
+                        output_revise_cmd,
                     };
                     sub_sinkers.push(Arc::new(async_mutex::Mutex::new(Box::new(sinker))));
                 }
