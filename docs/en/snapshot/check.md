@@ -95,6 +95,25 @@ When set to `true`, the checker appends `src_row` and `dst_row` to every diff lo
 }
 ```
 
+Missing entries also include `src_row` when `output_full_row=true`. Example:
+
+```json
+{
+  "log_type": "Miss",
+  "schema": "test_db_1",
+  "tb": "test_table",
+  "id_col_values": {
+    "id": "3"
+  },
+  "src_row": {
+    "id": 3,
+    "name": "Charlie",
+    "age": 35,
+    "email": "charlie@example.com"
+  }
+}
+```
+
 ## Output revise SQL
 
 If you wanna to fix data manually, enable SQL generation in the `[sinker]` section:
@@ -166,6 +185,8 @@ When set to `true`, the checker appends `src_row` and `dst_row` to every diff lo
   }
 }
 ```
+
+Missing entries behave the same and include `src_row` when `output_full_row=true`, so you always have the full source payload for troubleshooting.
 
 ## Output revise SQL
 
