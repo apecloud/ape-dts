@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use mongodb::bson::Document;
 
 use dt_common::meta::{
     col_value::ColValue, mysql::mysql_tb_meta::MysqlTbMeta, pg::pg_tb_meta::PgTbMeta,
@@ -697,29 +698,22 @@ impl BaseChecker {
             // Extract _id for filter
             let id = bson_doc.get(MongoConstants::ID)?;
 
-            // Build $set document with only changed fields
-            let mut set_fields = Vec::new();
-            for (col, diff_value) in diff_col_values {
+            let mut set_doc = Document::new();
+            for (col, _) in diff_col_values {
                 if col == MongoConstants::DOC || col == MongoConstants::ID {
                     continue;
                 }
-                if let Some(src_col_value) = after.get(col) {
-                    if let Ok(json_value) = serde_json::to_string(src_col_value) {
-                        set_fields.push(format!("\"{}\": {}", col, json_value));
-                    } else {
-                        log_extra!("failed to serialize column {} for revise command", col);
-                    }
-                } else if let Some(src_val) = &diff_value.src {
-                    set_fields.push(format!("\"{}\": {}", col, src_val));
+                if let Some(value) = bson_doc.get(col) {
+                    set_doc.insert(col.clone(), value.clone());
+                } else {
+                    log_extra!("Mongo doc missing column {} for revise command", col);
                 }
             }
 
-            // If we have the full document, we can use it
-            let update_doc = if set_fields.is_empty() {
-                // Use the full document from source
+            let update_doc = if set_doc.is_empty() {
                 format!("$set: {}", bson_doc)
             } else {
-                format!("$set: {{ {} }}", set_fields.join(", "))
+                format!("$set: {}", set_doc)
             };
 
             let cmd = format!(

@@ -176,53 +176,75 @@ impl BaseTestRunner {
         )
     }
 
+    /// Simplified SQL parser based on line aggregation.
+    /// 1. Handles ` ``` ` blocks for multi-line SQLs (preserving format).
+    /// 2. Handles standard SQLs split across lines (e.g. INSERT VALUES ...) by waiting for a semicolon ';'.
+    /// 3. Ignores lines starting with '--'.
     fn load_sql_file(sql_file: &str) -> Vec<String> {
-        /* sqls content E.g. :
-        -- this is comment
-
-        select * from db_1.tb_1;  -- a sql in single line
-
-        ```
-        -- a sql in multiple lines
-        select *
-        from
-        db_1.tb_1;
-        ```
-        */
+        let lines = Self::load_file(sql_file);
         let mut sqls = Vec::new();
+        let mut current_sql = String::new();
         let mut in_block = false;
-        let mut multi_line_sql = String::new();
 
-        for line in Self::load_file(sql_file).iter() {
-            let line = line.trim();
-            if line.is_empty() || line.starts_with("--") {
-                continue;
-            }
+        for line in lines {
+            let trimmed_line = line.trim();
 
-            if line.starts_with("```") {
+            // 1. Handle Block Toggle ` ``` `
+            if trimmed_line.starts_with("```") {
                 if in_block {
-                    // block end
+                    // End of block: push what we have
                     in_block = false;
-                    if !multi_line_sql.is_empty() {
-                        // pop the last '\n'
-                        multi_line_sql.pop();
-                        sqls.push(multi_line_sql.clone());
+                    if !current_sql.is_empty() {
+                        // Remove trailing semicolon if present, consistent with other logic
+                        sqls.push(current_sql.trim().trim_end_matches(';').to_string());
+                        current_sql.clear();
                     }
                 } else {
-                    // block start
+                    // Start of block
                     in_block = true;
-                    multi_line_sql.clear();
+                    current_sql.clear();
                 }
                 continue;
             }
 
+            // 2. Block Mode: Just accumulate everything
             if in_block {
-                multi_line_sql.push_str(line);
-                multi_line_sql.push('\n');
+                current_sql.push_str(&line);
+                current_sql.push('\n');
+                continue;
+            }
+
+            // 3. Normal Mode: Line-based aggregation
+
+            // Remove comments (--) from the line
+            let line_content = if let Some(idx) = line.find("--") {
+                &line[..idx]
             } else {
-                sqls.push(line.into());
+                &line
+            };
+
+            let trimmed_content = line_content.trim();
+
+            if trimmed_content.is_empty() {
+                continue;
+            }
+
+            current_sql.push_str(trimmed_content);
+            current_sql.push(' '); // Add space to prevent "FROMtable"
+
+            // If this line ends with a semicolon, the statement is finished
+            if trimmed_content.ends_with(';') {
+                // Push and reset
+                sqls.push(current_sql.trim().trim_end_matches(';').to_string());
+                current_sql.clear();
             }
         }
+
+        // Push any remaining SQL (e.g., file ends without semicolon)
+        if !current_sql.trim().is_empty() {
+            sqls.push(current_sql.trim().trim_end_matches(';').to_string());
+        }
+
         sqls
     }
 
