@@ -13,7 +13,7 @@ use dt_common::meta::{
 };
 
 use mongodb::{
-    bson::{doc, Bson, Document},
+    bson::{doc, Document},
     Client,
 };
 
