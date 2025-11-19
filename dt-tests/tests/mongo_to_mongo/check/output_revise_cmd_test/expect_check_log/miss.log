@@ -1,1 +1,0 @@
-{"log_type":"Miss","schema":"test_db_1","tb":"users","id_col_values":{"_id":"65733a82fb2ce9836745de03"},"revise_sql":"db.users.insertOne({\"_id\": \"65733a82fb2ce9836745de03\", \"name\": \"Charlie\", \"age\": 35, \"email\": \"charlie@example.com\"})"}

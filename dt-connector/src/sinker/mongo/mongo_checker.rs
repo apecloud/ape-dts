@@ -49,7 +49,6 @@ impl Sinker for MongoChecker {
     }
 
     async fn close(&mut self) -> anyhow::Result<()> {
-        self.mongo_client.clone().shutdown().await;
         Ok(())
     }
 }
@@ -112,28 +111,28 @@ impl MongoChecker {
         let mut miss = Vec::new();
         let mut diff = Vec::new();
         for (key, src_row_data) in src_row_data_map {
-                    if let Some(dst_row_data) = dst_row_data_map.remove(&key) {
-                        let diff_col_values = BaseChecker::compare_row_data(&src_row_data, &dst_row_data);
-                        if !diff_col_values.is_empty() {
-                            let diff_log = BaseChecker::build_mongo_diff_log(
-                                src_row_data,
-                                dst_row_data,
-                                diff_col_values,
-                                &tb_meta,
-                                &self.reverse_router,
-                                self.output_full_row,
-                                self.output_revise_sql,
-                            );
-                    diff.push(diff_log);
-                }
-                } else {
-                    let miss_log = BaseChecker::build_mongo_miss_log(
+            if let Some(dst_row_data) = dst_row_data_map.remove(&key) {
+                let diff_col_values = BaseChecker::compare_row_data(&src_row_data, &dst_row_data);
+                if !diff_col_values.is_empty() {
+                    let diff_log = BaseChecker::build_mongo_diff_log(
                         src_row_data,
+                        dst_row_data,
+                        diff_col_values,
                         &tb_meta,
                         &self.reverse_router,
                         self.output_full_row,
                         self.output_revise_sql,
                     );
+                    diff.push(diff_log);
+                }
+            } else {
+                let miss_log = BaseChecker::build_mongo_miss_log(
+                    src_row_data,
+                    &tb_meta,
+                    &self.reverse_router,
+                    self.output_full_row,
+                    self.output_revise_sql,
+                );
                 miss.push(miss_log);
             };
         }

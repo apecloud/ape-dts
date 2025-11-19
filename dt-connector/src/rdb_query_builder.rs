@@ -509,14 +509,41 @@ impl RdbQueryBuilder<'_> {
     fn get_pg_sql_value(&self, col_value: &ColValue) -> String {
         match col_value {
             ColValue::Blob(v) => format!(r#"'\x{}'"#, hex::encode(v)),
+            ColValue::String(_)
+            | ColValue::RawString(_)
+            | ColValue::Time(_)
+            | ColValue::Date(_)
+            | ColValue::DateTime(_)
+            | ColValue::Timestamp(_)
+            | ColValue::Json(_)
+            | ColValue::Json2(_)
+            | ColValue::Json3(_)
+            | ColValue::Set2(_)
+            | ColValue::Enum2(_)
+            | ColValue::MongoDoc(_) => Self::quote_pg_string_literal(col_value),
+            // For numeric types, we should not quote them in SQL
+            ColValue::Tiny(_)
+            | ColValue::UnsignedTiny(_)
+            | ColValue::Short(_)
+            | ColValue::UnsignedShort(_)
+            | ColValue::Long(_)
+            | ColValue::UnsignedLong(_)
+            | ColValue::LongLong(_)
+            | ColValue::UnsignedLongLong(_)
+            | ColValue::Float(_)
+            | ColValue::Double(_)
+            | ColValue::Decimal(_) => col_value
+                .to_option_string()
+                .unwrap_or_else(|| "NULL".to_string()),
+            _ => Self::quote_pg_string_literal(col_value),
+        }
+    }
 
-            _ => {
-                if let Some(str) = col_value.to_option_string() {
-                    format!(r#"'{}'"#, str.replace('\'', "\'\'"))
-                } else {
-                    "NULL".to_string()
-                }
-            }
+    fn quote_pg_string_literal(col_value: &ColValue) -> String {
+        if let Some(string) = col_value.to_option_string() {
+            format!(r#"'{}'"#, string.replace('\'', "''"))
+        } else {
+            "NULL".to_string()
         }
     }
 
