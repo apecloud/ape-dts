@@ -54,6 +54,48 @@ parallel_type=rdb_check
 {"log_type":"Miss","schema":"test_db_1","tb":"one_pk_multi_uk","id_col_values":{"f_0":"7"}}
 ```
 
+## 输出完整行
+
+当业务需要完整行内容用于排查异常，可以在 `[sinker]` 中开启全行日志：
+
+```
+[sinker]
+output_full_row=true
+```
+
+开启后，所有 diff.log 会追加 `src_row` 与 `dst_row`，miss.log 会追加 `src_row`（当前仅支持 MySQL/PG/Mongo，Redis 仍不支持）。示例：
+
+```json
+{
+  "log_type": "Diff",
+  "schema": "test_db_1",
+  "tb": "one_pk_multi_uk",
+  "id_col_values": {
+    "f_0": "5"
+  },
+  "diff_col_values": {
+    "f_1": {
+      "src": "5",
+      "dst": "5000"
+    },
+    "f_2": {
+      "src": "ok",
+      "dst": "after manual update"
+    }
+  },
+  "src_row": {
+    "f_0": 5,
+    "f_1": 5,
+    "f_2": "ok"
+  },
+  "dst_row": {
+    "f_0": 5,
+    "f_1": 5000,
+    "f_2": "after manual update"
+  }
+}
+```
+
 ## 输出修复 SQL
 
 业务若需要人工修复差异数据，可以在 `[sinker]` 中开启 SQL 输出：
