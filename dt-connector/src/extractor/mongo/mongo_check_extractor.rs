@@ -12,7 +12,7 @@ use dt_common::meta::{
 };
 
 use mongodb::{
-    bson::{doc, Document},
+    bson::{doc, Bson, Document},
     Client,
 };
 
@@ -62,8 +62,10 @@ impl BatchCheckExtractor for MongoCheckExtractor {
         for check_log in check_logs.iter() {
             // check log has only one col: _id
             if let Some(Some(col_value)) = check_log.id_col_values.get(MongoConstants::ID) {
-                let key: MongoKey = serde_json::from_str(col_value).unwrap();
-                ids.push(key.to_mongo_id());
+                let keys = MongoKey::parse_fuzzy(col_value);
+                for key in keys {
+                    ids.push(key.to_mongo_id());
+                }
             }
         }
 
@@ -77,7 +79,7 @@ impl BatchCheckExtractor for MongoCheckExtractor {
         while cursor.advance().await.unwrap() {
             let doc = cursor.deserialize_current().unwrap();
             let mut after = HashMap::new();
-            let id: String = MongoKey::from_doc(&doc).unwrap().to_string();
+            let id: String = MongoKey::from_doc(&doc).unwrap().to_plain_string();
             after.insert(MongoConstants::ID.to_string(), ColValue::String(id));
             after.insert(MongoConstants::DOC.to_string(), ColValue::MongoDoc(doc));
             let mut row_data = RowData::new(

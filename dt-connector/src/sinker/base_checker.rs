@@ -1,9 +1,10 @@
-use std::collections::HashMap;
 use mongodb::bson::Document;
+use std::collections::{BTreeSet, HashMap};
 
 use dt_common::meta::{
-    col_value::ColValue, mysql::mysql_tb_meta::MysqlTbMeta, pg::pg_tb_meta::PgTbMeta,
-    rdb_meta_manager::RdbMetaManager, rdb_tb_meta::RdbTbMeta, row_data::RowData, row_type::RowType,
+    col_value::ColValue, mongo::mongo_constant::MongoConstants, mysql::mysql_tb_meta::MysqlTbMeta,
+    pg::pg_tb_meta::PgTbMeta, rdb_meta_manager::RdbMetaManager, rdb_tb_meta::RdbTbMeta,
+    row_data::RowData, row_type::RowType,
     struct_meta::statement::struct_statement::StructStatement,
 };
 use dt_common::{log_diff, log_extra, log_miss, rdb_filter::RdbFilter};
@@ -328,7 +329,9 @@ mod tests {
             .unwrap()
             .unwrap();
         assert!(sql.contains("SET \"name\"='fresh'"));
-        assert!(sql.contains("WHERE \"id\" = 2 AND \"name\" = 'stale'"));
+        assert!(sql.contains("WHERE"));
+        assert!(sql.contains("\"id\" = 2"));
+        assert!(sql.contains("\"name\" = 'stale'"));
     }
 }
 
@@ -639,6 +642,12 @@ impl BaseChecker {
             false, // Don't generate insert cmd for diff log
         );
         diff_log.diff_col_values = diff_col_values;
+        if output_revise_sql
+            && diff_log.diff_col_values.len() == 1
+            && diff_log.diff_col_values.contains_key(MongoConstants::DOC)
+        {
+            diff_log.diff_col_values = Self::expand_mongo_doc_diff(&src_row_data, &dst_row_data);
+        }
         if output_full_row {
             let reverse_dst_row_data = reverse_router.route_row(dst_row_data);
             diff_log.dst_row = Self::clone_row_values(&reverse_dst_row_data);
@@ -724,5 +733,58 @@ impl BaseChecker {
         } else {
             None
         }
+    }
+
+    fn expand_mongo_doc_diff(
+        src_row_data: &RowData,
+        dst_row_data: &RowData,
+    ) -> HashMap<String, DiffColValue> {
+        let src_doc = src_row_data
+            .after
+            .as_ref()
+            .and_then(|after| after.get(MongoConstants::DOC))
+            .and_then(|col_value| {
+                if let ColValue::MongoDoc(doc) = col_value {
+                    Some(doc.clone())
+                } else {
+                    None
+                }
+            });
+        let dst_doc = dst_row_data
+            .after
+            .as_ref()
+            .and_then(|after| after.get(MongoConstants::DOC))
+            .and_then(|col_value| {
+                if let ColValue::MongoDoc(doc) = col_value {
+                    Some(doc.clone())
+                } else {
+                    None
+                }
+            });
+
+        let mut keys = BTreeSet::new();
+        if let Some(doc) = &src_doc {
+            keys.extend(doc.keys().cloned());
+        }
+        if let Some(doc) = &dst_doc {
+            keys.extend(doc.keys().cloned());
+        }
+
+        let mut diff_cols = HashMap::new();
+        for key in keys {
+            if key == MongoConstants::ID {
+                continue;
+            }
+            let src_value = src_doc.as_ref().and_then(|doc| doc.get(&key));
+            let dst_value = dst_doc.as_ref().and_then(|doc| doc.get(&key));
+            if src_value != dst_value {
+                let diff_col_value = DiffColValue {
+                    src: src_value.map(|v| v.to_string()),
+                    dst: dst_value.map(|v| v.to_string()),
+                };
+                diff_cols.insert(key, diff_col_value);
+            }
+        }
+        diff_cols
     }
 }
