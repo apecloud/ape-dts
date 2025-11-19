@@ -540,7 +540,9 @@ impl BaseChecker {
 
             let mut set_doc = Document::new();
             let mut unset_doc = Document::new();
-            for col in diff_col_values.keys() {
+            let mut sorted_keys: Vec<_> = diff_col_values.keys().collect();
+            sorted_keys.sort();
+            for col in sorted_keys {
                 if col == MongoConstants::DOC || col == MongoConstants::ID {
                     continue;
                 }
