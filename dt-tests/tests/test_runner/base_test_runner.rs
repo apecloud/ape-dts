@@ -23,6 +23,8 @@ pub struct BaseTestRunner {
     pub meta_center_prepare_sqls: Vec<String>,
 }
 
+static mut LOG4RS_INITED: bool = false;
+
 #[allow(dead_code)]
 impl BaseTestRunner {
     pub async fn new(relative_test_dir: &str) -> anyhow::Result<Self> {
@@ -89,12 +91,17 @@ impl BaseTestRunner {
     }
 
     pub async fn start_task(&self) -> anyhow::Result<()> {
-        TaskRunner::new(&self.task_config_file)?.start_task().await
+        let enable_log4rs = Self::get_enable_log4rs();
+        TaskRunner::new(&self.task_config_file)?
+            .start_task(enable_log4rs)
+            .await
     }
 
     pub async fn spawn_task(&self) -> anyhow::Result<JoinHandle<()>> {
+        let enable_log4rs = Self::get_enable_log4rs();
         let task_runner = TaskRunner::new(&self.task_config_file)?;
-        let task = tokio::spawn(async move { task_runner.start_task().await.unwrap() });
+        let task =
+            tokio::spawn(async move { task_runner.start_task(enable_log4rs).await.unwrap() });
         Ok(task)
     }
 
@@ -111,6 +118,16 @@ impl BaseTestRunner {
             TimeUtil::sleep_millis(1).await;
         }
         Ok(())
+    }
+
+    pub fn get_enable_log4rs() -> bool {
+        // all tests will be run in one process, and log4rs can only be inited once
+        let enable_log4rs = !unsafe { LOG4RS_INITED };
+
+        if enable_log4rs {
+            unsafe { LOG4RS_INITED = true };
+        }
+        enable_log4rs
     }
 
     pub fn load_file(file_path: &str) -> Vec<String> {
@@ -160,55 +177,46 @@ impl BaseTestRunner {
     }
 
     /// Simplified SQL parser based on line aggregation.
-    /// 1. Handles multi-line SQLs automatically.
+    /// 1. Handles ` ``` ` blocks for multi-line SQLs (preserving format).
     /// 2. Handles standard SQLs split across lines (e.g. INSERT VALUES ...) by waiting for a semicolon ';'.
     /// 3. Ignores lines starting with '--'.
     fn load_sql_file(sql_file: &str) -> Vec<String> {
         let lines = Self::load_file(sql_file);
         let mut sqls = Vec::new();
         let mut current_sql = String::new();
-        let mut in_backtick_block = false;
-        let mut dollar_tag: Option<String> = None;
+        let mut in_block = false;
 
         for line in lines {
             let trimmed_line = line.trim();
 
-            // 1. Handle ``` wrapped blocks
+            // 1. Handle Block Toggle ` ``` `
             if trimmed_line.starts_with("```") {
-                if in_backtick_block {
-                    in_backtick_block = false;
+                if in_block {
+                    // End of block: push what we have
+                    in_block = false;
                     if !current_sql.is_empty() {
-                        sqls.push(Self::flush_sql(&mut current_sql));
+                        // Remove trailing semicolon if present, consistent with other logic
+                        sqls.push(current_sql.trim().trim_end_matches(';').to_string());
+                        current_sql.clear();
                     }
                 } else {
-                    in_backtick_block = true;
+                    // Start of block
+                    in_block = true;
                     current_sql.clear();
                 }
                 continue;
             }
 
-            // 2. In ``` block: keep everything untouched
-            if in_backtick_block {
+            // 2. Block Mode: Just accumulate everything
+            if in_block {
                 current_sql.push_str(&line);
                 current_sql.push('\n');
                 continue;
             }
 
-            // 3. Inside PostgreSQL dollar-quoted blocks, ignore inner semicolons
-            if let Some(tag) = &dollar_tag {
-                current_sql.push_str(&line);
-                current_sql.push('\n');
+            // 3. Normal Mode: Line-based aggregation
 
-                if trimmed_line.contains(tag) {
-                    dollar_tag = None;
-                    if trimmed_line.ends_with(';') {
-                        sqls.push(Self::flush_sql(&mut current_sql));
-                    }
-                }
-                continue;
-            }
-
-            // 4. Normal mode: strip inline comments
+            // Remove comments (--) from the line
             let line_content = if let Some(idx) = line.find("--") {
                 &line[..idx]
             } else {
@@ -221,66 +229,23 @@ impl BaseTestRunner {
                 continue;
             }
 
-            if trimmed_content.starts_with("use ") {
-                if !current_sql.trim().is_empty() {
-                    sqls.push(Self::flush_sql(&mut current_sql));
-                }
-                let use_stmt = trimmed_content.trim_end_matches(';').to_string();
-                sqls.push(use_stmt);
-                continue;
-            }
-
-            // Detect start of dollar-quoted blocks like $$ ... $$ or $BODY$ ... $BODY$
-            if let Some(tag) = Self::extract_dollar_tag(trimmed_content) {
-                let tag_count = trimmed_content.matches(&tag).count();
-                current_sql.push_str(trimmed_content);
-                current_sql.push('\n');
-
-                if tag_count >= 2 {
-                    if trimmed_content.ends_with(';') {
-                        sqls.push(Self::flush_sql(&mut current_sql));
-                    }
-                    continue;
-                }
-
-                dollar_tag = Some(tag);
-                continue;
-            }
-
             current_sql.push_str(trimmed_content);
-            current_sql.push(' ');
+            current_sql.push(' '); // Add space to prevent "FROMtable"
 
             // If this line ends with a semicolon, the statement is finished
             if trimmed_content.ends_with(';') {
-                sqls.push(Self::flush_sql(&mut current_sql));
+                // Push and reset
+                sqls.push(current_sql.trim().trim_end_matches(';').to_string());
+                current_sql.clear();
             }
         }
 
         // Push any remaining SQL (e.g., file ends without semicolon)
         if !current_sql.trim().is_empty() {
-            sqls.push(Self::flush_sql(&mut current_sql));
+            sqls.push(current_sql.trim().trim_end_matches(';').to_string());
         }
 
         sqls
-    }
-
-    fn flush_sql(current_sql: &mut String) -> String {
-        let sql = current_sql.trim().trim_end_matches(';').to_string();
-        current_sql.clear();
-        sql
-    }
-
-    fn extract_dollar_tag(line: &str) -> Option<String> {
-        let mut start = None;
-        for (idx, ch) in line.char_indices() {
-            if ch == '$' {
-                if let Some(s) = start {
-                    return Some(line[s..=idx].to_string());
-                }
-                start = Some(idx);
-            }
-        }
-        None
     }
 
     pub fn check_path_exists(file: &str) -> bool {
