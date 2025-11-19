@@ -21,7 +21,10 @@ pub struct CheckLog {
     pub target_tb: Option<String>,
     #[serde(serialize_with = "ordered_map")]
     pub id_col_values: HashMap<String, Option<String>>,
-    #[serde(serialize_with = "ordered_map")]
+    #[serde(
+        skip_serializing_if = "HashMap::is_empty",
+        serialize_with = "ordered_map"
+    )]
     pub diff_col_values: HashMap<String, DiffColValue>,
     #[serde(
         default,

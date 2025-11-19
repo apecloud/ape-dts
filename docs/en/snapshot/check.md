@@ -37,20 +37,20 @@ The results are written to logs in JSON format, including diff.log and miss.log.
 
 The diff log includes the database (schema), table (tb), primary key/unique key (id_col_values), and the source and target values of the differing columns (diff_col_values).
 
-```
-{"log_type":"Diff","schema":"test_db_1","tb":"one_pk_multi_uk","id_col_values":{"f_0":"5"},"diff_col_values":{"f_1":{"src":"5","dst":"5000"}}}
+```json
+{"log_type":"Diff","schema":"test_db_1","tb":"one_pk_multi_uk","id_col_values":{"f_0":"5"},"diff_col_values":{"f_1":{"src":"5","dst":"5000"},"f_2":{"src":"ok","dst":"after manual update"}}}
 {"log_type":"Diff","schema":"test_db_1","tb":"one_pk_no_uk","id_col_values":{"f_0":"4"},"diff_col_values":{"f_1":{"src":"2","dst":"1"}}}
 {"log_type":"Diff","schema":"test_db_1","tb":"one_pk_no_uk","id_col_values":{"f_0":"6"},"diff_col_values":{"f_1":{"src":null,"dst":"1"}}}
 ```
 
 ## miss.log
 
-The miss log includes the database (schema), table (tb), and primary key/unique key (id_col_values), with empty diff_col_values.
+The miss log includes the database (schema), table (tb), and primary key/unique key (id_col_values). Because missing rows lack differing columns, the log does not emit `diff_col_values`.
 
-```
-{"log_type":"Miss","schema":"test_db_1","tb":"no_pk_one_uk","id_col_values":{"f_1":"8","f_2":"1"},"diff_col_values":{}}
-{"log_type":"Miss","schema":"test_db_1","tb":"no_pk_one_uk","id_col_values":{"f_1":null,"f_2":null},"diff_col_values":{}}
-{"log_type":"Miss","schema":"test_db_1","tb":"one_pk_multi_uk","id_col_values":{"f_0":"7"},"diff_col_values":{}}
+```json
+{"log_type":"Miss","schema":"test_db_1","tb":"no_pk_one_uk","id_col_values":{"f_1":"8","f_2":"1"}}
+{"log_type":"Miss","schema":"test_db_1","tb":"no_pk_one_uk","id_col_values":{"f_1":null,"f_2":null}}
+{"log_type":"Miss","schema":"test_db_1","tb":"one_pk_multi_uk","id_col_values":{"f_0":"7"}}
 ```
 
 ## Output complete rows
@@ -69,8 +69,6 @@ When set to `true`, the checker appends `src_row` and `dst_row` to every diff lo
   "log_type": "Diff",
   "schema": "test_db_1",
   "tb": "one_pk_multi_uk",
-  "target_schema": "test_db_1",
-  "target_tb": "one_pk_multi_uk",
   "id_col_values": {
     "f_0": "5"
   },
@@ -78,6 +76,10 @@ When set to `true`, the checker appends `src_row` and `dst_row` to every diff lo
     "f_1": {
       "src": "5",
       "dst": "5000"
+    },
+    "f_2": {
+      "src": "ok",
+      "dst": "after manual update"
     }
   },
   "src_row": {
@@ -95,7 +97,7 @@ When set to `true`, the checker appends `src_row` and `dst_row` to every diff lo
 
 ## Output revise SQL
 
-If you prefer to fix data manually, enable SQL generation in the `[sinker]` section:
+If you wanna to fix data manually, enable SQL generation in the `[sinker]` section:
 
 ```
 [sinker]
@@ -106,7 +108,9 @@ revise_match_full_row=true
 
 When `output_revise_sql` is `true`, every miss/diff log contains an extra `revise_sql` field. The checker automatically builds `INSERT` statements for missing rows and `UPDATE` statements for diffs. With `revise_match_full_row=true`, the `UPDATE` statement matches the entire target row even if a primary/unique key exists.
 
-When routers rename schemas or tables, the log now also emits `target_schema` and `target_tb` so you always know where the generated SQL should run (they point to the destination table, while `schema`/`tb` stay on the source naming for easier troubleshooting).
+When routers rename schema or table names, the log emits `target_schema` and `target_tb` so you always know where the generated SQL should run (these fields point to the destination naming, while `schema`/`tb` still represent the source). They are omitted when the router leaves the names unchanged.
+
+`revise_sql` captures the SQL the sinker should execute to reconcile the target engine with the source data captured in the diff. Because it is generated against the destination schema/table, you can run it directly on the sinker (and you can double-check the exact database/table via `target_schema`/`target_tb` when they appear).
 
 Example:
 
@@ -119,7 +123,7 @@ Example:
   "target_tb": "target_tb",
   "id_col_values": {"f_0": "4"},
   "diff_col_values": {"f_1": {"src": "2", "dst": "1"}},
-  "revise_sql": "UPDATE `test_db_1`.`one_pk_no_uk` SET `f_1`='2' WHERE `f_0` = 4;"
+  "revise_sql": "UPDATE `target_db`.`target_tb` SET `f_1`='2' WHERE `f_0` = 4;"
 }
 ```
 

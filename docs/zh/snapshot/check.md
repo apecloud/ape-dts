@@ -37,21 +37,21 @@ parallel_type=rdb_check
 差异日志包括库（schema）、表（tb）、主键/唯一键（id_col_values）、差异列的源值和目标值（diff_col_values）。
 
 ```json
-{"log_type":"Diff","schema":"test_db_1","tb":"one_pk_multi_uk","id_col_values":{"f_0":"5"},"diff_col_values":{"f_1":{"src":"5","dst":"5000"}}}
+{"log_type":"Diff","schema":"test_db_1","tb":"one_pk_multi_uk","id_col_values":{"f_0":"5"},"diff_col_values":{"f_1":{"src":"5","dst":"5000"},"f_2":{"src":"ok","dst":"after manual update"}}}
 {"log_type":"Diff","schema":"test_db_1","tb":"one_pk_no_uk","id_col_values":{"f_0":"4"},"diff_col_values":{"f_1":{"src":"2","dst":"1"}}}
 {"log_type":"Diff","schema":"test_db_1","tb":"one_pk_no_uk","id_col_values":{"f_0":"6"},"diff_col_values":{"f_1":{"src":null,"dst":"1"}}}
 ```
 
-在存在路由改名的场景下，日志还会补充 `target_schema`/`target_tb` 来标识目的端真实库表；`schema`、`tb` 依旧表示源端，方便排查。
+只有在路由对 schema 或 table 进行重命名时，日志才会补充 `target_schema`/`target_tb` 来标识目的端真实库表；`schema`、`tb` 依旧表示源端，方便排查。
 
 ## 缺失日志（miss.log）
 
-缺失日志包括库（schema）、表（tb）和主键/唯一键（id_col_values），diff_col_values 为空。
+缺失日志包括库（schema）、表（tb）和主键/唯一键（id_col_values）。由于缺失记录不存在差异列，因此不会输出 `diff_col_values`。
 
 ```json
-{"log_type":"Miss","schema":"test_db_1","tb":"no_pk_one_uk","id_col_values":{"f_1":"8","f_2":"1"},"diff_col_values":{}}
-{"log_type":"Miss","schema":"test_db_1","tb":"no_pk_one_uk","id_col_values":{"f_1":null,"f_2":null},"diff_col_values":{}}
-{"log_type":"Miss","schema":"test_db_1","tb":"one_pk_multi_uk","id_col_values":{"f_0":"7"},"diff_col_values":{}}
+{"log_type":"Miss","schema":"test_db_1","tb":"no_pk_one_uk","id_col_values":{"f_1":"8","f_2":"1"}}
+{"log_type":"Miss","schema":"test_db_1","tb":"no_pk_one_uk","id_col_values":{"f_1":null,"f_2":null}}
+{"log_type":"Miss","schema":"test_db_1","tb":"one_pk_multi_uk","id_col_values":{"f_0":"7"}}
 ```
 
 ## 输出修复 SQL
@@ -65,7 +65,9 @@ output_revise_sql=true
 revise_match_full_row=true
 ```
 
-开启后，diff/miss 日志会追加 `revise_sql` 字段。缺失记录会生成 `INSERT` 语句，差异记录会生成 `UPDATE` 语句。`revise_match_full_row=true` 时，即使表存在主键也会使用整行数据生成 WHERE 条件，以便通过完整行值定位目标数据。若存在路由改名，记得参考日志里的 `target_schema`、`target_tb` 决定 SQL 应执行的表。
+开启后，diff/miss 日志会追加 `revise_sql` 字段。缺失记录会生成 `INSERT` 语句，差异记录会生成 `UPDATE` 语句。`revise_match_full_row=true` 时，即使表存在主键也会使用整行数据生成 WHERE 条件，以便通过完整行值定位目标数据。若路由没有改名就不会输出 `target_schema`/`target_tb`，只在改名时才需要参考这两个字段决定 SQL 应执行的表。
+
+`revise_sql` 本质上是 sinker 需要执行、用以把目标数据修正到和源端一致的 SQL；它直接使用了真正的目的端 schema/table，所以可以直接在目标执行（路由改名时仍可参考 `target_schema`/`target_tb` 判断最终目标对象）。
 
 示例：
 
@@ -78,7 +80,7 @@ revise_match_full_row=true
   "target_tb": "target_tb",
   "id_col_values": {"f_0": "4"},
   "diff_col_values": {"f_1": {"src": "2", "dst": "1"}},
-  "revise_sql": "UPDATE `test_db_1`.`one_pk_no_uk` SET `f_1`='2' WHERE `f_0` = 4;"
+  "revise_sql": "UPDATE `target_db`.`target_tb` SET `f_1`='2' WHERE `f_0` = 4;"
 }
 ```
 

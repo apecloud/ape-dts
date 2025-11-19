@@ -333,22 +333,41 @@ mod tests {
 
 pub struct BaseChecker {}
 
+pub struct BatchCompareRange {
+    pub start_index: usize,
+    pub batch_size: usize,
+}
+
+pub struct BatchCompareContext<'ctx> {
+    pub dst_tb_meta: &'ctx RdbTbMeta,
+    pub extractor_meta_manager: &'ctx mut RdbMetaManager,
+    pub reverse_router: &'ctx RdbRouter,
+    pub output_full_row: bool,
+    pub revise_ctx: Option<&'ctx ReviseSqlContext<'ctx>>,
+}
+
 impl BaseChecker {
     #[inline(always)]
-    pub async fn batch_compare_row_data_items(
+    pub async fn batch_compare_row_data_items<'ctx>(
         src_data: &[RowData],
         dst_row_data_map: &HashMap<u128, RowData>,
-        start_index: usize,
-        batch_size: usize,
-        dst_tb_meta: &RdbTbMeta,
-        extractor_meta_manager: &mut RdbMetaManager,
-        reverse_router: &RdbRouter,
-        output_full_row: bool,
-        revise_ctx: Option<&ReviseSqlContext<'_>>,
+        range: BatchCompareRange,
+        ctx: BatchCompareContext<'ctx>,
     ) -> anyhow::Result<(Vec<CheckLog>, Vec<CheckLog>)> {
+        let BatchCompareContext {
+            dst_tb_meta,
+            extractor_meta_manager,
+            reverse_router,
+            output_full_row,
+            revise_ctx,
+        } = ctx;
         let mut miss = Vec::new();
         let mut diff = Vec::new();
-        for src_row_data in src_data.iter().skip(start_index).take(batch_size) {
+        for src_row_data in src_data
+            .iter()
+            .skip(range.start_index)
+            .take(range.batch_size)
+        {
             // src_row_data is already routed, so here we call get_hash_code by dst_tb_meta
             let hash_code = src_row_data.get_hash_code(dst_tb_meta);
             if let Some(dst_row_data) = dst_row_data_map.get(&hash_code) {
@@ -470,10 +489,14 @@ impl BaseChecker {
             Some(ctx) => ctx.build_miss_sql(src_row_data)?,
             None => None,
         };
-        let target_schema = Some(src_row_data.schema.clone());
-        let target_tb = Some(src_row_data.tb.clone());
+        let target_schema_value = src_row_data.schema.clone();
+        let target_tb_value = src_row_data.tb.clone();
         // route src_row_data back since we need origin extracted row_data in check log
         let reverse_src_row_data = reverse_router.route_row(src_row_data.clone());
+        let emit_target_fields = target_schema_value != reverse_src_row_data.schema
+            || target_tb_value != reverse_src_row_data.tb;
+        let target_schema = emit_target_fields.then_some(target_schema_value);
+        let target_tb = emit_target_fields.then_some(target_tb_value);
         let src_tb_meta = extractor_meta_manager
             .get_tb_meta(&reverse_src_row_data.schema, &reverse_src_row_data.tb)
             .await?;
@@ -559,18 +582,22 @@ impl BaseChecker {
         tb_meta: &RdbTbMeta,
         reverse_router: &RdbRouter,
         output_full_row: bool,
-        output_revise_cmd: bool,
+        output_revise_sql: bool,
     ) -> CheckLog {
-        let target_schema = Some(src_row_data.schema.clone());
-        let target_tb = Some(src_row_data.tb.clone());
+        let target_schema_value = src_row_data.schema.clone();
+        let target_tb_value = src_row_data.tb.clone();
         let reverse_src_row_data = reverse_router.route_row(src_row_data.clone());
+        let emit_target_fields = target_schema_value != reverse_src_row_data.schema
+            || target_tb_value != reverse_src_row_data.tb;
+        let target_schema = emit_target_fields.then_some(target_schema_value);
+        let target_tb = emit_target_fields.then_some(target_tb_value);
         let id_col_values = Self::build_id_col_values(&reverse_src_row_data, tb_meta);
         let src_row = if output_full_row {
             Self::clone_row_values(&reverse_src_row_data)
         } else {
             None
         };
-        let revise_sql = if output_revise_cmd {
+        let revise_sql = if output_revise_sql {
             Self::build_mongo_insert_cmd(&src_row_data)
         } else {
             None
@@ -596,15 +623,15 @@ impl BaseChecker {
         tb_meta: &RdbTbMeta,
         reverse_router: &RdbRouter,
         output_full_row: bool,
-        output_revise_cmd: bool,
+        output_revise_sql: bool,
     ) -> CheckLog {
-        let revise_sql = if output_revise_cmd {
+        let revise_sql = if output_revise_sql {
             Self::build_mongo_update_cmd(&src_row_data, &diff_col_values)
         } else {
             None
         };
         let mut diff_log = Self::build_mongo_miss_log(
-            src_row_data,
+            src_row_data.clone(),
             tb_meta,
             reverse_router,
             output_full_row,
@@ -680,10 +707,7 @@ impl BaseChecker {
                     if let Ok(json_value) = serde_json::to_string(src_col_value) {
                         set_fields.push(format!("\"{}\": {}", col, json_value));
                     } else {
-                        log_extra!(
-                            "failed to serialize column {} for revise command",
-                            col
-                        );
+                        log_extra!("failed to serialize column {} for revise command", col);
                     }
                 } else if let Some(src_val) = &diff_value.src {
                     set_fields.push(format!("\"{}\": {}", col, src_val));

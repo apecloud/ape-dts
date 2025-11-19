@@ -15,7 +15,7 @@ use crate::{
     rdb_query_builder::RdbQueryBuilder,
     rdb_router::RdbRouter,
     sinker::{
-        base_checker::{BaseChecker, ReviseSqlContext},
+        base_checker::{BaseChecker, BatchCompareContext, BatchCompareRange, ReviseSqlContext},
         base_sinker::BaseSinker,
     },
     Sinker,
@@ -37,6 +37,7 @@ pub struct MysqlChecker {
     pub conn_pool: Pool<MySql>,
     pub meta_manager: MysqlMetaManager,
     pub extractor_meta_manager: RdbMetaManager,
+    pub router: RdbRouter,
     pub reverse_router: RdbRouter,
     pub batch_size: usize,
     pub monitor: Arc<Monitor>,
@@ -161,16 +162,23 @@ impl MysqlChecker {
             dst_row_data_map.insert(hash_code, row_data);
         }
 
+        let compare_range = BatchCompareRange {
+            start_index,
+            batch_size,
+        };
+        let compare_ctx = BatchCompareContext {
+            dst_tb_meta: &tb_meta.basic,
+            extractor_meta_manager: &mut self.extractor_meta_manager,
+            reverse_router: &self.reverse_router,
+            output_full_row: self.output_full_row,
+            revise_ctx: revise_ctx.as_ref(),
+        };
+
         let (miss, diff) = BaseChecker::batch_compare_row_data_items(
             data,
             &dst_row_data_map,
-            start_index,
-            batch_size,
-            &tb_meta.basic,
-            &mut self.extractor_meta_manager,
-            &self.reverse_router,
-            self.output_full_row,
-            revise_ctx.as_ref(),
+            compare_range,
+            compare_ctx,
         )
         .await?;
         BaseChecker::log_dml(miss, diff);

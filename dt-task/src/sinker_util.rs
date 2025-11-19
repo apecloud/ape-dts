@@ -135,8 +135,8 @@ impl SinkerUtil {
                 revise_match_full_row,
                 ..
             } => {
-                // checker needs the reverse router
-                let reverse_router = create_router!(task_config, Mysql).reverse();
+                let router = create_router!(task_config, Mysql);
+                let reverse_router = router.clone().reverse();
                 let filter = create_filter!(task_config, Mysql);
                 let extractor_meta_manager = ExtractorUtil::get_extractor_meta_manager(task_config)
                     .await?
@@ -155,6 +155,7 @@ impl SinkerUtil {
                         conn_pool: conn_pool.clone(),
                         meta_manager: meta_manager.clone(),
                         extractor_meta_manager: extractor_meta_manager.clone(),
+                        router: router.clone(),
                         reverse_router: reverse_router.clone(),
                         filter: filter.clone(),
                         batch_size,
@@ -205,8 +206,8 @@ impl SinkerUtil {
                 revise_match_full_row,
                 ..
             } => {
-                // checker needs the reverse router
-                let reverse_router = create_router!(task_config, Pg).reverse();
+                let router = create_router!(task_config, Pg);
+                let reverse_router = router.clone().reverse();
                 let filter = create_filter!(task_config, Pg);
                 let extractor_meta_manager = ExtractorUtil::get_extractor_meta_manager(task_config)
                     .await?
@@ -225,6 +226,7 @@ impl SinkerUtil {
                         conn_pool: conn_pool.clone(),
                         meta_manager: meta_manager.clone(),
                         extractor_meta_manager: extractor_meta_manager.clone(),
+                        router: router.clone(),
                         reverse_router: reverse_router.clone(),
                         filter: filter.clone(),
                         batch_size,
@@ -260,10 +262,11 @@ impl SinkerUtil {
             SinkerConfig::MongoCheck {
                 batch_size,
                 output_full_row,
-                output_revise_cmd,
+                output_revise_sql,
                 ..
             } => {
-                let reverse_router = create_router!(task_config, Mongo).reverse();
+                let router = create_router!(task_config, Mongo);
+                let reverse_router = router.clone().reverse();
                 let mongo_client = match sinker_client {
                     ConnClient::MongoDB(mongo_client) => mongo_client,
                     _ => {
@@ -273,11 +276,12 @@ impl SinkerUtil {
                 for _ in 0..parallel_size {
                     let sinker = MongoChecker {
                         batch_size,
+                        router: router.clone(),
                         reverse_router: reverse_router.clone(),
                         mongo_client: mongo_client.clone(),
                         monitor: monitor.clone(),
                         output_full_row,
-                        output_revise_cmd,
+                        output_revise_sql,
                     };
                     sub_sinkers.push(Arc::new(async_mutex::Mutex::new(Box::new(sinker))));
                 }

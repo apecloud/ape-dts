@@ -28,12 +28,13 @@ use dt_common::{
 
 #[derive(Clone)]
 pub struct MongoChecker {
+    pub router: RdbRouter,
     pub reverse_router: RdbRouter,
     pub batch_size: usize,
     pub mongo_client: Client,
     pub monitor: Arc<Monitor>,
     pub output_full_row: bool,
-    pub output_revise_cmd: bool,
+    pub output_revise_sql: bool,
 }
 
 #[async_trait]
@@ -111,28 +112,28 @@ impl MongoChecker {
         let mut miss = Vec::new();
         let mut diff = Vec::new();
         for (key, src_row_data) in src_row_data_map {
-            if let Some(dst_row_data) = dst_row_data_map.remove(&key) {
-                let diff_col_values = BaseChecker::compare_row_data(&src_row_data, &dst_row_data);
-                if !diff_col_values.is_empty() {
-                    let diff_log = BaseChecker::build_mongo_diff_log(
+                    if let Some(dst_row_data) = dst_row_data_map.remove(&key) {
+                        let diff_col_values = BaseChecker::compare_row_data(&src_row_data, &dst_row_data);
+                        if !diff_col_values.is_empty() {
+                            let diff_log = BaseChecker::build_mongo_diff_log(
+                                src_row_data,
+                                dst_row_data,
+                                diff_col_values,
+                                &tb_meta,
+                                &self.reverse_router,
+                                self.output_full_row,
+                                self.output_revise_sql,
+                            );
+                    diff.push(diff_log);
+                }
+                } else {
+                    let miss_log = BaseChecker::build_mongo_miss_log(
                         src_row_data,
-                        dst_row_data,
-                        diff_col_values,
                         &tb_meta,
                         &self.reverse_router,
                         self.output_full_row,
-                        self.output_revise_cmd,
+                        self.output_revise_sql,
                     );
-                    diff.push(diff_log);
-                }
-            } else {
-                let miss_log = BaseChecker::build_mongo_miss_log(
-                    src_row_data,
-                    &tb_meta,
-                    &self.reverse_router,
-                    self.output_full_row,
-                    self.output_revise_cmd,
-                );
                 miss.push(miss_log);
             };
         }
