@@ -4,7 +4,6 @@ DROP FUNCTION IF EXISTS public.ape_dts_capture_ddl() CASCADE;
 
 DROP TABLE IF EXISTS public.ape_dts_ddl_command;
 
-```
 CREATE TABLE public.ape_dts_ddl_command
 (
   ddl_text text COLLATE pg_catalog."default",
@@ -22,9 +21,7 @@ CREATE TABLE public.ape_dts_ddl_command
   txid_current character varying(128) COLLATE pg_catalog."default",
   message text COLLATE pg_catalog."default"
 );
-```
 
-```
 CREATE FUNCTION public.ape_dts_capture_ddl()
   RETURNS event_trigger
   LANGUAGE 'plpgsql'
@@ -80,14 +77,11 @@ begin
   end if;
 end
 $BODY$;
-```
 
 ALTER FUNCTION public.ape_dts_capture_ddl() OWNER TO postgres;
 
-```
 CREATE EVENT TRIGGER ape_dts_intercept_ddl ON ddl_command_end
 EXECUTE PROCEDURE public.ape_dts_capture_ddl();
-```
 
 ALTER EVENT TRIGGER ape_dts_intercept_ddl ENABLE ALWAYS;
 

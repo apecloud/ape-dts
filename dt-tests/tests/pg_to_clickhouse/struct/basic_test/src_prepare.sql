@@ -4,7 +4,6 @@ drop schema if exists test_db_2 CASCADE;
 create schema test_db_1;
 create schema test_db_2;
 
-```
 CREATE TABLE test_db_1.full_column_type (
     id serial PRIMARY KEY, 
 
@@ -152,9 +151,7 @@ CREATE TABLE test_db_1.full_column_type (
     uuid_col uuid, 
     xml_col xml
 );
-```
 
-```
 CREATE TABLE test_db_1.check_pk_cols_order (
   col_1 INT,
   col_2 INT,
@@ -166,21 +163,16 @@ CREATE TABLE test_db_1.check_pk_cols_order (
   col_5 INT,
   PRIMARY KEY(pk_1, pk_2, pk_3)
 );
-```
 
 
-```
 CREATE TABLE test_db_2.router_test_1 (
   pk INT,
   col_1 INT,
   PRIMARY KEY(pk)
 );
-```
 
-```
 CREATE TABLE test_db_2.router_test_2 (
   pk INT,
   col_1 INT,
   PRIMARY KEY(pk)
 );
-```

@@ -3,7 +3,6 @@ drop schema if exists struct_it_pg2pg_1 CASCADE;
 create schema struct_it_pg2pg_1;
 
 -- all basic column types:
-```
 CREATE TABLE struct_it_pg2pg_1.full_column_type (
   id SERIAL PRIMARY KEY, 
   varchar_col VARCHAR(255) NOT NULL, 
@@ -34,13 +33,11 @@ CREATE TABLE struct_it_pg2pg_1.full_column_type (
   polygon_col POLYGON, 
   circle_col CIRCLE
 );
-```
 
 -- array column types:
 -- CREATE TABLE struct_it_pg2pg_1.array_table (pk SERIAL, int_array INT[], bigint_array BIGINT[], text_array TEXT[], char_array CHAR(10)[], varchar_array VARCHAR(10)[], date_array DATE[], numeric_array NUMERIC(10, 2)[], varnumeric_array NUMERIC[3], citext_array CITEXT[], inet_array INET[], cidr_array CIDR[], macaddr_array MACADDR[], tsrange_array TSRANGE[], tstzrange_array TSTZRANGE[], daterange_array DATERANGE[], int4range_array INT4RANGE[],numerange_array NUMRANGE[], int8range_array INT8RANGE[], uuid_array UUID[], json_array json[], jsonb_array jsonb[], oid_array OID[], PRIMARY KEY(pk));
 
 -- postgres 12, without: CITEXT[]
-```
 CREATE TABLE struct_it_pg2pg_1.array_table (
   pk SERIAL, 
   int_array INT[], 
@@ -66,10 +63,8 @@ CREATE TABLE struct_it_pg2pg_1.array_table (
   oid_array OID[], 
   PRIMARY KEY(pk)
 );
-```
 
 -- all check types(without fk and exclude):
-```
 CREATE TABLE struct_it_pg2pg_1.full_constraint_type (
   id SERIAL PRIMARY KEY, 
   varchar_col VARCHAR(255) NOT NULL, 
@@ -77,10 +72,8 @@ CREATE TABLE struct_it_pg2pg_1.full_constraint_type (
   not_null_col VARCHAR(255) NOT NULL, 
   check_col VARCHAR(255) CHECK (char_length(check_col) > 3)
 );
-```
 
 -- all index types:
-```
 CREATE TABLE struct_it_pg2pg_1.full_index_type (
   id SERIAL PRIMARY KEY, 
   unique_col VARCHAR(255) NOT NULL, 
@@ -93,7 +86,6 @@ CREATE TABLE struct_it_pg2pg_1.full_index_type (
   composite_index_col3 VARCHAR(255),
   where_col VARCHAR(10)
 );
-```
 
 CREATE UNIQUE INDEX unique_index ON struct_it_pg2pg_1.full_index_type (unique_col);
 
@@ -105,12 +97,10 @@ CREATE INDEX spatial_index ON struct_it_pg2pg_1.full_index_type USING gist(spati
 
 CREATE INDEX simple_index ON struct_it_pg2pg_1.full_index_type (simple_index_col);
 
-```
 CREATE INDEX composite_index ON struct_it_pg2pg_1.full_index_type (
   composite_index_col1, composite_index_col2, 
   composite_index_col3
 );
-```
 
 CREATE INDEX index_where ON struct_it_pg2pg_1.full_index_type (where_col) WHERE where_col = 'test';
 
@@ -145,13 +135,11 @@ ALTER SEQUENCE struct_it_pg2pg_1.sequence_test_2_seq_3 OWNED BY struct_it_pg2pg_
 CREATE SEQUENCE struct_it_pg2pg_1.sequence_test_3_seq_2;
 CREATE SEQUENCE struct_it_pg2pg_1."sequence_test_3_seq.\d@_3";
 
-```
 CREATE TABLE struct_it_pg2pg_1.sequence_test_3 (
   seq_1 SERIAL, 
   seq_2 BIGINT DEFAULT nextval('struct_it_pg2pg_1.sequence_test_3_seq_2'), 
   seq_3 SMALLINT DEFAULT nextval('struct_it_pg2pg_1."sequence_test_3_seq.\d@_3"')
 );
-```
 
 -- case 4: create independent sequences and never used by any tables
 -- we should not migrate them
@@ -180,7 +168,6 @@ CREATE SEQUENCE struct_it_pg2pg_1.sequence_test_4_seq_1;
 CREATE VIEW struct_it_pg2pg_1.full_column_type_view AS SELECT * FROM struct_it_pg2pg_1.full_column_type;
 
 -- special character
-```
 CREATE TABLE struct_it_pg2pg_1."special_character_$1#@*_table" (
   id SERIAL PRIMARY KEY, 
   varchar_col VARCHAR(255) NOT NULL, 
@@ -188,4 +175,3 @@ CREATE TABLE struct_it_pg2pg_1."special_character_$1#@*_table" (
   not_null_col VARCHAR(255) NOT NULL, 
   check_col VARCHAR(255) CHECK (char_length(check_col) > 3)
 );
-```

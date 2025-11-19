@@ -3,7 +3,6 @@ drop schema if exists tb_meta_test CASCADE;
 create schema tb_meta_test;
 
 -- https://www.postgresql.org/docs/17/datatype.html
-```
 CREATE TABLE tb_meta_test.full_column_type (
     id serial PRIMARY KEY, 
 
@@ -151,4 +150,3 @@ CREATE TABLE tb_meta_test.full_column_type (
     uuid_col uuid, 
     xml_col xml
 );
-```

@@ -1,4 +1,3 @@
-```
 INSERT INTO test_db_1.full_column_type (
     id,
     char_col, char_col_2, character_col, character_col_2,
@@ -66,9 +65,7 @@ INSERT INTO test_db_1.full_column_type (
     'fat & rat', 'a fat cat sat on a mat', NULL,
     '550e8400-e29b-41d4-a716-446655440000', '<note>a</note>'
 );
-```
 
-```
 INSERT INTO test_db_1.full_column_type (
     id,
     char_col, char_col_2, character_col, character_col_2,
@@ -135,9 +132,7 @@ INSERT INTO test_db_1.full_column_type (
     NULL, NULL, NULL, NULL, NULL,
     NULL, NULL, NULL, NULL,
     NULL, NULL);
-```
 
-```
 UPDATE test_db_1.full_column_type
 SET 
     char_col = NULL,
@@ -236,9 +231,7 @@ SET
     uuid_col = NULL,
     xml_col = NULL
 WHERE id = 1;
-```
 
-```
 UPDATE test_db_1.full_column_type
 SET 
     char_col = 'A',
@@ -337,6 +330,5 @@ SET
     uuid_col = '550e8400-e29b-41d4-a716-446655440000',
     xml_col = '<note>a</note>'
 WHERE id = 2;
-```
 
 DELETE FROM test_db_1.full_column_type;
