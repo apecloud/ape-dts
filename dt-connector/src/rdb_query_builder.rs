@@ -519,6 +519,18 @@ impl RdbQueryBuilder<'_> {
     fn get_pg_sql_value(&self, col_value: &ColValue) -> String {
         match col_value {
             ColValue::Blob(v) => format!(r#"'\x{}'"#, hex::encode(v)),
+            ColValue::String(_)
+            | ColValue::RawString(_)
+            | ColValue::Time(_)
+            | ColValue::Date(_)
+            | ColValue::DateTime(_)
+            | ColValue::Timestamp(_)
+            | ColValue::Json(_)
+            | ColValue::Json2(_)
+            | ColValue::Json3(_)
+            | ColValue::Set2(_)
+            | ColValue::Enum2(_)
+            | ColValue::MongoDoc(_) => Self::quote_pg_string_literal(col_value),
             // For numeric types, we should not quote them in SQL
             ColValue::Tiny(_)
             | ColValue::UnsignedTiny(_)

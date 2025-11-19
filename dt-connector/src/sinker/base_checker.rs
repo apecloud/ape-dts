@@ -166,6 +166,200 @@ impl<'a> ReviseSqlContext<'a> {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use dt_common::meta::{
+        col_value::ColValue,
+        mysql::mysql_col_type::MysqlColType,
+        pg::{pg_col_type::PgColType, pg_tb_meta::PgTbMeta, pg_value_type::PgValueType},
+        rdb_tb_meta::RdbTbMeta,
+    };
+    use std::collections::HashMap;
+
+    fn build_tb_meta() -> MysqlTbMeta {
+        let mut col_type_map = HashMap::new();
+        col_type_map.insert("id".into(), MysqlColType::Int { unsigned: false });
+        col_type_map.insert(
+            "name".into(),
+            MysqlColType::Varchar {
+                length: 255,
+                charset: "utf8mb4".into(),
+            },
+        );
+        MysqlTbMeta {
+            basic: RdbTbMeta {
+                schema: "test_db".into(),
+                tb: "test_tb".into(),
+                cols: vec!["id".into(), "name".into()],
+                col_origin_type_map: HashMap::new(),
+                key_map: HashMap::new(),
+                order_col: None,
+                partition_col: "id".into(),
+                id_cols: vec!["id".into()],
+                foreign_keys: Vec::new(),
+                ref_by_foreign_keys: Vec::new(),
+            },
+            col_type_map,
+        }
+    }
+
+    fn build_row_data(id: i64, name: &str) -> RowData {
+        let mut after = HashMap::new();
+        after.insert("id".into(), ColValue::LongLong(id));
+        after.insert("name".into(), ColValue::String(name.into()));
+        RowData::new(
+            "test_db".into(),
+            "test_tb".into(),
+            RowType::Insert,
+            None,
+            Some(after),
+        )
+    }
+
+    fn build_pg_tb_meta() -> PgTbMeta {
+        let mut col_type_map = HashMap::new();
+        col_type_map.insert(
+            "id".into(),
+            PgColType {
+                value_type: PgValueType::Int64,
+                name: "int8".into(),
+                alias: "int8".into(),
+                oid: 20,
+                parent_oid: 0,
+                element_oid: 0,
+                category: "N".into(),
+                enum_values: None,
+            },
+        );
+        col_type_map.insert(
+            "name".into(),
+            PgColType {
+                value_type: PgValueType::String,
+                name: "varchar".into(),
+                alias: "varchar".into(),
+                oid: 1043,
+                parent_oid: 0,
+                element_oid: 0,
+                category: "S".into(),
+                enum_values: None,
+            },
+        );
+        PgTbMeta {
+            basic: RdbTbMeta {
+                schema: "pg_db".into(),
+                tb: "pg_tb".into(),
+                cols: vec!["id".into(), "name".into()],
+                col_origin_type_map: HashMap::new(),
+                key_map: HashMap::new(),
+                order_col: None,
+                partition_col: "id".into(),
+                id_cols: vec!["id".into()],
+                foreign_keys: Vec::new(),
+                ref_by_foreign_keys: Vec::new(),
+            },
+            oid: 0,
+            col_type_map,
+        }
+    }
+
+    #[test]
+    fn mysql_builds_insert_sql() {
+        let meta = build_tb_meta();
+        let ctx = ReviseSqlContext::mysql(&meta, false);
+        let row = build_row_data(1, "new_name");
+        let sql = ctx.build_miss_sql(&row).unwrap().unwrap();
+        assert!(sql.starts_with("INSERT INTO `test_db`.`test_tb`"));
+        assert!(sql.contains("VALUES"));
+        assert!(sql.contains("'new_name'"));
+    }
+
+    #[test]
+    fn mysql_builds_update_sql_with_pk_match() {
+        let meta = build_tb_meta();
+        let ctx = ReviseSqlContext::mysql(&meta, false);
+
+        let src_row = build_row_data(1, "fresh");
+        let dst_row = build_row_data(1, "stale");
+
+        let mut diff_cols = HashMap::new();
+        diff_cols.insert(
+            "name".into(),
+            DiffColValue {
+                src: Some("fresh".into()),
+                dst: Some("stale".into()),
+            },
+        );
+
+        let sql = ctx
+            .build_diff_sql(&src_row, &dst_row, &diff_cols)
+            .unwrap()
+            .unwrap();
+        assert!(sql.starts_with("UPDATE `test_db`.`test_tb`"));
+        assert!(sql.contains("SET `name`='fresh'"));
+        assert!(sql.contains("WHERE `id` = 1"));
+    }
+
+    #[test]
+    fn mysql_builds_update_sql_with_full_row_match() {
+        let meta = build_tb_meta();
+        let ctx = ReviseSqlContext::mysql(&meta, true);
+
+        let src_row = build_row_data(1, "fixed");
+        let dst_row = build_row_data(1, "broken");
+
+        let mut diff_cols = HashMap::new();
+        diff_cols.insert(
+            "name".into(),
+            DiffColValue {
+                src: Some("fixed".into()),
+                dst: Some("broken".into()),
+            },
+        );
+
+        let sql = ctx
+            .build_diff_sql(&src_row, &dst_row, &diff_cols)
+            .unwrap()
+            .unwrap();
+        assert!(sql.contains("SET `name`='fixed'"));
+        assert!(sql.contains("WHERE `id` = 1 AND `name` = 'broken'"));
+    }
+
+    #[test]
+    fn pg_builds_insert_sql() {
+        let meta = build_pg_tb_meta();
+        let ctx = ReviseSqlContext::pg(&meta, false);
+        let row = build_row_data(10, "pg_name");
+        let sql = ctx.build_miss_sql(&row).unwrap().unwrap();
+        assert!(sql.starts_with("INSERT INTO \"pg_db\".\"pg_tb\""));
+        assert!(sql.contains("VALUES"));
+    }
+
+    #[test]
+    fn pg_full_row_match_includes_where_clause() {
+        let meta = build_pg_tb_meta();
+        let ctx = ReviseSqlContext::pg(&meta, true);
+        let src_row = build_row_data(2, "fresh");
+        let dst_row = build_row_data(2, "stale");
+        let mut diff_cols = HashMap::new();
+        diff_cols.insert(
+            "name".into(),
+            DiffColValue {
+                src: Some("fresh".into()),
+                dst: Some("stale".into()),
+            },
+        );
+        let sql = ctx
+            .build_diff_sql(&src_row, &dst_row, &diff_cols)
+            .unwrap()
+            .unwrap();
+        assert!(sql.contains("SET \"name\"='fresh'"));
+        assert!(sql.contains("WHERE"));
+        assert!(sql.contains("\"id\" = 2"));
+        assert!(sql.contains("\"name\" = 'stale'"));
+    }
+}
+
 pub struct BaseChecker {}
 
 pub struct BatchCompareRange {
@@ -570,7 +764,12 @@ impl BaseChecker {
             Self::build_mongo_miss_log(src_row_data, tb_meta, reverse_router, output_full_row)?;
 
         diff_log.diff_col_values = diff_col_values;
-
+        if output_revise_sql
+            && diff_log.diff_col_values.len() == 1
+            && diff_log.diff_col_values.contains_key(MongoConstants::DOC)
+        {
+            diff_log.diff_col_values = Self::expand_mongo_doc_diff(&src_row_data, &dst_row_data);
+        }
         if output_full_row {
             let has_col_map = reverse_router
                 .get_col_map(&dst_row_data.schema, &dst_row_data.tb)
@@ -868,5 +1067,58 @@ mod tests {
         assert_eq!(diff_val.dst.as_deref(), Some("bob_updated@example.com"));
         assert!(diff_val.src_type.is_none());
         assert!(diff_val.dst_type.is_none());
+    }
+
+    fn expand_mongo_doc_diff(
+        src_row_data: &RowData,
+        dst_row_data: &RowData,
+    ) -> HashMap<String, DiffColValue> {
+        let src_doc = src_row_data
+            .after
+            .as_ref()
+            .and_then(|after| after.get(MongoConstants::DOC))
+            .and_then(|col_value| {
+                if let ColValue::MongoDoc(doc) = col_value {
+                    Some(doc.clone())
+                } else {
+                    None
+                }
+            });
+        let dst_doc = dst_row_data
+            .after
+            .as_ref()
+            .and_then(|after| after.get(MongoConstants::DOC))
+            .and_then(|col_value| {
+                if let ColValue::MongoDoc(doc) = col_value {
+                    Some(doc.clone())
+                } else {
+                    None
+                }
+            });
+
+        let mut keys = BTreeSet::new();
+        if let Some(doc) = &src_doc {
+            keys.extend(doc.keys().cloned());
+        }
+        if let Some(doc) = &dst_doc {
+            keys.extend(doc.keys().cloned());
+        }
+
+        let mut diff_cols = HashMap::new();
+        for key in keys {
+            if key == MongoConstants::ID {
+                continue;
+            }
+            let src_value = src_doc.as_ref().and_then(|doc| doc.get(&key));
+            let dst_value = dst_doc.as_ref().and_then(|doc| doc.get(&key));
+            if src_value != dst_value {
+                let diff_col_value = DiffColValue {
+                    src: src_value.map(|v| v.to_string()),
+                    dst: dst_value.map(|v| v.to_string()),
+                };
+                diff_cols.insert(key, diff_col_value);
+            }
+        }
+        diff_cols
     }
 }

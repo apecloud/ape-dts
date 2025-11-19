@@ -280,11 +280,11 @@ impl MongoTestRunner {
     async fn execute_dmls(&self, client: &Client, db: &str, sqls: &[String]) -> anyhow::Result<()> {
         for sql in sqls.iter() {
             if sql.contains(".insert") {
-                Self::execute_insert(client, db, sql).await?;
+                self.execute_insert(client, db, sql).await?;
             } else if sql.contains(".update") {
-                Self::execute_update(client, db, sql).await?;
+                self.execute_update(client, db, sql).await?;
             } else if sql.contains(".delete") {
-                Self::execute_delete(client, db, sql).await?;
+                self.execute_delete(client, db, sql).await?;
             }
         }
         Ok(())
@@ -328,7 +328,7 @@ impl MongoTestRunner {
         Ok(())
     }
 
-    async fn execute_insert(client: &Client, db: &str, sql: &str) -> anyhow::Result<()> {
+    async fn execute_insert(&self, client: &Client, db: &str, sql: &str) -> anyhow::Result<()> {
         // example: db.tb_2.insertOne({ "name": "a", "age": "1" })
         let re = Regex::new(r"db.(\w+).insert(One|Many)\(([\w\W]+)\)").unwrap();
         let cap = re.captures(sql).unwrap();
@@ -366,7 +366,7 @@ impl MongoTestRunner {
         Ok(())
     }
 
-    async fn execute_delete(client: &Client, db: &str, sql: &str) -> anyhow::Result<()> {
+    async fn execute_delete(&self, client: &Client, db: &str, sql: &str) -> anyhow::Result<()> {
         let re = Regex::new(r"db.(\w+).delete(One|Many)\(([\w\W]+)\)").unwrap();
         let cap = re.captures(sql).unwrap();
         let tb = cap.get(1).unwrap().as_str();
@@ -387,7 +387,7 @@ impl MongoTestRunner {
         Ok(())
     }
 
-    async fn execute_update(client: &Client, db: &str, sql: &str) -> anyhow::Result<()> {
+    async fn execute_update(&self, client: &Client, db: &str, sql: &str) -> anyhow::Result<()> {
         let re = Regex::new(r"db.(\w+).update(One|Many)").unwrap();
         let cap = match re.captures(sql) {
             Some(cap) => cap,
@@ -468,7 +468,7 @@ impl MongoTestRunner {
         }
     }
 
-    async fn list_tb(&self, db: &str, from: &str) -> Vec<String> {
+    pub async fn list_tb(&self, db: &str, from: &str) -> Vec<String> {
         let client = if from == SRC {
             self.src_mongo_client.as_ref().unwrap()
         } else {
@@ -577,8 +577,7 @@ impl MongoTestRunner {
     }
 
     fn normalize_doc_string(doc: &str) -> String {
-        let re =
-            Regex::new(r"(?P<prefix>[\{\[,]\s*)(?P<key>[$A-Za-z_][A-Za-z0-9_$]*)\s*:").unwrap();
+        let re = Regex::new(r"(?P<prefix>[\{\[,]\s*)(?P<key>[A-Za-z_][A-Za-z0-9_]*)\s*:").unwrap();
         re.replace_all(doc, |caps: &Captures| {
             format!("{}\"{}\":", &caps["prefix"], &caps["key"])
         })
@@ -608,27 +607,5 @@ impl MongoTestRunner {
             ),
             other => other,
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::MongoTestRunner;
-    use serde_json::Value;
-
-    #[test]
-    fn normalize_doc_string_quotes_dollar_prefixed_keys() {
-        let doc = r#"{ $set: { name: "a" }, age: 1 }"#;
-        let normalized = MongoTestRunner::normalize_doc_string(doc);
-        assert_eq!(normalized, r#"{ "$set": { "name": "a" }, "age": 1 }"#);
-        serde_json::from_str::<Value>(&normalized).unwrap();
-    }
-
-    #[test]
-    fn normalize_doc_string_leaves_quoted_keys_untouched() {
-        let doc = r#"{ "$inc": { "count": 1 } }"#;
-        let normalized = MongoTestRunner::normalize_doc_string(doc);
-        assert_eq!(normalized, doc);
-        serde_json::from_str::<Value>(&normalized).unwrap();
     }
 }

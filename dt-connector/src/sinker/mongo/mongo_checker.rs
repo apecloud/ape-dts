@@ -160,9 +160,7 @@ impl MongoChecker {
                 if !diff_col_values.is_empty() {
                     let revise_sql = revise_ctx
                         .as_ref()
-                        .map(|ctx| {
-                            ctx.build_diff_sql(src_row_data, &dst_row_data, &diff_col_values)
-                        })
+                        .map(|ctx| ctx.build_diff_sql(src_row_data, &dst_row_data, &diff_col_values))
                         .transpose()?
                         .flatten();
 

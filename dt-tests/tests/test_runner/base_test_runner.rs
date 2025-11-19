@@ -229,6 +229,16 @@ impl BaseTestRunner {
                 continue;
             }
 
+            if trimmed_content.starts_with("use ") {
+                if !current_sql.trim().is_empty() {
+                    sqls.push(current_sql.trim().trim_end_matches(';').to_string());
+                    current_sql.clear();
+                }
+                let use_stmt = trimmed_content.trim_end_matches(';').to_string();
+                sqls.push(use_stmt);
+                continue;
+            }
+
             current_sql.push_str(trimmed_content);
             current_sql.push(' '); // Add space to prevent "FROMtable"
 
