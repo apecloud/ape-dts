@@ -72,7 +72,7 @@ impl BatchCheckExtractor for PgCheckExtractor {
                 check_row_data_items.len(),
             )?
         };
-        let query = query_builder.create_pg_query(&query_info);
+        let query = query_builder.create_pg_query(&query_info)?;
 
         let mut rows = query.fetch(&self.conn_pool);
         while let Some(row) = rows.try_next().await.unwrap() {
