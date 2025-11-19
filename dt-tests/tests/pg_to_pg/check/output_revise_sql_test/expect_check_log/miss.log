@@ -1,1 +1,1 @@
-{"log_type":"Miss","schema":"test_schema_1","tb":"test_table","id_col_values":{"id":"3"},"revise_sql":"INSERT INTO \"test_schema_1\".\"test_table\"(\"id\",\"name\",\"age\",\"email\") VALUES('3','Charlie','35','charlie@example.com');"}
+{"log_type":"Miss","schema":"test_schema_1","tb":"test_table","id_col_values":{"id":"3"},"revise_sql":"INSERT INTO \"test_schema_1\".\"test_table\"(\"id\",\"name\",\"age\",\"email\") VALUES(3,'Charlie',35,'charlie@example.com');"}
