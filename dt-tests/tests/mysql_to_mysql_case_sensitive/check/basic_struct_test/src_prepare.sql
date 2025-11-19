@@ -3,16 +3,13 @@ drop database if exists STRUCT_check_test_1;
 create database STRUCT_check_test_1;
 
 -- simple test
-```
 CREATE TABLE STRUCT_check_test_1.MATCH_table_test(
   ID integer, 
   text varchar(10) comment 'col comment test', 
   primary key (ID)
 ) comment 'table comment test';
-```
 
 -- full column type
-```
 CREATE TABLE STRUCT_check_test_1.MATCH_full_column_type (
   ID INT UNSIGNED AUTO_INCREMENT PRIMARY KEY, 
   VARCHAR_col VARCHAR(255) NOT NULL, 
@@ -40,10 +37,8 @@ CREATE TABLE STRUCT_check_test_1.MATCH_full_column_type (
   enum_col ENUM('value1', 'value2', 'value3'), 
   set_col SET('option1', 'option2', 'option3')
 );
-```
 
 -- full index type
-```
 CREATE TABLE STRUCT_check_test_1.MATCH_full_index_type(ID INT UNSIGNED AUTO_INCREMENT PRIMARY KEY, 
     F_1 int, 
     F_2 char(128),
@@ -55,7 +50,6 @@ CREATE TABLE STRUCT_check_test_1.MATCH_full_index_type(ID INT UNSIGNED AUTO_INCR
     f_8 TEXT, 
     f_9 POINT NOT NULL
 );
-```
 
 -- unique key with multiple columns
 CREATE UNIQUE INDEX IDX_unique_1 ON STRUCT_check_test_1.MATCH_full_index_type(F_1, F_2, f_3);
@@ -77,16 +71,13 @@ CREATE FULLTEXT INDEX IDX_full_text_2 ON STRUCT_check_test_1.MATCH_full_index_ty
 CREATE SPATIAL INDEX IDX_spatial_1 ON STRUCT_check_test_1.MATCH_full_index_type(f_9);
 
 -- not match: table miss
-```
 CREATE TABLE STRUCT_check_test_1.not_MATCH_miss(
   ID integer, 
   text varchar(10), 
   primary key (ID)
 );
-```
 
 -- not match: column
-```
 CREATE TABLE STRUCT_check_test_1.not_MATCH_column (
   ID INT UNSIGNED AUTO_INCREMENT PRIMARY KEY, 
   VARCHAR_col VARCHAR(255) NOT NULL, 
@@ -114,10 +105,8 @@ CREATE TABLE STRUCT_check_test_1.not_MATCH_column (
   enum_col ENUM('value1', 'value2', 'value3'), 
   set_col SET('option1', 'option2', 'option3')
 );
-```
 
 -- not match: index
-```
 CREATE TABLE STRUCT_check_test_1.not_MATCH_index (
   ID INT UNSIGNED AUTO_INCREMENT PRIMARY KEY, 
   UNIQUE_col VARCHAR(255) NOT NULL, 
@@ -129,7 +118,6 @@ CREATE TABLE STRUCT_check_test_1.not_MATCH_index (
   COMPOSITE_index_col2 VARCHAR(255), 
   COMPOSITE_index_col3 VARCHAR(255)
 );
-```
 
 CREATE INDEX I4_diff_order ON STRUCT_check_test_1.not_MATCH_index (COMPOSITE_index_col2, COMPOSITE_index_col1 , COMPOSITE_index_col3);
 CREATE INDEX I5_diff_name_src ON STRUCT_check_test_1.not_MATCH_index (index_col);
