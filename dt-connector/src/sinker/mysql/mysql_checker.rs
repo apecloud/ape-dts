@@ -93,7 +93,7 @@ impl MysqlChecker {
         for src_row_data in data.iter() {
             let query_builder = RdbQueryBuilder::new_for_mysql(tb_meta, None);
             let query_info = query_builder.get_select_query(src_row_data)?;
-            let query = query_builder.create_mysql_query(&query_info);
+            let query = query_builder.create_mysql_query(&query_info)?;
 
             let start_time = Instant::now();
             let mut rows = query.fetch(&self.conn_pool);
@@ -101,7 +101,7 @@ impl MysqlChecker {
 
             if let Some(row) = rows.try_next().await.unwrap() {
                 let dst_row_data = RowData::from_mysql_row(&row, tb_meta, &None);
-                let diff_col_values = BaseChecker::compare_row_data(src_row_data, &dst_row_data);
+                let diff_col_values = BaseChecker::compare_row_data(src_row_data, &dst_row_data)?;
                 if !diff_col_values.is_empty() {
                     let diff_log = BaseChecker::build_diff_log(
                         src_row_data,
@@ -147,7 +147,7 @@ impl MysqlChecker {
 
         // build fetch dst sql
         let query_info = query_builder.get_batch_select_query(data, start_index, batch_size)?;
-        let query = query_builder.create_mysql_query(&query_info);
+        let query = query_builder.create_mysql_query(&query_info)?;
 
         // fetch dst
         let mut dst_row_data_map = HashMap::new();

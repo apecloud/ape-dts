@@ -42,7 +42,7 @@ pub struct CheckLog {
     pub revise_sql: Option<String>,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct DiffColValue {
     pub src: Option<String>,
     pub dst: Option<String>,

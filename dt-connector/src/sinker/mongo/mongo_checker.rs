@@ -112,7 +112,7 @@ impl MongoChecker {
         let mut diff = Vec::new();
         for (key, src_row_data) in src_row_data_map {
             if let Some(dst_row_data) = dst_row_data_map.remove(&key) {
-                let diff_col_values = BaseChecker::compare_row_data(&src_row_data, &dst_row_data);
+                let diff_col_values = BaseChecker::compare_row_data(&src_row_data, &dst_row_data)?;
                 if !diff_col_values.is_empty() {
                     let diff_log = BaseChecker::build_mongo_diff_log(
                         src_row_data,

@@ -176,7 +176,7 @@ impl MysqlSinker {
             let tb_meta = self.meta_manager.get_tb_meta_by_row_data(row_data).await?;
             let query_builder = RdbQueryBuilder::new_for_mysql(tb_meta, None);
             let query_info = query_builder.get_query_info(row_data, self.replace)?;
-            let query = query_builder.create_mysql_query(&query_info);
+            let query = query_builder.create_mysql_query(&query_info)?;
 
             let start_time = Instant::now();
             query
@@ -219,7 +219,7 @@ impl MysqlSinker {
         let query_builder = RdbQueryBuilder::new_for_mysql(&tb_meta, None);
         let (query_info, data_size) =
             query_builder.get_batch_delete_query(data, start_index, batch_size)?;
-        let query = query_builder.create_mysql_query(&query_info);
+        let query = query_builder.create_mysql_query(&query_info)?;
 
         let start_time = Instant::now();
         let mut rts = LimitedQueue::new(1);
@@ -253,7 +253,7 @@ impl MysqlSinker {
 
         let (query_info, data_size) =
             query_builder.get_batch_insert_query(data, start_index, batch_size, self.replace)?;
-        let query = query_builder.create_mysql_query(&query_info);
+        let query = query_builder.create_mysql_query(&query_info)?;
 
         let start_time = Instant::now();
         let mut rts = LimitedQueue::new(1);
