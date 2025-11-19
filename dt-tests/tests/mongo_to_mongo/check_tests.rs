@@ -24,7 +24,7 @@ mod test {
 
     #[tokio::test]
     #[serial]
-    async fn check_output_revise_cmd_test() {
-        TestBase::run_mongo_check_test("mongo_to_mongo/check/output_revise_cmd_test").await;
+    async fn check_output_revise_sql_test() {
+        TestBase::run_mongo_check_test("mongo_to_mongo/check/output_revise_sql_test").await;
     }
 }
