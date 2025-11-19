@@ -310,10 +310,10 @@ impl RdbQueryBuilder<'_> {
         let after = row_data.after.as_ref().unwrap();
 
         let mut index = 1;
-        let mut set_cols = Vec::new();
+        let mut set_cols: Vec<String> = after.keys().cloned().collect();
+        set_cols.sort();
         let mut set_pairs = Vec::new();
-        for (col, _) in after.iter() {
-            set_cols.push(col.clone());
+        for col in set_cols.iter() {
             let sql_value = self.get_sql_value(index, col, &after.get(col), placeholder)?;
             set_pairs.push(format!("{}={}", self.escape(col), sql_value));
             index += 1;

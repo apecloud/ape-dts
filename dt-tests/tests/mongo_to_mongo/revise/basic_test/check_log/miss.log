@@ -1,5 +1,5 @@
-{"log_type":"Miss","schema":"test_db_1","tb":"tb_1","id_col_values":{"_id":"{\"String\":\"65733a82fb2ce9836745de4d\"}"},"diff_col_values":{}}
-{"log_type":"Miss","schema":"test_db_1","tb":"tb_1","id_col_values":{"_id":"{\"String\":\"65733a82fb2ce9836745de4e\"}"},"diff_col_values":{}}
-{"log_type":"Miss","schema":"test_db_1","tb":"tb_2","id_col_values":{"_id":"{\"String\":\"65733a82fb2ce9836745de4g\"}"},"diff_col_values":{}}
-{"log_type":"Miss","schema":"test_db_1","tb":"tb_2","id_col_values":{"_id":"{\"String\":\"65733a82fb2ce9836745de4f\"}"},"diff_col_values":{}}
-{"log_type":"Miss","schema":"test_db_2","tb":"tb_1","id_col_values":{"_id":"{\"String\":\"65733a82fb2ce9836745de4m\"}"},"diff_col_values":{}}
+{"log_type":"Miss","schema":"test_db_1","tb":"tb_1","id_col_values":{"_id":"{\"String\":\"65733a82fb2ce9836745de4d\"}"}}
+{"log_type":"Miss","schema":"test_db_1","tb":"tb_1","id_col_values":{"_id":"{\"String\":\"65733a82fb2ce9836745de4e\"}"}}
+{"log_type":"Miss","schema":"test_db_1","tb":"tb_2","id_col_values":{"_id":"{\"String\":\"65733a82fb2ce9836745de4g\"}"}}
+{"log_type":"Miss","schema":"test_db_1","tb":"tb_2","id_col_values":{"_id":"{\"String\":\"65733a82fb2ce9836745de4f\"}"}}
+{"log_type":"Miss","schema":"test_db_2","tb":"tb_1","id_col_values":{"_id":"{\"String\":\"65733a82fb2ce9836745de4m\"}"}}

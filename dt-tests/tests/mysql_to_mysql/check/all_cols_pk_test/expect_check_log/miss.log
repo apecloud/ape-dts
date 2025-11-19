@@ -1,4 +1,4 @@
-{"log_type":"Miss","schema":"test_db_1","tb":"all_cols_pk","target_schema":"test_db_1","target_tb":"all_cols_pk","id_col_values":{"f_0":"3","f_1":"3","f_2":"3"},"diff_col_values":{}}
-{"log_type":"Miss","schema":"test_db_1","tb":"all_cols_pk","target_schema":"test_db_1","target_tb":"all_cols_pk","id_col_values":{"f_0":"4","f_1":"4","f_2":"4"},"diff_col_values":{}}
-{"log_type":"Miss","schema":"test_db_1","tb":"all_cols_pk","target_schema":"test_db_1","target_tb":"all_cols_pk","id_col_values":{"f_0":"5","f_1":"5","f_2":"5"},"diff_col_values":{}}
-{"log_type":"Miss","schema":"test_db_1","tb":"all_cols_pk","target_schema":"test_db_1","target_tb":"all_cols_pk","id_col_values":{"f_0":"6","f_1":"6","f_2":"6"},"diff_col_values":{}}
+{"log_type":"Miss","schema":"test_db_1","tb":"all_cols_pk","id_col_values":{"f_0":"3","f_1":"3","f_2":"3"}}
+{"log_type":"Miss","schema":"test_db_1","tb":"all_cols_pk","id_col_values":{"f_0":"4","f_1":"4","f_2":"4"}}
+{"log_type":"Miss","schema":"test_db_1","tb":"all_cols_pk","id_col_values":{"f_0":"5","f_1":"5","f_2":"5"}}
+{"log_type":"Miss","schema":"test_db_1","tb":"all_cols_pk","id_col_values":{"f_0":"6","f_1":"6","f_2":"6"}}

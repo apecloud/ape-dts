@@ -53,7 +53,7 @@ pub enum SinkerConfig {
         batch_size: usize,
         check_log_dir: String,
         output_full_row: bool,
-        output_revise_cmd: bool,
+        output_revise_sql: bool,
     },
 
     MysqlStruct {
