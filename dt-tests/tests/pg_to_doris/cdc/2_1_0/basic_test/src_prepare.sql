@@ -83,18 +83,14 @@ CREATE TABLE timezone_table (pk SERIAL, t1 time, t2 timetz, t3 timestamp, t4 tim
 DROP TABLE IF EXISTS ignore_cols_1;
 CREATE TABLE ignore_cols_1 ( f_0 smallint, f_1 smallint DEFAULT NULL, f_2 smallint DEFAULT NULL, f_3 smallint DEFAULT NULL, PRIMARY KEY (f_0) );
 
-```
 CREATE TABLE test_db_2.router_test_1 (
   pk INT,
   col_1 INT,
   PRIMARY KEY(pk)
 );
-```
 
-```
 CREATE TABLE test_db_2.router_test_2 (
   pk INT,
   col_1 INT,
   PRIMARY KEY(pk)
 );
-```

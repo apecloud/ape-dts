@@ -2,7 +2,6 @@ DROP DATABASE IF EXISTS test_db_1;
 
 CREATE DATABASE test_db_1;
 
-```
 CREATE TABLE test_db_1.one_pk_no_uk ( 
     pk tinyint, 
     tinyint_col tinyint, 
@@ -40,4 +39,3 @@ CREATE TABLE test_db_1.one_pk_no_uk (
     set_col set('a','b','c','d','e') DEFAULT NULL, 
     json_col json DEFAULT NULL,
     PRIMARY KEY (pk) ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4; 
-```

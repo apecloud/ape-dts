@@ -14,7 +14,10 @@ use crate::{
     meta_fetcher::pg::pg_struct_fetcher::PgStructFetcher,
     rdb_query_builder::RdbQueryBuilder,
     rdb_router::RdbRouter,
-    sinker::{base_checker::BaseChecker, base_sinker::BaseSinker},
+    sinker::{
+        base_checker::{BaseChecker, BatchCompareContext, BatchCompareRange, ReviseSqlContext},
+        base_sinker::BaseSinker,
+    },
     Sinker,
 };
 use dt_common::{
@@ -38,6 +41,9 @@ pub struct PgChecker {
     pub batch_size: usize,
     pub monitor: Arc<Monitor>,
     pub filter: RdbFilter,
+    pub output_full_row: bool,
+    pub output_revise_sql: bool,
+    pub revise_match_full_row: bool,
 }
 
 #[async_trait]
@@ -76,6 +82,9 @@ impl PgChecker {
             return Ok(());
         }
         let tb_meta = self.meta_manager.get_tb_meta_by_row_data(&data[0]).await?;
+        let revise_ctx = self
+            .output_revise_sql
+            .then_some(ReviseSqlContext::pg(tb_meta, self.revise_match_full_row));
 
         let mut miss = Vec::new();
         let mut diff = Vec::new();
@@ -83,7 +92,7 @@ impl PgChecker {
         for src_row_data in data.iter() {
             let query_builder = RdbQueryBuilder::new_for_pg(tb_meta, None);
             let query_info = query_builder.get_select_query(src_row_data)?;
-            let query = query_builder.create_pg_query(&query_info);
+            let query = query_builder.create_pg_query(&query_info)?;
 
             let start_time = Instant::now();
             let mut rows = query.fetch(&self.conn_pool);
@@ -91,13 +100,16 @@ impl PgChecker {
 
             if let Some(row) = rows.try_next().await.unwrap() {
                 let dst_row_data = RowData::from_pg_row(&row, tb_meta, &None);
-                let diff_col_values = BaseChecker::compare_row_data(src_row_data, &dst_row_data);
+                let diff_col_values = BaseChecker::compare_row_data(src_row_data, &dst_row_data)?;
                 if !diff_col_values.is_empty() {
                     let diff_log = BaseChecker::build_diff_log(
                         src_row_data,
+                        &dst_row_data,
                         diff_col_values,
                         &mut self.extractor_meta_manager,
                         &self.reverse_router,
+                        self.output_full_row,
+                        revise_ctx.as_ref(),
                     )
                     .await?;
                     diff.push(diff_log);
@@ -107,6 +119,8 @@ impl PgChecker {
                     src_row_data,
                     &mut self.extractor_meta_manager,
                     &self.reverse_router,
+                    self.output_full_row,
+                    revise_ctx.as_ref(),
                 )
                 .await?;
                 miss.push(miss_log);
@@ -126,10 +140,13 @@ impl PgChecker {
     ) -> anyhow::Result<()> {
         let tb_meta = self.meta_manager.get_tb_meta_by_row_data(&data[0]).await?;
         let query_builder = RdbQueryBuilder::new_for_pg(tb_meta, None);
+        let revise_ctx = self
+            .output_revise_sql
+            .then_some(ReviseSqlContext::pg(tb_meta, self.revise_match_full_row));
 
         // build fetch dst sql
         let query_info = query_builder.get_batch_select_query(data, start_index, batch_size)?;
-        let query = query_builder.create_pg_query(&query_info);
+        let query = query_builder.create_pg_query(&query_info)?;
 
         // fetch dst
         let mut dst_row_data_map = HashMap::new();
@@ -144,14 +161,23 @@ impl PgChecker {
             dst_row_data_map.insert(hash_code, row_data);
         }
 
+        let compare_range = BatchCompareRange {
+            start_index,
+            batch_size,
+        };
+        let compare_ctx = BatchCompareContext {
+            dst_tb_meta: &tb_meta.basic,
+            extractor_meta_manager: &mut self.extractor_meta_manager,
+            reverse_router: &self.reverse_router,
+            output_full_row: self.output_full_row,
+            revise_ctx: revise_ctx.as_ref(),
+        };
+
         let (miss, diff) = BaseChecker::batch_compare_row_data_items(
             data,
             &dst_row_data_map,
-            start_index,
-            batch_size,
-            &tb_meta.basic,
-            &mut self.extractor_meta_manager,
-            &self.reverse_router,
+            compare_range,
+            compare_ctx,
         )
         .await?;
         BaseChecker::log_dml(miss, diff);

@@ -13,7 +13,6 @@ create database if not exists struct_it_mysql2mysql_5 CHARACTER SET utf8mb4 COLL
 -- expression defaults are surpported in mysql 8.0
 -- https://dev.mysql.com/doc/refman/8.0/en/data-type-defaults.html
 -- The BLOB, TEXT, GEOMETRY, and JSON data types cannot be assigned a default value.
-```
 CREATE TABLE struct_it_mysql2mysql_1.expression_defaults (
   -- literal defaults
   i INT         DEFAULT 0,
@@ -25,9 +24,7 @@ CREATE TABLE struct_it_mysql2mysql_1.expression_defaults (
   p POINT       DEFAULT (Point(0,0)),
   j JSON        DEFAULT (JSON_ARRAY())
 );
-```
 
-```
 CREATE TABLE struct_it_mysql2mysql_2.expression_defaults (
   -- literal defaults
   i INT         DEFAULT 0,
@@ -39,9 +36,7 @@ CREATE TABLE struct_it_mysql2mysql_2.expression_defaults (
   p POINT       DEFAULT (Point(0,0)),
   j JSON        DEFAULT (JSON_ARRAY())
 );
-```
 
-```
 CREATE TABLE struct_it_mysql2mysql_3.expression_defaults (
   -- literal defaults
   i INT         DEFAULT 0,
@@ -53,9 +48,7 @@ CREATE TABLE struct_it_mysql2mysql_3.expression_defaults (
   p POINT       DEFAULT (Point(0,0)),
   j JSON        DEFAULT (JSON_ARRAY())
 );
-```
 
-```
 CREATE TABLE struct_it_mysql2mysql_4.expression_defaults (
   -- literal defaults
   i INT         DEFAULT 0,
@@ -67,9 +60,7 @@ CREATE TABLE struct_it_mysql2mysql_4.expression_defaults (
   p POINT       DEFAULT (Point(0,0)),
   j JSON        DEFAULT (JSON_ARRAY())
 );
-```
 
-```
 CREATE TABLE struct_it_mysql2mysql_5.expression_defaults (
   -- literal defaults
   i INT         DEFAULT 0,
@@ -81,4 +72,3 @@ CREATE TABLE struct_it_mysql2mysql_5.expression_defaults (
   p POINT       DEFAULT (Point(0,0)),
   j JSON        DEFAULT (JSON_ARRAY())
 );
-```
