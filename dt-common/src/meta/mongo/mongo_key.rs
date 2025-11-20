@@ -17,22 +17,17 @@ pub enum MongoKey {
 
 impl MongoKey {
     pub fn from_doc(doc: &Document) -> Option<MongoKey> {
-        if let Some(id) = doc.get(MongoConstants::ID) {
-            let value = match id {
-                Bson::ObjectId(v) => Some(MongoKey::ObjectId(*v)),
-                Bson::String(v) => Some(MongoKey::String(v.clone())),
-                Bson::Int32(v) => Some(MongoKey::Int32(*v)),
-                Bson::Int64(v) => Some(MongoKey::Int64(*v)),
-                Bson::JavaScriptCode(v) => Some(MongoKey::JavaScriptCode(v.clone())),
-                Bson::Timestamp(v) => Some(MongoKey::Timestamp(*v)),
-                Bson::DateTime(v) => Some(MongoKey::DateTime(*v)),
-                Bson::Symbol(v) => Some(MongoKey::Symbol(v.clone())),
-                // other types don't derive Hash and Eq
-                _ => None,
-            };
-            return value;
-        }
-        None
+        doc.get(MongoConstants::ID).and_then(|id| match id {
+            Bson::ObjectId(v) => Some(MongoKey::ObjectId(*v)),
+            Bson::String(v) => Some(MongoKey::String(v.clone())),
+            Bson::Int32(v) => Some(MongoKey::Int32(*v)),
+            Bson::Int64(v) => Some(MongoKey::Int64(*v)),
+            Bson::JavaScriptCode(v) => Some(MongoKey::JavaScriptCode(v.clone())),
+            Bson::Timestamp(v) => Some(MongoKey::Timestamp(*v)),
+            Bson::DateTime(v) => Some(MongoKey::DateTime(*v)),
+            Bson::Symbol(v) => Some(MongoKey::Symbol(v.clone())),
+            _ => None,
+        })
     }
 
     pub fn to_mongo_id(&self) -> Bson {
@@ -68,19 +63,6 @@ impl MongoKey {
         }
 
         keys
-    }
-
-    pub fn to_plain_string(&self) -> String {
-        match self {
-            MongoKey::ObjectId(v) => v.to_hex(),
-            MongoKey::String(v) => v.clone(),
-            MongoKey::Int32(v) => v.to_string(),
-            MongoKey::Int64(v) => v.to_string(),
-            MongoKey::JavaScriptCode(v) => v.clone(),
-            MongoKey::Timestamp(v) => v.to_string(),
-            MongoKey::DateTime(v) => v.to_string(),
-            MongoKey::Symbol(v) => v.clone(),
-        }
     }
 }
 

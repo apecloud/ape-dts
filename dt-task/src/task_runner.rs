@@ -590,7 +590,8 @@ impl TaskRunner {
 
         match &self.config.sinker {
             SinkerConfig::MysqlCheck { check_log_dir, .. }
-            | SinkerConfig::PgCheck { check_log_dir, .. } => {
+            | SinkerConfig::PgCheck { check_log_dir, .. }
+            | SinkerConfig::MongoCheck { check_log_dir, .. } => {
                 if !check_log_dir.is_empty() {
                     config_str = config_str.replace(CHECK_LOG_DIR_PLACEHOLDER, check_log_dir);
                 }

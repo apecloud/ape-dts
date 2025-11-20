@@ -57,10 +57,9 @@ impl std::fmt::Display for CheckLog {
 impl FromStr for CheckLog {
     type Err = Error;
     fn from_str(str: &str) -> Result<Self, Self::Err> {
-        let me: Self = serde_json::from_str(str)
+        serde_json::from_str(str)
             .with_context(|| format!("invalid check log: [{}]", str))
-            .unwrap();
-        Ok(me)
+            .map_err(|e| Error::Unexpected(e.to_string()))
     }
 }
 
@@ -85,10 +84,7 @@ where
     S: Serializer,
 {
     match value {
-        Some(map) => {
-            let ordered: BTreeMap<_, _> = map.iter().collect();
-            ordered.serialize(serializer)
-        }
+        Some(map) => ordered_map(map, serializer),
         None => serializer.serialize_none(),
     }
 }
