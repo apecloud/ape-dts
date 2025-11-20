@@ -64,7 +64,7 @@ output_full_row=true
 
 When set to `true`, the checker appends `src_row` and `dst_row` to every diff log, and `src_row` to every miss log (full rows are currently available for MySQL, PostgreSQL, and MongoDB; Redis is not supported yet). Example:
 
-```
+```json
 {
   "log_type": "Diff",
   "schema": "test_db_1",
@@ -116,7 +116,7 @@ Missing entries also include `src_row` when `output_full_row=true`. Example:
 
 ## Output revise SQL
 
-If you wanna to fix data manually, enable SQL generation in the `[sinker]` section:
+If you want to fix data manually, enable SQL generation in the `[sinker]` section:
 
 ```
 [sinker]
@@ -143,82 +143,6 @@ Example:
   "id_col_values": {"f_0": "4"},
   "diff_col_values": {"f_1": {"src": "2", "dst": "1"}},
   "revise_sql": "UPDATE `target_db`.`target_tb` SET `f_1`='2' WHERE `f_0` = 4;"
-}
-```
-
-## Output complete rows
-
-When the business needs the full row content for troubleshooting, enable full-row logging in the `[sinker]` section:
-
-```
-[sinker]
-output_full_row=true
-```
-
-When set to `true`, the checker appends `src_row` and `dst_row` to every diff log, and `src_row` to every miss log (full rows are currently available for MySQL, PostgreSQL, and MongoDB; Redis is not supported yet). Example:
-
-```
-{
-  "log_type": "Diff",
-  "schema": "test_db_1",
-  "tb": "one_pk_multi_uk",
-  "target_schema": "test_db_1",
-  "target_tb": "one_pk_multi_uk",
-  "id_col_values": {
-    "f_0": "5"
-  },
-  "diff_col_values": {
-    "f_1": {
-      "src": "5",
-      "dst": "5000"
-    },
-    "f_2": {
-      "src": "ok",
-      "dst": "after manual update"
-    }
-  },
-  "src_row": {
-    "f_0": 5,
-    "f_1": 5,
-    "f_2": "ok"
-  },
-  "dst_row": {
-    "f_0": 5,
-    "f_1": 5000,
-    "f_2": "after manual update"
-  }
-}
-```
-
-Missing entries behave the same and include `src_row` when `output_full_row=true`, so you always have the full source payload for troubleshooting.
-
-## Output revise SQL
-
-If you prefer to fix data manually, enable SQL generation in the `[sinker]` section:
-
-```
-[sinker]
-output_revise_sql=true
-# optional: force WHERE clause to match the whole row
-revise_match_full_row=true
-```
-
-When `output_revise_sql` is `true`, every miss/diff log contains an extra `revise_sql` field. The checker automatically builds `INSERT` statements for missing rows and `UPDATE` statements for diffs. With `revise_match_full_row=true`, the `UPDATE` statement matches the entire target row even if a primary/unique key exists.
-
-When routers rename schemas or tables, the log now also emits `target_schema` and `target_tb` so you always know where the generated SQL should run (they point to the destination table, while `schema`/`tb` stay on the source naming for easier troubleshooting).
-
-Example:
-
-```json
-{
-  "log_type": "Diff",
-  "schema": "test_db_1",
-  "tb": "one_pk_no_uk",
-  "target_schema": "target_db",
-  "target_tb": "target_tb",
-  "id_col_values": {"f_0": "4"},
-  "diff_col_values": {"f_1": {"src": "2", "dst": "1"}},
-  "revise_sql": "UPDATE `test_db_1`.`one_pk_no_uk` SET `f_1`='2' WHERE `f_0` = 4;"
 }
 ```
 
