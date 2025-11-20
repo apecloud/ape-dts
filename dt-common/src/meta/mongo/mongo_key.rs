@@ -26,7 +26,6 @@ impl MongoKey {
             Bson::Timestamp(v) => Some(MongoKey::Timestamp(*v)),
             Bson::DateTime(v) => Some(MongoKey::DateTime(*v)),
             Bson::Symbol(v) => Some(MongoKey::Symbol(v.clone())),
-            // other types don't derive Hash and Eq
             _ => None,
         })
     }
@@ -64,19 +63,6 @@ impl MongoKey {
         }
 
         keys
-    }
-
-    pub fn to_plain_string(&self) -> String {
-        match self {
-            MongoKey::ObjectId(v) => v.to_hex(),
-            MongoKey::String(v) => v.clone(),
-            MongoKey::Int32(v) => v.to_string(),
-            MongoKey::Int64(v) => v.to_string(),
-            MongoKey::JavaScriptCode(v) => v.clone(),
-            MongoKey::Timestamp(v) => v.to_string(),
-            MongoKey::DateTime(v) => v.to_string(),
-            MongoKey::Symbol(v) => v.clone(),
-        }
     }
 }
 

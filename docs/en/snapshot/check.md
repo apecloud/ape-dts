@@ -171,6 +171,10 @@ When set to `true`, the checker appends `src_row` and `dst_row` to every diff lo
     "f_1": {
       "src": "5",
       "dst": "5000"
+    },
+    "f_2": {
+      "src": "ok",
+      "dst": "after manual update"
     }
   },
   "src_row": {

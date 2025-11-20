@@ -1,110 +1,56 @@
-use std::{collections::HashMap, str::FromStr};
+use std::{
+    collections::{BTreeMap, HashMap},
+    str::FromStr,
+};
 
 use anyhow::Context;
-use dt_common::{error::Error, meta::col_value::ColValue, utils::serialize_util::SerializeUtil};
-use serde::{Deserialize, Serialize};
+use dt_common::{error::Error, meta::col_value::ColValue};
+use serde::{Deserialize, Serialize, Serializer};
 use serde_json::json;
+
+use super::log_type::LogType;
 
 #[derive(Serialize, Deserialize)]
 pub struct CheckLog {
+    pub log_type: LogType,
     pub schema: String,
     pub tb: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target_schema: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target_tb: Option<String>,
-    #[serde(serialize_with = "SerializeUtil::ordered_map")]
+    #[serde(serialize_with = "ordered_map")]
     pub id_col_values: HashMap<String, Option<String>>,
     #[serde(
-        default,
         skip_serializing_if = "HashMap::is_empty",
-        serialize_with = "SerializeUtil::ordered_map"
+        serialize_with = "ordered_map"
     )]
-    // diff_col_values is empty means no diff, is miss
     pub diff_col_values: HashMap<String, DiffColValue>,
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
-        serialize_with = "SerializeUtil::ordered_option_map"
+        serialize_with = "ordered_option_map"
     )]
     pub src_row: Option<HashMap<String, ColValue>>,
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
-        serialize_with = "SerializeUtil::ordered_option_map"
+        serialize_with = "ordered_option_map"
     )]
     pub dst_row: Option<HashMap<String, ColValue>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub revise_sql: Option<String>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct DiffColValue {
     pub src: Option<String>,
     pub dst: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub src_type: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub dst_type: Option<String>,
-}
-
-#[derive(Serialize, Deserialize, Clone, Default)]
-pub struct CheckSummaryLog {
-    pub start_time: String,
-    pub end_time: String,
-    pub is_consistent: bool,
-    #[serde(default, skip_serializing_if = "is_zero")]
-    pub miss_count: usize,
-    #[serde(default, skip_serializing_if = "is_zero")]
-    pub diff_count: usize,
-    #[serde(default, skip_serializing_if = "is_zero")]
-    pub extra_count: usize,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub sql_count: Option<usize>,
-}
-
-fn is_zero(num: &usize) -> bool {
-    *num == 0
-}
-
-impl CheckSummaryLog {
-    pub fn merge(&mut self, other: &CheckSummaryLog) {
-        if other.end_time > self.end_time {
-            self.end_time = other.end_time.clone();
-        }
-        self.is_consistent = self.is_consistent && other.is_consistent;
-        self.miss_count += other.miss_count;
-        self.diff_count += other.diff_count;
-        self.extra_count += other.extra_count;
-        if let Some(sql_count) = other.sql_count {
-            self.sql_count = Some(self.sql_count.unwrap_or(0) + sql_count);
-        }
-    }
-}
-
-impl std::fmt::Display for CheckSummaryLog {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", json!(self))
-    }
 }
 
 impl std::fmt::Display for CheckLog {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", json!(self))
-    }
-}
-
-#[derive(Serialize, Deserialize)]
-pub struct StructCheckLog {
-    pub key: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub src_sql: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub dst_sql: Option<String>,
-}
-
-impl std::fmt::Display for StructCheckLog {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let s = serde_json::to_string(self).unwrap_or_else(|_| "{}".to_string());
-        write!(f, "{}", s)
     }
 }
 
@@ -117,6 +63,32 @@ impl FromStr for CheckLog {
     }
 }
 
+/// For use with serde's [serialize_with] attribute
+pub fn ordered_map<S, K: Ord + Serialize, V: Serialize>(
+    value: &HashMap<K, V>,
+    serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    let ordered: BTreeMap<_, _> = value.iter().collect();
+    ordered.serialize(serializer)
+}
+
+/// Like `ordered_map` but works with optional maps so that serde can skip them when None.
+pub fn ordered_option_map<S, K: Ord + Serialize, V: Serialize>(
+    value: &Option<HashMap<K, V>>,
+    serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    match value {
+        Some(map) => ordered_map(map, serializer),
+        None => serializer.serialize_none(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -126,6 +98,7 @@ mod tests {
         let mut id_col_values = HashMap::new();
         id_col_values.insert("id".to_string(), Some("1".to_string()));
         CheckLog {
+            log_type: LogType::Diff,
             schema: "s".into(),
             tb: "t".into(),
             target_schema: None,
@@ -134,6 +107,7 @@ mod tests {
             diff_col_values: HashMap::new(),
             src_row: None,
             dst_row: None,
+            revise_sql: None,
         }
     }
 
