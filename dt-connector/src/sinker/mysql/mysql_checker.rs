@@ -37,7 +37,6 @@ pub struct MysqlChecker {
     pub conn_pool: Pool<MySql>,
     pub meta_manager: MysqlMetaManager,
     pub extractor_meta_manager: RdbMetaManager,
-    pub router: RdbRouter,
     pub reverse_router: RdbRouter,
     pub batch_size: usize,
     pub monitor: Arc<Monitor>,

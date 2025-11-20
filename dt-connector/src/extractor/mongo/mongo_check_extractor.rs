@@ -79,7 +79,7 @@ impl BatchCheckExtractor for MongoCheckExtractor {
         while cursor.advance().await.unwrap() {
             let doc = cursor.deserialize_current().unwrap();
             let mut after = HashMap::new();
-            let id: String = MongoKey::from_doc(&doc).unwrap().to_plain_string();
+            let id: String = MongoKey::from_doc(&doc).unwrap().to_string();
             after.insert(MongoConstants::ID.to_string(), ColValue::String(id));
             after.insert(MongoConstants::DOC.to_string(), ColValue::MongoDoc(doc));
             let mut row_data = RowData::new(

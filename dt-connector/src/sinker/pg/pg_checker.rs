@@ -37,7 +37,6 @@ pub struct PgChecker {
     pub conn_pool: Pool<Postgres>,
     pub meta_manager: PgMetaManager,
     pub extractor_meta_manager: RdbMetaManager,
-    pub router: RdbRouter,
     pub reverse_router: RdbRouter,
     pub batch_size: usize,
     pub monitor: Arc<Monitor>,
