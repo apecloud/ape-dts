@@ -96,6 +96,7 @@ impl ColValue {
             ColValue::Json2(v) => Some(v.to_string()),
             ColValue::Json3(v) => Some(v.to_string()),
             ColValue::Blob(v) => Some(SqlUtil::binary_to_str(v).0),
+            // TODO: try serde_json::to_string(v)
             ColValue::MongoDoc(v) => Some(v.to_string()),
             ColValue::Bool(v) => Some(v.to_string()),
             ColValue::None => Option::None,

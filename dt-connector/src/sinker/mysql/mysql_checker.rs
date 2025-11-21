@@ -157,7 +157,7 @@ impl MysqlChecker {
 
         while let Some(row) = rows.try_next().await.unwrap() {
             let row_data = RowData::from_mysql_row(&row, tb_meta, &None);
-            let hash_code = row_data.get_hash_code(&tb_meta.basic);
+            let hash_code = row_data.get_hash_code(&tb_meta.basic)?;
             dst_row_data_map.insert(hash_code, row_data);
         }
 

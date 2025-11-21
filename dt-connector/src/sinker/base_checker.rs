@@ -59,8 +59,7 @@ impl<'a> ReviseSqlContext<'a> {
         );
         insert_row.refresh_data_size();
 
-        let sql = self.build_insert_query(&insert_row)?;
-        Ok(Some(sql))
+        self.build_insert_query(&insert_row).map(Some)
     }
 
     pub fn build_diff_sql(
@@ -78,12 +77,10 @@ impl<'a> ReviseSqlContext<'a> {
             None => return Ok(None),
         };
 
-        let mut update_after = HashMap::with_capacity(diff_col_values.len());
-        for col in diff_col_values.keys() {
-            if let Some(value) = src_after.get(col) {
-                update_after.insert(col.clone(), value.clone());
-            }
-        }
+        let update_after: HashMap<_, _> = diff_col_values
+            .keys()
+            .filter_map(|col| src_after.get(col).map(|v| (col.clone(), v.clone())))
+            .collect();
 
         if update_after.is_empty() {
             return Ok(None);
@@ -93,10 +90,11 @@ impl<'a> ReviseSqlContext<'a> {
             .after
             .as_ref()
             .or(dst_row_data.before.as_ref())
+            .filter(|before| !before.is_empty())
             .cloned();
-        let update_before = match update_before {
-            Some(before) if !before.is_empty() => before,
-            _ => return Ok(None),
+
+        let Some(update_before) = update_before else {
+            return Ok(None);
         };
 
         let mut update_row = RowData::new(
@@ -186,16 +184,14 @@ impl BaseChecker {
         }
 
         let target_slice = &src_data[start..end];
-
-        let mut miss = Vec::with_capacity(target_slice.len() / 5);
-        let mut diff = Vec::with_capacity(target_slice.len() / 5);
+        let mut miss = Vec::new();
+        let mut diff = Vec::new();
 
         for src_row_data in target_slice {
-            let hash_code = src_row_data.get_hash_code(dst_tb_meta);
-
+            let hash_code = src_row_data.get_hash_code(dst_tb_meta)?;
+            // src_row_data is already routed, so here we call get_hash_code by dst_tb_meta
             if let Some(dst_row_data) = dst_row_data_map.get(&hash_code) {
                 let diff_col_values = Self::compare_row_data(src_row_data, dst_row_data)?;
-
                 if !diff_col_values.is_empty() {
                     let diff_log = Self::build_diff_log(
                         src_row_data,
@@ -238,32 +234,27 @@ impl BaseChecker {
             .as_ref()
             .context("dst row data after is missing")?;
 
-        let mut diff_col_values = HashMap::new();
+        let diff_col_values = src
+            .iter()
+            .filter_map(|(col, src_val)| match dst.get(col) {
+                Some(dst_val) if src_val == dst_val => None,
+                Some(dst_val) => Some((
+                    col.clone(),
+                    DiffColValue {
+                        src: src_val.to_option_string(),
+                        dst: dst_val.to_option_string(),
+                    },
+                )),
+                None => Some((
+                    col.clone(),
+                    DiffColValue {
+                        src: src_val.to_option_string(),
+                        dst: None,
+                    },
+                )),
+            })
+            .collect();
 
-        for (col, src_col_value) in src.iter() {
-            match dst.get(col) {
-                Some(dst_col_value) => {
-                    if src_col_value != dst_col_value {
-                        diff_col_values.insert(
-                            col.clone(),
-                            DiffColValue {
-                                src: src_col_value.to_option_string(),
-                                dst: dst_col_value.to_option_string(),
-                            },
-                        );
-                    }
-                }
-                None => {
-                    diff_col_values.insert(
-                        col.clone(),
-                        DiffColValue {
-                            src: src_col_value.to_option_string(),
-                            dst: None,
-                        },
-                    );
-                }
-            }
-        }
         Ok(diff_col_values)
     }
 
