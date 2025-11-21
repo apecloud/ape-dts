@@ -22,6 +22,7 @@ pub struct CheckLog {
     #[serde(serialize_with = "ordered_map")]
     pub id_col_values: HashMap<String, Option<String>>,
     #[serde(
+        default,
         skip_serializing_if = "HashMap::is_empty",
         serialize_with = "ordered_map"
     )]
