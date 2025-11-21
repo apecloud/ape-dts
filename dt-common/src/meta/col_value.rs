@@ -6,6 +6,8 @@ use std::{
 use mongodb::bson::Document;
 use serde::{Deserialize, Serialize, Serializer};
 
+use crate::utils::sql_util::SqlUtil;
+
 // #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 // #[serde(tag = "type", content = "value")]
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -84,7 +86,7 @@ impl ColValue {
             ColValue::Timestamp(v) => Some(v.to_string()),
             ColValue::Year(v) => Some(v.to_string()),
             ColValue::String(v) => Some(v.to_string()),
-            ColValue::RawString(v) => Some(hex::encode(v)),
+            ColValue::RawString(v) => Some(SqlUtil::binary_to_str(v).0),
             ColValue::Bit(v) => Some(v.to_string()),
             ColValue::Set(v) => Some(v.to_string()),
             ColValue::Set2(v) => Some(v.to_string()),
@@ -93,7 +95,8 @@ impl ColValue {
             ColValue::Json(v) => Some(format!("{:?}", v)),
             ColValue::Json2(v) => Some(v.to_string()),
             ColValue::Json3(v) => Some(v.to_string()),
-            ColValue::Blob(v) => Some(hex::encode(v)),
+            ColValue::Blob(v) => Some(SqlUtil::binary_to_str(v).0),
+            // TODO: try serde_json::to_string(v)
             ColValue::MongoDoc(v) => Some(v.to_string()),
             ColValue::Bool(v) => Some(v.to_string()),
             ColValue::None => Option::None,

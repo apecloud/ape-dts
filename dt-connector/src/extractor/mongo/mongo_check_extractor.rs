@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use anyhow::Context;
 use async_trait::async_trait;
 
 use dt_common::log_info;
@@ -62,10 +63,9 @@ impl BatchCheckExtractor for MongoCheckExtractor {
         for check_log in check_logs.iter() {
             // check log has only one col: _id
             if let Some(Some(col_value)) = check_log.id_col_values.get(MongoConstants::ID) {
-                let keys = MongoKey::parse_fuzzy(col_value);
-                for key in keys {
-                    ids.push(key.to_mongo_id());
-                }
+                let key: MongoKey = serde_json::from_str(col_value)
+                    .with_context(|| format!("invalid mongo _id: {}", col_value))?;
+                ids.push(key.to_mongo_id());
             }
         }
 

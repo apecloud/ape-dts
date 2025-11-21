@@ -174,16 +174,19 @@ impl RowData {
         }
     }
 
-    pub fn get_hash_code(&self, tb_meta: &RdbTbMeta) -> u128 {
+    pub fn get_hash_code(&self, tb_meta: &RdbTbMeta) -> anyhow::Result<u128> {
         let col_values = match self.row_type {
-            RowType::Insert => self.after.as_ref().unwrap(),
-            _ => self.before.as_ref().unwrap(),
+            RowType::Insert => self.after.as_ref().context("row_data after is missing")?,
+            _ => self.before.as_ref().context("row_data before is missing")?,
         };
 
         // refer to: https://docs.oracle.com/javase/6/docs/api/java/util/List.html#hashCode%28%29
         let mut hash_code = 1u128;
         for col in tb_meta.id_cols.iter() {
-            let col_hash_code = col_values.get(col).unwrap().hash_code();
+            let col_hash_code = col_values
+                .get(col)
+                .with_context(|| format!("missing id col value: {}", col))?
+                .hash_code();
             // col_hash_code is 0 if col_value is ColValue::None,
             // consider following case,
             // create table a(id int, value int, unique key(id, value));
@@ -192,11 +195,11 @@ impl RowData {
             // delete from a where id=1 and value is NULL;  // this works
             // so here return 0 to stop merging to avoid batch deleting
             if col_hash_code == 0 {
-                return 0;
+                return Ok(0);
             }
             hash_code = 31 * hash_code + col_hash_code as u128;
         }
-        hash_code
+        Ok(hash_code)
     }
 
     pub fn refresh_data_size(&mut self) {

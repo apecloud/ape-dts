@@ -1,5 +1,6 @@
 use mongodb::bson::{oid::ObjectId, Bson, DateTime, Document, Timestamp};
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 
 use super::mongo_constant::MongoConstants;
 
@@ -26,6 +27,7 @@ impl MongoKey {
             Bson::Timestamp(v) => Some(MongoKey::Timestamp(*v)),
             Bson::DateTime(v) => Some(MongoKey::DateTime(*v)),
             Bson::Symbol(v) => Some(MongoKey::Symbol(v.clone())),
+            // other types don't derive Hash and Eq
             _ => None,
         })
     }
@@ -42,41 +44,10 @@ impl MongoKey {
             MongoKey::Symbol(v) => Bson::Symbol(v.clone()),
         }
     }
-
-    pub fn parse_fuzzy(s: &str) -> Vec<MongoKey> {
-        if let Ok(k) = serde_json::from_str::<MongoKey>(s) {
-            return vec![k];
-        }
-
-        let mut keys = Vec::new();
-        keys.push(MongoKey::String(s.to_string()));
-
-        if let Ok(oid) = ObjectId::parse_str(s) {
-            keys.push(MongoKey::ObjectId(oid));
-        }
-
-        if let Ok(i) = s.parse::<i64>() {
-            keys.push(MongoKey::Int64(i));
-            if let Ok(i32_val) = s.parse::<i32>() {
-                keys.push(MongoKey::Int32(i32_val));
-            }
-        }
-
-        keys
-    }
 }
 
 impl std::fmt::Display for MongoKey {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            MongoKey::ObjectId(v) => write!(f, "{}", v),
-            MongoKey::String(v) => write!(f, "{}", v),
-            MongoKey::Int32(v) => write!(f, "{}", v),
-            MongoKey::Int64(v) => write!(f, "{}", v),
-            MongoKey::JavaScriptCode(v) => write!(f, "{}", v),
-            MongoKey::Timestamp(v) => write!(f, "{}", v),
-            MongoKey::DateTime(v) => write!(f, "{}", v),
-            MongoKey::Symbol(v) => write!(f, "{}", v),
-        }
+        write!(f, "{}", json!(self))
     }
 }
