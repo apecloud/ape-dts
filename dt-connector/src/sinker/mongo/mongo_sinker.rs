@@ -1,5 +1,6 @@
 use std::{cmp, sync::Arc};
 
+use anyhow::Context;
 use async_trait::async_trait;
 use mongodb::{
     bson::{doc, Document},
@@ -80,10 +81,12 @@ impl MongoSinker {
             let start_time = Instant::now();
             match row_data.row_type {
                 RowType::Insert => {
-                    let after = row_data.after.as_mut().unwrap();
+                    let after = row_data.require_after_mut()?;
                     if let Some(ColValue::MongoDoc(doc)) = after.remove(MongoConstants::DOC) {
-                        let query_doc =
-                            doc! {MongoConstants::ID: doc.get(MongoConstants::ID).unwrap()};
+                        let id = doc
+                            .get(MongoConstants::ID)
+                            .context("mongo doc missing `_id`")?;
+                        let query_doc = doc! {MongoConstants::ID: id};
                         let update_doc = doc! {MongoConstants::SET: doc};
                         self.upsert(&collection, query_doc, update_doc).await?;
                         rts.push((start_time.elapsed().as_millis() as u64, 1));
@@ -91,27 +94,34 @@ impl MongoSinker {
                 }
 
                 RowType::Delete => {
-                    let before = row_data.before.as_mut().unwrap();
+                    let before = row_data.require_before_mut()?;
                     if let Some(ColValue::MongoDoc(doc)) = before.remove(MongoConstants::DOC) {
-                        let query_doc =
-                            doc! {MongoConstants::ID: doc.get(MongoConstants::ID).unwrap()};
+                        let id = doc
+                            .get(MongoConstants::ID)
+                            .context("mongo doc missing `_id`")?;
+                        let query_doc = doc! {MongoConstants::ID: id};
                         collection.delete_one(query_doc, None).await?;
                         rts.push((start_time.elapsed().as_millis() as u64, 1));
                     }
                 }
 
                 RowType::Update => {
-                    let before = row_data.before.as_mut().unwrap();
-                    let after = row_data.after.as_mut().unwrap();
-
-                    let query_doc =
-                        if let Some(ColValue::MongoDoc(doc)) = before.remove(MongoConstants::DOC) {
-                            Some(doc! {MongoConstants::ID: doc.get(MongoConstants::ID).unwrap()})
+                    let query_doc = {
+                        let before = row_data.require_before_mut()?;
+                        if let Some(ColValue::MongoDoc(doc)) =
+                            before.remove(MongoConstants::DOC)
+                        {
+                            let id = doc
+                                .get(MongoConstants::ID)
+                                .context("mongo doc missing `_id`")?;
+                            Some(doc! {MongoConstants::ID: id})
                         } else {
                             None
-                        };
+                        }
+                    };
 
-                    let update_doc =
+                    let update_doc = {
+                        let after = row_data.require_after_mut()?;
                         if let Some(ColValue::MongoDoc(doc)) = after.remove(MongoConstants::DOC) {
                             Some(doc)
                         } else if let Some(ColValue::MongoDoc(doc)) =
@@ -121,7 +131,8 @@ impl MongoSinker {
                             Some(doc)
                         } else {
                             None
-                        };
+                        }
+                    };
 
                     if query_doc.is_some() && update_doc.is_some() {
                         self.upsert(&collection, query_doc.unwrap(), update_doc.unwrap())
@@ -167,9 +178,12 @@ impl MongoSinker {
         for rd in data.iter().skip(start_index).take(batch_size) {
             data_size += rd.data_size;
 
-            let before = rd.before.as_ref().unwrap();
+            let before = rd.require_before()?;
             if let Some(ColValue::MongoDoc(doc)) = before.get(MongoConstants::DOC) {
-                ids.push(doc.get(MongoConstants::ID).unwrap());
+                let id = doc
+                    .get(MongoConstants::ID)
+                    .context("mongo doc missing `_id`")?;
+                ids.push(id);
             }
         }
 
@@ -204,7 +218,7 @@ impl MongoSinker {
         for rd in data.iter().skip(start_index).take(batch_size) {
             data_size += rd.data_size;
 
-            let after = rd.after.as_ref().unwrap();
+            let after = rd.require_after()?;
             if let Some(ColValue::MongoDoc(doc)) = after.get(MongoConstants::DOC) {
                 docs.push(doc);
             }

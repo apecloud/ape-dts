@@ -109,14 +109,14 @@ impl StarRocksSinker {
             Self::convert_row_data(row_data, tb_meta)?;
 
             let col_values = if row_data.row_type == RowType::Delete {
-                let before = row_data.before.as_mut().unwrap();
+                let before = row_data.require_before_mut()?;
                 if self.db_type == DbType::StarRocks {
                     // SIGN_COL value
                     before.insert(SIGN_COL_NAME.into(), ColValue::Long(1));
                 }
                 before
             } else {
-                row_data.after.as_mut().unwrap()
+                row_data.require_after_mut()?
             };
 
             if self.db_type == DbType::StarRocks {

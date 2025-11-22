@@ -157,6 +157,42 @@ impl RowData {
         }
     }
 
+    pub fn require_after(&self) -> anyhow::Result<&HashMap<String, ColValue>> {
+        self.after.as_ref().with_context(|| {
+            format!(
+                "row_data after is missing, schema: {}, tb: {}",
+                self.schema, self.tb
+            )
+        })
+    }
+
+    pub fn require_before(&self) -> anyhow::Result<&HashMap<String, ColValue>> {
+        self.before.as_ref().with_context(|| {
+            format!(
+                "row_data before is missing, schema: {}, tb: {}",
+                self.schema, self.tb
+            )
+        })
+    }
+
+    pub fn require_after_mut(&mut self) -> anyhow::Result<&mut HashMap<String, ColValue>> {
+        self.after.as_mut().with_context(|| {
+            format!(
+                "row_data after is missing, schema: {}, tb: {}",
+                self.schema, self.tb
+            )
+        })
+    }
+
+    pub fn require_before_mut(&mut self) -> anyhow::Result<&mut HashMap<String, ColValue>> {
+        self.before.as_mut().with_context(|| {
+            format!(
+                "row_data before is missing, schema: {}, tb: {}",
+                self.schema, self.tb
+            )
+        })
+    }
+
     fn convert_raw_string_col_values(col_values: &mut HashMap<String, ColValue>) {
         let mut str_col_values: HashMap<String, ColValue> = HashMap::new();
         for (col, col_value) in col_values.iter() {

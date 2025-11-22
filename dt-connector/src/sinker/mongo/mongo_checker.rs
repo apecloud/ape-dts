@@ -1,5 +1,6 @@
 use std::{collections::HashMap, sync::Arc};
 
+use anyhow::Context;
 use async_trait::async_trait;
 use mongodb::{
     bson::{doc, Document},
@@ -71,16 +72,34 @@ impl MongoChecker {
         let mut src_row_data_map = HashMap::new();
 
         for row_data in data.iter().skip(start_index).take(batch_size) {
-            let after = row_data.after.as_ref().unwrap();
-            if let Some(ColValue::MongoDoc(doc)) = after.get(MongoConstants::DOC) {
-                let id = doc.get(MongoConstants::ID).unwrap();
-                if let Some(key) = MongoKey::from_doc(doc) {
-                    src_row_data_map.insert(key, row_data.clone());
-                    ids.push(id);
-                } else {
-                    // this should have a very small chance to happen, and we don't support
-                    log_error!("row_data's _id type not supported, _id: {:?}", id);
-                }
+            let after = row_data.require_after()?;
+
+            let doc = after
+                .get(MongoConstants::DOC)
+                .and_then(|v| match v {
+                    ColValue::MongoDoc(doc) => Some(doc),
+                    _ => None,
+                })
+                .with_context(|| {
+                    format!(
+                        "row_data missing mongo doc, schema: {}, tb: {}",
+                        row_data.schema, row_data.tb
+                    )
+                })?;
+
+            let id = doc.get(MongoConstants::ID).with_context(|| {
+                format!(
+                    "row_data missing `_id`, schema: {}, tb: {}",
+                    row_data.schema, row_data.tb
+                )
+            })?;
+
+            if let Some(key) = MongoKey::from_doc(doc) {
+                src_row_data_map.insert(key, row_data.clone());
+                ids.push(id);
+            } else {
+                // this should have a very small chance to happen, and we don't support
+                log_error!("row_data's _id type not supported, _id: {:?}", id);
             }
         }
 
@@ -101,9 +120,13 @@ impl MongoChecker {
         while cursor.advance().await? {
             let doc = cursor.deserialize_current()?;
             // key should not be none since we have filtered in ids,
-            let key = MongoKey::from_doc(&doc).unwrap();
-            let row_data = Self::build_row_data(schema, tb, doc, &key);
-            dst_row_data_map.insert(key, row_data);
+            if let Some(key) = MongoKey::from_doc(&doc) {
+                let row_data = Self::build_row_data(schema, tb, doc, &key);
+                dst_row_data_map.insert(key, row_data);
+            } else {
+                let id = doc.get(MongoConstants::ID);
+                log_error!("dst row_data's _id type not supported, _id: {:?}", id);
+            }
         }
 
         // batch check
@@ -112,6 +135,11 @@ impl MongoChecker {
         for (key, src_row_data) in src_row_data_map {
             if let Some(dst_row_data) = dst_row_data_map.remove(&key) {
                 let diff_col_values = BaseChecker::compare_row_data(&src_row_data, &dst_row_data)?;
+                let diff_col_values = BaseChecker::expand_mongo_doc_diff_if_needed(
+                    &src_row_data,
+                    &dst_row_data,
+                    diff_col_values,
+                );
                 if !diff_col_values.is_empty() {
                     let diff_log = BaseChecker::build_mongo_diff_log(
                         src_row_data,
@@ -157,5 +185,27 @@ impl MongoChecker {
         );
         after.insert(MongoConstants::DOC.to_string(), ColValue::MongoDoc(doc));
         RowData::new(schema.into(), tb.into(), RowType::Insert, None, Some(after))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use mongodb::bson::{oid::ObjectId, Bson, DateTime};
+
+    #[test]
+    fn test_bson_display() {
+        let oid = ObjectId::parse_str("507f1f77bcf86cd799439011").unwrap();
+        let bson_oid = Bson::ObjectId(oid);
+        println!("ObjectId: {}", bson_oid);
+
+        let bson_int = Bson::Int32(123);
+        println!("Int32: {}", bson_int);
+
+        let bson_str = Bson::String("hello".to_string());
+        println!("String: {}", bson_str);
+
+        let date = DateTime::from_millis(1693470874000);
+        let bson_date = Bson::DateTime(date);
+        println!("DateTime: {}", bson_date);
     }
 }
