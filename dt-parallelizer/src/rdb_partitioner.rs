@@ -38,8 +38,8 @@ impl RdbPartitioner {
             .meta_manager
             .get_tb_meta(&row_data.schema, &row_data.tb)
             .await?;
-        let before = row_data.before.as_ref().unwrap();
-        let after = row_data.after.as_ref().unwrap();
+        let before = row_data.require_before()?;
+        let after = row_data.require_after()?;
         // if any col of pk & uk has changed, partition should not happen
         // example:
         // create table a(f1 int, f2 int, primary key(f1), unique key(f2));
@@ -63,8 +63,8 @@ impl RdbPartitioner {
                         &row_data.schema,
                         &row_data.tb,
                         col,
-                        col_value_before.unwrap().to_option_string(),
-                        col_value_after.unwrap().to_option_string()
+                        col_value_before.and_then(|v| v.to_option_string()),
+                        col_value_after.and_then(|v| v.to_option_string())
                     );
                     return Ok(false);
                 }
@@ -91,8 +91,8 @@ impl RdbPartitioner {
         }
 
         let col_values = match row_data.row_type {
-            RowType::Insert => row_data.after.as_ref().unwrap(),
-            _ => row_data.before.as_ref().unwrap(),
+            RowType::Insert => row_data.require_after()?,
+            _ => row_data.require_before()?,
         };
 
         let tb_meta = self

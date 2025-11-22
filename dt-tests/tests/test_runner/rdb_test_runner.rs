@@ -659,8 +659,11 @@ impl RdbTestRunner {
         let ignore_cols = self.filter.get_ignore_cols(&src_db_tb.0, &src_db_tb.1);
 
         for i in 0..src_data.len() {
-            let src_col_values = src_data[i].after.as_ref().unwrap();
-            let dst_col_values = dst_data[i].after.as_ref().unwrap();
+            let (src_col_values, dst_col_values) =
+                match (src_data[i].require_after(), dst_data[i].require_after()) {
+                    (Ok(src), Ok(dst)) => (src, dst),
+                    _ => return false,
+                };
 
             for (src_col, src_col_value) in src_col_values {
                 let dst_col = if let Some(col_map) = col_map {

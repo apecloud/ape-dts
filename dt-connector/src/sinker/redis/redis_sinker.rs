@@ -215,19 +215,21 @@ impl RedisSinker {
 
         let key = if let Some(col) = tb_meta.order_cols.first() {
             match row_data.row_type {
-                RowType::Insert | RowType::Update => row_data.after.as_ref().unwrap().get(col),
-                RowType::Delete => row_data.before.as_ref().unwrap().get(col),
+                RowType::Insert | RowType::Update => row_data
+                    .require_after()?
+                    .get(col)
+                    .and_then(|v| v.to_option_string()),
+                RowType::Delete => row_data
+                    .require_before()?
+                    .get(col)
+                    .and_then(|v| v.to_option_string()),
             }
         } else {
             None
         };
 
         let key = if let Some(v) = key {
-            if let Some(v) = v.to_option_string() {
-                format!("{}.{}.{}", row_data.schema, row_data.tb, v)
-            } else {
-                return Ok(None);
-            }
+            format!("{}.{}.{}", row_data.schema, row_data.tb, v)
         } else {
             return Ok(None);
         };
@@ -237,7 +239,7 @@ impl RedisSinker {
             RowType::Insert | RowType::Update => {
                 cmd.add_str_arg("hset");
                 cmd.add_str_arg(&key);
-                for (col, col_value) in row_data.after.as_ref().unwrap() {
+                for (col, col_value) in row_data.require_after()? {
                     cmd.add_str_arg(col);
                     if let Some(v) = col_value.to_option_string() {
                         cmd.add_str_arg(&v);
