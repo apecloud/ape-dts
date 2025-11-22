@@ -1,7 +1,5 @@
 use std::{collections::HashMap, sync::Arc};
 
-use async_mutex::Mutex;
-
 use anyhow::Context;
 use async_trait::async_trait;
 use mongodb::{
@@ -12,16 +10,12 @@ use tokio::time::Instant;
 
 use crate::{
     call_batch_fn,
-    check_log::check_log::CheckSummaryLog,
     rdb_router::RdbRouter,
-    sinker::{
-        base_checker::{BaseChecker, ReviseSqlContext},
-        base_sinker::BaseSinker,
-    },
+    sinker::{base_checker::BaseChecker, base_sinker::BaseSinker},
     Sinker,
 };
 use dt_common::{
-    log_error, log_sql, log_summary,
+    log_error,
     meta::{
         col_value::ColValue,
         mongo::{mongo_constant::MongoConstants, mongo_key::MongoKey},
@@ -41,8 +35,6 @@ pub struct MongoChecker {
     pub monitor: Arc<Monitor>,
     pub output_full_row: bool,
     pub output_revise_sql: bool,
-    pub summary: CheckSummaryLog,
-    pub global_summary: Option<Arc<Mutex<CheckSummaryLog>>>,
 }
 
 #[async_trait]
@@ -57,18 +49,6 @@ impl Sinker for MongoChecker {
     }
 
     async fn close(&mut self) -> anyhow::Result<()> {
-        if self.summary.miss_count > 0
-            || self.summary.diff_count > 0
-            || self.summary.extra_count > 0
-        {
-            self.summary.end_time = chrono::Local::now().to_rfc3339();
-            if let Some(global_summary) = &self.global_summary {
-                let mut global_summary = global_summary.lock().await;
-                global_summary.merge(&self.summary);
-            } else {
-                log_summary!("{}", self.summary);
-            }
-        }
         Ok(())
     }
 }
@@ -89,7 +69,7 @@ impl MongoChecker {
             .collection::<Document>(tb);
 
         let mut ids = Vec::new();
-        let mut src_row_data_map: HashMap<MongoKey, &RowData> = HashMap::new();
+        let mut src_row_data_map = HashMap::new();
 
         for row_data in data.iter().skip(start_index).take(batch_size) {
             let after = row_data.require_after()?;
@@ -115,7 +95,7 @@ impl MongoChecker {
             })?;
 
             if let Some(key) = MongoKey::from_doc(doc) {
-                src_row_data_map.insert(key, row_data);
+                src_row_data_map.insert(key, row_data.clone());
                 ids.push(id);
             } else {
                 // this should have a very small chance to happen, and we don't support
@@ -152,60 +132,38 @@ impl MongoChecker {
         // batch check
         let mut miss = Vec::new();
         let mut diff = Vec::new();
-        let mut sql_count = 0;
-        let revise_ctx = self.output_revise_sql.then(ReviseSqlContext::mongo);
         for (key, src_row_data) in src_row_data_map {
             if let Some(dst_row_data) = dst_row_data_map.remove(&key) {
-                let diff_col_values = BaseChecker::compare_row_data(src_row_data, &dst_row_data)?;
+                let diff_col_values = BaseChecker::compare_row_data(&src_row_data, &dst_row_data)?;
+                let diff_col_values = BaseChecker::expand_mongo_doc_diff_if_needed(
+                    &src_row_data,
+                    &dst_row_data,
+                    diff_col_values,
+                );
                 if !diff_col_values.is_empty() {
-                    let revise_sql = revise_ctx
-                        .as_ref()
-                        .map(|ctx| ctx.build_diff_sql(src_row_data, &dst_row_data, &diff_col_values))
-                        .transpose()?
-                        .flatten();
-
                     let diff_log = BaseChecker::build_mongo_diff_log(
                         src_row_data,
-                        &dst_row_data,
+                        dst_row_data,
                         diff_col_values,
                         &tb_meta,
                         &self.reverse_router,
                         self.output_full_row,
-                    )?;
-                    if let Some(revise_sql) = revise_sql {
-                        log_sql!("{}", revise_sql);
-                        sql_count += 1;
-                    }
+                        self.output_revise_sql,
+                    );
                     diff.push(diff_log);
                 }
             } else {
-                let revise_sql = revise_ctx
-                    .as_ref()
-                    .map(|ctx| ctx.build_miss_sql(src_row_data))
-                    .transpose()?
-                    .flatten();
-
                 let miss_log = BaseChecker::build_mongo_miss_log(
                     src_row_data,
                     &tb_meta,
                     &self.reverse_router,
                     self.output_full_row,
-                )?;
-                if let Some(revise_sql) = revise_sql {
-                    log_sql!("{}", revise_sql);
-                    sql_count += 1;
-                }
+                    self.output_revise_sql,
+                );
                 miss.push(miss_log);
             };
         }
-        BaseChecker::log_dml(&miss, &diff);
-
-        self.summary.end_time = chrono::Local::now().to_rfc3339();
-        self.summary.miss_count += miss.len();
-        self.summary.diff_count += diff.len();
-        if sql_count > 0 {
-            self.summary.sql_count = Some(self.summary.sql_count.unwrap_or(0) + sql_count);
-        }
+        BaseChecker::log_dml(miss, diff);
 
         BaseSinker::update_batch_monitor(&self.monitor, batch_size as u64, 0).await
     }

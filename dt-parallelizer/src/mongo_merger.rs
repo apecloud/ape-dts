@@ -68,11 +68,13 @@ impl MongoMerger {
                 }
 
                 RowType::Update => {
+                    let before = row_data.require_before()?.clone();
+                    let after: HashMap<String, ColValue> = row_data.require_after()?.clone();
                     let delete_row = RowData::new(
                         row_data.schema.clone(),
                         row_data.tb.clone(),
                         RowType::Delete,
-                        row_data.before,
+                        Some(before),
                         None,
                     );
                     delete_map.insert(id.clone(), delete_row);
@@ -82,7 +84,7 @@ impl MongoMerger {
                         row_data.tb,
                         RowType::Insert,
                         Option::None,
-                        row_data.after,
+                        Some(after),
                     );
                     insert_map.insert(id, insert_row);
                 }
