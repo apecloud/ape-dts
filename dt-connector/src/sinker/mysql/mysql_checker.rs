@@ -102,6 +102,14 @@ impl MysqlChecker {
                 let dst_row_data = RowData::from_mysql_row(&row, tb_meta, &None);
                 let diff_col_values = BaseChecker::compare_row_data(src_row_data, &dst_row_data)?;
                 if !diff_col_values.is_empty() {
+                    let revise_sql = revise_ctx
+                        .as_ref()
+                        .map(|ctx| {
+                            ctx.build_diff_sql(src_row_data, &dst_row_data, &diff_col_values)
+                        })
+                        .transpose()?
+                        .flatten();
+
                     let diff_log = BaseChecker::build_diff_log(
                         src_row_data,
                         &dst_row_data,
@@ -109,20 +117,28 @@ impl MysqlChecker {
                         &mut self.extractor_meta_manager,
                         &self.reverse_router,
                         self.output_full_row,
-                        revise_ctx.as_ref(),
                     )
                     .await?;
+                    let mut diff_log = diff_log;
+                    diff_log.revise_sql = revise_sql;
                     diff.push(diff_log);
                 }
             } else {
+                let revise_sql = revise_ctx
+                    .as_ref()
+                    .map(|ctx| ctx.build_miss_sql(src_row_data))
+                    .transpose()?
+                    .flatten();
+
                 let miss_log = BaseChecker::build_miss_log(
                     src_row_data,
                     &mut self.extractor_meta_manager,
                     &self.reverse_router,
                     self.output_full_row,
-                    revise_ctx.as_ref(),
                 )
                 .await?;
+                let mut miss_log = miss_log;
+                miss_log.revise_sql = revise_sql;
                 miss.push(miss_log);
             }
         }
@@ -140,9 +156,6 @@ impl MysqlChecker {
     ) -> anyhow::Result<()> {
         let tb_meta = self.meta_manager.get_tb_meta_by_row_data(&data[0]).await?;
         let query_builder = RdbQueryBuilder::new_for_mysql(tb_meta, None);
-        let revise_ctx = self
-            .output_revise_sql
-            .then_some(ReviseSqlContext::mysql(tb_meta, self.revise_match_full_row));
 
         // build fetch dst sql
         let query_info = query_builder.get_batch_select_query(data, start_index, batch_size)?;
@@ -165,7 +178,11 @@ impl MysqlChecker {
             start_index,
             batch_size,
         };
-        let compare_ctx = BatchCompareContext {
+        let revise_ctx = self
+            .output_revise_sql
+            .then(|| ReviseSqlContext::mysql(tb_meta, self.revise_match_full_row));
+
+        let ctx = BatchCompareContext {
             dst_tb_meta: &tb_meta.basic,
             extractor_meta_manager: &mut self.extractor_meta_manager,
             reverse_router: &self.reverse_router,
@@ -173,13 +190,9 @@ impl MysqlChecker {
             revise_ctx: revise_ctx.as_ref(),
         };
 
-        let (miss, diff) = BaseChecker::batch_compare_row_data_items(
-            data,
-            &dst_row_data_map,
-            compare_range,
-            compare_ctx,
-        )
-        .await?;
+        let (miss, diff) =
+            BaseChecker::batch_compare_row_data_items(data, &dst_row_data_map, compare_range, ctx)
+                .await?;
         BaseChecker::log_dml(miss, diff);
 
         BaseSinker::update_batch_monitor(&self.monitor, batch_size as u64, 0).await?;

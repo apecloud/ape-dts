@@ -3,7 +3,7 @@ use std::{
     hash::{Hash, Hasher},
 };
 
-use mongodb::bson::Document;
+use mongodb::bson::{Bson, Document};
 use serde::{Deserialize, Serialize, Serializer};
 
 use crate::utils::sql_util::SqlUtil;
@@ -96,8 +96,7 @@ impl ColValue {
             ColValue::Json2(v) => Some(v.to_string()),
             ColValue::Json3(v) => Some(v.to_string()),
             ColValue::Blob(v) => Some(SqlUtil::binary_to_str(v).0),
-            // TODO: try serde_json::to_string(v)
-            ColValue::MongoDoc(v) => Some(v.to_string()),
+            ColValue::MongoDoc(v) => Some(Self::mongo_doc_to_string(v)),
             ColValue::Bool(v) => Some(v.to_string()),
             ColValue::None => Option::None,
         }
@@ -135,8 +134,24 @@ impl ColValue {
             | ColValue::Json2(v) => v.len(),
             ColValue::Json(v) | ColValue::Blob(v) | ColValue::RawString(v) => v.len(),
             ColValue::Json3(v) => v.to_string().len(),
-            ColValue::MongoDoc(v) => v.to_string().len(),
+            ColValue::MongoDoc(v) => {
+                std::mem::size_of::<Document>()
+                    + v.iter()
+                        .map(|(k, bson)| k.len() + std::mem::size_of_val(bson))
+                        .sum::<usize>()
+            }
             ColValue::None => 0,
+        }
+    }
+
+    fn mongo_doc_to_string(doc: &Document) -> String {
+        // Use Relaxed Extended JSON to make it more human-readable while preserving necessary types.
+        // Convert Document to Bson first, then to relaxed extjson Value, then to String.
+        // https://www.mongodb.com/docs/manual/reference/mongodb-extended-json/
+        let bson = Bson::Document(doc.clone());
+        match bson.into_relaxed_extjson() {
+            serde_json::Value::Object(map) => serde_json::Value::Object(map).to_string(),
+            _ => doc.to_string(), // Fallback, though Document should always become an Object
         }
     }
 }
@@ -185,6 +200,35 @@ impl Serialize for ColValue {
             ColValue::Json3(v) => v.serialize(serializer),
             ColValue::MongoDoc(v) => v.serialize(serializer),
             ColValue::None => serializer.serialize_none(),
+        }
+    }
+}
+
+impl From<Bson> for ColValue {
+    fn from(bson: Bson) -> Self {
+        match bson {
+            Bson::Double(v) => ColValue::Double(v),
+            Bson::String(v) => ColValue::String(v),
+            Bson::Array(v) => ColValue::Json2(Bson::Array(v).to_string()),
+            Bson::Document(v) => ColValue::MongoDoc(v),
+            Bson::Boolean(v) => ColValue::Bool(v),
+            Bson::Null => ColValue::None,
+            Bson::Int32(v) => ColValue::Long(v),
+            Bson::Int64(v) => ColValue::LongLong(v),
+            Bson::Timestamp(v) => ColValue::Timestamp(format!("{}:{}", v.time, v.increment)),
+            Bson::Binary(v) => ColValue::Blob(v.bytes),
+            Bson::DateTime(v) => ColValue::DateTime(v.to_string()),
+            Bson::Decimal128(v) => ColValue::Decimal(v.to_string()),
+            // others types
+            Bson::ObjectId(v) => ColValue::String(v.to_hex()),
+            Bson::RegularExpression(v) => ColValue::String(v.pattern),
+            Bson::JavaScriptCode(v) => ColValue::String(v),
+            Bson::JavaScriptCodeWithScope(v) => ColValue::String(v.code),
+            Bson::Symbol(v) => ColValue::String(v),
+            Bson::Undefined => ColValue::String("Undefined".into()),
+            Bson::MaxKey => ColValue::String("MaxKey".into()),
+            Bson::MinKey => ColValue::String("MinKey".into()),
+            Bson::DbPointer(v) => ColValue::String(format!("{:?}", v)),
         }
     }
 }
