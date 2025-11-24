@@ -4,7 +4,6 @@ use std::{
     sync::Arc,
 };
 
-use async_mutex::Mutex;
 use async_trait::async_trait;
 use futures::TryStreamExt;
 use sqlx::{MySql, Pool};
@@ -12,7 +11,6 @@ use tokio::time::Instant;
 
 use crate::{
     call_batch_fn,
-    check_log::check_log::CheckSummaryLog,
     meta_fetcher::mysql::mysql_struct_fetcher::MysqlStructFetcher,
     rdb_query_builder::RdbQueryBuilder,
     rdb_router::RdbRouter,
@@ -23,7 +21,6 @@ use crate::{
     Sinker,
 };
 use dt_common::{
-    log_sql, log_summary,
     meta::{
         mysql::mysql_meta_manager::MysqlMetaManager,
         rdb_meta_manager::RdbMetaManager,
@@ -47,8 +44,6 @@ pub struct MysqlChecker {
     pub output_full_row: bool,
     pub output_revise_sql: bool,
     pub revise_match_full_row: bool,
-    pub summary: CheckSummaryLog,
-    pub global_summary: Option<Arc<Mutex<CheckSummaryLog>>>,
 }
 
 #[async_trait]
@@ -67,19 +62,6 @@ impl Sinker for MysqlChecker {
     }
 
     async fn close(&mut self) -> anyhow::Result<()> {
-        if self.summary.miss_count > 0
-            || self.summary.diff_count > 0
-            || self.summary.extra_count > 0
-        {
-            self.summary.end_time = chrono::Local::now().to_rfc3339();
-            if let Some(global_summary) = &self.global_summary {
-                let mut global_summary = global_summary.lock().await;
-                global_summary.merge(&self.summary);
-            } else {
-                log_summary!("{}", self.summary);
-            }
-        }
-
         self.meta_manager.close().await?;
         self.extractor_meta_manager.close().await
     }
@@ -137,9 +119,8 @@ impl MysqlChecker {
                         self.output_full_row,
                     )
                     .await?;
-                    if let Some(revise_sql) = revise_sql {
-                        log_sql!("{}", revise_sql);
-                    }
+                    let mut diff_log = diff_log;
+                    diff_log.revise_sql = revise_sql;
                     diff.push(diff_log);
                 }
             } else {
@@ -156,13 +137,12 @@ impl MysqlChecker {
                     self.output_full_row,
                 )
                 .await?;
-                if let Some(revise_sql) = revise_sql {
-                    log_sql!("{}", revise_sql);
-                }
+                let mut miss_log = miss_log;
+                miss_log.revise_sql = revise_sql;
                 miss.push(miss_log);
             }
         }
-        BaseChecker::log_dml(&miss, &diff);
+        BaseChecker::log_dml(miss, diff);
 
         BaseSinker::update_serial_monitor(&self.monitor, data.len() as u64, 0).await?;
         BaseSinker::update_monitor_rt(&self.monitor, &rts).await
@@ -210,18 +190,10 @@ impl MysqlChecker {
             revise_ctx: revise_ctx.as_ref(),
         };
 
-        let (miss, diff, sql_count) =
+        let (miss, diff) =
             BaseChecker::batch_compare_row_data_items(data, &dst_row_data_map, compare_range, ctx)
                 .await?;
-
-        BaseChecker::log_dml(&miss, &diff);
-
-        self.summary.end_time = chrono::Local::now().to_rfc3339();
-        self.summary.miss_count += miss.len();
-        self.summary.diff_count += diff.len();
-        if sql_count > 0 {
-            self.summary.sql_count = Some(self.summary.sql_count.unwrap_or(0) + sql_count);
-        }
+        BaseChecker::log_dml(miss, diff);
 
         BaseSinker::update_batch_monitor(&self.monitor, batch_size as u64, 0).await?;
         BaseSinker::update_monitor_rt(&self.monitor, &rts).await
@@ -264,18 +236,7 @@ impl MysqlChecker {
                 _ => StructStatement::Unknown,
             };
 
-            let (miss_count, diff_count, extra_count, sql_count) = BaseChecker::compare_struct(
-                src_statement,
-                &mut dst_statement,
-                &self.filter,
-                self.output_revise_sql,
-            )?;
-            self.summary.miss_count += miss_count;
-            self.summary.diff_count += diff_count;
-            self.summary.extra_count += extra_count;
-            if sql_count > 0 {
-                self.summary.sql_count = Some(self.summary.sql_count.unwrap_or(0) + sql_count);
-            }
+            BaseChecker::compare_struct(src_statement, &mut dst_statement, &self.filter)?;
         }
         Ok(())
     }

@@ -226,10 +226,7 @@ impl FoxlakePusher {
 // ORC functions
 impl FoxlakePusher {
     #[inline(always)]
-    fn get_col_value<'a>(
-        row_data: &'a RowData,
-        col: &str,
-    ) -> anyhow::Result<Option<&'a ColValue>> {
+    fn get_col_value<'a>(row_data: &'a RowData, col: &str) -> anyhow::Result<Option<&'a ColValue>> {
         if row_data.row_type == RowType::Delete {
             Ok(row_data.require_before()?.get(col))
         } else {
