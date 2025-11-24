@@ -1,5 +1,6 @@
-use anyhow::Context;
-use mongodb::bson::{Bson, Document};
+use anyhow::{Context, Ok};
+use mongodb::bson::Document;
+use std::borrow::Cow;
 use std::collections::{BTreeSet, HashMap};
 
 use dt_common::meta::{
@@ -17,11 +18,13 @@ use crate::{
     },
     rdb_query_builder::RdbQueryBuilder,
     rdb_router::RdbRouter,
+    sinker::mongo::mongo_cmd,
 };
 
 pub enum ReviseSqlMeta<'a> {
     Mysql(&'a MysqlTbMeta),
     Pg(&'a PgTbMeta),
+    Mongo,
 }
 
 pub struct ReviseSqlContext<'a> {
@@ -44,11 +47,24 @@ impl<'a> ReviseSqlContext<'a> {
         }
     }
 
+    pub fn mongo() -> Self {
+        Self {
+            meta: ReviseSqlMeta::Mongo,
+            match_full_row: false,
+        }
+    }
+
     pub fn build_miss_sql(&self, src_row_data: &RowData) -> anyhow::Result<Option<String>> {
         let after = match &src_row_data.after {
             Some(after) if !after.is_empty() => after.clone(),
             _ => return Ok(None),
         };
+
+        // 1. mongo
+        if let ReviseSqlMeta::Mongo = self.meta {
+            return Ok(mongo_cmd::build_insert_cmd(src_row_data));
+        }
+        // 2. rdb
 
         let mut insert_row = RowData::new(
             src_row_data.schema.clone(),
@@ -59,7 +75,7 @@ impl<'a> ReviseSqlContext<'a> {
         );
         insert_row.refresh_data_size();
 
-        self.build_insert_query(&insert_row).map(Some)
+        self.build_insert_query(&insert_row)
     }
 
     pub fn build_diff_sql(
@@ -71,29 +87,29 @@ impl<'a> ReviseSqlContext<'a> {
         if diff_col_values.is_empty() {
             return Ok(None);
         }
-
-        let src_after = match &src_row_data.after {
-            Some(after) => after,
-            None => return Ok(None),
+        // 1. mongo
+        if let ReviseSqlMeta::Mongo = self.meta {
+            return Ok(mongo_cmd::build_update_cmd(src_row_data, diff_col_values));
+        }
+        // 2. rdb
+        let Some(src_after) = src_row_data.require_after().ok() else {
+            return Ok(None);
         };
-
         let update_after: HashMap<_, _> = diff_col_values
             .keys()
             .filter_map(|col| src_after.get(col).map(|v| (col.clone(), v.clone())))
             .collect();
-
         if update_after.is_empty() {
             return Ok(None);
         }
 
-        let update_before = dst_row_data
-            .after
-            .as_ref()
-            .or(dst_row_data.before.as_ref())
-            .filter(|before| !before.is_empty())
-            .cloned();
-
-        let Some(update_before) = update_before else {
+        let Some(update_before) = dst_row_data
+            .require_after()
+            .ok()
+            .or_else(|| dst_row_data.require_before().ok())
+            .filter(|m| !m.is_empty())
+            .cloned()
+        else {
             return Ok(None);
         };
 
@@ -106,41 +122,50 @@ impl<'a> ReviseSqlContext<'a> {
         );
         update_row.refresh_data_size();
 
-        let sql = self.build_update_query(&update_row)?;
-        Ok(Some(sql))
+        self.build_update_query(&update_row)
     }
 
-    fn build_insert_query(&self, row_data: &RowData) -> anyhow::Result<String> {
+    fn build_insert_query(&self, row_data: &RowData) -> anyhow::Result<Option<String>> {
         match self.meta {
-            ReviseSqlMeta::Mysql(tb_meta) => {
-                RdbQueryBuilder::new_for_mysql(tb_meta, None).get_query_sql(row_data, false)
-            }
-            ReviseSqlMeta::Pg(tb_meta) => {
-                RdbQueryBuilder::new_for_pg(tb_meta, None).get_query_sql(row_data, false)
-            }
+            ReviseSqlMeta::Mysql(tb_meta) => RdbQueryBuilder::new_for_mysql(tb_meta, None)
+                .get_query_sql(row_data, false)
+                .map(Some),
+            ReviseSqlMeta::Pg(tb_meta) => RdbQueryBuilder::new_for_pg(tb_meta, None)
+                .get_query_sql(row_data, false)
+                .map(Some),
+            ReviseSqlMeta::Mongo => unreachable!("Mongo should be handled in build_miss_sql"),
         }
     }
 
-    fn build_update_query(&self, row_data: &RowData) -> anyhow::Result<String> {
+    fn build_update_query(&self, row_data: &RowData) -> anyhow::Result<Option<String>> {
         match self.meta {
             ReviseSqlMeta::Mysql(tb_meta) => {
-                if self.match_full_row {
+                let meta_cow = if self.match_full_row {
                     let mut owned = tb_meta.clone();
                     owned.basic.id_cols = owned.basic.cols.clone();
-                    RdbQueryBuilder::new_for_mysql(&owned, None).get_query_sql(row_data, false)
+                    Cow::Owned(owned)
                 } else {
-                    RdbQueryBuilder::new_for_mysql(tb_meta, None).get_query_sql(row_data, false)
-                }
+                    Cow::Borrowed(tb_meta)
+                };
+
+                RdbQueryBuilder::new_for_mysql(meta_cow.as_ref(), None)
+                    .get_query_sql(row_data, false)
+                    .map(Some)
             }
             ReviseSqlMeta::Pg(tb_meta) => {
-                if self.match_full_row {
+                let meta_cow = if self.match_full_row {
                     let mut owned = tb_meta.clone();
                     owned.basic.id_cols = owned.basic.cols.clone();
-                    RdbQueryBuilder::new_for_pg(&owned, None).get_query_sql(row_data, false)
+                    Cow::Owned(owned)
                 } else {
-                    RdbQueryBuilder::new_for_pg(tb_meta, None).get_query_sql(row_data, false)
-                }
+                    Cow::Borrowed(tb_meta)
+                };
+
+                RdbQueryBuilder::new_for_pg(meta_cow.as_ref(), None)
+                    .get_query_sql(row_data, false)
+                    .map(Some)
             }
+            ReviseSqlMeta::Mongo => unreachable!("Mongo should be handled in build_miss_sql"),
         }
     }
 }
@@ -190,31 +215,48 @@ impl BaseChecker {
         for src_row_data in target_slice {
             let hash_code = src_row_data.get_hash_code(dst_tb_meta)?;
             // src_row_data is already routed, so here we call get_hash_code by dst_tb_meta
-            if let Some(dst_row_data) = dst_row_data_map.get(&hash_code) {
-                let diff_col_values = Self::compare_row_data(src_row_data, dst_row_data)?;
-                if !diff_col_values.is_empty() {
-                    let diff_log = Self::build_diff_log(
+            match dst_row_data_map.get(&hash_code) {
+                Some(dst_row_data) => {
+                    let diff_col_values = Self::compare_row_data(src_row_data, dst_row_data)?;
+                    if diff_col_values.is_empty() {
+                        continue;
+                    }
+
+                    let revise_sql = revise_ctx
+                        .as_ref()
+                        .map(|ctx| ctx.build_diff_sql(src_row_data, dst_row_data, &diff_col_values))
+                        .transpose()?
+                        .flatten();
+
+                    let mut diff_log = Self::build_diff_log(
                         src_row_data,
                         dst_row_data,
                         diff_col_values,
                         extractor_meta_manager,
                         reverse_router,
                         output_full_row,
-                        revise_ctx,
                     )
                     .await?;
+                    diff_log.revise_sql = revise_sql;
                     diff.push(diff_log);
                 }
-            } else {
-                let miss_log = Self::build_miss_log(
-                    src_row_data,
-                    extractor_meta_manager,
-                    reverse_router,
-                    output_full_row,
-                    revise_ctx,
-                )
-                .await?;
-                miss.push(miss_log);
+                None => {
+                    let revise_sql = revise_ctx
+                        .as_ref()
+                        .map(|ctx| ctx.build_miss_sql(src_row_data))
+                        .transpose()?
+                        .flatten();
+
+                    let mut miss_log = Self::build_miss_log(
+                        src_row_data,
+                        extractor_meta_manager,
+                        reverse_router,
+                        output_full_row,
+                    )
+                    .await?;
+                    miss_log.revise_sql = revise_sql;
+                    miss.push(miss_log);
+                }
             }
         }
         Ok((miss, diff))
@@ -234,26 +276,50 @@ impl BaseChecker {
             .as_ref()
             .context("dst row data after is missing")?;
 
-        let diff_col_values = src
-            .iter()
-            .filter_map(|(col, src_val)| match dst.get(col) {
+        let mut diff_col_values = HashMap::new();
+        for (col, src_val) in src {
+            let dst_val = dst.get(col);
+            let maybe_diff = match dst_val {
                 Some(dst_val) if src_val == dst_val => None,
-                Some(dst_val) => Some((
-                    col.clone(),
-                    DiffColValue {
+                Some(dst_val) => {
+                    let src_type = Self::col_value_type_name(src_val);
+                    let dst_type = Self::col_value_type_name(dst_val);
+                    let type_diff = src_type != dst_type;
+                    let src_type = type_diff.then(|| src_type.to_string());
+                    let dst_type = type_diff.then(|| dst_type.to_string());
+
+                    Some(DiffColValue {
                         src: src_val.to_option_string(),
                         dst: dst_val.to_option_string(),
-                    },
-                )),
-                None => Some((
-                    col.clone(),
-                    DiffColValue {
-                        src: src_val.to_option_string(),
-                        dst: None,
-                    },
-                )),
-            })
-            .collect();
+                        src_type,
+                        dst_type,
+                    })
+                }
+                None => Some(DiffColValue {
+                    src: src_val.to_option_string(),
+                    dst: None,
+                    src_type: Some(Self::col_value_type_name(src_val).to_string()),
+                    dst_type: None,
+                }),
+            };
+
+            if let Some(diff_entry) = maybe_diff {
+                diff_col_values.insert(col.to_owned(), diff_entry);
+            }
+        }
+
+        let should_expand_doc = diff_col_values.contains_key(MongoConstants::DOC)
+            && [src_row_data, dst_row_data].iter().any(|row| {
+                matches!(
+                    row.after.as_ref().and_then(|m| m.get(MongoConstants::DOC)),
+                    Some(ColValue::MongoDoc(_))
+                )
+            });
+
+        if should_expand_doc {
+            diff_col_values =
+                Self::expand_mongo_doc_diff(src_row_data, dst_row_data, diff_col_values);
+        }
 
         Ok(diff_col_values)
     }
@@ -300,25 +366,15 @@ impl BaseChecker {
         extractor_meta_manager: &mut RdbMetaManager,
         reverse_router: &RdbRouter,
         output_full_row: bool,
-        revise_ctx: Option<&ReviseSqlContext<'_>>,
     ) -> anyhow::Result<CheckLog> {
-        let revise_sql = match revise_ctx {
-            Some(ctx) => ctx.build_miss_sql(src_row_data)?,
-            None => None,
-        };
-
         let reverse_src_row_data = reverse_router.route_row(src_row_data.clone());
 
-        let (target_schema, target_tb) = if src_row_data.schema != reverse_src_row_data.schema
-            || src_row_data.tb != reverse_src_row_data.tb
-        {
-            (
-                Some(src_row_data.schema.clone()),
-                Some(src_row_data.tb.clone()),
-            )
-        } else {
-            (None, None)
-        };
+        let is_routed = src_row_data.schema != reverse_src_row_data.schema
+            || src_row_data.tb != reverse_src_row_data.tb;
+
+        // None if not routed
+        let target_schema = is_routed.then(|| src_row_data.schema.clone());
+        let target_tb = is_routed.then(|| src_row_data.tb.clone());
 
         let src_tb_meta = extractor_meta_manager
             .get_tb_meta(&reverse_src_row_data.schema, &reverse_src_row_data.tb)
@@ -327,11 +383,9 @@ impl BaseChecker {
         let id_col_values = Self::build_id_col_values(&reverse_src_row_data, src_tb_meta)
             .context("Failed to build ID col values")?;
 
-        let src_row = if output_full_row {
-            Self::clone_row_values(&reverse_src_row_data)
-        } else {
-            None
-        };
+        let src_row = output_full_row
+            .then(|| Self::clone_row_values(&reverse_src_row_data))
+            .flatten();
 
         Ok(CheckLog {
             log_type: LogType::Miss,
@@ -343,7 +397,7 @@ impl BaseChecker {
             diff_col_values: HashMap::new(),
             src_row,
             dst_row: None,
-            revise_sql,
+            revise_sql: None,
         })
     }
 
@@ -354,19 +408,12 @@ impl BaseChecker {
         extractor_meta_manager: &mut RdbMetaManager,
         reverse_router: &RdbRouter,
         output_full_row: bool,
-        revise_ctx: Option<&ReviseSqlContext<'_>>,
     ) -> anyhow::Result<CheckLog> {
-        let revise_sql = match revise_ctx {
-            Some(ctx) => ctx.build_diff_sql(src_row_data, dst_row_data, &diff_col_values)?,
-            None => None,
-        };
-
         let mut log = Self::build_miss_log(
             src_row_data,
             extractor_meta_manager,
             reverse_router,
             output_full_row,
-            revise_ctx,
         )
         .await?;
 
@@ -385,7 +432,6 @@ impl BaseChecker {
 
         log.log_type = LogType::Diff;
         log.diff_col_values = mapped_diff_values;
-        log.revise_sql = revise_sql;
 
         if output_full_row {
             let reverse_dst_row_data = reverse_router.route_row(dst_row_data.clone());
@@ -400,8 +446,7 @@ impl BaseChecker {
         tb_meta: &RdbTbMeta,
         reverse_router: &RdbRouter,
         output_full_row: bool,
-        output_revise_sql: bool,
-    ) -> CheckLog {
+    ) -> anyhow::Result<CheckLog> {
         let reverse_src_row_data = reverse_router.route_row(src_row_data.clone());
 
         let (target_schema, target_tb) = if src_row_data.schema != reverse_src_row_data.schema
@@ -424,13 +469,7 @@ impl BaseChecker {
             None
         };
 
-        let revise_sql = if output_revise_sql {
-            Self::build_mongo_insert_cmd(&src_row_data)
-        } else {
-            None
-        };
-
-        CheckLog {
+        Ok(CheckLog {
             log_type: LogType::Miss,
             schema: reverse_src_row_data.schema,
             tb: reverse_src_row_data.tb,
@@ -440,8 +479,8 @@ impl BaseChecker {
             diff_col_values: HashMap::new(),
             src_row,
             dst_row: None,
-            revise_sql,
-        }
+            revise_sql: None,
+        })
     }
 
     pub fn build_mongo_diff_log(
@@ -451,40 +490,19 @@ impl BaseChecker {
         tb_meta: &RdbTbMeta,
         reverse_router: &RdbRouter,
         output_full_row: bool,
-        output_revise_sql: bool,
-    ) -> CheckLog {
-        let mut diff_cols_for_revise = diff_col_values;
-        if output_revise_sql
-            && diff_cols_for_revise.len() == 1
-            && diff_cols_for_revise.contains_key(MongoConstants::DOC)
-        {
-            diff_cols_for_revise = Self::expand_mongo_doc_diff(&src_row_data, &dst_row_data);
-        }
+    ) -> anyhow::Result<CheckLog> {
+        let mut diff_log =
+            Self::build_mongo_miss_log(src_row_data, tb_meta, reverse_router, output_full_row)?;
 
-        let revise_sql = if output_revise_sql {
-            Self::build_mongo_update_cmd(&src_row_data, &diff_cols_for_revise)
-        } else {
-            None
-        };
-
-        let mut diff_log = Self::build_mongo_miss_log(
-            src_row_data.clone(),
-            tb_meta,
-            reverse_router,
-            output_full_row,
-            false,
-        );
-
-        diff_log.diff_col_values = diff_cols_for_revise;
+        diff_log.diff_col_values = diff_col_values;
         diff_log.log_type = LogType::Diff;
-        diff_log.revise_sql = revise_sql;
 
         if output_full_row {
             let reverse_dst_row_data = reverse_router.route_row(dst_row_data);
             diff_log.dst_row = Self::clone_row_values(&reverse_dst_row_data);
         }
 
-        diff_log
+        Ok(diff_log)
     }
 
     fn clone_row_values(row_data: &RowData) -> Option<HashMap<String, ColValue>> {
@@ -494,12 +512,47 @@ impl BaseChecker {
         }
     }
 
+    fn col_value_type_name(value: &ColValue) -> &'static str {
+        match value {
+            ColValue::None => "None",
+            ColValue::Bool(_) => "Bool",
+            ColValue::Tiny(_) => "Tiny",
+            ColValue::UnsignedTiny(_) => "UnsignedTiny",
+            ColValue::Short(_) => "Short",
+            ColValue::UnsignedShort(_) => "UnsignedShort",
+            ColValue::Long(_) => "Long",
+            ColValue::UnsignedLong(_) => "UnsignedLong",
+            ColValue::LongLong(_) => "LongLong",
+            ColValue::UnsignedLongLong(_) => "UnsignedLongLong",
+            ColValue::Float(_) => "Float",
+            ColValue::Double(_) => "Double",
+            ColValue::Decimal(_) => "Decimal",
+            ColValue::Time(_) => "Time",
+            ColValue::Date(_) => "Date",
+            ColValue::DateTime(_) => "DateTime",
+            ColValue::Timestamp(_) => "Timestamp",
+            ColValue::Year(_) => "Year",
+            ColValue::String(_) => "String",
+            ColValue::RawString(_) => "RawString",
+            ColValue::Blob(_) => "Blob",
+            ColValue::Bit(_) => "Bit",
+            ColValue::Set(_) => "Set",
+            ColValue::Enum(_) => "Enum",
+            ColValue::Set2(_) => "Set2",
+            ColValue::Enum2(_) => "Enum2",
+            ColValue::Json(_) => "Json",
+            ColValue::Json2(_) => "Json2",
+            ColValue::Json3(_) => "Json3",
+            ColValue::MongoDoc(_) => "MongoDoc",
+        }
+    }
+
     fn build_id_col_values(
         row_data: &RowData,
         tb_meta: &RdbTbMeta,
     ) -> Option<HashMap<String, Option<String>>> {
         let mut id_col_values = HashMap::new();
-        let after = row_data.after.as_ref()?;
+        let after = row_data.require_after().ok()?;
 
         for col in tb_meta.id_cols.iter() {
             let val = after.get(col)?.to_option_string();
@@ -508,112 +561,56 @@ impl BaseChecker {
         Some(id_col_values)
     }
 
-    fn build_mongo_insert_cmd(src_row_data: &RowData) -> Option<String> {
-        let after = src_row_data.after.as_ref()?;
-        let doc = after.get(MongoConstants::DOC)?;
-
-        if let ColValue::MongoDoc(bson_doc) = doc {
-            Some(format!("db.{}.insertOne({})", src_row_data.tb, bson_doc))
-        } else {
-            None
-        }
-    }
-
-    fn build_mongo_update_cmd(
-        src_row_data: &RowData,
-        diff_col_values: &HashMap<String, DiffColValue>,
-    ) -> Option<String> {
-        let after = src_row_data.after.as_ref()?;
-        let doc = after.get(MongoConstants::DOC)?;
-
-        if let ColValue::MongoDoc(bson_doc) = doc {
-            let id = bson_doc.get(MongoConstants::ID)?;
-
-            let mut set_doc = Document::new();
-            let mut unset_doc = Document::new();
-            let mut sorted_keys: Vec<_> = diff_col_values.keys().collect();
-            sorted_keys.sort();
-            for col in sorted_keys {
-                if col == MongoConstants::DOC || col == MongoConstants::ID {
-                    continue;
-                }
-                if let Some(value) = bson_doc.get(col) {
-                    set_doc.insert(col.clone(), value.clone());
-                } else {
-                    unset_doc.insert(col.clone(), Bson::Int32(1));
-                }
-            }
-
-            if set_doc.is_empty() && unset_doc.is_empty() {
-                return None;
-            }
-
-            let mut parts = Vec::new();
-            if !set_doc.is_empty() {
-                parts.push(format!("\"$set\": {}", set_doc));
-            }
-            if !unset_doc.is_empty() {
-                parts.push(format!("\"$unset\": {}", unset_doc));
-            }
-
-            Some(format!(
-                "db.{}.updateOne({{ \"_id\": {} }}, {{ {} }})",
-                src_row_data.tb,
-                id,
-                parts.join(", ")
-            ))
-        } else {
-            None
-        }
-    }
-
-    fn expand_mongo_doc_diff(
+    pub fn expand_mongo_doc_diff(
         src_row_data: &RowData,
         dst_row_data: &RowData,
+        mut diff_col_values: HashMap<String, DiffColValue>,
     ) -> HashMap<String, DiffColValue> {
-        let get_doc = |row: &RowData| {
+        // avoid output full mongo document to diff
+        diff_col_values.remove(MongoConstants::DOC);
+
+        let doc_from_row = |row: &RowData| {
             row.after
                 .as_ref()
                 .and_then(|after| after.get(MongoConstants::DOC))
-                .and_then(|val| {
-                    if let ColValue::MongoDoc(doc) = val {
-                        Some(doc.clone())
-                    } else {
-                        None
-                    }
+                .and_then(|val| match val {
+                    ColValue::MongoDoc(doc) => Some(doc.clone()),
+                    _ => None,
                 })
         };
 
-        let src_doc = get_doc(src_row_data);
-        let dst_doc = get_doc(dst_row_data);
+        let src_doc = doc_from_row(src_row_data);
+        let dst_doc = doc_from_row(dst_row_data);
 
-        let mut keys = BTreeSet::new();
-        if let Some(doc) = src_doc.as_ref() {
-            keys.extend(doc.keys().cloned());
-        }
-        if let Some(doc) = dst_doc.as_ref() {
-            keys.extend(doc.keys().cloned());
-        }
+        let keys: BTreeSet<_> = src_doc
+            .iter()
+            .flat_map(Document::keys)
+            .cloned()
+            .chain(dst_doc.iter().flat_map(Document::keys).cloned())
+            .collect();
 
-        let mut diff_cols = HashMap::new();
         for key in keys {
-            if key == MongoConstants::ID {
-                continue;
-            }
             let src_value = src_doc.as_ref().and_then(|d| d.get(&key));
             let dst_value = dst_doc.as_ref().and_then(|d| d.get(&key));
+            let src_type_name = src_value.map(mongo_cmd::bson_type_name).unwrap_or("None");
+            let dst_type_name = dst_value.map(mongo_cmd::bson_type_name).unwrap_or("None");
+            let type_diff = src_type_name != dst_type_name;
+            let value_diff = src_value != dst_value;
 
-            if src_value != dst_value {
-                diff_cols.insert(
+            if value_diff || type_diff {
+                diff_col_values.insert(
                     key,
                     DiffColValue {
                         src: src_value.map(|v| v.to_string()),
                         dst: dst_value.map(|v| v.to_string()),
+                        src_type: type_diff.then(|| src_type_name.to_string()),
+                        dst_type: type_diff.then(|| dst_type_name.to_string()),
                     },
                 );
             }
         }
-        diff_cols
+
+        diff_col_values
     }
 }
 
@@ -622,10 +619,12 @@ mod tests {
     use super::*;
     use dt_common::meta::{
         col_value::ColValue,
+        mongo::mongo_constant::MongoConstants,
         mysql::mysql_col_type::MysqlColType,
         pg::{pg_col_type::PgColType, pg_tb_meta::PgTbMeta, pg_value_type::PgValueType},
         rdb_tb_meta::RdbTbMeta,
     };
+    use mongodb::bson::{doc, oid::ObjectId};
     use std::collections::HashMap;
 
     fn build_tb_meta() -> MysqlTbMeta {
@@ -739,6 +738,8 @@ mod tests {
             DiffColValue {
                 src: Some("fresh".into()),
                 dst: Some("stale".into()),
+                src_type: None,
+                dst_type: None,
             },
         );
 
@@ -765,6 +766,8 @@ mod tests {
             DiffColValue {
                 src: Some("fixed".into()),
                 dst: Some("broken".into()),
+                src_type: None,
+                dst_type: None,
             },
         );
 
@@ -798,6 +801,8 @@ mod tests {
             DiffColValue {
                 src: Some("fresh".into()),
                 dst: Some("stale".into()),
+                src_type: None,
+                dst_type: None,
             },
         );
         let sql = ctx
@@ -808,5 +813,138 @@ mod tests {
         assert!(sql.contains("WHERE"));
         assert!(sql.contains("\"id\" = 2"));
         assert!(sql.contains("\"name\" = 'stale'"));
+    }
+
+    #[test]
+    fn mongo_builds_insert_cmd() {
+        let ctx = ReviseSqlContext::mongo();
+        let object_id = ObjectId::parse_str("507f1f77bcf86cd799439011").unwrap();
+        let doc = doc! { MongoConstants::ID: object_id, "name": "mongo_user" };
+
+        let mut after = HashMap::new();
+        after.insert(
+            MongoConstants::DOC.to_string(),
+            ColValue::MongoDoc(doc.clone()),
+        );
+        let row = RowData::new(
+            "mongo_db".into(),
+            "mongo_tb".into(),
+            RowType::Insert,
+            None,
+            Some(after),
+        );
+
+        let sql = ctx.build_miss_sql(&row).unwrap().unwrap();
+        assert!(sql.starts_with("db.mongo_tb.insertOne"));
+        assert!(sql.contains("mongo_user"));
+    }
+
+    #[test]
+    fn mongo_builds_update_cmd() {
+        let ctx = ReviseSqlContext::mongo();
+        let object_id = ObjectId::parse_str("507f1f77bcf86cd799439012").unwrap();
+        let src_doc = doc! { MongoConstants::ID: object_id, "name": "new_name", "age": 18i32 };
+        let dst_doc = doc! { MongoConstants::ID: object_id, "name": "old_name" };
+
+        let mut src_after = HashMap::new();
+        src_after.insert(
+            MongoConstants::DOC.to_string(),
+            ColValue::MongoDoc(src_doc.clone()),
+        );
+        let src_row = RowData::new(
+            "mongo_db".into(),
+            "mongo_tb".into(),
+            RowType::Insert,
+            None,
+            Some(src_after),
+        );
+
+        let mut dst_after = HashMap::new();
+        dst_after.insert(MongoConstants::DOC.to_string(), ColValue::MongoDoc(dst_doc));
+        let dst_row = RowData::new(
+            "mongo_db".into(),
+            "mongo_tb".into(),
+            RowType::Insert,
+            None,
+            Some(dst_after),
+        );
+
+        let diff_col_values = BaseChecker::compare_row_data(&src_row, &dst_row).unwrap();
+
+        let sql = ctx
+            .build_diff_sql(&src_row, &dst_row, &diff_col_values)
+            .unwrap()
+            .unwrap();
+        assert!(sql.starts_with("db.mongo_tb.updateOne"));
+        assert!(sql.contains("\"$set\""));
+        assert!(sql.contains("\"name\": \"new_name\""));
+    }
+
+    #[test]
+    fn verify_mongo_doc_strict_type_diff() {
+        use crate::sinker::base_checker::BaseChecker;
+        use dt_common::meta::mongo::mongo_constant::MongoConstants;
+        use dt_common::meta::{col_value::ColValue, row_data::RowData, row_type::RowType};
+        use mongodb::bson::doc;
+        use std::collections::HashMap;
+
+        // Create src with Int32(5) and dst with Int64(5)
+        let src_doc = doc! { "val": 5i32 };
+        let dst_doc = doc! { "val": 5i64 };
+
+        let mut src_after = HashMap::new();
+        src_after.insert(MongoConstants::DOC.to_string(), ColValue::MongoDoc(src_doc));
+        let src_row = RowData::new(
+            "db".into(),
+            "coll".into(),
+            RowType::Insert,
+            None,
+            Some(src_after),
+        );
+
+        let mut dst_after = HashMap::new();
+        dst_after.insert(MongoConstants::DOC.to_string(), ColValue::MongoDoc(dst_doc));
+        let dst_row = RowData::new(
+            "db".into(),
+            "coll".into(),
+            RowType::Insert,
+            None,
+            Some(dst_after),
+        );
+
+        // Compare row data
+        let diff_col_values = BaseChecker::compare_row_data(&src_row, &dst_row).unwrap();
+        assert!(diff_col_values.contains_key("val"));
+        assert!(!diff_col_values.contains_key(MongoConstants::DOC));
+
+        // Build diff log
+        let tb_meta = Default::default();
+        let reverse_router = crate::rdb_router::RdbRouter {
+            schema_map: HashMap::new(),
+            tb_map: HashMap::new(),
+            col_map: HashMap::new(),
+            topic_map: HashMap::new(),
+        };
+
+        let check_log = BaseChecker::build_mongo_diff_log(
+            src_row,
+            dst_row,
+            diff_col_values,
+            &tb_meta,
+            &reverse_router,
+            false,
+        )
+        .unwrap();
+
+        // Verify expansion and type diff
+        assert!(check_log.diff_col_values.contains_key("val"));
+        assert!(!check_log.diff_col_values.contains_key(MongoConstants::DOC));
+
+        let diff_val = check_log.diff_col_values.get("val").unwrap();
+        assert_eq!(diff_val.src_type, Some("Int32".to_string()));
+        assert_eq!(diff_val.dst_type, Some("Int64".to_string()));
+        // Values might look the same string-wise, but types differ
+        assert_eq!(diff_val.src, Some("5".to_string()));
+        assert_eq!(diff_val.dst, Some("5".to_string()));
     }
 }

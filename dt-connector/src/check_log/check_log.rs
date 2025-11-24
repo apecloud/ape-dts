@@ -47,6 +47,10 @@ pub struct CheckLog {
 pub struct DiffColValue {
     pub src: Option<String>,
     pub dst: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub src_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dst_type: Option<String>,
 }
 
 impl std::fmt::Display for CheckLog {

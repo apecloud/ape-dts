@@ -108,9 +108,7 @@ impl MongoSinker {
                 RowType::Update => {
                     let query_doc = {
                         let before = row_data.require_before_mut()?;
-                        if let Some(ColValue::MongoDoc(doc)) =
-                            before.remove(MongoConstants::DOC)
-                        {
+                        if let Some(ColValue::MongoDoc(doc)) = before.remove(MongoConstants::DOC) {
                             let id = doc
                                 .get(MongoConstants::ID)
                                 .context("mongo doc missing `_id`")?;

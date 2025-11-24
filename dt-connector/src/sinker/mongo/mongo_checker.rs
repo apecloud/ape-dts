@@ -11,7 +11,10 @@ use tokio::time::Instant;
 use crate::{
     call_batch_fn,
     rdb_router::RdbRouter,
-    sinker::{base_checker::BaseChecker, base_sinker::BaseSinker},
+    sinker::{
+        base_checker::{BaseChecker, ReviseSqlContext},
+        base_sinker::BaseSinker,
+    },
     Sinker,
 };
 use dt_common::{
@@ -132,34 +135,44 @@ impl MongoChecker {
         // batch check
         let mut miss = Vec::new();
         let mut diff = Vec::new();
+        let revise_ctx = self.output_revise_sql.then(ReviseSqlContext::mongo);
         for (key, src_row_data) in src_row_data_map {
             if let Some(dst_row_data) = dst_row_data_map.remove(&key) {
                 let diff_col_values = BaseChecker::compare_row_data(&src_row_data, &dst_row_data)?;
-                let diff_col_values = BaseChecker::expand_mongo_doc_diff_if_needed(
-                    &src_row_data,
-                    &dst_row_data,
-                    diff_col_values,
-                );
                 if !diff_col_values.is_empty() {
-                    let diff_log = BaseChecker::build_mongo_diff_log(
+                    let revise_sql = revise_ctx
+                        .as_ref()
+                        .map(|ctx| {
+                            ctx.build_diff_sql(&src_row_data, &dst_row_data, &diff_col_values)
+                        })
+                        .transpose()?
+                        .flatten();
+
+                    let mut diff_log = BaseChecker::build_mongo_diff_log(
                         src_row_data,
                         dst_row_data,
                         diff_col_values,
                         &tb_meta,
                         &self.reverse_router,
                         self.output_full_row,
-                        self.output_revise_sql,
-                    );
+                    )?;
+                    diff_log.revise_sql = revise_sql;
                     diff.push(diff_log);
                 }
             } else {
-                let miss_log = BaseChecker::build_mongo_miss_log(
+                let revise_sql = revise_ctx
+                    .as_ref()
+                    .map(|ctx| ctx.build_miss_sql(&src_row_data))
+                    .transpose()?
+                    .flatten();
+
+                let mut miss_log = BaseChecker::build_mongo_miss_log(
                     src_row_data,
                     &tb_meta,
                     &self.reverse_router,
                     self.output_full_row,
-                    self.output_revise_sql,
-                );
+                )?;
+                miss_log.revise_sql = revise_sql;
                 miss.push(miss_log);
             };
         }

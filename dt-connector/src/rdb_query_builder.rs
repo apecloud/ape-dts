@@ -156,7 +156,7 @@ impl RdbQueryBuilder<'_> {
         let mut binds = Vec::with_capacity(cap);
         for row_data in data.iter().skip(start_index).take(batch_size) {
             data_size += row_data.data_size;
-            let before = self.require_before(row_data)?;
+            let before = row_data.require_before()?;
             for col in self.rdb_tb_meta.id_cols.iter() {
                 cols.push(col.clone());
                 let col_value = before.get(col);
@@ -203,7 +203,7 @@ impl RdbQueryBuilder<'_> {
         let mut binds = Vec::with_capacity(batch_size.saturating_mul(self.rdb_tb_meta.cols.len()));
         for row_data in data.iter().skip(start_index).take(batch_size) {
             malloc_size += row_data.data_size;
-            let after = self.require_after(row_data)?;
+            let after = row_data.require_after()?;
             for col_name in self.rdb_tb_meta.cols.iter() {
                 cols.push(col_name.clone());
                 binds.push(after.get(col_name));
@@ -224,7 +224,7 @@ impl RdbQueryBuilder<'_> {
         let mut query_info = self.get_insert_query(row_data, placeholder)?;
         if self.db_type == DbType::Pg {
             let mut index = query_info.cols.len() + 1;
-            let after = self.require_after(row_data)?;
+            let after = row_data.require_after()?;
             let mut set_pairs = Vec::with_capacity(self.rdb_tb_meta.cols.len());
             for col in self.rdb_tb_meta.cols.iter() {
                 if self.rdb_tb_meta.id_cols.contains(col) {
@@ -258,7 +258,7 @@ impl RdbQueryBuilder<'_> {
     ) -> anyhow::Result<RdbQueryInfo<'a>> {
         let mut cols = Vec::with_capacity(self.rdb_tb_meta.cols.len());
         let mut binds = Vec::with_capacity(self.rdb_tb_meta.cols.len());
-        let after = self.require_after(row_data)?;
+        let after = row_data.require_after()?;
         for col_name in self.rdb_tb_meta.cols.iter() {
             cols.push(col_name.clone());
             binds.push(after.get(col_name));
@@ -287,7 +287,7 @@ impl RdbQueryBuilder<'_> {
         row_data: &'a RowData,
         placeholder: bool,
     ) -> anyhow::Result<RdbQueryInfo<'a>> {
-        let before = self.require_before(row_data)?;
+        let before = row_data.require_before()?;
         let (where_sql, not_null_cols) = self.get_where_info(1, before, placeholder)?;
         let mut sql = format!(
             "DELETE FROM {}.{} WHERE {}",
@@ -313,8 +313,8 @@ impl RdbQueryBuilder<'_> {
         row_data: &'a RowData,
         placeholder: bool,
     ) -> anyhow::Result<RdbQueryInfo<'a>> {
-        let before = self.require_before(row_data)?;
-        let after = self.require_after(row_data)?;
+        let before = row_data.require_before()?;
+        let after = row_data.require_after()?;
 
         let mut index = 1;
         let mut set_cols: Vec<String> = after.keys().cloned().collect();
@@ -358,7 +358,7 @@ impl RdbQueryBuilder<'_> {
     }
 
     pub fn get_select_query<'a>(&self, row_data: &'a RowData) -> anyhow::Result<RdbQueryInfo<'a>> {
-        let after = self.require_after(row_data)?;
+        let after = row_data.require_after()?;
         let (where_sql, not_null_cols) = self.get_where_info(1, after, true)?;
         let mut sql = format!(
             "SELECT {} FROM {}.{} WHERE {}",
@@ -401,7 +401,7 @@ impl RdbQueryBuilder<'_> {
         let mut binds =
             Vec::with_capacity(batch_size.saturating_mul(self.rdb_tb_meta.id_cols.len()));
         for row_data in data.iter().skip(start_index).take(batch_size) {
-            let after = self.require_after(row_data)?;
+            let after = row_data.require_after()?;
             for col in self.rdb_tb_meta.id_cols.iter() {
                 cols.push(col.clone());
                 let col_value = after.get(col);
@@ -613,29 +613,5 @@ impl RdbQueryBuilder<'_> {
 
     fn escape_cols(&self, cols: &Vec<String>) -> Vec<String> {
         SqlUtil::escape_cols(cols, &self.db_type)
-    }
-
-    fn require_after<'a>(
-        &self,
-        row_data: &'a RowData,
-    ) -> anyhow::Result<&'a HashMap<String, ColValue>> {
-        row_data.after.as_ref().with_context(|| {
-            format!(
-                "row_type: {:?} for schema: {}, tb: {} requires after payload",
-                row_data.row_type, row_data.schema, row_data.tb
-            )
-        })
-    }
-
-    fn require_before<'a>(
-        &self,
-        row_data: &'a RowData,
-    ) -> anyhow::Result<&'a HashMap<String, ColValue>> {
-        row_data.before.as_ref().with_context(|| {
-            format!(
-                "row_type: {:?} for schema: {}, tb: {} requires before payload",
-                row_data.row_type, row_data.schema, row_data.tb
-            )
-        })
     }
 }
