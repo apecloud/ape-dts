@@ -130,11 +130,9 @@ impl<'a> ReviseSqlContext<'a> {
             ReviseSqlMeta::Mysql(tb_meta) => RdbQueryBuilder::new_for_mysql(tb_meta, None)
                 .get_query_sql(row_data, false)
                 .map(Some),
-            ReviseSqlMeta::Pg(tb_meta) => {
-                let sql =
-                    RdbQueryBuilder::new_for_pg(tb_meta, None).get_query_sql(row_data, false)?;
-                Ok(Some(Self::strip_pg_identifier_quotes(&sql)))
-            }
+            ReviseSqlMeta::Pg(tb_meta) => RdbQueryBuilder::new_for_pg(tb_meta, None)
+                .get_query_sql(row_data, false)
+                .map(Some),
             ReviseSqlMeta::Mongo => unreachable!("Mongo should be handled in build_miss_sql"),
         }
     }
@@ -163,42 +161,12 @@ impl<'a> ReviseSqlContext<'a> {
                     Cow::Borrowed(tb_meta)
                 };
 
-                let sql = RdbQueryBuilder::new_for_pg(meta_cow.as_ref(), None)
-                    .get_query_sql(row_data, false)?;
-                Ok(Some(Self::strip_pg_identifier_quotes(&sql)))
+                RdbQueryBuilder::new_for_pg(meta_cow.as_ref(), None)
+                    .get_query_sql(row_data, false)
+                    .map(Some)
             }
             ReviseSqlMeta::Mongo => unreachable!("Mongo should be handled in build_miss_sql"),
         }
-    }
-
-    fn strip_pg_identifier_quotes(sql: &str) -> String {
-        let mut result = String::with_capacity(sql.len());
-        let mut in_single_quote = false;
-        let mut chars = sql.chars().peekable();
-
-        while let Some(ch) = chars.next() {
-            if ch == '\'' {
-                result.push(ch);
-                if in_single_quote {
-                    if matches!(chars.peek(), Some('\'')) {
-                        result.push(chars.next().unwrap());
-                    } else {
-                        in_single_quote = false;
-                    }
-                } else {
-                    in_single_quote = true;
-                }
-                continue;
-            }
-
-            if ch == '"' && !in_single_quote {
-                continue;
-            }
-
-            result.push(ch);
-        }
-
-        result
     }
 }
 
