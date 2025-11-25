@@ -146,12 +146,11 @@ impl ColValue {
 
     fn mongo_doc_to_string(doc: &Document) -> String {
         // Use Relaxed Extended JSON to make it more human-readable while preserving necessary types.
-        // Convert Document to Bson first, then to relaxed extjson Value, then to String.
         // https://www.mongodb.com/docs/manual/reference/mongodb-extended-json/
         let bson = Bson::Document(doc.clone());
         match bson.into_relaxed_extjson() {
             serde_json::Value::Object(map) => serde_json::Value::Object(map).to_string(),
-            _ => doc.to_string(), // Fallback, though Document should always become an Object
+            _ => doc.to_string(),
         }
     }
 }
@@ -198,7 +197,9 @@ impl Serialize for ColValue {
             ColValue::Json(v) => serializer.serialize_bytes(v),
             ColValue::Json2(v) => serializer.serialize_str(v),
             ColValue::Json3(v) => v.serialize(serializer),
-            ColValue::MongoDoc(v) => v.serialize(serializer),
+            ColValue::MongoDoc(v) => Bson::Document(v.clone())
+                .into_relaxed_extjson()
+                .serialize(serializer),
             ColValue::None => serializer.serialize_none(),
         }
     }
