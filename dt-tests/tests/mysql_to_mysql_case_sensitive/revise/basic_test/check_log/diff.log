@@ -1,3 +1,0 @@
-{"log_type":"Diff","schema":"TEST_db_1","tb":"ONE_pk_no_uk","id_col_values":{"F_0":"4"},"diff_col_values":{}}
-{"log_type":"Diff","schema":"TEST_db_1","tb":"ONE_pk_no_uk","id_col_values":{"F_0":"5"},"diff_col_values":{}}
-{"log_type":"Diff","schema":"TEST_db_1","tb":"ONE_pk_no_uk","id_col_values":{"F_0":"6"},"diff_col_values":{}}
