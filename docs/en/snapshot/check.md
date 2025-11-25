@@ -40,8 +40,10 @@ The diff log includes the database (schema), table (tb), primary key/unique key 
 ```json
 {"log_type":"Diff","schema":"test_db_1","tb":"one_pk_multi_uk","id_col_values":{"f_0":"5"},"diff_col_values":{"f_1":{"src":"5","dst":"5000"},"f_2":{"src":"ok","dst":"after manual update"}}}
 {"log_type":"Diff","schema":"test_db_1","tb":"one_pk_no_uk","id_col_values":{"f_0":"4"},"diff_col_values":{"f_1":{"src":"2","dst":"1"}}}
-{"log_type":"Diff","schema":"test_db_1","tb":"one_pk_no_uk","id_col_values":{"f_0":"6"},"diff_col_values":{"f_1":{"src":null,"dst":"1"}}}
+{"log_type":"Diff","schema":"test_db_1","tb":"one_pk_no_uk","id_col_values":{"f_0":"6"},"diff_col_values":{"f_1":{"src":null,"dst":"1","src_type":"None","dst_type":"Short"}}}
 ```
+
+When the source/target value types differ (for example `Int32` vs `Int64`, or `None` vs `Short`), `src_type`/`dst_type` will be emitted for that column to highlight the type mismatch. This applies to Mongo as well—the checker prints BSON type names when Mongo documents differ.
 
 ## miss.log
 
@@ -143,6 +145,18 @@ Example:
   "id_col_values": {"f_0": "4"},
   "diff_col_values": {"f_1": {"src": "2", "dst": "1"}},
   "revise_sql": "UPDATE `target_db`.`target_tb` SET `f_1`='2' WHERE `f_0` = 4;"
+}
+```
+
+Missing rows also carry `revise_sql` when enabled. Example:
+
+```json
+{
+  "log_type": "Miss",
+  "schema": "test_db_1",
+  "tb": "test_table",
+  "id_col_values": {"id": "3"},
+  "revise_sql": "INSERT INTO `test_db_1`.`test_table`(`id`,`name`,`age`,`email`) VALUES(3,'Charlie',35,'charlie@example.com');"
 }
 ```
 

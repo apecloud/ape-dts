@@ -39,8 +39,10 @@ parallel_type=rdb_check
 ```json
 {"log_type":"Diff","schema":"test_db_1","tb":"one_pk_multi_uk","id_col_values":{"f_0":"5"},"diff_col_values":{"f_1":{"src":"5","dst":"5000"},"f_2":{"src":"ok","dst":"after manual update"}}}
 {"log_type":"Diff","schema":"test_db_1","tb":"one_pk_no_uk","id_col_values":{"f_0":"4"},"diff_col_values":{"f_1":{"src":"2","dst":"1"}}}
-{"log_type":"Diff","schema":"test_db_1","tb":"one_pk_no_uk","id_col_values":{"f_0":"6"},"diff_col_values":{"f_1":{"src":null,"dst":"1"}}}
+{"log_type":"Diff","schema":"test_db_1","tb":"one_pk_no_uk","id_col_values":{"f_0":"6"},"diff_col_values":{"f_1":{"src":null,"dst":"1","src_type":"None","dst_type":"Short"}}}
 ```
+
+当源端与目标端的类型不同（如 Int32 对 Int64，或 None 对 Short），`src_type`/`dst_type` 会出现在对应列下，明确标出类型不一致。Mongo 也适用这一规则，差异日志会输出 BSON 类型名称。
 
 只有在路由对 schema 或 table 进行重命名时，日志才会补充 `target_schema`/`target_tb` 来标识目的端真实库表；`schema`、`tb` 依旧表示源端，方便排查。
 
@@ -123,6 +125,18 @@ revise_match_full_row=true
   "id_col_values": {"f_0": "4"},
   "diff_col_values": {"f_1": {"src": "2", "dst": "1"}},
   "revise_sql": "UPDATE `target_db`.`target_tb` SET `f_1`='2' WHERE `f_0` = 4;"
+}
+```
+
+缺失记录同样会输出 `revise_sql`。示例：
+
+```json
+{
+  "log_type": "Miss",
+  "schema": "test_db_1",
+  "tb": "test_table",
+  "id_col_values": {"id": "3"},
+  "revise_sql": "INSERT INTO `test_db_1`.`test_table`(`id`,`name`,`age`,`email`) VALUES(3,'Charlie',35,'charlie@example.com');"
 }
 ```
 
