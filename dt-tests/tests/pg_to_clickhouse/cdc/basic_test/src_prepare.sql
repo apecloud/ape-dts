@@ -2,7 +2,6 @@ DROP SCHEMA IF EXISTS test_db_1 CASCADE;
 
 CREATE SCHEMA test_db_1;
 
-```
 CREATE TABLE test_db_1.full_column_type (
     id serial PRIMARY KEY, 
 
@@ -150,4 +149,3 @@ CREATE TABLE test_db_1.full_column_type (
     uuid_col uuid, 
     xml_col xml
 );
-```

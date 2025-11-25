@@ -1,3 +1,4 @@
+use anyhow::Context;
 use dt_common::utils::time_util::TimeUtil;
 use dt_connector::data_marker::DataMarker;
 use std::collections::HashMap;
@@ -155,12 +156,26 @@ impl RdbCycleTestRunner {
             .await?;
 
         for row_data in result {
-            let after = row_data.after.as_ref().unwrap();
+            let after = row_data.require_after()?;
 
-            let src_node = after.get("src_node").unwrap().to_string();
-            let dst_node = after.get("dst_node").unwrap().to_string();
-            let data_origin_node = after.get("data_origin_node").unwrap().to_string();
-            let tx_count: u8 = after.get("n").unwrap().to_string().parse().unwrap();
+            let src_node = after
+                .get("src_node")
+                .context("missing src_node")?
+                .to_string();
+            let dst_node = after
+                .get("dst_node")
+                .context("missing dst_node")?
+                .to_string();
+            let data_origin_node = after
+                .get("data_origin_node")
+                .context("missing data_origin_node")?
+                .to_string();
+            let tx_count: u8 = after
+                .get("n")
+                .context("missing n")?
+                .to_string()
+                .parse()
+                .context("invalid n")?;
 
             if src_node != data_marker.src_node || dst_node != data_marker.dst_node {
                 continue;

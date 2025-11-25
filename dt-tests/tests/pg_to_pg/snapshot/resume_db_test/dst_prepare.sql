@@ -26,7 +26,6 @@ CREATE TABLE "test_db_*.*"."finished_table_*$2"("p.k" serial, val numeric(20,8),
 DROP SCHEMA IF EXISTS apecloud_resumer_test CASCADE;
 CREATE SCHEMA apecloud_resumer_test;
 
-```
 CREATE TABLE IF NOT EXISTS apecloud_resumer_test.ape_task_position (
   id bigserial PRIMARY KEY,
   task_id varchar(255) NOT NULL,
@@ -37,7 +36,6 @@ CREATE TABLE IF NOT EXISTS apecloud_resumer_test.ape_task_position (
   updated_at timestamp DEFAULT CURRENT_TIMESTAMP,
   CONSTRAINT uk_task_id_task_type_position_key UNIQUE (task_id, resumer_type, position_key)
 )
-```
 
 insert into apecloud_resumer_test.ape_task_position (task_id, resumer_type, position_key, position_data) values ('resume_db_test_1', 'SnapshotFinished', 'test_db_*.*-finished_table_*$1', '{"type":"RdbSnapshotFinished","db_type":"pg","schema":"test_db_*.*","tb":"finished_table_*$1"}');
 insert into apecloud_resumer_test.ape_task_position (task_id, resumer_type, position_key, position_data) values ('resume_db_test_1', 'SnapshotFinished', 'test_db_*.*-finished_table_*$2', '{"type":"RdbSnapshotFinished","db_type":"pg","schema":"test_db_*.*","tb":"finished_table_*$2"}');

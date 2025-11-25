@@ -1,5 +1,4 @@
 -- Use a DO block and a FOR loop to create the schemas and their objects dynamically.
-```
 DO $$
 DECLARE
     i INT;
@@ -12,4 +11,3 @@ BEGIN
         EXECUTE format('DROP SCHEMA IF EXISTS %I CASCADE', schema_name);
     END LOOP;
 END $$;
-```

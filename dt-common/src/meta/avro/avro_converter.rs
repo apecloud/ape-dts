@@ -66,8 +66,8 @@ impl AvroConverter {
             };
 
             if let Some(key) = match row_data.row_type {
-                RowType::Insert => convert(row_data.after.as_ref().unwrap()),
-                RowType::Update | RowType::Delete => convert(row_data.before.as_ref().unwrap()),
+                RowType::Insert => convert(row_data.require_after()?),
+                RowType::Update | RowType::Delete => convert(row_data.require_before()?),
             } {
                 return Ok(key);
             }

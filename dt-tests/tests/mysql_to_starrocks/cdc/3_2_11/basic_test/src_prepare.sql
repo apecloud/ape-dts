@@ -4,7 +4,6 @@ DROP DATABASE IF EXISTS test_db_2;
 CREATE DATABASE test_db_1;
 CREATE DATABASE test_db_2;
 
-```
 CREATE TABLE test_db_1.one_pk_no_uk ( 
     f_0 tinyint, 
     f_1 smallint DEFAULT NULL, 
@@ -36,20 +35,15 @@ CREATE TABLE test_db_1.one_pk_no_uk (
     f_27 set('a','b','c','d','e') DEFAULT NULL, 
     f_28 json DEFAULT NULL,
     PRIMARY KEY (f_0) ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4; 
-```
 
-```
 CREATE TABLE test_db_2.router_test_1 (
   pk INT,
   col_1 INT,
   PRIMARY KEY(pk)
 );
-```
 
-```
 CREATE TABLE test_db_2.router_test_2 (
   pk INT,
   col_1 INT,
   PRIMARY KEY(pk)
 );
-```
