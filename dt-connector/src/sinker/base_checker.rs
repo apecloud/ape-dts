@@ -130,9 +130,11 @@ impl<'a> ReviseSqlContext<'a> {
             ReviseSqlMeta::Mysql(tb_meta) => RdbQueryBuilder::new_for_mysql(tb_meta, None)
                 .get_query_sql(row_data, false)
                 .map(Some),
-            ReviseSqlMeta::Pg(tb_meta) => RdbQueryBuilder::new_for_pg(tb_meta, None)
-                .get_query_sql(row_data, false)
-                .map(Some),
+            ReviseSqlMeta::Pg(tb_meta) => {
+                let sql =
+                    RdbQueryBuilder::new_for_pg(tb_meta, None).get_query_sql(row_data, false)?;
+                Ok(Some(Self::strip_pg_identifier_quotes(&sql)))
+            }
             ReviseSqlMeta::Mongo => unreachable!("Mongo should be handled in build_miss_sql"),
         }
     }
@@ -161,12 +163,42 @@ impl<'a> ReviseSqlContext<'a> {
                     Cow::Borrowed(tb_meta)
                 };
 
-                RdbQueryBuilder::new_for_pg(meta_cow.as_ref(), None)
-                    .get_query_sql(row_data, false)
-                    .map(Some)
+                let sql = RdbQueryBuilder::new_for_pg(meta_cow.as_ref(), None)
+                    .get_query_sql(row_data, false)?;
+                Ok(Some(Self::strip_pg_identifier_quotes(&sql)))
             }
             ReviseSqlMeta::Mongo => unreachable!("Mongo should be handled in build_miss_sql"),
         }
+    }
+
+    fn strip_pg_identifier_quotes(sql: &str) -> String {
+        let mut result = String::with_capacity(sql.len());
+        let mut in_single_quote = false;
+        let mut chars = sql.chars().peekable();
+
+        while let Some(ch) = chars.next() {
+            if ch == '\'' {
+                result.push(ch);
+                if in_single_quote {
+                    if matches!(chars.peek(), Some('\'')) {
+                        result.push(chars.next().unwrap());
+                    } else {
+                        in_single_quote = false;
+                    }
+                } else {
+                    in_single_quote = true;
+                }
+                continue;
+            }
+
+            if ch == '"' && !in_single_quote {
+                continue;
+            }
+
+            result.push(ch);
+        }
+
+        result
     }
 }
 
@@ -601,8 +633,8 @@ impl BaseChecker {
                 diff_col_values.insert(
                     key,
                     DiffColValue {
-                        src: src_value.map(|v| v.to_string()),
-                        dst: dst_value.map(|v| v.to_string()),
+                        src: src_value.map(mongo_cmd::bson_to_log_literal),
+                        dst: dst_value.map(mongo_cmd::bson_to_log_literal),
                         src_type: type_diff.then(|| src_type_name.to_string()),
                         dst_type: type_diff.then(|| dst_type_name.to_string()),
                     },
@@ -876,8 +908,8 @@ mod tests {
             .unwrap()
             .unwrap();
         assert!(sql.starts_with("db.mongo_tb.updateOne"));
-        assert!(sql.contains("\"$set\""));
-        assert!(sql.contains("\"name\": \"new_name\""));
+        assert!(sql.contains("'$set'"));
+        assert!(sql.contains("'name': 'new_name'"));
     }
 
     #[test]
@@ -945,6 +977,41 @@ mod tests {
         assert_eq!(diff_val.dst_type, Some("Int64".to_string()));
         // Values might look the same string-wise, but types differ
         assert_eq!(diff_val.src, Some("5".to_string()));
-        assert_eq!(diff_val.dst, Some("5".to_string()));
+        assert_eq!(diff_val.dst, Some("NumberLong(5)".to_string()));
+    }
+
+    #[test]
+    fn expand_mongo_doc_diff_strings_unquoted() {
+        let object_id = ObjectId::parse_str("507f1f77bcf86cd799439012").unwrap();
+        let src_doc = doc! { MongoConstants::ID: object_id, "email": "bob@example.com" };
+        let dst_doc = doc! { MongoConstants::ID: object_id, "email": "bob_updated@example.com" };
+
+        let mut src_after = HashMap::new();
+        src_after.insert(MongoConstants::DOC.to_string(), ColValue::MongoDoc(src_doc));
+        let src_row = RowData::new(
+            "db".into(),
+            "coll".into(),
+            RowType::Insert,
+            None,
+            Some(src_after),
+        );
+
+        let mut dst_after = HashMap::new();
+        dst_after.insert(MongoConstants::DOC.to_string(), ColValue::MongoDoc(dst_doc));
+        let dst_row = RowData::new(
+            "db".into(),
+            "coll".into(),
+            RowType::Insert,
+            None,
+            Some(dst_after),
+        );
+
+        let diff_col_values = BaseChecker::compare_row_data(&src_row, &dst_row).unwrap();
+        let diff_val = diff_col_values.get("email").expect("email diff missing");
+
+        assert_eq!(diff_val.src.as_deref(), Some("bob@example.com"));
+        assert_eq!(diff_val.dst.as_deref(), Some("bob_updated@example.com"));
+        assert!(diff_val.src_type.is_none());
+        assert!(diff_val.dst_type.is_none());
     }
 }
