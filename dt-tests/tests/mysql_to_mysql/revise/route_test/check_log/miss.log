@@ -1,0 +1,6 @@
+{"log_type":"Miss","schema":"test_db_1","tb":"one_pk_no_uk_1","target_schema":"dst_test_db_1","target_tb":"one_pk_no_uk_1","id_col_values":{"f_0":"4"}}
+{"log_type":"Miss","schema":"test_db_1","tb":"one_pk_no_uk_2","target_schema":"dst_test_db_1","target_tb":"one_pk_no_uk_2","id_col_values":{"f_0":"4"}}
+{"log_type":"Miss","schema":"test_db_2","tb":"one_pk_no_uk_1","target_schema":"dst_test_db_2","target_tb":"dst_one_pk_no_uk_1","id_col_values":{"f_0":"4"}}
+{"log_type":"Miss","schema":"test_db_2","tb":"one_pk_no_uk_2","id_col_values":{"f_0":"4"}}
+{"log_type":"Miss","schema":"test_db_3","tb":"one_pk_no_uk_1","target_schema":"dst_test_db_3","target_tb":"dst_one_pk_no_uk_1","id_col_values":{"f_0":"4"}}
+{"log_type":"Miss","schema":"test_db_3","tb":"one_pk_no_uk_2","id_col_values":{"f_0":"4"}}

@@ -1,0 +1,3 @@
+{"log_type":"Diff","schema":"TEST_db_1","tb":"ONE_pk_no_uk","id_col_values":{"F_0":"4"},"diff_col_values":{"F_1":{"src":"2","dst":"1"}}}
+{"log_type":"Diff","schema":"TEST_db_1","tb":"ONE_pk_no_uk","id_col_values":{"F_0":"5"},"diff_col_values":{"F_1":{"src":"20","dst":"1"}}}
+{"log_type":"Diff","schema":"TEST_db_1","tb":"ONE_pk_no_uk","id_col_values":{"F_0":"6"},"diff_col_values":{"F_1":{"src":null,"dst":"1"}}}
