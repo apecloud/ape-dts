@@ -11,7 +11,7 @@ use crate::extractor::resumer::{
 use dt_common::{
     config::{config_enums::TaskType, resumer_config::ResumerConfig},
     log_warn,
-    meta::position::{Position},
+    meta::position::Position,
     utils::file_util::FileUtil,
 };
 

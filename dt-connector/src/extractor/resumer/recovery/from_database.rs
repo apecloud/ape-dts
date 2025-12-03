@@ -10,9 +10,7 @@ use crate::extractor::resumer::{
     recovery::Recovery, utils::ResumerUtil, ResumerDbPool, ResumerType,
 };
 use dt_common::{
-    config::resumer_config::ResumerConfig,
-    log_info, log_warn,
-    meta::position::{Position},
+    config::resumer_config::ResumerConfig, log_info, log_warn, meta::position::Position,
 };
 
 pub struct DatabaseRecovery {
