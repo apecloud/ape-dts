@@ -14,7 +14,10 @@ use crate::{
     meta_fetcher::mysql::mysql_struct_fetcher::MysqlStructFetcher,
     rdb_query_builder::RdbQueryBuilder,
     rdb_router::RdbRouter,
-    sinker::{base_checker::BaseChecker, base_sinker::BaseSinker},
+    sinker::{
+        base_checker::{BaseChecker, BatchCompareContext, BatchCompareRange, ReviseSqlContext},
+        base_sinker::BaseSinker,
+    },
     Sinker,
 };
 use dt_common::{
@@ -38,6 +41,11 @@ pub struct MysqlChecker {
     pub batch_size: usize,
     pub monitor: Arc<Monitor>,
     pub filter: RdbFilter,
+    pub output_full_row: bool,
+    pub output_revise_sql: bool,
+    pub revise_match_full_row: bool,
+    pub recheck_interval_secs: u64,
+    pub recheck_attempts: u32,
 }
 
 #[async_trait]
@@ -76,6 +84,9 @@ impl MysqlChecker {
             return Ok(());
         }
         let tb_meta = self.meta_manager.get_tb_meta_by_row_data(&data[0]).await?;
+        let revise_ctx = self
+            .output_revise_sql
+            .then_some(ReviseSqlContext::mysql(tb_meta, self.revise_match_full_row));
 
         let mut miss = Vec::new();
         let mut diff = Vec::new();
@@ -83,7 +94,7 @@ impl MysqlChecker {
         for src_row_data in data.iter() {
             let query_builder = RdbQueryBuilder::new_for_mysql(tb_meta, None);
             let query_info = query_builder.get_select_query(src_row_data)?;
-            let query = query_builder.create_mysql_query(&query_info);
+            let query = query_builder.create_mysql_query(&query_info)?;
 
             let start_time = Instant::now();
             let mut rows = query.fetch(&self.conn_pool);
@@ -91,24 +102,45 @@ impl MysqlChecker {
 
             if let Some(row) = rows.try_next().await.unwrap() {
                 let dst_row_data = RowData::from_mysql_row(&row, tb_meta, &None);
-                let diff_col_values = BaseChecker::compare_row_data(src_row_data, &dst_row_data);
+                let diff_col_values = BaseChecker::compare_row_data(src_row_data, &dst_row_data)?;
                 if !diff_col_values.is_empty() {
+                    let revise_sql = revise_ctx
+                        .as_ref()
+                        .map(|ctx| {
+                            ctx.build_diff_sql(src_row_data, &dst_row_data, &diff_col_values)
+                        })
+                        .transpose()?
+                        .flatten();
+
                     let diff_log = BaseChecker::build_diff_log(
                         src_row_data,
+                        &dst_row_data,
                         diff_col_values,
                         &mut self.extractor_meta_manager,
                         &self.reverse_router,
+                        self.output_full_row,
                     )
                     .await?;
+                    let mut diff_log = diff_log;
+                    diff_log.revise_sql = revise_sql;
                     diff.push(diff_log);
                 }
             } else {
+                let revise_sql = revise_ctx
+                    .as_ref()
+                    .map(|ctx| ctx.build_miss_sql(src_row_data))
+                    .transpose()?
+                    .flatten();
+
                 let miss_log = BaseChecker::build_miss_log(
                     src_row_data,
                     &mut self.extractor_meta_manager,
                     &self.reverse_router,
+                    self.output_full_row,
                 )
                 .await?;
+                let mut miss_log = miss_log;
+                miss_log.revise_sql = revise_sql;
                 miss.push(miss_log);
             }
         }
@@ -129,7 +161,7 @@ impl MysqlChecker {
 
         // build fetch dst sql
         let query_info = query_builder.get_batch_select_query(data, start_index, batch_size)?;
-        let query = query_builder.create_mysql_query(&query_info);
+        let query = query_builder.create_mysql_query(&query_info)?;
 
         // fetch dst
         let mut dst_row_data_map = HashMap::new();
@@ -140,18 +172,57 @@ impl MysqlChecker {
 
         while let Some(row) = rows.try_next().await.unwrap() {
             let row_data = RowData::from_mysql_row(&row, tb_meta, &None);
-            let hash_code = row_data.get_hash_code(&tb_meta.basic);
+            let hash_code = row_data.get_hash_code(&tb_meta.basic)?;
             dst_row_data_map.insert(hash_code, row_data);
         }
 
-        let (miss, diff) = BaseChecker::batch_compare_row_data_items(
-            data,
-            &dst_row_data_map,
+        let compare_range = BatchCompareRange {
             start_index,
             batch_size,
-            &tb_meta.basic,
-            &mut self.extractor_meta_manager,
-            &self.reverse_router,
+        };
+        let revise_ctx = self
+            .output_revise_sql
+            .then(|| ReviseSqlContext::mysql(tb_meta, self.revise_match_full_row));
+
+        let retry_config = crate::sinker::base_checker::DoubleCheckConfig {
+            delay_ms: self.recheck_interval_secs.saturating_mul(1000),
+            times: self.recheck_attempts,
+        };
+
+        let ctx = BatchCompareContext {
+            dst_tb_meta: &tb_meta.basic,
+            extractor_meta_manager: &mut self.extractor_meta_manager,
+            reverse_router: &self.reverse_router,
+            output_full_row: self.output_full_row,
+            revise_ctx: revise_ctx.as_ref(),
+        };
+
+        let pool = self.conn_pool.clone();
+        let fetch_latest = |_, src_row: &RowData| {
+            let pool = pool.clone();
+            let tb_meta = tb_meta.clone();
+            let src_row = src_row.clone();
+            async move {
+                let qb = RdbQueryBuilder::new_for_mysql(&tb_meta, None);
+                let q_info = qb.get_select_query(&src_row)?;
+                let query = qb.create_mysql_query(&q_info)?;
+                let mut rows = query.fetch(&pool);
+                if let Some(row) = rows.try_next().await? {
+                    let row_data = RowData::from_mysql_row(&row, &tb_meta, &None);
+                    Ok(Some(row_data))
+                } else {
+                    Ok(None)
+                }
+            }
+        };
+
+        let (miss, diff) = BaseChecker::batch_compare_row_data_items(
+            data,
+            dst_row_data_map,
+            compare_range,
+            ctx,
+            retry_config,
+            fetch_latest,
         )
         .await?;
         BaseChecker::log_dml(miss, diff);

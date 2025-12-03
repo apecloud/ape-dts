@@ -4,7 +4,6 @@ DROP DATABASE IF EXISTS test_db_2;
 CREATE DATABASE test_db_1;
 CREATE DATABASE test_db_2;
 
-```
 CREATE TABLE test_db_1.one_pk_no_uk ( 
     f_0 tinyint, 
     f_1 smallint DEFAULT NULL, 
@@ -36,12 +35,10 @@ CREATE TABLE test_db_1.one_pk_no_uk (
     f_27 set('a','b','c','d','e') DEFAULT NULL, 
     f_28 json DEFAULT NULL,
     PRIMARY KEY (f_0) ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4; 
-```
 
 -- In StarRocks:
 -- Key columns must be the first few columns of the schema and the order
 -- of the key columns must be consistent with the order of the schema.
-```
 CREATE TABLE test_db_1.check_pk_cols_order (
   col_1 INT,
   col_2 INT,
@@ -53,20 +50,15 @@ CREATE TABLE test_db_1.check_pk_cols_order (
   col_5 INT,
   PRIMARY KEY(pk_1, pk_2, pk_3)
 );
-```
 
-```
 CREATE TABLE test_db_2.router_test_1 (
   pk INT,
   col_1 INT,
   PRIMARY KEY(pk)
 );
-```
 
-```
 CREATE TABLE test_db_2.router_test_2 (
   pk INT,
   col_1 INT,
   PRIMARY KEY(pk)
 );
-```

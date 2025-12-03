@@ -73,8 +73,8 @@ impl RdbMerger {
 
         match row_data.row_type {
             RowType::Delete => {
-                if Self::check_collision(&merged.insert_rows, tb_meta, &row_data, hash_code)
-                    || Self::check_collision(&merged.delete_rows, tb_meta, &row_data, hash_code)
+                if Self::check_collision(&merged.insert_rows, tb_meta, &row_data, hash_code)?
+                    || Self::check_collision(&merged.delete_rows, tb_meta, &row_data, hash_code)?
                 {
                     merged.unmerged_rows.push(row_data);
                     return Ok(());
@@ -85,7 +85,7 @@ impl RdbMerger {
 
             RowType::Update => {
                 // if uk change found in any row_data, for safety, all following row_data won't be merged
-                if Self::check_uk_changed(tb_meta, &row_data) {
+                if Self::check_uk_changed(tb_meta, &row_data)? {
                     merged.unmerged_rows.push(row_data);
                     return Ok(());
                 }
@@ -93,8 +93,8 @@ impl RdbMerger {
                 let (delete, insert) = row_data.split_update_row_data();
                 let insert_hash_code = Self::get_hash_code(&insert, tb_meta).await?;
 
-                if Self::check_collision(&merged.insert_rows, tb_meta, &insert, insert_hash_code)
-                    || Self::check_collision(&merged.delete_rows, tb_meta, &delete, hash_code)
+                if Self::check_collision(&merged.insert_rows, tb_meta, &insert, insert_hash_code)?
+                    || Self::check_collision(&merged.delete_rows, tb_meta, &delete, hash_code)?
                 {
                     let row_data = RowData::new(
                         delete.schema,
@@ -111,7 +111,7 @@ impl RdbMerger {
             }
 
             RowType::Insert => {
-                if Self::check_collision(&merged.insert_rows, tb_meta, &row_data, hash_code) {
+                if Self::check_collision(&merged.insert_rows, tb_meta, &row_data, hash_code)? {
                     merged.unmerged_rows.push(row_data);
                     return Ok(());
                 }
@@ -121,16 +121,16 @@ impl RdbMerger {
         Ok(())
     }
 
-    fn check_uk_changed(tb_meta: &RdbTbMeta, row_data: &RowData) -> bool {
-        let before = row_data.before.as_ref().unwrap();
-        let after = row_data.after.as_ref().unwrap();
+    fn check_uk_changed(tb_meta: &RdbTbMeta, row_data: &RowData) -> anyhow::Result<bool> {
+        let before = row_data.require_before()?;
+        let after = row_data.require_after()?;
         for col in tb_meta.id_cols.iter() {
             if before.get(col) != after.get(col) {
                 log_debug!("rdb_merger, uk change found, row_data: {:?}", row_data);
-                return true;
+                return Ok(true);
             }
         }
-        false
+        Ok(false)
     }
 
     fn check_collision(
@@ -138,33 +138,33 @@ impl RdbMerger {
         tb_meta: &RdbTbMeta,
         row_data: &RowData,
         hash_code: u128,
-    ) -> bool {
+    ) -> anyhow::Result<bool> {
         if let Some(exist) = buffer.get(&hash_code) {
             let col_values = match row_data.row_type {
-                RowType::Insert => row_data.after.as_ref().unwrap(),
-                _ => row_data.before.as_ref().unwrap(),
+                RowType::Insert => row_data.require_after()?,
+                _ => row_data.require_before()?,
             };
 
             let exist_col_values = match exist.row_type {
-                RowType::Insert => exist.after.as_ref().unwrap(),
-                _ => exist.before.as_ref().unwrap(),
+                RowType::Insert => exist.require_after()?,
+                _ => exist.require_before()?,
             };
 
             for col in tb_meta.id_cols.iter() {
                 if col_values.get(col) != exist_col_values.get(col) {
                     log_debug!("rdb_merger, collision found, row_data: {:?}", row_data);
-                    return true;
+                    return Ok(true);
                 }
             }
         }
-        false
+        Ok(false)
     }
 
     async fn get_hash_code(row_data: &RowData, tb_meta: &RdbTbMeta) -> anyhow::Result<u128> {
         if tb_meta.key_map.is_empty() {
             return Ok(0);
         }
-        Ok(row_data.get_hash_code(tb_meta))
+        row_data.get_hash_code(tb_meta)
     }
 }
 

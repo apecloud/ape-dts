@@ -113,7 +113,6 @@ impl ResumerUtil {
 }
 
 #[cfg(test)]
-
 mod tests {
     use crate::extractor::resumer::{
         utils::ResumerUtil, DEFAULT_RESUMER_SCHEMA, DEFAULT_RESUMER_TABLE,

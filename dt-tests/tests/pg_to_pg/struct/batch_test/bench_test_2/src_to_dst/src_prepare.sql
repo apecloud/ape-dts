@@ -1,5 +1,4 @@
 -- Use a DO block and a FOR loop to create the schemas and their objects dynamically.
-```
 DO $$
 DECLARE
     i INT;
@@ -48,4 +47,3 @@ BEGIN
 
     END LOOP;
 END $$;
-```

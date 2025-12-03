@@ -75,6 +75,11 @@ const PROCESSOR: &str = "processor";
 const META_CENTER: &str = "metacenter";
 // keys
 const CHECK_LOG_DIR: &str = "check_log_dir";
+const OUTPUT_FULL_ROW: &str = "output_full_row";
+const OUTPUT_REVISE_SQL: &str = "output_revise_sql";
+const REVISE_MATCH_FULL_ROW: &str = "revise_match_full_row";
+const RECHECK_INTERVAL_SECS: &str = "recheck_interval_secs";
+const RECHECK_ATTEMPTS: &str = "recheck_attempts";
 const DB_TYPE: &str = "db_type";
 const URL: &str = "url";
 const BATCH_SIZE: &str = "batch_size";
@@ -453,6 +458,15 @@ impl TaskConfig {
                     url,
                     batch_size,
                     check_log_dir: loader.get_optional(SINKER, CHECK_LOG_DIR),
+                    output_full_row: loader.get_with_default(SINKER, OUTPUT_FULL_ROW, false),
+                    output_revise_sql: loader.get_with_default(SINKER, OUTPUT_REVISE_SQL, false),
+                    revise_match_full_row: loader.get_with_default(
+                        SINKER,
+                        REVISE_MATCH_FULL_ROW,
+                        false,
+                    ),
+                    recheck_interval_secs: loader.get_with_default(SINKER, RECHECK_INTERVAL_SECS, 0),
+                    recheck_attempts: loader.get_with_default(SINKER, RECHECK_ATTEMPTS, 1),
                 },
 
                 SinkType::Struct => SinkerConfig::MysqlStruct {
@@ -483,6 +497,15 @@ impl TaskConfig {
                     url,
                     batch_size,
                     check_log_dir: loader.get_optional(SINKER, CHECK_LOG_DIR),
+                    output_full_row: loader.get_with_default(SINKER, OUTPUT_FULL_ROW, false),
+                    output_revise_sql: loader.get_with_default(SINKER, OUTPUT_REVISE_SQL, false),
+                    revise_match_full_row: loader.get_with_default(
+                        SINKER,
+                        REVISE_MATCH_FULL_ROW,
+                        false,
+                    ),
+                    recheck_interval_secs: loader.get_with_default(SINKER, RECHECK_INTERVAL_SECS, 0),
+                    recheck_attempts: loader.get_with_default(SINKER, RECHECK_ATTEMPTS, 1),
                 },
 
                 SinkType::Struct => SinkerConfig::PgStruct {
@@ -512,6 +535,18 @@ impl TaskConfig {
                         app_name,
                         batch_size,
                         check_log_dir: loader.get_optional(SINKER, CHECK_LOG_DIR),
+                        output_full_row: loader.get_with_default(SINKER, OUTPUT_FULL_ROW, false),
+                        output_revise_sql: loader.get_with_default(
+                            SINKER,
+                            "output_revise_sql",
+                            false,
+                        ),
+                        recheck_interval_secs: loader.get_with_default(
+                            SINKER,
+                            RECHECK_INTERVAL_SECS,
+                            0,
+                        ),
+                        recheck_attempts: loader.get_with_default(SINKER, RECHECK_ATTEMPTS, 1),
                     },
 
                     _ => bail! { not_supported_err },
