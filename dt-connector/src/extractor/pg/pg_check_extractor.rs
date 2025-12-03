@@ -103,11 +103,9 @@ impl PgCheckExtractor {
             let mut after = HashMap::new();
             for (col, value) in check_log.id_col_values.iter() {
                 let col_type = tb_meta.get_col_type(col)?;
-                let col_value = if let Some(str) = value {
-                    PgColValueConvertor::from_str(col_type, str, &mut self.meta_manager)?
-                } else {
-                    ColValue::None
-                };
+                let col_value = value.as_deref().map_or(Ok(ColValue::None), |v| {
+                    PgColValueConvertor::from_str(col_type, v, &mut self.meta_manager)
+                })?;
                 after.insert(col.to_string(), col_value);
             }
             let check_row_data = RowData::build_insert_row_data(after, &tb_meta.basic);

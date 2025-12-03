@@ -10,7 +10,7 @@ use serde_json::json;
 
 use super::log_type::LogType;
 
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct CheckLog {
     pub log_type: LogType,
     pub schema: String,
@@ -43,7 +43,7 @@ pub struct CheckLog {
     pub revise_sql: Option<String>,
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DiffColValue {
     pub src: Option<String>,
     pub dst: Option<String>,

@@ -38,6 +38,8 @@ pub struct MongoChecker {
     pub monitor: Arc<Monitor>,
     pub output_full_row: bool,
     pub output_revise_sql: bool,
+    pub recheck_interval_secs: u64,
+    pub recheck_attempts: u32,
 }
 
 #[async_trait]
@@ -136,10 +138,61 @@ impl MongoChecker {
         let mut miss = Vec::new();
         let mut diff = Vec::new();
         let revise_ctx = self.output_revise_sql.then(ReviseSqlContext::mongo);
+
+        let retry_config = crate::sinker::base_checker::DoubleCheckConfig {
+            delay_ms: self.recheck_interval_secs.saturating_mul(1000),
+            times: self.recheck_attempts,
+        };
+
+        let collection = collection.clone();
+        let schema_clone = schema.to_string();
+        let tb_clone = tb.to_string();
+
+        let fetch_latest = |src_row: &RowData| {
+            let collection = collection.clone();
+            let schema = schema_clone.clone();
+            let tb = tb_clone.clone();
+            let src_row = src_row.clone();
+            async move {
+                let after = src_row.require_after()?;
+                let doc = after
+                    .get(MongoConstants::DOC)
+                    .and_then(|v| match v {
+                        ColValue::MongoDoc(doc) => Some(doc),
+                        _ => None,
+                    })
+                    .context("missing mongo doc")?;
+
+                let id = doc.get(MongoConstants::ID).context("missing _id")?;
+                let filter = doc! { MongoConstants::ID: id };
+
+                if let Some(doc) = collection.find_one(filter, None).await? {
+                    if let Some(key) = MongoKey::from_doc(&doc) {
+                        let row_data = Self::build_row_data(&schema, &tb, doc, &key);
+                        Ok(Some(row_data))
+                    } else {
+                        Ok(None)
+                    }
+                } else {
+                    Ok(None)
+                }
+            }
+        };
+
         for (key, src_row_data) in src_row_data_map {
-            if let Some(dst_row_data) = dst_row_data_map.remove(&key) {
-                let diff_col_values = BaseChecker::compare_row_data(&src_row_data, &dst_row_data)?;
-                if !diff_col_values.is_empty() {
+            let dst_row_data = dst_row_data_map.remove(&key);
+
+            let (check_result, final_dst_row) = BaseChecker::check_row_with_retry(
+                &src_row_data,
+                dst_row_data,
+                retry_config,
+                fetch_latest,
+            )
+            .await?;
+
+            match check_result {
+                crate::sinker::base_checker::CheckResult::Diff(diff_col_values) => {
+                    let dst_row_data = final_dst_row.unwrap();
                     let revise_sql = revise_ctx
                         .as_ref()
                         .map(|ctx| {
@@ -159,22 +212,24 @@ impl MongoChecker {
                     diff_log.revise_sql = revise_sql;
                     diff.push(diff_log);
                 }
-            } else {
-                let revise_sql = revise_ctx
-                    .as_ref()
-                    .map(|ctx| ctx.build_miss_sql(&src_row_data))
-                    .transpose()?
-                    .flatten();
+                crate::sinker::base_checker::CheckResult::Miss => {
+                    let revise_sql = revise_ctx
+                        .as_ref()
+                        .map(|ctx| ctx.build_miss_sql(&src_row_data))
+                        .transpose()?
+                        .flatten();
 
-                let mut miss_log = BaseChecker::build_mongo_miss_log(
-                    src_row_data,
-                    &tb_meta,
-                    &self.reverse_router,
-                    self.output_full_row,
-                )?;
-                miss_log.revise_sql = revise_sql;
-                miss.push(miss_log);
-            };
+                    let mut miss_log = BaseChecker::build_mongo_miss_log(
+                        src_row_data,
+                        &tb_meta,
+                        &self.reverse_router,
+                        self.output_full_row,
+                    )?;
+                    miss_log.revise_sql = revise_sql;
+                    miss.push(miss_log);
+                }
+                crate::sinker::base_checker::CheckResult::Ok => {}
+            }
         }
         BaseChecker::log_dml(miss, diff);
 

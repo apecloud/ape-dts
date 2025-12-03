@@ -36,6 +36,8 @@ pub enum SinkerConfig {
         output_full_row: bool,
         output_revise_sql: bool,
         revise_match_full_row: bool,
+        recheck_interval_secs: u64,
+        recheck_attempts: u32,
     },
 
     PgCheck {
@@ -45,6 +47,8 @@ pub enum SinkerConfig {
         output_full_row: bool,
         output_revise_sql: bool,
         revise_match_full_row: bool,
+        recheck_interval_secs: u64,
+        recheck_attempts: u32,
     },
 
     MongoCheck {
@@ -54,6 +58,8 @@ pub enum SinkerConfig {
         check_log_dir: String,
         output_full_row: bool,
         output_revise_sql: bool,
+        recheck_interval_secs: u64,
+        recheck_attempts: u32,
     },
 
     MysqlStruct {

@@ -2,6 +2,8 @@ use anyhow::{Context, Ok};
 use mongodb::bson::Document;
 use std::borrow::Cow;
 use std::collections::{BTreeSet, HashMap};
+use std::future::Future;
+use tokio::time::{sleep, Duration};
 
 use dt_common::meta::{
     col_value::ColValue, mongo::mongo_constant::MongoConstants, mysql::mysql_tb_meta::MysqlTbMeta,
@@ -30,6 +32,18 @@ pub enum ReviseSqlMeta<'a> {
 pub struct ReviseSqlContext<'a> {
     pub meta: ReviseSqlMeta<'a>,
     pub match_full_row: bool,
+}
+
+#[derive(Clone, Copy)]
+pub struct DoubleCheckConfig {
+    pub delay_ms: u64,
+    pub times: u32,
+}
+
+pub enum CheckResult {
+    Ok,
+    Miss,
+    Diff(HashMap<String, DiffColValue>),
 }
 
 impl<'a> ReviseSqlContext<'a> {
@@ -65,7 +79,6 @@ impl<'a> ReviseSqlContext<'a> {
             return Ok(mongo_cmd::build_insert_cmd(src_row_data));
         }
         // 2. rdb
-
         let mut insert_row = RowData::new(
             src_row_data.schema.clone(),
             src_row_data.tb.clone(),
@@ -170,6 +183,12 @@ impl<'a> ReviseSqlContext<'a> {
     }
 }
 
+impl CheckResult {
+    pub fn is_inconsistent(&self) -> bool {
+        !matches!(self, CheckResult::Ok)
+    }
+}
+
 pub struct BaseChecker {}
 
 pub struct BatchCompareRange {
@@ -187,12 +206,18 @@ pub struct BatchCompareContext<'ctx> {
 
 impl BaseChecker {
     #[inline(always)]
-    pub async fn batch_compare_row_data_items(
+    pub async fn batch_compare_row_data_items<F, Fut>(
         src_data: &[RowData],
-        dst_row_data_map: &HashMap<u128, RowData>,
+        mut dst_row_data_map: HashMap<u128, RowData>,
         range: BatchCompareRange,
         ctx: BatchCompareContext<'_>,
-    ) -> anyhow::Result<(Vec<CheckLog>, Vec<CheckLog>)> {
+        retry_config: DoubleCheckConfig,
+        fetch_latest_row: F,
+    ) -> anyhow::Result<(Vec<CheckLog>, Vec<CheckLog>)>
+    where
+        F: Fn(u128, &RowData) -> Fut,
+        Fut: Future<Output = anyhow::Result<Option<RowData>>>,
+    {
         let BatchCompareContext {
             dst_tb_meta,
             extractor_meta_manager,
@@ -214,23 +239,27 @@ impl BaseChecker {
 
         for src_row_data in target_slice {
             let hash_code = src_row_data.get_hash_code(dst_tb_meta)?;
-            // src_row_data is already routed, so here we call get_hash_code by dst_tb_meta
-            match dst_row_data_map.get(&hash_code) {
-                Some(dst_row_data) => {
-                    let diff_col_values = Self::compare_row_data(src_row_data, dst_row_data)?;
-                    if diff_col_values.is_empty() {
-                        continue;
-                    }
 
+            let dst_row = dst_row_data_map.remove(&hash_code);
+
+            let fetch_wrapper = |row: &RowData| fetch_latest_row(hash_code, row);
+
+            let (check_result, final_dst_row) =
+                Self::check_row_with_retry(src_row_data, dst_row, retry_config, fetch_wrapper)
+                    .await?;
+
+            match check_result {
+                CheckResult::Diff(diff_col_values) => {
+                    let dst_row = final_dst_row.as_ref().unwrap(); // Must exist if Diff
                     let revise_sql = revise_ctx
                         .as_ref()
-                        .map(|ctx| ctx.build_diff_sql(src_row_data, dst_row_data, &diff_col_values))
+                        .map(|ctx| ctx.build_diff_sql(src_row_data, dst_row, &diff_col_values))
                         .transpose()?
                         .flatten();
 
                     let mut diff_log = Self::build_diff_log(
                         src_row_data,
-                        dst_row_data,
+                        dst_row,
                         diff_col_values,
                         extractor_meta_manager,
                         reverse_router,
@@ -240,7 +269,7 @@ impl BaseChecker {
                     diff_log.revise_sql = revise_sql;
                     diff.push(diff_log);
                 }
-                None => {
+                CheckResult::Miss => {
                     let revise_sql = revise_ctx
                         .as_ref()
                         .map(|ctx| ctx.build_miss_sql(src_row_data))
@@ -257,9 +286,52 @@ impl BaseChecker {
                     miss_log.revise_sql = revise_sql;
                     miss.push(miss_log);
                 }
+                CheckResult::Ok => {}
             }
         }
         Ok((miss, diff))
+    }
+
+    pub async fn check_row_with_retry<F, Fut>(
+        src_row: &RowData,
+        mut dst_row: Option<RowData>,
+        retry_config: DoubleCheckConfig,
+        fetch_latest: F,
+    ) -> anyhow::Result<(CheckResult, Option<RowData>)>
+    where
+        F: Fn(&RowData) -> Fut,
+        Fut: Future<Output = anyhow::Result<Option<RowData>>>,
+    {
+        let mut check_result = Self::compare_src_dst(src_row, &dst_row)?;
+
+        if check_result.is_inconsistent() && retry_config.times > 0 {
+            for _ in 0..retry_config.times {
+                sleep(Duration::from_millis(retry_config.delay_ms)).await;
+
+                if let std::result::Result::Ok(Some(latest)) = fetch_latest(src_row).await {
+                    dst_row = Some(latest);
+                }
+
+                check_result = Self::compare_src_dst(src_row, &dst_row)?;
+                if !check_result.is_inconsistent() {
+                    break;
+                }
+            }
+        }
+        Ok((check_result, dst_row))
+    }
+
+    fn compare_src_dst(src: &RowData, dst: &Option<RowData>) -> anyhow::Result<CheckResult> {
+        if let Some(dst_row) = dst {
+            let diffs = Self::compare_row_data(src, dst_row)?;
+            if !diffs.is_empty() {
+                Ok(CheckResult::Diff(diffs))
+            } else {
+                Ok(CheckResult::Ok)
+            }
+        } else {
+            Ok(CheckResult::Miss)
+        }
     }
 
     #[inline(always)]

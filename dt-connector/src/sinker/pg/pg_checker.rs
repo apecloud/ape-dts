@@ -44,6 +44,8 @@ pub struct PgChecker {
     pub output_full_row: bool,
     pub output_revise_sql: bool,
     pub revise_match_full_row: bool,
+    pub recheck_interval_secs: u64,
+    pub recheck_attempts: u32,
 }
 
 #[async_trait]
@@ -182,6 +184,11 @@ impl PgChecker {
             .output_revise_sql
             .then(|| ReviseSqlContext::pg(tb_meta, self.revise_match_full_row));
 
+        let retry_config = crate::sinker::base_checker::DoubleCheckConfig {
+            delay_ms: self.recheck_interval_secs.saturating_mul(1000),
+            times: self.recheck_attempts,
+        };
+
         let ctx = BatchCompareContext {
             dst_tb_meta: &tb_meta.basic,
             extractor_meta_manager: &mut self.extractor_meta_manager,
@@ -190,9 +197,34 @@ impl PgChecker {
             revise_ctx: revise_ctx.as_ref(),
         };
 
-        let (miss, diff) =
-            BaseChecker::batch_compare_row_data_items(data, &dst_row_data_map, compare_range, ctx)
-                .await?;
+        let pool = self.conn_pool.clone();
+        let fetch_latest = |_, src_row: &RowData| {
+            let pool = pool.clone();
+            let tb_meta = tb_meta.clone();
+            let src_row = src_row.clone();
+            async move {
+                let qb = RdbQueryBuilder::new_for_pg(&tb_meta, None);
+                let q_info = qb.get_select_query(&src_row)?;
+                let query = qb.create_pg_query(&q_info)?;
+                let mut rows = query.fetch(&pool);
+                if let Some(row) = rows.try_next().await? {
+                    let row_data = RowData::from_pg_row(&row, &tb_meta, &None);
+                    Ok(Some(row_data))
+                } else {
+                    Ok(None)
+                }
+            }
+        };
+
+        let (miss, diff) = BaseChecker::batch_compare_row_data_items(
+            data,
+            dst_row_data_map,
+            compare_range,
+            ctx,
+            retry_config,
+            fetch_latest,
+        )
+        .await?;
         BaseChecker::log_dml(miss, diff);
 
         BaseSinker::update_batch_monitor(&self.monitor, batch_size as u64, 0).await?;

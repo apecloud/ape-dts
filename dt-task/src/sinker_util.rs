@@ -133,6 +133,8 @@ impl SinkerUtil {
                 output_full_row,
                 output_revise_sql,
                 revise_match_full_row,
+                recheck_interval_secs,
+                recheck_attempts,
                 ..
             } => {
                 let reverse_router = create_router!(task_config, Mysql).reverse();
@@ -161,6 +163,8 @@ impl SinkerUtil {
                         output_full_row,
                         output_revise_sql,
                         revise_match_full_row,
+                        recheck_interval_secs,
+                        recheck_attempts,
                     };
                     sub_sinkers.push(Arc::new(async_mutex::Mutex::new(Box::new(sinker))));
                 }
@@ -202,6 +206,8 @@ impl SinkerUtil {
                 output_full_row,
                 output_revise_sql,
                 revise_match_full_row,
+                recheck_interval_secs,
+                recheck_attempts,
                 ..
             } => {
                 let reverse_router = create_router!(task_config, Pg).reverse();
@@ -230,6 +236,8 @@ impl SinkerUtil {
                         output_full_row,
                         output_revise_sql,
                         revise_match_full_row,
+                        recheck_interval_secs,
+                        recheck_attempts,
                     };
                     sub_sinkers.push(Arc::new(async_mutex::Mutex::new(Box::new(sinker))));
                 }
@@ -259,6 +267,8 @@ impl SinkerUtil {
                 batch_size,
                 output_full_row,
                 output_revise_sql,
+                recheck_interval_secs,
+                recheck_attempts,
                 ..
             } => {
                 let reverse_router = create_router!(task_config, Mongo).reverse();
@@ -276,6 +286,8 @@ impl SinkerUtil {
                         monitor: monitor.clone(),
                         output_full_row,
                         output_revise_sql,
+                        recheck_interval_secs,
+                        recheck_attempts,
                     };
                     sub_sinkers.push(Arc::new(async_mutex::Mutex::new(Box::new(sinker))));
                 }
