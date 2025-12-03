@@ -1,5 +1,5 @@
 use anyhow::bail;
-use std::{collections::HashMap, hash::Hash, sync::Arc};
+use std::{collections::HashMap, sync::Arc};
 
 use async_trait::async_trait;
 use futures::TryStreamExt;

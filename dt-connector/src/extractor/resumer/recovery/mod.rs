@@ -12,7 +12,6 @@ pub struct RecoverySnapshotCache {
     finished_tbs: DashMap<DbTb, bool>,
 }
 
-type DbTbCol = (String, String, String);
 type DbTb = (String, String);
 
 #[async_trait]

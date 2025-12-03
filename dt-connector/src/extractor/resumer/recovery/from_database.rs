@@ -1,4 +1,4 @@
-use std::{collections::HashMap, str::FromStr};
+use std::str::FromStr;
 
 use anyhow::{bail, Result};
 use async_trait::async_trait;
@@ -12,7 +12,7 @@ use crate::extractor::resumer::{
 use dt_common::{
     config::resumer_config::ResumerConfig,
     log_info, log_warn,
-    meta::position::{self, Position},
+    meta::position::{Position},
 };
 
 pub struct DatabaseRecovery {

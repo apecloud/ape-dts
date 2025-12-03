@@ -1,5 +1,3 @@
-use std::{collections::HashMap, hash::Hash};
-
 use anyhow::{bail, Context, Result};
 use async_std::path::Path;
 use async_trait::async_trait;
@@ -13,7 +11,7 @@ use crate::extractor::resumer::{
 use dt_common::{
     config::{config_enums::TaskType, resumer_config::ResumerConfig},
     log_warn,
-    meta::position::{self, Position},
+    meta::position::{Position},
     utils::file_util::FileUtil,
 };
 
