@@ -1,0 +1,1 @@
+2025-12-02 03:52:47.116262 | current_position | {"type":"RdbSnapshot","db_type":"pg","schema":"public","tb":"bytea_pk_test","order_col_values":{"binary_id":"c4e3bac3cac0bde7","category_id":"cat1"}}

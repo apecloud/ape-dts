@@ -46,8 +46,8 @@ impl Extractor for FoxlakeS3Extractor {
 impl FoxlakeS3Extractor {
     async fn extract_internal(&mut self) -> anyhow::Result<()> {
         let mut start_after = if let Some(handler) = &self.recovery {
-            if let Some(value) = handler
-                .get_snapshot_resume_position(&self.schema, &self.tb, "", false)
+            if let Some(Position::FoxlakeS3 { s3_meta_file, .. }) = handler
+                .get_snapshot_resume_position(&self.schema, &self.tb, false)
                 .await
             {
                 log_info!(
@@ -55,9 +55,9 @@ impl FoxlakeS3Extractor {
                     self.schema,
                     self.tb,
                     "",
-                    value
+                    s3_meta_file
                 );
-                Some(value)
+                Some(s3_meta_file)
             } else {
                 None
             }

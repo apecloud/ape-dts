@@ -89,10 +89,7 @@ impl ResumerUtil {
         }
     }
 
-    pub fn get_key_from_base(
-        (schema, tb, _col): (String, String, String),
-        resumer_type: ResumerType,
-    ) -> String {
+    pub fn get_key_from_base((schema, tb): (String, String), resumer_type: ResumerType) -> String {
         match resumer_type {
             ResumerType::SnapshotDoing | ResumerType::SnapshotFinished => {
                 format!("{}-{}", schema, tb)

@@ -501,25 +501,72 @@ impl MysqlSnapshotExtractor {
     ) -> anyhow::Result<HashMap<String, ColValue>> {
         let mut resume_values: HashMap<String, ColValue> = HashMap::new();
         if let Some(handler) = &self.recovery {
-            for order_col in &tb_meta.basic.order_cols {
-                if let Some(value) = handler
-                    .get_snapshot_resume_position(&self.db, &self.tb, order_col, check_point)
-                    .await
-                {
+            if let Some(Position::RdbSnapshot {
+                schema,
+                tb,
+                order_col,
+                value,
+                order_col_values,
+                ..
+            }) = handler
+                .get_snapshot_resume_position(&self.db, &self.tb, check_point)
+                .await
+            {
+                if schema != self.db || tb != self.tb {
+                    log_info!(
+                        r#"`{}`.`{}` resume position db/tb not match, ignore it"#,
+                        self.db,
+                        self.tb
+                    );
+                    return Ok(HashMap::new());
+                }
+
+                if order_col_values.is_empty() {
                     resume_values.insert(
-                        order_col.to_string(),
-                        MysqlColValueConvertor::from_str(tb_meta.get_col_type(order_col)?, &value)?,
+                        order_col.clone(),
+                        MysqlColValueConvertor::from_str(
+                            tb_meta.get_col_type(&order_col)?,
+                            &value,
+                        )?,
                     );
                 }
+                for (order_col, value) in order_col_values {
+                    if let Some(value_str) = value {
+                        resume_values.insert(
+                            order_col.clone(),
+                            MysqlColValueConvertor::from_str(
+                                tb_meta.get_col_type(&order_col)?,
+                                &value_str,
+                            )?,
+                        );
+                    } else {
+                        resume_values.insert(order_col, ColValue::None);
+                    }
+                }
+                if resume_values.len() != tb_meta.basic.order_cols.len() {
+                    log_info!(
+                        r#"`{}`.`{}` resume values not match order cols in length"#,
+                        self.db,
+                        self.tb
+                    );
+                    return Ok(HashMap::new());
+                }
+
+                for order_col in &tb_meta.basic.order_cols {
+                    if !resume_values.contains_key(order_col) {
+                        log_info!(
+                            r#"`{}`.`{}` resume position missing order col {}"#,
+                            self.db,
+                            self.tb,
+                            order_col
+                        );
+                        return Ok(HashMap::new());
+                    }
+                }
+            } else {
+                log_info!(r#"`{}`.`{}` has no resume position"#, self.db, self.tb);
+                return Ok(HashMap::new());
             }
-        }
-        if resume_values.is_empty() || resume_values.len() != tb_meta.basic.order_cols.len() {
-            log_info!(
-                r#"`{}`.`{}` resume values not match order cols"#,
-                self.db,
-                self.tb
-            );
-            return Ok(HashMap::new());
         }
         log_info!(
             r#"[`{}`.`{}`] recovery from [{}]"#,

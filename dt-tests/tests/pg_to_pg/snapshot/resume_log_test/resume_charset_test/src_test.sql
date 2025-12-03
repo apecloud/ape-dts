@@ -1,0 +1,2 @@
+INSERT INTO bytea_pk_test (category_id, binary_id, description) VALUES('cat1', '你好世界', 'Chinese hello world in binary');
+INSERT INTO bytea_pk_test (category_id, binary_id, description) VALUES('cat2', 'hello world', 'hello world in binary');

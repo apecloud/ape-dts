@@ -1,3 +1,5 @@
+use std::{collections::HashMap, hash::Hash};
+
 use anyhow::{bail, Context, Result};
 use async_std::path::Path;
 use async_trait::async_trait;
@@ -11,7 +13,7 @@ use crate::extractor::resumer::{
 use dt_common::{
     config::{config_enums::TaskType, resumer_config::ResumerConfig},
     log_warn,
-    meta::position::Position,
+    meta::position::{self, Position},
     utils::file_util::FileUtil,
 };
 
@@ -59,37 +61,15 @@ impl LogRecovery {
         } else {
             &self.snapshot_cache.checkpoint_tb_positions
         };
-
-        match Position::from_log(line) {
-            Position::RdbSnapshot {
-                schema,
-                tb,
-                order_col,
-                value,
-                order_col_values,
-                ..
-            } => {
-                if !order_col.is_empty() {
-                    tb_positions.insert((schema.clone(), tb.clone(), order_col), value);
-                }
-                if !order_col_values.is_empty() {
-                    for (col, value) in order_col_values {
-                        tb_positions
-                            .insert((schema.clone(), tb.clone(), col), value.unwrap_or_default());
-                    }
-                }
+        let position = Position::from_log(line);
+        match &position {
+            Position::RdbSnapshot { schema, tb, .. } | Position::FoxlakeS3 { schema, tb, .. } => {
+                tb_positions.insert((schema.clone(), tb.clone()), position);
             }
-
-            Position::FoxlakeS3 {
-                schema,
-                tb,
-                s3_meta_file,
-            } => {
-                tb_positions.insert((schema, tb, String::new()), s3_meta_file);
-            }
-
             Position::RdbSnapshotFinished { schema, tb, .. } => {
-                self.snapshot_cache.finished_tbs.insert((schema, tb), true);
+                self.snapshot_cache
+                    .finished_tbs
+                    .insert((schema.clone(), tb.clone()), true);
             }
 
             _ => {}
@@ -212,19 +192,17 @@ impl Recovery for LogRecovery {
         &self,
         schema: &str,
         tb: &str,
-        col: &str,
         checkpoint: bool,
-    ) -> Option<String> {
-        let key = (schema.to_string(), tb.to_string(), col.to_string());
+    ) -> Option<Position> {
+        let key = (schema.to_string(), tb.to_string());
         let tb_positions =
             if !checkpoint && self.snapshot_cache.current_tb_positions.contains_key(&key) {
                 &self.snapshot_cache.current_tb_positions
             } else {
                 &self.snapshot_cache.checkpoint_tb_positions
             };
-        tb_positions.get(&key).map(|value| value.to_owned())
+        tb_positions.get(&key).map(|p| p.clone())
     }
-
     async fn get_cdc_resume_position(&self) -> Option<Position> {
         if let Some(commit_position) = self.cdc_cache.get(CDC_CHECKPOINT_POSITION_KEY) {
             Some(commit_position.clone())

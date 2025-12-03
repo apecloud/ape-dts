@@ -1,5 +1,5 @@
 use anyhow::bail;
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, hash::Hash, sync::Arc};
 
 use async_trait::async_trait;
 use futures::TryStreamExt;
@@ -351,29 +351,74 @@ impl PgSnapshotExtractor {
     ) -> anyhow::Result<HashMap<String, ColValue>> {
         let mut resume_values: HashMap<String, ColValue> = HashMap::new();
         if let Some(handler) = &self.recovery {
-            for order_col in &tb_meta.basic.order_cols {
-                if let Some(value) = handler
-                    .get_snapshot_resume_position(&self.schema, &self.tb, order_col, false)
-                    .await
-                {
+            if let Some(Position::RdbSnapshot {
+                schema,
+                tb,
+                order_col,
+                value,
+                order_col_values,
+                ..
+            }) = handler
+                .get_snapshot_resume_position(&self.schema, &self.tb, false)
+                .await
+            {
+                if schema != self.schema || tb != self.tb {
+                    log_info!(
+                        r#""{}"."{}" resume position schema/tb not match, ignore it"#,
+                        self.schema,
+                        self.tb
+                    );
+                    return Ok(HashMap::new());
+                }
+
+                if order_col_values.is_empty() {
                     resume_values.insert(
-                        order_col.to_string(),
+                        order_col.clone(),
                         PgColValueConvertor::from_str(
-                            tb_meta.get_col_type(order_col)?,
+                            tb_meta.get_col_type(&order_col)?,
                             &value,
                             &mut self.meta_manager,
                         )?,
                     );
                 }
+                for (order_col, value) in order_col_values {
+                    if let Some(value_str) = value {
+                        resume_values.insert(
+                            order_col.clone(),
+                            PgColValueConvertor::from_str(
+                                tb_meta.get_col_type(&order_col)?,
+                                &value_str,
+                                &mut self.meta_manager,
+                            )?,
+                        );
+                    } else {
+                        resume_values.insert(order_col, ColValue::None);
+                    }
+                }
+                if resume_values.len() != tb_meta.basic.order_cols.len() {
+                    log_info!(
+                        r#""{}"."{}" resume values not match order cols in length"#,
+                        self.schema,
+                        self.tb
+                    );
+                    return Ok(HashMap::new());
+                }
+
+                for order_col in &tb_meta.basic.order_cols {
+                    if !resume_values.contains_key(order_col) {
+                        log_info!(
+                            r#""{}"."{}" resume position missing order col {}"#,
+                            self.schema,
+                            self.tb,
+                            order_col
+                        );
+                        return Ok(HashMap::new());
+                    }
+                }
+            } else {
+                log_info!(r#""{}"."{}" has no resume position"#, self.schema, self.tb);
+                return Ok(HashMap::new());
             }
-        }
-        if resume_values.is_empty() || resume_values.len() != tb_meta.basic.order_cols.len() {
-            log_info!(
-                r#""{}"."{}" resume values not match order cols"#,
-                self.schema,
-                self.tb
-            );
-            return Ok(HashMap::new());
         }
         log_info!(
             r#"["{}"."{}"] recovery from [{}]"#,

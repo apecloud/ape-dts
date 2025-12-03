@@ -1,8 +1,5 @@
 -- CREATE DATABASE euc_cn_db WITH ENCODING = 'EUC_CN' LC_COLLATE = 'C' LC_CTYPE = 'C' TEMPLATE=template0;
 
-DROP TABLE IF EXISTS tb_col_euc_cn;
-CREATE TABLE tb_col_euc_cn (pk serial PRIMARY KEY, value TEXT);
-
 DROP TABLE IF EXISTS bytea_pk_test;
 
 ```

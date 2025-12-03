@@ -79,7 +79,7 @@ impl PgColValueConvertor {
                     let bytes = hex::decode(value_str.trim_start_matches(r#"\x"#))?;
                     ColValue::Blob(bytes)
                 } else {
-                    ColValue::String(value_str)
+                    ColValue::Blob(hex::decode(value_str)?)
                 }
             }
 

@@ -53,8 +53,8 @@ impl MongoSnapshotExtractor {
         log_info!("start extracting data from {}.{}", self.db, self.tb);
 
         let filter = if let Some(handler) = &self.recovery {
-            if let Some(value) = handler
-                .get_snapshot_resume_position(&self.db, &self.tb, MongoConstants::ID, false)
+            if let Some(Position::RdbSnapshot { value, .. }) = handler
+                .get_snapshot_resume_position(&self.db, &self.tb, false)
                 .await
             {
                 let value = ObjectId::parse_str(&value)?;

@@ -1,4 +1,4 @@
-use std::str::FromStr;
+use std::{collections::HashMap, str::FromStr};
 
 use anyhow::{bail, Result};
 use async_trait::async_trait;
@@ -10,7 +10,9 @@ use crate::extractor::resumer::{
     recovery::Recovery, utils::ResumerUtil, ResumerDbPool, ResumerType,
 };
 use dt_common::{
-    config::resumer_config::ResumerConfig, log_info, log_warn, meta::position::Position,
+    config::resumer_config::ResumerConfig,
+    log_info, log_warn,
+    meta::position::{self, Position},
 };
 
 pub struct DatabaseRecovery {
@@ -210,7 +212,7 @@ impl DatabaseRecovery {
 impl Recovery for DatabaseRecovery {
     async fn check_snapshot_finished(&self, schema: &str, tb: &str) -> bool {
         let resumer_key = ResumerUtil::get_key_from_base(
-            (schema.to_string(), tb.to_string(), "".to_string()),
+            (schema.to_string(), tb.to_string()),
             ResumerType::SnapshotFinished,
         );
         self.resumer_finished.contains_key(&resumer_key)
@@ -220,30 +222,17 @@ impl Recovery for DatabaseRecovery {
         &self,
         schema: &str,
         tb: &str,
-        col: &str,
         _checkpoint: bool,
-    ) -> Option<String> {
+    ) -> Option<Position> {
         let resumer_key = ResumerUtil::get_key_from_base(
-            (schema.to_string(), tb.to_string(), col.to_string()),
+            (schema.to_string(), tb.to_string()),
             ResumerType::SnapshotDoing,
         );
         let position_str = self.resumer_doing.get(&resumer_key).map(|p| p.to_owned());
         if let Some(position_str) = position_str {
-            match Position::from_log(&position_str) {
-                Position::RdbSnapshot {
-                    order_col,
-                    value,
-                    order_col_values,
-                    ..
-                } => {
-                    if let Some(order_col_value) = order_col_values.get(col) {
-                        return order_col_value.clone();
-                    }
-                    if order_col == col {
-                        return Some(value);
-                    }
-                }
-                Position::FoxlakeS3 { s3_meta_file, .. } => return Some(s3_meta_file),
+            let position = Position::from_log(&position_str);
+            match &position {
+                Position::RdbSnapshot { .. } | Position::FoxlakeS3 { .. } => return Some(position),
                 _ => return None,
             }
         }
@@ -251,10 +240,8 @@ impl Recovery for DatabaseRecovery {
     }
 
     async fn get_cdc_resume_position(&self) -> Option<Position> {
-        let resumer_key = ResumerUtil::get_key_from_base(
-            ("".to_string(), "".to_string(), "".to_string()),
-            ResumerType::CdcDoing,
-        );
+        let resumer_key =
+            ResumerUtil::get_key_from_base(("".to_string(), "".to_string()), ResumerType::CdcDoing);
         let position_str = self.resumer_doing.get(&resumer_key).map(|p| p.to_owned());
         if let Some(position_str) = position_str {
             return Some(Position::from_log(&position_str));
