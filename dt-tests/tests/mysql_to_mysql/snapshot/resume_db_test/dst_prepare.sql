@@ -27,6 +27,30 @@ CREATE TABLE `test_db_@`.`finished_table_*$1`(`p.k` serial, val numeric(20,8), P
 
 CREATE TABLE `test_db_@`.`finished_table_*$2`(`p.k` serial, val numeric(20,8), PRIMARY KEY(`p.k`));
 
+```
+CREATE TABLE test_db_1.bytea_pk_gb2312_test (
+    category_id VARCHAR(50),
+    binary_id   BLOB,
+    description TEXT,
+    created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+
+    -- composite primary key
+    CONSTRAINT pk_bytea_pk_test PRIMARY KEY (category_id, binary_id(100))
+) ENGINE=InnoDB DEFAULT CHARSET=gb2312;
+```
+
+```
+CREATE TABLE test_db_1.bytea_pk_utf8_test (
+    category_id VARCHAR(50),
+    binary_id   BLOB,
+    description TEXT,
+    created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+
+    -- composite primary key
+    CONSTRAINT pk_bytea_pk_test PRIMARY KEY (category_id, binary_id(100))
+);
+```
+
 DROP DATABASE IF EXISTS apecloud_resumer_test;
 CREATE DATABASE apecloud_resumer_test;
 
@@ -50,8 +74,10 @@ insert into `apecloud_resumer_test`.`ape_task_position` (task_id, resumer_type, 
 insert into `apecloud_resumer_test`.`ape_task_position` (task_id, resumer_type, position_key, position_data) values ('resume_db_test_1', 'SnapshotDoing', 'test_db_1-no_pk_one_uk', '{"type":"RdbSnapshot","db_type":"mysql","schema":"test_db_1","tb":"no_pk_one_uk","order_col":"f_0","value":"5"}');
 insert into `apecloud_resumer_test`.`ape_task_position` (task_id, resumer_type, position_key, position_data) values ('resume_db_test_1', 'SnapshotDoing', 'test_db_1-no_pk_multi_uk', '{"type":"RdbSnapshot","db_type":"mysql","schema":"test_db_1","tb":"no_pk_multi_uk","order_col":"f_0","value":"5"}');
 insert into `apecloud_resumer_test`.`ape_task_position` (task_id, resumer_type, position_key, position_data) values ('resume_db_test_1', 'SnapshotDoing', 'test_db_1-one_pk_multi_uk', '{"type":"RdbSnapshot","db_type":"mysql","schema":"test_db_1","tb":"one_pk_multi_uk","order_col":"f_0","value":"5"}');
-insert into `apecloud_resumer_test`.`ape_task_position` (task_id, resumer_type, position_key, position_data) values ('resume_db_test_1', 'SnapshotDoing', 'test_db_1-multi_pk', '{"type":"RdbSnapshot","db_type":"mysql","schema":"test_db_1","tb":"resume_table_3","order_col_values":{"f_0":"1","f_1":"30"}}');
+insert into `apecloud_resumer_test`.`ape_task_position` (task_id, resumer_type, position_key, position_data) values ('resume_db_test_1', 'SnapshotDoing', 'test_db_1-multi_pk', '{"type":"RdbSnapshot","db_type":"mysql","schema":"test_db_1","tb":"multi_pk","order_col_values":{"f_0":"1","f_1":"30"}}');
 insert into `apecloud_resumer_test`.`ape_task_position` (task_id, resumer_type, position_key, position_data) values ('resume_db_test_1', 'SnapshotDoing', 'test_db_1-nullable_composite_unique_key_table', '{"type":"RdbSnapshot","db_type":"mysql","schema":"test_db_1","tb":"nullable_composite_unique_key_table","order_col_values":{"uk1":"6","uk2":"6"}}');
+insert into `apecloud_resumer_test`.`ape_task_position` (task_id, resumer_type, position_key, position_data) values ('resume_db_test_1', 'SnapshotDoing', 'test_db_1-bytea_pk_gb2312_test', '{"type":"RdbSnapshot","db_type":"mysql","schema":"test_db_1","tb":"bytea_pk_gb2312_test","order_col_values":{"category_id":"cat1","binary_id":"c4e3bac3cac0bde730"}}');
+insert into `apecloud_resumer_test`.`ape_task_position` (task_id, resumer_type, position_key, position_data) values ('resume_db_test_1', 'SnapshotDoing', 'test_db_1-bytea_pk_utf8_test', '{"type":"RdbSnapshot","db_type":"mysql","schema":"test_db_1","tb":"bytea_pk_utf8_test","order_col_values":{"category_id":"cat1","binary_id":"E4BDA0E5A5BDE4B896E7958C30"}}');
 insert into `apecloud_resumer_test`.`ape_task_position` (task_id, resumer_type, position_key, position_data) values ('resume_db_test_1', 'SnapshotDoing', 'test_db_@-resume_table_*$4', '{"type":"RdbSnapshot","db_type":"mysql","schema":"test_db_@","tb":"resume_table_*$4","order_col":"p.k","value":"1"}');
 
 

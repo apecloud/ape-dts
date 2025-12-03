@@ -30,6 +30,21 @@ CREATE TABLE "test_db_*.*"."finished_table_*$2"("p.k" serial, val numeric(20,8),
 DROP SCHEMA IF EXISTS apecloud_resumer_test CASCADE;
 CREATE SCHEMA apecloud_resumer_test;
 
+
+DROP TABLE IF EXISTS bytea_pk_test;
+
+```
+CREATE TABLE bytea_pk_test (
+    category_id VARCHAR(50),      -- composite primary key part 1 (text)
+    binary_id   BYTEA,            -- composite primary key part 2 (binary)
+    description TEXT,             -- description to verify content correspondence
+    created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+
+    -- composite primary key
+    CONSTRAINT pk_bytea_pk_test PRIMARY KEY (category_id, binary_id)
+);
+```
+
 ```
 CREATE TABLE IF NOT EXISTS apecloud_resumer_test.ape_task_position (
   id bigserial PRIMARY KEY,
@@ -51,3 +66,4 @@ insert into apecloud_resumer_test.ape_task_position (task_id, resumer_type, posi
 insert into apecloud_resumer_test.ape_task_position (task_id, resumer_type, position_key, position_data) values ('resume_db_test_1', 'SnapshotDoing', 'public-nullable_composite_unique_key_table', '{"type":"RdbSnapshot","db_type":"pg","schema":"public","tb":"nullable_composite_unique_key_table","order_col_values":{"uk1":"6","uk2":"6"}}');
 insert into apecloud_resumer_test.ape_task_position (task_id, resumer_type, position_key, position_data) values ('resume_db_test_1', 'SnapshotDoing', 'public-resume_table_*$4', '{"type":"RdbSnapshot","db_type":"pg","schema":"public","tb":"resume_table_*$4","order_col":"p.k","value":"1"}');
 insert into apecloud_resumer_test.ape_task_position (task_id, resumer_type, position_key, position_data) values ('resume_db_test_1', 'SnapshotDoing', 'test_db_*.*-resume_table_*$5', '{"type":"RdbSnapshot","db_type":"pg","schema":"test_db_*.*","tb":"resume_table_*$5","order_col":"p.k","value":"1"}');
+insert into apecloud_resumer_test.ape_task_position (task_id, resumer_type, position_key, position_data) values ('resume_db_test_1', 'SnapshotDoing', 'public-bytea_pk_test', '{"type":"RdbSnapshot","db_type":"pg","schema":"public","tb":"bytea_pk_test","order_col_values":{"binary_id":"e4bda0e5a5bde4b896e7958c30","category_id":"cat1"}}');

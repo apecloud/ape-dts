@@ -35,3 +35,17 @@ CREATE TABLE "test_db_*.*"."in_finished_log_table_*$2"("p.k" serial, val numeric
 
 DROP TABLE IF EXISTS "test_db_*.*"."in_position_log_table_*$1";
 CREATE TABLE "test_db_*.*"."in_position_log_table_*$1"("p.k" serial, val numeric(20,8), PRIMARY KEY("p.k"));
+
+DROP TABLE IF EXISTS bytea_pk_test;
+
+```
+CREATE TABLE bytea_pk_test (
+    category_id VARCHAR(50),      -- composite primary key part 1 (text)
+    binary_id   BYTEA,            -- composite primary key part 2 (binary)
+    description TEXT,             -- description to verify content correspondence
+    created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+
+    -- composite primary key
+    CONSTRAINT pk_bytea_pk_test PRIMARY KEY (category_id, binary_id)
+);
+```
