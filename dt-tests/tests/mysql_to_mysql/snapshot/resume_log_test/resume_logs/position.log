@@ -1,3 +1,7 @@
-2024-03-29 07:02:24.463776 | current_position | {"type":"RdbSnapshot","db_type":"mysql","schema":"test_db_@","tb":"in_position_log_table_*$1","order_col":"p.k","value":"0"}
+2024-03-29 07:02:24.463776 | current_position | {"type":"RdbSnapshot","db_type":"mysql","schema":"test_db_@","tb":"in_position_log_table_*$1","order_key":{"single":["p.k","0"]}}
 
-2024-03-29 07:02:24.463777 | current_position | {"type":"RdbSnapshot","db_type":"mysql","schema":"test_db_@","tb":"in_position_log_table_*$1","order_col":"p.k","value":"1"}
+2024-03-29 07:02:24.463777 | current_position | {"type":"RdbSnapshot","db_type":"mysql","schema":"test_db_@","tb":"in_position_log_table_*$1","order_key":{"single":["p.k","1"]}}
+
+2025-12-02 03:52:47.116262 | current_position | {"type":"RdbSnapshot","db_type":"mysql","schema":"test_db_1","tb":"bytea_pk_gb2312_test","order_key":{"composite":[["category_id","cat1"],["binary_id","c4e3bac3cac0bde730"]]}}
+
+2025-12-02 03:52:47.116262 | current_position | {"type":"RdbSnapshot","db_type":"mysql","schema":"test_db_1","tb":"bytea_pk_utf8_test","order_key":{"composite":[["category_id","cat1"],["binary_id","e4bda0e5a5bde4b896e7958c30"]]}}

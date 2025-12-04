@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use crate::log_error;
+use crate::meta::order_key::OrderKey;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(tag = "type")]
@@ -21,8 +22,7 @@ pub enum Position {
         db_type: String,
         schema: String,
         tb: String,
-        order_col: String,
-        value: String,
+        order_key: Option<OrderKey>,
     },
     RdbSnapshotFinished {
         db_type: String,
@@ -86,7 +86,8 @@ impl FromStr for Position {
 
 impl Position {
     pub fn from_log(log: &str) -> Position {
-        // 2024-03-29 07:02:24.463776 | current_position | {"type":"RdbSnapshot","db_type":"mysql","schema":"test_db_1","tb":"one_pk_no_uk","order_col":"f_0","value":"9"}
+        // 2024-03-29 07:02:24.463776 | current_position | {"type":"RdbSnapshot","db_type":"mysql","schema":"test_db_1","tb":"numeric_table","order_key":{"single":["f_0","127"]}}
+        // 2024-03-29 07:02:24.463776 | current_position | {"type":"RdbSnapshot","db_type":"mysql","schema":"test_db_1","tb":"numeric_table","order_key":{"composite":[["f_0","127"],["f_1","128"]]}}
         // 2024-04-01 03:25:18.701725 | {"type":"RdbSnapshotFinished","db_type":"mysql","schema":"test_db_1","tb":"one_pk_no_uk"}
         if log.trim().is_empty() {
             return Position::None;
@@ -149,19 +150,28 @@ mod test {
     fn test_from_str() {
         let strs = [
             r#"{"type":"None"}"#,
-            r#"{"type":"RdbSnapshot","db_type":"mysql","schema":"test_db_1","tb":"numeric_table","order_col":"f_0","value":"127"}"#,
+            r#"{"type":"RdbSnapshot","db_type":"mysql","schema":"test_db_1","tb":"numeric_table","order_key":null}"#,
+            r#"{"type":"RdbSnapshot","db_type":"mysql","schema":"test_db_1","tb":"numeric_table","order_key":{"single":["f_0","127"]}}"#,
+            r#"{"type":"RdbSnapshot","db_type":"mysql","schema":"test_db_1","tb":"numeric_table","order_key":{"composite":[["f_0","127"],["f_1","128"]]}}"#,
         ];
 
-        for str in strs {
+        let expected = [
+            r#"{"type":"None"}"#,
+            r#"{"type":"RdbSnapshot","db_type":"mysql","schema":"test_db_1","tb":"numeric_table","order_key":null}"#,
+            r#"{"type":"RdbSnapshot","db_type":"mysql","schema":"test_db_1","tb":"numeric_table","order_key":{"single":["f_0","127"]}}"#,
+            r#"{"type":"RdbSnapshot","db_type":"mysql","schema":"test_db_1","tb":"numeric_table","order_key":{"composite":[["f_0","127"],["f_1","128"]]}}"#,
+        ];
+
+        for (str, expected) in strs.iter().zip(expected.iter()) {
             let position = Position::from_str(str).unwrap();
-            assert_eq!(str, &position.to_string());
+            assert_eq!(expected, &position.to_string());
         }
     }
 
     #[test]
-    fn test_from_log() {
+    fn test_from_log_one_pk() {
         let log1 = r#"2024-04-01 03:25:18.701725 | {"type":"RdbSnapshotFinished","db_type":"mysql","schema":"test_db_1","tb":"one_pk_no_uk"}"#;
-        let log2 = r#"2024-03-29 07:02:24.463776 | current_position | {"type":"RdbSnapshot","db_type":"mysql","schema":"test_db_1","tb":"one_pk_no_uk","order_col":"f_0","value":"9"}"#;
+        let log2 = r#"2024-03-29 07:02:24.463776 | current_position | {"type":"RdbSnapshot","db_type":"mysql","schema":"test_db_1","tb":"one_pk_no_uk","order_key":{"single":["f_0","127"]}}"#;
         let log3 = "task finished";
 
         if let Position::RdbSnapshotFinished {
@@ -176,20 +186,62 @@ mod test {
         } else {
             panic!()
         }
-
+        let _res = Position::from_log(log2);
         if let Position::RdbSnapshot {
             db_type,
             schema,
             tb,
-            order_col,
-            value,
+            order_key: Some(OrderKey::Single((order_col, Some(value)))),
         } = Position::from_log(log2)
         {
             assert_eq!(db_type, "mysql");
             assert_eq!(schema, "test_db_1");
             assert_eq!(tb, "one_pk_no_uk");
             assert_eq!(order_col, "f_0");
-            assert_eq!(value, "9");
+            assert_eq!(value, "127");
+        } else {
+            panic!()
+        }
+
+        assert_eq!(Position::from_log(log3), Position::None);
+    }
+
+    #[test]
+    fn test_from_log_multi_pk() {
+        let log1 = r#"2024-04-01 03:25:18.701725 | {"type":"RdbSnapshotFinished","db_type":"mysql","schema":"test_db_1","tb":"one_pk_no_uk"}"#;
+        let log2 = r#"2024-03-29 07:02:24.463776 | current_position | {"type":"RdbSnapshot","db_type":"mysql","schema":"test_db_1","tb":"one_pk_no_uk","order_key":{"composite":[["f_0","127"],["f_1","128"]]}}"#;
+        let log3 = "task finished";
+
+        if let Position::RdbSnapshotFinished {
+            db_type,
+            schema,
+            tb,
+        } = Position::from_log(log1)
+        {
+            assert_eq!(db_type, "mysql");
+            assert_eq!(schema, "test_db_1");
+            assert_eq!(tb, "one_pk_no_uk");
+        } else {
+            panic!()
+        }
+        let _res = Position::from_log(log2);
+        if let Position::RdbSnapshot {
+            db_type,
+            schema,
+            tb,
+            order_key: Some(OrderKey::Composite(order_col_values)),
+        } = Position::from_log(log2)
+        {
+            assert_eq!(db_type, "mysql");
+            assert_eq!(schema, "test_db_1");
+            assert_eq!(tb, "one_pk_no_uk");
+            assert_eq!(
+                order_col_values,
+                vec![
+                    ("f_0".to_string(), Some("127".to_string())),
+                    ("f_1".to_string(), Some("128".to_string()))
+                ]
+            );
         } else {
             panic!()
         }

@@ -48,6 +48,18 @@ INSERT INTO test_db_1.one_pk_multi_uk VALUES (7,7,1,7,5,123456.1234,1234.78,1234
 INSERT INTO test_db_1.one_pk_multi_uk VALUES (8,8,1,8,50,654321.4321,4321.89,54321.321,3045,'2021-02-01 04:05:06.654321','04:05:06.654321','2012-02-01',2021,'2021-02-01 04:05:06.654321','1','2','3','4','5','6','7','8',x'ABCDEF0123456789',x'ABCDEF0123456789',x'ABCDEF0123456789',x'ABCDEF0123456789','small','b', NULL);
 INSERT INTO test_db_1.one_pk_multi_uk VALUES (9, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL);
 
+INSERT INTO test_db_1.multi_pk(f_0, f_1) VALUES (1, 30),(2, 30);
+
+INSERT INTO test_db_1.nullable_composite_unique_key_table VALUES(1, '1', 1),(2, '2', 2),(3, '3', 3),(4, '4', 4),(5, '5', 5),(6, '6', 6),(7, NULL, 7),(NULL, '8', 8),(NULL, 'null', 9),(NULL, NULL, 10),(NULL, NULL, NULL),(NULL, NULL, NULL);
+
+INSERT INTO test_db_1.bytea_pk_gb2312_test (category_id, binary_id, description) VALUES('cat1', CONVERT('你好世界0' USING gb2312), 'Chinese hello world in binary');
+INSERT INTO test_db_1.bytea_pk_gb2312_test (category_id, binary_id, description) VALUES('cat1', CONVERT('你好世界1' USING gb2312), 'Chinese hello world in binary');
+INSERT INTO test_db_1.bytea_pk_gb2312_test (category_id, binary_id, description) VALUES('cat2', CONVERT('hello world' USING gb2312), 'hello world in binary');
+
+INSERT INTO test_db_1.bytea_pk_utf8_test (category_id, binary_id, description) VALUES('cat1', '你好世界0', 'Chinese hello world in binary');
+INSERT INTO test_db_1.bytea_pk_utf8_test (category_id, binary_id, description) VALUES('cat1', '你好世界1', 'Chinese hello world in binary');
+INSERT INTO test_db_1.bytea_pk_utf8_test (category_id, binary_id, description) VALUES('cat2', 'hello world', 'hello world in binary');
+
 INSERT INTO `test_db_@`.`resume_table_*$4`(`p.k`, val) VALUES (1, 30),(2, 30);
 
 INSERT INTO `test_db_@`.`finished_table_*$1`(`p.k`, val) VALUES (1, 30),(2,30);

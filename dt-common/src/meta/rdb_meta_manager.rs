@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use anyhow::bail;
 
@@ -8,6 +8,8 @@ use super::{
     ddl_meta::ddl_data::DdlData, mysql::mysql_meta_manager::MysqlMetaManager,
     pg::pg_meta_manager::PgMetaManager, rdb_tb_meta::RdbTbMeta,
 };
+
+pub const RDB_PRIMARY_KEY_FLAG: &str = "primary";
 
 #[derive(Clone)]
 pub struct RdbMetaManager {
@@ -72,24 +74,40 @@ impl RdbMetaManager {
     pub fn parse_rdb_cols(
         key_map: &HashMap<String, Vec<String>>,
         cols: &[String],
-    ) -> anyhow::Result<(Option<String>, String, Vec<String>)> {
+        nullable_cols: &HashSet<String>,
+    ) -> anyhow::Result<(Vec<String>, String, Vec<String>)> {
         let mut id_cols = Vec::new();
-        if let Some(cols) = key_map.get("primary") {
+        if let Some(cols) = key_map.get(RDB_PRIMARY_KEY_FLAG) {
             // use primary key
             id_cols = cols.clone();
         } else if !key_map.is_empty() {
-            // use the unique key with least cols
-            for key_cols in key_map.values() {
-                if id_cols.is_empty() || id_cols.len() > key_cols.len() {
-                    id_cols = key_cols.clone();
+            // use unique key
+            // priority 1: use unique key with all non-nullable and least cols
+            let non_nullable_keys = key_map
+                .iter()
+                .filter(|(_, cols)| !cols.iter().any(|col| nullable_cols.contains(col)))
+                .map(|(_, cols)| cols)
+                .collect::<Vec<&Vec<String>>>();
+
+            for cols in non_nullable_keys {
+                if id_cols.is_empty() || id_cols.len() > cols.len() {
+                    id_cols = cols.clone();
+                }
+            }
+            // priority 2: use unique key with nullable cols
+            if id_cols.is_empty() {
+                for key_cols in key_map.values() {
+                    if id_cols.is_empty() || id_cols.len() > key_cols.len() {
+                        id_cols = key_cols.clone();
+                    }
                 }
             }
         }
 
-        let order_col = if id_cols.len() == 1 {
-            Some(id_cols.first().unwrap().clone())
+        let order_cols = if id_cols.is_empty() {
+            Vec::new()
         } else {
-            None
+            id_cols.clone()
         };
 
         if id_cols.is_empty() {
@@ -97,6 +115,7 @@ impl RdbMetaManager {
         }
 
         let partition_col = id_cols[0].clone();
-        Ok((order_col, partition_col, id_cols))
+
+        Ok((order_cols, partition_col, id_cols))
     }
 }

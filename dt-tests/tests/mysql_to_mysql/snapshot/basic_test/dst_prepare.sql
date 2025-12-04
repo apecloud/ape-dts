@@ -67,7 +67,19 @@ CREATE TABLE test_db_1.where_condition_3 ( f_0 int, f_1 int );
 -- ```
 
 -- test foreign key
-CREATE TABLE test_db_1.fk_tb_2 (f_0 int, f_1 int UNIQUE, f_2 int UNIQUE, f_3 int, PRIMARY KEY(f_0));
-CREATE TABLE test_db_1.fk_tb_1 (f_0 int, f_1 int UNIQUE, f_2 int UNIQUE, f_3 int, PRIMARY KEY(f_0));
-ALTER TABLE test_db_1.fk_tb_1 ADD CONSTRAINT fk_tb_1_1 FOREIGN KEY (f_1) REFERENCES test_db_1.fk_tb_2 (f_1);
-ALTER TABLE test_db_1.fk_tb_1 ADD CONSTRAINT fk_tb_1_2 FOREIGN KEY (f_2) REFERENCES test_db_1.fk_tb_2 (f_2);
+-- CREATE TABLE test_db_1.fk_tb_2 (f_0 int, f_1 int UNIQUE, f_2 int UNIQUE, f_3 int, PRIMARY KEY(f_0));
+-- CREATE TABLE test_db_1.fk_tb_1 (f_0 int, f_1 int UNIQUE, f_2 int UNIQUE, f_3 int, PRIMARY KEY(f_0));
+-- ALTER TABLE test_db_1.fk_tb_1 ADD CONSTRAINT fk_tb_1_1 FOREIGN KEY (f_1) REFERENCES test_db_1.fk_tb_2 (f_1);
+-- ALTER TABLE test_db_1.fk_tb_1 ADD CONSTRAINT fk_tb_1_2 FOREIGN KEY (f_2) REFERENCES test_db_1.fk_tb_2 (f_2);
+
+-- test composite primary key
+CREATE TABLE test_db_1.composite_pk_table (pk1 int, pk2 varchar(10), val int, PRIMARY KEY(pk1, pk2));
+
+-- test non-nullable composite unique key
+CREATE TABLE test_db_1.composite_unique_key_table (uk1 int not null, uk2 varchar(10) not null, val int, UNIQUE(uk1, uk2));
+
+--test nullable composite unique key
+CREATE TABLE test_db_1.composite_unique_key_table_2 (val int, uk2 varchar(10), uk1 int, UNIQUE(uk1, uk2));
+
+--test multi primary and single unique key
+CREATE TABLE test_db_1.multi_primary_and_single_unique_table (pk1 int, pk2 varchar(10), uk1 int not null, uk2 varchar(10), val int, PRIMARY KEY(pk1, pk2), UNIQUE(uk1), UNIQUE(uk2));

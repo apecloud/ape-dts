@@ -324,8 +324,8 @@ impl MysqlColValueConvertor {
                 | MysqlColType::TinyBlob
                 | MysqlColType::MediumBlob
                 | MysqlColType::Blob
-                | MysqlColType::LongBlob
-                | MysqlColType::Unknown => {
+                | MysqlColType::LongBlob => ColValue::Blob(hex::decode(value_str)?),
+                MysqlColType::Unknown => {
                     bail! {Error::Unexpected(format!(
                         "unsupported column type: {:?}",
                         col_type

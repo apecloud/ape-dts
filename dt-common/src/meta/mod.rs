@@ -12,6 +12,7 @@ pub mod foxlake;
 pub mod kafka;
 pub mod mongo;
 pub mod mysql;
+pub mod order_key;
 pub mod pg;
 pub mod position;
 pub mod rdb_meta_manager;

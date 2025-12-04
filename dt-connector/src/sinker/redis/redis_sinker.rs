@@ -209,11 +209,11 @@ impl RedisSinker {
             .await?;
 
         // no single primary / unique key exists, do not sink to redis
-        if tb_meta.order_col.is_none() {
+        if tb_meta.order_cols.is_empty() {
             return Ok(None);
         }
 
-        let key = if let Some(col) = &tb_meta.order_col {
+        let key = if let Some(col) = tb_meta.order_cols.first() {
             match row_data.row_type {
                 RowType::Insert | RowType::Update => row_data.after.as_ref().unwrap().get(col),
                 RowType::Delete => row_data.before.as_ref().unwrap().get(col),
