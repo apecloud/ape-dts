@@ -31,16 +31,16 @@ parallel_type=rdb_check
 
 # Results
 
-The results are written to logs in JSON format, including diff.log and miss.log. The logs are stored in the log/check subdirectory.
+The results are written to logs in JSON format, including diff.log, miss.log, sql.log and summary.log. The logs are stored in the log/check subdirectory.
 
 ## diff.log
 
 The diff log includes the database (schema), table (tb), primary key/unique key (id_col_values), and the source and target values of the differing columns (diff_col_values).
 
 ```json
-{"log_type":"Diff","schema":"test_db_1","tb":"one_pk_multi_uk","id_col_values":{"f_0":"5"},"diff_col_values":{"f_1":{"src":"5","dst":"5000"},"f_2":{"src":"ok","dst":"after manual update"}}}
-{"log_type":"Diff","schema":"test_db_1","tb":"one_pk_no_uk","id_col_values":{"f_0":"4"},"diff_col_values":{"f_1":{"src":"2","dst":"1"}}}
-{"log_type":"Diff","schema":"test_db_1","tb":"one_pk_no_uk","id_col_values":{"f_0":"6"},"diff_col_values":{"f_1":{"src":null,"dst":"1","src_type":"None","dst_type":"Short"}}}
+{"schema":"test_db_1","tb":"one_pk_multi_uk","id_col_values":{"f_0":"5"},"diff_col_values":{"f_1":{"src":"5","dst":"5000"},"f_2":{"src":"ok","dst":"after manual update"}}}
+{"schema":"test_db_1","tb":"one_pk_no_uk","id_col_values":{"f_0":"4"},"diff_col_values":{"f_1":{"src":"2","dst":"1"}}}
+{"schema":"test_db_1","tb":"one_pk_no_uk","id_col_values":{"f_0":"6"},"diff_col_values":{"f_1":{"src":null,"dst":"1","src_type":"None","dst_type":"Short"}}}
 ```
 
 When the source/target value types differ (for example `Int32` vs `Int64`, or `None` vs `Short`), `src_type`/`dst_type` will be emitted for that column to highlight the type mismatch. This applies to Mongo as well—the checker prints BSON type names when Mongo documents differ.
@@ -50,9 +50,9 @@ When the source/target value types differ (for example `Int32` vs `Int64`, or `N
 The miss log includes the database (schema), table (tb), and primary key/unique key (id_col_values). Because missing rows lack differing columns, the log does not emit `diff_col_values`.
 
 ```json
-{"log_type":"Miss","schema":"test_db_1","tb":"no_pk_one_uk","id_col_values":{"f_1":"8","f_2":"1"}}
-{"log_type":"Miss","schema":"test_db_1","tb":"no_pk_one_uk","id_col_values":{"f_1":null,"f_2":null}}
-{"log_type":"Miss","schema":"test_db_1","tb":"one_pk_multi_uk","id_col_values":{"f_0":"7"}}
+{"schema":"test_db_1","tb":"no_pk_one_uk","id_col_values":{"f_1":"8","f_2":"1"}}
+{"schema":"test_db_1","tb":"no_pk_one_uk","id_col_values":{"f_1":null,"f_2":null}}
+{"schema":"test_db_1","tb":"one_pk_multi_uk","id_col_values":{"f_0":"7"}}
 ```
 
 ## Output complete rows
@@ -68,7 +68,6 @@ When set to `true`, the checker appends `src_row` and `dst_row` to every diff lo
 
 ```json
 {
-  "log_type": "Diff",
   "schema": "test_db_1",
   "tb": "one_pk_multi_uk",
   "id_col_values": {
@@ -101,7 +100,6 @@ Missing entries also include `src_row` when `output_full_row=true`. Example:
 
 ```json
 {
-  "log_type": "Miss",
   "schema": "test_db_1",
   "tb": "test_table",
   "id_col_values": {
@@ -127,37 +125,25 @@ output_revise_sql=true
 revise_match_full_row=true
 ```
 
-When `output_revise_sql` is `true`, every miss/diff log contains an extra `revise_sql` field. The checker automatically builds `INSERT` statements for missing rows and `UPDATE` statements for diffs. With `revise_match_full_row=true`, the `UPDATE` statement matches the entire target row even if a primary/unique key exists.
+When `output_revise_sql` is `true`, the checker automatically builds `INSERT` statements for missing rows and `UPDATE` statements for diffs. These statements are written to `sql.log`. With `revise_match_full_row=true`, the `UPDATE` statement matches the entire target row even if a primary/unique key exists.
 
-When routers rename schema or table names, the log emits `target_schema` and `target_tb` so you always know where the generated SQL should run (these fields point to the destination naming, while `schema`/`tb` still represent the source). They are omitted when the router leaves the names unchanged.
+When routers rename schema or table names, the generated SQL uses the destination names.
 
-`revise_sql` captures the SQL the sinker should execute to reconcile the target engine with the source data captured in the diff. Because it is generated against the destination schema/table, you can run it directly on the sinker (and you can double-check the exact database/table via `target_schema`/`target_tb` when they appear).
+`revise_sql` captures the SQL the sinker should execute to reconcile the target engine with the source data captured in the diff. Because it is generated against the destination schema/table, you can run it directly on the sinker.
 
-Example:
+Example `sql.log`:
 
-```json
-{
-  "log_type": "Diff",
-  "schema": "test_db_1",
-  "tb": "one_pk_no_uk",
-  "target_schema": "target_db",
-  "target_tb": "target_tb",
-  "id_col_values": {"f_0": "4"},
-  "diff_col_values": {"f_1": {"src": "2", "dst": "1"}},
-  "revise_sql": "UPDATE `target_db`.`target_tb` SET `f_1`='2' WHERE `f_0` = 4;"
-}
+```sql
+UPDATE `target_db`.`target_tb` SET `f_1`='2' WHERE `f_0` = 4;
+INSERT INTO `test_db_1`.`test_table`(`id`,`name`,`age`,`email`) VALUES(3,'Charlie',35,'charlie@example.com');
 ```
 
-Missing rows also carry `revise_sql` when enabled. Example:
+### summary.log
+
+The summary log contains the overall result of the check, such as the number of missing and different rows.
 
 ```json
-{
-  "log_type": "Miss",
-  "schema": "test_db_1",
-  "tb": "test_table",
-  "id_col_values": {"id": "3"},
-  "revise_sql": "INSERT INTO `test_db_1`.`test_table`(`id`,`name`,`age`,`email`) VALUES(3,'Charlie',35,'charlie@example.com');"
-}
+{"start_time":"2023-09-01T12:00:00+08:00","end_time":"2023-09-01T12:00:01+08:00","is_consistent":false,"miss_count":1,"diff_count":2,"sql_count":3}
 ```
 
 # Other configurations

@@ -18,7 +18,7 @@ use crate::{
     Sinker,
 };
 use dt_common::{
-    log_error,
+    log_error, log_sql,
     meta::{
         col_value::ColValue,
         mongo::{mongo_constant::MongoConstants, mongo_key::MongoKey},
@@ -148,7 +148,7 @@ impl MongoChecker {
                         .transpose()?
                         .flatten();
 
-                    let mut diff_log = BaseChecker::build_mongo_diff_log(
+                    let diff_log = BaseChecker::build_mongo_diff_log(
                         src_row_data,
                         dst_row_data,
                         diff_col_values,
@@ -156,7 +156,9 @@ impl MongoChecker {
                         &self.reverse_router,
                         self.output_full_row,
                     )?;
-                    diff_log.revise_sql = revise_sql;
+                    if let Some(revise_sql) = revise_sql {
+                        log_sql!("{}", revise_sql);
+                    }
                     diff.push(diff_log);
                 }
             } else {
@@ -166,13 +168,15 @@ impl MongoChecker {
                     .transpose()?
                     .flatten();
 
-                let mut miss_log = BaseChecker::build_mongo_miss_log(
+                let miss_log = BaseChecker::build_mongo_miss_log(
                     src_row_data,
                     &tb_meta,
                     &self.reverse_router,
                     self.output_full_row,
                 )?;
-                miss_log.revise_sql = revise_sql;
+                if let Some(revise_sql) = revise_sql {
+                    log_sql!("{}", revise_sql);
+                }
                 miss.push(miss_log);
             };
         }

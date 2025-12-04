@@ -8,11 +8,8 @@ use dt_common::{error::Error, meta::col_value::ColValue};
 use serde::{Deserialize, Serialize, Serializer};
 use serde_json::json;
 
-use super::log_type::LogType;
-
 #[derive(Serialize, Deserialize)]
 pub struct CheckLog {
-    pub log_type: LogType,
     pub schema: String,
     pub tb: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -26,6 +23,7 @@ pub struct CheckLog {
         skip_serializing_if = "HashMap::is_empty",
         serialize_with = "ordered_map"
     )]
+    // diff_col_values is empty means no diff, is miss
     pub diff_col_values: HashMap<String, DiffColValue>,
     #[serde(
         default,
@@ -39,8 +37,6 @@ pub struct CheckLog {
         serialize_with = "ordered_option_map"
     )]
     pub dst_row: Option<HashMap<String, ColValue>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub revise_sql: Option<String>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -51,6 +47,29 @@ pub struct DiffColValue {
     pub src_type: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dst_type: Option<String>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct CheckSummaryLog {
+    pub start_time: String,
+    pub end_time: String,
+    pub is_consistent: bool,
+    #[serde(skip_serializing_if = "is_zero")]
+    pub miss_count: usize,
+    #[serde(skip_serializing_if = "is_zero")]
+    pub diff_count: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sql_count: Option<usize>,
+}
+
+fn is_zero(num: &usize) -> bool {
+    *num == 0
+}
+
+impl std::fmt::Display for CheckSummaryLog {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", json!(self))
+    }
 }
 
 impl std::fmt::Display for CheckLog {
@@ -103,7 +122,6 @@ mod tests {
         let mut id_col_values = HashMap::new();
         id_col_values.insert("id".to_string(), Some("1".to_string()));
         CheckLog {
-            log_type: LogType::Diff,
             schema: "s".into(),
             tb: "t".into(),
             target_schema: None,
@@ -112,7 +130,6 @@ mod tests {
             diff_col_values: HashMap::new(),
             src_row: None,
             dst_row: None,
-            revise_sql: None,
         }
     }
 

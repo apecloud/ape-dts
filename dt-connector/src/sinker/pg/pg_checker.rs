@@ -21,6 +21,7 @@ use crate::{
     Sinker,
 };
 use dt_common::{
+    log_sql,
     meta::{
         pg::pg_meta_manager::PgMetaManager,
         rdb_meta_manager::RdbMetaManager,
@@ -119,8 +120,9 @@ impl PgChecker {
                         self.output_full_row,
                     )
                     .await?;
-                    let mut diff_log = diff_log;
-                    diff_log.revise_sql = revise_sql;
+                    if let Some(revise_sql) = revise_sql {
+                        log_sql!("{}", revise_sql);
+                    }
                     diff.push(diff_log);
                 }
             } else {
@@ -137,8 +139,9 @@ impl PgChecker {
                     self.output_full_row,
                 )
                 .await?;
-                let mut miss_log = miss_log;
-                miss_log.revise_sql = revise_sql;
+                if let Some(revise_sql) = revise_sql {
+                    log_sql!("{}", revise_sql);
+                }
                 miss.push(miss_log);
             }
         }

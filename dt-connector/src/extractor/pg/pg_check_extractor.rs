@@ -20,7 +20,7 @@ use dt_common::{
 };
 
 use crate::{
-    check_log::{check_log::CheckLog, log_type::LogType},
+    check_log::check_log::CheckLog,
     extractor::{base_check_extractor::BaseCheckExtractor, base_extractor::BaseExtractor},
     rdb_query_builder::RdbQueryBuilder,
     BatchCheckExtractor, Extractor,
@@ -57,7 +57,7 @@ impl BatchCheckExtractor for PgCheckExtractor {
     async fn batch_extract(&mut self, check_logs: &[CheckLog]) -> anyhow::Result<()> {
         let schema = &check_logs[0].schema;
         let tb = &check_logs[0].tb;
-        let log_type = &check_logs[0].log_type;
+        let is_diff = !check_logs[0].diff_col_values.is_empty();
         let tb_meta = self.meta_manager.get_tb_meta(schema, tb).await?.to_owned();
         let check_row_data_items = self.build_check_row_data_items(check_logs, &tb_meta)?;
 
@@ -78,7 +78,7 @@ impl BatchCheckExtractor for PgCheckExtractor {
         while let Some(row) = rows.try_next().await.unwrap() {
             let mut row_data = RowData::from_pg_row(&row, &tb_meta, &ignore_cols);
 
-            if log_type == &LogType::Diff {
+            if is_diff {
                 row_data.row_type = RowType::Update;
                 row_data.before = row_data.after.clone();
             }

@@ -18,7 +18,7 @@ use mongodb::{
 };
 
 use crate::{
-    check_log::{check_log::CheckLog, log_type::LogType},
+    check_log::check_log::CheckLog,
     extractor::{base_check_extractor::BaseCheckExtractor, base_extractor::BaseExtractor},
     BatchCheckExtractor, Extractor,
 };
@@ -51,7 +51,7 @@ impl Extractor for MongoCheckExtractor {
 #[async_trait]
 impl BatchCheckExtractor for MongoCheckExtractor {
     async fn batch_extract(&mut self, check_logs: &[CheckLog]) -> anyhow::Result<()> {
-        let log_type = &check_logs[0].log_type;
+        let is_diff = !check_logs[0].diff_col_values.is_empty();
         let schema = &check_logs[0].schema;
         let tb = &check_logs[0].tb;
         let collection = self
@@ -90,7 +90,7 @@ impl BatchCheckExtractor for MongoCheckExtractor {
                 Some(after),
             );
 
-            if log_type == &LogType::Diff {
+            if is_diff {
                 row_data.row_type = RowType::Update;
                 row_data.before = row_data.after.clone();
             }
