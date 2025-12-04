@@ -16,6 +16,8 @@ pub struct BaseTestRunner {
     pub struct_task_config_file: String,
     pub src_test_sqls: Vec<String>,
     pub dst_test_sqls: Vec<String>,
+    pub src_post_test_sqls: Vec<String>,
+    pub dst_post_test_sqls: Vec<String>,
     pub src_prepare_sqls: Vec<String>,
     pub dst_prepare_sqls: Vec<String>,
     pub src_clean_sqls: Vec<String>,
@@ -38,6 +40,8 @@ impl BaseTestRunner {
         let (
             src_test_sqls,
             dst_test_sqls,
+            src_post_test_sqls,
+            dst_post_test_sqls,
             src_prepare_sqls,
             dst_prepare_sqls,
             src_clean_sqls,
@@ -51,6 +55,8 @@ impl BaseTestRunner {
             test_dir,
             src_test_sqls,
             dst_test_sqls,
+            src_post_test_sqls,
+            dst_post_test_sqls,
             src_prepare_sqls,
             dst_prepare_sqls,
             src_clean_sqls,
@@ -156,6 +162,8 @@ impl BaseTestRunner {
         Vec<String>,
         Vec<String>,
         Vec<String>,
+        Vec<String>,
+        Vec<String>,
     ) {
         let load = |sql_file: &str| -> Vec<String> {
             let full_sql_path = format!("{}/{}", test_dir, sql_file);
@@ -168,6 +176,8 @@ impl BaseTestRunner {
         (
             load("src_test.sql"),
             load("dst_test.sql"),
+            load("src_post_test.sql"),
+            load("dst_post_test.sql"),
             load("src_prepare.sql"),
             load("dst_prepare.sql"),
             load("src_clean.sql"),

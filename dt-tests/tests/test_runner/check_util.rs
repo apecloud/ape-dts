@@ -1,4 +1,4 @@
-use std::{collections::HashSet, fs::File};
+use std::{collections::HashSet, fs, fs::File, path::Path};
 
 use dt_common::config::{config_enums::DbType, sinker_config::SinkerConfig};
 
@@ -39,9 +39,10 @@ impl CheckUtil {
         let files = ["miss.log", "diff.log", "extra.log"];
         for file in files {
             let log_file = format!("{}/{}", dst_check_log_dir, file);
-            if BaseTestRunner::check_path_exists(&log_file) {
-                File::create(&log_file).unwrap().set_len(0).unwrap();
+            if let Some(parent) = Path::new(&log_file).parent() {
+                let _ = fs::create_dir_all(parent);
             }
+            File::create(&log_file).unwrap().set_len(0).unwrap();
         }
     }
 
