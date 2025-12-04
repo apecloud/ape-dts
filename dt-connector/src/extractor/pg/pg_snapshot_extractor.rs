@@ -16,6 +16,7 @@ use dt_common::{
     meta::{
         adaptor::{pg_col_value_convertor::PgColValueConvertor, sqlx_ext::SqlxPgExt},
         col_value::ColValue,
+        order_key::OrderKey,
         pg::{pg_meta_manager::PgMetaManager, pg_tb_meta::PgTbMeta},
         position::Position,
         rdb_tb_meta::RdbTbMeta,
@@ -354,9 +355,7 @@ impl PgSnapshotExtractor {
             if let Some(Position::RdbSnapshot {
                 schema,
                 tb,
-                order_col,
-                value,
-                order_col_values,
+                order_key: Some(order_key),
                 ..
             }) = handler
                 .get_snapshot_resume_position(&self.schema, &self.tb, false)
@@ -370,32 +369,11 @@ impl PgSnapshotExtractor {
                     );
                     return Ok(HashMap::new());
                 }
-
-                if order_col_values.is_empty() {
-                    resume_values.insert(
-                        order_col.clone(),
-                        PgColValueConvertor::from_str(
-                            tb_meta.get_col_type(&order_col)?,
-                            &value,
-                            &mut self.meta_manager,
-                        )?,
-                    );
-                }
-                for (order_col, value) in order_col_values {
-                    if let Some(value_str) = value {
-                        resume_values.insert(
-                            order_col.clone(),
-                            PgColValueConvertor::from_str(
-                                tb_meta.get_col_type(&order_col)?,
-                                &value_str,
-                                &mut self.meta_manager,
-                            )?,
-                        );
-                    } else {
-                        resume_values.insert(order_col, ColValue::None);
-                    }
-                }
-                if resume_values.len() != tb_meta.basic.order_cols.len() {
+                let order_col_values = match order_key {
+                    OrderKey::Single((order_col, value)) => vec![(order_col, value)],
+                    OrderKey::Composite(values) => values,
+                };
+                if order_col_values.len() != tb_meta.basic.order_cols.len() {
                     log_info!(
                         r#""{}"."{}" resume values not match order cols in length"#,
                         self.schema,
@@ -403,17 +381,29 @@ impl PgSnapshotExtractor {
                     );
                     return Ok(HashMap::new());
                 }
-
-                for order_col in &tb_meta.basic.order_cols {
-                    if !resume_values.contains_key(order_col) {
+                for ((position_order_col, value), order_col) in order_col_values
+                    .into_iter()
+                    .zip(tb_meta.basic.order_cols.iter())
+                {
+                    if position_order_col != *order_col {
                         log_info!(
-                            r#""{}"."{}" resume position missing order col {}"#,
+                            r#""{}"."{}" resume position order col {} not match {}"#,
                             self.schema,
                             self.tb,
+                            position_order_col,
                             order_col
                         );
                         return Ok(HashMap::new());
                     }
+                    let col_value = match value {
+                        Some(v) => PgColValueConvertor::from_str(
+                            tb_meta.get_col_type(order_col)?,
+                            &v,
+                            &mut self.meta_manager,
+                        )?,
+                        None => ColValue::None,
+                    };
+                    resume_values.insert(position_order_col, col_value);
                 }
             } else {
                 log_info!(r#""{}"."{}" has no resume position"#, self.schema, self.tb);

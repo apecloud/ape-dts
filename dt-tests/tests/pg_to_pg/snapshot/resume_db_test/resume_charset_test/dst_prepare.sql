@@ -30,4 +30,4 @@ CREATE TABLE IF NOT EXISTS apecloud_resumer_test.ape_task_position (
 )
 ```
 
-insert into apecloud_resumer_test.ape_task_position (task_id, resumer_type, position_key, position_data) values ('resume_db_test_1', 'SnapshotDoing', 'public-bytea_pk_test', '{"type":"RdbSnapshot","db_type":"pg","schema":"public","tb":"bytea_pk_test","order_col_values":{"binary_id":"c4e3bac3cac0bde730","category_id":"cat1"}}');
+insert into apecloud_resumer_test.ape_task_position (task_id, resumer_type, position_key, position_data) values ('resume_db_test_1', 'SnapshotDoing', 'public-bytea_pk_test', '{"type":"RdbSnapshot","db_type":"pg","schema":"public","tb":"bytea_pk_test","order_key":{"composite":[["category_id","cat1"],["binary_id","c4e3bac3cac0bde730"]]}}');

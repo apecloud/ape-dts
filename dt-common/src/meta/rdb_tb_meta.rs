@@ -4,7 +4,7 @@ use serde::Serialize;
 
 use crate::{
     config::config_enums::DbType,
-    meta::{col_value::ColValue, foreign_key::ForeignKey, position::Position},
+    meta::{col_value::ColValue, foreign_key::ForeignKey, order_key::OrderKey, position::Position},
 };
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -37,22 +37,25 @@ impl RdbTbMeta {
         db_type: &DbType,
         col_values: &HashMap<String, ColValue>,
     ) -> Position {
-        let mut order_col_values = HashMap::new();
+        let mut order_col_values = Vec::new();
         for order_col in &self.order_cols {
-            if let Some(value) = col_values.get(order_col) {
-                order_col_values.insert(order_col.to_string(), value.to_option_string());
+            if let Some(v) = col_values.get(order_col) {
+                order_col_values.push((order_col.clone(), v.to_option_string()));
             } else {
                 // Do not record rows whose composite unique columns have NULL values.
                 return Position::None;
             }
         }
+        let order_key = match order_col_values.len() {
+            0 => None,
+            1 => Some(OrderKey::Single(order_col_values[0].clone())),
+            _ => Some(OrderKey::Composite(order_col_values.clone())),
+        };
         Position::RdbSnapshot {
             db_type: db_type.to_string(),
             schema: self.schema.clone(),
             tb: self.tb.clone(),
-            order_col: String::new(),
-            value: String::new(),
-            order_col_values,
+            order_key,
         }
     }
 }

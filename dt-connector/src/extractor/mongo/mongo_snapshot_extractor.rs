@@ -17,6 +17,7 @@ use dt_common::{
     meta::{
         col_value::ColValue,
         mongo::{mongo_constant::MongoConstants, mongo_key::MongoKey},
+        order_key::OrderKey,
         position::Position,
         row_data::RowData,
         row_type::RowType,
@@ -53,7 +54,10 @@ impl MongoSnapshotExtractor {
         log_info!("start extracting data from {}.{}", self.db, self.tb);
 
         let filter = if let Some(handler) = &self.recovery {
-            if let Some(Position::RdbSnapshot { value, .. }) = handler
+            if let Some(Position::RdbSnapshot {
+                order_key: Some(OrderKey::Single((_, Some(value)))),
+                ..
+            }) = handler
                 .get_snapshot_resume_position(&self.db, &self.tb, false)
                 .await
             {
@@ -114,9 +118,10 @@ impl MongoSnapshotExtractor {
                 db_type: DbType::Mongo.to_string(),
                 schema: self.db.clone(),
                 tb: self.tb.clone(),
-                order_col: MongoConstants::ID.into(),
-                value: object_id,
-                order_col_values: HashMap::new(),
+                order_key: Some(OrderKey::Single((
+                    MongoConstants::ID.into(),
+                    Some(object_id),
+                ))),
             };
 
             self.base_extractor.push_row(row_data, position).await?;

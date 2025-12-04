@@ -31,6 +31,7 @@ use dt_common::{
             mysql_col_type::MysqlColType, mysql_meta_manager::MysqlMetaManager,
             mysql_tb_meta::MysqlTbMeta,
         },
+        order_key::OrderKey,
         position::Position,
         rdb_tb_meta::RdbTbMeta,
         row_data::RowData,
@@ -429,9 +430,7 @@ impl MysqlSnapshotExtractor {
                 db_type: DbType::Mysql.to_string(),
                 schema: db.into(),
                 tb: tb.into(),
-                order_col: order_col.into(),
-                value,
-                order_col_values: HashMap::new(),
+                order_key: Some(OrderKey::Single((order_col.to_owned(), Some(value)))),
             }
         } else {
             Position::None
@@ -504,9 +503,7 @@ impl MysqlSnapshotExtractor {
             if let Some(Position::RdbSnapshot {
                 schema,
                 tb,
-                order_col,
-                value,
-                order_col_values,
+                order_key: Some(order_key),
                 ..
             }) = handler
                 .get_snapshot_resume_position(&self.db, &self.tb, check_point)
@@ -520,30 +517,11 @@ impl MysqlSnapshotExtractor {
                     );
                     return Ok(HashMap::new());
                 }
-
-                if order_col_values.is_empty() {
-                    resume_values.insert(
-                        order_col.clone(),
-                        MysqlColValueConvertor::from_str(
-                            tb_meta.get_col_type(&order_col)?,
-                            &value,
-                        )?,
-                    );
-                }
-                for (order_col, value) in order_col_values {
-                    if let Some(value_str) = value {
-                        resume_values.insert(
-                            order_col.clone(),
-                            MysqlColValueConvertor::from_str(
-                                tb_meta.get_col_type(&order_col)?,
-                                &value_str,
-                            )?,
-                        );
-                    } else {
-                        resume_values.insert(order_col, ColValue::None);
-                    }
-                }
-                if resume_values.len() != tb_meta.basic.order_cols.len() {
+                let order_col_values = match order_key {
+                    OrderKey::Single((order_col, value)) => vec![(order_col, value)],
+                    OrderKey::Composite(values) => values,
+                };
+                if order_col_values.len() != tb_meta.basic.order_cols.len() {
                     log_info!(
                         r#"`{}`.`{}` resume values not match order cols in length"#,
                         self.db,
@@ -551,17 +529,27 @@ impl MysqlSnapshotExtractor {
                     );
                     return Ok(HashMap::new());
                 }
-
-                for order_col in &tb_meta.basic.order_cols {
-                    if !resume_values.contains_key(order_col) {
+                for ((position_order_col, value), order_col) in order_col_values
+                    .into_iter()
+                    .zip(tb_meta.basic.order_cols.iter())
+                {
+                    if position_order_col != *order_col {
                         log_info!(
-                            r#"`{}`.`{}` resume position missing order col {}"#,
+                            r#"`{}`.`{}` resume position order col {} not match {}"#,
                             self.db,
                             self.tb,
+                            position_order_col,
                             order_col
                         );
                         return Ok(HashMap::new());
                     }
+                    let col_value = match value {
+                        Some(v) => {
+                            MysqlColValueConvertor::from_str(tb_meta.get_col_type(order_col)?, &v)?
+                        }
+                        None => ColValue::None,
+                    };
+                    resume_values.insert(position_order_col, col_value);
                 }
             } else {
                 log_info!(r#"`{}`.`{}` has no resume position"#, self.db, self.tb);
