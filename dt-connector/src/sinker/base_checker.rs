@@ -9,13 +9,10 @@ use dt_common::meta::{
     row_data::RowData, row_type::RowType,
     struct_meta::statement::struct_statement::StructStatement,
 };
-use dt_common::{log_diff, log_miss, rdb_filter::RdbFilter};
+use dt_common::{log_diff, log_miss, log_sql, log_summary, rdb_filter::RdbFilter};
 
 use crate::{
-    check_log::{
-        check_log::{CheckLog, DiffColValue},
-        log_type::LogType,
-    },
+    check_log::check_log::{CheckLog, CheckSummaryLog, DiffColValue},
     rdb_query_builder::RdbQueryBuilder,
     rdb_router::RdbRouter,
     sinker::mongo::mongo_cmd,
@@ -186,13 +183,13 @@ pub struct BatchCompareContext<'ctx> {
 }
 
 impl BaseChecker {
-    #[inline(always)]
     pub async fn batch_compare_row_data_items(
         src_data: &[RowData],
         dst_row_data_map: &HashMap<u128, RowData>,
         range: BatchCompareRange,
         ctx: BatchCompareContext<'_>,
     ) -> anyhow::Result<(Vec<CheckLog>, Vec<CheckLog>)> {
+        let start_time = chrono::Local::now().to_rfc3339();
         let BatchCompareContext {
             dst_tb_meta,
             extractor_meta_manager,
@@ -211,6 +208,7 @@ impl BaseChecker {
         let target_slice = &src_data[start..end];
         let mut miss = Vec::new();
         let mut diff = Vec::new();
+        let mut sql_count = 0;
 
         for src_row_data in target_slice {
             let hash_code = src_row_data.get_hash_code(dst_tb_meta)?;
@@ -222,13 +220,17 @@ impl BaseChecker {
                         continue;
                     }
 
-                    let revise_sql = revise_ctx
+                    if let Some(revise_sql) = revise_ctx
                         .as_ref()
                         .map(|ctx| ctx.build_diff_sql(src_row_data, dst_row_data, &diff_col_values))
                         .transpose()?
-                        .flatten();
+                        .flatten()
+                    {
+                        log_sql!("{}", revise_sql);
+                        sql_count += 1;
+                    }
 
-                    let mut diff_log = Self::build_diff_log(
+                    let diff_log = Self::build_diff_log(
                         src_row_data,
                         dst_row_data,
                         diff_col_values,
@@ -237,32 +239,47 @@ impl BaseChecker {
                         output_full_row,
                     )
                     .await?;
-                    diff_log.revise_sql = revise_sql;
                     diff.push(diff_log);
                 }
                 None => {
-                    let revise_sql = revise_ctx
+                    if let Some(revise_sql) = revise_ctx
                         .as_ref()
                         .map(|ctx| ctx.build_miss_sql(src_row_data))
                         .transpose()?
-                        .flatten();
+                        .flatten()
+                    {
+                        log_sql!("{}", revise_sql);
+                        sql_count += 1;
+                    }
 
-                    let mut miss_log = Self::build_miss_log(
+                    let miss_log = Self::build_miss_log(
                         src_row_data,
                         extractor_meta_manager,
                         reverse_router,
                         output_full_row,
                     )
                     .await?;
-                    miss_log.revise_sql = revise_sql;
                     miss.push(miss_log);
                 }
             }
         }
+
+        if !miss.is_empty() || !diff.is_empty() {
+            let end_time = chrono::Local::now().to_rfc3339();
+            let summary_log = CheckSummaryLog {
+                start_time,
+                end_time,
+                is_consistent: false,
+                miss_count: miss.len(),
+                diff_count: diff.len(),
+                sql_count: if sql_count > 0 { Some(sql_count) } else { None },
+            };
+            log_summary!("{}", summary_log);
+        }
+
         Ok((miss, diff))
     }
 
-    #[inline(always)]
     pub fn compare_row_data(
         src_row_data: &RowData,
         dst_row_data: &RowData,
@@ -333,7 +350,6 @@ impl BaseChecker {
         }
     }
 
-    #[inline(always)]
     pub fn compare_struct(
         src_statement: &mut StructStatement,
         dst_statement: &mut StructStatement,
@@ -388,7 +404,6 @@ impl BaseChecker {
             .flatten();
 
         Ok(CheckLog {
-            log_type: LogType::Miss,
             schema: reverse_src_row_data.schema,
             tb: reverse_src_row_data.tb,
             target_schema,
@@ -397,7 +412,6 @@ impl BaseChecker {
             diff_col_values: HashMap::new(),
             src_row,
             dst_row: None,
-            revise_sql: None,
         })
     }
 
@@ -430,7 +444,6 @@ impl BaseChecker {
             diff_col_values
         };
 
-        log.log_type = LogType::Diff;
         log.diff_col_values = mapped_diff_values;
 
         if output_full_row {
@@ -470,7 +483,6 @@ impl BaseChecker {
         };
 
         Ok(CheckLog {
-            log_type: LogType::Miss,
             schema: reverse_src_row_data.schema,
             tb: reverse_src_row_data.tb,
             target_schema,
@@ -479,7 +491,6 @@ impl BaseChecker {
             diff_col_values: HashMap::new(),
             src_row,
             dst_row: None,
-            revise_sql: None,
         })
     }
 
@@ -495,7 +506,6 @@ impl BaseChecker {
             Self::build_mongo_miss_log(src_row_data, tb_meta, reverse_router, output_full_row)?;
 
         diff_log.diff_col_values = diff_col_values;
-        diff_log.log_type = LogType::Diff;
 
         if output_full_row {
             let reverse_dst_row_data = reverse_router.route_row(dst_row_data);
