@@ -1,0 +1,1 @@
+DROP DATABASE IF EXISTS test_db_1;

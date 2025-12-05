@@ -4,6 +4,7 @@ use std::{
     sync::Arc,
 };
 
+use async_mutex::Mutex;
 use async_trait::async_trait;
 use futures::TryStreamExt;
 use sqlx::{Pool, Postgres};
@@ -11,6 +12,7 @@ use tokio::time::Instant;
 
 use crate::{
     call_batch_fn,
+    check_log::check_log::CheckSummaryLog,
     meta_fetcher::pg::pg_struct_fetcher::PgStructFetcher,
     rdb_query_builder::RdbQueryBuilder,
     rdb_router::RdbRouter,
@@ -21,7 +23,7 @@ use crate::{
     Sinker,
 };
 use dt_common::{
-    log_sql,
+    log_sql, log_summary,
     meta::{
         pg::pg_meta_manager::PgMetaManager,
         rdb_meta_manager::RdbMetaManager,
@@ -45,6 +47,8 @@ pub struct PgChecker {
     pub output_full_row: bool,
     pub output_revise_sql: bool,
     pub revise_match_full_row: bool,
+    pub summary: CheckSummaryLog,
+    pub global_summary: Option<Arc<Mutex<CheckSummaryLog>>>,
 }
 
 #[async_trait]
@@ -63,6 +67,16 @@ impl Sinker for PgChecker {
     }
 
     async fn close(&mut self) -> anyhow::Result<()> {
+        if self.summary.miss_count > 0 || self.summary.diff_count > 0 {
+            self.summary.end_time = chrono::Local::now().to_rfc3339();
+            if let Some(global_summary) = &self.global_summary {
+                let mut global_summary = global_summary.lock().await;
+                global_summary.merge(&self.summary);
+            } else {
+                log_summary!("{}", self.summary);
+            }
+        }
+
         self.meta_manager.close().await?;
         self.extractor_meta_manager.close().await
     }
@@ -145,7 +159,7 @@ impl PgChecker {
                 miss.push(miss_log);
             }
         }
-        BaseChecker::log_dml(miss, diff);
+        BaseChecker::log_dml(&miss, &diff);
 
         BaseSinker::update_serial_monitor(&self.monitor, data.len() as u64, 0).await?;
         BaseSinker::update_monitor_rt(&self.monitor, &rts).await
@@ -193,10 +207,18 @@ impl PgChecker {
             revise_ctx: revise_ctx.as_ref(),
         };
 
-        let (miss, diff) =
+        let (miss, diff, sql_count) =
             BaseChecker::batch_compare_row_data_items(data, &dst_row_data_map, compare_range, ctx)
                 .await?;
-        BaseChecker::log_dml(miss, diff);
+
+        BaseChecker::log_dml(&miss, &diff);
+
+        self.summary.end_time = chrono::Local::now().to_rfc3339();
+        self.summary.miss_count += miss.len();
+        self.summary.diff_count += diff.len();
+        if sql_count > 0 {
+            self.summary.sql_count = Some(self.summary.sql_count.unwrap_or(0) + sql_count);
+        }
 
         BaseSinker::update_batch_monitor(&self.monitor, batch_size as u64, 0).await?;
         BaseSinker::update_monitor_rt(&self.monitor, &rts).await

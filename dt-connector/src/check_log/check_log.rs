@@ -49,7 +49,7 @@ pub struct DiffColValue {
     pub dst_type: Option<String>,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone, Default)]
 pub struct CheckSummaryLog {
     pub start_time: String,
     pub end_time: String,
@@ -64,6 +64,20 @@ pub struct CheckSummaryLog {
 
 fn is_zero(num: &usize) -> bool {
     *num == 0
+}
+
+impl CheckSummaryLog {
+    pub fn merge(&mut self, other: &CheckSummaryLog) {
+        if other.end_time > self.end_time {
+            self.end_time = other.end_time.clone();
+        }
+        self.is_consistent = self.is_consistent && other.is_consistent;
+        self.miss_count += other.miss_count;
+        self.diff_count += other.diff_count;
+        if let Some(sql_count) = other.sql_count {
+            self.sql_count = Some(self.sql_count.unwrap_or(0) + sql_count);
+        }
+    }
 }
 
 impl std::fmt::Display for CheckSummaryLog {
