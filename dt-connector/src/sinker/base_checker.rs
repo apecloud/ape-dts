@@ -3,20 +3,19 @@ use mongodb::bson::Document;
 use std::borrow::Cow;
 use std::collections::{BTreeSet, HashMap};
 
+use crate::{
+    check_log::check_log::{CheckLog, DiffColValue},
+    rdb_query_builder::RdbQueryBuilder,
+    rdb_router::RdbRouter,
+    sinker::mongo::mongo_cmd,
+};
 use dt_common::meta::{
     col_value::ColValue, mongo::mongo_constant::MongoConstants, mysql::mysql_tb_meta::MysqlTbMeta,
     pg::pg_tb_meta::PgTbMeta, rdb_meta_manager::RdbMetaManager, rdb_tb_meta::RdbTbMeta,
     row_data::RowData, row_type::RowType,
     struct_meta::statement::struct_statement::StructStatement,
 };
-use dt_common::{log_diff, log_miss, log_sql, log_summary, rdb_filter::RdbFilter};
-
-use crate::{
-    check_log::check_log::{CheckLog, CheckSummaryLog, DiffColValue},
-    rdb_query_builder::RdbQueryBuilder,
-    rdb_router::RdbRouter,
-    sinker::mongo::mongo_cmd,
-};
+use dt_common::{log_diff, log_miss, log_sql, rdb_filter::RdbFilter};
 
 pub enum ReviseSqlMeta<'a> {
     Mysql(&'a MysqlTbMeta),
@@ -188,8 +187,7 @@ impl BaseChecker {
         dst_row_data_map: &HashMap<u128, RowData>,
         range: BatchCompareRange,
         ctx: BatchCompareContext<'_>,
-    ) -> anyhow::Result<(Vec<CheckLog>, Vec<CheckLog>)> {
-        let start_time = chrono::Local::now().to_rfc3339();
+    ) -> anyhow::Result<(Vec<CheckLog>, Vec<CheckLog>, usize)> {
         let BatchCompareContext {
             dst_tb_meta,
             extractor_meta_manager,
@@ -202,7 +200,7 @@ impl BaseChecker {
         let end = (start + range.batch_size).min(src_data.len());
 
         if start >= src_data.len() {
-            return Ok((Vec::new(), Vec::new()));
+            return Ok((Vec::new(), Vec::new(), 0));
         }
 
         let target_slice = &src_data[start..end];
@@ -264,20 +262,7 @@ impl BaseChecker {
             }
         }
 
-        if !miss.is_empty() || !diff.is_empty() {
-            let end_time = chrono::Local::now().to_rfc3339();
-            let summary_log = CheckSummaryLog {
-                start_time,
-                end_time,
-                is_consistent: false,
-                miss_count: miss.len(),
-                diff_count: diff.len(),
-                sql_count: if sql_count > 0 { Some(sql_count) } else { None },
-            };
-            log_summary!("{}", summary_log);
-        }
-
-        Ok((miss, diff))
+        Ok((miss, diff, sql_count))
     }
 
     pub fn compare_row_data(
@@ -341,12 +326,12 @@ impl BaseChecker {
         Ok(diff_col_values)
     }
 
-    pub fn log_dml(miss: Vec<CheckLog>, diff: Vec<CheckLog>) {
+    pub fn log_dml(miss: &[CheckLog], diff: &[CheckLog]) {
         for log in miss {
-            log_miss!("{}", log.to_string());
+            log_miss!("{}", log);
         }
         for log in diff {
-            log_diff!("{}", log.to_string());
+            log_diff!("{}", log);
         }
     }
 

@@ -77,7 +77,7 @@ where
 {
     struct V;
 
-    impl<'de2> serde::de::Visitor<'de2> for V {
+    impl serde::de::Visitor<'_> for V {
         type Value = u64;
 
         fn expecting(&self, fmt: &mut std::fmt::Formatter) -> std::fmt::Result {

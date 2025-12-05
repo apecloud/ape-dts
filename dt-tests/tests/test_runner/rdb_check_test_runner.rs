@@ -61,9 +61,42 @@ impl RdbCheckTestRunner {
             }));
         }
 
+        // execute post src sqls after task starts to simulate delayed arrival
+        let mut post_src_task = None;
+        if !self.base.base.src_post_test_sqls.is_empty() {
+            let src_sqls = self.base.base.src_post_test_sqls.clone();
+            let delay_ms = match &self.base.config.sinker {
+                dt_common::config::sinker_config::SinkerConfig::MysqlCheck { .. }
+                | dt_common::config::sinker_config::SinkerConfig::PgCheck { .. }
+                | dt_common::config::sinker_config::SinkerConfig::MongoCheck { .. } => 0,
+                _ => 0,
+            };
+
+            let src_pool_mysql = self.base.src_conn_pool_mysql.clone();
+            let src_pool_pg = self.base.src_conn_pool_pg.clone();
+            post_src_task = Some(tokio::spawn(async move {
+                if delay_ms > 0 {
+                    dt_common::utils::time_util::TimeUtil::sleep_millis(delay_ms).await;
+                }
+                if let Some(pool) = src_pool_mysql {
+                    super::rdb_util::RdbUtil::execute_sqls_mysql(&pool, &src_sqls)
+                        .await
+                        .unwrap();
+                }
+                if let Some(pool) = src_pool_pg {
+                    super::rdb_util::RdbUtil::execute_sqls_pg(&pool, &src_sqls)
+                        .await
+                        .unwrap();
+                }
+            }));
+        }
+
         // start task
         self.base.base.start_task().await?;
         if let Some(handle) = post_dst_task {
+            handle.await.unwrap();
+        }
+        if let Some(handle) = post_src_task {
             handle.await.unwrap();
         }
 

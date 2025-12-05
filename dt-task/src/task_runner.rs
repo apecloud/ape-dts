@@ -8,6 +8,7 @@ use std::{
 };
 
 use anyhow::{bail, Context};
+use chrono::Local;
 use log4rs::config::{Config, Deserializers, RawConfig};
 use ratelimit::Ratelimiter;
 use tokio::{
@@ -24,6 +25,7 @@ use super::{
     extractor_util::ExtractorUtil, parallelizer_util::ParallelizerUtil, sinker_util::SinkerUtil,
 };
 use crate::task_util::{ConnClient, TaskUtil};
+use async_mutex::Mutex as AsyncMutex;
 use dt_common::log_filter::SizeLimitFilterDeserializer;
 use dt_common::{
     config::{
@@ -50,6 +52,7 @@ use dt_common::{
     utils::{sql_util::SqlUtil, time_util::TimeUtil},
 };
 use dt_connector::{
+    check_log::check_log::CheckSummaryLog,
     data_marker::DataMarker,
     extractor::resumer::{recorder::Recorder, recovery::Recovery},
     rdb_router::RdbRouter,
@@ -72,6 +75,7 @@ pub struct TaskContext {
     pub router: Arc<RdbRouter>,
     pub recorder: Option<Arc<dyn Recorder + Send + Sync>>,
     pub recovery: Option<Arc<dyn Recovery + Send + Sync>>,
+    pub check_summary: Option<Arc<AsyncMutex<CheckSummaryLog>>>,
 }
 
 #[derive(Clone)]
@@ -160,6 +164,16 @@ impl TaskRunner {
         };
         let (extractor_client, sinker_client) = ConnClient::from_config(&self.config).await?;
 
+        let check_summary = match &self.config.sinker {
+            SinkerConfig::MysqlCheck { .. }
+            | SinkerConfig::PgCheck { .. }
+            | SinkerConfig::MongoCheck { .. } => Some(Arc::new(AsyncMutex::new(CheckSummaryLog {
+                start_time: Local::now().to_rfc3339(),
+                ..Default::default()
+            }))),
+            _ => None,
+        };
+
         let task_context = TaskContext {
             id: String::new(),
             extractor_config: self.config.extractor.clone(),
@@ -168,6 +182,7 @@ impl TaskRunner {
             router,
             recorder,
             recovery,
+            check_summary: check_summary.clone(),
         };
 
         #[cfg(feature = "metrics")]
@@ -195,6 +210,13 @@ impl TaskRunner {
         // close connections
         extractor_client.close().await?;
         sinker_client.close().await?;
+
+        if let Some(check_summary) = check_summary {
+            let summary = check_summary.lock().await;
+            if summary.miss_count > 0 || summary.diff_count > 0 {
+                dt_common::log_summary!("{}", summary);
+            }
+        }
 
         log_finished!("task finished");
         Ok(())
@@ -274,6 +296,7 @@ impl TaskRunner {
             router: task_context.router,
             recorder: task_context.recorder,
             recovery: task_context.recovery,
+            check_summary: task_context.check_summary,
         };
         let me = self.clone();
         join_set.spawn(async move {
@@ -369,6 +392,7 @@ impl TaskRunner {
             sinker_client.clone(),
             sinker_monitor.clone(),
             rw_sinker_data_marker.clone(),
+            task_context.check_summary.clone(),
         )
         .await?;
 
@@ -511,7 +535,7 @@ impl TaskRunner {
         buffer: Arc<DtQueue>,
         shut_down: Arc<AtomicBool>,
         syncer: Arc<Mutex<Syncer>>,
-        sinkers: Vec<Arc<async_mutex::Mutex<Box<dyn Sinker + Send>>>>,
+        sinkers: Vec<Arc<AsyncMutex<Box<dyn Sinker + Send>>>>,
         monitor: Arc<Monitor>,
         data_marker: Option<Arc<RwLock<DataMarker>>>,
         recorder: Option<Arc<dyn Recorder + Send + Sync>>,
@@ -626,7 +650,7 @@ impl TaskRunner {
 
         let raw: RawConfig = serde_yaml::from_str(&config_str)?;
         let mut deserializers = Deserializers::default();
-        deserializers.insert("size_limit", SizeLimitFilterDeserializer::default());
+        deserializers.insert("size_limit", SizeLimitFilterDeserializer);
         let (appenders, errors) = raw.appenders_lossy(&deserializers);
         if !errors.is_empty() {
             bail!("errors deserializing appenders: {:?}", errors);
@@ -934,6 +958,7 @@ impl TaskRunner {
                 sinker_client,
                 recorder: original_task_context.recorder.clone(),
                 recovery: original_task_context.recovery.clone(),
+                check_summary: original_task_context.check_summary.clone(),
             });
         } else {
             for schema in schemas.iter() {
@@ -1025,6 +1050,7 @@ impl TaskRunner {
                         sinker_client: sinker_client.clone(),
                         recorder: original_task_context.recorder.clone(),
                         recovery: original_task_context.recovery.clone(),
+                        check_summary: original_task_context.check_summary.clone(),
                     });
                 }
 

@@ -1541,6 +1541,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-mutex",
+ "chrono",
  "clickhouse",
  "concurrent-queue",
  "configparser",

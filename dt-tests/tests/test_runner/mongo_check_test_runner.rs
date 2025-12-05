@@ -28,6 +28,29 @@ impl MongoCheckTestRunner {
 
         // start task
         self.base.base.start_task().await?;
+
+        // execute post src sqls after task starts to simulate delayed arrival
+        let mut post_src_task: Option<tokio::task::JoinHandle<()>> = None;
+        if !self.base.base.src_post_test_sqls.is_empty() {
+            let src_sqls = self.base.base.src_post_test_sqls.clone();
+            let src_mongo_client = self.base.src_mongo_client.clone();
+
+            post_src_task = Some(tokio::spawn(async move {
+                if let Some(client) = src_mongo_client {
+                    let sliced_sqls = MongoTestRunner::slice_sqls_by_db(&src_sqls);
+                    for (db, sqls) in sliced_sqls.iter() {
+                        MongoTestRunner::execute_dmls(&client, db, sqls)
+                            .await
+                            .unwrap();
+                    }
+                }
+            }));
+        }
+
+        if let Some(handle) = post_src_task {
+            handle.await.unwrap();
+        }
+
         CheckUtil::validate_check_log(&self.expect_check_log_dir, &self.dst_check_log_dir)
     }
 

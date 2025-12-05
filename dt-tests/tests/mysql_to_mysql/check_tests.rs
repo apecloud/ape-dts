@@ -65,6 +65,6 @@ mod test {
     #[tokio::test]
     #[serial]
     async fn check_double_check_test() {
-        TestBase::run_check_test("mysql_to_mysql/check/double_check_test").await;
+        TestBase::run_check_test("mysql_to_mysql/check/recheck_test").await;
     }
 }

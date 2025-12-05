@@ -3,7 +3,7 @@ use std::{str::FromStr, sync::Arc};
 use anyhow::{bail, Context};
 use kafka::producer::{Producer, RequiredAcks};
 use reqwest::{redirect::Policy, Url};
-use sqlx::types::chrono::Utc;
+use sqlx::types::chrono::{Local, Utc};
 use tokio::sync::{Mutex, RwLock};
 
 use dt_common::{
@@ -28,6 +28,7 @@ use dt_common::{
 use super::task_util::TaskUtil;
 use crate::{extractor_util::ExtractorUtil, task_util::ConnClient};
 use dt_connector::{
+    check_log::check_log::CheckSummaryLog,
     data_marker::DataMarker,
     rdb_router::RdbRouter,
     sinker::{
@@ -62,33 +63,34 @@ pub struct SinkerUtil {}
 
 #[macro_export]
 macro_rules! create_filter {
-    ($task_config:expr,$db_type:ident) => {
-        RdbFilter::from_config(&$task_config.filter, &DbType::$db_type)?
+    ($config:expr,$db_type:ident) => {
+        RdbFilter::from_config(&$config.filter, &DbType::$db_type)?
     };
 }
 
 #[macro_export]
 macro_rules! create_router {
-    ($task_config:expr,$db_type:ident) => {
-        RdbRouter::from_config(&$task_config.router, &DbType::$db_type)?
+    ($config:expr,$db_type:ident) => {
+        RdbRouter::from_config(&$config.router, &DbType::$db_type)?
     };
 }
 
 impl SinkerUtil {
     pub async fn create_sinkers(
-        task_config: &TaskConfig,
+        config: &TaskConfig,
         extractor_config: &ExtractorConfig,
-        sinker_client: ConnClient,
+        client: ConnClient,
         monitor: Arc<Monitor>,
         data_marker: Option<Arc<RwLock<DataMarker>>>,
+        check_summary: Option<Arc<async_mutex::Mutex<CheckSummaryLog>>>,
     ) -> anyhow::Result<Sinkers> {
-        let log_level = &task_config.runtime.log_level;
+        let log_level = &config.runtime.log_level;
         let enable_sqlx_log = TaskUtil::check_enable_sqlx_log(log_level);
-        let parallel_size = task_config.parallelizer.parallel_size as u32;
-        let monitor_interval = task_config.pipeline.checkpoint_interval_secs;
+        let parallel_size = config.parallelizer.parallel_size as u32;
+        let monitor_interval = config.pipeline.checkpoint_interval_secs;
 
         let mut sub_sinkers: Sinkers = Vec::new();
-        match task_config.sinker.clone() {
+        match config.sinker.clone() {
             SinkerConfig::Dummy => {
                 for _ in 0..parallel_size {
                     let sinker = DummySinker {};
@@ -102,9 +104,9 @@ impl SinkerUtil {
                 replace,
                 ..
             } => {
-                let router = create_router!(task_config, Mysql);
+                let router = create_router!(config, Mysql);
 
-                let conn_pool = match sinker_client {
+                let conn_pool = match client {
                     ConnClient::MySQL(conn_pool) => conn_pool,
                     _ => {
                         bail!("connection pool not found");
@@ -135,13 +137,13 @@ impl SinkerUtil {
                 revise_match_full_row,
                 ..
             } => {
-                let reverse_router = create_router!(task_config, Mysql).reverse();
-                let filter = create_filter!(task_config, Mysql);
-                let extractor_meta_manager = ExtractorUtil::get_extractor_meta_manager(task_config)
+                let reverse_router = create_router!(config, Mysql).reverse();
+                let filter = create_filter!(config, Mysql);
+                let extractor_meta_manager = ExtractorUtil::get_extractor_meta_manager(config)
                     .await?
                     .unwrap();
 
-                let conn_pool = match sinker_client {
+                let conn_pool = match client {
                     ConnClient::MySQL(conn_pool) => conn_pool,
                     _ => {
                         bail!("connection pool not found");
@@ -161,6 +163,11 @@ impl SinkerUtil {
                         output_full_row,
                         output_revise_sql,
                         revise_match_full_row,
+                        summary: CheckSummaryLog {
+                            start_time: Local::now().to_rfc3339(),
+                            ..Default::default()
+                        },
+                        global_summary: check_summary.clone(),
                     };
                     sub_sinkers.push(Arc::new(async_mutex::Mutex::new(Box::new(sinker))));
                 }
@@ -172,8 +179,8 @@ impl SinkerUtil {
                 replace,
                 ..
             } => {
-                let router = create_router!(task_config, Pg);
-                let conn_pool = match sinker_client {
+                let router = create_router!(config, Pg);
+                let conn_pool = match client {
                     ConnClient::PostgreSQL(conn_pool) => conn_pool,
                     _ => {
                         bail!("connection pool not found");
@@ -204,13 +211,13 @@ impl SinkerUtil {
                 revise_match_full_row,
                 ..
             } => {
-                let reverse_router = create_router!(task_config, Pg).reverse();
-                let filter = create_filter!(task_config, Pg);
-                let extractor_meta_manager = ExtractorUtil::get_extractor_meta_manager(task_config)
+                let reverse_router = create_router!(config, Pg).reverse();
+                let filter = create_filter!(config, Pg);
+                let extractor_meta_manager = ExtractorUtil::get_extractor_meta_manager(config)
                     .await?
                     .unwrap();
 
-                let conn_pool = match sinker_client {
+                let conn_pool = match client {
                     ConnClient::PostgreSQL(conn_pool) => conn_pool,
                     _ => {
                         bail!("connection pool not found");
@@ -230,14 +237,19 @@ impl SinkerUtil {
                         output_full_row,
                         output_revise_sql,
                         revise_match_full_row,
+                        summary: CheckSummaryLog {
+                            start_time: Local::now().to_rfc3339(),
+                            ..Default::default()
+                        },
+                        global_summary: check_summary.clone(),
                     };
                     sub_sinkers.push(Arc::new(async_mutex::Mutex::new(Box::new(sinker))));
                 }
             }
 
             SinkerConfig::Mongo { batch_size, .. } => {
-                let router = create_router!(task_config, Mongo);
-                let mongo_client = match sinker_client {
+                let router = create_router!(config, Mongo);
+                let mongo_client = match client {
                     ConnClient::MongoDB(mongo_client) => mongo_client,
                     _ => {
                         bail!("connection pool not found");
@@ -261,8 +273,8 @@ impl SinkerUtil {
                 output_revise_sql,
                 ..
             } => {
-                let reverse_router = create_router!(task_config, Mongo).reverse();
-                let mongo_client = match sinker_client {
+                let reverse_router = create_router!(config, Mongo).reverse();
+                let mongo_client = match client {
                     ConnClient::MongoDB(mongo_client) => mongo_client,
                     _ => {
                         bail!("connection pool not found");
@@ -276,6 +288,11 @@ impl SinkerUtil {
                         monitor: monitor.clone(),
                         output_full_row,
                         output_revise_sql,
+                        summary: CheckSummaryLog {
+                            start_time: Local::now().to_rfc3339(),
+                            ..Default::default()
+                        },
+                        global_summary: check_summary.clone(),
                     };
                     sub_sinkers.push(Arc::new(async_mutex::Mutex::new(Box::new(sinker))));
                 }
@@ -289,12 +306,12 @@ impl SinkerUtil {
                 with_field_defs,
             } => {
                 let router = RdbRouter::from_config(
-                    &task_config.router,
+                    &config.router,
                     // use the db_type of extractor
-                    &task_config.extractor_basic.db_type,
+                    &config.extractor_basic.db_type,
                 )?;
                 // kafka sinker may need meta data from RDB extractor
-                let meta_manager = ExtractorUtil::get_extractor_meta_manager(task_config).await?;
+                let meta_manager = ExtractorUtil::get_extractor_meta_manager(config).await?;
                 let avro_converter = AvroConverter::new(meta_manager, with_field_defs);
 
                 let brokers = vec![url.to_string()];
@@ -328,10 +345,10 @@ impl SinkerUtil {
             SinkerConfig::MysqlStruct {
                 conflict_policy, ..
             } => {
-                let filter = create_filter!(task_config, Mysql);
-                let router = create_router!(task_config, Mysql);
+                let filter = create_filter!(config, Mysql);
+                let router = create_router!(config, Mysql);
 
-                let conn_pool = match sinker_client {
+                let conn_pool = match client {
                     ConnClient::MySQL(conn_pool) => conn_pool,
                     _ => {
                         bail!("connection pool not found");
@@ -351,10 +368,10 @@ impl SinkerUtil {
             SinkerConfig::PgStruct {
                 conflict_policy, ..
             } => {
-                let filter = create_filter!(task_config, Pg);
-                let router = create_router!(task_config, Pg);
+                let filter = create_filter!(config, Pg);
+                let router = create_router!(config, Pg);
 
-                let conn_pool = match sinker_client {
+                let conn_pool = match client {
                     ConnClient::PostgreSQL(conn_pool) => conn_pool,
                     _ => {
                         bail!("connection pool not found");
@@ -378,7 +395,7 @@ impl SinkerUtil {
                 is_cluster,
             } => {
                 // redis sinker may need meta data from RDB extractor
-                let meta_manager = ExtractorUtil::get_extractor_meta_manager(task_config).await?;
+                let meta_manager = ExtractorUtil::get_extractor_meta_manager(config).await?;
                 let mut conn = RedisUtil::create_redis_conn(&url).await?;
                 let version = RedisUtil::get_redis_version(&mut conn)?;
                 let method = RedisWriteMethod::from_str(&method)?;
@@ -484,7 +501,7 @@ impl SinkerUtil {
                     .await?;
 
                     let mut sinker = StarRocksSinker {
-                        db_type: task_config.sinker_basic.db_type.clone(),
+                        db_type: config.sinker_basic.db_type.clone(),
                         http_client,
                         host,
                         port,
@@ -496,7 +513,7 @@ impl SinkerUtil {
                         sync_timestamp: Utc::now().timestamp_millis(),
                         hard_delete: false,
                     };
-                    if let SinkerConfig::StarRocks { hard_delete, .. } = task_config.sinker {
+                    if let SinkerConfig::StarRocks { hard_delete, .. } = config.sinker {
                         sinker.hard_delete = hard_delete;
                     }
 
@@ -514,13 +531,13 @@ impl SinkerUtil {
             } => {
                 let conn_pool =
                     TaskUtil::create_mysql_conn_pool(&url, 2, enable_sqlx_log, None).await?;
-                let filter = create_filter!(task_config, Mysql);
-                let router = create_router!(task_config, Mysql);
-                let extractor_meta_manager = ExtractorUtil::get_extractor_meta_manager(task_config)
+                let filter = create_filter!(config, Mysql);
+                let router = create_router!(config, Mysql);
+                let extractor_meta_manager = ExtractorUtil::get_extractor_meta_manager(config)
                     .await?
                     .unwrap();
                 let sinker = StarrocksStructSinker {
-                    db_type: task_config.sinker_basic.db_type.clone(),
+                    db_type: config.sinker_basic.db_type.clone(),
                     conn_pool,
                     conflict_policy,
                     filter,
@@ -569,9 +586,9 @@ impl SinkerUtil {
                     .with_url(format!("http://{}:{}", host, port))
                     .with_user(url_info.username())
                     .with_password(url_info.password().unwrap_or(""));
-                let filter = create_filter!(task_config, Mysql);
-                let router = create_router!(task_config, Mysql);
-                let extractor_meta_manager = ExtractorUtil::get_extractor_meta_manager(task_config)
+                let filter = create_filter!(config, Mysql);
+                let router = create_router!(config, Mysql);
+                let extractor_meta_manager = ExtractorUtil::get_extractor_meta_manager(config)
                     .await?
                     .unwrap();
                 let sinker = ClickhouseStructSinker {
@@ -586,13 +603,11 @@ impl SinkerUtil {
             }
 
             SinkerConfig::Sql { reverse } => {
-                let router = RdbRouter::from_config(
-                    &task_config.router,
-                    &task_config.extractor_basic.db_type,
-                )?;
+                let router =
+                    RdbRouter::from_config(&config.router, &config.extractor_basic.db_type)?;
 
                 for _ in 0..parallel_size {
-                    let meta_manager = ExtractorUtil::get_extractor_meta_manager(task_config)
+                    let meta_manager = ExtractorUtil::get_extractor_meta_manager(config)
                         .await?
                         .unwrap();
                     let sinker = SqlSinker {
@@ -612,7 +627,7 @@ impl SinkerUtil {
                 s3_config,
                 engine,
             } => {
-                let router = create_router!(task_config, Mysql);
+                let router = create_router!(config, Mysql);
                 let reverse_router = router.reverse();
                 let conn_pool = TaskUtil::create_mysql_conn_pool(
                     &url,
@@ -636,7 +651,7 @@ impl SinkerUtil {
 
                     let pusher = FoxlakePusher {
                         url: url.to_string(),
-                        extract_type: task_config.extractor_basic.extract_type.clone(),
+                        extract_type: config.extractor_basic.extract_type.clone(),
                         meta_manager: meta_manager.clone(),
                         batch_size,
                         batch_memory_bytes: batch_memory_mb * 1024 * 1024,
@@ -655,7 +670,7 @@ impl SinkerUtil {
                         s3_client: s3_client.clone(),
                         monitor: monitor.clone(),
                         conn_pool: conn_pool.clone(),
-                        extract_type: task_config.extractor_basic.extract_type.clone(),
+                        extract_type: config.extractor_basic.extract_type.clone(),
                     };
 
                     let sinker = FoxlakeSinker {
@@ -687,7 +702,7 @@ impl SinkerUtil {
                 )
                 .await?;
                 let s3_client = TaskUtil::create_s3_client(&s3_config)?;
-                let reverse_router = create_router!(task_config, Mysql).reverse();
+                let reverse_router = create_router!(config, Mysql).reverse();
                 let orc_sequencer = Arc::new(Mutex::new(OrcSequencer::new()));
 
                 for _ in 0..parallel_size {
@@ -702,7 +717,7 @@ impl SinkerUtil {
 
                     let sinker = FoxlakePusher {
                         url: url.to_string(),
-                        extract_type: task_config.extractor_basic.extract_type.clone(),
+                        extract_type: config.extractor_basic.extract_type.clone(),
                         meta_manager,
                         batch_size,
                         batch_memory_bytes: batch_memory_mb * 1024 * 1024,
@@ -739,7 +754,7 @@ impl SinkerUtil {
                         s3_client: s3_client.clone(),
                         monitor: monitor.clone(),
                         conn_pool: conn_pool.clone(),
-                        extract_type: task_config.extractor_basic.extract_type.clone(),
+                        extract_type: config.extractor_basic.extract_type.clone(),
                     };
                     sub_sinkers.push(Arc::new(async_mutex::Mutex::new(Box::new(sinker))));
                 }
@@ -750,8 +765,8 @@ impl SinkerUtil {
                 conflict_policy,
                 engine,
             } => {
-                let filter = create_filter!(task_config, Mysql);
-                let router = create_router!(task_config, Mysql);
+                let filter = create_filter!(config, Mysql);
+                let router = create_router!(config, Mysql);
                 let conn_pool = TaskUtil::create_mysql_conn_pool(
                     &url,
                     parallel_size * 2,

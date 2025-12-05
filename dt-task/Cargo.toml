@@ -40,3 +40,4 @@ anyhow = { workspace = true }
 clickhouse = { workspace = true }
 prometheus = { version = "0.14.0", optional = true }
 opendal = { workspace = true }
+chrono = { workspace = true }
