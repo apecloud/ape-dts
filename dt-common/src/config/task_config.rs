@@ -94,6 +94,7 @@ const DDL_CONFLICT_POLICY: &str = "ddl_conflict_policy";
 const REPLACE: &str = "replace";
 const DISABLE_FOREIGN_KEY_CHECKS: &str = "disable_foreign_key_checks";
 const RESUME_TYPE: &str = "resume_type";
+const CHECK_LOG_FILE_SIZE: &str = "check_log_file_size";
 // deprecated keys
 const RESUME_FROM_LOG: &str = "resume_from_log";
 const RESUME_LOG_DIR: &str = "resume_log_dir";
@@ -704,6 +705,11 @@ impl TaskConfig {
                 RUNTIME,
                 "log4rs_file",
                 "./log4rs.yaml".to_string(),
+            ),
+            check_log_file_size: loader.get_with_default(
+                RUNTIME,
+                CHECK_LOG_FILE_SIZE,
+                "100mb".to_string(),
             ),
             tb_parallel_size: loader.get_with_default(RUNTIME, "tb_parallel_size", 1),
         })

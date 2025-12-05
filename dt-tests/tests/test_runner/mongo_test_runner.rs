@@ -577,7 +577,7 @@ impl MongoTestRunner {
     }
 
     fn normalize_doc_string(doc: &str) -> String {
-        let re = Regex::new(r"(?P<prefix>[\{\[,]\s*)(?P<key>[A-Za-z_][A-Za-z0-9_]*)\s*:").unwrap();
+        let re = Regex::new(r"(?P<prefix>[\{\[,]\s*)(?P<key>[$A-Za-z_][A-Za-z0-9_$]*)\s*:").unwrap();
         re.replace_all(doc, |caps: &Captures| {
             format!("{}\"{}\":", &caps["prefix"], &caps["key"])
         })
@@ -607,5 +607,27 @@ impl MongoTestRunner {
             ),
             other => other,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::MongoTestRunner;
+    use serde_json::Value;
+
+    #[test]
+    fn normalize_doc_string_quotes_dollar_prefixed_keys() {
+        let doc = r#"{ $set: { name: "a" }, age: 1 }"#;
+        let normalized = MongoTestRunner::normalize_doc_string(doc);
+        assert_eq!(normalized, r#"{ "$set": { "name": "a" }, "age": 1 }"#);
+        serde_json::from_str::<Value>(&normalized).unwrap();
+    }
+
+    #[test]
+    fn normalize_doc_string_leaves_quoted_keys_untouched() {
+        let doc = r#"{ "$inc": { "count": 1 } }"#;
+        let normalized = MongoTestRunner::normalize_doc_string(doc);
+        assert_eq!(normalized, doc);
+        serde_json::from_str::<Value>(&normalized).unwrap();
     }
 }

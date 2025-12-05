@@ -10,10 +10,10 @@ workspace = true
 metrics = ["dt-common/metrics", "prometheus"]
 
 [dependencies]
-dt-common = {path = "../dt-common", version = "0.1.0"}
-dt-connector = {path = "../dt-connector", version = "0.1.0"}
-dt-parallelizer = {path = "../dt-parallelizer", version = "0.1.0"}
-dt-pipeline = {path = "../dt-pipeline", version = "0.1.0"}
+dt-common = { path = "../dt-common", version = "0.1.0" }
+dt-connector = { path = "../dt-connector", version = "0.1.0" }
+dt-parallelizer = { path = "../dt-parallelizer", version = "0.1.0" }
+dt-pipeline = { path = "../dt-pipeline", version = "0.1.0" }
 
 sqlx = { workspace = true }
 async-mutex = { workspace = true }
@@ -26,7 +26,7 @@ rdkafka = { workspace = true }
 kafka = { workspace = true }
 log = { workspace = true }
 log4rs = { workspace = true }
-dotenv =  { workspace = true }
+dotenv = { workspace = true }
 serde_yaml = { workspace = true }
 serial_test = { workspace = true }
 configparser = { workspace = true }

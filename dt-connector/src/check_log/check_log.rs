@@ -54,11 +54,11 @@ pub struct CheckSummaryLog {
     pub start_time: String,
     pub end_time: String,
     pub is_consistent: bool,
-    #[serde(skip_serializing_if = "is_zero")]
+    #[serde(default, skip_serializing_if = "is_zero")]
     pub miss_count: usize,
-    #[serde(skip_serializing_if = "is_zero")]
+    #[serde(default, skip_serializing_if = "is_zero")]
     pub diff_count: usize,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sql_count: Option<usize>,
 }
 
