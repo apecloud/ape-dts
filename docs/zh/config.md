@@ -149,7 +149,7 @@ url=mysql://user1:abc%25%24%23%3F%40@127.0.0.1:3307?ssl-mode=disabled
 | log_level | 日志级别 | info/warn/error/debug/trace | info |
 | log4rs_file | log4rs 配置地点，通常不需要改 | ./log4rs.yaml | ./log4rs.yaml |
 | log_dir | 日志输出目录 | ./logs | ./logs |
-| check_log_file_size | check 结果日志（diff/miss）单文件大小，超出后停止写入（不截断、不滚动） | 100mb | 100mb |
+| check_log_file_size | check 结果日志（diff/miss/sql）单文件大小，超出后停止写入（不截断、不滚动） | 100mb | 100mb |
 
 通常不需要修改。
 
