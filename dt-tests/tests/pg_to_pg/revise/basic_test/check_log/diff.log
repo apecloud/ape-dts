@@ -1,6 +1,6 @@
-{"log_type":"Diff","schema":"public","tb":"default_table","id_col_values":{"pk":"8"},"diff_col_values":{}}
-{"log_type":"Diff","schema":"public","tb":"default_table","id_col_values":{"pk":"7"},"diff_col_values":{}}
-{"log_type":"Diff","schema":"public","tb":"default_table","id_col_values":{"pk":"9"},"diff_col_values":{}}
-{"log_type":"Diff","schema":"public","tb":"col_has_special_character_table","id_col_values":{"p,k,1":"pk1,value,2","p\\k&2":"pk2,value,2"},"diff_col_values":{}}
-{"log_type":"Diff","schema":"public","tb":"col_has_special_character_table","id_col_values":{"p,k,1":"pk1,value,4","p\\k&2":"pk2,value,4"},"diff_col_values":{}}
-{"log_type":"Diff","schema":"public","tb":"ignore_cols_1","id_col_values":{"f_0":"2"},"diff_col_values":{"f_1":{"src":"2","dst":"1"}}}
+{"schema":"public","tb":"default_table","id_col_values":{"pk":"8"},"diff_col_values":{}}
+{"schema":"public","tb":"default_table","id_col_values":{"pk":"7"},"diff_col_values":{}}
+{"schema":"public","tb":"default_table","id_col_values":{"pk":"9"},"diff_col_values":{}}
+{"schema":"public","tb":"col_has_special_character_table","id_col_values":{"p,k,1":"pk1,value,2","p\\k&2":"pk2,value,2"},"diff_col_values":{}}
+{"schema":"public","tb":"col_has_special_character_table","id_col_values":{"p,k,1":"pk1,value,4","p\\k&2":"pk2,value,4"},"diff_col_values":{}}
+{"schema":"public","tb":"ignore_cols_1","id_col_values":{"f_0":"2"},"diff_col_values":{"f_1":{"src":"2","dst":"1"}}}

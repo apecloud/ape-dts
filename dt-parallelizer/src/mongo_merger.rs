@@ -68,13 +68,11 @@ impl MongoMerger {
                 }
 
                 RowType::Update => {
-                    let before = row_data.before.unwrap();
-                    let after: HashMap<String, ColValue> = row_data.after.unwrap();
                     let delete_row = RowData::new(
                         row_data.schema.clone(),
                         row_data.tb.clone(),
                         RowType::Delete,
-                        Some(before),
+                        row_data.before,
                         None,
                     );
                     delete_map.insert(id.clone(), delete_row);
@@ -84,7 +82,7 @@ impl MongoMerger {
                         row_data.tb,
                         RowType::Insert,
                         Option::None,
-                        Some(after),
+                        row_data.after,
                     );
                     insert_map.insert(id, insert_row);
                 }
@@ -99,28 +97,32 @@ impl MongoMerger {
     fn get_hash_key(row_data: &RowData) -> Option<MongoKey> {
         match row_data.row_type {
             RowType::Insert => {
-                let after = row_data.after.as_ref().unwrap();
-                if let Some(ColValue::MongoDoc(doc)) = after.get(MongoConstants::DOC) {
-                    return MongoKey::from_doc(doc);
+                if let Ok(after) = row_data.require_after() {
+                    if let Some(ColValue::MongoDoc(doc)) = after.get(MongoConstants::DOC) {
+                        return MongoKey::from_doc(doc);
+                    }
                 }
             }
 
             RowType::Delete => {
-                let before = row_data.before.as_ref().unwrap();
-                if let Some(ColValue::MongoDoc(doc)) = before.get(MongoConstants::DOC) {
-                    return MongoKey::from_doc(doc);
+                if let Ok(before) = row_data.require_before() {
+                    if let Some(ColValue::MongoDoc(doc)) = before.get(MongoConstants::DOC) {
+                        return MongoKey::from_doc(doc);
+                    }
                 }
             }
 
             RowType::Update => {
-                let before = row_data.before.as_ref().unwrap();
-                let after = row_data.after.as_ref().unwrap();
-                // for Update row_data from oplog (NOT change stream), after contains diff_doc instead of doc,
-                // in which case we can NOT transfer Update into Delete + Insert
-                if after.get(MongoConstants::DOC).is_none() {
-                    return None;
-                } else if let Some(ColValue::MongoDoc(doc)) = before.get(MongoConstants::DOC) {
-                    return MongoKey::from_doc(doc);
+                if let (Ok(before), Ok(after)) =
+                    (row_data.require_before(), row_data.require_after())
+                {
+                    // for Update row_data from oplog (NOT change stream), after contains diff_doc instead of doc,
+                    // in which case we can NOT transfer Update into Delete + Insert
+                    if after.get(MongoConstants::DOC).is_none() {
+                        return None;
+                    } else if let Some(ColValue::MongoDoc(doc)) = before.get(MongoConstants::DOC) {
+                        return MongoKey::from_doc(doc);
+                    }
                 }
             }
         }

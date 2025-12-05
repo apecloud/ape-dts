@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use anyhow::Context;
 use async_trait::async_trait;
 
 use dt_common::log_info;
@@ -17,7 +18,7 @@ use mongodb::{
 };
 
 use crate::{
-    check_log::{check_log::CheckLog, log_type::LogType},
+    check_log::check_log::CheckLog,
     extractor::{base_check_extractor::BaseCheckExtractor, base_extractor::BaseExtractor},
     BatchCheckExtractor, Extractor,
 };
@@ -50,7 +51,7 @@ impl Extractor for MongoCheckExtractor {
 #[async_trait]
 impl BatchCheckExtractor for MongoCheckExtractor {
     async fn batch_extract(&mut self, check_logs: &[CheckLog]) -> anyhow::Result<()> {
-        let log_type = &check_logs[0].log_type;
+        let is_diff = !check_logs[0].diff_col_values.is_empty();
         let schema = &check_logs[0].schema;
         let tb = &check_logs[0].tb;
         let collection = self
@@ -62,7 +63,8 @@ impl BatchCheckExtractor for MongoCheckExtractor {
         for check_log in check_logs.iter() {
             // check log has only one col: _id
             if let Some(Some(col_value)) = check_log.id_col_values.get(MongoConstants::ID) {
-                let key: MongoKey = serde_json::from_str(col_value).unwrap();
+                let key: MongoKey = serde_json::from_str(col_value)
+                    .with_context(|| format!("invalid mongo _id: {}", col_value))?;
                 ids.push(key.to_mongo_id());
             }
         }
@@ -88,7 +90,7 @@ impl BatchCheckExtractor for MongoCheckExtractor {
                 Some(after),
             );
 
-            if log_type == &LogType::Diff {
+            if is_diff {
                 row_data.row_type = RowType::Update;
                 row_data.before = row_data.after.clone();
             }

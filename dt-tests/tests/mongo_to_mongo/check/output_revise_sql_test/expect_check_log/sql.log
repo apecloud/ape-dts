@@ -1,0 +1,2 @@
+db.users.updateOne({'_id': ObjectId('65733a82fb2ce9836745de02')}, {'$set': {'age': 25, 'email': 'bob@example.com'}})
+db.users.insertOne({'_id': ObjectId('65733a82fb2ce9836745de03'), 'name': 'Charlie', 'age': 35, 'email': 'charlie@example.com'})

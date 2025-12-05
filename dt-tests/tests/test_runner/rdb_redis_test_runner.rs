@@ -1,4 +1,4 @@
-use anyhow::bail;
+use anyhow::{bail, Context};
 use dt_common::config::config_enums::DbType;
 use dt_common::utils::redis_util::RedisUtil;
 use dt_common::{
@@ -147,14 +147,11 @@ impl RdbRedisTestRunner {
 
             let results = RdbUtil::fetch_data_mysql(conn_pool, None, db_tb, "").await?;
             for row_data in results {
-                let key = row_data
-                    .after
-                    .as_ref()
-                    .unwrap()
+                let after = row_data.require_after()?;
+                let key = after
                     .get(key_col)
-                    .unwrap()
-                    .to_option_string()
-                    .unwrap();
+                    .and_then(|v| v.to_option_string())
+                    .context("missing redis key")?;
 
                 // redis data
                 let redis_k = format!("{}.{}.{}", db_tb.0, db_tb.1, key);
@@ -162,11 +159,11 @@ impl RdbRedisTestRunner {
                     .redis_util
                     .get_hash_entry(&mut self.redis_conn, &redis_k);
 
-                for (col, db_v) in row_data.after.unwrap() {
+                for (col, db_v) in after.iter() {
                     // check redis key exists
-                    assert!(redis_kvs.contains_key(&col));
+                    assert!(redis_kvs.contains_key(col));
                     // check redis value = db value
-                    if let Value::BulkString(v) = redis_kvs.get(&col).unwrap() {
+                    if let Value::BulkString(v) = redis_kvs.get(col).unwrap() {
                         let redis_v_str = String::from_utf8(v.clone()).unwrap();
                         if let Some(db_v_str) = db_v.to_option_string() {
                             if redis_v_str != db_v_str {

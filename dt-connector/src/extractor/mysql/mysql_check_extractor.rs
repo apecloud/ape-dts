@@ -14,7 +14,7 @@ use sqlx::{MySql, Pool};
 use std::collections::HashMap;
 
 use crate::{
-    check_log::{check_log::CheckLog, log_type::LogType},
+    check_log::check_log::CheckLog,
     extractor::{base_check_extractor::BaseCheckExtractor, base_extractor::BaseExtractor},
     rdb_query_builder::RdbQueryBuilder,
     BatchCheckExtractor, Extractor,
@@ -51,7 +51,7 @@ impl BatchCheckExtractor for MysqlCheckExtractor {
     async fn batch_extract(&mut self, check_logs: &[CheckLog]) -> anyhow::Result<()> {
         let db = &check_logs[0].schema;
         let tb = &check_logs[0].tb;
-        let log_type = &check_logs[0].log_type;
+        let is_diff = !check_logs[0].diff_col_values.is_empty();
         let tb_meta = self.meta_manager.get_tb_meta(db, tb).await?;
         let check_row_data_items = Self::build_check_row_data_items(check_logs, tb_meta)?;
 
@@ -66,13 +66,13 @@ impl BatchCheckExtractor for MysqlCheckExtractor {
                 check_row_data_items.len(),
             )?
         };
-        let query = query_builder.create_mysql_query(&query_info);
+        let query = query_builder.create_mysql_query(&query_info)?;
 
         let mut rows = query.fetch(&self.conn_pool);
         while let Some(row) = rows.try_next().await.unwrap() {
             let mut row_data = RowData::from_mysql_row(&row, tb_meta, &ignore_cols);
 
-            if log_type == &LogType::Diff {
+            if is_diff {
                 row_data.row_type = RowType::Update;
                 row_data.before = row_data.after.clone();
             }

@@ -1401,6 +1401,7 @@ dependencies = [
  "hex",
  "kafka",
  "log",
+ "log4rs",
  "mlua",
  "mongodb",
  "mysql-binlog-connector-rust",
@@ -1540,6 +1541,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-mutex",
+ "chrono",
  "clickhouse",
  "concurrent-queue",
  "configparser",

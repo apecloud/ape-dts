@@ -3,7 +3,6 @@ drop database if exists struct_it_mysql2mysql_1;
 create database if not exists struct_it_mysql2mysql_1;
 
 -- full column type
-```
 CREATE TABLE struct_it_mysql2mysql_1.full_column_type (id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     varchar_col VARCHAR(255) NOT NULL COMMENT 'varchar_col_comment',
     char_col CHAR(10) COMMENT 'char_col_comment',
@@ -38,11 +37,9 @@ CREATE TABLE struct_it_mysql2mysql_1.full_column_type (id INT UNSIGNED AUTO_INCR
     set_col SET('option1', 'option2', 'option3') COMMENT 'set_col_comment',
     json_col JSON COMMENT 'json_col_comment'
 ); 
-```
 
 -- full column type with default value
 -- The BLOB, TEXT, GEOMETRY, and JSON data types cannot be assigned a default value.
-```
 CREATE TABLE struct_it_mysql2mysql_1.full_column_type_with_default (
     id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     varchar_col VARCHAR(255) NOT NULL DEFAULT 'abc中文' COMMENT 'varchar_col_comment',
@@ -90,18 +87,14 @@ CREATE TABLE struct_it_mysql2mysql_1.full_column_type_with_default (
     set_col SET('option1', 'option2', 'option3') DEFAULT 'option1' COMMENT 'set_col_comment',
     json_col JSON DEFAULT NULL COMMENT 'json_col_comment'
 ) DEFAULT CHARSET=utf8mb4;
-```
 
 -- default value and comment
-```
 CREATE TABLE struct_it_mysql2mysql_1.special_default_and_comment (
     id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     f_1 VARCHAR(255) NOT NULL DEFAULT 'abc''中文''' COMMENT '中文注释''f_1''' 
 ) COMMENT='中文注释''special_default_and_comment''';
-```
 
 -- full index type
-```
 CREATE TABLE struct_it_mysql2mysql_1.full_index_type(
     id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY, 
     f_1 int, 
@@ -122,7 +115,6 @@ CREATE TABLE struct_it_mysql2mysql_1.full_index_type(
     f_16 varchar(10),
     KEY idx_btree_text_1 (f_10)
 );
-```
 
 -- unique key with multiple columns
 CREATE UNIQUE INDEX idx_unique_1 ON struct_it_mysql2mysql_1.full_index_type(f_1, f_2, f_3);
@@ -152,7 +144,6 @@ CREATE INDEX idx_prefix_1 ON struct_it_mysql2mysql_1.full_index_type(f_14(10), f
 CREATE INDEX idx_prefix_2 ON struct_it_mysql2mysql_1.full_index_type(f_16(3));
 
 -- full constraint
-```
 CREATE TABLE struct_it_mysql2mysql_1.constraint_table (
   id INT PRIMARY KEY AUTO_INCREMENT, 
   username VARCHAR(50) NOT NULL UNIQUE, 
@@ -165,13 +156,11 @@ CREATE TABLE struct_it_mysql2mysql_1.constraint_table (
   CONSTRAINT chk_age CHECK (age >= 18), 
   CONSTRAINT chk_email CHECK (email LIKE '%@%.%')
 );
-```
 
 -- test view filtered
 CREATE VIEW struct_it_mysql2mysql_1.full_column_type_view AS SELECT * FROM struct_it_mysql2mysql_1.full_column_type;
 
 -- case sensitive column name
-```
 CREATE TABLE struct_it_mysql2mysql_1.case_sensitive_column_name (
   `id` int(11) NOT NULL AUTO_INCREMENT,
   `name` varchar(255) NOT NULL DEFAULT 'jack',
@@ -179,4 +168,3 @@ CREATE TABLE struct_it_mysql2mysql_1.case_sensitive_column_name (
   `GRADE` int(11) NOT NULL DEFAULT '100',
   PRIMARY KEY (`id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8
-```

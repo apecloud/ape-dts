@@ -68,7 +68,8 @@ impl BaseCheckExtractor {
         }
 
         let same_tb = exist_items[0].schema == new_item.schema && exist_items[0].tb == new_item.tb;
-        let same_log_type = exist_items[0].log_type == new_item.log_type;
+        let same_log_type =
+            exist_items[0].diff_col_values.is_empty() == new_item.diff_col_values.is_empty();
         let any_col_none = Self::is_any_col_none(new_item);
         same_tb && same_log_type && !any_col_none
     }

@@ -1,4 +1,6 @@
-use std::collections::HashMap;
+use serde_json::Value;
+use std::collections::{HashMap, HashSet};
+use std::convert::TryFrom;
 
 use dt_common::meta::mongo::{mongo_constant::MongoConstants, mongo_key::MongoKey};
 use dt_common::{
@@ -11,11 +13,11 @@ use dt_common::{
 use dt_connector::rdb_router::RdbRouter;
 use dt_task::task_util::TaskUtil;
 use mongodb::{
-    bson::{doc, Document},
+    bson::{doc, oid::ObjectId, Bson, Document},
     options::FindOptions,
     Client,
 };
-use regex::Regex;
+use regex::{Captures, Regex};
 use sqlx::types::chrono::Utc;
 
 use crate::test_config_util::TestConfigUtil;
@@ -24,7 +26,7 @@ use super::base_test_runner::BaseTestRunner;
 
 pub struct MongoTestRunner {
     pub base: BaseTestRunner,
-    src_mongo_client: Option<Client>,
+    pub src_mongo_client: Option<Client>,
     dst_mongo_client: Option<Client>,
     router: RdbRouter,
 }
@@ -66,6 +68,17 @@ impl MongoTestRunner {
             _ => {}
         }
 
+        // cleanup dbs before tests
+        let mongo_dbs = Self::collect_databases(&base);
+        if !mongo_dbs.is_empty() {
+            if let Some(client) = src_mongo_client.as_ref() {
+                Self::drop_databases(client, &mongo_dbs).await?;
+            }
+            if let Some(client) = dst_mongo_client.as_ref() {
+                Self::drop_databases(client, &mongo_dbs).await?;
+            }
+        }
+
         let router = RdbRouter::from_config(&config.router, &DbType::Mongo).unwrap();
         Ok(Self {
             base,
@@ -102,15 +115,15 @@ impl MongoTestRunner {
             let (src_insert_sqls, src_update_sqls, src_delete_sqls) =
                 Self::slice_sqls_by_type(sqls);
             // insert
-            self.execute_dmls(src_mongo_client, db, &src_insert_sqls)
+            Self::execute_dmls(src_mongo_client, db, &src_insert_sqls)
                 .await
                 .unwrap();
             // update
-            self.execute_dmls(src_mongo_client, db, &src_update_sqls)
+            Self::execute_dmls(src_mongo_client, db, &src_update_sqls)
                 .await
                 .unwrap();
             // delete
-            self.execute_dmls(src_mongo_client, db, &src_delete_sqls)
+            Self::execute_dmls(src_mongo_client, db, &src_delete_sqls)
                 .await
                 .unwrap();
         }
@@ -125,7 +138,7 @@ impl MongoTestRunner {
         for (db, sqls) in src_sqls.iter() {
             let (_, _, src_delete_sqls) = Self::slice_sqls_by_type(sqls);
             // delete
-            self.execute_dmls(src_mongo_client, db, &src_delete_sqls)
+            Self::execute_dmls(src_mongo_client, db, &src_delete_sqls)
                 .await
                 .unwrap();
         }
@@ -150,21 +163,21 @@ impl MongoTestRunner {
             let (src_insert_sqls, src_update_sqls, src_delete_sqls) =
                 Self::slice_sqls_by_type(sqls);
             // insert
-            self.execute_dmls(src_mongo_client, db, &src_insert_sqls)
+            Self::execute_dmls(src_mongo_client, db, &src_insert_sqls)
                 .await
                 .unwrap();
             TimeUtil::sleep_millis(parse_millis).await;
             self.compare_db_data(db).await;
 
             // update
-            self.execute_dmls(src_mongo_client, db, &src_update_sqls)
+            Self::execute_dmls(src_mongo_client, db, &src_update_sqls)
                 .await
                 .unwrap();
             TimeUtil::sleep_millis(parse_millis).await;
             self.compare_db_data(db).await;
 
             // delete
-            self.execute_dmls(src_mongo_client, db, &src_delete_sqls)
+            Self::execute_dmls(src_mongo_client, db, &src_delete_sqls)
                 .await
                 .unwrap();
             TimeUtil::sleep_millis(parse_millis).await;
@@ -225,11 +238,11 @@ impl MongoTestRunner {
 
         for (db, sqls) in src_sqls.iter() {
             self.execute_ddls(src_mongo_client, db, sqls).await?;
-            self.execute_dmls(src_mongo_client, db, sqls).await?;
+            Self::execute_dmls(src_mongo_client, db, sqls).await?;
         }
         for (db, sqls) in dst_sqls.iter() {
             self.execute_ddls(dst_mongo_client, db, sqls).await?;
-            self.execute_dmls(dst_mongo_client, db, sqls).await?;
+            Self::execute_dmls(dst_mongo_client, db, sqls).await?;
         }
         Ok(())
     }
@@ -237,14 +250,14 @@ impl MongoTestRunner {
     pub async fn execute_test_sqls(&self) -> anyhow::Result<()> {
         let sqls = MongoTestRunner::slice_sqls_by_db(&self.base.src_test_sqls);
         for (db, sqls) in sqls.iter() {
-            self.execute_dmls(self.src_mongo_client.as_ref().unwrap(), db, sqls)
+            Self::execute_dmls(self.src_mongo_client.as_ref().unwrap(), db, sqls)
                 .await
                 .unwrap();
         }
 
         let sqls = MongoTestRunner::slice_sqls_by_db(&self.base.dst_test_sqls);
         for (db, sqls) in sqls.iter() {
-            self.execute_dmls(self.dst_mongo_client.as_ref().unwrap(), db, sqls)
+            Self::execute_dmls(self.dst_mongo_client.as_ref().unwrap(), db, sqls)
                 .await
                 .unwrap();
         }
@@ -264,16 +277,23 @@ impl MongoTestRunner {
         Ok(())
     }
 
-    async fn execute_dmls(&self, client: &Client, db: &str, sqls: &[String]) -> anyhow::Result<()> {
+    pub async fn execute_src_dmls(&self, sqls: &[String]) -> anyhow::Result<()> {
+        let client = self.src_mongo_client.as_ref().unwrap();
+        let sliced_sqls = Self::slice_sqls_by_db(sqls);
+        for (db, sqls) in sliced_sqls.iter() {
+            Self::execute_dmls(client, db, sqls).await?;
+        }
+        Ok(())
+    }
+
+    pub async fn execute_dmls(client: &Client, db: &str, sqls: &[String]) -> anyhow::Result<()> {
         for sql in sqls.iter() {
-            if sql.contains("insert") {
-                self.execute_insert(client, db, sql).await?;
-            }
-            if sql.contains("update") {
-                self.execute_update(client, db, sql).await?;
-            }
-            if sql.contains("delete") {
-                self.execute_delete(client, db, sql).await?;
+            if sql.contains(".insert") {
+                Self::execute_insert(client, db, sql).await?;
+            } else if sql.contains(".update") {
+                Self::execute_update(client, db, sql).await?;
+            } else if sql.contains(".delete") {
+                Self::execute_delete(client, db, sql).await?;
             }
         }
         Ok(())
@@ -317,7 +337,7 @@ impl MongoTestRunner {
         Ok(())
     }
 
-    async fn execute_insert(&self, client: &Client, db: &str, sql: &str) -> anyhow::Result<()> {
+    async fn execute_insert(client: &Client, db: &str, sql: &str) -> anyhow::Result<()> {
         // example: db.tb_2.insertOne({ "name": "a", "age": "1" })
         let re = Regex::new(r"db.(\w+).insert(One|Many)\(([\w\W]+)\)").unwrap();
         let cap = re.captures(sql).unwrap();
@@ -328,25 +348,45 @@ impl MongoTestRunner {
         doc_content = oid_re
             .replace_all(&doc_content, r#"{"$$oid": "$1"}"#)
             .to_string();
+        doc_content = Self::normalize_doc_string(&doc_content);
 
         let coll = client.database(db).collection::<Document>(tb);
+        let json_value: Value = serde_json::from_str(&doc_content).unwrap();
+        let parsed = Self::convert_extended_json(Bson::try_from(json_value).unwrap());
         if sql.contains("insertOne") {
-            let doc: Document = serde_json::from_str(&doc_content).unwrap();
+            let doc = match parsed {
+                Bson::Document(doc) => doc,
+                other => panic!("expected document for insertOne, got {:?}", other),
+            };
             coll.insert_one(doc, None).await.unwrap();
         } else {
-            let docs: Vec<Document> = serde_json::from_str(&doc_content).unwrap();
+            let docs = match parsed {
+                Bson::Array(arr) => arr
+                    .into_iter()
+                    .map(|item| match item {
+                        Bson::Document(doc) => doc,
+                        other => panic!("expected document inside array, got {:?}", other),
+                    })
+                    .collect::<Vec<Document>>(),
+                other => panic!("expected array for insertMany, got {:?}", other),
+            };
             coll.insert_many(docs, None).await.unwrap();
         }
         Ok(())
     }
 
-    async fn execute_delete(&self, client: &Client, db: &str, sql: &str) -> anyhow::Result<()> {
+    async fn execute_delete(client: &Client, db: &str, sql: &str) -> anyhow::Result<()> {
         let re = Regex::new(r"db.(\w+).delete(One|Many)\(([\w\W]+)\)").unwrap();
         let cap = re.captures(sql).unwrap();
         let tb = cap.get(1).unwrap().as_str();
         let doc = cap.get(3).unwrap().as_str();
-
-        let doc: Document = serde_json::from_str(doc).unwrap();
+        let normalized_doc = Self::normalize_doc_string(doc);
+        let json_value: Value = serde_json::from_str(&normalized_doc).unwrap();
+        let parsed = Self::convert_extended_json(Bson::try_from(json_value).unwrap());
+        let doc = match parsed {
+            Bson::Document(doc) => doc,
+            other => panic!("expected document for delete, got {:?}", other),
+        };
         let coll = client.database(db).collection::<Document>(tb);
         if sql.contains("deleteOne") {
             coll.delete_one(doc, None).await.unwrap();
@@ -356,15 +396,31 @@ impl MongoTestRunner {
         Ok(())
     }
 
-    async fn execute_update(&self, client: &Client, db: &str, sql: &str) -> anyhow::Result<()> {
-        let re = Regex::new(r"db.(\w+).update(One|Many)\(([\w\W]+),([\w\W]+)\)").unwrap();
-        let cap = re.captures(sql).unwrap();
+    async fn execute_update(client: &Client, db: &str, sql: &str) -> anyhow::Result<()> {
+        let re = Regex::new(r"db.(\w+).update(One|Many)").unwrap();
+        let cap = match re.captures(sql) {
+            Some(cap) => cap,
+            None => return Ok(()),
+        };
         let tb = cap.get(1).unwrap().as_str();
-        let query_doc = cap.get(3).unwrap().as_str();
-        let update_doc = cap.get(4).unwrap().as_str();
-
-        let query_doc: Document = serde_json::from_str(query_doc).unwrap();
-        let update_doc: Document = serde_json::from_str(update_doc).unwrap();
+        let args_start = sql.find('(').unwrap();
+        let args_end = sql.rfind(')').unwrap();
+        let args = &sql[args_start + 1..args_end];
+        let (query_doc, update_doc) = Self::split_update_args(args);
+        let normalized_query = Self::normalize_doc_string(&query_doc);
+        let normalized_update = Self::normalize_doc_string(&update_doc);
+        let json_query: Value = serde_json::from_str(&normalized_query).unwrap();
+        let json_update: Value = serde_json::from_str(&normalized_update).unwrap();
+        let parsed_query = Self::convert_extended_json(Bson::try_from(json_query).unwrap());
+        let parsed_update = Self::convert_extended_json(Bson::try_from(json_update).unwrap());
+        let query_doc = match parsed_query {
+            Bson::Document(doc) => doc,
+            other => panic!("expected document for update query, got {:?}", other),
+        };
+        let update_doc = match parsed_update {
+            Bson::Document(doc) => doc,
+            other => panic!("expected document for update update, got {:?}", other),
+        };
         let coll = client.database(db).collection::<Document>(tb);
         if sql.contains("updateOne") {
             coll.update_one(query_doc, update_doc, None).await.unwrap();
@@ -372,6 +428,27 @@ impl MongoTestRunner {
             coll.update_many(query_doc, update_doc, None).await.unwrap();
         }
         Ok(())
+    }
+
+    fn split_update_args(args: &str) -> (String, String) {
+        let mut depth = 0;
+        for (idx, ch) in args.char_indices() {
+            match ch {
+                '{' | '[' | '(' => depth += 1,
+                '}' | ']' | ')' => {
+                    if depth > 0 {
+                        depth -= 1;
+                    }
+                }
+                ',' if depth == 0 => {
+                    let query = args[..idx].trim().to_string();
+                    let update = args[idx + 1..].trim().to_string();
+                    return (query, update);
+                }
+                _ => {}
+            }
+        }
+        (String::new(), String::new())
     }
 
     async fn compare_db_data(&self, db: &str) {
@@ -435,7 +512,7 @@ impl MongoTestRunner {
         results
     }
 
-    fn slice_sqls_by_db(sqls: &[String]) -> HashMap<String, Vec<String>> {
+    pub fn slice_sqls_by_db(sqls: &[String]) -> HashMap<String, Vec<String>> {
         let mut db = String::new();
         let mut sliced_sqls: HashMap<String, Vec<String>> = HashMap::new();
         for sql in sqls.iter() {
@@ -469,5 +546,98 @@ impl MongoTestRunner {
             }
         }
         (insert_sqls, update_sqls, delete_sqls)
+    }
+
+    fn collect_databases(base: &BaseTestRunner) -> HashSet<String> {
+        let mut dbs = HashSet::new();
+        let sections = vec![
+            &base.src_prepare_sqls,
+            &base.dst_prepare_sqls,
+            &base.src_test_sqls,
+            &base.dst_test_sqls,
+            &base.src_clean_sqls,
+            &base.dst_clean_sqls,
+        ];
+        for sqls in sections.iter() {
+            Self::add_dbs_from_sqls(sqls, &mut dbs);
+        }
+        dbs
+    }
+
+    fn add_dbs_from_sqls(sqls: &[String], dbs: &mut HashSet<String>) {
+        for sql in sqls.iter() {
+            if sql.trim_start().starts_with("use ") {
+                let db = Self::get_db(sql);
+                if !db.is_empty() {
+                    dbs.insert(db);
+                }
+            }
+        }
+    }
+
+    async fn drop_databases(client: &Client, dbs: &HashSet<String>) -> anyhow::Result<()> {
+        for db in dbs.iter() {
+            if db.is_empty() {
+                continue;
+            }
+            client.database(db).drop(None).await?;
+        }
+        Ok(())
+    }
+
+    fn normalize_doc_string(doc: &str) -> String {
+        let re =
+            Regex::new(r"(?P<prefix>[\{\[,]\s*)(?P<key>[$A-Za-z_][A-Za-z0-9_$]*)\s*:").unwrap();
+        re.replace_all(doc, |caps: &Captures| {
+            format!("{}\"{}\":", &caps["prefix"], &caps["key"])
+        })
+        .to_string()
+    }
+
+    fn convert_extended_json(value: Bson) -> Bson {
+        match value {
+            Bson::Document(doc) => {
+                if doc.len() == 1 {
+                    if let Some(Bson::String(s)) = doc.get("$oid") {
+                        if let Ok(oid) = ObjectId::parse_str(s) {
+                            return Bson::ObjectId(oid);
+                        }
+                    }
+                }
+                let mut normalized = Document::new();
+                for (k, v) in doc.into_iter() {
+                    normalized.insert(k, Self::convert_extended_json(v));
+                }
+                Bson::Document(normalized)
+            }
+            Bson::Array(arr) => Bson::Array(
+                arr.into_iter()
+                    .map(Self::convert_extended_json)
+                    .collect::<Vec<Bson>>(),
+            ),
+            other => other,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::MongoTestRunner;
+    use serde_json::Value;
+
+    #[test]
+    fn normalize_doc_string_quotes_dollar_prefixed_keys() {
+        let doc = r#"{ $set: { name: "a" }, age: 1 }"#;
+        let normalized = MongoTestRunner::normalize_doc_string(doc);
+        assert_eq!(normalized, r#"{ "$set": { "name": "a" }, "age": 1 }"#);
+        serde_json::from_str::<Value>(&normalized).unwrap();
+    }
+
+    #[test]
+    fn normalize_doc_string_leaves_quoted_keys_untouched() {
+        let doc = r#"{ "$inc": { "count": 1 } }"#;
+        let normalized = MongoTestRunner::normalize_doc_string(doc);
+        assert_eq!(normalized, doc);
+        serde_json::from_str::<Value>(&normalized).unwrap();
     }
 }

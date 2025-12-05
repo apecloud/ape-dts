@@ -33,12 +33,18 @@ pub enum SinkerConfig {
         url: String,
         batch_size: usize,
         check_log_dir: String,
+        output_full_row: bool,
+        output_revise_sql: bool,
+        revise_match_full_row: bool,
     },
 
     PgCheck {
         url: String,
         batch_size: usize,
         check_log_dir: String,
+        output_full_row: bool,
+        output_revise_sql: bool,
+        revise_match_full_row: bool,
     },
 
     MongoCheck {
@@ -46,6 +52,8 @@ pub enum SinkerConfig {
         app_name: String,
         batch_size: usize,
         check_log_dir: String,
+        output_full_row: bool,
+        output_revise_sql: bool,
     },
 
     MysqlStruct {
