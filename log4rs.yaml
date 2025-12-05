@@ -92,27 +92,22 @@ appenders:
     encoder:
       pattern: "{m}{n}"
 
-  sql_appender:
-    kind: file
-    append: true
-    path: "CHECK_LOG_DIR_PLACEHOLDER/sql.log"
-    filters:
-      - kind: size_limit
-        path: "CHECK_LOG_DIR_PLACEHOLDER/sql.log"
-        limit: CHECK_LOG_FILE_SIZE_PLACEHOLDER
-    encoder:
-      pattern: "{m}{n}"
-
   extra_appender:
-    kind: file
+    kind: rolling_file
     append: true
     path: "CHECK_LOG_DIR_PLACEHOLDER/extra.log"
-    filters:
-      - kind: size_limit
-        path: "CHECK_LOG_DIR_PLACEHOLDER/extra.log"
-        limit: CHECK_LOG_FILE_SIZE_PLACEHOLDER
     encoder:
       pattern: "{m}{n}"
+    policy:
+      kind: compound
+      trigger:
+        kind: size
+        limit: 100mb
+      roller:
+        kind: fixed_window
+        base: 1
+        count: 10
+        pattern: "CHECK_LOG_DIR_PLACEHOLDER/extra{}.log"
 
   summary_appender:
     kind: file
@@ -155,6 +150,23 @@ appenders:
         count: 10
         pattern: "LOG_DIR_PLACEHOLDER/finished{}.log"
   
+  sql_appender:
+    kind: rolling_file
+    append: true
+    path: "LOG_DIR_PLACEHOLDER/sql.log"
+    encoder:
+      pattern: "{m}{n}"
+    policy:
+      kind: compound
+      trigger:
+        kind: size
+        limit: 100mb
+      roller:
+        kind: fixed_window
+        base: 1
+        count: 10
+        pattern: "LOG_DIR_PLACEHOLDER/sql{}.log"
+
   task_appender:
     kind: rolling_file
     append: true

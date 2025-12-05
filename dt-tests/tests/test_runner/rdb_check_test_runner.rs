@@ -36,24 +36,9 @@ impl RdbCheckTestRunner {
         if !self.base.base.dst_post_test_sqls.is_empty() {
             let dst_sqls = self.base.base.dst_post_test_sqls.clone();
             let delay_ms = match &self.base.config.sinker {
-                dt_common::config::sinker_config::SinkerConfig::MysqlCheck {
-                    recheck_interval_secs,
-                    ..
-                }
-                | dt_common::config::sinker_config::SinkerConfig::PgCheck {
-                    recheck_interval_secs,
-                    ..
-                } => {
-                    let interval_ms = recheck_interval_secs.saturating_mul(1000);
-                    if interval_ms == 0 { 0 } else { interval_ms / 2 }
-                }
-                dt_common::config::sinker_config::SinkerConfig::MongoCheck {
-                    recheck_interval_secs,
-                    ..
-                } => {
-                    let interval_ms = recheck_interval_secs.saturating_mul(1000);
-                    if interval_ms == 0 { 0 } else { interval_ms / 2 }
-                }
+                dt_common::config::sinker_config::SinkerConfig::MysqlCheck { .. }
+                | dt_common::config::sinker_config::SinkerConfig::PgCheck { .. }
+                | dt_common::config::sinker_config::SinkerConfig::MongoCheck { .. } => 0,
                 _ => 0,
             };
 

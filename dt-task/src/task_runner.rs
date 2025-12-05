@@ -8,7 +8,7 @@ use std::{
 };
 
 use anyhow::{bail, Context};
-use log4rs::config::RawConfig;
+use log4rs::config::{Config, Deserializers, RawConfig};
 use ratelimit::Ratelimiter;
 use tokio::{
     fs::{metadata, File},
@@ -24,6 +24,7 @@ use super::{
     extractor_util::ExtractorUtil, parallelizer_util::ParallelizerUtil, sinker_util::SinkerUtil,
 };
 use crate::task_util::{ConnClient, TaskUtil};
+use dt_common::log_filter::SizeLimitFilterDeserializer;
 use dt_common::{
     config::{
         config_enums::{build_task_type, DbType, PipelineType, TaskType},
@@ -89,6 +90,7 @@ const CHECK_LOG_DIR_PLACEHOLDER: &str = "CHECK_LOG_DIR_PLACEHOLDER";
 const STATISTIC_LOG_DIR_PLACEHOLDER: &str = "STATISTIC_LOG_DIR_PLACEHOLDER";
 const LOG_LEVEL_PLACEHOLDER: &str = "LOG_LEVEL_PLACEHOLDER";
 const LOG_DIR_PLACEHOLDER: &str = "LOG_DIR_PLACEHOLDER";
+const CHECK_LOG_FILE_SIZE_PLACEHOLDER: &str = "CHECK_LOG_FILE_SIZE_PLACEHOLDER";
 const DEFAULT_CHECK_LOG_DIR_PLACEHOLDER: &str = "LOG_DIR_PLACEHOLDER/check";
 const DEFAULT_STATISTIC_LOG_DIR_PLACEHOLDER: &str = "LOG_DIR_PLACEHOLDER/statistic";
 
@@ -615,11 +617,26 @@ impl TaskRunner {
                 STATISTIC_LOG_DIR_PLACEHOLDER,
                 DEFAULT_STATISTIC_LOG_DIR_PLACEHOLDER,
             )
+            .replace(
+                CHECK_LOG_FILE_SIZE_PLACEHOLDER,
+                &self.config.runtime.check_log_file_size,
+            )
             .replace(LOG_DIR_PLACEHOLDER, &self.config.runtime.log_dir)
             .replace(LOG_LEVEL_PLACEHOLDER, &self.config.runtime.log_level);
 
-        let config: RawConfig = serde_yaml::from_str(&config_str)?;
-        log4rs::init_raw_config(config)?;
+        let raw: RawConfig = serde_yaml::from_str(&config_str)?;
+        let mut deserializers = Deserializers::default();
+        deserializers.insert("size_limit", SizeLimitFilterDeserializer::default());
+        let (appenders, errors) = raw.appenders_lossy(&deserializers);
+        if !errors.is_empty() {
+            bail!("errors deserializing appenders: {:?}", errors);
+        }
+
+        let config = Config::builder()
+            .appenders(appenders)
+            .loggers(raw.loggers())
+            .build(raw.root())?;
+        log4rs::init_config(config)?;
         Ok(())
     }
 
