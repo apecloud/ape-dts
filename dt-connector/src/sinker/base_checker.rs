@@ -620,7 +620,7 @@ mod tests {
         rdb_tb_meta::RdbTbMeta,
     };
     use mongodb::bson::{doc, oid::ObjectId};
-    use std::collections::HashMap;
+    use std::collections::{HashMap, HashSet};
 
     fn build_tb_meta() -> MysqlTbMeta {
         let mut col_type_map = HashMap::new();
@@ -637,9 +637,11 @@ mod tests {
                 schema: "test_db".into(),
                 tb: "test_tb".into(),
                 cols: vec!["id".into(), "name".into()],
+                nullable_cols: HashSet::new(),
                 col_origin_type_map: HashMap::new(),
                 key_map: HashMap::new(),
-                order_col: None,
+                order_cols: Vec::new(),
+                order_cols_are_nullable: false,
                 partition_col: "id".into(),
                 id_cols: vec!["id".into()],
                 foreign_keys: Vec::new(),
@@ -695,9 +697,11 @@ mod tests {
                 schema: "pg_db".into(),
                 tb: "pg_tb".into(),
                 cols: vec!["id".into(), "name".into()],
+                nullable_cols: HashSet::new(),
                 col_origin_type_map: HashMap::new(),
                 key_map: HashMap::new(),
-                order_col: None,
+                order_cols: Vec::new(),
+                order_cols_are_nullable: false,
                 partition_col: "id".into(),
                 id_cols: vec!["id".into()],
                 foreign_keys: Vec::new(),
