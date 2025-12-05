@@ -146,6 +146,6 @@ Same with [filter].
 | log_level | level | info/warn/error/debug/trace | info |
 | log4rs_file | log4rs config file | ./log4rs.yaml | ./log4rs.yaml |
 | log_dir | output dir | ./logs | ./logs |
-| check_log_file_size | Max size of check result logs (miss/diff); when exceeded, new logs are dropped (no rotation/truncation) | 100mb | 100mb |
+| check_log_file_size | Max size of check result logs (miss/diff/sql); when exceeded, new logs are dropped (no rotation/truncation) | 100mb | 100mb |
 
 Note that the log files contain progress information for the task, which can be used for task [resuming at breakpoint](/docs/en/snapshot/resume.md). Therefore, if you have multiple tasks, **please set up separate log directories for each task**.
