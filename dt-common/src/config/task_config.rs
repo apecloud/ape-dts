@@ -60,6 +60,8 @@ pub struct TaskConfig {
 
 pub const DEFAULT_DB_BATCH_SIZE: usize = 100;
 pub const DEFAULT_MAX_CONNECTIONS: u32 = 10;
+pub const DEFAULT_CHECK_LOG_FILE_SIZE: &str = "100mb";
+
 // sections
 const GLOBAL: &str = "global";
 const EXTRACTOR: &str = "extractor";
@@ -457,6 +459,11 @@ impl TaskConfig {
                     url,
                     batch_size,
                     check_log_dir: loader.get_optional(SINKER, CHECK_LOG_DIR),
+                    check_log_file_size: loader.get_with_default(
+                        SINKER,
+                        CHECK_LOG_FILE_SIZE,
+                        DEFAULT_CHECK_LOG_FILE_SIZE.to_string(),
+                    ),
                     output_full_row: loader.get_with_default(SINKER, OUTPUT_FULL_ROW, false),
                     output_revise_sql: loader.get_with_default(SINKER, OUTPUT_REVISE_SQL, false),
                     revise_match_full_row: loader.get_with_default(
@@ -494,6 +501,11 @@ impl TaskConfig {
                     url,
                     batch_size,
                     check_log_dir: loader.get_optional(SINKER, CHECK_LOG_DIR),
+                    check_log_file_size: loader.get_with_default(
+                        SINKER,
+                        CHECK_LOG_FILE_SIZE,
+                        DEFAULT_CHECK_LOG_FILE_SIZE.to_string(),
+                    ),
                     output_full_row: loader.get_with_default(SINKER, OUTPUT_FULL_ROW, false),
                     output_revise_sql: loader.get_with_default(SINKER, OUTPUT_REVISE_SQL, false),
                     revise_match_full_row: loader.get_with_default(
@@ -530,6 +542,11 @@ impl TaskConfig {
                         app_name,
                         batch_size,
                         check_log_dir: loader.get_optional(SINKER, CHECK_LOG_DIR),
+                        check_log_file_size: loader.get_with_default(
+                            SINKER,
+                            CHECK_LOG_FILE_SIZE,
+                            DEFAULT_CHECK_LOG_FILE_SIZE.to_string(),
+                        ),
                         output_full_row: loader.get_with_default(SINKER, OUTPUT_FULL_ROW, false),
                         output_revise_sql: loader.get_with_default(
                             SINKER,
@@ -705,11 +722,6 @@ impl TaskConfig {
                 RUNTIME,
                 "log4rs_file",
                 "./log4rs.yaml".to_string(),
-            ),
-            check_log_file_size: loader.get_with_default(
-                RUNTIME,
-                CHECK_LOG_FILE_SIZE,
-                "100mb".to_string(),
             ),
             tb_parallel_size: loader.get_with_default(RUNTIME, "tb_parallel_size", 1),
         })

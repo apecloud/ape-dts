@@ -33,7 +33,7 @@ use dt_common::{
         config_token_parser::{ConfigTokenParser, TokenEscapePair},
         extractor_config::ExtractorConfig,
         sinker_config::SinkerConfig,
-        task_config::TaskConfig,
+        task_config::{TaskConfig, DEFAULT_CHECK_LOG_FILE_SIZE},
     },
     error::Error,
     log_error, log_finished, log_info,
@@ -615,12 +615,26 @@ impl TaskRunner {
         file.read_to_string(&mut config_str).await?;
 
         match &self.config.sinker {
-            SinkerConfig::MysqlCheck { check_log_dir, .. }
-            | SinkerConfig::PgCheck { check_log_dir, .. }
-            | SinkerConfig::MongoCheck { check_log_dir, .. } => {
+            SinkerConfig::MysqlCheck {
+                check_log_dir,
+                check_log_file_size,
+                ..
+            }
+            | SinkerConfig::PgCheck {
+                check_log_dir,
+                check_log_file_size,
+                ..
+            }
+            | SinkerConfig::MongoCheck {
+                check_log_dir,
+                check_log_file_size,
+                ..
+            } => {
                 if !check_log_dir.is_empty() {
                     config_str = config_str.replace(CHECK_LOG_DIR_PLACEHOLDER, check_log_dir);
                 }
+                config_str =
+                    config_str.replace(CHECK_LOG_FILE_SIZE_PLACEHOLDER, check_log_file_size);
             }
 
             SinkerConfig::RedisStatistic {
@@ -641,10 +655,7 @@ impl TaskRunner {
                 STATISTIC_LOG_DIR_PLACEHOLDER,
                 DEFAULT_STATISTIC_LOG_DIR_PLACEHOLDER,
             )
-            .replace(
-                CHECK_LOG_FILE_SIZE_PLACEHOLDER,
-                &self.config.runtime.check_log_file_size,
-            )
+            .replace(CHECK_LOG_FILE_SIZE_PLACEHOLDER, DEFAULT_CHECK_LOG_FILE_SIZE)
             .replace(LOG_DIR_PLACEHOLDER, &self.config.runtime.log_dir)
             .replace(LOG_LEVEL_PLACEHOLDER, &self.config.runtime.log_level);
 
