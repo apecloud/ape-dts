@@ -67,7 +67,10 @@ impl Sinker for PgChecker {
     }
 
     async fn close(&mut self) -> anyhow::Result<()> {
-        if self.summary.miss_count > 0 || self.summary.diff_count > 0 {
+        if self.summary.miss_count > 0
+            || self.summary.diff_count > 0
+            || self.summary.extra_count > 0
+        {
             self.summary.end_time = chrono::Local::now().to_rfc3339();
             if let Some(global_summary) = &self.global_summary {
                 let mut global_summary = global_summary.lock().await;
@@ -264,7 +267,11 @@ impl PgChecker {
                 _ => StructStatement::Unknown,
             };
 
-            BaseChecker::compare_struct(src_statement, &mut dst_statement, &self.filter)?;
+            let (miss_count, diff_count, extra_count) =
+                BaseChecker::compare_struct(src_statement, &mut dst_statement, &self.filter)?;
+            self.summary.miss_count += miss_count;
+            self.summary.diff_count += diff_count;
+            self.summary.extra_count += extra_count;
         }
         Ok(())
     }

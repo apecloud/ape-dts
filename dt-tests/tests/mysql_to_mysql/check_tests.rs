@@ -16,13 +16,11 @@ mod test {
     async fn check_all_cols_pk_test() {
         TestBase::run_check_test("mysql_to_mysql/check/all_cols_pk_test").await;
     }
-
-    // TODO: fix this test
-    // #[tokio::test]
-    // #[serial]
-    // async fn check_basic_struct_test() {
-    //     TestBase::run_check_test("mysql_to_mysql/check/basic_struct_test").await;
-    // }
+    #[tokio::test]
+    #[serial]
+    async fn check_basic_struct_test() {
+        TestBase::run_check_test("mysql_to_mysql/check/basic_struct_test").await;
+    }
 
     // this should run separately from other tests since it has a different check log dir,
     // all tests will be run in one progress, the log4rs will only be initialized once, it makes this test fails

@@ -41,10 +41,9 @@ mod test {
         TestBase::run_check_test("pg_to_pg/check/revise_match_full_row_test").await;
     }
 
-    // TODO: fix this test
-    // #[tokio::test]
-    // #[serial]
-    // async fn check_struct_basic_test() {
-    //     TestBase::run_check_test("pg_to_pg/check/basic_struct_test").await;
-    // }
+    #[tokio::test]
+    #[serial]
+    async fn check_struct_basic_test() {
+        TestBase::run_check_test("pg_to_pg/check/basic_struct_test").await;
+    }
 }
