@@ -1,3 +1,1 @@
 [("table.struct_check_test_1.not_match_miss", "CREATE TABLE IF NOT EXISTS `struct_check_test_1`.`not_match_miss` (`id` int(11) NOT NULL, `text` varchar(10) CHARACTER SET utf8 COLLATE utf8_general_ci NULL, PRIMARY KEY (`id`)) ENGINE=InnoDB  DEFAULT CHARSET=utf8 COLLATE=utf8_general_ci")]
-key: index.struct_check_test_1.not_match_index.i6_miss, src_sql: CREATE  INDEX `i6_miss` ON `struct_check_test_1`.`not_match_index` (`index_col`) 
-key: index.struct_check_test_1.not_match_index.i5_diff_name_src, src_sql: CREATE  INDEX `i5_diff_name_src` ON `struct_check_test_1`.`not_match_index` (`index_col`) 

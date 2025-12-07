@@ -15,7 +15,7 @@ use dt_common::meta::{
     row_data::RowData, row_type::RowType,
     struct_meta::statement::struct_statement::StructStatement,
 };
-use dt_common::{log_diff, log_miss, log_sql, rdb_filter::RdbFilter};
+use dt_common::{log_diff, log_extra, log_miss, log_sql, rdb_filter::RdbFilter};
 
 pub enum ReviseSqlMeta<'a> {
     Mysql(&'a MysqlTbMeta),
@@ -339,27 +339,40 @@ impl BaseChecker {
         src_statement: &mut StructStatement,
         dst_statement: &mut StructStatement,
         filter: &RdbFilter,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<(usize, usize, usize)> {
         if matches!(dst_statement, StructStatement::Unknown) {
             log_miss!("{:?}", src_statement.to_sqls(filter)?);
-            return Ok(());
+            return Ok((1, 0, 0));
         }
 
-        let src_sqls = src_statement.to_sqls(filter)?;
+        let src_sqls: HashMap<_, _> = src_statement.to_sqls(filter)?.into_iter().collect();
         let dst_sqls: HashMap<_, _> = dst_statement.to_sqls(filter)?.into_iter().collect();
 
-        for (key, src_sql) in src_sqls {
-            if let Some(dst_sql) = dst_sqls.get(&key) {
-                if src_sql != *dst_sql {
+        let mut miss_count = 0;
+        let mut diff_count = 0;
+        let mut extra_count = 0;
+
+        for (key, src_sql) in &src_sqls {
+            if let Some(dst_sql) = dst_sqls.get(key) {
+                if src_sql != dst_sql {
                     log_diff!("key: {}, src_sql: {}", key, src_sql);
                     log_diff!("key: {}, dst_sql: {}", key, dst_sql);
+                    diff_count += 1;
                 }
             } else {
                 log_miss!("key: {}, src_sql: {}", key, src_sql);
+                miss_count += 1;
             }
         }
 
-        Ok(())
+        for (key, dst_sql) in &dst_sqls {
+            if !src_sqls.contains_key(key) {
+                log_extra!("key: {}, dst_sql: {}", key, dst_sql);
+                extra_count += 1;
+            }
+        }
+
+        Ok((miss_count, diff_count, extra_count))
     }
 
     pub async fn build_miss_log(

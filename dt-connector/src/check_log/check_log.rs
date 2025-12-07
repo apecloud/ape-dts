@@ -58,6 +58,8 @@ pub struct CheckSummaryLog {
     pub miss_count: usize,
     #[serde(default, skip_serializing_if = "is_zero")]
     pub diff_count: usize,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub extra_count: usize,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sql_count: Option<usize>,
 }
@@ -74,6 +76,7 @@ impl CheckSummaryLog {
         self.is_consistent = self.is_consistent && other.is_consistent;
         self.miss_count += other.miss_count;
         self.diff_count += other.diff_count;
+        self.extra_count += other.extra_count;
         if let Some(sql_count) = other.sql_count {
             self.sql_count = Some(self.sql_count.unwrap_or(0) + sql_count);
         }

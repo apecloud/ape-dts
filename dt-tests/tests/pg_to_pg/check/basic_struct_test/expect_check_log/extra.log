@@ -1,1 +1,1 @@
-key: index.struct_check_test_1.full_index_type.index_not_match_name_dst, dst_sql: CREATE UNIQUE INDEX IF NOT EXISTS "index_not_match_name_dst" ON "struct_check_test_1"."full_index_type" USING btree (unique_col) TABLESPACE pg_default
+key: index.struct_check_test_1.full_index_type.index_not_match_name_dst, dst_sql: CREATE UNIQUE INDEX IF NOT EXISTS "index_not_match_name_dst" ON "struct_check_test_1"."full_index_type" USING btree (unique_col)

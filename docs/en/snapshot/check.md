@@ -140,10 +140,10 @@ INSERT INTO `test_db_1`.`test_table`(`id`,`name`,`age`,`email`) VALUES(3,'Charli
 
 ### summary.log
 
-The summary log contains the overall result of the check, such as the number of missing and different rows.
+The summary log contains the overall result of the check, such as the number of missing, different, and extra rows.
 
 ```json
-{"start_time":"2023-09-01T12:00:00+08:00","end_time":"2023-09-01T12:00:01+08:00","is_consistent":false,"miss_count":1,"diff_count":2,"sql_count":3}
+{"start_time":"2023-09-01T12:00:00+08:00","end_time":"2023-09-01T12:00:01+08:00","is_consistent":false,"miss_count":1,"diff_count":2,"extra_count":1,"sql_count":3}
 ```
 
 # Other configurations

@@ -57,7 +57,10 @@ impl Sinker for MongoChecker {
     }
 
     async fn close(&mut self) -> anyhow::Result<()> {
-        if self.summary.miss_count > 0 || self.summary.diff_count > 0 {
+        if self.summary.miss_count > 0
+            || self.summary.diff_count > 0
+            || self.summary.extra_count > 0
+        {
             self.summary.end_time = chrono::Local::now().to_rfc3339();
             if let Some(global_summary) = &self.global_summary {
                 let mut global_summary = global_summary.lock().await;
