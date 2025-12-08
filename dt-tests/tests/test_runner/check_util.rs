@@ -88,6 +88,9 @@ impl CheckUtil {
     }
 
     pub fn clear_check_log(dst_check_log_dir: &str) {
+        if dst_check_log_dir.is_empty() {
+            return;
+        }
         let files = [
             "miss.log",
             "diff.log",

@@ -1,5 +1,5 @@
-{"schema":"public","tb":"default_table","id_col_values":{"pk":"10"},"diff_col_values":{}}
-{"schema":"public","tb":"default_table","id_col_values":{"pk":"12"},"diff_col_values":{}}
-{"schema":"public","tb":"default_table","id_col_values":{"pk":"11"},"diff_col_values":{}}
-{"schema":"public","tb":"col_has_special_character_table","id_col_values":{"p,k,1":"pk1,value,3","p\\k&2":"pk2,value,3"},"diff_col_values":{}}
-{"schema":"public","tb":"col_has_special_character_table","id_col_values":{"p,k,1":"pk1,value,5","p\\k&2":"pk2,value,5"},"diff_col_values":{}}
+{"schema":"public","tb":"default_table","id_col_values":{"pk":"10"}}
+{"schema":"public","tb":"default_table","id_col_values":{"pk":"12"}}
+{"schema":"public","tb":"default_table","id_col_values":{"pk":"11"}}
+{"schema":"public","tb":"col_has_special_character_table","id_col_values":{"p,k,1":"pk1,value,3","p\\k&2":"pk2,value,3"}}
+{"schema":"public","tb":"col_has_special_character_table","id_col_values":{"p,k,1":"pk1,value,5","p\\k&2":"pk2,value,5"}}

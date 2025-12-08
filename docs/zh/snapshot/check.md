@@ -140,6 +140,14 @@ revise_match_full_row=true
 }
 ```
 
+### 概览日志（summary.log）
+概览日志包含校验的总体结果，如 start_time, end_time, is_consistent，以及 miss, diff, extra 的数量。
+
+```json
+{"start_time": "2023-09-01T12:00:00+08:00", "end_time": "2023-09-01T12:00:01+08:00", "is_consistent": false, "miss_count": 1, "diff_count": 2, "extra_count": 1, "sql_count": 3}
+```
+
+
 # 反向校验
 
 将 [extractor] 和 [sinker] 配置调换，即可进行反向校验。
