@@ -26,7 +26,7 @@ use super::base_test_runner::BaseTestRunner;
 
 pub struct MongoTestRunner {
     pub base: BaseTestRunner,
-    pub src_mongo_client: Option<Client>,
+    src_mongo_client: Option<Client>,
     dst_mongo_client: Option<Client>,
     router: RdbRouter,
 }
@@ -115,15 +115,15 @@ impl MongoTestRunner {
             let (src_insert_sqls, src_update_sqls, src_delete_sqls) =
                 Self::slice_sqls_by_type(sqls);
             // insert
-            Self::execute_dmls(src_mongo_client, db, &src_insert_sqls)
+            self.execute_dmls(src_mongo_client, db, &src_insert_sqls)
                 .await
                 .unwrap();
             // update
-            Self::execute_dmls(src_mongo_client, db, &src_update_sqls)
+            self.execute_dmls(src_mongo_client, db, &src_update_sqls)
                 .await
                 .unwrap();
             // delete
-            Self::execute_dmls(src_mongo_client, db, &src_delete_sqls)
+            self.execute_dmls(src_mongo_client, db, &src_delete_sqls)
                 .await
                 .unwrap();
         }
@@ -138,7 +138,7 @@ impl MongoTestRunner {
         for (db, sqls) in src_sqls.iter() {
             let (_, _, src_delete_sqls) = Self::slice_sqls_by_type(sqls);
             // delete
-            Self::execute_dmls(src_mongo_client, db, &src_delete_sqls)
+            self.execute_dmls(src_mongo_client, db, &src_delete_sqls)
                 .await
                 .unwrap();
         }
@@ -163,21 +163,21 @@ impl MongoTestRunner {
             let (src_insert_sqls, src_update_sqls, src_delete_sqls) =
                 Self::slice_sqls_by_type(sqls);
             // insert
-            Self::execute_dmls(src_mongo_client, db, &src_insert_sqls)
+            self.execute_dmls(src_mongo_client, db, &src_insert_sqls)
                 .await
                 .unwrap();
             TimeUtil::sleep_millis(parse_millis).await;
             self.compare_db_data(db).await;
 
             // update
-            Self::execute_dmls(src_mongo_client, db, &src_update_sqls)
+            self.execute_dmls(src_mongo_client, db, &src_update_sqls)
                 .await
                 .unwrap();
             TimeUtil::sleep_millis(parse_millis).await;
             self.compare_db_data(db).await;
 
             // delete
-            Self::execute_dmls(src_mongo_client, db, &src_delete_sqls)
+            self.execute_dmls(src_mongo_client, db, &src_delete_sqls)
                 .await
                 .unwrap();
             TimeUtil::sleep_millis(parse_millis).await;
@@ -238,11 +238,11 @@ impl MongoTestRunner {
 
         for (db, sqls) in src_sqls.iter() {
             self.execute_ddls(src_mongo_client, db, sqls).await?;
-            Self::execute_dmls(src_mongo_client, db, sqls).await?;
+            self.execute_dmls(src_mongo_client, db, sqls).await?;
         }
         for (db, sqls) in dst_sqls.iter() {
             self.execute_ddls(dst_mongo_client, db, sqls).await?;
-            Self::execute_dmls(dst_mongo_client, db, sqls).await?;
+            self.execute_dmls(dst_mongo_client, db, sqls).await?;
         }
         Ok(())
     }
@@ -250,14 +250,14 @@ impl MongoTestRunner {
     pub async fn execute_test_sqls(&self) -> anyhow::Result<()> {
         let sqls = MongoTestRunner::slice_sqls_by_db(&self.base.src_test_sqls);
         for (db, sqls) in sqls.iter() {
-            Self::execute_dmls(self.src_mongo_client.as_ref().unwrap(), db, sqls)
+            self.execute_dmls(self.src_mongo_client.as_ref().unwrap(), db, sqls)
                 .await
                 .unwrap();
         }
 
         let sqls = MongoTestRunner::slice_sqls_by_db(&self.base.dst_test_sqls);
         for (db, sqls) in sqls.iter() {
-            Self::execute_dmls(self.dst_mongo_client.as_ref().unwrap(), db, sqls)
+            self.execute_dmls(self.dst_mongo_client.as_ref().unwrap(), db, sqls)
                 .await
                 .unwrap();
         }
@@ -277,16 +277,7 @@ impl MongoTestRunner {
         Ok(())
     }
 
-    pub async fn execute_src_dmls(&self, sqls: &[String]) -> anyhow::Result<()> {
-        let client = self.src_mongo_client.as_ref().unwrap();
-        let sliced_sqls = Self::slice_sqls_by_db(sqls);
-        for (db, sqls) in sliced_sqls.iter() {
-            Self::execute_dmls(client, db, sqls).await?;
-        }
-        Ok(())
-    }
-
-    pub async fn execute_dmls(client: &Client, db: &str, sqls: &[String]) -> anyhow::Result<()> {
+    async fn execute_dmls(&self, client: &Client, db: &str, sqls: &[String]) -> anyhow::Result<()> {
         for sql in sqls.iter() {
             if sql.contains(".insert") {
                 Self::execute_insert(client, db, sql).await?;
@@ -477,7 +468,7 @@ impl MongoTestRunner {
         }
     }
 
-    pub async fn list_tb(&self, db: &str, from: &str) -> Vec<String> {
+    async fn list_tb(&self, db: &str, from: &str) -> Vec<String> {
         let client = if from == SRC {
             self.src_mongo_client.as_ref().unwrap()
         } else {
@@ -512,7 +503,7 @@ impl MongoTestRunner {
         results
     }
 
-    pub fn slice_sqls_by_db(sqls: &[String]) -> HashMap<String, Vec<String>> {
+    fn slice_sqls_by_db(sqls: &[String]) -> HashMap<String, Vec<String>> {
         let mut db = String::new();
         let mut sliced_sqls: HashMap<String, Vec<String>> = HashMap::new();
         for sql in sqls.iter() {

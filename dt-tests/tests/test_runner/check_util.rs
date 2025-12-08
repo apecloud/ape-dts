@@ -1,5 +1,5 @@
 use serde_json::Value;
-use std::{collections::HashSet, fs, fs::File, path::Path};
+use std::{collections::HashSet, fs::File};
 
 use dt_common::config::{config_enums::DbType, sinker_config::SinkerConfig};
 
@@ -33,15 +33,19 @@ impl CheckUtil {
         assert_eq!(expect_extra_logs.len(), actual_extra_logs.len());
         assert_eq!(expect_sql_logs.len(), actual_sql_logs.len());
         for log in actual_diff_logs {
+            println!("actual_diff_logs: {}", log);
             assert!(expect_diff_logs.contains(&log))
         }
         for log in actual_miss_logs {
+            println!("actual_miss_logs: {}", log);
             assert!(expect_miss_logs.contains(&log))
         }
         for log in actual_extra_logs {
+            println!("actual_extra_logs: {}", log);
             assert!(expect_extra_logs.contains(&log))
         }
         for log in actual_sql_logs {
+            println!("actual_sql_logs: {}", log);
             assert!(expect_sql_logs.contains(&log))
         }
 
@@ -100,10 +104,9 @@ impl CheckUtil {
         ];
         for file in files {
             let log_file = format!("{}/{}", dst_check_log_dir, file);
-            if let Some(parent) = Path::new(&log_file).parent() {
-                let _ = fs::create_dir_all(parent);
+            if BaseTestRunner::check_path_exists(&log_file) {
+                File::create(&log_file).unwrap().set_len(0).unwrap();
             }
-            File::create(&log_file).unwrap().set_len(0).unwrap();
         }
     }
 
