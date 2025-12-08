@@ -442,11 +442,7 @@ impl TaskConfig {
                         DISABLE_FOREIGN_KEY_CHECKS,
                         true,
                     ),
-                    transaction_isolation: loader.get_with_default(
-                        SINKER,
-                        "transaction_isolation",
-                        RdbTransactionIsolation::ReadCommitted,
-                    ),
+                    transaction_isolation: loader.get_optional(SINKER, "transaction_isolation"),
                 },
 
                 SinkType::Check => SinkerConfig::MysqlCheck {

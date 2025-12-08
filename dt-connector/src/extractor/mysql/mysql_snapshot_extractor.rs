@@ -367,9 +367,10 @@ impl MysqlSnapshotExtractor {
                 }
 
                 start_value = last_order_col_value.lock().await.value.clone();
-                if all_finished.load(Ordering::Acquire) {
-                    break;
-                }
+            }
+
+            if all_finished.load(Ordering::Acquire) {
+                break;
             }
         }
 
