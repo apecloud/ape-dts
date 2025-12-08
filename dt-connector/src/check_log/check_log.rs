@@ -95,6 +95,22 @@ impl std::fmt::Display for CheckLog {
     }
 }
 
+#[derive(Serialize, Deserialize)]
+pub struct StructCheckLog {
+    pub key: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub src_sql: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dst_sql: Option<String>,
+}
+
+impl std::fmt::Display for StructCheckLog {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = serde_json::to_string(self).unwrap_or_else(|_| "{}".to_string());
+        write!(f, "{}", s)
+    }
+}
+
 impl FromStr for CheckLog {
     type Err = Error;
     fn from_str(str: &str) -> Result<Self, Self::Err> {

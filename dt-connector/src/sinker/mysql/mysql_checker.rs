@@ -264,11 +264,18 @@ impl MysqlChecker {
                 _ => StructStatement::Unknown,
             };
 
-            let (miss_count, diff_count, extra_count) =
-                BaseChecker::compare_struct(src_statement, &mut dst_statement, &self.filter)?;
+            let (miss_count, diff_count, extra_count, sql_count) = BaseChecker::compare_struct(
+                src_statement,
+                &mut dst_statement,
+                &self.filter,
+                self.output_revise_sql,
+            )?;
             self.summary.miss_count += miss_count;
             self.summary.diff_count += diff_count;
             self.summary.extra_count += extra_count;
+            if sql_count > 0 {
+                self.summary.sql_count = Some(self.summary.sql_count.unwrap_or(0) + sql_count);
+            }
         }
         Ok(())
     }

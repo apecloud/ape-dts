@@ -1,0 +1,13 @@
+CREATE INDEX IF NOT EXISTS "index_not_match_missing" ON "struct_check_test_1"."full_index_type" USING btree (index_col)
+CREATE UNIQUE INDEX IF NOT EXISTS "index_not_match_name_src" ON "struct_check_test_1"."full_index_type" USING btree (unique_col)
+COMMENT ON COLUMN "struct_check_test_1"."not_match_comment"."id" IS 'This is the primary key column.'
+CREATE SEQUENCE IF NOT EXISTS "struct_check_test_1"."not_match_missing_id_seq" AS integer START 1 INCREMENT by 1 MINVALUE 1 MAXVALUE 2147483647 NO CYCLE
+CREATE TABLE IF NOT EXISTS "struct_check_test_1"."not_match_missing" ("id" integer NOT NULL DEFAULT nextval('struct_check_test_1.not_match_missing_id_seq'::regclass) ,"varchar_col" character varying(255) NOT NULL ,"char_col" character(10) )
+ALTER SEQUENCE "struct_check_test_1"."not_match_missing_id_seq" OWNED BY "struct_check_test_1"."not_match_missing"."id"
+ALTER TABLE "struct_check_test_1"."not_match_missing" ADD CONSTRAINT "not_match_missing_pkey" PRIMARY KEY (id)
+CREATE UNIQUE INDEX IF NOT EXISTS "not_match_missing_pkey" ON "struct_check_test_1"."not_match_missing" USING btree (id)
+ALTER TABLE "struct_check_test_1"."not_match_check" ADD CONSTRAINT "not_match_check_check_col_check" CHECK ((char_length((check_col)::text) > 3))
+CREATE TABLE IF NOT EXISTS "struct_check_test_1"."not_match_column" ("id" integer NOT NULL DEFAULT nextval('struct_check_test_1.not_match_column_id_seq'::regclass) ,"varchar_col" character varying(255) NOT NULL ,"char_col" character(10) )
+CREATE INDEX IF NOT EXISTS "index_not_match_order" ON "struct_check_test_1"."full_index_type" USING btree (composite_index_col1, composite_index_col2, composite_index_col3)
+CREATE INDEX IF NOT EXISTS "index_not_match_wrong_column" ON "struct_check_test_1"."full_index_type" USING btree (simple_index_col)
+COMMENT ON TABLE "struct_check_test_1"."not_match_comment" is 'This is an example table.'

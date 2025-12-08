@@ -89,7 +89,7 @@ impl MongoChecker {
             .collection::<Document>(tb);
 
         let mut ids = Vec::new();
-        let mut src_row_data_map = HashMap::new();
+        let mut src_row_data_map: HashMap<MongoKey, &RowData> = HashMap::new();
 
         for row_data in data.iter().skip(start_index).take(batch_size) {
             let after = row_data.require_after()?;
@@ -115,7 +115,7 @@ impl MongoChecker {
             })?;
 
             if let Some(key) = MongoKey::from_doc(doc) {
-                src_row_data_map.insert(key, row_data.clone());
+                src_row_data_map.insert(key, row_data);
                 ids.push(id);
             } else {
                 // this should have a very small chance to happen, and we don't support
@@ -156,19 +156,19 @@ impl MongoChecker {
         let revise_ctx = self.output_revise_sql.then(ReviseSqlContext::mongo);
         for (key, src_row_data) in src_row_data_map {
             if let Some(dst_row_data) = dst_row_data_map.remove(&key) {
-                let diff_col_values = BaseChecker::compare_row_data(&src_row_data, &dst_row_data)?;
+                let diff_col_values = BaseChecker::compare_row_data(src_row_data, &dst_row_data)?;
                 if !diff_col_values.is_empty() {
                     let revise_sql = revise_ctx
                         .as_ref()
                         .map(|ctx| {
-                            ctx.build_diff_sql(&src_row_data, &dst_row_data, &diff_col_values)
+                            ctx.build_diff_sql(src_row_data, &dst_row_data, &diff_col_values)
                         })
                         .transpose()?
                         .flatten();
 
                     let diff_log = BaseChecker::build_mongo_diff_log(
                         src_row_data,
-                        dst_row_data,
+                        &dst_row_data,
                         diff_col_values,
                         &tb_meta,
                         &self.reverse_router,
@@ -183,7 +183,7 @@ impl MongoChecker {
             } else {
                 let revise_sql = revise_ctx
                     .as_ref()
-                    .map(|ctx| ctx.build_miss_sql(&src_row_data))
+                    .map(|ctx| ctx.build_miss_sql(src_row_data))
                     .transpose()?
                     .flatten();
 

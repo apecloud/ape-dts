@@ -4,7 +4,7 @@ use std::borrow::Cow;
 use std::collections::{BTreeSet, HashMap};
 
 use crate::{
-    check_log::check_log::{CheckLog, DiffColValue},
+    check_log::check_log::{CheckLog, DiffColValue, StructCheckLog},
     rdb_query_builder::RdbQueryBuilder,
     rdb_router::RdbRouter,
     sinker::mongo::mongo_cmd,
@@ -339,10 +339,24 @@ impl BaseChecker {
         src_statement: &mut StructStatement,
         dst_statement: &mut StructStatement,
         filter: &RdbFilter,
-    ) -> anyhow::Result<(usize, usize, usize)> {
+        output_revise_sql: bool,
+    ) -> anyhow::Result<(usize, usize, usize, usize)> {
         if matches!(dst_statement, StructStatement::Unknown) {
-            log_miss!("{:?}", src_statement.to_sqls(filter)?);
-            return Ok((1, 0, 0));
+            let sqls = src_statement.to_sqls(filter)?;
+            let count = sqls.len();
+            for (key, src_sql) in sqls {
+                let log = StructCheckLog {
+                    key,
+                    src_sql: Some(src_sql.clone()),
+                    dst_sql: None,
+                };
+                log_miss!("{}", log);
+                if output_revise_sql {
+                    log_sql!("{}", src_sql);
+                }
+            }
+            let sql_count = if output_revise_sql { count } else { 0 };
+            return Ok((count, 0, 0, sql_count));
         }
 
         let src_sqls: HashMap<_, _> = src_statement.to_sqls(filter)?.into_iter().collect();
@@ -351,28 +365,51 @@ impl BaseChecker {
         let mut miss_count = 0;
         let mut diff_count = 0;
         let mut extra_count = 0;
+        let mut sql_count = 0;
 
         for (key, src_sql) in &src_sqls {
             if let Some(dst_sql) = dst_sqls.get(key) {
                 if src_sql != dst_sql {
-                    log_diff!("key: {}, src_sql: {}", key, src_sql);
-                    log_diff!("key: {}, dst_sql: {}", key, dst_sql);
+                    let log = StructCheckLog {
+                        key: key.clone(),
+                        src_sql: Some(src_sql.clone()),
+                        dst_sql: Some(dst_sql.clone()),
+                    };
+                    log_diff!("{}", log);
                     diff_count += 1;
+                    if output_revise_sql {
+                        log_sql!("{}", src_sql);
+                        sql_count += 1;
+                    }
                 }
             } else {
-                log_miss!("key: {}, src_sql: {}", key, src_sql);
+                let log = StructCheckLog {
+                    key: key.clone(),
+                    src_sql: Some(src_sql.clone()),
+                    dst_sql: None,
+                };
+                log_miss!("{}", log);
                 miss_count += 1;
+                if output_revise_sql {
+                    log_sql!("{}", src_sql);
+                    sql_count += 1;
+                }
             }
         }
 
         for (key, dst_sql) in &dst_sqls {
             if !src_sqls.contains_key(key) {
-                log_extra!("key: {}, dst_sql: {}", key, dst_sql);
+                let log = StructCheckLog {
+                    key: key.clone(),
+                    src_sql: None,
+                    dst_sql: Some(dst_sql.clone()),
+                };
+                log_extra!("{}", log);
                 extra_count += 1;
             }
         }
 
-        Ok((miss_count, diff_count, extra_count))
+        Ok((miss_count, diff_count, extra_count, sql_count))
     }
 
     pub async fn build_miss_log(
@@ -381,29 +418,45 @@ impl BaseChecker {
         reverse_router: &RdbRouter,
         output_full_row: bool,
     ) -> anyhow::Result<CheckLog> {
-        let reverse_src_row_data = reverse_router.route_row(src_row_data.clone());
+        let (mapped_schema, mapped_tb) =
+            reverse_router.get_tb_map(&src_row_data.schema, &src_row_data.tb);
+        let has_col_map = reverse_router
+            .get_col_map(&src_row_data.schema, &src_row_data.tb)
+            .is_some();
+        let schema_changed = src_row_data.schema != mapped_schema || src_row_data.tb != mapped_tb;
 
-        let is_routed = src_row_data.schema != reverse_src_row_data.schema
-            || src_row_data.tb != reverse_src_row_data.tb;
+        let (routed_row_data, schema_for_meta, tb_for_meta): (Cow<RowData>, String, String) =
+            if has_col_map {
+                let routed = reverse_router.route_row(src_row_data.clone());
+                let schema = routed.schema.clone();
+                let tb = routed.tb.clone();
+                (Cow::Owned(routed), schema, tb)
+            } else {
+                (
+                    Cow::Borrowed(src_row_data),
+                    mapped_schema.to_string(),
+                    mapped_tb.to_string(),
+                )
+            };
 
-        // None if not routed
-        let target_schema = is_routed.then(|| src_row_data.schema.clone());
-        let target_tb = is_routed.then(|| src_row_data.tb.clone());
+        // None if schema/tb not routed
+        let target_schema = schema_changed.then(|| src_row_data.schema.clone());
+        let target_tb = schema_changed.then(|| src_row_data.tb.clone());
 
         let src_tb_meta = extractor_meta_manager
-            .get_tb_meta(&reverse_src_row_data.schema, &reverse_src_row_data.tb)
+            .get_tb_meta(&schema_for_meta, &tb_for_meta)
             .await?;
 
-        let id_col_values = Self::build_id_col_values(&reverse_src_row_data, src_tb_meta)
+        let id_col_values = Self::build_id_col_values(&routed_row_data, src_tb_meta)
             .context("Failed to build ID col values")?;
 
         let src_row = output_full_row
-            .then(|| Self::clone_row_values(&reverse_src_row_data))
+            .then(|| Self::clone_row_values(&routed_row_data))
             .flatten();
 
         Ok(CheckLog {
-            schema: reverse_src_row_data.schema,
-            tb: reverse_src_row_data.tb,
+            schema: schema_for_meta,
+            tb: tb_for_meta,
             target_schema,
             target_tb,
             id_col_values,
@@ -445,46 +498,59 @@ impl BaseChecker {
         log.diff_col_values = mapped_diff_values;
 
         if output_full_row {
-            let reverse_dst_row_data = reverse_router.route_row(dst_row_data.clone());
-            log.dst_row = Self::clone_row_values(&reverse_dst_row_data);
+            let has_col_map = reverse_router
+                .get_col_map(&dst_row_data.schema, &dst_row_data.tb)
+                .is_some();
+            log.dst_row = if has_col_map {
+                let reverse_dst_row_data = reverse_router.route_row(dst_row_data.clone());
+                Self::clone_row_values(&reverse_dst_row_data)
+            } else {
+                Self::clone_row_values(dst_row_data)
+            };
         }
 
         Ok(log)
     }
 
     pub fn build_mongo_miss_log(
-        src_row_data: RowData,
+        src_row_data: &RowData,
         tb_meta: &RdbTbMeta,
         reverse_router: &RdbRouter,
         output_full_row: bool,
     ) -> anyhow::Result<CheckLog> {
-        let reverse_src_row_data = reverse_router.route_row(src_row_data.clone());
+        let (mapped_schema, mapped_tb) =
+            reverse_router.get_tb_map(&src_row_data.schema, &src_row_data.tb);
+        let has_col_map = reverse_router
+            .get_col_map(&src_row_data.schema, &src_row_data.tb)
+            .is_some();
+        let schema_changed = src_row_data.schema != mapped_schema || src_row_data.tb != mapped_tb;
 
-        let (target_schema, target_tb) = if src_row_data.schema != reverse_src_row_data.schema
-            || src_row_data.tb != reverse_src_row_data.tb
-        {
-            (
-                Some(src_row_data.schema.clone()),
-                Some(src_row_data.tb.clone()),
-            )
+        let routed_row_data: Cow<RowData> = if has_col_map {
+            Cow::Owned(reverse_router.route_row(src_row_data.clone()))
         } else {
-            (None, None)
+            Cow::Borrowed(src_row_data)
+        };
+
+        let (schema_for_log, tb_for_log) = if has_col_map {
+            (routed_row_data.schema.clone(), routed_row_data.tb.clone())
+        } else {
+            (mapped_schema.to_string(), mapped_tb.to_string())
         };
 
         let id_col_values =
-            Self::build_id_col_values(&reverse_src_row_data, tb_meta).unwrap_or_default();
+            Self::build_id_col_values(&routed_row_data, tb_meta).unwrap_or_default();
 
         let src_row = if output_full_row {
-            Self::clone_row_values(&reverse_src_row_data)
+            Self::clone_row_values(&routed_row_data)
         } else {
             None
         };
 
         Ok(CheckLog {
-            schema: reverse_src_row_data.schema,
-            tb: reverse_src_row_data.tb,
-            target_schema,
-            target_tb,
+            schema: schema_for_log,
+            tb: tb_for_log,
+            target_schema: schema_changed.then(|| src_row_data.schema.clone()),
+            target_tb: schema_changed.then(|| src_row_data.tb.clone()),
             id_col_values,
             diff_col_values: HashMap::new(),
             src_row,
@@ -493,8 +559,8 @@ impl BaseChecker {
     }
 
     pub fn build_mongo_diff_log(
-        src_row_data: RowData,
-        dst_row_data: RowData,
+        src_row_data: &RowData,
+        dst_row_data: &RowData,
         diff_col_values: HashMap<String, DiffColValue>,
         tb_meta: &RdbTbMeta,
         reverse_router: &RdbRouter,
@@ -506,8 +572,15 @@ impl BaseChecker {
         diff_log.diff_col_values = diff_col_values;
 
         if output_full_row {
-            let reverse_dst_row_data = reverse_router.route_row(dst_row_data);
-            diff_log.dst_row = Self::clone_row_values(&reverse_dst_row_data);
+            let has_col_map = reverse_router
+                .get_col_map(&dst_row_data.schema, &dst_row_data.tb)
+                .is_some();
+            diff_log.dst_row = if has_col_map {
+                let reverse_dst_row_data = reverse_router.route_row(dst_row_data.clone());
+                Self::clone_row_values(&reverse_dst_row_data)
+            } else {
+                Self::clone_row_values(dst_row_data)
+            };
         }
 
         Ok(diff_log)
@@ -939,8 +1012,8 @@ mod tests {
         };
 
         let check_log = BaseChecker::build_mongo_diff_log(
-            src_row,
-            dst_row,
+            &src_row,
+            &dst_row,
             diff_col_values,
             &tb_meta,
             &reverse_router,

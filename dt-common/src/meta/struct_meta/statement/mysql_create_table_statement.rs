@@ -45,6 +45,7 @@ impl MysqlCreateTableStatement {
         }
 
         if !self.indexes.is_empty() {
+            self.indexes.sort_by(|a, b| a.index_name.cmp(&b.index_name));
             let mut idx_appends = Vec::new();
             for i in self.indexes.iter_mut() {
                 match i.index_kind {

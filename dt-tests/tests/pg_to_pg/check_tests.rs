@@ -46,4 +46,10 @@ mod test {
     async fn check_struct_basic_test() {
         TestBase::run_check_test("pg_to_pg/check/basic_struct_test").await;
     }
+
+    #[tokio::test]
+    #[serial]
+    async fn check_revise_struct_test() {
+        TestBase::run_check_test("pg_to_pg/check/revise_struct_test").await;
+    }
 }
