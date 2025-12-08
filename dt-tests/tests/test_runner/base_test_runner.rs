@@ -23,8 +23,6 @@ pub struct BaseTestRunner {
     pub meta_center_prepare_sqls: Vec<String>,
 }
 
-static mut LOG4RS_INITED: bool = false;
-
 #[allow(dead_code)]
 impl BaseTestRunner {
     pub async fn new(relative_test_dir: &str) -> anyhow::Result<Self> {
@@ -91,17 +89,12 @@ impl BaseTestRunner {
     }
 
     pub async fn start_task(&self) -> anyhow::Result<()> {
-        let enable_log4rs = Self::get_enable_log4rs();
-        TaskRunner::new(&self.task_config_file)?
-            .start_task(enable_log4rs)
-            .await
+        TaskRunner::new(&self.task_config_file)?.start_task().await
     }
 
     pub async fn spawn_task(&self) -> anyhow::Result<JoinHandle<()>> {
-        let enable_log4rs = Self::get_enable_log4rs();
         let task_runner = TaskRunner::new(&self.task_config_file)?;
-        let task =
-            tokio::spawn(async move { task_runner.start_task(enable_log4rs).await.unwrap() });
+        let task = tokio::spawn(async move { task_runner.start_task().await.unwrap() });
         Ok(task)
     }
 
@@ -118,16 +111,6 @@ impl BaseTestRunner {
             TimeUtil::sleep_millis(1).await;
         }
         Ok(())
-    }
-
-    pub fn get_enable_log4rs() -> bool {
-        // all tests will be run in one process, and log4rs can only be inited once
-        let enable_log4rs = !unsafe { LOG4RS_INITED };
-
-        if enable_log4rs {
-            unsafe { LOG4RS_INITED = true };
-        }
-        enable_log4rs
     }
 
     pub fn load_file(file_path: &str) -> Vec<String> {

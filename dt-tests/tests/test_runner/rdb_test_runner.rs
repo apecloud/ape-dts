@@ -545,7 +545,7 @@ impl RdbTestRunner {
         // migrate database/table structures to target if needed
         if !self.base.struct_task_config_file.is_empty() {
             TaskRunner::new(&self.base.struct_task_config_file)?
-                .start_task(BaseTestRunner::get_enable_log4rs())
+                .start_task()
                 .await?;
         }
         Ok(())

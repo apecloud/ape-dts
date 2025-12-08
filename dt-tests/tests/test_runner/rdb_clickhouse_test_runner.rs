@@ -6,7 +6,6 @@ use serde_json::json;
 use url::Url;
 
 use super::{
-    base_test_runner::BaseTestRunner,
     rdb_struct_test_runner::RdbStructTestRunner,
     rdb_test_runner::{RdbTestRunner, SRC},
 };
@@ -125,7 +124,7 @@ impl RdbClickHouseTestRunner {
         // migrate database/table structures to target if needed
         if !basic.struct_task_config_file.is_empty() {
             TaskRunner::new(&basic.struct_task_config_file)?
-                .start_task(BaseTestRunner::get_enable_log4rs())
+                .start_task()
                 .await?;
         }
         Ok(())

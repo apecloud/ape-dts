@@ -1,11 +1,8 @@
-use std::{
-    collections::{BTreeMap, HashMap},
-    str::FromStr,
-};
+use std::{collections::HashMap, str::FromStr};
 
 use anyhow::Context;
-use dt_common::{error::Error, meta::col_value::ColValue};
-use serde::{Deserialize, Serialize, Serializer};
+use dt_common::{error::Error, meta::col_value::ColValue, utils::serialize_util::SerializeUtil};
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 #[derive(Serialize, Deserialize)]
@@ -16,25 +13,25 @@ pub struct CheckLog {
     pub target_schema: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target_tb: Option<String>,
-    #[serde(serialize_with = "ordered_map")]
+    #[serde(serialize_with = "SerializeUtil::ordered_map")]
     pub id_col_values: HashMap<String, Option<String>>,
     #[serde(
         default,
         skip_serializing_if = "HashMap::is_empty",
-        serialize_with = "ordered_map"
+        serialize_with = "SerializeUtil::ordered_map"
     )]
     // diff_col_values is empty means no diff, is miss
     pub diff_col_values: HashMap<String, DiffColValue>,
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
-        serialize_with = "ordered_option_map"
+        serialize_with = "SerializeUtil::ordered_option_map"
     )]
     pub src_row: Option<HashMap<String, ColValue>>,
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
-        serialize_with = "ordered_option_map"
+        serialize_with = "SerializeUtil::ordered_option_map"
     )]
     pub dst_row: Option<HashMap<String, ColValue>>,
 }
@@ -117,32 +114,6 @@ impl FromStr for CheckLog {
         serde_json::from_str(str)
             .with_context(|| format!("invalid check log: [{}]", str))
             .map_err(|e| Error::Unexpected(e.to_string()))
-    }
-}
-
-/// For use with serde's [serialize_with] attribute
-pub fn ordered_map<S, K: Ord + Serialize, V: Serialize>(
-    value: &HashMap<K, V>,
-    serializer: S,
-) -> Result<S::Ok, S::Error>
-where
-    S: Serializer,
-{
-    let ordered: BTreeMap<_, _> = value.iter().collect();
-    ordered.serialize(serializer)
-}
-
-/// Like `ordered_map` but works with optional maps so that serde can skip them when None.
-pub fn ordered_option_map<S, K: Ord + Serialize, V: Serialize>(
-    value: &Option<HashMap<K, V>>,
-    serializer: S,
-) -> Result<S::Ok, S::Error>
-where
-    S: Serializer,
-{
-    match value {
-        Some(map) => ordered_map(map, serializer),
-        None => serializer.serialize_none(),
     }
 }
 
