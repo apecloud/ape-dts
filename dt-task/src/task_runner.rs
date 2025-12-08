@@ -26,6 +26,9 @@ use super::{
 };
 use crate::task_util::{ConnClient, TaskUtil};
 use async_mutex::Mutex as AsyncMutex;
+use std::sync::Mutex as StdMutex;
+
+static LOG_HANDLE: StdMutex<Option<log4rs::Handle>> = StdMutex::new(None);
 use dt_common::log_filter::SizeLimitFilterDeserializer;
 use dt_common::{
     config::{
@@ -133,10 +136,8 @@ impl TaskRunner {
         })
     }
 
-    pub async fn start_task(&self, enable_log4rs: bool) -> anyhow::Result<()> {
-        if enable_log4rs {
-            self.init_log4rs().await?;
-        }
+    pub async fn start_task(&self) -> anyhow::Result<()> {
+        self.init_log4rs().await?;
 
         panic::set_hook(Box::new(|panic_info| {
             let backtrace = std::backtrace::Backtrace::capture();
@@ -671,7 +672,14 @@ impl TaskRunner {
             .appenders(appenders)
             .loggers(raw.loggers())
             .build(raw.root())?;
-        log4rs::init_config(config)?;
+        let mut handle_guard = LOG_HANDLE.lock().unwrap();
+        if let Some(handle) = handle_guard.as_ref() {
+            // refresh log4rs config in one process
+            handle.set_config(config);
+        } else {
+            let handle = log4rs::init_config(config)?;
+            *handle_guard = Some(handle);
+        }
         Ok(())
     }
 
