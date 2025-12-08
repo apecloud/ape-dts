@@ -650,24 +650,24 @@ impl BaseChecker {
         // avoid output full mongo document to diff
         diff_col_values.remove(MongoConstants::DOC);
 
-        let doc_from_row = |row: &RowData| {
+        fn get_doc(row: &RowData) -> Option<&Document> {
             row.after
                 .as_ref()
                 .and_then(|after| after.get(MongoConstants::DOC))
                 .and_then(|val| match val {
-                    ColValue::MongoDoc(doc) => Some(doc.clone()),
+                    ColValue::MongoDoc(doc) => Some(doc),
                     _ => None,
                 })
-        };
+        }
 
-        let src_doc = doc_from_row(src_row_data);
-        let dst_doc = doc_from_row(dst_row_data);
+        let src_doc = get_doc(src_row_data);
+        let dst_doc = get_doc(dst_row_data);
 
         let keys: BTreeSet<_> = src_doc
-            .iter()
+            .into_iter()
             .flat_map(Document::keys)
             .cloned()
-            .chain(dst_doc.iter().flat_map(Document::keys).cloned())
+            .chain(dst_doc.into_iter().flat_map(Document::keys).cloned())
             .collect();
 
         for key in keys {
