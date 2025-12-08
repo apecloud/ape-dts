@@ -28,7 +28,6 @@ impl MongoCheckTestRunner {
 
         // start task
         self.base.base.start_task().await?;
-
         CheckUtil::validate_check_log(&self.expect_check_log_dir, &self.dst_check_log_dir)
     }
 

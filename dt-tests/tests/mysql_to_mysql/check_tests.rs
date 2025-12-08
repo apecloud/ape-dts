@@ -65,4 +65,11 @@ mod test {
     async fn check_revise_match_full_row_test() {
         TestBase::run_check_test("mysql_to_mysql/check/revise_match_full_row_test").await;
     }
+
+    #[tokio::test]
+    #[serial]
+    async fn check_size_limit_test() {
+        // gen log, and verify log size limit
+        TestBase::run_check_test("mysql_to_mysql/check/log_size_limit_test").await;
+    }
 }

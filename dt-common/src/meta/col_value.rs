@@ -134,13 +134,31 @@ impl ColValue {
             | ColValue::Json2(v) => v.len(),
             ColValue::Json(v) | ColValue::Blob(v) | ColValue::RawString(v) => v.len(),
             ColValue::Json3(v) => v.to_string().len(),
-            ColValue::MongoDoc(v) => {
-                std::mem::size_of::<Document>()
-                    + v.iter()
-                        .map(|(k, bson)| k.len() + std::mem::size_of_val(bson))
-                        .sum::<usize>()
-            }
+            ColValue::MongoDoc(v) => Self::get_bson_size_doc(v),
             ColValue::None => 0,
+        }
+    }
+
+    fn get_bson_size_doc(doc: &Document) -> usize {
+        std::mem::size_of::<Document>()
+            + doc
+                .iter()
+                .map(|(k, v)| k.len() + Self::get_bson_size(v))
+                .sum::<usize>()
+    }
+
+    fn get_bson_size(bson: &Bson) -> usize {
+        match bson {
+            Bson::String(v) | Bson::Symbol(v) | Bson::JavaScriptCode(v) => v.len(),
+            Bson::Array(arr) => arr.iter().map(Self::get_bson_size).sum(),
+            Bson::Document(doc) => Self::get_bson_size_doc(doc),
+            Bson::Binary(v) => v.bytes.len(),
+            Bson::RegularExpression(regex) => regex.pattern.len() + regex.options.len(),
+            Bson::JavaScriptCodeWithScope(code_w_scope) => {
+                code_w_scope.code.len() + Self::get_bson_size_doc(&code_w_scope.scope)
+            }
+            Bson::DbPointer(_) => std::mem::size_of::<Bson>(),
+            _ => std::mem::size_of_val(bson),
         }
     }
 
