@@ -1,0 +1,3 @@
+DROP DATABASE IF EXISTS test_db_1;
+CREATE DATABASE test_db_1;
+CREATE TABLE test_db_1.recheck_table (id INT PRIMARY KEY, name VARCHAR(100));

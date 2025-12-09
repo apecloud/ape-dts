@@ -15,7 +15,7 @@ use crate::{
     check_log::check_log::CheckSummaryLog,
     rdb_router::RdbRouter,
     sinker::{
-        base_checker::{BaseChecker, CheckResult, DoubleCheckConfig, ReviseSqlContext},
+        base_checker::{BaseChecker, CheckResult, RecheckConfig, ReviseSqlContext},
         base_sinker::BaseSinker,
     },
     Sinker,
@@ -156,7 +156,7 @@ impl MongoChecker {
         let mut diff = Vec::new();
         let mut sql_count = 0;
         let revise_ctx = self.output_revise_sql.then(ReviseSqlContext::mongo);
-        let retry_config = DoubleCheckConfig {
+        let recheck_config = RecheckConfig {
             delay_ms: self.recheck_interval_secs.saturating_mul(1000),
             times: self.recheck_attempts,
         };
@@ -198,18 +198,22 @@ impl MongoChecker {
         for (key, src_row_data) in src_row_data_map {
             let dst_row_data = dst_row_data_map.remove(&key);
 
-            let (check_result, final_dst_row) =
-                BaseChecker::check_row_with_retry(src_row_data, dst_row_data, retry_config, fetch_latest).await?;
+            let (check_result, final_dst_row) = BaseChecker::check_row_with_retry(
+                src_row_data,
+                dst_row_data,
+                recheck_config,
+                fetch_latest,
+            )
+            .await?;
 
             match check_result {
                 CheckResult::Diff(diff_col_values) => {
-                    let dst_row =
-                        final_dst_row.as_ref().expect("diff result should have a dst row");
+                    let dst_row = final_dst_row
+                        .as_ref()
+                        .expect("diff result should have a dst row");
                     let revise_sql = revise_ctx
                         .as_ref()
-                        .map(|ctx| {
-                            ctx.build_diff_sql(src_row_data, dst_row, &diff_col_values)
-                        })
+                        .map(|ctx| ctx.build_diff_sql(src_row_data, dst_row, &diff_col_values))
                         .transpose()?
                         .flatten();
 

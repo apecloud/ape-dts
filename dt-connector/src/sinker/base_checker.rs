@@ -34,7 +34,7 @@ pub struct ReviseSqlContext<'a> {
 }
 
 #[derive(Clone, Copy)]
-pub struct DoubleCheckConfig {
+pub struct RecheckConfig {
     pub delay_ms: u64,
     pub times: u32,
 }
@@ -210,7 +210,7 @@ impl BaseChecker {
         mut dst_row_data_map: HashMap<u128, RowData>,
         range: BatchCompareRange,
         ctx: BatchCompareContext<'_>,
-        retry_config: DoubleCheckConfig,
+        recheck_config: RecheckConfig,
         fetch_latest_row: F,
     ) -> anyhow::Result<(Vec<CheckLog>, Vec<CheckLog>, usize)>
     where
@@ -241,13 +241,11 @@ impl BaseChecker {
             let hash_code = src_row_data.get_hash_code(dst_tb_meta)?;
             let dst_row_data = dst_row_data_map.remove(&hash_code);
 
-            let (check_result, final_dst_row) = Self::check_row_with_retry(
-                src_row_data,
-                dst_row_data,
-                retry_config,
-                |row| fetch_latest_row(hash_code, row),
-            )
-            .await?;
+            let (check_result, final_dst_row) =
+                Self::check_row_with_retry(src_row_data, dst_row_data, recheck_config, |row| {
+                    fetch_latest_row(hash_code, row)
+                })
+                .await?;
 
             match check_result {
                 CheckResult::Diff(diff_col_values) => {
@@ -310,7 +308,7 @@ impl BaseChecker {
     pub async fn check_row_with_retry<F, Fut>(
         src_row: &RowData,
         mut dst_row: Option<RowData>,
-        retry_config: DoubleCheckConfig,
+        recheck_config: RecheckConfig,
         fetch_latest: F,
     ) -> anyhow::Result<(CheckResult, Option<RowData>)>
     where
@@ -319,10 +317,10 @@ impl BaseChecker {
     {
         let mut check_result = Self::compare_src_dst(src_row, dst_row.as_ref())?;
 
-        if check_result.is_inconsistent() && retry_config.times > 0 {
-            for _ in 0..retry_config.times {
-                if retry_config.delay_ms > 0 {
-                    sleep(Duration::from_millis(retry_config.delay_ms)).await;
+        if check_result.is_inconsistent() && recheck_config.times > 0 {
+            for _ in 0..recheck_config.times {
+                if recheck_config.delay_ms > 0 {
+                    sleep(Duration::from_millis(recheck_config.delay_ms)).await;
                 }
 
                 if let Some(latest) = fetch_latest(src_row).await? {

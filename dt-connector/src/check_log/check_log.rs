@@ -1,11 +1,7 @@
 use std::{collections::HashMap, str::FromStr};
 
 use anyhow::Context;
-use dt_common::{
-    error::Error,
-    meta::col_value::ColValue,
-    utils::serialize_util::SerializeUtil,
-};
+use dt_common::{error::Error, meta::col_value::ColValue, utils::serialize_util::SerializeUtil};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 

@@ -18,8 +18,7 @@ use crate::{
     rdb_router::RdbRouter,
     sinker::{
         base_checker::{
-            BaseChecker, BatchCompareContext, BatchCompareRange, DoubleCheckConfig,
-            ReviseSqlContext,
+            BaseChecker, BatchCompareContext, BatchCompareRange, RecheckConfig, ReviseSqlContext,
         },
         base_sinker::BaseSinker,
     },
@@ -214,7 +213,7 @@ impl PgChecker {
             .output_revise_sql
             .then(|| ReviseSqlContext::pg(tb_meta, self.revise_match_full_row));
 
-        let retry_config = DoubleCheckConfig {
+        let recheck_config = RecheckConfig {
             delay_ms: self.recheck_interval_secs.saturating_mul(1000),
             times: self.recheck_attempts,
         };
@@ -252,7 +251,7 @@ impl PgChecker {
             dst_row_data_map,
             compare_range,
             ctx,
-            retry_config,
+            recheck_config,
             fetch_latest,
         )
         .await?;
