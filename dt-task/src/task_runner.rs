@@ -8,7 +8,8 @@ use std::{
 };
 
 use anyhow::{bail, Context};
-use log4rs::config::RawConfig;
+use chrono::Local;
+use log4rs::config::{Config, Deserializers, RawConfig};
 use ratelimit::Ratelimiter;
 use tokio::{
     fs::{metadata, File},
@@ -24,13 +25,18 @@ use super::{
     extractor_util::ExtractorUtil, parallelizer_util::ParallelizerUtil, sinker_util::SinkerUtil,
 };
 use crate::task_util::{ConnClient, TaskUtil};
+use async_mutex::Mutex as AsyncMutex;
+use std::sync::Mutex as StdMutex;
+
+static LOG_HANDLE: StdMutex<Option<log4rs::Handle>> = StdMutex::new(None);
+use dt_common::log_filter::SizeLimitFilterDeserializer;
 use dt_common::{
     config::{
         config_enums::{build_task_type, DbType, PipelineType, TaskType},
         config_token_parser::{ConfigTokenParser, TokenEscapePair},
         extractor_config::ExtractorConfig,
         sinker_config::SinkerConfig,
-        task_config::TaskConfig,
+        task_config::{TaskConfig, DEFAULT_CHECK_LOG_FILE_SIZE},
     },
     error::Error,
     log_error, log_finished, log_info,
@@ -49,6 +55,7 @@ use dt_common::{
     utils::{sql_util::SqlUtil, time_util::TimeUtil},
 };
 use dt_connector::{
+    check_log::check_log::CheckSummaryLog,
     data_marker::DataMarker,
     extractor::resumer::{recorder::Recorder, recovery::Recovery},
     rdb_router::RdbRouter,
@@ -71,6 +78,7 @@ pub struct TaskContext {
     pub router: Arc<RdbRouter>,
     pub recorder: Option<Arc<dyn Recorder + Send + Sync>>,
     pub recovery: Option<Arc<dyn Recovery + Send + Sync>>,
+    pub check_summary: Option<Arc<AsyncMutex<CheckSummaryLog>>>,
 }
 
 #[derive(Clone)]
@@ -89,6 +97,7 @@ const CHECK_LOG_DIR_PLACEHOLDER: &str = "CHECK_LOG_DIR_PLACEHOLDER";
 const STATISTIC_LOG_DIR_PLACEHOLDER: &str = "STATISTIC_LOG_DIR_PLACEHOLDER";
 const LOG_LEVEL_PLACEHOLDER: &str = "LOG_LEVEL_PLACEHOLDER";
 const LOG_DIR_PLACEHOLDER: &str = "LOG_DIR_PLACEHOLDER";
+const CHECK_LOG_FILE_SIZE_PLACEHOLDER: &str = "CHECK_LOG_FILE_SIZE_PLACEHOLDER";
 const DEFAULT_CHECK_LOG_DIR_PLACEHOLDER: &str = "LOG_DIR_PLACEHOLDER/check";
 const DEFAULT_STATISTIC_LOG_DIR_PLACEHOLDER: &str = "LOG_DIR_PLACEHOLDER/statistic";
 
@@ -127,10 +136,8 @@ impl TaskRunner {
         })
     }
 
-    pub async fn start_task(&self, enable_log4rs: bool) -> anyhow::Result<()> {
-        if enable_log4rs {
-            self.init_log4rs().await?;
-        }
+    pub async fn start_task(&self) -> anyhow::Result<()> {
+        self.init_log4rs().await?;
 
         panic::set_hook(Box::new(|panic_info| {
             let backtrace = std::backtrace::Backtrace::capture();
@@ -158,6 +165,16 @@ impl TaskRunner {
         };
         let (extractor_client, sinker_client) = ConnClient::from_config(&self.config).await?;
 
+        let check_summary = match &self.config.sinker {
+            SinkerConfig::MysqlCheck { .. }
+            | SinkerConfig::PgCheck { .. }
+            | SinkerConfig::MongoCheck { .. } => Some(Arc::new(AsyncMutex::new(CheckSummaryLog {
+                start_time: Local::now().to_rfc3339(),
+                ..Default::default()
+            }))),
+            _ => None,
+        };
+
         let task_context = TaskContext {
             id: String::new(),
             extractor_config: self.config.extractor.clone(),
@@ -166,6 +183,7 @@ impl TaskRunner {
             router,
             recorder,
             recovery,
+            check_summary: check_summary.clone(),
         };
 
         #[cfg(feature = "metrics")]
@@ -193,6 +211,13 @@ impl TaskRunner {
         // close connections
         extractor_client.close().await?;
         sinker_client.close().await?;
+
+        if let Some(check_summary) = check_summary {
+            let summary = check_summary.lock().await;
+            if summary.miss_count > 0 || summary.diff_count > 0 || summary.extra_count > 0 {
+                dt_common::log_summary!("{}", summary);
+            }
+        }
 
         log_finished!("task finished");
         Ok(())
@@ -272,6 +297,7 @@ impl TaskRunner {
             router: task_context.router,
             recorder: task_context.recorder,
             recovery: task_context.recovery,
+            check_summary: task_context.check_summary,
         };
         let me = self.clone();
         join_set.spawn(async move {
@@ -367,6 +393,7 @@ impl TaskRunner {
             sinker_client.clone(),
             sinker_monitor.clone(),
             rw_sinker_data_marker.clone(),
+            task_context.check_summary.clone(),
         )
         .await?;
 
@@ -509,7 +536,7 @@ impl TaskRunner {
         buffer: Arc<DtQueue>,
         shut_down: Arc<AtomicBool>,
         syncer: Arc<Mutex<Syncer>>,
-        sinkers: Vec<Arc<async_mutex::Mutex<Box<dyn Sinker + Send>>>>,
+        sinkers: Vec<Arc<AsyncMutex<Box<dyn Sinker + Send>>>>,
         monitor: Arc<Monitor>,
         data_marker: Option<Arc<RwLock<DataMarker>>>,
         recorder: Option<Arc<dyn Recorder + Send + Sync>>,
@@ -589,11 +616,26 @@ impl TaskRunner {
         file.read_to_string(&mut config_str).await?;
 
         match &self.config.sinker {
-            SinkerConfig::MysqlCheck { check_log_dir, .. }
-            | SinkerConfig::PgCheck { check_log_dir, .. } => {
+            SinkerConfig::MysqlCheck {
+                check_log_dir,
+                check_log_file_size,
+                ..
+            }
+            | SinkerConfig::PgCheck {
+                check_log_dir,
+                check_log_file_size,
+                ..
+            }
+            | SinkerConfig::MongoCheck {
+                check_log_dir,
+                check_log_file_size,
+                ..
+            } => {
                 if !check_log_dir.is_empty() {
                     config_str = config_str.replace(CHECK_LOG_DIR_PLACEHOLDER, check_log_dir);
                 }
+                config_str =
+                    config_str.replace(CHECK_LOG_FILE_SIZE_PLACEHOLDER, check_log_file_size);
             }
 
             SinkerConfig::RedisStatistic {
@@ -614,11 +656,30 @@ impl TaskRunner {
                 STATISTIC_LOG_DIR_PLACEHOLDER,
                 DEFAULT_STATISTIC_LOG_DIR_PLACEHOLDER,
             )
+            .replace(CHECK_LOG_FILE_SIZE_PLACEHOLDER, DEFAULT_CHECK_LOG_FILE_SIZE)
             .replace(LOG_DIR_PLACEHOLDER, &self.config.runtime.log_dir)
             .replace(LOG_LEVEL_PLACEHOLDER, &self.config.runtime.log_level);
 
-        let config: RawConfig = serde_yaml::from_str(&config_str)?;
-        log4rs::init_raw_config(config)?;
+        let raw: RawConfig = serde_yaml::from_str(&config_str)?;
+        let mut deserializers = Deserializers::default();
+        deserializers.insert("size_limit", SizeLimitFilterDeserializer);
+        let (appenders, errors) = raw.appenders_lossy(&deserializers);
+        if !errors.is_empty() {
+            bail!("errors deserializing appenders: {:?}", errors);
+        }
+
+        let config = Config::builder()
+            .appenders(appenders)
+            .loggers(raw.loggers())
+            .build(raw.root())?;
+        let mut handle_guard = LOG_HANDLE.lock().unwrap();
+        if let Some(handle) = handle_guard.as_ref() {
+            // refresh log4rs config in one process
+            handle.set_config(config);
+        } else {
+            let handle = log4rs::init_config(config)?;
+            *handle_guard = Some(handle);
+        }
         Ok(())
     }
 
@@ -916,6 +977,7 @@ impl TaskRunner {
                 sinker_client,
                 recorder: original_task_context.recorder.clone(),
                 recovery: original_task_context.recovery.clone(),
+                check_summary: original_task_context.check_summary.clone(),
             });
         } else {
             for schema in schemas.iter() {
@@ -1007,6 +1069,7 @@ impl TaskRunner {
                         sinker_client: sinker_client.clone(),
                         recorder: original_task_context.recorder.clone(),
                         recovery: original_task_context.recovery.clone(),
+                        check_summary: original_task_context.check_summary.clone(),
                     });
                 }
 

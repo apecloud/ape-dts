@@ -420,8 +420,8 @@ impl PgCdcExtractor {
         }
 
         let get_string = |row_data: &RowData, col: &str| -> String {
-            if let Some(col_value) = row_data.after.as_ref().unwrap().get(col) {
-                if let Some(str) = col_value.to_option_string() {
+            if let Ok(after) = row_data.require_after() {
+                if let Some(str) = after.get(col).and_then(|v| v.to_option_string()) {
                     return str;
                 }
             }

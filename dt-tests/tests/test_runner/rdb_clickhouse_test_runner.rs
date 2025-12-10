@@ -6,7 +6,6 @@ use serde_json::json;
 use url::Url;
 
 use super::{
-    base_test_runner::BaseTestRunner,
     rdb_struct_test_runner::RdbStructTestRunner,
     rdb_test_runner::{RdbTestRunner, SRC},
 };
@@ -125,7 +124,7 @@ impl RdbClickHouseTestRunner {
         // migrate database/table structures to target if needed
         if !basic.struct_task_config_file.is_empty() {
             TaskRunner::new(&basic.struct_task_config_file)?
-                .start_task(BaseTestRunner::get_enable_log4rs())
+                .start_task()
                 .await?;
         }
         Ok(())
@@ -171,9 +170,10 @@ impl RdbClickHouseTestRunner {
         for i in 0..dst_data.len() {
             let src_row = &src_data[i];
             let dst_json_row = json!(dst_data[i]);
+            let src_after = src_row.require_after()?;
 
             for (col, dst_col_value) in dst_json_row.as_object().unwrap() {
-                let src_col_value = src_row.after.as_ref().unwrap().get(col);
+                let src_col_value = src_after.get(col);
                 println!(
                     "row index: {}, col: {}, src_col_value: {:?}, dst_col_value: {}",
                     i, col, src_col_value, dst_col_value

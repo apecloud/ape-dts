@@ -16,13 +16,17 @@ mod test {
     async fn check_all_cols_pk_test() {
         TestBase::run_check_test("mysql_to_mysql/check/all_cols_pk_test").await;
     }
+    #[tokio::test]
+    #[serial]
+    async fn check_basic_struct_test() {
+        TestBase::run_check_test("mysql_to_mysql/check/basic_struct_test").await;
+    }
 
-    // TODO: fix this test
-    // #[tokio::test]
-    // #[serial]
-    // async fn check_basic_struct_test() {
-    //     TestBase::run_check_test("mysql_to_mysql/check/basic_struct_test").await;
-    // }
+    #[tokio::test]
+    #[serial]
+    async fn check_revise_struct_test() {
+        TestBase::run_check_test("mysql_to_mysql/check/revise_struct_test").await;
+    }
 
     // this should run separately from other tests since it has a different check log dir,
     // all tests will be run in one progress, the log4rs will only be initialized once, it makes this test fails
@@ -42,5 +46,30 @@ mod test {
     #[serial]
     async fn check_sample_test() {
         TestBase::run_check_test("mysql_to_mysql/check/sample_test").await;
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn check_output_full_row_test() {
+        TestBase::run_check_test("mysql_to_mysql/check/output_full_row_test").await;
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn check_output_revise_sql_test() {
+        TestBase::run_check_test("mysql_to_mysql/check/output_revise_sql_test").await;
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn check_revise_match_full_row_test() {
+        TestBase::run_check_test("mysql_to_mysql/check/revise_match_full_row_test").await;
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn check_size_limit_test() {
+        // gen log, and verify log size limit
+        TestBase::run_check_test("mysql_to_mysql/check/log_size_limit_test").await;
     }
 }

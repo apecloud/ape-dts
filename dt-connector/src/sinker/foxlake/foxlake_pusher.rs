@@ -226,11 +226,11 @@ impl FoxlakePusher {
 // ORC functions
 impl FoxlakePusher {
     #[inline(always)]
-    fn get_col_value<'a>(row_data: &'a RowData, col: &str) -> Option<&'a ColValue> {
+    fn get_col_value<'a>(row_data: &'a RowData, col: &str) -> anyhow::Result<Option<&'a ColValue>> {
         if row_data.row_type == RowType::Delete {
-            row_data.before.as_ref().unwrap().get(col)
+            Ok(row_data.require_before()?.get(col))
         } else {
-            row_data.after.as_ref().unwrap().get(col)
+            Ok(row_data.require_after()?.get(col))
         }
     }
 
@@ -255,7 +255,7 @@ impl FoxlakePusher {
                 Schema::Long => {
                     let field_data = root.child(i).unwrap_long();
                     for row_data in data.iter() {
-                        match Self::get_col_value(row_data, col) {
+                        match Self::get_col_value(row_data, col)? {
                             Some(ColValue::Tiny(v)) => field_data.write(*v as i64),
                             Some(ColValue::UnsignedTiny(v)) => field_data.write(*v as i64),
                             Some(ColValue::Short(v)) => field_data.write(*v as i64),
@@ -291,7 +291,7 @@ impl FoxlakePusher {
                 Schema::Decimal(..) => {
                     let field_data = root.child(i).unwrap_decimal();
                     for row_data in data.iter() {
-                        match Self::get_col_value(row_data, col) {
+                        match Self::get_col_value(row_data, col)? {
                             Some(ColValue::Decimal(v)) => {
                                 let decimal = Decimal::from_str(v)
                                     .with_context(|| format!("invalid decimal: {}", v))?;
@@ -305,7 +305,7 @@ impl FoxlakePusher {
                 Schema::Float => {
                     let field_data = root.child(i).unwrap_float();
                     for row_data in data.iter() {
-                        match Self::get_col_value(row_data, col) {
+                        match Self::get_col_value(row_data, col)? {
                             Some(ColValue::Float(v)) => field_data.write(*v),
                             _ => field_data.write_null(),
                         };
@@ -315,7 +315,7 @@ impl FoxlakePusher {
                 Schema::Double => {
                     let field_data = root.child(i).unwrap_double();
                     for row_data in data.iter() {
-                        match Self::get_col_value(row_data, col) {
+                        match Self::get_col_value(row_data, col)? {
                             Some(ColValue::Double(v)) => field_data.write(*v),
                             _ => field_data.write_null(),
                         };
@@ -325,7 +325,7 @@ impl FoxlakePusher {
                 Schema::String => {
                     let field_data = root.child(i).unwrap_string();
                     for row_data in data.iter() {
-                        match Self::get_col_value(row_data, col) {
+                        match Self::get_col_value(row_data, col)? {
                             Some(ColValue::String(v))
                             | Some(ColValue::Set2(v))
                             | Some(ColValue::Enum2(v))
@@ -338,7 +338,7 @@ impl FoxlakePusher {
                 Schema::Binary => {
                     let field_data = root.child(i).unwrap_binary();
                     for row_data in data.iter() {
-                        match Self::get_col_value(row_data, col) {
+                        match Self::get_col_value(row_data, col)? {
                             Some(ColValue::Json(v))
                             | Some(ColValue::Blob(v))
                             | Some(ColValue::RawString(v)) => field_data.write(v),

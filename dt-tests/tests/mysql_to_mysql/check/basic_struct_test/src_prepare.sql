@@ -3,16 +3,13 @@ drop database if exists struct_check_test_1;
 create database struct_check_test_1;
 
 -- simple test
-```
 CREATE TABLE struct_check_test_1.match_table_test(
   id integer, 
   text varchar(10) comment 'col comment test', 
   primary key (id)
 ) comment 'table comment test';
-```
 
 -- full column type
-```
 CREATE TABLE struct_check_test_1.match_full_column_type (
   id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY, 
   varchar_col VARCHAR(255) NOT NULL, 
@@ -40,10 +37,8 @@ CREATE TABLE struct_check_test_1.match_full_column_type (
   enum_col ENUM('value1', 'value2', 'value3'), 
   set_col SET('option1', 'option2', 'option3')
 );
-```
 
 -- full index type
-```
 CREATE TABLE struct_check_test_1.match_full_index_type(id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY, 
     f_1 int, 
     f_2 char(128),
@@ -55,7 +50,6 @@ CREATE TABLE struct_check_test_1.match_full_index_type(id INT UNSIGNED AUTO_INCR
     f_8 TEXT, 
     f_9 POINT NOT NULL
 );
-```
 
 -- unique key with multiple columns
 CREATE UNIQUE INDEX idx_unique_1 ON struct_check_test_1.match_full_index_type(f_1, f_2, f_3);
@@ -77,16 +71,13 @@ CREATE FULLTEXT INDEX idx_full_text_2 ON struct_check_test_1.match_full_index_ty
 CREATE SPATIAL INDEX idx_spatial_1 ON struct_check_test_1.match_full_index_type(f_9);
 
 -- not match: table miss
-```
 CREATE TABLE struct_check_test_1.not_match_miss(
   id integer, 
   text varchar(10), 
   primary key (id)
 );
-```
 
 -- not match: column
-```
 CREATE TABLE struct_check_test_1.not_match_column (
   id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY, 
   varchar_col VARCHAR(255) NOT NULL, 
@@ -114,23 +105,21 @@ CREATE TABLE struct_check_test_1.not_match_column (
   enum_col ENUM('value1', 'value2', 'value3'), 
   set_col SET('option1', 'option2', 'option3')
 );
-```
 
 -- not match: index
-```
-CREATE TABLE struct_check_test_1.not_match_index (
-  id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY, 
-  unique_col VARCHAR(255) NOT NULL, 
-  index_col VARCHAR(255), 
-  fulltext_col TEXT, 
-  spatial_col POINT NOT NULL, 
-  simple_index_col VARCHAR(255), 
-  composite_index_col1 VARCHAR(255), 
-  composite_index_col2 VARCHAR(255), 
-  composite_index_col3 VARCHAR(255)
-);
-```
+CREATE TABLE IF NOT EXISTS struct_check_test_1.not_match_index (
+  `id` int(11) NOT NULL,
+  `index_col` int(11) DEFAULT NULL,
+  `unique_col` int(11) DEFAULT NULL,
+  `fulltext_col` text DEFAULT NULL,
+  `composite_index_col1` int(11) DEFAULT NULL,
+  `composite_index_col2` int(11) DEFAULT NULL,
+  `composite_index_col3` int(11) DEFAULT NULL,
+  PRIMARY KEY (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8;
 
-CREATE INDEX i4_diff_order ON struct_check_test_1.not_match_index (composite_index_col2, composite_index_col1 , composite_index_col3);
 CREATE INDEX i5_diff_name_src ON struct_check_test_1.not_match_index (index_col);
+CREATE UNIQUE INDEX u_index ON struct_check_test_1.not_match_index (unique_col);
+CREATE FULLTEXT INDEX f_index ON struct_check_test_1.not_match_index (fulltext_col);
+CREATE INDEX i4_diff_order ON struct_check_test_1.not_match_index (composite_index_col2, composite_index_col1, composite_index_col3);
 CREATE INDEX i6_miss ON struct_check_test_1.not_match_index (index_col);

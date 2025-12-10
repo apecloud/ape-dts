@@ -135,15 +135,16 @@ impl RdbRouter {
 
         let route_col_values =
             |col_values: HashMap<String, ColValue>| -> HashMap<String, ColValue> {
-                let mut new_col_values = HashMap::new();
-                for (col, col_value) in col_values {
-                    if let Some(dst_col) = col_map.get(&col) {
-                        new_col_values.insert(dst_col.to_owned(), col_value);
-                    } else {
-                        new_col_values.insert(col, col_value);
-                    }
-                }
-                new_col_values
+                col_values
+                    .into_iter()
+                    .map(|(col, val)| {
+                        if let Some(dst_col) = col_map.get(&col) {
+                            (dst_col.clone(), val)
+                        } else {
+                            (col, val)
+                        }
+                    })
+                    .collect()
             };
 
         if let Some(before) = row_data.before {

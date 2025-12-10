@@ -1,4 +1,3 @@
-```
 
 create database if not exists struct_it_mysql2mysql_0 CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_520_ci;
 use struct_it_mysql2mysql_0;
@@ -59,4 +58,3 @@ BEGIN
 END;
 
 CALL SetupTestDatabases();
-```

@@ -60,6 +60,8 @@ pub struct TaskConfig {
 
 pub const DEFAULT_DB_BATCH_SIZE: usize = 100;
 pub const DEFAULT_MAX_CONNECTIONS: u32 = 10;
+pub const DEFAULT_CHECK_LOG_FILE_SIZE: &str = "100mb";
+
 // sections
 const GLOBAL: &str = "global";
 const EXTRACTOR: &str = "extractor";
@@ -75,6 +77,9 @@ const PROCESSOR: &str = "processor";
 const META_CENTER: &str = "metacenter";
 // keys
 const CHECK_LOG_DIR: &str = "check_log_dir";
+const OUTPUT_FULL_ROW: &str = "output_full_row";
+const OUTPUT_REVISE_SQL: &str = "output_revise_sql";
+const REVISE_MATCH_FULL_ROW: &str = "revise_match_full_row";
 const DB_TYPE: &str = "db_type";
 const URL: &str = "url";
 const BATCH_SIZE: &str = "batch_size";
@@ -91,6 +96,7 @@ const DDL_CONFLICT_POLICY: &str = "ddl_conflict_policy";
 const REPLACE: &str = "replace";
 const DISABLE_FOREIGN_KEY_CHECKS: &str = "disable_foreign_key_checks";
 const RESUME_TYPE: &str = "resume_type";
+const CHECK_LOG_FILE_SIZE: &str = "check_log_file_size";
 // deprecated keys
 const RESUME_FROM_LOG: &str = "resume_from_log";
 const RESUME_LOG_DIR: &str = "resume_log_dir";
@@ -453,6 +459,18 @@ impl TaskConfig {
                     url,
                     batch_size,
                     check_log_dir: loader.get_optional(SINKER, CHECK_LOG_DIR),
+                    check_log_file_size: loader.get_with_default(
+                        SINKER,
+                        CHECK_LOG_FILE_SIZE,
+                        DEFAULT_CHECK_LOG_FILE_SIZE.to_string(),
+                    ),
+                    output_full_row: loader.get_with_default(SINKER, OUTPUT_FULL_ROW, false),
+                    output_revise_sql: loader.get_with_default(SINKER, OUTPUT_REVISE_SQL, false),
+                    revise_match_full_row: loader.get_with_default(
+                        SINKER,
+                        REVISE_MATCH_FULL_ROW,
+                        false,
+                    ),
                 },
 
                 SinkType::Struct => SinkerConfig::MysqlStruct {
@@ -483,6 +501,18 @@ impl TaskConfig {
                     url,
                     batch_size,
                     check_log_dir: loader.get_optional(SINKER, CHECK_LOG_DIR),
+                    check_log_file_size: loader.get_with_default(
+                        SINKER,
+                        CHECK_LOG_FILE_SIZE,
+                        DEFAULT_CHECK_LOG_FILE_SIZE.to_string(),
+                    ),
+                    output_full_row: loader.get_with_default(SINKER, OUTPUT_FULL_ROW, false),
+                    output_revise_sql: loader.get_with_default(SINKER, OUTPUT_REVISE_SQL, false),
+                    revise_match_full_row: loader.get_with_default(
+                        SINKER,
+                        REVISE_MATCH_FULL_ROW,
+                        false,
+                    ),
                 },
 
                 SinkType::Struct => SinkerConfig::PgStruct {
@@ -512,6 +542,17 @@ impl TaskConfig {
                         app_name,
                         batch_size,
                         check_log_dir: loader.get_optional(SINKER, CHECK_LOG_DIR),
+                        check_log_file_size: loader.get_with_default(
+                            SINKER,
+                            CHECK_LOG_FILE_SIZE,
+                            DEFAULT_CHECK_LOG_FILE_SIZE.to_string(),
+                        ),
+                        output_full_row: loader.get_with_default(SINKER, OUTPUT_FULL_ROW, false),
+                        output_revise_sql: loader.get_with_default(
+                            SINKER,
+                            "output_revise_sql",
+                            false,
+                        ),
                     },
 
                     _ => bail! { not_supported_err },
