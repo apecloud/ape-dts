@@ -10,10 +10,7 @@ use anyhow::{bail, Ok};
 #[cfg(feature = "metrics")]
 use crate::config::metrics_config::MetricsConfig;
 use crate::{
-    config::{
-        config_enums::{RdbTransactionIsolation, ResumeType},
-        global_config::GlobalConfig,
-    },
+    config::{config_enums::ResumeType, global_config::GlobalConfig},
     error::Error,
     utils::task_util::TaskUtil,
 };
@@ -448,11 +445,7 @@ impl TaskConfig {
                         DISABLE_FOREIGN_KEY_CHECKS,
                         true,
                     ),
-                    transaction_isolation: loader.get_with_default(
-                        SINKER,
-                        "transaction_isolation",
-                        RdbTransactionIsolation::ReadCommitted,
-                    ),
+                    transaction_isolation: loader.get_optional(SINKER, "transaction_isolation"),
                 },
 
                 SinkType::Check => SinkerConfig::MysqlCheck {
