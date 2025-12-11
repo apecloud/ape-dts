@@ -852,7 +852,7 @@ impl TaskRunner {
                 .filter(|schema| !filter.filter_schema(schema))
                 .map(|s| s.to_owned())
                 .collect::<Vec<_>>();
-        if schemas.len() == 0 {
+        if schemas.is_empty() {
             log_warn!("no schemas to extract");
             return Ok(pending_tasks);
         }
