@@ -6,6 +6,7 @@ use std::{
     },
 };
 
+use anyhow::bail;
 use async_trait::async_trait;
 use futures::TryStreamExt;
 use sqlx::{MySql, Pool};
@@ -19,7 +20,7 @@ use crate::{
 };
 use dt_common::{
     config::config_enums::DbType,
-    log_debug, log_info,
+    log_debug, log_error, log_info,
     meta::{
         adaptor::{mysql_col_value_convertor::MysqlColValueConvertor, sqlx_ext::SqlxMysqlExt},
         col_value::ColValue,
@@ -288,7 +289,7 @@ impl MysqlSnapshotExtractor {
                 let mut slice_count = 0;
                 let query = sqlx::query(&sql_1);
                 let mut rows = query.fetch(&self.conn_pool);
-                while let Some(row) = rows.try_next().await.unwrap() {
+                while let Some(row) = rows.try_next().await? {
                     start_value =
                         MysqlColValueConvertor::from_query(&row, order_col, order_col_type)?;
                     let row_data = RowData::from_mysql_row(&row, tb_meta, &ignore_cols.as_ref());
@@ -337,7 +338,7 @@ impl MysqlSnapshotExtractor {
 
                         let mut order_col_value = ColValue::None;
                         let mut slice_count = 0;
-                        while let Some(row) = rows.try_next().await.unwrap() {
+                        while let Some(row) = rows.try_next().await? {
                             order_col_value = MysqlColValueConvertor::from_query(
                                 &row,
                                 &order_col,
@@ -362,14 +363,44 @@ impl MysqlSnapshotExtractor {
                     futures.push(future);
                 }
 
+                let mut execute_failed = false;
                 for future in futures {
-                    let _ = future.await.unwrap();
+                    match future.await {
+                        Ok(Ok(())) => (),
+                        Ok(Err(error)) => {
+                            log_error!(
+                                "db: `{}`, tb: `{}`, parallel extract failed, error: {}",
+                                self.db,
+                                self.tb,
+                                error
+                            );
+                            execute_failed = true;
+                        }
+                        Err(error) => {
+                            log_error!(
+                                "db: `{}`, tb: `{}`, parallel extract failed, error: {}",
+                                self.db,
+                                self.tb,
+                                error
+                            );
+                            execute_failed = true;
+                        }
+                    }
+                }
+
+                if execute_failed {
+                    bail!(
+                        "db: `{}`, tb: `{}`, parallel extract failed",
+                        self.db,
+                        self.tb
+                    );
                 }
 
                 start_value = last_order_col_value.lock().await.value.clone();
-                if all_finished.load(Ordering::Acquire) {
-                    break;
-                }
+            }
+
+            if all_finished.load(Ordering::Acquire) {
+                break;
             }
         }
 

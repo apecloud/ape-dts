@@ -33,7 +33,7 @@ use dt_common::{
         task_config::TaskConfig,
     },
     error::Error,
-    log_error, log_finished, log_info,
+    log_error, log_finished, log_info, log_warn,
     meta::{
         avro::avro_converter::AvroConverter, dt_queue::DtQueue, position::Position,
         row_type::RowType, syncer::Syncer,
@@ -843,6 +843,8 @@ impl TaskRunner {
         let db_type = &self.config.extractor_basic.db_type;
         let filter = RdbFilter::from_config(&self.config.filter, db_type)?;
 
+        let mut pending_tasks = VecDeque::new();
+
         let schemas =
             TaskUtil::list_schemas(&original_task_context.extractor_client.clone(), db_type)
                 .await?
@@ -850,6 +852,10 @@ impl TaskRunner {
                 .filter(|schema| !filter.filter_schema(schema))
                 .map(|s| s.to_owned())
                 .collect::<Vec<_>>();
+        if schemas.len() == 0 {
+            log_warn!("no schemas to extract");
+            return Ok(pending_tasks);
+        }
 
         if is_multi_task {
             if let Some(task_type) = &self.task_type {
@@ -873,7 +879,6 @@ impl TaskRunner {
         let extractor_client = original_task_context.extractor_client.clone();
         let sinker_client = original_task_context.sinker_client.clone();
 
-        let mut pending_tasks = VecDeque::new();
         let is_db_extractor_config = matches!(
             &self.config.extractor,
             ExtractorConfig::MysqlStruct { .. } | ExtractorConfig::PgStruct { .. }

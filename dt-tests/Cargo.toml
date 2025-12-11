@@ -6,9 +6,6 @@ version = "0.1.0"
 [lints]
 workspace = true
 
-[features]
-metrics = ["dt-task/metrics"]
-
 [dependencies]
 dt-common = {path = "../dt-common", version = "0.1.0"}
 dt-connector = {path = "../dt-connector", version = "0.1.0"}
