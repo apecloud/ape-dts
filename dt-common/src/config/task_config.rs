@@ -10,10 +10,7 @@ use anyhow::{bail, Ok};
 #[cfg(feature = "metrics")]
 use crate::config::metrics_config::MetricsConfig;
 use crate::{
-    config::{
-        config_enums::{RdbTransactionIsolation, ResumeType},
-        global_config::GlobalConfig,
-    },
+    config::{config_enums::ResumeType, global_config::GlobalConfig},
     error::Error,
     utils::task_util::TaskUtil,
 };
