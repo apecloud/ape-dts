@@ -13,6 +13,8 @@ pub enum SinkerConfig {
         batch_size: usize,
         replace: bool,
         disable_foreign_key_checks: bool,
+        // Specifies the transaction isolation level used for writes. The database default is used if not specified.
+        // If ReadCommitted or ReadUncommitted is set, the target database must have BINLOG_FORMAT set to at least MIXED (ROW is recommended). Otherwise, write operations will fail.
         transaction_isolation: RdbTransactionIsolation,
     },
 
