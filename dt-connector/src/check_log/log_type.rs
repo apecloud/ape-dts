@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use strum::{EnumString, IntoStaticStr};
 
-#[derive(EnumString, IntoStaticStr, PartialEq, Serialize, Deserialize, Clone)]
+#[derive(Debug, EnumString, IntoStaticStr, PartialEq, Serialize, Deserialize, Clone)]
 pub enum LogType {
     #[strum(serialize = "miss")]
     Miss,

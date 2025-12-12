@@ -17,7 +17,9 @@ use crate::{
     rdb_query_builder::RdbQueryBuilder,
     rdb_router::RdbRouter,
     sinker::{
-        base_checker::{BaseChecker, BatchCompareContext, BatchCompareRange, ReviseSqlContext},
+        base_checker::{
+            BaseChecker, BatchCompareContext, BatchCompareRange, RecheckConfig, ReviseSqlContext,
+        },
         base_sinker::BaseSinker,
     },
     Sinker,
@@ -47,6 +49,8 @@ pub struct PgChecker {
     pub output_full_row: bool,
     pub output_revise_sql: bool,
     pub revise_match_full_row: bool,
+    pub recheck_interval_secs: u64,
+    pub recheck_attempts: u32,
     pub summary: CheckSummaryLog,
     pub global_summary: Option<Arc<Mutex<CheckSummaryLog>>>,
 }
@@ -128,7 +132,7 @@ impl PgChecker {
                         .transpose()?
                         .flatten();
 
-                    let diff_log = BaseChecker::build_diff_log(
+                    let mut diff_log = BaseChecker::build_diff_log(
                         src_row_data,
                         &dst_row_data,
                         diff_col_values,
@@ -137,6 +141,7 @@ impl PgChecker {
                         self.output_full_row,
                     )
                     .await?;
+                    diff_log.revise_sql = revise_sql.clone();
                     if let Some(revise_sql) = revise_sql {
                         log_sql!("{}", revise_sql);
                     }
@@ -149,13 +154,14 @@ impl PgChecker {
                     .transpose()?
                     .flatten();
 
-                let miss_log = BaseChecker::build_miss_log(
+                let mut miss_log = BaseChecker::build_miss_log(
                     src_row_data,
                     &mut self.extractor_meta_manager,
                     &self.reverse_router,
                     self.output_full_row,
                 )
                 .await?;
+                miss_log.revise_sql = revise_sql.clone();
                 if let Some(revise_sql) = revise_sql {
                     log_sql!("{}", revise_sql);
                 }
@@ -174,7 +180,12 @@ impl PgChecker {
         start_index: usize,
         batch_size: usize,
     ) -> anyhow::Result<()> {
-        let tb_meta = self.meta_manager.get_tb_meta_by_row_data(&data[0]).await?;
+        let tb_meta_owned = self
+            .meta_manager
+            .get_tb_meta_by_row_data(&data[0])
+            .await?
+            .clone();
+        let tb_meta = &tb_meta_owned;
         let query_builder = RdbQueryBuilder::new_for_pg(tb_meta, None);
 
         // build fetch dst sql
@@ -202,6 +213,11 @@ impl PgChecker {
             .output_revise_sql
             .then(|| ReviseSqlContext::pg(tb_meta, self.revise_match_full_row));
 
+        let recheck_config = RecheckConfig {
+            delay_ms: self.recheck_interval_secs.saturating_mul(1000),
+            times: self.recheck_attempts,
+        };
+
         let ctx = BatchCompareContext {
             dst_tb_meta: &tb_meta.basic,
             extractor_meta_manager: &mut self.extractor_meta_manager,
@@ -210,9 +226,35 @@ impl PgChecker {
             revise_ctx: revise_ctx.as_ref(),
         };
 
-        let (miss, diff, sql_count) =
-            BaseChecker::batch_compare_row_data_items(data, &dst_row_data_map, compare_range, ctx)
-                .await?;
+        let pool = self.conn_pool.clone();
+        let fetch_tb_meta = tb_meta_owned.clone();
+        let fetch_latest = move |_, src_row: &RowData| {
+            let pool = pool.clone();
+            let tb_meta = fetch_tb_meta.clone();
+            let src_row = src_row.clone();
+            async move {
+                let qb = RdbQueryBuilder::new_for_pg(&tb_meta, None);
+                let q_info = qb.get_select_query(&src_row)?;
+                let query = qb.create_pg_query(&q_info)?;
+                let mut rows = query.fetch(&pool);
+                if let Some(row) = rows.try_next().await? {
+                    let row_data = RowData::from_pg_row(&row, &tb_meta, &None);
+                    Ok(Some(row_data))
+                } else {
+                    Ok(None)
+                }
+            }
+        };
+
+        let (miss, diff, sql_count) = BaseChecker::batch_compare_row_data_items(
+            data,
+            dst_row_data_map,
+            compare_range,
+            ctx,
+            recheck_config,
+            fetch_latest,
+        )
+        .await?;
 
         BaseChecker::log_dml(&miss, &diff);
 
