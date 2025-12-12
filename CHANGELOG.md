@@ -38,7 +38,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - [[413]](https://github.com/apecloud/ape-dts/pull/413) - fix: [PG] bytea handling for invalid UTF-8 characters
 - [[420]](https://github.com/apecloud/ape-dts/pull/420) - fix: [MySQL] BLOB/TEXT B-tree index in table structure migration
 - [[422]](https://github.com/apecloud/ape-dts/pull/422) - fix: [PG] index creation failure when using WHERE clause
-- [[400]](https://github.com/apecloud/ape-dts/pull/400) - fix: decode username and password fields in Redis client authentication
+- [[400]](https://github.com/apecloud/ape-dts/pull/400) - fix: [Redis] decode username and password fields in Redis client authentication
 - [[403]](https://github.com/apecloud/ape-dts/pull/403) - fix: [MySQL] CURRENT_TIMESTAMP handling in table structure
 - [[407]](https://github.com/apecloud/ape-dts/pull/407) - fix: [PG] OID fetch SQL handling for special characters in table names
 - [[443]](https://github.com/apecloud/ape-dts/pull/443) - fix: [MySQL] parallel extractor infinite loop

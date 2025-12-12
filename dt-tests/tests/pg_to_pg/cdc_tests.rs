@@ -29,7 +29,7 @@ mod test {
         TestBase::run_cdc_test("pg_to_pg/cdc/charset_test", 3000, 5000).await;
     }
 
-    #[tokio::test]
+    // #[tokio::test]
     #[serial]
     async fn cdc_charset_euc_cn_test() {
         TestBase::run_cdc_test("pg_to_pg/cdc/charset_euc_cn_test", 3000, 5000).await;

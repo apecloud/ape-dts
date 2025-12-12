@@ -711,12 +711,30 @@ impl ConnClient {
                     .await?,
                 )
             }
-            SinkerConfig::Pg { url, .. }
-            | SinkerConfig::PgStruct { url, .. }
-            | SinkerConfig::PgCheck { url, .. } => ConnClient::PostgreSQL(
-                TaskUtil::create_pg_conn_pool(url, sinker_max_connections, enable_sqlx_log, false)
-                    .await?,
+            SinkerConfig::Pg {
+                url,
+                disable_foreign_key_checks,
+                ..
+            } => ConnClient::PostgreSQL(
+                TaskUtil::create_pg_conn_pool(
+                    url,
+                    sinker_max_connections,
+                    enable_sqlx_log,
+                    *disable_foreign_key_checks,
+                )
+                .await?,
             ),
+            SinkerConfig::PgStruct { url, .. } | SinkerConfig::PgCheck { url, .. } => {
+                ConnClient::PostgreSQL(
+                    TaskUtil::create_pg_conn_pool(
+                        url,
+                        sinker_max_connections,
+                        enable_sqlx_log,
+                        false,
+                    )
+                    .await?,
+                )
+            }
             SinkerConfig::Mongo { url, app_name, .. }
             | SinkerConfig::MongoCheck { url, app_name, .. } => ConnClient::MongoDB(
                 TaskUtil::create_mongo_client(url, app_name, Some(sinker_max_connections)).await?,
