@@ -899,14 +899,13 @@ impl TaskRunner {
                 ExtractorConfig::PgStruct {
                     url,
                     schema,
-                    do_global_structs,
                     db_batch_size,
                     ..
                 } => ExtractorConfig::PgStruct {
                     url: url.clone(),
                     schema: schema.clone(),
                     schemas,
-                    do_global_structs: *do_global_structs,
+                    do_global_structs: true,
                     db_batch_size: *db_batch_size,
                 },
                 _ => {
