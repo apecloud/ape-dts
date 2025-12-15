@@ -76,6 +76,7 @@ impl BatchCheckExtractor for MysqlCheckExtractor {
                 row_data.row_type = RowType::Update;
                 row_data.before = row_data.after.clone();
             }
+            log_info!("extracted row_data = {}", row_data);
 
             self.base_extractor
                 .push_row(row_data, Position::None)
@@ -95,14 +96,13 @@ impl MysqlCheckExtractor {
             let mut after = HashMap::new();
             for (col, value) in check_log.id_col_values.iter() {
                 let col_type = tb_meta.get_col_type(col)?;
-                let col_value = if let Some(str) = value {
-                    MysqlColValueConvertor::from_str(col_type, str)?
-                } else {
-                    ColValue::None
-                };
+                let col_value = value.as_deref().map_or(Ok(ColValue::None), |v| {
+                    MysqlColValueConvertor::from_str(col_type, v)
+                })?;
                 after.insert(col.to_string(), col_value);
             }
             let check_row_data = RowData::build_insert_row_data(after, &tb_meta.basic);
+            log_info!("check_row_data = {}", check_row_data);
             result.push(check_row_data);
         }
         Ok(result)

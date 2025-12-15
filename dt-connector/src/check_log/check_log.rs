@@ -5,7 +5,7 @@ use dt_common::{error::Error, meta::col_value::ColValue, utils::serialize_util::
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct CheckLog {
     pub schema: String,
     pub tb: String,
@@ -36,7 +36,7 @@ pub struct CheckLog {
     pub dst_row: Option<HashMap<String, ColValue>>,
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DiffColValue {
     pub src: Option<String>,
     pub dst: Option<String>,

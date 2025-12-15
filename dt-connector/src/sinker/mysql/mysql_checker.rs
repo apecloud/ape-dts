@@ -17,13 +17,15 @@ use crate::{
     rdb_query_builder::RdbQueryBuilder,
     rdb_router::RdbRouter,
     sinker::{
-        base_checker::{BaseChecker, BatchCompareContext, BatchCompareRange, ReviseSqlContext},
+        base_checker::{
+            BaseChecker, BatchCompareContext, BatchCompareRange, RecheckConfig, ReviseSqlContext,
+        },
         base_sinker::BaseSinker,
     },
     Sinker,
 };
 use dt_common::{
-    log_sql, log_summary,
+    log_diff, log_miss, log_sql, log_summary,
     meta::{
         mysql::mysql_meta_manager::MysqlMetaManager,
         rdb_meta_manager::RdbMetaManager,
@@ -47,6 +49,10 @@ pub struct MysqlChecker {
     pub output_full_row: bool,
     pub output_revise_sql: bool,
     pub revise_match_full_row: bool,
+    pub recheck_interval_secs: u64,
+    pub recheck_attempts: u32,
+    pub check_log_dir: String,
+    pub check_log_file_size: Option<u64>,
     pub summary: CheckSummaryLog,
     pub global_summary: Option<Arc<Mutex<CheckSummaryLog>>>,
 }
@@ -95,6 +101,46 @@ impl Sinker for MysqlChecker {
 }
 
 impl MysqlChecker {
+    async fn fetch_dst_struct_statement(
+        &self,
+        src_statement: &StructStatement,
+    ) -> anyhow::Result<StructStatement> {
+        let db = match src_statement {
+            StructStatement::MysqlCreateDatabase(s) => s.database.name.clone(),
+            StructStatement::MysqlCreateTable(s) => s.table.database_name.clone(),
+            _ => return Ok(StructStatement::Unknown),
+        };
+
+        let mut struct_fetcher = MysqlStructFetcher {
+            conn_pool: self.conn_pool.to_owned(),
+            dbs: HashSet::from([db.clone()]),
+            filter: None,
+            meta_manager: self.meta_manager.clone(),
+        };
+
+        match src_statement {
+            StructStatement::MysqlCreateDatabase(_) => {
+                let mut statements = struct_fetcher.get_create_database_statements(&db).await?;
+                if statements.is_empty() {
+                    Ok(StructStatement::Unknown)
+                } else {
+                    Ok(StructStatement::MysqlCreateDatabase(statements.remove(0)))
+                }
+            }
+            StructStatement::MysqlCreateTable(s) => {
+                let mut statements = struct_fetcher
+                    .get_create_table_statements(&s.table.database_name, &s.table.table_name)
+                    .await?;
+                if statements.is_empty() {
+                    Ok(StructStatement::Unknown)
+                } else {
+                    Ok(StructStatement::MysqlCreateTable(statements.remove(0)))
+                }
+            }
+            _ => Ok(StructStatement::Unknown),
+        }
+    }
+
     async fn serial_check(&mut self, data: Vec<RowData>) -> anyhow::Result<()> {
         if data.is_empty() {
             return Ok(());
@@ -103,6 +149,11 @@ impl MysqlChecker {
         let revise_ctx = self
             .output_revise_sql
             .then_some(ReviseSqlContext::mysql(tb_meta, self.revise_match_full_row));
+
+        let recheck_config = RecheckConfig {
+            delay_ms: self.recheck_interval_secs.saturating_mul(1000),
+            times: self.recheck_attempts,
+        };
 
         let mut miss = Vec::new();
         let mut diff = Vec::new();
@@ -116,21 +167,51 @@ impl MysqlChecker {
             let mut rows = query.fetch(&self.conn_pool);
             rts.push((start_time.elapsed().as_millis() as u64, 1));
 
-            if let Some(row) = rows.try_next().await.unwrap() {
-                let dst_row_data = RowData::from_mysql_row(&row, tb_meta, &None);
-                let diff_col_values = BaseChecker::compare_row_data(src_row_data, &dst_row_data)?;
-                if !diff_col_values.is_empty() {
+            let dst_row = if let Some(row) = rows.try_next().await? {
+                Some(RowData::from_mysql_row(&row, tb_meta, &None))
+            } else {
+                None
+            };
+
+            let (check_result, final_dst_row) = BaseChecker::check_row_with_retry(
+                src_row_data,
+                dst_row,
+                recheck_config,
+                |src_row| {
+                    let pool = self.conn_pool.clone();
+                    let tb_meta = tb_meta.clone();
+                    let src_row = src_row.clone();
+                    async move {
+                        let qb = RdbQueryBuilder::new_for_mysql(&tb_meta, None);
+                        let q_info = qb.get_select_query(&src_row)?;
+                        let query = qb.create_mysql_query(&q_info)?;
+                        let mut rows = query.fetch(&pool);
+                        if let Some(row) = rows.try_next().await? {
+                            let row_data = RowData::from_mysql_row(&row, &tb_meta, &None);
+                            Ok(Some(row_data))
+                        } else {
+                            Ok(None)
+                        }
+                    }
+                },
+            )
+            .await?;
+
+            match check_result {
+                crate::sinker::base_checker::CheckResult::Diff(diff_col_values) => {
+                    let dst_row = final_dst_row
+                        .as_ref()
+                        .expect("diff result should have a dst row");
+
                     let revise_sql = revise_ctx
                         .as_ref()
-                        .map(|ctx| {
-                            ctx.build_diff_sql(src_row_data, &dst_row_data, &diff_col_values)
-                        })
+                        .map(|ctx| ctx.build_diff_sql(src_row_data, dst_row, &diff_col_values))
                         .transpose()?
                         .flatten();
 
                     let diff_log = BaseChecker::build_diff_log(
                         src_row_data,
-                        &dst_row_data,
+                        dst_row,
                         diff_col_values,
                         &mut self.extractor_meta_manager,
                         &self.reverse_router,
@@ -139,30 +220,49 @@ impl MysqlChecker {
                     .await?;
                     if let Some(revise_sql) = revise_sql {
                         log_sql!("{}", revise_sql);
+                        self.summary.sql_count = Some(self.summary.sql_count.unwrap_or(0) + 1);
                     }
                     diff.push(diff_log);
                 }
-            } else {
-                let revise_sql = revise_ctx
-                    .as_ref()
-                    .map(|ctx| ctx.build_miss_sql(src_row_data))
-                    .transpose()?
-                    .flatten();
+                crate::sinker::base_checker::CheckResult::Miss => {
+                    let revise_sql = revise_ctx
+                        .as_ref()
+                        .map(|ctx| ctx.build_miss_sql(src_row_data))
+                        .transpose()?
+                        .flatten();
 
-                let miss_log = BaseChecker::build_miss_log(
-                    src_row_data,
-                    &mut self.extractor_meta_manager,
-                    &self.reverse_router,
-                    self.output_full_row,
-                )
-                .await?;
-                if let Some(revise_sql) = revise_sql {
-                    log_sql!("{}", revise_sql);
+                    let miss_log = BaseChecker::build_miss_log(
+                        src_row_data,
+                        &mut self.extractor_meta_manager,
+                        &self.reverse_router,
+                        self.output_full_row,
+                    )
+                    .await?;
+                    if let Some(revise_sql) = revise_sql {
+                        log_sql!("{}", revise_sql);
+                        self.summary.sql_count = Some(self.summary.sql_count.unwrap_or(0) + 1);
+                    }
+                    miss.push(miss_log);
                 }
-                miss.push(miss_log);
+                crate::sinker::base_checker::CheckResult::Ok => {}
             }
         }
-        BaseChecker::log_dml(&miss, &diff);
+        if !miss.is_empty() {
+            let path = format!("{}/miss.log", self.check_log_dir);
+            for log in miss {
+                if BaseChecker::check_log_file_size(&path, self.check_log_file_size) {
+                    log_miss!("{}", log);
+                }
+            }
+        }
+        if !diff.is_empty() {
+            let path = format!("{}/diff.log", self.check_log_dir);
+            for log in diff {
+                if BaseChecker::check_log_file_size(&path, self.check_log_file_size) {
+                    log_diff!("{}", log);
+                }
+            }
+        }
 
         BaseSinker::update_serial_monitor(&self.monitor, data.len() as u64, 0).await?;
         BaseSinker::update_monitor_rt(&self.monitor, &rts).await
@@ -174,7 +274,12 @@ impl MysqlChecker {
         start_index: usize,
         batch_size: usize,
     ) -> anyhow::Result<()> {
-        let tb_meta = self.meta_manager.get_tb_meta_by_row_data(&data[0]).await?;
+        let tb_meta_owned = self
+            .meta_manager
+            .get_tb_meta_by_row_data(&data[0])
+            .await?
+            .clone();
+        let tb_meta = &tb_meta_owned;
         let query_builder = RdbQueryBuilder::new_for_mysql(tb_meta, None);
 
         // build fetch dst sql
@@ -202,6 +307,11 @@ impl MysqlChecker {
             .output_revise_sql
             .then(|| ReviseSqlContext::mysql(tb_meta, self.revise_match_full_row));
 
+        let recheck_config = RecheckConfig {
+            delay_ms: self.recheck_interval_secs.saturating_mul(1000),
+            times: self.recheck_attempts,
+        };
+
         let ctx = BatchCompareContext {
             dst_tb_meta: &tb_meta.basic,
             extractor_meta_manager: &mut self.extractor_meta_manager,
@@ -210,11 +320,52 @@ impl MysqlChecker {
             revise_ctx: revise_ctx.as_ref(),
         };
 
-        let (miss, diff, sql_count) =
-            BaseChecker::batch_compare_row_data_items(data, &dst_row_data_map, compare_range, ctx)
-                .await?;
+        let pool = self.conn_pool.clone();
+        let fetch_tb_meta = tb_meta_owned.clone();
+        let fetch_latest = move |_, src_row: &RowData| {
+            let pool = pool.clone();
+            let tb_meta = fetch_tb_meta.clone();
+            let src_row = src_row.clone();
+            async move {
+                let qb = RdbQueryBuilder::new_for_mysql(&tb_meta, None);
+                let q_info = qb.get_select_query(&src_row)?;
+                let query = qb.create_mysql_query(&q_info)?;
+                let mut rows = query.fetch(&pool);
+                if let Some(row) = rows.try_next().await? {
+                    let row_data = RowData::from_mysql_row(&row, &tb_meta, &None);
+                    Ok(Some(row_data))
+                } else {
+                    Ok(None)
+                }
+            }
+        };
 
-        BaseChecker::log_dml(&miss, &diff);
+        let (miss, diff, sql_count) = BaseChecker::batch_compare_row_data_items(
+            data,
+            dst_row_data_map,
+            compare_range,
+            ctx,
+            recheck_config,
+            fetch_latest,
+        )
+        .await?;
+
+        if !miss.is_empty() {
+            let path = format!("{}/miss.log", self.check_log_dir);
+            for log in &miss {
+                if BaseChecker::check_log_file_size(&path, self.check_log_file_size) {
+                    log_miss!("{}", log);
+                }
+            }
+        }
+        if !diff.is_empty() {
+            let path = format!("{}/diff.log", self.check_log_dir);
+            for log in &diff {
+                if BaseChecker::check_log_file_size(&path, self.check_log_file_size) {
+                    log_diff!("{}", log);
+                }
+            }
+        }
 
         self.summary.end_time = chrono::Local::now().to_rfc3339();
         self.summary.miss_count += miss.len();
@@ -227,56 +378,32 @@ impl MysqlChecker {
         BaseSinker::update_monitor_rt(&self.monitor, &rts).await
     }
 
-    async fn serial_check_struct(&mut self, mut data: Vec<StructData>) -> anyhow::Result<()> {
-        for src_data in data.iter_mut() {
-            let src_statement = &mut src_data.statement;
-            let db = match src_statement {
-                StructStatement::MysqlCreateDatabase(s) => s.database.name.clone(),
-                StructStatement::MysqlCreateTable(s) => s.table.database_name.clone(),
-                _ => String::new(),
-            };
+    async fn serial_check_struct(&mut self, data: Vec<StructData>) -> anyhow::Result<()> {
+        let recheck_config = RecheckConfig {
+            delay_ms: self.recheck_interval_secs.saturating_mul(1000),
+            times: self.recheck_attempts,
+        };
 
-            let mut struct_fetcher = MysqlStructFetcher {
-                conn_pool: self.conn_pool.to_owned(),
-                dbs: HashSet::from([db.clone()]),
-                filter: None,
-                meta_manager: self.meta_manager.clone(),
-            };
-
-            let mut dst_statement = match &src_statement {
-                StructStatement::MysqlCreateDatabase(_) => {
-                    let mut dst_statement =
-                        struct_fetcher.get_create_database_statements(&db).await?;
-                    StructStatement::MysqlCreateDatabase(dst_statement.remove(0))
-                }
-
-                StructStatement::MysqlCreateTable(s) => {
-                    let mut dst_statement = struct_fetcher
-                        .get_create_table_statements(&s.table.database_name, &s.table.table_name)
-                        .await?;
-                    if dst_statement.is_empty() {
-                        StructStatement::Unknown
-                    } else {
-                        StructStatement::MysqlCreateTable(dst_statement.remove(0))
-                    }
-                }
-
-                _ => StructStatement::Unknown,
-            };
-
-            let (miss_count, diff_count, extra_count, sql_count) = BaseChecker::compare_struct(
-                src_statement,
-                &mut dst_statement,
+        let (miss_count, diff_count, extra_count, sql_count) =
+            BaseChecker::check_struct_with_retry(
+                data,
+                recheck_config,
                 &self.filter,
                 self.output_revise_sql,
-            )?;
-            self.summary.miss_count += miss_count;
-            self.summary.diff_count += diff_count;
-            self.summary.extra_count += extra_count;
-            if sql_count > 0 {
-                self.summary.sql_count = Some(self.summary.sql_count.unwrap_or(0) + sql_count);
-            }
+                |src_statement| {
+                    let this = self.clone();
+                    async move { this.fetch_dst_struct_statement(&src_statement).await }
+                },
+            )
+            .await?;
+
+        self.summary.miss_count += miss_count;
+        self.summary.diff_count += diff_count;
+        self.summary.extra_count += extra_count;
+        if sql_count > 0 {
+            self.summary.sql_count = Some(self.summary.sql_count.unwrap_or(0) + sql_count);
         }
+
         Ok(())
     }
 }
