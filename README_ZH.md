@@ -174,6 +174,11 @@ dt-main crate 提供了几个可选组件，可以通过 `Cargo [features]` 启�
 
 - 执行 `cargo clippy --all-targets --all-features --workspace` 并修复所有警告
 
-# 技术交流
+## 社区
 
-[Slack 社区](https://join.slack.com/t/kubeblocks/shared_invite/zt-22cx2f84x-BPZvnLRqBOGdZ_XSjELh4Q)
+如有任何问题，欢迎通过以下方式联系我们：
+
+- ApeDTS GitHub [讨论区](https://github.com/apecloud/ape-dts/discussions)
+- ApeDTS 微信公众号，添加时请备注 **ape-dts**：
+
+  <img src=".\docs\img\wechat-assistant.png" alt="wechat" width="100" height="100" style="margin-top:10px">
