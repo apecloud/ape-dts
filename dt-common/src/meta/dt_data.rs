@@ -6,6 +6,7 @@ use super::{
     struct_meta::struct_data::StructData,
 };
 use crate::meta::dcl_meta::dcl_data::DclData;
+use crate::meta::row_type::RowSqlType;
 use crate::meta::{position::Position, redis::redis_entry::RedisEntry};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -22,6 +23,14 @@ impl DtItem {
 
     pub fn is_dcl(&self) -> bool {
         self.dt_data.is_dcl()
+    }
+
+    pub fn get_row_sql_type(&self) -> RowSqlType {
+        match &self.dt_data {
+            DtData::Ddl { .. } => RowSqlType::DDL,
+            DtData::Dcl { .. } => RowSqlType::DCL,
+            _ => RowSqlType::DML,
+        }
     }
 
     pub fn get_data_size(&self) -> u64 {
