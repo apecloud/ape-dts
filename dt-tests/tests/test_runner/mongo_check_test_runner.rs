@@ -1,4 +1,6 @@
 use super::{check_util::CheckUtil, mongo_test_runner::MongoTestRunner};
+use dt_common::meta::mongo::mongo_constant::MongoConstants;
+use mongodb::bson::doc;
 
 pub struct MongoCheckTestRunner {
     base: MongoTestRunner,
@@ -27,6 +29,27 @@ impl MongoCheckTestRunner {
         self.base.execute_test_sqls().await.unwrap();
 
         // start task
+        self.base.base.start_task().await?;
+        CheckUtil::validate_check_log(&self.expect_check_log_dir, &self.dst_check_log_dir)
+    }
+
+    pub async fn run_check_recover_test(&self, delay_secs: u64) -> anyhow::Result<()> {
+        CheckUtil::clear_check_log(&self.dst_check_log_dir);
+
+        self.base.execute_prepare_sqls().await?;
+        self.base.execute_test_sqls().await?;
+
+        let dst_client = self.base.dst_mongo_client().clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(tokio::time::Duration::from_secs(delay_secs)).await;
+            let coll = dst_client
+                .database("sample_db")
+                .collection::<mongodb::bson::Document>("sample_tb");
+            let filter = doc! { MongoConstants::ID: 2 };
+            let update = doc! { "$set": { "name": "Bob" } };
+            coll.update_one(filter, update, None).await.unwrap();
+        });
+
         self.base.base.start_task().await?;
         CheckUtil::validate_check_log(&self.expect_check_log_dir, &self.dst_check_log_dir)
     }

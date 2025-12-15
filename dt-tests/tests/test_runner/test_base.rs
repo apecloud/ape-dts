@@ -135,6 +135,15 @@ impl TestBase {
         runner.close().await.unwrap();
     }
 
+    pub async fn run_check_recover_test(test_dir: &str, recover_sql: &str, delay_secs: u64) {
+        let runner = RdbCheckTestRunner::new(test_dir).await.unwrap();
+        runner
+            .run_check_recover_test(recover_sql, delay_secs)
+            .await
+            .unwrap();
+        runner.close().await.unwrap();
+    }
+
     pub async fn run_mongo_snapshot_test(test_dir: &str) {
         let runner = MongoTestRunner::new(test_dir).await.unwrap();
         runner.run_snapshot_test(true).await.unwrap();
@@ -186,6 +195,11 @@ impl TestBase {
     pub async fn run_mongo_check_test(test_dir: &str) {
         let runner = MongoCheckTestRunner::new(test_dir).await.unwrap();
         runner.run_check_test().await.unwrap();
+    }
+
+    pub async fn run_mongo_check_recover_test(test_dir: &str, delay_secs: u64) {
+        let runner = MongoCheckTestRunner::new(test_dir).await.unwrap();
+        runner.run_check_recover_test(delay_secs).await.unwrap();
     }
 
     pub async fn run_mongo_revise_test(test_dir: &str) {

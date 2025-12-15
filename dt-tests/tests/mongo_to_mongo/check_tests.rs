@@ -27,4 +27,17 @@ mod test {
     async fn check_output_revise_sql_test() {
         TestBase::run_mongo_check_test("mongo_to_mongo/check/output_revise_sql_test").await;
     }
+
+    #[tokio::test]
+    #[serial]
+    async fn check_recheck_test() {
+        TestBase::run_mongo_check_test("mongo_to_mongo/check/recheck_config").await;
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn check_recheck_recover_test() {
+        TestBase::run_mongo_check_recover_test("mongo_to_mongo/recheck/basic_recheck_config", 1)
+            .await;
+    }
 }

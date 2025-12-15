@@ -247,6 +247,18 @@ impl MongoTestRunner {
         Ok(())
     }
 
+    pub fn src_mongo_client(&self) -> &Client {
+        self.src_mongo_client
+            .as_ref()
+            .expect("src_mongo_client is not initialized")
+    }
+
+    pub fn dst_mongo_client(&self) -> &Client {
+        self.dst_mongo_client
+            .as_ref()
+            .expect("dst_mongo_client is not initialized")
+    }
+
     pub async fn execute_test_sqls(&self) -> anyhow::Result<()> {
         let sqls = MongoTestRunner::slice_sqls_by_db(&self.base.src_test_sqls);
         for (db, sqls) in sqls.iter() {
