@@ -56,14 +56,13 @@ jobs:
       - name: Cross build
         if: matrix.target == 'x86_64-unknown-linux-gnu' || matrix.target == 'aarch64-unknown-linux-gnu' || matrix.target == 'x86_64-pc-windows-gnu'
         run: |
-          cargo install cross --git https://github.com/cross-rs/cross
-          cross build --release --target=${{ matrix.target }}
+          cross build --release --target=${{ matrix.target }} --features metrics
 
       - name: Local build
         if: matrix.target == 'x86_64-apple-darwin'
         run: |
           rustup target add ${{ matrix.target }}
-          cargo build --release --features metrics --target=${{ matrix.target }}
+          cargo build --release --target=${{ matrix.target }} --features metrics
 
       - name: Create release artifact
         run: |
