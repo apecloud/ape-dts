@@ -25,7 +25,7 @@ use crate::{
     Sinker,
 };
 use dt_common::{
-    log_diff, log_miss, log_sql, log_summary,
+    log_sql, log_summary,
     meta::{
         mysql::mysql_meta_manager::MysqlMetaManager,
         rdb_meta_manager::RdbMetaManager,
@@ -51,8 +51,6 @@ pub struct MysqlChecker {
     pub revise_match_full_row: bool,
     pub recheck_interval_secs: u64,
     pub recheck_attempts: u32,
-    pub check_log_dir: String,
-    pub check_log_file_size: Option<u64>,
     pub summary: CheckSummaryLog,
     pub global_summary: Option<Arc<Mutex<CheckSummaryLog>>>,
 }
@@ -247,22 +245,7 @@ impl MysqlChecker {
                 crate::sinker::base_checker::CheckResult::Ok => {}
             }
         }
-        if !miss.is_empty() {
-            let path = format!("{}/miss.log", self.check_log_dir);
-            for log in miss {
-                if BaseChecker::check_log_file_size(&path, self.check_log_file_size) {
-                    log_miss!("{}", log);
-                }
-            }
-        }
-        if !diff.is_empty() {
-            let path = format!("{}/diff.log", self.check_log_dir);
-            for log in diff {
-                if BaseChecker::check_log_file_size(&path, self.check_log_file_size) {
-                    log_diff!("{}", log);
-                }
-            }
-        }
+        BaseChecker::log_dml(&miss, &diff);
 
         BaseSinker::update_serial_monitor(&self.monitor, data.len() as u64, 0).await?;
         BaseSinker::update_monitor_rt(&self.monitor, &rts).await
@@ -350,22 +333,7 @@ impl MysqlChecker {
         )
         .await?;
 
-        if !miss.is_empty() {
-            let path = format!("{}/miss.log", self.check_log_dir);
-            for log in &miss {
-                if BaseChecker::check_log_file_size(&path, self.check_log_file_size) {
-                    log_miss!("{}", log);
-                }
-            }
-        }
-        if !diff.is_empty() {
-            let path = format!("{}/diff.log", self.check_log_dir);
-            for log in &diff {
-                if BaseChecker::check_log_file_size(&path, self.check_log_file_size) {
-                    log_diff!("{}", log);
-                }
-            }
-        }
+        BaseChecker::log_dml(&miss, &diff);
 
         self.summary.end_time = chrono::Local::now().to_rfc3339();
         self.summary.miss_count += miss.len();

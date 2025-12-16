@@ -59,27 +59,6 @@ use dt_connector::{
 
 type Sinkers = Vec<Arc<async_mutex::Mutex<Box<dyn Sinker + Send>>>>;
 
-fn parse_log_file_size(size_str: &str) -> Option<u64> {
-    let size_str = size_str.trim();
-    if size_str.is_empty() {
-        return None;
-    }
-    let last_char = size_str.chars().last()?;
-    if last_char.is_ascii_digit() {
-        return size_str.parse::<u64>().ok();
-    }
-
-    let (num, _) = size_str.split_at(size_str.len() - 1);
-    let n = num.trim().parse::<u64>().ok()?;
-    match last_char.to_ascii_lowercase() {
-        'b' => Some(n),
-        'k' => Some(n * 1024),
-        'm' => Some(n * 1024 * 1024),
-        'g' => Some(n * 1024 * 1024 * 1024),
-        _ => None,
-    }
-}
-
 pub struct SinkerUtil {}
 
 #[macro_export]
@@ -158,7 +137,6 @@ impl SinkerUtil {
                 revise_match_full_row,
                 recheck_interval_secs,
                 recheck_attempts,
-                check_log_file_size,
                 ..
             } => {
                 let reverse_router = create_router!(config, Mysql).reverse();
@@ -189,8 +167,6 @@ impl SinkerUtil {
                         revise_match_full_row,
                         recheck_interval_secs,
                         recheck_attempts,
-                        check_log_dir: config.runtime.log_dir.clone(),
-                        check_log_file_size: parse_log_file_size(&check_log_file_size),
                         summary: CheckSummaryLog {
                             start_time: Local::now().to_rfc3339(),
                             ..Default::default()

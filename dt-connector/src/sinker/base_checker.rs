@@ -189,19 +189,6 @@ impl<'a> ReviseSqlContext<'a> {
 
 pub struct BaseChecker {}
 
-impl BaseChecker {
-    pub fn check_log_file_size(path: &str, limit: Option<u64>) -> bool {
-        if let Some(limit) = limit {
-            if let Ok(metadata) = std::fs::metadata(path) {
-                if metadata.len() >= limit {
-                    return false;
-                }
-            }
-        }
-        true
-    }
-}
-
 pub struct BatchCompareRange {
     pub start_index: usize,
     pub batch_size: usize,
@@ -398,9 +385,7 @@ impl BaseChecker {
                     sleep(Duration::from_millis(recheck_config.delay_ms)).await;
                 }
 
-                if let Some(latest) = fetch_latest(src_row).await? {
-                    dst_row = Some(latest);
-                }
+                dst_row = fetch_latest(src_row).await?;
 
                 check_result = Self::compare_src_dst(src_row, dst_row.as_ref())?;
                 if !check_result.is_inconsistent() {
