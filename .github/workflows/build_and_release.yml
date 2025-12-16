@@ -11,7 +11,8 @@ on:
         description: 'JSON array of target platforms to build [{"os": "ubuntu-latest", "target": "x86_64-unknown-linux-gnu"}, ...]'
         required: true
         default: '[{"os": "ubuntu-latest", "target": "x86_64-unknown-linux-gnu"}, {"os": "ubuntu-latest", "target": "aarch64-unknown-linux-gnu"}, {"os": "macos-latest", "target": "x86_64-apple-darwin"}]'
-
+env:
+  GITHUB_TOKEN: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
 jobs:
   build:
     name: Build ${{ matrix.target }}
@@ -29,7 +30,7 @@ jobs:
       - name: Get Release Upload URL
         id: get_upload_url
         run: |
-          tag_info=$(curl -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+          tag_info=$(curl -H "Authorization: token ${{ env.GITHUB_TOKEN }}" \
             "https://api.github.com/repos/${{ github.repository }}/releases/tags/${{ inputs.tag_name }}")
           echo "tag_info: ${tag_info}"
           upload_url=$(echo $tag_info | jq -r '.upload_url')
