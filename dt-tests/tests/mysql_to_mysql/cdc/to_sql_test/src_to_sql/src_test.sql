@@ -137,8 +137,8 @@ UPDATE test_db_1.tb_col_utf8mb4 set value = NULL WHERE pk = 1;
 DELETE FROM test_db_1.tb_col_utf8mb4;
 
 -- json
-INSERT INTO test_db_1.json_test VALUES (1, '{"age":22,"addr":{"code":100,"detail":{"ab":"970785C8-C299"}},"name":"''Alice''"}')
-UPDATE test_db_1.json_test SET f_1 = JSON_SET(f_1, '$.addr.detail.ab', '''970785C8''')
+INSERT INTO test_db_1.json_test VALUES (1, '{"age":22,"addr":{"code":100,"detail":{"ab":"970785C8-C299"}},"name":"''Alice''"}');
+UPDATE test_db_1.json_test SET f_1 = JSON_SET(f_1, '$.addr.detail.ab', '''970785C8''');
 DELETE FROM test_db_1.json_test;
 
 -- col value with '
