@@ -18,7 +18,7 @@ pub struct RdbSqlTestRunner {
     reverse: bool,
 }
 
-const UTC_FORMAT: &str = "%Y-%m-%d %H:%M:%S";
+const UTC_FORMAT: &str = "%Y-%m-%d %H:%M:%S%.f";
 
 #[allow(dead_code)]
 impl RdbSqlTestRunner {

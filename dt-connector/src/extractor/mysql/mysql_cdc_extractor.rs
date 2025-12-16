@@ -135,7 +135,7 @@ impl MysqlCdcExtractor {
     async fn extract_internal(&mut self) -> anyhow::Result<()> {
         let start_position = if self.gtid_enabled && !self.gtid_set.is_empty() {
             StartPosition::Gtid(self.gtid_set.clone())
-        } else if !self.binlog_filename.is_empty() && self.binlog_position > 0 {
+        } else if !self.binlog_filename.is_empty() {
             StartPosition::BinlogPosition(self.binlog_filename.clone(), self.binlog_position)
         } else {
             StartPosition::Latest {}

@@ -5,6 +5,7 @@
 - ape-dts is a data migration tool enabling any-to-any data transfers.
 - It also provides data subscription and data processing.
 - It is lightweight, efficient and standalone, requiring no third-party components or extra storage.
+- Designed for cloud-native stateless component scenarios.
 - In Rust.
 
 ## Key features
@@ -172,6 +173,11 @@ Refer to [test docs](./dt-tests/README.md) for details.
 
 - run `cargo clippy --all-targets --all-features --workspace` fix all clippy issues.
 
-# Contact us
+## Community
 
-[Slack Community](https://join.slack.com/t/kubeblocks/shared_invite/zt-22cx2f84x-BPZvnLRqBOGdZ_XSjELh4Q)
+If you have any questions, you can reach out to us through:
+
+- ApeDTS GitHub [Discussions](https://github.com/apecloud/ape-dts/discussions)
+- ApeDTS Wechat Account with note **ape-dts**:
+
+  <img src=".\docs\img\wechat-assistant.png" alt="wechat" width="100" height="100" style="margin-top:10px">
