@@ -206,11 +206,11 @@ impl ExtractorUtil {
             }
 
             ExtractorConfig::PgSnapshot {
-                url,
                 schema,
                 tb,
                 sample_interval,
                 batch_size,
+                ..
             } => {
                 let conn_pool = match extractor_client {
                     ConnClient::PostgreSQL(conn_pool) => conn_pool,
@@ -218,8 +218,7 @@ impl ExtractorUtil {
                         bail!("connection pool not found");
                     }
                 };
-                let meta_manager =
-                    TaskUtil::create_pg_meta_manager(&url, &config.runtime.log_level).await?;
+                let meta_manager = PgMetaManager::new(conn_pool.clone()).await?;
                 let extractor = PgSnapshotExtractor {
                     conn_pool,
                     meta_manager,

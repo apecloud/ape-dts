@@ -11,7 +11,8 @@ on:
         description: 'JSON array of target platforms to build [{"os": "ubuntu-latest", "target": "x86_64-unknown-linux-gnu"}, ...]'
         required: true
         default: '[{"os": "ubuntu-latest", "target": "x86_64-unknown-linux-gnu"}, {"os": "ubuntu-latest", "target": "aarch64-unknown-linux-gnu"}, {"os": "macos-latest", "target": "x86_64-apple-darwin"}]'
-
+env:
+  GITHUB_TOKEN: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
 jobs:
   build:
     name: Build ${{ matrix.target }}
@@ -29,7 +30,7 @@ jobs:
       - name: Get Release Upload URL
         id: get_upload_url
         run: |
-          tag_info=$(curl -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+          tag_info=$(curl -H "Authorization: token ${{ env.GITHUB_TOKEN }}" \
             "https://api.github.com/repos/${{ github.repository }}/releases/tags/${{ inputs.tag_name }}")
           echo "tag_info: ${tag_info}"
           upload_url=$(echo $tag_info | jq -r '.upload_url')
@@ -55,14 +56,13 @@ jobs:
       - name: Cross build
         if: matrix.target == 'x86_64-unknown-linux-gnu' || matrix.target == 'aarch64-unknown-linux-gnu' || matrix.target == 'x86_64-pc-windows-gnu'
         run: |
-          cargo install cross --git https://github.com/cross-rs/cross
-          cross build --release --target=${{ matrix.target }}
+          cross build --release --target=${{ matrix.target }} --features metrics
 
       - name: Local build
         if: matrix.target == 'x86_64-apple-darwin'
         run: |
           rustup target add ${{ matrix.target }}
-          cargo build --release --features metrics --target=${{ matrix.target }}
+          cargo build --release --target=${{ matrix.target }} --features metrics
 
       - name: Create release artifact
         run: |
@@ -79,5 +79,16 @@ jobs:
           asset_path: ape-dts-${{ github.run_id }}-${{ matrix.target }}.tar.gz
           asset_name: ape-dts-${{ github.run_id }}-${{ matrix.target }}.tar.gz
           asset_content_type: application/gzip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload CHANGELOG
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        uses: actions/upload-release-asset@v1
+        with:
+          upload_url: ${{ env.UPLOAD_URL }}
+          asset_path: CHANGELOG.md
+          asset_name: CHANGELOG.md
+          asset_content_type: text/markdown
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
