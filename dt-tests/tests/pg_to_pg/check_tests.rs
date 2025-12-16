@@ -23,10 +23,33 @@ mod test {
         TestBase::run_check_test("pg_to_pg/check/sample_test").await;
     }
 
-    // TODO: fix this test
-    // #[tokio::test]
-    // #[serial]
-    // async fn check_struct_basic_test() {
-    //     TestBase::run_check_test("pg_to_pg/check/basic_struct_test").await;
-    // }
+    #[tokio::test]
+    #[serial]
+    async fn check_output_full_row_test() {
+        TestBase::run_check_test("pg_to_pg/check/output_full_row_test").await;
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn check_output_revise_sql_test() {
+        TestBase::run_check_test("pg_to_pg/check/output_revise_sql_test").await;
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn check_revise_match_full_row_test() {
+        TestBase::run_check_test("pg_to_pg/check/revise_match_full_row_test").await;
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn check_struct_basic_test() {
+        TestBase::run_check_test("pg_to_pg/check/basic_struct_test").await;
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn check_revise_struct_test() {
+        TestBase::run_check_test("pg_to_pg/check/revise_struct_test").await;
+    }
 }

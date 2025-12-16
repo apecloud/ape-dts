@@ -9,12 +9,14 @@ Refer to [config details](/docs/en/config.md) for explanations of common fields.
 extract_type=struct
 db_type=pg
 url=postgres://postgres:postgres@127.0.0.1:5433/postgres?options[statement_timeout]=10s
+max_connections=10
 
 [sinker]
 sink_type=struct
 db_type=pg
 url=postgres://postgres:postgres@127.0.0.1:5434/postgres?options[statement_timeout]=10s
 conflict_policy=interrupt
+max_connections=10
 
 [filter]
 do_dbs=test_schema
@@ -22,7 +24,7 @@ ignore_dbs=
 do_tbs=
 ignore_tbs=
 do_events=
-do_structures=
+do_structures=database,table,constraint,sequence,comment,index
 
 [router]
 db_map=
@@ -50,6 +52,7 @@ db_type=pg
 extract_type=snapshot
 url=postgres://postgres:postgres@127.0.0.1:5433/postgres?options[statement_timeout]=10s
 batch_size=10000
+max_connections=10
 
 [sinker]
 db_type=pg
@@ -57,6 +60,7 @@ sink_type=write
 url=postgres://postgres:postgres@127.0.0.1:5434/postgres?options[statement_timeout]=10s
 batch_size=200
 replace=true
+max_connections=10
 
 [filter]
 do_dbs=
@@ -107,6 +111,7 @@ sink_type=write
 url=postgres://postgres:postgres@127.0.0.1:5434/postgres?options[statement_timeout]=10s
 batch_size=200
 replace=true
+max_connections=10
 
 [router]
 tb_map=

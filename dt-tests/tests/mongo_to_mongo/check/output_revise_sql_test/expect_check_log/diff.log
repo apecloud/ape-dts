@@ -1,0 +1,1 @@
+{"schema":"test_db_1","tb":"users","id_col_values":{"_id":"{\"ObjectId\":{\"$oid\":\"65733a82fb2ce9836745de02\"}}"},"diff_col_values":{"age":{"src":"25","dst":"99"},"email":{"src":"bob@example.com","dst":"bob_updated@example.com"}}}

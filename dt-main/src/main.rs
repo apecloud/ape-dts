@@ -26,6 +26,6 @@ async fn main() {
         do_precheck(&task_config).await;
     } else {
         let runner = TaskRunner::new(&task_config).unwrap();
-        runner.start_task(true).await.unwrap()
+        runner.start_task().await.unwrap()
     }
 }

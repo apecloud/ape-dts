@@ -32,10 +32,10 @@ impl BaseParallelizer {
         // ddls and dmls should be drained separately
         while let Ok(item) = self.pop(buffer, &mut record_size_counter).await {
             if data.is_empty()
-                || (data[0].is_ddl() == item.is_ddl()
+                || (data[0].get_row_sql_type() == item.get_row_sql_type()
                     && data[0].data_origin_node == item.data_origin_node)
-                || data[0].is_dcl() == item.is_dcl()
             {
+                // merge when sql type is the same
                 data.push(item);
             } else {
                 self.popped_data.push_back(item);

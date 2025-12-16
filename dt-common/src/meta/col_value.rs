@@ -5,8 +5,10 @@ use std::{
 };
 
 use anyhow::bail;
-use mongodb::bson::Document;
+use mongodb::bson::{Bson, Document};
 use serde::{Deserialize, Serialize, Serializer};
+
+use crate::utils::sql_util::SqlUtil;
 
 // #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 // #[serde(tag = "type", content = "value")]
@@ -183,7 +185,7 @@ impl ColValue {
             ColValue::Timestamp(v) => Some(v.to_string()),
             ColValue::Year(v) => Some(v.to_string()),
             ColValue::String(v) => Some(v.to_string()),
-            ColValue::RawString(v) => Some(hex::encode(v)),
+            ColValue::RawString(v) => Some(SqlUtil::binary_to_str(v).0),
             ColValue::Bit(v) => Some(v.to_string()),
             ColValue::Set(v) => Some(v.to_string()),
             ColValue::Set2(v) => Some(v.to_string()),
@@ -192,8 +194,8 @@ impl ColValue {
             ColValue::Json(v) => Some(format!("{:?}", v)),
             ColValue::Json2(v) => Some(v.to_string()),
             ColValue::Json3(v) => Some(v.to_string()),
-            ColValue::Blob(v) => Some(hex::encode(v)),
-            ColValue::MongoDoc(v) => Some(v.to_string()),
+            ColValue::Blob(v) => Some(SqlUtil::binary_to_str(v).0),
+            ColValue::MongoDoc(v) => Some(Self::mongo_doc_to_string(v)),
             ColValue::Bool(v) => Some(v.to_string()),
             ColValue::None => Option::None,
         }
@@ -231,8 +233,41 @@ impl ColValue {
             | ColValue::Json2(v) => v.len(),
             ColValue::Json(v) | ColValue::Blob(v) | ColValue::RawString(v) => v.len(),
             ColValue::Json3(v) => v.to_string().len(),
-            ColValue::MongoDoc(v) => v.to_string().len(),
+            ColValue::MongoDoc(v) => Self::get_bson_size_doc(v),
             ColValue::None => 0,
+        }
+    }
+
+    fn get_bson_size_doc(doc: &Document) -> usize {
+        std::mem::size_of::<Document>()
+            + doc
+                .iter()
+                .map(|(k, v)| k.len() + Self::get_bson_size(v))
+                .sum::<usize>()
+    }
+
+    fn get_bson_size(bson: &Bson) -> usize {
+        match bson {
+            Bson::String(v) | Bson::Symbol(v) | Bson::JavaScriptCode(v) => v.len(),
+            Bson::Array(arr) => arr.iter().map(Self::get_bson_size).sum(),
+            Bson::Document(doc) => Self::get_bson_size_doc(doc),
+            Bson::Binary(v) => v.bytes.len(),
+            Bson::RegularExpression(regex) => regex.pattern.len() + regex.options.len(),
+            Bson::JavaScriptCodeWithScope(code_w_scope) => {
+                code_w_scope.code.len() + Self::get_bson_size_doc(&code_w_scope.scope)
+            }
+            Bson::DbPointer(_) => std::mem::size_of::<Bson>(),
+            _ => std::mem::size_of_val(bson),
+        }
+    }
+
+    fn mongo_doc_to_string(doc: &Document) -> String {
+        // Use Relaxed Extended JSON to make it more human-readable while preserving necessary types.
+        // https://www.mongodb.com/docs/manual/reference/mongodb-extended-json/
+        let bson = Bson::Document(doc.clone());
+        match bson.into_relaxed_extjson() {
+            serde_json::Value::Object(map) => serde_json::Value::Object(map).to_string(),
+            _ => doc.to_string(),
         }
     }
 }
@@ -279,9 +314,39 @@ impl Serialize for ColValue {
             ColValue::Json(v) => serializer.serialize_bytes(v),
             ColValue::Json2(v) => serializer.serialize_str(v),
             ColValue::Json3(v) => v.serialize(serializer),
-            // not supported
-            ColValue::MongoDoc(_) => serializer.serialize_none(),
+            ColValue::MongoDoc(v) => Bson::Document(v.clone())
+                .into_relaxed_extjson()
+                .serialize(serializer),
             ColValue::None => serializer.serialize_none(),
+        }
+    }
+}
+
+impl From<Bson> for ColValue {
+    fn from(bson: Bson) -> Self {
+        match bson {
+            Bson::Double(v) => ColValue::Double(v),
+            Bson::String(v) => ColValue::String(v),
+            Bson::Array(v) => ColValue::Json2(Bson::Array(v).to_string()),
+            Bson::Document(v) => ColValue::MongoDoc(v),
+            Bson::Boolean(v) => ColValue::Bool(v),
+            Bson::Null => ColValue::None,
+            Bson::Int32(v) => ColValue::Long(v),
+            Bson::Int64(v) => ColValue::LongLong(v),
+            Bson::Timestamp(v) => ColValue::Timestamp(format!("{}:{}", v.time, v.increment)),
+            Bson::Binary(v) => ColValue::Blob(v.bytes),
+            Bson::DateTime(v) => ColValue::DateTime(v.to_string()),
+            Bson::Decimal128(v) => ColValue::Decimal(v.to_string()),
+            // others types
+            Bson::ObjectId(v) => ColValue::String(v.to_hex()),
+            Bson::RegularExpression(v) => ColValue::String(v.pattern),
+            Bson::JavaScriptCode(v) => ColValue::String(v),
+            Bson::JavaScriptCodeWithScope(v) => ColValue::String(v.code),
+            Bson::Symbol(v) => ColValue::String(v),
+            Bson::Undefined => ColValue::String("Undefined".into()),
+            Bson::MaxKey => ColValue::String("MaxKey".into()),
+            Bson::MinKey => ColValue::String("MinKey".into()),
+            Bson::DbPointer(v) => ColValue::String(format!("{:?}", v)),
         }
     }
 }

@@ -9,37 +9,29 @@ DROP ROLE IF EXISTS r_seq;
 
 create schema struct_it_pg2pg_rbac;
 
-```
 CREATE TABLE struct_it_pg2pg_rbac.test_1 (
   field1 VARCHAR(255) NOT NULL,
   field2 VARCHAR(255) NOT NULL,
   field3 VARCHAR(255) NOT NULL
 );
-```
 
-```
 CREATE TABLE struct_it_pg2pg_rbac.test_2 (
   field1 VARCHAR(255) NOT NULL,
   field2 VARCHAR(255) NOT NULL,
   field3 VARCHAR(255) NOT NULL
 );
-```
 
-```
 CREATE SEQUENCE struct_it_pg2pg_rbac.custom_seq1
     START WITH 1
     INCREMENT BY 1
     NO MINVALUE
     NO MAXVALUE
     CACHE 1;
-```    
-```
 CREATE TABLE struct_it_pg2pg_rbac.test_3 (
   field1 SERIAL PRIMARY KEY,
   field2 VARCHAR(255) NOT NULL DEFAULT nextval('struct_it_pg2pg_rbac.custom_seq1'::regclass),
   field3 VARCHAR(255) 
 );
-```
 
 create role r1 nologin password '123456';
 create role r2 login password '123456';

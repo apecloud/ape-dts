@@ -1,0 +1,2 @@
+INSERT INTO `test_db_1`.`test_table`(`id`,`name`,`age`,`email`) VALUES(3,'Charlie',35,'charlie@example.com');
+UPDATE `test_db_1`.`test_table` SET `age`=25,`email`='bob@example.com' WHERE `id` = 2 AND `name` = 'Bob' AND `age` = 99 AND `email` = 'bob_updated@example.com';

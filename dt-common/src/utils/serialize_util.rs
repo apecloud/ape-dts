@@ -17,6 +17,21 @@ impl SerializeUtil {
         ordered.serialize(serializer)
     }
 
+    pub fn ordered_option_map<S, K, V>(
+        value: &Option<HashMap<K, V>>,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error>
+    where
+        K: Ord + Serialize,
+        V: Serialize,
+        S: Serializer,
+    {
+        match value {
+            Some(map) => Self::ordered_map(map, serializer),
+            None => serializer.serialize_none(),
+        }
+    }
+
     pub fn serialize_hashmap_to_json<K, V>(value: &HashMap<K, V>) -> anyhow::Result<String>
     where
         K: Ord + Serialize,

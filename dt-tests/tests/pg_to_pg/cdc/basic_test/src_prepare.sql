@@ -89,7 +89,6 @@ CREATE TABLE col_has_special_character_table ("p:k" SERIAL, "col`1" text, "col,2
 DROP TABLE IF EXISTS ignore_cols_1;
 CREATE TABLE ignore_cols_1 ( f_0 smallint, f_1 smallint DEFAULT NULL, f_2 smallint DEFAULT NULL, f_3 smallint DEFAULT NULL, PRIMARY KEY (f_0) );
 
-```
 CREATE TABLE "Upper_Case_DB"."Upper_Case_TB" (
     "Id" INT, 
     "FIELD_1" INT,
@@ -99,9 +98,7 @@ CREATE TABLE "Upper_Case_DB"."Upper_Case_TB" (
     PRIMARY KEY("Id"),
     UNIQUE("FIELD_1", field_2, Field_3)
 );
-```
 
-```
 CREATE TABLE Upper_Case_DB.Upper_Case_TB (
     "Id" INT, 
     "FIELD_1" INT,
@@ -111,4 +108,3 @@ CREATE TABLE Upper_Case_DB.Upper_Case_TB (
     PRIMARY KEY("Id"),
     UNIQUE("FIELD_1", field_2, Field_3)
 );
-```

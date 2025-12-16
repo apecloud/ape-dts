@@ -1,0 +1,1 @@
+drop schema if exists struct_check_test_1 CASCADE;

@@ -1,0 +1,1 @@
+{"schema":"test_db_1","tb":"test_table","id_col_values":{"id":"3"},"src_row":{"age":35,"email":"charlie@example.com","id":3,"name":"Charlie"}}

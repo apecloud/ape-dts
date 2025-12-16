@@ -16,7 +16,6 @@ CREATE TABLE test_db_1.col_has_special_character_table (`p:k` tinyint, `col"1` t
 
 CREATE TABLE test_db_1.numeric_table ( f_0 tinyint, f_1 tinyint unsigned, f_2 smallint, f_3 smallint unsigned, f_4 mediumint, f_5 mediumint unsigned, f_6 int, f_7 int unsigned, f_8 bigint, f_9 bigint unsigned, PRIMARY KEY(f_0));
 
-```
 CREATE TABLE test_db_1.date_time_table( f_0 tinyint, 
     f_1 datetime DEFAULT NULL, 
     f_2 datetime(6) DEFAULT NULL, 
@@ -27,13 +26,10 @@ CREATE TABLE test_db_1.date_time_table( f_0 tinyint,
     f_7 date DEFAULT NULL, 
     f_8 year DEFAULT NULL,
     PRIMARY KEY(f_0));
-```
 
-```
 CREATE TABLE test_db_1.set_table( f_0 tinyint,
     f_1 SET('a','b','c','d','e'),
     PRIMARY KEY(f_0));
-```
 
 CREATE TABLE test_db_1.ignore_cols_1 ( f_0 tinyint, f_1 smallint DEFAULT NULL, f_2 smallint DEFAULT NULL, f_3 smallint DEFAULT NULL, PRIMARY KEY (f_0) ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4; 
 CREATE TABLE test_db_1.ignore_cols_2 ( f_0 tinyint, f_1 smallint DEFAULT NULL, f_2 smallint DEFAULT NULL, f_3 smallint DEFAULT NULL, PRIMARY KEY (f_0) ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4; 

@@ -1,8 +1,8 @@
-key: index.struct_it_pg2pg_1.full_index_type.fulltext_index, src_sql: CREATE INDEX IF NOT EXISTS "fulltext_index" ON "struct_it_pg2pg_1"."full_index_type" USING gin (fulltext_col) TABLESPACE pg_default
+key: index.struct_it_pg2pg_1.full_index_type.fulltext_index, src_sql: CREATE INDEX IF NOT EXISTS "fulltext_index" ON "struct_it_pg2pg_1"."full_index_type" USING gin (fulltext_col)
 key: constraint.struct_it_pg2pg_1.full_index_type.full_index_type_check_col_check, src_sql: ALTER TABLE "struct_it_pg2pg_1"."full_index_type" ADD CONSTRAINT "full_index_type_check_col_check" CHECK ((char_length((check_col)::text) > 3))
-key: index.struct_it_pg2pg_1.full_index_type.spatial_index, src_sql: CREATE INDEX IF NOT EXISTS "spatial_index" ON "struct_it_pg2pg_1"."full_index_type" USING gist (spatial_col) TABLESPACE pg_default
-key: index.struct_it_pg2pg_1.full_index_type.index_index, src_sql: CREATE INDEX IF NOT EXISTS "index_index" ON "struct_it_pg2pg_1"."full_index_type" USING btree (index_col) TABLESPACE pg_default
-key: index.struct_it_pg2pg_1.full_index_type.simple_index, src_sql: CREATE INDEX IF NOT EXISTS "simple_index" ON "struct_it_pg2pg_1"."full_index_type" USING btree (simple_index_col) TABLESPACE pg_default
-key: index.struct_it_pg2pg_1.full_index_type.composite_index, src_sql: CREATE INDEX IF NOT EXISTS "composite_index" ON "struct_it_pg2pg_1"."full_index_type" USING btree (composite_index_col1, composite_index_col2, composite_index_col3) TABLESPACE pg_default
+key: index.struct_it_pg2pg_1.full_index_type.spatial_index, src_sql: CREATE INDEX IF NOT EXISTS "spatial_index" ON "struct_it_pg2pg_1"."full_index_type" USING gist (spatial_col)
+key: index.struct_it_pg2pg_1.full_index_type.index_index, src_sql: CREATE INDEX IF NOT EXISTS "index_index" ON "struct_it_pg2pg_1"."full_index_type" USING btree (index_col)
+key: index.struct_it_pg2pg_1.full_index_type.simple_index, src_sql: CREATE INDEX IF NOT EXISTS "simple_index" ON "struct_it_pg2pg_1"."full_index_type" USING btree (simple_index_col)
+key: index.struct_it_pg2pg_1.full_index_type.composite_index, src_sql: CREATE INDEX IF NOT EXISTS "composite_index" ON "struct_it_pg2pg_1"."full_index_type" USING btree (composite_index_col1, composite_index_col2, composite_index_col3)
 key: constraint.struct_it_pg2pg_1.foreign_key_child.fk_test_2, src_sql: ALTER TABLE "struct_it_pg2pg_1"."foreign_key_child" ADD CONSTRAINT "fk_test_2" FOREIGN KEY (child_col_2) REFERENCES struct_it_pg2pg_1.foreign_key_parent(parent_col_2)
 key: constraint.struct_it_pg2pg_1.foreign_key_child.fk_test_1, src_sql: ALTER TABLE "struct_it_pg2pg_1"."foreign_key_child" ADD CONSTRAINT "fk_test_1" FOREIGN KEY (child_col_1) REFERENCES struct_it_pg2pg_1.foreign_key_parent(parent_col_1)

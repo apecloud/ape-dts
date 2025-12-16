@@ -73,12 +73,12 @@ impl ClickhouseSinker {
             Self::convert_row_data(row_data)?;
 
             let col_values = if row_data.row_type == RowType::Delete {
-                let before = row_data.before.as_mut().unwrap();
+                let before = row_data.require_before_mut()?;
                 // SIGN_COL value
                 before.insert(SIGN_COL_NAME.into(), ColValue::Long(1));
                 before
             } else {
-                row_data.after.as_mut().unwrap()
+                row_data.require_after_mut()?
             };
 
             col_values.insert(

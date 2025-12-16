@@ -13,6 +13,8 @@ pub enum SinkerConfig {
         batch_size: usize,
         replace: bool,
         disable_foreign_key_checks: bool,
+        // Specifies the transaction isolation level used for writes. The database default is used if not specified.
+        // If ReadCommitted or ReadUncommitted is set, the target database must have BINLOG_FORMAT set to at least MIXED (ROW is recommended). Otherwise, write operations will fail.
         transaction_isolation: RdbTransactionIsolation,
     },
 
@@ -33,12 +35,20 @@ pub enum SinkerConfig {
         url: String,
         batch_size: usize,
         check_log_dir: String,
+        check_log_file_size: String,
+        output_full_row: bool,
+        output_revise_sql: bool,
+        revise_match_full_row: bool,
     },
 
     PgCheck {
         url: String,
         batch_size: usize,
         check_log_dir: String,
+        check_log_file_size: String,
+        output_full_row: bool,
+        output_revise_sql: bool,
+        revise_match_full_row: bool,
     },
 
     MongoCheck {
@@ -46,6 +56,9 @@ pub enum SinkerConfig {
         app_name: String,
         batch_size: usize,
         check_log_dir: String,
+        check_log_file_size: String,
+        output_full_row: bool,
+        output_revise_sql: bool,
     },
 
     MysqlStruct {

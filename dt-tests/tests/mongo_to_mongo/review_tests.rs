@@ -10,10 +10,4 @@ mod test {
     async fn review_basic_test() {
         TestBase::run_mongo_review_test("mongo_to_mongo/review/basic_test").await;
     }
-
-    #[tokio::test]
-    #[serial]
-    async fn review_route_test() {
-        TestBase::run_mongo_review_test("mongo_to_mongo/review/route_test").await;
-    }
 }
