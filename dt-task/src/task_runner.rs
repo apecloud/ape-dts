@@ -852,7 +852,7 @@ impl TaskRunner {
                 .filter(|schema| !filter.filter_schema(schema))
                 .map(|s| s.to_owned())
                 .collect::<Vec<_>>();
-        if schemas.len() == 0 {
+        if schemas.is_empty() {
             log_warn!("no schemas to extract");
             return Ok(pending_tasks);
         }
@@ -899,14 +899,13 @@ impl TaskRunner {
                 ExtractorConfig::PgStruct {
                     url,
                     schema,
-                    do_global_structs,
                     db_batch_size,
                     ..
                 } => ExtractorConfig::PgStruct {
                     url: url.clone(),
                     schema: schema.clone(),
                     schemas,
-                    do_global_structs: *do_global_structs,
+                    do_global_structs: true,
                     db_batch_size: *db_batch_size,
                 },
                 _ => {

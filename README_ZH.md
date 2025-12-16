@@ -4,6 +4,7 @@
 
 - ape-dts 是一款旨在实现 any-to-any 的数据迁移工具，并具有数据订阅和数据加工能力。
 - 简单、轻量、高效，不依赖第三方组件和额外存储。
+- 面向云原生无状态组件场景设计
 - 使用 Rust。
 
 ## 主要特性
@@ -18,8 +19,6 @@
 ## 支持任务类型
 
 目前支持的成熟任务类型：
-
-<br/>
 
 |                    | mysql -> mysql | pg -> pg | mongo -> mongo | redis -> redis | mysql -> kafka | pg -> kafka | mysql -> starrocks | mysql -> clickhouse | mysql -> tidb | pg -> starrocks | pg -> clickhouse | mysql -> doris | pg -> doris |
 | :----------------- | :------------- | :------- | :------------- | :------------- | :------------- | :---------- | :----------------- | :------------------ | :------------ | :-------------- | :--------------- | :------------- | :---------- |
@@ -174,6 +173,11 @@ dt-main crate 提供了几个可选组件，可以通过 `Cargo [features]` 启�
 
 - 执行 `cargo clippy --all-targets --all-features --workspace` 并修复所有警告
 
-# 技术交流
+## 社区
 
-[Slack 社区](https://join.slack.com/t/kubeblocks/shared_invite/zt-22cx2f84x-BPZvnLRqBOGdZ_XSjELh4Q)
+如有任何问题，欢迎通过以下方式联系我们：
+
+- ApeDTS GitHub [讨论区](https://github.com/apecloud/ape-dts/discussions)
+- ApeDTS 微信公众号，添加时请备注 **ape-dts**：
+
+  <img src=".\docs\img\wechat-assistant.png" alt="wechat" width="100" height="100" style="margin-top:10px">

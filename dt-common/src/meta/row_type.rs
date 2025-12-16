@@ -11,6 +11,13 @@ pub enum RowType {
     Delete,
 }
 
+#[derive(PartialEq)]
+pub enum RowSqlType {
+    DML,
+    DDL,
+    DCL,
+}
+
 #[test]
 fn test_row_type() {
     assert_eq!(RowType::Insert.to_string(), "insert");
