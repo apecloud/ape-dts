@@ -8,3 +8,4 @@ pub mod mysql;
 pub mod pg;
 pub mod redis;
 pub mod resumer;
+pub mod splitter;

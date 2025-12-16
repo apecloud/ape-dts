@@ -93,6 +93,25 @@ pub enum MysqlColType {
 }
 
 impl MysqlColType {
+    pub fn is_integer(&self) -> bool {
+        matches!(
+            self,
+            Self::TinyInt { .. }
+                | Self::SmallInt { .. }
+                | Self::MediumInt { .. }
+                | Self::Int { .. }
+                | Self::BigInt { .. }
+        )
+    }
+
+    pub fn is_float(&self) -> bool {
+        matches!(self, Self::Float | Self::Double)
+    }
+
+    pub fn is_decimal(&self) -> bool {
+        matches!(self, Self::Decimal { .. })
+    }
+
     pub fn is_string(&self) -> bool {
         matches!(
             self,
