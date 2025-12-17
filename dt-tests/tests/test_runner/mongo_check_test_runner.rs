@@ -33,7 +33,7 @@ impl MongoCheckTestRunner {
         CheckUtil::validate_check_log(&self.expect_check_log_dir, &self.dst_check_log_dir)
     }
 
-    pub async fn run_check_recover_test(&self, delay_secs: u64) -> anyhow::Result<()> {
+    pub async fn run_recheck_test(&self, delay_secs: u64) -> anyhow::Result<()> {
         CheckUtil::clear_check_log(&self.dst_check_log_dir);
 
         self.base.execute_prepare_sqls().await?;

@@ -31,12 +31,6 @@ pub struct ReviseSqlContext<'a> {
     pub match_full_row: bool,
 }
 
-#[derive(Clone, Copy)]
-pub struct RecheckConfig {
-    pub delay_ms: u64,
-    pub times: u32,
-}
-
 pub enum CheckResult {
     Ok,
     Miss,
@@ -208,7 +202,8 @@ impl BaseChecker {
         mut dst_row_data_map: HashMap<u128, RowData>,
         range: BatchCompareRange,
         ctx: BatchCompareContext<'_>,
-        recheck_config: RecheckConfig,
+        recheck_delay_secs: u64,
+        recheck_times: u32,
         fetch_latest_row: F,
     ) -> anyhow::Result<(Vec<CheckLog>, Vec<CheckLog>, usize)>
     where
@@ -239,11 +234,14 @@ impl BaseChecker {
             let hash_code = src_row_data.get_hash_code(dst_tb_meta)?;
             let dst_row_data = dst_row_data_map.remove(&hash_code);
 
-            let (check_result, final_dst_row) =
-                Self::check_row_with_retry(src_row_data, dst_row_data, recheck_config, |row| {
-                    fetch_latest_row(hash_code, row)
-                })
-                .await?;
+            let (check_result, final_dst_row) = Self::check_row_with_retry(
+                src_row_data,
+                dst_row_data,
+                recheck_delay_secs,
+                recheck_times,
+                |row| fetch_latest_row(hash_code, row),
+            )
+            .await?;
 
             match check_result {
                 CheckResult::Diff(diff_col_values) => {
@@ -303,7 +301,8 @@ impl BaseChecker {
 
     pub async fn check_struct_with_retry<F, Fut>(
         mut data: Vec<StructData>,
-        recheck_config: RecheckConfig,
+        recheck_delay_secs: u64,
+        recheck_times: u32,
         filter: &RdbFilter,
         output_revise_sql: bool,
         fetch_dst_struct: F,
@@ -331,10 +330,10 @@ impl BaseChecker {
                 miss + diff + extra > 0
             };
 
-            if inconsistent && recheck_config.times > 0 {
-                for _ in 0..recheck_config.times {
-                    if recheck_config.delay_ms > 0 {
-                        sleep(Duration::from_millis(recheck_config.delay_ms)).await;
+            if inconsistent && recheck_times > 0 {
+                for _ in 0..recheck_times {
+                    if recheck_delay_secs > 0 {
+                        sleep(Duration::from_secs(recheck_delay_secs)).await;
                     }
 
                     dst_statement = fetch_dst_struct(src_for_fetch.clone()).await?;
@@ -370,7 +369,8 @@ impl BaseChecker {
     pub async fn check_row_with_retry<F, Fut>(
         src_row: &RowData,
         mut dst_row: Option<RowData>,
-        recheck_config: RecheckConfig,
+        recheck_delay_secs: u64,
+        recheck_times: u32,
         fetch_latest: F,
     ) -> anyhow::Result<(CheckResult, Option<RowData>)>
     where
@@ -379,10 +379,10 @@ impl BaseChecker {
     {
         let mut check_result = Self::compare_src_dst(src_row, dst_row.as_ref())?;
 
-        if check_result.is_inconsistent() && recheck_config.times > 0 {
-            for _ in 0..recheck_config.times {
-                if recheck_config.delay_ms > 0 {
-                    sleep(Duration::from_millis(recheck_config.delay_ms)).await;
+        if check_result.is_inconsistent() && recheck_times > 0 {
+            for _ in 0..recheck_times {
+                if recheck_delay_secs > 0 {
+                    sleep(Duration::from_secs(recheck_delay_secs)).await;
                 }
 
                 dst_row = fetch_latest(src_row).await?;

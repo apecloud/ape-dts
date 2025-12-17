@@ -41,11 +41,7 @@ impl RdbCheckTestRunner {
         Ok(())
     }
 
-    pub async fn run_check_recover_test(
-        &self,
-        recover_sql: &str,
-        delay_secs: u64,
-    ) -> anyhow::Result<()> {
+    pub async fn run_recheck_test(&self, recover_sql: &str, delay_secs: u64) -> anyhow::Result<()> {
         CheckUtil::clear_check_log(&self.dst_check_log_dir);
         self.base.execute_prepare_sqls().await?;
         self.base.execute_test_sqls().await?;

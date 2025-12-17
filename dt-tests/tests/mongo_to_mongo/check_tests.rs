@@ -37,7 +37,6 @@ mod test {
     #[tokio::test]
     #[serial]
     async fn check_recheck_recover_test() {
-        TestBase::run_mongo_check_recover_test("mongo_to_mongo/recheck/basic_recheck_config", 1)
-            .await;
+        TestBase::run_mongo_recheck_test("mongo_to_mongo/recheck/basic_recheck_config", 1).await;
     }
 }

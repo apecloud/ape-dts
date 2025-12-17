@@ -17,9 +17,7 @@ use crate::{
     rdb_query_builder::RdbQueryBuilder,
     rdb_router::RdbRouter,
     sinker::{
-        base_checker::{
-            BaseChecker, BatchCompareContext, BatchCompareRange, RecheckConfig, ReviseSqlContext,
-        },
+        base_checker::{BaseChecker, BatchCompareContext, BatchCompareRange, ReviseSqlContext},
         base_sinker::BaseSinker,
     },
     Sinker,
@@ -147,10 +145,8 @@ impl PgChecker {
             .output_revise_sql
             .then_some(ReviseSqlContext::pg(tb_meta, self.revise_match_full_row));
 
-        let recheck_config = RecheckConfig {
-            delay_ms: self.recheck_interval_secs.saturating_mul(1000),
-            times: self.recheck_attempts,
-        };
+        let recheck_delay_secs = self.recheck_interval_secs;
+        let recheck_times = self.recheck_attempts;
 
         let mut miss = Vec::new();
         let mut diff = Vec::new();
@@ -173,7 +169,8 @@ impl PgChecker {
             let (check_result, final_dst_row) = BaseChecker::check_row_with_retry(
                 src_row_data,
                 dst_row,
-                recheck_config,
+                recheck_delay_secs,
+                recheck_times,
                 |src_row| {
                     let pool = self.conn_pool.clone();
                     let tb_meta = tb_meta.clone();
@@ -289,10 +286,8 @@ impl PgChecker {
             .output_revise_sql
             .then(|| ReviseSqlContext::pg(tb_meta, self.revise_match_full_row));
 
-        let recheck_config = RecheckConfig {
-            delay_ms: self.recheck_interval_secs.saturating_mul(1000),
-            times: self.recheck_attempts,
-        };
+        let recheck_delay_secs = self.recheck_interval_secs;
+        let recheck_times = self.recheck_attempts;
 
         let ctx = BatchCompareContext {
             dst_tb_meta: &tb_meta.basic,
@@ -327,7 +322,8 @@ impl PgChecker {
             dst_row_data_map,
             compare_range,
             ctx,
-            recheck_config,
+            recheck_delay_secs,
+            recheck_times,
             fetch_latest,
         )
         .await?;
@@ -346,15 +342,14 @@ impl PgChecker {
     }
 
     async fn serial_check_struct(&mut self, data: Vec<StructData>) -> anyhow::Result<()> {
-        let recheck_config = RecheckConfig {
-            delay_ms: self.recheck_interval_secs.saturating_mul(1000),
-            times: self.recheck_attempts,
-        };
+        let recheck_delay_secs = self.recheck_interval_secs;
+        let recheck_times = self.recheck_attempts;
 
         let (miss_count, diff_count, extra_count, sql_count) =
             BaseChecker::check_struct_with_retry(
                 data,
-                recheck_config,
+                recheck_delay_secs,
+                recheck_times,
                 &self.filter,
                 self.output_revise_sql,
                 |src_statement| {
