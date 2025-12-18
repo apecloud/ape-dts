@@ -8,5 +8,4 @@ pub enum Error {
     BadSplitColumnError(String, String),
     #[error("{0} out of distribution factor range [{1},{2}]")]
     OutOfDistributionFactorRangeError(f64, f64, f64),
-
 }

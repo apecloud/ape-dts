@@ -114,7 +114,7 @@ impl ExtractorUtil {
                     db,
                     tb,
                     batch_size,
-                    sample_interval,
+                    sample_interval: sample_interval as u64,
                     parallel_size,
                     base_extractor,
                     filter,
