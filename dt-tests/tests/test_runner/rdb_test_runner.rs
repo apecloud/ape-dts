@@ -73,7 +73,7 @@ impl RdbTestRunner {
                 src_conn_pool_mysql = Some(
                     TaskUtil::create_mysql_conn_pool(
                         src_url,
-                        1,
+                        5,
                         false,
                         mysql_conn_settings.clone(),
                     )
@@ -82,7 +82,7 @@ impl RdbTestRunner {
             }
             DbType::Pg => {
                 src_conn_pool_pg =
-                    Some(TaskUtil::create_pg_conn_pool(src_url, 1, false, true).await?);
+                    Some(TaskUtil::create_pg_conn_pool(src_url, 5, false, true).await?);
             }
             _ => {}
         }
@@ -97,7 +97,7 @@ impl RdbTestRunner {
                     dst_conn_pool_mysql = Some(
                         TaskUtil::create_mysql_conn_pool(
                             dst_url,
-                            1,
+                            5,
                             false,
                             mysql_conn_settings.clone(),
                         )
@@ -106,7 +106,7 @@ impl RdbTestRunner {
                 }
                 DbType::Pg => {
                     dst_conn_pool_pg =
-                        Some(TaskUtil::create_pg_conn_pool(dst_url, 1, false, true).await?);
+                        Some(TaskUtil::create_pg_conn_pool(dst_url, 5, false, true).await?);
                 }
                 _ => {}
             }

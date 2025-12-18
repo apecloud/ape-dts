@@ -19,6 +19,9 @@ cargo test --package dt-tests --test integration_test -- mysql_to_mysql::cdc_tes
   - dst_prepare.sql
   - src_test.sql
   - dst_test.sql
+  - Notes for `*.sql` test files:
+    - Multi-statement SQL must be terminated with `;` (the runner splits statements by `;`).
+    - Avoid `--` inside string/JSON literals (the runner strips inline `-- ...`); if needed, wrap the whole statement in a ``` block.
 
 - Steps for running a test: 
   - 1, execute src_prepare.sql in source database.

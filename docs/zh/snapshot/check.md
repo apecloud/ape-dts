@@ -37,9 +37,9 @@ parallel_type=rdb_check
 差异日志包括库（schema）、表（tb）、主键/唯一键（id_col_values）、差异列的源值和目标值（diff_col_values）。
 
 ```json
-{"log_type":"Diff","schema":"test_db_1","tb":"one_pk_multi_uk","id_col_values":{"f_0":"5"},"diff_col_values":{"f_1":{"src":"5","dst":"5000"},"f_2":{"src":"ok","dst":"after manual update"}}}
-{"log_type":"Diff","schema":"test_db_1","tb":"one_pk_no_uk","id_col_values":{"f_0":"4"},"diff_col_values":{"f_1":{"src":"2","dst":"1"}}}
-{"log_type":"Diff","schema":"test_db_1","tb":"one_pk_no_uk","id_col_values":{"f_0":"6"},"diff_col_values":{"f_1":{"src":null,"dst":"1","src_type":"None","dst_type":"Short"}}}
+{"schema":"test_db_1","tb":"one_pk_multi_uk","id_col_values":{"f_0":"5"},"diff_col_values":{"f_1":{"src":"5","dst":"5000"},"f_2":{"src":"ok","dst":"after manual update"}}}
+{"schema":"test_db_1","tb":"one_pk_no_uk","id_col_values":{"f_0":"4"},"diff_col_values":{"f_1":{"src":"2","dst":"1"}}}
+{"schema":"test_db_1","tb":"one_pk_no_uk","id_col_values":{"f_0":"6"},"diff_col_values":{"f_1":{"src":null,"dst":"1","src_type":"None","dst_type":"Short"}}}
 ```
 
 当源端与目标端的类型不同（如 Int32 对 Int64，或 None 对 Short），`src_type`/`dst_type` 会出现在对应列下，明确标出类型不一致。Mongo 也适用这一规则，差异日志会输出 BSON 类型名称。
@@ -51,9 +51,9 @@ parallel_type=rdb_check
 缺失日志包括库（schema）、表（tb）和主键/唯一键（id_col_values）。由于缺失记录不存在差异列，因此不会输出 `diff_col_values`。
 
 ```json
-{"log_type":"Miss","schema":"test_db_1","tb":"no_pk_one_uk","id_col_values":{"f_1":"8","f_2":"1"}}
-{"log_type":"Miss","schema":"test_db_1","tb":"no_pk_one_uk","id_col_values":{"f_1":null,"f_2":null}}
-{"log_type":"Miss","schema":"test_db_1","tb":"one_pk_multi_uk","id_col_values":{"f_0":"7"}}
+{"schema":"test_db_1","tb":"no_pk_one_uk","id_col_values":{"f_1":"8","f_2":"1"}}
+{"schema":"test_db_1","tb":"no_pk_one_uk","id_col_values":{"f_1":null,"f_2":null}}
+{"schema":"test_db_1","tb":"one_pk_multi_uk","id_col_values":{"f_0":"7"}}
 ```
 
 ## 输出完整行
@@ -69,7 +69,7 @@ output_full_row=true
 
 ```json
 {
-  "log_type": "Diff",
+  
   "schema": "test_db_1",
   "tb": "one_pk_multi_uk",
   "id_col_values": {
@@ -117,7 +117,7 @@ revise_match_full_row=true
 
 ```json
 {
-  "log_type": "Diff",
+  
   "schema": "test_db_1",
   "tb": "one_pk_no_uk",
   "target_schema": "target_db",
@@ -132,7 +132,7 @@ revise_match_full_row=true
 
 ```json
 {
-  "log_type": "Miss",
+  
   "schema": "test_db_1",
   "tb": "test_table",
   "id_col_values": {"id": "3"},
