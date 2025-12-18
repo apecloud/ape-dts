@@ -154,11 +154,11 @@ docker run --rm --network host \
 ## Check results
 - cat /tmp/ape_dts/check_data_task_log/check/miss.log
 ```
-{"schema":"test_db","tb":"tb_1","id_col_values":{"_id":"{\"String\":\"1\"}"},"diff_col_values":{}}
+{"schema":"test_db","tb":"tb_1","id_col_values":{"_id":"\"1\""}}
 ```
 - cat /tmp/ape_dts/check_data_task_log/check/diff.log
 ```
-{"schema":"test_db","tb":"tb_1","id_col_values":{"_id":"{\"String\":\"2\"}"},"diff_col_values":{"doc":{"src":"{ \"_id\": \"2\", \"name\": \"d\", \"age\": \"2\" }","dst":"{ \"_id\": \"2\", \"name\": \"d\", \"age\": 200000 }"}}}
+{"schema":"test_db","tb":"tb_1","id_col_values":{"_id":"\"2\""},"diff_col_values":{"age":{"src":"2","dst":"200000"}}}
 ```
 
 # Revise data

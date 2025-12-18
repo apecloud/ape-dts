@@ -6,8 +6,6 @@ use std::{
 use mongodb::bson::{Bson, Document};
 use serde::{Deserialize, Serialize, Serializer};
 
-use crate::utils::sql_util::SqlUtil;
-
 // #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 // #[serde(tag = "type", content = "value")]
 #[derive(Debug, Clone, PartialEq, Deserialize)]

@@ -15,7 +15,7 @@ use crate::{
     check_log::check_log::CheckSummaryLog,
     rdb_router::RdbRouter,
     sinker::{
-        base_checker::{BaseChecker, CheckResult, ReviseSqlContext},
+        base_checker::{BaseChecker, CheckInconsistency, ReviseSqlContext},
         base_sinker::BaseSinker,
     },
     Sinker,
@@ -79,8 +79,8 @@ impl MongoChecker {
     async fn batch_check(
         &mut self,
         data: &mut [RowData],
-        start_index: usize,
-        batch_size: usize,
+        start: usize,
+        batch: usize,
     ) -> anyhow::Result<()> {
         let schema = &data[0].schema;
         let tb = &data[0].tb;
@@ -93,7 +93,7 @@ impl MongoChecker {
         let mut ids = Vec::new();
         let mut src_row_data_map: HashMap<MongoKey, &RowData> = HashMap::new();
 
-        for row_data in data.iter().skip(start_index).take(batch_size) {
+        for row_data in data.iter().skip(start).take(batch) {
             let after = row_data.require_after()?;
 
             let doc = after
@@ -206,7 +206,7 @@ impl MongoChecker {
             .await?;
 
             match check_result {
-                CheckResult::Diff(diff_col_values) => {
+                Some(CheckInconsistency::Diff(diff_col_values)) => {
                     let dst_row = final_dst_row
                         .as_ref()
                         .expect("diff result should have a dst row");
@@ -231,7 +231,7 @@ impl MongoChecker {
                     )?;
                     diff.push(diff_log);
                 }
-                CheckResult::Miss => {
+                Some(CheckInconsistency::Miss) => {
                     let revise_sql = revise_ctx
                         .as_ref()
                         .map(|ctx| ctx.build_miss_sql(src_row_data))
@@ -251,7 +251,7 @@ impl MongoChecker {
                     )?;
                     miss.push(miss_log);
                 }
-                CheckResult::Ok => {}
+                None => {}
             }
         }
         BaseChecker::log_dml(&miss, &diff);
@@ -263,7 +263,7 @@ impl MongoChecker {
             self.summary.sql_count = Some(self.summary.sql_count.unwrap_or(0) + sql_count);
         }
 
-        BaseSinker::update_batch_monitor(&self.monitor, batch_size as u64, 0).await
+        Ok(())
     }
 
     fn mock_tb_meta(schema: &str, tb: &str) -> RdbTbMeta {

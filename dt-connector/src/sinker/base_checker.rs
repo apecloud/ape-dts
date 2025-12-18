@@ -31,17 +31,12 @@ pub struct ReviseSqlContext<'a> {
     pub match_full_row: bool,
 }
 
-pub enum CheckResult {
-    Ok,
+pub enum CheckInconsistency {
     Miss,
     Diff(HashMap<String, DiffColValue>),
 }
 
-impl CheckResult {
-    pub fn is_inconsistent(&self) -> bool {
-        !matches!(self, CheckResult::Ok)
-    }
-}
+pub type CheckResult = Option<CheckInconsistency>;
 
 impl<'a> ReviseSqlContext<'a> {
     pub fn mysql(meta: &'a MysqlTbMeta, match_full_row: bool) -> Self {
@@ -183,12 +178,9 @@ impl<'a> ReviseSqlContext<'a> {
 
 pub struct BaseChecker {}
 
-pub struct BatchCompareRange {
-    pub start_index: usize,
-    pub batch_size: usize,
-}
-
 pub struct BatchCompareContext<'ctx> {
+    pub start: usize,
+    pub batch: usize,
     pub dst_tb_meta: &'ctx RdbTbMeta,
     pub extractor_meta_manager: &'ctx mut RdbMetaManager,
     pub reverse_router: &'ctx RdbRouter,
@@ -200,7 +192,6 @@ impl BaseChecker {
     pub async fn batch_compare_row_data_items<F, Fut>(
         src_data: &[RowData],
         mut dst_row_data_map: HashMap<u128, RowData>,
-        range: BatchCompareRange,
         ctx: BatchCompareContext<'_>,
         recheck_delay_secs: u64,
         recheck_times: u32,
@@ -211,20 +202,18 @@ impl BaseChecker {
         Fut: Future<Output = anyhow::Result<Option<RowData>>>,
     {
         let BatchCompareContext {
+            start,
+            batch,
             dst_tb_meta,
             extractor_meta_manager,
             reverse_router,
             output_full_row,
             revise_ctx,
         } = ctx;
-
-        let start = range.start_index;
-        let end = (start + range.batch_size).min(src_data.len());
-
         if start >= src_data.len() {
             return Ok((Vec::new(), Vec::new(), 0));
         }
-
+        let end = (start + batch).min(src_data.len());
         let target_slice = &src_data[start..end];
         let mut miss = Vec::new();
         let mut diff = Vec::new();
@@ -244,7 +233,7 @@ impl BaseChecker {
             .await?;
 
             match check_result {
-                CheckResult::Diff(diff_col_values) => {
+                Some(CheckInconsistency::Diff(diff_col_values)) => {
                     let dst_row = final_dst_row
                         .as_ref()
                         .expect("diff result should have a dst row");
@@ -271,7 +260,7 @@ impl BaseChecker {
                     .await?;
                     diff.push(diff_log);
                 }
-                CheckResult::Miss => {
+                Some(CheckInconsistency::Miss) => {
                     let revise_sql = revise_ctx
                         .as_ref()
                         .map(|ctx| ctx.build_miss_sql(src_row_data))
@@ -292,7 +281,7 @@ impl BaseChecker {
                     .await?;
                     miss.push(miss_log);
                 }
-                CheckResult::Ok => {}
+                None => {}
             }
         }
 
@@ -322,15 +311,15 @@ impl BaseChecker {
 
             let mut dst_statement = fetch_dst_struct(src_for_fetch.clone()).await?;
 
-            let mut inconsistent = {
+            let mut inconsistency = {
                 let mut src_clone = src_for_fetch.clone();
                 let mut dst_clone = dst_statement.clone();
                 let (miss, diff, extra) =
-                    Self::compare_struct_without_log(&mut src_clone, &mut dst_clone, filter)?;
+                    Self::compare_struct_metadata(&mut src_clone, &mut dst_clone, filter)?;
                 miss + diff + extra > 0
             };
 
-            if inconsistent && recheck_times > 0 {
+            if inconsistency && recheck_times > 0 {
                 for _ in 0..recheck_times {
                     if recheck_delay_secs > 0 {
                         sleep(Duration::from_secs(recheck_delay_secs)).await;
@@ -341,16 +330,16 @@ impl BaseChecker {
                     let mut src_clone = src_for_fetch.clone();
                     let mut dst_clone = dst_statement.clone();
                     let (miss, diff, extra) =
-                        Self::compare_struct_without_log(&mut src_clone, &mut dst_clone, filter)?;
-                    inconsistent = miss + diff + extra > 0;
-                    if !inconsistent {
+                        Self::compare_struct_metadata(&mut src_clone, &mut dst_clone, filter)?;
+                    inconsistency = miss + diff + extra > 0;
+                    if !inconsistency {
                         break;
                     }
                 }
             }
 
-            if inconsistent {
-                let (miss_count, diff_count, extra_count, sql_count) = Self::compare_struct(
+            if inconsistency {
+                let (miss_count, diff_count, extra_count, sql_count) = Self::compare_struct_all(
                     src_statement,
                     &mut dst_statement,
                     filter,
@@ -379,7 +368,7 @@ impl BaseChecker {
     {
         let mut check_result = Self::compare_src_dst(src_row, dst_row.as_ref())?;
 
-        if check_result.is_inconsistent() && recheck_times > 0 {
+        if check_result.is_some() && recheck_times > 0 {
             for _ in 0..recheck_times {
                 if recheck_delay_secs > 0 {
                     sleep(Duration::from_secs(recheck_delay_secs)).await;
@@ -388,7 +377,7 @@ impl BaseChecker {
                 dst_row = fetch_latest(src_row).await?;
 
                 check_result = Self::compare_src_dst(src_row, dst_row.as_ref())?;
-                if !check_result.is_inconsistent() {
+                if check_result.is_none() {
                     break;
                 }
             }
@@ -404,12 +393,12 @@ impl BaseChecker {
         if let Some(dst_row) = dst_row {
             let diffs = Self::compare_row_data(src_row, dst_row)?;
             if diffs.is_empty() {
-                Ok(CheckResult::Ok)
+                Ok(None)
             } else {
-                Ok(CheckResult::Diff(diffs))
+                Ok(Some(CheckInconsistency::Diff(diffs)))
             }
         } else {
-            Ok(CheckResult::Miss)
+            Ok(Some(CheckInconsistency::Miss))
         }
     }
 
@@ -483,7 +472,7 @@ impl BaseChecker {
         }
     }
 
-    pub fn compare_struct(
+    pub fn compare_struct_all(
         src_statement: &mut StructStatement,
         dst_statement: &mut StructStatement,
         filter: &RdbFilter,
@@ -560,7 +549,7 @@ impl BaseChecker {
         Ok((miss_count, diff_count, extra_count, sql_count))
     }
 
-    pub fn compare_struct_without_log(
+    pub fn compare_struct_metadata(
         src_statement: &mut StructStatement,
         dst_statement: &mut StructStatement,
         filter: &RdbFilter,

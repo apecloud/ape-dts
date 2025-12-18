@@ -8,12 +8,7 @@ mod test {
     #[tokio::test]
     #[serial]
     async fn check_recheck_recover_test() {
-        TestBase::run_recheck_test(
-            "mysql_to_mysql/check/recheck_recover",
-            "UPDATE test_db_1.recheck_table SET name='Bob' WHERE id=2",
-            2,
-        )
-        .await;
+        TestBase::run_recheck_test("mysql_to_mysql/check/recheck_recover", 1).await;
     }
 
     #[tokio::test]
@@ -82,6 +77,12 @@ mod test {
     async fn check_size_limit_test() {
         // gen log, and verify log size limit
         TestBase::run_check_test("mysql_to_mysql/check/log_size_limit_test").await;
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn check_recheck_struct_recover_test() {
+        TestBase::run_recheck_test("mysql_to_mysql/check/recheck_struct_recover", 1).await;
     }
 
     #[tokio::test]

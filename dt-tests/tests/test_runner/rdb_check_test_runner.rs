@@ -41,21 +41,25 @@ impl RdbCheckTestRunner {
         Ok(())
     }
 
-    pub async fn run_recheck_test(&self, recover_sql: &str, delay_secs: u64) -> anyhow::Result<()> {
+    pub async fn run_recheck_test(&self, delay_secs: u64) -> anyhow::Result<()> {
         CheckUtil::clear_check_log(&self.dst_check_log_dir);
         self.base.execute_prepare_sqls().await?;
         self.base.execute_test_sqls().await?;
 
         let pool_mysql = self.base.dst_conn_pool_mysql.clone();
         let pool_pg = self.base.dst_conn_pool_pg.clone();
-        let sql = recover_sql.to_string();
+        let sqls = self.base.base.src_test_sqls.clone();
         tokio::spawn(async move {
             tokio::time::sleep(tokio::time::Duration::from_secs(delay_secs)).await;
             if let Some(pool) = pool_mysql {
-                sqlx::query(&sql).execute(&pool).await.unwrap();
+                for sql in &sqls {
+                    sqlx::query(sql).execute(&pool).await.unwrap();
+                }
             }
             if let Some(pool) = pool_pg {
-                sqlx::query(&sql).execute(&pool).await.unwrap();
+                for sql in &sqls {
+                    sqlx::query(sql).execute(&pool).await.unwrap();
+                }
             }
         });
 

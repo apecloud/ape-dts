@@ -17,7 +17,7 @@ use crate::{
     rdb_query_builder::RdbQueryBuilder,
     rdb_router::RdbRouter,
     sinker::{
-        base_checker::{BaseChecker, BatchCompareContext, BatchCompareRange, ReviseSqlContext},
+        base_checker::{BaseChecker, BatchCompareContext, ReviseSqlContext},
         base_sinker::BaseSinker,
     },
     Sinker,
@@ -144,7 +144,7 @@ impl MysqlChecker {
         let tb_meta = self.meta_manager.get_tb_meta_by_row_data(&data[0]).await?;
         let revise_ctx = self
             .output_revise_sql
-            .then_some(ReviseSqlContext::mysql(tb_meta, self.revise_match_full_row));
+            .then(|| ReviseSqlContext::mysql(tb_meta, self.revise_match_full_row));
 
         let recheck_delay_secs = self.recheck_interval_secs;
         let recheck_times = self.recheck_attempts;
@@ -193,7 +193,7 @@ impl MysqlChecker {
             .await?;
 
             match check_result {
-                crate::sinker::base_checker::CheckResult::Diff(diff_col_values) => {
+                Some(crate::sinker::base_checker::CheckInconsistency::Diff(diff_col_values)) => {
                     let dst_row = final_dst_row
                         .as_ref()
                         .expect("diff result should have a dst row");
@@ -219,7 +219,7 @@ impl MysqlChecker {
                     }
                     diff.push(diff_log);
                 }
-                crate::sinker::base_checker::CheckResult::Miss => {
+                Some(crate::sinker::base_checker::CheckInconsistency::Miss) => {
                     let revise_sql = revise_ctx
                         .as_ref()
                         .map(|ctx| ctx.build_miss_sql(src_row_data))
@@ -239,7 +239,7 @@ impl MysqlChecker {
                     }
                     miss.push(miss_log);
                 }
-                crate::sinker::base_checker::CheckResult::Ok => {}
+                None => {}
             }
         }
         BaseChecker::log_dml(&miss, &diff);
@@ -251,8 +251,8 @@ impl MysqlChecker {
     async fn batch_check(
         &mut self,
         data: &mut [RowData],
-        start_index: usize,
-        batch_size: usize,
+        start: usize,
+        batch: usize,
     ) -> anyhow::Result<()> {
         let tb_meta_owned = self
             .meta_manager
@@ -263,7 +263,7 @@ impl MysqlChecker {
         let query_builder = RdbQueryBuilder::new_for_mysql(tb_meta, None);
 
         // build fetch dst sql
-        let query_info = query_builder.get_batch_select_query(data, start_index, batch_size)?;
+        let query_info = query_builder.get_batch_select_query(data, start, batch)?;
         let query = query_builder.create_mysql_query(&query_info)?;
 
         // fetch dst
@@ -279,10 +279,6 @@ impl MysqlChecker {
             dst_row_data_map.insert(hash_code, row_data);
         }
 
-        let compare_range = BatchCompareRange {
-            start_index,
-            batch_size,
-        };
         let revise_ctx = self
             .output_revise_sql
             .then(|| ReviseSqlContext::mysql(tb_meta, self.revise_match_full_row));
@@ -291,6 +287,8 @@ impl MysqlChecker {
         let recheck_times = self.recheck_attempts;
 
         let ctx = BatchCompareContext {
+            start,
+            batch,
             dst_tb_meta: &tb_meta.basic,
             extractor_meta_manager: &mut self.extractor_meta_manager,
             reverse_router: &self.reverse_router,
@@ -321,7 +319,6 @@ impl MysqlChecker {
         let (miss, diff, sql_count) = BaseChecker::batch_compare_row_data_items(
             data,
             dst_row_data_map,
-            compare_range,
             ctx,
             recheck_delay_secs,
             recheck_times,
@@ -338,7 +335,7 @@ impl MysqlChecker {
             self.summary.sql_count = Some(self.summary.sql_count.unwrap_or(0) + sql_count);
         }
 
-        BaseSinker::update_batch_monitor(&self.monitor, batch_size as u64, 0).await?;
+        BaseSinker::update_batch_monitor(&self.monitor, batch as u64, 0).await?;
         BaseSinker::update_monitor_rt(&self.monitor, &rts).await
     }
 

@@ -135,12 +135,9 @@ impl TestBase {
         runner.close().await.unwrap();
     }
 
-    pub async fn run_recheck_test(test_dir: &str, recover_sql: &str, delay_secs: u64) {
+    pub async fn run_recheck_test(test_dir: &str, delay_secs: u64) {
         let runner = RdbCheckTestRunner::new(test_dir).await.unwrap();
-        runner
-            .run_recheck_test(recover_sql, delay_secs)
-            .await
-            .unwrap();
+        runner.run_recheck_test(delay_secs).await.unwrap();
         runner.close().await.unwrap();
     }
 

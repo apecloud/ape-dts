@@ -62,11 +62,6 @@ mod test {
     #[tokio::test]
     #[serial]
     async fn check_recheck_recover_test() {
-        TestBase::run_recheck_test(
-            "pg_to_pg/recheck/basic_recheck_config",
-            "UPDATE public.recheck_table SET name='Bob' WHERE id=2",
-            1,
-        )
-        .await;
+        TestBase::run_recheck_test("pg_to_pg/check/recheck_recover", 1).await;
     }
 }
