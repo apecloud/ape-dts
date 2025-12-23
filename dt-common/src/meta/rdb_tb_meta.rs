@@ -32,6 +32,11 @@ impl RdbTbMeta {
             .collect()
     }
 
+    #[inline(always)]
+    pub fn is_col_nullable(&self, col: &str) -> bool {
+        self.nullable_cols.contains(col)
+    }
+
     pub fn build_position(
         &self,
         db_type: &DbType,
@@ -51,6 +56,25 @@ impl RdbTbMeta {
             1 => Some(OrderKey::Single(order_col_values[0].clone())),
             _ => Some(OrderKey::Composite(order_col_values.clone())),
         };
+        Position::RdbSnapshot {
+            db_type: db_type.to_string(),
+            schema: self.schema.clone(),
+            tb: self.tb.clone(),
+            order_key,
+        }
+    }
+
+    pub fn build_position_for_partition(
+        &self,
+        db_type: &DbType,
+        partition_col: &str,
+        partition_col_value: &ColValue,
+    ) -> Position {
+        // partion_col can be defined by user, not necessarily in order_cols
+        let order_key = Some(OrderKey::Single((
+            partition_col.to_string(),
+            partition_col_value.to_option_string(),
+        )));
         Position::RdbSnapshot {
             db_type: db_type.to_string(),
             schema: self.schema.clone(),

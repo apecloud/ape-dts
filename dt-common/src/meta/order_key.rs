@@ -2,10 +2,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
 pub enum OrderKey {
-    #[serde(rename = "single")]
     Single((String, Option<String>)),
-    #[serde(rename = "composite")]
     Composite(Vec<(String, Option<String>)>),
 }
 
