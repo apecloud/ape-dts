@@ -23,7 +23,7 @@ use dt_common::{log_diff, log_extra, log_miss, log_sql, rdb_filter::RdbFilter};
 pub enum ReviseSqlMeta<'a> {
     Mysql(&'a MysqlTbMeta),
     Pg(&'a PgTbMeta),
-    Mongo,
+    Mongo(&'a RdbTbMeta),
 }
 
 pub struct ReviseSqlContext<'a> {
@@ -53,9 +53,9 @@ impl<'a> ReviseSqlContext<'a> {
         }
     }
 
-    pub fn mongo() -> Self {
+    pub fn mongo(meta: &'a RdbTbMeta) -> Self {
         Self {
-            meta: ReviseSqlMeta::Mongo,
+            meta: ReviseSqlMeta::Mongo(meta),
             match_full_row: false,
         }
     }
@@ -67,7 +67,7 @@ impl<'a> ReviseSqlContext<'a> {
         };
 
         // 1. mongo
-        if let ReviseSqlMeta::Mongo = self.meta {
+        if let ReviseSqlMeta::Mongo(_) = self.meta {
             return Ok(mongo_cmd::build_insert_cmd(src_row_data));
         }
         // 2. rdb
@@ -94,7 +94,7 @@ impl<'a> ReviseSqlContext<'a> {
             return Ok(None);
         }
         // 1. mongo
-        if let ReviseSqlMeta::Mongo = self.meta {
+        if let ReviseSqlMeta::Mongo(_) = self.meta {
             return Ok(mongo_cmd::build_update_cmd(src_row_data, diff_col_values));
         }
         // 2. rdb
@@ -139,7 +139,7 @@ impl<'a> ReviseSqlContext<'a> {
             ReviseSqlMeta::Pg(tb_meta) => RdbQueryBuilder::new_for_pg(tb_meta, None)
                 .get_query_sql(row_data, false)
                 .map(Some),
-            ReviseSqlMeta::Mongo => unreachable!("Mongo should be handled in build_miss_sql"),
+            ReviseSqlMeta::Mongo(_) => unreachable!("Mongo should be handled in build_miss_sql"),
         }
     }
 
@@ -171,127 +171,188 @@ impl<'a> ReviseSqlContext<'a> {
                     .get_query_sql(row_data, false)
                     .map(Some)
             }
-            ReviseSqlMeta::Mongo => unreachable!("Mongo should be handled in build_miss_sql"),
+            ReviseSqlMeta::Mongo(_) => unreachable!("Mongo should be handled in build_miss_sql"),
         }
     }
 }
 
 pub struct BaseChecker {}
 
-pub struct BatchCompareContext<'ctx> {
-    pub start: usize,
-    pub batch: usize,
-    pub dst_tb_meta: &'ctx RdbTbMeta,
-    pub extractor_meta_manager: &'ctx mut RdbMetaManager,
-    pub reverse_router: &'ctx RdbRouter,
+pub struct CheckItemContext<'a> {
+    pub extractor_meta_manager: Option<&'a mut RdbMetaManager>,
+    pub revise_ctx: Option<&'a ReviseSqlContext<'a>>,
+    pub reverse_router: &'a RdbRouter,
     pub output_full_row: bool,
-    pub revise_ctx: Option<&'ctx ReviseSqlContext<'ctx>>,
+    pub tb_meta: &'a RdbTbMeta, // Source table meta for RDB, or mock meta for Mongo
 }
 
 impl BaseChecker {
-    pub async fn batch_compare_row_data_items<F, Fut>(
+    pub async fn batch_compare_row_data_items<K, F, Fut>(
         src_data: &[RowData],
-        mut dst_row_data_map: HashMap<u128, RowData>,
-        ctx: BatchCompareContext<'_>,
+        mut dst_row_data_map: HashMap<K, RowData>,
+        mut ctx: CheckItemContext<'_>,
         recheck_delay_secs: u64,
-        recheck_times: u32,
+        recheck_attempts: u32,
+        get_key: impl Fn(&RowData) -> anyhow::Result<K>,
         fetch_latest_row: F,
     ) -> anyhow::Result<(Vec<CheckLog>, Vec<CheckLog>, usize)>
     where
-        F: Fn(u128, &RowData) -> Fut,
+        K: std::hash::Hash + Eq + Send + Sync + Clone,
+        F: Fn(K, &RowData) -> Fut,
         Fut: Future<Output = anyhow::Result<Option<RowData>>>,
     {
-        let BatchCompareContext {
-            start,
-            batch,
-            dst_tb_meta,
-            extractor_meta_manager,
-            reverse_router,
-            output_full_row,
-            revise_ctx,
-        } = ctx;
-        if start >= src_data.len() {
-            return Ok((Vec::new(), Vec::new(), 0));
-        }
-        let end = (start + batch).min(src_data.len());
-        let target_slice = &src_data[start..end];
         let mut miss = Vec::new();
         let mut diff = Vec::new();
         let mut sql_count = 0;
 
-        for src_row_data in target_slice {
-            let hash_code = src_row_data.get_hash_code(dst_tb_meta)?;
-            let dst_row_data = dst_row_data_map.remove(&hash_code);
+        for src_row_data in src_data {
+            let key = get_key(src_row_data)?;
+            let dst_row_data = dst_row_data_map.remove(&key);
 
-            let (check_result, final_dst_row) = Self::check_row_with_retry(
+            let (check_result, final_dst_row, item_sql_count) = Self::check_and_process_item(
                 src_row_data,
                 dst_row_data,
                 recheck_delay_secs,
-                recheck_times,
-                |row| fetch_latest_row(hash_code, row),
+                recheck_attempts,
+                |r| fetch_latest_row(key.clone(), r),
+                &mut ctx,
             )
             .await?;
 
-            match check_result {
-                Some(CheckInconsistency::Diff(diff_col_values)) => {
-                    let dst_row = final_dst_row
-                        .as_ref()
-                        .expect("diff result should have a dst row");
-
-                    let revise_sql = revise_ctx
-                        .as_ref()
-                        .map(|ctx| ctx.build_diff_sql(src_row_data, dst_row, &diff_col_values))
-                        .transpose()?
-                        .flatten();
-
-                    if let Some(revise_sql) = &revise_sql {
-                        log_sql!("{}", revise_sql);
-                        sql_count += 1;
+            sql_count += item_sql_count;
+            if let Some(res) = check_result {
+                match res {
+                    CheckInconsistency::Miss => {
+                        let log = Self::build_any_miss_log(src_row_data, &mut ctx).await?;
+                        miss.push(log);
                     }
-
-                    let diff_log = Self::build_diff_log(
-                        src_row_data,
-                        dst_row,
-                        diff_col_values,
-                        extractor_meta_manager,
-                        reverse_router,
-                        output_full_row,
-                    )
-                    .await?;
-                    diff.push(diff_log);
-                }
-                Some(CheckInconsistency::Miss) => {
-                    let revise_sql = revise_ctx
-                        .as_ref()
-                        .map(|ctx| ctx.build_miss_sql(src_row_data))
-                        .transpose()?
-                        .flatten();
-
-                    if let Some(revise_sql) = &revise_sql {
-                        log_sql!("{}", revise_sql);
-                        sql_count += 1;
+                    CheckInconsistency::Diff(diff_col_values) => {
+                        let dst_row = final_dst_row.as_ref().context("missing dst row in diff")?;
+                        let log = Self::build_any_diff_log(
+                            src_row_data,
+                            dst_row,
+                            diff_col_values,
+                            &mut ctx,
+                        )
+                        .await?;
+                        diff.push(log);
                     }
-
-                    let miss_log = Self::build_miss_log(
-                        src_row_data,
-                        extractor_meta_manager,
-                        reverse_router,
-                        output_full_row,
-                    )
-                    .await?;
-                    miss.push(miss_log);
                 }
-                None => {}
             }
         }
 
         Ok((miss, diff, sql_count))
     }
 
+    pub async fn check_and_process_item<F, Fut>(
+        src_row_data: &RowData,
+        dst_row_data: Option<RowData>,
+        recheck_delay_secs: u64,
+        recheck_attempts: u32,
+        fetch_latest: F,
+        ctx: &mut CheckItemContext<'_>,
+    ) -> anyhow::Result<(CheckResult, Option<RowData>, usize)>
+    where
+        F: Fn(&RowData) -> Fut,
+        Fut: Future<Output = anyhow::Result<Option<RowData>>>,
+    {
+        let (check_result, final_dst_row) = Self::check_row_with_retry(
+            src_row_data,
+            dst_row_data,
+            recheck_delay_secs,
+            recheck_attempts,
+            fetch_latest,
+        )
+        .await?;
+
+        let mut sql_count = 0;
+        if let Some(res) = &check_result {
+            let revise_sql = match res {
+                CheckInconsistency::Miss => ctx
+                    .revise_ctx
+                    .as_ref()
+                    .map(|c| c.build_miss_sql(src_row_data))
+                    .transpose()?
+                    .flatten(),
+                CheckInconsistency::Diff(diff_col_values) => ctx
+                    .revise_ctx
+                    .as_ref()
+                    .map(|c| {
+                        c.build_diff_sql(
+                            src_row_data,
+                            final_dst_row.as_ref().unwrap(),
+                            diff_col_values,
+                        )
+                    })
+                    .transpose()?
+                    .flatten(),
+            };
+
+            if let Some(sql) = revise_sql {
+                log_sql!("{}", sql);
+                sql_count += 1;
+            }
+        }
+
+        Ok((check_result, final_dst_row, sql_count))
+    }
+
+    pub async fn build_any_miss_log(
+        src_row_data: &RowData,
+        ctx: &mut CheckItemContext<'_>,
+    ) -> anyhow::Result<CheckLog> {
+        match ctx.revise_ctx.map(|c| &c.meta) {
+            Some(ReviseSqlMeta::Mongo(meta)) => Self::build_mongo_miss_log(
+                src_row_data,
+                meta,
+                ctx.reverse_router,
+                ctx.output_full_row,
+            ),
+            _ => Ok(Self::build_miss_log(
+                src_row_data,
+                ctx.extractor_meta_manager
+                    .as_mut()
+                    .context("missing meta manager for rdb")?,
+                ctx.reverse_router,
+                ctx.output_full_row,
+            )
+            .await?),
+        }
+    }
+
+    pub async fn build_any_diff_log(
+        src_row_data: &RowData,
+        dst_row_data: &RowData,
+        diff_col_values: HashMap<String, DiffColValue>,
+        ctx: &mut CheckItemContext<'_>,
+    ) -> anyhow::Result<CheckLog> {
+        match ctx.revise_ctx.map(|c| &c.meta) {
+            Some(ReviseSqlMeta::Mongo(meta)) => Self::build_mongo_diff_log(
+                src_row_data,
+                dst_row_data,
+                diff_col_values,
+                meta,
+                ctx.reverse_router,
+                ctx.output_full_row,
+            ),
+            _ => Ok(Self::build_diff_log(
+                src_row_data,
+                dst_row_data,
+                diff_col_values,
+                ctx.extractor_meta_manager
+                    .as_mut()
+                    .context("missing meta manager for rdb")?,
+                ctx.reverse_router,
+                ctx.output_full_row,
+            )
+            .await?),
+        }
+    }
+
     pub async fn check_struct_with_retry<F, Fut>(
         mut data: Vec<StructData>,
         recheck_delay_secs: u64,
-        recheck_times: u32,
+        recheck_attempts: u32,
         filter: &RdbFilter,
         output_revise_sql: bool,
         fetch_dst_struct: F,
@@ -319,8 +380,8 @@ impl BaseChecker {
                 miss + diff + extra > 0
             };
 
-            if inconsistency && recheck_times > 0 {
-                for _ in 0..recheck_times {
+            if inconsistency && recheck_attempts > 0 {
+                for _ in 0..recheck_attempts {
                     if recheck_delay_secs > 0 {
                         sleep(Duration::from_secs(recheck_delay_secs)).await;
                     }
@@ -359,7 +420,7 @@ impl BaseChecker {
         src_row: &RowData,
         mut dst_row: Option<RowData>,
         recheck_delay_secs: u64,
-        recheck_times: u32,
+        recheck_attempts: u32,
         fetch_latest: F,
     ) -> anyhow::Result<(CheckResult, Option<RowData>)>
     where
@@ -368,8 +429,8 @@ impl BaseChecker {
     {
         let mut check_result = Self::compare_src_dst(src_row, dst_row.as_ref())?;
 
-        if check_result.is_some() && recheck_times > 0 {
-            for _ in 0..recheck_times {
+        if check_result.is_some() && recheck_attempts > 0 {
+            for _ in 0..recheck_attempts {
                 if recheck_delay_secs > 0 {
                     sleep(Duration::from_secs(recheck_delay_secs)).await;
                 }
@@ -880,7 +941,8 @@ mod tests {
 
     #[test]
     fn mongo_builds_insert_cmd() {
-        let ctx = ReviseSqlContext::mongo();
+        let meta = RdbTbMeta::default();
+        let ctx = ReviseSqlContext::mongo(&meta);
         let object_id = ObjectId::parse_str("507f1f77bcf86cd799439011").unwrap();
         let doc = doc! { MongoConstants::ID: object_id, "name": "mongo_user" };
 
@@ -904,7 +966,8 @@ mod tests {
 
     #[test]
     fn mongo_builds_update_cmd() {
-        let ctx = ReviseSqlContext::mongo();
+        let meta = RdbTbMeta::default();
+        let ctx = ReviseSqlContext::mongo(&meta);
         let object_id = ObjectId::parse_str("507f1f77bcf86cd799439012").unwrap();
         let src_doc = doc! { MongoConstants::ID: object_id, "name": "new_name", "age": 18i32 };
         let dst_doc = doc! { MongoConstants::ID: object_id, "name": "old_name" };

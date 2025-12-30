@@ -15,13 +15,13 @@ use crate::{
     check_log::check_log::CheckSummaryLog,
     rdb_router::RdbRouter,
     sinker::{
-        base_checker::{BaseChecker, CheckInconsistency, ReviseSqlContext},
+        base_checker::{BaseChecker, CheckItemContext, ReviseSqlContext},
         base_sinker::BaseSinker,
     },
     Sinker,
 };
 use dt_common::{
-    log_error, log_sql, log_summary,
+    log_error, log_summary,
     meta::{
         col_value::ColValue,
         mongo::{mongo_constant::MongoConstants, mongo_key::MongoKey},
@@ -84,7 +84,6 @@ impl MongoChecker {
     ) -> anyhow::Result<()> {
         let schema = &data[0].schema;
         let tb = &data[0].tb;
-        let tb_meta = Self::mock_tb_meta(schema, tb);
         let collection = self
             .mongo_client
             .database(schema)
@@ -118,7 +117,7 @@ impl MongoChecker {
 
             if let Some(key) = MongoKey::from_doc(doc) {
                 src_row_data_map.insert(key, row_data);
-                ids.push(id);
+                ids.push(id.clone());
             } else {
                 // this should have a very small chance to happen, and we don't support
                 log_error!("row_data's _id type not supported, _id: {:?}", id);
@@ -139,46 +138,27 @@ impl MongoChecker {
         rts.push((start_time.elapsed().as_millis() as u64, 1));
         BaseSinker::update_monitor_rt(&self.monitor, &rts).await?;
 
-        while cursor.advance().await? {
-            let doc = cursor.deserialize_current()?;
-            // key should not be none since we have filtered in ids,
-            if let Some(key) = MongoKey::from_doc(&doc) {
-                let row_data = Self::build_row_data(schema, tb, doc, &key);
-                dst_row_data_map.insert(key, row_data);
-            } else {
-                let id = doc.get(MongoConstants::ID);
-                log_error!("dst row_data's _id type not supported, _id: {:?}", id);
-            }
-        }
+        let tb_meta: Arc<RdbTbMeta> = Arc::new(Self::mock_tb_meta(schema, tb));
+        let tb_meta_cloned = tb_meta.clone();
+        let mongo_client = self.mongo_client.clone();
+        let fetch_latest = move |_: MongoKey, src_row: &RowData| {
+            let mongo_client = mongo_client.clone();
+            let _tb_meta = tb_meta_cloned.clone();
+            let schema = src_row.schema.clone();
+            let tb = src_row.tb.clone();
+            let doc = src_row
+                .after
+                .as_ref()
+                .and_then(|a| a.get(MongoConstants::DOC));
+            let id = doc.and_then(|v| match v {
+                ColValue::MongoDoc(doc) => doc.get(MongoConstants::ID).cloned(),
+                _ => None,
+            });
 
-        // batch check
-        let mut miss = Vec::new();
-        let mut diff = Vec::new();
-        let mut sql_count = 0;
-        let revise_ctx = self.output_revise_sql.then(ReviseSqlContext::mongo);
-        let recheck_delay_secs = self.recheck_interval_secs;
-        let recheck_times = self.recheck_attempts;
-
-        let collection = collection.clone();
-        let schema_clone = schema.to_string();
-        let tb_clone = tb.to_string();
-        let fetch_latest = |src_row: &RowData| {
-            let collection = collection.clone();
-            let schema = schema_clone.clone();
-            let tb = tb_clone.clone();
-            let src_row = src_row.clone();
             async move {
-                let after = src_row.require_after()?;
-                let doc = after
-                    .get(MongoConstants::DOC)
-                    .and_then(|v| match v {
-                        ColValue::MongoDoc(doc) => Some(doc),
-                        _ => None,
-                    })
-                    .context("missing mongo doc")?;
-
-                let id = doc.get(MongoConstants::ID).context("missing _id")?;
+                let id = id.context("missing _id")?;
                 let filter = doc! { MongoConstants::ID: id };
+                let collection = mongo_client.database(&schema).collection::<Document>(&tb);
 
                 if let Some(doc) = collection.find_one(filter, None).await? {
                     if let Some(key) = MongoKey::from_doc(&doc) {
@@ -193,70 +173,58 @@ impl MongoChecker {
             }
         };
 
-        for (key, src_row_data) in src_row_data_map {
-            let dst_row_data = dst_row_data_map.remove(&key);
-
-            let (check_result, final_dst_row) = BaseChecker::check_row_with_retry(
-                src_row_data,
-                dst_row_data,
-                recheck_delay_secs,
-                recheck_times,
-                fetch_latest,
-            )
-            .await?;
-
-            match check_result {
-                Some(CheckInconsistency::Diff(diff_col_values)) => {
-                    let dst_row = final_dst_row
-                        .as_ref()
-                        .expect("diff result should have a dst row");
-                    let revise_sql = revise_ctx
-                        .as_ref()
-                        .map(|ctx| ctx.build_diff_sql(src_row_data, dst_row, &diff_col_values))
-                        .transpose()?
-                        .flatten();
-
-                    if let Some(revise_sql) = &revise_sql {
-                        log_sql!("{}", revise_sql);
-                        sql_count += 1;
-                    }
-
-                    let diff_log = BaseChecker::build_mongo_diff_log(
-                        src_row_data,
-                        dst_row,
-                        diff_col_values,
-                        &tb_meta,
-                        &self.reverse_router,
-                        self.output_full_row,
-                    )?;
-                    diff.push(diff_log);
-                }
-                Some(CheckInconsistency::Miss) => {
-                    let revise_sql = revise_ctx
-                        .as_ref()
-                        .map(|ctx| ctx.build_miss_sql(src_row_data))
-                        .transpose()?
-                        .flatten();
-
-                    if let Some(revise_sql) = &revise_sql {
-                        log_sql!("{}", revise_sql);
-                        sql_count += 1;
-                    }
-
-                    let miss_log = BaseChecker::build_mongo_miss_log(
-                        src_row_data,
-                        &tb_meta,
-                        &self.reverse_router,
-                        self.output_full_row,
-                    )?;
-                    miss.push(miss_log);
-                }
-                None => {}
+        while cursor.advance().await? {
+            let doc = cursor.deserialize_current()?;
+            // key should not be none since we have filtered in ids,
+            if let Some(key) = MongoKey::from_doc(&doc) {
+                let row_data = Self::build_row_data(schema, tb, doc, &key);
+                dst_row_data_map.insert(key, row_data);
+            } else {
+                let id = doc.get(MongoConstants::ID);
+                log_error!("dst row_data's _id type not supported, _id: {:?}", id);
             }
         }
+
+        let revise_ctx = self
+            .output_revise_sql
+            .then(|| ReviseSqlContext::mongo(tb_meta.as_ref()));
+
+        let recheck_delay_secs = self.recheck_interval_secs;
+        let recheck_attempts = self.recheck_attempts;
+
+        let ctx = CheckItemContext {
+            extractor_meta_manager: None,
+            reverse_router: &self.reverse_router,
+            output_full_row: self.output_full_row,
+            revise_ctx: revise_ctx.as_ref(),
+            tb_meta: tb_meta.as_ref(),
+        };
+
+        let (miss, diff, sql_count) = BaseChecker::batch_compare_row_data_items(
+            &data[start..((start + batch).min(data.len()))],
+            dst_row_data_map,
+            ctx,
+            recheck_delay_secs,
+            recheck_attempts,
+            |r| {
+                let doc = r
+                    .after
+                    .as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("missing after"))?
+                    .get(MongoConstants::DOC)
+                    .ok_or_else(|| anyhow::anyhow!("missing DOC"))?;
+                match doc {
+                    ColValue::MongoDoc(doc) => MongoKey::from_doc(doc)
+                        .ok_or_else(|| anyhow::anyhow!("failed to parse MongoKey")),
+                    _ => Err(anyhow::anyhow!("not a MongoDoc")),
+                }
+            },
+            |key, r| fetch_latest(key, r),
+        )
+        .await?;
+
         BaseChecker::log_dml(&miss, &diff);
 
-        self.summary.end_time = chrono::Local::now().to_rfc3339();
         self.summary.miss_count += miss.len();
         self.summary.diff_count += diff.len();
         if sql_count > 0 {

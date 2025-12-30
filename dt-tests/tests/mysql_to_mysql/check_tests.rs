@@ -7,12 +7,6 @@ mod test {
 
     #[tokio::test]
     #[serial]
-    async fn check_recheck_recover_test() {
-        TestBase::run_recheck_test("mysql_to_mysql/check/recheck_recover", 1).await;
-    }
-
-    #[tokio::test]
-    #[serial]
     async fn check_basic_test() {
         TestBase::run_check_test("mysql_to_mysql/check/basic_test").await;
     }
@@ -81,13 +75,19 @@ mod test {
 
     #[tokio::test]
     #[serial]
-    async fn check_recheck_struct_recover_test() {
-        TestBase::run_recheck_test("mysql_to_mysql/check/recheck_struct_recover", 1).await;
+    async fn check_recheck_basic_test() {
+        TestBase::run_check_test("mysql_to_mysql/check/recheck_basic").await;
     }
 
     #[tokio::test]
     #[serial]
-    async fn check_recheck_test() {
-        TestBase::run_check_test("mysql_to_mysql/check/recheck_config").await;
+    async fn check_recheck_recover_test() {
+        TestBase::run_recheck_test("mysql_to_mysql/check/recheck_recover", 1).await;
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn check_recheck_struct_recover_test() {
+        TestBase::run_recheck_test("mysql_to_mysql/check/recheck_struct_recover", 1).await;
     }
 }

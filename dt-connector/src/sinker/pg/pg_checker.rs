@@ -1,3 +1,4 @@
+use anyhow::Context;
 use std::{
     cmp,
     collections::{HashMap, HashSet},
@@ -17,17 +18,18 @@ use crate::{
     rdb_query_builder::RdbQueryBuilder,
     rdb_router::RdbRouter,
     sinker::{
-        base_checker::{BaseChecker, BatchCompareContext, ReviseSqlContext},
+        base_checker::{BaseChecker, CheckInconsistency, CheckItemContext, ReviseSqlContext},
         base_sinker::BaseSinker,
     },
     Sinker,
 };
 use dt_common::{
-    log_sql, log_summary,
+    log_summary,
     meta::{
         pg::pg_meta_manager::PgMetaManager,
         rdb_meta_manager::RdbMetaManager,
         row_data::RowData,
+        row_type::RowType,
         struct_meta::{statement::struct_statement::StructStatement, struct_data::StructData},
     },
     monitor::monitor::Monitor,
@@ -140,20 +142,49 @@ impl PgChecker {
         if data.is_empty() {
             return Ok(());
         }
-        let tb_meta = self.meta_manager.get_tb_meta_by_row_data(&data[0]).await?;
+        let tb_meta = Arc::new(self.meta_manager.get_tb_meta_by_row_data(&data[0]).await?);
         let revise_ctx = self
             .output_revise_sql
-            .then(|| ReviseSqlContext::pg(tb_meta, self.revise_match_full_row));
+            .then(|| ReviseSqlContext::pg(tb_meta.as_ref(), self.revise_match_full_row));
 
         let recheck_delay_secs = self.recheck_interval_secs;
-        let recheck_times = self.recheck_attempts;
+        let recheck_attempts = self.recheck_attempts;
 
         let mut miss = Vec::new();
         let mut diff = Vec::new();
-        let mut rts = LimitedQueue::new(cmp::min(100, data.len()));
         let mut sql_count = 0;
+        let mut rts = LimitedQueue::new(cmp::min(100, data.len()));
+        let pool = self.conn_pool.clone();
+        let tb_meta_cloned = tb_meta.clone();
+        let fetch_latest = move |src_row: &RowData| {
+            let pool = pool.clone();
+            let tb_meta = tb_meta_cloned.clone();
+            let src_row = src_row.clone();
+
+            async move {
+                let qb = RdbQueryBuilder::new_for_pg(&tb_meta, None);
+                let q_info = qb.get_select_query(&src_row)?;
+                let query = qb.create_pg_query(&q_info)?;
+                let mut rows = query.fetch(&pool);
+                if let Some(row) = rows.try_next().await? {
+                    let row_data = RowData::from_pg_row(&row, &tb_meta, &None);
+                    Ok(Some(row_data))
+                } else {
+                    Ok(None)
+                }
+            }
+        };
+
+        let mut ctx = CheckItemContext {
+            extractor_meta_manager: Some(&mut self.extractor_meta_manager),
+            reverse_router: &self.reverse_router,
+            output_full_row: self.output_full_row,
+            revise_ctx: revise_ctx.as_ref(),
+            tb_meta: &tb_meta.basic,
+        };
+
         for src_row_data in data.iter() {
-            let query_builder = RdbQueryBuilder::new_for_pg(tb_meta, None);
+            let query_builder = RdbQueryBuilder::new_for_pg(&tb_meta, None);
             let query_info = query_builder.get_select_query(src_row_data)?;
             let query = query_builder.create_pg_query(&query_info)?;
 
@@ -162,89 +193,46 @@ impl PgChecker {
             rts.push((start_time.elapsed().as_millis() as u64, 1));
 
             let dst_row = if let Some(row) = rows.try_next().await? {
-                Some(RowData::from_pg_row(&row, tb_meta, &None))
+                let row_data = RowData::from_pg_row(&row, &tb_meta, &None);
+                Some(row_data)
             } else {
                 None
             };
 
-            let (check_result, final_dst_row) = BaseChecker::check_row_with_retry(
-                src_row_data,
-                dst_row,
-                recheck_delay_secs,
-                recheck_times,
-                |src_row| {
-                    let pool = self.conn_pool.clone();
-                    let tb_meta = tb_meta.clone();
-                    let src_row = src_row.clone();
-                    async move {
-                        let qb = RdbQueryBuilder::new_for_pg(&tb_meta, None);
-                        let q_info = qb.get_select_query(&src_row)?;
-                        let query = qb.create_pg_query(&q_info)?;
-                        let mut rows = query.fetch(&pool);
-                        if let Some(row) = rows.try_next().await? {
-                            let row_data = RowData::from_pg_row(&row, &tb_meta, &None);
-                            Ok(Some(row_data))
-                        } else {
-                            Ok(None)
-                        }
+            let (check_result, final_dst_row, item_sql_count) =
+                BaseChecker::check_and_process_item(
+                    src_row_data,
+                    dst_row,
+                    recheck_delay_secs,
+                    recheck_attempts,
+                    &fetch_latest,
+                    &mut ctx,
+                )
+                .await?;
+
+            sql_count += item_sql_count;
+            if let Some(res) = check_result {
+                match res {
+                    CheckInconsistency::Miss => {
+                        let log = BaseChecker::build_any_miss_log(src_row_data, &mut ctx).await?;
+                        miss.push(log);
                     }
-                },
-            )
-            .await?;
-
-            match check_result {
-                Some(crate::sinker::base_checker::CheckInconsistency::Diff(diff_col_values)) => {
-                    let dst_row = final_dst_row
-                        .as_ref()
-                        .expect("diff result should have a dst row");
-
-                    let revise_sql = revise_ctx
-                        .as_ref()
-                        .map(|ctx| ctx.build_diff_sql(src_row_data, dst_row, &diff_col_values))
-                        .transpose()?
-                        .flatten();
-
-                    let diff_log = BaseChecker::build_diff_log(
-                        src_row_data,
-                        dst_row,
-                        diff_col_values,
-                        &mut self.extractor_meta_manager,
-                        &self.reverse_router,
-                        self.output_full_row,
-                    )
-                    .await?;
-                    if let Some(revise_sql) = revise_sql {
-                        log_sql!("{}", revise_sql);
-                        sql_count += 1;
+                    CheckInconsistency::Diff(diff_col_values) => {
+                        let dst_row = final_dst_row.as_ref().context("missing dst row in diff")?;
+                        let log = BaseChecker::build_any_diff_log(
+                            src_row_data,
+                            dst_row,
+                            diff_col_values,
+                            &mut ctx,
+                        )
+                        .await?;
+                        diff.push(log);
                     }
-                    diff.push(diff_log);
                 }
-                Some(crate::sinker::base_checker::CheckInconsistency::Miss) => {
-                    let revise_sql = revise_ctx
-                        .as_ref()
-                        .map(|ctx| ctx.build_miss_sql(src_row_data))
-                        .transpose()?
-                        .flatten();
-
-                    let miss_log = BaseChecker::build_miss_log(
-                        src_row_data,
-                        &mut self.extractor_meta_manager,
-                        &self.reverse_router,
-                        self.output_full_row,
-                    )
-                    .await?;
-                    if let Some(revise_sql) = revise_sql {
-                        log_sql!("{}", revise_sql);
-                        sql_count += 1;
-                    }
-                    miss.push(miss_log);
-                }
-                None => {}
             }
         }
         BaseChecker::log_dml(&miss, &diff);
 
-        self.summary.end_time = chrono::Local::now().to_rfc3339();
         self.summary.miss_count += miss.len();
         self.summary.diff_count += diff.len();
         if sql_count > 0 {
@@ -261,12 +249,13 @@ impl PgChecker {
         start: usize,
         batch: usize,
     ) -> anyhow::Result<()> {
-        let tb_meta_owned = self
-            .meta_manager
-            .get_tb_meta_by_row_data(&data[0])
-            .await?
-            .clone();
-        let tb_meta = &tb_meta_owned;
+        let tb_meta = Arc::new(
+            self.meta_manager
+                .get_tb_meta_by_row_data(&data[0])
+                .await?
+                .clone(),
+        );
+        let tb_meta = &tb_meta;
         let query_builder = RdbQueryBuilder::new_for_pg(tb_meta, None);
 
         // build fetch dst sql
@@ -280,7 +269,7 @@ impl PgChecker {
         let mut rows = query.fetch(&self.conn_pool);
         rts.push((start_time.elapsed().as_millis() as u64, 1));
 
-        while let Some(row) = rows.try_next().await.unwrap() {
+        while let Some(row) = rows.try_next().await? {
             let row_data = RowData::from_pg_row(&row, tb_meta, &None);
             let hash_code = row_data.get_hash_code(&tb_meta.basic)?;
             dst_row_data_map.insert(hash_code, row_data);
@@ -288,28 +277,40 @@ impl PgChecker {
 
         let revise_ctx = self
             .output_revise_sql
-            .then(|| ReviseSqlContext::pg(tb_meta, self.revise_match_full_row));
+            .then(|| ReviseSqlContext::pg(tb_meta.as_ref(), self.revise_match_full_row));
 
         let recheck_delay_secs = self.recheck_interval_secs;
-        let recheck_times = self.recheck_attempts;
+        let recheck_attempts = self.recheck_attempts;
 
-        let ctx = BatchCompareContext {
-            start,
-            batch,
-            dst_tb_meta: &tb_meta.basic,
-            extractor_meta_manager: &mut self.extractor_meta_manager,
+        let ctx = CheckItemContext {
+            extractor_meta_manager: Some(&mut self.extractor_meta_manager),
             reverse_router: &self.reverse_router,
             output_full_row: self.output_full_row,
             revise_ctx: revise_ctx.as_ref(),
+            tb_meta: &tb_meta.basic,
         };
 
         let pool = self.conn_pool.clone();
-        let fetch_tb_meta = tb_meta_owned.clone();
+        let tb_meta_cloned = tb_meta.clone();
+        let schema = data[0].schema.clone();
+        let tb = data[0].tb.clone();
         let fetch_latest = move |_, src_row: &RowData| {
             let pool = pool.clone();
-            let tb_meta = fetch_tb_meta.clone();
-            let src_row = src_row.clone();
+            let tb_meta = tb_meta_cloned.clone();
+            let schema = schema.clone();
+            let tb = tb.clone();
+            let row_type = src_row.row_type.clone();
+            let col_values = match &row_type {
+                RowType::Insert | RowType::Update => src_row.after.clone(),
+                RowType::Delete => src_row.before.clone(),
+            };
             async move {
+                let (before, after) = match &row_type {
+                    RowType::Insert | RowType::Update => (None, col_values),
+                    RowType::Delete => (col_values, None),
+                };
+                let src_row = RowData::new(schema, tb, row_type, before, after);
+
                 let qb = RdbQueryBuilder::new_for_pg(&tb_meta, None);
                 let q_info = qb.get_select_query(&src_row)?;
                 let query = qb.create_pg_query(&q_info)?;
@@ -323,12 +324,14 @@ impl PgChecker {
             }
         };
 
+        let dst_tb_meta_for_key = &tb_meta.basic;
         let (miss, diff, sql_count) = BaseChecker::batch_compare_row_data_items(
-            data,
+            &data[start..((start + batch).min(data.len()))],
             dst_row_data_map,
             ctx,
             recheck_delay_secs,
-            recheck_times,
+            recheck_attempts,
+            |r| r.get_hash_code(dst_tb_meta_for_key),
             fetch_latest,
         )
         .await?;
@@ -341,19 +344,20 @@ impl PgChecker {
         if sql_count > 0 {
             self.summary.sql_count = Some(self.summary.sql_count.unwrap_or(0) + sql_count);
         }
+
         BaseSinker::update_batch_monitor(&self.monitor, batch as u64, 0).await?;
         BaseSinker::update_monitor_rt(&self.monitor, &rts).await
     }
 
     async fn serial_check_struct(&mut self, data: Vec<StructData>) -> anyhow::Result<()> {
         let recheck_delay_secs = self.recheck_interval_secs;
-        let recheck_times = self.recheck_attempts;
+        let recheck_attempts = self.recheck_attempts;
 
         let (miss_count, diff_count, extra_count, sql_count) =
             BaseChecker::check_struct_with_retry(
                 data,
                 recheck_delay_secs,
-                recheck_times,
+                recheck_attempts,
                 &self.filter,
                 self.output_revise_sql,
                 |src_statement| {
