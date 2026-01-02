@@ -16,7 +16,6 @@ pub struct RdbTbMeta {
     pub col_origin_type_map: HashMap<String, String>,
     pub key_map: HashMap<String, Vec<String>>,
     pub order_cols: Vec<String>,
-    pub order_cols_are_nullable: bool,
     pub partition_col: String,
     pub id_cols: Vec<String>,
     pub foreign_keys: Vec<ForeignKey>,
@@ -30,6 +29,11 @@ impl RdbTbMeta {
             .iter()
             .map(|col| (col.clone(), ColValue::None))
             .collect()
+    }
+
+    #[inline(always)]
+    pub fn has_col(&self, col: &String) -> bool {
+        self.cols.contains(col)
     }
 
     #[inline(always)]

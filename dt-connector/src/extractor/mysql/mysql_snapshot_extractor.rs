@@ -1,25 +1,19 @@
 use std::{
-    cmp,
     collections::{HashMap, HashSet, VecDeque},
-    sync::{
-        atomic::{AtomicBool, AtomicU64, Ordering},
-        Arc,
-    },
+    sync::Arc,
 };
 
 use anyhow::bail;
 use async_trait::async_trait;
-use futures::{future::Join, TryStreamExt};
+use futures::TryStreamExt;
 use sqlx::{MySql, Pool};
-use tokio::{
-    sync::Mutex,
-    task::{JoinHandle, JoinSet},
-};
+use tokio::task::JoinSet;
 
 use crate::{
     extractor::{
         base_extractor::BaseExtractor,
         mysql::mysql_snapshot_splitter::{MySqlSnapshotSplitter, SnapshotChunk},
+        rdb_snapshot_extract_statement::{OrderKeyPredicateType, RdbSnapshotExtractStatement},
         resumer::recovery::Recovery,
     },
     rdb_query_builder::RdbQueryBuilder,
@@ -41,7 +35,6 @@ use dt_common::{
         },
         order_key::OrderKey,
         position::Position,
-        rdb_tb_meta::RdbTbMeta,
         row_data::RowData,
     },
     quote_mysql,
@@ -96,52 +89,66 @@ impl Extractor for MysqlSnapshotExtractor {
 
 impl MysqlSnapshotExtractor {
     async fn extract_internal(&mut self) -> anyhow::Result<()> {
-        let extracted_count;
-        let tb_meta = self
+        let mut tb_meta = self
             .meta_manager
             .get_tb_meta(&self.db, &self.tb)
             .await?
             .to_owned();
-
-        if Self::can_extract_by_batch(&tb_meta) {
-            let mut splitter =
-                MySqlSnapshotSplitter::new(&tb_meta, self.conn_pool.clone(), self.batch_size);
-            let parallel_extract = self.parallel_size > 1 && splitter.can_be_splitted().await?;
-            let resume_values = self.get_resume_values(&tb_meta, parallel_extract).await?;
-            extracted_count = if parallel_extract {
-                log_info!("parallel extracting, parallel_size: {}", self.parallel_size);
-                splitter.init(&resume_values)?;
-                self.parallel_extract_by_batch(&tb_meta, &mut splitter)
-                    .await?
+        let user_defined_partition_col = "".to_string();
+        self.validate_user_defined(&mut tb_meta, &user_defined_partition_col)?;
+        let mut splitter = MySqlSnapshotSplitter::new(
+            &tb_meta,
+            self.conn_pool.clone(),
+            self.batch_size,
+            if !user_defined_partition_col.is_empty() {
+                user_defined_partition_col.clone()
             } else {
-                self.extract_by_batch(&tb_meta, resume_values).await?
-            };
+                tb_meta.basic.partition_col.clone()
+            },
+        );
+        let extracted_count = if !tb_meta.basic.order_cols.is_empty() && self.parallel_size <= 1 {
+            self.serial_extract(&tb_meta).await?
         } else {
-            extracted_count = self.extract_all(&tb_meta).await?;
-        }
+            self.parallel_extract_by_batch(&tb_meta, &mut splitter)
+                .await?
+        };
 
         log_info!(
-            "end extracting data from `{}`.`{}`, all count: {}",
-            self.db,
-            self.tb,
+            "end extracting data from {}.{}, all count: {}",
+            quote_mysql!(self.db),
+            quote_mysql!(self.tb),
             extracted_count
         );
         Ok(())
     }
 
+    async fn serial_extract(&mut self, tb_meta: &MysqlTbMeta) -> anyhow::Result<u64> {
+        if !tb_meta.basic.order_cols.is_empty() {
+            let resume_values = self
+                .get_resume_values(tb_meta, &tb_meta.basic.order_cols, false)
+                .await?;
+            self.extract_by_batch(tb_meta, resume_values).await
+        } else {
+            self.extract_all(tb_meta).await
+        }
+    }
+
     async fn extract_all(&mut self, tb_meta: &MysqlTbMeta) -> anyhow::Result<u64> {
         log_info!(
-            "start extracting data from `{}`.`{}` without batch",
-            self.db,
-            self.tb
+            "start extracting data from {}.{} without batch",
+            quote_mysql!(self.db),
+            quote_mysql!(self.tb)
         );
 
         let ignore_cols = self.filter.get_ignore_cols(&self.db, &self.tb);
         let cols_str = self.build_extract_cols_str(tb_meta)?;
         let where_sql = BaseExtractor::get_where_sql(&self.filter, &self.db, &self.tb, "");
         let sql = format!(
-            "SELECT {} FROM `{}`.`{}` {}",
-            cols_str, self.db, self.tb, where_sql
+            "SELECT {} FROM {}.{} {}",
+            cols_str,
+            quote_mysql!(self.db),
+            quote_mysql!(self.tb),
+            where_sql
         );
 
         let mut rows = sqlx::query(&sql).fetch(&self.conn_pool);
@@ -166,16 +173,24 @@ impl MysqlSnapshotExtractor {
         }
         let mut extracted_count = 0u64;
         let mut start_values = resume_values;
-        let sql_from_beginning = Self::with_limit(
-            self.build_extract_sql(tb_meta, &tb_meta.basic.order_cols, 1)?,
-            self.batch_size,
-        );
-        let sql_from_value = Self::with_limit(
-            self.build_extract_sql(tb_meta, &tb_meta.basic.order_cols, 3)?,
-            self.batch_size,
-        );
         let ignore_cols = self.filter.get_ignore_cols(&self.db, &self.tb);
-
+        let where_condition = self
+            .filter
+            .get_where_condition(&self.db, &self.tb)
+            .cloned()
+            .unwrap_or_default();
+        let sql_from_beginning = RdbSnapshotExtractStatement::new_for_mysql(tb_meta, ignore_cols)
+            .with_order_cols(tb_meta.basic.order_cols.clone())
+            .with_where_condition(where_condition.clone())
+            .with_predicate_type(OrderKeyPredicateType::None)
+            .with_limit(self.batch_size)
+            .build()?;
+        let sql_from_value = RdbSnapshotExtractStatement::new_for_mysql(tb_meta, ignore_cols)
+            .with_order_cols(tb_meta.basic.order_cols.clone())
+            .with_where_condition(where_condition)
+            .with_predicate_type(OrderKeyPredicateType::GreaterThan)
+            .with_limit(self.batch_size)
+            .build()?;
         loop {
             let bind_values = start_values.clone();
             let query = if start_from_beginning {
@@ -227,7 +242,12 @@ impl MysqlSnapshotExtractor {
         }
 
         // extract rows with NULL
-        if tb_meta.basic.order_cols_are_nullable {
+        if tb_meta
+            .basic
+            .order_cols
+            .iter()
+            .any(|col| tb_meta.basic.is_col_nullable(col))
+        {
             extracted_count += self
                 .extract_nulls(tb_meta, &tb_meta.basic.order_cols)
                 .await?;
@@ -242,8 +262,17 @@ impl MysqlSnapshotExtractor {
         order_cols: &[String],
     ) -> anyhow::Result<u64> {
         let mut extracted_count = 0u64;
-        let sql_for_null = self.build_extract_null_sql(tb_meta, order_cols, true)?;
         let ignore_cols = self.filter.get_ignore_cols(&self.db, &self.tb);
+        let where_condition = self
+            .filter
+            .get_where_condition(&self.db, &self.tb)
+            .cloned()
+            .unwrap_or_default();
+        let sql_for_null = RdbSnapshotExtractStatement::new_for_mysql(tb_meta, ignore_cols)
+            .with_order_cols(order_cols.to_owned())
+            .with_where_condition(where_condition)
+            .with_predicate_type(OrderKeyPredicateType::IsNull)
+            .build()?;
 
         let mut rows = sqlx::query(&sql_for_null).fetch(&self.conn_pool);
         while let Some(row) = rows.try_next().await? {
@@ -261,15 +290,32 @@ impl MysqlSnapshotExtractor {
         tb_meta: &MysqlTbMeta,
         splitter: &mut MySqlSnapshotSplitter<'_>,
     ) -> anyhow::Result<u64> {
+        log_info!("parallel extracting, parallel_size: {}", self.parallel_size);
+        let order_cols = vec![splitter.partition_col.clone()];
+        let partition_col = &order_cols[0];
+        let partition_col_type = tb_meta.get_col_type(partition_col)?;
+        let resume_values = self.get_resume_values(tb_meta, &order_cols, true).await?;
+        splitter.init(&resume_values)?;
+
         let mut extract_cnt = 0u64;
         let parallel_size = self.parallel_size;
         let router = Arc::new(self.base_extractor.router.clone());
         let ignore_cols = self.filter.get_ignore_cols(&self.db, &self.tb).cloned();
-        let sql_le = self.build_extract_sql(tb_meta, &tb_meta.basic.order_cols, 4)?;
-        let sql_range = self.build_extract_sql(tb_meta, &tb_meta.basic.order_cols, 2)?;
-        let partition_col = &tb_meta.basic.partition_col;
-        let partition_col_type = tb_meta.get_col_type(partition_col)?;
-
+        let where_condition = self
+            .filter
+            .get_where_condition(&self.db, &self.tb)
+            .cloned()
+            .unwrap_or_default();
+        let sql_le = RdbSnapshotExtractStatement::new_for_mysql(tb_meta, ignore_cols.as_ref())
+            .with_order_cols(order_cols.clone())
+            .with_where_condition(where_condition.clone())
+            .with_predicate_type(OrderKeyPredicateType::LessThanOrEqual)
+            .build()?;
+        let sql_range = RdbSnapshotExtractStatement::new_for_mysql(tb_meta, ignore_cols.as_ref())
+            .with_order_cols(order_cols.clone())
+            .with_where_condition(where_condition.clone())
+            .with_predicate_type(OrderKeyPredicateType::Range)
+            .build()?;
         let mut parallel_cnt = 0;
         let mut join_set: JoinSet<anyhow::Result<(u64, u64, ColValue)>> = JoinSet::new();
         let mut pending_chunks = VecDeque::new();
@@ -286,12 +332,11 @@ impl MysqlSnapshotExtractor {
                     }
                     // no split
                     log_info!(
-                        "table {}.{} has no split chunk",
+                        "table {}.{} has no split chunk, extracting by single batch extractor",
                         quote_mysql!(self.db),
                         quote_mysql!(self.tb)
                     );
-                    let resume_values = self.get_resume_values(tb_meta, false).await?;
-                    return self.extract_by_batch(tb_meta, resume_values).await;
+                    return self.serial_extract(tb_meta).await;
                 }
 
                 Self::spawn_sub_parallel_extract(
@@ -351,9 +396,7 @@ impl MysqlSnapshotExtractor {
         }
 
         if tb_meta.basic.is_col_nullable(partition_col) {
-            extract_cnt += self
-                .extract_nulls(tb_meta, &tb_meta.basic.order_cols)
-                .await?;
+            extract_cnt += self.extract_nulls(tb_meta, &order_cols).await?;
         }
         Ok(extract_cnt)
     }
@@ -442,35 +485,30 @@ impl MysqlSnapshotExtractor {
         query_builder.build_extract_cols_str()
     }
 
-    #[inline(always)]
-    pub fn can_extract_by_batch(tb_meta: &MysqlTbMeta) -> bool {
-        !tb_meta.basic.order_cols.is_empty()
-    }
-
-    fn build_null_predicate(
-        tb_meta: &RdbTbMeta,
-        order_cols: &[String],
-        is_null: bool,
-    ) -> anyhow::Result<String> {
-        let null_check = if is_null { "IS NULL" } else { "IS NOT NULL" };
-        let join_str = if is_null { "OR" } else { "AND" };
-        if order_cols.is_empty() {
-            bail!("order cols is empty");
-        } else {
-            // col_1 IS NOT NULL AND col_2 IS NOT NULL AND col_3 IS NOT NULL
-            // col_1 IS NULL OR col_2 IS NULL OR col_3 IS NULL
-            Ok(order_cols
-                .iter()
-                .filter(|&col| tb_meta.is_col_nullable(col))
-                .map(|col| format!(r#"`{}` {}"#, col, null_check))
-                .collect::<Vec<String>>()
-                .join(&format!(" {} ", join_str)))
+    pub fn validate_user_defined(
+        &self,
+        tb_meta: &mut MysqlTbMeta,
+        user_defined_partition_col: &String,
+    ) -> anyhow::Result<()> {
+        if user_defined_partition_col.is_empty() {
+            return Ok(());
         }
+        // if user defined partition col is set, use it
+        if tb_meta.basic.has_col(user_defined_partition_col) {
+            return Ok(());
+        }
+        bail!(
+            "user defined partition col {} not in cols of {}.{}",
+            quote_mysql!(user_defined_partition_col),
+            quote_mysql!(&tb_meta.basic.schema),
+            quote_mysql!(&tb_meta.basic.tb),
+        );
     }
 
     async fn get_resume_values(
         &self,
         tb_meta: &MysqlTbMeta,
+        order_cols: &Vec<String>,
         check_point: bool,
     ) -> anyhow::Result<HashMap<String, ColValue>> {
         let mut resume_values: HashMap<String, ColValue> = HashMap::new();
@@ -496,7 +534,7 @@ impl MysqlSnapshotExtractor {
                     OrderKey::Single((order_col, value)) => vec![(order_col, value)],
                     OrderKey::Composite(values) => values,
                 };
-                if order_col_values.len() != tb_meta.basic.order_cols.len() {
+                if order_col_values.len() != order_cols.len() {
                     log_info!(
                         r#"`{}`.`{}` resume values not match order cols in length"#,
                         self.db,
@@ -504,9 +542,8 @@ impl MysqlSnapshotExtractor {
                     );
                     return Ok(HashMap::new());
                 }
-                for ((position_order_col, value), order_col) in order_col_values
-                    .into_iter()
-                    .zip(tb_meta.basic.order_cols.iter())
+                for ((position_order_col, value), order_col) in
+                    order_col_values.into_iter().zip(order_cols.iter())
                 {
                     if position_order_col != *order_col {
                         log_info!(
@@ -538,151 +575,5 @@ impl MysqlSnapshotExtractor {
             SerializeUtil::serialize_hashmap_to_json(&resume_values)?
         );
         Ok(resume_values)
-    }
-
-    fn build_extract_sql(
-        &self,
-        tb_meta: &MysqlTbMeta,
-        order_cols: &[String],
-        sql_type: u8,
-    ) -> anyhow::Result<String> {
-        let cols_str = self.build_extract_cols_str(tb_meta)?;
-        let mut condition_str = match sql_type {
-            1 => "".to_string(),
-            2 => Self::build_order_col_predicate_range(order_cols)?,
-            3 => Self::build_order_col_predicate_gt(order_cols)?,
-            4 => Self::build_order_col_predicate_le(order_cols)?,
-            _ => bail!("unsupported sql_type: {}", sql_type),
-        };
-
-        if order_cols
-            .iter()
-            .any(|col| tb_meta.basic.is_col_nullable(col))
-        {
-            let not_null_predicate = Self::build_null_predicate(&tb_meta.basic, order_cols, false)?;
-            if !not_null_predicate.is_empty() {
-                condition_str = if condition_str.is_empty() {
-                    not_null_predicate
-                } else {
-                    format!("{} AND {}", condition_str, not_null_predicate)
-                };
-            }
-        }
-        let where_sql =
-            BaseExtractor::get_where_sql(&self.filter, &self.db, &self.tb, &condition_str);
-        let sql = format!(
-            "SELECT {} FROM `{}`.`{}` {} ORDER BY {}",
-            cols_str,
-            self.db,
-            self.tb,
-            where_sql,
-            Self::build_order_by_clause(&tb_meta.basic.order_cols)?,
-        );
-        Ok(sql)
-    }
-
-    fn with_limit(mut sql: String, limit_size: usize) -> String {
-        sql.push_str(&format!(" LIMIT {}", limit_size));
-        sql
-    }
-
-    fn build_extract_null_sql(
-        &self,
-        tb_meta: &MysqlTbMeta,
-        order_cols: &[String],
-        is_null: bool,
-    ) -> anyhow::Result<String> {
-        let cols_str = self.build_extract_cols_str(tb_meta)?;
-        let order_by_clause = Self::build_order_by_clause(&tb_meta.basic.order_cols)?;
-        let null_predicate = Self::build_null_predicate(&tb_meta.basic, order_cols, is_null)?;
-        let where_sql =
-            BaseExtractor::get_where_sql(&self.filter, &self.db, &self.tb, &null_predicate);
-
-        Ok(format!(
-            r#"SELECT {} FROM `{}`.`{}` {} ORDER BY {}"#,
-            cols_str, self.db, self.tb, where_sql, order_by_clause
-        ))
-    }
-
-    #[inline(always)]
-    fn build_order_col_str(order_cols: &[String]) -> String {
-        order_cols
-            .iter()
-            .map(|col| format!(r#"`{}`"#, col))
-            .collect::<Vec<String>>()
-            .join(", ")
-    }
-
-    #[inline(always)]
-    fn build_place_holder_str(order_cols: &[String]) -> String {
-        order_cols
-            .iter()
-            .map(|_| "?".to_string())
-            .collect::<Vec<String>>()
-            .join(", ")
-    }
-
-    fn build_order_col_predicate_range(order_cols: &[String]) -> anyhow::Result<String> {
-        if order_cols.is_empty() {
-            bail!("order cols is empty");
-        } else if order_cols.len() == 1 {
-            // col_1 > ? AND col_1 <= ?
-            Ok(format!(
-                r#"`{}` > ? AND `{}` <= ?"#,
-                &order_cols[0], &order_cols[0],
-            ))
-        } else {
-            // (col_1, col_2, col_3) > (?, ?, ?) AND (col_1, col_2, col_3) <= (?, ?, ?)
-            let order_col_str = Self::build_order_col_str(order_cols);
-            let place_holder_str = Self::build_place_holder_str(order_cols);
-            Ok(format!(
-                r#"({}) > ({}) AND ({}) <= ({})"#,
-                &order_col_str, &place_holder_str, &order_col_str, &place_holder_str,
-            ))
-        }
-    }
-
-    fn build_order_col_predicate_gt(order_cols: &[String]) -> anyhow::Result<String> {
-        if order_cols.is_empty() {
-            bail!("order cols is empty");
-        } else if order_cols.len() == 1 {
-            // col_1 > ?
-            Ok(format!(r#"`{}` > ?"#, &order_cols[0],))
-        } else {
-            // (col_1, col_2, col_3) > (?, ?, ?)
-            let order_col_str = Self::build_order_col_str(order_cols);
-            let place_holder_str = Self::build_place_holder_str(order_cols);
-            Ok(format!(r#"({}) > ({})"#, order_col_str, place_holder_str))
-        }
-    }
-
-    fn build_order_col_predicate_le(order_cols: &[String]) -> anyhow::Result<String> {
-        if order_cols.is_empty() {
-            bail!("order cols is empty");
-        } else if order_cols.len() == 1 {
-            // col_1 <= ?
-            Ok(format!(r#"`{}` <= ?"#, &order_cols[0],))
-        } else {
-            // (col_1, col_2, col_3) <= (?, ?, ?)
-            let order_col_str = Self::build_order_col_str(order_cols);
-            let place_holder_str = Self::build_place_holder_str(order_cols);
-            Ok(format!(r#"({}) <= ({})"#, order_col_str, place_holder_str))
-        }
-    }
-
-    fn build_order_by_clause(order_cols: &[String]) -> anyhow::Result<String> {
-        if order_cols.is_empty() {
-            bail!("order cols is empty");
-        } else if order_cols.len() == 1 {
-            Ok(format!(r#"`{}` ASC"#, &order_cols[0]))
-        } else {
-            // col_1 ASC, col_2 ASC, col_3 ASC
-            // (col_1, col_2, col_3) ASC does not trigger index scan sometimes
-            Ok(order_cols
-                .iter()
-                .map(|col| format!(r#"`{}` ASC"#, col))
-                .collect::<Vec<String>>()
-                .join(", "))
-        }
     }
 }

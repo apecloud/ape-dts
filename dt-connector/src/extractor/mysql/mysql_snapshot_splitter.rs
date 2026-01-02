@@ -29,17 +29,17 @@ pub struct SnapshotChunk {
     pub chunk_range: ChunkRange,
 }
 pub struct MySqlSnapshotSplitter<'a> {
-    snapshot_range: Option<ChunkRange>,
-    mysql_tb_meta: &'a MysqlTbMeta,
-    has_next_chunks: bool,
-    conn_pool: Pool<MySql>,
-    batch_size: u64,
-    estimated_row_count: u64,
-    partition_col: String,
-    current_col_value: Option<ColValue>,
-    chunk_id_generator: u64,
-    checkpoint_id: u64,
-    checkpoint_map: HashMap<u64, ColValue>,
+    pub snapshot_range: Option<ChunkRange>,
+    pub mysql_tb_meta: &'a MysqlTbMeta,
+    pub has_next_chunks: bool,
+    pub conn_pool: Pool<MySql>,
+    pub batch_size: u64,
+    pub estimated_row_count: u64,
+    pub partition_col: String,
+    pub current_col_value: Option<ColValue>,
+    pub chunk_id_generator: u64,
+    pub checkpoint_id: u64,
+    pub checkpoint_map: HashMap<u64, ColValue>,
 }
 
 impl MySqlSnapshotSplitter<'_> {
@@ -47,6 +47,7 @@ impl MySqlSnapshotSplitter<'_> {
         mysql_tb_meta: &MysqlTbMeta,
         conn_pool: Pool<MySql>,
         batch_size: usize,
+        partition_col: String,
     ) -> MySqlSnapshotSplitter<'_> {
         // todo: support user-defined split column
         MySqlSnapshotSplitter {
@@ -56,7 +57,7 @@ impl MySqlSnapshotSplitter<'_> {
             conn_pool,
             batch_size: batch_size as u64,
             estimated_row_count: 0,
-            partition_col: mysql_tb_meta.basic.partition_col.clone(),
+            partition_col,
             current_col_value: None,
             chunk_id_generator: 0,
             checkpoint_id: 0,

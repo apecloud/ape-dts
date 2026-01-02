@@ -100,7 +100,6 @@ impl MysqlMetaFetcher {
             let basic = RdbTbMeta {
                 schema: schema.to_string(),
                 tb: tb.to_string(),
-                order_cols_are_nullable: order_cols.iter().any(|col| nullable_cols.contains(col)),
                 cols,
                 nullable_cols,
                 col_origin_type_map,

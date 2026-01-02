@@ -128,7 +128,12 @@ impl PgSnapshotExtractor {
         let mut extracted_count = 0;
         let sql_from_beginning = self.build_extract_sql(tb_meta, false)?;
         let sql_from_value = self.build_extract_sql(tb_meta, true)?;
-        let sql_for_null = if tb_meta.basic.order_cols_are_nullable {
+        let sql_for_null = if tb_meta
+            .basic
+            .order_cols
+            .iter()
+            .any(|col| tb_meta.basic.is_col_nullable(col))
+        {
             self.build_extract_null_sql(tb_meta, true)?
         } else {
             String::new()
@@ -184,7 +189,13 @@ impl PgSnapshotExtractor {
         }
 
         // extract rows with NULL
-        if tb_meta.basic.order_cols_are_nullable && !sql_for_null.is_empty() {
+        if tb_meta
+            .basic
+            .order_cols
+            .iter()
+            .any(|col| tb_meta.basic.is_col_nullable(col))
+            && !sql_for_null.is_empty()
+        {
             let mut rows = sqlx::query(&sql_for_null).fetch(&self.conn_pool);
             while let Some(row) = rows.try_next().await? {
                 extracted_count += 1;
@@ -228,7 +239,12 @@ impl PgSnapshotExtractor {
             let order_by_clause = Self::build_order_by_clause(&tb_meta.basic)?;
             if has_start_value {
                 let mut where_clause = Self::build_order_col_predicate(tb_meta)?;
-                if tb_meta.basic.order_cols_are_nullable {
+                if tb_meta
+                    .basic
+                    .order_cols
+                    .iter()
+                    .any(|col| tb_meta.basic.is_col_nullable(col))
+                {
                     let not_null_predicate = Self::build_null_predicate(&tb_meta.basic, false)?;
                     if !not_null_predicate.is_empty() {
                         where_clause = format!("{} AND {}", where_clause, not_null_predicate);

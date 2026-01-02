@@ -1,5 +1,5 @@
-use std::cell::Cell;
 use std::collections::HashSet;
+use std::{cell::Cell, fmt::format};
 
 use anyhow::bail;
 use dt_common::{
@@ -107,29 +107,37 @@ impl RdbSnapshotExtractStatement<'_> {
         if !self.where_condition.is_empty() {
             predicates.push(self.where_condition.clone());
         }
-        match self.predicate_type {
+        let predicate = match self.predicate_type {
             OrderKeyPredicateType::GreaterThan => {
-                predicates.push(self.build_order_col_predicate_gt(&self.order_cols)?);
+                self.build_order_col_predicate_gt(&self.order_cols)?
             }
             OrderKeyPredicateType::LessThanOrEqual => {
-                predicates.push(self.build_order_col_predicate_le(&self.order_cols)?);
+                self.build_order_col_predicate_le(&self.order_cols)?
             }
             OrderKeyPredicateType::Range => {
-                predicates.push(self.build_order_col_predicate_range(&self.order_cols)?);
+                self.build_order_col_predicate_range(&self.order_cols)?
             }
-            _ => {}
+            _ => String::new(),
+        };
+        if !predicate.is_empty() {
+            predicates.push(predicate);
         }
-
         match self.predicate_type {
             OrderKeyPredicateType::GreaterThan
             | OrderKeyPredicateType::LessThanOrEqual
             | OrderKeyPredicateType::Range => {
                 let null_predicate = self.build_null_predicate(&self.order_cols, false)?;
-                predicates.push(null_predicate);
+                if !null_predicate.is_empty() {
+                    predicates.push(null_predicate);
+                }
             }
             OrderKeyPredicateType::IsNull => {
                 let null_predicate = self.build_null_predicate(&self.order_cols, true)?;
-                predicates.push(null_predicate);
+                predicates.push(if predicates.is_empty() || null_predicate.is_empty() {
+                    null_predicate
+                } else {
+                    format!("({})", null_predicate)
+                });
             }
             _ => {}
         }
@@ -329,14 +337,7 @@ mod tests {
             tb: "test_table".to_string(),
             cols,
             nullable_cols,
-            col_origin_type_map: HashMap::new(),
-            key_map: HashMap::new(),
-            order_cols: Vec::new(),
-            order_cols_are_nullable: true,
-            partition_col: "id".to_string(),
-            id_cols: Vec::new(),
-            foreign_keys: Vec::new(),
-            ref_by_foreign_keys: Vec::new(),
+            ..Default::default()
         };
 
         let mut col_type_map = HashMap::new();
@@ -383,14 +384,7 @@ mod tests {
             tb: "test_table".to_string(),
             cols,
             nullable_cols,
-            col_origin_type_map: HashMap::new(),
-            key_map: HashMap::new(),
-            order_cols: Vec::new(),
-            order_cols_are_nullable: true,
-            partition_col: "id".to_string(),
-            id_cols: Vec::new(),
-            foreign_keys: Vec::new(),
-            ref_by_foreign_keys: Vec::new(),
+            ..Default::default()
         };
 
         let mut col_type_map = HashMap::new();
@@ -582,6 +576,28 @@ mod tests {
     }
 
     #[test]
+    fn test_mysql_is_null_predicate_with_where_condition() {
+        let mysql_meta = create_mysql_tb_meta();
+        let mut stmt = RdbSnapshotExtractStatement::new_for_mysql(&mysql_meta, None);
+        stmt.with_order_cols(vec![
+            "id".to_string(),
+            "price".to_string(),
+            "username".to_string(),
+            "bio".to_string(),
+            "large_blob".to_string(),
+        ])
+        .with_where_condition("id > 100".to_string())
+        .with_predicate_type(OrderKeyPredicateType::IsNull)
+        .with_limit(100);
+
+        let sql = stmt.build().unwrap();
+        assert_eq!(
+            sql,
+            r#"SELECT `id`,`price`,`username`,`bio`,`large_blob` FROM `test_schema`.`test_table` WHERE id > 100 AND (`price` IS NULL OR `bio` IS NULL OR `large_blob` IS NULL) ORDER BY `id` ASC, `price` ASC, `username` ASC, `bio` ASC, `large_blob` ASC LIMIT 100"#
+        );
+    }
+
+    #[test]
     fn test_pg_single_order_col_gt() {
         let pg_meta = create_pg_tb_meta();
         let mut stmt = RdbSnapshotExtractStatement::new_for_pg(&pg_meta, None);
@@ -692,6 +708,28 @@ mod tests {
     }
 
     #[test]
+    fn test_pg_is_null_predicate_with_where_condition() {
+        let pg_meta = create_pg_tb_meta();
+        let mut stmt = RdbSnapshotExtractStatement::new_for_pg(&pg_meta, None);
+        stmt.with_order_cols(vec![
+            "id".to_string(),
+            "price".to_string(),
+            "username".to_string(),
+            "bio".to_string(),
+            "large_blob".to_string(),
+        ])
+        .with_where_condition("id > 100".to_string())
+        .with_predicate_type(OrderKeyPredicateType::IsNull)
+        .with_limit(100);
+
+        let sql = stmt.build().unwrap();
+        assert_eq!(
+            sql,
+            r#"SELECT "id"::int8,"price"::float8,"username"::text,"bio"::text,"large_blob"::bytea FROM "test_schema"."test_table" WHERE id > 100 AND ("price" IS NULL OR "bio" IS NULL OR "large_blob" IS NULL) ORDER BY "id" ASC, "price" ASC, "username" ASC, "bio" ASC, "large_blob" ASC LIMIT 100"#
+        );
+    }
+
+    #[test]
     fn test_mysql_with_where_condition() {
         let mysql_meta = create_mysql_tb_meta();
         let mut stmt = RdbSnapshotExtractStatement::new_for_mysql(&mysql_meta, None);
@@ -718,6 +756,131 @@ mod tests {
         assert_eq!(
             sql,
             r#"SELECT "id"::int8,"price"::float8,"username"::text,"bio"::text,"large_blob"::bytea FROM "test_schema"."test_table" WHERE id > 1000 AND "id" > $1::int8 ORDER BY "id" ASC"#
+        );
+    }
+
+    // Boundary tests
+    #[test]
+    fn test_mysql_no_order_cols() {
+        let mysql_meta = create_mysql_tb_meta();
+        let stmt = RdbSnapshotExtractStatement::new_for_mysql(&mysql_meta, None);
+
+        let sql = stmt.build().unwrap();
+        assert_eq!(
+            sql,
+            r#"SELECT `id`,`price`,`username`,`bio`,`large_blob` FROM `test_schema`.`test_table`"#
+        );
+    }
+
+    #[test]
+    fn test_pg_no_order_cols() {
+        let pg_meta = create_pg_tb_meta();
+        let stmt = RdbSnapshotExtractStatement::new_for_pg(&pg_meta, None);
+
+        let sql = stmt.build().unwrap();
+        assert_eq!(
+            sql,
+            r#"SELECT "id"::int8,"price"::float8,"username"::text,"bio"::text,"large_blob"::bytea FROM "test_schema"."test_table""#
+        );
+    }
+
+    #[test]
+    fn test_no_limit() {
+        let mysql_meta = create_mysql_tb_meta();
+        let mut stmt = RdbSnapshotExtractStatement::new_for_mysql(&mysql_meta, None);
+        stmt.with_order_cols(vec!["id".to_string()])
+            .with_predicate_type(OrderKeyPredicateType::GreaterThan);
+
+        let sql = stmt.build().unwrap();
+        assert_eq!(
+            sql,
+            r#"SELECT `id`,`price`,`username`,`bio`,`large_blob` FROM `test_schema`.`test_table` WHERE `id` > ? ORDER BY `id` ASC"#
+        );
+    }
+
+    #[test]
+    fn test_mysql_only_where_condition() {
+        let mysql_meta = create_mysql_tb_meta();
+        let mut stmt = RdbSnapshotExtractStatement::new_for_mysql(&mysql_meta, None);
+        stmt.with_where_condition("price > 100.0".to_string());
+
+        let sql = stmt.build().unwrap();
+        assert_eq!(
+            sql,
+            r#"SELECT `id`,`price`,`username`,`bio`,`large_blob` FROM `test_schema`.`test_table` WHERE price > 100.0"#
+        );
+    }
+
+    #[test]
+    fn test_pg_only_where_condition() {
+        let pg_meta = create_pg_tb_meta();
+        let mut stmt = RdbSnapshotExtractStatement::new_for_pg(&pg_meta, None);
+        stmt.with_where_condition("price > 100.0".to_string());
+
+        let sql = stmt.build().unwrap();
+        assert_eq!(
+            sql,
+            r#"SELECT "id"::int8,"price"::float8,"username"::text,"bio"::text,"large_blob"::bytea FROM "test_schema"."test_table" WHERE price > 100.0"#
+        );
+    }
+
+    #[test]
+    fn test_mysql_single_non_nullable_order_col() {
+        let mysql_meta = create_mysql_tb_meta();
+        let mut stmt = RdbSnapshotExtractStatement::new_for_mysql(&mysql_meta, None);
+        stmt.with_order_cols(vec!["username".to_string()])
+            .with_predicate_type(OrderKeyPredicateType::GreaterThan)
+            .with_limit(50);
+
+        let sql = stmt.build().unwrap();
+        assert_eq!(
+            sql,
+            r#"SELECT `id`,`price`,`username`,`bio`,`large_blob` FROM `test_schema`.`test_table` WHERE `username` > ? ORDER BY `username` ASC LIMIT 50"#
+        );
+    }
+
+    #[test]
+    fn test_pg_single_non_nullable_order_col() {
+        let pg_meta = create_pg_tb_meta();
+        let mut stmt = RdbSnapshotExtractStatement::new_for_pg(&pg_meta, None);
+        stmt.with_order_cols(vec!["username".to_string()])
+            .with_predicate_type(OrderKeyPredicateType::GreaterThan)
+            .with_limit(50);
+
+        let sql = stmt.build().unwrap();
+        assert_eq!(
+            sql,
+            r#"SELECT "id"::int8,"price"::float8,"username"::text,"bio"::text,"large_blob"::bytea FROM "test_schema"."test_table" WHERE "username" > $1::varchar ORDER BY "username" ASC LIMIT 50"#
+        );
+    }
+
+    #[test]
+    fn test_empty_where_condition() {
+        let mysql_meta = create_mysql_tb_meta();
+        let mut stmt = RdbSnapshotExtractStatement::new_for_mysql(&mysql_meta, None);
+        stmt.with_order_cols(vec!["id".to_string()])
+            .with_where_condition("".to_string())
+            .with_predicate_type(OrderKeyPredicateType::GreaterThan);
+
+        let sql = stmt.build().unwrap();
+        assert_eq!(
+            sql,
+            r#"SELECT `id`,`price`,`username`,`bio`,`large_blob` FROM `test_schema`.`test_table` WHERE `id` > ? ORDER BY `id` ASC"#
+        );
+    }
+
+    #[test]
+    fn test_limit_zero() {
+        let mysql_meta = create_mysql_tb_meta();
+        let mut stmt = RdbSnapshotExtractStatement::new_for_mysql(&mysql_meta, None);
+        stmt.with_order_cols(vec!["id".to_string()])
+            .with_predicate_type(OrderKeyPredicateType::GreaterThan)
+            .with_limit(0);
+
+        let sql = stmt.build().unwrap();
+        assert_eq!(
+            sql,
+            r#"SELECT `id`,`price`,`username`,`bio`,`large_blob` FROM `test_schema`.`test_table` WHERE `id` > ? ORDER BY `id` ASC"#
         );
     }
 }
