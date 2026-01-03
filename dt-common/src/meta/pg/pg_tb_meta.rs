@@ -8,7 +8,7 @@ use crate::meta::rdb_tb_meta::RdbTbMeta;
 
 use super::pg_col_type::PgColType;
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct PgTbMeta {
     pub basic: RdbTbMeta,
     pub oid: i32,

@@ -1,3 +1,5 @@
-DROP DATABASE IF EXISTS test_db_1;
-CREATE DATABASE test_db_1;
-CREATE TABLE test_db_1.recheck_table (id INT PRIMARY KEY, name VARCHAR(100));
+use sample_db
+db.dropDatabase();
+db.createCollection("sample_tb");
+db.sample_tb.insertOne({ "_id": 1, "name": "Alice" });
+db.sample_tb.insertOne({ "_id": 2, "name": "Bob" });

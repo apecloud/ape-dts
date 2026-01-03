@@ -32,6 +32,7 @@ use dt_connector::{
     data_marker::DataMarker,
     rdb_router::RdbRouter,
     sinker::{
+        base_checker::CheckerCommon,
         clickhouse::{
             clickhouse_sinker::ClickhouseSinker, clickhouse_struct_sinker::ClickhouseStructSinker,
         },
@@ -157,21 +158,23 @@ impl SinkerUtil {
                     let sinker = MysqlChecker {
                         conn_pool: conn_pool.clone(),
                         meta_manager: meta_manager.clone(),
-                        extractor_meta_manager: extractor_meta_manager.clone(),
-                        reverse_router: reverse_router.clone(),
-                        filter: filter.clone(),
-                        batch_size,
-                        monitor: monitor.clone(),
-                        output_full_row,
-                        output_revise_sql,
-                        revise_match_full_row,
-                        recheck_interval_secs,
-                        recheck_attempts,
-                        summary: CheckSummaryLog {
-                            start_time: Local::now().to_rfc3339(),
-                            ..Default::default()
+                        common: CheckerCommon {
+                            extractor_meta_manager: Some(extractor_meta_manager.clone()),
+                            reverse_router: reverse_router.clone(),
+                            batch_size,
+                            monitor: monitor.clone(),
+                            filter: filter.clone(),
+                            output_full_row,
+                            output_revise_sql,
+                            revise_match_full_row,
+                            recheck_interval_secs,
+                            recheck_attempts,
+                            summary: CheckSummaryLog {
+                                start_time: Local::now().to_rfc3339(),
+                                ..Default::default()
+                            },
+                            global_summary: check_summary.clone(),
                         },
-                        global_summary: check_summary.clone(),
                     };
                     sub_sinkers.push(Arc::new(async_mutex::Mutex::new(Box::new(sinker))));
                 }
@@ -235,21 +238,23 @@ impl SinkerUtil {
                     let sinker = PgChecker {
                         conn_pool: conn_pool.clone(),
                         meta_manager: meta_manager.clone(),
-                        extractor_meta_manager: extractor_meta_manager.clone(),
-                        reverse_router: reverse_router.clone(),
-                        filter: filter.clone(),
-                        batch_size,
-                        monitor: monitor.clone(),
-                        output_full_row,
-                        output_revise_sql,
-                        revise_match_full_row,
-                        recheck_interval_secs,
-                        recheck_attempts,
-                        summary: CheckSummaryLog {
-                            start_time: Local::now().to_rfc3339(),
-                            ..Default::default()
+                        common: CheckerCommon {
+                            extractor_meta_manager: Some(extractor_meta_manager.clone()),
+                            reverse_router: reverse_router.clone(),
+                            batch_size,
+                            monitor: monitor.clone(),
+                            filter: filter.clone(),
+                            output_full_row,
+                            output_revise_sql,
+                            revise_match_full_row,
+                            recheck_interval_secs,
+                            recheck_attempts,
+                            summary: CheckSummaryLog {
+                                start_time: Local::now().to_rfc3339(),
+                                ..Default::default()
+                            },
+                            global_summary: check_summary.clone(),
                         },
-                        global_summary: check_summary.clone(),
                     };
                     sub_sinkers.push(Arc::new(async_mutex::Mutex::new(Box::new(sinker))));
                 }
@@ -284,6 +289,7 @@ impl SinkerUtil {
                 ..
             } => {
                 let reverse_router = create_router!(config, Mongo).reverse();
+                let filter = create_filter!(config, Mongo);
                 let mongo_client = match client {
                     ConnClient::MongoDB(mongo_client) => mongo_client,
                     _ => {
@@ -292,19 +298,24 @@ impl SinkerUtil {
                 };
                 for _ in 0..parallel_size {
                     let sinker = MongoChecker {
-                        batch_size,
-                        reverse_router: reverse_router.clone(),
                         mongo_client: mongo_client.clone(),
-                        monitor: monitor.clone(),
-                        output_full_row,
-                        output_revise_sql,
-                        recheck_interval_secs,
-                        recheck_attempts,
-                        summary: CheckSummaryLog {
-                            start_time: Local::now().to_rfc3339(),
-                            ..Default::default()
+                        common: CheckerCommon {
+                            extractor_meta_manager: None,
+                            reverse_router: reverse_router.clone(),
+                            batch_size,
+                            monitor: monitor.clone(),
+                            filter: filter.clone(),
+                            output_full_row,
+                            output_revise_sql,
+                            revise_match_full_row: false,
+                            recheck_interval_secs,
+                            recheck_attempts,
+                            summary: CheckSummaryLog {
+                                start_time: Local::now().to_rfc3339(),
+                                ..Default::default()
+                            },
+                            global_summary: check_summary.clone(),
                         },
-                        global_summary: check_summary.clone(),
                     };
                     sub_sinkers.push(Arc::new(async_mutex::Mutex::new(Box::new(sinker))));
                 }
