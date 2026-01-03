@@ -16,7 +16,6 @@ use crate::{
         rdb_snapshot_extract_statement::{OrderKeyPredicateType, RdbSnapshotExtractStatement},
         resumer::recovery::Recovery,
     },
-    rdb_query_builder::RdbQueryBuilder,
     rdb_router::RdbRouter,
     Extractor,
 };
@@ -73,8 +72,8 @@ impl Extractor for MysqlSnapshotExtractor {
     async fn extract(&mut self) -> anyhow::Result<()> {
         log_info!(
             "MysqlSnapshotExtractor starts, schema: {}, tb: {}, batch_size: {}, parallel_size: {}",
-            quote_mysql!(self.db),
-            quote_mysql!(self.tb),
+            quote_mysql!(&self.db),
+            quote_mysql!(&self.tb),
             self.batch_size,
             self.parallel_size
         );
@@ -94,6 +93,7 @@ impl MysqlSnapshotExtractor {
             .get_tb_meta(&self.db, &self.tb)
             .await?
             .to_owned();
+        // TODO(wl): get user defined partition col from config
         let user_defined_partition_col = "".to_string();
         self.validate_user_defined(&mut tb_meta, &user_defined_partition_col)?;
         let mut splitter = MySqlSnapshotSplitter::new(
@@ -115,8 +115,8 @@ impl MysqlSnapshotExtractor {
 
         log_info!(
             "end extracting data from {}.{}, all count: {}",
-            quote_mysql!(self.db),
-            quote_mysql!(self.tb),
+            quote_mysql!(&self.db),
+            quote_mysql!(&self.tb),
             extracted_count
         );
         Ok(())
@@ -136,20 +136,20 @@ impl MysqlSnapshotExtractor {
     async fn extract_all(&mut self, tb_meta: &MysqlTbMeta) -> anyhow::Result<u64> {
         log_info!(
             "start extracting data from {}.{} without batch",
-            quote_mysql!(self.db),
-            quote_mysql!(self.tb)
+            quote_mysql!(&self.db),
+            quote_mysql!(&self.tb)
         );
 
         let ignore_cols = self.filter.get_ignore_cols(&self.db, &self.tb);
-        let cols_str = self.build_extract_cols_str(tb_meta)?;
-        let where_sql = BaseExtractor::get_where_sql(&self.filter, &self.db, &self.tb, "");
-        let sql = format!(
-            "SELECT {} FROM {}.{} {}",
-            cols_str,
-            quote_mysql!(self.db),
-            quote_mysql!(self.tb),
-            where_sql
-        );
+        let where_condition = self
+            .filter
+            .get_where_condition(&self.db, &self.tb)
+            .cloned()
+            .unwrap_or_default();
+        let sql = RdbSnapshotExtractStatement::from(tb_meta)
+            .with_ignore_cols(ignore_cols.unwrap_or(&HashSet::new()))
+            .with_where_condition(&where_condition)
+            .build()?;
 
         let mut rows = sqlx::query(&sql).fetch(&self.conn_pool);
         while let Some(row) = rows.try_next().await.unwrap() {
@@ -179,15 +179,17 @@ impl MysqlSnapshotExtractor {
             .get_where_condition(&self.db, &self.tb)
             .cloned()
             .unwrap_or_default();
-        let sql_from_beginning = RdbSnapshotExtractStatement::new_for_mysql(tb_meta, ignore_cols)
-            .with_order_cols(tb_meta.basic.order_cols.clone())
-            .with_where_condition(where_condition.clone())
+        let sql_from_beginning = RdbSnapshotExtractStatement::from(tb_meta)
+            .with_ignore_cols(ignore_cols.unwrap_or(&HashSet::new()))
+            .with_order_cols(&tb_meta.basic.order_cols)
+            .with_where_condition(&where_condition)
             .with_predicate_type(OrderKeyPredicateType::None)
             .with_limit(self.batch_size)
             .build()?;
-        let sql_from_value = RdbSnapshotExtractStatement::new_for_mysql(tb_meta, ignore_cols)
-            .with_order_cols(tb_meta.basic.order_cols.clone())
-            .with_where_condition(where_condition)
+        let sql_from_value = RdbSnapshotExtractStatement::from(tb_meta)
+            .with_ignore_cols(ignore_cols.unwrap_or(&HashSet::new()))
+            .with_order_cols(&tb_meta.basic.order_cols)
+            .with_where_condition(&where_condition)
             .with_predicate_type(OrderKeyPredicateType::GreaterThan)
             .with_limit(self.batch_size)
             .build()?;
@@ -217,8 +219,8 @@ impl MysqlSnapshotExtractor {
                     } else {
                         bail!(
                             "{}.{} order col {} not found",
-                            quote_mysql!(self.db),
-                            quote_mysql!(self.tb),
+                            quote_mysql!(&self.db),
+                            quote_mysql!(&self.tb),
                             quote_mysql!(order_col),
                         );
                     }
@@ -259,7 +261,7 @@ impl MysqlSnapshotExtractor {
     async fn extract_nulls(
         &mut self,
         tb_meta: &MysqlTbMeta,
-        order_cols: &[String],
+        order_cols: &Vec<String>,
     ) -> anyhow::Result<u64> {
         let mut extracted_count = 0u64;
         let ignore_cols = self.filter.get_ignore_cols(&self.db, &self.tb);
@@ -268,9 +270,10 @@ impl MysqlSnapshotExtractor {
             .get_where_condition(&self.db, &self.tb)
             .cloned()
             .unwrap_or_default();
-        let sql_for_null = RdbSnapshotExtractStatement::new_for_mysql(tb_meta, ignore_cols)
-            .with_order_cols(order_cols.to_owned())
-            .with_where_condition(where_condition)
+        let sql_for_null = RdbSnapshotExtractStatement::from(tb_meta)
+            .with_ignore_cols(ignore_cols.unwrap_or(&HashSet::new()))
+            .with_order_cols(order_cols)
+            .with_where_condition(&where_condition)
             .with_predicate_type(OrderKeyPredicateType::IsNull)
             .build()?;
 
@@ -291,7 +294,7 @@ impl MysqlSnapshotExtractor {
         splitter: &mut MySqlSnapshotSplitter<'_>,
     ) -> anyhow::Result<u64> {
         log_info!("parallel extracting, parallel_size: {}", self.parallel_size);
-        let order_cols = vec![splitter.partition_col.clone()];
+        let order_cols = vec![splitter.get_partition_col()];
         let partition_col = &order_cols[0];
         let partition_col_type = tb_meta.get_col_type(partition_col)?;
         let resume_values = self.get_resume_values(tb_meta, &order_cols, true).await?;
@@ -306,14 +309,16 @@ impl MysqlSnapshotExtractor {
             .get_where_condition(&self.db, &self.tb)
             .cloned()
             .unwrap_or_default();
-        let sql_le = RdbSnapshotExtractStatement::new_for_mysql(tb_meta, ignore_cols.as_ref())
-            .with_order_cols(order_cols.clone())
-            .with_where_condition(where_condition.clone())
+        let sql_le = RdbSnapshotExtractStatement::from(tb_meta)
+            .with_ignore_cols(ignore_cols.as_ref().unwrap_or(&HashSet::new()))
+            .with_order_cols(&order_cols)
+            .with_where_condition(&where_condition)
             .with_predicate_type(OrderKeyPredicateType::LessThanOrEqual)
             .build()?;
-        let sql_range = RdbSnapshotExtractStatement::new_for_mysql(tb_meta, ignore_cols.as_ref())
-            .with_order_cols(order_cols.clone())
-            .with_where_condition(where_condition.clone())
+        let sql_range = RdbSnapshotExtractStatement::from(tb_meta)
+            .with_ignore_cols(ignore_cols.as_ref().unwrap_or(&HashSet::new()))
+            .with_order_cols(&order_cols)
+            .with_where_condition(&where_condition)
             .with_predicate_type(OrderKeyPredicateType::Range)
             .build()?;
         let mut parallel_cnt = 0;
@@ -326,15 +331,15 @@ impl MysqlSnapshotExtractor {
                     if !join_set.is_empty() {
                         bail!(
                             "table {}.{} has no split chunk, but some parallel extractors are running",
-                            quote_mysql!(self.db),
-                            quote_mysql!(self.tb)
+                            quote_mysql!(&self.db),
+                            quote_mysql!(&self.tb)
                         );
                     }
                     // no split
                     log_info!(
                         "table {}.{} has no split chunk, extracting by single batch extractor",
-                        quote_mysql!(self.db),
-                        quote_mysql!(self.tb)
+                        quote_mysql!(&self.db),
+                        quote_mysql!(&self.tb)
                     );
                     return self.serial_extract(tb_meta).await;
                 }
@@ -424,8 +429,8 @@ impl MysqlSnapshotExtractor {
                     bail!(
                         "chunk {} has bad chunk range from {}.{}",
                         chunk_id,
-                        quote_mysql!(tb_meta.basic.schema),
-                        quote_mysql!(tb_meta.basic.tb)
+                        quote_mysql!(&tb_meta.basic.schema),
+                        quote_mysql!(&tb_meta.basic.tb)
                     );
                 }
                 (ColValue::None, _) => {
@@ -479,12 +484,6 @@ impl MysqlSnapshotExtractor {
         Ok(())
     }
 
-    fn build_extract_cols_str(&self, tb_meta: &MysqlTbMeta) -> anyhow::Result<String> {
-        let ignore_cols = self.filter.get_ignore_cols(&self.db, &self.tb);
-        let query_builder = RdbQueryBuilder::new_for_mysql(tb_meta, ignore_cols);
-        query_builder.build_extract_cols_str()
-    }
-
     pub fn validate_user_defined(
         &self,
         tb_meta: &mut MysqlTbMeta,
@@ -524,9 +523,9 @@ impl MysqlSnapshotExtractor {
             {
                 if schema != self.db || tb != self.tb {
                     log_info!(
-                        r#"`{}`.`{}` resume position db/tb not match, ignore it"#,
-                        self.db,
-                        self.tb
+                        r#"{}.{} resume position db/tb not match, ignore it"#,
+                        quote_mysql!(&self.db),
+                        quote_mysql!(&self.tb)
                     );
                     return Ok(HashMap::new());
                 }
@@ -536,9 +535,9 @@ impl MysqlSnapshotExtractor {
                 };
                 if order_col_values.len() != order_cols.len() {
                     log_info!(
-                        r#"`{}`.`{}` resume values not match order cols in length"#,
-                        self.db,
-                        self.tb
+                        r#"{}.{} resume values not match order cols in length"#,
+                        quote_mysql!(&self.db),
+                        quote_mysql!(&self.tb)
                     );
                     return Ok(HashMap::new());
                 }
@@ -547,9 +546,9 @@ impl MysqlSnapshotExtractor {
                 {
                     if position_order_col != *order_col {
                         log_info!(
-                            r#"`{}`.`{}` resume position order col {} not match {}"#,
-                            self.db,
-                            self.tb,
+                            r#"{}.{} resume position order col {} not match {}"#,
+                            quote_mysql!(&self.db),
+                            quote_mysql!(&self.tb),
                             position_order_col,
                             order_col
                         );
@@ -569,9 +568,9 @@ impl MysqlSnapshotExtractor {
             }
         }
         log_info!(
-            r#"[`{}`.`{}`] recovery from [{}]"#,
-            self.db,
-            self.tb,
+            r#"[{}.{}] recovery from [{}]"#,
+            quote_mysql!(&self.db),
+            quote_mysql!(&self.tb),
             SerializeUtil::serialize_hashmap_to_json(&resume_values)?
         );
         Ok(resume_values)

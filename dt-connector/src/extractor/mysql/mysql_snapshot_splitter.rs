@@ -29,17 +29,17 @@ pub struct SnapshotChunk {
     pub chunk_range: ChunkRange,
 }
 pub struct MySqlSnapshotSplitter<'a> {
-    pub snapshot_range: Option<ChunkRange>,
-    pub mysql_tb_meta: &'a MysqlTbMeta,
-    pub has_next_chunks: bool,
-    pub conn_pool: Pool<MySql>,
-    pub batch_size: u64,
-    pub estimated_row_count: u64,
-    pub partition_col: String,
-    pub current_col_value: Option<ColValue>,
-    pub chunk_id_generator: u64,
-    pub checkpoint_id: u64,
-    pub checkpoint_map: HashMap<u64, ColValue>,
+    snapshot_range: Option<ChunkRange>,
+    mysql_tb_meta: &'a MysqlTbMeta,
+    has_next_chunks: bool,
+    conn_pool: Pool<MySql>,
+    batch_size: u64,
+    estimated_row_count: u64,
+    partition_col: String,
+    current_col_value: Option<ColValue>,
+    chunk_id_generator: u64,
+    checkpoint_id: u64,
+    checkpoint_map: HashMap<u64, ColValue>,
 }
 
 impl MySqlSnapshotSplitter<'_> {
@@ -353,5 +353,9 @@ SELECT {} FROM {}.{} WHERE {} ORDER BY {} ASC LIMIT {}) AS T",
             chunk_id: self.chunk_id_generator,
             chunk_range,
         }))
+    }
+
+    pub fn get_partition_col(&self) -> String {
+        self.partition_col.clone()
     }
 }

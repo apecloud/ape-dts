@@ -74,7 +74,7 @@ impl RdbTbMeta {
         partition_col: &str,
         partition_col_value: &ColValue,
     ) -> Position {
-        // partion_col can be defined by user, not necessarily in order_cols
+        // partion_col can be defined by user, not necessary in order_cols
         let order_key = Some(OrderKey::Single((
             partition_col.to_string(),
             partition_col_value.to_option_string(),
