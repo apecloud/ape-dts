@@ -106,7 +106,10 @@ impl MysqlSnapshotExtractor {
                 tb_meta.basic.partition_col.clone()
             },
         );
-        let extracted_count = if !tb_meta.basic.order_cols.is_empty() && self.parallel_size <= 1 {
+        let extracted_count = if user_defined_partition_col.is_empty()
+            && self.parallel_size <= 1
+            && !tb_meta.basic.order_cols.is_empty()
+        {
             self.serial_extract(&tb_meta).await?
         } else {
             self.parallel_extract_by_batch(&tb_meta, &mut splitter)
@@ -261,7 +264,7 @@ impl MysqlSnapshotExtractor {
     async fn extract_nulls(
         &mut self,
         tb_meta: &MysqlTbMeta,
-        order_cols: &Vec<String>,
+        order_cols: &[String],
     ) -> anyhow::Result<u64> {
         let mut extracted_count = 0u64;
         let ignore_cols = self.filter.get_ignore_cols(&self.db, &self.tb);
