@@ -227,4 +227,11 @@ impl PgValueType {
             _ => PgValueType::String,
         }
     }
+
+    pub fn is_integer(&self) -> bool {
+        matches!(
+            self,
+            Self::Int16 { .. } | Self::Int32 { .. } | Self::Int64 { .. }
+        )
+    }
 }
