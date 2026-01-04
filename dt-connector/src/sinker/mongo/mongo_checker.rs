@@ -143,7 +143,7 @@ impl MongoChecker {
                 if let Ok(oid) = ObjectId::parse_str(s) {
                     return Ok(Bson::ObjectId(oid));
                 }
-                // Try to parse as JSON for wrapped types (e.g. from CheckLogExtractor)
+                // Try to parse as JSON for wrapped types
                 if let Ok(json) = serde_json::from_str::<JsonValue>(s) {
                     if let Some(val) = json.get("String").and_then(|v| v.as_str()) {
                         if let Ok(oid) = ObjectId::parse_str(val) {

@@ -3,7 +3,7 @@ use async_mutex::Mutex;
 use async_trait::async_trait;
 use mongodb::bson::Document;
 use std::borrow::Cow;
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use std::sync::Arc;
 use tokio::time::{sleep, Duration};
@@ -27,6 +27,24 @@ use dt_common::{
     log_diff, log_extra, log_miss, log_sql, log_summary, monitor::monitor::Monitor,
     rdb_filter::RdbFilter, utils::limit_queue::LimitedQueue,
 };
+
+#[async_trait]
+impl<T> Sinker for T
+where
+    T: Checker,
+{
+    async fn sink_dml(&mut self, data: Vec<RowData>, batch: bool) -> anyhow::Result<()> {
+        BaseChecker::sink_dml(self, data, batch).await
+    }
+
+    async fn close(&mut self) -> anyhow::Result<()> {
+        BaseChecker::close(self).await
+    }
+
+    async fn sink_struct(&mut self, data: Vec<StructData>) -> anyhow::Result<()> {
+        BaseChecker::sink_struct(self, data).await
+    }
+}
 
 #[derive(Debug, Clone)]
 pub enum CheckerTbMeta {
@@ -207,24 +225,6 @@ pub trait Checker: Clone + Send + Sync + 'static {
     ) -> anyhow::Result<Vec<RowData>>;
     async fn fetch_dst_struct(&self, _src: &StructStatement) -> anyhow::Result<StructStatement> {
         Ok(StructStatement::Unknown)
-    }
-}
-
-#[async_trait]
-impl<T> Sinker for T
-where
-    T: Checker,
-{
-    async fn sink_dml(&mut self, data: Vec<RowData>, batch: bool) -> anyhow::Result<()> {
-        BaseChecker::sink_dml(self, data, batch).await
-    }
-
-    async fn close(&mut self) -> anyhow::Result<()> {
-        BaseChecker::close(self).await
-    }
-
-    async fn sink_struct(&mut self, data: Vec<StructData>) -> anyhow::Result<()> {
-        BaseChecker::sink_struct(self, data).await
     }
 }
 
@@ -543,21 +543,24 @@ impl BaseChecker {
     fn collect_sqls(
         statement: &mut StructStatement,
         filter: &RdbFilter,
-    ) -> anyhow::Result<HashMap<String, String>> {
+    ) -> anyhow::Result<BTreeMap<String, String>> {
         Ok(statement.to_sqls(filter)?.into_iter().collect())
     }
 
     fn collect_dst_sqls(
         statement: &mut StructStatement,
         filter: &RdbFilter,
-    ) -> anyhow::Result<Option<HashMap<String, String>>> {
+    ) -> anyhow::Result<Option<BTreeMap<String, String>>> {
         if matches!(statement, StructStatement::Unknown) {
             return Ok(None);
         }
         Ok(Some(Self::collect_sqls(statement, filter)?))
     }
 
-    fn sqls_equal(src_sqls: &HashMap<String, String>, dst_sqls: &HashMap<String, String>) -> bool {
+    fn sqls_equal(
+        src_sqls: &BTreeMap<String, String>,
+        dst_sqls: &BTreeMap<String, String>,
+    ) -> bool {
         if src_sqls.len() != dst_sqls.len() {
             return false;
         }
@@ -570,8 +573,8 @@ impl BaseChecker {
     }
 
     fn log_struct_diff(
-        src_sqls: &HashMap<String, String>,
-        dst_sqls: Option<&HashMap<String, String>>,
+        src_sqls: &BTreeMap<String, String>,
+        dst_sqls: Option<&BTreeMap<String, String>>,
         output_revise_sql: bool,
     ) -> (usize, usize, usize, usize) {
         let mut miss_count = 0;

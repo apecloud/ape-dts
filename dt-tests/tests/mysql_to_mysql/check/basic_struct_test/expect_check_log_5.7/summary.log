@@ -1,1 +1,1 @@
-{"start_time": "1970-01-01T00:00:00Z", "end_time": "1970-01-01T00:00:00Z", "is_consistent": false, "miss_count": 1, "diff_count": 2}
+{"start_time": "1970-01-01T00:00:00Z", "end_time": "1970-01-01T00:00:00Z", "is_consistent": false, "miss_count": 1, "diff_count": 2, "extra_count": 0, "sql_count": 3}

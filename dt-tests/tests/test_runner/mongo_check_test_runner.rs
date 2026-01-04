@@ -1,7 +1,7 @@
 use super::{check_util::CheckUtil, mongo_test_runner::MongoTestRunner};
 
 pub struct MongoCheckTestRunner {
-    base: MongoTestRunner,
+    base: std::sync::Arc<MongoTestRunner>,
     dst_check_log_dir: String,
     expect_check_log_dir: String,
 }
@@ -12,7 +12,7 @@ impl MongoCheckTestRunner {
         let (expect_check_log_dir, dst_check_log_dir) =
             CheckUtil::get_check_log_dir(&base.base, "");
         Ok(Self {
-            base,
+            base: std::sync::Arc::new(base),
             dst_check_log_dir,
             expect_check_log_dir,
         })
@@ -41,9 +41,11 @@ impl MongoCheckTestRunner {
 
         let sqls = self.base.base.src_test_sqls.clone();
         let client = self.base.dst_mongo_client().clone();
+        let runner = self.base.clone();
         tokio::spawn(async move {
             tokio::time::sleep(tokio::time::Duration::from_secs(delay_secs)).await;
-            MongoTestRunner::execute_sqls_with_client(&client, &sqls)
+            runner
+                .execute_sqls_with_client(&client, &sqls)
                 .await
                 .unwrap();
         });

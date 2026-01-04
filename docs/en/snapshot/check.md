@@ -30,7 +30,7 @@ parallel_type=rdb_check
 
 # Check Results
 
-The check results are written to the log in json format, including diff.log and miss.log. The logs are stored in the log/check subdirectory.
+The check results are written to the log in json format, including diff.log, miss.log, sql.log and summary.log. The logs are stored in the log/check subdirectory.
 
 ## Difference Log (diff.log)
 
@@ -108,9 +108,9 @@ output_revise_sql=true
 revise_match_full_row=true
 ```
 
-After enabling, diff/miss logs will append the `revise_sql` field. Missing records will generate `INSERT` statements, and difference records will generate `UPDATE` statements. When `revise_match_full_row=true`, even if the table has a primary key, it will use the entire row data to generate the WHERE condition, so as to locate the target data through the full row value. If the route is not renamed, `target_schema`/`target_tb` will not be output, and these two fields are only needed to determine the table where the SQL should be executed when renaming.
+After enabling, `INSERT` statements for missing records and `UPDATE` statements for differing records will be written to `sql.log`. When `revise_match_full_row=true`, even if the table has a primary key, it will use the entire row data to generate the WHERE condition, so as to locate the target data through the full row value. If the route is not renamed, `target_schema`/`target_tb` will not be output, and these two fields are only needed to determine the table where the SQL should be executed when renaming.
 
-`revise_sql` is essentially the SQL that the sinker needs to execute to correct the target data to be consistent with the source; it directly uses the real destination schema/table, so it can be executed directly at the target (refer to `target_schema`/`target_tb` to determine the final target object when routing renames).
+The generated SQL is essentially the SQL that the sinker needs to execute to correct the target data to be consistent with the source; it directly uses the real destination schema/table, so it can be executed directly at the target (refer to `target_schema`/`target_tb` to determine the final target object when routing renames).
 
 Example:
 
@@ -121,20 +121,30 @@ Example:
   "target_schema": "target_db",
   "target_tb": "target_tb",
   "id_col_values": {"f_0": "4"},
-  "diff_col_values": {"f_1": {"src": "2", "dst": "1"}},
-  "revise_sql": "UPDATE `target_db`.`target_tb` SET `f_1`='2' WHERE `f_0` = 4;"
+  "diff_col_values": {"f_1": {"src": "2", "dst": "1"}}
 }
 ```
 
-Missing records will also output `revise_sql`. Example:
+`sql.log` example:
+
+```sql
+UPDATE `target_db`.`target_tb` SET `f_1`='2' WHERE `f_0` = 4;
+```
+
+Missing record log example:
 
 ```json
 {
   "schema": "test_db_1",
   "tb": "test_table",
-  "id_col_values": {"id": "3"},
-  "revise_sql": "INSERT INTO `test_db_1`.`test_table`(`id`,`name`,`age`,`email`) VALUES(3,'Charlie',35,'charlie@example.com');"
+  "id_col_values": {"id": "3"}
 }
+```
+
+`sql.log` example:
+
+```sql
+INSERT INTO `test_db_1`.`test_table`(`id`,`name`,`age`,`email`) VALUES(3,'Charlie',35,'charlie@example.com');
 ```
 
 ### Summary Log (summary.log)

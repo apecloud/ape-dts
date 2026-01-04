@@ -30,7 +30,7 @@ parallel_type=rdb_check
 
 # 校验结果
 
-校验结果以 json 格式写入日志中，包括 diff.log 和 miss.log。日志存放在 log/check 子目录中。
+校验结果以 json 格式写入日志中，包括 diff.log, miss.log, sql.log 和 summary.log。日志存放在 log/check 子目录中。
 
 ## 差异日志（diff.log）
 
@@ -108,9 +108,9 @@ output_revise_sql=true
 revise_match_full_row=true
 ```
 
-开启后，diff/miss 日志会追加 `revise_sql` 字段。缺失记录会生成 `INSERT` 语句，差异记录会生成 `UPDATE` 语句。`revise_match_full_row=true` 时，即使表存在主键也会使用整行数据生成 WHERE 条件，以便通过完整行值定位目标数据。若路由没有改名就不会输出 `target_schema`/`target_tb`，只在改名时才需要参考这两个字段决定 SQL 应执行的表。
+开启后，缺失记录的 `INSERT` 语句与差异记录的 `UPDATE` 语句会被写入 `sql.log`。`revise_match_full_row=true` 时，即使表存在主键也会使用整行数据生成 WHERE 条件，以便通过完整行值定位目标数据。若路由没有改名就不会输出 `target_schema`/`target_tb`，只在改名时才需要参考这两个字段决定 SQL 应执行的表。
 
-`revise_sql` 本质上是 sinker 需要执行、用以把目标数据修正到和源端一致的 SQL；它直接使用了真正的目的端 schema/table，所以可以直接在目标执行（路由改名时仍可参考 `target_schema`/`target_tb` 判断最终目标对象）。
+生成的 SQL 本质上是 sinker 需要执行、用以把目标数据修正到和源端一致的 SQL；它直接使用了真正的目的端 schema/table，所以可以直接在目标执行（路由改名时仍可参考 `target_schema`/`target_tb` 判断最终目标对象）。
 
 示例：
 
@@ -121,20 +121,30 @@ revise_match_full_row=true
   "target_schema": "target_db",
   "target_tb": "target_tb",
   "id_col_values": {"f_0": "4"},
-  "diff_col_values": {"f_1": {"src": "2", "dst": "1"}},
-  "revise_sql": "UPDATE `target_db`.`target_tb` SET `f_1`='2' WHERE `f_0` = 4;"
+  "diff_col_values": {"f_1": {"src": "2", "dst": "1"}}
 }
 ```
 
-缺失记录同样会输出 `revise_sql`。示例：
+`sql.log` 示例：
+
+```sql
+UPDATE `target_db`.`target_tb` SET `f_1`='2' WHERE `f_0` = 4;
+```
+
+缺失记录日志示例：
 
 ```json
 {
   "schema": "test_db_1",
   "tb": "test_table",
-  "id_col_values": {"id": "3"},
-  "revise_sql": "INSERT INTO `test_db_1`.`test_table`(`id`,`name`,`age`,`email`) VALUES(3,'Charlie',35,'charlie@example.com');"
+  "id_col_values": {"id": "3"}
 }
+```
+
+`sql.log` 示例：
+
+```sql
+INSERT INTO `test_db_1`.`test_table`(`id`,`name`,`age`,`email`) VALUES(3,'Charlie',35,'charlie@example.com');
 ```
 
 ### 概览日志（summary.log）

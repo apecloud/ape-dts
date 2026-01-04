@@ -115,15 +115,15 @@ impl MongoTestRunner {
             let (src_insert_sqls, src_update_sqls, src_delete_sqls) =
                 Self::slice_sqls_by_type(sqls);
             // insert
-            Self::execute_dmls(src_mongo_client, db, &src_insert_sqls)
+            Self::execute_dmls(self, src_mongo_client, db, &src_insert_sqls)
                 .await
                 .unwrap();
             // update
-            Self::execute_dmls(src_mongo_client, db, &src_update_sqls)
+            Self::execute_dmls(self, src_mongo_client, db, &src_update_sqls)
                 .await
                 .unwrap();
             // delete
-            Self::execute_dmls(src_mongo_client, db, &src_delete_sqls)
+            Self::execute_dmls(self, src_mongo_client, db, &src_delete_sqls)
                 .await
                 .unwrap();
         }
@@ -138,7 +138,7 @@ impl MongoTestRunner {
         for (db, sqls) in src_sqls.iter() {
             let (_, _, src_delete_sqls) = Self::slice_sqls_by_type(sqls);
             // delete
-            Self::execute_dmls(src_mongo_client, db, &src_delete_sqls)
+            Self::execute_dmls(self, src_mongo_client, db, &src_delete_sqls)
                 .await
                 .unwrap();
         }
@@ -163,21 +163,21 @@ impl MongoTestRunner {
             let (src_insert_sqls, src_update_sqls, src_delete_sqls) =
                 Self::slice_sqls_by_type(sqls);
             // insert
-            Self::execute_dmls(src_mongo_client, db, &src_insert_sqls)
+            Self::execute_dmls(self, src_mongo_client, db, &src_insert_sqls)
                 .await
                 .unwrap();
             TimeUtil::sleep_millis(parse_millis).await;
             self.compare_db_data(db).await;
 
             // update
-            Self::execute_dmls(src_mongo_client, db, &src_update_sqls)
+            Self::execute_dmls(self, src_mongo_client, db, &src_update_sqls)
                 .await
                 .unwrap();
             TimeUtil::sleep_millis(parse_millis).await;
             self.compare_db_data(db).await;
 
             // delete
-            Self::execute_dmls(src_mongo_client, db, &src_delete_sqls)
+            Self::execute_dmls(self, src_mongo_client, db, &src_delete_sqls)
                 .await
                 .unwrap();
             TimeUtil::sleep_millis(parse_millis).await;
@@ -237,12 +237,12 @@ impl MongoTestRunner {
         let dst_sqls = Self::slice_sqls_by_db(&self.base.dst_prepare_sqls);
 
         for (db, sqls) in src_sqls.iter() {
-            Self::execute_ddls(src_mongo_client, db, sqls).await?;
-            Self::execute_dmls(src_mongo_client, db, sqls).await?;
+            Self::execute_ddls(self, src_mongo_client, db, sqls).await?;
+            Self::execute_dmls(self, src_mongo_client, db, sqls).await?;
         }
         for (db, sqls) in dst_sqls.iter() {
-            Self::execute_ddls(dst_mongo_client, db, sqls).await?;
-            Self::execute_dmls(dst_mongo_client, db, sqls).await?;
+            Self::execute_ddls(self, dst_mongo_client, db, sqls).await?;
+            Self::execute_dmls(self, dst_mongo_client, db, sqls).await?;
         }
         Ok(())
     }
@@ -255,12 +255,12 @@ impl MongoTestRunner {
         let dst_sqls = Self::slice_sqls_by_db(&self.base.dst_clean_sqls);
 
         for (db, sqls) in src_sqls.iter() {
-            Self::execute_ddls(src_mongo_client, db, sqls).await?;
-            Self::execute_dmls(src_mongo_client, db, sqls).await?;
+            Self::execute_ddls(self, src_mongo_client, db, sqls).await?;
+            Self::execute_dmls(self, src_mongo_client, db, sqls).await?;
         }
         for (db, sqls) in dst_sqls.iter() {
-            Self::execute_ddls(dst_mongo_client, db, sqls).await?;
-            Self::execute_dmls(dst_mongo_client, db, sqls).await?;
+            Self::execute_ddls(self, dst_mongo_client, db, sqls).await?;
+            Self::execute_dmls(self, dst_mongo_client, db, sqls).await?;
         }
         Ok(())
     }
@@ -278,12 +278,12 @@ impl MongoTestRunner {
     }
 
     pub async fn execute_test_sqls(&self) -> anyhow::Result<()> {
-        Self::execute_sqls_with_client(
+        self.execute_sqls_with_client(
             self.src_mongo_client.as_ref().unwrap(),
             &self.base.src_test_sqls,
         )
         .await?;
-        Self::execute_sqls_with_client(
+        self.execute_sqls_with_client(
             self.dst_mongo_client.as_ref().unwrap(),
             &self.base.dst_test_sqls,
         )
@@ -291,36 +291,40 @@ impl MongoTestRunner {
         Ok(())
     }
 
-    pub async fn execute_sqls_with_client(client: &Client, sqls: &[String]) -> anyhow::Result<()> {
+    pub async fn execute_sqls_with_client(
+        &self,
+        client: &Client,
+        sqls: &[String],
+    ) -> anyhow::Result<()> {
         let sliced_sqls = Self::slice_sqls_by_db(sqls);
         for (db, sqls) in sliced_sqls.iter() {
-            Self::execute_ddls(client, db, sqls).await?;
-            Self::execute_dmls(client, db, sqls).await?;
+            self.execute_ddls(client, db, sqls).await?;
+            self.execute_dmls(client, db, sqls).await?;
         }
         Ok(())
     }
 
-    async fn execute_ddls(client: &Client, db: &str, sqls: &[String]) -> anyhow::Result<()> {
+    async fn execute_ddls(&self, client: &Client, db: &str, sqls: &[String]) -> anyhow::Result<()> {
         for sql in sqls.iter() {
             if sql.contains("dropDatabase") {
-                Self::execute_drop_database(client, db).await.unwrap();
+                self.execute_drop_database(client, db).await.unwrap();
             } else if sql.contains("drop") {
-                Self::execute_drop(client, db, sql).await.unwrap();
+                self.execute_drop(client, db, sql).await.unwrap();
             } else if sql.contains("createCollection") {
-                Self::execute_create(client, db, sql).await.unwrap();
+                self.execute_create(client, db, sql).await.unwrap();
             }
         }
         Ok(())
     }
 
-    async fn execute_dmls(client: &Client, db: &str, sqls: &[String]) -> anyhow::Result<()> {
+    async fn execute_dmls(&self, client: &Client, db: &str, sqls: &[String]) -> anyhow::Result<()> {
         for sql in sqls.iter() {
             if sql.contains(".insert") {
-                Self::execute_insert(client, db, sql).await?;
+                self.execute_insert(client, db, sql).await?;
             } else if sql.contains(".update") {
-                Self::execute_update(client, db, sql).await?;
+                self.execute_update(client, db, sql).await?;
             } else if sql.contains(".delete") {
-                Self::execute_delete(client, db, sql).await?;
+                self.execute_delete(client, db, sql).await?;
             }
         }
         Ok(())
@@ -332,7 +336,7 @@ impl MongoTestRunner {
         cap.get(1).unwrap().as_str().to_string()
     }
 
-    async fn execute_drop(client: &Client, db: &str, sql: &str) -> anyhow::Result<()> {
+    async fn execute_drop(&self, client: &Client, db: &str, sql: &str) -> anyhow::Result<()> {
         let re = Regex::new(r"db.(\w+).drop()").unwrap();
         let cap = re.captures(sql).unwrap();
         let tb = cap.get(1).unwrap().as_str();
@@ -346,12 +350,12 @@ impl MongoTestRunner {
         Ok(())
     }
 
-    async fn execute_drop_database(client: &Client, db: &str) -> anyhow::Result<()> {
+    async fn execute_drop_database(&self, client: &Client, db: &str) -> anyhow::Result<()> {
         client.database(db).drop(None).await.unwrap();
         Ok(())
     }
 
-    async fn execute_create(client: &Client, db: &str, sql: &str) -> anyhow::Result<()> {
+    async fn execute_create(&self, client: &Client, db: &str, sql: &str) -> anyhow::Result<()> {
         let re = Regex::new(r#"db.createCollection\("(\w+)"\)"#).unwrap();
         let cap = re.captures(sql).unwrap();
         let tb = cap.get(1).unwrap().as_str();
@@ -364,7 +368,7 @@ impl MongoTestRunner {
         Ok(())
     }
 
-    async fn execute_insert(client: &Client, db: &str, sql: &str) -> anyhow::Result<()> {
+    async fn execute_insert(&self, client: &Client, db: &str, sql: &str) -> anyhow::Result<()> {
         // example: db.tb_2.insertOne({ "name": "a", "age": "1" })
         let re = Regex::new(r"db.(\w+).insert(One|Many)\(([\w\W]+)\)").unwrap();
         let cap = re.captures(sql).unwrap();
@@ -402,7 +406,7 @@ impl MongoTestRunner {
         Ok(())
     }
 
-    async fn execute_delete(client: &Client, db: &str, sql: &str) -> anyhow::Result<()> {
+    async fn execute_delete(&self, client: &Client, db: &str, sql: &str) -> anyhow::Result<()> {
         let re = Regex::new(r"db.(\w+).delete(One|Many)\(([\w\W]+)\)").unwrap();
         let cap = re.captures(sql).unwrap();
         let tb = cap.get(1).unwrap().as_str();
@@ -423,7 +427,7 @@ impl MongoTestRunner {
         Ok(())
     }
 
-    async fn execute_update(client: &Client, db: &str, sql: &str) -> anyhow::Result<()> {
+    async fn execute_update(&self, client: &Client, db: &str, sql: &str) -> anyhow::Result<()> {
         let re = Regex::new(r"db.(\w+).update(One|Many)").unwrap();
         let cap = match re.captures(sql) {
             Some(cap) => cap,
