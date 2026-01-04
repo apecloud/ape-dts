@@ -1,17 +1,16 @@
-# Check data
+# Data Check
 
-After data migration, you may want to compare the source data and the target data. If there are too many records, try sampling check. Before you start, please ensure that the tables to be verified have primary/unique keys.
+After data migration, you may want to compare the source and target data row by row and column by column. If the data volume is too large, you can perform sampling check. Please ensure that the tables to be checked have primary keys/unique keys.
 
-MySQL/PG/Mongo are currently supported for data check.
+Support comparison for MySQL/PG/Mongo.
 
 # Example: MySQL -> MySQL
 
 Refer to [task templates](../../templates/mysql_to_mysql.md) and [tutorial](../tutorial/mysql_to_mysql.md)
 
-## Sampling check
+## Sampling Check
 
-Based on full check configuration, add `sample_interval` for sampling check. The following code means that every 3 records will be sampled once.
-
+In the full check configuration, add `sample_interval` configuration. That is, sample 1 record for every 3 records.
 ```
 [extractor]
 sample_interval=3
@@ -19,7 +18,7 @@ sample_interval=3
 
 ## Note
 
-While this configuration is similar to that of snapshot migration, the only differences are:
+This configuration is similar to the full synchronization task. The only differences are:
 
 ```
 [sinker]
@@ -29,13 +28,13 @@ sink_type=check
 parallel_type=rdb_check
 ```
 
-# Results
+# Check Results
 
-The results are written to logs in JSON format, including diff.log, miss.log, sql.log and summary.log. The logs are stored in the log/check subdirectory.
+The check results are written to the log in json format, including diff.log and miss.log. The logs are stored in the log/check subdirectory.
 
-## diff.log
+## Difference Log (diff.log)
 
-The diff log includes the database (schema), table (tb), primary key/unique key (id_col_values), and the source and target values of the differing columns (diff_col_values).
+Difference logs include database (schema), table (tb), primary key/unique key (id_col_values), source and target values of difference columns (diff_col_values).
 
 ```json
 {"schema":"test_db_1","tb":"one_pk_multi_uk","id_col_values":{"f_0":"5"},"diff_col_values":{"f_1":{"src":"5","dst":"5000"},"f_2":{"src":"ok","dst":"after manual update"}}}
@@ -43,11 +42,13 @@ The diff log includes the database (schema), table (tb), primary key/unique key 
 {"schema":"test_db_1","tb":"one_pk_no_uk","id_col_values":{"f_0":"6"},"diff_col_values":{"f_1":{"src":null,"dst":"1","src_type":"None","dst_type":"Short"}}}
 ```
 
-When the source/target value types differ (for example `Int32` vs `Int64`, or `None` vs `Short`), `src_type`/`dst_type` will be emitted for that column to highlight the type mismatch. This applies to Mongo as well—the checker prints BSON type names when Mongo documents differ.
+When the source and target types are different (such as Int32 vs Int64, or None vs Short), `src_type`/`dst_type` will appear under the corresponding column, clearly marking the type inconsistency. Mongo also applies this rule, and the difference log will output the BSON type name.
 
-## miss.log
+Only when the route renames the schema or table, the log will supplement `target_schema`/`target_tb` to identify the real destination database table; `schema`, `tb` still represent the source, facilitating troubleshooting.
 
-The miss log includes the database (schema), table (tb), and primary key/unique key (id_col_values). Because missing rows lack differing columns, the log does not emit `diff_col_values`.
+## Missing Log (miss.log)
+
+Missing logs include database (schema), table (tb) and primary/unique key (id_col_values). Since missing records do not have difference columns, `diff_col_values` will not be output.
 
 ```json
 {"schema":"test_db_1","tb":"no_pk_one_uk","id_col_values":{"f_1":"8","f_2":"1"}}
@@ -55,16 +56,16 @@ The miss log includes the database (schema), table (tb), and primary key/unique 
 {"schema":"test_db_1","tb":"one_pk_multi_uk","id_col_values":{"f_0":"7"}}
 ```
 
-## Output complete rows
+## Output Full Row
 
-When the business needs the full row content for troubleshooting, enable full-row logging in the `[sinker]` section:
+When the business needs full row content for troubleshooting exceptions, you can enable full row logging in `[sinker]`:
 
 ```
 [sinker]
 output_full_row=true
 ```
 
-When set to `true`, the checker appends `src_row` and `dst_row` to every diff log, and `src_row` to every miss log (full rows are currently available for MySQL, PostgreSQL, and MongoDB; Redis is not supported yet). Example:
+After enabling, all diff.log will append `src_row` and `dst_row`, and miss.log will append `src_row` (currently only supports MySQL/PG/Mongo, Redis is not supported yet). Example:
 
 ```json
 {
@@ -96,60 +97,62 @@ When set to `true`, the checker appends `src_row` and `dst_row` to every diff lo
 }
 ```
 
-Missing entries also include `src_row` when `output_full_row=true`. Example:
+## Output Revise SQL
+
+If the business needs to manually repair different data, you can enable SQL output in `[sinker]`:
+
+```
+[sinker]
+output_revise_sql=true
+# Optional: force WHERE clause to match the whole row
+revise_match_full_row=true
+```
+
+After enabling, diff/miss logs will append the `revise_sql` field. Missing records will generate `INSERT` statements, and difference records will generate `UPDATE` statements. When `revise_match_full_row=true`, even if the table has a primary key, it will use the entire row data to generate the WHERE condition, so as to locate the target data through the full row value. If the route is not renamed, `target_schema`/`target_tb` will not be output, and these two fields are only needed to determine the table where the SQL should be executed when renaming.
+
+`revise_sql` is essentially the SQL that the sinker needs to execute to correct the target data to be consistent with the source; it directly uses the real destination schema/table, so it can be executed directly at the target (refer to `target_schema`/`target_tb` to determine the final target object when routing renames).
+
+Example:
+
+```json
+{
+  "schema": "test_db_1",
+  "tb": "one_pk_no_uk",
+  "target_schema": "target_db",
+  "target_tb": "target_tb",
+  "id_col_values": {"f_0": "4"},
+  "diff_col_values": {"f_1": {"src": "2", "dst": "1"}},
+  "revise_sql": "UPDATE `target_db`.`target_tb` SET `f_1`='2' WHERE `f_0` = 4;"
+}
+```
+
+Missing records will also output `revise_sql`. Example:
 
 ```json
 {
   "schema": "test_db_1",
   "tb": "test_table",
-  "id_col_values": {
-    "id": "3"
-  },
-  "src_row": {
-    "id": 3,
-    "name": "Charlie",
-    "age": 35,
-    "email": "charlie@example.com"
-  }
+  "id_col_values": {"id": "3"},
+  "revise_sql": "INSERT INTO `test_db_1`.`test_table`(`id`,`name`,`age`,`email`) VALUES(3,'Charlie',35,'charlie@example.com');"
 }
 ```
 
-## Output revise SQL
-
-If you want to fix data manually, enable SQL generation in the `[sinker]` section:
-
-```
-[sinker]
-output_revise_sql=true
-# optional: force WHERE clause to match the whole row
-revise_match_full_row=true
-```
-
-When `output_revise_sql` is `true`, the checker automatically builds `INSERT` statements for missing rows and `UPDATE` statements for diffs. These statements are written to `sql.log`. With `revise_match_full_row=true`, the `UPDATE` statement matches the entire target row even if a primary/unique key exists.
-
-When routers rename schema or table names, the generated SQL uses the destination names.
-
-`revise_sql` captures the SQL the sinker should execute to reconcile the target engine with the source data captured in the diff. Because it is generated against the destination schema/table, you can run it directly on the sinker.
-
-Example `sql.log`:
-
-```sql
-UPDATE `target_db`.`target_tb` SET `f_1`='2' WHERE `f_0` = 4;
-INSERT INTO `test_db_1`.`test_table`(`id`,`name`,`age`,`email`) VALUES(3,'Charlie',35,'charlie@example.com');
-```
-
-### summary.log
-
-The summary log contains the overall result of the check, such as the number of missing, different, and extra rows.
+### Summary Log (summary.log)
+The summary log contains the overall results of the check, such as start_time, end_time, is_consistent, and the number of miss, diff, extra.
 
 ```json
-{"start_time":"2023-09-01T12:00:00+08:00","end_time":"2023-09-01T12:00:01+08:00","is_consistent":false,"miss_count":1,"diff_count":2,"extra_count":1,"sql_count":3}
+{"start_time": "2023-09-01T12:00:00+08:00", "end_time": "2023-09-01T12:00:01+08:00", "is_consistent": false, "miss_count": 1, "diff_count": 2, "extra_count": 1, "sql_count": 3}
 ```
 
-# Other configurations
 
-- For [filter] and [router], refer to [config details](../config.md).
-- Refer to task_config.ini in tests:
+# Reverse Check
+
+Swap the [extractor] and [sinker] configurations to perform reverse check.
+
+# Other Configurations
+
+- Support [router], please refer to [config details](../config.md) for details.
+- Refer to task_config.ini of each type of integration test:
     - dt-tests/tests/mysql_to_mysql/check
     - dt-tests/tests/pg_to_pg/check
     - dt-tests/tests/mongo_to_mongo/check

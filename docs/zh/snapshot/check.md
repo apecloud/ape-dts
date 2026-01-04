@@ -69,7 +69,6 @@ output_full_row=true
 
 ```json
 {
-  
   "schema": "test_db_1",
   "tb": "one_pk_multi_uk",
   "id_col_values": {
@@ -117,7 +116,6 @@ revise_match_full_row=true
 
 ```json
 {
-  
   "schema": "test_db_1",
   "tb": "one_pk_no_uk",
   "target_schema": "target_db",
@@ -132,7 +130,6 @@ revise_match_full_row=true
 
 ```json
 {
-  
   "schema": "test_db_1",
   "tb": "test_table",
   "id_col_values": {"id": "3"},
