@@ -55,13 +55,13 @@ impl Checker for MongoChecker {
     async fn fetch_batch(
         &self,
         tb_meta: &CheckerTbMeta,
-        data: &[RowData],
+        data: &[&RowData],
     ) -> anyhow::Result<Vec<RowData>> {
         let basic_meta = tb_meta.basic();
 
         let mut ids = Vec::with_capacity(data.len());
 
-        for row_data in data {
+        for &row_data in data {
             let id = Self::get_id_from_row(row_data).with_context(|| {
                 format!(
                     "row_data missing `_id`, schema: {}, tb: {}",

@@ -63,13 +63,14 @@ impl BatchCheckExtractor for PgCheckExtractor {
 
         let ignore_cols = self.filter.get_ignore_cols(schema, tb);
         let query_builder = RdbQueryBuilder::new_for_pg(&tb_meta, ignore_cols);
+        let check_row_data_refs: Vec<&RowData> = check_row_data_items.iter().collect();
         let query_info = if check_logs.len() == 1 {
             query_builder.get_select_query(&check_row_data_items[0])?
         } else {
             query_builder.get_batch_select_query(
-                &check_row_data_items,
+                &check_row_data_refs,
                 0,
-                check_row_data_items.len(),
+                check_row_data_refs.len(),
             )?
         };
         let query = query_builder.create_pg_query(&query_info)?;

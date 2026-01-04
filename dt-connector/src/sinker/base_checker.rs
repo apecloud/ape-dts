@@ -5,7 +5,6 @@ use mongodb::bson::Document;
 use std::borrow::Cow;
 use std::collections::{BTreeSet, HashMap};
 
-use std::slice;
 use std::sync::Arc;
 use tokio::time::{sleep, Duration};
 
@@ -204,7 +203,7 @@ pub trait Checker: Clone + Send + Sync + 'static {
     async fn fetch_batch(
         &self,
         tb_meta: &CheckerTbMeta,
-        data: &[RowData],
+        data: &[&RowData],
     ) -> anyhow::Result<Vec<RowData>>;
     async fn fetch_dst_struct(&self, _src: &StructStatement) -> anyhow::Result<StructStatement> {
         Ok(StructStatement::Unknown)
@@ -231,16 +230,15 @@ where
 
 pub struct BaseChecker {}
 
-struct CheckItemContext<'a> {
-    pub extractor_meta_manager: Option<&'a mut RdbMetaManager>,
-    pub reverse_router: &'a RdbRouter,
-    pub output_full_row: bool,
-    pub output_revise_sql: bool,
-    pub revise_match_full_row: bool,
-    pub tb_meta: &'a CheckerTbMeta,
-}
-
 impl BaseChecker {
+    // check if row has null key
+    pub fn has_null_key(row_data: &RowData, id_cols: &[String]) -> bool {
+        row_data.require_after().ok().is_some_and(|after| {
+            id_cols
+                .iter()
+                .any(|col| matches!(after.get(col), Some(ColValue::None) | None))
+        })
+    }
     async fn resolve_inconsistencies_with_retry<B: Checker>(
         checker: &B,
         src_data: &[RowData],
@@ -250,60 +248,40 @@ impl BaseChecker {
         tb_meta: &CheckerTbMeta,
     ) -> anyhow::Result<HashMap<u128, RowData>> {
         let (retry_interval_secs, max_retries) = recheck_settings;
-        let mut inconsistent_indices = Vec::new();
-
-        for (i, src_row) in src_data.iter().enumerate() {
-            let key = src_keys[i];
-            let dst_row = dst_row_data_map.get(&key);
-            if Self::compare_src_dst(src_row, dst_row)?.is_some() {
-                inconsistent_indices.push(i);
-            }
-        }
-
-        if inconsistent_indices.is_empty() || max_retries == 0 {
+        if max_retries == 0 {
             return Ok(dst_row_data_map);
         }
 
-        let mut index = HashMap::with_capacity(src_keys.len());
-        for (i, key) in src_keys.iter().enumerate() {
-            index.insert(*key, i);
-        }
+        let mut retry_indices: Vec<usize> = src_data
+            .iter()
+            .enumerate()
+            .filter(|(i, src_row)| {
+                Self::compare_src_dst(src_row, dst_row_data_map.get(&src_keys[*i]))
+                    .is_ok_and(|r| r.is_some())
+            })
+            .map(|(i, _)| i)
+            .collect();
+
         for _ in 0..max_retries {
-            if inconsistent_indices.is_empty() {
+            if retry_indices.is_empty() {
                 break;
             }
 
             Self::maybe_sleep(retry_interval_secs).await;
 
-            let keys_to_fetch: Vec<u128> =
-                inconsistent_indices.iter().map(|&i| src_keys[i]).collect();
+            // only collect references
+            let retry_rows: Vec<&RowData> = retry_indices.iter().map(|&i| &src_data[i]).collect();
+            let new_dst_rows = checker.fetch_batch(tb_meta, &retry_rows).await?;
 
-            let rows: Vec<RowData> = keys_to_fetch
-                .iter()
-                .filter_map(|k| index.get(k).and_then(|&i| src_data.get(i)))
-                .cloned()
-                .collect();
-            if rows.is_empty() {
-                continue;
-            }
-
-            let new_dst_rows = checker.fetch_batch(tb_meta, &rows).await?;
             for row in new_dst_rows {
                 let key = row.get_hash_code(tb_meta.basic())?;
                 dst_row_data_map.insert(key, row);
             }
 
-            let mut still_inconsistent = Vec::new();
-            for &i in &inconsistent_indices {
-                let src_row = &src_data[i];
-                let key = src_keys[i];
-                let dst_row = dst_row_data_map.get(&key);
-
-                if Self::compare_src_dst(src_row, dst_row)?.is_some() {
-                    still_inconsistent.push(i);
-                }
-            }
-            inconsistent_indices = still_inconsistent;
+            retry_indices.retain(|&i| {
+                Self::compare_src_dst(&src_data[i], dst_row_data_map.get(&src_keys[i]))
+                    .is_ok_and(|r| r.is_some())
+            });
         }
 
         Ok(dst_row_data_map)
@@ -351,24 +329,25 @@ impl BaseChecker {
     async fn handle_inconsistency(
         src_row_data: &RowData,
         dst_row_data: Option<&RowData>,
-        check_result: CheckResult,
-        ctx: &mut CheckItemContext<'_>,
+        common: &mut CheckerCommon,
+        tb_meta: &CheckerTbMeta,
         miss: &mut Vec<CheckLog>,
         diff: &mut Vec<CheckLog>,
         sql_count: &mut usize,
     ) -> anyhow::Result<()> {
+        let check_result = Self::compare_src_dst(src_row_data, dst_row_data)?;
         let Some(res) = check_result else {
             return Ok(());
         };
 
         match res {
             CheckInconsistency::Miss => {
-                let log = Self::build_miss_log(src_row_data, ctx).await?;
+                let log = Self::build_miss_log(src_row_data, common, tb_meta).await?;
                 miss.push(log);
                 let revise_sql = Self::build_revise_sql(
-                    ctx.output_revise_sql,
-                    ctx.revise_match_full_row,
-                    ctx.tb_meta,
+                    common.output_revise_sql,
+                    common.revise_match_full_row,
+                    tb_meta,
                     src_row_data,
                     None,
                     None,
@@ -378,14 +357,16 @@ impl BaseChecker {
             CheckInconsistency::Diff(diff_col_values) => {
                 let dst_row = dst_row_data.context("missing dst row in diff")?;
                 let revise_sql = Self::build_revise_sql(
-                    ctx.output_revise_sql,
-                    ctx.revise_match_full_row,
-                    ctx.tb_meta,
+                    common.output_revise_sql,
+                    common.revise_match_full_row,
+                    tb_meta,
                     src_row_data,
                     Some(dst_row),
                     Some(&diff_col_values),
                 )?;
-                let log = Self::build_diff_log(src_row_data, dst_row, diff_col_values, ctx).await?;
+                let log =
+                    Self::build_diff_log(src_row_data, dst_row, diff_col_values, common, tb_meta)
+                        .await?;
                 diff.push(log);
                 Self::log_revise_sql(revise_sql, sql_count);
             }
@@ -398,7 +379,8 @@ impl BaseChecker {
         src_data: &[RowData],
         src_keys: &[u128],
         mut dst_row_data_map: HashMap<u128, RowData>,
-        ctx: &mut CheckItemContext<'_>,
+        common: &mut CheckerCommon,
+        tb_meta: &CheckerTbMeta,
     ) -> anyhow::Result<(Vec<CheckLog>, Vec<CheckLog>, usize)> {
         let mut miss = Vec::new();
         let mut diff = Vec::new();
@@ -407,12 +389,11 @@ impl BaseChecker {
         for (src_row_data, key) in src_data.iter().zip(src_keys) {
             let dst_row_data = dst_row_data_map.remove(key);
 
-            let check_result = Self::compare_src_dst(src_row_data, dst_row_data.as_ref())?;
             Self::handle_inconsistency(
                 src_row_data,
                 dst_row_data.as_ref(),
-                check_result,
-                ctx,
+                common,
+                tb_meta,
                 &mut miss,
                 &mut diff,
                 &mut sql_count,
@@ -702,19 +683,20 @@ impl BaseChecker {
 
     async fn build_miss_log(
         src_row_data: &RowData,
-        ctx: &mut CheckItemContext<'_>,
+        common: &mut CheckerCommon,
+        tb_meta: &CheckerTbMeta,
     ) -> anyhow::Result<CheckLog> {
-        let (mapped_schema, mapped_tb) = ctx
+        let (mapped_schema, mapped_tb) = common
             .reverse_router
             .get_tb_map(&src_row_data.schema, &src_row_data.tb);
-        let has_col_map = ctx
+        let has_col_map = common
             .reverse_router
             .get_col_map(&src_row_data.schema, &src_row_data.tb)
             .is_some();
         let schema_changed = src_row_data.schema != mapped_schema || src_row_data.tb != mapped_tb;
 
         let routed_row = if has_col_map {
-            Cow::Owned(ctx.reverse_router.route_row(src_row_data.clone()))
+            Cow::Owned(common.reverse_router.route_row(src_row_data.clone()))
         } else {
             Cow::Borrowed(src_row_data)
         };
@@ -724,15 +706,15 @@ impl BaseChecker {
             (mapped_schema.to_string(), mapped_tb.to_string())
         };
 
-        let id_col_values = if let Some(meta_manager) = ctx.extractor_meta_manager.as_mut() {
+        let id_col_values = if let Some(meta_manager) = common.extractor_meta_manager.as_mut() {
             let src_tb_meta = meta_manager.get_tb_meta(&schema, &tb).await?;
             Self::build_id_col_values(routed_row.as_ref(), src_tb_meta)
                 .context("Failed to build ID col values")?
         } else {
-            Self::build_id_col_values(routed_row.as_ref(), ctx.tb_meta.basic()).unwrap_or_default()
+            Self::build_id_col_values(routed_row.as_ref(), tb_meta.basic()).unwrap_or_default()
         };
 
-        let src_row = if ctx.output_full_row {
+        let src_row = if common.output_full_row {
             Self::clone_row_values(routed_row.as_ref())
         } else {
             None
@@ -754,14 +736,15 @@ impl BaseChecker {
         src_row_data: &RowData,
         dst_row_data: &RowData,
         diff_col_values: HashMap<String, DiffColValue>,
-        ctx: &mut CheckItemContext<'_>,
+        common: &mut CheckerCommon,
+        tb_meta: &CheckerTbMeta,
     ) -> anyhow::Result<CheckLog> {
-        let mut log = Self::build_miss_log(src_row_data, ctx).await?;
+        let mut log = Self::build_miss_log(src_row_data, common, tb_meta).await?;
 
         log.diff_col_values =
-            Self::map_diff_col_values(ctx.reverse_router, src_row_data, diff_col_values);
+            Self::map_diff_col_values(&common.reverse_router, src_row_data, diff_col_values);
         log.dst_row =
-            Self::maybe_build_dst_row(ctx.reverse_router, dst_row_data, ctx.output_full_row);
+            Self::maybe_build_dst_row(&common.reverse_router, dst_row_data, common.output_full_row);
 
         Ok(log)
     }
@@ -898,142 +881,56 @@ impl BaseChecker {
         Ok(())
     }
 
-    async fn serial_check<B: Checker>(checker: &mut B, data: Vec<RowData>) -> anyhow::Result<()> {
+    async fn process_batch<B: Checker>(
+        checker: &mut B,
+        data: &[RowData],
+        is_serial_mode: bool,
+    ) -> anyhow::Result<()> {
         if data.is_empty() {
             return Ok(());
         }
 
         let tb_meta = checker.get_tb_meta_by_row(&data[0]).await?;
-        let (
-            output_revise_sql,
-            revise_match_full_row,
-            output_full_row,
-            retry_interval_secs,
-            max_retries,
-        ) = {
-            let common = checker.common_mut();
-            (
-                common.output_revise_sql,
-                common.revise_match_full_row,
-                common.output_full_row,
-                common.retry_interval_secs,
-                common.max_retries,
-            )
-        };
-        let mut miss = Vec::new();
-        let mut diff = Vec::new();
-        let mut sql_count = 0;
-        let mut rts = LimitedQueue::new(std::cmp::min(100, data.len()));
-
-        for src_row_data in data.iter() {
-            let start_time = tokio::time::Instant::now();
-            let mut dst_row_data_map = HashMap::new();
-            if let Some(dst_row) = checker
-                .fetch_batch(&tb_meta, &[src_row_data.clone()])
-                .await?
-                .into_iter()
-                .next()
-            {
-                let key = dst_row.get_hash_code(tb_meta.basic())?;
-                dst_row_data_map.insert(key, dst_row);
-            }
-            rts.push((start_time.elapsed().as_millis() as u64, 1));
-
-            let key = src_row_data.get_hash_code(tb_meta.basic())?;
-            let src_batch = slice::from_ref(src_row_data);
-            let src_keys = slice::from_ref(&key);
-            let final_dst_map = Self::resolve_inconsistencies_with_retry(
-                checker,
-                src_batch,
-                src_keys,
-                dst_row_data_map,
-                (retry_interval_secs, max_retries),
-                &tb_meta,
-            )
-            .await?;
-
-            let (mut m, mut d, s) = {
-                let common = checker.common_mut();
-                let mut ctx = CheckItemContext {
-                    extractor_meta_manager: common.extractor_meta_manager.as_mut(),
-                    reverse_router: &common.reverse_router,
-                    output_full_row,
-                    output_revise_sql,
-                    revise_match_full_row,
-                    tb_meta: &tb_meta,
-                };
-                Self::check_and_generate_logs(src_batch, src_keys, final_dst_map, &mut ctx).await?
-            };
-            miss.append(&mut m);
-            diff.append(&mut d);
-            sql_count += s;
-        }
-
-        Self::log_dml(&miss, &diff);
-        let summary = &mut checker.common_mut().summary;
-        summary.miss_count += miss.len();
-        summary.diff_count += diff.len();
-        if sql_count > 0 {
-            summary.sql_count = Some(summary.sql_count.unwrap_or(0) + sql_count);
-        }
-
-        let monitor = checker.common_mut().monitor.clone();
-        BaseSinker::update_serial_monitor(&monitor, data.len() as u64, 0).await?;
-        BaseSinker::update_monitor_rt(&monitor, &rts).await
-    }
-
-    async fn batch_check<B: Checker>(checker: &mut B, data: &[RowData]) -> anyhow::Result<()> {
-        let first_row = data.first().context("empty batch")?;
-        let tb_meta = checker.get_tb_meta_by_row(first_row).await?;
-
         let start_time = tokio::time::Instant::now();
-        let dst_rows = checker.fetch_batch(&tb_meta, data).await?;
-        let mut dst_row_data_map = HashMap::new();
+
+        // 1. batch fetch all dst rows and start metrics
+        let data_refs: Vec<&RowData> = data.iter().collect();
+        let dst_rows = checker.fetch_batch(&tb_meta, &data_refs).await?;
+        let mut dst_row_data_map = HashMap::with_capacity(dst_rows.len());
         for row in dst_rows {
-            let hash_code = row.get_hash_code(tb_meta.basic())?;
-            dst_row_data_map.insert(hash_code, row);
+            let key = row.get_hash_code(tb_meta.basic())?;
+            dst_row_data_map.insert(key, row);
         }
         let mut rts = LimitedQueue::new(1);
         rts.push((start_time.elapsed().as_millis() as u64, 1));
-
-        let (output_revise_sql, revise_match_full_row, output_full_row, recheck_settings) = {
+        let (retry_interval_secs, max_retries) = {
             let common = checker.common_mut();
-            (
-                common.output_revise_sql,
-                common.revise_match_full_row,
-                common.output_full_row,
-                (common.retry_interval_secs, common.max_retries),
-            )
+            (common.retry_interval_secs, common.max_retries)
         };
-        let src_keys = data
+
+        // 2. compute src keys
+        let src_keys: Vec<u128> = data
             .iter()
             .map(|row| row.get_hash_code(tb_meta.basic()))
-            .collect::<anyhow::Result<Vec<u128>>>()?;
+            .collect::<anyhow::Result<_>>()?;
+
+        // 3. resolve inconsistencies with retry
         let final_dst_map = Self::resolve_inconsistencies_with_retry(
             checker,
             data,
             &src_keys,
             dst_row_data_map,
-            recheck_settings,
+            (retry_interval_secs, max_retries),
             &tb_meta,
         )
         .await?;
 
+        // 4. check and generate logs
         let (miss, diff, sql_count) = {
             let common = checker.common_mut();
-            let mut ctx = CheckItemContext {
-                extractor_meta_manager: common.extractor_meta_manager.as_mut(),
-                reverse_router: &common.reverse_router,
-                output_full_row,
-                output_revise_sql,
-                revise_match_full_row,
-                tb_meta: &tb_meta,
-            };
-            Self::check_and_generate_logs(data, &src_keys, final_dst_map, &mut ctx).await?
+            Self::check_and_generate_logs(data, &src_keys, final_dst_map, common, &tb_meta).await?
         };
-
         Self::log_dml(&miss, &diff);
-
         let summary = &mut checker.common_mut().summary;
         summary.end_time = chrono::Local::now().to_rfc3339();
         summary.miss_count += miss.len();
@@ -1042,9 +939,22 @@ impl BaseChecker {
             summary.sql_count = Some(summary.sql_count.unwrap_or(0) + sql_count);
         }
 
+        // 5. update monitor metrics
         let monitor = checker.common_mut().monitor.clone();
-        BaseSinker::update_batch_monitor(&monitor, data.len() as u64, 0).await?;
+        if is_serial_mode {
+            BaseSinker::update_serial_monitor(&monitor, data.len() as u64, 0).await?;
+        } else {
+            BaseSinker::update_batch_monitor(&monitor, data.len() as u64, 0).await?;
+        }
         BaseSinker::update_monitor_rt(&monitor, &rts).await
+    }
+
+    async fn serial_check<B: Checker>(checker: &mut B, data: Vec<RowData>) -> anyhow::Result<()> {
+        Self::process_batch(checker, &data, true).await
+    }
+
+    async fn batch_check<B: Checker>(checker: &mut B, data: &[RowData]) -> anyhow::Result<()> {
+        Self::process_batch(checker, data, false).await
     }
 
     pub async fn close<B: Checker>(checker: &mut B) -> anyhow::Result<()> {

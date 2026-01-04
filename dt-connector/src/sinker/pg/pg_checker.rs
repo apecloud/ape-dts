@@ -6,10 +6,10 @@ use std::collections::HashSet;
 use crate::{
     meta_fetcher::pg::pg_struct_fetcher::PgStructFetcher,
     rdb_query_builder::RdbQueryBuilder,
-    sinker::base_checker::{Checker, CheckerCommon, CheckerTbMeta},
+    sinker::base_checker::{BaseChecker, Checker, CheckerCommon, CheckerTbMeta},
 };
 use dt_common::meta::{
-    col_value::ColValue, pg::pg_meta_manager::PgMetaManager, row_data::RowData,
+    pg::pg_meta_manager::PgMetaManager, row_data::RowData,
     struct_meta::statement::struct_statement::StructStatement,
 };
 
@@ -38,7 +38,7 @@ impl Checker for PgChecker {
     async fn fetch_batch(
         &self,
         tb_meta: &CheckerTbMeta,
-        data: &[RowData],
+        data: &[&RowData],
     ) -> anyhow::Result<Vec<RowData>> {
         let pg_meta = tb_meta.pg()?;
         let qb = RdbQueryBuilder::new_for_pg(pg_meta, None);
@@ -46,16 +46,8 @@ impl Checker for PgChecker {
         let mut res = Vec::with_capacity(data.len());
         let mut batch_rows = Vec::with_capacity(data.len());
 
-        for row in data {
-            let has_null_key = row.require_after().ok().map_or(false, |after| {
-                pg_meta
-                    .basic
-                    .id_cols
-                    .iter()
-                    .any(|col| matches!(after.get(col), Some(ColValue::None) | None))
-            });
-
-            if has_null_key {
+        for &row in data {
+            if BaseChecker::has_null_key(row, &pg_meta.basic.id_cols) {
                 let query_info = qb.get_select_query(row)?;
                 let query = qb.create_pg_query(&query_info)?;
                 let mut rows = query.fetch(&self.conn_pool);
@@ -63,7 +55,7 @@ impl Checker for PgChecker {
                     res.push(RowData::from_pg_row(&r, pg_meta, &None));
                 }
             } else {
-                batch_rows.push(row.clone());
+                batch_rows.push(row);
             }
         }
 

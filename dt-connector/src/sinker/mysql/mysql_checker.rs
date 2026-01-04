@@ -6,10 +6,10 @@ use std::collections::HashSet;
 use crate::{
     meta_fetcher::mysql::mysql_struct_fetcher::MysqlStructFetcher,
     rdb_query_builder::RdbQueryBuilder,
-    sinker::base_checker::{Checker, CheckerCommon, CheckerTbMeta},
+    sinker::base_checker::{BaseChecker, Checker, CheckerCommon, CheckerTbMeta},
 };
 use dt_common::meta::{
-    col_value::ColValue, mysql::mysql_meta_manager::MysqlMetaManager, row_data::RowData,
+    mysql::mysql_meta_manager::MysqlMetaManager, row_data::RowData,
     struct_meta::statement::struct_statement::StructStatement,
 };
 
@@ -38,7 +38,7 @@ impl Checker for MysqlChecker {
     async fn fetch_batch(
         &self,
         tb_meta: &CheckerTbMeta,
-        data: &[RowData],
+        data: &[&RowData],
     ) -> anyhow::Result<Vec<RowData>> {
         let mysql_meta = tb_meta.mysql()?;
         let qb = RdbQueryBuilder::new_for_mysql(mysql_meta, None);
@@ -46,16 +46,8 @@ impl Checker for MysqlChecker {
         let mut res = Vec::with_capacity(data.len());
         let mut batch_rows = Vec::with_capacity(data.len());
 
-        for row in data {
-            let has_null_key = row.require_after().ok().map_or(false, |after| {
-                mysql_meta
-                    .basic
-                    .id_cols
-                    .iter()
-                    .any(|col| matches!(after.get(col), Some(ColValue::None) | None))
-            });
-
-            if has_null_key {
+        for &row in data {
+            if BaseChecker::has_null_key(row, &mysql_meta.basic.id_cols) {
                 let query_info = qb.get_select_query(row)?;
                 let query = qb.create_mysql_query(&query_info)?;
                 let mut rows = query.fetch(&self.conn_pool);
@@ -63,7 +55,7 @@ impl Checker for MysqlChecker {
                     res.push(RowData::from_mysql_row(&r, mysql_meta, &None));
                 }
             } else {
-                batch_rows.push(row.clone());
+                batch_rows.push(row);
             }
         }
 
@@ -105,7 +97,7 @@ impl Checker for MysqlChecker {
         match src {
             StructStatement::MysqlCreateDatabase(_) => {
                 let statement = struct_fetcher
-                    .get_create_database_statements(&schema)
+                    .get_create_database_statements(schema)
                     .await?
                     .into_iter()
                     .next();
@@ -116,7 +108,7 @@ impl Checker for MysqlChecker {
             StructStatement::MysqlCreateTable(_) => {
                 if let Some(table_name) = table {
                     let statement = struct_fetcher
-                        .get_create_table_statements(&schema, &table_name)
+                        .get_create_table_statements(schema, table_name)
                         .await?
                         .into_iter()
                         .next();
