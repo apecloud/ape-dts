@@ -56,7 +56,7 @@ mod test {
     #[tokio::test]
     #[serial]
     async fn check_recheck_struct_recover_test() {
-        TestBase::run_recheck_test("pg_to_pg/check/recheck_struct_recover", 1).await;
+        TestBase::run_recheck_test("pg_to_pg/check/recheck_struct_recover").await;
     }
 
     #[tokio::test]
@@ -68,6 +68,6 @@ mod test {
     #[tokio::test]
     #[serial]
     async fn check_recheck_recover_test() {
-        TestBase::run_recheck_test("pg_to_pg/check/recheck_recover", 1).await;
+        TestBase::run_recheck_test("pg_to_pg/check/recheck_recover").await;
     }
 }

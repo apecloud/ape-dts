@@ -163,6 +163,26 @@ pub enum SinkerConfig {
     },
 }
 
+impl SinkerConfig {
+    pub fn get_retry_interval_secs(&self) -> u64 {
+        match self {
+            SinkerConfig::MysqlCheck {
+                retry_interval_secs,
+                ..
+            } => *retry_interval_secs,
+            SinkerConfig::PgCheck {
+                retry_interval_secs,
+                ..
+            } => *retry_interval_secs,
+            SinkerConfig::MongoCheck {
+                retry_interval_secs,
+                ..
+            } => *retry_interval_secs,
+            _ => 0,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default, Hash)]
 pub struct BasicSinkerConfig {
     pub sink_type: SinkType,

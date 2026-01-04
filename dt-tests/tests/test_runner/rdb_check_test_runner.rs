@@ -41,10 +41,13 @@ impl RdbCheckTestRunner {
         Ok(())
     }
 
-    pub async fn run_recheck_test(&self, delay_secs: u64) -> anyhow::Result<()> {
+    pub async fn run_recheck_test(&self) -> anyhow::Result<()> {
         CheckUtil::clear_check_log(&self.dst_check_log_dir);
         self.base.execute_prepare_sqls().await?;
         self.base.execute_test_sqls().await?;
+
+        let retry_interval_secs = self.base.base.get_config().sinker.get_retry_interval_secs();
+        let delay_secs = std::cmp::max(1, retry_interval_secs / 2);
 
         let pool_mysql = self.base.dst_conn_pool_mysql.clone();
         let pool_pg = self.base.dst_conn_pool_pg.clone();

@@ -82,12 +82,12 @@ mod test {
     #[tokio::test]
     #[serial]
     async fn check_recheck_recover_test() {
-        TestBase::run_recheck_test("mysql_to_mysql/check/recheck_recover", 1).await;
+        TestBase::run_recheck_test("mysql_to_mysql/check/recheck_recover").await;
     }
 
     #[tokio::test]
     #[serial]
     async fn check_recheck_struct_recover_test() {
-        TestBase::run_recheck_test("mysql_to_mysql/check/recheck_struct_recover", 1).await;
+        TestBase::run_recheck_test("mysql_to_mysql/check/recheck_struct_recover").await;
     }
 }

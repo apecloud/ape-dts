@@ -135,9 +135,9 @@ impl TestBase {
         runner.close().await.unwrap();
     }
 
-    pub async fn run_recheck_test(test_dir: &str, delay_secs: u64) {
+    pub async fn run_recheck_test(test_dir: &str) {
         let runner = RdbCheckTestRunner::new(test_dir).await.unwrap();
-        runner.run_recheck_test(delay_secs).await.unwrap();
+        runner.run_recheck_test().await.unwrap();
         runner.close().await.unwrap();
     }
 
@@ -194,9 +194,9 @@ impl TestBase {
         runner.run_check_test().await.unwrap();
     }
 
-    pub async fn run_mongo_recheck_test(test_dir: &str, delay_secs: u64) {
+    pub async fn run_mongo_recheck_test(test_dir: &str) {
         let runner = MongoCheckTestRunner::new(test_dir).await.unwrap();
-        runner.run_recheck_test(delay_secs).await.unwrap();
+        runner.run_recheck_test().await.unwrap();
     }
 
     pub async fn run_mongo_revise_test(test_dir: &str) {
