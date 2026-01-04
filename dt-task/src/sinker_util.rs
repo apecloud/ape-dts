@@ -136,8 +136,8 @@ impl SinkerUtil {
                 output_full_row,
                 output_revise_sql,
                 revise_match_full_row,
-                recheck_interval_secs,
-                recheck_attempts,
+                retry_interval_secs,
+                max_retries,
                 ..
             } => {
                 let reverse_router = create_router!(config, Mysql).reverse();
@@ -167,8 +167,8 @@ impl SinkerUtil {
                             output_full_row,
                             output_revise_sql,
                             revise_match_full_row,
-                            recheck_interval_secs,
-                            recheck_attempts,
+                            retry_interval_secs,
+                            max_retries,
                             summary: CheckSummaryLog {
                                 start_time: Local::now().to_rfc3339(),
                                 ..Default::default()
@@ -216,8 +216,8 @@ impl SinkerUtil {
                 output_full_row,
                 output_revise_sql,
                 revise_match_full_row,
-                recheck_interval_secs,
-                recheck_attempts,
+                retry_interval_secs,
+                max_retries,
                 ..
             } => {
                 let reverse_router = create_router!(config, Pg).reverse();
@@ -247,8 +247,8 @@ impl SinkerUtil {
                             output_full_row,
                             output_revise_sql,
                             revise_match_full_row,
-                            recheck_interval_secs,
-                            recheck_attempts,
+                            retry_interval_secs,
+                            max_retries,
                             summary: CheckSummaryLog {
                                 start_time: Local::now().to_rfc3339(),
                                 ..Default::default()
@@ -284,8 +284,8 @@ impl SinkerUtil {
                 batch_size,
                 output_full_row,
                 output_revise_sql,
-                recheck_interval_secs,
-                recheck_attempts,
+                retry_interval_secs,
+                max_retries,
                 ..
             } => {
                 let reverse_router = create_router!(config, Mongo).reverse();
@@ -308,8 +308,8 @@ impl SinkerUtil {
                             output_full_row,
                             output_revise_sql,
                             revise_match_full_row: false,
-                            recheck_interval_secs,
-                            recheck_attempts,
+                            retry_interval_secs,
+                            max_retries,
                             summary: CheckSummaryLog {
                                 start_time: Local::now().to_rfc3339(),
                                 ..Default::default()

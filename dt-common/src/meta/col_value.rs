@@ -65,6 +65,41 @@ impl ColValue {
         }
     }
 
+    pub fn type_name(&self) -> &'static str {
+        match self {
+            ColValue::None => "None",
+            ColValue::Bool(_) => "Bool",
+            ColValue::Tiny(_) => "Tiny",
+            ColValue::UnsignedTiny(_) => "UnsignedTiny",
+            ColValue::Short(_) => "Short",
+            ColValue::UnsignedShort(_) => "UnsignedShort",
+            ColValue::Long(_) => "Long",
+            ColValue::UnsignedLong(_) => "UnsignedLong",
+            ColValue::LongLong(_) => "LongLong",
+            ColValue::UnsignedLongLong(_) => "UnsignedLongLong",
+            ColValue::Float(_) => "Float",
+            ColValue::Double(_) => "Double",
+            ColValue::Decimal(_) => "Decimal",
+            ColValue::Time(_) => "Time",
+            ColValue::Date(_) => "Date",
+            ColValue::DateTime(_) => "DateTime",
+            ColValue::Timestamp(_) => "Timestamp",
+            ColValue::Year(_) => "Year",
+            ColValue::String(_) => "String",
+            ColValue::RawString(_) => "RawString",
+            ColValue::Blob(_) => "Blob",
+            ColValue::Bit(_) => "Bit",
+            ColValue::Set(_) => "Set",
+            ColValue::Enum(_) => "Enum",
+            ColValue::Set2(_) => "Set2",
+            ColValue::Enum2(_) => "Enum2",
+            ColValue::Json(_) => "Json",
+            ColValue::Json2(_) => "Json2",
+            ColValue::Json3(_) => "Json3",
+            ColValue::MongoDoc(_) => "MongoDoc",
+        }
+    }
+
     pub fn to_option_string(&self) -> Option<String> {
         match self {
             ColValue::Tiny(v) => Some(v.to_string()),
