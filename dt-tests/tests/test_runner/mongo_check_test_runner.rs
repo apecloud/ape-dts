@@ -1,7 +1,8 @@
 use super::{check_util::CheckUtil, mongo_test_runner::MongoTestRunner};
+use std::sync::Arc;
 
 pub struct MongoCheckTestRunner {
-    base: std::sync::Arc<MongoTestRunner>,
+    base: Arc<MongoTestRunner>,
     dst_check_log_dir: String,
     expect_check_log_dir: String,
 }
@@ -12,7 +13,7 @@ impl MongoCheckTestRunner {
         let (expect_check_log_dir, dst_check_log_dir) =
             CheckUtil::get_check_log_dir(&base.base, "");
         Ok(Self {
-            base: std::sync::Arc::new(base),
+            base: Arc::new(base),
             dst_check_log_dir,
             expect_check_log_dir,
         })
