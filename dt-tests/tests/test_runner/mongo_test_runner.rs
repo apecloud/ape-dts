@@ -163,21 +163,21 @@ impl MongoTestRunner {
             let (src_insert_sqls, src_update_sqls, src_delete_sqls) =
                 Self::slice_sqls_by_type(sqls);
             // insert
-            Self::execute_dmls(self, src_mongo_client, db, &src_insert_sqls)
+            self.execute_dmls(src_mongo_client, db, &src_insert_sqls)
                 .await
                 .unwrap();
             TimeUtil::sleep_millis(parse_millis).await;
             self.compare_db_data(db).await;
 
             // update
-            Self::execute_dmls(self, src_mongo_client, db, &src_update_sqls)
+            self.execute_dmls(src_mongo_client, db, &src_update_sqls)
                 .await
                 .unwrap();
             TimeUtil::sleep_millis(parse_millis).await;
             self.compare_db_data(db).await;
 
             // delete
-            Self::execute_dmls(self, src_mongo_client, db, &src_delete_sqls)
+            self.execute_dmls(src_mongo_client, db, &src_delete_sqls)
                 .await
                 .unwrap();
             TimeUtil::sleep_millis(parse_millis).await;
@@ -237,12 +237,12 @@ impl MongoTestRunner {
         let dst_sqls = Self::slice_sqls_by_db(&self.base.dst_prepare_sqls);
 
         for (db, sqls) in src_sqls.iter() {
-            Self::execute_ddls(self, src_mongo_client, db, sqls).await?;
-            Self::execute_dmls(self, src_mongo_client, db, sqls).await?;
+            self.execute_ddls(src_mongo_client, db, sqls).await?;
+            self.execute_dmls(src_mongo_client, db, sqls).await?;
         }
         for (db, sqls) in dst_sqls.iter() {
-            Self::execute_ddls(self, dst_mongo_client, db, sqls).await?;
-            Self::execute_dmls(self, dst_mongo_client, db, sqls).await?;
+            self.execute_ddls(dst_mongo_client, db, sqls).await?;
+            self.execute_dmls(dst_mongo_client, db, sqls).await?;
         }
         Ok(())
     }
@@ -255,12 +255,12 @@ impl MongoTestRunner {
         let dst_sqls = Self::slice_sqls_by_db(&self.base.dst_clean_sqls);
 
         for (db, sqls) in src_sqls.iter() {
-            Self::execute_ddls(self, src_mongo_client, db, sqls).await?;
-            Self::execute_dmls(self, src_mongo_client, db, sqls).await?;
+            self.execute_ddls(src_mongo_client, db, sqls).await?;
+            self.execute_dmls(src_mongo_client, db, sqls).await?;
         }
         for (db, sqls) in dst_sqls.iter() {
-            Self::execute_ddls(self, dst_mongo_client, db, sqls).await?;
-            Self::execute_dmls(self, dst_mongo_client, db, sqls).await?;
+            self.execute_ddls(dst_mongo_client, db, sqls).await?;
+            self.execute_dmls(dst_mongo_client, db, sqls).await?;
         }
         Ok(())
     }
