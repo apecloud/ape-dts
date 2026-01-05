@@ -50,65 +50,12 @@ CREATE TABLE IF NOT EXISTS apecloud_resumer_test.ape_task_position (
   CONSTRAINT uk_task_id_task_type_position_key UNIQUE (task_id, resumer_type, position_key)
 );
 
-insert into apecloud_resumer_test.ape_task_position (task_id, resumer_type, position_key, position_data) values (
-  'resume_db_test_1', 
-  'SnapshotFinished', 
-  'test_db_*.*-finished_table_*$1', 
-  '{"type":"RdbSnapshotFinished","db_type":"pg","schema":"test_db_*.*","tb":"finished_table_*$1"}'
-);
-
-insert into apecloud_resumer_test.ape_task_position (task_id, resumer_type, position_key, position_data) values (
-  'resume_db_test_1', 
-  'SnapshotFinished', 
-  'test_db_*.*-finished_table_*$2', 
-  '{"type":"RdbSnapshotFinished","db_type":"pg","schema":"test_db_*.*","tb":"finished_table_*$2"}'
-);
-
-insert into apecloud_resumer_test.ape_task_position (task_id, resumer_type, position_key, position_data) values (
-  'resume_db_test_1', 
-  'SnapshotDoing', 
-  'public-resume_table_1', 
-  '{"type":"RdbSnapshot","db_type":"pg","schema":"public","tb":"resume_table_1","order_key":{"single":["pk","1"]}}'
-);
-
-insert into apecloud_resumer_test.ape_task_position (task_id, resumer_type, position_key, position_data) values (
-  'resume_db_test_1', 
-  'SnapshotDoing', 
-  'public-resume_table_2', 
-  '{"type":"RdbSnapshot","db_type":"pg","schema":"public","tb":"resume_table_2","order_key":{"single":["p.k","1"]}}'
-);
-
-insert into apecloud_resumer_test.ape_task_position (task_id, resumer_type, position_key, position_data) values (
-  'resume_db_test_1', 
-  'SnapshotDoing', 
-  'public-resume_table_3', 
-  '{"type":"RdbSnapshot","db_type":"pg","schema":"public","tb":"resume_table_3","order_key":{"composite":[["f_0","1"],["f_1","30"]]}}'
-);
-
-insert into apecloud_resumer_test.ape_task_position (task_id, resumer_type, position_key, position_data) values (
-  'resume_db_test_1', 
-  'SnapshotDoing', 
-  'public-nullable_composite_unique_key_table', 
-  '{"type":"RdbSnapshot","db_type":"pg","schema":"public","tb":"nullable_composite_unique_key_table","order_key":{"composite":[["uk1","6"],["uk2","6"]]}}'
-);
-
-insert into apecloud_resumer_test.ape_task_position (task_id, resumer_type, position_key, position_data) values (
-  'resume_db_test_1', 
-  'SnapshotDoing', 
-  'public-resume_table_*$4', 
-  '{"type":"RdbSnapshot","db_type":"pg","schema":"public","tb":"resume_table_*$4","order_key":{"single":["p.k","1"]}}'
-);
-
-insert into apecloud_resumer_test.ape_task_position (task_id, resumer_type, position_key, position_data) values (
-  'resume_db_test_1', 
-  'SnapshotDoing', 
-  'test_db_*.*-resume_table_*$5', 
-  '{"type":"RdbSnapshot","db_type":"pg","schema":"test_db_*.*","tb":"resume_table_*$5","order_key":{"single":["p.k","1"]}}'
-);
-
-insert into apecloud_resumer_test.ape_task_position (task_id, resumer_type, position_key, position_data) values (
-  'resume_db_test_1', 
-  'SnapshotDoing', 
-  'public-bytea_pk_test', 
-  '{"type":"RdbSnapshot","db_type":"pg","schema":"public","tb":"bytea_pk_test","order_key":{"composite":[["category_id","cat1"],["binary_id","e4bda0e5a5bde4b896e7958c30"]]}}'
-);
+insert into apecloud_resumer_test.ape_task_position (task_id, resumer_type, position_key, position_data) values ('resume_db_test_1', 'SnapshotFinished', 'test_db_*.*-finished_table_*$1', '{"type":"RdbSnapshotFinished","db_type":"pg","schema":"test_db_*.*","tb":"finished_table_*$1"}');
+insert into apecloud_resumer_test.ape_task_position (task_id, resumer_type, position_key, position_data) values ('resume_db_test_1', 'SnapshotFinished', 'test_db_*.*-finished_table_*$2', '{"type":"RdbSnapshotFinished","db_type":"pg","schema":"test_db_*.*","tb":"finished_table_*$2"}');
+insert into apecloud_resumer_test.ape_task_position (task_id, resumer_type, position_key, position_data) values ('resume_db_test_1', 'SnapshotDoing', 'public-resume_table_1', '{"type":"RdbSnapshot","db_type":"pg","schema":"public","tb":"resume_table_1","order_key":{"single":["pk","1"]}}');
+insert into apecloud_resumer_test.ape_task_position (task_id, resumer_type, position_key, position_data) values ('resume_db_test_1', 'SnapshotDoing', 'public-resume_table_2', '{"type":"RdbSnapshot","db_type":"pg","schema":"public","tb":"resume_table_2","order_key":{"single":["p.k","1"]}}');
+insert into apecloud_resumer_test.ape_task_position (task_id, resumer_type, position_key, position_data) values ('resume_db_test_1', 'SnapshotDoing', 'public-resume_table_3', '{"type":"RdbSnapshot","db_type":"pg","schema":"public","tb":"resume_table_3","order_key":{"composite":[["f_0","1"],["f_1","30"]]}}');
+insert into apecloud_resumer_test.ape_task_position (task_id, resumer_type, position_key, position_data) values ('resume_db_test_1', 'SnapshotDoing', 'public-nullable_composite_unique_key_table', '{"type":"RdbSnapshot","db_type":"pg","schema":"public","tb":"nullable_composite_unique_key_table","order_key":{"composite":[["uk1","6"],["uk2","6"]]}}');
+insert into apecloud_resumer_test.ape_task_position (task_id, resumer_type, position_key, position_data) values ('resume_db_test_1', 'SnapshotDoing', 'public-resume_table_*$4', '{"type":"RdbSnapshot","db_type":"pg","schema":"public","tb":"resume_table_*$4","order_key":{"single":["p.k","1"]}}');
+insert into apecloud_resumer_test.ape_task_position (task_id, resumer_type, position_key, position_data) values ('resume_db_test_1', 'SnapshotDoing', 'test_db_*.*-resume_table_*$5', '{"type":"RdbSnapshot","db_type":"pg","schema":"test_db_*.*","tb":"resume_table_*$5","order_key":{"single":["p.k","1"]}}');
+insert into apecloud_resumer_test.ape_task_position (task_id, resumer_type, position_key, position_data) values ('resume_db_test_1', 'SnapshotDoing', 'public-bytea_pk_test', '{"type":"RdbSnapshot","db_type":"pg","schema":"public","tb":"bytea_pk_test","order_key":{"composite":[["category_id","cat1"],["binary_id","e4bda0e5a5bde4b896e7958c30"]]}}');
