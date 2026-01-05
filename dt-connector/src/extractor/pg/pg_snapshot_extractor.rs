@@ -90,8 +90,11 @@ impl PgSnapshotExtractor {
             .get_tb_meta(&self.schema, &self.tb)
             .await?
             .to_owned();
-        // TODO(wl): get user defined partition col from config
-        let user_defined_partition_col = "".to_string();
+        let user_defined_partition_col = self
+            .filter
+            .get_partition_col(&self.schema, &self.tb)
+            .cloned()
+            .unwrap_or_default();
         self.validate_user_defined(&mut tb_meta, &user_defined_partition_col)?;
         let mut splitter = PgSnapshotSplitter::new(
             &tb_meta,
@@ -260,7 +263,7 @@ impl PgSnapshotExtractor {
     async fn extract_nulls(
         &mut self,
         tb_meta: &PgTbMeta,
-        order_cols: &[String],
+        order_cols: &Vec<String>,
     ) -> anyhow::Result<u64> {
         let mut extracted_count = 0u64;
         let ignore_cols = self.filter.get_ignore_cols(&self.schema, &self.tb);
@@ -447,12 +450,7 @@ impl PgSnapshotExtractor {
                 partition_col_value =
                     PgColValueConvertor::from_query(&row, &partition_col, &partition_col_type)?;
                 let row_data = RowData::from_pg_row(&row, &tb_meta, &ignore_cols.as_ref());
-                let position = tb_meta.basic.build_position_for_partition(
-                    &DbType::Pg,
-                    &partition_col,
-                    &partition_col_value,
-                );
-                Self::push_row(&buffer, &router, row_data, position).await?;
+                Self::push_row(&buffer, &router, row_data, Position::None).await?;
                 extracted_cnt += 1;
             }
             Ok((chunk_id, extracted_cnt, partition_col_value))
@@ -564,7 +562,11 @@ impl PgSnapshotExtractor {
                     resume_values.insert(position_order_col, col_value);
                 }
             } else {
-                log_info!(r#"`{}`.`{}` has no resume position"#, self.schema, self.tb);
+                log_info!(
+                    r#"{}.{} has no resume position"#,
+                    quote_pg!(&self.schema),
+                    quote_pg!(&self.tb)
+                );
                 return Ok(HashMap::new());
             }
         }

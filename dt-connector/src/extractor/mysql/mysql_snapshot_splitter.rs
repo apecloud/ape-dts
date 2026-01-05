@@ -2,7 +2,6 @@ use std::vec;
 use std::{cmp, collections::HashMap};
 
 use anyhow::Context;
-use dt_common::log_debug;
 use dt_common::meta::position::Position;
 use dt_common::meta::{
     adaptor::{mysql_col_value_convertor::MysqlColValueConvertor, sqlx_ext::SqlxMysqlExt},
@@ -12,11 +11,12 @@ use dt_common::meta::{
 };
 use dt_common::utils::sql_util::*;
 use dt_common::{config::config_enums::DbType, quote_mysql};
+use dt_common::{log_debug, log_info};
 use futures::TryStreamExt;
 use sqlx::{MySql, Pool, Row};
 
+use crate::extractor::splitter;
 use crate::extractor::splitter::Error::*;
-use crate::extractor::{mysql, splitter};
 
 const DISTRIBUTION_FACTOR_LOWER: f64 = 0.05;
 const DISTRIBUTION_FACTOR_UPPER: f64 = 1000.0;
@@ -199,8 +199,8 @@ LIMIT 1",
         );
         let mut rows = sqlx::query(&sql).fetch(&self.conn_pool);
         if let Some(row) = rows.try_next().await? {
-            let row_count: i64 = row.try_get(0)?;
-            return Ok(if row_count < 0 { 0 } else { row_count as u64 });
+            let row_count: u64 = row.try_get(0)?;
+            return Ok(row_count);
         }
         Ok(0)
     }
@@ -294,7 +294,14 @@ FROM
             self.chunk_id_generator += 1;
             chunks.push(SnapshotChunk {
                 chunk_id: self.chunk_id_generator,
-                chunk_range: (cur_value, t_value.clone()),
+                chunk_range: (
+                    if cur_value_i128 != min_value_i128 {
+                        cur_value
+                    } else {
+                        ColValue::None
+                    },
+                    t_value.clone(),
+                ),
             });
             cur_value_i128 = t_i128;
             cur_value = t_value;
@@ -309,12 +316,12 @@ FROM
     ) -> anyhow::Result<Option<SnapshotChunk>> {
         let mut where_clause = String::new();
         if self.current_col_value.is_some() {
-            where_clause = format!("{} > ?", quote_mysql!(tb_meta.basic.partition_col));
+            where_clause = format!("WHERE {} > ?", quote_mysql!(tb_meta.basic.partition_col));
         }
         let partition_col = &self.partition_col;
         let get_next_chunk_end_sql = format!(
             "SELECT MAX({}) AS max_value FROM (
-SELECT {} FROM {}.{} WHERE {} ORDER BY {} ASC LIMIT {}) AS T",
+SELECT {} FROM {}.{} {} ORDER BY {} ASC LIMIT {}) AS T",
             quote_mysql!(partition_col),
             quote_mysql!(partition_col),
             quote_mysql!(tb_meta.basic.schema),

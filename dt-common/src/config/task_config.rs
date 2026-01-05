@@ -271,6 +271,7 @@ impl TaskConfig {
                     schema: String::new(),
                     tb: String::new(),
                     sample_interval: loader.get_with_default(EXTRACTOR, SAMPLE_INTERVAL, 1),
+                    parallel_size: loader.get_with_default(EXTRACTOR, PARALLEL_SIZE, 1),
                     batch_size,
                 },
 
@@ -733,6 +734,7 @@ impl TaskConfig {
             do_structures: loader.get_with_default(FILTER, "do_structures", ASTRISK.to_string()),
             ignore_cmds: loader.get_optional(FILTER, "ignore_cmds"),
             where_conditions: loader.get_optional(FILTER, "where_conditions"),
+            partition_cols: loader.get_optional(FILTER, "partition_cols"),
         })
     }
 

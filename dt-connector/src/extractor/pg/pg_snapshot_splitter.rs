@@ -15,8 +15,8 @@ use dt_common::{config::config_enums::DbType, quote_pg};
 use futures::TryStreamExt;
 use sqlx::{Pool, Postgres, Row};
 
-use crate::extractor::splitter::Error::*;
 use crate::extractor::splitter;
+use crate::extractor::splitter::Error::*;
 
 const DISTRIBUTION_FACTOR_LOWER: f64 = 0.05;
 const DISTRIBUTION_FACTOR_UPPER: f64 = 1000.0;
@@ -184,10 +184,16 @@ impl PgSnapshotSplitter<'_> {
 
     async fn estimate_row_count(&mut self, tb_meta: &RdbTbMeta) -> anyhow::Result<u64> {
         let sql = format!(
-            "SELECT reltuples::bigint AS estimate
-FROM pg_class
-WHERE oid = '\"{}\".\"{}\"'::regclass",
-            tb_meta.schema, tb_meta.tb
+            r#"SELECT
+    c.reltuples::bigint AS row_count
+FROM
+    pg_class c
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+WHERE
+    c.relkind = 'r'
+    AND n.nspname = '{}'
+    AND c.relname = '{}'"#,
+            tb_meta.schema, tb_meta.tb,
         );
         let mut rows = sqlx::query(&sql).fetch(&self.conn_pool);
         if let Some(row) = rows.try_next().await? {
@@ -286,7 +292,14 @@ FROM
             self.chunk_id_generator += 1;
             chunks.push(SnapshotChunk {
                 chunk_id: self.chunk_id_generator,
-                chunk_range: (cur_value, t_value.clone()),
+                chunk_range: (
+                    if cur_value_i128 != min_value_i128 {
+                        cur_value
+                    } else {
+                        ColValue::None
+                    },
+                    t_value.clone(),
+                ),
             });
             cur_value_i128 = t_i128;
             cur_value = t_value;
@@ -301,33 +314,20 @@ FROM
     ) -> anyhow::Result<Option<SnapshotChunk>> {
         let mut where_clause = String::new();
         if self.current_col_value.is_some() {
-            where_clause = format!("{} > $1", quote_pg!(tb_meta.basic.partition_col));
+            where_clause = format!("WHERE {} > $1", quote_pg!(tb_meta.basic.partition_col));
         }
         let partition_col = &self.partition_col;
-        let get_next_chunk_end_sql = if where_clause.is_empty() {
-            format!(
-                "SELECT MAX({}) AS max_value FROM (
-SELECT {} FROM {}.{} ORDER BY {} ASC LIMIT {}) AS T",
-                quote_pg!(partition_col),
-                quote_pg!(partition_col),
-                quote_pg!(tb_meta.basic.schema),
-                quote_pg!(tb_meta.basic.tb),
-                quote_pg!(partition_col),
-                self.batch_size,
-            )
-        } else {
-            format!(
-                "SELECT MAX({}) AS max_value FROM (
-SELECT {} FROM {}.{} WHERE {} ORDER BY {} ASC LIMIT {}) AS T",
-                quote_pg!(partition_col),
-                quote_pg!(partition_col),
-                quote_pg!(tb_meta.basic.schema),
-                quote_pg!(tb_meta.basic.tb),
-                where_clause,
-                quote_pg!(partition_col),
-                self.batch_size,
-            )
-        };
+        let get_next_chunk_end_sql = format!(
+            "SELECT MAX({}) AS max_value FROM (
+SELECT {} FROM {}.{} {} ORDER BY {} ASC LIMIT {}) AS T",
+            quote_pg!(partition_col),
+            quote_pg!(partition_col),
+            quote_pg!(tb_meta.basic.schema),
+            quote_pg!(tb_meta.basic.tb),
+            where_clause,
+            quote_pg!(partition_col),
+            self.batch_size,
+        );
         let partition_col_type = tb_meta.get_col_type(partition_col)?;
         let query = if self.current_col_value.is_some() {
             sqlx::query(&get_next_chunk_end_sql)

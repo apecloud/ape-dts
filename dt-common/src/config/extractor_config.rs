@@ -57,6 +57,7 @@ pub enum ExtractorConfig {
         schema: String,
         tb: String,
         sample_interval: usize,
+        parallel_size: usize,
         batch_size: usize,
     },
 

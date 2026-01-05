@@ -68,6 +68,7 @@ mod tests {
             do_dcls: "".to_string(),
             ignore_cmds: "".to_string(),
             where_conditions: "".to_string(),
+            partition_cols: "".to_string(),
         };
         let router_config = RouterConfig::Rdb {
             schema_map: "db1:db1_tmp".to_string(),

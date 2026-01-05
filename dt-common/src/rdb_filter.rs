@@ -21,6 +21,7 @@ use crate::{
 
 type IgnoreCols = HashMap<(String, String), HashSet<String>>;
 type WhereConditions = HashMap<(String, String), String>;
+type PartitionCols = HashMap<(String, String), String>;
 
 const JSON_PREFIX: &str = "json:";
 
@@ -40,6 +41,7 @@ pub struct RdbFilter {
     pub do_dcls: HashSet<String>,
     pub ignore_cmds: HashSet<String>,
     pub where_conditions: WhereConditions,
+    pub partition_cols: PartitionCols,
     pub cache: DashMap<(String, String), bool>,
 }
 
@@ -58,6 +60,7 @@ impl RdbFilter {
             do_dcls: Self::parse_single_tokens(&config.do_dcls, db_type)?,
             ignore_cmds: Self::parse_single_tokens(&config.ignore_cmds, db_type)?,
             where_conditions: Self::parse_where_conditions(&config.where_conditions)?,
+            partition_cols: Self::parse_partition_cols(&config.partition_cols)?,
             cache: DashMap::new(),
         })
     }
@@ -150,6 +153,11 @@ impl RdbFilter {
 
     pub fn get_where_condition(&self, schema: &str, tb: &str) -> Option<&String> {
         self.where_conditions
+            .get(&(schema.to_string(), tb.to_string()))
+    }
+
+    pub fn get_partition_col(&self, schema: &str, tb: &str) -> Option<&String> {
+        self.partition_cols
             .get(&(schema.to_string(), tb.to_string()))
     }
 
@@ -294,6 +302,26 @@ impl RdbFilter {
             serde_json::from_str(config_str.trim_start_matches(JSON_PREFIX))?;
         for i in config {
             results.insert((i.db, i.tb), i.condition);
+        }
+        Ok(results)
+    }
+
+    fn parse_partition_cols(config_str: &str) -> anyhow::Result<PartitionCols> {
+        let mut results = PartitionCols::new();
+        if config_str.trim().is_empty() {
+            return Ok(results);
+        }
+        // partition_cols=json:[{"db":"test_db","tb":"tb_1","ignore_cols":"id"}]
+        #[derive(Serialize, Deserialize)]
+        struct PartitionColsType {
+            db: String,
+            tb: String,
+            partition_col: String,
+        }
+        let config: Vec<PartitionColsType> =
+            serde_json::from_str(config_str.trim_start_matches(JSON_PREFIX))?;
+        for i in config {
+            results.insert((i.db, i.tb), i.partition_col);
         }
         Ok(results)
     }

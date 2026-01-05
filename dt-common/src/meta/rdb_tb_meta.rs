@@ -71,10 +71,13 @@ impl RdbTbMeta {
     pub fn build_position_for_partition(
         &self,
         db_type: &DbType,
-        partition_col: &str,
+        partition_col: &String,
         partition_col_value: &ColValue,
     ) -> Position {
         // partion_col can be defined by user, not necessary in order_cols
+        if !self.has_col(partition_col) {
+            return Position::None;
+        }
         let order_key = Some(OrderKey::Single((
             partition_col.to_string(),
             partition_col_value.to_option_string(),
