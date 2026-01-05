@@ -115,15 +115,15 @@ impl MongoTestRunner {
             let (src_insert_sqls, src_update_sqls, src_delete_sqls) =
                 Self::slice_sqls_by_type(sqls);
             // insert
-            Self::execute_dmls(self, src_mongo_client, db, &src_insert_sqls)
+            self.execute_dmls(src_mongo_client, db, &src_insert_sqls)
                 .await
                 .unwrap();
             // update
-            Self::execute_dmls(self, src_mongo_client, db, &src_update_sqls)
+            self.execute_dmls(src_mongo_client, db, &src_update_sqls)
                 .await
                 .unwrap();
             // delete
-            Self::execute_dmls(self, src_mongo_client, db, &src_delete_sqls)
+            self.execute_dmls(src_mongo_client, db, &src_delete_sqls)
                 .await
                 .unwrap();
         }
@@ -138,7 +138,7 @@ impl MongoTestRunner {
         for (db, sqls) in src_sqls.iter() {
             let (_, _, src_delete_sqls) = Self::slice_sqls_by_type(sqls);
             // delete
-            Self::execute_dmls(self, src_mongo_client, db, &src_delete_sqls)
+            self.execute_dmls(src_mongo_client, db, &src_delete_sqls)
                 .await
                 .unwrap();
         }
