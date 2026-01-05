@@ -6,8 +6,6 @@ use std::{
 use mongodb::bson::{Bson, Document};
 use serde::{Deserialize, Serialize, Serializer};
 
-use crate::utils::sql_util::SqlUtil;
-
 // #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 // #[serde(tag = "type", content = "value")]
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -67,6 +65,41 @@ impl ColValue {
         }
     }
 
+    pub fn type_name(&self) -> &'static str {
+        match self {
+            ColValue::None => "None",
+            ColValue::Bool(_) => "Bool",
+            ColValue::Tiny(_) => "Tiny",
+            ColValue::UnsignedTiny(_) => "UnsignedTiny",
+            ColValue::Short(_) => "Short",
+            ColValue::UnsignedShort(_) => "UnsignedShort",
+            ColValue::Long(_) => "Long",
+            ColValue::UnsignedLong(_) => "UnsignedLong",
+            ColValue::LongLong(_) => "LongLong",
+            ColValue::UnsignedLongLong(_) => "UnsignedLongLong",
+            ColValue::Float(_) => "Float",
+            ColValue::Double(_) => "Double",
+            ColValue::Decimal(_) => "Decimal",
+            ColValue::Time(_) => "Time",
+            ColValue::Date(_) => "Date",
+            ColValue::DateTime(_) => "DateTime",
+            ColValue::Timestamp(_) => "Timestamp",
+            ColValue::Year(_) => "Year",
+            ColValue::String(_) => "String",
+            ColValue::RawString(_) => "RawString",
+            ColValue::Blob(_) => "Blob",
+            ColValue::Bit(_) => "Bit",
+            ColValue::Set(_) => "Set",
+            ColValue::Enum(_) => "Enum",
+            ColValue::Set2(_) => "Set2",
+            ColValue::Enum2(_) => "Enum2",
+            ColValue::Json(_) => "Json",
+            ColValue::Json2(_) => "Json2",
+            ColValue::Json3(_) => "Json3",
+            ColValue::MongoDoc(_) => "MongoDoc",
+        }
+    }
+
     pub fn to_option_string(&self) -> Option<String> {
         match self {
             ColValue::Tiny(v) => Some(v.to_string()),
@@ -86,7 +119,7 @@ impl ColValue {
             ColValue::Timestamp(v) => Some(v.to_string()),
             ColValue::Year(v) => Some(v.to_string()),
             ColValue::String(v) => Some(v.to_string()),
-            ColValue::RawString(v) => Some(SqlUtil::binary_to_str(v).0),
+            ColValue::RawString(v) => Some(hex::encode(v)),
             ColValue::Bit(v) => Some(v.to_string()),
             ColValue::Set(v) => Some(v.to_string()),
             ColValue::Set2(v) => Some(v.to_string()),
@@ -95,7 +128,7 @@ impl ColValue {
             ColValue::Json(v) => Some(format!("{:?}", v)),
             ColValue::Json2(v) => Some(v.to_string()),
             ColValue::Json3(v) => Some(v.to_string()),
-            ColValue::Blob(v) => Some(SqlUtil::binary_to_str(v).0),
+            ColValue::Blob(v) => Some(hex::encode(v)),
             ColValue::MongoDoc(v) => Some(Self::mongo_doc_to_string(v)),
             ColValue::Bool(v) => Some(v.to_string()),
             ColValue::None => Option::None,

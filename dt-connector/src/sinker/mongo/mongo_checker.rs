@@ -1,125 +1,77 @@
-use std::{collections::HashMap, sync::Arc};
-
-use async_mutex::Mutex;
+use std::collections::HashMap;
 
 use anyhow::Context;
 use async_trait::async_trait;
+
 use mongodb::{
-    bson::{doc, Document},
+    bson::{doc, oid::ObjectId, Bson, Document},
     Client,
 };
+use serde_json::Value as JsonValue;
 use tokio::time::Instant;
 
-use crate::{
-    call_batch_fn,
-    check_log::check_log::CheckSummaryLog,
-    rdb_router::RdbRouter,
-    sinker::{
-        base_checker::{BaseChecker, ReviseSqlContext},
-        base_sinker::BaseSinker,
-    },
-    Sinker,
+use crate::sinker::{
+    base_checker::{Checker, CheckerCommon, CheckerTbMeta},
+    base_sinker::BaseSinker,
 };
 use dt_common::{
-    log_error, log_sql, log_summary,
+    log_error,
     meta::{
         col_value::ColValue,
         mongo::{mongo_constant::MongoConstants, mongo_key::MongoKey},
         rdb_tb_meta::RdbTbMeta,
         row_data::RowData,
-        row_type::RowType,
     },
-    monitor::monitor::Monitor,
     utils::limit_queue::LimitedQueue,
 };
 
 #[derive(Clone)]
 pub struct MongoChecker {
-    pub reverse_router: RdbRouter,
-    pub batch_size: usize,
     pub mongo_client: Client,
-    pub monitor: Arc<Monitor>,
-    pub output_full_row: bool,
-    pub output_revise_sql: bool,
-    pub summary: CheckSummaryLog,
-    pub global_summary: Option<Arc<Mutex<CheckSummaryLog>>>,
+    pub common: CheckerCommon,
 }
 
 #[async_trait]
-impl Sinker for MongoChecker {
-    async fn sink_dml(&mut self, mut data: Vec<RowData>, _batch: bool) -> anyhow::Result<()> {
-        if data.is_empty() {
-            return Ok(());
-        }
-
-        call_batch_fn!(self, data, Self::batch_check);
-        Ok(())
+impl Checker for MongoChecker {
+    fn common_mut(&mut self) -> &mut CheckerCommon {
+        &mut self.common
     }
 
-    async fn close(&mut self) -> anyhow::Result<()> {
-        if self.summary.miss_count > 0
-            || self.summary.diff_count > 0
-            || self.summary.extra_count > 0
-        {
-            self.summary.end_time = chrono::Local::now().to_rfc3339();
-            if let Some(global_summary) = &self.global_summary {
-                let mut global_summary = global_summary.lock().await;
-                global_summary.merge(&self.summary);
-            } else {
-                log_summary!("{}", self.summary);
+    async fn get_tb_meta_by_row(&mut self, row: &RowData) -> anyhow::Result<CheckerTbMeta> {
+        let mut meta = Self::mock_tb_meta(&row.schema, &row.tb);
+        if let Some(after) = &row.after {
+            meta.cols = after.keys().cloned().collect();
+        }
+        // Ensure standard Mongo columns are always checked
+        for col in [MongoConstants::DOC, MongoConstants::ID] {
+            let col = col.to_string();
+            if !meta.cols.contains(&col) {
+                meta.cols.push(col);
             }
         }
-        Ok(())
+        Ok(CheckerTbMeta::Mongo(meta))
     }
-}
 
-impl MongoChecker {
-    async fn batch_check(
-        &mut self,
-        data: &mut [RowData],
-        start_index: usize,
-        batch_size: usize,
-    ) -> anyhow::Result<()> {
-        let schema = &data[0].schema;
-        let tb = &data[0].tb;
-        let tb_meta = Self::mock_tb_meta(schema, tb);
-        let collection = self
-            .mongo_client
-            .database(schema)
-            .collection::<Document>(tb);
+    async fn fetch_batch(
+        &self,
+        tb_meta: &CheckerTbMeta,
+        data: &[&RowData],
+    ) -> anyhow::Result<Vec<RowData>> {
+        let basic_meta = tb_meta.basic();
 
-        let mut ids = Vec::new();
-        let mut src_row_data_map: HashMap<MongoKey, &RowData> = HashMap::new();
+        let mut ids = Vec::with_capacity(data.len());
 
-        for row_data in data.iter().skip(start_index).take(batch_size) {
-            let after = row_data.require_after()?;
-
-            let doc = after
-                .get(MongoConstants::DOC)
-                .and_then(|v| match v {
-                    ColValue::MongoDoc(doc) => Some(doc),
-                    _ => None,
-                })
-                .with_context(|| {
-                    format!(
-                        "row_data missing mongo doc, schema: {}, tb: {}",
-                        row_data.schema, row_data.tb
-                    )
-                })?;
-
-            let id = doc.get(MongoConstants::ID).with_context(|| {
+        for &row_data in data {
+            let id = Self::get_id_from_row(row_data).with_context(|| {
                 format!(
                     "row_data missing `_id`, schema: {}, tb: {}",
                     row_data.schema, row_data.tb
                 )
             })?;
 
-            if let Some(key) = MongoKey::from_doc(doc) {
-                src_row_data_map.insert(key, row_data);
+            let doc = doc! { MongoConstants::ID: id.clone() };
+            if MongoKey::from_doc(&doc).is_some() {
                 ids.push(id);
-            } else {
-                // this should have a very small chance to happen, and we don't support
-                log_error!("row_data's _id type not supported, _id: {:?}", id);
             }
         }
 
@@ -129,127 +81,89 @@ impl MongoChecker {
             }
         };
 
-        // batch fetch dst
-        let mut dst_row_data_map = HashMap::new();
+        let mut dst_row_data_vec = Vec::new();
         let start_time = Instant::now();
         let mut rts = LimitedQueue::new(1);
+        let collection = self
+            .mongo_client
+            .database(&basic_meta.schema)
+            .collection::<Document>(&basic_meta.tb);
         let mut cursor = collection.find(filter, None).await?;
         rts.push((start_time.elapsed().as_millis() as u64, 1));
-        BaseSinker::update_monitor_rt(&self.monitor, &rts).await?;
+        BaseSinker::update_monitor_rt(&self.common.monitor, &rts).await?;
 
         while cursor.advance().await? {
             let doc = cursor.deserialize_current()?;
-            // key should not be none since we have filtered in ids,
             if let Some(key) = MongoKey::from_doc(&doc) {
-                let row_data = Self::build_row_data(schema, tb, doc, &key);
-                dst_row_data_map.insert(key, row_data);
+                let row_data = Self::build_row_data(&basic_meta.schema, &basic_meta.tb, doc, &key);
+                dst_row_data_vec.push(row_data);
             } else {
                 let id = doc.get(MongoConstants::ID);
                 log_error!("dst row_data's _id type not supported, _id: {:?}", id);
             }
         }
-
-        // batch check
-        let mut miss = Vec::new();
-        let mut diff = Vec::new();
-        let mut sql_count = 0;
-        let revise_ctx = self.output_revise_sql.then(ReviseSqlContext::mongo);
-        for (key, src_row_data) in src_row_data_map {
-            if let Some(dst_row_data) = dst_row_data_map.remove(&key) {
-                let diff_col_values = BaseChecker::compare_row_data(src_row_data, &dst_row_data)?;
-                if !diff_col_values.is_empty() {
-                    let revise_sql = revise_ctx
-                        .as_ref()
-                        .map(|ctx| {
-                            ctx.build_diff_sql(src_row_data, &dst_row_data, &diff_col_values)
-                        })
-                        .transpose()?
-                        .flatten();
-
-                    let diff_log = BaseChecker::build_mongo_diff_log(
-                        src_row_data,
-                        &dst_row_data,
-                        diff_col_values,
-                        &tb_meta,
-                        &self.reverse_router,
-                        self.output_full_row,
-                    )?;
-                    if let Some(revise_sql) = revise_sql {
-                        log_sql!("{}", revise_sql);
-                        sql_count += 1;
-                    }
-                    diff.push(diff_log);
-                }
-            } else {
-                let revise_sql = revise_ctx
-                    .as_ref()
-                    .map(|ctx| ctx.build_miss_sql(src_row_data))
-                    .transpose()?
-                    .flatten();
-
-                let miss_log = BaseChecker::build_mongo_miss_log(
-                    src_row_data,
-                    &tb_meta,
-                    &self.reverse_router,
-                    self.output_full_row,
-                )?;
-                if let Some(revise_sql) = revise_sql {
-                    log_sql!("{}", revise_sql);
-                    sql_count += 1;
-                }
-                miss.push(miss_log);
-            };
-        }
-        BaseChecker::log_dml(&miss, &diff);
-
-        self.summary.end_time = chrono::Local::now().to_rfc3339();
-        self.summary.miss_count += miss.len();
-        self.summary.diff_count += diff.len();
-        if sql_count > 0 {
-            self.summary.sql_count = Some(self.summary.sql_count.unwrap_or(0) + sql_count);
-        }
-
-        BaseSinker::update_batch_monitor(&self.monitor, batch_size as u64, 0).await
+        Ok(dst_row_data_vec)
     }
+}
 
+impl MongoChecker {
     fn mock_tb_meta(schema: &str, tb: &str) -> RdbTbMeta {
         RdbTbMeta {
-            schema: schema.into(),
-            tb: tb.into(),
-            id_cols: vec![MongoConstants::ID.into()],
+            schema: schema.to_string(),
+            tb: tb.to_string(),
+            id_cols: vec![MongoConstants::ID.to_string()],
             ..Default::default()
         }
     }
 
     fn build_row_data(schema: &str, tb: &str, doc: Document, key: &MongoKey) -> RowData {
-        let mut after = HashMap::new();
-        after.insert(
+        let mut dst_after = HashMap::new();
+        dst_after.insert(
             MongoConstants::ID.to_string(),
             ColValue::String(key.to_string()),
         );
-        after.insert(MongoConstants::DOC.to_string(), ColValue::MongoDoc(doc));
-        RowData::new(schema.into(), tb.into(), RowType::Insert, None, Some(after))
+        dst_after.insert(MongoConstants::DOC.to_string(), ColValue::MongoDoc(doc));
+        RowData::new(
+            schema.to_string(),
+            tb.to_string(),
+            dt_common::meta::row_type::RowType::Insert,
+            None,
+            Some(dst_after),
+        )
     }
-}
 
-#[cfg(test)]
-mod tests {
-    use mongodb::bson::{oid::ObjectId, Bson, DateTime};
-
-    #[test]
-    fn test_bson_display() {
-        let oid = ObjectId::parse_str("507f1f77bcf86cd799439011").unwrap();
-        let bson_oid = Bson::ObjectId(oid);
-        println!("ObjectId: {}", bson_oid);
-
-        let bson_int = Bson::Int32(123);
-        println!("Int32: {}", bson_int);
-
-        let bson_str = Bson::String("hello".to_string());
-        println!("String: {}", bson_str);
-
-        let date = DateTime::from_millis(1693470874000);
-        let bson_date = Bson::DateTime(date);
-        println!("DateTime: {}", bson_date);
+    fn get_id_from_row(row: &RowData) -> anyhow::Result<Bson> {
+        if let Some(after) = &row.after {
+            if let Some(ColValue::MongoDoc(doc)) = after.get(MongoConstants::DOC) {
+                if let Some(id) = doc.get(MongoConstants::ID) {
+                    return Ok(id.clone());
+                }
+            }
+            if let Some(ColValue::String(s)) = after.get(MongoConstants::ID) {
+                if let Ok(oid) = ObjectId::parse_str(s) {
+                    return Ok(Bson::ObjectId(oid));
+                }
+                // Try to parse as JSON for wrapped types
+                if let Ok(json) = serde_json::from_str::<JsonValue>(s) {
+                    if let Some(val) = json.get("String").and_then(|v| v.as_str()) {
+                        if let Ok(oid) = ObjectId::parse_str(val) {
+                            return Ok(Bson::ObjectId(oid));
+                        }
+                        return Ok(Bson::String(val.to_string()));
+                    }
+                    if let Some(oid) = json
+                        .get("ObjectId")
+                        .and_then(|v| v.get("$oid"))
+                        .and_then(|v| v.as_str())
+                    {
+                        if let Ok(oid) = ObjectId::parse_str(oid) {
+                            return Ok(Bson::ObjectId(oid));
+                        }
+                    }
+                }
+                return Ok(Bson::String(s.clone()));
+            }
+        }
+        anyhow::bail!("missing _id in row data")
     }
 }

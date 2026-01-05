@@ -19,6 +19,9 @@ cargo test --package dt-tests --test integration_test -- mysql_to_mysql::cdc_tes
   - dst_prepare.sql
   - src_test.sql
   - dst_test.sql
+  - `*.sql` 测试文件说明：
+    - 多语句必须用 `;` 结束（runner 依赖 `;` 分割语句）。
+    - 避免在字符串/JSON 字面量中出现 `--`（runner 会按行截断 `-- ...` 内联注释）。
 
 - 一个典型测试用例的步骤：
   - 1，对源库执行 src_prepare.sql。

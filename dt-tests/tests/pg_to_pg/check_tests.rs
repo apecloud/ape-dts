@@ -52,4 +52,22 @@ mod test {
     async fn check_revise_struct_test() {
         TestBase::run_check_test("pg_to_pg/check/revise_struct_test").await;
     }
+
+    #[tokio::test]
+    #[serial]
+    async fn check_recheck_struct_recover_test() {
+        TestBase::run_recheck_test("pg_to_pg/check/recheck_struct_recover").await;
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn check_recheck_basic_test() {
+        TestBase::run_check_test("pg_to_pg/check/recheck_basic").await;
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn check_recheck_recover_test() {
+        TestBase::run_recheck_test("pg_to_pg/check/recheck_recover").await;
+    }
 }

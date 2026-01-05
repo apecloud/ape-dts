@@ -8,7 +8,7 @@ use crate::meta::rdb_tb_meta::RdbTbMeta;
 
 use super::mysql_col_type::MysqlColType;
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct MysqlTbMeta {
     pub basic: RdbTbMeta,
     pub col_type_map: HashMap<String, MysqlColType>,

@@ -39,6 +39,8 @@ pub enum SinkerConfig {
         output_full_row: bool,
         output_revise_sql: bool,
         revise_match_full_row: bool,
+        retry_interval_secs: u64,
+        max_retries: u32,
     },
 
     PgCheck {
@@ -49,6 +51,8 @@ pub enum SinkerConfig {
         output_full_row: bool,
         output_revise_sql: bool,
         revise_match_full_row: bool,
+        retry_interval_secs: u64,
+        max_retries: u32,
     },
 
     MongoCheck {
@@ -59,6 +63,8 @@ pub enum SinkerConfig {
         check_log_file_size: String,
         output_full_row: bool,
         output_revise_sql: bool,
+        retry_interval_secs: u64,
+        max_retries: u32,
     },
 
     MysqlStruct {
@@ -157,6 +163,26 @@ pub enum SinkerConfig {
     Sql {
         reverse: bool,
     },
+}
+
+impl SinkerConfig {
+    pub fn get_retry_interval_secs(&self) -> u64 {
+        match self {
+            SinkerConfig::MysqlCheck {
+                retry_interval_secs,
+                ..
+            } => *retry_interval_secs,
+            SinkerConfig::PgCheck {
+                retry_interval_secs,
+                ..
+            } => *retry_interval_secs,
+            SinkerConfig::MongoCheck {
+                retry_interval_secs,
+                ..
+            } => *retry_interval_secs,
+            _ => 0,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default, Hash)]

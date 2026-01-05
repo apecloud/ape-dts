@@ -30,16 +30,16 @@ parallel_type=rdb_check
 
 # 校验结果
 
-校验结果以 json 格式写入日志中，包括 diff.log 和 miss.log。日志存放在 log/check 子目录中。
+校验结果以 json 格式写入日志中，包括 diff.log, miss.log, sql.log 和 summary.log。日志存放在 log/check 子目录中。
 
 ## 差异日志（diff.log）
 
 差异日志包括库（schema）、表（tb）、主键/唯一键（id_col_values）、差异列的源值和目标值（diff_col_values）。
 
 ```json
-{"log_type":"Diff","schema":"test_db_1","tb":"one_pk_multi_uk","id_col_values":{"f_0":"5"},"diff_col_values":{"f_1":{"src":"5","dst":"5000"},"f_2":{"src":"ok","dst":"after manual update"}}}
-{"log_type":"Diff","schema":"test_db_1","tb":"one_pk_no_uk","id_col_values":{"f_0":"4"},"diff_col_values":{"f_1":{"src":"2","dst":"1"}}}
-{"log_type":"Diff","schema":"test_db_1","tb":"one_pk_no_uk","id_col_values":{"f_0":"6"},"diff_col_values":{"f_1":{"src":null,"dst":"1","src_type":"None","dst_type":"Short"}}}
+{"schema":"test_db_1","tb":"one_pk_multi_uk","id_col_values":{"f_0":"5"},"diff_col_values":{"f_1":{"src":"5","dst":"5000"},"f_2":{"src":"ok","dst":"after manual update"}}}
+{"schema":"test_db_1","tb":"one_pk_no_uk","id_col_values":{"f_0":"4"},"diff_col_values":{"f_1":{"src":"2","dst":"1"}}}
+{"schema":"test_db_1","tb":"one_pk_no_uk","id_col_values":{"f_0":"6"},"diff_col_values":{"f_1":{"src":null,"dst":"1","src_type":"None","dst_type":"Short"}}}
 ```
 
 当源端与目标端的类型不同（如 Int32 对 Int64，或 None 对 Short），`src_type`/`dst_type` 会出现在对应列下，明确标出类型不一致。Mongo 也适用这一规则，差异日志会输出 BSON 类型名称。
@@ -51,9 +51,9 @@ parallel_type=rdb_check
 缺失日志包括库（schema）、表（tb）和主键/唯一键（id_col_values）。由于缺失记录不存在差异列，因此不会输出 `diff_col_values`。
 
 ```json
-{"log_type":"Miss","schema":"test_db_1","tb":"no_pk_one_uk","id_col_values":{"f_1":"8","f_2":"1"}}
-{"log_type":"Miss","schema":"test_db_1","tb":"no_pk_one_uk","id_col_values":{"f_1":null,"f_2":null}}
-{"log_type":"Miss","schema":"test_db_1","tb":"one_pk_multi_uk","id_col_values":{"f_0":"7"}}
+{"schema":"test_db_1","tb":"no_pk_one_uk","id_col_values":{"f_1":"8","f_2":"1"}}
+{"schema":"test_db_1","tb":"no_pk_one_uk","id_col_values":{"f_1":null,"f_2":null}}
+{"schema":"test_db_1","tb":"one_pk_multi_uk","id_col_values":{"f_0":"7"}}
 ```
 
 ## 输出完整行
@@ -69,7 +69,6 @@ output_full_row=true
 
 ```json
 {
-  "log_type": "Diff",
   "schema": "test_db_1",
   "tb": "one_pk_multi_uk",
   "id_col_values": {
@@ -109,35 +108,43 @@ output_revise_sql=true
 revise_match_full_row=true
 ```
 
-开启后，diff/miss 日志会追加 `revise_sql` 字段。缺失记录会生成 `INSERT` 语句，差异记录会生成 `UPDATE` 语句。`revise_match_full_row=true` 时，即使表存在主键也会使用整行数据生成 WHERE 条件，以便通过完整行值定位目标数据。若路由没有改名就不会输出 `target_schema`/`target_tb`，只在改名时才需要参考这两个字段决定 SQL 应执行的表。
+开启后，缺失记录的 `INSERT` 语句与差异记录的 `UPDATE` 语句会被写入 `sql.log`。`revise_match_full_row=true` 时，即使表存在主键也会使用整行数据生成 WHERE 条件，以便通过完整行值定位目标数据。若路由没有改名就不会输出 `target_schema`/`target_tb`，只在改名时才需要参考这两个字段决定 SQL 应执行的表。
 
-`revise_sql` 本质上是 sinker 需要执行、用以把目标数据修正到和源端一致的 SQL；它直接使用了真正的目的端 schema/table，所以可以直接在目标执行（路由改名时仍可参考 `target_schema`/`target_tb` 判断最终目标对象）。
+生成的 SQL 本质上是 sinker 需要执行、用以把目标数据修正到和源端一致的 SQL；它直接使用了真正的目的端 schema/table，所以可以直接在目标执行（路由改名时仍可参考 `target_schema`/`target_tb` 判断最终目标对象）。
 
 示例：
 
 ```json
 {
-  "log_type": "Diff",
   "schema": "test_db_1",
   "tb": "one_pk_no_uk",
   "target_schema": "target_db",
   "target_tb": "target_tb",
   "id_col_values": {"f_0": "4"},
-  "diff_col_values": {"f_1": {"src": "2", "dst": "1"}},
-  "revise_sql": "UPDATE `target_db`.`target_tb` SET `f_1`='2' WHERE `f_0` = 4;"
+  "diff_col_values": {"f_1": {"src": "2", "dst": "1"}}
 }
 ```
 
-缺失记录同样会输出 `revise_sql`。示例：
+`sql.log` 示例：
+
+```sql
+UPDATE `target_db`.`target_tb` SET `f_1`='2' WHERE `f_0` = 4;
+```
+
+缺失记录日志示例：
 
 ```json
 {
-  "log_type": "Miss",
   "schema": "test_db_1",
   "tb": "test_table",
-  "id_col_values": {"id": "3"},
-  "revise_sql": "INSERT INTO `test_db_1`.`test_table`(`id`,`name`,`age`,`email`) VALUES(3,'Charlie',35,'charlie@example.com');"
+  "id_col_values": {"id": "3"}
 }
+```
+
+`sql.log` 示例：
+
+```sql
+INSERT INTO `test_db_1`.`test_table`(`id`,`name`,`age`,`email`) VALUES(3,'Charlie',35,'charlie@example.com');
 ```
 
 ### 概览日志（summary.log）

@@ -74,9 +74,12 @@ const PROCESSOR: &str = "processor";
 const META_CENTER: &str = "metacenter";
 // keys
 const CHECK_LOG_DIR: &str = "check_log_dir";
+const CHECK_LOG_FILE_SIZE: &str = "check_log_file_size";
 const OUTPUT_FULL_ROW: &str = "output_full_row";
 const OUTPUT_REVISE_SQL: &str = "output_revise_sql";
 const REVISE_MATCH_FULL_ROW: &str = "revise_match_full_row";
+const RETRY_INTERVAL_SECS: &str = "retry_interval_secs";
+const MAX_RETRIES: &str = "max_retries";
 const DB_TYPE: &str = "db_type";
 const URL: &str = "url";
 const BATCH_SIZE: &str = "batch_size";
@@ -93,7 +96,6 @@ const DDL_CONFLICT_POLICY: &str = "ddl_conflict_policy";
 const REPLACE: &str = "replace";
 const DISABLE_FOREIGN_KEY_CHECKS: &str = "disable_foreign_key_checks";
 const RESUME_TYPE: &str = "resume_type";
-const CHECK_LOG_FILE_SIZE: &str = "check_log_file_size";
 // deprecated keys
 const RESUME_FROM_LOG: &str = "resume_from_log";
 const RESUME_LOG_DIR: &str = "resume_log_dir";
@@ -464,6 +466,8 @@ impl TaskConfig {
                         REVISE_MATCH_FULL_ROW,
                         false,
                     ),
+                    retry_interval_secs: loader.get_with_default(SINKER, RETRY_INTERVAL_SECS, 0),
+                    max_retries: loader.get_with_default(SINKER, MAX_RETRIES, 1),
                 },
 
                 SinkType::Struct => SinkerConfig::MysqlStruct {
@@ -506,6 +510,8 @@ impl TaskConfig {
                         REVISE_MATCH_FULL_ROW,
                         false,
                     ),
+                    retry_interval_secs: loader.get_with_default(SINKER, RETRY_INTERVAL_SECS, 0),
+                    max_retries: loader.get_with_default(SINKER, MAX_RETRIES, 1),
                 },
 
                 SinkType::Struct => SinkerConfig::PgStruct {
@@ -546,6 +552,12 @@ impl TaskConfig {
                             "output_revise_sql",
                             false,
                         ),
+                        retry_interval_secs: loader.get_with_default(
+                            SINKER,
+                            RETRY_INTERVAL_SECS,
+                            0,
+                        ),
+                        max_retries: loader.get_with_default(SINKER, MAX_RETRIES, 1),
                     },
 
                     _ => bail! { not_supported_err },
