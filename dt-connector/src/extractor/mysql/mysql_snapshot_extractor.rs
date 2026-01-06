@@ -427,6 +427,7 @@ impl MysqlSnapshotExtractor {
         let router = extract_ctx.router.clone();
         let buffer = extract_ctx.buffer.clone();
 
+        log_debug!("extract by partition_col: {}, chunk range: {:?}", partition_col, chunk);
         join_set.spawn(async move {
             let chunk_id = chunk.chunk_id;
             let (start_value, end_value) = chunk.chunk_range;

@@ -144,4 +144,10 @@ mod test {
     async fn snapshot_route_test() {
         TestBase::run_snapshot_test("pg_to_pg/snapshot/route_test").await;
     }
+
+    #[tokio::test]
+    #[serial]
+    async fn snapshot_parallel_test() {
+        TestBase::run_snapshot_test("pg_to_pg/snapshot/parallel_test").await;
+    }
 }

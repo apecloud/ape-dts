@@ -1,7 +1,7 @@
 INSERT INTO test_db_1.tb_1 VALUES (1,1),(2,2),(3,3),(7,7),(9,9),(10,10),(11,11),(12,12),(14,14),(16,16),(17,17),(18,18),(19,19);
 INSERT INTO test_db_1.tb_1_more VALUES (1,1),(2,2),(3,3),(7,7),(9,9),(10,10),(11,11),(12,12),(14,14),(16,16),(17,17),(18,18),(19,19),(20,20),(21,21),(22,22),(23,23),(24,24),(25,25),(26,26),(27,27),(28,28),(29,29),(30,30);
 
-INSERT INTO test_db_1.tb_2 VALUES ("1",1),("2",2),("3",3),("7",7),("9",9),("10",10),("11",11),("12",12),("14",14),("16",16),("17",17),("18",18),("19",19);
+INSERT INTO test_db_1.tb_2 VALUES ('1',1),('2',2),('3',3),('7',7),('9',9),('10',10),('11',11),('12',12),('14',14),('16',16),('17',17),('18',18),('19',19);
 
 INSERT INTO test_db_1.tb_3 VALUES (1,1),(2,2),(3,3),(7,7),(9,9),(10,10),(11,11),(12,12),(14,14),(16,16),(17,17),(18,18),(19,19);
 INSERT INTO test_db_1.tb_3_null VALUES (1,1,1),(2,2,2),(3,3,3),(7,7,7),(9,9,9),(10,10,10),(11,11,11),(12,12,12),(14,14,14),(16,16,16),(17,17,17),(18,18,18),(19,19,19),(100,NULL,100),(200,NULL,200);
@@ -24,7 +24,7 @@ INSERT INTO test_db_1.tb_fallback_3 VALUES (1,1),(1,1),(1,1),(1,1),(1,1),
                                            (2,2),(2,2),(2,2),(2,2),(2,2),
                                            (2,2),(2,2),(2,2),(2,2),(2,2);
 
--- 1. Int (Standard)
+-- 1. Int
 INSERT INTO test_db_2.tb_4 VALUES 
 (1,1,1), (2,2,2), (3,3,3), (7,7,7), (9,9,9), (10,10,10), (11,11,11), 
 (12,12,12), (14,14,14), (16,16,16), (17,17,17), (18,18,18), (19,19,19), 
@@ -46,7 +46,7 @@ INSERT INTO test_db_2.tb_varchar VALUES
 (7,'',7), (8,NULL,8), (9,'admin',9), (10,'guest',10), (11,'root',11),
 (12,'test_long_string_value_here',12), (13,'!@#$%',13), (14,' ',14), 
 (15,'Chinese_中文',15), (16,'Emoji_😊',16), (17,'10',17), (18,'20',18), 
-(19,'a',19), (20,'B',20), (21,'gap_test',21), (22,'boundary_z',22);
+(19,'a',19), (20,'A',20), (21,'gap_test',21), (22,'boundary_z',22);
 
 -- 4. Char/UUID
 INSERT INTO test_db_2.tb_char VALUES 
@@ -82,7 +82,7 @@ INSERT INTO test_db_2.tb_composite VALUES
 (14,101,'user_01',14), (15,200,'admin',15), (16,200,'guest',16), (17,300,'a',17),
 (18,300,'b',18), (19,300,'c',19), (20,400,'z',20), (21,500,'y',21);
 
--- 7. TinyInt Signed
+-- 7. TinyInt (SmallInt)
 INSERT INTO test_db_2.tb_tinyint VALUES 
 (1,-128,'min_val'), (2,-127,'min_p1'), (3,-100,'neg_100'), (4,-50,'neg_50'), 
 (5,-1,'neg_1'), (6,0,'zero'), (7,1,'pos_1'), (8,50,'pos_50'), (9,100,'pos_100'), 
@@ -90,7 +90,7 @@ INSERT INTO test_db_2.tb_tinyint VALUES
 (14,10,'pos_10'), (15,20,'pos_20'), (16,30,'pos_30'), (17,40,'pos_40'),
 (18,60,'pos_60'), (19,70,'pos_70'), (20,-70,'neg_70'), (21,-60,'neg_60');
 
--- 8. BigInt Unsigned
+-- 8. BigInt Unsigned (Numeric)
 INSERT INTO test_db_2.tb_bigint_unsigned VALUES 
 (1,0,'min_val'), (2,1,'one'), (3,100,'hundred'), (4,100000,'large'), 
 (5,4294967295,'max_int32'), (6,4294967296,'over_int32'), (7,18446744073709551615,'max_u64'),
@@ -119,19 +119,20 @@ INSERT INTO test_db_2.tb_date VALUES
 (16,'1980-01-01','past_2'), (17,'1990-01-01','past_3'), (18,'2023-02-01','feb'),
 (19,'2023-03-01','mar'), (20,'2023-04-01','apr'), (21,'2023-05-01','may');
 
--- 11. VarBinary
+-- 11. VarBinary (Bytea)
+-- Converted 0x... to '\x...' and strings to hex bytea representation
 INSERT INTO test_db_2.tb_varbinary VALUES 
-(1,0x00,'null_byte'), (2,0x01,'one'), (3,'A','A_hex41'), (4,'a','a_hex61'),
-(5,0xFF,'max_byte'), (6,NULL,'null'), (7,'B','B'), (8,'b','b'), (9,'1','char_1'),
-(10,0x02,'two'), (11,0x10,'sixteen'), (12,0x20,'thirtytwo'), (13,0x7F,'max_ascii'),
-(14,0x80,'ext_ascii'), (15,'AA','double_A'), (16,'aa','double_a'), (17,'Ab','mixed'),
-(18,0x1234,'multi_1'), (19,0x5678,'multi_2'), (20,0x9ABC,'multi_3'), 
-(21,0xFFFF,'max_2byte');
+(1,'\x00','null_byte'), (2,'\x01','one'), (3,'\x41','A_hex41'), (4,'\x61','a_hex61'),
+(5,'\xFF','max_byte'), (6,NULL,'null'), (7,'\x42','B'), (8,'\x62','b'), (9,'\x31','char_1'),
+(10,'\x02','two'), (11,'\x10','sixteen'), (12,'\x20','thirtytwo'), (13,'\x7F','max_ascii'),
+(14,'\x80','ext_ascii'), (15,'\x4141','double_A'), (16,'\x6161','double_a'), (17,'\x4162','mixed'),
+(18,'\x1234','multi_1'), (19,'\x5678','multi_2'), (20,'\x9ABC','multi_3'), 
+(21,'\xFFFF','max_2byte');
 
 -- 12. Varchar Primary Key
 INSERT INTO test_db_2.tb_varchar_pk VALUES 
 (1,'',0), (2,' ',0), (3,'-',0), (4,'0',0), (5,'1',1), (6,'10',10), (7,'100',100),
-(8,'2',2), (9,'A',65), (10,'c',97), (11,'AA',6565), (12,'B',66), 
+(8,'2',2), (9,'A',65), (10,'a',97), (11,'AA',6565), (12,'B',66), 
 (13,'ORD_001',2023), (14,'ORD_002',2023), (15,'ORD_003',2024), 
 (16,'User_1',999), (17,'User_2',888), (18,'你好',1000), (19,'测试',1001), 
 (20,'🌟',9999), (21,'🔥',9998), (22,'zzzz',99), (23,'~~~~',126);
@@ -146,12 +147,16 @@ INSERT INTO test_db_2.tb_text_pk VALUES
 (18,'100',100), (19,'200',200), (20,'unique_prefix_1',300), 
 (21,'unique_prefix_2',301), (22,NULL,NULL);
 
--- 14. Blob with Prefix Index
+-- 14. Blob with Prefix Index (Bytea)
+-- Converted _binary literals to '\x...' style
 INSERT INTO test_db_2.tb_blob_pk VALUES 
-(1,_binary '',0), (2,_binary 'a',97), (3,_binary 'A',65), (4,_binary 'ab',2), 
-(5,_binary 'ac',3), (6,0x00,0), (7,0x0000,0), (8,0x0001,1), (9,0x01,1), 
-(10,0x0F,15), (11,0x10,16), (12,0x7F,127), (13,0x80,128), (14,0xFF,255), 
-(15,0xFFFF,65535), (16,_binary '1',49), (17,_binary '10',50), (18,_binary '2',50), 
-(19,REPEAT(0xAA,10),88), (20,REPEAT(0xAA,60),89), 
-(21,CONCAT(REPEAT(0xAA,63),0x00),90), (22,CONCAT(REPEAT(0xAA,63),0x01),91),
+(1,'\x',0), (2,'\x61',97), (3,'\x41',65), (4,'\x6162',2), (5,'\x6163',3), (6,'\x00',0), (7,'\x0000',0), 
+(8,'\x0001',1), (9,'\x01',1), (10,'\x0F',15), (11,'\x10',16), (12,'\x7F',127), (13,'\x80',128), (14,'\xFF',255), 
+(15,'\xFFFF',65535), (16,'\x31',49), (17,'\x3130',50), (18,'\x32',50), 
+(19,'\xAAAAAAAAAAAAAAAAAAAA',88), 
+(20,'\xAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',89), 
+(21,'\xAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA00',90), 
+(22,'\xAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA01',91),
 (23,NULL,NULL);
+
+ANALYZE;

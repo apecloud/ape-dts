@@ -68,31 +68,31 @@ impl<'r> From<&'r PgTbMeta> for RdbSnapshotExtractStatement<'r> {
 
 impl<'r> RdbSnapshotExtractStatement<'r> {
     #[inline(always)]
-    pub fn with_ignore_cols(&mut self, ignore_cols: &'r HashSet<String>) -> &mut Self {
+    pub fn with_ignore_cols(mut self, ignore_cols: &'r HashSet<String>) -> Self {
         self.ignore_cols = Some(ignore_cols);
         self
     }
 
     #[inline(always)]
-    pub fn with_order_cols(&mut self, order_cols: &'r Vec<String>) -> &mut Self {
+    pub fn with_order_cols(mut self, order_cols: &'r Vec<String>) -> Self {
         self.order_cols = Some(order_cols);
         self
     }
 
     #[inline(always)]
-    pub fn with_where_condition(&mut self, where_condition: &'r String) -> &mut Self {
+    pub fn with_where_condition(mut self, where_condition: &'r String) -> Self {
         self.where_condition = Some(where_condition);
         self
     }
 
     #[inline(always)]
-    pub fn with_limit(&mut self, limit: usize) -> &mut Self {
+    pub fn with_limit(mut self, limit: usize) -> Self {
         self.limit = limit;
         self
     }
 
     #[inline(always)]
-    pub fn with_predicate_type(&mut self, predicate_type: OrderKeyPredicateType) -> &mut Self {
+    pub fn with_predicate_type(mut self, predicate_type: OrderKeyPredicateType) -> Self {
         self.predicate_type = predicate_type;
         self
     }
@@ -478,9 +478,9 @@ mod tests {
     #[test]
     fn test_mysql_single_order_col_gt() {
         let mysql_meta = create_mysql_tb_meta();
-        let mut stmt = RdbSnapshotExtractStatement::from(&mysql_meta);
+        let stmt = RdbSnapshotExtractStatement::from(&mysql_meta);
         let order_cols = vec!["id".to_string()];
-        stmt.with_order_cols(&order_cols)
+        let stmt = stmt.with_order_cols(&order_cols)
             .with_predicate_type(OrderKeyPredicateType::GreaterThan)
             .with_limit(100);
 
@@ -494,7 +494,7 @@ mod tests {
     #[test]
     fn test_mysql_multiple_order_cols_gt() {
         let mysql_meta = create_mysql_tb_meta();
-        let mut stmt = RdbSnapshotExtractStatement::from(&mysql_meta);
+        let stmt = RdbSnapshotExtractStatement::from(&mysql_meta);
         let order_cols = vec![
             "id".to_string(),
             "price".to_string(),
@@ -502,7 +502,7 @@ mod tests {
             "bio".to_string(),
             "large_blob".to_string(),
         ];
-        stmt.with_order_cols(&order_cols)
+        let stmt = stmt.with_order_cols(&order_cols)
             .with_predicate_type(OrderKeyPredicateType::GreaterThan)
             .with_limit(100);
 
@@ -516,9 +516,9 @@ mod tests {
     #[test]
     fn test_mysql_single_order_col_range() {
         let mysql_meta = create_mysql_tb_meta();
-        let mut stmt = RdbSnapshotExtractStatement::from(&mysql_meta);
+        let stmt = RdbSnapshotExtractStatement::from(&mysql_meta);
         let order_cols = vec!["id".to_string()];
-        stmt.with_order_cols(&order_cols)
+        let stmt = stmt.with_order_cols(&order_cols)
             .with_predicate_type(OrderKeyPredicateType::Range);
 
         let sql = stmt.build().unwrap();
@@ -531,7 +531,7 @@ mod tests {
     #[test]
     fn test_mysql_multiple_order_cols_range() {
         let mysql_meta = create_mysql_tb_meta();
-        let mut stmt = RdbSnapshotExtractStatement::from(&mysql_meta);
+        let stmt = RdbSnapshotExtractStatement::from(&mysql_meta);
         let order_cols = vec![
             "id".to_string(),
             "price".to_string(),
@@ -539,7 +539,7 @@ mod tests {
             "bio".to_string(),
             "large_blob".to_string(),
         ];
-        stmt.with_order_cols(&order_cols)
+        let stmt = stmt.with_order_cols(&order_cols)
             .with_predicate_type(OrderKeyPredicateType::Range);
 
         let sql = stmt.build().unwrap();
@@ -552,7 +552,7 @@ mod tests {
     #[test]
     fn test_mysql_null_predicate_with_nullable_cols() {
         let mysql_meta = create_mysql_tb_meta();
-        let mut stmt = RdbSnapshotExtractStatement::from(&mysql_meta);
+        let stmt = RdbSnapshotExtractStatement::from(&mysql_meta);
         let order_cols = vec![
             "id".to_string(),
             "price".to_string(),
@@ -560,7 +560,7 @@ mod tests {
             "bio".to_string(),
             "large_blob".to_string(),
         ];
-        stmt.with_order_cols(&order_cols)
+        let stmt = stmt.with_order_cols(&order_cols)
             .with_predicate_type(OrderKeyPredicateType::LessThanOrEqual);
 
         let sql = stmt.build().unwrap();
@@ -573,7 +573,7 @@ mod tests {
     #[test]
     fn test_mysql_is_null_predicate() {
         let mysql_meta = create_mysql_tb_meta();
-        let mut stmt = RdbSnapshotExtractStatement::from(&mysql_meta);
+        let stmt = RdbSnapshotExtractStatement::from(&mysql_meta);
         let order_cols = vec![
             "id".to_string(),
             "price".to_string(),
@@ -581,7 +581,7 @@ mod tests {
             "bio".to_string(),
             "large_blob".to_string(),
         ];
-        stmt.with_order_cols(&order_cols)
+        let stmt = stmt.with_order_cols(&order_cols)
             .with_predicate_type(OrderKeyPredicateType::IsNull);
 
         let sql = stmt.build().unwrap();
@@ -594,7 +594,7 @@ mod tests {
     #[test]
     fn test_mysql_is_null_predicate_with_where_condition() {
         let mysql_meta = create_mysql_tb_meta();
-        let mut stmt = RdbSnapshotExtractStatement::from(&mysql_meta);
+        let stmt = RdbSnapshotExtractStatement::from(&mysql_meta);
         let order_cols = vec![
             "id".to_string(),
             "price".to_string(),
@@ -603,7 +603,7 @@ mod tests {
             "large_blob".to_string(),
         ];
         let where_condition = "id > 100".to_string();
-        stmt.with_order_cols(&order_cols)
+        let stmt = stmt.with_order_cols(&order_cols)
             .with_where_condition(&where_condition)
             .with_predicate_type(OrderKeyPredicateType::IsNull)
             .with_limit(100);
@@ -618,9 +618,9 @@ mod tests {
     #[test]
     fn test_pg_single_order_col_gt() {
         let pg_meta = create_pg_tb_meta();
-        let mut stmt = RdbSnapshotExtractStatement::from(&pg_meta);
+        let stmt = RdbSnapshotExtractStatement::from(&pg_meta);
         let order_cols = vec!["id".to_string()];
-        stmt.with_order_cols(&order_cols)
+        let stmt = stmt.with_order_cols(&order_cols)
             .with_predicate_type(OrderKeyPredicateType::GreaterThan)
             .with_limit(100);
 
@@ -634,7 +634,7 @@ mod tests {
     #[test]
     fn test_pg_multiple_order_cols_gt() {
         let pg_meta = create_pg_tb_meta();
-        let mut stmt = RdbSnapshotExtractStatement::from(&pg_meta);
+        let stmt = RdbSnapshotExtractStatement::from(&pg_meta);
         let order_cols = vec![
             "id".to_string(),
             "price".to_string(),
@@ -642,7 +642,7 @@ mod tests {
             "bio".to_string(),
             "large_blob".to_string(),
         ];
-        stmt.with_order_cols(&order_cols)
+        let stmt = stmt.with_order_cols(&order_cols)
             .with_predicate_type(OrderKeyPredicateType::GreaterThan)
             .with_limit(100);
 
@@ -656,9 +656,9 @@ mod tests {
     #[test]
     fn test_pg_single_order_col_le() {
         let pg_meta = create_pg_tb_meta();
-        let mut stmt = RdbSnapshotExtractStatement::from(&pg_meta);
+        let stmt = RdbSnapshotExtractStatement::from(&pg_meta);
         let order_cols = vec!["id".to_string()];
-        stmt.with_order_cols(&order_cols)
+        let stmt = stmt.with_order_cols(&order_cols)
             .with_predicate_type(OrderKeyPredicateType::LessThanOrEqual);
 
         let sql = stmt.build().unwrap();
@@ -671,7 +671,7 @@ mod tests {
     #[test]
     fn test_pg_multiple_order_cols_range() {
         let pg_meta = create_pg_tb_meta();
-        let mut stmt = RdbSnapshotExtractStatement::from(&pg_meta);
+        let stmt = RdbSnapshotExtractStatement::from(&pg_meta);
         let order_cols = vec![
             "id".to_string(),
             "price".to_string(),
@@ -679,7 +679,7 @@ mod tests {
             "bio".to_string(),
             "large_blob".to_string(),
         ];
-        stmt.with_order_cols(&order_cols)
+        let stmt = stmt.with_order_cols(&order_cols)
             .with_predicate_type(OrderKeyPredicateType::Range);
 
         let sql = stmt.build().unwrap();
@@ -692,7 +692,7 @@ mod tests {
     #[test]
     fn test_pg_null_predicate_with_nullable_cols() {
         let pg_meta = create_pg_tb_meta();
-        let mut stmt = RdbSnapshotExtractStatement::from(&pg_meta);
+        let stmt = RdbSnapshotExtractStatement::from(&pg_meta);
         let order_cols = vec![
             "id".to_string(),
             "price".to_string(),
@@ -700,7 +700,7 @@ mod tests {
             "bio".to_string(),
             "large_blob".to_string(),
         ];
-        stmt.with_order_cols(&order_cols)
+        let stmt = stmt.with_order_cols(&order_cols)
             .with_predicate_type(OrderKeyPredicateType::LessThanOrEqual);
 
         let sql = stmt.build().unwrap();
@@ -713,7 +713,7 @@ mod tests {
     #[test]
     fn test_pg_is_null_predicate() {
         let pg_meta = create_pg_tb_meta();
-        let mut stmt = RdbSnapshotExtractStatement::from(&pg_meta);
+        let stmt = RdbSnapshotExtractStatement::from(&pg_meta);
         let order_cols = vec![
             "id".to_string(),
             "price".to_string(),
@@ -721,7 +721,7 @@ mod tests {
             "bio".to_string(),
             "large_blob".to_string(),
         ];
-        stmt.with_order_cols(&order_cols)
+        let stmt = stmt.with_order_cols(&order_cols)
             .with_predicate_type(OrderKeyPredicateType::IsNull);
 
         let sql = stmt.build().unwrap();
@@ -734,7 +734,7 @@ mod tests {
     #[test]
     fn test_pg_is_null_predicate_with_where_condition() {
         let pg_meta = create_pg_tb_meta();
-        let mut stmt = RdbSnapshotExtractStatement::from(&pg_meta);
+        let stmt = RdbSnapshotExtractStatement::from(&pg_meta);
         let order_cols = vec![
             "id".to_string(),
             "price".to_string(),
@@ -743,7 +743,7 @@ mod tests {
             "large_blob".to_string(),
         ];
         let where_condition = "id > 100".to_string();
-        stmt.with_order_cols(&order_cols)
+        let stmt = stmt.with_order_cols(&order_cols)
             .with_where_condition(&where_condition)
             .with_predicate_type(OrderKeyPredicateType::IsNull)
             .with_limit(100);
@@ -758,10 +758,10 @@ mod tests {
     #[test]
     fn test_mysql_with_where_condition() {
         let mysql_meta = create_mysql_tb_meta();
-        let mut stmt = RdbSnapshotExtractStatement::from(&mysql_meta);
+        let stmt = RdbSnapshotExtractStatement::from(&mysql_meta);
         let order_cols = vec!["id".to_string()];
         let where_condition = "id > 1000".to_string();
-        stmt.with_order_cols(&order_cols)
+        let stmt = stmt.with_order_cols(&order_cols)
             .with_where_condition(&where_condition)
             .with_predicate_type(OrderKeyPredicateType::GreaterThan);
 
@@ -775,10 +775,10 @@ mod tests {
     #[test]
     fn test_pg_with_where_condition() {
         let pg_meta = create_pg_tb_meta();
-        let mut stmt = RdbSnapshotExtractStatement::from(&pg_meta);
+        let stmt = RdbSnapshotExtractStatement::from(&pg_meta);
         let order_cols = vec!["id".to_string()];
         let where_condition = "id > 1000".to_string();
-        stmt.with_order_cols(&order_cols)
+        let stmt = stmt.with_order_cols(&order_cols)
             .with_where_condition(&where_condition)
             .with_predicate_type(OrderKeyPredicateType::GreaterThan);
 
@@ -817,9 +817,9 @@ mod tests {
     #[test]
     fn test_no_limit() {
         let mysql_meta = create_mysql_tb_meta();
-        let mut stmt = RdbSnapshotExtractStatement::from(&mysql_meta);
+        let stmt = RdbSnapshotExtractStatement::from(&mysql_meta);
         let order_cols = vec!["id".to_string()];
-        stmt.with_order_cols(&order_cols)
+        let stmt = stmt.with_order_cols(&order_cols)
             .with_predicate_type(OrderKeyPredicateType::GreaterThan);
 
         let sql = stmt.build().unwrap();
@@ -832,9 +832,9 @@ mod tests {
     #[test]
     fn test_mysql_only_where_condition() {
         let mysql_meta = create_mysql_tb_meta();
-        let mut stmt = RdbSnapshotExtractStatement::from(&mysql_meta);
+        let stmt = RdbSnapshotExtractStatement::from(&mysql_meta);
         let where_condition = "price > 100.0".to_string();
-        stmt.with_where_condition(&where_condition);
+        let stmt = stmt.with_where_condition(&where_condition);
 
         let sql = stmt.build().unwrap();
         assert_eq!(
@@ -846,9 +846,9 @@ mod tests {
     #[test]
     fn test_pg_only_where_condition() {
         let pg_meta = create_pg_tb_meta();
-        let mut stmt = RdbSnapshotExtractStatement::from(&pg_meta);
+        let stmt = RdbSnapshotExtractStatement::from(&pg_meta);
         let where_condition = "price > 100.0".to_string();
-        stmt.with_where_condition(&where_condition);
+        let stmt = stmt.with_where_condition(&where_condition);
 
         let sql = stmt.build().unwrap();
         assert_eq!(
@@ -860,9 +860,9 @@ mod tests {
     #[test]
     fn test_mysql_single_non_nullable_order_col() {
         let mysql_meta = create_mysql_tb_meta();
-        let mut stmt = RdbSnapshotExtractStatement::from(&mysql_meta);
+        let stmt = RdbSnapshotExtractStatement::from(&mysql_meta);
         let order_cols = vec!["username".to_string()];
-        stmt.with_order_cols(&order_cols)
+        let stmt = stmt.with_order_cols(&order_cols)
             .with_predicate_type(OrderKeyPredicateType::GreaterThan)
             .with_limit(50);
 
@@ -876,9 +876,9 @@ mod tests {
     #[test]
     fn test_pg_single_non_nullable_order_col() {
         let pg_meta = create_pg_tb_meta();
-        let mut stmt = RdbSnapshotExtractStatement::from(&pg_meta);
+        let stmt = RdbSnapshotExtractStatement::from(&pg_meta);
         let order_cols = vec!["username".to_string()];
-        stmt.with_order_cols(&order_cols)
+        let stmt = stmt.with_order_cols(&order_cols)
             .with_predicate_type(OrderKeyPredicateType::GreaterThan)
             .with_limit(50);
 
@@ -892,10 +892,10 @@ mod tests {
     #[test]
     fn test_empty_where_condition() {
         let mysql_meta = create_mysql_tb_meta();
-        let mut stmt = RdbSnapshotExtractStatement::from(&mysql_meta);
+        let stmt = RdbSnapshotExtractStatement::from(&mysql_meta);
         let order_cols = vec!["id".to_string()];
         let where_condition = "".to_string();
-        stmt.with_order_cols(&order_cols)
+        let stmt = stmt.with_order_cols(&order_cols)
             .with_where_condition(&where_condition)
             .with_predicate_type(OrderKeyPredicateType::GreaterThan);
 
@@ -909,9 +909,9 @@ mod tests {
     #[test]
     fn test_limit_zero() {
         let mysql_meta = create_mysql_tb_meta();
-        let mut stmt: RdbSnapshotExtractStatement = (&mysql_meta).into();
+        let stmt: RdbSnapshotExtractStatement = (&mysql_meta).into();
         let order_cols = vec!["id".to_string()];
-        stmt.with_order_cols(&order_cols)
+        let stmt = stmt.with_order_cols(&order_cols)
             .with_predicate_type(OrderKeyPredicateType::GreaterThan)
             .with_limit(0);
 
@@ -925,11 +925,11 @@ mod tests {
     #[test]
     fn test_mysql_with_ignore_cols() {
         let mysql_meta = create_mysql_tb_meta();
-        let mut stmt: RdbSnapshotExtractStatement = (&mysql_meta).into();
+        let stmt: RdbSnapshotExtractStatement = (&mysql_meta).into();
         let mut ignore_cols = HashSet::new();
         ignore_cols.insert("bio".to_string());
         ignore_cols.insert("large_blob".to_string());
-        stmt.with_ignore_cols(&ignore_cols);
+        let stmt = stmt.with_ignore_cols(&ignore_cols);
 
         let sql = stmt.build().unwrap();
         assert_eq!(
@@ -941,11 +941,11 @@ mod tests {
     #[test]
     fn test_pg_with_ignore_cols() {
         let pg_meta = create_pg_tb_meta();
-        let mut stmt: RdbSnapshotExtractStatement = (&pg_meta).into();
+        let stmt: RdbSnapshotExtractStatement = (&pg_meta).into();
         let mut ignore_cols = HashSet::new();
         ignore_cols.insert("bio".to_string());
         ignore_cols.insert("large_blob".to_string());
-        stmt.with_ignore_cols(&ignore_cols);
+        let stmt = stmt.with_ignore_cols(&ignore_cols);
 
         let sql = stmt.build().unwrap();
         assert_eq!(
@@ -957,11 +957,11 @@ mod tests {
     #[test]
     fn test_mysql_with_ignore_cols_and_order() {
         let mysql_meta = create_mysql_tb_meta();
-        let mut stmt: RdbSnapshotExtractStatement = (&mysql_meta).into();
+        let stmt: RdbSnapshotExtractStatement = (&mysql_meta).into();
         let mut ignore_cols = HashSet::new();
         ignore_cols.insert("large_blob".to_string());
         let order_cols = vec!["id".to_string()];
-        stmt.with_ignore_cols(&ignore_cols)
+        let stmt = stmt.with_ignore_cols(&ignore_cols)
             .with_order_cols(&order_cols)
             .with_predicate_type(OrderKeyPredicateType::GreaterThan)
             .with_limit(50);
@@ -976,11 +976,11 @@ mod tests {
     #[test]
     fn test_pg_with_ignore_cols_and_order() {
         let pg_meta = create_pg_tb_meta();
-        let mut stmt: RdbSnapshotExtractStatement = (&pg_meta).into();
+        let stmt: RdbSnapshotExtractStatement = (&pg_meta).into();
         let mut ignore_cols = HashSet::new();
         ignore_cols.insert("large_blob".to_string());
         let order_cols = vec!["id".to_string()];
-        stmt.with_ignore_cols(&ignore_cols)
+        let stmt = stmt.with_ignore_cols(&ignore_cols)
             .with_order_cols(&order_cols)
             .with_predicate_type(OrderKeyPredicateType::GreaterThan)
             .with_limit(50);
@@ -995,7 +995,7 @@ mod tests {
     #[test]
     fn test_mysql_predicate_type_none_with_nullable_cols() {
         let mysql_meta = create_mysql_tb_meta();
-        let mut stmt = RdbSnapshotExtractStatement::from(&mysql_meta);
+        let stmt = RdbSnapshotExtractStatement::from(&mysql_meta);
         let order_cols = vec![
             "id".to_string(),
             "price".to_string(),
@@ -1003,7 +1003,7 @@ mod tests {
             "bio".to_string(),
             "large_blob".to_string(),
         ];
-        stmt.with_order_cols(&order_cols)
+        let stmt = stmt.with_order_cols(&order_cols)
             .with_predicate_type(OrderKeyPredicateType::None)
             .with_limit(100);
 
@@ -1017,7 +1017,7 @@ mod tests {
     #[test]
     fn test_pg_predicate_type_none_with_nullable_cols() {
         let pg_meta = create_pg_tb_meta();
-        let mut stmt = RdbSnapshotExtractStatement::from(&pg_meta);
+        let stmt = RdbSnapshotExtractStatement::from(&pg_meta);
         let order_cols = vec![
             "id".to_string(),
             "price".to_string(),
@@ -1025,7 +1025,7 @@ mod tests {
             "bio".to_string(),
             "large_blob".to_string(),
         ];
-        stmt.with_order_cols(&order_cols)
+        let stmt = stmt.with_order_cols(&order_cols)
             .with_predicate_type(OrderKeyPredicateType::None)
             .with_limit(100);
 
@@ -1039,9 +1039,9 @@ mod tests {
     #[test]
     fn test_mysql_predicate_type_none_single_non_nullable_col() {
         let mysql_meta = create_mysql_tb_meta();
-        let mut stmt = RdbSnapshotExtractStatement::from(&mysql_meta);
+        let stmt = RdbSnapshotExtractStatement::from(&mysql_meta);
         let order_cols = vec!["id".to_string()];
-        stmt.with_order_cols(&order_cols)
+        let stmt = stmt.with_order_cols(&order_cols)
             .with_predicate_type(OrderKeyPredicateType::None)
             .with_limit(100);
 
@@ -1056,10 +1056,10 @@ mod tests {
     #[test]
     fn test_mysql_predicate_type_none_with_where_condition() {
         let mysql_meta = create_mysql_tb_meta();
-        let mut stmt = RdbSnapshotExtractStatement::from(&mysql_meta);
+        let stmt = RdbSnapshotExtractStatement::from(&mysql_meta);
         let order_cols = vec!["id".to_string(), "price".to_string(), "bio".to_string()];
         let where_condition = "id > 100".to_string();
-        stmt.with_order_cols(&order_cols)
+        let stmt = stmt.with_order_cols(&order_cols)
             .with_where_condition(&where_condition)
             .with_predicate_type(OrderKeyPredicateType::None)
             .with_limit(100);

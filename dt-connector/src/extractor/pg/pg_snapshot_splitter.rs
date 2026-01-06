@@ -2,7 +2,6 @@ use std::vec;
 use std::{cmp, collections::HashMap};
 
 use anyhow::Context;
-use dt_common::log_debug;
 use dt_common::meta::position::Position;
 use dt_common::meta::{
     adaptor::{pg_col_value_convertor::PgColValueConvertor, sqlx_ext::SqlxPgExt},
@@ -12,6 +11,7 @@ use dt_common::meta::{
 };
 use dt_common::utils::sql_util::*;
 use dt_common::{config::config_enums::DbType, quote_pg};
+use dt_common::{log_debug, log_info};
 use futures::TryStreamExt;
 use sqlx::{Pool, Postgres, Row};
 
@@ -20,6 +20,8 @@ use crate::extractor::splitter::Error::*;
 
 const DISTRIBUTION_FACTOR_LOWER: f64 = 0.05;
 const DISTRIBUTION_FACTOR_UPPER: f64 = 1000.0;
+const NO_NEXT_CHUNKS: u8 = 0b01;
+const NO_EVEN_CHUNKS: u8 = 0b10;
 
 pub type ChunkRange = (ColValue, ColValue);
 
@@ -31,7 +33,7 @@ pub struct SnapshotChunk {
 pub struct PgSnapshotSplitter<'a> {
     snapshot_range: Option<ChunkRange>,
     pg_tb_meta: &'a PgTbMeta,
-    has_next_chunks: bool,
+    split_state: u8,
     conn_pool: Pool<Postgres>,
     batch_size: u64,
     estimated_row_count: u64,
@@ -53,7 +55,7 @@ impl PgSnapshotSplitter<'_> {
         PgSnapshotSplitter {
             snapshot_range: None,
             pg_tb_meta,
-            has_next_chunks: true,
+            split_state: 0,
             conn_pool,
             batch_size: batch_size as u64,
             estimated_row_count: 0,
@@ -94,7 +96,7 @@ impl PgSnapshotSplitter<'_> {
 
     pub async fn get_next_chunks(&mut self) -> anyhow::Result<Vec<SnapshotChunk>> {
         // only support single-column splitting.
-        if !self.has_next_chunks {
+        if self.has(NO_NEXT_CHUNKS) {
             return Ok(Vec::new());
         }
         let pg_tb_meta = self.pg_tb_meta;
@@ -102,13 +104,13 @@ impl PgSnapshotSplitter<'_> {
             self.estimated_row_count = self.estimate_row_count(&pg_tb_meta.basic).await?;
         }
         if self.estimated_row_count <= self.batch_size {
-            log_debug!(
+            log_info!(
                 "table {}.{} row count {} is too small, no need to split",
                 pg_tb_meta.basic.schema,
                 pg_tb_meta.basic.tb,
                 self.estimated_row_count
             );
-            self.has_next_chunks = false;
+            self.toggle(NO_NEXT_CHUNKS);
             // represent no split
             return Ok(vec![SnapshotChunk {
                 chunk_id: 0,
@@ -117,37 +119,27 @@ impl PgSnapshotSplitter<'_> {
         }
         let partition_col = &self.partition_col;
         let partition_col_type = pg_tb_meta.get_col_type(partition_col)?;
-        match pg_tb_meta.basic.order_cols.len() {
-            0 => {
-                // no primary or unique key
-                if let Some(chunk) = self.get_next_unevenly_sized_chunk(pg_tb_meta).await? {
-                    return Ok(vec![chunk]);
-                } else {
-                    return Ok(Vec::new());
-                }
-            }
-            _ => {
-                // single or composite primary or unique key
-                if partition_col_type.is_integer() {
-                    let chunks = self.get_evenly_sized_chunks(pg_tb_meta).await;
-                    if let Err(e) = chunks {
-                        match e.downcast_ref::<splitter::Error>() {
-                            Some(OutOfDistributionFactorRangeError { .. })
-                            | Some(BadSplitColumnError { .. }) => {
-                                return Ok(vec![SnapshotChunk {
-                                    chunk_id: 0,
-                                    chunk_range: (ColValue::None, ColValue::None),
-                                }]);
-                            }
-                            _ => return Err(e),
-                        }
-                    } else {
-                        return chunks;
+        if !self.has(NO_EVEN_CHUNKS) && partition_col_type.is_integer() {
+            let chunks = self.get_evenly_sized_chunks(pg_tb_meta).await;
+            if let Err(e) = chunks {
+                match e.downcast_ref::<splitter::Error>() {
+                    Some(BadSplitColumnError { .. }) => {
+                        return Ok(vec![SnapshotChunk {
+                            chunk_id: 0,
+                            chunk_range: (ColValue::None, ColValue::None),
+                        }]);
                     }
-                } else if let Some(chunk) = self.get_next_unevenly_sized_chunk(pg_tb_meta).await? {
-                    return Ok(vec![chunk]);
+                    Some(OutOfDistributionFactorRangeError { .. }) => {
+                        // fallback to get_next_unevenly_sized_chunk
+                    }
+                    _ => return Err(e),
                 }
+            } else {
+                return chunks;
             }
+        }
+        if let Some(chunk) = self.get_next_unevenly_sized_chunk(pg_tb_meta).await? {
+            return Ok(vec![chunk]);
         }
         Ok(Vec::new())
     }
@@ -184,7 +176,7 @@ impl PgSnapshotSplitter<'_> {
 
     async fn estimate_row_count(&mut self, tb_meta: &RdbTbMeta) -> anyhow::Result<u64> {
         let sql = format!(
-            r#"SELECT
+            "SELECT
     c.reltuples::bigint AS row_count
 FROM
     pg_class c
@@ -192,7 +184,7 @@ FROM
 WHERE
     c.relkind = 'r'
     AND n.nspname = '{}'
-    AND c.relname = '{}'"#,
+    AND c.relname = '{}'",
             tb_meta.schema, tb_meta.tb,
         );
         let mut rows = sqlx::query(&sql).fetch(&self.conn_pool);
@@ -248,12 +240,23 @@ FROM
         &mut self,
         tb_meta: &PgTbMeta,
     ) -> anyhow::Result<Vec<SnapshotChunk>> {
+        if self.has(NO_EVEN_CHUNKS) | self.has(NO_NEXT_CHUNKS) {
+            return Ok(Vec::new());
+        }
+        self.toggle(NO_EVEN_CHUNKS);
         let (min_value, max_value) = if let Some(range) = &self.snapshot_range {
             (range.0.clone(), range.1.clone())
         } else {
             let range = self.get_partition_col_range(tb_meta).await?;
             if range.0.is_same_value(&range.1) {
-                return Err(BadSplitColumnError(range.0.to_string(), range.1.to_string()).into());
+                let err = BadSplitColumnError(range.0.to_string(), range.1.to_string());
+                log_info!(
+                    "splitting {}.{} gets: {:?}",
+                    quote_pg!(tb_meta.basic.schema),
+                    quote_pg!(tb_meta.basic.tb),
+                    err.to_string()
+                );
+                return Err(err.into());
             }
             self.snapshot_range = Some(range.clone());
             range
@@ -267,12 +270,18 @@ FROM
         if distribution_factor < DISTRIBUTION_FACTOR_LOWER
             || distribution_factor > DISTRIBUTION_FACTOR_UPPER
         {
-            return Err(OutOfDistributionFactorRangeError(
+            let err = OutOfDistributionFactorRangeError(
                 distribution_factor,
                 DISTRIBUTION_FACTOR_LOWER,
                 DISTRIBUTION_FACTOR_UPPER,
-            )
-            .into());
+            );
+            log_info!(
+                "splitting {}.{} gets: {:?}",
+                quote_pg!(tb_meta.basic.schema),
+                quote_pg!(tb_meta.basic.tb),
+                err.to_string()
+            );
+            return Err(err.into());
         }
         let step_size = cmp::max(
             (distribution_factor * self.batch_size as f64) as i128,
@@ -293,7 +302,7 @@ FROM
             chunks.push(SnapshotChunk {
                 chunk_id: self.chunk_id_generator,
                 chunk_range: (
-                    if cur_value_i128 != min_value_i128 {
+                    if cur_value_i128 > min_value_i128 {
                         cur_value
                     } else {
                         ColValue::None
@@ -304,7 +313,7 @@ FROM
             cur_value_i128 = t_i128;
             cur_value = t_value;
         }
-        self.has_next_chunks = false;
+        self.toggle(NO_NEXT_CHUNKS);
         Ok(chunks)
     }
 
@@ -344,7 +353,7 @@ SELECT {} FROM {}.{} {} ORDER BY {} ASC LIMIT {}) AS T",
         let next_chunk_end_value =
             PgColValueConvertor::from_query(&row, "max_value", partition_col_type)?;
         if let ColValue::None = next_chunk_end_value {
-            self.has_next_chunks = false;
+            self.toggle(NO_NEXT_CHUNKS);
             return Ok(None);
         }
         let chunk_range = if let Some(current_value) = &self.current_col_value {
@@ -362,5 +371,13 @@ SELECT {} FROM {}.{} {} ORDER BY {} ASC LIMIT {}) AS T",
 
     pub fn get_partition_col(&self) -> String {
         self.partition_col.clone()
+    }
+
+    pub fn toggle(&mut self, mask: u8) {
+        self.split_state ^= mask;
+    }
+
+    pub fn has(&self, mask: u8) -> bool {
+        (self.split_state & mask) == mask
     }
 }
