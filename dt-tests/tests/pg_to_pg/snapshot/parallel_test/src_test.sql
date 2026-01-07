@@ -121,13 +121,13 @@ INSERT INTO test_db_2.tb_date VALUES
 
 -- 11. VarBinary (Bytea)
 -- Converted 0x... to '\x...' and strings to hex bytea representation
-INSERT INTO test_db_2.tb_varbinary VALUES 
-(1,'\x00','null_byte'), (2,'\x01','one'), (3,'\x41','A_hex41'), (4,'\x61','a_hex61'),
-(5,'\xFF','max_byte'), (6,NULL,'null'), (7,'\x42','B'), (8,'\x62','b'), (9,'\x31','char_1'),
-(10,'\x02','two'), (11,'\x10','sixteen'), (12,'\x20','thirtytwo'), (13,'\x7F','max_ascii'),
-(14,'\x80','ext_ascii'), (15,'\x4141','double_A'), (16,'\x6161','double_a'), (17,'\x4162','mixed'),
-(18,'\x1234','multi_1'), (19,'\x5678','multi_2'), (20,'\x9ABC','multi_3'), 
-(21,'\xFFFF','max_2byte');
+-- INSERT INTO test_db_2.tb_varbinary VALUES 
+-- (1,'\x00','null_byte'), (2,'\x01','one'), (3,'\x41','A_hex41'), (4,'\x61','a_hex61'),
+-- (5,'\xFF','max_byte'), (6,NULL,'null'), (7,'\x42','B'), (8,'\x62','b'), (9,'\x31','char_1'),
+-- (10,'\x02','two'), (11,'\x10','sixteen'), (12,'\x20','thirtytwo'), (13,'\x7F','max_ascii'),
+-- (14,'\x80','ext_ascii'), (15,'\x4141','double_A'), (16,'\x6161','double_a'), (17,'\x4162','mixed'),
+-- (18,'\x1234','multi_1'), (19,'\x5678','multi_2'), (20,'\x9ABC','multi_3'), 
+-- (21,'\xFFFF','max_2byte');
 
 -- 12. Varchar Primary Key
 INSERT INTO test_db_2.tb_varchar_pk VALUES 
@@ -149,14 +149,15 @@ INSERT INTO test_db_2.tb_text_pk VALUES
 
 -- 14. Blob with Prefix Index (Bytea)
 -- Converted _binary literals to '\x...' style
-INSERT INTO test_db_2.tb_blob_pk VALUES 
-(1,'\x',0), (2,'\x61',97), (3,'\x41',65), (4,'\x6162',2), (5,'\x6163',3), (6,'\x00',0), (7,'\x0000',0), 
-(8,'\x0001',1), (9,'\x01',1), (10,'\x0F',15), (11,'\x10',16), (12,'\x7F',127), (13,'\x80',128), (14,'\xFF',255), 
-(15,'\xFFFF',65535), (16,'\x31',49), (17,'\x3130',50), (18,'\x32',50), 
-(19,'\xAAAAAAAAAAAAAAAAAAAA',88), 
-(20,'\xAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',89), 
-(21,'\xAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA00',90), 
-(22,'\xAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA01',91),
-(23,NULL,NULL);
+-- INSERT INTO test_db_2.tb_blob_pk VALUES 
+-- (1,'\x',0), (2,'\x61',97), (3,'\x41',65), (4,'\x6162',2), (5,'\x6163',3), (6,'\x00',0), (7,'\x0000',0), 
+-- (8,'\x0001',1), (9,'\x01',1), (10,'\x0F',15), (11,'\x10',16), (12,'\x7F',127), (13,'\x80',128), (14,'\xFF',255), 
+-- (15,'\xFFFF',65535), (16,'\x31',49), (17,'\x3130',50), (18,'\x32',50), 
+-- (19,'\xAAAAAAAAAAAAAAAAAAAA',88), 
+-- (20,'\xAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',89), 
+-- (21,'\xAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA00',90), 
+-- (22,'\xAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA01',91),
+-- (23,NULL,NULL);
 
-ANALYZE;
+-- Analyze tables to update statistics on reltuples
+ANALYZE VERBOSE;

@@ -41,6 +41,8 @@ use dt_common::{
     utils::serialize_util::SerializeUtil,
 };
 
+use quote_mysql as quote;
+
 pub struct MysqlSnapshotExtractor {
     pub base_extractor: BaseExtractor,
     pub conn_pool: Pool<MySql>,
@@ -72,8 +74,8 @@ impl Extractor for MysqlSnapshotExtractor {
     async fn extract(&mut self) -> anyhow::Result<()> {
         log_info!(
             "MysqlSnapshotExtractor starts, schema: {}, tb: {}, batch_size: {}, parallel_size: {}",
-            quote_mysql!(&self.db),
-            quote_mysql!(&self.tb),
+            quote!(&self.db),
+            quote!(&self.tb),
             self.batch_size,
             self.parallel_size
         );
@@ -121,8 +123,8 @@ impl MysqlSnapshotExtractor {
 
         log_info!(
             "end extracting data from {}.{}, all count: {}",
-            quote_mysql!(&self.db),
-            quote_mysql!(&self.tb),
+            quote!(&self.db),
+            quote!(&self.tb),
             extracted_count
         );
         Ok(())
@@ -142,8 +144,8 @@ impl MysqlSnapshotExtractor {
     async fn extract_all(&mut self, tb_meta: &MysqlTbMeta) -> anyhow::Result<u64> {
         log_info!(
             "start extracting data from {}.{} without batch",
-            quote_mysql!(&self.db),
-            quote_mysql!(&self.tb)
+            quote!(&self.db),
+            quote!(&self.tb)
         );
 
         let ignore_cols = self.filter.get_ignore_cols(&self.db, &self.tb);
@@ -225,9 +227,9 @@ impl MysqlSnapshotExtractor {
                     } else {
                         bail!(
                             "{}.{} order col {} not found",
-                            quote_mysql!(&self.db),
-                            quote_mysql!(&self.tb),
-                            quote_mysql!(order_col),
+                            quote!(&self.db),
+                            quote!(&self.tb),
+                            quote!(order_col),
                         );
                     }
                 }
@@ -337,15 +339,15 @@ impl MysqlSnapshotExtractor {
                     if !join_set.is_empty() {
                         bail!(
                             "table {}.{} has no split chunk, but some parallel extractors are running",
-                            quote_mysql!(&self.db),
-                            quote_mysql!(&self.tb)
+                            quote!(&self.db),
+                            quote!(&self.tb)
                         );
                     }
                     // no split
                     log_info!(
                         "table {}.{} has no split chunk, extracting by single batch extractor",
-                        quote_mysql!(&self.db),
-                        quote_mysql!(&self.tb)
+                        quote!(&self.db),
+                        quote!(&self.tb)
                     );
                     return self.serial_extract(tb_meta).await;
                 }
@@ -427,7 +429,11 @@ impl MysqlSnapshotExtractor {
         let router = extract_ctx.router.clone();
         let buffer = extract_ctx.buffer.clone();
 
-        log_debug!("extract by partition_col: {}, chunk range: {:?}", partition_col, chunk);
+        log_debug!(
+            "extract by partition_col: {}, chunk range: {:?}",
+            partition_col,
+            chunk
+        );
         join_set.spawn(async move {
             let chunk_id = chunk.chunk_id;
             let (start_value, end_value) = chunk.chunk_range;
@@ -436,8 +442,8 @@ impl MysqlSnapshotExtractor {
                     bail!(
                         "chunk {} has bad chunk range from {}.{}",
                         chunk_id,
-                        quote_mysql!(&tb_meta.basic.schema),
-                        quote_mysql!(&tb_meta.basic.tb)
+                        quote!(&tb_meta.basic.schema),
+                        quote!(&tb_meta.basic.tb)
                     );
                 }
                 (ColValue::None, _) => {
@@ -500,9 +506,9 @@ impl MysqlSnapshotExtractor {
         }
         bail!(
             "user defined partition col {} not in cols of {}.{}",
-            quote_mysql!(user_defined_partition_col),
-            quote_mysql!(&tb_meta.basic.schema),
-            quote_mysql!(&tb_meta.basic.tb),
+            quote!(user_defined_partition_col),
+            quote!(&tb_meta.basic.schema),
+            quote!(&tb_meta.basic.tb),
         );
     }
 
@@ -526,8 +532,8 @@ impl MysqlSnapshotExtractor {
                 if schema != self.db || tb != self.tb {
                     log_info!(
                         r#"{}.{} resume position db/tb not match, ignore it"#,
-                        quote_mysql!(&self.db),
-                        quote_mysql!(&self.tb)
+                        quote!(&self.db),
+                        quote!(&self.tb)
                     );
                     return Ok(HashMap::new());
                 }
@@ -538,8 +544,8 @@ impl MysqlSnapshotExtractor {
                 if order_col_values.len() != order_cols.len() {
                     log_info!(
                         r#"{}.{} resume values not match order cols in length"#,
-                        quote_mysql!(&self.db),
-                        quote_mysql!(&self.tb)
+                        quote!(&self.db),
+                        quote!(&self.tb)
                     );
                     return Ok(HashMap::new());
                 }
@@ -549,8 +555,8 @@ impl MysqlSnapshotExtractor {
                     if position_order_col != *order_col {
                         log_info!(
                             r#"{}.{} resume position order col {} not match {}"#,
-                            quote_mysql!(&self.db),
-                            quote_mysql!(&self.tb),
+                            quote!(&self.db),
+                            quote!(&self.tb),
                             position_order_col,
                             order_col
                         );
@@ -571,8 +577,8 @@ impl MysqlSnapshotExtractor {
         }
         log_info!(
             r#"[{}.{}] recovery from [{}]"#,
-            quote_mysql!(&self.db),
-            quote_mysql!(&self.tb),
+            quote!(&self.db),
+            quote!(&self.tb),
             SerializeUtil::serialize_hashmap_to_json(&resume_values)?
         );
         Ok(resume_values)

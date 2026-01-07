@@ -36,7 +36,7 @@ CREATE SCHEMA test_db_2;
 -- 1. Standard Int
 CREATE TABLE IF NOT EXISTS test_db_2.tb_4 (
   row_id int,
-  id int, -- Postgres int is usually 32-bit (same as int(11))
+  id int, 
   value int DEFAULT NULL,
   UNIQUE (id)
 );
@@ -50,7 +50,6 @@ CREATE TABLE test_db_2.tb_bigint (
 );
 
 -- 3. Varchar Unique
--- Postgres is case-sensitive by default, so 'a' != 'A' automatically.
 CREATE TABLE test_db_2.tb_varchar (
   row_id int,
   id varchar(64) DEFAULT NULL,
@@ -86,13 +85,12 @@ CREATE TABLE test_db_2.tb_composite (
 -- 7. TinyInt (Mapped to SmallInt)
 CREATE TABLE test_db_2.tb_tinyint (
   row_id int,
-  id smallint DEFAULT NULL, -- Postgres has no tinyint, use smallint
+  id smallint DEFAULT NULL,
   value varchar(20),
   UNIQUE (id)
 );
 
 -- 8. BigInt Unsigned (Mapped to Numeric)
--- Postgres BigInt is signed. Max uint64 fits only in NUMERIC.
 CREATE TABLE test_db_2.tb_bigint_unsigned (
   row_id int,
   id numeric(20,0) DEFAULT NULL, 

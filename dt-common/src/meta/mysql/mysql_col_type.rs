@@ -115,4 +115,40 @@ impl MysqlColType {
                 | Self::LongText { .. }
         )
     }
+
+    pub fn can_be_splitted(&self) -> bool {
+        // Means wheather the type can be used in `max`/`min` aggregate operations and `order by` comparisons.
+        // Comparing Enum/Set types is different between `max`/`min` and `order by`, so we exclude them here.
+        // Compatible with mysql 5.7+. Reference: https://dev.mysql.com/doc/refman/5.7/en/aggregate-functions.html#function_max.
+        matches!(
+            self,
+            MysqlColType::TinyInt { .. }
+                | MysqlColType::SmallInt { .. }
+                | MysqlColType::MediumInt { .. }
+                | MysqlColType::Int { .. }
+                | MysqlColType::BigInt { .. }
+                | MysqlColType::Float
+                | MysqlColType::Double
+                | MysqlColType::Decimal { .. }
+                | MysqlColType::Date { .. }
+                | MysqlColType::DateTime { .. }
+                | MysqlColType::Time { .. }
+                | MysqlColType::Timestamp { .. }
+                | MysqlColType::Year
+                | MysqlColType::Char { .. }
+                | MysqlColType::Varchar { .. }
+                | MysqlColType::TinyText { .. }
+                | MysqlColType::MediumText { .. }
+                | MysqlColType::Text { .. }
+                | MysqlColType::LongText { .. }
+                | MysqlColType::Binary { .. }
+                | MysqlColType::VarBinary { .. }
+                | MysqlColType::TinyBlob
+                | MysqlColType::MediumBlob
+                | MysqlColType::Blob
+                | MysqlColType::LongBlob
+                | MysqlColType::Bit
+                | MysqlColType::Json
+        )
+    }
 }

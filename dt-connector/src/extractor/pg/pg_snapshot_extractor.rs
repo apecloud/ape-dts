@@ -38,6 +38,8 @@ use dt_common::{
     utils::serialize_util::SerializeUtil,
 };
 
+use quote_pg as quote;
+
 pub struct PgSnapshotExtractor {
     pub base_extractor: BaseExtractor,
     pub conn_pool: Pool<Postgres>,
@@ -69,8 +71,8 @@ impl Extractor for PgSnapshotExtractor {
     async fn extract(&mut self) -> anyhow::Result<()> {
         log_info!(
             "PgSnapshotExtractor starts, schema: {}, tb: {}, batch_size: {}, parallel_size: {}",
-            quote_pg!(&self.schema),
-            quote_pg!(&self.tb),
+            quote!(&self.schema),
+            quote!(&self.tb),
             self.batch_size,
             self.parallel_size
         );
@@ -118,8 +120,8 @@ impl PgSnapshotExtractor {
 
         log_info!(
             "end extracting data from {}.{}, all count: {}",
-            quote_pg!(&self.schema),
-            quote_pg!(&self.tb),
+            quote!(&self.schema),
+            quote!(&self.tb),
             extracted_count
         );
         Ok(())
@@ -139,8 +141,8 @@ impl PgSnapshotExtractor {
     async fn extract_all(&mut self, tb_meta: &PgTbMeta) -> anyhow::Result<u64> {
         log_info!(
             "start extracting data from {}.{} without batch",
-            quote_pg!(&self.schema),
-            quote_pg!(&self.tb)
+            quote!(&self.schema),
+            quote!(&self.tb)
         );
 
         let ignore_cols = self.filter.get_ignore_cols(&self.schema, &self.tb);
@@ -221,9 +223,9 @@ impl PgSnapshotExtractor {
                     } else {
                         bail!(
                             "{}.{} order col {} not found",
-                            quote_pg!(&self.schema),
-                            quote_pg!(&self.tb),
-                            quote_pg!(order_col),
+                            quote!(&self.schema),
+                            quote!(&self.tb),
+                            quote!(order_col),
                         );
                     }
                 }
@@ -333,15 +335,15 @@ impl PgSnapshotExtractor {
                     if !join_set.is_empty() {
                         bail!(
                             "table {}.{} has no split chunk, but some parallel extractors are running",
-                            quote_pg!(&self.schema),
-                            quote_pg!(&self.tb)
+                            quote!(&self.schema),
+                            quote!(&self.tb)
                         );
                     }
                     // no split
                     log_info!(
                         "table {}.{} has no split chunk, extracting by single batch extractor",
-                        quote_pg!(&self.schema),
-                        quote_pg!(&self.tb)
+                        quote!(&self.schema),
+                        quote!(&self.tb)
                     );
                     return self.serial_extract(tb_meta).await;
                 }
@@ -423,7 +425,11 @@ impl PgSnapshotExtractor {
         let router = extract_ctx.router.clone();
         let buffer = extract_ctx.buffer.clone();
 
-        log_debug!("extract by partition_col: {}, chunk range: {:?}", partition_col, chunk);
+        log_debug!(
+            "extract by partition_col: {}, chunk range: {:?}",
+            partition_col,
+            chunk
+        );
         join_set.spawn(async move {
             let chunk_id = chunk.chunk_id;
             let (start_value, end_value) = chunk.chunk_range;
@@ -432,8 +438,8 @@ impl PgSnapshotExtractor {
                     bail!(
                         "chunk {} has bad chunk range from {}.{}",
                         chunk_id,
-                        quote_pg!(&tb_meta.basic.schema),
-                        quote_pg!(&tb_meta.basic.tb)
+                        quote!(&tb_meta.basic.schema),
+                        quote!(&tb_meta.basic.tb)
                     );
                 }
                 (ColValue::None, _) => {
@@ -496,9 +502,9 @@ impl PgSnapshotExtractor {
         }
         bail!(
             "user defined partition col {} not in cols of {}.{}",
-            quote_pg!(user_defined_partition_col),
-            quote_pg!(&tb_meta.basic.schema),
-            quote_pg!(&tb_meta.basic.tb),
+            quote!(user_defined_partition_col),
+            quote!(&tb_meta.basic.schema),
+            quote!(&tb_meta.basic.tb),
         );
     }
 
@@ -522,8 +528,8 @@ impl PgSnapshotExtractor {
                 if schema != self.schema || tb != self.tb {
                     log_info!(
                         r#"{}.{} resume position schema/tb not match, ignore it"#,
-                        quote_pg!(&self.schema),
-                        quote_pg!(&self.tb)
+                        quote!(&self.schema),
+                        quote!(&self.tb)
                     );
                     return Ok(HashMap::new());
                 }
@@ -534,8 +540,8 @@ impl PgSnapshotExtractor {
                 if order_col_values.len() != order_cols.len() {
                     log_info!(
                         r#"{}.{} resume values not match order cols in length"#,
-                        quote_pg!(&self.schema),
-                        quote_pg!(&self.tb)
+                        quote!(&self.schema),
+                        quote!(&self.tb)
                     );
                     return Ok(HashMap::new());
                 }
@@ -545,8 +551,8 @@ impl PgSnapshotExtractor {
                     if position_order_col != *order_col {
                         log_info!(
                             r#"{}.{} resume position order col {} not match {}"#,
-                            quote_pg!(&self.schema),
-                            quote_pg!(&self.tb),
+                            quote!(&self.schema),
+                            quote!(&self.tb),
                             position_order_col,
                             order_col
                         );
@@ -565,16 +571,16 @@ impl PgSnapshotExtractor {
             } else {
                 log_info!(
                     r#"{}.{} has no resume position"#,
-                    quote_pg!(&self.schema),
-                    quote_pg!(&self.tb)
+                    quote!(&self.schema),
+                    quote!(&self.tb)
                 );
                 return Ok(HashMap::new());
             }
         }
         log_info!(
             r#"[{}.{}] recovery from [{}]"#,
-            quote_pg!(&self.schema),
-            quote_pg!(&self.tb),
+            quote!(&self.schema),
+            quote!(&self.tb),
             SerializeUtil::serialize_hashmap_to_json(&resume_values)?
         );
         Ok(resume_values)
