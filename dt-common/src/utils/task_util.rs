@@ -33,6 +33,7 @@ mod tests {
     use crate::{
         config::{
             config_enums::{DbType, ExtractType, SinkType},
+            connection_auth_config::ConnectionAuthConfig,
             extractor_config::BasicExtractorConfig,
             filter_config::FilterConfig,
             router_config::RouterConfig,
@@ -47,12 +48,14 @@ mod tests {
             db_type: DbType::Mysql,
             extract_type: ExtractType::Snapshot,
             url: "mysql://localhost:3306/test".to_string(),
+            connection_auth: ConnectionAuthConfig::NoAuth,
             max_connections: 10,
         };
         let sinker_config = BasicSinkerConfig {
             db_type: DbType::Mysql,
             sink_type: SinkType::Write,
             url: "mysql://localhost:3307/test".to_string(),
+            connection_auth: ConnectionAuthConfig::NoAuth,
             batch_size: 0,
             max_connections: 10,
         };

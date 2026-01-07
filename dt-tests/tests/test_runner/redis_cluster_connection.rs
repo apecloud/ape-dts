@@ -1,5 +1,8 @@
-use dt_common::meta::redis::command::key_parser::KeyParser;
 use dt_common::utils::redis_util::RedisUtil;
+use dt_common::{
+    config::connection_auth_config::ConnectionAuthConfig,
+    meta::redis::command::key_parser::KeyParser,
+};
 use redis::Connection;
 use std::collections::{HashMap, HashSet};
 use url::Url;
@@ -15,7 +18,7 @@ impl RedisClusterConnection {
     pub async fn new(url: &str, is_cluster: bool) -> anyhow::Result<Self> {
         let mut slot_node_map = HashMap::new();
         let mut node_conn_map = HashMap::new();
-        let mut conn = RedisUtil::create_redis_conn(url).await?;
+        let mut conn = RedisUtil::create_redis_conn(url, &ConnectionAuthConfig::NoAuth).await?;
 
         if is_cluster {
             let nodes = RedisUtil::get_cluster_master_nodes(&mut conn)?;
@@ -29,7 +32,8 @@ impl RedisClusterConnection {
             for node in nodes {
                 println!("redis cluster node: {}", node.address);
                 let new_url = format!("redis://{}:{}@{}", username, password, node.address);
-                let conn = RedisUtil::create_redis_conn(&new_url).await?;
+                let conn =
+                    RedisUtil::create_redis_conn(&new_url, &ConnectionAuthConfig::NoAuth).await?;
                 node_conn_map.insert(node.address.clone(), conn);
             }
         }

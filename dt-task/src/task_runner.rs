@@ -948,22 +948,26 @@ impl TaskRunner {
             let db_extractor_config = match &self.config.extractor {
                 ExtractorConfig::MysqlStruct {
                     url,
+                    connection_auth,
                     db,
                     db_batch_size,
                     ..
                 } => ExtractorConfig::MysqlStruct {
                     url: url.clone(),
+                    connection_auth: connection_auth.clone(),
                     db: db.clone(),
                     dbs: schemas,
                     db_batch_size: *db_batch_size,
                 },
                 ExtractorConfig::PgStruct {
                     url,
+                    connection_auth,
                     schema,
                     db_batch_size,
                     ..
                 } => ExtractorConfig::PgStruct {
                     url: url.clone(),
+                    connection_auth: connection_auth.clone(),
                     schema: schema.clone(),
                     schemas,
                     do_global_structs: true,
@@ -1013,12 +1017,14 @@ impl TaskRunner {
                     let tb_extractor_config = match &self.config.extractor {
                         ExtractorConfig::MysqlSnapshot {
                             url,
+                            connection_auth,
                             sample_interval,
                             parallel_size,
                             batch_size,
                             ..
                         } => ExtractorConfig::MysqlSnapshot {
                             url: url.clone(),
+                            connection_auth: connection_auth.clone(),
                             db: schema.clone(),
                             tb: tb.clone(),
                             sample_interval: *sample_interval,
@@ -1028,25 +1034,31 @@ impl TaskRunner {
 
                         ExtractorConfig::PgSnapshot {
                             url,
+                            connection_auth,
                             sample_interval,
                             batch_size,
                             ..
                         } => ExtractorConfig::PgSnapshot {
                             url: url.clone(),
+                            connection_auth: connection_auth.clone(),
                             schema: schema.clone(),
                             tb: tb.clone(),
                             sample_interval: *sample_interval,
                             batch_size: *batch_size,
                         },
 
-                        ExtractorConfig::MongoSnapshot { url, app_name, .. } => {
-                            ExtractorConfig::MongoSnapshot {
-                                url: url.clone(),
-                                app_name: app_name.clone(),
-                                db: schema.clone(),
-                                tb: tb.clone(),
-                            }
-                        }
+                        ExtractorConfig::MongoSnapshot {
+                            url,
+                            connection_auth,
+                            app_name,
+                            ..
+                        } => ExtractorConfig::MongoSnapshot {
+                            url: url.clone(),
+                            connection_auth: connection_auth.clone(),
+                            app_name: app_name.clone(),
+                            db: schema.clone(),
+                            tb: tb.clone(),
+                        },
 
                         ExtractorConfig::FoxlakeS3 {
                             url,

@@ -2,8 +2,10 @@ use std::{str::FromStr, sync::Arc, time::Duration};
 
 use anyhow::bail;
 use futures::TryStreamExt;
-use mongodb::bson::doc;
-use mongodb::options::ClientOptions;
+use mongodb::{
+    bson::doc,
+    options::{ClientOptions, Credential},
+};
 use opendal::Operator;
 use sqlx::{
     mysql::{MySqlConnectOptions, MySqlPoolOptions},
@@ -14,6 +16,7 @@ use sqlx::{
 use dt_common::{
     config::{
         config_enums::{DbType, RdbTransactionIsolation, TaskType},
+        connection_auth_config::ConnectionAuthConfig,
         extractor_config::ExtractorConfig,
         global_config::GlobalConfig,
         meta_center_config::MetaCenterConfig,
@@ -46,6 +49,7 @@ pub struct TaskUtil {}
 impl TaskUtil {
     pub async fn create_mysql_conn_pool(
         url: &str,
+        connection_auth: &ConnectionAuthConfig,
         max_connections: u32,
         enable_sqlx_log: bool,
         after_connect_settings: Option<Vec<&'static str>>,
@@ -58,6 +62,13 @@ impl TaskUtil {
 
         if !enable_sqlx_log {
             conn_options.disable_statement_logging();
+        }
+
+        if let ConnectionAuthConfig::Basic { username, password } = connection_auth {
+            conn_options = conn_options.username(username);
+            if let Some(password_real) = password {
+                conn_options = conn_options.password(password_real);
+            }
         }
 
         let mut conn_pool = MySqlPoolOptions::new().max_connections(max_connections);
@@ -115,6 +126,7 @@ impl TaskUtil {
 
     pub async fn create_pg_conn_pool(
         url: &str,
+        connection_auth: &ConnectionAuthConfig,
         max_connections: u32,
         enable_sqlx_log: bool,
         disable_foreign_key_checks: bool,
@@ -126,6 +138,13 @@ impl TaskUtil {
 
         if !enable_sqlx_log {
             conn_options.disable_statement_logging();
+        }
+
+        if let ConnectionAuthConfig::Basic { username, password } = connection_auth {
+            conn_options = conn_options.username(username);
+            if let Some(password_real) = password {
+                conn_options = conn_options.password(password_real);
+            }
         }
 
         let conn_pool = PgPoolOptions::new()
@@ -150,10 +169,25 @@ impl TaskUtil {
     ) -> anyhow::Result<Option<RdbMetaManager>> {
         let log_level = &config.runtime.log_level;
         let meta_manager = match &config.sinker {
-            SinkerConfig::Mysql { url, .. } | SinkerConfig::MysqlCheck { url, .. } => {
-                let mysql_meta_manager =
-                    Self::create_mysql_meta_manager(url, log_level, DbType::Mysql, None, None)
-                        .await?;
+            SinkerConfig::Mysql {
+                url,
+                connection_auth,
+                ..
+            }
+            | SinkerConfig::MysqlCheck {
+                url,
+                connection_auth,
+                ..
+            } => {
+                let mysql_meta_manager = Self::create_mysql_meta_manager(
+                    url,
+                    connection_auth,
+                    log_level,
+                    DbType::Mysql,
+                    None,
+                    None,
+                )
+                .await?;
                 RdbMetaManager::from_mysql(mysql_meta_manager)
             }
 
@@ -161,9 +195,14 @@ impl TaskUtil {
             // as a workaround, for MySQL/Postgres -> Doris/Starrocks, we use extractor meta manager instead.
             SinkerConfig::StarRocks { .. } | SinkerConfig::Doris { .. } => {
                 match &config.extractor {
-                    ExtractorConfig::MysqlCdc { url, .. } => {
+                    ExtractorConfig::MysqlCdc {
+                        url,
+                        connection_auth,
+                        ..
+                    } => {
                         let mysql_meta_manager = Self::create_mysql_meta_manager(
                             url,
+                            connection_auth,
                             log_level,
                             DbType::Mysql,
                             None,
@@ -172,16 +211,31 @@ impl TaskUtil {
                         .await?;
                         RdbMetaManager::from_mysql(mysql_meta_manager)
                     }
-                    ExtractorConfig::PgCdc { url, .. } => {
-                        let pg_meta_manager = Self::create_pg_meta_manager(url, log_level).await?;
+                    ExtractorConfig::PgCdc {
+                        url,
+                        connection_auth,
+                        ..
+                    } => {
+                        let pg_meta_manager =
+                            Self::create_pg_meta_manager(url, connection_auth, log_level).await?;
                         RdbMetaManager::from_pg(pg_meta_manager)
                     }
                     _ => return Ok(None),
                 }
             }
 
-            SinkerConfig::Pg { url, .. } | SinkerConfig::PgCheck { url, .. } => {
-                let pg_meta_manager = Self::create_pg_meta_manager(url, log_level).await?;
+            SinkerConfig::Pg {
+                url,
+                connection_auth,
+                ..
+            }
+            | SinkerConfig::PgCheck {
+                url,
+                connection_auth,
+                ..
+            } => {
+                let pg_meta_manager =
+                    Self::create_pg_meta_manager(url, connection_auth, log_level).await?;
                 RdbMetaManager::from_pg(pg_meta_manager)
             }
 
@@ -194,6 +248,7 @@ impl TaskUtil {
 
     pub async fn create_mysql_meta_manager(
         url: &str,
+        connection_auth: &ConnectionAuthConfig,
         log_level: &str,
         db_type: DbType,
         meta_center_config: Option<MetaCenterConfig>,
@@ -202,22 +257,29 @@ impl TaskUtil {
         let enable_sqlx_log = Self::check_enable_sqlx_log(log_level);
         let conn_pool = match &conn_pool_opt {
             Some(conn_pool) => conn_pool.clone(),
-            None => Self::create_mysql_conn_pool(url, 1, enable_sqlx_log, None).await?,
+            None => {
+                Self::create_mysql_conn_pool(url, connection_auth, 1, enable_sqlx_log, None).await?
+            }
         };
         let mut meta_manager = MysqlMetaManager::new_mysql_compatible(conn_pool, db_type).await?;
 
         if let Some(MetaCenterConfig::MySqlDbEngine {
             url,
+            connection_auth,
             ddl_conflict_policy,
             ..
         }) = &meta_center_config
         {
             let meta_center_conn_pool = match &conn_pool_opt {
                 Some(conn_pool) => conn_pool.clone(),
-                None => Self::create_mysql_conn_pool(url, 1, enable_sqlx_log, None).await?,
+                None => {
+                    Self::create_mysql_conn_pool(url, connection_auth, 1, enable_sqlx_log, None)
+                        .await?
+                }
             };
             let meta_center = MysqlDbEngineMetaCenter::new(
                 url.clone(),
+                connection_auth.clone(),
                 meta_center_conn_pool,
                 ddl_conflict_policy.clone(),
             )
@@ -229,15 +291,18 @@ impl TaskUtil {
 
     pub async fn create_pg_meta_manager(
         url: &str,
+        connection_auth: &ConnectionAuthConfig,
         log_level: &str,
     ) -> anyhow::Result<PgMetaManager> {
         let enable_sqlx_log = Self::check_enable_sqlx_log(log_level);
-        let conn_pool = Self::create_pg_conn_pool(url, 1, enable_sqlx_log, false).await?;
+        let conn_pool =
+            Self::create_pg_conn_pool(url, connection_auth, 1, enable_sqlx_log, false).await?;
         PgMetaManager::new(conn_pool.clone()).await
     }
 
     pub async fn create_mongo_client(
         url: &str,
+        connection_auth: &ConnectionAuthConfig,
         app_name: &str,
         max_pool_size: Option<u32>,
     ) -> anyhow::Result<mongodb::Client> {
@@ -246,6 +311,15 @@ impl TaskUtil {
         client_options.app_name = Some(app_name.to_string());
         client_options.direct_connection = Some(true);
         client_options.max_pool_size = max_pool_size;
+
+        if let ConnectionAuthConfig::Basic { username, password } = connection_auth {
+            let credential = Credential::builder()
+                .username(username.to_string())
+                .password(password.to_owned())
+                .build();
+            client_options.credential = Some(credential);
+        }
+
         Ok(mongodb::Client::with_options(client_options)?)
     }
 
@@ -590,11 +664,18 @@ WHERE
         let recorder_pool = match resumer_config {
             ResumerConfig::FromDB {
                 url,
+                connection_auth,
                 db_type,
                 max_connections,
                 ..
             } => {
-                let pool = ResumerUtil::create_pool(url, db_type, *max_connections as u32).await?;
+                let pool = ResumerUtil::create_pool(
+                    url,
+                    connection_auth,
+                    db_type,
+                    *max_connections as u32,
+                )
+                .await?;
                 Some(pool)
             }
             _ => None,
@@ -640,41 +721,96 @@ impl ConnClient {
         }
 
         let extractor_client = match &task_config.extractor {
-            ExtractorConfig::MysqlSnapshot { url, .. }
-            | ExtractorConfig::MysqlStruct { url, .. }
-            | ExtractorConfig::MysqlCheck { url, .. }
-            | ExtractorConfig::MysqlCdc { url, .. } => ConnClient::MySQL(
+            ExtractorConfig::MysqlSnapshot {
+                url,
+                connection_auth,
+                ..
+            }
+            | ExtractorConfig::MysqlStruct {
+                url,
+                connection_auth,
+                ..
+            }
+            | ExtractorConfig::MysqlCheck {
+                url,
+                connection_auth,
+                ..
+            }
+            | ExtractorConfig::MysqlCdc {
+                url,
+                connection_auth,
+                ..
+            } => ConnClient::MySQL(
                 TaskUtil::create_mysql_conn_pool(
                     url,
+                    connection_auth,
                     extractor_max_connections,
                     enable_sqlx_log,
                     None,
                 )
                 .await?,
             ),
-            ExtractorConfig::PgSnapshot { url, .. }
-            | ExtractorConfig::PgStruct { url, .. }
-            | ExtractorConfig::PgCheck { url, .. }
-            | ExtractorConfig::PgCdc { url, .. } => ConnClient::PostgreSQL(
+            ExtractorConfig::PgSnapshot {
+                url,
+                connection_auth,
+                ..
+            }
+            | ExtractorConfig::PgStruct {
+                url,
+                connection_auth,
+                ..
+            }
+            | ExtractorConfig::PgCheck {
+                url,
+                connection_auth,
+                ..
+            }
+            | ExtractorConfig::PgCdc {
+                url,
+                connection_auth,
+                ..
+            } => ConnClient::PostgreSQL(
                 TaskUtil::create_pg_conn_pool(
                     url,
+                    connection_auth,
                     extractor_max_connections,
                     enable_sqlx_log,
                     false,
                 )
                 .await?,
             ),
-            ExtractorConfig::MongoSnapshot { url, app_name, .. }
-            | ExtractorConfig::MongoCheck { url, app_name, .. }
-            | ExtractorConfig::MongoCdc { url, app_name, .. } => ConnClient::MongoDB(
-                TaskUtil::create_mongo_client(url, app_name, Some(extractor_max_connections))
-                    .await?,
+            ExtractorConfig::MongoSnapshot {
+                url,
+                connection_auth,
+                app_name,
+                ..
+            }
+            | ExtractorConfig::MongoCheck {
+                url,
+                connection_auth,
+                app_name,
+                ..
+            }
+            | ExtractorConfig::MongoCdc {
+                url,
+                connection_auth,
+                app_name,
+                ..
+            } => ConnClient::MongoDB(
+                TaskUtil::create_mongo_client(
+                    url,
+                    connection_auth,
+                    app_name,
+                    Some(extractor_max_connections),
+                )
+                .await?,
             ),
             _ => ConnClient::None,
         };
         let sinker_client = match &task_config.sinker {
             SinkerConfig::Mysql {
                 url,
+                connection_auth,
                 disable_foreign_key_checks,
                 transaction_isolation,
                 ..
@@ -686,6 +822,7 @@ impl ConnClient {
                 ConnClient::MySQL(
                     TaskUtil::create_mysql_conn_pool(
                         url,
+                        connection_auth,
                         sinker_max_connections,
                         enable_sqlx_log,
                         conn_settings,
@@ -693,44 +830,78 @@ impl ConnClient {
                     .await?,
                 )
             }
-            SinkerConfig::MysqlStruct { url, .. } | SinkerConfig::MysqlCheck { url, .. } => {
-                ConnClient::MySQL(
-                    TaskUtil::create_mysql_conn_pool(
-                        url,
-                        sinker_max_connections,
-                        enable_sqlx_log,
-                        None,
-                    )
-                    .await?,
-                )
+            SinkerConfig::MysqlStruct {
+                url,
+                connection_auth,
+                ..
             }
+            | SinkerConfig::MysqlCheck {
+                url,
+                connection_auth,
+                ..
+            } => ConnClient::MySQL(
+                TaskUtil::create_mysql_conn_pool(
+                    url,
+                    connection_auth,
+                    sinker_max_connections,
+                    enable_sqlx_log,
+                    None,
+                )
+                .await?,
+            ),
             SinkerConfig::Pg {
                 url,
+                connection_auth,
                 disable_foreign_key_checks,
                 ..
             } => ConnClient::PostgreSQL(
                 TaskUtil::create_pg_conn_pool(
                     url,
+                    connection_auth,
                     sinker_max_connections,
                     enable_sqlx_log,
                     *disable_foreign_key_checks,
                 )
                 .await?,
             ),
-            SinkerConfig::PgStruct { url, .. } | SinkerConfig::PgCheck { url, .. } => {
-                ConnClient::PostgreSQL(
-                    TaskUtil::create_pg_conn_pool(
-                        url,
-                        sinker_max_connections,
-                        enable_sqlx_log,
-                        false,
-                    )
-                    .await?,
-                )
+            SinkerConfig::PgStruct {
+                url,
+                connection_auth,
+                ..
             }
-            SinkerConfig::Mongo { url, app_name, .. }
-            | SinkerConfig::MongoCheck { url, app_name, .. } => ConnClient::MongoDB(
-                TaskUtil::create_mongo_client(url, app_name, Some(sinker_max_connections)).await?,
+            | SinkerConfig::PgCheck {
+                url,
+                connection_auth,
+                ..
+            } => ConnClient::PostgreSQL(
+                TaskUtil::create_pg_conn_pool(
+                    url,
+                    connection_auth,
+                    sinker_max_connections,
+                    enable_sqlx_log,
+                    false,
+                )
+                .await?,
+            ),
+            SinkerConfig::Mongo {
+                url,
+                connection_auth,
+                app_name,
+                ..
+            }
+            | SinkerConfig::MongoCheck {
+                url,
+                connection_auth,
+                app_name,
+                ..
+            } => ConnClient::MongoDB(
+                TaskUtil::create_mongo_client(
+                    url,
+                    connection_auth,
+                    app_name,
+                    Some(sinker_max_connections),
+                )
+                .await?,
             ),
             _ => ConnClient::None,
         };

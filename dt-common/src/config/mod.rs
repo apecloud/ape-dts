@@ -1,5 +1,6 @@
 pub mod config_enums;
 pub mod config_token_parser;
+pub mod connection_auth_config;
 pub mod data_marker_config;
 pub mod extractor_config;
 pub mod filter_config;

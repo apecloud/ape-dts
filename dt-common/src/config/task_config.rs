@@ -10,7 +10,10 @@ use anyhow::{bail, Ok};
 #[cfg(feature = "metrics")]
 use crate::config::metrics_config::MetricsConfig;
 use crate::{
-    config::{config_enums::ResumeType, global_config::GlobalConfig},
+    config::{
+        config_enums::ResumeType, connection_auth_config::ConnectionAuthConfig,
+        global_config::GlobalConfig,
+    },
     error::Error,
     utils::task_util::TaskUtil,
 };
@@ -174,10 +177,13 @@ impl TaskConfig {
         let max_connections =
             loader.get_with_default(EXTRACTOR, MAX_CONNECTIONS, DEFAULT_MAX_CONNECTIONS);
 
+        let connection_auth = ConnectionAuthConfig::from(loader, EXTRACTOR);
+
         let basic = BasicExtractorConfig {
             db_type: db_type.clone(),
             extract_type: extract_type.clone(),
             url: url.clone(),
+            connection_auth: connection_auth.clone(),
             max_connections,
         };
 
@@ -188,6 +194,7 @@ impl TaskConfig {
             DbType::Mysql => match extract_type {
                 ExtractType::Snapshot => ExtractorConfig::MysqlSnapshot {
                     url,
+                    connection_auth,
                     db: String::new(),
                     tb: String::new(),
                     sample_interval: loader.get_with_default(EXTRACTOR, SAMPLE_INTERVAL, 1),
@@ -197,6 +204,7 @@ impl TaskConfig {
 
                 ExtractType::Cdc => ExtractorConfig::MysqlCdc {
                     url,
+                    connection_auth,
                     binlog_filename: loader.get_optional(EXTRACTOR, "binlog_filename"),
                     binlog_position: loader.get_optional(EXTRACTOR, "binlog_position"),
                     server_id: loader.get_required(EXTRACTOR, "server_id"),
@@ -230,12 +238,14 @@ impl TaskConfig {
 
                 ExtractType::CheckLog => ExtractorConfig::MysqlCheck {
                     url,
+                    connection_auth,
                     check_log_dir: loader.get_required(EXTRACTOR, CHECK_LOG_DIR),
                     batch_size: loader.get_with_default(EXTRACTOR, BATCH_SIZE, 200),
                 },
 
                 ExtractType::Struct => ExtractorConfig::MysqlStruct {
                     url,
+                    connection_auth,
                     db: String::new(),
                     dbs: Vec::new(),
                     db_batch_size: loader.get_with_default(
@@ -270,6 +280,7 @@ impl TaskConfig {
             DbType::Pg => match extract_type {
                 ExtractType::Snapshot => ExtractorConfig::PgSnapshot {
                     url,
+                    connection_auth,
                     schema: String::new(),
                     tb: String::new(),
                     sample_interval: loader.get_with_default(EXTRACTOR, SAMPLE_INTERVAL, 1),
@@ -278,6 +289,7 @@ impl TaskConfig {
 
                 ExtractType::Cdc => ExtractorConfig::PgCdc {
                     url,
+                    connection_auth,
                     slot_name: loader.get_required(EXTRACTOR, "slot_name"),
                     pub_name: loader.get_optional(EXTRACTOR, "pub_name"),
                     start_lsn: loader.get_optional(EXTRACTOR, "start_lsn"),
@@ -293,12 +305,14 @@ impl TaskConfig {
 
                 ExtractType::CheckLog => ExtractorConfig::PgCheck {
                     url,
+                    connection_auth,
                     check_log_dir: loader.get_required(EXTRACTOR, CHECK_LOG_DIR),
                     batch_size: loader.get_with_default(EXTRACTOR, BATCH_SIZE, 200),
                 },
 
                 ExtractType::Struct => ExtractorConfig::PgStruct {
                     url,
+                    connection_auth,
                     schema: String::new(),
                     schemas: Vec::new(),
                     do_global_structs: false,
@@ -318,6 +332,7 @@ impl TaskConfig {
                 match extract_type {
                     ExtractType::Snapshot => ExtractorConfig::MongoSnapshot {
                         url,
+                        connection_auth,
                         app_name,
                         db: String::new(),
                         tb: String::new(),
@@ -325,6 +340,7 @@ impl TaskConfig {
 
                     ExtractType::Cdc => ExtractorConfig::MongoCdc {
                         url,
+                        connection_auth,
                         app_name,
                         resume_token: loader.get_optional(EXTRACTOR, "resume_token"),
                         start_timestamp: loader.get_optional(EXTRACTOR, "start_timestamp"),
@@ -335,6 +351,7 @@ impl TaskConfig {
 
                     ExtractType::CheckLog => ExtractorConfig::MongoCheck {
                         url,
+                        connection_auth,
                         app_name,
                         check_log_dir: loader.get_required(EXTRACTOR, CHECK_LOG_DIR),
                         batch_size: loader.get_with_default(EXTRACTOR, BATCH_SIZE, 200),
@@ -347,7 +364,11 @@ impl TaskConfig {
             DbType::Redis => match extract_type {
                 ExtractType::Snapshot => {
                     let repl_port = loader.get_with_default(EXTRACTOR, REPL_PORT, 10008);
-                    ExtractorConfig::RedisSnapshot { url, repl_port }
+                    ExtractorConfig::RedisSnapshot {
+                        url,
+                        connection_auth,
+                        repl_port,
+                    }
                 }
 
                 ExtractType::SnapshotFile => ExtractorConfig::RedisSnapshotFile {
@@ -356,6 +377,7 @@ impl TaskConfig {
 
                 ExtractType::Scan => ExtractorConfig::RedisScan {
                     url,
+                    connection_auth,
                     statistic_type: loader.get_required(EXTRACTOR, "statistic_type"),
                     scan_count: loader.get_with_default(EXTRACTOR, "scan_count", 1000),
                 },
@@ -364,6 +386,7 @@ impl TaskConfig {
                     let repl_port = loader.get_with_default(EXTRACTOR, REPL_PORT, 10008);
                     ExtractorConfig::RedisCdc {
                         url,
+                        connection_auth,
                         repl_port,
                         repl_id: loader.get_optional(EXTRACTOR, "repl_id"),
                         repl_offset: loader.get_optional(EXTRACTOR, "repl_offset"),
@@ -378,6 +401,7 @@ impl TaskConfig {
                     let repl_port = loader.get_with_default(EXTRACTOR, REPL_PORT, 10008);
                     ExtractorConfig::RedisSnapshotAndCdc {
                         url,
+                        connection_auth,
                         repl_port,
                         repl_id: loader.get_optional(EXTRACTOR, "repl_id"),
                         keepalive_interval_secs,
@@ -386,7 +410,10 @@ impl TaskConfig {
                     }
                 }
 
-                ExtractType::Reshard => ExtractorConfig::RedisReshard { url },
+                ExtractType::Reshard => ExtractorConfig::RedisReshard {
+                    url,
+                    connection_auth,
+                },
 
                 _ => bail! { not_supported_err },
             },
@@ -422,10 +449,13 @@ impl TaskConfig {
         let max_connections =
             loader.get_with_default(SINKER, MAX_CONNECTIONS, DEFAULT_MAX_CONNECTIONS);
 
+        let connection_auth = ConnectionAuthConfig::from(loader, SINKER);
+
         let basic = BasicSinkerConfig {
             sink_type: sink_type.clone(),
             db_type: db_type.clone(),
             url: url.clone(),
+            connection_auth: connection_auth.clone(),
             batch_size,
             max_connections,
         };
@@ -440,6 +470,7 @@ impl TaskConfig {
             DbType::Mysql | DbType::Tidb => match sink_type {
                 SinkType::Write => SinkerConfig::Mysql {
                     url,
+                    connection_auth,
                     batch_size,
                     replace: loader.get_with_default(SINKER, REPLACE, true),
                     disable_foreign_key_checks: loader.get_with_default(
@@ -452,6 +483,7 @@ impl TaskConfig {
 
                 SinkType::Check => SinkerConfig::MysqlCheck {
                     url,
+                    connection_auth,
                     batch_size,
                     check_log_dir: loader.get_optional(SINKER, CHECK_LOG_DIR),
                     check_log_file_size: loader.get_with_default(
@@ -472,6 +504,7 @@ impl TaskConfig {
 
                 SinkType::Struct => SinkerConfig::MysqlStruct {
                     url,
+                    connection_auth,
                     conflict_policy,
                 },
 
@@ -485,6 +518,7 @@ impl TaskConfig {
             DbType::Pg => match sink_type {
                 SinkType::Write => SinkerConfig::Pg {
                     url,
+                    connection_auth,
                     batch_size,
                     replace: loader.get_with_default(SINKER, REPLACE, true),
                     disable_foreign_key_checks: loader.get_with_default(
@@ -496,6 +530,7 @@ impl TaskConfig {
 
                 SinkType::Check => SinkerConfig::PgCheck {
                     url,
+                    connection_auth,
                     batch_size,
                     check_log_dir: loader.get_optional(SINKER, CHECK_LOG_DIR),
                     check_log_file_size: loader.get_with_default(
@@ -516,6 +551,7 @@ impl TaskConfig {
 
                 SinkType::Struct => SinkerConfig::PgStruct {
                     url,
+                    connection_auth,
                     conflict_policy,
                 },
 
@@ -532,12 +568,14 @@ impl TaskConfig {
                 match sink_type {
                     SinkType::Write => SinkerConfig::Mongo {
                         url,
+                        connection_auth,
                         app_name,
                         batch_size,
                     },
 
                     SinkType::Check => SinkerConfig::MongoCheck {
                         url,
+                        connection_auth,
                         app_name,
                         batch_size,
                         check_log_dir: loader.get_optional(SINKER, CHECK_LOG_DIR),
@@ -575,6 +613,7 @@ impl TaskConfig {
             DbType::Redis => match sink_type {
                 SinkType::Write => SinkerConfig::Redis {
                     url,
+                    connection_auth,
                     batch_size,
                     method: loader.get_optional(SINKER, "method"),
                     is_cluster: loader.get_optional(SINKER, "is_cluster"),
@@ -593,6 +632,7 @@ impl TaskConfig {
             DbType::StarRocks => match sink_type {
                 SinkType::Write => SinkerConfig::StarRocks {
                     url,
+                    connection_auth,
                     batch_size,
                     stream_load_url: loader.get_optional(SINKER, "stream_load_url"),
                     hard_delete: loader.get_optional(SINKER, "hard_delete"),
@@ -600,6 +640,7 @@ impl TaskConfig {
 
                 SinkType::Struct => SinkerConfig::StarRocksStruct {
                     url,
+                    connection_auth,
                     conflict_policy,
                 },
 
@@ -609,12 +650,14 @@ impl TaskConfig {
             DbType::Doris => match sink_type {
                 SinkType::Write => SinkerConfig::Doris {
                     url,
+                    connection_auth,
                     batch_size,
                     stream_load_url: loader.get_optional(SINKER, "stream_load_url"),
                 },
 
                 SinkType::Struct => SinkerConfig::DorisStruct {
                     url,
+                    connection_auth,
                     conflict_policy,
                 },
 
@@ -775,6 +818,7 @@ impl TaskConfig {
             }),
             ResumeType::FromTarget => Ok(ResumerConfig::FromDB {
                 url: sinker_basic.url.clone(),
+                connection_auth: ConnectionAuthConfig::from(loader, SINKER),
                 db_type: sinker_basic.db_type.clone(),
                 table_full_name: loader.get_optional(RESUMER, "table_full_name"),
                 max_connections: loader.get_with_default(
@@ -785,6 +829,7 @@ impl TaskConfig {
             }),
             ResumeType::FromDB => Ok(ResumerConfig::FromDB {
                 url: loader.get_required(RESUMER, URL),
+                connection_auth: ConnectionAuthConfig::from(loader, RESUMER),
                 db_type: loader.get_required(RESUMER, DB_TYPE),
                 table_full_name: loader.get_optional(RESUMER, "table_full_name"),
                 max_connections: loader.get_with_default(
@@ -871,6 +916,7 @@ impl TaskConfig {
 
             config = MetaCenterConfig::MySqlDbEngine {
                 url: meta_center_url,
+                connection_auth: ConnectionAuthConfig::from(loader, META_CENTER),
                 ddl_conflict_policy: loader.get_with_default(
                     META_CENTER,
                     DDL_CONFLICT_POLICY,

@@ -1,26 +1,43 @@
+use regex::Regex;
+use std::{collections::HashMap, str::FromStr};
+
+use anyhow::{bail, Context};
+use redis::{Client, Connection, ConnectionLike, Value};
+
+use crate::config::connection_auth_config::ConnectionAuthConfig;
 use crate::error::Error;
 use crate::log_info;
-use crate::meta::redis::cluster_node::ClusterNode;
-use crate::meta::redis::command::cmd_encoder::CmdEncoder;
-use crate::meta::redis::command::key_parser::KeyParser;
-use crate::meta::redis::redis_object::RedisCmd;
-use anyhow::{bail, Context};
-use redis::{Connection, ConnectionLike, Value};
-use regex::Regex;
-use std::collections::HashMap;
-use std::str::FromStr;
+use crate::meta::redis::{
+    cluster_node::ClusterNode,
+    command::{cmd_encoder::CmdEncoder, key_parser::KeyParser},
+    redis_object::RedisCmd,
+};
 
 pub struct RedisUtil {}
 
 const SLOTS_COUNT: usize = 16384;
 
 impl RedisUtil {
-    pub async fn create_redis_conn(url: &str) -> anyhow::Result<redis::Connection> {
-        let conn = redis::Client::open(url)
-            .with_context(|| format!("invalid redis url: [{}]", url))?
-            .get_connection()
-            .with_context(|| format!("can not connect redis: [{}]", url))?;
-        Ok(conn)
+    pub async fn create_redis_conn(
+        url: &str,
+        connection_auth: &ConnectionAuthConfig,
+    ) -> anyhow::Result<redis::Connection> {
+        let conn = Client::open(url).with_context(|| format!("invalid redis url: [{}]", url))?;
+
+        if let ConnectionAuthConfig::Basic { username, password } = connection_auth {
+            let mut conn_info = conn.get_connection_info().clone();
+            conn_info.redis.username = Some(username.to_string());
+            if let Some(password_real) = password {
+                conn_info.redis.password = Some(password_real.to_string());
+            }
+            Ok(Client::open(conn_info)?
+                .get_connection()
+                .with_context(|| format!("can not connect redis: [{}] with auth override", url))?)
+        } else {
+            Ok(conn
+                .get_connection()
+                .with_context(|| format!("can not connect redis: [{}]", url))?)
+        }
     }
 
     pub fn send_cmd(conn: &mut Connection, cmd: &[&str]) -> anyhow::Result<Value> {
