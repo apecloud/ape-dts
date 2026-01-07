@@ -42,11 +42,26 @@ impl MongoTestRunner {
 
         let config = TaskConfig::new(&base.task_config_file).unwrap();
         match config.extractor {
-            ExtractorConfig::MongoSnapshot { url, app_name, .. }
-            | ExtractorConfig::MongoCdc { url, app_name, .. }
-            | ExtractorConfig::MongoCheck { url, app_name, .. } => {
+            ExtractorConfig::MongoSnapshot {
+                url,
+                connection_auth,
+                app_name,
+                ..
+            }
+            | ExtractorConfig::MongoCdc {
+                url,
+                connection_auth,
+                app_name,
+                ..
+            }
+            | ExtractorConfig::MongoCheck {
+                url,
+                connection_auth,
+                app_name,
+                ..
+            } => {
                 src_mongo_client = Some(
-                    TaskUtil::create_mongo_client(&url, &app_name, None)
+                    TaskUtil::create_mongo_client(&url, &connection_auth, &app_name, None)
                         .await
                         .unwrap(),
                 );
@@ -55,10 +70,20 @@ impl MongoTestRunner {
         }
 
         match config.sinker {
-            SinkerConfig::Mongo { url, app_name, .. }
-            | SinkerConfig::MongoCheck { url, app_name, .. } => {
+            SinkerConfig::Mongo {
+                url,
+                connection_auth,
+                app_name,
+                ..
+            }
+            | SinkerConfig::MongoCheck {
+                url,
+                connection_auth,
+                app_name,
+                ..
+            } => {
                 dst_mongo_client = Some(
-                    TaskUtil::create_mongo_client(&url, &app_name, None)
+                    TaskUtil::create_mongo_client(&url, &connection_auth, &app_name, None)
                         .await
                         .unwrap(),
                 );

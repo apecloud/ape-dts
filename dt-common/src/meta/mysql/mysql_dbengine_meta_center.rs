@@ -7,7 +7,7 @@ use sqlx::{
 };
 
 use crate::{
-    config::config_enums::ConflictPolicyEnum,
+    config::{config_enums::ConflictPolicyEnum, connection_auth_config::ConnectionAuthConfig},
     log_error, log_info,
     meta::ddl_meta::{ddl_data::DdlData, ddl_type::DdlType},
 };
@@ -18,17 +18,20 @@ use super::mysql_meta_fetcher::MysqlMetaFetcher;
 pub struct MysqlDbEngineMetaCenter {
     pub meta_fetcher: MysqlMetaFetcher,
     pub url: String,
+    pub connection_auth: ConnectionAuthConfig,
     pub ddl_conflict_policy: ConflictPolicyEnum,
 }
 
 impl MysqlDbEngineMetaCenter {
     pub async fn new(
         url: String,
+        connection_auth: ConnectionAuthConfig,
         conn_pool: Pool<MySql>,
         ddl_conflict_policy: ConflictPolicyEnum,
     ) -> anyhow::Result<Self> {
         Ok(Self {
             url,
+            connection_auth,
             meta_fetcher: MysqlMetaFetcher::new(conn_pool).await?,
             ddl_conflict_policy,
         })
@@ -50,6 +53,13 @@ impl MysqlDbEngineMetaCenter {
                 _ => {
                     conn_options = conn_options.database(&db);
                 }
+            }
+        }
+
+        if let ConnectionAuthConfig::Basic { username, password } = &self.connection_auth {
+            conn_options = conn_options.username(username);
+            if let Some(password_real) = password {
+                conn_options = conn_options.password(password_real);
             }
         }
 

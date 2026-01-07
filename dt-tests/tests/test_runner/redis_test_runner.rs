@@ -38,11 +38,23 @@ impl RedisTestRunner {
 
         let config = TaskConfig::new(&base.task_config_file).unwrap();
         let src_conn = match config.extractor {
-            ExtractorConfig::RedisSnapshot { url, .. }
-            | ExtractorConfig::RedisCdc { url, .. }
-            | ExtractorConfig::RedisSnapshotAndCdc { url, .. } => {
-                RedisUtil::create_redis_conn(&url).await.unwrap()
+            ExtractorConfig::RedisSnapshot {
+                url,
+                connection_auth,
+                ..
             }
+            | ExtractorConfig::RedisCdc {
+                url,
+                connection_auth,
+                ..
+            }
+            | ExtractorConfig::RedisSnapshotAndCdc {
+                url,
+                connection_auth,
+                ..
+            } => RedisUtil::create_redis_conn(&url, &connection_auth)
+                .await
+                .unwrap(),
             _ => {
                 bail! {Error::ConfigError("unsupported extractor config".into())};
             }

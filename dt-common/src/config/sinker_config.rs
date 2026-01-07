@@ -2,7 +2,10 @@ use super::{
     config_enums::{ConflictPolicyEnum, DbType},
     s3_config::S3Config,
 };
-use crate::config::config_enums::{RdbTransactionIsolation, SinkType};
+use crate::config::{
+    config_enums::{RdbTransactionIsolation, SinkType},
+    connection_auth_config::ConnectionAuthConfig,
+};
 
 #[derive(Clone, Debug)]
 pub enum SinkerConfig {
@@ -10,6 +13,7 @@ pub enum SinkerConfig {
 
     Mysql {
         url: String,
+        connection_auth: ConnectionAuthConfig,
         batch_size: usize,
         replace: bool,
         disable_foreign_key_checks: bool,
@@ -20,6 +24,7 @@ pub enum SinkerConfig {
 
     Pg {
         url: String,
+        connection_auth: ConnectionAuthConfig,
         batch_size: usize,
         replace: bool,
         disable_foreign_key_checks: bool,
@@ -27,24 +32,28 @@ pub enum SinkerConfig {
 
     Mongo {
         url: String,
+        connection_auth: ConnectionAuthConfig,
         app_name: String,
         batch_size: usize,
     },
 
     MysqlCheck {
         url: String,
+        connection_auth: ConnectionAuthConfig,
         batch_size: usize,
         check_log_dir: String,
     },
 
     PgCheck {
         url: String,
+        connection_auth: ConnectionAuthConfig,
         batch_size: usize,
         check_log_dir: String,
     },
 
     MongoCheck {
         url: String,
+        connection_auth: ConnectionAuthConfig,
         app_name: String,
         batch_size: usize,
         check_log_dir: String,
@@ -52,11 +61,13 @@ pub enum SinkerConfig {
 
     MysqlStruct {
         url: String,
+        connection_auth: ConnectionAuthConfig,
         conflict_policy: ConflictPolicyEnum,
     },
 
     PgStruct {
         url: String,
+        connection_auth: ConnectionAuthConfig,
         conflict_policy: ConflictPolicyEnum,
     },
 
@@ -70,6 +81,7 @@ pub enum SinkerConfig {
 
     Redis {
         url: String,
+        connection_auth: ConnectionAuthConfig,
         batch_size: usize,
         method: String,
         is_cluster: bool,
@@ -84,6 +96,7 @@ pub enum SinkerConfig {
 
     StarRocks {
         url: String,
+        connection_auth: ConnectionAuthConfig,
         batch_size: usize,
         stream_load_url: String,
         hard_delete: bool,
@@ -91,17 +104,20 @@ pub enum SinkerConfig {
 
     DorisStruct {
         url: String,
+        connection_auth: ConnectionAuthConfig,
         conflict_policy: ConflictPolicyEnum,
     },
 
     Doris {
         url: String,
+        connection_auth: ConnectionAuthConfig,
         batch_size: usize,
         stream_load_url: String,
     },
 
     StarRocksStruct {
         url: String,
+        connection_auth: ConnectionAuthConfig,
         conflict_policy: ConflictPolicyEnum,
     },
 
@@ -153,6 +169,7 @@ pub struct BasicSinkerConfig {
     pub sink_type: SinkType,
     pub db_type: DbType,
     pub url: String,
+    pub connection_auth: ConnectionAuthConfig,
     pub batch_size: usize,
     pub max_connections: u32,
 }

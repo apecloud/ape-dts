@@ -33,7 +33,10 @@ use crate::{
     Extractor,
 };
 use dt_common::{
-    config::{config_enums::DbType, config_token_parser::ConfigTokenParser},
+    config::{
+        config_enums::DbType, config_token_parser::ConfigTokenParser,
+        connection_auth_config::ConnectionAuthConfig,
+    },
     error::Error,
     log_error, log_info, log_warn,
     meta::{
@@ -57,6 +60,7 @@ pub struct PgCdcExtractor {
     pub conn_pool: Pool<Postgres>,
     pub filter: RdbFilter,
     pub url: String,
+    pub connection_auth: ConnectionAuthConfig,
     pub slot_name: String,
     pub pub_name: String,
     pub start_lsn: String,
@@ -113,6 +117,7 @@ impl PgCdcExtractor {
     async fn extract_internal(&mut self) -> anyhow::Result<()> {
         let mut cdc_client = PgCdcClient {
             url: self.url.clone(),
+            connection_auth: self.connection_auth.clone(),
             pub_name: self.pub_name.clone(),
             slot_name: self.slot_name.clone(),
             start_lsn: self.start_lsn.clone(),
