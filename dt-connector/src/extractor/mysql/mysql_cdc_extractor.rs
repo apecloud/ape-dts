@@ -30,7 +30,7 @@ use crate::{
     Extractor,
 };
 use dt_common::{
-    config::config_enums::DbType,
+    config::{config_enums::DbType, connection_auth_config::ConnectionAuthConfig},
     error::Error,
     log_debug, log_error, log_info, log_warn,
     meta::{
@@ -48,6 +48,7 @@ pub struct MysqlCdcExtractor {
     pub conn_pool: Pool<MySql>,
     pub filter: RdbFilter,
     pub url: String,
+    pub connection_auth: ConnectionAuthConfig,
     pub binlog_filename: String,
     pub binlog_position: u32,
     pub server_id: u64,
@@ -141,7 +142,12 @@ impl MysqlCdcExtractor {
             StartPosition::Latest {}
         };
 
-        let mut stream = BinlogClient::new(&self.url, self.server_id, start_position)
+        let url = ConnectionAuthConfig::merge_url_with_auth(&self.url, &self.connection_auth)
+            .map_err(|e| {
+                Error::ConfigError(format!("failed to merge url with connection auth: {}", e))
+            })?;
+
+        let mut stream = BinlogClient::new(&url, self.server_id, start_position)
             .with_master_heartbeat(Duration::from_secs(self.binlog_heartbeat_interval_secs))
             .with_read_timeout(Duration::from_secs(self.binlog_timeout_secs))
             .with_keepalive(

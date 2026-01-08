@@ -193,6 +193,7 @@ impl ExtractorUtil {
                     filter,
                     conn_pool,
                     url,
+                    connection_auth,
                     binlog_filename,
                     binlog_position,
                     server_id,
