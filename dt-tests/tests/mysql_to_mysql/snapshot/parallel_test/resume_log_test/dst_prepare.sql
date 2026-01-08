@@ -21,34 +21,12 @@ CREATE TABLE test_db_1.multi_pk(f_0 integer, f_1 integer, PRIMARY KEY(f_0, f_1))
 -- test nullable composite unique key
 CREATE TABLE test_db_1.nullable_composite_unique_key_table (uk1 int, uk2 varchar(10), val int, UNIQUE(uk1, uk2));
 
+CREATE TABLE test_db_1.varchar_uk ( `id` varchar(64) DEFAULT NULL, `value` int DEFAULT NULL, UNIQUE KEY (`id`));
+
 CREATE TABLE `test_db_@`.`resume_table_*$4`(`p.k` serial, val numeric(20,8), PRIMARY KEY(`p.k`));
 
 CREATE TABLE `test_db_@`.`finished_table_*$1`(`p.k` serial, val numeric(20,8), PRIMARY KEY(`p.k`));
 
-CREATE TABLE `test_db_@`.`finished_table_*$2`(`p.k` serial, val numeric(20,8), PRIMARY KEY(`p.k`));
-
 CREATE TABLE `test_db_@`.`in_finished_log_table_*$1`(`p.k` serial, val numeric(20,8), PRIMARY KEY(`p.k`));
 
-CREATE TABLE `test_db_@`.`in_finished_log_table_*$2`(`p.k` serial, val numeric(20,8), PRIMARY KEY(`p.k`));
-
 CREATE TABLE `test_db_@`.`in_position_log_table_*$1`(`p.k` serial, val numeric(20,8), PRIMARY KEY(`p.k`));
-
-CREATE TABLE test_db_1.bytea_pk_gb2312_test (
-    category_id VARCHAR(50),
-    binary_id   BLOB,
-    description TEXT,
-    created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-
-    -- composite primary key
-    CONSTRAINT pk_bytea_pk_test PRIMARY KEY (category_id, binary_id(100))
-) ENGINE=InnoDB DEFAULT CHARSET=gb2312;
-
-CREATE TABLE test_db_1.bytea_pk_utf8_test (
-    category_id VARCHAR(50),
-    binary_id   BLOB,
-    description TEXT,
-    created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-
-    -- composite primary key
-    CONSTRAINT pk_bytea_pk_test PRIMARY KEY (category_id, binary_id(100))
-);

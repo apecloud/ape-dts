@@ -27,7 +27,6 @@ CREATE TABLE `test_db_@`.`finished_table_*$1`(`p.k` serial, val numeric(20,8), P
 
 CREATE TABLE `test_db_@`.`finished_table_*$2`(`p.k` serial, val numeric(20,8), PRIMARY KEY(`p.k`));
 
-```
 CREATE TABLE test_db_1.bytea_pk_gb2312_test (
     category_id VARCHAR(50),
     binary_id   BLOB,
@@ -37,9 +36,7 @@ CREATE TABLE test_db_1.bytea_pk_gb2312_test (
     -- composite primary key
     CONSTRAINT pk_bytea_pk_test PRIMARY KEY (category_id, binary_id(100))
 ) ENGINE=InnoDB DEFAULT CHARSET=gb2312;
-```
 
-```
 CREATE TABLE test_db_1.bytea_pk_utf8_test (
     category_id VARCHAR(50),
     binary_id   BLOB,
@@ -49,7 +46,6 @@ CREATE TABLE test_db_1.bytea_pk_utf8_test (
     -- composite primary key
     CONSTRAINT pk_bytea_pk_test PRIMARY KEY (category_id, binary_id(100))
 );
-```
 
 DROP DATABASE IF EXISTS apecloud_resumer_test;
 CREATE DATABASE apecloud_resumer_test;

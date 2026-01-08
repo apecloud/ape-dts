@@ -8,6 +8,9 @@ INSERT INTO test_db_1.tb_3_null VALUES (1,1,1),(2,2,2),(3,3,3),(7,7,7),(9,9,9),(
 
 INSERT INTO test_db_1.tb_4 VALUES (1,1,1),(2,2,2),(3,3,3),(7,7,7),(9,9,9),(10,10,10),(11,11,11),(12,12,12),(14,14,14),(16,16,16),(17,17,17),(18,18,18),(19,19,19),(100,NULL,100),(200,NULL,200);
 
+INSERT INTO test_db_1.tb_all_null_1 VALUES (NULL,NULL),(NULL,NULL),(NULL,NULL),(NULL,NULL),(NULL,NULL),(NULL,NULL),(NULL,NULL),(NULL,NULL),(NULL,NULL),(NULL,NULL),(NULL,NULL),(NULL,NULL);
+INSERT INTO test_db_1.tb_all_null_2 VALUES (NULL,NULL),(NULL,NULL),(NULL,NULL),(NULL,NULL),(NULL,NULL),(NULL,NULL),(NULL,NULL),(NULL,NULL),(NULL,NULL),(NULL,NULL),(NULL,NULL),(NULL,NULL);
+
 -- test where condition
 INSERT INTO test_db_1.where_condition_1 VALUES(1, 1),(2, 2),(3, 3),(4, 4),(5, 5),(6, 6),(7, 7),(8, 8),(9, 9),(10, 10);
 INSERT INTO test_db_1.where_condition_2 VALUES(1, 1),(2, 2),(3, 3),(4, 4),(5, 5),(6, 6),(7, 7),(8, 8),(9, 9),(10, 10);
@@ -158,6 +161,15 @@ INSERT INTO test_db_2.tb_text_pk VALUES
 -- (21,'\xAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA00',90), 
 -- (22,'\xAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA01',91),
 -- (23,NULL,NULL);
+
+-- 15. Float/Double
+INSERT INTO test_db_2.tb_float VALUES 
+(1,-3.402823e38,'min_float'), (2,-1000.5,'neg_large'), (3,-1.5,'neg_small'), (4,'NaN','nan_val'),
+(5,0.0,'zero'), (6,0.000001,'tiny'), (7,1.5,'small'), (8,3.14159,'pi'),
+(9,100.123,'hundred'), (10,1000.456,'thousand'), (11,1.23e10,'sci_1'), (12,4.56e20,'sci_2'),
+(13,3.402823e38,'max_float'), (14,NULL,'null'), (15,-100.1,'neg_100'),
+(16,100.1,'pos_100'), (17,999.999,'almost_1k'), (18,0.5,'half'),
+(19,0.333333,'third'), (20,2.718281828,'euler'), (21,1.414213562,'sqrt2');
 
 -- Analyze tables to update statistics on reltuples
 ANALYZE VERBOSE;

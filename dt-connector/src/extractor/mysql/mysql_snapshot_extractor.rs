@@ -431,7 +431,7 @@ impl MysqlSnapshotExtractor {
 
         log_debug!(
             "extract by partition_col: {}, chunk range: {:?}",
-            partition_col,
+            quote!(partition_col),
             chunk
         );
         join_set.spawn(async move {

@@ -19,6 +19,10 @@ CREATE TABLE test_db_1.tb_3_null (`row_id` int, `id` int(11), `value` int(11) DE
 -- no unique key with multiple nulls, can be extracted parallelly
 CREATE TABLE test_db_1.tb_4 (`row_id` int, `id` int(11), `value` int(11) DEFAULT NULL, UNIQUE KEY (`id`)); 
 
+-- all null values
+CREATE TABLE test_db_1.tb_all_null_1 (`id` varchar(255), `value` int(11) DEFAULT NULL, UNIQUE KEY (`id`)); 
+CREATE TABLE test_db_1.tb_all_null_2 (`id` int(11), `value` int(11) DEFAULT NULL, UNIQUE KEY (`id`)); 
+
 CREATE TABLE test_db_1.where_condition_1 ( f_0 int, f_1 int, PRIMARY KEY (f_0) ); 
 CREATE TABLE test_db_1.where_condition_2 ( f_0 int, f_1 int, PRIMARY KEY (f_0) ); 
 
@@ -146,4 +150,12 @@ CREATE TABLE test_db_2.tb_blob_pk (
   `id` BLOB, 
   `value` int DEFAULT NULL,
   UNIQUE KEY `idx_blob_prefix` (`id`(64))
+);
+
+-- 15. Float/Double (Scenario: Floating point as Unique Key)
+CREATE TABLE test_db_2.tb_float (
+  `row_id` int,
+  `id` double DEFAULT NULL,
+  `value` varchar(20),
+  UNIQUE KEY (`id`)
 );
