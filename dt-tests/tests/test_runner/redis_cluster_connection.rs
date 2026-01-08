@@ -15,10 +15,14 @@ pub struct RedisClusterConnection {
 }
 
 impl RedisClusterConnection {
-    pub async fn new(url: &str, is_cluster: bool) -> anyhow::Result<Self> {
+    pub async fn new(
+        url: &str,
+        connection_auth: &ConnectionAuthConfig,
+        is_cluster: bool,
+    ) -> anyhow::Result<Self> {
         let mut slot_node_map = HashMap::new();
         let mut node_conn_map = HashMap::new();
-        let mut conn = RedisUtil::create_redis_conn(url, &ConnectionAuthConfig::NoAuth).await?;
+        let mut conn = RedisUtil::create_redis_conn(url, connection_auth).await?;
 
         if is_cluster {
             let nodes = RedisUtil::get_cluster_master_nodes(&mut conn)?;
@@ -32,8 +36,7 @@ impl RedisClusterConnection {
             for node in nodes {
                 println!("redis cluster node: {}", node.address);
                 let new_url = format!("redis://{}:{}@{}", username, password, node.address);
-                let conn =
-                    RedisUtil::create_redis_conn(&new_url, &ConnectionAuthConfig::NoAuth).await?;
+                let conn = RedisUtil::create_redis_conn(&new_url, connection_auth).await?;
                 node_conn_map.insert(node.address.clone(), conn);
             }
         }

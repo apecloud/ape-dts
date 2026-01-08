@@ -43,16 +43,13 @@ impl ResumerUtil {
         db_type: &DbType,
         max_connections: u32,
     ) -> anyhow::Result<ResumerDbPool> {
+        let final_url = ConnectionAuthConfig::merge_url_with_auth(url, connection_auth)
+            .context("failed to merge URL with connection auth")?;
+
         match db_type {
             DbType::Mysql => {
-                let mut conn_options = MySqlConnectOptions::from_str(url)
+                let conn_options = MySqlConnectOptions::from_str(&final_url)
                     .context("failed to parse MySQL connection URL")?;
-                if let ConnectionAuthConfig::Basic { username, password } = connection_auth {
-                    conn_options = conn_options.username(username);
-                    if let Some(password_real) = password {
-                        conn_options = conn_options.password(password_real);
-                    }
-                }
 
                 let pool = MySqlPoolOptions::new()
                     .max_connections(max_connections)
@@ -63,14 +60,8 @@ impl ResumerUtil {
                 Ok(ResumerDbPool::MySql(pool))
             }
             DbType::Pg => {
-                let mut conn_options = PgConnectOptions::from_str(url)
+                let conn_options = PgConnectOptions::from_str(&final_url)
                     .context("failed to parse PostgreSQL connection URL")?;
-                if let ConnectionAuthConfig::Basic { username, password } = connection_auth {
-                    conn_options = conn_options.username(username);
-                    if let Some(password_real) = password {
-                        conn_options = conn_options.password(password_real);
-                    }
-                }
 
                 let pool = PgPoolOptions::new()
                     .max_connections(max_connections)

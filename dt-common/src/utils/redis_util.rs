@@ -2,7 +2,7 @@ use regex::Regex;
 use std::{collections::HashMap, str::FromStr};
 
 use anyhow::{bail, Context};
-use redis::{Client, Connection, ConnectionLike, Value};
+use redis::{Connection, ConnectionLike, Value};
 
 use crate::config::connection_auth_config::ConnectionAuthConfig;
 use crate::error::Error;
@@ -22,22 +22,12 @@ impl RedisUtil {
         url: &str,
         connection_auth: &ConnectionAuthConfig,
     ) -> anyhow::Result<redis::Connection> {
-        let conn = Client::open(url).with_context(|| format!("invalid redis url: [{}]", url))?;
-
-        if let ConnectionAuthConfig::Basic { username, password } = connection_auth {
-            let mut conn_info = conn.get_connection_info().clone();
-            conn_info.redis.username = Some(username.to_string());
-            if let Some(password_real) = password {
-                conn_info.redis.password = Some(password_real.to_string());
-            }
-            Ok(Client::open(conn_info)?
-                .get_connection()
-                .with_context(|| format!("can not connect redis: [{}] with auth override", url))?)
-        } else {
-            Ok(conn
-                .get_connection()
-                .with_context(|| format!("can not connect redis: [{}]", url))?)
-        }
+        let final_url = ConnectionAuthConfig::merge_url_with_auth(url, connection_auth)?;
+        let conn = redis::Client::open(final_url)
+            .with_context(|| format!("invalid redis url: [{}]", url))?
+            .get_connection()
+            .with_context(|| format!("can not connect redis: [{}]", url))?;
+        Ok(conn)
     }
 
     pub fn send_cmd(conn: &mut Connection, cmd: &[&str]) -> anyhow::Result<Value> {

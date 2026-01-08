@@ -2,10 +2,7 @@ use std::{str::FromStr, sync::Arc, time::Duration};
 
 use anyhow::bail;
 use futures::TryStreamExt;
-use mongodb::{
-    bson::doc,
-    options::{ClientOptions, Credential},
-};
+use mongodb::{bson::doc, options::ClientOptions};
 use rusoto_core::Region;
 use rusoto_s3::S3Client;
 use sqlx::{
@@ -27,7 +24,7 @@ use dt_common::{
         task_config::TaskConfig,
     },
     error::Error,
-    log_info,
+    log_info, log_warn,
     meta::{
         mysql::{
             mysql_dbengine_meta_center::MysqlDbEngineMetaCenter,
@@ -55,7 +52,9 @@ impl TaskUtil {
         enable_sqlx_log: bool,
         after_connect_settings: Option<Vec<&'static str>>,
     ) -> anyhow::Result<Pool<MySql>> {
-        let mut conn_options = MySqlConnectOptions::from_str(url)?;
+        let final_url = ConnectionAuthConfig::merge_url_with_auth(url, connection_auth)?;
+
+        let mut conn_options = MySqlConnectOptions::from_str(&final_url)?;
         // The default character set is `utf8mb4`
         conn_options
             .log_statements(log::LevelFilter::Debug)
@@ -63,13 +62,6 @@ impl TaskUtil {
 
         if !enable_sqlx_log {
             conn_options.disable_statement_logging();
-        }
-
-        if let ConnectionAuthConfig::Basic { username, password } = connection_auth {
-            conn_options = conn_options.username(username);
-            if let Some(password_real) = password {
-                conn_options = conn_options.password(password_real);
-            }
         }
 
         let mut conn_pool = MySqlPoolOptions::new().max_connections(max_connections);
@@ -132,7 +124,9 @@ impl TaskUtil {
         enable_sqlx_log: bool,
         disable_foreign_key_checks: bool,
     ) -> anyhow::Result<Pool<Postgres>> {
-        let mut conn_options = PgConnectOptions::from_str(url)?;
+        let final_url = ConnectionAuthConfig::merge_url_with_auth(url, connection_auth)?;
+
+        let mut conn_options = PgConnectOptions::from_str(&final_url)?;
         conn_options
             .log_statements(log::LevelFilter::Debug)
             .log_slow_statements(log::LevelFilter::Debug, Duration::from_secs(1));
@@ -141,27 +135,24 @@ impl TaskUtil {
             conn_options.disable_statement_logging();
         }
 
-        if let ConnectionAuthConfig::Basic { username, password } = connection_auth {
-            conn_options = conn_options.username(username);
-            if let Some(password_real) = password {
-                conn_options = conn_options.password(password_real);
-            }
-        }
+        let mut pool_options = PgPoolOptions::new().max_connections(max_connections);
 
-        let conn_pool = PgPoolOptions::new()
-            .max_connections(max_connections)
-            .after_connect(move |conn, _meta| {
+        if disable_foreign_key_checks {
+            pool_options = pool_options.after_connect(move |conn, _meta| {
                 Box::pin(async move {
-                    if disable_foreign_key_checks {
-                        // disable foreign key checks
-                        conn.execute("SET session_replication_role = 'replica';")
-                            .await?;
+                    if let Err(e) = conn.execute("SET session_replication_role = 'replica';").await {
+                        log_warn!(
+                            "Failed to disable foreign key checks (user may lack superuser/replication role): {}. \
+                            Foreign key constraints will remain enabled.",
+                            e
+                        );
                     }
                     Ok(())
                 })
-            })
-            .connect_with(conn_options)
-            .await?;
+            });
+        }
+
+        let conn_pool = pool_options.connect_with(conn_options).await?;
         Ok(conn_pool)
     }
 
@@ -307,19 +298,13 @@ impl TaskUtil {
         app_name: &str,
         max_pool_size: Option<u32>,
     ) -> anyhow::Result<mongodb::Client> {
-        let mut client_options = ClientOptions::parse_async(url).await?;
+        let final_url = ConnectionAuthConfig::merge_url_with_auth(url, connection_auth)?;
+
+        let mut client_options = ClientOptions::parse_async(&final_url).await?;
         // app_name only for debug usage
         client_options.app_name = Some(app_name.to_string());
         client_options.direct_connection = Some(true);
         client_options.max_pool_size = max_pool_size;
-
-        if let ConnectionAuthConfig::Basic { username, password } = connection_auth {
-            let credential = Credential::builder()
-                .username(username.to_string())
-                .password(password.to_owned())
-                .build();
-            client_options.credential = Some(credential);
-        }
 
         Ok(mongodb::Client::with_options(client_options)?)
     }

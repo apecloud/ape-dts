@@ -62,8 +62,13 @@ impl RedisTestRunner {
 
         let dst_conn = match config.sinker {
             SinkerConfig::Redis {
-                url, is_cluster, ..
-            } => RedisClusterConnection::new(&url, is_cluster).await.unwrap(),
+                url,
+                connection_auth,
+                is_cluster,
+                ..
+            } => RedisClusterConnection::new(&url, &connection_auth, is_cluster)
+                .await
+                .unwrap(),
             _ => {
                 bail! {Error::ConfigError("unsupported sinker config".into())};
             }

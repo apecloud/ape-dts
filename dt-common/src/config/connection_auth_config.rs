@@ -1,3 +1,7 @@
+use anyhow::{Context, Result};
+use url::Url;
+use urlencoding::encode;
+
 use crate::config::ini_loader::IniLoader;
 
 const BASIC_AUTH_USERNAME_KEY: &str = "username";
@@ -28,5 +32,31 @@ impl ConnectionAuthConfig {
         } else {
             ConnectionAuthConfig::NoAuth
         }
+    }
+
+    pub fn merge_url_with_auth(original_url: &str, connection_auth: &Self) -> Result<String> {
+        let mut parsed_url = Url::parse(original_url)
+            .with_context(|| format!("failed to parse URL: {}", original_url))?;
+
+        match connection_auth {
+            ConnectionAuthConfig::Basic { username, password } => {
+                if !username.is_empty() {
+                    parsed_url
+                        .set_username(encode(username).into_owned().as_str())
+                        .map_err(|_| anyhow::anyhow!("failed to set username in URL"))?;
+                }
+
+                if let Some(pwd) = password {
+                    if !pwd.is_empty() {
+                        parsed_url
+                            .set_password(Some(encode(pwd).into_owned().as_str()))
+                            .map_err(|_| anyhow::anyhow!("failed to set password in URL"))?;
+                    }
+                }
+            }
+            ConnectionAuthConfig::NoAuth => {}
+        }
+
+        Ok(parsed_url.to_string())
     }
 }
