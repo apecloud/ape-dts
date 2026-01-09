@@ -88,6 +88,7 @@ impl ExtractorUtil {
         let extractor: Box<dyn Extractor + Send> = match extractor_config.to_owned() {
             ExtractorConfig::MysqlSnapshot {
                 url,
+                connection_auth,
                 db,
                 tb,
                 sample_interval,
@@ -102,6 +103,7 @@ impl ExtractorUtil {
                 };
                 let meta_manager = TaskUtil::create_mysql_meta_manager(
                     &url,
+                    &connection_auth,
                     &config.runtime.log_level,
                     DbType::Mysql,
                     config.meta_center.clone(),
@@ -125,6 +127,7 @@ impl ExtractorUtil {
 
             ExtractorConfig::MysqlCheck {
                 url,
+                connection_auth,
                 check_log_dir,
                 batch_size,
             } => {
@@ -136,6 +139,7 @@ impl ExtractorUtil {
                 };
                 let meta_manager = TaskUtil::create_mysql_meta_manager(
                     &url,
+                    &connection_auth,
                     &config.runtime.log_level,
                     DbType::Mysql,
                     config.meta_center.clone(),
@@ -155,6 +159,7 @@ impl ExtractorUtil {
 
             ExtractorConfig::MysqlCdc {
                 url,
+                connection_auth,
                 binlog_filename,
                 binlog_position,
                 server_id,
@@ -175,6 +180,7 @@ impl ExtractorUtil {
                 };
                 let meta_manager = TaskUtil::create_mysql_meta_manager(
                     &url,
+                    &connection_auth,
                     &config.runtime.log_level,
                     DbType::Mysql,
                     config.meta_center.clone(),
@@ -187,6 +193,7 @@ impl ExtractorUtil {
                     filter,
                     conn_pool,
                     url,
+                    connection_auth,
                     binlog_filename,
                     binlog_position,
                     server_id,
@@ -258,6 +265,7 @@ impl ExtractorUtil {
 
             ExtractorConfig::PgCdc {
                 url,
+                connection_auth,
                 slot_name,
                 pub_name,
                 start_lsn,
@@ -279,6 +287,7 @@ impl ExtractorUtil {
                     meta_manager,
                     filter,
                     url,
+                    connection_auth,
                     conn_pool,
                     slot_name,
                     pub_name,
@@ -403,9 +412,13 @@ impl ExtractorUtil {
                 Box::new(extractor)
             }
 
-            ExtractorConfig::RedisSnapshot { url, repl_port } => {
+            ExtractorConfig::RedisSnapshot {
+                url,
+                connection_auth,
+                repl_port,
+            } => {
                 let extractor = RedisPsyncExtractor {
-                    conn: RedisClient::new(&url).await?,
+                    conn: RedisClient::new(&url, &connection_auth).await?,
                     syncer,
                     repl_port,
                     filter,
@@ -433,10 +446,11 @@ impl ExtractorUtil {
 
             ExtractorConfig::RedisScan {
                 url,
+                connection_auth,
                 scan_count,
                 statistic_type,
             } => {
-                let conn = RedisUtil::create_redis_conn(&url).await?;
+                let conn = RedisUtil::create_redis_conn(&url, &connection_auth).await?;
                 let statistic_type = RedisStatisticType::from_str(&statistic_type)?;
                 let extractor = RedisScanExtractor {
                     conn,
@@ -450,6 +464,7 @@ impl ExtractorUtil {
 
             ExtractorConfig::RedisCdc {
                 url,
+                connection_auth,
                 repl_id,
                 repl_offset,
                 now_db_id,
@@ -459,7 +474,7 @@ impl ExtractorUtil {
                 heartbeat_key,
             } => {
                 let extractor = RedisPsyncExtractor {
-                    conn: RedisClient::new(&url).await?,
+                    conn: RedisClient::new(&url, &connection_auth).await?,
                     repl_id,
                     repl_offset,
                     keepalive_interval_secs,
@@ -478,6 +493,7 @@ impl ExtractorUtil {
 
             ExtractorConfig::RedisSnapshotAndCdc {
                 url,
+                connection_auth,
                 repl_id,
                 repl_port,
                 keepalive_interval_secs,
@@ -485,7 +501,7 @@ impl ExtractorUtil {
                 heartbeat_key,
             } => {
                 let extractor = RedisPsyncExtractor {
-                    conn: RedisClient::new(&url).await?,
+                    conn: RedisClient::new(&url, &connection_auth).await?,
                     syncer,
                     repl_port,
                     filter,
@@ -502,10 +518,14 @@ impl ExtractorUtil {
                 Box::new(extractor)
             }
 
-            ExtractorConfig::RedisReshard { url } => {
+            ExtractorConfig::RedisReshard {
+                url,
+                connection_auth,
+            } => {
                 let extractor = RedisReshardExtractor {
                     base_extractor,
                     url,
+                    connection_auth,
                 };
                 Box::new(extractor)
             }
@@ -562,16 +582,20 @@ impl ExtractorUtil {
         task_config: &TaskConfig,
     ) -> anyhow::Result<Option<RdbMetaManager>> {
         let extractor_url = &task_config.extractor_basic.url;
+        let connection_auth = &task_config.extractor_basic.connection_auth;
+
         let meta_manager = match task_config.extractor_basic.db_type {
             DbType::Mysql => {
                 let conn_pool =
-                    TaskUtil::create_mysql_conn_pool(extractor_url, 1, true, None).await?;
+                    TaskUtil::create_mysql_conn_pool(extractor_url, connection_auth, 1, true, None)
+                        .await?;
                 let meta_manager = MysqlMetaManager::new(conn_pool.clone()).await?;
                 Some(RdbMetaManager::from_mysql(meta_manager))
             }
             DbType::Pg => {
                 let conn_pool =
-                    TaskUtil::create_pg_conn_pool(extractor_url, 1, true, false).await?;
+                    TaskUtil::create_pg_conn_pool(extractor_url, connection_auth, 1, true, false)
+                        .await?;
                 let meta_manager = PgMetaManager::new(conn_pool.clone()).await?;
                 Some(RdbMetaManager::from_pg(meta_manager))
             }

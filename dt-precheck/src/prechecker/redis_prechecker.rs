@@ -93,7 +93,7 @@ impl Prechecker for RedisPrechecker {
         };
 
         let mut psyncer = RedisPsyncExtractor {
-            conn: RedisClient::new(&self.fetcher.url).await?,
+            conn: RedisClient::new(&self.fetcher.url, &self.fetcher.connection_auth).await?,
             repl_id: String::new(),
             repl_offset: 0,
             now_db_id: 0,

@@ -38,15 +38,17 @@ impl PrecheckerBuilder {
     }
 
     pub fn build_checker(&self, is_source: bool) -> Option<Box<dyn Prechecker + Send>> {
-        let (db_type, url) = if is_source {
+        let (db_type, url, connection_auth) = if is_source {
             (
                 self.task_config.extractor_basic.db_type.clone(),
                 self.task_config.extractor_basic.url.clone(),
+                self.task_config.extractor_basic.connection_auth.clone(),
             )
         } else {
             (
                 self.task_config.sinker_basic.db_type.clone(),
                 self.task_config.sinker_basic.url.clone(),
+                self.task_config.sinker_basic.connection_auth.clone(),
             )
         };
 
@@ -59,6 +61,7 @@ impl PrecheckerBuilder {
                 fetcher: MysqlFetcher {
                     pool: None,
                     url,
+                    connection_auth,
                     is_source,
                     filter,
                 },
@@ -70,6 +73,7 @@ impl PrecheckerBuilder {
                 fetcher: PgFetcher {
                     pool: None,
                     url,
+                    connection_auth,
                     is_source,
                     filter,
                 },
@@ -78,6 +82,7 @@ impl PrecheckerBuilder {
                 fetcher: MongoFetcher {
                     pool: None,
                     url,
+                    connection_auth,
                     is_source,
                     filter,
                 },
@@ -89,6 +94,7 @@ impl PrecheckerBuilder {
                 fetcher: RedisFetcher {
                     conn: None,
                     url,
+                    connection_auth,
                     is_source,
                     filter,
                 },

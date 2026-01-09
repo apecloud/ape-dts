@@ -31,8 +31,15 @@ impl RedisStatisticTestRunner {
         let expect_statistic_file =
             format!("{}/expect_statistic_log/statistic.log", self.base.test_dir);
 
-        if let ExtractorConfig::RedisScan { url, .. } = self.base.get_config().extractor {
-            let mut src_conn = RedisUtil::create_redis_conn(&url).await.unwrap();
+        if let ExtractorConfig::RedisScan {
+            url,
+            connection_auth,
+            ..
+        } = self.base.get_config().extractor
+        {
+            let mut src_conn = RedisUtil::create_redis_conn(&url, &connection_auth)
+                .await
+                .unwrap();
             let redis_util = RedisTestUtil::new(vec![('"', '"')]);
             redis_util.execute_cmds(&mut src_conn, &self.base.src_prepare_sqls.clone());
             redis_util.execute_cmds(&mut src_conn, &self.base.src_test_sqls.clone());
