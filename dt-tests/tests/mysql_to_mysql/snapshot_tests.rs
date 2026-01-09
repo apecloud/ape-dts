@@ -74,10 +74,9 @@ mod test {
     #[serial]
     async fn snapshot_resume_from_db_test() {
         let mut dst_expected_counts = HashMap::new();
-        dst_expected_counts.insert("test_db_1.no_pk_no_uk", 9);
-        // no_pk_one_uk has a uk with multiple cols, UNIQUE KEY uk_1 (f_1,f_2), resume_filter won't work
         dst_expected_counts.insert("test_db_1.no_pk_one_uk", 9);
         // resume_filter works
+        dst_expected_counts.insert("test_db_1.no_pk_no_uk", 4);
         dst_expected_counts.insert("test_db_1.one_pk_multi_uk", 4);
         dst_expected_counts.insert("test_db_1.one_pk_no_uk", 4);
         dst_expected_counts.insert("test_db_1.multi_pk", 1);
@@ -130,6 +129,7 @@ mod test {
         // resume_filter works
         dst_expected_counts.insert("test_db_1.no_pk_no_uk", 4);
         dst_expected_counts.insert("test_db_1.one_pk_multi_uk", 4);
+        dst_expected_counts.insert("test_db_1.no_pk_multi_uk", 4);
         dst_expected_counts.insert("test_db_1.one_pk_no_uk", 4);
         dst_expected_counts.insert("test_db_1.multi_pk", 4);
         dst_expected_counts.insert("test_db_1.nullable_composite_unique_key_table", 6);
@@ -142,6 +142,31 @@ mod test {
 
         TestBase::run_snapshot_test_and_check_dst_count(
             "mysql_to_mysql/snapshot/parallel_test/resume_log_test",
+            &DbType::Mysql,
+            dst_expected_counts,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn snapshot_parallel_resume_from_db_test() {
+        let mut dst_expected_counts = HashMap::new();
+        dst_expected_counts.insert("test_db_1.no_pk_one_uk", 4);
+        // resume_filter works
+        dst_expected_counts.insert("test_db_1.no_pk_no_uk", 4);
+        dst_expected_counts.insert("test_db_1.one_pk_multi_uk", 4);
+        dst_expected_counts.insert("test_db_1.no_pk_multi_uk", 4);
+        dst_expected_counts.insert("test_db_1.one_pk_no_uk", 4);
+        dst_expected_counts.insert("test_db_1.multi_pk", 4);
+        dst_expected_counts.insert("test_db_1.nullable_composite_unique_key_table", 6);
+        dst_expected_counts.insert("test_db_1.varchar_uk", 6);
+        // with special characters in db && tb && col names
+        dst_expected_counts.insert("test_db_@.resume_table_*$4", 4);
+        dst_expected_counts.insert("test_db_@.finished_table_*$1", 0);
+
+        TestBase::run_snapshot_test_and_check_dst_count(
+            "mysql_to_mysql/snapshot/parallel_test/resume_db_test",
             &DbType::Mysql,
             dst_expected_counts,
         )

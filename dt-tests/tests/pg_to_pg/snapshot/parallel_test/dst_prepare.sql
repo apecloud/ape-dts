@@ -16,7 +16,8 @@ CREATE TABLE test_db_1.tb_3 (id int NOT NULL, value int DEFAULT NULL);
 CREATE TABLE test_db_1.tb_3_null (row_id int, id int, value int DEFAULT NULL); 
 
 -- no unique key with multiple nulls, can be extracted parallelly
-CREATE TABLE test_db_1.tb_4 (row_id int, id int, value int DEFAULT NULL, UNIQUE (id)); 
+CREATE TABLE test_db_1.tb_4 (row_id int, id int, value int DEFAULT NULL, UNIQUE (id));
+
 -- all null values
 CREATE TABLE test_db_1.tb_all_null_1 (id varchar(255), value int DEFAULT NULL, UNIQUE (id)); 
 CREATE TABLE test_db_1.tb_all_null_2 (id int, value int DEFAULT NULL, UNIQUE (id)); 
