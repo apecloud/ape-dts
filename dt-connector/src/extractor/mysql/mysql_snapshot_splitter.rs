@@ -1,5 +1,5 @@
 use std::vec;
-use std::{cmp, collections::HashMap};
+use std::collections::HashMap;
 
 use anyhow::Context;
 use dt_common::meta::position::Position;
@@ -15,33 +15,19 @@ use dt_common::{log_debug, log_info};
 use futures::TryStreamExt;
 use sqlx::{MySql, Pool, Row};
 
-use crate::extractor::splitter;
-use crate::extractor::splitter::Error::*;
+use crate::extractor::base_splitter::{self, BaseSplitter, ChunkRange, Error::*, SnapshotChunk};
 
 use quote_mysql as quote;
 
-const DISTRIBUTION_FACTOR_LOWER: f64 = 0.05;
-const DISTRIBUTION_FACTOR_UPPER: f64 = 1000.0;
-const NO_NEXT_CHUNKS: u8 = 0b01;
-const NO_EVEN_CHUNKS: u8 = 0b10;
-
-pub type ChunkRange = (ColValue, ColValue);
-
-#[derive(Debug, Clone)]
-pub struct SnapshotChunk {
-    pub chunk_id: u64,
-    pub chunk_range: ChunkRange,
-}
 pub struct MySqlSnapshotSplitter<'a> {
+    basic: BaseSplitter,
     snapshot_range: Option<ChunkRange>,
     mysql_tb_meta: &'a MysqlTbMeta,
-    split_state: u8,
     conn_pool: Pool<MySql>,
     batch_size: u64,
     estimated_row_count: u64,
     partition_col: String,
     current_col_value: Option<ColValue>,
-    chunk_id_generator: u64,
     checkpoint_id: u64,
     checkpoint_map: HashMap<u64, ColValue>,
 }
@@ -54,15 +40,14 @@ impl MySqlSnapshotSplitter<'_> {
         partition_col: String,
     ) -> MySqlSnapshotSplitter<'_> {
         MySqlSnapshotSplitter {
+            basic: BaseSplitter::new(),
             snapshot_range: None,
             mysql_tb_meta,
-            split_state: 0,
             conn_pool,
             batch_size: batch_size as u64,
             estimated_row_count: 0,
             partition_col,
             current_col_value: None,
-            chunk_id_generator: 0,
             checkpoint_id: 0,
             checkpoint_map: HashMap::new(),
         }
@@ -79,7 +64,7 @@ impl MySqlSnapshotSplitter<'_> {
 
     pub async fn get_next_chunks(&mut self) -> anyhow::Result<Vec<SnapshotChunk>> {
         // only support single-column splitting.
-        if self.has_state(NO_NEXT_CHUNKS) {
+        if self.basic.has_no_next_chunks() {
             return Ok(Vec::new());
         }
         let mysql_tb_meta = self.mysql_tb_meta;
@@ -93,9 +78,11 @@ impl MySqlSnapshotSplitter<'_> {
                 quote!(partition_col),
                 partition_col_type,
             );
-            self.set_state(NO_NEXT_CHUNKS);
+            self.basic.mark_no_next_chunks();
             // represents no split
-            return Ok(vec![self.gen_next_chunk((ColValue::None, ColValue::None))]);
+            return Ok(vec![self
+                .basic
+                .gen_next_chunk((ColValue::None, ColValue::None))]);
         }
         if self.estimated_row_count == 0 {
             self.estimated_row_count = self.estimate_row_count(&mysql_tb_meta.basic).await?;
@@ -107,15 +94,20 @@ impl MySqlSnapshotSplitter<'_> {
                 mysql_tb_meta.basic.tb,
                 self.estimated_row_count
             );
-            self.set_state(NO_NEXT_CHUNKS);
-            return Ok(vec![self.gen_next_chunk((ColValue::None, ColValue::None))]);
+            self.basic.mark_no_next_chunks();
+            // represents no split
+            return Ok(vec![self
+                .basic
+                .gen_next_chunk((ColValue::None, ColValue::None))]);
         }
-        if !self.has_state(NO_EVEN_CHUNKS) && partition_col_type.is_integer() {
+        if !self.basic.has_no_even_chunks() && partition_col_type.is_integer() {
             let chunks = self.get_evenly_sized_chunks(mysql_tb_meta).await;
             if let Err(e) = chunks {
-                match e.downcast_ref::<splitter::Error>() {
+                match e.downcast_ref::<base_splitter::Error>() {
                     Some(BadSplitColumnError { .. }) => {
-                        return Ok(vec![self.gen_next_chunk((ColValue::None, ColValue::None))]);
+                        return Ok(vec![self
+                            .basic
+                            .gen_next_chunk((ColValue::None, ColValue::None))]);
                     }
                     Some(OutOfDistributionFactorRangeError { .. }) => {
                         // fallback to get_next_unevenly_sized_chunk
@@ -232,10 +224,10 @@ FROM
         &mut self,
         tb_meta: &MysqlTbMeta,
     ) -> anyhow::Result<Vec<SnapshotChunk>> {
-        if self.has_state(NO_EVEN_CHUNKS) | self.has_state(NO_NEXT_CHUNKS) {
+        if self.basic.has_no_even_chunks() | self.basic.has_no_next_chunks() {
             return Ok(Vec::new());
         }
-        self.set_state(NO_EVEN_CHUNKS);
+        self.basic.mark_no_even_chunks();
         let (min_value, max_value) = if let Some(range) = &self.snapshot_range {
             (range.0.clone(), range.1.clone())
         } else {
@@ -253,72 +245,12 @@ FROM
             self.snapshot_range = Some(range.clone());
             range
         };
-        let (min_value_i128, max_value_i128) = (
-            min_value.convert_into_integer_128()?,
-            max_value.convert_into_integer_128()?,
-        );
-        let distribution_factor: f64 =
-            (max_value_i128 - min_value_i128 + 1) as f64 / (self.estimated_row_count as f64);
-        if distribution_factor < DISTRIBUTION_FACTOR_LOWER
-            || distribution_factor > DISTRIBUTION_FACTOR_UPPER
-        {
-            let err = OutOfDistributionFactorRangeError(
-                distribution_factor,
-                DISTRIBUTION_FACTOR_LOWER,
-                DISTRIBUTION_FACTOR_UPPER,
-            );
-            log_info!(
-                "splitting {}.{} gets: {:?}",
-                quote!(tb_meta.basic.schema),
-                quote!(tb_meta.basic.tb),
-                err.to_string()
-            );
-            return Err(err.into());
-        }
-        let step_size = cmp::max(
-            (distribution_factor * self.batch_size as f64) as i128,
-            1i128,
-        );
-        let mut chunks = Vec::new();
-        let (mut cur_value, mut cur_value_i128) = match &self.current_col_value {
-            Some(ColValue::None) => {
-                // unexpected or all data have been extracted.
-                self.set_state(NO_NEXT_CHUNKS);
-                return Ok(chunks);
-            }
-            Some(current_col_value) => {
-                // from resume value
-                let cur_value = current_col_value.clone();
-                let cur_value_i128 = current_col_value.convert_into_integer_128()?;
-                (cur_value, cur_value_i128)
-            }
-            None => {
-                // from beginning
-                // chunk range represents left-open and right-closed interval like (v1, v2].
-                // cornor case for the first interval.
-                let cur_value_i128 = min_value_i128 + step_size;
-                let cur_value = if cur_value_i128 >= max_value_i128 {
-                    max_value.clone()
-                } else {
-                    min_value.add_integer_128(step_size)?
-                };
-                chunks.push(self.gen_next_chunk((ColValue::None, cur_value.clone())));
-                (cur_value, cur_value_i128)
-            }
-        };
-        while cur_value_i128 < max_value_i128 {
-            let t_i128 = cur_value_i128 + step_size;
-            let t_value = if t_i128 >= max_value_i128 {
-                max_value.clone()
-            } else {
-                cur_value.add_integer_128(step_size)?
-            };
-            chunks.push(self.gen_next_chunk((cur_value, t_value.clone())));
-            cur_value_i128 = t_i128;
-            cur_value = t_value;
-        }
-        self.set_state(NO_NEXT_CHUNKS);
-        Ok(chunks)
+        self.basic.gen_next_evenly_sized_chunks(
+            (min_value, max_value),
+            self.batch_size,
+            self.estimated_row_count,
+            &self.current_col_value,
+        )
     }
 
     async fn get_next_unevenly_sized_chunk(
@@ -356,7 +288,7 @@ SELECT {} FROM {}.{} {} ORDER BY {} ASC LIMIT {}) AS T",
         );
         let query = match &self.current_col_value {
             Some(ColValue::None) => {
-                self.set_state(NO_NEXT_CHUNKS);
+                self.basic.mark_no_next_chunks();
                 return Ok(None);
             }
             Some(current_col_value) => sqlx::query(&get_next_chunk_end_sql)
@@ -373,7 +305,7 @@ SELECT {} FROM {}.{} {} ORDER BY {} ASC LIMIT {}) AS T",
             MysqlColValueConvertor::from_query(&row, "max_value", partition_col_type)?;
         log_debug!("next chunk end value: {:?}", next_chunk_end_value);
         if let ColValue::None = next_chunk_end_value {
-            self.set_state(NO_NEXT_CHUNKS);
+            self.basic.mark_no_next_chunks();
             return Ok(None);
         }
         let chunk_range = if let Some(current_value) = &self.current_col_value {
@@ -382,35 +314,11 @@ SELECT {} FROM {}.{} {} ORDER BY {} ASC LIMIT {}) AS T",
             (ColValue::None, next_chunk_end_value.clone())
         };
         self.current_col_value = Some(next_chunk_end_value);
-        Ok(Some(self.gen_next_chunk(chunk_range)))
+        Ok(Some(self.basic.gen_next_chunk(chunk_range)))
     }
 
     #[inline(always)]
     pub fn get_partition_col(&self) -> String {
         self.partition_col.clone()
-    }
-
-    #[inline(always)]
-    pub fn set_state(&mut self, mask: u8) {
-        self.split_state |= mask;
-    }
-
-    #[inline(always)]
-    pub fn has_state(&self, mask: u8) -> bool {
-        (self.split_state & mask) == mask
-    }
-
-    #[inline(always)]
-    fn gen_next_chunk_id(&mut self) -> u64 {
-        self.chunk_id_generator += 1;
-        self.chunk_id_generator
-    }
-
-    #[inline(always)]
-    fn gen_next_chunk(&mut self, range: (ColValue, ColValue)) -> SnapshotChunk {
-        SnapshotChunk {
-            chunk_id: self.gen_next_chunk_id(),
-            chunk_range: range,
-        }
     }
 }

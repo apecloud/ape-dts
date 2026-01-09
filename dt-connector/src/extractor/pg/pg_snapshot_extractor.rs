@@ -12,7 +12,8 @@ use tokio::task::JoinSet;
 use crate::{
     extractor::{
         base_extractor::BaseExtractor,
-        pg::pg_snapshot_splitter::{PgSnapshotSplitter, SnapshotChunk},
+        base_splitter::SnapshotChunk,
+        pg::pg_snapshot_splitter::PgSnapshotSplitter,
         rdb_snapshot_extract_statement::{OrderKeyPredicateType, RdbSnapshotExtractStatement},
         resumer::recovery::Recovery,
     },

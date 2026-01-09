@@ -12,7 +12,8 @@ use tokio::task::JoinSet;
 use crate::{
     extractor::{
         base_extractor::BaseExtractor,
-        mysql::mysql_snapshot_splitter::{MySqlSnapshotSplitter, SnapshotChunk},
+        base_splitter::SnapshotChunk,
+        mysql::mysql_snapshot_splitter::MySqlSnapshotSplitter,
         rdb_snapshot_extract_statement::{OrderKeyPredicateType, RdbSnapshotExtractStatement},
         resumer::recovery::Recovery,
     },
