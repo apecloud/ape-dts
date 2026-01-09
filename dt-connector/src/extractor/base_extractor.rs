@@ -19,7 +19,6 @@ use dt_common::{
         dt_queue::DtQueue,
         struct_meta::struct_data::StructData,
     },
-    rdb_filter::RdbFilter,
     utils::sql_util::SqlUtil,
 };
 use dt_common::{
@@ -202,23 +201,6 @@ impl BaseExtractor {
             Ok(Some(dcl_data))
         } else {
             Ok(None)
-        }
-    }
-
-    pub fn get_where_sql(filter: &RdbFilter, schema: &str, tb: &str, condition: &str) -> String {
-        let mut res: String = String::new();
-        if let Some(where_condition) = filter.get_where_condition(schema, tb) {
-            res = format!("WHERE {}", where_condition);
-        }
-
-        if condition.is_empty() {
-            return res;
-        }
-
-        if res.is_empty() {
-            format!("WHERE {}", condition)
-        } else {
-            format!("{} AND {}", res, condition)
         }
     }
 

@@ -1,8 +1,10 @@
 use std::{
+    cmp,
     collections::hash_map::DefaultHasher,
     hash::{Hash, Hasher},
 };
 
+use anyhow::bail;
 use mongodb::bson::{Bson, Document};
 use serde::{Deserialize, Serialize, Serializer};
 
@@ -54,6 +56,103 @@ impl std::fmt::Display for ColValue {
 }
 
 impl ColValue {
+    pub fn is_integer(&self) -> bool {
+        matches!(
+            self,
+            Self::Tiny { .. }
+                | Self::UnsignedTiny { .. }
+                | Self::Short { .. }
+                | Self::UnsignedShort { .. }
+                | Self::Long { .. }
+                | Self::UnsignedLong { .. }
+                | Self::LongLong { .. }
+                | Self::UnsignedLongLong { .. }
+        )
+    }
+
+    pub fn is_float(&self) -> bool {
+        matches!(self, Self::Float { .. } | Self::Double { .. })
+    }
+
+    pub fn is_decimal(&self) -> bool {
+        matches!(self, Self::Decimal { .. })
+    }
+
+    pub fn is_string(&self) -> bool {
+        matches!(self, Self::String { .. })
+    }
+
+    pub fn convert_into_integer_128(&self) -> anyhow::Result<i128> {
+        match self {
+            Self::Tiny(v) => Ok(*v as i128),
+            Self::UnsignedTiny(v) => Ok(*v as i128),
+            Self::Short(v) => Ok(*v as i128),
+            Self::UnsignedShort(v) => Ok(*v as i128),
+            Self::Long(v) => Ok(*v as i128),
+            Self::UnsignedLong(v) => Ok(*v as i128),
+            Self::LongLong(v) => Ok(*v as i128),
+            Self::UnsignedLongLong(v) => Ok(*v as i128),
+            _ => bail!("can not convert {:?} into 128-bit integer", self),
+        }
+    }
+
+    pub fn add_integer_128(&self, t: i128) -> anyhow::Result<Self> {
+        match self {
+            Self::Tiny(v) => Ok(Self::Tiny(cmp::min(*v as i128 + t, i8::MAX as i128) as i8)),
+            Self::UnsignedTiny(v) => Ok(Self::UnsignedTiny(
+                cmp::min(*v as i128 + t, i8::MAX as i128) as u8,
+            )),
+            Self::Short(v) => Ok(Self::Short(
+                cmp::min(*v as i128 + t, i16::MAX as i128) as i16
+            )),
+            Self::UnsignedShort(v) => Ok(Self::UnsignedShort(cmp::min(
+                *v as i128 + t,
+                i16::MAX as i128,
+            ) as u16)),
+            Self::Long(v) => Ok(Self::Long(cmp::min(*v as i128 + t, i32::MAX as i128) as i32)),
+            Self::UnsignedLong(v) => Ok(Self::UnsignedLong(cmp::min(
+                *v as i128 + t,
+                i32::MAX as i128,
+            ) as u32)),
+            Self::LongLong(v) => Ok(Self::LongLong(
+                cmp::min(*v as i128 + t, i64::MAX as i128) as i64
+            )),
+            Self::UnsignedLongLong(v) => Ok(Self::UnsignedLongLong(cmp::min(
+                *v as i128 + t,
+                i64::MAX as i128,
+            ) as u64)),
+            _ => bail!("{} can not add 128-bit integer", self),
+        }
+    }
+
+    pub fn convert_into_float_64(&self) -> anyhow::Result<f64> {
+        match self {
+            Self::Float(v) => Ok(*v as f64),
+            Self::Double(v) => Ok(*v),
+            _ => bail!("can not convert {:?} into double", self),
+        }
+    }
+
+    pub fn is_same_value(&self, other: &ColValue) -> bool {
+        match (self, other) {
+            (ColValue::Float(v1), ColValue::Float(v2)) => {
+                if v1.is_nan() && v2.is_nan() {
+                    true
+                } else {
+                    v1 == v2
+                }
+            }
+            (ColValue::Double(v1), ColValue::Double(v2)) => {
+                if v1.is_nan() && v2.is_nan() {
+                    true
+                } else {
+                    v1 == v2
+                }
+            }
+            _ => self == other,
+        }
+    }
+
     pub fn hash_code(&self) -> u64 {
         match self {
             ColValue::None => 0,
@@ -281,6 +380,60 @@ impl From<Bson> for ColValue {
             Bson::MaxKey => ColValue::String("MaxKey".into()),
             Bson::MinKey => ColValue::String("MinKey".into()),
             Bson::DbPointer(v) => ColValue::String(format!("{:?}", v)),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_is_same_value() {
+        let v1 = ColValue::Float(f32::NAN);
+        let v2 = ColValue::Double(f64::NAN);
+        let v3 = ColValue::None;
+        let v4 = ColValue::Long(7);
+
+        assert!(v1.is_same_value(&ColValue::Float(f32::NAN)));
+        assert!(v2.is_same_value(&ColValue::Double(f64::NAN)));
+        assert!(v3.is_same_value(&ColValue::None));
+        assert!(v4.is_same_value(&ColValue::Long(7)));
+    }
+
+    #[test]
+    fn test_add_integer_128() {
+        let cases = vec![
+            (ColValue::Tiny(10), 20, Some(ColValue::Tiny(30))),
+            (ColValue::Short(1000), 2000, Some(ColValue::Short(3000))),
+            (ColValue::Long(50), -20, Some(ColValue::Long(30))),
+            (ColValue::Tiny(100), 50, Some(ColValue::Tiny(127))),
+            // i64::MAX boundary check
+            (
+                ColValue::LongLong(i64::MAX - 5),
+                10,
+                Some(ColValue::LongLong(i64::MAX)),
+            ),
+            (
+                ColValue::UnsignedTiny(100),
+                50,
+                Some(ColValue::UnsignedTiny(127)),
+            ),
+            // --- Error Case ---
+            (ColValue::String("test".into()), 1, None),
+        ];
+
+        for (index, (input, delta, expected)) in cases.into_iter().enumerate() {
+            let result = input.add_integer_128(delta);
+
+            match expected {
+                Some(exp_val) => {
+                    assert_eq!(result.unwrap(), exp_val, "Failed at case #{}", index);
+                }
+                None => {
+                    assert!(result.is_err(), "Case #{} should fail", index);
+                }
+            }
         }
     }
 }

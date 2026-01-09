@@ -1,0 +1,1 @@
+2024-04-01 07:08:05.459594 | {"type":"RdbSnapshotFinished","db_type":"mysql","schema":"test_db_@","tb":"in_finished_log_table_*$1"}

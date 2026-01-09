@@ -583,7 +583,7 @@ impl TaskRunner {
                     lua_processor,
                     recorder,
                 };
-                Ok(Box::new(pipeline))
+                Ok(Box::new(pipeline) as Box<dyn Pipeline + Send>)
             }
 
             PipelineType::HttpServer => {
@@ -600,7 +600,7 @@ impl TaskRunner {
                     &self.config.pipeline.http_host,
                     self.config.pipeline.http_port,
                 );
-                Ok(Box::new(pipeline))
+                Ok(Box::new(pipeline) as Box<dyn Pipeline + Send>)
             }
         }
     }
@@ -1029,6 +1029,7 @@ impl TaskRunner {
                         ExtractorConfig::PgSnapshot {
                             url,
                             sample_interval,
+                            parallel_size,
                             batch_size,
                             ..
                         } => ExtractorConfig::PgSnapshot {
@@ -1036,6 +1037,7 @@ impl TaskRunner {
                             schema: schema.clone(),
                             tb: tb.clone(),
                             sample_interval: *sample_interval,
+                            parallel_size: *parallel_size,
                             batch_size: *batch_size,
                         },
 

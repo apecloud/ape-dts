@@ -1,0 +1,1 @@
+2024-03-29 07:02:24.463776 | checkpoint_position | {"type":"RdbSnapshot","db_type":"pg","schema":"test_db_@","tb":"in_position_log_table_*$1","order_key":{"single":["p.k","5"]}}

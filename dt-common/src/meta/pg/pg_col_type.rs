@@ -33,4 +33,12 @@ impl PgColType {
     pub fn is_user_defined(&self) -> bool {
         "U" == self.category
     }
+
+    pub fn is_integer(&self) -> bool {
+        self.value_type.is_integer()
+    }
+
+    pub fn can_be_splitted(&self) -> bool {
+        self.value_type.can_be_splitted()
+    }
 }
