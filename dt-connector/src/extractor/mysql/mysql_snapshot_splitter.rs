@@ -1,5 +1,5 @@
-use std::vec;
 use std::collections::HashMap;
+use std::vec;
 
 use anyhow::Context;
 use dt_common::meta::position::Position;

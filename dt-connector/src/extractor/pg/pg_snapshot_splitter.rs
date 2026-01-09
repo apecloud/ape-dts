@@ -1,7 +1,8 @@
-use std::vec;
 use std::collections::HashMap;
+use std::vec;
 
 use anyhow::Context;
+use dt_common::log_info;
 use dt_common::meta::position::Position;
 use dt_common::meta::{
     adaptor::{pg_col_value_convertor::PgColValueConvertor, sqlx_ext::SqlxPgExt},
@@ -11,7 +12,6 @@ use dt_common::meta::{
 };
 use dt_common::utils::sql_util::*;
 use dt_common::{config::config_enums::DbType, quote_pg};
-use dt_common::log_info;
 use futures::TryStreamExt;
 use sqlx::{Pool, Postgres, Row};
 
