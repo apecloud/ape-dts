@@ -4,9 +4,30 @@ use crate::config::config_enums::DbType;
 
 pub struct SqlUtil {}
 
-const MYSQL_ESCAPE: char = '`';
-const PG_ESCAPE: char = '"';
-const REDIS_ESCAPE: char = '"';
+pub const MYSQL_ESCAPE: char = '`';
+pub const PG_ESCAPE: char = '"';
+pub const REDIS_ESCAPE: char = '"';
+
+#[macro_export]
+macro_rules! quote_mysql {
+    () => {
+        ""
+    };
+    ($s:expr) => {
+        // return borrowed str
+        format_args!("{}{}{}", MYSQL_ESCAPE, $s, MYSQL_ESCAPE)
+    };
+}
+
+#[macro_export]
+macro_rules! quote_pg {
+    () => {
+        ""
+    };
+    ($s:expr) => {
+        format_args!("{}{}{}", PG_ESCAPE, $s, PG_ESCAPE)
+    };
+}
 
 impl SqlUtil {
     pub fn is_escaped(token: &str, escape_pair: &(char, char)) -> bool {

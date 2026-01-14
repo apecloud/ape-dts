@@ -227,4 +227,31 @@ impl PgValueType {
             _ => PgValueType::String,
         }
     }
+
+    pub fn is_integer(&self) -> bool {
+        matches!(
+            self,
+            Self::Int16 { .. } | Self::Int32 { .. } | Self::Int64 { .. }
+        )
+    }
+
+    pub fn can_be_splitted(&self) -> bool {
+        // Means wheather the type can be used in `max`/`min` aggregate operations and `order by` comparisons.
+        // Compatible with postgresql 14+. Reference: https://www.postgresql.org/docs/14/functions-aggregate.html
+        matches!(
+            self,
+            PgValueType::Int32
+                | PgValueType::Int16
+                | PgValueType::Int64
+                | PgValueType::Float32
+                | PgValueType::Float64
+                | PgValueType::Numeric
+                | PgValueType::TimestampTZ
+                | PgValueType::Timestamp
+                | PgValueType::Time
+                | PgValueType::TimeTZ
+                | PgValueType::Date
+                | PgValueType::String
+        )
+    }
 }

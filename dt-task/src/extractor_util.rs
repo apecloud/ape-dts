@@ -1,9 +1,11 @@
 use std::{
+    collections::HashMap,
     str::FromStr,
     sync::{atomic::AtomicBool, Arc},
 };
 
 use anyhow::bail;
+use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 
 use dt_common::{
@@ -59,6 +61,10 @@ use crate::task_util::ConnClient;
 
 use super::task_util::TaskUtil;
 
+pub type PartitionCols = HashMap<(String, String), String>;
+
+const JSON_PREFIX: &str = "json:";
+
 pub struct ExtractorUtil {}
 
 impl ExtractorUtil {
@@ -66,6 +72,7 @@ impl ExtractorUtil {
         config: &TaskConfig,
         extractor_config: &ExtractorConfig,
         extractor_client: ConnClient,
+        partition_cols: Option<Arc<PartitionCols>>,
         buffer: Arc<DtQueue>,
         shut_down: Arc<AtomicBool>,
         syncer: Arc<Mutex<Syncer>>,
@@ -94,6 +101,7 @@ impl ExtractorUtil {
                 sample_interval,
                 parallel_size,
                 batch_size,
+                ..
             } => {
                 let conn_pool = match extractor_client {
                     ConnClient::MySQL(conn_pool) => conn_pool,
@@ -110,17 +118,22 @@ impl ExtractorUtil {
                     Some(conn_pool.clone()),
                 )
                 .await?;
+                let db_tb = (db, tb);
+                let user_defined_partition_col = partition_cols
+                    .map(|m| m.get(&db_tb).cloned().unwrap_or_default())
+                    .unwrap_or_default();
                 let extractor = MysqlSnapshotExtractor {
                     conn_pool,
                     meta_manager,
-                    db,
-                    tb,
+                    db: db_tb.0,
+                    tb: db_tb.1,
                     batch_size,
-                    sample_interval,
+                    sample_interval: sample_interval as u64,
                     parallel_size,
                     base_extractor,
                     filter,
                     recovery,
+                    user_defined_partition_col,
                 };
                 Box::new(extractor)
             }
@@ -216,6 +229,7 @@ impl ExtractorUtil {
                 schema,
                 tb,
                 sample_interval,
+                parallel_size,
                 batch_size,
                 ..
             } => {
@@ -225,17 +239,23 @@ impl ExtractorUtil {
                         bail!("connection pool not found");
                     }
                 };
+                let sch_tb = (schema, tb);
+                let user_defined_partition_col = partition_cols
+                    .map(|m| m.get(&sch_tb).cloned().unwrap_or_default())
+                    .unwrap_or_default();
                 let meta_manager = PgMetaManager::new(conn_pool.clone()).await?;
                 let extractor = PgSnapshotExtractor {
                     conn_pool,
                     meta_manager,
                     batch_size,
-                    sample_interval,
-                    schema,
-                    tb,
+                    parallel_size,
+                    sample_interval: sample_interval as u64,
+                    schema: sch_tb.0,
+                    tb: sch_tb.1,
                     base_extractor,
                     filter,
                     recovery,
+                    user_defined_partition_col,
                 };
                 Box::new(extractor)
             }
@@ -602,5 +622,25 @@ impl ExtractorUtil {
             _ => None,
         };
         Ok(meta_manager)
+    }
+
+    pub fn parse_partition_cols(config_str: &str) -> anyhow::Result<PartitionCols> {
+        let mut results = PartitionCols::new();
+        if config_str.trim().is_empty() {
+            return Ok(results);
+        }
+        // partition_cols=json:[{"db":"test_db","tb":"tb_1","partition_col":"id"}]
+        #[derive(Serialize, Deserialize)]
+        struct PartitionColsType {
+            db: String,
+            tb: String,
+            partition_col: String,
+        }
+        let config: Vec<PartitionColsType> =
+            serde_json::from_str(config_str.trim_start_matches(JSON_PREFIX))?;
+        for i in config {
+            results.insert((i.db, i.tb), i.partition_col);
+        }
+        Ok(results)
     }
 }

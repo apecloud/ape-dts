@@ -1,0 +1,324 @@
+use std::collections::HashMap;
+use std::vec;
+
+use anyhow::Context;
+use dt_common::meta::position::Position;
+use dt_common::meta::{
+    adaptor::{mysql_col_value_convertor::MysqlColValueConvertor, sqlx_ext::SqlxMysqlExt},
+    col_value::ColValue,
+    mysql::mysql_tb_meta::MysqlTbMeta,
+    rdb_tb_meta::RdbTbMeta,
+};
+use dt_common::utils::sql_util::*;
+use dt_common::{config::config_enums::DbType, quote_mysql};
+use dt_common::{log_debug, log_info};
+use futures::TryStreamExt;
+use sqlx::{MySql, Pool, Row};
+
+use crate::extractor::base_splitter::{self, BaseSplitter, ChunkRange, Error::*, SnapshotChunk};
+
+use quote_mysql as quote;
+
+pub struct MySqlSnapshotSplitter<'a> {
+    basic: BaseSplitter,
+    snapshot_range: Option<ChunkRange>,
+    mysql_tb_meta: &'a MysqlTbMeta,
+    conn_pool: Pool<MySql>,
+    batch_size: u64,
+    estimated_row_count: u64,
+    partition_col: String,
+    current_col_value: Option<ColValue>,
+    checkpoint_id: u64,
+    checkpoint_map: HashMap<u64, ColValue>,
+}
+
+impl MySqlSnapshotSplitter<'_> {
+    pub fn new(
+        mysql_tb_meta: &MysqlTbMeta,
+        conn_pool: Pool<MySql>,
+        batch_size: usize,
+        partition_col: String,
+    ) -> MySqlSnapshotSplitter<'_> {
+        MySqlSnapshotSplitter {
+            basic: BaseSplitter::new(),
+            snapshot_range: None,
+            mysql_tb_meta,
+            conn_pool,
+            batch_size: batch_size as u64,
+            estimated_row_count: 0,
+            partition_col,
+            current_col_value: None,
+            checkpoint_id: 0,
+            checkpoint_map: HashMap::new(),
+        }
+    }
+
+    pub fn init(&mut self, resume_values: &HashMap<String, ColValue>) -> anyhow::Result<()> {
+        self.current_col_value = if !resume_values.is_empty() {
+            resume_values.get(&self.partition_col).cloned()
+        } else {
+            None
+        };
+        Ok(())
+    }
+
+    pub async fn get_next_chunks(&mut self) -> anyhow::Result<Vec<SnapshotChunk>> {
+        // only support single-column splitting.
+        if self.basic.has_no_next_chunks() {
+            return Ok(Vec::new());
+        }
+        let mysql_tb_meta = self.mysql_tb_meta;
+        let partition_col = &self.partition_col;
+        let partition_col_type = mysql_tb_meta.get_col_type(partition_col)?;
+        if !partition_col_type.can_be_splitted() {
+            log_info!(
+                "table {}.{} partition col: {}, type: {:?}, can not be splitted",
+                quote!(mysql_tb_meta.basic.schema),
+                quote!(mysql_tb_meta.basic.tb),
+                quote!(partition_col),
+                partition_col_type,
+            );
+            self.basic.mark_no_next_chunks();
+            // represents no split
+            return Ok(vec![self
+                .basic
+                .gen_next_chunk((ColValue::None, ColValue::None))]);
+        }
+        if self.estimated_row_count == 0 {
+            self.estimated_row_count = self.estimate_row_count(&mysql_tb_meta.basic).await?;
+        }
+        if self.estimated_row_count <= self.batch_size {
+            log_debug!(
+                "table {}.{} row count {} is too small, no need to split",
+                mysql_tb_meta.basic.schema,
+                mysql_tb_meta.basic.tb,
+                self.estimated_row_count
+            );
+            self.basic.mark_no_next_chunks();
+            // represents no split
+            return Ok(vec![self
+                .basic
+                .gen_next_chunk((ColValue::None, ColValue::None))]);
+        }
+        if !self.basic.has_no_even_chunks() && partition_col_type.is_integer() {
+            let chunks = self.get_evenly_sized_chunks(mysql_tb_meta).await;
+            if let Err(e) = chunks {
+                match e.downcast_ref::<base_splitter::Error>() {
+                    Some(BadSplitColumnError { .. }) => {
+                        return Ok(vec![self
+                            .basic
+                            .gen_next_chunk((ColValue::None, ColValue::None))]);
+                    }
+                    Some(OutOfDistributionFactorRangeError { .. }) => {
+                        // fallback to get_next_unevenly_sized_chunk
+                    }
+                    _ => return Err(e),
+                }
+            } else {
+                return chunks;
+            }
+        }
+        if let Some(chunk) = self.get_next_unevenly_sized_chunk(mysql_tb_meta).await? {
+            return Ok(vec![chunk]);
+        }
+        Ok(Vec::new())
+    }
+
+    pub fn get_next_checkpoint_position(
+        &mut self,
+        chunk_id: u64,
+        partition_col_value: ColValue,
+    ) -> Option<Position> {
+        let partition_col = &self.partition_col;
+        let mut position = if chunk_id == self.checkpoint_id + 1 {
+            self.checkpoint_id = chunk_id;
+            self.mysql_tb_meta.basic.build_position_for_partition(
+                &DbType::Mysql,
+                partition_col,
+                &partition_col_value,
+            )
+        } else {
+            self.checkpoint_map
+                .insert(chunk_id, partition_col_value.clone());
+            return None;
+        };
+        while let Some(partition_col_values) = self.checkpoint_map.remove(&(self.checkpoint_id + 1))
+        {
+            self.checkpoint_id += 1;
+            position = self.mysql_tb_meta.basic.build_position_for_partition(
+                &DbType::Mysql,
+                partition_col,
+                &partition_col_values,
+            );
+        }
+        Some(position)
+    }
+
+    async fn estimate_row_count(&mut self, tb_meta: &RdbTbMeta) -> anyhow::Result<u64> {
+        let sql = format!(
+            "select
+    TABLE_ROWS
+FROM
+    information_schema.TABLES
+WHERE
+    table_type = 'BASE TABLE'
+    AND table_schema = '{}'
+    AND table_name = '{}'
+LIMIT 1",
+            tb_meta.schema, tb_meta.tb
+        );
+        let mut rows = sqlx::query(&sql).fetch(&self.conn_pool);
+        if let Some(row) = rows.try_next().await? {
+            let row_count: u64 = row.try_get(0)?;
+            return Ok(row_count);
+        }
+        Ok(0)
+    }
+
+    async fn get_partition_col_range(
+        &mut self,
+        tb_meta: &MysqlTbMeta,
+    ) -> anyhow::Result<ChunkRange> {
+        let partition_col = &self.partition_col;
+        let sql = format!(
+            "select
+    MIN({}) AS min_value, MAX({}) AS max_value
+FROM
+    {}.{}",
+            quote!(partition_col),
+            quote!(partition_col),
+            quote!(tb_meta.basic.schema),
+            quote!(tb_meta.basic.tb)
+        );
+        let mut rows = sqlx::query(&sql).fetch(&self.conn_pool);
+        if let Some(row) = rows.try_next().await? {
+            let min_value = MysqlColValueConvertor::from_query(
+                &row,
+                "min_value",
+                tb_meta.get_col_type(partition_col)?,
+            )
+            .with_context(|| {
+                format!(
+                    "schema: {}, tb: {}, col: {}, fails to get min value",
+                    tb_meta.basic.schema, tb_meta.basic.tb, partition_col,
+                )
+            })?;
+            let max_value = MysqlColValueConvertor::from_query(
+                &row,
+                "max_value",
+                tb_meta.get_col_type(partition_col)?,
+            )
+            .with_context(|| {
+                format!(
+                    "schema: {}, tb: {}, col: {}, fails to get max value",
+                    tb_meta.basic.schema, tb_meta.basic.tb, partition_col,
+                )
+            })?;
+            return Ok((min_value, max_value));
+        }
+        // no data in table or NULL only
+        Ok((ColValue::None, ColValue::None))
+    }
+
+    async fn get_evenly_sized_chunks(
+        &mut self,
+        tb_meta: &MysqlTbMeta,
+    ) -> anyhow::Result<Vec<SnapshotChunk>> {
+        if self.basic.has_no_even_chunks() | self.basic.has_no_next_chunks() {
+            return Ok(Vec::new());
+        }
+        self.basic.mark_no_even_chunks();
+        let (min_value, max_value) = if let Some(range) = &self.snapshot_range {
+            (range.0.clone(), range.1.clone())
+        } else {
+            let range = self.get_partition_col_range(tb_meta).await?;
+            if range.0.is_same_value(&range.1) {
+                let err = BadSplitColumnError(range.0.to_string(), range.1.to_string());
+                log_info!(
+                    "splitting {}.{} gets: {:?}",
+                    quote!(tb_meta.basic.schema),
+                    quote!(tb_meta.basic.tb),
+                    err.to_string()
+                );
+                return Err(err.into());
+            }
+            self.snapshot_range = Some(range.clone());
+            range
+        };
+        self.basic.gen_next_evenly_sized_chunks(
+            (min_value, max_value),
+            self.batch_size,
+            self.estimated_row_count,
+            &self.current_col_value,
+        )
+    }
+
+    async fn get_next_unevenly_sized_chunk(
+        &mut self,
+        tb_meta: &MysqlTbMeta,
+    ) -> anyhow::Result<Option<SnapshotChunk>> {
+        let partition_col = &self.partition_col;
+        let partition_col_type = tb_meta.get_col_type(partition_col)?;
+        let mut where_clause = if tb_meta.basic.is_col_nullable(partition_col) {
+            format!("WHERE{} IS NOT NULL", quote!(partition_col))
+        } else {
+            String::new()
+        };
+        if self.current_col_value.is_some() {
+            where_clause = if where_clause.is_empty() {
+                format!("WHERE {} > ?", quote!(tb_meta.basic.partition_col))
+            } else {
+                format!(
+                    "{} AND {} > ?",
+                    where_clause,
+                    quote!(tb_meta.basic.partition_col)
+                )
+            };
+        }
+        let get_next_chunk_end_sql = format!(
+            "SELECT MAX({}) AS max_value FROM (
+SELECT {} FROM {}.{} {} ORDER BY {} ASC LIMIT {}) AS T",
+            quote!(partition_col),
+            quote!(partition_col),
+            quote!(tb_meta.basic.schema),
+            quote!(tb_meta.basic.tb),
+            where_clause,
+            quote!(partition_col),
+            self.batch_size,
+        );
+        let query = match &self.current_col_value {
+            Some(ColValue::None) => {
+                self.basic.mark_no_next_chunks();
+                return Ok(None);
+            }
+            Some(current_col_value) => sqlx::query(&get_next_chunk_end_sql)
+                .bind_col_value(Some(current_col_value), partition_col_type),
+            None => sqlx::query(&get_next_chunk_end_sql),
+        };
+        let row = query.fetch_one(&self.conn_pool).await.with_context(|| {
+            format!(
+                "schema: {}, tb: {}, fails to get next chunk end value",
+                tb_meta.basic.schema, tb_meta.basic.tb
+            )
+        })?;
+        let next_chunk_end_value =
+            MysqlColValueConvertor::from_query(&row, "max_value", partition_col_type)?;
+        log_debug!("next chunk end value: {:?}", next_chunk_end_value);
+        if let ColValue::None = next_chunk_end_value {
+            self.basic.mark_no_next_chunks();
+            return Ok(None);
+        }
+        let chunk_range = if let Some(current_value) = &self.current_col_value {
+            (current_value.clone(), next_chunk_end_value.clone())
+        } else {
+            (ColValue::None, next_chunk_end_value.clone())
+        };
+        self.current_col_value = Some(next_chunk_end_value);
+        Ok(Some(self.basic.gen_next_chunk(chunk_range)))
+    }
+
+    #[inline(always)]
+    pub fn get_partition_col(&self) -> String {
+        self.partition_col.clone()
+    }
+}

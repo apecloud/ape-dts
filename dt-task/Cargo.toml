@@ -27,6 +27,7 @@ kafka = { workspace = true }
 log = { workspace = true }
 log4rs = { workspace = true }
 dotenv = { workspace = true }
+serde = { workspace = true }
 serde_yaml = { workspace = true }
 serial_test = { workspace = true }
 configparser = { workspace = true }

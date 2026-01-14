@@ -1,30 +1,45 @@
-use anyhow::bail;
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet, VecDeque},
+    sync::Arc,
+};
 
+use anyhow::bail;
 use async_trait::async_trait;
 use futures::TryStreamExt;
 use sqlx::{Pool, Postgres};
+use tokio::task::JoinSet;
 
 use crate::{
-    extractor::{base_extractor::BaseExtractor, resumer::recovery::Recovery},
-    rdb_query_builder::RdbQueryBuilder,
+    extractor::{
+        base_extractor::BaseExtractor,
+        base_splitter::SnapshotChunk,
+        pg::pg_snapshot_splitter::PgSnapshotSplitter,
+        rdb_snapshot_extract_statement::{OrderKeyPredicateType, RdbSnapshotExtractStatement},
+        resumer::recovery::Recovery,
+    },
+    rdb_router::RdbRouter,
     Extractor,
 };
+use dt_common::utils::sql_util::PG_ESCAPE;
 use dt_common::{
     config::config_enums::DbType,
-    log_info,
+    log_debug, log_info,
     meta::{
         adaptor::{pg_col_value_convertor::PgColValueConvertor, sqlx_ext::SqlxPgExt},
         col_value::ColValue,
+        dt_data::{DtData, DtItem},
+        dt_queue::DtQueue,
         order_key::OrderKey,
-        pg::{pg_meta_manager::PgMetaManager, pg_tb_meta::PgTbMeta},
+        pg::{pg_col_type::PgColType, pg_meta_manager::PgMetaManager, pg_tb_meta::PgTbMeta},
         position::Position,
-        rdb_tb_meta::RdbTbMeta,
         row_data::RowData,
     },
+    quote_pg,
     rdb_filter::RdbFilter,
     utils::serialize_util::SerializeUtil,
 };
+
+use quote_pg as quote;
 
 pub struct PgSnapshotExtractor {
     pub base_extractor: BaseExtractor,
@@ -32,20 +47,36 @@ pub struct PgSnapshotExtractor {
     pub meta_manager: PgMetaManager,
     pub filter: RdbFilter,
     pub batch_size: usize,
-    pub sample_interval: usize,
+    pub parallel_size: usize,
+    pub sample_interval: u64,
     pub schema: String,
     pub tb: String,
+    pub user_defined_partition_col: String,
     pub recovery: Option<Arc<dyn Recovery + Send + Sync>>,
+}
+
+struct ParallelExtractCtx<'a> {
+    pub conn_pool: &'a Pool<Postgres>,
+    pub tb_meta: &'a PgTbMeta,
+    pub partition_col: &'a String,
+    pub partition_col_type: &'a PgColType,
+    pub sql_le: &'a String,
+    pub sql_range: &'a String,
+    pub chunk: SnapshotChunk,
+    pub ignore_cols: &'a Option<HashSet<String>>,
+    pub buffer: &'a Arc<DtQueue>,
+    pub router: &'a Arc<RdbRouter>,
 }
 
 #[async_trait]
 impl Extractor for PgSnapshotExtractor {
     async fn extract(&mut self) -> anyhow::Result<()> {
         log_info!(
-            r#"PgSnapshotExtractor starts, schema: "{}", tb: "{}", batch_size: {}"#,
-            self.schema,
-            self.tb,
-            self.batch_size
+            "PgSnapshotExtractor starts, schema: {}, tb: {}, batch_size: {}, parallel_size: {}",
+            quote!(&self.schema),
+            quote!(&self.tb),
+            self.batch_size,
+            self.parallel_size
         );
         self.extract_internal().await?;
         self.base_extractor.wait_task_finish().await
@@ -58,44 +89,71 @@ impl Extractor for PgSnapshotExtractor {
 
 impl PgSnapshotExtractor {
     async fn extract_internal(&mut self) -> anyhow::Result<()> {
-        let tb_meta = self
+        let mut tb_meta = self
             .meta_manager
             .get_tb_meta(&self.schema, &self.tb)
             .await?
             .to_owned();
-
-        if Self::can_extract_by_batch(&tb_meta) {
-            let resume_values = self.get_resume_values(&tb_meta).await?;
-            if resume_values.is_empty() {
-                log_info!(
-                    r#"start extracting data from "{}"."{}" by batch from beginning"#,
-                    self.schema,
-                    self.tb
-                );
+        let user_defined_partition_col = &self.user_defined_partition_col;
+        self.validate_user_defined(&mut tb_meta, &user_defined_partition_col)?;
+        let mut splitter = PgSnapshotSplitter::new(
+            &tb_meta,
+            self.conn_pool.clone(),
+            self.batch_size,
+            if !user_defined_partition_col.is_empty() {
+                user_defined_partition_col.clone()
             } else {
-                log_info!(
-                    r#"start extracting data from "{}"."{}" by batch, start_values: {}"#,
-                    self.schema,
-                    self.tb,
-                    SerializeUtil::serialize_hashmap_to_json(&resume_values)?
-                );
-            }
-            self.extract_by_batch(&tb_meta, resume_values).await?;
+                tb_meta.basic.partition_col.clone()
+            },
+        );
+        let extracted_count = if user_defined_partition_col.is_empty()
+            && self.parallel_size <= 1
+            && !tb_meta.basic.order_cols.is_empty()
+        {
+            self.serial_extract(&tb_meta).await?
         } else {
-            self.extract_all(&tb_meta).await?;
-        }
+            self.parallel_extract_by_batch(&tb_meta, &mut splitter)
+                .await?
+        };
+
+        log_info!(
+            "end extracting data from {}.{}, all count: {}",
+            quote!(&self.schema),
+            quote!(&self.tb),
+            extracted_count
+        );
         Ok(())
     }
 
-    async fn extract_all(&mut self, tb_meta: &PgTbMeta) -> anyhow::Result<()> {
+    async fn serial_extract(&mut self, tb_meta: &PgTbMeta) -> anyhow::Result<u64> {
+        if !tb_meta.basic.order_cols.is_empty() {
+            let resume_values = self
+                .get_resume_values(tb_meta, &tb_meta.basic.order_cols, false)
+                .await?;
+            self.extract_by_batch(tb_meta, resume_values).await
+        } else {
+            self.extract_all(tb_meta).await
+        }
+    }
+
+    async fn extract_all(&mut self, tb_meta: &PgTbMeta) -> anyhow::Result<u64> {
         log_info!(
-            r#"start extracting data from "{}"."{}" without batch"#,
-            self.schema,
-            self.tb
+            "start extracting data from {}.{} without batch",
+            quote!(&self.schema),
+            quote!(&self.tb)
         );
 
-        let sql = self.build_extract_sql(tb_meta, false)?;
         let ignore_cols = self.filter.get_ignore_cols(&self.schema, &self.tb);
+        let where_condition = self
+            .filter
+            .get_where_condition(&self.schema, &self.tb)
+            .cloned()
+            .unwrap_or_default();
+        let sql = RdbSnapshotExtractStatement::from(tb_meta)
+            .with_ignore_cols(ignore_cols.unwrap_or(&HashSet::new()))
+            .with_where_condition(&where_condition)
+            .build()?;
+
         let mut rows = sqlx::query(&sql).fetch(&self.conn_pool);
         while let Some(row) = rows.try_next().await? {
             let row_data = RowData::from_pg_row(&row, tb_meta, &ignore_cols);
@@ -103,38 +161,41 @@ impl PgSnapshotExtractor {
                 .push_row(row_data, Position::None)
                 .await?;
         }
-
-        log_info!(
-            r#"end extracting data from "{}"."{}", all count: {}"#,
-            self.schema,
-            self.tb,
-            self.base_extractor.monitor.counters.pushed_record_count
-        );
-        Ok(())
+        Ok(self.base_extractor.monitor.counters.pushed_record_count)
     }
 
     async fn extract_by_batch(
         &mut self,
         tb_meta: &PgTbMeta,
         mut resume_values: HashMap<String, ColValue>,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<u64> {
         let mut start_from_beginning = false;
         if resume_values.is_empty() {
             resume_values = tb_meta.basic.get_default_order_col_values();
             start_from_beginning = true;
         }
-
+        let mut extracted_count = 0u64;
         let mut start_values = resume_values;
-        let mut extracted_count = 0;
-        let sql_from_beginning = self.build_extract_sql(tb_meta, false)?;
-        let sql_from_value = self.build_extract_sql(tb_meta, true)?;
-        let sql_for_null = if tb_meta.basic.order_cols_are_nullable {
-            self.build_extract_null_sql(tb_meta, true)?
-        } else {
-            String::new()
-        };
         let ignore_cols = self.filter.get_ignore_cols(&self.schema, &self.tb);
-
+        let where_condition = self
+            .filter
+            .get_where_condition(&self.schema, &self.tb)
+            .cloned()
+            .unwrap_or_default();
+        let sql_from_beginning = RdbSnapshotExtractStatement::from(tb_meta)
+            .with_ignore_cols(ignore_cols.unwrap_or(&HashSet::new()))
+            .with_order_cols(&tb_meta.basic.order_cols)
+            .with_where_condition(&where_condition)
+            .with_predicate_type(OrderKeyPredicateType::None)
+            .with_limit(self.batch_size)
+            .build()?;
+        let sql_from_value = RdbSnapshotExtractStatement::from(tb_meta)
+            .with_ignore_cols(ignore_cols.unwrap_or(&HashSet::new()))
+            .with_order_cols(&tb_meta.basic.order_cols)
+            .with_where_condition(&where_condition)
+            .with_predicate_type(OrderKeyPredicateType::GreaterThan)
+            .with_limit(self.batch_size)
+            .build()?;
         loop {
             let bind_values = start_values.clone();
             let query = if start_from_beginning {
@@ -151,6 +212,7 @@ impl PgSnapshotExtractor {
 
             let mut rows = query.fetch(&self.conn_pool);
             let mut slice_count = 0usize;
+
             while let Some(row) = rows.try_next().await? {
                 for order_col in tb_meta.basic.order_cols.iter() {
                     let order_col_type = tb_meta.get_col_type(order_col)?;
@@ -158,15 +220,15 @@ impl PgSnapshotExtractor {
                         *value = PgColValueConvertor::from_query(&row, order_col, order_col_type)?;
                     } else {
                         bail!(
-                            r#""{}"."{}" order col {} not found"#,
-                            self.schema,
-                            self.tb,
-                            order_col
+                            "{}.{} order col {} not found",
+                            quote!(&self.schema),
+                            quote!(&self.tb),
+                            quote!(order_col),
                         );
                     }
                 }
-                slice_count += 1;
                 extracted_count += 1;
+                slice_count += 1;
                 // sampling may be used in check scenario
                 if extracted_count % self.sample_interval != 0 {
                     continue;
@@ -184,171 +246,271 @@ impl PgSnapshotExtractor {
         }
 
         // extract rows with NULL
-        if tb_meta.basic.order_cols_are_nullable && !sql_for_null.is_empty() {
-            let mut rows = sqlx::query(&sql_for_null).fetch(&self.conn_pool);
-            while let Some(row) = rows.try_next().await? {
-                extracted_count += 1;
-                let row_data = RowData::from_pg_row(&row, tb_meta, &ignore_cols);
-                self.base_extractor
-                    .push_row(row_data, Position::None)
-                    .await?;
+        if tb_meta
+            .basic
+            .order_cols
+            .iter()
+            .any(|col| tb_meta.basic.is_col_nullable(col))
+        {
+            extracted_count += self
+                .extract_nulls(tb_meta, &tb_meta.basic.order_cols)
+                .await?;
+        }
+
+        Ok(extracted_count)
+    }
+
+    async fn extract_nulls(
+        &mut self,
+        tb_meta: &PgTbMeta,
+        order_cols: &Vec<String>,
+    ) -> anyhow::Result<u64> {
+        let mut extracted_count = 0u64;
+        let ignore_cols = self.filter.get_ignore_cols(&self.schema, &self.tb);
+        let where_condition = self
+            .filter
+            .get_where_condition(&self.schema, &self.tb)
+            .cloned()
+            .unwrap_or_default();
+        let sql_for_null = RdbSnapshotExtractStatement::from(tb_meta)
+            .with_ignore_cols(ignore_cols.unwrap_or(&HashSet::new()))
+            .with_order_cols(order_cols)
+            .with_where_condition(&where_condition)
+            .with_predicate_type(OrderKeyPredicateType::IsNull)
+            .build()?;
+
+        let mut rows = sqlx::query(&sql_for_null).fetch(&self.conn_pool);
+        while let Some(row) = rows.try_next().await? {
+            extracted_count += 1;
+            let row_data = RowData::from_pg_row(&row, tb_meta, &ignore_cols);
+            self.base_extractor
+                .push_row(row_data, Position::None)
+                .await?;
+        }
+        Ok(extracted_count)
+    }
+
+    async fn parallel_extract_by_batch(
+        &mut self,
+        tb_meta: &PgTbMeta,
+        splitter: &mut PgSnapshotSplitter<'_>,
+    ) -> anyhow::Result<u64> {
+        log_info!("parallel extracting, parallel_size: {}", self.parallel_size);
+        let order_cols = vec![splitter.get_partition_col()];
+        let partition_col = &order_cols[0];
+        let partition_col_type = tb_meta.get_col_type(partition_col)?;
+        let resume_values = self.get_resume_values(tb_meta, &order_cols, true).await?;
+        splitter.init(&resume_values)?;
+
+        let mut extract_cnt = 0u64;
+        let parallel_size = self.parallel_size;
+        let router = Arc::new(self.base_extractor.router.clone());
+        let ignore_cols = self.filter.get_ignore_cols(&self.schema, &self.tb).cloned();
+        let where_condition = self
+            .filter
+            .get_where_condition(&self.schema, &self.tb)
+            .cloned()
+            .unwrap_or_default();
+        let sql_le = RdbSnapshotExtractStatement::from(tb_meta)
+            .with_ignore_cols(ignore_cols.as_ref().unwrap_or(&HashSet::new()))
+            .with_order_cols(&order_cols)
+            .with_where_condition(&where_condition)
+            .with_predicate_type(OrderKeyPredicateType::LessThanOrEqual)
+            .build()?;
+        let sql_range = RdbSnapshotExtractStatement::from(tb_meta)
+            .with_ignore_cols(ignore_cols.as_ref().unwrap_or(&HashSet::new()))
+            .with_order_cols(&order_cols)
+            .with_where_condition(&where_condition)
+            .with_predicate_type(OrderKeyPredicateType::Range)
+            .build()?;
+        let mut parallel_cnt = 0;
+        let mut join_set: JoinSet<anyhow::Result<(u64, u64, ColValue)>> = JoinSet::new();
+        let mut pending_chunks = VecDeque::new();
+        while parallel_cnt < parallel_size {
+            pending_chunks.extend(splitter.get_next_chunks().await?.into_iter());
+            if let Some(chunk) = pending_chunks.pop_front() {
+                if let (ColValue::None, ColValue::None) = &chunk.chunk_range {
+                    if !join_set.is_empty() {
+                        bail!(
+                            "table {}.{} has no split chunk, but some parallel extractors are running",
+                            quote!(&self.schema),
+                            quote!(&self.tb)
+                        );
+                    }
+                    // no split
+                    log_info!(
+                        "table {}.{} has no split chunk, extracting by single batch extractor",
+                        quote!(&self.schema),
+                        quote!(&self.tb)
+                    );
+                    return self.serial_extract(tb_meta).await;
+                }
+
+                Self::spawn_sub_parallel_extract(
+                    ParallelExtractCtx {
+                        conn_pool: &self.conn_pool,
+                        tb_meta,
+                        partition_col,
+                        partition_col_type,
+                        sql_le: &sql_le,
+                        sql_range: &sql_range,
+                        chunk,
+                        ignore_cols: &ignore_cols,
+                        buffer: &self.base_extractor.buffer,
+                        router: &router,
+                    },
+                    &mut join_set,
+                )
+                .await?;
+                parallel_cnt += 1;
+            } else {
+                break;
             }
         }
 
-        log_info!(
-            r#"end extracting data from "{}"."{}"", all count: {}"#,
-            self.schema,
-            self.tb,
-            extracted_count
+        while let Some(res) = join_set.join_next().await {
+            let (chunk_id, cnt, partition_col_value) = res??;
+            if let Some(position) =
+                splitter.get_next_checkpoint_position(chunk_id, partition_col_value)
+            {
+                self.send_checkpoint_position(position).await?;
+            }
+            extract_cnt += cnt;
+            // spawn new extract task
+            if let Some(chunk) = if !pending_chunks.is_empty() {
+                pending_chunks.pop_front()
+            } else {
+                pending_chunks.extend(splitter.get_next_chunks().await?.into_iter());
+                pending_chunks.pop_front()
+            } {
+                Self::spawn_sub_parallel_extract(
+                    ParallelExtractCtx {
+                        conn_pool: &self.conn_pool,
+                        tb_meta,
+                        partition_col,
+                        partition_col_type,
+                        sql_le: &sql_le,
+                        sql_range: &sql_range,
+                        chunk,
+                        ignore_cols: &ignore_cols,
+                        buffer: &self.base_extractor.buffer,
+                        router: &router,
+                    },
+                    &mut join_set,
+                )
+                .await?;
+            }
+        }
+
+        if tb_meta.basic.is_col_nullable(partition_col) {
+            extract_cnt += self.extract_nulls(tb_meta, &order_cols).await?;
+        }
+        Ok(extract_cnt)
+    }
+
+    async fn spawn_sub_parallel_extract(
+        extract_ctx: ParallelExtractCtx<'_>,
+        join_set: &mut JoinSet<anyhow::Result<(u64, u64, ColValue)>>,
+    ) -> anyhow::Result<()> {
+        let conn_pool = extract_ctx.conn_pool.clone();
+        let tb_meta = extract_ctx.tb_meta.clone();
+        let partition_col = extract_ctx.partition_col.clone();
+        let partition_col_type = extract_ctx.partition_col_type.clone();
+        let sql_le = extract_ctx.sql_le.clone();
+        let sql_range = extract_ctx.sql_range.clone();
+        let chunk = extract_ctx.chunk;
+        let ignore_cols = extract_ctx.ignore_cols.clone();
+        let router = extract_ctx.router.clone();
+        let buffer = extract_ctx.buffer.clone();
+
+        log_debug!(
+            "extract by partition_col: {}, chunk range: {:?}",
+            quote!(partition_col),
+            chunk
         );
+        join_set.spawn(async move {
+            let chunk_id = chunk.chunk_id;
+            let (start_value, end_value) = chunk.chunk_range;
+            let query = match (&start_value, &end_value) {
+                (ColValue::None, ColValue::None) | (_, ColValue::None) => {
+                    bail!(
+                        "chunk {} has bad chunk range from {}.{}",
+                        chunk_id,
+                        quote!(&tb_meta.basic.schema),
+                        quote!(&tb_meta.basic.tb)
+                    );
+                }
+                (ColValue::None, _) => {
+                    sqlx::query(&sql_le).bind_col_value(Some(&end_value), &partition_col_type)
+                }
+                _ => sqlx::query(&sql_range)
+                    .bind_col_value(Some(&start_value), &partition_col_type)
+                    .bind_col_value(Some(&end_value), &partition_col_type),
+            };
+
+            let mut extracted_cnt = 0u64;
+            let mut partition_col_value = ColValue::None;
+            let mut rows = query.fetch(&conn_pool);
+            while let Some(row) = rows.try_next().await? {
+                partition_col_value =
+                    PgColValueConvertor::from_query(&row, &partition_col, &partition_col_type)?;
+                let row_data = RowData::from_pg_row(&row, &tb_meta, &ignore_cols.as_ref());
+                Self::push_row(&buffer, &router, row_data, Position::None).await?;
+                extracted_cnt += 1;
+            }
+            Ok((chunk_id, extracted_cnt, partition_col_value))
+        });
         Ok(())
     }
 
-    #[inline(always)]
-    pub fn can_extract_by_batch(tb_meta: &PgTbMeta) -> bool {
-        !tb_meta.basic.order_cols.is_empty()
+    pub async fn push_row(
+        buffer: &Arc<DtQueue>,
+        router: &Arc<RdbRouter>,
+        row_data: RowData,
+        position: Position,
+    ) -> anyhow::Result<()> {
+        let row_data = router.route_row(row_data);
+        let dt_data = DtData::Dml { row_data };
+        let item = DtItem {
+            dt_data,
+            position,
+            data_origin_node: String::new(),
+        };
+        log_debug!("extracted item: {:?}", item);
+        buffer.push(item).await
     }
 
-    fn build_extract_cols_str(&mut self, tb_meta: &PgTbMeta) -> anyhow::Result<String> {
-        let ignore_cols = self.filter.get_ignore_cols(&self.schema, &self.tb);
-        let query_builder = RdbQueryBuilder::new_for_pg(tb_meta, ignore_cols);
-        query_builder.build_extract_cols_str()
+    async fn send_checkpoint_position(&mut self, position: Position) -> anyhow::Result<()> {
+        let commit = DtData::Commit { xid: String::new() };
+        self.base_extractor.push_dt_data(commit, position).await?;
+        Ok(())
     }
 
-    fn build_extract_sql(
-        &mut self,
-        tb_meta: &PgTbMeta,
-        has_start_value: bool,
-    ) -> anyhow::Result<String> {
-        let cols_str = self.build_extract_cols_str(tb_meta)?;
-        let where_sql = BaseExtractor::get_where_sql(&self.filter, &self.schema, &self.tb, "");
-
-        // SELECT col_1, col_2::text FROM tb_1 WHERE col_1 > $1 ORDER BY col_1;
-        if Self::can_extract_by_batch(tb_meta) {
-            let order_by_clause = Self::build_order_by_clause(&tb_meta.basic)?;
-            if has_start_value {
-                let mut where_clause = Self::build_order_col_predicate(tb_meta)?;
-                if tb_meta.basic.order_cols_are_nullable {
-                    let not_null_predicate = Self::build_null_predicate(&tb_meta.basic, false)?;
-                    if !not_null_predicate.is_empty() {
-                        where_clause = format!("{} AND {}", where_clause, not_null_predicate);
-                    }
-                }
-                let where_sql = BaseExtractor::get_where_sql(
-                    &self.filter,
-                    &self.schema,
-                    &self.tb,
-                    &where_clause,
-                );
-                Ok(format!(
-                    r#"SELECT {} FROM "{}"."{}" {} ORDER BY {} LIMIT {}"#,
-                    cols_str, self.schema, self.tb, where_sql, order_by_clause, self.batch_size
-                ))
-            } else {
-                Ok(format!(
-                    r#"SELECT {} FROM "{}"."{}" {} ORDER BY {} LIMIT {}"#,
-                    cols_str, self.schema, self.tb, where_sql, order_by_clause, self.batch_size
-                ))
-            }
-        } else {
-            Ok(format!(
-                r#"SELECT {} FROM "{}"."{}" {}"#,
-                cols_str, self.schema, self.tb, where_sql
-            ))
+    pub fn validate_user_defined(
+        &self,
+        tb_meta: &mut PgTbMeta,
+        user_defined_partition_col: &String,
+    ) -> anyhow::Result<()> {
+        if user_defined_partition_col.is_empty() {
+            return Ok(());
         }
-    }
-
-    fn build_extract_null_sql(
-        &mut self,
-        tb_meta: &PgTbMeta,
-        is_null: bool,
-    ) -> anyhow::Result<String> {
-        let cols_str = self.build_extract_cols_str(tb_meta)?;
-        let order_by_clause = Self::build_order_by_clause(&tb_meta.basic)?;
-        let null_predicate = Self::build_null_predicate(&tb_meta.basic, is_null)?;
-        let where_sql =
-            BaseExtractor::get_where_sql(&self.filter, &self.schema, &self.tb, &null_predicate);
-
-        Ok(format!(
-            r#"SELECT {} FROM "{}"."{}" {} ORDER BY {}"#,
-            cols_str, self.schema, self.tb, where_sql, order_by_clause
-        ))
-    }
-
-    fn build_order_col_predicate(tb_meta: &PgTbMeta) -> anyhow::Result<String> {
-        let order_cols = &tb_meta.basic.order_cols;
-        if order_cols.is_empty() {
-            bail!("order cols is empty");
-        } else if order_cols.len() == 1 {
-            // col_1 > $1::col_1_type
-            Ok(format!(
-                r#""{}" > {}"#,
-                &order_cols[0],
-                format_args!(
-                    r#"$1::{}"#,
-                    tb_meta.get_col_type(&order_cols[0]).unwrap().alias
-                )
-            ))
-        } else {
-            // (col_1, col_2, col_3) > ($1::col_1_type, $2::col_2_type, $3::col_3_type)
-            Ok(format!(
-                r#"({}) > ({})"#,
-                order_cols
-                    .iter()
-                    .map(|col| format!(r#""{}""#, col))
-                    .collect::<Vec<String>>()
-                    .join(", "),
-                order_cols
-                    .iter()
-                    .enumerate()
-                    .map(|(i, col)| {
-                        let col_type = tb_meta.get_col_type(col).unwrap();
-                        format!(r#"${}::{}"#, i + 1, col_type.alias)
-                    })
-                    .collect::<Vec<String>>()
-                    .join(", ")
-            ))
+        // if user defined partition col is set, use it
+        if tb_meta.basic.has_col(user_defined_partition_col) {
+            return Ok(());
         }
-    }
-
-    fn build_order_by_clause(tb_meta: &RdbTbMeta) -> anyhow::Result<String> {
-        let order_cols = &tb_meta.order_cols;
-        if order_cols.is_empty() {
-            bail!("order cols is empty");
-        } else if order_cols.len() == 1 {
-            Ok(format!(r#""{}" ASC"#, &order_cols[0]))
-        } else {
-            // col_1 ASC, col_2 ASC, col_3 ASC
-            // (col_1, col_2, col_3) ASC does not trigger index scan sometimes
-            Ok(order_cols
-                .iter()
-                .map(|col| format!(r#""{}" ASC"#, col))
-                .collect::<Vec<String>>()
-                .join(", "))
-        }
-    }
-
-    fn build_null_predicate(tb_meta: &RdbTbMeta, is_null: bool) -> anyhow::Result<String> {
-        let order_cols = &tb_meta.order_cols;
-        let null_check = if is_null { "IS NULL" } else { "IS NOT NULL" };
-        let join_str = if is_null { "OR" } else { "AND" };
-        if order_cols.is_empty() {
-            bail!("order cols is empty");
-        } else {
-            // col_1 IS NOT NULL AND col_2 IS NOT NULL AND col_3 IS NOT NULL
-            // col_1 IS NULL OR col_2 IS NULL OR col_3 IS NULL
-            Ok(order_cols
-                .iter()
-                .filter(|&col| tb_meta.nullable_cols.contains(col))
-                .map(|col| format!(r#""{}" {}"#, col, null_check))
-                .collect::<Vec<String>>()
-                .join(&format!(" {} ", join_str)))
-        }
+        bail!(
+            "user defined partition col {} not in cols of {}.{}",
+            quote!(user_defined_partition_col),
+            quote!(&tb_meta.basic.schema),
+            quote!(&tb_meta.basic.tb),
+        );
     }
 
     async fn get_resume_values(
         &mut self,
         tb_meta: &PgTbMeta,
+        order_cols: &[String],
+        check_point: bool,
     ) -> anyhow::Result<HashMap<String, ColValue>> {
         let mut resume_values: HashMap<String, ColValue> = HashMap::new();
         if let Some(handler) = &self.recovery {
@@ -358,14 +520,14 @@ impl PgSnapshotExtractor {
                 order_key: Some(order_key),
                 ..
             }) = handler
-                .get_snapshot_resume_position(&self.schema, &self.tb, false)
+                .get_snapshot_resume_position(&self.schema, &self.tb, check_point)
                 .await
             {
                 if schema != self.schema || tb != self.tb {
                     log_info!(
-                        r#""{}"."{}" resume position schema/tb not match, ignore it"#,
-                        self.schema,
-                        self.tb
+                        r#"{}.{} resume position schema/tb not match, ignore it"#,
+                        quote!(&self.schema),
+                        quote!(&self.tb)
                     );
                     return Ok(HashMap::new());
                 }
@@ -373,23 +535,22 @@ impl PgSnapshotExtractor {
                     OrderKey::Single((order_col, value)) => vec![(order_col, value)],
                     OrderKey::Composite(values) => values,
                 };
-                if order_col_values.len() != tb_meta.basic.order_cols.len() {
+                if order_col_values.len() != order_cols.len() {
                     log_info!(
-                        r#""{}"."{}" resume values not match order cols in length"#,
-                        self.schema,
-                        self.tb
+                        r#"{}.{} resume values not match order cols in length"#,
+                        quote!(&self.schema),
+                        quote!(&self.tb)
                     );
                     return Ok(HashMap::new());
                 }
-                for ((position_order_col, value), order_col) in order_col_values
-                    .into_iter()
-                    .zip(tb_meta.basic.order_cols.iter())
+                for ((position_order_col, value), order_col) in
+                    order_col_values.into_iter().zip(order_cols.iter())
                 {
                     if position_order_col != *order_col {
                         log_info!(
-                            r#""{}"."{}" resume position order col {} not match {}"#,
-                            self.schema,
-                            self.tb,
+                            r#"{}.{} resume position order col {} not match {}"#,
+                            quote!(&self.schema),
+                            quote!(&self.tb),
                             position_order_col,
                             order_col
                         );
@@ -406,14 +567,18 @@ impl PgSnapshotExtractor {
                     resume_values.insert(position_order_col, col_value);
                 }
             } else {
-                log_info!(r#""{}"."{}" has no resume position"#, self.schema, self.tb);
+                log_info!(
+                    r#"{}.{} has no resume position"#,
+                    quote!(&self.schema),
+                    quote!(&self.tb)
+                );
                 return Ok(HashMap::new());
             }
         }
         log_info!(
-            r#"["{}"."{}"] recovery from [{}]"#,
-            self.schema,
-            self.tb,
+            r#"[{}.{}] recovery from [{}]"#,
+            quote!(&self.schema),
+            quote!(&self.tb),
             SerializeUtil::serialize_hashmap_to_json(&resume_values)?
         );
         Ok(resume_values)

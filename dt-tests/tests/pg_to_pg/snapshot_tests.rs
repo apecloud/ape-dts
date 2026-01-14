@@ -144,4 +144,62 @@ mod test {
     async fn snapshot_route_test() {
         TestBase::run_snapshot_test("pg_to_pg/snapshot/route_test").await;
     }
+
+    #[tokio::test]
+    #[serial]
+    async fn snapshot_parallel_test() {
+        TestBase::run_snapshot_test("pg_to_pg/snapshot/parallel_test").await;
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn snapshot_parallel_resume_from_log_test() {
+        let mut dst_expected_counts = HashMap::new();
+        dst_expected_counts.insert("test_db_1.no_pk_one_uk", 4);
+        // resume_filter works
+        dst_expected_counts.insert("test_db_1.no_pk_no_uk", 4);
+        dst_expected_counts.insert("test_db_1.one_pk_multi_uk", 4);
+        dst_expected_counts.insert("test_db_1.no_pk_multi_uk", 4);
+        dst_expected_counts.insert("test_db_1.one_pk_no_uk", 4);
+        dst_expected_counts.insert("test_db_1.multi_pk", 4);
+        dst_expected_counts.insert("test_db_1.nullable_composite_unique_key_table", 6);
+        dst_expected_counts.insert("test_db_1.varchar_uk", 6);
+        // with special characters in db && tb && col names
+        dst_expected_counts.insert("test_db_@.resume_table_*$4", 4);
+        dst_expected_counts.insert("test_db_@.finished_table_*$1", 0);
+        dst_expected_counts.insert("test_db_@.in_position_log_table_*$1", 4);
+        dst_expected_counts.insert("test_db_@.in_finished_log_table_*$1", 0);
+
+        TestBase::run_snapshot_test_and_check_dst_count(
+            "pg_to_pg/snapshot/parallel_test/resume_log_test",
+            &DbType::Pg,
+            dst_expected_counts,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn snapshot_parallel_resume_from_db_test() {
+        let mut dst_expected_counts = HashMap::new();
+        dst_expected_counts.insert("test_db_1.no_pk_one_uk", 4);
+        // resume_filter works
+        dst_expected_counts.insert("test_db_1.no_pk_no_uk", 4);
+        dst_expected_counts.insert("test_db_1.one_pk_multi_uk", 4);
+        dst_expected_counts.insert("test_db_1.no_pk_multi_uk", 4);
+        dst_expected_counts.insert("test_db_1.one_pk_no_uk", 4);
+        dst_expected_counts.insert("test_db_1.multi_pk", 4);
+        dst_expected_counts.insert("test_db_1.nullable_composite_unique_key_table", 6);
+        dst_expected_counts.insert("test_db_1.varchar_uk", 6);
+        // with special characters in db && tb && col names
+        dst_expected_counts.insert("test_db_@.resume_table_*$4", 4);
+        dst_expected_counts.insert("test_db_@.finished_table_*$1", 0);
+
+        TestBase::run_snapshot_test_and_check_dst_count(
+            "pg_to_pg/snapshot/parallel_test/resume_db_test",
+            &DbType::Pg,
+            dst_expected_counts,
+        )
+        .await;
+    }
 }

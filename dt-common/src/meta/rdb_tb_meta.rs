@@ -16,7 +16,6 @@ pub struct RdbTbMeta {
     pub col_origin_type_map: HashMap<String, String>,
     pub key_map: HashMap<String, Vec<String>>,
     pub order_cols: Vec<String>,
-    pub order_cols_are_nullable: bool,
     pub partition_col: String,
     pub id_cols: Vec<String>,
     pub foreign_keys: Vec<ForeignKey>,
@@ -30,6 +29,16 @@ impl RdbTbMeta {
             .iter()
             .map(|col| (col.clone(), ColValue::None))
             .collect()
+    }
+
+    #[inline(always)]
+    pub fn has_col(&self, col: &String) -> bool {
+        self.cols.contains(col)
+    }
+
+    #[inline(always)]
+    pub fn is_col_nullable(&self, col: &str) -> bool {
+        self.nullable_cols.contains(col)
     }
 
     pub fn build_position(
@@ -51,6 +60,28 @@ impl RdbTbMeta {
             1 => Some(OrderKey::Single(order_col_values[0].clone())),
             _ => Some(OrderKey::Composite(order_col_values.clone())),
         };
+        Position::RdbSnapshot {
+            db_type: db_type.to_string(),
+            schema: self.schema.clone(),
+            tb: self.tb.clone(),
+            order_key,
+        }
+    }
+
+    pub fn build_position_for_partition(
+        &self,
+        db_type: &DbType,
+        partition_col: &String,
+        partition_col_value: &ColValue,
+    ) -> Position {
+        // partion_col can be defined by user, not necessary in order_cols
+        if !self.has_col(partition_col) {
+            return Position::None;
+        }
+        let order_key = Some(OrderKey::Single((
+            partition_col.to_string(),
+            partition_col_value.to_option_string(),
+        )));
         Position::RdbSnapshot {
             db_type: db_type.to_string(),
             schema: self.schema.clone(),
