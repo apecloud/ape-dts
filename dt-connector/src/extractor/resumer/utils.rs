@@ -9,7 +9,10 @@ use sqlx::{
 use crate::extractor::resumer::{
     ResumerDbPool, ResumerType, DEFAULT_POSITION_KEY, DEFAULT_RESUMER_SCHEMA, DEFAULT_RESUMER_TABLE,
 };
-use dt_common::{config::config_enums::DbType, meta::position::Position};
+use dt_common::{
+    config::{config_enums::DbType, connection_auth_config::ConnectionAuthConfig},
+    meta::position::Position,
+};
 
 pub struct ResumerUtil {}
 
@@ -36,12 +39,16 @@ impl ResumerUtil {
 
     pub async fn create_pool(
         url: &str,
+        connection_auth: &ConnectionAuthConfig,
         db_type: &DbType,
         max_connections: u32,
     ) -> anyhow::Result<ResumerDbPool> {
+        let final_url = ConnectionAuthConfig::merge_url_with_auth(url, connection_auth)
+            .context("failed to merge URL with connection auth")?;
+
         match db_type {
             DbType::Mysql => {
-                let conn_options = MySqlConnectOptions::from_str(url)
+                let conn_options = MySqlConnectOptions::from_str(&final_url)
                     .context("failed to parse MySQL connection URL")?;
 
                 let pool = MySqlPoolOptions::new()
@@ -53,7 +60,7 @@ impl ResumerUtil {
                 Ok(ResumerDbPool::MySql(pool))
             }
             DbType::Pg => {
-                let conn_options = PgConnectOptions::from_str(url)
+                let conn_options = PgConnectOptions::from_str(&final_url)
                     .context("failed to parse PostgreSQL connection URL")?;
 
                 let pool = PgPoolOptions::new()

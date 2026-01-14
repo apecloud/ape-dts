@@ -63,13 +63,14 @@ impl BatchCheckExtractor for PgCheckExtractor {
 
         let ignore_cols = self.filter.get_ignore_cols(schema, tb);
         let query_builder = RdbQueryBuilder::new_for_pg(&tb_meta, ignore_cols);
+        let check_row_data_refs: Vec<&RowData> = check_row_data_items.iter().collect();
         let query_info = if check_logs.len() == 1 {
             query_builder.get_select_query(&check_row_data_items[0])?
         } else {
             query_builder.get_batch_select_query(
-                &check_row_data_items,
+                &check_row_data_refs,
                 0,
-                check_row_data_items.len(),
+                check_row_data_refs.len(),
             )?
         };
         let query = query_builder.create_pg_query(&query_info)?;
@@ -103,11 +104,9 @@ impl PgCheckExtractor {
             let mut after = HashMap::new();
             for (col, value) in check_log.id_col_values.iter() {
                 let col_type = tb_meta.get_col_type(col)?;
-                let col_value = if let Some(str) = value {
-                    PgColValueConvertor::from_str(col_type, str, &mut self.meta_manager)?
-                } else {
-                    ColValue::None
-                };
+                let col_value = value.as_deref().map_or(Ok(ColValue::None), |v| {
+                    PgColValueConvertor::from_str(col_type, v, &mut self.meta_manager)
+                })?;
                 after.insert(col.to_string(), col_value);
             }
             let check_row_data = RowData::build_insert_row_data(after, &tb_meta.basic);

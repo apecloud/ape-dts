@@ -65,6 +65,8 @@ impl RdbTestRunner {
         let dst_db_type = &config.sinker_basic.db_type;
         let src_url = &config.extractor_basic.url;
         let dst_url = &config.sinker_basic.url;
+        let src_connection_auth = &config.extractor_basic.connection_auth;
+        let dst_connection_auth = &config.sinker_basic.connection_auth;
 
         let mysql_conn_settings = Some(vec!["SET FOREIGN_KEY_CHECKS=0"]);
 
@@ -73,7 +75,8 @@ impl RdbTestRunner {
                 src_conn_pool_mysql = Some(
                     TaskUtil::create_mysql_conn_pool(
                         src_url,
-                        1,
+                        src_connection_auth,
+                        5,
                         false,
                         mysql_conn_settings.clone(),
                     )
@@ -81,8 +84,10 @@ impl RdbTestRunner {
                 );
             }
             DbType::Pg => {
-                src_conn_pool_pg =
-                    Some(TaskUtil::create_pg_conn_pool(src_url, 1, false, true).await?);
+                src_conn_pool_pg = Some(
+                    TaskUtil::create_pg_conn_pool(src_url, src_connection_auth, 5, false, true)
+                        .await?,
+                );
             }
             _ => {}
         }
@@ -97,7 +102,8 @@ impl RdbTestRunner {
                     dst_conn_pool_mysql = Some(
                         TaskUtil::create_mysql_conn_pool(
                             dst_url,
-                            1,
+                            dst_connection_auth,
+                            5,
                             false,
                             mysql_conn_settings.clone(),
                         )
@@ -105,8 +111,10 @@ impl RdbTestRunner {
                     );
                 }
                 DbType::Pg => {
-                    dst_conn_pool_pg =
-                        Some(TaskUtil::create_pg_conn_pool(dst_url, 1, false, true).await?);
+                    dst_conn_pool_pg = Some(
+                        TaskUtil::create_pg_conn_pool(dst_url, dst_connection_auth, 5, false, true)
+                            .await?,
+                    );
                 }
                 _ => {}
             }
@@ -116,10 +124,20 @@ impl RdbTestRunner {
         let router = RdbRouter::from_config(&config.router, dst_db_type).unwrap();
         let filter = RdbFilter::from_config(&config.filter, dst_db_type).unwrap();
         let meta_center_pool_mysql = match &config.meta_center {
-            Some(MetaCenterConfig::MySqlDbEngine { url, .. }) => Some(
-                TaskUtil::create_mysql_conn_pool(url, 1, false, mysql_conn_settings.clone())
-                    .await
-                    .unwrap(),
+            Some(MetaCenterConfig::MySqlDbEngine {
+                url,
+                connection_auth,
+                ..
+            }) => Some(
+                TaskUtil::create_mysql_conn_pool(
+                    url,
+                    connection_auth,
+                    1,
+                    false,
+                    mysql_conn_settings.clone(),
+                )
+                .await
+                .unwrap(),
             ),
             _ => None,
         };

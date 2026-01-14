@@ -406,7 +406,7 @@ impl RedisPsyncExtractor {
             return Ok(());
         }
 
-        let mut conn = RedisClient::new(&self.conn.url).await?;
+        let mut conn = RedisClient::new(&self.conn.url, &self.conn.connection_auth).await?;
         let heartbeat_interval_secs = self.heartbeat_interval_secs;
         let key = key.to_string();
 

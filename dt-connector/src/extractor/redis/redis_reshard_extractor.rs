@@ -1,23 +1,24 @@
-use std::{cmp, collections::HashMap};
-
 use async_trait::async_trait;
+use redis::{Connection, ConnectionLike};
+use std::{cmp, collections::HashMap};
+use url::Url;
+
+use crate::{extractor::base_extractor::BaseExtractor, Extractor};
 use dt_common::{
+    config::connection_auth_config::ConnectionAuthConfig,
     log_debug, log_info,
     meta::redis::{
         cluster_node::ClusterNode, command::cmd_encoder::CmdEncoder, redis_object::RedisCmd,
     },
     utils::redis_util::RedisUtil,
 };
-use redis::{Connection, ConnectionLike};
-use url::Url;
-
-use crate::{extractor::base_extractor::BaseExtractor, Extractor};
 
 const SLOTS_COUNT: usize = 16384;
 
 pub struct RedisReshardExtractor {
     pub base_extractor: BaseExtractor,
     pub url: String,
+    pub connection_auth: ConnectionAuthConfig,
 }
 
 #[async_trait]
@@ -31,7 +32,7 @@ impl Extractor for RedisReshardExtractor {
 
 impl RedisReshardExtractor {
     pub async fn reshard(&self) -> anyhow::Result<()> {
-        let mut conn = RedisUtil::create_redis_conn(&self.url).await?;
+        let mut conn = RedisUtil::create_redis_conn(&self.url, &self.connection_auth).await?;
         let nodes = RedisUtil::get_cluster_master_nodes(&mut conn)?;
         let slot_address_map = RedisUtil::get_slot_address_map(&nodes);
         let avg_slot_count = SLOTS_COUNT / nodes.len();
@@ -200,6 +201,6 @@ impl RedisReshardExtractor {
         let username = url_info.username();
         let password = url_info.password().unwrap_or("").to_string();
         let url = format!("redis://{}:{}@{}", username, password, node.address);
-        RedisUtil::create_redis_conn(&url).await
+        RedisUtil::create_redis_conn(&url, &self.connection_auth).await
     }
 }

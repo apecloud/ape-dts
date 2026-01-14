@@ -1,22 +1,29 @@
-use crate::error::Error;
-use crate::log_info;
-use crate::meta::redis::cluster_node::ClusterNode;
-use crate::meta::redis::command::cmd_encoder::CmdEncoder;
-use crate::meta::redis::command::key_parser::KeyParser;
-use crate::meta::redis::redis_object::RedisCmd;
+use regex::Regex;
+use std::{collections::HashMap, str::FromStr};
+
 use anyhow::{bail, Context};
 use redis::{Connection, ConnectionLike, Value};
-use regex::Regex;
-use std::collections::HashMap;
-use std::str::FromStr;
+
+use crate::config::connection_auth_config::ConnectionAuthConfig;
+use crate::error::Error;
+use crate::log_info;
+use crate::meta::redis::{
+    cluster_node::ClusterNode,
+    command::{cmd_encoder::CmdEncoder, key_parser::KeyParser},
+    redis_object::RedisCmd,
+};
 
 pub struct RedisUtil {}
 
 const SLOTS_COUNT: usize = 16384;
 
 impl RedisUtil {
-    pub async fn create_redis_conn(url: &str) -> anyhow::Result<redis::Connection> {
-        let conn = redis::Client::open(url)
+    pub async fn create_redis_conn(
+        url: &str,
+        connection_auth: &ConnectionAuthConfig,
+    ) -> anyhow::Result<redis::Connection> {
+        let final_url = ConnectionAuthConfig::merge_url_with_auth(url, connection_auth)?;
+        let conn = redis::Client::open(final_url)
             .with_context(|| format!("invalid redis url: [{}]", url))?
             .get_connection()
             .with_context(|| format!("can not connect redis: [{}]", url))?;

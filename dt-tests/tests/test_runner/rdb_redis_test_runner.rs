@@ -30,10 +30,23 @@ impl RdbRedisTestRunner {
         let config = TaskConfig::new(&base.task_config_file).unwrap();
 
         let mysql_conn_pool = Some(
-            TaskUtil::create_mysql_conn_pool(&config.extractor_basic.url, 1, false, None).await?,
+            TaskUtil::create_mysql_conn_pool(
+                &config.extractor_basic.url,
+                &config.extractor_basic.connection_auth,
+                1,
+                false,
+                None,
+            )
+            .await?,
         );
         let redis_conn = match config.sinker {
-            SinkerConfig::Redis { url, .. } => RedisUtil::create_redis_conn(&url).await.unwrap(),
+            SinkerConfig::Redis {
+                url,
+                connection_auth,
+                ..
+            } => RedisUtil::create_redis_conn(&url, &connection_auth)
+                .await
+                .unwrap(),
             _ => {
                 bail! {Error::ConfigError("unsupported sinker config".into())};
             }

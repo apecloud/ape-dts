@@ -1,0 +1,1 @@
+{"diff_col_values":{"name":{"src":"Bob","dst":"Eve"}},"id_col_values":{"_id":"{\"Int32\":2}"},"schema":"sample_db","tb":"sample_tb"}

@@ -1,20 +1,20 @@
-use anyhow::bail;
-use async_std::io::BufReader;
-use async_std::net::TcpStream;
-use async_std::prelude::*;
-use async_trait::async_trait;
 use futures::executor::block_on;
 use url::Url;
 
-use super::redis_resp_reader::RedisRespReader;
-use super::redis_resp_types::Value;
-use super::StreamReader;
-use dt_common::error::Error;
-use dt_common::meta::redis::command::cmd_encoder::CmdEncoder;
-use dt_common::meta::redis::redis_object::RedisCmd;
+use anyhow::bail;
+use async_std::{io::BufReader, net::TcpStream, prelude::*};
+use async_trait::async_trait;
+
+use super::{redis_resp_reader::RedisRespReader, redis_resp_types::Value, StreamReader};
+use dt_common::{
+    config::connection_auth_config::ConnectionAuthConfig,
+    error::Error,
+    meta::redis::{command::cmd_encoder::CmdEncoder, redis_object::RedisCmd},
+};
 
 pub struct RedisClient {
     pub url: String,
+    pub connection_auth: ConnectionAuthConfig,
     stream: BufReader<TcpStream>,
 }
 
@@ -26,16 +26,29 @@ impl StreamReader for RedisClient {
 }
 
 impl RedisClient {
-    pub async fn new(url: &str) -> anyhow::Result<Self> {
+    pub async fn new(url: &str, connection_auth: &ConnectionAuthConfig) -> anyhow::Result<Self> {
         let url_info = Url::parse(url)?;
         let host = url_info.host_str().unwrap();
         let port = url_info.port().unwrap();
-        let username = url_info.username();
-        let password = url_info.password();
+        let username = if let ConnectionAuthConfig::Basic { username, .. } = connection_auth {
+            username
+        } else {
+            url_info.username()
+        };
+        let password = if let ConnectionAuthConfig::Basic {
+            password: Some(password),
+            ..
+        } = connection_auth
+        {
+            Some(password.as_str())
+        } else {
+            url_info.password()
+        };
 
         let stream = TcpStream::connect(format!("{}:{}", host, port)).await?;
         let mut me = Self {
             url: url.into(),
+            connection_auth: connection_auth.clone(),
             stream: BufReader::new(stream),
         };
 

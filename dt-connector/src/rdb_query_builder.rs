@@ -383,7 +383,7 @@ impl RdbQueryBuilder<'_> {
 
     pub fn get_batch_select_query<'a>(
         &self,
-        data: &'a [RowData],
+        data: &[&'a RowData],
         start_index: usize,
         batch_size: usize,
     ) -> anyhow::Result<RdbQueryInfo<'a>> {
@@ -400,7 +400,7 @@ impl RdbQueryBuilder<'_> {
             Vec::with_capacity(batch_size.saturating_mul(self.rdb_tb_meta.id_cols.len()));
         let mut binds =
             Vec::with_capacity(batch_size.saturating_mul(self.rdb_tb_meta.id_cols.len()));
-        for row_data in data.iter().skip(start_index).take(batch_size) {
+        for &row_data in data.iter().skip(start_index).take(batch_size) {
             let after = row_data.require_after()?;
             for col in self.rdb_tb_meta.id_cols.iter() {
                 cols.push(col.clone());

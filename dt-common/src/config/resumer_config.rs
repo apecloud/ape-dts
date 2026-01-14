@@ -1,4 +1,4 @@
-use crate::config::config_enums::DbType;
+use crate::config::{config_enums::DbType, connection_auth_config::ConnectionAuthConfig};
 
 #[derive(Clone, Debug)]
 pub enum ResumerConfig {
@@ -12,6 +12,7 @@ pub enum ResumerConfig {
     },
     FromDB {
         url: String,
+        connection_auth: ConnectionAuthConfig,
         db_type: DbType,
         // such as public.ape_task_position or database1.table1
         table_full_name: String,

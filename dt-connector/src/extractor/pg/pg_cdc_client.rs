@@ -1,14 +1,18 @@
-use anyhow::{bail, Ok};
-use dt_common::error::Error;
-use dt_common::{log_info, log_warn};
-use postgres_types::PgLsn;
-use tokio_postgres::NoTls;
-use tokio_postgres::SimpleQueryMessage::Row;
-use tokio_postgres::{replication::LogicalReplicationStream, Client};
 use url::Url;
+
+use anyhow::{bail, Ok};
+use postgres_types::PgLsn;
+use tokio_postgres::{
+    replication::LogicalReplicationStream, Client, NoTls, SimpleQueryMessage::Row,
+};
+
+use dt_common::{
+    config::connection_auth_config::ConnectionAuthConfig, error::Error, log_info, log_warn,
+};
 
 pub struct PgCdcClient {
     pub url: String,
+    pub connection_auth: ConnectionAuthConfig,
     pub slot_name: String,
     pub pub_name: String,
     pub start_lsn: String,
@@ -21,8 +25,20 @@ impl PgCdcClient {
         let host = url_info.host_str().unwrap().to_string();
         let port = format!("{}", url_info.port().unwrap());
         let dbname = url_info.path().trim_start_matches('/');
-        let username = url_info.username().to_string();
-        let password = url_info.password().unwrap().to_string();
+        let username = if let ConnectionAuthConfig::Basic { username, .. } = &self.connection_auth {
+            username
+        } else {
+            url_info.username()
+        };
+        let password = if let ConnectionAuthConfig::Basic {
+            password: Some(password),
+            ..
+        } = &self.connection_auth
+        {
+            password
+        } else {
+            url_info.password().unwrap_or_default()
+        };
         let conn_info = format!(
             "host={} port={} dbname={} user={} password={} replication=database",
             host, port, dbname, username, password

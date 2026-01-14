@@ -2,7 +2,9 @@ use std::collections::HashMap;
 
 use anyhow::bail;
 use async_trait::async_trait;
-use dt_common::{error::Error, rdb_filter::RdbFilter};
+use dt_common::{
+    config::connection_auth_config::ConnectionAuthConfig, error::Error, rdb_filter::RdbFilter,
+};
 use dt_task::task_util::TaskUtil;
 use futures::{Stream, TryStreamExt};
 use sqlx::{mysql::MySqlRow, query, MySql, Pool, Row};
@@ -15,6 +17,7 @@ use crate::{
 pub struct MysqlFetcher {
     pub pool: Option<Pool<MySql>>,
     pub url: String,
+    pub connection_auth: ConnectionAuthConfig,
     pub is_source: bool,
     pub filter: RdbFilter,
 }
@@ -22,7 +25,10 @@ pub struct MysqlFetcher {
 #[async_trait]
 impl Fetcher for MysqlFetcher {
     async fn build_connection(&mut self) -> anyhow::Result<()> {
-        self.pool = Some(TaskUtil::create_mysql_conn_pool(&self.url, 1, true, None).await?);
+        self.pool = Some(
+            TaskUtil::create_mysql_conn_pool(&self.url, &self.connection_auth, 1, true, None)
+                .await?,
+        );
         Ok(())
     }
 

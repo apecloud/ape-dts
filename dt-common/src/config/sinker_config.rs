@@ -2,7 +2,10 @@ use super::{
     config_enums::{ConflictPolicyEnum, DbType},
     s3_config::S3Config,
 };
-use crate::config::config_enums::{RdbTransactionIsolation, SinkType};
+use crate::config::{
+    config_enums::{RdbTransactionIsolation, SinkType},
+    connection_auth_config::ConnectionAuthConfig,
+};
 
 #[derive(Clone, Debug)]
 pub enum SinkerConfig {
@@ -10,6 +13,7 @@ pub enum SinkerConfig {
 
     Mysql {
         url: String,
+        connection_auth: ConnectionAuthConfig,
         batch_size: usize,
         replace: bool,
         disable_foreign_key_checks: bool,
@@ -20,6 +24,7 @@ pub enum SinkerConfig {
 
     Pg {
         url: String,
+        connection_auth: ConnectionAuthConfig,
         batch_size: usize,
         replace: bool,
         disable_foreign_key_checks: bool,
@@ -27,47 +32,59 @@ pub enum SinkerConfig {
 
     Mongo {
         url: String,
+        connection_auth: ConnectionAuthConfig,
         app_name: String,
         batch_size: usize,
     },
 
     MysqlCheck {
         url: String,
+        connection_auth: ConnectionAuthConfig,
         batch_size: usize,
         check_log_dir: String,
         check_log_file_size: String,
         output_full_row: bool,
         output_revise_sql: bool,
         revise_match_full_row: bool,
+        retry_interval_secs: u64,
+        max_retries: u32,
     },
 
     PgCheck {
         url: String,
+        connection_auth: ConnectionAuthConfig,
         batch_size: usize,
         check_log_dir: String,
         check_log_file_size: String,
         output_full_row: bool,
         output_revise_sql: bool,
         revise_match_full_row: bool,
+        retry_interval_secs: u64,
+        max_retries: u32,
     },
 
     MongoCheck {
         url: String,
+        connection_auth: ConnectionAuthConfig,
         app_name: String,
         batch_size: usize,
         check_log_dir: String,
         check_log_file_size: String,
         output_full_row: bool,
         output_revise_sql: bool,
+        retry_interval_secs: u64,
+        max_retries: u32,
     },
 
     MysqlStruct {
         url: String,
+        connection_auth: ConnectionAuthConfig,
         conflict_policy: ConflictPolicyEnum,
     },
 
     PgStruct {
         url: String,
+        connection_auth: ConnectionAuthConfig,
         conflict_policy: ConflictPolicyEnum,
     },
 
@@ -81,6 +98,7 @@ pub enum SinkerConfig {
 
     Redis {
         url: String,
+        connection_auth: ConnectionAuthConfig,
         batch_size: usize,
         method: String,
         is_cluster: bool,
@@ -95,6 +113,7 @@ pub enum SinkerConfig {
 
     StarRocks {
         url: String,
+        connection_auth: ConnectionAuthConfig,
         batch_size: usize,
         stream_load_url: String,
         hard_delete: bool,
@@ -102,17 +121,20 @@ pub enum SinkerConfig {
 
     DorisStruct {
         url: String,
+        connection_auth: ConnectionAuthConfig,
         conflict_policy: ConflictPolicyEnum,
     },
 
     Doris {
         url: String,
+        connection_auth: ConnectionAuthConfig,
         batch_size: usize,
         stream_load_url: String,
     },
 
     StarRocksStruct {
         url: String,
+        connection_auth: ConnectionAuthConfig,
         conflict_policy: ConflictPolicyEnum,
     },
 
@@ -159,11 +181,32 @@ pub enum SinkerConfig {
     },
 }
 
+impl SinkerConfig {
+    pub fn get_retry_interval_secs(&self) -> u64 {
+        match self {
+            SinkerConfig::MysqlCheck {
+                retry_interval_secs,
+                ..
+            } => *retry_interval_secs,
+            SinkerConfig::PgCheck {
+                retry_interval_secs,
+                ..
+            } => *retry_interval_secs,
+            SinkerConfig::MongoCheck {
+                retry_interval_secs,
+                ..
+            } => *retry_interval_secs,
+            _ => 0,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default, Hash)]
 pub struct BasicSinkerConfig {
     pub sink_type: SinkType,
     pub db_type: DbType,
     pub url: String,
+    pub connection_auth: ConnectionAuthConfig,
     pub batch_size: usize,
     pub max_connections: u32,
 }

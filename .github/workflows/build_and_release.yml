@@ -10,7 +10,7 @@ on:
       targets:
         description: 'JSON array of target platforms to build [{"os": "ubuntu-latest", "target": "x86_64-unknown-linux-gnu"}, ...]'
         required: true
-        default: '[{"os": "ubuntu-latest", "target": "x86_64-unknown-linux-gnu"}, {"os": "ubuntu-latest", "target": "aarch64-unknown-linux-gnu"}, {"os": "macos-latest", "target": "x86_64-apple-darwin"}]'
+        default: '[{"os": "ubuntu-latest", "target": "x86_64-unknown-linux-gnu"}, {"os": "ubuntu-latest", "target": "aarch64-unknown-linux-gnu"}, {"os": "macos-latest", "target": "x86_64-apple-darwin"}, {"os": "macos-latest", "target": "aarch64-apple-darwin"}]'
 env:
   GITHUB_TOKEN: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
 jobs:
@@ -59,7 +59,7 @@ jobs:
           cross build --release --target=${{ matrix.target }} --features metrics
 
       - name: Local build
-        if: matrix.target == 'x86_64-apple-darwin'
+        if: matrix.target == 'x86_64-apple-darwin' || matrix.target == 'aarch64-apple-darwin'
         run: |
           rustup target add ${{ matrix.target }}
           cargo build --release --target=${{ matrix.target }} --features metrics
