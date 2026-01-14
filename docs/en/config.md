@@ -15,6 +15,8 @@ Different tasks may require extra configs, refer to [task templates](/docs/templ
 | password        | database connection password                                                 | password                                                       | -                                                       |
 | max_connections | max connections for source database                                          | 10                                                             | currently 10, may be dynamically adjusted in the future |
 | batch_size      | number of extracted records in a batch                                       | 10000                                                          | same as [pipeline] buffer_size                          |
+| parallel_size   | number of workers for extracting a table                                     | 4                                                              | 1                         |
+| partition_cols  | partition column for data splitting during snapshot migration, only single column supported          | json:[{"db":"db_1","tb":"tb_1","partition_col":"id"},{"db":"db_2","tb":"tb_2","partition_col":"id"}]                                 | -       |
 
 ## URL escaping
 
@@ -53,14 +55,13 @@ url=mysql://user1:abc%25%24%23%3F%40@127.0.0.1:3307?ssl-mode=disabled
 | do_structures    | structures to be migrated, for mysql/pg structure migration tasks    | database,table,constraint,sequence,comment,index                                                                                     | \*      |
 | ignore_cmds      | commands to be filtered, for redis cdc tasks                         | flushall,flushdb                                                                                                                     | -       |
 | where_conditions | where conditions for the source SELECT SQL during snapshot migration | json:[{"db":"db_1","tb":"tb_1","condition":"f_0 > 1"},{"db":"db_2","tb":"tb_2","condition":"f_0 > 1 AND f_1 < 9"}]                   | -       |
-| partition_cols  | partition column for data splitting during snapshot migration, only single column supported          | json:[{"db":"db_1","tb":"tb_1","partition_col":"id"},{"db":"db_2","tb":"tb_2","partition_col":"id"}]                                 | -       |
 
 ## Values
 
 - All configurations support multiple items, which are separated by ",". Example: do_dbs=db_1,db_2.
 - Set to \* to match all. Example: do_dbs=\*.
 - Keep empty to match nothing. Example: ignore_dbs=.
-- `ignore_cols`, `where_conditions` and `partition_cols` are in JSON format, it should starts with "json:".
+- `ignore_cols` and `where_conditions` are in JSON format, it should starts with "json:".
 - do_events takes one or more values from **insert**, **update**, and **delete**.
 
 ## Priority
