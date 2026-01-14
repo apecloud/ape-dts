@@ -51,6 +51,7 @@ pub struct PgSnapshotExtractor {
     pub sample_interval: u64,
     pub schema: String,
     pub tb: String,
+    pub user_defined_partition_col: String,
     pub recovery: Option<Arc<dyn Recovery + Send + Sync>>,
 }
 
@@ -93,11 +94,7 @@ impl PgSnapshotExtractor {
             .get_tb_meta(&self.schema, &self.tb)
             .await?
             .to_owned();
-        let user_defined_partition_col = self
-            .filter
-            .get_partition_col(&self.schema, &self.tb)
-            .cloned()
-            .unwrap_or_default();
+        let user_defined_partition_col = &self.user_defined_partition_col;
         self.validate_user_defined(&mut tb_meta, &user_defined_partition_col)?;
         let mut splitter = PgSnapshotSplitter::new(
             &tb_meta,
@@ -158,7 +155,7 @@ impl PgSnapshotExtractor {
             .build()?;
 
         let mut rows = sqlx::query(&sql).fetch(&self.conn_pool);
-        while let Some(row) = rows.try_next().await.unwrap() {
+        while let Some(row) = rows.try_next().await? {
             let row_data = RowData::from_pg_row(&row, tb_meta, &ignore_cols);
             self.base_extractor
                 .push_row(row_data, Position::None)
@@ -216,7 +213,7 @@ impl PgSnapshotExtractor {
             let mut rows = query.fetch(&self.conn_pool);
             let mut slice_count = 0usize;
 
-            while let Some(row) = rows.try_next().await.unwrap() {
+            while let Some(row) = rows.try_next().await? {
                 for order_col in tb_meta.basic.order_cols.iter() {
                     let order_col_type = tb_meta.get_col_type(order_col)?;
                     if let Some(value) = start_values.get_mut(order_col) {
@@ -454,7 +451,7 @@ impl PgSnapshotExtractor {
             let mut extracted_cnt = 0u64;
             let mut partition_col_value = ColValue::None;
             let mut rows = query.fetch(&conn_pool);
-            while let Some(row) = rows.try_next().await.unwrap() {
+            while let Some(row) = rows.try_next().await? {
                 partition_col_value =
                     PgColValueConvertor::from_query(&row, &partition_col, &partition_col_type)?;
                 let row_data = RowData::from_pg_row(&row, &tb_meta, &ignore_cols.as_ref());

@@ -133,7 +133,6 @@ mod tests {
             do_ddls: HashSet::new(),
             ignore_cmds: HashSet::new(),
             where_conditions: HashMap::new(),
-            partition_cols: HashMap::new(),
         };
         filter.do_structures.insert(StructureType::Rbac.to_string());
         filter

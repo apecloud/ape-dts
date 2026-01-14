@@ -32,6 +32,7 @@ pub enum ExtractorConfig {
         sample_interval: usize,
         parallel_size: usize,
         batch_size: usize,
+        partition_cols: String,
     },
 
     MysqlCdc {
@@ -67,6 +68,7 @@ pub enum ExtractorConfig {
         sample_interval: usize,
         parallel_size: usize,
         batch_size: usize,
+        partition_cols: String,
     },
 
     PgCdc {

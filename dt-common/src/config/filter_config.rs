@@ -11,5 +11,4 @@ pub struct FilterConfig {
     pub do_dcls: String,
     pub ignore_cmds: String,
     pub where_conditions: String,
-    pub partition_cols: String,
 }

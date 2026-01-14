@@ -88,6 +88,7 @@ const URL: &str = "url";
 const BATCH_SIZE: &str = "batch_size";
 const MAX_CONNECTIONS: &str = "max_connections";
 const SAMPLE_INTERVAL: &str = "sample_interval";
+const PARTITION_COLS: &str = "partition_cols";
 const HEARTBEAT_INTERVAL_SECS: &str = "heartbeat_interval_secs";
 const KEEPALIVE_INTERVAL_SECS: &str = "keepalive_interval_secs";
 const HEARTBEAT_TB: &str = "heartbeat_tb";
@@ -200,6 +201,7 @@ impl TaskConfig {
                     sample_interval: loader.get_with_default(EXTRACTOR, SAMPLE_INTERVAL, 1),
                     parallel_size: loader.get_with_default(EXTRACTOR, PARALLEL_SIZE, 1),
                     batch_size,
+                    partition_cols: loader.get_optional(EXTRACTOR, PARTITION_COLS),
                 },
 
                 ExtractType::Cdc => ExtractorConfig::MysqlCdc {
@@ -286,6 +288,7 @@ impl TaskConfig {
                     sample_interval: loader.get_with_default(EXTRACTOR, SAMPLE_INTERVAL, 1),
                     parallel_size: loader.get_with_default(EXTRACTOR, PARALLEL_SIZE, 1),
                     batch_size,
+                    partition_cols: loader.get_optional(EXTRACTOR, PARTITION_COLS),
                 },
 
                 ExtractType::Cdc => ExtractorConfig::PgCdc {
@@ -789,7 +792,6 @@ impl TaskConfig {
             do_structures: loader.get_with_default(FILTER, "do_structures", ASTRISK.to_string()),
             ignore_cmds: loader.get_optional(FILTER, "ignore_cmds"),
             where_conditions: loader.get_optional(FILTER, "where_conditions"),
-            partition_cols: loader.get_optional(FILTER, "partition_cols"),
         })
     }
 

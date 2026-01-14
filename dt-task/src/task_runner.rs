@@ -1,5 +1,5 @@
 use std::{
-    collections::VecDeque,
+    collections::{HashMap, VecDeque},
     panic,
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -22,7 +22,9 @@ use tokio::{
 };
 
 use super::{
-    extractor_util::ExtractorUtil, parallelizer_util::ParallelizerUtil, sinker_util::SinkerUtil,
+    extractor_util::{ExtractorUtil, PartitionCols},
+    parallelizer_util::ParallelizerUtil,
+    sinker_util::SinkerUtil,
 };
 use crate::task_util::{ConnClient, TaskUtil};
 use async_mutex::Mutex as AsyncMutex;
@@ -74,6 +76,7 @@ pub struct TaskContext {
     pub id: String,
     pub extractor_config: ExtractorConfig,
     pub extractor_client: ConnClient,
+    pub partition_cols: Option<Arc<PartitionCols>>,
     pub sinker_client: ConnClient,
     pub router: Arc<RdbRouter>,
     pub recorder: Option<Arc<dyn Recorder + Send + Sync>>,
@@ -175,10 +178,19 @@ impl TaskRunner {
             _ => None,
         };
 
+        let partition_cols = match &self.config.extractor {
+            ExtractorConfig::MysqlSnapshot { partition_cols, .. }
+            | ExtractorConfig::PgSnapshot { partition_cols, .. } => {
+                Some(Arc::new(ExtractorUtil::parse_partition_cols(partition_cols)?))
+            }
+            _ => None,
+        };
+
         let task_context = TaskContext {
             id: String::new(),
             extractor_config: self.config.extractor.clone(),
             extractor_client: extractor_client.clone(),
+            partition_cols,
             sinker_client: sinker_client.clone(),
             router,
             recorder,
@@ -298,6 +310,7 @@ impl TaskRunner {
             recorder: task_context.recorder,
             recovery: task_context.recovery,
             check_summary: task_context.check_summary,
+            partition_cols: task_context.partition_cols,
         };
         let me = self.clone();
         join_set.spawn(async move {
@@ -369,6 +382,7 @@ impl TaskRunner {
             &self.config,
             &extractor_config,
             extractor_client.clone(),
+            task_context.partition_cols,
             buffer.clone(),
             shut_down.clone(),
             syncer.clone(),
@@ -986,6 +1000,7 @@ impl TaskRunner {
                 recorder: original_task_context.recorder.clone(),
                 recovery: original_task_context.recovery.clone(),
                 check_summary: original_task_context.check_summary.clone(),
+                partition_cols: original_task_context.partition_cols.clone(),
             });
         } else {
             for schema in schemas.iter() {
@@ -1030,6 +1045,7 @@ impl TaskRunner {
                             sample_interval: *sample_interval,
                             parallel_size: *parallel_size,
                             batch_size: *batch_size,
+                            partition_cols: String::new(),
                         },
 
                         ExtractorConfig::PgSnapshot {
@@ -1047,6 +1063,7 @@ impl TaskRunner {
                             sample_interval: *sample_interval,
                             parallel_size: *parallel_size,
                             batch_size: *batch_size,
+                            partition_cols: String::new(),
                         },
 
                         ExtractorConfig::MongoSnapshot {
@@ -1088,6 +1105,7 @@ impl TaskRunner {
                         recorder: original_task_context.recorder.clone(),
                         recovery: original_task_context.recovery.clone(),
                         check_summary: original_task_context.check_summary.clone(),
+                        partition_cols: original_task_context.partition_cols.clone(),
                     });
                 }
 
