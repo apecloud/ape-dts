@@ -180,9 +180,9 @@ impl TaskRunner {
 
         let partition_cols = match &self.config.extractor {
             ExtractorConfig::MysqlSnapshot { partition_cols, .. }
-            | ExtractorConfig::PgSnapshot { partition_cols, .. } => {
-                Some(Arc::new(ExtractorUtil::parse_partition_cols(partition_cols)?))
-            }
+            | ExtractorConfig::PgSnapshot { partition_cols, .. } => Some(Arc::new(
+                ExtractorUtil::parse_partition_cols(partition_cols)?,
+            )),
             _ => None,
         };
 
