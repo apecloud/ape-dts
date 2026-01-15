@@ -3,21 +3,29 @@ name: Build and push images
 on:
   workflow_dispatch:
     inputs:
-      docker_repository:
-        description: "Docker registry repository"
+      image_name:
+        description: "Docker image name"
         required: true
         type: string
-        default: apecloud-registry.cn-zhangjiakou.cr.aliyuncs.com
+        default: apecloud/ape-dts
       image_tag:
         description: "Docker image tag"
         required: true
         type: string
-        default: apecloud/ape-dts:latest
+        default: latest
       platforms:
         description: "Target platforms for multi-arch build"
         required: true
         type: string
         default: linux/arm64,linux/amd64
+
+env:
+  DOCKER_REGISTRY_URL: docker.io
+  DOCKER_USER: ${{ secrets.DOCKER_REGISTRY_USER }}
+  DOCKER_PASSWORD: ${{ secrets.DOCKER_REGISTRY_PASSWORD }}
+  ALIYUN_REGISTRY_URL: apecloud-registry.cn-zhangjiakou.cr.aliyuncs.com
+  ALIYUN_USER: ${{ secrets.ALIYUN_REGISTRY_USER }}
+  ALIYUN_PASSWORD: ${{ secrets.ALIYUN_REGISTRY_PASSWORD }}
 
 jobs:
   build:
@@ -50,7 +58,24 @@ jobs:
       - name: Set up docker buildx
         uses: docker/setup-buildx-action@v2
 
+      - name: Login to Docker Hub
+        uses: docker/login-action@v2
+        with:
+          registry: ${{ env.DOCKER_REGISTRY_URL }}
+          username: ${{ env.DOCKER_USER }}
+          password: ${{ env.DOCKER_PASSWORD }}
+
+      - name: Login to Aliyun Hub
+        uses: docker/login-action@v2
+        with:
+          registry: ${{ env.ALIYUN_REGISTRY_URL }}
+          username: ${{ env.ALIYUN_USER }}
+          password: ${{ env.ALIYUN_PASSWORD }}
+
       - name: Build and push docker image
         run: |
-          docker login --username ${{ secrets.DOCKER_USER }} --password ${{ secrets.DOCKER_PASSWORD }} ${{ inputs.docker_repository }}
-          docker buildx build -f Dockerfile.github.workflow --platform ${{ inputs.platforms }} --tag ${{ inputs.docker_repository }}/${{ inputs.image_tag }} --push .
+          docker buildx build -f Dockerfile.github.workflow \
+            --platform ${{ inputs.platforms }} \
+            --tag ${{ env.DOCKER_REGISTRY_URL }}/${{ inputs.image_name }}:${{ inputs.image_tag }} \
+            --tag ${{ env.ALIYUN_REGISTRY_URL }}/${{ inputs.image_name }}:${{ inputs.image_tag }} \
+            --push .
