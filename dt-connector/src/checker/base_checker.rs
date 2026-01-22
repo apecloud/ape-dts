@@ -18,7 +18,7 @@ use crate::{
 use dt_common::meta::{
     col_value::ColValue, mongo::mongo_constant::MongoConstants, mysql::mysql_tb_meta::MysqlTbMeta,
     pg::pg_tb_meta::PgTbMeta, rdb_meta_manager::RdbMetaManager, rdb_tb_meta::RdbTbMeta,
-    row_data::RowData, row_type::RowType,
+    row_data::RowData, row_type::RowType, struct_meta::struct_data::StructData,
 };
 use dt_common::{
     log_diff, log_miss, log_sql, log_summary, monitor::monitor::Monitor,
@@ -208,6 +208,9 @@ pub struct CheckerCommon {
 #[async_trait]
 pub trait CheckerHandle: Send + Sync + 'static {
     async fn check(&self, data: Vec<Arc<RowData>>) -> anyhow::Result<()>;
+    async fn check_struct(&self, _data: Vec<StructData>) -> anyhow::Result<()> {
+        Ok(())
+    }
     async fn close(&mut self) -> anyhow::Result<()> {
         Ok(())
     }

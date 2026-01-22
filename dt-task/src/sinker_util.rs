@@ -31,7 +31,6 @@ use dt_connector::{
     data_marker::DataMarker,
     rdb_router::RdbRouter,
     sinker::{
-        base_struct_sinker::DBConnPool,
         clickhouse::{
             clickhouse_sinker::ClickhouseSinker, clickhouse_struct_sinker::ClickhouseStructSinker,
         },
@@ -52,7 +51,6 @@ use dt_connector::{
         starrocks::{
             starrocks_sinker::StarRocksSinker, starrocks_struct_sinker::StarrocksStructSinker,
         },
-        struct_check_sinker::StructCheckSinker,
     },
     Sinker,
 };
@@ -91,78 +89,6 @@ impl SinkerUtil {
         let mut sub_sinkers: Sinkers = Vec::new();
         match config.sinker.clone() {
             SinkerConfig::Dummy => {
-                let is_struct_check = matches!(
-                    extractor_config,
-                    ExtractorConfig::MysqlStruct { .. } | ExtractorConfig::PgStruct { .. }
-                );
-                if is_struct_check {
-                    if let Some(checker) = config.checker.as_ref() {
-                        let (checker_db_type, checker_url, checker_auth) = if let Some(db_type) =
-                            &checker.db_type
-                        {
-                                (
-                                    db_type.clone(),
-                                    checker.url.clone().unwrap_or_default(),
-                                    checker
-                                        .connection_auth
-                                        .clone()
-                                        .unwrap_or_default(),
-                                )
-                            } else {
-                                (
-                                    config.sinker_basic.db_type.clone(),
-                                    config.sinker_basic.url.clone(),
-                                    config.sinker_basic.connection_auth.clone(),
-                                )
-                            };
-
-                        let sinker: StructCheckSinker = match checker_db_type {
-                            DbType::Mysql => {
-                                let conn_pool = TaskUtil::create_mysql_conn_pool(
-                                    &checker_url,
-                                    &checker_auth,
-                                    checker.max_connections.max(1),
-                                    enable_sqlx_log,
-                                    None,
-                                )
-                                .await?;
-                                let filter = create_filter!(config, Mysql);
-                                let router = create_router!(config, Mysql);
-                                StructCheckSinker::new(
-                                    checker_db_type,
-                                    DBConnPool::MySQL(conn_pool),
-                                    filter,
-                                    router,
-                                    checker.output_revise_sql,
-                                )
-                            }
-                            DbType::Pg => {
-                                let conn_pool = TaskUtil::create_pg_conn_pool(
-                                    &checker_url,
-                                    &checker_auth,
-                                    checker.max_connections.max(1),
-                                    enable_sqlx_log,
-                                    false,
-                                )
-                                .await?;
-                                let filter = create_filter!(config, Pg);
-                                let router = create_router!(config, Pg);
-                                StructCheckSinker::new(
-                                    checker_db_type,
-                                    DBConnPool::PostgreSQL(conn_pool),
-                                    filter,
-                                    router,
-                                    checker.output_revise_sql,
-                                )
-                            }
-                            _ => bail!("struct check not supported for db_type: {}", checker_db_type),
-                        };
-
-                        sub_sinkers.push(Arc::new(async_mutex::Mutex::new(Box::new(sinker))));
-                        return Ok(sub_sinkers);
-                    }
-                }
-
                 for _ in 0..parallel_size {
                     let sinker = DummySinker {};
                     sub_sinkers.push(Arc::new(async_mutex::Mutex::new(Box::new(sinker))));

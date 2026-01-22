@@ -4,6 +4,7 @@ pub mod log_reader;
 pub mod mongo_checker;
 pub mod mysql_checker;
 pub mod pg_checker;
+pub mod struct_checker;
 
 pub use base_checker::CheckerMode;
 pub use base_checker::{
@@ -12,3 +13,4 @@ pub use base_checker::{
 pub use mongo_checker::MongoCheckerHandle;
 pub use mysql_checker::MysqlCheckerHandle;
 pub use pg_checker::PgCheckerHandle;
+pub use struct_checker::StructCheckerHandle;
