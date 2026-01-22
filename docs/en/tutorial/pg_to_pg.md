@@ -186,8 +186,9 @@ db_type=pg
 extract_type=snapshot
 url=postgres://postgres:postgres@127.0.0.1:5433/postgres?options[statement_timeout]=10s
 
-[checker]
+[sinker]
 db_type=pg
+sink_type=check
 url=postgres://postgres:postgres@127.0.0.1:5434/postgres?options[statement_timeout]=10s
 
 [filter]
@@ -295,8 +296,9 @@ extract_type=check_log
 url=postgres://postgres:postgres@127.0.0.1:5433/postgres?options[statement_timeout]=10s
 check_log_dir=./check_data_task_log
 
-[checker]
+[sinker]
 db_type=pg
+sink_type=check
 url=postgres://postgres:postgres@127.0.0.1:5434/postgres?options[statement_timeout]=10s
 
 [filter]
