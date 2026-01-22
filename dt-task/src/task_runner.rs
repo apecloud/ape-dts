@@ -62,6 +62,7 @@ use dt_connector::{
     checker::check_log::CheckSummaryLog,
     checker::{
         CheckerHandle, CheckerMode, MongoCheckerHandle, MysqlCheckerHandle, PgCheckerHandle,
+        StructCheckerHandle,
     },
     data_marker::DataMarker,
     extractor::resumer::{recorder::Recorder, recovery::Recovery},
@@ -692,6 +693,61 @@ impl TaskRunner {
                 ),
             }
         };
+
+        let is_struct_task = matches!(
+            self.config.extractor,
+            ExtractorConfig::MysqlStruct { .. } | ExtractorConfig::PgStruct { .. }
+        );
+
+        if is_struct_task {
+            let filter = RdbFilter::from_config(&self.config.filter, &checker_db_type)?;
+            let router = RdbRouter::from_config(&self.config.router, &checker_db_type)?;
+            let checker = match checker_db_type {
+                DbType::Mysql => {
+                    let conn_pool = TaskUtil::create_mysql_conn_pool(
+                        &checker_url,
+                        &checker_auth,
+                        max_connections,
+                        enable_sqlx_log,
+                        None,
+                    )
+                    .await?;
+                    StructCheckerHandle::new(
+                        checker_db_type,
+                        Some(conn_pool),
+                        None,
+                        filter,
+                        router,
+                        cfg.output_revise_sql,
+                        check_summary,
+                    )
+                }
+                DbType::Pg => {
+                    let conn_pool = TaskUtil::create_pg_conn_pool(
+                        &checker_url,
+                        &checker_auth,
+                        max_connections,
+                        enable_sqlx_log,
+                        false,
+                    )
+                    .await?;
+                    StructCheckerHandle::new(
+                        checker_db_type,
+                        None,
+                        Some(conn_pool),
+                        filter,
+                        router,
+                        cfg.output_revise_sql,
+                        check_summary,
+                    )
+                }
+                _ => bail!(
+                    "struct check not supported for db_type: {}",
+                    checker_db_type
+                ),
+            };
+            return Ok(Some(Box::new(checker)));
+        }
 
         match checker_db_type {
             DbType::Mysql => {
