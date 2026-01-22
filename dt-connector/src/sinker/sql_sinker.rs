@@ -19,16 +19,16 @@ pub struct SqlSinker {
 
 #[async_trait]
 impl Sinker for SqlSinker {
-    async fn sink_dml(&mut self, data: Vec<RowData>, _batch: bool) -> anyhow::Result<()> {
+    async fn sink_dml(&mut self, data: Vec<Arc<RowData>>, _batch: bool) -> anyhow::Result<()> {
         if data.is_empty() {
             return Ok(());
         }
 
         for row_data in data {
             let row_data = if self.reverse {
-                row_data.reverse()
+                row_data.as_ref().reverse()
             } else {
-                row_data
+                (*row_data).clone()
             };
 
             let query_builder =

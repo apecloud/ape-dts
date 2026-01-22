@@ -31,7 +31,7 @@ impl Parallelizer for CheckParallelizer {
 
     async fn sink_dml(
         &mut self,
-        data: Vec<RowData>,
+        data: Vec<Arc<RowData>>,
         sinkers: &[Arc<async_mutex::Mutex<Box<dyn Sinker + Send>>>],
     ) -> anyhow::Result<DataSize> {
         let mut data_size = DataSize::default();

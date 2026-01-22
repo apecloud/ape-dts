@@ -40,7 +40,7 @@ pub struct MysqlSinker {
 
 #[async_trait]
 impl Sinker for MysqlSinker {
-    async fn sink_dml(&mut self, mut data: Vec<RowData>, batch: bool) -> anyhow::Result<()> {
+    async fn sink_dml(&mut self, mut data: Vec<Arc<RowData>>, batch: bool) -> anyhow::Result<()> {
         if data.is_empty() {
             return Ok(());
         }
@@ -152,7 +152,7 @@ impl Sinker for MysqlSinker {
 }
 
 impl MysqlSinker {
-    async fn serial_sink(&mut self, data: &[RowData]) -> anyhow::Result<()> {
+    async fn serial_sink(&mut self, data: &[Arc<RowData>]) -> anyhow::Result<()> {
         let monitor_interval = if self.monitor_interval > 0 {
             self.monitor_interval
         } else {
@@ -171,7 +171,7 @@ impl MysqlSinker {
         let mut data_size = 0;
         let mut rts = LimitedQueue::new(cmp::min(100, data.len()));
         for row_data in data.iter() {
-            data_size += row_data.data_size;
+            data_size += row_data.get_data_size() as usize;
             data_len += 1;
             let tb_meta = self.meta_manager.get_tb_meta_by_row_data(row_data).await?;
             let query_builder = RdbQueryBuilder::new_for_mysql(tb_meta, None);
@@ -207,7 +207,7 @@ impl MysqlSinker {
 
     async fn batch_delete(
         &mut self,
-        data: &mut [RowData],
+        data: &mut [Arc<RowData>],
         start_index: usize,
         batch_size: usize,
     ) -> anyhow::Result<()> {
@@ -240,7 +240,7 @@ impl MysqlSinker {
 
     async fn batch_insert(
         &mut self,
-        data: &mut [RowData],
+        data: &mut [Arc<RowData>],
         start_index: usize,
         batch_size: usize,
     ) -> anyhow::Result<()> {

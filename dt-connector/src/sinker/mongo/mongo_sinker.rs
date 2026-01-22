@@ -31,7 +31,7 @@ pub struct MongoSinker {
 
 #[async_trait]
 impl Sinker for MongoSinker {
-    async fn sink_dml(&mut self, mut data: Vec<RowData>, batch: bool) -> anyhow::Result<()> {
+    async fn sink_dml(&mut self, mut data: Vec<Arc<RowData>>, batch: bool) -> anyhow::Result<()> {
         if data.is_empty() {
             return Ok(());
         }
@@ -58,7 +58,7 @@ impl Sinker for MongoSinker {
 }
 
 impl MongoSinker {
-    async fn serial_sink(&mut self, mut data: Vec<RowData>) -> anyhow::Result<()> {
+    async fn serial_sink(&mut self, data: Vec<Arc<RowData>>) -> anyhow::Result<()> {
         let mut rts = LimitedQueue::new(cmp::min(100, data.len()));
         let monitor_interval = if self.monitor_interval > 0 {
             self.monitor_interval
@@ -69,8 +69,8 @@ impl MongoSinker {
         let mut data_len = 0;
         let mut last_monitor_time = Instant::now();
 
-        for row_data in data.iter_mut() {
-            data_size += row_data.data_size;
+        for row_data in data.iter() {
+            data_size += row_data.get_data_size() as usize;
             data_len += 1;
 
             let collection = self
@@ -81,21 +81,21 @@ impl MongoSinker {
             let start_time = Instant::now();
             match row_data.row_type {
                 RowType::Insert => {
-                    let after = row_data.require_after_mut()?;
-                    if let Some(ColValue::MongoDoc(doc)) = after.remove(MongoConstants::DOC) {
+                    let after = row_data.require_after()?;
+                    if let Some(ColValue::MongoDoc(doc)) = after.get(MongoConstants::DOC) {
                         let id = doc
                             .get(MongoConstants::ID)
                             .context("mongo doc missing `_id`")?;
                         let query_doc = doc! {MongoConstants::ID: id};
-                        let update_doc = doc! {MongoConstants::SET: doc};
+                        let update_doc = doc! {MongoConstants::SET: doc.clone()};
                         self.upsert(&collection, query_doc, update_doc).await?;
                         rts.push((start_time.elapsed().as_millis() as u64, 1));
                     }
                 }
 
                 RowType::Delete => {
-                    let before = row_data.require_before_mut()?;
-                    if let Some(ColValue::MongoDoc(doc)) = before.remove(MongoConstants::DOC) {
+                    let before = row_data.require_before()?;
+                    if let Some(ColValue::MongoDoc(doc)) = before.get(MongoConstants::DOC) {
                         let id = doc
                             .get(MongoConstants::ID)
                             .context("mongo doc missing `_id`")?;
@@ -107,8 +107,8 @@ impl MongoSinker {
 
                 RowType::Update => {
                     let query_doc = {
-                        let before = row_data.require_before_mut()?;
-                        if let Some(ColValue::MongoDoc(doc)) = before.remove(MongoConstants::DOC) {
+                        let before = row_data.require_before()?;
+                        if let Some(ColValue::MongoDoc(doc)) = before.get(MongoConstants::DOC) {
                             let id = doc
                                 .get(MongoConstants::ID)
                                 .context("mongo doc missing `_id`")?;
@@ -119,14 +119,14 @@ impl MongoSinker {
                     };
 
                     let update_doc = {
-                        let after = row_data.require_after_mut()?;
-                        if let Some(ColValue::MongoDoc(doc)) = after.remove(MongoConstants::DOC) {
-                            Some(doc)
+                        let after = row_data.require_after()?;
+                        if let Some(ColValue::MongoDoc(doc)) = after.get(MongoConstants::DOC) {
+                            Some(doc.clone())
                         } else if let Some(ColValue::MongoDoc(doc)) =
-                            after.remove(MongoConstants::DIFF_DOC)
+                            after.get(MongoConstants::DIFF_DOC)
                         {
                             // for Update row_data from oplog (NOT change stream), after contains diff_doc instead of doc
-                            Some(doc)
+                            Some(doc.clone())
                         } else {
                             None
                         }
@@ -161,7 +161,7 @@ impl MongoSinker {
 
     async fn batch_delete(
         &mut self,
-        data: &mut [RowData],
+        data: &mut [Arc<RowData>],
         start_index: usize,
         batch_size: usize,
     ) -> anyhow::Result<()> {
@@ -174,7 +174,7 @@ impl MongoSinker {
 
         let mut ids = Vec::new();
         for rd in data.iter().skip(start_index).take(batch_size) {
-            data_size += rd.data_size;
+            data_size += rd.get_data_size() as usize;
 
             let before = rd.require_before()?;
             if let Some(ColValue::MongoDoc(doc)) = before.get(MongoConstants::DOC) {
@@ -202,7 +202,7 @@ impl MongoSinker {
 
     async fn batch_insert(
         &mut self,
-        data: &mut [RowData],
+        data: &mut [Arc<RowData>],
         start_index: usize,
         batch_size: usize,
     ) -> anyhow::Result<()> {
@@ -214,11 +214,11 @@ impl MongoSinker {
 
         let mut docs = Vec::new();
         for rd in data.iter().skip(start_index).take(batch_size) {
-            data_size += rd.data_size;
+            data_size += rd.get_data_size() as usize;
 
             let after = rd.require_after()?;
             if let Some(ColValue::MongoDoc(doc)) = after.get(MongoConstants::DOC) {
-                docs.push(doc);
+                docs.push(doc.clone());
             }
         }
 

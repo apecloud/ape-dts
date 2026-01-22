@@ -162,11 +162,6 @@ impl TaskUtil {
                 url,
                 connection_auth,
                 ..
-            }
-            | SinkerConfig::MysqlCheck {
-                url,
-                connection_auth,
-                ..
             } => {
                 let mysql_meta_manager = Self::create_mysql_meta_manager(
                     url,
@@ -177,7 +172,7 @@ impl TaskUtil {
                     None,
                 )
                 .await?;
-                RdbMetaManager::from_mysql(mysql_meta_manager)
+                Some(RdbMetaManager::from_mysql(mysql_meta_manager))
             }
 
             // In Doris/Starrocks, you can NOT get UNIQUE KEY by "SHOW INDEXES" or from "information_schema.STATISTICS",
@@ -198,7 +193,7 @@ impl TaskUtil {
                             None,
                         )
                         .await?;
-                        RdbMetaManager::from_mysql(mysql_meta_manager)
+                        Some(RdbMetaManager::from_mysql(mysql_meta_manager))
                     }
                     ExtractorConfig::PgCdc {
                         url,
@@ -207,9 +202,9 @@ impl TaskUtil {
                     } => {
                         let pg_meta_manager =
                             Self::create_pg_meta_manager(url, connection_auth, log_level).await?;
-                        RdbMetaManager::from_pg(pg_meta_manager)
+                        Some(RdbMetaManager::from_pg(pg_meta_manager))
                     }
-                    _ => return Ok(None),
+                    _ => None,
                 }
             }
 
@@ -217,22 +212,52 @@ impl TaskUtil {
                 url,
                 connection_auth,
                 ..
-            }
-            | SinkerConfig::PgCheck {
-                url,
-                connection_auth,
-                ..
             } => {
                 let pg_meta_manager =
                     Self::create_pg_meta_manager(url, connection_auth, log_level).await?;
-                RdbMetaManager::from_pg(pg_meta_manager)
+                Some(RdbMetaManager::from_pg(pg_meta_manager))
             }
 
             _ => {
-                return Ok(None);
+                None
             }
         };
-        Ok(Some(meta_manager))
+        if meta_manager.is_some() {
+            return Ok(meta_manager);
+        }
+
+        if let Some(checker) = &config.checker {
+            if let (Some(db_type), Some(url), Some(connection_auth)) = (
+                checker.db_type.clone(),
+                checker.url.clone(),
+                checker.connection_auth.clone(),
+            ) {
+                let checker_meta_manager = match db_type {
+                    DbType::Mysql => {
+                        let mysql_meta_manager = Self::create_mysql_meta_manager(
+                            &url,
+                            &connection_auth,
+                            log_level,
+                            DbType::Mysql,
+                            None,
+                            None,
+                        )
+                        .await?;
+                        Some(RdbMetaManager::from_mysql(mysql_meta_manager))
+                    }
+                    DbType::Pg => {
+                        let pg_meta_manager =
+                            Self::create_pg_meta_manager(&url, &connection_auth, log_level)
+                                .await?;
+                        Some(RdbMetaManager::from_pg(pg_meta_manager))
+                    }
+                    _ => None,
+                };
+                return Ok(checker_meta_manager);
+            }
+        }
+
+        Ok(None)
     }
 
     pub async fn create_mysql_meta_manager(
@@ -822,11 +847,6 @@ impl ConnClient {
                 url,
                 connection_auth,
                 ..
-            }
-            | SinkerConfig::MysqlCheck {
-                url,
-                connection_auth,
-                ..
             } => ConnClient::MySQL(
                 TaskUtil::create_mysql_conn_pool(
                     url,
@@ -856,11 +876,6 @@ impl ConnClient {
                 url,
                 connection_auth,
                 ..
-            }
-            | SinkerConfig::PgCheck {
-                url,
-                connection_auth,
-                ..
             } => ConnClient::PostgreSQL(
                 TaskUtil::create_pg_conn_pool(
                     url,
@@ -872,12 +887,6 @@ impl ConnClient {
                 .await?,
             ),
             SinkerConfig::Mongo {
-                url,
-                connection_auth,
-                app_name,
-                ..
-            }
-            | SinkerConfig::MongoCheck {
                 url,
                 connection_auth,
                 app_name,

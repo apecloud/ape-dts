@@ -8,7 +8,8 @@ use dt_common::meta::dcl_meta::dcl_data::DclData;
 use dt_common::meta::ddl_meta::ddl_data::DdlData;
 use dt_common::meta::dt_queue::DtQueue;
 use dt_common::meta::{
-    dt_data::DtItem, rdb_meta_manager::RdbMetaManager, row_data::RowData, row_type::RowType,
+    dt_data::DtItem, rdb_meta_manager::RdbMetaManager, row_data::RowData,
+    row_type::RowType,
 };
 use dt_connector::Sinker;
 
@@ -28,9 +29,9 @@ enum MergeType {
 
 pub struct TbMergedData {
     pub tb: String,
-    pub delete_rows: Vec<RowData>,
-    pub insert_rows: Vec<RowData>,
-    pub unmerged_rows: Vec<RowData>,
+    pub delete_rows: Vec<Arc<RowData>>,
+    pub insert_rows: Vec<Arc<RowData>>,
+    pub unmerged_rows: Vec<Arc<RowData>>,
 }
 
 #[async_trait]
@@ -52,7 +53,7 @@ impl Parallelizer for MergeParallelizer {
 
     async fn sink_dml(
         &mut self,
-        data: Vec<RowData>,
+        data: Vec<Arc<RowData>>,
         sinkers: &[Arc<async_mutex::Mutex<Box<dyn Sinker + Send>>>],
     ) -> anyhow::Result<DataSize> {
         let mut data_size = DataSize::default();
@@ -119,7 +120,7 @@ impl MergeParallelizer {
         let mut futures = Vec::new();
         let mut data_size = DataSize::default();
         for tb_merged_data in tb_merged_data_items.iter_mut() {
-            let data: Vec<RowData> = match merge_type {
+            let data: Vec<Arc<RowData>> = match merge_type {
                 MergeType::Delete => tb_merged_data.delete_rows.drain(..).collect(),
                 MergeType::Insert => tb_merged_data.insert_rows.drain(..).collect(),
                 MergeType::Unmerged => tb_merged_data.unmerged_rows.drain(..).collect(),
@@ -172,7 +173,7 @@ impl MergeParallelizer {
 
     async fn sink_unmerged_rows(
         sinker: Arc<async_mutex::Mutex<Box<dyn Sinker + Send>>>,
-        data: Vec<RowData>,
+        data: Vec<Arc<RowData>>,
     ) -> anyhow::Result<()> {
         let mut start = 0;
         for i in 1..=data.len() {

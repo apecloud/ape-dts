@@ -6,7 +6,7 @@ use dt_common::meta::{
     col_value::ColValue, mongo::mongo_constant::MongoConstants, row_data::RowData,
 };
 
-use crate::check_log::check_log::DiffColValue;
+use crate::checker::check_log::DiffColValue;
 
 pub fn build_insert_cmd(src_row_data: &RowData) -> Option<String> {
     let doc = get_doc(src_row_data)?;

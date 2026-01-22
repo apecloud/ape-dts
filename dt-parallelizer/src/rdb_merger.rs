@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::Arc};
 
 use async_trait::async_trait;
 use dt_common::log_debug;
@@ -14,7 +14,7 @@ pub struct RdbMerger {
 
 #[async_trait]
 impl Merger for RdbMerger {
-    async fn merge(&mut self, data: Vec<RowData>) -> anyhow::Result<Vec<TbMergedData>> {
+    async fn merge(&mut self, data: Vec<Arc<RowData>>) -> anyhow::Result<Vec<TbMergedData>> {
         let mut tb_data_map = HashMap::<String, RdbTbMergedData>::new();
         for row_data in data {
             let full_tb = format!("{}.{}", row_data.schema, row_data.tb);
@@ -49,7 +49,7 @@ impl RdbMerger {
     async fn merge_row_data(
         &mut self,
         merged: &mut RdbTbMergedData,
-        row_data: RowData,
+        row_data: Arc<RowData>,
     ) -> anyhow::Result<()> {
         // if the table already has some rows unmerged, then following rows also need to be unmerged.
         // all unmerged rows will be sinked serially
@@ -90,20 +90,20 @@ impl RdbMerger {
                     return Ok(());
                 }
 
-                let (delete, insert) = row_data.split_update_row_data();
+                let (delete, insert) = Self::split_update_row_data_ref(&row_data);
                 let insert_hash_code = Self::get_hash_code(&insert, tb_meta).await?;
 
                 if Self::check_collision(&merged.insert_rows, tb_meta, &insert, insert_hash_code)?
                     || Self::check_collision(&merged.delete_rows, tb_meta, &delete, hash_code)?
                 {
                     let row_data = RowData::new(
-                        delete.schema,
-                        delete.tb,
+                        delete.schema.clone(),
+                        delete.tb.clone(),
                         RowType::Update,
-                        delete.before,
-                        insert.after,
+                        delete.before.clone(),
+                        insert.after.clone(),
                     );
-                    merged.unmerged_rows.push(row_data);
+                    merged.unmerged_rows.push(Arc::new(row_data));
                     return Ok(());
                 }
                 merged.delete_rows.insert(hash_code, delete);
@@ -121,7 +121,7 @@ impl RdbMerger {
         Ok(())
     }
 
-    fn check_uk_changed(tb_meta: &RdbTbMeta, row_data: &RowData) -> anyhow::Result<bool> {
+    fn check_uk_changed(tb_meta: &RdbTbMeta, row_data: &Arc<RowData>) -> anyhow::Result<bool> {
         let before = row_data.require_before()?;
         let after = row_data.require_after()?;
         for col in tb_meta.id_cols.iter() {
@@ -134,9 +134,9 @@ impl RdbMerger {
     }
 
     fn check_collision(
-        buffer: &HashMap<u128, RowData>,
+        buffer: &HashMap<u128, Arc<RowData>>,
         tb_meta: &RdbTbMeta,
-        row_data: &RowData,
+        row_data: &Arc<RowData>,
         hash_code: u128,
     ) -> anyhow::Result<bool> {
         if let Some(exist) = buffer.get(&hash_code) {
@@ -160,19 +160,36 @@ impl RdbMerger {
         Ok(false)
     }
 
-    async fn get_hash_code(row_data: &RowData, tb_meta: &RdbTbMeta) -> anyhow::Result<u128> {
+    async fn get_hash_code(row_data: &Arc<RowData>, tb_meta: &RdbTbMeta) -> anyhow::Result<u128> {
         if tb_meta.key_map.is_empty() {
             return Ok(0);
         }
         row_data.get_hash_code(tb_meta)
     }
+
+    fn split_update_row_data_ref(row_data: &Arc<RowData>) -> (Arc<RowData>, Arc<RowData>) {
+        let delete = RowData::new(
+            row_data.schema.clone(),
+            row_data.tb.clone(),
+            RowType::Delete,
+            row_data.before.clone(),
+            None,
+        );
+        let insert = RowData::new(
+            row_data.schema.clone(),
+            row_data.tb.clone(),
+            RowType::Insert,
+            None,
+            row_data.after.clone(),
+        );
+        (Arc::new(delete), Arc::new(insert))
+    }
 }
 
 struct RdbTbMergedData {
-    // HashMap<row_key_hash_code, RowData>
-    delete_rows: HashMap<u128, RowData>,
-    insert_rows: HashMap<u128, RowData>,
-    unmerged_rows: Vec<RowData>,
+    delete_rows: HashMap<u128, Arc<RowData>>,
+    insert_rows: HashMap<u128, Arc<RowData>>,
+    unmerged_rows: Vec<Arc<RowData>>,
 }
 
 impl RdbTbMergedData {
@@ -184,15 +201,15 @@ impl RdbTbMergedData {
         }
     }
 
-    pub fn get_delete_rows(&mut self) -> Vec<RowData> {
+    pub fn get_delete_rows(&mut self) -> Vec<Arc<RowData>> {
         self.delete_rows.drain().map(|i| i.1).collect::<Vec<_>>()
     }
 
-    pub fn get_insert_rows(&mut self) -> Vec<RowData> {
+    pub fn get_insert_rows(&mut self) -> Vec<Arc<RowData>> {
         self.insert_rows.drain().map(|i| i.1).collect::<Vec<_>>()
     }
 
-    pub fn get_unmerged_rows(&mut self) -> Vec<RowData> {
+    pub fn get_unmerged_rows(&mut self) -> Vec<Arc<RowData>> {
         self.unmerged_rows.drain(..).collect::<Vec<_>>()
     }
 }

@@ -33,7 +33,7 @@ pub struct ClickhouseSinker {
 
 #[async_trait]
 impl Sinker for ClickhouseSinker {
-    async fn sink_dml(&mut self, mut data: Vec<RowData>, _batch: bool) -> anyhow::Result<()> {
+    async fn sink_dml(&mut self, mut data: Vec<Arc<RowData>>, _batch: bool) -> anyhow::Result<()> {
         if data.is_empty() {
             return Ok(());
         }
@@ -46,7 +46,7 @@ impl Sinker for ClickhouseSinker {
 impl ClickhouseSinker {
     async fn batch_sink(
         &mut self,
-        data: &mut [RowData],
+        data: &mut [Arc<RowData>],
         start_index: usize,
         batch_size: usize,
     ) -> anyhow::Result<()> {
@@ -56,7 +56,7 @@ impl ClickhouseSinker {
 
     async fn send_data(
         &mut self,
-        data: &mut [RowData],
+        data: &mut [Arc<RowData>],
         start_index: usize,
         batch_size: usize,
     ) -> anyhow::Result<usize> {
@@ -67,18 +67,19 @@ impl ClickhouseSinker {
         let mut data_size = 0;
         // build stream load data
         let mut load_data = Vec::new();
-        for row_data in data.iter_mut().skip(start_index).take(batch_size) {
-            data_size += row_data.data_size;
+        for row_data in data.iter().skip(start_index).take(batch_size) {
+            data_size += row_data.get_data_size() as usize;
+            let mut row = row_data.as_ref().clone();
 
-            Self::convert_row_data(row_data)?;
+            Self::convert_row_data(&mut row)?;
 
-            let col_values = if row_data.row_type == RowType::Delete {
-                let before = row_data.require_before_mut()?;
+            let mut col_values = if row.row_type == RowType::Delete {
+                let mut before = row.require_before()?.clone();
                 // SIGN_COL value
                 before.insert(SIGN_COL_NAME.into(), ColValue::Long(1));
                 before
             } else {
-                row_data.require_after_mut()?
+                row.require_after()?.clone()
             };
 
             col_values.insert(

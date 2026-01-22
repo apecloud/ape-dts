@@ -24,12 +24,12 @@ impl Parallelizer for SnapshotParallelizer {
 
     async fn sink_dml(
         &mut self,
-        data: Vec<RowData>,
+        data: Vec<Arc<RowData>>,
         sinkers: &[Arc<async_mutex::Mutex<Box<dyn Sinker + Send>>>],
     ) -> anyhow::Result<DataSize> {
         let data_size = DataSize {
             count: data.len() as u64,
-            bytes: data.iter().map(|v| v.data_size as u64).sum(),
+            bytes: data.iter().map(|v| v.get_data_size()).sum(),
         };
 
         let sub_datas = Self::partition(data, self.parallel_size)?;
