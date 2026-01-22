@@ -1,3 +1,4 @@
+pub mod checker_config;
 pub mod config_enums;
 pub mod config_token_parser;
 pub mod connection_auth_config;

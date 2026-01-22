@@ -222,11 +222,9 @@ db_type=mysql
 extract_type=struct
 url=mysql://root:123456@127.0.0.1:3307?ssl-mode=disabled
 
-[sinker]
+[checker]
 db_type=mysql
-sink_type=check
 url=mysql://root:123456@127.0.0.1:3308?ssl-mode=disabled
-replace=true
 
 [filter]
 do_dbs=test_db
@@ -264,9 +262,8 @@ extract_type=snapshot
 url=mysql://root:123456@127.0.0.1:3307?ssl-mode=disabled
 batch_size=10000
 
-[sinker]
+[checker]
 db_type=mysql
-sink_type=check
 url=mysql://root:123456@127.0.0.1:3308?ssl-mode=disabled
 batch_size=200
 
@@ -356,9 +353,8 @@ url=mysql://root:123456@127.0.0.1:3307?ssl-mode=disabled
 check_log_dir=./logs/origin_check_log
 batch_size=200
 
-[sinker]
+[checker]
 db_type=mysql
-sink_type=check
 url=mysql://root:123456@127.0.0.1:3308?ssl-mode=disabled
 batch_size=200
 

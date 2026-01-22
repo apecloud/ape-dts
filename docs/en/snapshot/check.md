@@ -4,6 +4,8 @@ After data migration, you may want to compare the source and target data row by 
 
 Support comparison for MySQL/PG/Mongo.
 
+Data check can be used with both snapshot and CDC tasks. For CDC tasks, keep `[checker]` enabled and set `extract_type=cdc`; the checker validates applied changes after they are sunk.
+
 # Example: MySQL -> MySQL
 
 Refer to [task templates](../../templates/mysql_to_mysql.md) and [tutorial](../tutorial/mysql_to_mysql.md)
@@ -16,17 +18,15 @@ In the full check configuration, add `sample_interval` configuration. That is, s
 sample_interval=3
 ```
 
-## Note
+## Configuration
 
-This configuration is similar to the full synchronization task. The only differences are:
+See [config.md](../config.md) for `[checker]` options and target selection rules. Use the task
+templates and tutorials for end-to-end examples.
 
-```
-[sinker]
-sink_type=check
+## Limitations
 
-[parallelizer]
-parallel_type=rdb_check
-```
+- Data check is source-driven (validates Source ∈ Target) and cannot detect extra rows that exist only in the target (ghost data). This means missing deletes on the target side will not be detected.
+- For MongoDB, `_id` must be a hashable type (for example ObjectId/String/Int32/Int64). Unsupported `_id` types will make the checker return an error.
 
 # Check Results
 
@@ -58,10 +58,10 @@ Missing logs include database (schema), table (tb) and primary/unique key (id_co
 
 ## Output Full Row
 
-When the business needs full row content for troubleshooting exceptions, you can enable full row logging in `[sinker]`:
+When the business needs full row content for troubleshooting exceptions, you can enable full row logging in `[checker]`:
 
 ```
-[sinker]
+[checker]
 output_full_row=true
 ```
 
@@ -99,10 +99,10 @@ After enabling, all diff.log will append `src_row` and `dst_row`, and miss.log w
 
 ## Output Revise SQL
 
-If the business needs to manually repair different data, you can enable SQL output in `[sinker]`:
+If the business needs to manually repair different data, you can enable SQL output in `[checker]`:
 
 ```
-[sinker]
+[checker]
 output_revise_sql=true
 # Optional: force WHERE clause to match the whole row
 revise_match_full_row=true
@@ -148,16 +148,27 @@ INSERT INTO `test_db_1`.`test_table`(`id`,`name`,`age`,`email`) VALUES(3,'Charli
 ```
 
 ### Summary Log (summary.log)
-The summary log contains the overall results of the check, such as start_time, end_time, is_consistent, and the number of miss, diff, extra.
+The summary log contains the overall results of the check, such as start_time, end_time, is_consistent, and the number of miss, diff.
 
 ```json
-{"start_time": "2023-09-01T12:00:00+08:00", "end_time": "2023-09-01T12:00:01+08:00", "is_consistent": false, "miss_count": 1, "diff_count": 2, "extra_count": 1, "sql_count": 3}
+{"start_time": "2023-09-01T12:00:00+08:00", "end_time": "2023-09-01T12:00:01+08:00", "is_consistent": false, "miss_count": 1, "diff_count": 2, "sql_count": 3}
 ```
 
 
 # Reverse Check
 
-Swap the [extractor] and [sinker] configurations to perform reverse check.
+Swap the [extractor] and [checker] target configurations to perform reverse check.
+
+# Checker Configuration Parameters
+
+See [config.md](../config.md) for the full `[checker]` configuration list and target selection rules.
+
+## Retry Mechanism
+
+When `max_retries > 0`, the checker automatically retries on inconsistency:
+- No logs are written during retry attempts to reduce noise
+- Detailed miss/diff logs are only written on the final check
+- Useful when target data synchronization is not yet complete
 
 # Other Configurations
 

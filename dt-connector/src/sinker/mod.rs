@@ -1,4 +1,3 @@
-pub mod base_checker;
 pub mod base_sinker;
 pub mod base_struct_sinker;
 pub mod clickhouse;
