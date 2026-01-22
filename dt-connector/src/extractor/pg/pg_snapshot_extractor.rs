@@ -95,7 +95,7 @@ impl PgSnapshotExtractor {
             .await?
             .to_owned();
         let user_defined_partition_col = &self.user_defined_partition_col;
-        self.validate_user_defined(&mut tb_meta, &user_defined_partition_col)?;
+        self.validate_user_defined(&mut tb_meta, user_defined_partition_col)?;
         let mut splitter = PgSnapshotSplitter::new(
             &tb_meta,
             self.conn_pool.clone(),

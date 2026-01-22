@@ -107,7 +107,7 @@ impl BaseParallelizer {
 
     pub async fn sink_dml(
         &self,
-        mut sub_data_items: Vec<Vec<RowData>>,
+        mut sub_data_items: Vec<Vec<Arc<RowData>>>,
         sinkers: &[Arc<async_mutex::Mutex<Box<dyn Sinker + Send>>>],
         parallel_size: usize,
         batch: bool,
