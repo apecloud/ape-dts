@@ -21,7 +21,7 @@ pub struct KafkaSinker {
 
 #[async_trait]
 impl Sinker for KafkaSinker {
-    async fn sink_dml(&mut self, mut data: Vec<RowData>, _batch: bool) -> anyhow::Result<()> {
+    async fn sink_dml(&mut self, mut data: Vec<Arc<RowData>>, _batch: bool) -> anyhow::Result<()> {
         if data.is_empty() {
             return Ok(());
         }
@@ -55,23 +55,20 @@ impl Sinker for KafkaSinker {
 impl KafkaSinker {
     async fn send_avro(
         &mut self,
-        data: &mut [RowData],
+        data: &mut [Arc<RowData>],
         sinked_count: usize,
         batch_size: usize,
     ) -> anyhow::Result<()> {
         let mut data_size = 0;
 
         let mut messages = Vec::new();
-        for row_data in data.iter_mut().skip(sinked_count).take(batch_size) {
-            data_size += row_data.data_size;
-
+        for row_data in data.iter().skip(sinked_count).take(batch_size) {
+            data_size += row_data.get_data_size();
+            let mut row_data = row_data.as_ref().clone();
             row_data.convert_raw_string();
             let topic = self.router.get_topic(&row_data.schema, &row_data.tb);
-            let key = self.avro_converter.row_data_to_avro_key(row_data).await?;
-            let payload = self
-                .avro_converter
-                .row_data_to_avro_value(row_data.clone())
-                .await?;
+            let key = self.avro_converter.row_data_to_avro_key(&row_data).await?;
+            let payload = self.avro_converter.row_data_to_avro_value(row_data).await?;
             messages.push(Record {
                 key,
                 value: payload,
@@ -91,8 +88,7 @@ impl KafkaSinker {
             messages.len() as u64,
         ));
 
-        BaseSinker::update_batch_monitor(&self.monitor, batch_size as u64, data_size as u64)
-            .await?;
+        BaseSinker::update_batch_monitor(&self.monitor, batch_size as u64, data_size).await?;
         BaseSinker::update_monitor_rt(&self.monitor, &rts).await
     }
 }

@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 use anyhow::{bail, Context};
 use sqlx::{mysql::MySqlArguments, postgres::PgArguments, query::Query, MySql, Postgres};
@@ -143,7 +144,7 @@ impl RdbQueryBuilder<'_> {
 
     pub fn get_batch_delete_query<'a>(
         &self,
-        data: &'a [RowData],
+        data: &'a [Arc<RowData>],
         start_index: usize,
         batch_size: usize,
     ) -> anyhow::Result<(RdbQueryInfo<'a>, usize)> {
@@ -190,7 +191,7 @@ impl RdbQueryBuilder<'_> {
 
     pub fn get_batch_insert_query<'a>(
         &self,
-        data: &'a [RowData],
+        data: &'a [Arc<RowData>],
         start_index: usize,
         batch_size: usize,
         replace: bool,
@@ -595,7 +596,7 @@ impl RdbQueryBuilder<'_> {
 
     pub fn get_batch_select_query<'a>(
         &self,
-        data: &[&'a RowData],
+        data: &[&'a Arc<RowData>],
         start_index: usize,
         batch_size: usize,
     ) -> anyhow::Result<RdbQueryInfo<'a>> {

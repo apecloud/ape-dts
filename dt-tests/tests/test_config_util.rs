@@ -13,6 +13,7 @@ pub struct TestConfigUtil {}
 
 const EXTRACTOR: &str = "extractor";
 const SINKER: &str = "sinker";
+const CHECKER: &str = "checker";
 const RUNTIME: &str = "runtime";
 const RESUMER: &str = "resumer";
 const TEST_PROJECT: &str = "dt-tests";
@@ -141,23 +142,20 @@ impl TestConfigUtil {
             _ => {}
         }
 
-        match config.sinker {
-            // sinker/check_log_dir
-            SinkerConfig::MysqlCheck { check_log_dir, .. }
-            | SinkerConfig::PgCheck { check_log_dir, .. }
-            | SinkerConfig::MongoCheck { check_log_dir, .. } => {
-                let sinker_check_log_dir = if !check_log_dir.is_empty() {
-                    format!("{}/{}", project_root, check_log_dir)
-                } else {
-                    format!("{}/check", log_dir)
-                };
-                update_configs.push((
-                    SINKER.to_string(),
-                    "check_log_dir".to_string(),
-                    sinker_check_log_dir,
-                ));
-            }
+        if let Some(checker) = &config.checker {
+            let checker_check_log_dir = if !checker.check_log_dir.is_empty() {
+                format!("{}/{}", project_root, checker.check_log_dir)
+            } else {
+                format!("{}/check", log_dir)
+            };
+            update_configs.push((
+                CHECKER.to_string(),
+                "check_log_dir".to_string(),
+                checker_check_log_dir,
+            ));
+        }
 
+        match config.sinker {
             // sinker/statistic_log_dir
             SinkerConfig::RedisStatistic {
                 statistic_log_dir, ..
