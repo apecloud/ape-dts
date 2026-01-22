@@ -4,6 +4,8 @@
 
 支持对 MySQL/PG/Mongo 进行比对。
 
+数据校验可用于 Snapshot 与 CDC 任务。若为 CDC 任务，保持 `[checker]` 开启并设置 `extract_type=cdc`，checker 会在数据落库后进行校验。
+
 # 示例: MySQL -> MySQL
 
 参考 [任务模版](../../templates/mysql_to_mysql.md) 和 [教程](../../en/tutorial/mysql_to_mysql.md)
@@ -16,17 +18,14 @@
 sample_interval=3
 ```
 
-## 说明
+## 配置
 
-此配置和全量同步任务的基本一致，两者的不同之处是：
+`[checker]` 相关配置与目标选择规则请参考 [config.md](../config.md)。端到端示例请参考模板与教程。
 
-```
-[sinker]
-sink_type=check
+## 限制
 
-[parallelizer]
-parallel_type=rdb_check
-```
+- 数据校验为源端驱动（仅验证 Source ∈ Target），无法发现目标端多余数据（幽灵数据）。因此，目标端删除同步缺失不会被检测到。
+- 对于 MongoDB，`_id` 需为可哈希类型（例如 ObjectId/String/Int32/Int64）。不支持的 `_id` 类型会导致 checker 报错。
 
 # 校验结果
 
@@ -58,10 +57,10 @@ parallel_type=rdb_check
 
 ## 输出完整行
 
-当业务需要完整行内容用于排查异常，可以在 `[sinker]` 中开启全行日志：
+当业务需要完整行内容用于排查异常，可以在 `[checker]` 中开启全行日志：
 
 ```
-[sinker]
+[checker]
 output_full_row=true
 ```
 
@@ -99,10 +98,10 @@ output_full_row=true
 
 ## 输出修复 SQL
 
-业务若需要人工修复差异数据，可以在 `[sinker]` 中开启 SQL 输出：
+业务若需要人工修复差异数据，可以在 `[checker]` 中开启 SQL 输出：
 
 ```
-[sinker]
+[checker]
 output_revise_sql=true
 # 可选：强制使用全字段匹配 WHERE 条件
 revise_match_full_row=true
@@ -148,16 +147,27 @@ INSERT INTO `test_db_1`.`test_table`(`id`,`name`,`age`,`email`) VALUES(3,'Charli
 ```
 
 ### 概览日志（summary.log）
-概览日志包含校验的总体结果，如 start_time, end_time, is_consistent，以及 miss, diff, extra 的数量。
+概览日志包含校验的总体结果，如 start_time, end_time, is_consistent，以及 miss, diff 的数量。
 
 ```json
-{"start_time": "2023-09-01T12:00:00+08:00", "end_time": "2023-09-01T12:00:01+08:00", "is_consistent": false, "miss_count": 1, "diff_count": 2, "extra_count": 1, "sql_count": 3}
+{"start_time": "2023-09-01T12:00:00+08:00", "end_time": "2023-09-01T12:00:01+08:00", "is_consistent": false, "miss_count": 1, "diff_count": 2, "sql_count": 3}
 ```
 
 
 # 反向校验
 
-将 [extractor] 和 [sinker] 配置调换，即可进行反向校验。
+将 [extractor] 与 [checker] 目标配置调换，即可进行反向校验。
+
+# Checker 配置参数
+
+`[checker]` 的完整配置与目标选择规则请参考 [config.md](../config.md)。
+
+## 重试机制说明
+
+当 `max_retries > 0` 时，checker 会在检测到不一致时自动重试：
+- 重试期间不记录日志，避免噪音
+- 仅在最后一次检查时记录详细的 miss/diff 日志
+- 适用于目标端数据尚未完全同步的场景
 
 # 其他配置
 

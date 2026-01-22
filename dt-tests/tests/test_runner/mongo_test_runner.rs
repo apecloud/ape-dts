@@ -77,12 +77,6 @@ impl MongoTestRunner {
                 connection_auth,
                 app_name,
                 ..
-            }
-            | SinkerConfig::MongoCheck {
-                url,
-                connection_auth,
-                app_name,
-                ..
             } => {
                 dst_mongo_client = Some(
                     TaskUtil::create_mongo_client(&url, &connection_auth, &app_name, None)
@@ -91,6 +85,31 @@ impl MongoTestRunner {
                 );
             }
             _ => {}
+        }
+
+        if dst_mongo_client.is_none() {
+            if let Some(checker) = config.checker.as_ref() {
+                if matches!(checker.db_type, Some(DbType::Mongo)) {
+                    if let Some(url) = checker.url.as_ref() {
+                        let connection_auth = checker.connection_auth.clone().unwrap_or_default();
+                        dst_mongo_client = Some(
+                            TaskUtil::create_mongo_client(url, &connection_auth, "", None)
+                                .await
+                                .unwrap(),
+                        );
+                    }
+                }
+            }
+        }
+
+        if dst_mongo_client.is_none() && config.sinker_basic.db_type == DbType::Mongo {
+            let url = &config.sinker_basic.url;
+            let connection_auth = &config.sinker_basic.connection_auth;
+            dst_mongo_client = Some(
+                TaskUtil::create_mongo_client(url, connection_auth, "", None)
+                    .await
+                    .unwrap(),
+            );
         }
 
         // cleanup dbs before tests
