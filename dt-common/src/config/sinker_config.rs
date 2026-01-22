@@ -37,45 +37,6 @@ pub enum SinkerConfig {
         batch_size: usize,
     },
 
-    MysqlCheck {
-        url: String,
-        connection_auth: ConnectionAuthConfig,
-        batch_size: usize,
-        check_log_dir: String,
-        check_log_file_size: String,
-        output_full_row: bool,
-        output_revise_sql: bool,
-        revise_match_full_row: bool,
-        retry_interval_secs: u64,
-        max_retries: u32,
-    },
-
-    PgCheck {
-        url: String,
-        connection_auth: ConnectionAuthConfig,
-        batch_size: usize,
-        check_log_dir: String,
-        check_log_file_size: String,
-        output_full_row: bool,
-        output_revise_sql: bool,
-        revise_match_full_row: bool,
-        retry_interval_secs: u64,
-        max_retries: u32,
-    },
-
-    MongoCheck {
-        url: String,
-        connection_auth: ConnectionAuthConfig,
-        app_name: String,
-        batch_size: usize,
-        check_log_dir: String,
-        check_log_file_size: String,
-        output_full_row: bool,
-        output_revise_sql: bool,
-        retry_interval_secs: u64,
-        max_retries: u32,
-    },
-
     MysqlStruct {
         url: String,
         connection_auth: ConnectionAuthConfig,
@@ -179,26 +140,6 @@ pub enum SinkerConfig {
     Sql {
         reverse: bool,
     },
-}
-
-impl SinkerConfig {
-    pub fn get_retry_interval_secs(&self) -> u64 {
-        match self {
-            SinkerConfig::MysqlCheck {
-                retry_interval_secs,
-                ..
-            } => *retry_interval_secs,
-            SinkerConfig::PgCheck {
-                retry_interval_secs,
-                ..
-            } => *retry_interval_secs,
-            SinkerConfig::MongoCheck {
-                retry_interval_secs,
-                ..
-            } => *retry_interval_secs,
-            _ => 0,
-        }
-    }
 }
 
 #[derive(Clone, Debug, Default, Hash)]

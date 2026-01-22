@@ -19,6 +19,7 @@ use crate::{
 };
 
 use super::{
+    checker_config::CheckerConfig,
     config_enums::{
         ConflictPolicyEnum, DbType, ExtractType, MetaCenterType, ParallelType, PipelineType,
         SinkType,
@@ -51,6 +52,7 @@ pub struct TaskConfig {
     pub filter: FilterConfig,
     pub router: RouterConfig,
     pub resumer: ResumerConfig,
+    pub checker: Option<CheckerConfig>,
     pub meta_center: Option<MetaCenterConfig>,
     pub data_marker: Option<DataMarkerConfig>,
     pub processor: Option<ProcessorConfig>,
@@ -74,6 +76,7 @@ const ROUTER: &str = "router";
 const RESUMER: &str = "resumer";
 const DATA_MARKER: &str = "data_marker";
 const PROCESSOR: &str = "processor";
+const CHECKER: &str = "checker";
 const META_CENTER: &str = "metacenter";
 // keys
 const CHECK_LOG_DIR: &str = "check_log_dir";
@@ -100,6 +103,11 @@ const DDL_CONFLICT_POLICY: &str = "ddl_conflict_policy";
 const REPLACE: &str = "replace";
 const DISABLE_FOREIGN_KEY_CHECKS: &str = "disable_foreign_key_checks";
 const RESUME_TYPE: &str = "resume_type";
+const CHECKER_DROP_ON_FULL: &str = "drop_on_full";
+const CHECKER_QUEUE_SIZE: &str = "queue_size";
+const USERNAME: &str = "username";
+const PASSWORD: &str = "password";
+
 // deprecated keys
 const RESUME_FROM_LOG: &str = "resume_from_log";
 const RESUME_LOG_DIR: &str = "resume_log_dir";
@@ -114,6 +122,7 @@ impl TaskConfig {
         let loader = IniLoader::new(task_config_file);
 
         let pipeline = Self::load_pipeline_config(&loader);
+        let checker = Self::load_checker_config(&loader);
         let runtime = Self::load_runtime_config(&loader)?;
         let (sinker_basic, sinker) = Self::load_sinker_config(&loader)?;
         let resumer = Self::load_resumer_config(&loader, &runtime, &sinker_basic)?;
@@ -138,6 +147,7 @@ impl TaskConfig {
             filter,
             router,
             resumer,
+            checker,
             data_marker: Self::load_data_marker_config(&loader)?,
             processor: Self::load_processor_config(&loader)?,
             meta_center: Self::load_meta_center_config(&loader)?,
@@ -442,9 +452,58 @@ impl TaskConfig {
     }
 
     fn load_sinker_config(loader: &IniLoader) -> anyhow::Result<(BasicSinkerConfig, SinkerConfig)> {
+        let sinker_section_present = loader.ini.sections().contains(&SINKER.to_string());
+        if !sinker_section_present {
+            if !loader.ini.sections().contains(&CHECKER.to_string()) {
+                bail!(Error::ConfigError(
+                    "config [sinker] is required when [checker] is not set".into()
+                ));
+            }
+            if !Self::checker_target_present(loader) {
+                bail!(Error::ConfigError(
+                    "config [checker] target is required when [sinker] is missing".into()
+                ));
+            }
+            let (db_type, url, connection_auth) = Self::load_checker_target_basic(loader);
+            let batch_size = loader.get_with_default(CHECKER, BATCH_SIZE, 200);
+            let max_connections =
+                loader.get_with_default(CHECKER, MAX_CONNECTIONS, DEFAULT_MAX_CONNECTIONS);
+            return Ok((
+                BasicSinkerConfig {
+                    sink_type: SinkType::Dummy,
+                    db_type,
+                    url,
+                    connection_auth,
+                    batch_size,
+                    max_connections,
+                },
+                SinkerConfig::Dummy,
+            ));
+        }
+
         let sink_type = loader.get_with_default(SINKER, "sink_type", SinkType::Write);
         if let SinkType::Dummy = sink_type {
-            return Ok((BasicSinkerConfig::default(), SinkerConfig::Dummy));
+            if !loader.ini.sections().contains(&CHECKER.to_string()) {
+                return Ok((BasicSinkerConfig::default(), SinkerConfig::Dummy));
+            }
+            let db_type: DbType = loader.get_required(SINKER, DB_TYPE);
+            let url: String = loader.get_required(SINKER, URL);
+            let batch_size: usize = loader.get_with_default(SINKER, BATCH_SIZE, 200);
+            let max_connections =
+                loader.get_with_default(SINKER, MAX_CONNECTIONS, DEFAULT_MAX_CONNECTIONS);
+            let connection_auth = ConnectionAuthConfig::from(loader, SINKER);
+
+            return Ok((
+                BasicSinkerConfig {
+                    sink_type,
+                    db_type,
+                    url,
+                    connection_auth,
+                    batch_size,
+                    max_connections,
+                },
+                SinkerConfig::Dummy,
+            ));
         }
 
         let db_type: DbType = loader.get_required(SINKER, DB_TYPE);
@@ -485,27 +544,6 @@ impl TaskConfig {
                     transaction_isolation: loader.get_optional(SINKER, "transaction_isolation"),
                 },
 
-                SinkType::Check => SinkerConfig::MysqlCheck {
-                    url,
-                    connection_auth,
-                    batch_size,
-                    check_log_dir: loader.get_optional(SINKER, CHECK_LOG_DIR),
-                    check_log_file_size: loader.get_with_default(
-                        SINKER,
-                        CHECK_LOG_FILE_SIZE,
-                        DEFAULT_CHECK_LOG_FILE_SIZE.to_string(),
-                    ),
-                    output_full_row: loader.get_with_default(SINKER, OUTPUT_FULL_ROW, false),
-                    output_revise_sql: loader.get_with_default(SINKER, OUTPUT_REVISE_SQL, false),
-                    revise_match_full_row: loader.get_with_default(
-                        SINKER,
-                        REVISE_MATCH_FULL_ROW,
-                        false,
-                    ),
-                    retry_interval_secs: loader.get_with_default(SINKER, RETRY_INTERVAL_SECS, 0),
-                    max_retries: loader.get_with_default(SINKER, MAX_RETRIES, 1),
-                },
-
                 SinkType::Struct => SinkerConfig::MysqlStruct {
                     url,
                     connection_auth,
@@ -532,27 +570,6 @@ impl TaskConfig {
                     ),
                 },
 
-                SinkType::Check => SinkerConfig::PgCheck {
-                    url,
-                    connection_auth,
-                    batch_size,
-                    check_log_dir: loader.get_optional(SINKER, CHECK_LOG_DIR),
-                    check_log_file_size: loader.get_with_default(
-                        SINKER,
-                        CHECK_LOG_FILE_SIZE,
-                        DEFAULT_CHECK_LOG_FILE_SIZE.to_string(),
-                    ),
-                    output_full_row: loader.get_with_default(SINKER, OUTPUT_FULL_ROW, false),
-                    output_revise_sql: loader.get_with_default(SINKER, OUTPUT_REVISE_SQL, false),
-                    revise_match_full_row: loader.get_with_default(
-                        SINKER,
-                        REVISE_MATCH_FULL_ROW,
-                        false,
-                    ),
-                    retry_interval_secs: loader.get_with_default(SINKER, RETRY_INTERVAL_SECS, 0),
-                    max_retries: loader.get_with_default(SINKER, MAX_RETRIES, 1),
-                },
-
                 SinkType::Struct => SinkerConfig::PgStruct {
                     url,
                     connection_auth,
@@ -575,31 +592,6 @@ impl TaskConfig {
                         connection_auth,
                         app_name,
                         batch_size,
-                    },
-
-                    SinkType::Check => SinkerConfig::MongoCheck {
-                        url,
-                        connection_auth,
-                        app_name,
-                        batch_size,
-                        check_log_dir: loader.get_optional(SINKER, CHECK_LOG_DIR),
-                        check_log_file_size: loader.get_with_default(
-                            SINKER,
-                            CHECK_LOG_FILE_SIZE,
-                            DEFAULT_CHECK_LOG_FILE_SIZE.to_string(),
-                        ),
-                        output_full_row: loader.get_with_default(SINKER, OUTPUT_FULL_ROW, false),
-                        output_revise_sql: loader.get_with_default(
-                            SINKER,
-                            "output_revise_sql",
-                            false,
-                        ),
-                        retry_interval_secs: loader.get_with_default(
-                            SINKER,
-                            RETRY_INTERVAL_SECS,
-                            0,
-                        ),
-                        max_retries: loader.get_with_default(SINKER, MAX_RETRIES, 1),
                     },
 
                     _ => bail! { not_supported_err },
@@ -764,6 +756,57 @@ impl TaskConfig {
             config.counter_time_window_secs = config.checkpoint_interval_secs;
         }
         config
+    }
+
+    fn load_checker_config(loader: &IniLoader) -> Option<CheckerConfig> {
+        let checker_section_present = loader.ini.sections().contains(&CHECKER.to_string());
+        if !checker_section_present {
+            return None;
+        }
+
+        let mut config = CheckerConfig::default();
+        config.drop_on_full =
+            loader.get_with_default(CHECKER, CHECKER_DROP_ON_FULL, config.drop_on_full);
+        config.queue_size = loader.get_with_default(CHECKER, CHECKER_QUEUE_SIZE, config.queue_size);
+        config.max_connections =
+            loader.get_with_default(CHECKER, MAX_CONNECTIONS, config.max_connections);
+        config.batch_size = loader.get_with_default(CHECKER, BATCH_SIZE, config.batch_size);
+        config.output_full_row =
+            loader.get_with_default(CHECKER, OUTPUT_FULL_ROW, config.output_full_row);
+        config.output_revise_sql =
+            loader.get_with_default(CHECKER, OUTPUT_REVISE_SQL, config.output_revise_sql);
+        config.revise_match_full_row =
+            loader.get_with_default(CHECKER, REVISE_MATCH_FULL_ROW, config.revise_match_full_row);
+        config.retry_interval_secs =
+            loader.get_with_default(CHECKER, RETRY_INTERVAL_SECS, config.retry_interval_secs);
+        config.max_retries = loader.get_with_default(CHECKER, MAX_RETRIES, config.max_retries);
+        config.check_log_dir =
+            loader.get_with_default(CHECKER, CHECK_LOG_DIR, config.check_log_dir);
+        config.check_log_file_size =
+            loader.get_with_default(CHECKER, CHECK_LOG_FILE_SIZE, config.check_log_file_size);
+        if Self::checker_target_present(loader) {
+            let (db_type, url, connection_auth) = Self::load_checker_target_basic(loader);
+            config.db_type = Some(db_type);
+            config.url = Some(url);
+            config.connection_auth = Some(connection_auth);
+        }
+        Some(config)
+    }
+
+    fn checker_target_present(loader: &IniLoader) -> bool {
+        loader.contains(CHECKER, DB_TYPE)
+            || loader.contains(CHECKER, URL)
+            || loader.contains(CHECKER, USERNAME)
+            || loader.contains(CHECKER, PASSWORD)
+    }
+
+    fn load_checker_target_basic(
+        loader: &IniLoader,
+    ) -> (DbType, String, ConnectionAuthConfig) {
+        let db_type: DbType = loader.get_required(CHECKER, DB_TYPE);
+        let url: String = loader.get_required(CHECKER, URL);
+        let connection_auth = ConnectionAuthConfig::from(loader, CHECKER);
+        (db_type, url, connection_auth)
     }
 
     fn load_runtime_config(loader: &IniLoader) -> anyhow::Result<RuntimeConfig> {

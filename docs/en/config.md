@@ -6,17 +6,17 @@ Different tasks may require extra configs, refer to [task templates](/docs/templ
 
 # [extractor]
 
-| Config          | Description                                                                  | Example                                                        | Default                                                 |
-| :-------------- | :--------------------------------------------------------------------------- | :------------------------------------------------------------- | :------------------------------------------------------ |
-| db_type         | source database type                                                         | mysql                                                          | -                                                       |
-| extract_type    | snapshot, cdc                                                                | snapshot                                                       | -                                                       |
-| url             | database URL. You can specify the username and password directly in the URL. | mysql://127.0.0.1:3307 or mysql://root:password@127.0.0.1:3307 |
-| username        | database connection username                                                 | root                                                           |
-| password        | database connection password                                                 | password                                                       | -                                                       |
-| max_connections | max connections for source database                                          | 10                                                             | currently 10, may be dynamically adjusted in the future |
-| batch_size      | number of extracted records in a batch                                       | 10000                                                          | same as [pipeline] buffer_size                          |
-| parallel_size   | number of workers for extracting a table                                     | 4                                                              | 1                         |
-| partition_cols  | partition column for data splitting during snapshot migration, only single column supported          | json:[{"db":"db_1","tb":"tb_1","partition_col":"id"},{"db":"db_2","tb":"tb_2","partition_col":"id"}]                                 | -       |
+| Config          | Description                                                                                 | Example                                                                                              | Default                                                 |
+| :-------------- | :------------------------------------------------------------------------------------------ | :--------------------------------------------------------------------------------------------------- | :------------------------------------------------------ |
+| db_type         | source database type                                                                        | mysql                                                                                                | -                                                       |
+| extract_type    | snapshot, cdc                                                                               | snapshot                                                                                             | -                                                       |
+| url             | database URL. You can specify the username and password directly in the URL.                | mysql://127.0.0.1:3307 or mysql://root:password@127.0.0.1:3307                                       |
+| username        | database connection username                                                                | root                                                                                                 |
+| password        | database connection password                                                                | password                                                                                             | -                                                       |
+| max_connections | max connections for source database                                                         | 10                                                                                                   | currently 10, may be dynamically adjusted in the future |
+| batch_size      | number of extracted records in a batch                                                      | 10000                                                                                                | same as [pipeline] buffer_size                          |
+| parallel_size   | number of workers for extracting a table                                                    | 4                                                                                                    | 1                                                       |
+| partition_cols  | partition column for data splitting during snapshot migration, only single column supported | json:[{"db":"db_1","tb":"tb_1","partition_col":"id"},{"db":"db_2","tb":"tb_2","partition_col":"id"}] | -                                                       |
 
 ## URL escaping
 
@@ -33,13 +33,46 @@ url=mysql://user1:abc%25%24%23%3F%40@127.0.0.1:3307?ssl-mode=disabled
 | Config          | Description                                                                                                                          | Example                                                        | Default                                                 |
 | :-------------- | :----------------------------------------------------------------------------------------------------------------------------------- | :------------------------------------------------------------- | :------------------------------------------------------ |
 | db_type         | target database type                                                                                                                 | mysql                                                          | -                                                       |
-| sink_type       | write, check                                                                                                                         | write                                                          | write                                                   |
+| sink_type       | write, dummy                                                                                                                         | write                                                          | write                                                   |
 | url             | database URL. You can specify the username and password directly in the URL.                                                         | mysql://127.0.0.1:3307 or mysql://root:password@127.0.0.1:3307 |
 | username        | database connection username                                                                                                         | root                                                           |
 | password        | database connection password                                                                                                         | password                                                       | -                                                       |
 | max_connections | max connections for source database                                                                                                  | 10                                                             | currently 10, may be dynamically adjusted in the future |
 | batch_size      | number of records written in a batch, 1 for serial                                                                                   | 200                                                            | 200                                                     |
 | replace         | when inserting data, whether to force replacement if data already exists in target database, used in snapshot/cdc tasks for MySQL/PG | false                                                          | true                                                    |
+
+# For check tasks, set `sink_type=dummy` and configure the checker in `[checker]`,
+# or omit `[sinker]` and specify the checker target in `[checker]` (see below).
+
+# [checker]
+
+Checker has two modes:
+- Standalone checker: run a check task only (no data write). Set `sink_type=dummy` or omit
+  `[sinker]`, and specify the checker target in `[checker]`.
+- CDC + checker: for CDC tasks with `sink_type=write`, checker runs asynchronously after sink,
+  using isolated resources (pool/queue). Enable it by adding the `[checker]` section.
+
+| Config                | Description                                                 | Example    | Default |
+| :-------------------- | :---------------------------------------------------------- | :--------- | :------ |
+| drop_on_full          | drop batch when queue full (true) or block pipeline (false) | true       | true    |
+| queue_size            | checker queue capacity                                      | 2000       | 2000    |
+| max_concurrency       | max concurrent checker workers                              | 1          | 1       |
+| max_connections       | max connections for checker pool                            | 2          | 2       |
+| batch_size            | checker batch size                                          | 100        | 100     |
+| output_full_row       | output full row in diff log                                 | false      | false   |
+| output_revise_sql     | output revise SQL                                           | false      | false   |
+| revise_match_full_row | match full row when building revise SQL                     | false      | false   |
+| retry_interval_secs   | retry interval for recheck (seconds)                        | 0          | 0       |
+| max_retries           | retry times for recheck                                     | 0          | 0       |
+| check_log_dir         | check log dir                                               | /tmp/check | empty   |
+| check_log_file_size   | check log file size limit                                   | 100mb      | 100mb   |
+| db_type | checker target db type (override sinker target)            | mysql      | empty   |
+| url     | checker target URL (override sinker target)                | mysql://... | empty  |
+| username | checker target username (when URL lacks auth)             | root       | empty   |
+| password | checker target password (when URL lacks auth)             | password   | empty   |
+
+Note: when extract_type=cdc and sink_type=write, checker will always use the [sinker] target,
+and [checker] db_type/url/username/password will be ignored.
 
 # [filter]
 

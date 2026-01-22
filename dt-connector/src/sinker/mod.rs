@@ -1,4 +1,3 @@
-pub mod base_checker;
 pub mod base_sinker;
 pub mod base_struct_sinker;
 pub mod clickhouse;
@@ -11,3 +10,4 @@ pub mod pg;
 pub mod redis;
 pub mod sql_sinker;
 pub mod starrocks;
+pub mod struct_check_sinker;

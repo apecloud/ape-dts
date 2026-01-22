@@ -25,7 +25,9 @@ use dt_common::{
     },
     monitor::{counter_type::CounterType, monitor::Monitor},
 };
-use dt_connector::{data_marker::DataMarker, extractor::resumer::recorder::Recorder, Sinker};
+use dt_connector::{
+    checker::CheckerHandle, data_marker::DataMarker, extractor::resumer::recorder::Recorder, Sinker,
+};
 use dt_parallelizer::{DataSize, Parallelizer};
 
 pub struct BasePipeline {
@@ -41,6 +43,7 @@ pub struct BasePipeline {
     pub data_marker: Option<Arc<RwLock<DataMarker>>>,
     pub lua_processor: Option<LuaProcessor>,
     pub recorder: Option<Arc<dyn Recorder + Send + Sync>>,
+    pub checker: Option<Box<dyn CheckerHandle>>,
 }
 
 enum SinkMethod {
@@ -57,6 +60,10 @@ impl Pipeline for BasePipeline {
         for sinker in self.sinkers.iter_mut() {
             sinker.lock().await.close().await?;
         }
+        if let Some(checker) = &mut self.checker {
+            checker.close().await?;
+        }
+        self.checker.take();
         self.parallelizer.close().await
     }
 
@@ -184,21 +191,29 @@ impl BasePipeline {
         all_data: Vec<DtItem>,
     ) -> anyhow::Result<(DataSize, Option<Position>, Option<Position>)> {
         let (mut data, last_received_position, last_commit_position) = Self::fetch_dml(all_data);
-        if !data.is_empty() {
-            // execute lua processor
-            if let Some(lua_processor) = &self.lua_processor {
-                data = lua_processor.process(data)?;
-            }
-
-            let data_size = self.parallelizer.sink_dml(data, &self.sinkers).await?;
-            Ok((data_size, last_received_position, last_commit_position))
-        } else {
-            Ok((
+        if data.is_empty() {
+            return Ok((
                 DataSize::default(),
                 last_received_position,
                 last_commit_position,
-            ))
+            ));
         }
+
+        // execute lua processor
+        if let Some(lua_processor) = &self.lua_processor {
+            data = lua_processor.process(data)?;
+        }
+
+        let data_for_check = if self.checker.is_some() {
+            Some(data.clone())
+        } else {
+            None
+        };
+        let data_size = self.parallelizer.sink_dml(data, &self.sinkers).await?;
+        if let (Some(checker), Some(data_for_check)) = (&self.checker, data_for_check) {
+            checker.check(data_for_check).await?;
+        }
+        Ok((data_size, last_received_position, last_commit_position))
     }
 
     async fn sink_ddl(
@@ -274,7 +289,7 @@ impl BasePipeline {
         (data_count, last_received_position, last_commit_position)
     }
 
-    fn fetch_dml(mut data: Vec<DtItem>) -> (Vec<RowData>, Option<Position>, Option<Position>) {
+    fn fetch_dml(mut data: Vec<DtItem>) -> (Vec<Arc<RowData>>, Option<Position>, Option<Position>) {
         let mut dml_data = Vec::new();
         let mut last_received_position = Option::None;
         let mut last_commit_position = Option::None;
@@ -288,7 +303,7 @@ impl BasePipeline {
 
                 DtData::Dml { row_data } => {
                     last_received_position = Some(i.position);
-                    dml_data.push(row_data);
+                    dml_data.push(Arc::new(row_data));
                 }
 
                 _ => {}

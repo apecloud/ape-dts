@@ -3,7 +3,7 @@ use std::{str::FromStr, sync::Arc};
 use anyhow::{bail, Context};
 use kafka::producer::{Producer, RequiredAcks};
 use reqwest::{redirect::Policy, Url};
-use sqlx::types::chrono::{Local, Utc};
+use sqlx::types::chrono::Utc;
 use tokio::sync::{Mutex, RwLock};
 
 use dt_common::{
@@ -28,11 +28,10 @@ use dt_common::{
 use super::task_util::TaskUtil;
 use crate::{extractor_util::ExtractorUtil, task_util::ConnClient};
 use dt_connector::{
-    check_log::check_log::CheckSummaryLog,
     data_marker::DataMarker,
     rdb_router::RdbRouter,
     sinker::{
-        base_checker::CheckerCommon,
+        base_struct_sinker::DBConnPool,
         clickhouse::{
             clickhouse_sinker::ClickhouseSinker, clickhouse_struct_sinker::ClickhouseStructSinker,
         },
@@ -43,17 +42,17 @@ use dt_connector::{
             orc_sequencer::OrcSequencer,
         },
         kafka::kafka_sinker::KafkaSinker,
-        mongo::{mongo_checker::MongoChecker, mongo_sinker::MongoSinker},
+        mongo::mongo_sinker::MongoSinker,
         mysql::{
-            mysql_checker::MysqlChecker, mysql_sinker::MysqlSinker,
-            mysql_struct_sinker::MysqlStructSinker,
+            mysql_sinker::MysqlSinker, mysql_struct_sinker::MysqlStructSinker,
         },
-        pg::{pg_checker::PgChecker, pg_sinker::PgSinker, pg_struct_sinker::PgStructSinker},
+        pg::{pg_sinker::PgSinker, pg_struct_sinker::PgStructSinker},
         redis::{redis_sinker::RedisSinker, redis_statistic_sinker::RedisStatisticSinker},
         sql_sinker::SqlSinker,
         starrocks::{
             starrocks_sinker::StarRocksSinker, starrocks_struct_sinker::StarrocksStructSinker,
         },
+        struct_check_sinker::StructCheckSinker,
     },
     Sinker,
 };
@@ -83,7 +82,6 @@ impl SinkerUtil {
         client: ConnClient,
         monitor: Arc<Monitor>,
         data_marker: Option<Arc<RwLock<DataMarker>>>,
-        check_summary: Option<Arc<async_mutex::Mutex<CheckSummaryLog>>>,
     ) -> anyhow::Result<Sinkers> {
         let log_level = &config.runtime.log_level;
         let enable_sqlx_log = TaskUtil::check_enable_sqlx_log(log_level);
@@ -93,6 +91,78 @@ impl SinkerUtil {
         let mut sub_sinkers: Sinkers = Vec::new();
         match config.sinker.clone() {
             SinkerConfig::Dummy => {
+                let is_struct_check = matches!(
+                    extractor_config,
+                    ExtractorConfig::MysqlStruct { .. } | ExtractorConfig::PgStruct { .. }
+                );
+                if is_struct_check {
+                    if let Some(checker) = config.checker.as_ref() {
+                        let (checker_db_type, checker_url, checker_auth) = if let Some(db_type) =
+                            &checker.db_type
+                        {
+                                (
+                                    db_type.clone(),
+                                    checker.url.clone().unwrap_or_default(),
+                                    checker
+                                        .connection_auth
+                                        .clone()
+                                        .unwrap_or_default(),
+                                )
+                            } else {
+                                (
+                                    config.sinker_basic.db_type.clone(),
+                                    config.sinker_basic.url.clone(),
+                                    config.sinker_basic.connection_auth.clone(),
+                                )
+                            };
+
+                        let sinker: StructCheckSinker = match checker_db_type {
+                            DbType::Mysql => {
+                                let conn_pool = TaskUtil::create_mysql_conn_pool(
+                                    &checker_url,
+                                    &checker_auth,
+                                    checker.max_connections.max(1),
+                                    enable_sqlx_log,
+                                    None,
+                                )
+                                .await?;
+                                let filter = create_filter!(config, Mysql);
+                                let router = create_router!(config, Mysql);
+                                StructCheckSinker::new(
+                                    checker_db_type,
+                                    DBConnPool::MySQL(conn_pool),
+                                    filter,
+                                    router,
+                                    checker.output_revise_sql,
+                                )
+                            }
+                            DbType::Pg => {
+                                let conn_pool = TaskUtil::create_pg_conn_pool(
+                                    &checker_url,
+                                    &checker_auth,
+                                    checker.max_connections.max(1),
+                                    enable_sqlx_log,
+                                    false,
+                                )
+                                .await?;
+                                let filter = create_filter!(config, Pg);
+                                let router = create_router!(config, Pg);
+                                StructCheckSinker::new(
+                                    checker_db_type,
+                                    DBConnPool::PostgreSQL(conn_pool),
+                                    filter,
+                                    router,
+                                    checker.output_revise_sql,
+                                )
+                            }
+                            _ => bail!("struct check not supported for db_type: {}", checker_db_type),
+                        };
+
+                        sub_sinkers.push(Arc::new(async_mutex::Mutex::new(Box::new(sinker))));
+                        return Ok(sub_sinkers);
+                    }
+                }
+
                 for _ in 0..parallel_size {
                     let sinker = DummySinker {};
                     sub_sinkers.push(Arc::new(async_mutex::Mutex::new(Box::new(sinker))));
@@ -131,55 +201,6 @@ impl SinkerUtil {
                 }
             }
 
-            SinkerConfig::MysqlCheck {
-                batch_size,
-                output_full_row,
-                output_revise_sql,
-                revise_match_full_row,
-                retry_interval_secs,
-                max_retries,
-                ..
-            } => {
-                let reverse_router = create_router!(config, Mysql).reverse();
-                let filter = create_filter!(config, Mysql);
-                let extractor_meta_manager = ExtractorUtil::get_extractor_meta_manager(config)
-                    .await?
-                    .unwrap();
-
-                let conn_pool = match client {
-                    ConnClient::MySQL(conn_pool) => conn_pool,
-                    _ => {
-                        bail!("connection pool not found");
-                    }
-                };
-                let meta_manager = MysqlMetaManager::new(conn_pool.clone()).await?;
-
-                for _ in 0..parallel_size {
-                    let sinker = MysqlChecker {
-                        conn_pool: conn_pool.clone(),
-                        meta_manager: meta_manager.clone(),
-                        common: CheckerCommon {
-                            extractor_meta_manager: Some(extractor_meta_manager.clone()),
-                            reverse_router: reverse_router.clone(),
-                            batch_size,
-                            monitor: monitor.clone(),
-                            filter: filter.clone(),
-                            output_full_row,
-                            output_revise_sql,
-                            revise_match_full_row,
-                            retry_interval_secs,
-                            max_retries,
-                            summary: CheckSummaryLog {
-                                start_time: Local::now().to_rfc3339(),
-                                ..Default::default()
-                            },
-                            global_summary: check_summary.clone(),
-                        },
-                    };
-                    sub_sinkers.push(Arc::new(async_mutex::Mutex::new(Box::new(sinker))));
-                }
-            }
-
             SinkerConfig::Pg {
                 url,
                 batch_size,
@@ -211,55 +232,6 @@ impl SinkerUtil {
                 }
             }
 
-            SinkerConfig::PgCheck {
-                batch_size,
-                output_full_row,
-                output_revise_sql,
-                revise_match_full_row,
-                retry_interval_secs,
-                max_retries,
-                ..
-            } => {
-                let reverse_router = create_router!(config, Pg).reverse();
-                let filter = create_filter!(config, Pg);
-                let extractor_meta_manager = ExtractorUtil::get_extractor_meta_manager(config)
-                    .await?
-                    .unwrap();
-
-                let conn_pool = match client {
-                    ConnClient::PostgreSQL(conn_pool) => conn_pool,
-                    _ => {
-                        bail!("connection pool not found");
-                    }
-                };
-                let meta_manager = PgMetaManager::new(conn_pool.clone()).await?;
-
-                for _ in 0..parallel_size {
-                    let sinker = PgChecker {
-                        conn_pool: conn_pool.clone(),
-                        meta_manager: meta_manager.clone(),
-                        common: CheckerCommon {
-                            extractor_meta_manager: Some(extractor_meta_manager.clone()),
-                            reverse_router: reverse_router.clone(),
-                            batch_size,
-                            monitor: monitor.clone(),
-                            filter: filter.clone(),
-                            output_full_row,
-                            output_revise_sql,
-                            revise_match_full_row,
-                            retry_interval_secs,
-                            max_retries,
-                            summary: CheckSummaryLog {
-                                start_time: Local::now().to_rfc3339(),
-                                ..Default::default()
-                            },
-                            global_summary: check_summary.clone(),
-                        },
-                    };
-                    sub_sinkers.push(Arc::new(async_mutex::Mutex::new(Box::new(sinker))));
-                }
-            }
-
             SinkerConfig::Mongo { batch_size, .. } => {
                 let router = create_router!(config, Mongo);
                 let mongo_client = match client {
@@ -275,47 +247,6 @@ impl SinkerUtil {
                         mongo_client: mongo_client.clone(),
                         monitor: monitor.clone(),
                         monitor_interval,
-                    };
-                    sub_sinkers.push(Arc::new(async_mutex::Mutex::new(Box::new(sinker))));
-                }
-            }
-
-            SinkerConfig::MongoCheck {
-                batch_size,
-                output_full_row,
-                output_revise_sql,
-                retry_interval_secs,
-                max_retries,
-                ..
-            } => {
-                let reverse_router = create_router!(config, Mongo).reverse();
-                let filter = create_filter!(config, Mongo);
-                let mongo_client = match client {
-                    ConnClient::MongoDB(mongo_client) => mongo_client,
-                    _ => {
-                        bail!("connection pool not found");
-                    }
-                };
-                for _ in 0..parallel_size {
-                    let sinker = MongoChecker {
-                        mongo_client: mongo_client.clone(),
-                        common: CheckerCommon {
-                            extractor_meta_manager: None,
-                            reverse_router: reverse_router.clone(),
-                            batch_size,
-                            monitor: monitor.clone(),
-                            filter: filter.clone(),
-                            output_full_row,
-                            output_revise_sql,
-                            revise_match_full_row: false,
-                            retry_interval_secs,
-                            max_retries,
-                            summary: CheckSummaryLog {
-                                start_time: Local::now().to_rfc3339(),
-                                ..Default::default()
-                            },
-                            global_summary: check_summary.clone(),
-                        },
                     };
                     sub_sinkers.push(Arc::new(async_mutex::Mutex::new(Box::new(sinker))));
                 }
