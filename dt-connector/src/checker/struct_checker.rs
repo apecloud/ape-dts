@@ -1,6 +1,8 @@
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 use anyhow::{bail, Context};
+use async_mutex::Mutex;
 use async_trait::async_trait;
 use chrono::Local;
 use sqlx::{MySql, Pool, Postgres};
@@ -18,34 +20,37 @@ use crate::{
         mysql::mysql_struct_fetcher::MysqlStructFetcher, pg::pg_struct_fetcher::PgStructFetcher,
     },
     rdb_router::RdbRouter,
-    sinker::base_struct_sinker::DBConnPool,
-    Sinker,
 };
 
-pub struct StructCheckSinker {
+use super::CheckerHandle;
+
+struct StructCheckState {
+    src_sql_map: HashMap<String, String>,
+    dbs: HashSet<String>,
+    start_time: String,
+}
+
+pub struct StructCheckerHandle {
     db_type: DbType,
     conn_pool_mysql: Option<Pool<MySql>>,
     conn_pool_pg: Option<Pool<Postgres>>,
     filter: RdbFilter,
     router: RdbRouter,
     output_revise_sql: bool,
-    src_sql_map: HashMap<String, String>,
-    dbs: HashSet<String>,
-    start_time: String,
+    global_summary: Option<Arc<Mutex<CheckSummaryLog>>>,
+    state: Arc<Mutex<StructCheckState>>,
 }
 
-impl StructCheckSinker {
+impl StructCheckerHandle {
     pub fn new(
         db_type: DbType,
-        conn_pool: DBConnPool,
+        conn_pool_mysql: Option<Pool<MySql>>,
+        conn_pool_pg: Option<Pool<Postgres>>,
         filter: RdbFilter,
         router: RdbRouter,
         output_revise_sql: bool,
+        global_summary: Option<Arc<Mutex<CheckSummaryLog>>>,
     ) -> Self {
-        let (conn_pool_mysql, conn_pool_pg) = match conn_pool {
-            DBConnPool::MySQL(pool) => (Some(pool), None),
-            DBConnPool::PostgreSQL(pool) => (None, Some(pool)),
-        };
         Self {
             db_type,
             conn_pool_mysql,
@@ -53,9 +58,12 @@ impl StructCheckSinker {
             filter,
             router,
             output_revise_sql,
-            src_sql_map: HashMap::new(),
-            dbs: HashSet::new(),
-            start_time: Local::now().to_rfc3339(),
+            global_summary,
+            state: Arc::new(Mutex::new(StructCheckState {
+                src_sql_map: HashMap::new(),
+                dbs: HashSet::new(),
+                start_time: Local::now().to_rfc3339(),
+            })),
         }
     }
 
@@ -65,19 +73,25 @@ impl StructCheckSinker {
         parts.next().map(|s| s.to_string())
     }
 
-    fn add_src_sqls(&mut self, struct_data: StructData) -> anyhow::Result<()> {
+    async fn add_src_sqls(&self, struct_data: StructData) -> anyhow::Result<()> {
         let routed = self.router.route_struct(struct_data);
         let mut statement = routed.statement;
-        for (key, sql) in statement.to_sqls(&self.filter)? {
+        let sqls = statement.to_sqls(&self.filter)?;
+
+        let mut state = self.state.lock().await;
+        for (key, sql) in sqls {
             if let Some(db) = Self::collect_db_from_key(&key) {
-                self.dbs.insert(db);
+                state.dbs.insert(db);
             }
-            self.src_sql_map.insert(key, sql);
+            state.src_sql_map.insert(key, sql);
         }
         Ok(())
     }
 
-    async fn build_dst_sql_map(&self) -> anyhow::Result<HashMap<String, String>> {
+    async fn build_dst_sql_map(
+        &self,
+        dbs: &HashSet<String>,
+    ) -> anyhow::Result<HashMap<String, String>> {
         let mut dst_map = HashMap::new();
         match self.db_type {
             DbType::Mysql => {
@@ -92,7 +106,7 @@ impl StructCheckSinker {
                 .await?;
                 let mut fetcher = MysqlStructFetcher {
                     conn_pool,
-                    dbs: self.dbs.clone(),
+                    dbs: dbs.clone(),
                     filter: Some(self.filter.clone()),
                     meta_manager,
                 };
@@ -115,7 +129,7 @@ impl StructCheckSinker {
                     .clone();
                 let mut fetcher = PgStructFetcher {
                     conn_pool,
-                    schemas: self.dbs.clone(),
+                    schemas: dbs.clone(),
                     filter: Some(self.filter.clone()),
                 };
                 for stmt in fetcher.get_create_schema_statements("").await? {
@@ -141,24 +155,37 @@ impl StructCheckSinker {
 }
 
 #[async_trait]
-impl Sinker for StructCheckSinker {
-    async fn sink_struct(&mut self, data: Vec<StructData>) -> anyhow::Result<()> {
+impl CheckerHandle for StructCheckerHandle {
+    async fn check(&self, _data: Vec<Arc<dt_common::meta::row_data::RowData>>) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    async fn check_struct(&self, data: Vec<StructData>) -> anyhow::Result<()> {
         for struct_data in data {
-            self.add_src_sqls(struct_data)?;
+            self.add_src_sqls(struct_data).await?;
         }
         Ok(())
     }
 
     async fn close(&mut self) -> anyhow::Result<()> {
-        let mut dst_map = self.build_dst_sql_map().await?;
+        let (src_sql_map, dbs, start_time) = {
+            let state = self.state.lock().await;
+            (
+                state.src_sql_map.clone(),
+                state.dbs.clone(),
+                state.start_time.clone(),
+            )
+        };
+
+        let mut dst_map = self.build_dst_sql_map(&dbs).await?;
         let mut summary = CheckSummaryLog {
-            start_time: self.start_time.clone(),
+            start_time,
             end_time: Local::now().to_rfc3339(),
             ..Default::default()
         };
 
         let mut sql_count = 0usize;
-        for (key, src_sql) in self.src_sql_map.iter() {
+        for (key, src_sql) in src_sql_map.iter() {
             match dst_map.remove(key) {
                 None => {
                     let log = StructCheckLog {
@@ -208,6 +235,11 @@ impl Sinker for StructCheckSinker {
         }
         summary.end_time = Local::now().to_rfc3339();
         log_summary!("{}", summary);
+
+        if let Some(global_summary) = &self.global_summary {
+            let mut global_summary = global_summary.lock().await;
+            global_summary.merge(&summary);
+        }
         Ok(())
     }
 }

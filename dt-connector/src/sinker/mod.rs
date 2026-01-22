@@ -10,4 +10,3 @@ pub mod pg;
 pub mod redis;
 pub mod sql_sinker;
 pub mod starrocks;
-pub mod struct_check_sinker;
