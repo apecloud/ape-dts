@@ -125,8 +125,9 @@ db_type=mongo
 extract_type=snapshot
 url=mongodb://127.0.0.1:27017
 
-[checker]
+[sinker]
 db_type=mongo
+sink_type=check
 url=mongodb://ape_dts:123456@127.0.0.1:27018
 
 [filter]
@@ -225,8 +226,9 @@ extract_type=check_log
 url=mongodb://127.0.0.1:27017
 check_log_dir=./check_data_task_log
 
-[checker]
+[sinker]
 db_type=mongo
+sink_type=check
 url=mongodb://ape_dts:123456@127.0.0.1:27018
 
 [filter]
