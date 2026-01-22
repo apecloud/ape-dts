@@ -32,45 +32,13 @@ url=mysql://user1:abc%25%24%23%3F%40@127.0.0.1:3307?ssl-mode=disabled
 | 配置            | 作用                                                                          | 示例                                                           | 默认                          |
 | :-------------- | :---------------------------------------------------------------------------- | :------------------------------------------------------------- | :---------------------------- |
 | db_type         | 目标库类型                                                                    | mysql                                                          | -                             |
-| sink_type       | 拉取类型（写入：write，虚拟：dummy）                                          | write                                                          | write                         |
+| sink_type       | 拉取类型（写入：write，校验：check）                                          | write                                                          | write                         |
 | url             | 数据库 URL。也可以在 URL 中直接指定用户名和密码。                             | mysql://127.0.0.1:3307 或 mysql://root:password@127.0.0.1:3307 |
 | username        | 数据库连接账号                                                                | root                                                           |
 | password        | 数据库连接密码                                                                | password                                                       |
 | batch_size      | 批量写入数据条数，1 代表串行                                                  | 200                                                            | 200                           |
 | max_connections | 最大连接数                                                                    | 10                                                             | 目前是 10，未来可能会动态适配 |
 | replace         | 插入数据时，如果已存在于目标库，是否强行替换，适用于 mysql/pg 的全量/增量任务 | false                                                          | true                          |
-
-校验任务可设置 `sink_type=dummy` 并在 `[checker]` 中配置校验参数；或直接省略 `[sinker]`，在 `[checker]` 中配置校验目标（见下）。
-
-# [checker]
-
-Checker 有两种模式：
-- 独立 checker：仅做校验任务，不做写入。设置 `sink_type=dummy` 或直接省略 `[sinker]`，
-  并在 `[checker]` 中配置校验目标。
-- CDC + checker：CDC 任务且 `sink_type=write` 时，在主链路写入后异步校验，连接池/队列隔离资源。
-  只要存在 `[checker]` section 即启用。
-
-| 配置                  | 作用                                      | 示例      | 默认  |
-| :-------------------- | :---------------------------------------- | :-------- | :---- |
-| drop_on_full          | 队列满时丢弃(true)或阻塞(false)           | true      | true  |
-| queue_size            | checker 队列容量                          | 2000      | 2000  |
-| max_concurrency       | checker 最大并发                          | 1         | 1     |
-| max_connections       | checker 连接池最大连接数                  | 2         | 2     |
-| batch_size            | checker 批量校验大小                      | 100       | 100   |
-| output_full_row       | diff 日志是否输出全量行                   | false     | false |
-| output_revise_sql     | diff 日志是否输出修复 SQL                 | false     | false |
-| revise_match_full_row | 生成修复 SQL 时是否按全量行匹配           | false     | false |
-| retry_interval_secs   | 重试间隔（秒）                            | 0         | 0     |
-| max_retries           | 重试次数                                  | 0         | 0     |
-| check_log_dir         | 校验日志目录                              | /tmp/check | 空    |
-| check_log_file_size   | 校验日志大小限制                          | 100mb     | 100mb |
-| db_type | 校验目标库类型（覆盖 [sinker] 目标）     | mysql     | 空    |
-| url     | 校验目标 URL（覆盖 [sinker] 目标）       | mysql://... | 空  |
-| username | 校验目标用户名（URL 未包含时使用）     | root      | 空    |
-| password | 校验目标密码（URL 未包含时使用）       | password  | 空    |
-
-注意：当 extract_type=cdc 且 sink_type=write 时，checker 会强制使用 [sinker] 目标，
-[checker] 的 db_type/url/username/password 将被忽略。
 
 # [filter]
 
@@ -194,24 +162,3 @@ Checker 有两种模式：
 通常不需要修改。
 
 需要注意的是，日志文件中包含了该任务的进度信息，这些信息可用于任务 [断点续传](/docs/zh/snapshot/resume.md)。所以如果你有多个任务，**请为每个任务设置独立的日志目录**。
-
-# [global]
-
-| 配置    | 作用           | 示例       | 默认 |
-| :------ | :------------- | :--------- | :--- |
-| task_id | 任务唯一标识符 | cdc_task_1 |      |
-
-在某些场景下，task_id 用于区分任务的唯一性，例如使用数据库断点续传时。默认情况下，它将根据关键配置信息自动生成。
-
-# [resumer]
-
-| 配置            | 作用                                                           | 示例                                        | 默认                                   |
-| :-------------- | :------------------------------------------------------------- | :------------------------------------------ | :------------------------------------- |
-| resume_type     | 类型: [from_log;from_target;from_db]                           | from_target                                 |                                        |
-| log_dir         | resume_type 为 from_log 时有效，日志目录位置                   | ./logs                                      |                                        |
-| url             | resume_type 为 from_db 时有效，数据库连接 URL                  | mysql://xxx:xxx@127.0.0.1:3306              |                                        |
-| db_type         | resume_type 为 from_db 时有效，数据库类型                      | mysql                                       |                                        |
-| table_full_name | resume_type 为 from_db 或 from_target 时有效，用于记录的表全名 | apecloud_metadata_test.apedts_task_position | apecloud_metadata.apedts_task_position |
-| max_connections | 断点续传连接池的最大连接数                                     | 1                                           | 1                                      |
-
-详情请参考断点续传文档：[断点续传](/docs/zh/snapshot/resume.md)。

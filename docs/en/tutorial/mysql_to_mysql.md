@@ -185,8 +185,9 @@ db_type=mysql
 extract_type=snapshot
 url=mysql://root:123456@127.0.0.1:3307?ssl-mode=disabled
 
-[checker]
+[sinker]
 db_type=mysql
+sink_type=check
 url=mysql://root:123456@127.0.0.1:3308?ssl-mode=disabled
 
 [filter]
@@ -287,8 +288,9 @@ extract_type=check_log
 url=mysql://root:123456@127.0.0.1:3307?ssl-mode=disabled
 check_log_dir=./check_data_task_log
 
-[checker]
+[sinker]
 db_type=mysql
+sink_type=check
 url=mysql://root:123456@127.0.0.1:3308?ssl-mode=disabled
 
 [filter]
