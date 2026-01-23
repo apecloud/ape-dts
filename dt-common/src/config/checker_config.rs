@@ -23,7 +23,6 @@ impl Default for CheckerConfig {
         Self {
             drop_on_full: true,
             queue_size: 2000,
-
             max_connections: 2,
             batch_size: 100,
             output_full_row: false,

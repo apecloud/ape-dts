@@ -1,16 +1,18 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::{bail, Context};
 use async_mutex::Mutex;
-use async_trait::async_trait;
 use chrono::Local;
 use sqlx::{MySql, Pool, Postgres};
+use tokio::time::sleep;
 
 use dt_common::{
     config::config_enums::DbType,
-    log_diff, log_extra, log_miss, log_sql, log_summary,
+    log_diff, log_miss, log_sql, log_summary,
     meta::struct_meta::struct_data::StructData,
+    monitor::{counter_type::CounterType, monitor::Monitor},
     rdb_filter::RdbFilter,
 };
 
@@ -21,8 +23,6 @@ use crate::{
     },
     rdb_router::RdbRouter,
 };
-
-use super::CheckerHandle;
 
 struct StructCheckState {
     src_sql_map: HashMap<String, String>,
@@ -37,11 +37,15 @@ pub struct StructCheckerHandle {
     filter: RdbFilter,
     router: RdbRouter,
     output_revise_sql: bool,
+    retry_interval_secs: u64,
+    max_retries: u32,
     global_summary: Option<Arc<Mutex<CheckSummaryLog>>>,
+    monitor: Arc<Monitor>,
     state: Arc<Mutex<StructCheckState>>,
 }
 
 impl StructCheckerHandle {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         db_type: DbType,
         conn_pool_mysql: Option<Pool<MySql>>,
@@ -49,7 +53,10 @@ impl StructCheckerHandle {
         filter: RdbFilter,
         router: RdbRouter,
         output_revise_sql: bool,
+        retry_interval_secs: u64,
+        max_retries: u32,
         global_summary: Option<Arc<Mutex<CheckSummaryLog>>>,
+        monitor: Arc<Monitor>,
     ) -> Self {
         Self {
             db_type,
@@ -58,7 +65,10 @@ impl StructCheckerHandle {
             filter,
             router,
             output_revise_sql,
+            retry_interval_secs,
+            max_retries,
             global_summary,
+            monitor,
             state: Arc::new(Mutex::new(StructCheckState {
                 src_sql_map: HashMap::new(),
                 dbs: HashSet::new(),
@@ -77,6 +87,11 @@ impl StructCheckerHandle {
         let routed = self.router.route_struct(struct_data);
         let mut statement = routed.statement;
         let sqls = statement.to_sqls(&self.filter)?;
+        if !sqls.is_empty() {
+            self.monitor
+                .add_counter(CounterType::RecordCount, sqls.len() as u64)
+                .await;
+        }
 
         let mut state = self.state.lock().await;
         for (key, sql) in sqls {
@@ -100,10 +115,11 @@ impl StructCheckerHandle {
                     .as_ref()
                     .context("mysql connection pool not found")?
                     .clone();
-                let meta_manager = dt_common::meta::mysql::mysql_meta_manager::MysqlMetaManager::new(
-                    conn_pool.clone(),
-                )
-                .await?;
+                let meta_manager =
+                    dt_common::meta::mysql::mysql_meta_manager::MysqlMetaManager::new(
+                        conn_pool.clone(),
+                    )
+                    .await?;
                 let mut fetcher = MysqlStructFetcher {
                     conn_pool,
                     dbs: dbs.clone(),
@@ -152,39 +168,22 @@ impl StructCheckerHandle {
         }
         Ok(dst_map)
     }
-}
 
-#[async_trait]
-impl CheckerHandle for StructCheckerHandle {
-    async fn check(&self, _data: Vec<Arc<dt_common::meta::row_data::RowData>>) -> anyhow::Result<()> {
-        Ok(())
-    }
-
-    async fn check_struct(&self, data: Vec<StructData>) -> anyhow::Result<()> {
-        for struct_data in data {
-            self.add_src_sqls(struct_data).await?;
-        }
-        Ok(())
-    }
-
-    async fn close(&mut self) -> anyhow::Result<()> {
-        let (src_sql_map, dbs, start_time) = {
-            let state = self.state.lock().await;
-            (
-                state.src_sql_map.clone(),
-                state.dbs.clone(),
-                state.start_time.clone(),
-            )
-        };
-
-        let mut dst_map = self.build_dst_sql_map(&dbs).await?;
+    async fn compare_once(
+        &self,
+        src_sql_map: &HashMap<String, String>,
+        dbs: &HashSet<String>,
+        start_time: &str,
+        log_enabled: bool,
+    ) -> anyhow::Result<(CheckSummaryLog, usize)> {
+        let mut dst_map = self.build_dst_sql_map(dbs).await?;
         let mut summary = CheckSummaryLog {
-            start_time,
+            start_time: start_time.to_string(),
             end_time: Local::now().to_rfc3339(),
             ..Default::default()
         };
-
         let mut sql_count = 0usize;
+
         for (key, src_sql) in src_sql_map.iter() {
             match dst_map.remove(key) {
                 None => {
@@ -193,9 +192,11 @@ impl CheckerHandle for StructCheckerHandle {
                         src_sql: Some(src_sql.clone()),
                         dst_sql: None,
                     };
-                    log_miss!("{}", log);
                     summary.miss_count += 1;
-                    if self.output_revise_sql {
+                    if log_enabled {
+                        log_miss!("{}", log);
+                    }
+                    if self.output_revise_sql && log_enabled {
                         log_sql!("{}", src_sql);
                         sql_count += 1;
                     }
@@ -207,9 +208,11 @@ impl CheckerHandle for StructCheckerHandle {
                             src_sql: Some(src_sql.clone()),
                             dst_sql: Some(dst_sql),
                         };
-                        log_diff!("{}", log);
                         summary.diff_count += 1;
-                        if self.output_revise_sql {
+                        if log_enabled {
+                            log_diff!("{}", log);
+                        }
+                        if self.output_revise_sql && log_enabled {
                             log_sql!("{}", src_sql);
                             sql_count += 1;
                         }
@@ -218,27 +221,76 @@ impl CheckerHandle for StructCheckerHandle {
             }
         }
 
-        for (key, dst_sql) in dst_map.into_iter() {
-            let log = StructCheckLog {
-                key,
-                src_sql: None,
-                dst_sql: Some(dst_sql),
-            };
-            log_extra!("{}", log);
-            summary.extra_count += 1;
-        }
-
-        summary.is_consistent =
-            summary.miss_count == 0 && summary.diff_count == 0 && summary.extra_count == 0;
+        summary.is_consistent = summary.miss_count == 0 && summary.diff_count == 0;
         if self.output_revise_sql && sql_count > 0 {
             summary.sql_count = Some(sql_count);
         }
         summary.end_time = Local::now().to_rfc3339();
-        log_summary!("{}", summary);
 
-        if let Some(global_summary) = &self.global_summary {
-            let mut global_summary = global_summary.lock().await;
-            global_summary.merge(&summary);
+        Ok((summary, sql_count))
+    }
+}
+
+impl StructCheckerHandle {
+    pub async fn check_struct(&self, data: Vec<StructData>) -> anyhow::Result<()> {
+        for struct_data in data {
+            self.add_src_sqls(struct_data).await?;
+        }
+        Ok(())
+    }
+
+    pub async fn close(&mut self) -> anyhow::Result<()> {
+        let (src_sql_map, dbs, start_time) = {
+            let state = self.state.lock().await;
+            (
+                state.src_sql_map.clone(),
+                state.dbs.clone(),
+                state.start_time.clone(),
+            )
+        };
+
+        let mut retries_left = self.max_retries;
+        loop {
+            let (summary, _) = self
+                .compare_once(&src_sql_map, &dbs, &start_time, false)
+                .await?;
+            if summary.is_consistent {
+                return Ok(());
+            }
+            if retries_left == 0 {
+                break;
+            }
+            retries_left -= 1;
+            if self.retry_interval_secs > 0 {
+                sleep(Duration::from_secs(self.retry_interval_secs)).await;
+            }
+        }
+
+        let (summary, sql_count) = self
+            .compare_once(&src_sql_map, &dbs, &start_time, true)
+            .await?;
+        if summary.miss_count > 0 {
+            self.monitor
+                .add_counter(CounterType::CheckerMissCount, summary.miss_count as u64)
+                .await;
+        }
+        if summary.diff_count > 0 {
+            self.monitor
+                .add_counter(CounterType::CheckerDiffCount, summary.diff_count as u64)
+                .await;
+        }
+        if sql_count > 0 {
+            self.monitor
+                .add_counter(CounterType::CheckerGenerateSqlCount, sql_count as u64)
+                .await;
+        }
+        if summary.miss_count > 0 || summary.diff_count > 0 {
+            if let Some(global_summary) = &self.global_summary {
+                let mut global_summary = global_summary.lock().await;
+                global_summary.merge(&summary);
+            } else {
+                log_summary!("{}", summary);
+            }
         }
         Ok(())
     }
