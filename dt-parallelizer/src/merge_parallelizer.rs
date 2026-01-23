@@ -8,8 +8,7 @@ use dt_common::meta::dcl_meta::dcl_data::DclData;
 use dt_common::meta::ddl_meta::ddl_data::DdlData;
 use dt_common::meta::dt_queue::DtQueue;
 use dt_common::meta::{
-    dt_data::DtItem, rdb_meta_manager::RdbMetaManager, row_data::RowData,
-    row_type::RowType,
+    dt_data::DtItem, rdb_meta_manager::RdbMetaManager, row_data::RowData, row_type::RowType,
 };
 use dt_connector::Sinker;
 

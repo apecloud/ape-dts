@@ -1,36 +1,39 @@
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
-use anyhow::{anyhow, Context};
+use anyhow::Context;
 use async_trait::async_trait;
 use mongodb::{
     bson::{doc, oid::ObjectId, Bson, Document},
     Client,
 };
 use serde_json::Value as JsonValue;
-use tokio::sync::{mpsc, Mutex};
 
+use crate::checker::base_checker::{
+    CheckContext, Checker, CheckerTbMeta, DataCheckerHandle, FetchResult, CHECKER_MAX_QUERY_BATCH,
+};
+use dt_common::log_error;
 use dt_common::meta::{
     col_value::ColValue,
     mongo::{mongo_constant::MongoConstants, mongo_key::MongoKey},
     rdb_tb_meta::RdbTbMeta,
     row_data::RowData,
+    row_type::RowType,
 };
-use dt_common::{log_error, log_info, log_warn};
 
-use crate::checker::base_checker::{CheckProcessor, Checker, CheckerCommon, CheckerTbMeta};
-use crate::checker::{CheckerHandle, CheckerMode};
-
-struct MongoChecker {
+pub struct MongoChecker {
     mongo_client: Client,
 }
 
 #[async_trait]
 impl Checker for MongoChecker {
-    async fn get_tb_meta(&mut self, row: &Arc<RowData>) -> anyhow::Result<CheckerTbMeta> {
-        let mut meta = Self::mock_tb_meta(&row.schema, &row.tb);
-        if let Some(after) = &row.after {
+    async fn fetch(&mut self, src_rows: &[Arc<RowData>]) -> anyhow::Result<FetchResult> {
+        let first_row = src_rows
+            .first()
+            .context("fetch called with empty src rows")?;
+
+        let mut meta = Self::mock_tb_meta(&first_row.schema, &first_row.tb);
+        if let Some(after) = &first_row.after {
             meta.cols = after.keys().cloned().collect();
         }
         for col in [MongoConstants::DOC, MongoConstants::ID] {
@@ -39,19 +42,12 @@ impl Checker for MongoChecker {
                 meta.cols.push(col);
             }
         }
-        Ok(CheckerTbMeta::Mongo(meta))
-    }
-
-    async fn fetch_batch(
-        &self,
-        tb_meta: &CheckerTbMeta,
-        data: &[&Arc<RowData>],
-    ) -> anyhow::Result<Vec<RowData>> {
+        let tb_meta = Arc::new(CheckerTbMeta::Mongo(meta));
         let basic_meta = tb_meta.basic();
 
-        let mut ids = Vec::with_capacity(data.len());
-
-        for &row_data in data {
+        let mut ids = Vec::with_capacity(src_rows.len());
+        let mut batch_rows = Vec::with_capacity(src_rows.len());
+        for row_data in src_rows {
             let id = Self::get_id_from_row(row_data).with_context(|| {
                 format!(
                     "row_data missing `_id`, schema: {}, tb: {}",
@@ -62,37 +58,68 @@ impl Checker for MongoChecker {
             let doc = doc! { MongoConstants::ID: id.clone() };
             if MongoKey::from_doc(&doc).is_some() {
                 ids.push(id);
+                batch_rows.push(row_data.clone());
             }
         }
 
-        let filter = doc! {
-            MongoConstants::ID: {
-                "$in": ids
-            }
-        };
+        if ids.is_empty() {
+            return Ok(FetchResult {
+                tb_meta,
+                src_rows: Vec::new(),
+                dst_rows: Vec::new(),
+            });
+        }
 
         let mut dst_row_data_vec = Vec::new();
         let collection = self
             .mongo_client
             .database(&basic_meta.schema)
             .collection::<Document>(&basic_meta.tb);
-        let mut cursor = collection.find(filter, None).await?;
+        for chunk in ids.chunks(CHECKER_MAX_QUERY_BATCH) {
+            let filter = doc! {
+                MongoConstants::ID: {
+                    "$in": chunk.to_vec()
+                }
+            };
+            let mut cursor = collection.find(filter, None).await?;
 
-        while cursor.advance().await? {
-            let doc = cursor.deserialize_current()?;
-            if let Some(key) = MongoKey::from_doc(&doc) {
-                let row_data = Self::build_row_data(&basic_meta.schema, &basic_meta.tb, doc, &key);
-                dst_row_data_vec.push(row_data);
-            } else {
-                let id = doc.get(MongoConstants::ID);
-                log_error!("dst row_data's _id type not supported, _id: {:?}", id);
+            while cursor.advance().await? {
+                let doc = cursor.deserialize_current()?;
+                if let Some(key) = MongoKey::from_doc(&doc) {
+                    let row_data =
+                        Self::build_row_data(&basic_meta.schema, &basic_meta.tb, doc, &key);
+                    dst_row_data_vec.push(row_data);
+                } else {
+                    let id = doc.get(MongoConstants::ID);
+                    log_error!("dst row_data's _id type not supported, _id: {:?}", id);
+                }
             }
         }
-        Ok(dst_row_data_vec)
+
+        Ok(FetchResult {
+            tb_meta,
+            src_rows: batch_rows,
+            dst_rows: dst_row_data_vec,
+        })
     }
 }
 
 impl MongoChecker {
+    pub fn spawn(
+        mongo_client: Client,
+        ctx: CheckContext,
+        buffer_size: usize,
+        drop_on_full: bool,
+    ) -> DataCheckerHandle {
+        DataCheckerHandle::spawn(
+            Self { mongo_client },
+            ctx,
+            buffer_size,
+            drop_on_full,
+            "MongoChecker",
+        )
+    }
+
     fn mock_tb_meta(schema: &str, tb: &str) -> RdbTbMeta {
         RdbTbMeta {
             schema: schema.to_string(),
@@ -112,7 +139,7 @@ impl MongoChecker {
         RowData::new(
             schema.to_string(),
             tb.to_string(),
-            dt_common::meta::row_type::RowType::Insert,
+            RowType::Insert,
             None,
             Some(dst_after),
         )
@@ -150,100 +177,5 @@ impl MongoChecker {
             }
         }
         anyhow::bail!("missing _id in row data")
-    }
-}
-
-pub struct MongoCheckerHandle {
-    processor: Option<Mutex<CheckProcessor<MongoChecker>>>,
-    sender: Option<mpsc::Sender<Vec<Arc<RowData>>>>,
-    mode: CheckerMode,
-    dropped_batches: AtomicU64,
-}
-
-impl MongoCheckerHandle {
-    pub fn new(mongo_client: Client, common: CheckerCommon, mode: CheckerMode) -> Self {
-        let backend = MongoChecker { mongo_client };
-        let processor = CheckProcessor::new(backend, common);
-        let (sender, processor) = match mode {
-            CheckerMode::Sync => (None, Some(Mutex::new(processor))),
-            CheckerMode::AsyncBlocking { buffer_size } | CheckerMode::AsyncDrop { buffer_size } => {
-                let (tx, mut rx) = mpsc::channel(buffer_size.max(1));
-                tokio::spawn(async move {
-                    log_info!("Checker [MongoChecker] background worker started.");
-                    let mut processor = processor;
-                    while let Some(batch) = rx.recv().await {
-                        if let Err(err) = processor.sink_dml(batch, true).await {
-                            log_error!("Checker [MongoChecker] batch failed: {}", err);
-                        }
-                    }
-                    if let Err(err) = processor.close().await {
-                        log_error!("Checker [MongoChecker] close failed: {}", err);
-                    }
-                    log_info!("Checker [MongoChecker] background worker stopped.");
-                });
-                (Some(tx), None)
-            }
-        };
-
-        Self {
-            processor,
-            sender,
-            mode,
-            dropped_batches: AtomicU64::new(0),
-        }
-    }
-}
-
-#[async_trait]
-impl CheckerHandle for MongoCheckerHandle {
-    async fn check(&self, data: Vec<Arc<RowData>>) -> anyhow::Result<()> {
-        if data.is_empty() {
-            return Ok(());
-        }
-
-        match self.mode {
-            CheckerMode::Sync => {
-                let processor = self
-                    .processor
-                    .as_ref()
-                    .ok_or_else(|| anyhow!("Checker processor missing"))?;
-                let mut guard = processor.lock().await;
-                guard.sink_dml(data, true).await
-            }
-            CheckerMode::AsyncBlocking { .. } => {
-                if let Some(tx) = &self.sender {
-                    tx.send(data)
-                        .await
-                        .map_err(|_| anyhow!("Checker worker closed"))?;
-                }
-                Ok(())
-            }
-            CheckerMode::AsyncDrop { .. } => {
-                if let Some(tx) = &self.sender {
-                    match tx.try_send(data) {
-                        Ok(()) => {}
-                        Err(mpsc::error::TrySendError::Full(_)) => {
-                            let dropped = self.dropped_batches.fetch_add(1, Ordering::Relaxed) + 1;
-                            if dropped % 1000 == 0 {
-                                log_warn!("Checker queue full, dropped {} batches.", dropped);
-                            }
-                        }
-                        Err(_) => return Err(anyhow!("Checker worker closed")),
-                    }
-                }
-                Ok(())
-            }
-        }
-    }
-
-    async fn close(&mut self) -> anyhow::Result<()> {
-        self.sender.take();
-        if matches!(self.mode, CheckerMode::Sync) {
-            if let Some(processor) = &self.processor {
-                let mut guard = processor.lock().await;
-                guard.close().await?;
-            }
-        }
-        Ok(())
     }
 }

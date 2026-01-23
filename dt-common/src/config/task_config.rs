@@ -87,6 +87,7 @@ const REVISE_MATCH_FULL_ROW: &str = "revise_match_full_row";
 const RETRY_INTERVAL_SECS: &str = "retry_interval_secs";
 const MAX_RETRIES: &str = "max_retries";
 const DB_TYPE: &str = "db_type";
+const SINK_TYPE: &str = "sink_type";
 const URL: &str = "url";
 const BATCH_SIZE: &str = "batch_size";
 const MAX_CONNECTIONS: &str = "max_connections";
@@ -122,13 +123,14 @@ impl TaskConfig {
         let loader = IniLoader::new(task_config_file);
 
         let pipeline = Self::load_pipeline_config(&loader);
-        let checker = Self::load_checker_config(&loader);
         let runtime = Self::load_runtime_config(&loader)?;
         let (sinker_basic, sinker) = Self::load_sinker_config(&loader)?;
         let resumer = Self::load_resumer_config(&loader, &runtime, &sinker_basic)?;
         let (extractor_basic, extractor) = Self::load_extractor_config(&loader, &pipeline)?;
         let filter = Self::load_filter_config(&loader)?;
         let router = Self::load_router_config(&loader)?;
+        let mut checker = Self::load_checker_config(&loader);
+        Self::finalize_checker_target(&mut checker, &extractor_basic, &sinker_basic)?;
         Ok(Self {
             global: Self::load_global_config(
                 &loader,
@@ -452,66 +454,21 @@ impl TaskConfig {
     }
 
     fn load_sinker_config(loader: &IniLoader) -> anyhow::Result<(BasicSinkerConfig, SinkerConfig)> {
-        let sinker_section_present = loader.ini.sections().contains(&SINKER.to_string());
-        if !sinker_section_present {
+        if !loader.ini.sections().contains(&SINKER.to_string()) {
             if !loader.ini.sections().contains(&CHECKER.to_string()) {
                 bail!(Error::ConfigError(
                     "config [sinker] is required when [checker] is not set".into()
                 ));
             }
-            if !Self::checker_target_present(loader) {
-                bail!(Error::ConfigError(
-                    "config [checker] target is required when [sinker] is missing".into()
-                ));
-            }
-            let (db_type, url, connection_auth) = Self::load_checker_target_basic(loader);
-            let batch_size = loader.get_with_default(CHECKER, BATCH_SIZE, 200);
-            let max_connections =
-                loader.get_with_default(CHECKER, MAX_CONNECTIONS, DEFAULT_MAX_CONNECTIONS);
-            return Ok((
-                BasicSinkerConfig {
-                    sink_type: SinkType::Dummy,
-                    db_type,
-                    url,
-                    connection_auth,
-                    batch_size,
-                    max_connections,
-                },
-                SinkerConfig::Dummy,
-            ));
+            return Ok((BasicSinkerConfig::default(), SinkerConfig::Dummy));
         }
 
-        let sink_type = loader.get_with_default(SINKER, "sink_type", SinkType::Write);
-        if let SinkType::Dummy = sink_type {
-            if !loader.ini.sections().contains(&CHECKER.to_string()) {
-                return Ok((BasicSinkerConfig::default(), SinkerConfig::Dummy));
-            }
-            let db_type: DbType = loader.get_required(SINKER, DB_TYPE);
-            let url: String = loader.get_required(SINKER, URL);
-            let batch_size: usize = loader.get_with_default(SINKER, BATCH_SIZE, 200);
-            let max_connections =
-                loader.get_with_default(SINKER, MAX_CONNECTIONS, DEFAULT_MAX_CONNECTIONS);
-            let connection_auth = ConnectionAuthConfig::from(loader, SINKER);
-
-            return Ok((
-                BasicSinkerConfig {
-                    sink_type,
-                    db_type,
-                    url,
-                    connection_auth,
-                    batch_size,
-                    max_connections,
-                },
-                SinkerConfig::Dummy,
-            ));
-        }
-
+        let sink_type = loader.get_with_default(SINKER, SINK_TYPE, SinkType::Write);
         let db_type: DbType = loader.get_required(SINKER, DB_TYPE);
         let url: String = loader.get_optional(SINKER, URL);
         let batch_size: usize = loader.get_with_default(SINKER, BATCH_SIZE, 200);
         let max_connections =
             loader.get_with_default(SINKER, MAX_CONNECTIONS, DEFAULT_MAX_CONNECTIONS);
-
         let connection_auth = ConnectionAuthConfig::from(loader, SINKER);
 
         let basic = BasicSinkerConfig {
@@ -759,8 +716,7 @@ impl TaskConfig {
     }
 
     fn load_checker_config(loader: &IniLoader) -> Option<CheckerConfig> {
-        let checker_section_present = loader.ini.sections().contains(&CHECKER.to_string());
-        if !checker_section_present {
+        if !loader.ini.sections().contains(&CHECKER.to_string()) {
             return None;
         }
 
@@ -784,29 +740,27 @@ impl TaskConfig {
             loader.get_with_default(CHECKER, CHECK_LOG_DIR, config.check_log_dir);
         config.check_log_file_size =
             loader.get_with_default(CHECKER, CHECK_LOG_FILE_SIZE, config.check_log_file_size);
-        if Self::checker_target_present(loader) {
-            let (db_type, url, connection_auth) = Self::load_checker_target_basic(loader);
-            config.db_type = Some(db_type);
-            config.url = Some(url);
-            config.connection_auth = Some(connection_auth);
-        }
         Some(config)
     }
 
-    fn checker_target_present(loader: &IniLoader) -> bool {
-        loader.contains(CHECKER, DB_TYPE)
-            || loader.contains(CHECKER, URL)
-            || loader.contains(CHECKER, USERNAME)
-            || loader.contains(CHECKER, PASSWORD)
-    }
+    fn finalize_checker_target(
+        checker: &mut Option<CheckerConfig>,
+        extractor_basic: &BasicExtractorConfig,
+        sinker_basic: &BasicSinkerConfig,
+    ) -> anyhow::Result<()> {
+        let Some(config) = checker.as_mut() else {
+            return Ok(());
+        };
+        if sinker_basic.sink_type == SinkType::Dummy || sinker_basic.url.is_empty() {
+            bail!(Error::ConfigError(
+                "config [sinker] target is required when [checker] is set".into()
+            ));
+        }
 
-    fn load_checker_target_basic(
-        loader: &IniLoader,
-    ) -> (DbType, String, ConnectionAuthConfig) {
-        let db_type: DbType = loader.get_required(CHECKER, DB_TYPE);
-        let url: String = loader.get_required(CHECKER, URL);
-        let connection_auth = ConnectionAuthConfig::from(loader, CHECKER);
-        (db_type, url, connection_auth)
+        config.db_type = Some(sinker_basic.db_type.clone());
+        config.url = Some(sinker_basic.url.clone());
+        config.connection_auth = Some(sinker_basic.connection_auth.clone());
+        Ok(())
     }
 
     fn load_runtime_config(loader: &IniLoader) -> anyhow::Result<RuntimeConfig> {
