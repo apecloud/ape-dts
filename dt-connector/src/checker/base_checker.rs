@@ -4,9 +4,13 @@ use async_trait::async_trait;
 use mongodb::bson::Document;
 use std::borrow::Cow;
 use std::collections::{BTreeSet, HashMap, VecDeque};
-
-use std::sync::Arc;
-use tokio::time::{Duration, Instant};
+use std::sync::{
+    atomic::{AtomicU64, Ordering},
+    Arc,
+};
+use tokio::sync::mpsc;
+use tokio::task::JoinHandle;
+use tokio::time::{sleep, Duration, Instant};
 
 use crate::{
     checker::check_log::{CheckLog, CheckSummaryLog, DiffColValue},
@@ -18,19 +22,16 @@ use crate::{
 use dt_common::meta::{
     col_value::ColValue, mongo::mongo_constant::MongoConstants, mysql::mysql_tb_meta::MysqlTbMeta,
     pg::pg_tb_meta::PgTbMeta, rdb_meta_manager::RdbMetaManager, rdb_tb_meta::RdbTbMeta,
-    row_data::RowData, row_type::RowType, struct_meta::struct_data::StructData,
+    row_data::RowData, row_type::RowType,
 };
 use dt_common::{
-    log_diff, log_miss, log_sql, log_summary, monitor::monitor::Monitor,
+    log_diff, log_error, log_info, log_miss, log_sql, log_summary, log_warn,
+    monitor::{counter_type::CounterType, monitor::Monitor},
     utils::limit_queue::LimitedQueue,
 };
 
-#[derive(Debug, Clone, Copy)]
-pub enum CheckerMode {
-    Sync,
-    AsyncBlocking { buffer_size: usize },
-    AsyncDrop { buffer_size: usize },
-}
+pub const CHECKER_MAX_QUERY_BATCH: usize = 1000;
+const CHECKER_MAX_RETRY_QUEUE_SIZE: usize = 100_000;
 
 #[derive(Debug, Clone)]
 pub enum CheckerTbMeta {
@@ -182,7 +183,13 @@ enum CheckInconsistency {
     Diff(HashMap<String, DiffColValue>),
 }
 
-type CheckResult = Option<CheckInconsistency>;
+struct InconsistencyContext<'a> {
+    common: &'a mut CheckContext,
+    tb_meta: &'a CheckerTbMeta,
+    miss: &'a mut Vec<CheckLog>,
+    diff: &'a mut Vec<CheckLog>,
+    sql_count: &'a mut usize,
+}
 
 struct RetryItem {
     row: Arc<RowData>,
@@ -191,7 +198,7 @@ struct RetryItem {
 }
 
 #[derive(Clone)]
-pub struct CheckerCommon {
+pub struct CheckContext {
     pub monitor: Arc<Monitor>,
     pub summary: CheckSummaryLog,
     pub output_revise_sql: bool,
@@ -205,31 +212,142 @@ pub struct CheckerCommon {
     pub max_retries: u32,
 }
 
-#[async_trait]
-pub trait CheckerHandle: Send + Sync + 'static {
-    async fn check(&self, data: Vec<Arc<RowData>>) -> anyhow::Result<()>;
-    async fn check_struct(&self, _data: Vec<StructData>) -> anyhow::Result<()> {
+pub struct FetchResult {
+    pub tb_meta: Arc<CheckerTbMeta>,
+    pub src_rows: Vec<Arc<RowData>>,
+    pub dst_rows: Vec<RowData>,
+}
+
+enum CheckerMsg {
+    ProcessBatch(Vec<Arc<RowData>>),
+    Close,
+}
+
+pub struct DataCheckerHandle {
+    tx: mpsc::Sender<CheckerMsg>,
+    join_handle: Option<JoinHandle<()>>,
+    pending_rows: Arc<AtomicU64>,
+    dropped_batches: AtomicU64,
+    monitor: Arc<Monitor>,
+    drop_on_full: bool,
+}
+
+impl DataCheckerHandle {
+    pub fn spawn<B: Checker>(
+        backend: B,
+        ctx: CheckContext,
+        buffer_size: usize,
+        drop_on_full: bool,
+        name: &str,
+    ) -> Self {
+        let (tx, rx) = mpsc::channel::<CheckerMsg>(buffer_size.max(1));
+        let pending_rows = Arc::new(AtomicU64::new(0));
+        let dropped_batches = AtomicU64::new(0);
+        let monitor = ctx.monitor.clone();
+        monitor.set_counter(CounterType::CheckerPending, 0);
+
+        let check_job = DataChecker::new(
+            backend,
+            ctx,
+            rx,
+            pending_rows.clone(),
+            monitor.clone(),
+            name,
+        );
+        let join_handle = tokio::spawn(check_job.run());
+
+        Self {
+            tx,
+            join_handle: Some(join_handle),
+            pending_rows,
+            dropped_batches,
+            monitor,
+            drop_on_full,
+        }
+    }
+
+    pub async fn check(&self, data: Vec<Arc<RowData>>) -> anyhow::Result<()> {
+        if data.is_empty() {
+            return Ok(());
+        }
+        if self.drop_on_full {
+            self.try_send(data).await
+        } else {
+            self.send(data).await
+        }
+    }
+
+    pub async fn close(&mut self) -> anyhow::Result<()> {
+        let _ = self.tx.send(CheckerMsg::Close).await;
+        if let Some(handle) = self.join_handle.take() {
+            handle.await?;
+        }
         Ok(())
     }
+
+    async fn send(&self, data: Vec<Arc<RowData>>) -> anyhow::Result<()> {
+        let data_size = data.len() as u64;
+        if let Err(err) = self.tx.send(CheckerMsg::ProcessBatch(data)).await {
+            self.monitor
+                .add_counter(CounterType::CheckerErrorTotal, 1)
+                .await;
+            return Err(anyhow::anyhow!("Checker worker closed: {}", err));
+        }
+        if data_size > 0 {
+            let pending = self.pending_rows.fetch_add(data_size, Ordering::Relaxed) + data_size;
+            self.monitor
+                .set_counter(CounterType::CheckerPending, pending);
+        }
+        Ok(())
+    }
+
+    async fn try_send(&self, data: Vec<Arc<RowData>>) -> anyhow::Result<()> {
+        let data_size = data.len() as u64;
+        match self.tx.try_send(CheckerMsg::ProcessBatch(data)) {
+            Ok(()) => {
+                if data_size > 0 {
+                    let pending =
+                        self.pending_rows.fetch_add(data_size, Ordering::Relaxed) + data_size;
+                    self.monitor
+                        .set_counter(CounterType::CheckerPending, pending);
+                }
+            }
+            Err(mpsc::error::TrySendError::Full(_)) => {
+                let dropped = self.dropped_batches.fetch_add(1, Ordering::Relaxed) + 1;
+                self.monitor
+                    .add_counter(CounterType::CheckerAsyncDropCount, data_size)
+                    .await;
+                if dropped % 1000 == 0 {
+                    log_warn!("Checker queue full, dropped {} batches.", dropped);
+                }
+            }
+            Err(err) => {
+                self.monitor
+                    .add_counter(CounterType::CheckerErrorTotal, 1)
+                    .await;
+                return Err(anyhow::anyhow!("Checker worker closed: {}", err));
+            }
+        }
+        Ok(())
+    }
+}
+
+#[async_trait]
+pub trait Checker: Send + Sync + 'static {
+    async fn fetch(&mut self, src_rows: &[Arc<RowData>]) -> anyhow::Result<FetchResult>;
     async fn close(&mut self) -> anyhow::Result<()> {
         Ok(())
     }
 }
 
-#[async_trait]
-pub trait Checker: Send + 'static {
-    async fn get_tb_meta(&mut self, row: &Arc<RowData>) -> anyhow::Result<CheckerTbMeta>;
-    async fn fetch_batch(
-        &self,
-        tb_meta: &CheckerTbMeta,
-        data: &[&Arc<RowData>],
-    ) -> anyhow::Result<Vec<RowData>>;
-}
-
-pub struct CheckProcessor<B: Checker> {
+struct DataChecker<B: Checker> {
     backend: B,
-    common: CheckerCommon,
+    ctx: CheckContext,
     retry_queue: VecDeque<RetryItem>,
+    rx: mpsc::Receiver<CheckerMsg>,
+    pending_rows: Arc<AtomicU64>,
+    monitor: Arc<Monitor>,
+    name: String,
 }
 
 // check if row has null key
@@ -241,13 +359,66 @@ pub fn has_null_key(row_data: &Arc<RowData>, id_cols: &[String]) -> bool {
     })
 }
 
-impl<B: Checker> CheckProcessor<B> {
-    pub fn new(backend: B, common: CheckerCommon) -> Self {
+impl<B: Checker> DataChecker<B> {
+    pub fn new(
+        backend: B,
+        ctx: CheckContext,
+        rx: mpsc::Receiver<CheckerMsg>,
+        pending_rows: Arc<AtomicU64>,
+        monitor: Arc<Monitor>,
+        name: &str,
+    ) -> Self {
         Self {
             backend,
-            common,
+            ctx,
             retry_queue: VecDeque::new(),
+            rx,
+            pending_rows,
+            monitor,
+            name: name.to_string(),
         }
+    }
+
+    pub async fn run(mut self) {
+        log_info!("Checker [{}] background worker started.", self.name);
+        let mut interval = tokio::time::interval(Duration::from_secs(1));
+
+        loop {
+            tokio::select! {
+                msg = self.rx.recv() => {
+                    match msg {
+                        Some(CheckerMsg::ProcessBatch(batch)) => {
+                            let batch_size = batch.len() as u64;
+                            if let Err(err) = self.check_batch(batch, true).await {
+                                self.monitor.add_counter(CounterType::CheckerErrorTotal, 1).await;
+                                log_error!("Checker [{}] batch failed: {}", self.name, err);
+                            }
+                            if batch_size > 0 {
+                                self.pending_rows.fetch_sub(batch_size, Ordering::Relaxed);
+                                let pending = self.pending_rows.load(Ordering::Relaxed);
+                                self.monitor.set_counter(CounterType::CheckerPending, pending);
+                            }
+                        }
+                        Some(CheckerMsg::Close) | None => {
+                            if let Err(err) = self.shutdown().await {
+                                self.monitor.add_counter(CounterType::CheckerErrorTotal, 1).await;
+                                log_error!("Checker [{}] close failed: {}", self.name, err);
+                            }
+                            break;
+                        }
+                    }
+                }
+                _ = interval.tick() => {
+                    if let Err(err) = self.process_due_retries().await {
+                        self.monitor.add_counter(CounterType::CheckerErrorTotal, 1).await;
+                        log_error!("Checker [{}] retry failed: {}", self.name, err);
+                    }
+                }
+            }
+        }
+
+        self.monitor.set_counter(CounterType::CheckerPending, 0);
+        log_info!("Checker [{}] background worker stopped.", self.name);
     }
 
     fn build_revise_sql(
@@ -283,57 +454,46 @@ impl<B: Checker> CheckProcessor<B> {
         }
     }
 
-    fn split_checkable_rows(
-        data: &[Arc<RowData>],
-        tb_meta: &CheckerTbMeta,
-    ) -> (Vec<Arc<RowData>>, usize) {
-        let _ = tb_meta;
-        (data.to_vec(), 0)
-    }
-
     async fn handle_inconsistency(
+        check_result: CheckInconsistency,
         src_row_data: &Arc<RowData>,
         dst_row_data: Option<&RowData>,
-        common: &mut CheckerCommon,
-        tb_meta: &CheckerTbMeta,
-        miss: &mut Vec<CheckLog>,
-        diff: &mut Vec<CheckLog>,
-        sql_count: &mut usize,
+        ctx: &mut InconsistencyContext<'_>,
     ) -> anyhow::Result<()> {
-        let check_result = Self::compare_src_dst(src_row_data, dst_row_data)?;
-        let Some(res) = check_result else {
-            return Ok(());
-        };
-
-        match res {
+        match check_result {
             CheckInconsistency::Miss => {
-                let log = Self::build_miss_log(src_row_data, common, tb_meta).await?;
-                miss.push(log);
+                let log = Self::build_miss_log(src_row_data, ctx.common, ctx.tb_meta).await?;
+                ctx.miss.push(log);
                 let revise_sql = Self::build_revise_sql(
-                    common.output_revise_sql,
-                    common.revise_match_full_row,
-                    tb_meta,
+                    ctx.common.output_revise_sql,
+                    ctx.common.revise_match_full_row,
+                    ctx.tb_meta,
                     src_row_data,
                     None,
                     None,
                 )?;
-                Self::log_revise_sql(revise_sql, sql_count);
+                Self::log_revise_sql(revise_sql, ctx.sql_count);
             }
             CheckInconsistency::Diff(diff_col_values) => {
                 let dst_row = dst_row_data.context("missing dst row in diff")?;
                 let revise_sql = Self::build_revise_sql(
-                    common.output_revise_sql,
-                    common.revise_match_full_row,
-                    tb_meta,
+                    ctx.common.output_revise_sql,
+                    ctx.common.revise_match_full_row,
+                    ctx.tb_meta,
                     src_row_data,
                     Some(dst_row),
                     Some(&diff_col_values),
                 )?;
-                let log =
-                    Self::build_diff_log(src_row_data, dst_row, diff_col_values, common, tb_meta)
-                        .await?;
-                diff.push(log);
-                Self::log_revise_sql(revise_sql, sql_count);
+                let log = Self::build_diff_log(
+                    src_row_data,
+                    dst_row,
+                    diff_col_values,
+                    ctx.common,
+                    ctx.tb_meta,
+                )
+                .await?;
+                ctx.diff.push(log);
+                Self::log_revise_sql(revise_sql, ctx.sql_count);
             }
         }
 
@@ -342,40 +502,44 @@ impl<B: Checker> CheckProcessor<B> {
 
     async fn check_and_generate_logs(
         src_data: &[Arc<RowData>],
-        src_keys: &[u128],
         mut dst_row_data_map: HashMap<u128, RowData>,
-        common: &mut CheckerCommon,
+        common: &mut CheckContext,
         tb_meta: &CheckerTbMeta,
         max_retries: u32,
     ) -> anyhow::Result<(Vec<CheckLog>, Vec<CheckLog>, usize, Vec<Arc<RowData>>)> {
         let mut miss = Vec::new();
         let mut diff = Vec::new();
         let mut sql_count = 0;
-        let mut retry_rows = Vec::new();
+        let mut ctx = InconsistencyContext {
+            common,
+            tb_meta,
+            miss: &mut miss,
+            diff: &mut diff,
+            sql_count: &mut sql_count,
+        };
+        let mut retry_rows = Vec::with_capacity(src_data.len());
 
-        for (src_row_data, key) in src_data.iter().zip(src_keys) {
-            let dst_row_data = dst_row_data_map.remove(key);
+        if max_retries > 0 {
+            for src_row_data in src_data {
+                let key = src_row_data.get_hash_code(tb_meta.basic())?;
+                let dst_row_data = dst_row_data_map.remove(&key);
+                if Self::is_inconsistent_fast(src_row_data, dst_row_data.as_ref())? {
+                    retry_rows.push(src_row_data.clone());
+                }
+            }
+            return Ok((miss, diff, sql_count, retry_rows));
+        }
 
+        for src_row_data in src_data {
+            let key = src_row_data.get_hash_code(tb_meta.basic())?;
+            let dst_row_data = dst_row_data_map.remove(&key);
             let check_result = Self::compare_src_dst(src_row_data, dst_row_data.as_ref())?;
-            if check_result.is_none() {
+            let Some(check_result) = check_result else {
                 continue;
-            }
+            };
 
-            if max_retries > 0 {
-                retry_rows.push(src_row_data.clone());
-                continue;
-            }
-
-            Self::handle_inconsistency(
-                src_row_data,
-                dst_row_data.as_ref(),
-                common,
-                tb_meta,
-                &mut miss,
-                &mut diff,
-                &mut sql_count,
-            )
-            .await?;
+            Self::handle_inconsistency(check_result, src_row_data, dst_row_data.as_ref(), &mut ctx)
+                .await?;
         }
 
         Ok((miss, diff, sql_count, retry_rows))
@@ -384,7 +548,7 @@ impl<B: Checker> CheckProcessor<B> {
     fn compare_src_dst(
         src_row: &Arc<RowData>,
         dst_row: Option<&RowData>,
-    ) -> anyhow::Result<CheckResult> {
+    ) -> anyhow::Result<Option<CheckInconsistency>> {
         if let Some(dst_row) = dst_row {
             let diffs = Self::compare_row_data(src_row, dst_row)?;
             if diffs.is_empty() {
@@ -395,6 +559,32 @@ impl<B: Checker> CheckProcessor<B> {
         } else {
             Ok(Some(CheckInconsistency::Miss))
         }
+    }
+
+    fn is_inconsistent_fast(
+        src_row: &Arc<RowData>,
+        dst_row: Option<&RowData>,
+    ) -> anyhow::Result<bool> {
+        let Some(dst_row) = dst_row else {
+            return Ok(true);
+        };
+        let src = src_row
+            .after
+            .as_ref()
+            .context("src row data after is missing")?;
+        let dst = dst_row
+            .after
+            .as_ref()
+            .context("dst row data after is missing")?;
+
+        for (col, src_val) in src {
+            match dst.get(col) {
+                Some(dst_val) if src_val == dst_val => {}
+                _ => return Ok(true),
+            }
+        }
+
+        Ok(false)
     }
 
     fn compare_row_data(
@@ -410,7 +600,7 @@ impl<B: Checker> CheckProcessor<B> {
             .as_ref()
             .context("dst row data after is missing")?;
 
-        let mut diff_col_values = HashMap::new();
+        let mut diff_col_values = HashMap::with_capacity(src.len());
         for (col, src_val) in src {
             let dst_val = dst.get(col);
             let maybe_diff = match dst_val {
@@ -478,6 +668,7 @@ impl<B: Checker> CheckProcessor<B> {
 
     async fn log_single_inconsistency(
         &mut self,
+        check_result: CheckInconsistency,
         src_row_data: &Arc<RowData>,
         dst_row_data: Option<&RowData>,
         tb_meta: &CheckerTbMeta,
@@ -485,26 +676,32 @@ impl<B: Checker> CheckProcessor<B> {
         let mut miss = Vec::new();
         let mut diff = Vec::new();
         let mut sql_count = 0;
-
-        Self::handle_inconsistency(
-            src_row_data,
-            dst_row_data,
-            &mut self.common,
+        let mut ctx = InconsistencyContext {
+            common: &mut self.ctx,
             tb_meta,
-            &mut miss,
-            &mut diff,
-            &mut sql_count,
-        )
-        .await?;
+            miss: &mut miss,
+            diff: &mut diff,
+            sql_count: &mut sql_count,
+        };
+
+        Self::handle_inconsistency(check_result, src_row_data, dst_row_data, &mut ctx).await?;
 
         Self::log_dml(&miss, &diff);
-        let summary = &mut self.common.summary;
+        let summary = &mut self.ctx.summary;
         summary.end_time = chrono::Local::now().to_rfc3339();
         summary.miss_count += miss.len();
         summary.diff_count += diff.len();
         if sql_count > 0 {
             summary.sql_count = Some(summary.sql_count.unwrap_or(0) + sql_count);
         }
+        let monitor = self.ctx.monitor.clone();
+        monitor
+            .add_counter(CounterType::CheckerMissCount, miss.len() as u64)
+            .await
+            .add_counter(CounterType::CheckerDiffCount, diff.len() as u64)
+            .await
+            .add_counter(CounterType::CheckerGenerateSqlCount, sql_count as u64)
+            .await;
         Ok(())
     }
 
@@ -529,8 +726,13 @@ impl<B: Checker> CheckProcessor<B> {
 
         let mut mapped = HashMap::with_capacity(diff_col_values.len());
         for (col, val) in diff_col_values {
-            let mapped_col = col_map.get(&col).unwrap_or(&col).to_owned();
-            mapped.insert(mapped_col, val);
+            if let Some(mapped_col) = col_map.get(&col) {
+                if mapped_col != &col {
+                    mapped.insert(mapped_col.clone(), val);
+                    continue;
+                }
+            }
+            mapped.insert(col, val);
         }
         mapped
     }
@@ -557,7 +759,7 @@ impl<B: Checker> CheckProcessor<B> {
 
     async fn build_miss_log(
         src_row_data: &Arc<RowData>,
-        common: &mut CheckerCommon,
+        common: &mut CheckContext,
         tb_meta: &CheckerTbMeta,
     ) -> anyhow::Result<CheckLog> {
         let (mapped_schema, mapped_tb) = common
@@ -614,7 +816,7 @@ impl<B: Checker> CheckProcessor<B> {
         src_row_data: &Arc<RowData>,
         dst_row_data: &RowData,
         diff_col_values: HashMap<String, DiffColValue>,
-        common: &mut CheckerCommon,
+        common: &mut CheckContext,
         tb_meta: &CheckerTbMeta,
     ) -> anyhow::Result<CheckLog> {
         let mut log = Self::build_miss_log(src_row_data, common, tb_meta).await?;
@@ -638,7 +840,7 @@ impl<B: Checker> CheckProcessor<B> {
         row_data: &RowData,
         tb_meta: &RdbTbMeta,
     ) -> Option<HashMap<String, Option<String>>> {
-        let mut id_col_values = HashMap::new();
+        let mut id_col_values = HashMap::with_capacity(tb_meta.id_cols.len());
         let after = row_data.require_after().ok()?;
 
         for col in tb_meta.id_cols.iter() {
@@ -705,14 +907,26 @@ impl<B: Checker> CheckProcessor<B> {
             return;
         }
 
-        let retry_at = Instant::now() + Duration::from_secs(self.common.retry_interval_secs);
+        let retry_at = Instant::now() + Duration::from_secs(self.ctx.retry_interval_secs);
+        let mut dropped = 0usize;
         for row in rows {
+            if self.retry_queue.len() >= CHECKER_MAX_RETRY_QUEUE_SIZE {
+                self.retry_queue.pop_front();
+                dropped += 1;
+            }
             self.retry_queue.push_back(RetryItem {
                 row,
-                retries_left: self.common.max_retries,
+                retries_left: self.ctx.max_retries,
                 next_retry_at: retry_at,
             });
         }
+        if dropped > 0 {
+            log_warn!("Checker retry queue full, dropped {} oldest rows.", dropped);
+        }
+        self.ctx.monitor.set_counter(
+            CounterType::CheckerRetryQueueSize,
+            self.retry_queue.len() as u64,
+        );
     }
 
     async fn process_due_retries(&mut self) -> anyhow::Result<()> {
@@ -732,27 +946,40 @@ impl<B: Checker> CheckProcessor<B> {
                 self.retry_queue.push_back(rescheduled);
             }
         }
+        self.ctx.monitor.set_counter(
+            CounterType::CheckerRetryQueueSize,
+            self.retry_queue.len() as u64,
+        );
         Ok(())
     }
 
     async fn retry_check_item(&mut self, mut item: RetryItem) -> anyhow::Result<Option<RetryItem>> {
-        let tb_meta = self.backend.get_tb_meta(&item.row).await?;
-        let dst_rows = self.backend.fetch_batch(&tb_meta, &[&item.row]).await?;
-        let dst_row = Self::select_dst_row(&item.row, &tb_meta, dst_rows)?;
-        let check_result = Self::compare_src_dst(&item.row, dst_row.as_ref())?;
-        if check_result.is_none() {
+        let fetch_result = self.backend.fetch(std::slice::from_ref(&item.row)).await?;
+        if fetch_result.src_rows.is_empty() {
             return Ok(None);
         }
-
+        let tb_meta = fetch_result.tb_meta;
+        let dst_row = Self::select_dst_row(&item.row, tb_meta.as_ref(), fetch_result.dst_rows)?;
         if item.retries_left > 1 {
+            let inconsistent = Self::is_inconsistent_fast(&item.row, dst_row.as_ref())?;
+            if !inconsistent {
+                return Ok(None);
+            }
             item.retries_left -= 1;
-            item.next_retry_at =
-                Instant::now() + Duration::from_secs(self.common.retry_interval_secs);
+            item.next_retry_at = Instant::now() + Duration::from_secs(self.ctx.retry_interval_secs);
             return Ok(Some(item));
         }
 
-        self.log_single_inconsistency(&item.row, dst_row.as_ref(), &tb_meta)
+        let check_result = Self::compare_src_dst(&item.row, dst_row.as_ref())?;
+        let Some(check_result) = check_result else {
+            return Ok(None);
+        };
+        self.log_single_inconsistency(check_result, &item.row, dst_row.as_ref(), tb_meta.as_ref())
             .await?;
+        self.ctx
+            .monitor
+            .add_counter(CounterType::CheckerErrorTotal, 1)
+            .await;
         Ok(None)
     }
 
@@ -762,10 +989,35 @@ impl<B: Checker> CheckProcessor<B> {
             item.retries_left = 0;
             let _ = self.retry_check_item(item).await?;
         }
+        self.ctx.monitor.set_counter(
+            CounterType::CheckerRetryQueueSize,
+            self.retry_queue.len() as u64,
+        );
         Ok(())
     }
 
-    pub async fn sink_dml(&mut self, data: Vec<Arc<RowData>>, batch: bool) -> anyhow::Result<()> {
+    async fn drain_retries(&mut self) -> anyhow::Result<()> {
+        while !self.retry_queue.is_empty() {
+            let next_retry_at = self
+                .retry_queue
+                .iter()
+                .map(|item| item.next_retry_at)
+                .min()
+                .expect("retry queue should not be empty");
+            let now = Instant::now();
+            if next_retry_at > now {
+                sleep(next_retry_at.duration_since(now)).await;
+            }
+            self.process_due_retries().await?;
+        }
+        Ok(())
+    }
+
+    pub async fn check_batch(
+        &mut self,
+        data: Vec<Arc<RowData>>,
+        batch: bool,
+    ) -> anyhow::Result<()> {
         if data.is_empty() {
             return Ok(());
         }
@@ -774,7 +1026,7 @@ impl<B: Checker> CheckProcessor<B> {
             return Self::serial_check(self, data).await;
         }
 
-        let batch_size = self.common.batch_size;
+        let batch_size = self.ctx.batch_size;
         if batch_size == 0 {
             return Ok(());
         }
@@ -794,9 +1046,9 @@ impl<B: Checker> CheckProcessor<B> {
             return Ok(());
         }
 
-        self.process_due_retries().await?;
-        let tb_meta = self.backend.get_tb_meta(&data[0]).await?;
-        let (checkable, _skipped) = Self::split_checkable_rows(data, &tb_meta);
+        let fetch_result = self.backend.fetch(data).await?;
+        let tb_meta = fetch_result.tb_meta;
+        let checkable = fetch_result.src_rows;
         if checkable.is_empty() {
             return Ok(());
         }
@@ -804,8 +1056,7 @@ impl<B: Checker> CheckProcessor<B> {
         let start_time = tokio::time::Instant::now();
 
         // 1. batch fetch all dst rows and start metrics
-        let data_refs: Vec<&Arc<RowData>> = checkable.iter().collect();
-        let dst_rows = self.backend.fetch_batch(&tb_meta, &data_refs).await?;
+        let dst_rows = fetch_result.dst_rows;
         let mut dst_row_data_map = HashMap::with_capacity(dst_rows.len());
         for row in dst_rows {
             let key = row.get_hash_code(tb_meta.basic())?;
@@ -814,26 +1065,19 @@ impl<B: Checker> CheckProcessor<B> {
         let mut rts = LimitedQueue::new(1);
         rts.push((start_time.elapsed().as_millis() as u64, 1));
 
-        let max_retries = self.common.max_retries;
+        let max_retries = self.ctx.max_retries;
 
-        // 2. compute src keys
-        let src_keys: Vec<u128> = checkable
-            .iter()
-            .map(|row| row.get_hash_code(tb_meta.basic()))
-            .collect::<anyhow::Result<_>>()?;
-
-        // 3. check and generate logs (inconsistencies will be retried later)
+        // 2. check and generate logs (inconsistencies will be retried later)
         let (miss, diff, sql_count, retry_rows) = Self::check_and_generate_logs(
             &checkable,
-            &src_keys,
             dst_row_data_map,
-            &mut self.common,
-            &tb_meta,
+            &mut self.ctx,
+            tb_meta.as_ref(),
             max_retries,
         )
         .await?;
         Self::log_dml(&miss, &diff);
-        let summary = &mut self.common.summary;
+        let summary = &mut self.ctx.summary;
         summary.end_time = chrono::Local::now().to_rfc3339();
         summary.miss_count += miss.len();
         summary.diff_count += diff.len();
@@ -843,7 +1087,14 @@ impl<B: Checker> CheckProcessor<B> {
         self.enqueue_retry_rows(retry_rows);
 
         // 4. update monitor metrics
-        let monitor = self.common.monitor.clone();
+        let monitor = self.ctx.monitor.clone();
+        monitor
+            .add_counter(CounterType::CheckerMissCount, miss.len() as u64)
+            .await
+            .add_counter(CounterType::CheckerDiffCount, diff.len() as u64)
+            .await
+            .add_counter(CounterType::CheckerGenerateSqlCount, sql_count as u64)
+            .await;
         if is_serial_mode {
             BaseSinker::update_serial_monitor(&monitor, checkable.len() as u64, 0).await?;
         } else {
@@ -860,12 +1111,11 @@ impl<B: Checker> CheckProcessor<B> {
         Self::process_batch(self, data, false).await
     }
 
-    pub async fn close(&mut self) -> anyhow::Result<()> {
-        self.flush_retries().await?;
-        let common = &mut self.common;
+    async fn finish_summary_and_meta(&mut self) -> anyhow::Result<()> {
+        let common = &mut self.ctx;
         let global_summary_opt = common.global_summary.clone();
         let summary = &mut common.summary;
-        if summary.miss_count > 0 || summary.diff_count > 0 || summary.extra_count > 0 {
+        if summary.miss_count > 0 || summary.diff_count > 0 {
             summary.end_time = chrono::Local::now().to_rfc3339();
             if let Some(global_summary) = global_summary_opt {
                 let mut global_summary = global_summary.lock().await;
@@ -879,5 +1129,15 @@ impl<B: Checker> CheckProcessor<B> {
         } else {
             Ok(())
         }
+    }
+
+    async fn shutdown(&mut self) -> anyhow::Result<()> {
+        if self.ctx.max_retries > 0 {
+            self.drain_retries().await?;
+        } else {
+            self.flush_retries().await?;
+        }
+        self.finish_summary_and_meta().await?;
+        self.backend.close().await
     }
 }

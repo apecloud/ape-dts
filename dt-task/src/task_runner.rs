@@ -58,11 +58,10 @@ use dt_common::{
     utils::{sql_util::SqlUtil, time_util::TimeUtil},
 };
 use dt_connector::{
-    checker::base_checker::CheckerCommon,
+    checker::base_checker::CheckContext,
     checker::check_log::CheckSummaryLog,
     checker::{
-        CheckerHandle, CheckerMode, MongoCheckerHandle, MysqlCheckerHandle, PgCheckerHandle,
-        StructCheckerHandle,
+        CheckerHandle, MongoCheckerHandle, MysqlCheckerHandle, PgCheckerHandle, StructCheckerHandle,
     },
     data_marker::DataMarker,
     extractor::resumer::{recorder::Recorder, recovery::Recovery},
@@ -117,6 +116,7 @@ impl TaskRunner {
         let task_type = build_task_type(
             &config.extractor_basic.extract_type,
             &config.sinker_basic.sink_type,
+            config.checker.is_some(),
         );
         #[cfg(not(feature = "metrics"))]
         let task_monitor = Arc::new(TaskMonitor::new(task_type.clone()));
@@ -229,7 +229,7 @@ impl TaskRunner {
 
         if let Some(check_summary) = check_summary {
             let summary = check_summary.lock().await;
-            if summary.miss_count > 0 || summary.diff_count > 0 || summary.extra_count > 0 {
+            if summary.miss_count > 0 || summary.diff_count > 0 {
                 dt_common::log_summary!("{}", summary);
             }
         }
@@ -413,6 +413,18 @@ impl TaskRunner {
         )
         .await?;
 
+        // checker
+        let checker_monitor = Arc::new(Monitor::new(
+            "checker",
+            &single_task_id,
+            monitor_time_window_secs,
+            monitor_max_sub_count,
+            monitor_count_window,
+        ));
+        let checker = self
+            .create_checker(checker_monitor.clone(), task_context.check_summary.clone())
+            .await?;
+
         // pipeline
         let pipeline_monitor = Arc::new(Monitor::new(
             "pipeline",
@@ -421,10 +433,6 @@ impl TaskRunner {
             monitor_max_sub_count,
             monitor_count_window,
         ));
-
-        let checker = self
-            .create_checker(sinker_monitor.clone(), task_context.check_summary.clone())
-            .await?;
 
         let mut pipeline = self
             .create_pipeline(
@@ -460,6 +468,7 @@ impl TaskRunner {
                         (MonitorType::Extractor, extractor_monitor.clone()),
                         (MonitorType::Pipeline, pipeline_monitor.clone()),
                         (MonitorType::Sinker, sinker_monitor.clone()),
+                        (MonitorType::Checker, checker_monitor.clone()),
                     ],
                 );
             }
@@ -494,7 +503,12 @@ impl TaskRunner {
             Self::flush_monitors_generic::<Monitor, TaskMonitor>(
                 interval_secs,
                 shut_down,
-                &[extractor_monitor, pipeline_monitor, sinker_monitor],
+                &[
+                    extractor_monitor,
+                    pipeline_monitor,
+                    sinker_monitor,
+                    checker_monitor,
+                ],
                 &tasks,
             )
             .await
@@ -512,8 +526,10 @@ impl TaskRunner {
                 summary.diff_count as u64,
             );
             if let Some(sql_count) = summary.sql_count {
-                self.task_monitor
-                    .add_no_window_metrics(TaskMetricsType::CheckerSqlCount, sql_count as u64);
+                self.task_monitor.add_no_window_metrics(
+                    TaskMetricsType::CheckerGenerateSqlCount,
+                    sql_count as u64,
+                );
             }
         }
 
@@ -560,6 +576,7 @@ impl TaskRunner {
                         MonitorType::Extractor,
                         MonitorType::Pipeline,
                         MonitorType::Sinker,
+                        MonitorType::Checker,
                     ],
                 );
             }
@@ -577,7 +594,7 @@ impl TaskRunner {
         monitor: Arc<Monitor>,
         data_marker: Option<Arc<RwLock<DataMarker>>>,
         recorder: Option<Arc<dyn Recorder + Send + Sync>>,
-        checker: Option<Box<dyn CheckerHandle>>,
+        checker: Option<CheckerHandle>,
     ) -> anyhow::Result<Box<dyn Pipeline + Send>> {
         match self.config.pipeline.pipeline_type {
             PipelineType::Basic => {
@@ -648,7 +665,7 @@ impl TaskRunner {
         &self,
         monitor: Arc<Monitor>,
         check_summary: Option<Arc<AsyncMutex<CheckSummaryLog>>>,
-    ) -> anyhow::Result<Option<Box<dyn CheckerHandle>>> {
+    ) -> anyhow::Result<Option<CheckerHandle>> {
         if !matches!(self.config.pipeline.pipeline_type, PipelineType::Basic) {
             return Ok(None);
         }
@@ -659,40 +676,17 @@ impl TaskRunner {
         };
         let max_connections = cfg.max_connections.max(1);
         let queue_size = cfg.queue_size.max(1);
-        let mode = if cfg.drop_on_full {
-            CheckerMode::AsyncDrop {
-                buffer_size: queue_size,
-            }
-        } else {
-            CheckerMode::AsyncBlocking {
-                buffer_size: queue_size,
-            }
-        };
+        let drop_on_full = cfg.drop_on_full;
         let log_level = &self.config.runtime.log_level;
         let enable_sqlx_log = TaskUtil::check_enable_sqlx_log(log_level);
-
-        let use_sinker_target = self.config.extractor_basic.extract_type == ExtractType::Cdc
-            && self.config.sinker_basic.sink_type == SinkType::Write;
-        let (checker_db_type, checker_url, checker_auth) = if use_sinker_target {
-            (
-                self.config.sinker_basic.db_type.clone(),
-                self.config.sinker_basic.url.clone(),
-                self.config.sinker_basic.connection_auth.clone(),
-            )
-        } else {
-            match &cfg.db_type {
-                Some(db_type) => (
-                    db_type.clone(),
-                    cfg.url.clone().unwrap_or_default(),
-                    cfg.connection_auth.clone().unwrap_or_default(),
-                ),
-                None => (
-                    self.config.sinker_basic.db_type.clone(),
-                    self.config.sinker_basic.url.clone(),
-                    self.config.sinker_basic.connection_auth.clone(),
-                ),
-            }
-        };
+        let is_cdc_task = matches!(self.config.extractor_basic.extract_type, ExtractType::Cdc)
+            && matches!(self.config.sinker_basic.sink_type, SinkType::Write);
+        let missing = || Error::ConfigError("config [checker] target is required".into());
+        let (checker_db_type, checker_url, checker_auth) = (
+            cfg.db_type.clone().ok_or_else(missing)?,
+            cfg.url.clone().ok_or_else(missing)?,
+            cfg.connection_auth.clone().ok_or_else(missing)?,
+        );
 
         let is_struct_task = matches!(
             self.config.extractor,
@@ -719,7 +713,10 @@ impl TaskRunner {
                         filter,
                         router,
                         cfg.output_revise_sql,
+                        cfg.retry_interval_secs,
+                        cfg.max_retries,
                         check_summary,
+                        monitor.clone(),
                     )
                 }
                 DbType::Pg => {
@@ -738,7 +735,10 @@ impl TaskRunner {
                         filter,
                         router,
                         cfg.output_revise_sql,
+                        cfg.retry_interval_secs,
+                        cfg.max_retries,
                         check_summary,
+                        monitor.clone(),
                     )
                 }
                 _ => bail!(
@@ -746,7 +746,7 @@ impl TaskRunner {
                     checker_db_type
                 ),
             };
-            return Ok(Some(Box::new(checker)));
+            return Ok(Some(CheckerHandle::Struct(checker)));
         }
 
         match checker_db_type {
@@ -767,10 +767,10 @@ impl TaskRunner {
                         conn_pool.clone(),
                     )
                     .await?;
-                let checker = MysqlCheckerHandle::new(
+                let checker = MysqlCheckerHandle::spawn(
                     conn_pool,
                     meta_manager,
-                    CheckerCommon {
+                    CheckContext {
                         extractor_meta_manager,
                         reverse_router,
                         batch_size: cfg.batch_size,
@@ -786,9 +786,10 @@ impl TaskRunner {
                         },
                         global_summary: check_summary,
                     },
-                    mode,
+                    queue_size,
+                    drop_on_full,
                 );
-                Ok(Some(Box::new(checker)))
+                Ok(Some(CheckerHandle::Data(checker)))
             }
             DbType::Pg => {
                 let reverse_router = create_router!(self.config, Pg).reverse();
@@ -805,10 +806,10 @@ impl TaskRunner {
                 let meta_manager =
                     dt_common::meta::pg::pg_meta_manager::PgMetaManager::new(conn_pool.clone())
                         .await?;
-                let checker = PgCheckerHandle::new(
+                let checker = PgCheckerHandle::spawn(
                     conn_pool,
                     meta_manager,
-                    CheckerCommon {
+                    CheckContext {
                         extractor_meta_manager,
                         reverse_router,
                         batch_size: cfg.batch_size,
@@ -824,13 +825,14 @@ impl TaskRunner {
                         },
                         global_summary: check_summary,
                     },
-                    mode,
+                    queue_size,
+                    drop_on_full,
                 );
-                Ok(Some(Box::new(checker)))
+                Ok(Some(CheckerHandle::Data(checker)))
             }
             DbType::Mongo => {
                 let reverse_router = create_router!(self.config, Mongo).reverse();
-                let app_name = if cfg.db_type.is_some() && !use_sinker_target {
+                let app_name = if cfg.db_type.is_some() && !is_cdc_task {
                     "checker"
                 } else {
                     match &self.config.sinker {
@@ -845,9 +847,9 @@ impl TaskRunner {
                     Some(max_connections),
                 )
                 .await?;
-                let checker = MongoCheckerHandle::new(
+                let checker = MongoCheckerHandle::spawn(
                     mongo_client,
-                    CheckerCommon {
+                    CheckContext {
                         extractor_meta_manager: None,
                         reverse_router,
                         batch_size: cfg.batch_size,
@@ -863,9 +865,10 @@ impl TaskRunner {
                         },
                         global_summary: check_summary,
                     },
-                    mode,
+                    queue_size,
+                    drop_on_full,
                 );
-                Ok(Some(Box::new(checker)))
+                Ok(Some(CheckerHandle::Data(checker)))
             }
             _ => Ok(None),
         }

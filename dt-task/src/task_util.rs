@@ -218,9 +218,7 @@ impl TaskUtil {
                 Some(RdbMetaManager::from_pg(pg_meta_manager))
             }
 
-            _ => {
-                None
-            }
+            _ => None,
         };
         if meta_manager.is_some() {
             return Ok(meta_manager);
@@ -247,8 +245,7 @@ impl TaskUtil {
                     }
                     DbType::Pg => {
                         let pg_meta_manager =
-                            Self::create_pg_meta_manager(&url, &connection_auth, log_level)
-                                .await?;
+                            Self::create_pg_meta_manager(&url, &connection_auth, log_level).await?;
                         Some(RdbMetaManager::from_pg(pg_meta_manager))
                     }
                     _ => None,
@@ -727,7 +724,8 @@ impl ConnClient {
                 "`extractor.max_connections` must be greater than 0".into()
             ));
         }
-        if sinker_max_connections < 1 {
+        let sinker_exists = !matches!(task_config.sinker, SinkerConfig::Dummy);
+        if sinker_exists && sinker_max_connections < 1 {
             bail!(Error::ConfigError(
                 "`sinker.max_connections` must be greater than 0".into()
             ));

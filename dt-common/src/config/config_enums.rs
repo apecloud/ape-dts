@@ -38,7 +38,7 @@ pub enum DbType {
     Tidb,
 }
 
-#[derive(Display, EnumString, IntoStaticStr, Debug, Clone, Hash, PartialEq, Eq)]
+#[derive(Display, EnumString, IntoStaticStr, Debug, Clone, Hash)]
 pub enum ExtractType {
     #[strum(serialize = "snapshot")]
     Snapshot,
@@ -60,7 +60,7 @@ pub enum ExtractType {
     FoxlakeS3,
 }
 
-#[derive(Display, EnumString, IntoStaticStr, Clone, Debug, Default, Hash, PartialEq, Eq)]
+#[derive(Display, EnumString, IntoStaticStr, Clone, Debug, Default, Hash)]
 pub enum SinkType {
     #[default]
     #[strum(serialize = "dummy")]
@@ -166,12 +166,16 @@ pub enum RdbTransactionIsolation {
     Default,
 }
 
-pub fn build_task_type(extract_type: &ExtractType, sink_type: &SinkType) -> Option<TaskType> {
-    match (extract_type, sink_type) {
-        (ExtractType::Struct, SinkType::Struct) => Some(TaskType::Struct),
-        (ExtractType::Snapshot, SinkType::Write) => Some(TaskType::Snapshot),
-        (ExtractType::Cdc, SinkType::Write) => Some(TaskType::Cdc),
-        (ExtractType::Snapshot, SinkType::Dummy) => Some(TaskType::Check),
+pub fn build_task_type(
+    extract_type: &ExtractType,
+    sink_type: &SinkType,
+    checker_enabled: bool,
+) -> Option<TaskType> {
+    match (extract_type, sink_type, checker_enabled) {
+        (ExtractType::Struct, SinkType::Struct, _) => Some(TaskType::Struct),
+        (ExtractType::Snapshot, SinkType::Write, _) => Some(TaskType::Snapshot),
+        (ExtractType::Cdc, SinkType::Write, _) => Some(TaskType::Cdc),
+        (_, SinkType::Dummy, true) => Some(TaskType::Check),
         _ => None,
     }
 }

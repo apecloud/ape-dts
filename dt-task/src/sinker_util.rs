@@ -42,9 +42,7 @@ use dt_connector::{
         },
         kafka::kafka_sinker::KafkaSinker,
         mongo::mongo_sinker::MongoSinker,
-        mysql::{
-            mysql_sinker::MysqlSinker, mysql_struct_sinker::MysqlStructSinker,
-        },
+        mysql::{mysql_sinker::MysqlSinker, mysql_struct_sinker::MysqlStructSinker},
         pg::{pg_sinker::PgSinker, pg_struct_sinker::PgStructSinker},
         redis::{redis_sinker::RedisSinker, redis_statistic_sinker::RedisStatisticSinker},
         sql_sinker::SqlSinker,
