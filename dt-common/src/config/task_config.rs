@@ -129,8 +129,7 @@ impl TaskConfig {
         let (extractor_basic, extractor) = Self::load_extractor_config(&loader, &pipeline)?;
         let filter = Self::load_filter_config(&loader)?;
         let router = Self::load_router_config(&loader)?;
-        let mut checker = Self::load_checker_config(&loader);
-        Self::finalize_checker_target(&mut checker, &extractor_basic, &sinker_basic)?;
+        let checker = Self::load_checker_config(&loader, &sinker_basic)?;
         Ok(Self {
             global: Self::load_global_config(
                 &loader,
@@ -715,52 +714,94 @@ impl TaskConfig {
         config
     }
 
-    fn load_checker_config(loader: &IniLoader) -> Option<CheckerConfig> {
+    fn load_checker_config(
+        loader: &IniLoader,
+        sinker_basic: &BasicSinkerConfig,
+    ) -> anyhow::Result<Option<CheckerConfig>> {
         if !loader.ini.sections().contains(&CHECKER.to_string()) {
-            return None;
+            return Ok(None);
         }
 
-        let mut config = CheckerConfig::default();
-        config.drop_on_full =
-            loader.get_with_default(CHECKER, CHECKER_DROP_ON_FULL, config.drop_on_full);
-        config.queue_size = loader.get_with_default(CHECKER, CHECKER_QUEUE_SIZE, config.queue_size);
-        config.max_connections =
-            loader.get_with_default(CHECKER, MAX_CONNECTIONS, config.max_connections);
-        config.batch_size = loader.get_with_default(CHECKER, BATCH_SIZE, config.batch_size);
-        config.output_full_row =
-            loader.get_with_default(CHECKER, OUTPUT_FULL_ROW, config.output_full_row);
-        config.output_revise_sql =
-            loader.get_with_default(CHECKER, OUTPUT_REVISE_SQL, config.output_revise_sql);
-        config.revise_match_full_row =
-            loader.get_with_default(CHECKER, REVISE_MATCH_FULL_ROW, config.revise_match_full_row);
-        config.retry_interval_secs =
-            loader.get_with_default(CHECKER, RETRY_INTERVAL_SECS, config.retry_interval_secs);
-        config.max_retries = loader.get_with_default(CHECKER, MAX_RETRIES, config.max_retries);
-        config.check_log_dir =
-            loader.get_with_default(CHECKER, CHECK_LOG_DIR, config.check_log_dir);
-        config.check_log_file_size =
-            loader.get_with_default(CHECKER, CHECK_LOG_FILE_SIZE, config.check_log_file_size);
-        Some(config)
+        let default = CheckerConfig::default();
+        let mut config = CheckerConfig {
+            drop_on_full: loader.get_with_default(
+                CHECKER,
+                CHECKER_DROP_ON_FULL,
+                default.drop_on_full,
+            ),
+            queue_size: loader.get_with_default(CHECKER, CHECKER_QUEUE_SIZE, default.queue_size),
+            max_connections: loader.get_with_default(
+                CHECKER,
+                MAX_CONNECTIONS,
+                default.max_connections,
+            ),
+            batch_size: loader.get_with_default(CHECKER, BATCH_SIZE, default.batch_size),
+            output_full_row: loader.get_with_default(
+                CHECKER,
+                OUTPUT_FULL_ROW,
+                default.output_full_row,
+            ),
+            output_revise_sql: loader.get_with_default(
+                CHECKER,
+                OUTPUT_REVISE_SQL,
+                default.output_revise_sql,
+            ),
+            revise_match_full_row: loader.get_with_default(
+                CHECKER,
+                REVISE_MATCH_FULL_ROW,
+                default.revise_match_full_row,
+            ),
+            retry_interval_secs: loader.get_with_default(
+                CHECKER,
+                RETRY_INTERVAL_SECS,
+                default.retry_interval_secs,
+            ),
+            max_retries: loader.get_with_default(CHECKER, MAX_RETRIES, default.max_retries),
+            check_log_dir: loader.get_with_default(
+                CHECKER,
+                CHECK_LOG_DIR,
+                default.check_log_dir,
+            ),
+            check_log_file_size: loader.get_with_default(
+                CHECKER,
+                CHECK_LOG_FILE_SIZE,
+                default.check_log_file_size,
+            ),
+            ..default
+        };
+        let (db_type, url, connection_auth) = Self::resolve_checker_target(loader, sinker_basic)?;
+        config.db_type = Some(db_type);
+        config.url = Some(url);
+        config.connection_auth = Some(connection_auth);
+        Ok(Some(config))
     }
 
-    fn finalize_checker_target(
-        checker: &mut Option<CheckerConfig>,
-        extractor_basic: &BasicExtractorConfig,
+    fn resolve_checker_target(
+        loader: &IniLoader,
         sinker_basic: &BasicSinkerConfig,
-    ) -> anyhow::Result<()> {
-        let Some(config) = checker.as_mut() else {
-            return Ok(());
-        };
-        if sinker_basic.sink_type == SinkType::Dummy || sinker_basic.url.is_empty() {
-            bail!(Error::ConfigError(
-                "config [sinker] target is required when [checker] is set".into()
+    ) -> anyhow::Result<(DbType, String, ConnectionAuthConfig)> {
+        let checker_target_present = loader.contains(CHECKER, DB_TYPE)
+            || loader.contains(CHECKER, URL)
+            || loader.contains(CHECKER, USERNAME)
+            || loader.contains(CHECKER, PASSWORD);
+        if checker_target_present {
+            let db_type: DbType = loader.get_required(CHECKER, DB_TYPE);
+            let url: String = loader.get_required(CHECKER, URL);
+            let connection_auth = ConnectionAuthConfig::from(loader, CHECKER);
+            return Ok((db_type, url, connection_auth));
+        }
+
+        if !matches!(&sinker_basic.sink_type, SinkType::Dummy) && !sinker_basic.url.is_empty() {
+            return Ok((
+                sinker_basic.db_type.clone(),
+                sinker_basic.url.clone(),
+                sinker_basic.connection_auth.clone(),
             ));
         }
 
-        config.db_type = Some(sinker_basic.db_type.clone());
-        config.url = Some(sinker_basic.url.clone());
-        config.connection_auth = Some(sinker_basic.connection_auth.clone());
-        Ok(())
+        bail!(Error::ConfigError(
+            "config [checker] target is required when [sinker] target is not set".into()
+        ))
     }
 
     fn load_runtime_config(loader: &IniLoader) -> anyhow::Result<RuntimeConfig> {
