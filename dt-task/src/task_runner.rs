@@ -235,6 +235,7 @@ impl TaskRunner {
         }
 
         log_finished!("task finished");
+        log::logger().flush();
         Ok(())
     }
 
@@ -682,11 +683,30 @@ impl TaskRunner {
         let is_cdc_task = matches!(self.config.extractor_basic.extract_type, ExtractType::Cdc)
             && matches!(self.config.sinker_basic.sink_type, SinkType::Write);
         let missing = || Error::ConfigError("config [checker] target is required".into());
-        let (checker_db_type, checker_url, checker_auth) = (
-            cfg.db_type.clone().ok_or_else(missing)?,
-            cfg.url.clone().ok_or_else(missing)?,
-            cfg.connection_auth.clone().ok_or_else(missing)?,
-        );
+        let fallback_target = if matches!(self.config.sinker_basic.sink_type, SinkType::Dummy) {
+            None
+        } else {
+            Some((
+                &self.config.sinker_basic.db_type,
+                &self.config.sinker_basic.url,
+                &self.config.sinker_basic.connection_auth,
+            ))
+        };
+        let checker_db_type = cfg
+            .db_type
+            .clone()
+            .or_else(|| fallback_target.map(|(db_type, _, _)| db_type.clone()))
+            .ok_or_else(missing)?;
+        let checker_url = cfg
+            .url
+            .clone()
+            .or_else(|| fallback_target.map(|(_, url, _)| url.clone()))
+            .ok_or_else(missing)?;
+        let checker_auth = cfg
+            .connection_auth
+            .clone()
+            .or_else(|| fallback_target.map(|(_, _, auth)| auth.clone()))
+            .ok_or_else(missing)?;
 
         let is_struct_task = matches!(
             self.config.extractor,

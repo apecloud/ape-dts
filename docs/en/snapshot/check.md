@@ -21,8 +21,10 @@ sample_interval=3
 This configuration is similar to the full synchronization task. The only differences are:
 
 ```
-[sinker]
-sink_type=check
+[checker]
+db_type=mysql
+url=mysql://user:pass@host:3306/db
+batch_size=2
 
 [parallelizer]
 parallel_type=rdb_check
@@ -58,10 +60,10 @@ Missing logs include database (schema), table (tb) and primary/unique key (id_co
 
 ## Output Full Row
 
-When the business needs full row content for troubleshooting exceptions, you can enable full row logging in `[sinker]`:
+When the business needs full row content for troubleshooting exceptions, you can enable full row logging in `[checker]`:
 
 ```
-[sinker]
+[checker]
 output_full_row=true
 ```
 
@@ -99,10 +101,10 @@ After enabling, all diff.log will append `src_row` and `dst_row`, and miss.log w
 
 ## Output Revise SQL
 
-If the business needs to manually repair different data, you can enable SQL output in `[sinker]`:
+If the business needs to manually repair different data, you can enable SQL output in `[checker]`:
 
 ```
-[sinker]
+[checker]
 output_revise_sql=true
 # Optional: force WHERE clause to match the whole row
 revise_match_full_row=true
@@ -157,7 +159,7 @@ The summary log contains the overall results of the check, such as start_time, e
 
 # Reverse Check
 
-Swap the [extractor] and [sinker] configurations to perform reverse check.
+Swap the [extractor] and [checker] target configurations to perform reverse check.
 
 # Other Configurations
 

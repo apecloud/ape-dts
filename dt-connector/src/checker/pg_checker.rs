@@ -35,9 +35,11 @@ impl Checker for PgChecker {
         let qb = RdbQueryBuilder::new_for_pg(pg_meta, None);
 
         let mut res = Vec::with_capacity(src_rows.len());
+        let mut check_rows = Vec::with_capacity(src_rows.len());
         let mut batch_rows = Vec::with_capacity(src_rows.len());
 
         for row in src_rows {
+            check_rows.push(row.clone());
             if has_null_key(row, &pg_meta.basic.id_cols) {
                 continue;
             }
@@ -47,12 +49,12 @@ impl Checker for PgChecker {
         if batch_rows.is_empty() {
             return Ok(FetchResult {
                 tb_meta,
-                src_rows: Vec::new(),
+                src_rows: check_rows,
                 dst_rows: res,
             });
         }
 
-        let src_rows = batch_rows.clone();
+        let src_rows = check_rows;
         for chunk in batch_rows.chunks(CHECKER_MAX_QUERY_BATCH) {
             let batch_refs: Vec<&Arc<RowData>> = chunk.iter().collect();
             let query_info = qb.get_batch_select_query(&batch_refs, 0, batch_refs.len())?;

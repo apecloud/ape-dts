@@ -21,8 +21,10 @@ sample_interval=3
 此配置和全量同步任务的基本一致，两者的不同之处是：
 
 ```
-[sinker]
-sink_type=check
+[checker]
+db_type=mysql
+url=mysql://user:pass@host:3306/db
+batch_size=2
 
 [parallelizer]
 parallel_type=rdb_check
@@ -58,10 +60,10 @@ parallel_type=rdb_check
 
 ## 输出完整行
 
-当业务需要完整行内容用于排查异常，可以在 `[sinker]` 中开启全行日志：
+当业务需要完整行内容用于排查异常，可以在 `[checker]` 中开启全行日志：
 
 ```
-[sinker]
+[checker]
 output_full_row=true
 ```
 
@@ -99,10 +101,10 @@ output_full_row=true
 
 ## 输出修复 SQL
 
-业务若需要人工修复差异数据，可以在 `[sinker]` 中开启 SQL 输出：
+业务若需要人工修复差异数据，可以在 `[checker]` 中开启 SQL 输出：
 
 ```
-[sinker]
+[checker]
 output_revise_sql=true
 # 可选：强制使用全字段匹配 WHERE 条件
 revise_match_full_row=true
@@ -157,7 +159,7 @@ INSERT INTO `test_db_1`.`test_table`(`id`,`name`,`age`,`email`) VALUES(3,'Charli
 
 # 反向校验
 
-将 [extractor] 和 [sinker] 配置调换，即可进行反向校验。
+将 [extractor] 与 [checker] 目标配置调换，即可进行反向校验。
 
 # 其他配置
 

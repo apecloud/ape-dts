@@ -183,14 +183,6 @@ enum CheckInconsistency {
     Diff(HashMap<String, DiffColValue>),
 }
 
-struct InconsistencyContext<'a> {
-    common: &'a mut CheckContext,
-    tb_meta: &'a CheckerTbMeta,
-    miss: &'a mut Vec<CheckLog>,
-    diff: &'a mut Vec<CheckLog>,
-    sql_count: &'a mut usize,
-}
-
 struct RetryItem {
     row: Arc<RowData>,
     retries_left: u32,
@@ -233,8 +225,8 @@ pub struct DataCheckerHandle {
 }
 
 impl DataCheckerHandle {
-    pub fn spawn<B: Checker>(
-        backend: B,
+    pub fn spawn<C: Checker>(
+        checker: C,
         ctx: CheckContext,
         buffer_size: usize,
         drop_on_full: bool,
@@ -247,7 +239,7 @@ impl DataCheckerHandle {
         monitor.set_counter(CounterType::CheckerPending, 0);
 
         let check_job = DataChecker::new(
-            backend,
+            checker,
             ctx,
             rx,
             pending_rows.clone(),
@@ -340,28 +332,20 @@ pub trait Checker: Send + Sync + 'static {
     }
 }
 
-struct DataChecker<B: Checker> {
-    backend: B,
+struct DataChecker<C: Checker> {
+    checker: C,
     ctx: CheckContext,
     retry_queue: VecDeque<RetryItem>,
+    retry_next_at: Option<Instant>,
     rx: mpsc::Receiver<CheckerMsg>,
     pending_rows: Arc<AtomicU64>,
     monitor: Arc<Monitor>,
     name: String,
 }
 
-// check if row has null key
-pub fn has_null_key(row_data: &Arc<RowData>, id_cols: &[String]) -> bool {
-    row_data.require_after().ok().is_some_and(|after| {
-        id_cols
-            .iter()
-            .any(|col| matches!(after.get(col), Some(ColValue::None) | None))
-    })
-}
-
-impl<B: Checker> DataChecker<B> {
+impl<C: Checker> DataChecker<C> {
     pub fn new(
-        backend: B,
+        checker: C,
         ctx: CheckContext,
         rx: mpsc::Receiver<CheckerMsg>,
         pending_rows: Arc<AtomicU64>,
@@ -369,9 +353,10 @@ impl<B: Checker> DataChecker<B> {
         name: &str,
     ) -> Self {
         Self {
-            backend,
+            checker,
             ctx,
             retry_queue: VecDeque::new(),
+            retry_next_at: None,
             rx,
             pending_rows,
             monitor,
@@ -458,42 +443,41 @@ impl<B: Checker> DataChecker<B> {
         check_result: CheckInconsistency,
         src_row_data: &Arc<RowData>,
         dst_row_data: Option<&RowData>,
-        ctx: &mut InconsistencyContext<'_>,
+        ctx: &mut CheckContext,
+        tb_meta: &CheckerTbMeta,
+        miss: &mut Vec<CheckLog>,
+        diff: &mut Vec<CheckLog>,
+        sql_count: &mut usize,
     ) -> anyhow::Result<()> {
         match check_result {
             CheckInconsistency::Miss => {
-                let log = Self::build_miss_log(src_row_data, ctx.common, ctx.tb_meta).await?;
-                ctx.miss.push(log);
+                let log = Self::build_miss_log(src_row_data, ctx, tb_meta).await?;
+                miss.push(log);
                 let revise_sql = Self::build_revise_sql(
-                    ctx.common.output_revise_sql,
-                    ctx.common.revise_match_full_row,
-                    ctx.tb_meta,
+                    ctx.output_revise_sql,
+                    ctx.revise_match_full_row,
+                    tb_meta,
                     src_row_data,
                     None,
                     None,
                 )?;
-                Self::log_revise_sql(revise_sql, ctx.sql_count);
+                Self::log_revise_sql(revise_sql, sql_count);
             }
             CheckInconsistency::Diff(diff_col_values) => {
                 let dst_row = dst_row_data.context("missing dst row in diff")?;
                 let revise_sql = Self::build_revise_sql(
-                    ctx.common.output_revise_sql,
-                    ctx.common.revise_match_full_row,
-                    ctx.tb_meta,
+                    ctx.output_revise_sql,
+                    ctx.revise_match_full_row,
+                    tb_meta,
                     src_row_data,
                     Some(dst_row),
                     Some(&diff_col_values),
                 )?;
-                let log = Self::build_diff_log(
-                    src_row_data,
-                    dst_row,
-                    diff_col_values,
-                    ctx.common,
-                    ctx.tb_meta,
-                )
-                .await?;
-                ctx.diff.push(log);
-                Self::log_revise_sql(revise_sql, ctx.sql_count);
+                let log =
+                    Self::build_diff_log(src_row_data, dst_row, diff_col_values, ctx, tb_meta)
+                        .await?;
+                diff.push(log);
+                Self::log_revise_sql(revise_sql, sql_count);
             }
         }
 
@@ -503,27 +487,20 @@ impl<B: Checker> DataChecker<B> {
     async fn check_and_generate_logs(
         src_data: &[Arc<RowData>],
         mut dst_row_data_map: HashMap<u128, RowData>,
-        common: &mut CheckContext,
+        ctx: &mut CheckContext,
         tb_meta: &CheckerTbMeta,
         max_retries: u32,
     ) -> anyhow::Result<(Vec<CheckLog>, Vec<CheckLog>, usize, Vec<Arc<RowData>>)> {
         let mut miss = Vec::new();
         let mut diff = Vec::new();
         let mut sql_count = 0;
-        let mut ctx = InconsistencyContext {
-            common,
-            tb_meta,
-            miss: &mut miss,
-            diff: &mut diff,
-            sql_count: &mut sql_count,
-        };
-        let mut retry_rows = Vec::with_capacity(src_data.len());
+        let mut retry_rows = Vec::new();
 
         if max_retries > 0 {
             for src_row_data in src_data {
                 let key = src_row_data.get_hash_code(tb_meta.basic())?;
                 let dst_row_data = dst_row_data_map.remove(&key);
-                if Self::is_inconsistent_fast(src_row_data, dst_row_data.as_ref())? {
+                if Self::is_inconsistent(src_row_data, dst_row_data.as_ref())? {
                     retry_rows.push(src_row_data.clone());
                 }
             }
@@ -538,8 +515,17 @@ impl<B: Checker> DataChecker<B> {
                 continue;
             };
 
-            Self::handle_inconsistency(check_result, src_row_data, dst_row_data.as_ref(), &mut ctx)
-                .await?;
+            Self::handle_inconsistency(
+                check_result,
+                src_row_data,
+                dst_row_data.as_ref(),
+                ctx,
+                tb_meta,
+                &mut miss,
+                &mut diff,
+                &mut sql_count,
+            )
+            .await?;
         }
 
         Ok((miss, diff, sql_count, retry_rows))
@@ -561,32 +547,6 @@ impl<B: Checker> DataChecker<B> {
         }
     }
 
-    fn is_inconsistent_fast(
-        src_row: &Arc<RowData>,
-        dst_row: Option<&RowData>,
-    ) -> anyhow::Result<bool> {
-        let Some(dst_row) = dst_row else {
-            return Ok(true);
-        };
-        let src = src_row
-            .after
-            .as_ref()
-            .context("src row data after is missing")?;
-        let dst = dst_row
-            .after
-            .as_ref()
-            .context("dst row data after is missing")?;
-
-        for (col, src_val) in src {
-            match dst.get(col) {
-                Some(dst_val) if src_val == dst_val => {}
-                _ => return Ok(true),
-            }
-        }
-
-        Ok(false)
-    }
-
     fn compare_row_data(
         src_row_data: &Arc<RowData>,
         dst_row_data: &RowData,
@@ -600,7 +560,7 @@ impl<B: Checker> DataChecker<B> {
             .as_ref()
             .context("dst row data after is missing")?;
 
-        let mut diff_col_values = HashMap::with_capacity(src.len());
+        let mut diff_col_values: Option<HashMap<String, DiffColValue>> = None;
         for (col, src_val) in src {
             let dst_val = dst.get(col);
             let maybe_diff = match dst_val {
@@ -628,19 +588,21 @@ impl<B: Checker> DataChecker<B> {
             };
 
             if let Some(diff_entry) = maybe_diff {
-                diff_col_values.insert(col.to_owned(), diff_entry);
+                diff_col_values
+                    .get_or_insert_with(HashMap::new)
+                    .insert(col.to_owned(), diff_entry);
             }
         }
 
-        let should_expand_doc = diff_col_values.contains_key(MongoConstants::DOC)
+        let mut diff_col_values = diff_col_values.unwrap_or_default();
+        if diff_col_values.contains_key(MongoConstants::DOC)
             && [src_row_data, dst_row_data].iter().any(|row| {
                 matches!(
                     row.after.as_ref().and_then(|m| m.get(MongoConstants::DOC)),
                     Some(ColValue::MongoDoc(_))
                 )
-            });
-
-        if should_expand_doc {
+            })
+        {
             diff_col_values =
                 Self::expand_mongo_doc_diff(src_row_data, dst_row_data, diff_col_values);
         }
@@ -676,15 +638,17 @@ impl<B: Checker> DataChecker<B> {
         let mut miss = Vec::new();
         let mut diff = Vec::new();
         let mut sql_count = 0;
-        let mut ctx = InconsistencyContext {
-            common: &mut self.ctx,
+        Self::handle_inconsistency(
+            check_result,
+            src_row_data,
+            dst_row_data,
+            &mut self.ctx,
             tb_meta,
-            miss: &mut miss,
-            diff: &mut diff,
-            sql_count: &mut sql_count,
-        };
-
-        Self::handle_inconsistency(check_result, src_row_data, dst_row_data, &mut ctx).await?;
+            &mut miss,
+            &mut diff,
+            &mut sql_count,
+        )
+        .await?;
 
         Self::log_dml(&miss, &diff);
         let summary = &mut self.ctx.summary;
@@ -759,24 +723,20 @@ impl<B: Checker> DataChecker<B> {
 
     async fn build_miss_log(
         src_row_data: &Arc<RowData>,
-        common: &mut CheckContext,
+        ctx: &mut CheckContext,
         tb_meta: &CheckerTbMeta,
     ) -> anyhow::Result<CheckLog> {
-        let (mapped_schema, mapped_tb) = common
+        let (mapped_schema, mapped_tb) = ctx
             .reverse_router
             .get_tb_map(&src_row_data.schema, &src_row_data.tb);
-        let has_col_map = common
+        let has_col_map = ctx
             .reverse_router
             .get_col_map(&src_row_data.schema, &src_row_data.tb)
             .is_some();
         let schema_changed = src_row_data.schema != mapped_schema || src_row_data.tb != mapped_tb;
 
         let routed_row = if has_col_map {
-            Cow::Owned(
-                common
-                    .reverse_router
-                    .route_row(src_row_data.as_ref().clone()),
-            )
+            Cow::Owned(ctx.reverse_router.route_row(src_row_data.as_ref().clone()))
         } else {
             Cow::Borrowed(src_row_data.as_ref())
         };
@@ -786,7 +746,7 @@ impl<B: Checker> DataChecker<B> {
             (mapped_schema.to_string(), mapped_tb.to_string())
         };
 
-        let id_col_values = if let Some(meta_manager) = common.extractor_meta_manager.as_mut() {
+        let id_col_values = if let Some(meta_manager) = ctx.extractor_meta_manager.as_mut() {
             let src_tb_meta = meta_manager.get_tb_meta(&schema, &tb).await?;
             Self::build_id_col_values(routed_row.as_ref(), src_tb_meta)
                 .context("Failed to build ID col values")?
@@ -794,7 +754,7 @@ impl<B: Checker> DataChecker<B> {
             Self::build_id_col_values(routed_row.as_ref(), tb_meta.basic()).unwrap_or_default()
         };
 
-        let src_row = if common.output_full_row {
+        let src_row = if ctx.output_full_row {
             Self::clone_row_values(routed_row.as_ref())
         } else {
             None
@@ -816,15 +776,15 @@ impl<B: Checker> DataChecker<B> {
         src_row_data: &Arc<RowData>,
         dst_row_data: &RowData,
         diff_col_values: HashMap<String, DiffColValue>,
-        common: &mut CheckContext,
+        ctx: &mut CheckContext,
         tb_meta: &CheckerTbMeta,
     ) -> anyhow::Result<CheckLog> {
-        let mut log = Self::build_miss_log(src_row_data, common, tb_meta).await?;
+        let mut log = Self::build_miss_log(src_row_data, ctx, tb_meta).await?;
 
         log.diff_col_values =
-            Self::map_diff_col_values(&common.reverse_router, src_row_data, diff_col_values);
+            Self::map_diff_col_values(&ctx.reverse_router, src_row_data, diff_col_values);
         log.dst_row =
-            Self::maybe_build_dst_row(&common.reverse_router, dst_row_data, common.output_full_row);
+            Self::maybe_build_dst_row(&ctx.reverse_router, dst_row_data, ctx.output_full_row);
 
         Ok(log)
     }
@@ -908,6 +868,9 @@ impl<B: Checker> DataChecker<B> {
         }
 
         let retry_at = Instant::now() + Duration::from_secs(self.ctx.retry_interval_secs);
+        if self.retry_next_at.is_none_or(|current| retry_at < current) {
+            self.retry_next_at = Some(retry_at);
+        }
         let mut dropped = 0usize;
         for row in rows {
             if self.retry_queue.len() >= CHECKER_MAX_RETRY_QUEUE_SIZE {
@@ -922,6 +885,7 @@ impl<B: Checker> DataChecker<B> {
         }
         if dropped > 0 {
             log_warn!("Checker retry queue full, dropped {} oldest rows.", dropped);
+            self.retry_next_at = None;
         }
         self.ctx.monitor.set_counter(
             CounterType::CheckerRetryQueueSize,
@@ -935,17 +899,39 @@ impl<B: Checker> DataChecker<B> {
         }
 
         let now = Instant::now();
-        let mut pending = std::mem::take(&mut self.retry_queue);
-        while let Some(item) = pending.pop_front() {
+        if self
+            .retry_next_at
+            .is_some_and(|next_retry_at| next_retry_at > now)
+        {
+            return Ok(());
+        }
+
+        let mut next_retry_at: Option<Instant> = None;
+        let pending_len = self.retry_queue.len();
+        for _ in 0..pending_len {
+            let item = match self.retry_queue.pop_front() {
+                Some(item) => item,
+                None => break,
+            };
+
             if item.next_retry_at > now {
+                next_retry_at = match next_retry_at {
+                    Some(current) => Some(current.min(item.next_retry_at)),
+                    None => Some(item.next_retry_at),
+                };
                 self.retry_queue.push_back(item);
                 continue;
             }
 
             if let Some(rescheduled) = self.retry_check_item(item).await? {
+                next_retry_at = match next_retry_at {
+                    Some(current) => Some(current.min(rescheduled.next_retry_at)),
+                    None => Some(rescheduled.next_retry_at),
+                };
                 self.retry_queue.push_back(rescheduled);
             }
         }
+        self.retry_next_at = next_retry_at;
         self.ctx.monitor.set_counter(
             CounterType::CheckerRetryQueueSize,
             self.retry_queue.len() as u64,
@@ -954,14 +940,14 @@ impl<B: Checker> DataChecker<B> {
     }
 
     async fn retry_check_item(&mut self, mut item: RetryItem) -> anyhow::Result<Option<RetryItem>> {
-        let fetch_result = self.backend.fetch(std::slice::from_ref(&item.row)).await?;
+        let fetch_result = self.checker.fetch(std::slice::from_ref(&item.row)).await?;
         if fetch_result.src_rows.is_empty() {
             return Ok(None);
         }
         let tb_meta = fetch_result.tb_meta;
         let dst_row = Self::select_dst_row(&item.row, tb_meta.as_ref(), fetch_result.dst_rows)?;
         if item.retries_left > 1 {
-            let inconsistent = Self::is_inconsistent_fast(&item.row, dst_row.as_ref())?;
+            let inconsistent = Self::is_inconsistent(&item.row, dst_row.as_ref())?;
             if !inconsistent {
                 return Ok(None);
             }
@@ -989,6 +975,7 @@ impl<B: Checker> DataChecker<B> {
             item.retries_left = 0;
             let _ = self.retry_check_item(item).await?;
         }
+        self.retry_next_at = None;
         self.ctx.monitor.set_counter(
             CounterType::CheckerRetryQueueSize,
             self.retry_queue.len() as u64,
@@ -1010,6 +997,7 @@ impl<B: Checker> DataChecker<B> {
             }
             self.process_due_retries().await?;
         }
+        self.retry_next_at = None;
         Ok(())
     }
 
@@ -1046,7 +1034,7 @@ impl<B: Checker> DataChecker<B> {
             return Ok(());
         }
 
-        let fetch_result = self.backend.fetch(data).await?;
+        let fetch_result = self.checker.fetch(data).await?;
         let tb_meta = fetch_result.tb_meta;
         let checkable = fetch_result.src_rows;
         if checkable.is_empty() {
@@ -1064,7 +1052,6 @@ impl<B: Checker> DataChecker<B> {
         }
         let mut rts = LimitedQueue::new(1);
         rts.push((start_time.elapsed().as_millis() as u64, 1));
-
         let max_retries = self.ctx.max_retries;
 
         // 2. check and generate logs (inconsistencies will be retried later)
@@ -1086,7 +1073,7 @@ impl<B: Checker> DataChecker<B> {
         }
         self.enqueue_retry_rows(retry_rows);
 
-        // 4. update monitor metrics
+        // 3. update monitor metrics
         let monitor = self.ctx.monitor.clone();
         monitor
             .add_counter(CounterType::CheckerMissCount, miss.len() as u64)
@@ -1131,6 +1118,29 @@ impl<B: Checker> DataChecker<B> {
         }
     }
 
+    fn is_inconsistent(src_row: &Arc<RowData>, dst_row: Option<&RowData>) -> anyhow::Result<bool> {
+        let Some(dst_row) = dst_row else {
+            return Ok(true);
+        };
+        let src = src_row
+            .after
+            .as_ref()
+            .context("src row data after is missing")?;
+        let dst = dst_row
+            .after
+            .as_ref()
+            .context("dst row data after is missing")?;
+
+        for (col, src_val) in src {
+            match dst.get(col) {
+                Some(dst_val) if src_val == dst_val => {}
+                _ => return Ok(true),
+            }
+        }
+
+        Ok(false)
+    }
+
     async fn shutdown(&mut self) -> anyhow::Result<()> {
         if self.ctx.max_retries > 0 {
             self.drain_retries().await?;
@@ -1138,6 +1148,15 @@ impl<B: Checker> DataChecker<B> {
             self.flush_retries().await?;
         }
         self.finish_summary_and_meta().await?;
-        self.backend.close().await
+        self.checker.close().await
     }
+}
+
+// check if row has null key
+pub fn has_null_key(row_data: &Arc<RowData>, id_cols: &[String]) -> bool {
+    row_data.require_after().ok().is_some_and(|after| {
+        id_cols
+            .iter()
+            .any(|col| matches!(after.get(col), Some(ColValue::None) | None))
+    })
 }

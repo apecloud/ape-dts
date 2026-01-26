@@ -21,7 +21,10 @@ use dt_common::{
     meta::{
         col_value::ColValue,
         dt_data::DtData,
-        mongo::{mongo_cdc_source::MongoCdcSource, mongo_constant::MongoConstants},
+        mongo::{
+            mongo_cdc_source::MongoCdcSource, mongo_constant::MongoConstants,
+            mongo_key::MongoKey,
+        },
         position::Position,
         row_data::RowData,
         row_type::RowType,
@@ -50,6 +53,14 @@ pub struct MongoCdcExtractor {
     pub heartbeat_tb: String,
     pub syncer: Arc<Mutex<Syncer>>,
     pub recovery: Option<Arc<dyn Recovery + Send + Sync>>,
+}
+
+impl MongoCdcExtractor {
+    fn insert_id_from_doc(target: &mut HashMap<String, ColValue>, doc: &Document) {
+        if let Some(key) = MongoKey::from_doc(doc) {
+            target.insert(MongoConstants::ID.to_string(), ColValue::String(key.to_string()));
+        }
+    }
 }
 
 #[async_trait]
@@ -143,15 +154,20 @@ impl MongoCdcExtractor {
 
             match op.as_str() {
                 "i" => {
+                    let doc = o.unwrap().as_document().unwrap().clone();
+                    Self::insert_id_from_doc(&mut after, &doc);
                     after.insert(
                         MongoConstants::DOC.to_string(),
-                        ColValue::MongoDoc(o.unwrap().as_document().unwrap().clone()),
+                        ColValue::MongoDoc(doc),
                     );
                 }
                 "u" => {
                     row_type = RowType::Update;
                     // for update op log, doc.o contains only diff instead of full doc
                     let after_doc = o.unwrap().as_document().unwrap();
+                    if let Some(id_doc) = o2.and_then(|doc| doc.as_document()) {
+                        Self::insert_id_from_doc(&mut after, id_doc);
+                    }
                     // refer: https://www.mongodb.com/community/forums/t/oplog-update-entry-without-set-and-unset/171771
                     // https://www.mongodb.com/docs/manual/reference/operator/update/#update-operators-1
                     // in MongoDB 4.4 and earlier, after_doc contains $set with all new document fields,
@@ -195,10 +211,9 @@ impl MongoCdcExtractor {
                 }
                 "d" => {
                     row_type = RowType::Delete;
-                    before.insert(
-                        MongoConstants::DOC.to_string(),
-                        ColValue::MongoDoc(o.unwrap().as_document().unwrap().clone()),
-                    );
+                    let doc = o.unwrap().as_document().unwrap().clone();
+                    Self::insert_id_from_doc(&mut after, &doc);
+                    before.insert(MongoConstants::DOC.to_string(), ColValue::MongoDoc(doc));
                 }
                 // TODO, DDL
                 "c" | "xi" | "xd" => {
@@ -293,17 +308,17 @@ impl MongoCdcExtractor {
 
             let o = item.get("o");
             let mut before = HashMap::new();
-            before.insert(
-                MongoConstants::DOC.to_string(),
-                ColValue::MongoDoc(o.unwrap().as_document().unwrap().clone()),
-            );
+            let doc = o.unwrap().as_document().unwrap().clone();
+            let mut after = HashMap::new();
+            Self::insert_id_from_doc(&mut after, &doc);
+            before.insert(MongoConstants::DOC.to_string(), ColValue::MongoDoc(doc));
 
             data.push(Self::build_oplog_row_data(
                 &ns,
                 &ts,
                 RowType::Delete,
                 before,
-                HashMap::new(),
+                after,
             ));
         }
         data
@@ -393,6 +408,7 @@ impl MongoCdcExtractor {
 
                 match doc.operation_type {
                     OperationType::Insert => {
+                        Self::insert_id_from_doc(&mut after, &doc.full_document.as_ref().unwrap());
                         after.insert(
                             MongoConstants::DOC.to_string(),
                             ColValue::MongoDoc(doc.full_document.unwrap()),
@@ -401,15 +417,18 @@ impl MongoCdcExtractor {
 
                     OperationType::Delete => {
                         row_type = RowType::Delete;
-                        before.insert(
-                            MongoConstants::DOC.to_string(),
-                            ColValue::MongoDoc(doc.document_key.unwrap()),
-                        );
+                        let doc = doc.document_key.unwrap();
+                        Self::insert_id_from_doc(&mut after, &doc);
+                        before.insert(MongoConstants::DOC.to_string(), ColValue::MongoDoc(doc));
                     }
 
                     OperationType::Update | OperationType::Replace => {
                         row_type = RowType::Update;
                         if let Some(document) = doc.full_document {
+                            if let Some(id_doc) = doc.document_key.as_ref() {
+                                Self::insert_id_from_doc(&mut after, id_doc);
+                            }
+                            Self::insert_id_from_doc(&mut after, &document);
                             before.insert(
                                 MongoConstants::DOC.to_string(),
                                 ColValue::MongoDoc(doc.document_key.unwrap()),
