@@ -87,7 +87,6 @@ const REVISE_MATCH_FULL_ROW: &str = "revise_match_full_row";
 const RETRY_INTERVAL_SECS: &str = "retry_interval_secs";
 const MAX_RETRIES: &str = "max_retries";
 const DB_TYPE: &str = "db_type";
-const SINK_TYPE: &str = "sink_type";
 const URL: &str = "url";
 const BATCH_SIZE: &str = "batch_size";
 const MAX_CONNECTIONS: &str = "max_connections";
@@ -454,15 +453,34 @@ impl TaskConfig {
 
     fn load_sinker_config(loader: &IniLoader) -> anyhow::Result<(BasicSinkerConfig, SinkerConfig)> {
         if !loader.ini.sections().contains(&SINKER.to_string()) {
-            if !loader.ini.sections().contains(&CHECKER.to_string()) {
-                bail!(Error::ConfigError(
-                    "config [sinker] is required when [checker] is not set".into()
-                ));
+            if loader.ini.sections().contains(&CHECKER.to_string()) {
+                let db_type: DbType = loader.get_required(CHECKER, DB_TYPE);
+                let url: String = loader.get_required(CHECKER, URL);
+                let connection_auth = ConnectionAuthConfig::from(loader, CHECKER);
+                let basic = BasicSinkerConfig {
+                    sink_type: SinkType::Dummy,
+                    db_type: db_type.clone(),
+                    url: url.clone(),
+                    connection_auth: connection_auth.clone(),
+                    batch_size: loader.get_with_default(CHECKER, BATCH_SIZE, 200),
+                    max_connections: loader.get_with_default(
+                        CHECKER,
+                        MAX_CONNECTIONS,
+                        DEFAULT_MAX_CONNECTIONS,
+                    ),
+                };
+                return Ok((basic, SinkerConfig::Dummy));
             }
+            bail!(Error::ConfigError(
+                "config [sinker] is required when [checker] is not set".into()
+            ));
+        }
+
+        let sink_type = loader.get_with_default(SINKER, "sink_type", SinkType::Write);
+        if let SinkType::Dummy = sink_type {
             return Ok((BasicSinkerConfig::default(), SinkerConfig::Dummy));
         }
 
-        let sink_type = loader.get_with_default(SINKER, SINK_TYPE, SinkType::Write);
         let db_type: DbType = loader.get_required(SINKER, DB_TYPE);
         let url: String = loader.get_optional(SINKER, URL);
         let batch_size: usize = loader.get_with_default(SINKER, BATCH_SIZE, 200);
@@ -757,11 +775,7 @@ impl TaskConfig {
                 default.retry_interval_secs,
             ),
             max_retries: loader.get_with_default(CHECKER, MAX_RETRIES, default.max_retries),
-            check_log_dir: loader.get_with_default(
-                CHECKER,
-                CHECK_LOG_DIR,
-                default.check_log_dir,
-            ),
+            check_log_dir: loader.get_with_default(CHECKER, CHECK_LOG_DIR, default.check_log_dir),
             check_log_file_size: loader.get_with_default(
                 CHECKER,
                 CHECK_LOG_FILE_SIZE,
@@ -780,6 +794,15 @@ impl TaskConfig {
         loader: &IniLoader,
         sinker_basic: &BasicSinkerConfig,
     ) -> anyhow::Result<(DbType, String, ConnectionAuthConfig)> {
+        let mut target = None;
+        if !sinker_basic.url.is_empty() {
+            target = Some((
+                sinker_basic.db_type.clone(),
+                sinker_basic.url.clone(),
+                sinker_basic.connection_auth.clone(),
+            ));
+        }
+
         let checker_target_present = loader.contains(CHECKER, DB_TYPE)
             || loader.contains(CHECKER, URL)
             || loader.contains(CHECKER, USERNAME)
@@ -788,15 +811,11 @@ impl TaskConfig {
             let db_type: DbType = loader.get_required(CHECKER, DB_TYPE);
             let url: String = loader.get_required(CHECKER, URL);
             let connection_auth = ConnectionAuthConfig::from(loader, CHECKER);
-            return Ok((db_type, url, connection_auth));
+            target = Some((db_type, url, connection_auth));
         }
 
-        if !matches!(&sinker_basic.sink_type, SinkType::Dummy) && !sinker_basic.url.is_empty() {
-            return Ok((
-                sinker_basic.db_type.clone(),
-                sinker_basic.url.clone(),
-                sinker_basic.connection_auth.clone(),
-            ));
+        if let Some(target) = target {
+            return Ok(target);
         }
 
         bail!(Error::ConfigError(
