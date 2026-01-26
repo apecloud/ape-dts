@@ -143,9 +143,8 @@ db_type=mongo
 extract_type=snapshot
 url=mongodb://ape_dts:123456@mongo1:9042/?replicaSet=rs0
 
-[sinker]
+[checker]
 db_type=mongo
-sink_type=check
 url=mongodb://ape_dts:123456@127.0.0.1:27018
 batch_size=200
 
@@ -233,9 +232,8 @@ url=mongodb://ape_dts:123456@mongo1:9042/?replicaSet=rs0
 check_log_dir=./logs/origin_check_log
 batch_size=200
 
-[sinker]
+[checker]
 db_type=mongo
-sink_type=check
 url=mongodb://ape_dts:123456@127.0.0.1:27018
 batch_size=200
 
