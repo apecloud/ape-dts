@@ -4,6 +4,8 @@
 
 支持对 MySQL/PG/Mongo 进行比对。
 
+数据校验可用于 Snapshot 与 CDC 任务。若为 CDC 任务，保持 `[checker]` 开启并设置 `extract_type=cdc`，checker 会在数据落库后进行校验。
+
 # 示例: MySQL -> MySQL
 
 参考 [任务模版](../../templates/mysql_to_mysql.md) 和 [教程](../../en/tutorial/mysql_to_mysql.md)
@@ -29,6 +31,10 @@ batch_size=2
 [parallelizer]
 parallel_type=rdb_check
 ```
+
+## 限制
+
+- 数据校验为源端驱动（仅验证 Source ∈ Target），无法发现目标端多余数据（幽灵数据）。因此，目标端删除同步缺失不会被检测到。
 
 # 校验结果
 

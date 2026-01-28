@@ -219,9 +219,7 @@ pub struct DataCheckerHandle {
     tx: mpsc::Sender<CheckerMsg>,
     join_handle: Option<JoinHandle<()>>,
     pending_rows: Arc<AtomicU64>,
-    dropped_batches: AtomicU64,
     monitor: Arc<Monitor>,
-    drop_on_full: bool,
 }
 
 impl DataCheckerHandle {
@@ -229,12 +227,10 @@ impl DataCheckerHandle {
         checker: C,
         ctx: CheckContext,
         buffer_size: usize,
-        drop_on_full: bool,
         name: &str,
     ) -> Self {
         let (tx, rx) = mpsc::channel::<CheckerMsg>(buffer_size.max(1));
         let pending_rows = Arc::new(AtomicU64::new(0));
-        let dropped_batches = AtomicU64::new(0);
         let monitor = ctx.monitor.clone();
         monitor.set_counter(CounterType::CheckerPending, 0);
 
@@ -252,9 +248,7 @@ impl DataCheckerHandle {
             tx,
             join_handle: Some(join_handle),
             pending_rows,
-            dropped_batches,
             monitor,
-            drop_on_full,
         }
     }
 
@@ -262,11 +256,7 @@ impl DataCheckerHandle {
         if data.is_empty() {
             return Ok(());
         }
-        if self.drop_on_full {
-            self.try_send(data).await
-        } else {
-            self.send(data).await
-        }
+        self.send(data).await
     }
 
     pub async fn close(&mut self) -> anyhow::Result<()> {
@@ -289,36 +279,6 @@ impl DataCheckerHandle {
             let pending = self.pending_rows.fetch_add(data_size, Ordering::Relaxed) + data_size;
             self.monitor
                 .set_counter(CounterType::CheckerPending, pending);
-        }
-        Ok(())
-    }
-
-    async fn try_send(&self, data: Vec<Arc<RowData>>) -> anyhow::Result<()> {
-        let data_size = data.len() as u64;
-        match self.tx.try_send(CheckerMsg::ProcessBatch(data)) {
-            Ok(()) => {
-                if data_size > 0 {
-                    let pending =
-                        self.pending_rows.fetch_add(data_size, Ordering::Relaxed) + data_size;
-                    self.monitor
-                        .set_counter(CounterType::CheckerPending, pending);
-                }
-            }
-            Err(mpsc::error::TrySendError::Full(_)) => {
-                let dropped = self.dropped_batches.fetch_add(1, Ordering::Relaxed) + 1;
-                self.monitor
-                    .add_counter(CounterType::CheckerAsyncDropCount, data_size)
-                    .await;
-                if dropped % 1000 == 0 {
-                    log_warn!("Checker queue full, dropped {} batches.", dropped);
-                }
-            }
-            Err(err) => {
-                self.monitor
-                    .add_counter(CounterType::CheckerErrorTotal, 1)
-                    .await;
-                return Err(anyhow::anyhow!("Checker worker closed: {}", err));
-            }
         }
         Ok(())
     }
@@ -439,6 +399,7 @@ impl<C: Checker> DataChecker<C> {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn handle_inconsistency(
         check_result: CheckInconsistency,
         src_row_data: &Arc<RowData>,
@@ -564,7 +525,7 @@ impl<C: Checker> DataChecker<C> {
         for (col, src_val) in src {
             let dst_val = dst.get(col);
             let maybe_diff = match dst_val {
-                Some(dst_val) if src_val == dst_val => None,
+                Some(dst_val) if src_val.is_same_value(dst_val) => None,
                 Some(dst_val) => {
                     let src_type = src_val.type_name();
                     let dst_type = dst_val.type_name();
@@ -1133,7 +1094,7 @@ impl<C: Checker> DataChecker<C> {
 
         for (col, src_val) in src {
             match dst.get(col) {
-                Some(dst_val) if src_val == dst_val => {}
+                Some(dst_val) if src_val.is_same_value(dst_val) => {}
                 _ => return Ok(true),
             }
         }

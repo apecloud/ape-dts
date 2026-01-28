@@ -4,6 +4,10 @@ CDC tasks calculate delays by positions. For example, a MySQL CDC task uses the 
 
 But if the source database has not been updated for a long time, or there are updates but the updated tables are not subscribed by the CDC task, then the position won't change, which will be considered as a delay. Therefore, we can create a heartbeat table in the source database and update the table periodically by CDC tasks to push the task position forward.
 
+## CDC + Checker
+
+If you want to validate CDC-applied data, enable `[checker]` in the CDC task config. See [Data Check](../snapshot/check.md) for configuration and limitations.
+
 # Configurations
 
 - For MySQL/PG/Mongo, refer to:

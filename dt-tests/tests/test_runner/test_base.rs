@@ -123,6 +123,15 @@ impl TestBase {
         runner.close().await.unwrap();
     }
 
+    pub async fn run_cdc_check_test(test_dir: &str, start_millis: u64, parse_millis: u64) {
+        let runner = RdbCheckTestRunner::new(test_dir).await.unwrap();
+        runner
+            .run_cdc_check_test(start_millis, parse_millis)
+            .await
+            .unwrap();
+        runner.close().await.unwrap();
+    }
+
     pub async fn run_review_test(test_dir: &str) {
         let runner = RdbCheckTestRunner::new(test_dir).await.unwrap();
         runner.run_review_test().await.unwrap();
@@ -192,6 +201,14 @@ impl TestBase {
     pub async fn run_mongo_check_test(test_dir: &str) {
         let runner = MongoCheckTestRunner::new(test_dir).await.unwrap();
         runner.run_check_test().await.unwrap();
+    }
+
+    pub async fn run_mongo_cdc_check_test(test_dir: &str, start_millis: u64, parse_millis: u64) {
+        let runner = MongoCheckTestRunner::new(test_dir).await.unwrap();
+        runner
+            .run_cdc_check_test(start_millis, parse_millis)
+            .await
+            .unwrap();
     }
 
     pub async fn run_mongo_recheck_test(test_dir: &str) {

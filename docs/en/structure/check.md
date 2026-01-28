@@ -2,6 +2,8 @@
 
 After structure migration, you can choose from two methods for verification. One is provided by us, and the other is an open source tool called [Liquibase](./check_liquibase.md). This document primarily focuses on the former one.
 
+Structure check is independent of CDC. CDC + checker applies to row-level data check (see data check docs).
+
 # Example: MySQL -> MySQL
 Refer to [task templates](../../templates/mysql_to_mysql.md)
 
@@ -9,6 +11,10 @@ Refer to [task templates](../../templates/mysql_to_mysql.md)
 
 Based on the source structures, the check results include **miss**, **diff**, **extra**, and **summary**, all presented in JSON.
 `miss.log`, `diff.log`, `extra.log` all use the same JSON structure (`StructCheckLog`):
+
+## Limitations
+
+- Data check (checker) is source-driven (validates Source ∈ Target) and cannot detect extra rows that exist only in the target (ghost data). This means missing deletes on the target side will not be detected.
 
 ```json
 {

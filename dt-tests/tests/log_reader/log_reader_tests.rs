@@ -1,7 +1,7 @@
 #[cfg(test)]
 mod test {
 
-    use dt_connector::check_log::log_reader::LogReader;
+    use dt_connector::checker::log_reader::LogReader;
     use serial_test::serial;
 
     use crate::test_config_util::TestConfigUtil;

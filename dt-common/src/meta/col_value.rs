@@ -149,6 +149,21 @@ impl ColValue {
                     v1 == v2
                 }
             }
+            // MySQL Binlog VARCHAR/CHAR/TEXT->RawString same as String
+            (ColValue::RawString(v1) | ColValue::Blob(v1), ColValue::String(v2)) => {
+                if let Ok(s) = String::from_utf8(v1.clone()) {
+                    &s == v2
+                } else {
+                    false
+                }
+            }
+            (ColValue::String(v1), ColValue::RawString(v2) | ColValue::Blob(v2)) => {
+                if let Ok(s) = String::from_utf8(v2.clone()) {
+                    v1 == &s
+                } else {
+                    false
+                }
+            }
             _ => self == other,
         }
     }

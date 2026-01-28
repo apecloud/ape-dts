@@ -1,4 +1,5 @@
 use super::{check_util::CheckUtil, rdb_test_runner::RdbTestRunner};
+use dt_common::utils::time_util::TimeUtil;
 
 pub struct RdbCheckTestRunner {
     base: RdbTestRunner,
@@ -41,12 +42,43 @@ impl RdbCheckTestRunner {
         Ok(())
     }
 
+    pub async fn run_cdc_check_test(
+        &self,
+        start_millis: u64,
+        parse_millis: u64,
+    ) -> anyhow::Result<()> {
+        CheckUtil::clear_check_log(&self.dst_check_log_dir);
+
+        self.base.execute_prepare_sqls().await?;
+        self.base
+            .execute_dst_sqls(&self.base.base.dst_test_sqls)
+            .await?;
+
+        let task = self.base.spawn_cdc_task(start_millis, parse_millis).await?;
+        self.base
+            .execute_src_sqls(&self.base.base.src_test_sqls)
+            .await?;
+        self.base.base.wait_task_finish(&task).await?;
+        TimeUtil::sleep_millis(3000).await;
+
+        CheckUtil::validate_check_log(&self.expect_check_log_dir, &self.dst_check_log_dir)?;
+        self.base.execute_clean_sqls().await?;
+        Ok(())
+    }
+
     pub async fn run_recheck_test(&self) -> anyhow::Result<()> {
         CheckUtil::clear_check_log(&self.dst_check_log_dir);
         self.base.execute_prepare_sqls().await?;
         self.base.execute_test_sqls().await?;
 
-        let retry_interval_secs = self.base.base.get_config().sinker.get_retry_interval_secs();
+        let retry_interval_secs = self
+            .base
+            .base
+            .get_config()
+            .checker
+            .as_ref()
+            .map(|checker| checker.retry_interval_secs)
+            .unwrap_or(0);
         let delay_secs = std::cmp::max(1, retry_interval_secs / 2);
 
         let pool_mysql = self.base.dst_conn_pool_mysql.clone();

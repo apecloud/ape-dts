@@ -35,6 +35,7 @@ static LOG_HANDLE: StdMutex<Option<log4rs::Handle>> = StdMutex::new(None);
 use dt_common::log_filter::SizeLimitFilterDeserializer;
 use dt_common::{
     config::{
+        checker_config::CheckerConfig,
         config_enums::{build_task_type, DbType, ExtractType, PipelineType, SinkType, TaskType},
         config_token_parser::{ConfigTokenParser, TokenEscapePair},
         extractor_config::ExtractorConfig,
@@ -96,6 +97,7 @@ pub struct TaskRunner {
     extractor_monitor: Arc<GroupMonitor>,
     pipeline_monitor: Arc<GroupMonitor>,
     sinker_monitor: Arc<GroupMonitor>,
+    checker_monitor: Arc<GroupMonitor>,
     task_monitor: Arc<TaskMonitor>,
     #[cfg(feature = "metrics")]
     prometheus_metrics: Arc<PrometheusMetrics>,
@@ -138,6 +140,7 @@ impl TaskRunner {
             extractor_monitor: Arc::new(GroupMonitor::new("extractor", "global")),
             pipeline_monitor: Arc::new(GroupMonitor::new("pipeline", "global")),
             sinker_monitor: Arc::new(GroupMonitor::new("sinker", "global")),
+            checker_monitor: Arc::new(GroupMonitor::new("checker", "global")),
             task_monitor,
             #[cfg(feature = "metrics")]
             prometheus_metrics,
@@ -249,12 +252,18 @@ impl TaskRunner {
         let extractor_monitor = self.extractor_monitor.clone();
         let pipeline_monitor = self.pipeline_monitor.clone();
         let sinker_monitor = self.sinker_monitor.clone();
+        let checker_monitor = self.checker_monitor.clone();
         let task_monitor = self.task_monitor.clone();
         let global_monitor_task = tokio::spawn(async move {
             Self::flush_monitors_generic::<GroupMonitor, TaskMonitor>(
                 interval_secs,
                 global_shut_down_clone,
-                &[extractor_monitor, pipeline_monitor, sinker_monitor],
+                &[
+                    extractor_monitor,
+                    pipeline_monitor,
+                    sinker_monitor,
+                    checker_monitor,
+                ],
                 &[task_monitor],
             )
             .await
@@ -423,7 +432,11 @@ impl TaskRunner {
             monitor_count_window,
         ));
         let checker = self
-            .create_checker(checker_monitor.clone(), task_context.check_summary.clone())
+            .create_checker(
+                self.config.checker.as_ref(),
+                checker_monitor.clone(),
+                task_context.check_summary.clone(),
+            )
             .await?;
 
         // pipeline
@@ -461,6 +474,10 @@ impl TaskRunner {
             async {
                 self.sinker_monitor
                     .add_monitor(&single_task_id, sinker_monitor.clone());
+            },
+            async {
+                self.checker_monitor
+                    .add_monitor(&single_task_id, checker_monitor.clone());
             },
             async {
                 self.task_monitor.register(
@@ -571,6 +588,9 @@ impl TaskRunner {
                 self.sinker_monitor.remove_monitor(&single_task_id);
             },
             async {
+                self.checker_monitor.remove_monitor(&single_task_id);
+            },
+            async {
                 self.task_monitor.unregister(
                     &single_task_id,
                     vec![
@@ -664,6 +684,7 @@ impl TaskRunner {
 
     async fn create_checker(
         &self,
+        checker_config: Option<&CheckerConfig>,
         monitor: Arc<Monitor>,
         check_summary: Option<Arc<AsyncMutex<CheckSummaryLog>>>,
     ) -> anyhow::Result<Option<CheckerHandle>> {
@@ -671,13 +692,12 @@ impl TaskRunner {
             return Ok(None);
         }
 
-        let cfg = match self.config.checker.as_ref() {
+        let cfg = match checker_config {
             Some(cfg) => cfg,
             None => return Ok(None),
         };
         let max_connections = cfg.max_connections.max(1);
         let queue_size = cfg.queue_size.max(1);
-        let drop_on_full = cfg.drop_on_full;
         let log_level = &self.config.runtime.log_level;
         let enable_sqlx_log = TaskUtil::check_enable_sqlx_log(log_level);
         let is_cdc_task = matches!(self.config.extractor_basic.extract_type, ExtractType::Cdc)
@@ -807,7 +827,6 @@ impl TaskRunner {
                         global_summary: check_summary,
                     },
                     queue_size,
-                    drop_on_full,
                 );
                 Ok(Some(CheckerHandle::Data(checker)))
             }
@@ -846,7 +865,6 @@ impl TaskRunner {
                         global_summary: check_summary,
                     },
                     queue_size,
-                    drop_on_full,
                 );
                 Ok(Some(CheckerHandle::Data(checker)))
             }
@@ -886,7 +904,6 @@ impl TaskRunner {
                         global_summary: check_summary,
                     },
                     queue_size,
-                    drop_on_full,
                 );
                 Ok(Some(CheckerHandle::Data(checker)))
             }
