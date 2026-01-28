@@ -79,7 +79,6 @@ impl MysqlChecker {
         meta_manager: MysqlMetaManager,
         ctx: CheckContext,
         buffer_size: usize,
-        drop_on_full: bool,
     ) -> DataCheckerHandle {
         DataCheckerHandle::spawn(
             Self {
@@ -88,7 +87,6 @@ impl MysqlChecker {
             },
             ctx,
             buffer_size,
-            drop_on_full,
             "MysqlChecker",
         )
     }

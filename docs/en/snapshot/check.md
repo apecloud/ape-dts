@@ -4,6 +4,8 @@ After data migration, you may want to compare the source and target data row by 
 
 Support comparison for MySQL/PG/Mongo.
 
+Data check can be used with both snapshot and CDC tasks. For CDC tasks, keep `[checker]` enabled and set `extract_type=cdc`; the checker validates applied changes after they are sunk.
+
 # Example: MySQL -> MySQL
 
 Refer to [task templates](../../templates/mysql_to_mysql.md) and [tutorial](../tutorial/mysql_to_mysql.md)
@@ -29,6 +31,10 @@ batch_size=2
 [parallelizer]
 parallel_type=rdb_check
 ```
+
+## Limitations
+
+- Data check is source-driven (validates Source ∈ Target) and cannot detect extra rows that exist only in the target (ghost data). This means missing deletes on the target side will not be detected.
 
 # Check Results
 

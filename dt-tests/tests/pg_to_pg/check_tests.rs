@@ -13,6 +13,12 @@ mod test {
 
     #[tokio::test]
     #[serial]
+    async fn check_cdc_check_blocking_test() {
+        TestBase::run_cdc_check_test("pg_to_pg/check/cdc_check_blocking_test", 3000, 9000).await;
+    }
+
+    #[tokio::test]
+    #[serial]
     async fn check_route_test() {
         TestBase::run_check_test("pg_to_pg/check/route_test").await;
     }

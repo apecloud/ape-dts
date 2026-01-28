@@ -12,6 +12,17 @@ mod test {
 
     #[tokio::test]
     #[serial]
+    async fn check_cdc_check_blocking_test() {
+        TestBase::run_mongo_cdc_check_test(
+            "mongo_to_mongo/check/cdc_check_blocking_test",
+            3000,
+            3000,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    #[serial]
     async fn check_route_test() {
         TestBase::run_mongo_check_test("mongo_to_mongo/check/route_test").await;
     }

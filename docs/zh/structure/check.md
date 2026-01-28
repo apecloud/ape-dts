@@ -2,6 +2,8 @@
 
 结构迁移后，您可使用两种校验方式。一种是我们自带的，一种是第三方 [liquibase](./check_liquibase.md)。本文档主要介绍前者。
 
+结构校验与 CDC 无直接关系。CDC + checker 指的是行级数据校验（见数据校验文档）。
+
 # 示例: MySQL -> MySQL
 
 参考 [任务模版](../../templates/mysql_to_mysql.md)
@@ -9,6 +11,10 @@
 # 校验结果
 
 以源端结构为基准，校验结果包括 **miss**，**diff**，**extra**（目标多出）以及 **summary** 等部分，均以 JSON 的方式呈现。
+
+## 限制
+
+- 数据校验（checker）为源端驱动（仅验证 Source ∈ Target），无法发现目标端多余数据（幽灵数据）。因此，目标端删除同步缺失不会被检测到。
 
 `miss.log`, `diff.log`, `extra.log` 均采用相同的 JSON 结构 (`StructCheckLog`)：
 ```json

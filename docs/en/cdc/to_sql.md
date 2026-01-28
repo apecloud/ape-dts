@@ -9,6 +9,10 @@ Supported databases:
 Supported data changes:
 - DML
 
+## CDC + Checker
+
+If you want to validate CDC-applied data, enable `[checker]` in the CDC task config. See [Data Check](../snapshot/check.md) for configuration and limitations.
+
 # Examples
 
 Refer to [task templates](../../templates/mysql_to_mysql.md)
@@ -82,4 +86,3 @@ end_time_utc=2024-10-09 03:00:00
 # Data rollback
 If some sqls were executed incorrectly in the source and you want to roll back the data, you may:
 - generate reverse sqls and execute them from the last to the first.
-

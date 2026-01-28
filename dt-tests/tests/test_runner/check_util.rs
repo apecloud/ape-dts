@@ -1,7 +1,7 @@
 use serde_json::Value;
 use std::{collections::HashSet, fs::File};
 
-use dt_common::config::{config_enums::DbType, sinker_config::SinkerConfig};
+use dt_common::config::config_enums::DbType;
 
 use super::base_test_runner::BaseTestRunner;
 
@@ -42,7 +42,7 @@ impl CheckUtil {
         if !actual_summary_logs.is_empty() {
             let mut expect_summaries = Vec::new();
             for log in expect_summary_logs {
-                let summary: dt_connector::check_log::check_log::CheckSummaryLog =
+                let summary: dt_connector::checker::check_log::CheckSummaryLog =
                     serde_json::from_str(&log).map_err(|e| {
                         anyhow::anyhow!("Failed to parse expect summary log: {}, error: {}", log, e)
                     })?;
@@ -51,7 +51,7 @@ impl CheckUtil {
 
             let mut actual_summaries = Vec::new();
             for log in actual_summary_logs {
-                let summary: dt_connector::check_log::check_log::CheckSummaryLog =
+                let summary: dt_connector::checker::check_log::CheckSummaryLog =
                     serde_json::from_str(&log).map_err(|e| {
                         anyhow::anyhow!("Failed to parse actual summary log: {}, error: {}", log, e)
                     })?;
@@ -100,12 +100,18 @@ impl CheckUtil {
             }
         }
 
-        let dst_check_log_dir = match base_test_runner.get_config().sinker {
-            SinkerConfig::MysqlCheck { check_log_dir, .. }
-            | SinkerConfig::PgCheck { check_log_dir, .. }
-            | SinkerConfig::MongoCheck { check_log_dir, .. } => check_log_dir.clone(),
-            _ => String::new(),
-        };
+        let config = base_test_runner.get_config();
+        let dst_check_log_dir = config
+            .checker
+            .as_ref()
+            .map(|checker| {
+                if checker.check_log_dir.is_empty() {
+                    format!("{}/check", config.runtime.log_dir)
+                } else {
+                    checker.check_log_dir.clone()
+                }
+            })
+            .unwrap_or_default();
         (expect_check_log_dir, dst_check_log_dir)
     }
 

@@ -322,12 +322,19 @@ impl PrometheusMetrics {
                 .default_service(web::route().to(not_found_handler))
         })
         .workers(self.config.workers as usize)
-        .shutdown_timeout(10)
-        .bind(&addr)
-        .unwrap()
-        .run();
+        .shutdown_timeout(10);
 
-        tokio::spawn(server)
+        match server.bind(&addr) {
+            Ok(server) => tokio::spawn(server.run()),
+            Err(err) => {
+                log::warn!(
+                    "Failed to bind metrics server on {} (metrics disabled): {}",
+                    addr,
+                    err
+                );
+                tokio::spawn(async move { Err(err) })
+            }
+        }
     }
 }
 

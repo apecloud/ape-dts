@@ -408,7 +408,7 @@ impl MongoCdcExtractor {
 
                 match doc.operation_type {
                     OperationType::Insert => {
-                        Self::insert_id_from_doc(&mut after, &doc.full_document.as_ref().unwrap());
+                        Self::insert_id_from_doc(&mut after, doc.full_document.as_ref().unwrap());
                         after.insert(
                             MongoConstants::DOC.to_string(),
                             ColValue::MongoDoc(doc.full_document.unwrap()),

@@ -105,19 +105,8 @@ impl Checker for MongoChecker {
 }
 
 impl MongoChecker {
-    pub fn spawn(
-        mongo_client: Client,
-        ctx: CheckContext,
-        buffer_size: usize,
-        drop_on_full: bool,
-    ) -> DataCheckerHandle {
-        DataCheckerHandle::spawn(
-            Self { mongo_client },
-            ctx,
-            buffer_size,
-            drop_on_full,
-            "MongoChecker",
-        )
+    pub fn spawn(mongo_client: Client, ctx: CheckContext, buffer_size: usize) -> DataCheckerHandle {
+        DataCheckerHandle::spawn(Self { mongo_client }, ctx, buffer_size, "MongoChecker")
     }
 
     fn mock_tb_meta(schema: &str, tb: &str) -> RdbTbMeta {

@@ -4,6 +4,10 @@ In a distributed system, the source and target databases may not necessarily hav
 
 To enable two-way data sync, we need to configure CDC tasks for both "source -> target" and "target -> source" directions.
 
+## CDC + Checker
+
+If you want to validate CDC-applied data, enable `[checker]` in the CDC task config. See [Data Check](../snapshot/check.md) for configuration and limitations.
+
 # Cyclic replication
 
 The main challenge for two-way data sync is to avoid data cyclic replication. Considering the following scenario:
