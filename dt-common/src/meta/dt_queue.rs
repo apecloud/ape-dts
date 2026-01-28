@@ -1,7 +1,7 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::task::yield_now;
 
-use concurrent_queue::{ConcurrentQueue, PopError};
+use concurrent_queue::{ConcurrentQueue, PopError, PushError};
 
 use super::dt_data::DtItem;
 
@@ -43,7 +43,7 @@ impl DtQueue {
     }
 
     #[inline(always)]
-    pub async fn push(&self, item: DtItem) -> anyhow::Result<()> {
+    pub async fn push(&self, mut item: DtItem) -> anyhow::Result<()> {
         while self.queue.is_full() {
             yield_now().await;
         }
@@ -56,7 +56,17 @@ impl DtQueue {
         self.cur_bytes
             .fetch_add(item.dt_data.get_data_size(), Ordering::Release);
 
-        self.queue.push(item)?;
+        loop {
+            let res = self.queue.push(item);
+            match res {
+                Ok(_) => break,
+                Err(PushError::Full(returned_item)) => {
+                    item = returned_item;
+                    yield_now().await;
+                }
+                Err(e) => return Err(e.into()),
+            }
+        }
         Ok(())
     }
 
