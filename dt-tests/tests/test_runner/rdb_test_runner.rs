@@ -6,6 +6,7 @@ use dt_common::{
         config_enums::DbType,
         config_token_parser::{ConfigTokenParser, TokenEscapePair},
         extractor_config::ExtractorConfig,
+        ini_loader::IniLoader,
         meta_center_config::MetaCenterConfig,
         sinker_config::SinkerConfig,
         task_config::TaskConfig,
@@ -27,7 +28,10 @@ use dt_task::{task_runner::TaskRunner, task_util::TaskUtil};
 use sqlx::{query, types::BigDecimal, MySql, Pool, Postgres, Row};
 use tokio::task::JoinHandle;
 
-use crate::test_config_util::TestConfigUtil;
+use crate::{
+    test_config_util::TestConfigUtil,
+    test_runner::mock_utils::{mock_config::MockConfig, mock_pg_type::PgType},
+};
 
 use super::{base_test_runner::BaseTestRunner, rdb_util::RdbUtil};
 
@@ -41,6 +45,7 @@ pub struct RdbTestRunner {
     pub config: TaskConfig,
     pub router: RdbRouter,
     pub filter: RdbFilter,
+    pub mock_config: Option<MockConfig>,
 }
 
 pub const SRC: &str = "src";
@@ -52,7 +57,7 @@ const UTC_FORMAT: &str = "%Y-%m-%d %H:%M:%S";
 #[allow(dead_code)]
 impl RdbTestRunner {
     pub async fn new(relative_test_dir: &str) -> anyhow::Result<Self> {
-        let base = BaseTestRunner::new(relative_test_dir).await.unwrap();
+        let mut base = BaseTestRunner::new(relative_test_dir).await.unwrap();
 
         // prepare conn pools
         let mut src_conn_pool_mysql = None;
@@ -67,6 +72,15 @@ impl RdbTestRunner {
         let dst_url = &config.sinker_basic.url;
         let src_connection_auth = &config.extractor_basic.connection_auth;
         let dst_connection_auth = &config.sinker_basic.connection_auth;
+
+        // generate mock sqls
+        let mock_config = MockConfig::new(&base.task_config_file);
+        if let Some(mock_conf) = &mock_config {
+            let mock_ddl_stmts = mock_conf.mock_ddl_stmts();
+            base.src_prepare_sqls.extend(mock_ddl_stmts.clone());
+            base.dst_prepare_sqls.extend(mock_ddl_stmts);
+            base.src_test_sqls.extend(mock_conf.mock_dml_stmts());
+        }
 
         let mysql_conn_settings = Some(vec!["SET FOREIGN_KEY_CHECKS=0"]);
 
@@ -152,6 +166,7 @@ impl RdbTestRunner {
             router,
             filter,
             base,
+            mock_config,
         })
     }
 
