@@ -28,6 +28,7 @@ use dt_common::{
         syncer::Syncer,
     },
     rdb_filter::RdbFilter,
+    system_dbs::SystemDb,
     utils::time_util::TimeUtil,
 };
 use mongodb::{
@@ -36,8 +37,6 @@ use mongodb::{
     options::{ChangeStreamOptions, FullDocumentBeforeChangeType, FullDocumentType, UpdateOptions},
     Client,
 };
-
-const SYSTEM_DBS: [&str; 3] = ["admin", "config", "local"];
 
 pub struct MongoCdcExtractor {
     pub base_extractor: BaseExtractor,
@@ -439,9 +438,10 @@ impl MongoCdcExtractor {
         row_data: RowData,
         position: Position,
     ) -> anyhow::Result<()> {
-        if SYSTEM_DBS.contains(&row_data.schema.as_str()) {
+        if SystemDb::is_system_db(&row_data.schema, &DbType::Mongo) {
             return Ok(());
         }
+
         if self
             .filter
             .filter_event(&row_data.schema, &row_data.tb, &row_data.row_type)
