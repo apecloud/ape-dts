@@ -30,20 +30,9 @@ impl RedisClient {
         let url_info = Url::parse(url)?;
         let host = url_info.host_str().unwrap();
         let port = url_info.port().unwrap();
-        let username = if let ConnectionAuthConfig::Basic { username, .. } = connection_auth {
-            username
-        } else {
-            url_info.username()
-        };
-        let password = if let ConnectionAuthConfig::Basic {
-            password: Some(password),
-            ..
-        } = connection_auth
-        {
-            Some(password.as_str())
-        } else {
-            url_info.password()
-        };
+
+        let username = Self::extract_username(connection_auth, &url_info)?;
+        let password = Self::extract_password(connection_auth, &url_info)?;
 
         let stream = TcpStream::connect(format!("{}:{}", host, port)).await?;
         let mut me = Self {
@@ -56,18 +45,9 @@ impl RedisClient {
             let mut cmd = RedisCmd::new();
             cmd.add_str_arg("AUTH");
             if !username.is_empty() {
-                cmd.add_str_arg(
-                    &percent_encoding::percent_decode_str(username)
-                        .decode_utf8()
-                        .map_err(|e| Error::ConfigError(format!("username parse failed: {}", e)))?,
-                );
+                cmd.add_str_arg(&username);
             }
-
-            cmd.add_str_arg(
-                &percent_encoding::percent_decode_str(pwd)
-                    .decode_utf8()
-                    .map_err(|e| Error::ConfigError(format!("password parse failed: {}", e)))?,
-            );
+            cmd.add_str_arg(&pwd);
 
             me.send(&cmd).await?;
             if let Ok(Value::Okay) = me.read().await {
@@ -154,5 +134,45 @@ impl RedisClient {
             }
         }
         Ok(results)
+    }
+
+    fn decode_url_component(component: &str, field_name: &str) -> anyhow::Result<String> {
+        percent_encoding::percent_decode_str(component)
+            .decode_utf8()
+            .map(|s| s.to_string())
+            .map_err(|e| Error::ConfigError(format!("{} parse failed: {}", field_name, e)).into())
+    }
+
+    fn extract_username<'a>(
+        connection_auth: &'a ConnectionAuthConfig,
+        url_info: &'a Url,
+    ) -> anyhow::Result<String> {
+        match connection_auth {
+            ConnectionAuthConfig::Basic { username, .. } => Ok(username.clone()),
+            _ => {
+                let usr_in_url = url_info.username();
+                if usr_in_url.is_empty() {
+                    Ok(String::new())
+                } else {
+                    Self::decode_url_component(usr_in_url, "username")
+                }
+            }
+        }
+    }
+
+    fn extract_password(
+        connection_auth: &ConnectionAuthConfig,
+        url_info: &Url,
+    ) -> anyhow::Result<Option<String>> {
+        match connection_auth {
+            ConnectionAuthConfig::Basic {
+                password: Some(password),
+                ..
+            } => Ok(Some(password.clone())),
+            _ => url_info
+                .password()
+                .map(|pwd| Self::decode_url_component(pwd, "password"))
+                .transpose(),
+        }
     }
 }
