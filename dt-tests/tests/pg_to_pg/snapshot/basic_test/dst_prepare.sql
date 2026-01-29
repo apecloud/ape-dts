@@ -92,4 +92,7 @@ CREATE TABLE Upper_Case_DB.Upper_Case_TB (
 
 CREATE TABLE test_db_1.where_condition_1 ( f_0 int, f_1 int ); 
 CREATE TABLE test_db_1.where_condition_2 ( f_0 int, f_1 int, PRIMARY KEY (f_0) ); 
-CREATE TABLE test_db_1.where_condition_3 ( f_0 int, f_1 int ); 
+CREATE TABLE test_db_1.where_condition_3 ( f_0 int, f_1 int );
+
+CREATE TABLE test_db_1.all_pks (pk1 INT, pk2 INT, pk3 INT, PRIMARY KEY(pk1, pk2, pk3));
+INSERT INTO test_db_1.all_pks VALUES(1, 2, 3),(4, 5, 6),(7, 8, 9);

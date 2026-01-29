@@ -96,3 +96,6 @@ CREATE TABLE test_db_1.where_condition_3 ( f_0 int, f_1 int );
 
 -- test view filtered
 CREATE VIEW test_db_1.default_table_view AS SELECT * FROM test_db_1.default_table;
+
+-- test all columns are primary keys
+CREATE TABLE test_db_1.all_pks (pk1 INT, pk2 INT, pk3 INT, PRIMARY KEY(pk1, pk2, pk3));
