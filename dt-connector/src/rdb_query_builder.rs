@@ -238,11 +238,18 @@ impl RdbQueryBuilder<'_> {
                 index += 1;
             }
 
+            let conflict_clause = if set_pairs.is_empty() {
+                // when all columns are primary keys, use DO NOTHING instead of DO UPDATE SET
+                "DO NOTHING".to_string()
+            } else {
+                format!("DO UPDATE SET {}", set_pairs.join(","))
+            };
+
             query_info.sql = format!(
-                "{} ON CONFLICT ({}) DO UPDATE SET {}",
+                "{} ON CONFLICT ({}) {}",
                 query_info.sql,
                 SqlUtil::escape_cols(&self.rdb_tb_meta.id_cols, &self.db_type).join(","),
-                set_pairs.join(",")
+                conflict_clause
             );
             return Ok(query_info);
         } else {

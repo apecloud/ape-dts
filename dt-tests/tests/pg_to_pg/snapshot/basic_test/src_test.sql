@@ -99,3 +99,6 @@ INSERT INTO test_db_1.composite_unique_key_table_2 VALUES(1, '1', 1),(2, '2', 2)
 
 --test multi primary and single unique key
 INSERT INTO test_db_1.multi_primary_and_single_unique_table VALUES(1, '1', 1, '1', 1),(2, '2', 2, '2', 2),(3, '3', 3, '3', 3),(4, '4', 4, '4', 4),(5, '5', 5, '5', 5),(6, '6', 6, '6', 6),(7, '7', 7, '7', 7),(8, '8', 8, '8', 8),(9, '9', 9, '9', 9),(10, '10', 10, '10', 10);
+
+-- test all columns are primary keys
+INSERT INTO test_db_1.all_pks VALUES(1, 2, 3),(4, 5, 6),(7, 8, 9),(10, 11, 12);

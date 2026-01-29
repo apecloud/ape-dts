@@ -33,13 +33,11 @@ use dt_common::{
         rdb_meta_manager::RdbMetaManager,
     },
     rdb_filter::RdbFilter,
+    system_dbs::SystemDb,
 };
 use dt_connector::extractor::resumer::{
     build_recorder, build_recovery, recorder::Recorder, recovery::Recovery, utils::ResumerUtil,
 };
-
-const MYSQL_SYS_DBS: [&str; 4] = ["information_schema", "mysql", "performance_schema", "sys"];
-const PG_SYS_SCHEMAS: [&str; 2] = ["pg_catalog", "information_schema"];
 
 pub struct TaskUtil {}
 
@@ -377,7 +375,7 @@ impl TaskUtil {
                 sql,
                 schemas
                     .iter()
-                    .filter(|s| !MYSQL_SYS_DBS.contains(&s.as_str()))
+                    .filter(|s| !SystemDb::is_system_db(s, &DbType::Mysql))
                     .map(|s| format!("'{}'", s))
                     .collect::<Vec<_>>()
                     .join(",")
@@ -431,7 +429,7 @@ WHERE
                 sql,
                 schemas
                     .iter()
-                    .filter(|s| !PG_SYS_SCHEMAS.contains(&s.as_str()))
+                    .filter(|s| !SystemDb::is_system_db(s, &DbType::Pg))
                     .map(|s| format!("'{}'", s))
                     .collect::<Vec<_>>()
                     .join(",")
@@ -519,7 +517,7 @@ WHERE
         let mut rows = sqlx::query(sql).fetch(conn_pool);
         while let Some(row) = rows.try_next().await.unwrap() {
             let schema: String = row.try_get(0)?;
-            if PG_SYS_SCHEMAS.contains(&schema.as_str()) {
+            if SystemDb::is_system_db(&schema, &DbType::Pg) {
                 continue;
             }
             schemas.push(schema);
@@ -567,7 +565,7 @@ WHERE
         let mut rows = sqlx::query(sql).fetch(conn_pool);
         while let Some(row) = rows.try_next().await.unwrap() {
             let db: String = row.try_get(0)?;
-            if MYSQL_SYS_DBS.contains(&db.as_str()) {
+            if SystemDb::is_system_db(&db, &DbType::Mysql) {
                 continue;
             }
             dbs.push(db);
@@ -605,7 +603,12 @@ WHERE
                 bail!("client is not found")
             }
         };
-        let dbs = client.list_database_names(None, None).await?;
+        let dbs = client
+            .list_database_names(None, None)
+            .await?
+            .into_iter()
+            .filter(|name| !SystemDb::is_system_db(name, &DbType::Mongo))
+            .collect();
         Ok(dbs)
     }
 
