@@ -1,5 +1,12 @@
 use rand::{rngs::ThreadRng, Rng, RngCore};
 
+const ALPHANUMERIC_SPECIALCHAR_ALPHABET: &[u8] =
+    b"079AEOXZaeoxz!#<>/.,~-+'*()[]{} ^*?%_\t\n\r|&\\@";
+
+pub trait RandomValue {
+    fn next_value(random: &mut Random) -> String;
+}
+
 #[derive(Debug, Clone)]
 pub struct Random {
     seed: u64,
@@ -50,8 +57,7 @@ impl Random {
     }
 
     pub fn next_u64(&mut self) -> u64 {
-        // let mut rng: rand::rngs::SmallRng = rand::SeedableRng::seed_from_u64(self.seed);
-        self.rng.random()
+        self.rng.random::<u64>()
     }
 
     pub fn next_f32(&mut self) -> f32 {
@@ -60,6 +66,17 @@ impl Random {
 
     pub fn next_f64(&mut self) -> f64 {
         self.rng.random::<f64>()
+    }
+
+    pub fn next_str(&mut self) -> String {
+        let len = ALPHANUMERIC_SPECIALCHAR_ALPHABET.len();
+        let random_len = self.random_range(0..10);
+        (0..random_len)
+            .map(|_| {
+                let idx = self.random_range(0..len as i32);
+                ALPHANUMERIC_SPECIALCHAR_ALPHABET[idx as usize] as char
+            })
+            .collect()
     }
 
     pub fn random_range(&mut self, range: std::ops::Range<i32>) -> i32 {

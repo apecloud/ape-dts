@@ -30,7 +30,7 @@ use tokio::task::JoinHandle;
 
 use crate::{
     test_config_util::TestConfigUtil,
-    test_runner::mock_utils::{mock_config::MockConfig, mock_pg_type::PgType},
+    test_runner::mock_utils::{mock_config::MockConfig, pg_type::PgType},
 };
 
 use super::{base_test_runner::BaseTestRunner, rdb_util::RdbUtil};
@@ -74,7 +74,12 @@ impl RdbTestRunner {
         let dst_connection_auth = &config.sinker_basic.connection_auth;
 
         // generate mock sqls
-        let mock_config = MockConfig::new(&base.task_config_file);
+        // only support pg for now
+        let mock_config = if let DbType::Pg = src_db_type {
+            MockConfig::new(&base.task_config_file)
+        } else {
+            None
+        };
         if let Some(mock_conf) = &mock_config {
             let mock_ddl_stmts = mock_conf.mock_ddl_stmts();
             base.src_prepare_sqls.extend(mock_ddl_stmts.clone());

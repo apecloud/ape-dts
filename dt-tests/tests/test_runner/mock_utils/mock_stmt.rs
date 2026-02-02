@@ -5,7 +5,7 @@ use std::{
 
 use rand::seq::SliceRandom;
 
-use crate::test_runner::mock_utils::{mock_pg_type::PgType, random::Random};
+use crate::test_runner::mock_utils::{pg_type::PgType, random::Random};
 
 #[allow(dead_code)]
 pub enum Constraint {
@@ -43,27 +43,24 @@ impl MockStmt {
     }
 
     pub fn with_index(mut self, index: Constraint) -> Self {
-        let mut filtered_index = index;
-        match filtered_index {
-            Constraint::Primary(cols) => {
+        let filtered_index = index;
+        match &filtered_index {
+            Constraint::Primary(cols) | Constraint::Unique(cols) => {
+                if cols.is_empty() {
+                    return self;
+                }
                 let mut set = HashSet::new();
-                filtered_index = Constraint::Primary(
-                    cols.into_iter()
-                        .filter(|&col_idx| col_idx < self.included_types.len())
-                        .filter(|&col_idx| self.is_bad_cols(col_idx))
-                        .filter(|&col_idx| set.insert(col_idx))
-                        .collect(),
-                );
-            }
-            Constraint::Unique(cols) => {
-                let mut set = HashSet::new();
-                filtered_index = Constraint::Unique(
-                    cols.into_iter()
-                        .filter(|&col_idx| col_idx < self.included_types.len())
-                        .filter(|&col_idx| self.is_bad_cols(col_idx))
-                        .filter(|&col_idx| set.insert(col_idx))
-                        .collect(),
-                );
+                let filtered_cols = cols
+                    .iter()
+                    .filter(|&&col_idx| col_idx < self.included_types.len())
+                    .filter(|&&col_idx| self.is_bad_col_for_index(col_idx))
+                    .filter(|&&col_idx| set.insert(col_idx))
+                    .cloned()
+                    .collect::<Vec<usize>>();
+                if filtered_cols.len() != cols.len() {
+                    println!("bad index cols");
+                    return self;
+                }
             }
             _ => return self,
         }
@@ -81,14 +78,6 @@ impl MockStmt {
                 }
                 _ => return self,
             }
-        }
-        match &filtered_index {
-            Constraint::Primary(cols) | Constraint::Unique(cols) => {
-                if cols.is_empty() {
-                    return self;
-                }
-            }
-            _ => return self,
         }
         self.indexs.push(filtered_index);
         self
@@ -113,7 +102,7 @@ impl MockStmt {
             } else {
                 " NOT NULL"
             };
-            let col_def = format!("{} {}{}", col_name, pg_type.display_name(), is_nullable);
+            let col_def = format!("{} {}{}", col_name, pg_type.name(), is_nullable);
             col_names.push(col_name);
             col_defs.push(col_def);
         }
@@ -169,7 +158,7 @@ impl MockStmt {
                     let col_constants = col_types
                         .iter()
                         .map(|pg_type| {
-                            let mut values = pg_type.constant_values();
+                            let mut values = pg_type.constant_value_str();
                             values.shuffle(&mut rand::rng());
                             values
                         })
@@ -290,10 +279,14 @@ impl MockStmt {
         Some(pg_type.next_value_str(random))
     }
 
-    fn is_bad_cols(&self, col_idx: usize) -> bool {
-        match self.included_types.get(col_idx).unwrap() {
-            PgType::Bool => {
-                println!("bool can not be primary or unique key col for mock");
+    fn is_bad_col_for_index(&self, col_idx: usize) -> bool {
+        let pg_type = self.included_types.get(col_idx).unwrap();
+        match pg_type {
+            PgType::Bool | PgType::Json | PgType::Jsonb | PgType::Point => {
+                println!(
+                    "{} can not be primary or unique key col for mock",
+                    pg_type.name()
+                );
                 false
             }
             _ => true,
@@ -307,7 +300,7 @@ mod tests {
 
     #[test]
     fn test_schema_generation() {
-        let mut mock_stmt = MockStmt::new(&[PgType::Int4, PgType::Varchar], "test_db", "test_tb");
+        let mock_stmt = MockStmt::new(&[PgType::Int4, PgType::Float8], "test_db", "test_tb");
         let db_stmts = mock_stmt.create_schema_stmt();
         assert_eq!(db_stmts.len(), 2);
         assert_eq!(db_stmts[0], "DROP SCHEMA IF EXISTS test_db CASCADE;");
@@ -316,14 +309,14 @@ mod tests {
         let table_stmt = mock_stmt.create_table_stmt();
         assert_eq!(
             table_stmt,
-            "CREATE TABLE test_db.test_tb (col_0 INT4 NOT NULL, col_1 VARCHAR NOT NULL);"
+            "CREATE TABLE test_db.test_tb (col_0 int4 NOT NULL, col_1 varchar NOT NULL);"
         );
     }
 
     #[test]
     fn test_full_schema_generation() {
-        let mut mock_stmt = MockStmt::new(
-            &[PgType::Int4, PgType::Varchar, PgType::Bool],
+        let mock_stmt = MockStmt::new(
+            &[PgType::Int4, PgType::Float8, PgType::Float8],
             "test_db",
             "test_tb",
         )
@@ -333,14 +326,14 @@ mod tests {
         let table_stmt = mock_stmt.create_table_stmt();
         assert_eq!(
             table_stmt,
-            "CREATE TABLE test_db.test_tb (col_0 INT4 NOT NULL, col_1 VARCHAR, col_2 BOOL, PRIMARY KEY (col_0, col_1), UNIQUE (col_2));"
+            "CREATE TABLE test_db.test_tb (col_0 int4 NOT NULL, col_1 varchar, col_2 float8, PRIMARY KEY (col_0, col_1), UNIQUE (col_2));"
         );
     }
 
     #[test]
     fn test_insert_value_generation() {
         let mut random = Random::new(Some(42));
-        let mut mock_stmt = MockStmt::new(
+        let mock_stmt: MockStmt = MockStmt::new(
             &[PgType::Int4, PgType::Float4, PgType::Bool],
             "test_db",
             "test_tb",
@@ -357,7 +350,7 @@ mod tests {
     #[test]
     fn test_insert_value_generation_with_nullable() {
         let mut random = Random::new(Some(42));
-        let mut mock_stmt = MockStmt::new(
+        let mock_stmt = MockStmt::new(
             &[PgType::Int4, PgType::Float4, PgType::Int8, PgType::Bool],
             "test_db",
             "test_tb",

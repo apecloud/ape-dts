@@ -1,5 +1,9 @@
 pub struct Constants {}
 
+pub trait ConstantValues {
+    fn next_values() -> Vec<String>;
+}
+
 impl Constants {
     const NEXT_I8: &[i8] = &[i8::MIN, 0, i8::MAX];
 
@@ -39,6 +43,37 @@ impl Constants {
         f64::NEG_INFINITY,
         f64::NAN,
         f64::EPSILON,
+    ];
+
+    const NEXT_STR: &[&str] = &[
+        // --- 1. Emptiness & Whitespace ---
+        r#""#,    // Empty String (Length 0)
+        r#"   "#, // Pure Whitespace (Tests trimming logic in application or char(n))
+        r#" 	"#,  // Mixed Space & Tab
+        // --- 2. SQL Syntax & Injection Simulation ---
+        // The single quote is the most dangerous character in SQL.
+        r#"O'Neil"#,                    // Single Quote (Standard name case)
+        r#"'"#,                         // Lone Single Quote (Syntax breaker)
+        r#"value'); DROP TABLE x; --"#, // Classic SQL Injection payload
+        r#"$$"#,                        // Dollar signs (Tests conflict with Dollar Quoting)
+        // --- 3. Special Characters & Formatting ---
+        // Note: Postgres TEXT cannot store Null Bytes (\0).
+        r#"Line1
+Line2"#, // Multi-line string (Newlines \n)
+        r#"C:\Windows\System32"#,       // Backslashes (Escaping hell)
+        r#"<script>alert(1)</script>"#, // XSS Payload (Tests frontend rendering safety)
+        // --- 4. Unicode & Encoding (UTF-8) ---
+        r#"汉字"#,   // CJK Characters (3 bytes per char)
+        r#"🔥🚀"#,   // Emoji (4 bytes per char, requires proper collation)
+        r#"Z͑ͫ̓ͪ̂ͫ̽͏̴Iͦ͊̽̔͌ͬ͛̎Gͫ̎̚Zͧͬͪ͐Ȁ̉G̿"#, // Zalgo Text (Stacked diacritics, tests vertical rendering)
+        r#"ﷺ"#,      // Single character expanded to wide glyph (Ligature)
+        r#"مرحبا"#,  // RTL (Right-To-Left) text (Arabic)
+        "",          // Zero Width Space (Invisible but present)
+        // --- 5. Length Boundaries ---
+        r#"a"#, // Min Length (1 char)
+        // A very long string (simulating TOAST entry point, usually > 2KB)
+        // Shortened here for readability, but in practice, generate 2KB+
+        r#"Lorem ipsum dolor sit amet, consectetur adipiscing elit..."#,
     ];
 
     #[inline]
@@ -89,6 +124,11 @@ impl Constants {
     #[inline]
     pub fn next_f64() -> &'static [f64] {
         Self::NEXT_F64
+    }
+
+    #[inline]
+    pub fn next_str() -> &'static [&'static str] {
+        Self::NEXT_STR
     }
 }
 

@@ -1,8 +1,8 @@
 use dt_common::config::ini_loader::IniLoader;
 
 use crate::test_runner::mock_utils::{
-    mock_pg_type::PgType,
     mock_stmt::{Constraint, MockStmt},
+    pg_type::PgType,
     random::Random,
 };
 
