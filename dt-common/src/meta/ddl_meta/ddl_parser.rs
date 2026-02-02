@@ -182,19 +182,22 @@ impl DdlParser {
     }
 
     fn create_schema<'a>(&'a self, i: &'a [u8]) -> IResult<&'a [u8], DdlData> {
-        let (remaining_input, (_, _, _, _, if_not_exists, schema, _)) = tuple((
-            tag_no_case("create"),
-            multispace1,
-            tag_no_case("schema"),
-            multispace1,
-            opt(if_not_exists),
-            |i| self.sql_identifier(i),
-            multispace0,
-        ))(i)?;
+        let (remaining_input, (_, _, _, _, if_not_exists, authorization, schema, _)) =
+            tuple((
+                tag_no_case("create"),
+                multispace1,
+                tag_no_case("schema"),
+                multispace1,
+                opt(if_not_exists),
+                opt(tuple((tag_no_case("authorization"), multispace1))),
+                |i| self.sql_identifier(i),
+                multispace0,
+            ))(i)?;
 
         let statement = CreateSchemaStatement {
             schema: self.identifier_to_string(schema),
             if_not_exists: if_not_exists.is_some(),
+            authorization: authorization.is_some(),
             unparsed: to_string(remaining_input),
         };
 
@@ -232,19 +235,37 @@ impl DdlParser {
     }
 
     fn alter_schema<'a>(&'a self, i: &'a [u8]) -> IResult<&'a [u8], DdlData> {
-        let (remaining_input, (_, _, _, _, schema, _)) = tuple((
+        let rename_to = |i: &'a [u8]| -> IResult<&'a [u8], &[u8]> {
+            let (remaining_input, (_, _, _, _, new_name, _)) = tuple((
+                tag_no_case("rename"),
+                multispace1,
+                tag_no_case("to"),
+                multispace1,
+                |i| self.sql_identifier(i),
+                multispace0,
+            ))(i)?;
+            Ok((remaining_input, new_name))
+        };
+
+        let (remaining_input, (_, _, _, _, schema, _, rename_to, _)) = tuple((
             tag_no_case("alter"),
             multispace1,
             tag_no_case("schema"),
             multispace1,
             |i| self.sql_identifier(i),
             multispace1,
+            opt(rename_to),
+            multispace0,
         ))(i)?;
 
-        let statement = AlterSchemaStatement {
+        let mut statement = AlterSchemaStatement {
             schema: self.identifier_to_string(schema),
+            new_schema: None,
             unparsed: to_string(remaining_input),
         };
+        if let Some(new_schema) = rename_to {
+            statement.new_schema = Some(self.identifier_to_string(new_schema));
+        }
 
         let ddl = DdlData {
             ddl_type: DdlType::AlterSchema,
@@ -712,7 +733,7 @@ impl DdlParser {
                 opt(tuple((tag_no_case("concurrently"), multispace1))),
                 opt(tuple((
                     opt(if_not_exists),
-                    |i| self.sql_identifier(i),
+                    |i| self.sql_identifier_with_keywords(i, &["ON"]),
                     multispace1,
                 ))),
                 tag_no_case("on"),
@@ -868,18 +889,20 @@ impl DdlParser {
     }
 
     fn sql_identifier<'a>(&'a self, i: &'a [u8]) -> IResult<&'a [u8], &'a [u8]> {
+        self.sql_identifier_with_keywords(i, &[])
+    }
+
+    fn sql_identifier_with_keywords<'a>(
+        &'a self,
+        i: &'a [u8],
+        forbidden_keywords: &[&str],
+    ) -> IResult<&'a [u8], &'a [u8]> {
         if self.db_type == DbType::Pg {
             return alt((
                 preceded(
-                    not(peek(|i| self.sql_keyword(i))),
+                    not(peek(|input| self.check_keywords(input, forbidden_keywords))),
                     take_while1(is_sql_identifier),
                 ),
-                // delimited(
-                //     tag("\""),
-                //     take_while1(is_escaped_sql_identifier_2),
-                //     tag("\""),
-                // );
-
                 // keep tag("\""), input: "Abc", return: "Abc"
                 recognize(tuple((
                     tag("\""),
@@ -891,12 +914,29 @@ impl DdlParser {
 
         alt((
             preceded(
-                not(peek(|i| self.sql_keyword(i))),
+                not(peek(|input| self.check_keywords(input, forbidden_keywords))),
                 take_while1(is_sql_identifier),
             ),
             // remove tag("`"), input: `Abc``, return: Abc
             delimited(tag("`"), take_while1(is_escaped_sql_identifier_1), tag("`")),
         ))(i)
+    }
+
+    fn check_keywords<'a>(&'a self, i: &'a [u8], keywords: &[&str]) -> IResult<&'a [u8], &'a [u8]> {
+        for &keyword in keywords {
+            let keyword_bytes = keyword.as_bytes();
+            if let Ok((remaining, matched)) =
+                tag_no_case::<_, _, nom::error::Error<&[u8]>>(keyword_bytes)(i)
+            {
+                if remaining.is_empty() || !is_sql_identifier(remaining[0]) {
+                    return Ok((remaining, matched));
+                }
+            }
+        }
+        Err(nom::Err::Error(nom::error::Error {
+            input: i,
+            code: nom::error::ErrorKind::Tag,
+        }))
     }
 
     fn sql_identifier_list<'a>(&'a self, i: &'a [u8]) -> IResult<&'a [u8], Vec<&'a [u8]>> {
@@ -912,7 +952,9 @@ impl DdlParser {
     }
 
     // Matches any SQL reserved keyword
-    fn sql_keyword<'a>(&'a self, i: &'a [u8]) -> IResult<&'a [u8], &'a [u8]> {
+    // TODO: remove this function if not used
+    #[allow(dead_code)]
+    fn _sql_keyword<'a>(&'a self, i: &'a [u8]) -> IResult<&'a [u8], &'a [u8]> {
         alt((
             keyword_a_to_c,
             keyword_c_to_e,
@@ -1019,6 +1061,9 @@ mod test_mysql {
             "create /*some comments,*/table/*some comments*/ `aaa`.`bbb` (id int)",
             //  escapes + spaces + if not exists + comments
             "create /*some comments,*/table/*some comments*/ if  not  exists  `aaa` .  `bbb` (id int)  ",
+            "create table `special_character_$1#@*_table` (id int)",
+            // with database keyword
+            "create table query.match (id int)",
         ];
 
         let expect_sqls = [
@@ -1029,6 +1074,8 @@ mod test_mysql {
             "CREATE TABLE IF NOT EXISTS `aaa`.`bbb` (id int)",
             "CREATE TABLE `aaa`.`bbb` (id int)",
             "CREATE TABLE IF NOT EXISTS `aaa`.`bbb` (id int)",
+            "CREATE TABLE `special_character_$1#@*_table` (id int)",
+            "CREATE TABLE `query`.`match` (id int)",
         ];
 
         let parser = DdlParser::new(DbType::Mysql);
@@ -1573,11 +1620,13 @@ mod test_mysql {
         let sqls = [
             "create index idx2 on t1 ((col1 + col2), (col1 - col2), col1);",
             "create unique index `idx2` using  btree  on `d1`.`t1`((col1 + col2), (col1 - col2), col1);",
+            "create index query on db1.match(a,b);",
         ];
 
-        let expect_sqls =[
+        let expect_sqls = [
             "CREATE INDEX `idx2` ON `t1` ((col1 + col2), (col1 - col2), col1);",
             "CREATE UNIQUE INDEX `idx2` USING BTREE ON `d1`.`t1` ((col1 + col2), (col1 - col2), col1);",
+            "CREATE INDEX `query` ON `db1`.`match` (a,b);",
         ];
 
         let parser = DdlParser::new(DbType::Mysql);
@@ -1663,11 +1712,13 @@ mod test_pg {
         let sqls = [
             r#"CREATE TABLE IF NOT EXISTS "test_db_*.*".bbb(id int);"#,
             r#"CREATE TABLE IF NOT EXISTS "中文.others*&^%$#@!+_)(&^%#"."中文!@$#$%^&*&(_+)"(id int);"#,
+            r#"CREATE TABLE IF NOT EXISTS query.match(id int);"#,
         ];
 
         let expect_sqls = [
             r#"CREATE TABLE IF NOT EXISTS "test_db_*.*"."bbb" (id int);"#,
             r#"CREATE TABLE IF NOT EXISTS "中文.others*&^%$#@!+_)(&^%#"."中文!@$#$%^&*&(_+)" (id int);"#,
+            r#"CREATE TABLE IF NOT EXISTS "query"."match" (id int);"#,
         ];
 
         let parser = DdlParser::new(DbType::Pg);
@@ -1818,6 +1869,8 @@ mod test_pg {
             "create /*some comments,*/schema/*some comments*/ \"aaa\"",
             //  escapes + spaces + if exists + comments
             "create /*some comments,*/schema/*some comments*/ if  not  exists    \"aaa\"  ",
+            "create schema authorization aaa",
+            "create schema if not exists match authorization hehe",
         ];
 
         let expect_sqls = [
@@ -1834,6 +1887,8 @@ mod test_pg {
             r#"CREATE SCHEMA "aaa""#,
             //  escapes + spaces + if exists + comments
             r#"CREATE SCHEMA IF NOT EXISTS "aaa""#,
+            r#"CREATE SCHEMA AUTHORIZATION "aaa""#,
+            r#"CREATE SCHEMA IF NOT EXISTS "match" authorization hehe"#,
         ];
 
         let parser = DdlParser::new(DbType::Pg);
@@ -1920,20 +1975,22 @@ mod test_pg {
             "alter /*some comments,*/schema/*some comments*/ \"aaa\" rename to bbb",
             //  escapes + spaces + comments
             "alter /*some comments,*/schema/*some comments*/    \"aaa\"   rename to bbb",
+            "alter schema aaa owner to bbb",
         ];
 
         let expect_sqls = [
-            r#"ALTER SCHEMA "aaa" rename to bbb"#,
+            r#"ALTER SCHEMA "aaa" RENAME TO "bbb""#,
             // escapes
-            r#"ALTER SCHEMA "aaa" rename to bbb"#,
+            r#"ALTER SCHEMA "aaa" RENAME TO "bbb""#,
             // spaces
-            r#"ALTER SCHEMA "aaa" rename to bbb"#,
+            r#"ALTER SCHEMA "aaa" RENAME TO "bbb""#,
             // spaces + escapes
-            r#"ALTER SCHEMA "aaa" rename to bbb"#,
+            r#"ALTER SCHEMA "aaa" RENAME TO "bbb""#,
             // comments
-            r#"ALTER SCHEMA "aaa" rename to bbb"#,
+            r#"ALTER SCHEMA "aaa" RENAME TO "bbb""#,
             //  escapes + spaces + comments
-            r#"ALTER SCHEMA "aaa" rename to bbb"#,
+            r#"ALTER SCHEMA "aaa" RENAME TO "bbb""#,
+            r#"ALTER SCHEMA "aaa" owner to bbb"#,
         ];
 
         let parser = DdlParser::new(DbType::Pg);
@@ -1978,18 +2035,18 @@ mod test_pg {
     fn test_create_index_pg() {
         let sqls = [
             r#"create index on "tb_1"(id);"#,
-            r#"create unique index 
+            r#"create unique index
             concurrently -- some comments
             "idx3" on only "tb_1"(a);"#,
             r#"create
-            unique 
-            index 
+            unique
+            index
             concurrently -- some comments
-            if not 
-            exists 
-            "idx3" 
-            on 
-            only 
+            if not
+            exists
+            "idx3"
+            on
+            only
             "tb_1"(a);"#,
         ];
 
@@ -2047,6 +2104,27 @@ mod test_common {
         for sql in sqls {
             assert!(!DdlParser::ddl_simple_judgment(sql));
             assert!(parser.parse(sql).unwrap().is_none());
+        }
+    }
+}
+#[cfg(test)]
+mod parse_pg_create_index_tests {
+    use crate::config::config_enums::DbType;
+    use crate::meta::ddl_meta::ddl_parser::DdlParser;
+
+    #[test]
+    fn test_parse_pg_create_index_sql() {
+        let sql = r#"CREATE INDEX hehe on public.match USING btree (_airbyte_extracted_at)"#;
+        let parser = DdlParser::new(DbType::Pg);
+
+        // The parser should successfully parse the SQL, not return an error, and return Some(ddl_data)
+        match parser.parse(sql) {
+            Ok(Some(ddl_data)) => {
+                // Optionally: check the type is PgCreateIndex
+                assert_eq!(ddl_data.ddl_type.to_string(), "CreateIndex");
+            }
+            Ok(None) => panic!("Expected Some DdlData, got None"),
+            Err(e) => panic!("Parse error: {:?}", e),
         }
     }
 }
