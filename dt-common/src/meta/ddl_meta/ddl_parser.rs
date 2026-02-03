@@ -1,4 +1,8 @@
-use crate::{config::config_enums::DbType, error::Error, utils::sql_util::SqlUtil};
+use std::{
+    borrow::Cow,
+    str::{self},
+};
+
 use anyhow::bail;
 use nom::{
     branch::alt,
@@ -14,29 +18,24 @@ use nom::{
 };
 use regex::Regex;
 
-use std::{
-    borrow::Cow,
-    str::{self},
-};
-
 use super::{
     ddl_data::DdlData,
     ddl_statement::{
-        AlterSchemaStatement, DropMultiTableStatement, DropSchemaStatement,
-        MysqlAlterTableRenameStatement, MysqlAlterTableStatement, MysqlCreateIndexStatement,
-        MysqlCreateTableStatement, MysqlDropIndexStatement, MysqlTruncateTableStatement,
-        PgAlterTableRenameStatement, PgAlterTableSetSchemaStatement, PgAlterTableStatement,
-        PgCreateIndexStatement, PgCreateTableStatement, PgDropMultiIndexStatement,
-        PgTruncateTableStatement, RenameMultiTableStatement,
+        AlterDatabaseStatement, AlterSchemaStatement, CreateDatabaseStatement,
+        CreateSchemaStatement, DdlStatement, DropDatabaseStatement, DropMultiTableStatement,
+        DropSchemaStatement, MysqlAlterTableRenameStatement, MysqlAlterTableStatement,
+        MysqlCreateIndexStatement, MysqlCreateTableStatement, MysqlDropIndexStatement,
+        MysqlTruncateTableStatement, PgAlterTableRenameStatement, PgAlterTableSetSchemaStatement,
+        PgAlterTableStatement, PgCreateIndexStatement, PgCreateTableStatement,
+        PgDropMultiIndexStatement, PgTruncateTableStatement, RenameMultiTableStatement,
     },
     ddl_type::DdlType,
-    keywords::keyword_a_to_c,
+    keywords::{
+        keyword_a_to_c, keyword_c_to_e, keyword_e_to_i, keyword_i_to_o, keyword_o_to_s,
+        keyword_s_to_z,
+    },
 };
-use super::{ddl_statement::AlterDatabaseStatement, keywords::keyword_o_to_s};
-use super::{ddl_statement::CreateDatabaseStatement, keywords::keyword_c_to_e};
-use super::{ddl_statement::CreateSchemaStatement, keywords::keyword_s_to_z};
-use super::{ddl_statement::DdlStatement, keywords::keyword_e_to_i};
-use super::{ddl_statement::DropDatabaseStatement, keywords::keyword_i_to_o};
+use crate::{config::config_enums::DbType, error::Error, utils::sql_util::SqlUtil};
 
 type SchemaTable = (Option<Vec<u8>>, Vec<u8>);
 
