@@ -64,3 +64,9 @@ CREATE SCHEMA "中文database!@$%^&*()_+";
 CREATE TABLE "中文database!@$%^&*()_+"."中文" ( f_0 int, f_1 int DEFAULT NULL, f_2 int DEFAULT NULL, PRIMARY KEY (f_0) ) ; 
 
 INSERT INTO "中文database!@$%^&*()_+"."中文" VALUES(1, 1, 1);
+
+-- contain db system keywords
+CREATE TABLE test_db_2.match (select_id SERIAL PRIMARY KEY, "table" VARCHAR(255) NOT NULL, "column" VARCHAR(255) NOT NULL, "offset" INT NOT NULL, unique_col VARCHAR(255), "match" INT, check_col INT, constraint_col INT);
+CREATE INDEX idx_index_on_index ON test_db_2.match("offset");
+CREATE INDEX idx_key_col ON test_db_2.match("match");
+CREATE UNIQUE INDEX uniq_unique_col ON test_db_2.match(unique_col);

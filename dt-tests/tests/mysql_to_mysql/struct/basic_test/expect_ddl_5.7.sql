@@ -143,3 +143,19 @@ CREATE TABLE `case_sensitive_column_name` (
   `GRADE` int(11) NOT NULL DEFAULT '100',
   PRIMARY KEY (`id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8
+
+struct_it_mysql2mysql_1.match
+CREATE TABLE `match` (
+  `select_id` int NOT NULL AUTO_INCREMENT,
+  `table` varchar(50) NOT NULL,
+  `column` varchar(100) NOT NULL,
+  `offset` int NOT NULL,
+  `unique_col` varchar(20) DEFAULT NULL,
+  `match` int DEFAULT NULL,
+  `check_col` int DEFAULT NULL,
+  `constraint_col` int DEFAULT NULL,
+  PRIMARY KEY (`select_id`),
+  UNIQUE KEY `uniq_unique_col` (`unique_col`),
+  KEY `idx_index_on_index` (`offset`),
+  KEY `idx_key_col` (`match`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8
