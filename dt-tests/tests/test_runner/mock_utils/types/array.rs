@@ -1,34 +1,6 @@
-use rust_decimal::Decimal;
-use time::{Date, PrimitiveDateTime, Time};
-use uuid::Uuid;
+use chrono::format;
 
-use crate::test_runner::mock_utils::{
-    pg_type::PgType,
-    random::Random,
-    types::{
-        bytea::Bytea,
-        geo::{Box, Circle, Line, LineSegment, Path, Point, Polygon},
-        json::Json,
-        money::Money,
-        net::{Cidr, Inet, MacAddr, MacAddr8},
-        time::Interval,
-        type_util::TypeUtil,
-    },
-};
-
-use super::super::random::RandomValue;
-
-macro_rules! single_quote {
-    ($s:expr) => {
-        format!("'{}'", $s)
-    };
-}
-
-macro_rules! dollar_quote {
-    ($s:expr) => {
-        format!("$${}$$", $s)
-    };
-}
+use crate::test_runner::mock_utils::{pg_type::PgType, random::Random};
 
 pub struct Array {}
 
@@ -57,114 +29,10 @@ impl Array {
     }
 
     pub fn next_value_str(pg_type: &PgType, rand: &mut Random) -> String {
-        match pg_type {
-            // Boolean
-            PgType::BoolArray => Self::gen_array(rand, |r| {
-                if r.next_u8() % 2 == 0 {
-                    "TRUE".to_string()
-                } else {
-                    "FALSE".to_string()
-                }
-            }),
-
-            // Integer types
-            PgType::Int2Array => Self::gen_array(rand, |r| r.next_i16().to_string()),
-            PgType::Int4Array => Self::gen_array(rand, |r| r.next_i32().to_string()),
-            PgType::Int8Array => Self::gen_array(rand, |r| r.next_i64().to_string()),
-            PgType::OidArray => Self::gen_array(rand, |r| r.next_u32().to_string()),
-
-            // Floating point types
-            PgType::Float4Array => Self::gen_array(rand, |r| r.next_f32().to_string()),
-            PgType::Float8Array => Self::gen_array(rand, |r| r.next_f64().to_string()),
-            PgType::NumericArray => Self::gen_array(rand, |_| TypeUtil::fake_str::<Decimal>()),
-
-            // String types
-            PgType::TextArray | PgType::VarcharArray | PgType::BpcharArray => {
-                Self::gen_array(rand, |r| dollar_quote!(r.next_str()))
-            }
-            PgType::CharArray => Self::gen_array(rand, |r| {
-                single_quote!(r.next_str().chars().next().unwrap_or('a'))
-            }),
-            PgType::NameArray => Self::gen_array(rand, |r| {
-                // name is max 63 chars
-                let s = r.next_str();
-                let truncated: String = s.chars().take(63).collect();
-                dollar_quote!(truncated)
-            }),
-
-            // Binary
-            PgType::ByteaArray => {
-                Self::gen_array(rand, |r| format!("'\\x{}'", Bytea::next_value(r)))
-            }
-
-            // JSON types
-            PgType::JsonArray | PgType::JsonbArray => {
-                Self::gen_array(rand, |r| dollar_quote!(Json::next_value(r)))
-            }
-
-            // UUID
-            PgType::UuidArray => {
-                Self::gen_array(rand, |_| single_quote!(TypeUtil::fake_str::<Uuid>()))
-            }
-
-            // Date/Time types
-            PgType::DateArray => {
-                Self::gen_array(rand, |_| single_quote!(TypeUtil::fake_str::<Date>()))
-            }
-            PgType::TimeArray | PgType::TimetzArray => {
-                Self::gen_array(rand, |_| single_quote!(TypeUtil::fake_str::<Time>()))
-            }
-            PgType::TimestampArray | PgType::TimestamptzArray => Self::gen_array(rand, |_| {
-                single_quote!(TypeUtil::fake_str::<PrimitiveDateTime>())
-            }),
-            PgType::IntervalArray => {
-                Self::gen_array(rand, |r| single_quote!(Interval::next_value(r)))
-            }
-
-            // Geometric types
-            PgType::PointArray => Self::gen_array(rand, |r| single_quote!(Point::next_value(r))),
-            PgType::LineArray => Self::gen_array(rand, |r| single_quote!(Line::next_value(r))),
-            PgType::LsegArray => {
-                Self::gen_array(rand, |r| single_quote!(LineSegment::next_value(r)))
-            }
-            PgType::BoxArray => Self::gen_array(rand, |r| single_quote!(Box::next_value(r))),
-            PgType::PathArray => Self::gen_array(rand, |r| single_quote!(Path::next_value(r))),
-            PgType::PolygonArray => {
-                Self::gen_array(rand, |r| single_quote!(Polygon::next_value(r)))
-            }
-            PgType::CircleArray => Self::gen_array(rand, |r| single_quote!(Circle::next_value(r))),
-
-            // Network types
-            PgType::InetArray => Self::gen_array(rand, |r| single_quote!(Inet::next_value(r))),
-            PgType::CidrArray => Self::gen_array(rand, |r| single_quote!(Cidr::next_value(r))),
-            PgType::MacaddrArray => {
-                Self::gen_array(rand, |r| single_quote!(MacAddr::next_value(r)))
-            }
-            PgType::Macaddr8Array => {
-                Self::gen_array(rand, |r| single_quote!(MacAddr8::next_value(r)))
-            }
-
-            // Money
-            PgType::MoneyArray => Self::gen_array(rand, |r| dollar_quote!(Money::next_value(r))),
-
-            // Bit string types
-            PgType::BitArray => Self::gen_array(rand, |r| {
-                let len = (r.next_u8() % 8 + 1) as usize;
-                let bits: String = (0..len)
-                    .map(|_| if r.next_u8() % 2 == 0 { '0' } else { '1' })
-                    .collect();
-                format!("B'{}'", bits)
-            }),
-            PgType::VarbitArray => Self::gen_array(rand, |r| {
-                let len = (r.next_u8() % 16 + 1) as usize;
-                let bits: String = (0..len)
-                    .map(|_| if r.next_u8() % 2 == 0 { '0' } else { '1' })
-                    .collect();
-                format!("B'{}'", bits)
-            }),
-
-            _ => panic!("unsupported array type: {:?}", pg_type),
-        }
+        if let Some(elem_pg_type) = Array::element_type(pg_type) {
+            return Self::gen_array(rand, |r| PgType::next_value_str(&elem_pg_type, r));
+        };
+        panic!("unsupported array type: {:?}", pg_type);
     }
 
     /// Get the element type for an array type
@@ -225,7 +93,6 @@ impl Array {
 
         // Generate different array patterns
         vec![
-            // Empty array
             "ARRAY[]".to_string(),
             // Single element (first value)
             format!(

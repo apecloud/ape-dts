@@ -1,8 +1,8 @@
 use crate::test_runner::mock_utils::constants::ConstantValues;
 use crate::test_runner::mock_utils::random::{Random, RandomValue};
-use fake::faker::internet::raw::{IPv4, IPv6, MACAddress};
+use fake::faker::internet::raw::{IPv4, IPv6};
 use fake::locales::EN;
-use fake::{Fake, Faker};
+use fake::Fake;
 use std::fmt;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
@@ -34,7 +34,7 @@ impl RandomValue for Inet {
         let use_prefix = random.next_u8() % 2 == 0;
 
         if use_ipv6 {
-            let ip: String = IPv6(EN).fake();
+            let ip: String = IPv6(EN).fake_with_rng(&mut random.rng);
             let addr: Ipv6Addr = ip.parse().unwrap_or(Ipv6Addr::LOCALHOST);
             let prefix = if use_prefix {
                 Some(random.random_range(0..129) as u8)
@@ -43,7 +43,7 @@ impl RandomValue for Inet {
             };
             Inet::new(IpAddr::V6(addr), prefix).to_string()
         } else {
-            let ip: String = IPv4(EN).fake();
+            let ip: String = IPv4(EN).fake_with_rng(&mut random.rng);
             let addr: Ipv4Addr = ip.parse().unwrap_or(Ipv4Addr::LOCALHOST);
             let prefix = if use_prefix {
                 Some(random.random_range(0..33) as u8)

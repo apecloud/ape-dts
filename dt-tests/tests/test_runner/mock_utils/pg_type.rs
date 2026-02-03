@@ -4,7 +4,6 @@ use uuid::Uuid;
 
 use crate::test_runner::mock_utils::{
     constants::{ConstantValues, Constants},
-    pg_type,
     random::{Random, RandomValue},
     types::{
         array::Array,
@@ -126,12 +125,6 @@ pub enum PgType {
     MoneyArray,
     // https://www.postgresql.org/docs/9.3/datatype-pseudo.html
     Void,
-    // for test, not an offical data type of pg.
-    Test {
-        oid: u32,
-        default: String,
-        collation: String,
-    },
 }
 
 impl PgType {
@@ -139,7 +132,7 @@ impl PgType {
         match self {
             PgType::Bool => "bool",
             PgType::Bytea => "bytea",
-            PgType::Char => "char",
+            PgType::Char => "\"char\"",
             PgType::Name => "name",
             PgType::Int8 => "int8",
             PgType::Int2 => "int2",
@@ -229,13 +222,87 @@ impl PgType {
             PgType::Money => "money",
             PgType::MoneyArray => "_money",
             PgType::Void => "void",
-            _ => panic!("unsupported pg type for display name: {:?}", self),
         }
     }
 
+    pub fn support_btree_index(&self) -> bool {
+        matches!(
+            self,
+            PgType::Bytea
+                // | PgType::Bool // too small cardinality for test
+                | PgType::Char
+                | PgType::Name
+                | PgType::Int2
+                | PgType::Int4
+                | PgType::Int8
+                | PgType::Text
+                | PgType::Bpchar
+                | PgType::Varchar
+                | PgType::Float4
+                | PgType::Float8
+                | PgType::Numeric
+                | PgType::Money
+                | PgType::Oid
+                // | PgType::Bit // default Bit(1) is too small cardinality for test
+                | PgType::Varbit
+                | PgType::Uuid
+                | PgType::Date
+                | PgType::Time
+                | PgType::Timestamp
+                | PgType::Timestamptz
+                | PgType::Interval
+                | PgType::Timetz
+                | PgType::Inet
+                | PgType::Cidr
+                | PgType::Macaddr
+                | PgType::Macaddr8
+                | PgType::Int4Range
+                | PgType::Int8Range
+                | PgType::NumRange
+                | PgType::TsRange
+                | PgType::TstzRange
+                | PgType::DateRange
+                // | PgType::BoolArray
+                | PgType::ByteaArray
+                | PgType::CharArray
+                | PgType::NameArray
+                | PgType::Int2Array
+                | PgType::Int4Array
+                | PgType::Int8Array
+                | PgType::TextArray
+                | PgType::BpcharArray
+                | PgType::VarcharArray
+                | PgType::Float4Array
+                | PgType::Float8Array
+                | PgType::NumericArray
+                | PgType::MoneyArray
+                | PgType::OidArray
+                // | PgType::BitArray
+                | PgType::VarbitArray
+                | PgType::UuidArray
+                | PgType::InetArray
+                | PgType::CidrArray
+                | PgType::MacaddrArray
+                | PgType::Macaddr8Array
+                | PgType::TimestampArray
+                | PgType::DateArray
+                | PgType::TimeArray
+                | PgType::TimestamptzArray
+                | PgType::IntervalArray
+                | PgType::TimetzArray
+                | PgType::Int4RangeArray
+                | PgType::Int8RangeArray
+                | PgType::NumRangeArray
+                | PgType::TsRangeArray
+                | PgType::TstzRangeArray
+                | PgType::DateRangeArray
+        )
+    }
     pub fn next_value_str(&self, random: &mut Random) -> String {
-        if let Some(elem_pg_type) = Array::element_type(&self) {
-            return PgType::next_value_str(&elem_pg_type, random);
+        if let Some(_elem_pg_type) = Array::element_type(self) {
+            let mut res = Array::next_value_str(self, random);
+            res.push_str(format!("::{}", self.name()).as_str());
+            return res;
         };
         match self {
             PgType::Bool => {
@@ -268,8 +335,11 @@ impl PgType {
             PgType::Oid => {
                 format!("{}", random.next_u32())
             }
-            PgType::Bpchar | PgType::Text | PgType::Varchar => {
+            PgType::Bpchar | PgType::Text | PgType::Varchar | PgType::Name => {
                 dollar_quote!(random.next_str())
+            }
+            PgType::Char => {
+                dollar_quote!(random.next_str().chars().next().unwrap_or('a'))
             }
             PgType::Bytea => {
                 format!("'\\x{}'", Bytea::next_value(random))
@@ -278,9 +348,9 @@ impl PgType {
                 dollar_quote!(Json::next_value(random))
             }
             PgType::Uuid => {
-                single_quote!(TypeUtil::fake_str::<Uuid>())
+                single_quote!(TypeUtil::fake_str::<Uuid>(random))
             }
-            PgType::Numeric => TypeUtil::fake_str::<Decimal>(),
+            PgType::Numeric => TypeUtil::fake_str::<Decimal>(random),
             PgType::Date => single_quote!(PgDate::next_value(random)),
             PgType::Time | PgType::Timetz => single_quote!(PgTime::next_value(random)),
             PgType::Timestamp | PgType::Timestamptz => {
@@ -321,13 +391,27 @@ impl PgType {
                 single_quote!(MacAddr8::next_value(random))
             }
             PgType::Money => Money::next_value(random),
+            PgType::Bit => {
+                let bit = if random.next_u8() % 2 == 0 { '1' } else { '0' };
+                format!("B'{}'", bit)
+            }
+            PgType::Varbit => {
+                let len = (random.next_u8() % 10 + 1) as usize;
+                let bits: String = (0..len)
+                    .map(|_| if random.next_u8() % 2 == 0 { '1' } else { '0' })
+                    .collect();
+                format!("B'{}'", bits)
+            }
             _ => panic!("unsupported pg type for mock value generation: {:?}", self),
         }
     }
 
     pub fn constant_value_str(&self) -> Vec<String> {
-        if let Some(elem_pg_type) = Array::element_type(&self) {
-            return PgType::constant_value_str(&elem_pg_type);
+        if let Some(_elem_pg_type) = Array::element_type(self) {
+            return Array::constant_values(self)
+                .iter()
+                .map(|s| format!("{}::{}", s, self.name()))
+                .collect();
         };
         match self {
             PgType::Int8 => Constants::next_i8()
@@ -344,13 +428,13 @@ impl PgType {
                 .collect::<Vec<String>>(),
             PgType::Float4 => Constants::next_f32()
                 .iter()
-                .map(|v| v.to_string())
+                .map(|v| single_quote!(v.to_string()))
                 .collect::<Vec<String>>(),
             PgType::Float8 | PgType::Numeric => Constants::next_f64()
                 .iter()
-                .map(|v| v.to_string())
+                .map(|v| single_quote!(v.to_string())) // quote for nan and inf
                 .collect::<Vec<String>>(),
-            PgType::Bpchar | PgType::Text | PgType::Varchar => Constants::next_str()
+            PgType::Bpchar | PgType::Text | PgType::Varchar | PgType::Name => Constants::next_str()
                 .iter()
                 .map(|s| dollar_quote!(s))
                 .collect(),
@@ -432,23 +516,6 @@ impl PgType {
 mod tests {
     use super::*;
     #[test]
-    fn test_gen_pg_types() {
-        let default_pg_types = vec![
-            PgType::Int8,
-            PgType::Int2,
-            PgType::Int4,
-            PgType::Float4,
-            PgType::Float8,
-            PgType::Bool,
-            PgType::Bpchar,
-            PgType::Varchar,
-            PgType::Text,
-        ];
-        let serialized = serde_json::to_string(&default_pg_types).unwrap();
-        println!("{}", serialized);
-    }
-
-    #[test]
     fn test_pg_type_vec_serialization() {
         let supported_pg_types = vec![
             PgType::Bool,
@@ -457,16 +524,12 @@ mod tests {
             PgType::Int4,
             PgType::Float4,
             PgType::Float8,
-            PgType::Test {
-                oid: 32,
-                default: "NULL".to_string(),
-                collation: "utf8".to_string(),
-            },
+            PgType::VarcharArray,
         ];
         let serialized = serde_json::to_string(&supported_pg_types).unwrap();
         assert_eq!(
             serialized,
-            r#"["bool","int8","int2","int4","float4","float8",{"test":{"oid":32,"default":"NULL","collation":"utf8"}}]"#
+            r#"["bool","int8","int2","int4","float4","float8","varchararray"]"#
         );
         let deserialized: Vec<PgType> = serde_json::from_str(&serialized).unwrap();
         assert_eq!(supported_pg_types, deserialized);

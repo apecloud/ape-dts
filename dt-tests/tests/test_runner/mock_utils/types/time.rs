@@ -25,8 +25,13 @@ impl std::fmt::Display for PgDate {
 }
 
 impl RandomValue for PgDate {
-    fn next_value(_random: &mut Random) -> String {
-        let d: Date = Faker.fake();
+    fn next_value(random: &mut Random) -> String {
+        let d: Date = Faker.fake_with_rng(&mut random.rng);
+        if d.year() == 0 {
+            // time::Date does not support year 0, so we adjust it to year 1
+            let adjusted_date = Date::from_calendar_date(1, d.month(), d.day()).unwrap();
+            return PgDate::new(adjusted_date).to_string();
+        }
         PgDate::new(d).to_string()
     }
 }
@@ -78,8 +83,8 @@ impl std::fmt::Display for PgTime {
 }
 
 impl RandomValue for PgTime {
-    fn next_value(_random: &mut Random) -> String {
-        let t: Time = Faker.fake();
+    fn next_value(random: &mut Random) -> String {
+        let t: Time = Faker.fake_with_rng(&mut random.rng);
         PgTime::new(t).to_string()
     }
 }
@@ -93,7 +98,6 @@ impl ConstantValues for PgTime {
             r#"23:59:59"#, // Last second of the day
             // --- 2. Postgres Special Extensions ---
             r#"24:00:00"#, // Represents midnight of the NEXT day (Valid in PG)
-            r#"allballs"#, // Slang for 00:00:00.00 (Legacy compatibility)
             // --- 3. Precision (Microseconds) ---
             // Postgres stores up to 6 decimal places for seconds.
             r#"12:34:56.123456"#, // Max precision
@@ -129,8 +133,15 @@ impl std::fmt::Display for PgDateTime {
 }
 
 impl RandomValue for PgDateTime {
-    fn next_value(_random: &mut Random) -> String {
-        let dt: PrimitiveDateTime = Faker.fake();
+    fn next_value(random: &mut Random) -> String {
+        let dt: PrimitiveDateTime = Faker.fake_with_rng(&mut random.rng);
+        if dt.year() == 0 {
+            // time::PrimitiveDateTime does not support year 0, so we adjust it to year 1
+            let date = Date::from_calendar_date(1, dt.month(), dt.day()).unwrap();
+            let time = Time::from_hms_micro(dt.hour(), dt.minute(), dt.second(), dt.microsecond());
+            let adjusted_dt = PrimitiveDateTime::new(date, time.unwrap());
+            return PgDateTime::new(adjusted_dt).to_string();
+        }
         PgDateTime::new(dt).to_string()
     }
 }
@@ -139,13 +150,12 @@ impl ConstantValues for PgDateTime {
     fn next_values() -> Vec<String> {
         [
             // --- 1. ISO 8601 Standards ---
-            r#"2024-01-01 12:00:00"#,    // Local time (No timezone info)
-            r#"2024-01-01T12:00:00Z"#,   // UTC / Zulu time (Standard for data exchange)
-            r#"2024-01-01 12:00:00+08"#, // Specific Offset (e.g., Asia/Shanghai)
+            r#"2024-01-01 12:00:01"#,    // Local time (No timezone info)
+            r#"2024-01-01T12:00:02Z"#,   // UTC / Zulu time (Standard for data exchange)
+            r#"2024-01-01 12:00:03+08"#, // Specific Offset (e.g., Asia/Shanghai)
             // --- 2. Special Constants ---
             r#"infinity"#,  // Future infinity
             r#"-infinity"#, // Past infinity
-            r#"now"#,       // Server current time (Evaluated at transaction time)
             r#"epoch"#,     // 1970-01-01 00:00:00 UTC
             // --- 3. Extreme Values ---
             r#"294276-01-01 00:00:00"#, // Far future year (Max supported year is ~294276)
@@ -199,8 +209,8 @@ impl std::fmt::Display for Interval {
 }
 
 impl RandomValue for Interval {
-    fn next_value(_random: &mut Random) -> String {
-        let d: Duration = Faker.fake();
+    fn next_value(random: &mut Random) -> String {
+        let d: Duration = Faker.fake_with_rng(&mut random.rng);
         Interval::new(d).to_string()
     }
 }

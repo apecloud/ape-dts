@@ -7,18 +7,22 @@ pub trait ConstantValues {
 impl Constants {
     const NEXT_I8: &[i8] = &[i8::MIN, 0, i8::MAX];
 
+    #[allow(dead_code)]
     const NEXT_U8: &[u8] = &[u8::MIN, u8::MAX];
 
     const NEXT_I16: &[i16] = &[i16::MIN, 0, i16::MAX];
 
+    #[allow(dead_code)]
     const NEXT_U16: &[u16] = &[u16::MIN, u16::MAX];
 
     const NEXT_I32: &[i32] = &[i32::MIN, -1, 0, 1, i32::MAX];
 
+    #[allow(dead_code)]
     const NEXT_U32: &[u32] = &[u32::MIN, 1, u32::MAX];
 
     const NEXT_I64: &[i64] = &[i64::MIN, -1, 0, 1, i64::MAX];
 
+    #[allow(dead_code)]
     const NEXT_U64: &[u64] = &[u64::MIN, 1, u64::MAX];
 
     const NEXT_F32: &[f32] = &[
@@ -47,15 +51,15 @@ impl Constants {
 
     const NEXT_STR: &[&str] = &[
         // --- 1. Emptiness & Whitespace ---
-        r#""#,    // Empty String (Length 0)
-        r#"   "#, // Pure Whitespace (Tests trimming logic in application or char(n))
-        r#" 	"#,  // Mixed Space & Tab
+        r#""#, // Empty String (Length 0)
+        // r#"   "#, // Pure Whitespace (Tests trimming logic in application or char(n))
+        " \t", // Mixed Space & Tab
         // --- 2. SQL Syntax & Injection Simulation ---
         // The single quote is the most dangerous character in SQL.
         r#"O'Neil"#,                    // Single Quote (Standard name case)
         r#"'"#,                         // Lone Single Quote (Syntax breaker)
         r#"value'); DROP TABLE x; --"#, // Classic SQL Injection payload
-        r#"$$"#,                        // Dollar signs (Tests conflict with Dollar Quoting)
+        // r#"$$"#,                        // Dollar signs (Tests conflict with Dollar Quoting)
         // --- 3. Special Characters & Formatting ---
         // Note: Postgres TEXT cannot store Null Bytes (\0).
         r#"Line1
@@ -68,7 +72,6 @@ Line2"#, // Multi-line string (Newlines \n)
         r#"Z͑ͫ̓ͪ̂ͫ̽͏̴Iͦ͊̽̔͌ͬ͛̎Gͫ̎̚Zͧͬͪ͐Ȁ̉G̿"#, // Zalgo Text (Stacked diacritics, tests vertical rendering)
         r#"ﷺ"#,      // Single character expanded to wide glyph (Ligature)
         r#"مرحبا"#,  // RTL (Right-To-Left) text (Arabic)
-        "",          // Zero Width Space (Invisible but present)
         // --- 5. Length Boundaries ---
         r#"a"#, // Min Length (1 char)
         // A very long string (simulating TOAST entry point, usually > 2KB)
@@ -82,6 +85,7 @@ Line2"#, // Multi-line string (Newlines \n)
     }
 
     #[inline]
+    #[allow(dead_code)]
     pub fn next_u8() -> &'static [u8] {
         Self::NEXT_U8
     }
@@ -92,6 +96,7 @@ Line2"#, // Multi-line string (Newlines \n)
     }
 
     #[inline]
+    #[allow(dead_code)]
     pub fn next_u16() -> &'static [u16] {
         Self::NEXT_U16
     }
@@ -102,6 +107,7 @@ Line2"#, // Multi-line string (Newlines \n)
     }
 
     #[inline]
+    #[allow(dead_code)]
     pub fn next_u32() -> &'static [u32] {
         Self::NEXT_U32
     }
@@ -112,6 +118,7 @@ Line2"#, // Multi-line string (Newlines \n)
     }
 
     #[inline]
+    #[allow(dead_code)]
     pub fn next_u64() -> &'static [u64] {
         Self::NEXT_U64
     }

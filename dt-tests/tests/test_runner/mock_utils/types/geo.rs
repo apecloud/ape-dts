@@ -12,8 +12,8 @@ impl std::fmt::Display for Point {
 }
 
 impl RandomValue for Point {
-    fn next_value(_random: &mut Random) -> String {
-        Point(Faker.fake()).to_string()
+    fn next_value(random: &mut Random) -> String {
+        Point(Faker.fake_with_rng(&mut random.rng)).to_string()
     }
 }
 
@@ -53,8 +53,8 @@ impl std::fmt::Display for Line {
 }
 
 impl RandomValue for Line {
-    fn next_value(_random: &mut Random) -> String {
-        Line(Faker.fake()).to_string()
+    fn next_value(random: &mut Random) -> String {
+        Line(Faker.fake_with_rng(&mut random.rng)).to_string()
     }
 }
 
@@ -91,8 +91,8 @@ impl std::fmt::Display for LineSegment {
 }
 
 impl RandomValue for LineSegment {
-    fn next_value(_random: &mut Random) -> String {
-        LineSegment(Faker.fake()).to_string()
+    fn next_value(random: &mut Random) -> String {
+        LineSegment(Faker.fake_with_rng(&mut random.rng)).to_string()
     }
 }
 
@@ -125,8 +125,8 @@ impl std::fmt::Display for Box {
 }
 
 impl RandomValue for Box {
-    fn next_value(_random: &mut Random) -> String {
-        Box(Faker.fake()).to_string()
+    fn next_value(random: &mut Random) -> String {
+        Box(Faker.fake_with_rng(&mut random.rng)).to_string()
     }
 }
 
@@ -167,9 +167,9 @@ impl std::fmt::Display for Path {
 }
 
 impl RandomValue for Path {
-    fn next_value(_random: &mut Random) -> String {
-        let points: geo_types::LineString<f64> = Faker.fake();
-        let closed: bool = Faker.fake();
+    fn next_value(random: &mut Random) -> String {
+        let points: geo_types::LineString<f64> = Faker.fake_with_rng(&mut random.rng);
+        let closed: bool = Faker.fake_with_rng(&mut random.rng);
         Path { points, closed }.to_string()
     }
 }
@@ -208,9 +208,9 @@ impl std::fmt::Display for Polygon {
 }
 
 impl RandomValue for Polygon {
-    fn next_value(_random: &mut Random) -> String {
+    fn next_value(random: &mut Random) -> String {
         // geo_types::Polygon will auto-close the LineString
-        Polygon(Faker.fake()).to_string()
+        Polygon(Faker.fake_with_rng(&mut random.rng)).to_string()
     }
 }
 
@@ -248,9 +248,9 @@ impl std::fmt::Display for Circle {
 }
 
 impl RandomValue for Circle {
-    fn next_value(_random: &mut Random) -> String {
-        let center: geo_types::Point<f64> = Faker.fake();
-        let radius: f64 = Faker.fake::<f64>().abs();
+    fn next_value(random: &mut Random) -> String {
+        let center: geo_types::Point<f64> = Faker.fake_with_rng(&mut random.rng);
+        let radius: f64 = Faker.fake_with_rng::<f64, _>(&mut random.rng).abs();
         Circle { center, radius }.to_string()
     }
 }

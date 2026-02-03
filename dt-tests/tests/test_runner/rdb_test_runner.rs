@@ -6,7 +6,6 @@ use dt_common::{
         config_enums::DbType,
         config_token_parser::{ConfigTokenParser, TokenEscapePair},
         extractor_config::ExtractorConfig,
-        ini_loader::IniLoader,
         meta_center_config::MetaCenterConfig,
         sinker_config::SinkerConfig,
         task_config::TaskConfig,
@@ -28,10 +27,7 @@ use dt_task::{task_runner::TaskRunner, task_util::TaskUtil};
 use sqlx::{query, types::BigDecimal, MySql, Pool, Postgres, Row};
 use tokio::task::JoinHandle;
 
-use crate::{
-    test_config_util::TestConfigUtil,
-    test_runner::mock_utils::{mock_config::MockConfig, pg_type::PgType},
-};
+use crate::{test_config_util::TestConfigUtil, test_runner::mock_utils::mock_config::MockConfig};
 
 use super::{base_test_runner::BaseTestRunner, rdb_util::RdbUtil};
 
@@ -45,7 +41,6 @@ pub struct RdbTestRunner {
     pub config: TaskConfig,
     pub router: RdbRouter,
     pub filter: RdbFilter,
-    pub mock_config: Option<MockConfig>,
 }
 
 pub const SRC: &str = "src";
@@ -171,7 +166,6 @@ impl RdbTestRunner {
             router,
             filter,
             base,
-            mock_config,
         })
     }
 

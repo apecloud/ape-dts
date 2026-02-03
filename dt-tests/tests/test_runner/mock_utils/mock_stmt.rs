@@ -8,12 +8,14 @@ use rand::seq::SliceRandom;
 use crate::test_runner::mock_utils::{pg_type::PgType, random::Random};
 
 #[allow(dead_code)]
+#[derive(Debug)]
 pub enum Constraint {
     Primary(Vec<usize>), // column indices
     Unique(Vec<usize>),  // column indices
     None,
 }
 
+#[derive(Debug)]
 pub struct MockStmt {
     pub included_types: Vec<PgType>,
     pub db: String,
@@ -58,7 +60,7 @@ impl MockStmt {
                     .cloned()
                     .collect::<Vec<usize>>();
                 if filtered_cols.len() != cols.len() {
-                    println!("bad index cols");
+                    // println!("bad index cols");
                     return self;
                 }
             }
@@ -134,6 +136,7 @@ impl MockStmt {
     }
 
     pub fn insert_value_stmt(&self, random: &mut Random, cnt: usize) -> Vec<String> {
+        // println!("Start generating insert statements for table {:?}.{:?}, stmt: {:?}", self.db, self.tb, self);
         let mut stmts = vec![];
         if cnt == 0 {
             return stmts;
@@ -178,7 +181,8 @@ impl MockStmt {
                             }
                             // it should be promised that constant values do not generate duplicate rows
                             if !set.insert(row.clone()) {
-                                panic!("duplicate constant index values generated");
+                                // println!("duplicate constant index values generated, stmt: {:?}, set: {:?}, row: {:?}, consts: {:?}", self, set, row, col_constants);
+                                continue;
                             }
                             vec.push(row.into_iter().map(Some).collect());
                         }
@@ -218,7 +222,9 @@ impl MockStmt {
 
                     // inject random values until reach cnt
                     let starter = if vec.is_empty() { 0 } else { vec.len() };
+                    let max_retries = cnt * 10;
                     for _ in starter..cnt {
+                        let mut retries = 0;
                         loop {
                             let mut key = vec![];
                             for pg_type in &col_types {
@@ -228,6 +234,15 @@ impl MockStmt {
                             if set.insert(key.clone()) {
                                 vec.push(key.into_iter().map(Some).collect());
                                 break;
+                            }
+                            retries += 1;
+                            if retries >= max_retries {
+                                panic!(
+                                    "failed to generate enough unique index values, stmt: {:?}, generated: {}, required: {}",
+                                    self,
+                                    vec.len(),
+                                    cnt
+                                );
                             }
                         }
                     }
@@ -267,7 +282,13 @@ impl MockStmt {
                     .join(", ")
             ));
         }
-        // the most NULL values inserted at last
+        println!(
+            "Generated {} insert statements for table {}.{}, stmt: {:?}",
+            stmts.len(),
+            self.db,
+            self.tb,
+            self
+        );
         stmts
     }
 
@@ -281,16 +302,11 @@ impl MockStmt {
 
     fn is_bad_col_for_index(&self, col_idx: usize) -> bool {
         let pg_type = self.included_types.get(col_idx).unwrap();
-        match pg_type {
-            PgType::Bool | PgType::Json | PgType::Jsonb | PgType::Point => {
-                println!(
-                    "{} can not be primary or unique key col for mock",
-                    pg_type.name()
-                );
-                false
-            }
-            _ => true,
+        if !pg_type.support_btree_index() {
+            // println!("unsupported type for btree index: {:?}", pg_type);
+            return false;
         }
+        true
     }
 }
 
@@ -300,7 +316,7 @@ mod tests {
 
     #[test]
     fn test_schema_generation() {
-        let mock_stmt = MockStmt::new(&[PgType::Int4, PgType::Float8], "test_db", "test_tb");
+        let mock_stmt = MockStmt::new(&[PgType::Int4, PgType::Varchar], "test_db", "test_tb");
         let db_stmts = mock_stmt.create_schema_stmt();
         assert_eq!(db_stmts.len(), 2);
         assert_eq!(db_stmts[0], "DROP SCHEMA IF EXISTS test_db CASCADE;");
@@ -316,7 +332,7 @@ mod tests {
     #[test]
     fn test_full_schema_generation() {
         let mock_stmt = MockStmt::new(
-            &[PgType::Int4, PgType::Float8, PgType::Float8],
+            &[PgType::Int4, PgType::Varchar, PgType::Float8],
             "test_db",
             "test_tb",
         )

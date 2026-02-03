@@ -8,8 +8,8 @@ use std::fmt;
 pub struct Money(pub i64); // stored as cents (fractional digits = 2)
 
 impl Money {
-    pub const MIN: i64 = -9223372036854775808; // -92233720368547758.08 in cents
-    pub const MAX: i64 = 9223372036854775807; // +92233720368547758.07 in cents
+    pub const _MIN: i64 = -9223372036854775808; // -92233720368547758.08 in cents
+    pub const _MAX: i64 = 9223372036854775807; // +92233720368547758.07 in cents
 
     pub fn new(cents: i64) -> Self {
         Self(cents)

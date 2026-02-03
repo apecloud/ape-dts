@@ -18,8 +18,8 @@ impl std::fmt::Display for Json {
 }
 
 impl RandomValue for Json {
-    fn next_value(_random: &mut Random) -> String {
-        let res: serde_json::Value = Faker.fake();
+    fn next_value(random: &mut Random) -> String {
+        let res: serde_json::Value = Faker.fake_with_rng(&mut random.rng);
         Json::new(res).to_string()
     }
 }
