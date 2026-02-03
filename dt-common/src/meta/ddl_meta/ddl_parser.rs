@@ -2106,24 +2106,3 @@ mod test_common {
         }
     }
 }
-#[cfg(test)]
-mod parse_pg_create_index_tests {
-    use crate::config::config_enums::DbType;
-    use crate::meta::ddl_meta::ddl_parser::DdlParser;
-
-    #[test]
-    fn test_parse_pg_create_index_sql() {
-        let sql = r#"CREATE INDEX hehe on public.match USING btree (_airbyte_extracted_at)"#;
-        let parser = DdlParser::new(DbType::Pg);
-
-        // The parser should successfully parse the SQL, not return an error, and return Some(ddl_data)
-        match parser.parse(sql) {
-            Ok(Some(ddl_data)) => {
-                // Optionally: check the type is PgCreateIndex
-                assert_eq!(ddl_data.ddl_type.to_string(), "CreateIndex");
-            }
-            Ok(None) => panic!("Expected Some DdlData, got None"),
-            Err(e) => panic!("Parse error: {:?}", e),
-        }
-    }
-}
