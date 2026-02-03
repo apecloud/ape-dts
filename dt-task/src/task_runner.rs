@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::VecDeque,
     panic,
     sync::{
         atomic::{AtomicBool, Ordering},

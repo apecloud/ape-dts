@@ -298,6 +298,7 @@ pub struct AlterDatabaseStatement {
 pub struct CreateSchemaStatement {
     pub schema: String,
     pub if_not_exists: bool,
+    pub authorization: bool,
     pub unparsed: String,
 }
 
@@ -311,6 +312,7 @@ pub struct DropSchemaStatement {
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 pub struct AlterSchemaStatement {
     pub schema: String,
+    pub new_schema: Option<String>,
     pub unparsed: String,
 }
 
@@ -503,6 +505,9 @@ impl DdlStatement {
                 if s.if_not_exists {
                     sql = format!("{} IF NOT EXISTS", sql);
                 }
+                if s.authorization {
+                    sql = format!("{} AUTHORIZATION", sql);
+                }
                 sql = append_identifier(&sql, &s.schema, true, db_type);
                 append_unparsed(sql, &s.unparsed)
             }
@@ -519,7 +524,12 @@ impl DdlStatement {
             DdlStatement::AlterSchema(s) => {
                 let mut sql = "ALTER SCHEMA".to_string();
                 sql = append_identifier(&sql, &s.schema, true, db_type);
-                append_unparsed(sql, &s.unparsed)
+                if let Some(new_schema) = &s.new_schema {
+                    sql = format!("{} RENAME TO", sql);
+                    append_identifier(&sql, new_schema, true, db_type)
+                } else {
+                    append_unparsed(sql, &s.unparsed)
+                }
             }
 
             DdlStatement::MysqlCreateTable(s) => {
@@ -726,6 +736,11 @@ impl DdlStatement {
             DdlStatement::AlterSchema(alter_schema_statement) => {
                 size += alter_schema_statement.schema.len() as u64;
                 size += alter_schema_statement.unparsed.len() as u64;
+                size += std::mem::size_of::<Option<String>>() as u64;
+                size += alter_schema_statement
+                    .new_schema
+                    .as_ref()
+                    .map_or(0, |s| s.len() as u64);
             }
             DdlStatement::MysqlCreateTable(mysql_create_table_statement) => {
                 size += mysql_create_table_statement.db.len() as u64;

@@ -58,3 +58,9 @@ CREATE DATABASE `中文database!@#$%^&*()_+`;
 CREATE TABLE `中文database!@#$%^&*()_+`.`中文` ( f_0 tinyint, f_1 smallint DEFAULT NULL, f_2 smallint DEFAULT NULL, PRIMARY KEY (f_0) ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4; 
 
 INSERT INTO `中文database!@#$%^&*()_+`.`中文` VALUES(1, 1, 1);
+
+-- contain db system keywords
+CREATE TABLE test_db_2.match (select_id INT PRIMARY KEY AUTO_INCREMENT, `table` VARCHAR(50) NOT NULL, `column` VARCHAR(100) NOT NULL, offset INT NOT NULL, unique_col VARCHAR(20), `match` INT, check_col INT, constraint_col INT);
+CREATE INDEX idx_index_on_index ON test_db_2.match(offset);
+CREATE INDEX idx_key_col ON test_db_2.match(`match`);
+CREATE UNIQUE INDEX uniq_unique_col ON test_db_2.match(unique_col);
