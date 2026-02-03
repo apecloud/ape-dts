@@ -180,3 +180,22 @@ CREATE TABLE struct_it_mysql2mysql_1.case_sensitive_column_name (
   PRIMARY KEY (`id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8
 ```
+
+-- contain db system keywords
+```
+CREATE TABLE struct_it_mysql2mysql_1.match (
+  select_id INT PRIMARY KEY AUTO_INCREMENT,
+  `table` VARCHAR(50) NOT NULL,
+  `column` VARCHAR(100) NOT NULL,
+  offset INT NOT NULL,
+  unique_col VARCHAR(20),
+  `match` INT,
+  check_col INT,
+  constraint_col INT
+);
+```
+
+CREATE INDEX idx_index_on_index ON struct_it_mysql2mysql_1.match(offset);
+CREATE INDEX idx_key_col ON struct_it_mysql2mysql_1.match(`match`);
+CREATE UNIQUE INDEX uniq_unique_col ON struct_it_mysql2mysql_1.match(unique_col);
+
