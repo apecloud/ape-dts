@@ -1,8 +1,6 @@
 DROP DATABASE IF EXISTS test_db_2;
 CREATE DATABASE test_db_2;
 
--- 创建一个用于实验的表
-
 ```
 CREATE TABLE `test_db_2`.`replace_deadlock` (
   `id` int(11) NOT NULL,

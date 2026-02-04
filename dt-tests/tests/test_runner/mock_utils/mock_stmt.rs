@@ -162,7 +162,7 @@ impl MockStmt {
                         .iter()
                         .map(|pg_type| {
                             let mut values = pg_type.constant_value_str();
-                            values.shuffle(&mut rand::rng());
+                            values.shuffle(&mut random.rng);
                             values
                         })
                         .collect::<Vec<Vec<String>>>();

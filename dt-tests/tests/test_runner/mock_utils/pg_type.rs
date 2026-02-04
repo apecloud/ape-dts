@@ -335,7 +335,11 @@ impl PgType {
             PgType::Oid => {
                 format!("{}", random.next_u32())
             }
-            PgType::Bpchar | PgType::Text | PgType::Varchar | PgType::Name => {
+            PgType::Bpchar => {
+                // bpchar will trim trailing spaces
+                dollar_quote!(random.next_str().trim_end_matches(' '))
+            }
+            PgType::Text | PgType::Varchar | PgType::Name => {
                 dollar_quote!(random.next_str())
             }
             PgType::Char => {

@@ -169,6 +169,9 @@ impl std::fmt::Display for Path {
 impl RandomValue for Path {
     fn next_value(random: &mut Random) -> String {
         let points: geo_types::LineString<f64> = Faker.fake_with_rng(&mut random.rng);
+        if points.0.is_empty() {
+            return "[(0,0),(1,1)]".to_string();
+        }
         let closed: bool = Faker.fake_with_rng(&mut random.rng);
         Path { points, closed }.to_string()
     }
@@ -210,7 +213,11 @@ impl std::fmt::Display for Polygon {
 impl RandomValue for Polygon {
     fn next_value(random: &mut Random) -> String {
         // geo_types::Polygon will auto-close the LineString
-        Polygon(Faker.fake_with_rng(&mut random.rng)).to_string()
+        let polygon: geo_types::Polygon<f64> = Faker.fake_with_rng(&mut random.rng);
+        if polygon.exterior().0.is_empty() {
+            return "((0,0),(1,0),(0.5,1))".to_string();
+        }
+        Polygon(polygon).to_string()
     }
 }
 
