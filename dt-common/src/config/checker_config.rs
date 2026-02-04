@@ -2,10 +2,10 @@ use super::{config_enums::DbType, connection_auth_config::ConnectionAuthConfig};
 
 #[derive(Clone)]
 pub struct CheckerConfig {
-    pub drop_on_full: bool,
     pub queue_size: usize,
     pub max_connections: u32,
     pub batch_size: usize,
+    pub sample_rate: f64,
     pub output_full_row: bool,
     pub output_revise_sql: bool,
     pub revise_match_full_row: bool,
@@ -21,10 +21,10 @@ pub struct CheckerConfig {
 impl Default for CheckerConfig {
     fn default() -> Self {
         Self {
-            drop_on_full: true,
             queue_size: 2000,
             max_connections: 2,
             batch_size: 100,
+            sample_rate: 1.0,
             output_full_row: false,
             output_revise_sql: false,
             revise_match_full_row: false,

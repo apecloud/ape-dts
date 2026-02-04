@@ -156,16 +156,39 @@ INSERT INTO `test_db_1`.`test_table`(`id`,`name`,`age`,`email`) VALUES(3,'Charli
 ```
 
 ### Summary Log (summary.log)
-The summary log contains the overall results of the check, such as start_time, end_time, is_consistent, and the number of miss, diff, extra.
+The summary log contains the overall results of the check, such as start_time, end_time, is_consistent, and the number of miss, diff.
 
 ```json
-{"start_time": "2023-09-01T12:00:00+08:00", "end_time": "2023-09-01T12:00:01+08:00", "is_consistent": false, "miss_count": 1, "diff_count": 2, "extra_count": 1, "sql_count": 3}
+{"start_time": "2023-09-01T12:00:00+08:00", "end_time": "2023-09-01T12:00:01+08:00", "is_consistent": false, "miss_count": 1, "diff_count": 2, "sql_count": 3}
 ```
 
 
 # Reverse Check
 
 Swap the [extractor] and [checker] target configurations to perform reverse check.
+
+# Checker Configuration Parameters
+
+| Parameter | Description | Example | Default |
+|-----------|-------------|---------|---------|
+| db_type | Target database type | mysql | - |
+| url | Database connection URL | mysql://user:pass@host:3306/db | - |
+| batch_size | Batch size for querying data | 100 | 100 |
+| max_connections | Maximum number of connections | 2 | 2 |
+| output_full_row | Output full row data in logs | true | false |
+| output_revise_sql | Generate repair SQL statements | true | false |
+| revise_match_full_row | Use full row matching in repair SQL | true | false |
+| retry_interval_secs | Retry interval in seconds | 5 | 0 |
+| max_retries | Maximum number of retries | 3 | 0 |
+| check_log_dir | Check log directory | ./logs/check | Defaults to check subdirectory under runtime.log_dir |
+| check_log_file_size | Maximum size per log file | 100mb | 100mb |
+
+## Retry Mechanism
+
+When `max_retries > 0`, the checker automatically retries on inconsistency:
+- No logs are written during retry attempts to reduce noise
+- Detailed miss/diff logs are only written on the final check
+- Useful when target data synchronization is not yet complete
 
 # Other Configurations
 

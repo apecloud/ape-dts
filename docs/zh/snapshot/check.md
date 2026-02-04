@@ -156,16 +156,39 @@ INSERT INTO `test_db_1`.`test_table`(`id`,`name`,`age`,`email`) VALUES(3,'Charli
 ```
 
 ### 概览日志（summary.log）
-概览日志包含校验的总体结果，如 start_time, end_time, is_consistent，以及 miss, diff, extra 的数量。
+概览日志包含校验的总体结果，如 start_time, end_time, is_consistent，以及 miss, diff 的数量。
 
 ```json
-{"start_time": "2023-09-01T12:00:00+08:00", "end_time": "2023-09-01T12:00:01+08:00", "is_consistent": false, "miss_count": 1, "diff_count": 2, "extra_count": 1, "sql_count": 3}
+{"start_time": "2023-09-01T12:00:00+08:00", "end_time": "2023-09-01T12:00:01+08:00", "is_consistent": false, "miss_count": 1, "diff_count": 2, "sql_count": 3}
 ```
 
 
 # 反向校验
 
 将 [extractor] 与 [checker] 目标配置调换，即可进行反向校验。
+
+# Checker 配置参数
+
+| 参数 | 说明 | 示例 | 默认值 |
+|------|------|------|--------|
+| db_type | 目标数据库类型 | mysql | - |
+| url | 数据库连接URL | mysql://user:pass@host:3306/db | - |
+| batch_size | 批量查询数据条数 | 100 | 100 |
+| max_connections | 最大连接数 | 2 | 2 |
+| output_full_row | 是否在日志中输出完整行数据 | true | false |
+| output_revise_sql | 是否生成修复SQL | true | false |
+| revise_match_full_row | 修复SQL是否使用整行匹配 | true | false |
+| retry_interval_secs | 重试间隔（秒） | 5 | 0 |
+| max_retries | 最大重试次数 | 3 | 0 |
+| check_log_dir | 校验日志目录 | ./logs/check | 默认在runtime.log_dir下的check子目录 |
+| check_log_file_size | 单个日志文件最大大小 | 100mb | 100mb |
+
+## 重试机制说明
+
+当 `max_retries > 0` 时，checker 会在检测到不一致时自动重试：
+- 重试期间不记录日志，避免噪音
+- 仅在最后一次检查时记录详细的 miss/diff 日志
+- 适用于目标端数据尚未完全同步的场景
 
 # 其他配置
 

@@ -10,7 +10,7 @@ use tokio::time::sleep;
 
 use dt_common::{
     config::config_enums::DbType,
-    log_diff, log_miss, log_sql, log_summary,
+    log_diff, log_info, log_miss, log_sql, log_summary,
     meta::struct_meta::struct_data::StructData,
     monitor::{counter_type::CounterType, monitor::Monitor},
     rdb_filter::RdbFilter,
@@ -77,6 +77,11 @@ impl StructCheckerHandle {
         }
     }
 
+    /// Extracts database/schema name from a key in format "type.db.table"
+    ///
+    /// # Examples
+    /// - "table.mydb.users" -> Some("mydb")
+    /// - "index.testdb.orders.idx_name" -> Some("testdb")
     fn collect_db_from_key(key: &str) -> Option<String> {
         let mut parts = key.split('.');
         parts.next()?;
@@ -230,9 +235,11 @@ impl StructCheckerHandle {
         Ok((summary, sql_count))
     }
 }
-
 impl StructCheckerHandle {
-    pub async fn check_struct(&self, data: Vec<StructData>) -> anyhow::Result<()> {
+    pub async fn check_struct(
+        &self,
+        data: Vec<dt_common::meta::struct_meta::struct_data::StructData>,
+    ) -> anyhow::Result<()> {
         for struct_data in data {
             self.add_src_sqls(struct_data).await?;
         }
@@ -255,6 +262,7 @@ impl StructCheckerHandle {
                 .compare_once(&src_sql_map, &dbs, &start_time, false)
                 .await?;
             if summary.is_consistent {
+                log_info!("Structure check passed - all structures are consistent");
                 return Ok(());
             }
             if retries_left == 0 {
