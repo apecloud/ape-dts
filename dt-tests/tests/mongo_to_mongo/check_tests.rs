@@ -12,9 +12,9 @@ mod test {
 
     #[tokio::test]
     #[serial]
-    async fn check_cdc_check_blocking_test() {
+    async fn cdc_check_basic_test() {
         TestBase::run_mongo_cdc_check_test(
-            "mongo_to_mongo/check/cdc_check_blocking_test",
+            "mongo_to_mongo/check/cdc_check_basic_test",
             3000,
             3000,
         )

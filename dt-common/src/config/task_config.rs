@@ -103,8 +103,8 @@ const DDL_CONFLICT_POLICY: &str = "ddl_conflict_policy";
 const REPLACE: &str = "replace";
 const DISABLE_FOREIGN_KEY_CHECKS: &str = "disable_foreign_key_checks";
 const RESUME_TYPE: &str = "resume_type";
-const CHECKER_DROP_ON_FULL: &str = "drop_on_full";
 const CHECKER_QUEUE_SIZE: &str = "queue_size";
+const CHECKER_SAMPLE_RATE: &str = "sample_rate";
 const USERNAME: &str = "username";
 const PASSWORD: &str = "password";
 
@@ -742,11 +742,6 @@ impl TaskConfig {
 
         let default = CheckerConfig::default();
         let mut config = CheckerConfig {
-            drop_on_full: loader.get_with_default(
-                CHECKER,
-                CHECKER_DROP_ON_FULL,
-                default.drop_on_full,
-            ),
             queue_size: loader.get_with_default(CHECKER, CHECKER_QUEUE_SIZE, default.queue_size),
             max_connections: loader.get_with_default(
                 CHECKER,
@@ -754,6 +749,7 @@ impl TaskConfig {
                 default.max_connections,
             ),
             batch_size: loader.get_with_default(CHECKER, BATCH_SIZE, default.batch_size),
+            sample_rate: loader.get_with_default(CHECKER, CHECKER_SAMPLE_RATE, default.sample_rate),
             output_full_row: loader.get_with_default(
                 CHECKER,
                 OUTPUT_FULL_ROW,

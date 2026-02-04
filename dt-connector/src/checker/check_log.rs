@@ -55,6 +55,7 @@ pub struct CheckSummaryLog {
     pub miss_count: usize,
     #[serde(default, skip_serializing_if = "is_zero")]
     pub diff_count: usize,
+
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sql_count: Option<usize>,
 }
@@ -100,7 +101,10 @@ pub struct StructCheckLog {
 
 impl std::fmt::Display for StructCheckLog {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let s = serde_json::to_string(self).unwrap_or_else(|_| "{}".to_string());
+        let s = serde_json::to_string(self).unwrap_or_else(|e| {
+            log::warn!("Failed to serialize StructCheckLog: {}", e);
+            "{}".to_string()
+        });
         write!(f, "{}", s)
     }
 }

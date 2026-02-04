@@ -38,7 +38,7 @@ pub enum DbType {
     Tidb,
 }
 
-#[derive(Display, EnumString, IntoStaticStr, Debug, Clone, Hash)]
+#[derive(Display, EnumString, IntoStaticStr, Debug, Clone, Hash, PartialEq, Eq)]
 pub enum ExtractType {
     #[strum(serialize = "snapshot")]
     Snapshot,

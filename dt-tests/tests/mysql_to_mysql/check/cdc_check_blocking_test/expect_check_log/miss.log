@@ -1,7 +1,0 @@
-{"schema":"test_db_1","tb":"no_pk_one_uk","id_col_values":{"f_1":"1","f_2":"1"}}
-{"schema":"test_db_1","tb":"no_pk_one_uk","id_col_values":{"f_1":null,"f_2":null}}
-{"schema":"test_db_1","tb":"no_pk_multi_uk","id_col_values":{"f_1":null,"f_2":null}}
-{"schema":"test_db_1","tb":"col_has_special_character_table","id_col_values":{"p,k,1":"706b312c76616c75652c31","p\\k&2":"706b322c76616c75652c31"}}
-{"schema":"test_db_1","tb":"col_has_special_character_table","id_col_values":{"p,k,1":"706b312c76616c75652c32","p\\k&2":"706b322c76616c75652c32"}}
-{"schema":"test_db_1","tb":"col_has_special_character_table","id_col_values":{"p,k,1":"706b312c76616c75652c33","p\\k&2":"706b322c76616c75652c33"}}
-{"schema":"test_db_1","tb":"col_has_special_character_table","id_col_values":{"p,k,1":"706b312c76616c75652c34","p\\k&2":"706b322c76616c75652c34"}}

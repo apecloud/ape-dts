@@ -103,17 +103,6 @@ appenders:
     encoder:
       pattern: "{m}{n}"
 
-  extra_appender:
-    kind: file
-    append: true
-    path: "CHECK_LOG_DIR_PLACEHOLDER/extra.log"
-    filters:
-      - kind: size_limit
-        path: "CHECK_LOG_DIR_PLACEHOLDER/extra.log"
-        limit: CHECK_LOG_FILE_SIZE_PLACEHOLDER
-    encoder:
-      pattern: "{m}{n}"
-
   summary_appender:
     kind: file
     append: true
@@ -154,20 +143,20 @@ appenders:
         base: 1
         count: 10
         pattern: "LOG_DIR_PLACEHOLDER/finished{}.log"
-  
+
   task_appender:
     kind: rolling_file
     append: true
     path: "LOG_DIR_PLACEHOLDER/task.log"
     encoder:
-      pattern: "{m}{n}"   
+      pattern: "{m}{n}"
     policy:
       kind: compound
       trigger:
         kind: size
         limit: 100kb
       roller:
-        kind: delete    
+        kind: delete
 
   http_appender:
     kind: rolling_file
@@ -187,76 +176,71 @@ appenders:
         pattern: "LOG_DIR_PLACEHOLDER/http{}.log"
 
 loggers:
-  mysql_binlog_connector_rust:  # crate: mysql-binlog-connector-rust
+  mysql_binlog_connector_rust: # crate: mysql-binlog-connector-rust
     level: LOG_LEVEL_PLACEHOLDER
     appenders:
       - default_appender
 
-  sqlx:  # crate: sqlx
+  sqlx: # crate: sqlx
     level: LOG_LEVEL_PLACEHOLDER
     appenders:
       - default_appender
 
   default_logger:
     level: LOG_LEVEL_PLACEHOLDER
-    appenders: 
+    appenders:
       - default_appender
 
   commit_logger:
     level: LOG_LEVEL_PLACEHOLDER
-    appenders: 
+    appenders:
       - commit_appender
 
   position_logger:
     level: LOG_LEVEL_PLACEHOLDER
-    appenders: 
+    appenders:
       - position_appender
 
   monitor_logger:
     level: LOG_LEVEL_PLACEHOLDER
-    appenders: 
+    appenders:
       - monitor_appender
 
-  miss_logger: 
+  miss_logger:
     level: LOG_LEVEL_PLACEHOLDER
-    appenders: 
+    appenders:
       - miss_appender
 
-  diff_logger: 
+  diff_logger:
     level: LOG_LEVEL_PLACEHOLDER
-    appenders: 
+    appenders:
       - diff_appender
 
-  extra_logger: 
+  summary_logger:
     level: LOG_LEVEL_PLACEHOLDER
-    appenders: 
-      - extra_appender
-
-  summary_logger: 
-    level: LOG_LEVEL_PLACEHOLDER
-    appenders: 
+    appenders:
       - summary_appender
 
-  statistic_logger: 
+  statistic_logger:
     level: LOG_LEVEL_PLACEHOLDER
-    appenders: 
+    appenders:
       - statistic_appender
 
-  finished_logger: 
+  finished_logger:
     level: LOG_LEVEL_PLACEHOLDER
-    appenders: 
+    appenders:
       - finished_appender
 
-  sql_logger: 
+  sql_logger:
     level: LOG_LEVEL_PLACEHOLDER
-    appenders: 
+    appenders:
       - sql_appender
 
-  task_logger: 
+  task_logger:
     level: LOG_LEVEL_PLACEHOLDER
-    appenders: 
+    appenders:
       - task_appender
-    additive: false  
+    additive: false
 
   http_logger:
     level: info
@@ -270,13 +254,13 @@ loggers:
       - http_appender
       - stdout
     additive: false
-      
+
   actix_server:
-    level: info  
+    level: info
     appenders:
       - http_appender
       - stdout
-    additive: false  
+    additive: false
 
 root:
   level: LOG_LEVEL_PLACEHOLDER
