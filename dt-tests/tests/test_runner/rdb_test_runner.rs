@@ -1,4 +1,7 @@
-use std::{collections::HashSet, str::FromStr};
+use std::{
+    collections::{HashMap, HashSet},
+    str::FromStr,
+};
 
 use chrono::{Duration, Utc};
 use dt_common::{
@@ -27,7 +30,7 @@ use dt_task::{task_runner::TaskRunner, task_util::TaskUtil};
 use sqlx::{query, types::BigDecimal, MySql, Pool, Postgres, Row};
 use tokio::task::JoinHandle;
 
-use crate::test_config_util::TestConfigUtil;
+use crate::{test_config_util::TestConfigUtil, test_runner::mock_utils::mock_config::MockConfig};
 
 use super::{base_test_runner::BaseTestRunner, rdb_util::RdbUtil};
 
@@ -41,6 +44,7 @@ pub struct RdbTestRunner {
     pub config: TaskConfig,
     pub router: RdbRouter,
     pub filter: RdbFilter,
+    pub unordered_compare: bool, // whether to compare rows in unordered way
 }
 
 pub const SRC: &str = "src";
@@ -52,7 +56,7 @@ const UTC_FORMAT: &str = "%Y-%m-%d %H:%M:%S";
 #[allow(dead_code)]
 impl RdbTestRunner {
     pub async fn new(relative_test_dir: &str) -> anyhow::Result<Self> {
-        let base = BaseTestRunner::new(relative_test_dir).await.unwrap();
+        let mut base = BaseTestRunner::new(relative_test_dir).await.unwrap();
 
         // prepare conn pools
         let mut src_conn_pool_mysql = None;
@@ -67,6 +71,23 @@ impl RdbTestRunner {
         let dst_url = &config.sinker_basic.url;
         let src_connection_auth = &config.extractor_basic.connection_auth;
         let dst_connection_auth = &config.sinker_basic.connection_auth;
+
+        // generate mock sqls
+        // only support pg for now
+        let mut unordered_compare = false;
+        let mock_config = if let DbType::Pg = src_db_type {
+            MockConfig::new(&base.task_config_file)
+        } else {
+            None
+        };
+        if let Some(mock_conf) = &mock_config {
+            let mock_ddl_stmts = mock_conf.mock_ddl_stmts();
+            base.src_prepare_sqls.extend(mock_ddl_stmts.clone());
+            base.dst_prepare_sqls.extend(mock_ddl_stmts);
+            base.src_test_sqls.extend(mock_conf.mock_dml_stmts());
+
+            unordered_compare = true;
+        }
 
         let mysql_conn_settings = Some(vec!["SET FOREIGN_KEY_CHECKS=0"]);
 
@@ -152,6 +173,7 @@ impl RdbTestRunner {
             router,
             filter,
             base,
+            unordered_compare,
         })
     }
 
@@ -667,7 +689,15 @@ impl RdbTestRunner {
         dst_data: &[RowData],
         src_db_tb: &(String, String),
     ) -> bool {
-        assert_eq!(src_data.len(), dst_data.len());
+        if src_data.len() != dst_data.len() {
+            println!(
+                "row count mismatch: src={}, dst={}",
+                src_data.len(),
+                dst_data.len()
+            );
+            return false;
+        }
+
         let src_db_type = self.get_db_type(SRC);
         let dst_db_type = self.get_db_type(DST);
 
@@ -676,6 +706,38 @@ impl RdbTestRunner {
         // filter: ignore_cols
         let ignore_cols = self.filter.get_ignore_cols(&src_db_tb.0, &src_db_tb.1);
 
+        if self.unordered_compare {
+            // Unordered comparison: use multiset matching for tables without primary key
+            self.compare_row_data_unordered(
+                src_data,
+                dst_data,
+                col_map,
+                ignore_cols,
+                &src_db_type,
+                &dst_db_type,
+            )
+        } else {
+            // Ordered comparison: compare rows by index
+            self.compare_row_data_ordered(
+                src_data,
+                dst_data,
+                col_map,
+                ignore_cols,
+                &src_db_type,
+                &dst_db_type,
+            )
+        }
+    }
+
+    fn compare_row_data_ordered(
+        &self,
+        src_data: &[RowData],
+        dst_data: &[RowData],
+        col_map: Option<&HashMap<String, String>>,
+        ignore_cols: Option<&HashSet<String>>,
+        src_db_type: &DbType,
+        dst_db_type: &DbType,
+    ) -> bool {
         for i in 0..src_data.len() {
             let (src_col_values, dst_col_values) =
                 match (src_data[i].require_after(), dst_data[i].require_after()) {
@@ -714,10 +776,183 @@ impl RdbTestRunner {
                     i, src_col, src_col_value, dst_col_value
                 );
 
-                if Self::compare_col_value(src_col_value, dst_col_value, &src_db_type, &dst_db_type)
-                {
+                if Self::compare_col_value(src_col_value, dst_col_value, src_db_type, dst_db_type) {
                     continue;
                 }
+                return false;
+            }
+        }
+        true
+    }
+
+    // Unordered comparison: use multiset matching for tables without primary key
+    // or with NULL values in unique keys
+    fn compare_row_data_unordered(
+        &self,
+        src_data: &[RowData],
+        dst_data: &[RowData],
+        col_map: Option<&HashMap<String, String>>,
+        ignore_cols: Option<&HashSet<String>>,
+        src_db_type: &DbType,
+        dst_db_type: &DbType,
+    ) -> bool {
+        // Normalize rows to comparable strings and count occurrences
+        let mut dst_row_counts: HashMap<String, usize> = HashMap::new();
+
+        // Build destination row counts
+        for (i, row) in dst_data.iter().enumerate() {
+            let dst_col_values = match row.require_after() {
+                Ok(v) => v,
+                Err(_) => {
+                    println!("failed to get dst row {} after values", i);
+                    return false;
+                }
+            };
+
+            let row_key =
+                self.normalize_row(dst_col_values, col_map, ignore_cols, dst_db_type, false);
+            *dst_row_counts.entry(row_key).or_insert(0) += 1;
+        }
+
+        // Compare multisets using flexible column value comparison
+        // Try to match each src row to a dst row
+        let mut matched_dst_rows: HashMap<String, usize> = HashMap::new();
+
+        for (i, row) in src_data.iter().enumerate() {
+            let src_col_values = match row.require_after() {
+                Ok(v) => v,
+                Err(_) => return false,
+            };
+
+            // Try to find a matching row in dst_data
+            let mut found_match = false;
+            for dst_row in dst_data.iter() {
+                let dst_col_values = match dst_row.require_after() {
+                    Ok(v) => v,
+                    Err(_) => continue,
+                };
+
+                // Check how many times this dst row has been matched
+                let dst_key =
+                    self.normalize_row(dst_col_values, col_map, ignore_cols, dst_db_type, false);
+                let already_matched = *matched_dst_rows.get(&dst_key).unwrap_or(&0);
+                let dst_available = *dst_row_counts.get(&dst_key).unwrap_or(&0);
+
+                if already_matched >= dst_available {
+                    continue;
+                }
+
+                if self.compare_single_row(
+                    src_col_values,
+                    dst_col_values,
+                    col_map,
+                    ignore_cols,
+                    src_db_type,
+                    dst_db_type,
+                ) {
+                    *matched_dst_rows.entry(dst_key).or_insert(0) += 1;
+                    found_match = true;
+                    break;
+                }
+            }
+
+            if !found_match {
+                println!("no matching dst row found for src row {}", i);
+                // Print the src row for debugging
+                for (col, val) in src_col_values {
+                    println!("  src col: {}, value: {:?}", col, val);
+                }
+                return false;
+            }
+        }
+
+        true
+    }
+
+    /// Normalize a row to a comparable string key
+    fn normalize_row(
+        &self,
+        col_values: &HashMap<String, ColValue>,
+        col_map: Option<&HashMap<String, String>>,
+        ignore_cols: Option<&HashSet<String>>,
+        _db_type: &DbType,
+        is_src: bool,
+    ) -> String {
+        let mut parts: Vec<String> = Vec::new();
+
+        // Get sorted column names for consistent ordering
+        let mut cols: Vec<&String> = col_values.keys().collect();
+        cols.sort();
+
+        for col in cols {
+            // Map column name if needed
+            let effective_col = if is_src {
+                if let Some(map) = col_map {
+                    map.get(col).unwrap_or(col)
+                } else {
+                    col
+                }
+            } else {
+                col
+            };
+
+            // Skip ignored columns
+            if is_src && ignore_cols.is_some_and(|cols| cols.contains(col)) {
+                continue;
+            }
+            if !is_src && ignore_cols.is_some_and(|cols| cols.contains(effective_col)) {
+                continue;
+            }
+
+            let val = col_values.get(col).unwrap();
+            parts.push(format!("{}={:?}", effective_col, val));
+        }
+
+        parts.join("|")
+    }
+
+    // Compare a single source row with a destination row
+    fn compare_single_row(
+        &self,
+        src_col_values: &HashMap<String, ColValue>,
+        dst_col_values: &HashMap<String, ColValue>,
+        col_map: Option<&HashMap<String, String>>,
+        ignore_cols: Option<&HashSet<String>>,
+        src_db_type: &DbType,
+        dst_db_type: &DbType,
+    ) -> bool {
+        for (src_col, src_col_value) in src_col_values {
+            let dst_col = if let Some(map) = col_map {
+                map.get(src_col).unwrap_or(src_col)
+            } else {
+                src_col
+            };
+
+            let dst_col_value = match dst_col_values.get(dst_col) {
+                Some(v) => v,
+                None => return false,
+            };
+
+            // ignored cols were NOT synced to target
+            if ignore_cols.is_some_and(|cols| cols.contains(src_col)) {
+                if *dst_col_value != ColValue::None {
+                    return false;
+                }
+                continue;
+            }
+
+            // TODO
+            // issue: https://github.com/apecloud/foxlake/issues/2108
+            // sqlx will execute: "SET time_zone='+00:00',NAMES utf8mb4 COLLATE utf8mb4_unicode_ci;"
+            // to initialize each connection.
+            // but it doesn't work on Foxlake
+            if matches!(self.base.get_config().sinker, SinkerConfig::Foxlake { .. })
+                && matches!(dst_col_value, ColValue::Timestamp(..))
+            {
+                continue;
+            }
+
+            if !Self::compare_col_value(src_col_value, dst_col_value, src_db_type, dst_db_type) {
                 return false;
             }
         }

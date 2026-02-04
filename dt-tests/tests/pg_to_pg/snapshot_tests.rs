@@ -202,4 +202,10 @@ mod test {
         )
         .await;
     }
+
+    #[tokio::test]
+    #[serial]
+    async fn snapshot_mock_test() {
+        TestBase::run_snapshot_test("pg_to_pg/snapshot/mock_test").await;
+    }
 }
