@@ -299,13 +299,25 @@ impl<'r> RdbSnapshotExtractStatement<'r> {
     fn build_order_by_clause(&self, order_cols: &[String]) -> anyhow::Result<String> {
         match order_cols.len() {
             0 => Ok(String::new()),
-            1 => Ok(format!("{}.{}.{} ASC", self.escape(&self.rdb_tb_meta.schema), self.escape(&self.rdb_tb_meta.tb), self.escape(&order_cols[0]))),
+            1 => Ok(format!(
+                "{}.{}.{} ASC",
+                self.escape(&self.rdb_tb_meta.schema),
+                self.escape(&self.rdb_tb_meta.tb),
+                self.escape(&order_cols[0])
+            )),
             _ => {
                 // col_1 ASC, col_2 ASC, col_3 ASC
                 // (col_1, col_2, col_3) ASC does not trigger index scan sometimes
                 Ok(order_cols
                     .iter()
-                    .map(|col| format!("{}.{}.{} ASC", self.escape(&self.rdb_tb_meta.schema), self.escape(&self.rdb_tb_meta.tb), self.escape(col)))
+                    .map(|col| {
+                        format!(
+                            "{}.{}.{} ASC",
+                            self.escape(&self.rdb_tb_meta.schema),
+                            self.escape(&self.rdb_tb_meta.tb),
+                            self.escape(col)
+                        )
+                    })
                     .collect::<Vec<String>>()
                     .join(", "))
             }
