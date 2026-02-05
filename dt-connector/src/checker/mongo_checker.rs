@@ -55,11 +55,9 @@ impl Checker for MongoChecker {
                 )
             })?;
 
-            let doc = doc! { MongoConstants::ID: id.clone() };
-            if MongoKey::from_doc(&doc).is_some() {
-                ids.push(id);
-                batch_rows.push(row_data.clone());
-            }
+            Self::validate_mongo_id(&row_data.schema, &row_data.tb, &id)?;
+            ids.push(id);
+            batch_rows.push(row_data.clone());
         }
 
         if ids.is_empty() {
@@ -107,6 +105,19 @@ impl Checker for MongoChecker {
 impl MongoChecker {
     pub fn spawn(mongo_client: Client, ctx: CheckContext, buffer_size: usize) -> DataCheckerHandle {
         DataCheckerHandle::spawn(Self { mongo_client }, ctx, buffer_size, "MongoChecker")
+    }
+
+    fn validate_mongo_id(schema: &str, tb: &str, id: &Bson) -> anyhow::Result<()> {
+        let doc = doc! { MongoConstants::ID: id.clone() };
+        if MongoKey::from_doc(&doc).is_none() {
+            anyhow::bail!(
+                "unsupported _id type for checker, schema: {}, tb: {}, _id: {:?}",
+                schema,
+                tb,
+                id
+            );
+        }
+        Ok(())
     }
 
     fn mock_tb_meta(schema: &str, tb: &str) -> RdbTbMeta {

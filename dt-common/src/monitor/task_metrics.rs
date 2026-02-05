@@ -27,8 +27,6 @@ pub enum TaskMetricsType {
     CheckerDiffCount,
     CheckerGenerateSqlCount,
     CheckerPending,
-    CheckerRetryQueueSize,
-    CheckerErrorTotal,
     CheckerAsyncDropCount,
     CheckerLagAvgSeconds,
     CheckerRpsMax,

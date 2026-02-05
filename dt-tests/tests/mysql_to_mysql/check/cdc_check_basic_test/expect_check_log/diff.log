@@ -1,1 +1,0 @@
-{"schema":"test_db_1","tb":"check_test","id_col_values":{"id":"3"},"diff_col_values":{"value":{"src":"300","dst":"999"}}}

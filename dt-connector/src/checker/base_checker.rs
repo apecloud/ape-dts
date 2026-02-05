@@ -270,9 +270,6 @@ impl DataCheckerHandle {
     async fn send(&self, data: Vec<Arc<RowData>>) -> anyhow::Result<()> {
         let data_size = data.len() as u64;
         if let Err(err) = self.tx.send(CheckerMsg::ProcessBatch(data)).await {
-            self.monitor
-                .add_counter(CounterType::CheckerErrorTotal, 1)
-                .await;
             return Err(anyhow::anyhow!("Checker worker closed: {}", err));
         }
         if data_size > 0 {
@@ -335,7 +332,6 @@ impl<C: Checker> DataChecker<C> {
                         Some(CheckerMsg::ProcessBatch(batch)) => {
                             let batch_size = batch.len() as u64;
                             if let Err(err) = self.check_batch(batch, true).await {
-                                self.monitor.add_counter(CounterType::CheckerErrorTotal, 1).await;
                                 log_error!("Checker [{}] batch failed: {}", self.name, err);
                             }
                             if batch_size > 0 {
@@ -346,7 +342,6 @@ impl<C: Checker> DataChecker<C> {
                         }
                         Some(CheckerMsg::Close) | None => {
                             if let Err(err) = self.shutdown().await {
-                                self.monitor.add_counter(CounterType::CheckerErrorTotal, 1).await;
                                 log_error!("Checker [{}] close failed: {}", self.name, err);
                             }
                             break;
@@ -355,7 +350,6 @@ impl<C: Checker> DataChecker<C> {
                 }
                 _ = interval.tick() => {
                     if let Err(err) = self.process_due_retries().await {
-                        self.monitor.add_counter(CounterType::CheckerErrorTotal, 1).await;
                         log_error!("Checker [{}] retry failed: {}", self.name, err);
                     }
                 }
@@ -848,10 +842,6 @@ impl<C: Checker> DataChecker<C> {
             log_warn!("Checker retry queue full, dropped {} oldest rows.", dropped);
             self.retry_next_at = None;
         }
-        self.ctx.monitor.set_counter(
-            CounterType::CheckerRetryQueueSize,
-            self.retry_queue.len() as u64,
-        );
     }
 
     async fn process_due_retries(&mut self) -> anyhow::Result<()> {
@@ -893,10 +883,6 @@ impl<C: Checker> DataChecker<C> {
             }
         }
         self.retry_next_at = next_retry_at;
-        self.ctx.monitor.set_counter(
-            CounterType::CheckerRetryQueueSize,
-            self.retry_queue.len() as u64,
-        );
         Ok(())
     }
 
@@ -923,10 +909,6 @@ impl<C: Checker> DataChecker<C> {
         };
         self.log_single_inconsistency(check_result, &item.row, dst_row.as_ref(), tb_meta.as_ref())
             .await?;
-        self.ctx
-            .monitor
-            .add_counter(CounterType::CheckerErrorTotal, 1)
-            .await;
         Ok(None)
     }
 
@@ -937,10 +919,6 @@ impl<C: Checker> DataChecker<C> {
             let _ = self.retry_check_item(item).await?;
         }
         self.retry_next_at = None;
-        self.ctx.monitor.set_counter(
-            CounterType::CheckerRetryQueueSize,
-            self.retry_queue.len() as u64,
-        );
         Ok(())
     }
 
@@ -1063,14 +1041,13 @@ impl<C: Checker> DataChecker<C> {
         let common = &mut self.ctx;
         let global_summary_opt = common.global_summary.clone();
         let summary = &mut common.summary;
-        if summary.miss_count > 0 || summary.diff_count > 0 {
-            summary.end_time = chrono::Local::now().to_rfc3339();
-            if let Some(global_summary) = global_summary_opt {
-                let mut global_summary = global_summary.lock().await;
-                global_summary.merge(summary);
-            } else {
-                log_summary!("{}", summary);
-            }
+        summary.end_time = chrono::Local::now().to_rfc3339();
+        summary.is_consistent = summary.miss_count == 0 && summary.diff_count == 0;
+        if let Some(global_summary) = global_summary_opt {
+            let mut global_summary = global_summary.lock().await;
+            global_summary.merge(summary);
+        } else {
+            log_summary!("{}", summary);
         }
         if let Some(meta_manager) = common.extractor_meta_manager.as_mut() {
             meta_manager.close().await

@@ -20,6 +20,13 @@ mod test {
 
     #[tokio::test]
     #[serial]
+    async fn cdc_check_large_data_test() {
+        TestBase::run_cdc_check_test("mysql_to_mysql/check/cdc_check_large_data_test", 5000, 30000)
+            .await;
+    }
+
+    #[tokio::test]
+    #[serial]
     async fn check_all_cols_pk_test() {
         TestBase::run_check_test("mysql_to_mysql/check/all_cols_pk_test").await;
     }

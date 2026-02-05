@@ -190,16 +190,6 @@ impl PrometheusMetrics {
             TaskMetricsType::CheckerPending,
         );
         register_handler(
-            "checker_retry_queue_size",
-            "the pending rows in checker retry queue",
-            TaskMetricsType::CheckerRetryQueueSize,
-        );
-        register_handler(
-            "checker_error_total",
-            "the total checker errors",
-            TaskMetricsType::CheckerErrorTotal,
-        );
-        register_handler(
             "checker_async_drop_count",
             "the total rows dropped by async checker",
             TaskMetricsType::CheckerAsyncDropCount,

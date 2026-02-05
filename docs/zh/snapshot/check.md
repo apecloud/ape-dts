@@ -18,23 +18,14 @@
 sample_interval=3
 ```
 
-## 说明
+## 配置
 
-此配置和全量同步任务的基本一致，两者的不同之处是：
-
-```
-[checker]
-db_type=mysql
-url=mysql://user:pass@host:3306/db
-batch_size=2
-
-[parallelizer]
-parallel_type=rdb_check
-```
+`[checker]` 相关配置与目标选择规则请参考 [config.md](../config.md)。端到端示例请参考模板与教程。
 
 ## 限制
 
 - 数据校验为源端驱动（仅验证 Source ∈ Target），无法发现目标端多余数据（幽灵数据）。因此，目标端删除同步缺失不会被检测到。
+- 对于 MongoDB，`_id` 需为可哈希类型（例如 ObjectId/String/Int32/Int64）。不支持的 `_id` 类型会导致 checker 报错。
 
 # 校验结果
 
@@ -169,19 +160,7 @@ INSERT INTO `test_db_1`.`test_table`(`id`,`name`,`age`,`email`) VALUES(3,'Charli
 
 # Checker 配置参数
 
-| 参数 | 说明 | 示例 | 默认值 |
-|------|------|------|--------|
-| db_type | 目标数据库类型 | mysql | - |
-| url | 数据库连接URL | mysql://user:pass@host:3306/db | - |
-| batch_size | 批量查询数据条数 | 100 | 100 |
-| max_connections | 最大连接数 | 2 | 2 |
-| output_full_row | 是否在日志中输出完整行数据 | true | false |
-| output_revise_sql | 是否生成修复SQL | true | false |
-| revise_match_full_row | 修复SQL是否使用整行匹配 | true | false |
-| retry_interval_secs | 重试间隔（秒） | 5 | 0 |
-| max_retries | 最大重试次数 | 3 | 0 |
-| check_log_dir | 校验日志目录 | ./logs/check | 默认在runtime.log_dir下的check子目录 |
-| check_log_file_size | 单个日志文件最大大小 | 100mb | 100mb |
+`[checker]` 的完整配置与目标选择规则请参考 [config.md](../config.md)。
 
 ## 重试机制说明
 

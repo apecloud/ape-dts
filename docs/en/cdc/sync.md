@@ -11,6 +11,7 @@ Prerequisites
 ## CDC + Checker
 
 To validate CDC-applied data, enable `[checker]` in the CDC task config. See [Data Check](../snapshot/check.md) for configuration and limitations.
+If both `[checker]` and `[sinker]` specify targets, `[checker]` takes precedence.
 
 # Example: MySQL -> MySQL
 

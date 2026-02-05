@@ -7,6 +7,7 @@ To enable two-way data sync, we need to configure CDC tasks for both "source -> 
 ## CDC + Checker
 
 If you want to validate CDC-applied data, enable `[checker]` in the CDC task config. See [Data Check](../snapshot/check.md) for configuration and limitations.
+If both `[checker]` and `[sinker]` specify targets, `[checker]` takes precedence.
 
 # Cyclic replication
 
