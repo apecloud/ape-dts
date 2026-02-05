@@ -33,13 +33,42 @@ url=mysql://user1:abc%25%24%23%3F%40@127.0.0.1:3307?ssl-mode=disabled
 | Config          | Description                                                                                                                          | Example                                                        | Default                                                 |
 | :-------------- | :----------------------------------------------------------------------------------------------------------------------------------- | :------------------------------------------------------------- | :------------------------------------------------------ |
 | db_type         | target database type                                                                                                                 | mysql                                                          | -                                                       |
-| sink_type       | write, check                                                                                                                         | write                                                          | write                                                   |
+| sink_type       | write, dummy                                                                                                                         | write                                                          | write                                                   |
 | url             | database URL. You can specify the username and password directly in the URL.                                                         | mysql://127.0.0.1:3307 or mysql://root:password@127.0.0.1:3307 |
 | username        | database connection username                                                                                                         | root                                                           |
 | password        | database connection password                                                                                                         | password                                                       | -                                                       |
-| max_connections | max connections for source database                                                                                                  | 10                                                             | currently 10, may be dynamically adjusted in the future |
+| max_connections | max connections for target database                                                                                                  | 10                                                             | currently 10, may be dynamically adjusted in the future |
 | batch_size      | number of records written in a batch, 1 for serial                                                                                   | 200                                                            | 200                                                     |
 | replace         | when inserting data, whether to force replacement if data already exists in target database, used in snapshot/cdc tasks for MySQL/PG | false                                                          | true                                                    |
+
+# [checker]
+
+Checker has two modes:
+- Standalone checker: run a check task only (no data write). Set `sink_type=dummy` or omit
+  `[sinker]`, and specify the checker target in `[checker]` (or in `[sinker]` when it exists).
+- CDC + checker: for CDC tasks with `sink_type=write`, checker runs asynchronously after sink.
+  Enable it by adding the `[checker]` section.
+
+Target selection: if `[checker]` provides a target (`db_type`/`url`/`username`/`password`), it
+takes precedence; otherwise the checker reuses the `[sinker]` target.
+
+| Config                | Description                                           | Example     | Default |
+| :-------------------- | :---------------------------------------------------- | :---------- | :------ |
+| queue_size            | checker queue capacity                                | 2000        | 2000    |
+| max_connections       | max connections for checker pool                      | 2           | 2       |
+| batch_size            | checker batch size                                    | 100         | 100     |
+| sample_rate           | checker sampling rate (reserved, currently unused)    | 1.0         | 1.0     |
+| output_full_row       | output full row in diff log                           | false       | false   |
+| output_revise_sql     | output revise SQL                                     | false       | false   |
+| revise_match_full_row | match full row when building revise SQL               | false       | false   |
+| retry_interval_secs   | retry interval for recheck (seconds)                  | 0           | 0       |
+| max_retries           | retry times for recheck                               | 0           | 0       |
+| check_log_dir         | check log dir                                         | /tmp/check  | empty (use runtime.log_dir/check) |
+| check_log_file_size   | check log file size limit                             | 100mb       | 100mb   |
+| db_type               | checker target db type (override sinker target)       | mysql       | empty   |
+| url                   | checker target URL (override sinker target)           | mysql://... | empty   |
+| username              | checker target username (when URL lacks auth)         | root        | empty   |
+| password              | checker target password (when URL lacks auth)         | password    | empty   |
 
 # [filter]
 
@@ -157,7 +186,6 @@ Same with [filter].
 | log_level           | level                                                                                                       | info/warn/error/debug/trace | info          |
 | log4rs_file         | log4rs config file                                                                                          | ./log4rs.yaml               | ./log4rs.yaml |
 | log_dir             | output dir                                                                                                  | ./logs                      | ./logs        |
-| check_log_file_size | Max size of check result logs (miss/diff/sql); when exceeded, new logs are dropped (no rotation/truncation) | 100mb                       | 100mb         |
 
 Note that the log files contain progress information for the task, which can be used for task [resuming at breakpoint](/docs/en/snapshot/resume.md). Therefore, if you have multiple tasks, **please set up separate log directories for each task**.
 

@@ -7,6 +7,7 @@ But if the source database has not been updated for a long time, or there are up
 ## CDC + Checker
 
 If you want to validate CDC-applied data, enable `[checker]` in the CDC task config. See [Data Check](../snapshot/check.md) for configuration and limitations.
+If both `[checker]` and `[sinker]` specify targets, `[checker]` takes precedence.
 
 # Configurations
 

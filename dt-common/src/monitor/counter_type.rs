@@ -43,10 +43,6 @@ pub enum CounterType {
     QueuedByteCurrent,
     #[strum(serialize = "checker_pending")]
     CheckerPending,
-    #[strum(serialize = "checker_retry_queue_size")]
-    CheckerRetryQueueSize,
-    #[strum(serialize = "checker_error_total")]
-    CheckerErrorTotal,
     #[strum(serialize = "checker_async_drop_count")]
     CheckerAsyncDropCount,
 
@@ -111,8 +107,6 @@ impl CounterType {
             | Self::QueuedRecordCurrent
             | Self::QueuedByteCurrent
             | Self::CheckerPending
-            | Self::CheckerRetryQueueSize
-            | Self::CheckerErrorTotal
             | Self::CheckerAsyncDropCount
             | Self::DDLRecordTotal
             | Self::Timestamp => WindowType::NoWindow,

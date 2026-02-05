@@ -164,8 +164,22 @@ impl ColValue {
                     false
                 }
             }
+            // PostgreSQL inet type normalization: 192.168.1.100 == 192.168.1.100/32
+            (ColValue::String(v1), ColValue::String(v2)) => {
+                if v1 == v2 {
+                    true
+                } else {
+                    Self::normalize_inet(v1) == Self::normalize_inet(v2)
+                }
+            }
             _ => self == other,
         }
+    }
+
+    /// Normalize PostgreSQL inet type values for comparison
+    /// e.g., "192.168.1.100" and "192.168.1.100/32" should be considered equal
+    fn normalize_inet(s: &str) -> &str {
+        s.strip_suffix("/32").unwrap_or(s)
     }
 
     pub fn hash_code(&self) -> u64 {

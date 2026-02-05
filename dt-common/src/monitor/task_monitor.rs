@@ -550,18 +550,6 @@ fn calc_nowindow_metrics(
                 );
                 metric_handler(
                     &monitor,
-                    CounterType::CheckerRetryQueueSize,
-                    TaskMetricsType::CheckerRetryQueueSize,
-                    CalcType::Latest,
-                );
-                metric_handler(
-                    &monitor,
-                    CounterType::CheckerErrorTotal,
-                    TaskMetricsType::CheckerErrorTotal,
-                    CalcType::Add,
-                );
-                metric_handler(
-                    &monitor,
                     CounterType::CheckerAsyncDropCount,
                     TaskMetricsType::CheckerAsyncDropCount,
                     CalcType::Add,

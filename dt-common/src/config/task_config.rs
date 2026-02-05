@@ -478,6 +478,25 @@ impl TaskConfig {
 
         let sink_type = loader.get_with_default(SINKER, "sink_type", SinkType::Write);
         if let SinkType::Dummy = sink_type {
+            if loader.ini.sections().contains(&CHECKER.to_string()) {
+                let db_type: DbType = loader.get_required(SINKER, DB_TYPE);
+                let url: String = loader.get_required(SINKER, URL);
+                let batch_size: usize = loader.get_with_default(SINKER, BATCH_SIZE, 200);
+                let max_connections =
+                    loader.get_with_default(SINKER, MAX_CONNECTIONS, DEFAULT_MAX_CONNECTIONS);
+                let connection_auth = ConnectionAuthConfig::from(loader, SINKER);
+                return Ok((
+                    BasicSinkerConfig {
+                        sink_type,
+                        db_type,
+                        url,
+                        connection_auth,
+                        batch_size,
+                        max_connections,
+                    },
+                    SinkerConfig::Dummy,
+                ));
+            }
             return Ok((BasicSinkerConfig::default(), SinkerConfig::Dummy));
         }
 

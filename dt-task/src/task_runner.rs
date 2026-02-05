@@ -231,10 +231,10 @@ impl TaskRunner {
         sinker_client.close().await?;
 
         if let Some(check_summary) = check_summary {
-            let summary = check_summary.lock().await;
-            if summary.miss_count > 0 || summary.diff_count > 0 {
-                dt_common::log_summary!("{}", summary);
-            }
+            let mut summary = check_summary.lock().await;
+            summary.end_time = Local::now().to_rfc3339();
+            summary.is_consistent = summary.miss_count == 0 && summary.diff_count == 0;
+            dt_common::log_summary!("{}", summary);
         }
 
         log_finished!("task finished");

@@ -1,6 +1,0 @@
-{"schema":"public","tb":"default_table","id_col_values":{"pk":"1"},"diff_col_values":{"cinet":{"src":"192.168.1.100","dst":"192.168.1.100/32"}}}
-{"schema":"public","tb":"default_table","id_col_values":{"pk":"3"},"diff_col_values":{"cinet":{"src":"192.168.1.100","dst":"192.168.1.100/32"}}}
-{"schema":"public","tb":"default_table","id_col_values":{"pk":"5"},"diff_col_values":{"cinet":{"src":"192.168.1.100","dst":"192.168.1.100/32"}}}
-{"schema":"public","tb":"default_table","id_col_values":{"pk":"7"},"diff_col_values":{"cinet":{"src":"192.168.1.100","dst":"192.168.1.100/32"}}}
-{"schema":"public","tb":"default_table","id_col_values":{"pk":"9"},"diff_col_values":{"cinet":{"src":"192.168.1.100","dst":"192.168.1.100/32"}}}
-{"schema":"public","tb":"default_table","id_col_values":{"pk":"11"},"diff_col_values":{"cinet":{"src":"192.168.1.100","dst":"192.168.1.100/32"}}}

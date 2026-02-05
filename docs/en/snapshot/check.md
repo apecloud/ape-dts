@@ -18,23 +18,15 @@ In the full check configuration, add `sample_interval` configuration. That is, s
 sample_interval=3
 ```
 
-## Note
+## Configuration
 
-This configuration is similar to the full synchronization task. The only differences are:
-
-```
-[checker]
-db_type=mysql
-url=mysql://user:pass@host:3306/db
-batch_size=2
-
-[parallelizer]
-parallel_type=rdb_check
-```
+See [config.md](../config.md) for `[checker]` options and target selection rules. Use the task
+templates and tutorials for end-to-end examples.
 
 ## Limitations
 
 - Data check is source-driven (validates Source ∈ Target) and cannot detect extra rows that exist only in the target (ghost data). This means missing deletes on the target side will not be detected.
+- For MongoDB, `_id` must be a hashable type (for example ObjectId/String/Int32/Int64). Unsupported `_id` types will make the checker return an error.
 
 # Check Results
 
@@ -169,19 +161,7 @@ Swap the [extractor] and [checker] target configurations to perform reverse chec
 
 # Checker Configuration Parameters
 
-| Parameter | Description | Example | Default |
-|-----------|-------------|---------|---------|
-| db_type | Target database type | mysql | - |
-| url | Database connection URL | mysql://user:pass@host:3306/db | - |
-| batch_size | Batch size for querying data | 100 | 100 |
-| max_connections | Maximum number of connections | 2 | 2 |
-| output_full_row | Output full row data in logs | true | false |
-| output_revise_sql | Generate repair SQL statements | true | false |
-| revise_match_full_row | Use full row matching in repair SQL | true | false |
-| retry_interval_secs | Retry interval in seconds | 5 | 0 |
-| max_retries | Maximum number of retries | 3 | 0 |
-| check_log_dir | Check log directory | ./logs/check | Defaults to check subdirectory under runtime.log_dir |
-| check_log_file_size | Maximum size per log file | 100mb | 100mb |
+See [config.md](../config.md) for the full `[checker]` configuration list and target selection rules.
 
 ## Retry Mechanism
 

@@ -53,6 +53,8 @@ impl MongoCheckTestRunner {
             .await?;
         TimeUtil::sleep_millis(parse_millis).await;
 
+        // Mongo CDC doesn't support end_time_utc, so we must abort
+        // Summary won't be written, so we skip summary validation for Mongo CDC
         self.base.base.abort_task(&task).await?;
         TimeUtil::sleep_millis(3000).await;
         CheckUtil::validate_check_log(&self.expect_check_log_dir, &self.dst_check_log_dir)?;
