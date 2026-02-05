@@ -4,11 +4,13 @@ use std::{
 };
 
 use rand::seq::SliceRandom;
+use serde::{Deserialize, Serialize};
 
 use crate::test_runner::mock_utils::{pg_type::PgType, random::Random};
 
 #[allow(dead_code)]
-#[derive(Debug)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "lowercase")]
 pub enum Constraint {
     Primary(Vec<usize>), // column indices
     Unique(Vec<usize>),  // column indices
