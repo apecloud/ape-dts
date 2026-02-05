@@ -500,7 +500,7 @@ mod tests {
         let sql = stmt.build().unwrap();
         assert_eq!(
             sql,
-            r#"SELECT `id`,`price`,`username`,`bio`,`large_blob` FROM `test_schema`.`test_table` WHERE `id` > ? ORDER BY `id` ASC LIMIT 100"#
+            r#"SELECT `id`,`price`,`username`,`bio`,`large_blob` FROM `test_schema`.`test_table` WHERE `id` > ? ORDER BY `test_schema`.`test_table`.`id` ASC LIMIT 100"#
         );
     }
 
@@ -523,7 +523,7 @@ mod tests {
         let sql = stmt.build().unwrap();
         assert_eq!(
             sql,
-            r#"SELECT `id`,`price`,`username`,`bio`,`large_blob` FROM `test_schema`.`test_table` WHERE (`id`, `price`, `username`, `bio`, `large_blob`) > (?, ?, ?, ?, ?) AND `price` IS NOT NULL AND `bio` IS NOT NULL AND `large_blob` IS NOT NULL ORDER BY `id` ASC, `price` ASC, `username` ASC, `bio` ASC, `large_blob` ASC LIMIT 100"#
+            r#"SELECT `id`,`price`,`username`,`bio`,`large_blob` FROM `test_schema`.`test_table` WHERE (`id`, `price`, `username`, `bio`, `large_blob`) > (?, ?, ?, ?, ?) AND `price` IS NOT NULL AND `bio` IS NOT NULL AND `large_blob` IS NOT NULL ORDER BY `test_schema`.`test_table`.`id` ASC, `test_schema`.`test_table`.`price` ASC, `test_schema`.`test_table`.`username` ASC, `test_schema`.`test_table`.`bio` ASC, `test_schema`.`test_table`.`large_blob` ASC LIMIT 100"#
         );
     }
 
@@ -539,7 +539,7 @@ mod tests {
         let sql = stmt.build().unwrap();
         assert_eq!(
             sql,
-            r#"SELECT `id`,`price`,`username`,`bio`,`large_blob` FROM `test_schema`.`test_table` WHERE `id` > ? AND `id` <= ? ORDER BY `id` ASC"#
+            r#"SELECT `id`,`price`,`username`,`bio`,`large_blob` FROM `test_schema`.`test_table` WHERE `id` > ? AND `id` <= ? ORDER BY `test_schema`.`test_table`.`id` ASC"#
         );
     }
 
@@ -561,7 +561,7 @@ mod tests {
         let sql = stmt.build().unwrap();
         assert_eq!(
             sql,
-            r#"SELECT `id`,`price`,`username`,`bio`,`large_blob` FROM `test_schema`.`test_table` WHERE (`id`, `price`, `username`, `bio`, `large_blob`) > (?, ?, ?, ?, ?) AND (`id`, `price`, `username`, `bio`, `large_blob`) <= (?, ?, ?, ?, ?) AND `price` IS NOT NULL AND `bio` IS NOT NULL AND `large_blob` IS NOT NULL ORDER BY `id` ASC, `price` ASC, `username` ASC, `bio` ASC, `large_blob` ASC"#
+            r#"SELECT `id`,`price`,`username`,`bio`,`large_blob` FROM `test_schema`.`test_table` WHERE (`id`, `price`, `username`, `bio`, `large_blob`) > (?, ?, ?, ?, ?) AND (`id`, `price`, `username`, `bio`, `large_blob`) <= (?, ?, ?, ?, ?) AND `price` IS NOT NULL AND `bio` IS NOT NULL AND `large_blob` IS NOT NULL ORDER BY `test_schema`.`test_table`.`id` ASC, `test_schema`.`test_table`.`price` ASC, `test_schema`.`test_table`.`username` ASC, `test_schema`.`test_table`.`bio` ASC, `test_schema`.`test_table`.`large_blob` ASC"#
         );
     }
 
@@ -583,7 +583,7 @@ mod tests {
         let sql = stmt.build().unwrap();
         assert_eq!(
             sql,
-            r#"SELECT `id`,`price`,`username`,`bio`,`large_blob` FROM `test_schema`.`test_table` WHERE (`id`, `price`, `username`, `bio`, `large_blob`) <= (?, ?, ?, ?, ?) AND `price` IS NOT NULL AND `bio` IS NOT NULL AND `large_blob` IS NOT NULL ORDER BY `id` ASC, `price` ASC, `username` ASC, `bio` ASC, `large_blob` ASC"#
+            r#"SELECT `id`,`price`,`username`,`bio`,`large_blob` FROM `test_schema`.`test_table` WHERE (`id`, `price`, `username`, `bio`, `large_blob`) <= (?, ?, ?, ?, ?) AND `price` IS NOT NULL AND `bio` IS NOT NULL AND `large_blob` IS NOT NULL ORDER BY `test_schema`.`test_table`.`id` ASC, `test_schema`.`test_table`.`price` ASC, `test_schema`.`test_table`.`username` ASC, `test_schema`.`test_table`.`bio` ASC, `test_schema`.`test_table`.`large_blob` ASC"#
         );
     }
 
@@ -605,7 +605,7 @@ mod tests {
         let sql = stmt.build().unwrap();
         assert_eq!(
             sql,
-            r#"SELECT `id`,`price`,`username`,`bio`,`large_blob` FROM `test_schema`.`test_table` WHERE `price` IS NULL OR `bio` IS NULL OR `large_blob` IS NULL ORDER BY `id` ASC, `price` ASC, `username` ASC, `bio` ASC, `large_blob` ASC"#
+            r#"SELECT `id`,`price`,`username`,`bio`,`large_blob` FROM `test_schema`.`test_table` WHERE `price` IS NULL OR `bio` IS NULL OR `large_blob` IS NULL ORDER BY `test_schema`.`test_table`.`id` ASC, `test_schema`.`test_table`.`price` ASC, `test_schema`.`test_table`.`username` ASC, `test_schema`.`test_table`.`bio` ASC, `test_schema`.`test_table`.`large_blob` ASC"#
         );
     }
 
@@ -630,7 +630,7 @@ mod tests {
         let sql = stmt.build().unwrap();
         assert_eq!(
             sql,
-            r#"SELECT `id`,`price`,`username`,`bio`,`large_blob` FROM `test_schema`.`test_table` WHERE id > 100 AND (`price` IS NULL OR `bio` IS NULL OR `large_blob` IS NULL) ORDER BY `id` ASC, `price` ASC, `username` ASC, `bio` ASC, `large_blob` ASC LIMIT 100"#
+            r#"SELECT `id`,`price`,`username`,`bio`,`large_blob` FROM `test_schema`.`test_table` WHERE id > 100 AND (`price` IS NULL OR `bio` IS NULL OR `large_blob` IS NULL) ORDER BY `test_schema`.`test_table`.`id` ASC, `test_schema`.`test_table`.`price` ASC, `test_schema`.`test_table`.`username` ASC, `test_schema`.`test_table`.`bio` ASC, `test_schema`.`test_table`.`large_blob` ASC LIMIT 100"#
         );
     }
 
@@ -647,7 +647,7 @@ mod tests {
         let sql = stmt.build().unwrap();
         assert_eq!(
             sql,
-            r#"SELECT "id"::int8,"price"::float8,"username"::text,"bio"::text,"large_blob"::bytea FROM "test_schema"."test_table" WHERE "id" > $1::int8 ORDER BY "id" ASC LIMIT 100"#
+            r#"SELECT "id"::int8,"price"::float8,"username"::text,"bio"::text,"large_blob"::bytea FROM "test_schema"."test_table" WHERE "id" > $1::int8 ORDER BY "test_schema"."test_table"."id" ASC LIMIT 100"#
         );
     }
 
@@ -670,7 +670,7 @@ mod tests {
         let sql = stmt.build().unwrap();
         assert_eq!(
             sql,
-            r#"SELECT "id"::int8,"price"::float8,"username"::text,"bio"::text,"large_blob"::bytea FROM "test_schema"."test_table" WHERE ("id", "price", "username", "bio", "large_blob") > ($1::int8, $2::float8, $3::varchar, $4::text, $5::bytea) AND "price" IS NOT NULL AND "bio" IS NOT NULL AND "large_blob" IS NOT NULL ORDER BY "id" ASC, "price" ASC, "username" ASC, "bio" ASC, "large_blob" ASC LIMIT 100"#
+            r#"SELECT "id"::int8,"price"::float8,"username"::text,"bio"::text,"large_blob"::bytea FROM "test_schema"."test_table" WHERE ("id", "price", "username", "bio", "large_blob") > ($1::int8, $2::float8, $3::varchar, $4::text, $5::bytea) AND "price" IS NOT NULL AND "bio" IS NOT NULL AND "large_blob" IS NOT NULL ORDER BY "test_schema"."test_table"."id" ASC, "test_schema"."test_table"."price" ASC, "test_schema"."test_table"."username" ASC, "test_schema"."test_table"."bio" ASC, "test_schema"."test_table"."large_blob" ASC LIMIT 100"#
         );
     }
 
@@ -686,7 +686,7 @@ mod tests {
         let sql = stmt.build().unwrap();
         assert_eq!(
             sql,
-            r#"SELECT "id"::int8,"price"::float8,"username"::text,"bio"::text,"large_blob"::bytea FROM "test_schema"."test_table" WHERE "id" <= $1::int8 ORDER BY "id" ASC"#
+            r#"SELECT "id"::int8,"price"::float8,"username"::text,"bio"::text,"large_blob"::bytea FROM "test_schema"."test_table" WHERE "id" <= $1::int8 ORDER BY "test_schema"."test_table"."id" ASC"#
         );
     }
 
@@ -708,7 +708,7 @@ mod tests {
         let sql = stmt.build().unwrap();
         assert_eq!(
             sql,
-            r#"SELECT "id"::int8,"price"::float8,"username"::text,"bio"::text,"large_blob"::bytea FROM "test_schema"."test_table" WHERE ("id", "price", "username", "bio", "large_blob") > ($1::int8, $2::float8, $3::varchar, $4::text, $5::bytea) AND ("id", "price", "username", "bio", "large_blob") <= ($6::int8, $7::float8, $8::varchar, $9::text, $10::bytea) AND "price" IS NOT NULL AND "bio" IS NOT NULL AND "large_blob" IS NOT NULL ORDER BY "id" ASC, "price" ASC, "username" ASC, "bio" ASC, "large_blob" ASC"#
+            r#"SELECT "id"::int8,"price"::float8,"username"::text,"bio"::text,"large_blob"::bytea FROM "test_schema"."test_table" WHERE ("id", "price", "username", "bio", "large_blob") > ($1::int8, $2::float8, $3::varchar, $4::text, $5::bytea) AND ("id", "price", "username", "bio", "large_blob") <= ($6::int8, $7::float8, $8::varchar, $9::text, $10::bytea) AND "price" IS NOT NULL AND "bio" IS NOT NULL AND "large_blob" IS NOT NULL ORDER BY "test_schema"."test_table"."id" ASC, "test_schema"."test_table"."price" ASC, "test_schema"."test_table"."username" ASC, "test_schema"."test_table"."bio" ASC, "test_schema"."test_table"."large_blob" ASC"#
         );
     }
 
@@ -730,7 +730,7 @@ mod tests {
         let sql = stmt.build().unwrap();
         assert_eq!(
             sql,
-            r#"SELECT "id"::int8,"price"::float8,"username"::text,"bio"::text,"large_blob"::bytea FROM "test_schema"."test_table" WHERE ("id", "price", "username", "bio", "large_blob") <= ($1::int8, $2::float8, $3::varchar, $4::text, $5::bytea) AND "price" IS NOT NULL AND "bio" IS NOT NULL AND "large_blob" IS NOT NULL ORDER BY "id" ASC, "price" ASC, "username" ASC, "bio" ASC, "large_blob" ASC"#
+            r#"SELECT "id"::int8,"price"::float8,"username"::text,"bio"::text,"large_blob"::bytea FROM "test_schema"."test_table" WHERE ("id", "price", "username", "bio", "large_blob") <= ($1::int8, $2::float8, $3::varchar, $4::text, $5::bytea) AND "price" IS NOT NULL AND "bio" IS NOT NULL AND "large_blob" IS NOT NULL ORDER BY "test_schema"."test_table"."id" ASC, "test_schema"."test_table"."price" ASC, "test_schema"."test_table"."username" ASC, "test_schema"."test_table"."bio" ASC, "test_schema"."test_table"."large_blob" ASC"#
         );
     }
 
@@ -752,7 +752,7 @@ mod tests {
         let sql = stmt.build().unwrap();
         assert_eq!(
             sql,
-            r#"SELECT "id"::int8,"price"::float8,"username"::text,"bio"::text,"large_blob"::bytea FROM "test_schema"."test_table" WHERE "price" IS NULL OR "bio" IS NULL OR "large_blob" IS NULL ORDER BY "id" ASC, "price" ASC, "username" ASC, "bio" ASC, "large_blob" ASC"#
+            r#"SELECT "id"::int8,"price"::float8,"username"::text,"bio"::text,"large_blob"::bytea FROM "test_schema"."test_table" WHERE "price" IS NULL OR "bio" IS NULL OR "large_blob" IS NULL ORDER BY "test_schema"."test_table"."id" ASC, "test_schema"."test_table"."price" ASC, "test_schema"."test_table"."username" ASC, "test_schema"."test_table"."bio" ASC, "test_schema"."test_table"."large_blob" ASC"#
         );
     }
 
@@ -777,7 +777,7 @@ mod tests {
         let sql = stmt.build().unwrap();
         assert_eq!(
             sql,
-            r#"SELECT "id"::int8,"price"::float8,"username"::text,"bio"::text,"large_blob"::bytea FROM "test_schema"."test_table" WHERE id > 100 AND ("price" IS NULL OR "bio" IS NULL OR "large_blob" IS NULL) ORDER BY "id" ASC, "price" ASC, "username" ASC, "bio" ASC, "large_blob" ASC LIMIT 100"#
+            r#"SELECT "id"::int8,"price"::float8,"username"::text,"bio"::text,"large_blob"::bytea FROM "test_schema"."test_table" WHERE id > 100 AND ("price" IS NULL OR "bio" IS NULL OR "large_blob" IS NULL) ORDER BY "test_schema"."test_table"."id" ASC, "test_schema"."test_table"."price" ASC, "test_schema"."test_table"."username" ASC, "test_schema"."test_table"."bio" ASC, "test_schema"."test_table"."large_blob" ASC LIMIT 100"#
         );
     }
 
@@ -795,7 +795,7 @@ mod tests {
         let sql = stmt.build().unwrap();
         assert_eq!(
             sql,
-            r#"SELECT `id`,`price`,`username`,`bio`,`large_blob` FROM `test_schema`.`test_table` WHERE id > 1000 AND `id` > ? ORDER BY `id` ASC"#
+            r#"SELECT `id`,`price`,`username`,`bio`,`large_blob` FROM `test_schema`.`test_table` WHERE id > 1000 AND `id` > ? ORDER BY `test_schema`.`test_table`.`id` ASC"#
         );
     }
 
@@ -813,7 +813,7 @@ mod tests {
         let sql = stmt.build().unwrap();
         assert_eq!(
             sql,
-            r#"SELECT "id"::int8,"price"::float8,"username"::text,"bio"::text,"large_blob"::bytea FROM "test_schema"."test_table" WHERE id > 1000 AND "id" > $1::int8 ORDER BY "id" ASC"#
+            r#"SELECT "id"::int8,"price"::float8,"username"::text,"bio"::text,"large_blob"::bytea FROM "test_schema"."test_table" WHERE id > 1000 AND "id" > $1::int8 ORDER BY "test_schema"."test_table"."id" ASC"#
         );
     }
 
@@ -854,7 +854,7 @@ mod tests {
         let sql = stmt.build().unwrap();
         assert_eq!(
             sql,
-            r#"SELECT `id`,`price`,`username`,`bio`,`large_blob` FROM `test_schema`.`test_table` WHERE `id` > ? ORDER BY `id` ASC"#
+            r#"SELECT `id`,`price`,`username`,`bio`,`large_blob` FROM `test_schema`.`test_table` WHERE `id` > ? ORDER BY `test_schema`.`test_table`.`id` ASC"#
         );
     }
 
@@ -899,7 +899,7 @@ mod tests {
         let sql = stmt.build().unwrap();
         assert_eq!(
             sql,
-            r#"SELECT `id`,`price`,`username`,`bio`,`large_blob` FROM `test_schema`.`test_table` WHERE `username` > ? ORDER BY `username` ASC LIMIT 50"#
+            r#"SELECT `id`,`price`,`username`,`bio`,`large_blob` FROM `test_schema`.`test_table` WHERE `username` > ? ORDER BY `test_schema`.`test_table`.`username` ASC LIMIT 50"#
         );
     }
 
@@ -916,7 +916,7 @@ mod tests {
         let sql = stmt.build().unwrap();
         assert_eq!(
             sql,
-            r#"SELECT "id"::int8,"price"::float8,"username"::text,"bio"::text,"large_blob"::bytea FROM "test_schema"."test_table" WHERE "username" > $1::varchar ORDER BY "username" ASC LIMIT 50"#
+            r#"SELECT "id"::int8,"price"::float8,"username"::text,"bio"::text,"large_blob"::bytea FROM "test_schema"."test_table" WHERE "username" > $1::varchar ORDER BY "test_schema"."test_table"."username" ASC LIMIT 50"#
         );
     }
 
@@ -934,7 +934,7 @@ mod tests {
         let sql = stmt.build().unwrap();
         assert_eq!(
             sql,
-            r#"SELECT `id`,`price`,`username`,`bio`,`large_blob` FROM `test_schema`.`test_table` WHERE `id` > ? ORDER BY `id` ASC"#
+            r#"SELECT `id`,`price`,`username`,`bio`,`large_blob` FROM `test_schema`.`test_table` WHERE `id` > ? ORDER BY `test_schema`.`test_table`.`id` ASC"#
         );
     }
 
@@ -951,7 +951,7 @@ mod tests {
         let sql = stmt.build().unwrap();
         assert_eq!(
             sql,
-            r#"SELECT `id`,`price`,`username`,`bio`,`large_blob` FROM `test_schema`.`test_table` WHERE `id` > ? ORDER BY `id` ASC"#
+            r#"SELECT `id`,`price`,`username`,`bio`,`large_blob` FROM `test_schema`.`test_table` WHERE `id` > ? ORDER BY `test_schema`.`test_table`.`id` ASC"#
         );
     }
 
@@ -1003,7 +1003,7 @@ mod tests {
         let sql = stmt.build().unwrap();
         assert_eq!(
             sql,
-            r#"SELECT `id`,`price`,`username`,`bio` FROM `test_schema`.`test_table` WHERE `id` > ? ORDER BY `id` ASC LIMIT 50"#
+            r#"SELECT `id`,`price`,`username`,`bio` FROM `test_schema`.`test_table` WHERE `id` > ? ORDER BY `test_schema`.`test_table`.`id` ASC LIMIT 50"#
         );
     }
 
@@ -1023,7 +1023,7 @@ mod tests {
         let sql = stmt.build().unwrap();
         assert_eq!(
             sql,
-            r#"SELECT "id"::int8,"price"::float8,"username"::text,"bio"::text FROM "test_schema"."test_table" WHERE "id" > $1::int8 ORDER BY "id" ASC LIMIT 50"#
+            r#"SELECT "id"::int8,"price"::float8,"username"::text,"bio"::text FROM "test_schema"."test_table" WHERE "id" > $1::int8 ORDER BY "test_schema"."test_table"."id" ASC LIMIT 50"#
         );
     }
 
@@ -1046,7 +1046,7 @@ mod tests {
         let sql = stmt.build().unwrap();
         assert_eq!(
             sql,
-            r#"SELECT `id`,`price`,`username`,`bio`,`large_blob` FROM `test_schema`.`test_table` WHERE `price` IS NOT NULL AND `bio` IS NOT NULL AND `large_blob` IS NOT NULL ORDER BY `id` ASC, `price` ASC, `username` ASC, `bio` ASC, `large_blob` ASC LIMIT 100"#
+            r#"SELECT `id`,`price`,`username`,`bio`,`large_blob` FROM `test_schema`.`test_table` WHERE `price` IS NOT NULL AND `bio` IS NOT NULL AND `large_blob` IS NOT NULL ORDER BY `test_schema`.`test_table`.`id` ASC, `test_schema`.`test_table`.`price` ASC, `test_schema`.`test_table`.`username` ASC, `test_schema`.`test_table`.`bio` ASC, `test_schema`.`test_table`.`large_blob` ASC LIMIT 100"#
         );
     }
 
@@ -1069,7 +1069,7 @@ mod tests {
         let sql = stmt.build().unwrap();
         assert_eq!(
             sql,
-            r#"SELECT "id"::int8,"price"::float8,"username"::text,"bio"::text,"large_blob"::bytea FROM "test_schema"."test_table" WHERE "price" IS NOT NULL AND "bio" IS NOT NULL AND "large_blob" IS NOT NULL ORDER BY "id" ASC, "price" ASC, "username" ASC, "bio" ASC, "large_blob" ASC LIMIT 100"#
+            r#"SELECT "id"::int8,"price"::float8,"username"::text,"bio"::text,"large_blob"::bytea FROM "test_schema"."test_table" WHERE "price" IS NOT NULL AND "bio" IS NOT NULL AND "large_blob" IS NOT NULL ORDER BY "test_schema"."test_table"."id" ASC, "test_schema"."test_table"."price" ASC, "test_schema"."test_table"."username" ASC, "test_schema"."test_table"."bio" ASC, "test_schema"."test_table"."large_blob" ASC LIMIT 100"#
         );
     }
 
@@ -1087,7 +1087,7 @@ mod tests {
         // id is not nullable, so no IS NOT NULL predicate
         assert_eq!(
             sql,
-            r#"SELECT `id`,`price`,`username`,`bio`,`large_blob` FROM `test_schema`.`test_table` ORDER BY `id` ASC LIMIT 100"#
+            r#"SELECT `id`,`price`,`username`,`bio`,`large_blob` FROM `test_schema`.`test_table` ORDER BY `test_schema`.`test_table`.`id` ASC LIMIT 100"#
         );
     }
 
@@ -1106,7 +1106,7 @@ mod tests {
         let sql = stmt.build().unwrap();
         assert_eq!(
             sql,
-            r#"SELECT `id`,`price`,`username`,`bio`,`large_blob` FROM `test_schema`.`test_table` WHERE id > 100 AND `price` IS NOT NULL AND `bio` IS NOT NULL ORDER BY `id` ASC, `price` ASC, `bio` ASC LIMIT 100"#
+            r#"SELECT `id`,`price`,`username`,`bio`,`large_blob` FROM `test_schema`.`test_table` WHERE id > 100 AND `price` IS NOT NULL AND `bio` IS NOT NULL ORDER BY `test_schema`.`test_table`.`id` ASC, `test_schema`.`test_table`.`price` ASC, `test_schema`.`test_table`.`bio` ASC LIMIT 100"#
         );
     }
 }
