@@ -79,8 +79,9 @@ impl TypeRegistry {
             "bigserial" => "serial8",
             "bit varying" => "varbit",
             "boolean" => "bool",
+            "char" => "\"char\"",
             // fixed-length, blank-padded, refer to: https://www.postgresql.org/docs/17/datatype-character.html
-            "character" | "char" => "bpchar",
+            "character" => "bpchar",
             "character varying" => "varchar",
             "double precision" => "float8",
             "int" | "integer" => "int4",
