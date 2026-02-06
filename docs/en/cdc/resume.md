@@ -2,10 +2,6 @@
 
 When starting a task, you can retrieve the latest task position from the previous execution based on the configuration, allowing you to continue the task without starting from scratch.
 
-## CDC + Checker
-
-If you want to validate CDC-applied data, enable `[checker]` in the CDC task config. See [Data Check](../snapshot/check.md) for configuration and limitations.
-If both `[checker]` and `[sinker]` specify targets, `[checker]` takes precedence.
 
 ## Supported Sources
 
