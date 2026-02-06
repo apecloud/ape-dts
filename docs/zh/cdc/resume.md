@@ -8,11 +8,6 @@
 - Postgres 源端
 - Mongo 源端
 
-## CDC + Checker
-
-如需校验 CDC 落库后的数据，可在 CDC 任务配置中开启 `[checker]`。配置与限制请参考 [数据校验](../snapshot/check.md)。
-若 `[checker]` 与 `[sinker]` 同时指定目标，优先使用 `[checker]`。
-
 ## 位点记录
 
 增量任务进度会定期记录在 position.log 中。任务进度记录频率取决于 `pipeline.checkpoint_interval_secs` 配置，默认值 10s

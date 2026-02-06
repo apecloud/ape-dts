@@ -702,6 +702,7 @@ impl TaskRunner {
         let enable_sqlx_log = TaskUtil::check_enable_sqlx_log(log_level);
         let is_cdc_task = matches!(self.config.extractor_basic.extract_type, ExtractType::Cdc)
             && matches!(self.config.sinker_basic.sink_type, SinkType::Write);
+        let max_retries = if is_cdc_task { 0 } else { cfg.max_retries };
         let missing = || Error::ConfigError("config [checker] target is required".into());
         let fallback_target = if matches!(self.config.sinker_basic.sink_type, SinkType::Dummy) {
             None
@@ -754,7 +755,7 @@ impl TaskRunner {
                         router,
                         cfg.output_revise_sql,
                         cfg.retry_interval_secs,
-                        cfg.max_retries,
+                        max_retries,
                         check_summary,
                         monitor.clone(),
                     )
@@ -776,7 +777,7 @@ impl TaskRunner {
                         router,
                         cfg.output_revise_sql,
                         cfg.retry_interval_secs,
-                        cfg.max_retries,
+                        max_retries,
                         check_summary,
                         monitor.clone(),
                     )
@@ -819,7 +820,7 @@ impl TaskRunner {
                         output_revise_sql: cfg.output_revise_sql,
                         revise_match_full_row: cfg.revise_match_full_row,
                         retry_interval_secs: cfg.retry_interval_secs,
-                        max_retries: cfg.max_retries,
+                        max_retries,
                         summary: CheckSummaryLog {
                             start_time: Local::now().to_rfc3339(),
                             ..Default::default()
@@ -857,7 +858,7 @@ impl TaskRunner {
                         output_revise_sql: cfg.output_revise_sql,
                         revise_match_full_row: cfg.revise_match_full_row,
                         retry_interval_secs: cfg.retry_interval_secs,
-                        max_retries: cfg.max_retries,
+                        max_retries,
                         summary: CheckSummaryLog {
                             start_time: Local::now().to_rfc3339(),
                             ..Default::default()
@@ -896,7 +897,7 @@ impl TaskRunner {
                         output_revise_sql: cfg.output_revise_sql,
                         revise_match_full_row: false,
                         retry_interval_secs: cfg.retry_interval_secs,
-                        max_retries: cfg.max_retries,
+                        max_retries,
                         summary: CheckSummaryLog {
                             start_time: Local::now().to_rfc3339(),
                             ..Default::default()
