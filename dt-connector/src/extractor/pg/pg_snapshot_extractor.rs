@@ -205,13 +205,27 @@ impl PgSnapshotExtractor {
                 let where_sql =
                     BaseExtractor::get_where_sql(&self.filter, &self.schema, &self.tb, &condition);
                 Ok(format!(
-                    r#"SELECT {} FROM "{}"."{}" {} ORDER BY "{}" ASC LIMIT {}"#,
-                    cols_str, self.schema, self.tb, where_sql, order_col, self.batch_size
+                    r#"SELECT {} FROM "{}"."{}" {} ORDER BY "{}"."{}"."{}" ASC LIMIT {}"#,
+                    cols_str,
+                    self.schema,
+                    self.tb,
+                    where_sql,
+                    self.schema,
+                    self.tb,
+                    order_col,
+                    self.batch_size
                 ))
             } else {
                 Ok(format!(
-                    r#"SELECT {} FROM "{}"."{}" {} ORDER BY "{}" ASC LIMIT {}"#,
-                    cols_str, self.schema, self.tb, where_sql, order_col, self.batch_size
+                    r#"SELECT {} FROM "{}"."{}" {} ORDER BY "{}"."{}"."{}" ASC LIMIT {}"#,
+                    cols_str,
+                    self.schema,
+                    self.tb,
+                    where_sql,
+                    self.schema,
+                    self.tb,
+                    order_col,
+                    self.batch_size
                 ))
             }
         } else {
