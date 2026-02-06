@@ -5,20 +5,24 @@ use dt_common::meta::col_value::ColValue;
 use dt_common::meta::row_data::RowData;
 use dt_common::meta::row_type::RowType;
 use mlua::{IntoLua, Lua};
+use std::sync::Arc;
 
 pub struct LuaProcessor {
     pub lua_code: String,
 }
 
 impl LuaProcessor {
-    pub fn process(&self, data: Vec<RowData>) -> anyhow::Result<Vec<RowData>> {
+    pub fn process(&self, data: Vec<Arc<RowData>>) -> anyhow::Result<Vec<Arc<RowData>>> {
         let mut new_data = Vec::new();
         let lua = Lua::new();
 
         for row_data in data {
+            let row_data = (*row_data).clone();
             // to lua
-            let (lua_before, blob_before) = self.col_values_to_lua_table(row_data.before, &lua)?;
-            let (lua_after, blob_after) = self.col_values_to_lua_table(row_data.after, &lua)?;
+            let (lua_before, blob_before) =
+                self.col_values_to_lua_table(row_data.before.clone(), &lua)?;
+            let (lua_after, blob_after) =
+                self.col_values_to_lua_table(row_data.after.clone(), &lua)?;
 
             lua.globals().set("before", lua_before)?;
             lua.globals().set("after", lua_after)?;
@@ -46,7 +50,7 @@ impl LuaProcessor {
             let tb = lua.globals().get("tb")?;
             let row_type = RowType::from_str(&row_type)?;
             let new_row_data = RowData::new(schema, tb, row_type, before, after);
-            new_data.push(new_row_data);
+            new_data.push(Arc::new(new_row_data));
         }
 
         Ok(new_data)
