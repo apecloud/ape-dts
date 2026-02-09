@@ -500,6 +500,14 @@ impl TaskRunner {
         )
         .await?;
 
+        // snapshot check_summary before this subtask so we can compute per-subtask deltas
+        let check_summary_snapshot = if let Some(check_summary) = &task_context.check_summary {
+            let s = check_summary.lock().await;
+            Some((s.miss_count, s.diff_count, s.sql_count.unwrap_or(0)))
+        } else {
+            None
+        };
+
         // start threads
         let f1 = tokio::spawn(async move {
             extractor.extract().await.unwrap();
@@ -533,20 +541,21 @@ impl TaskRunner {
         });
         try_join!(f1, f2, f3)?;
 
-        if let Some(check_summary) = &task_context.check_summary {
+        if let (Some(check_summary), Some((prev_miss, prev_diff, prev_sql))) =
+            (&task_context.check_summary, check_summary_snapshot)
+        {
             let summary = check_summary.lock().await;
-            self.task_monitor.add_no_window_metrics(
-                TaskMetricsType::CheckerMissCount,
-                summary.miss_count as u64,
-            );
-            self.task_monitor.add_no_window_metrics(
-                TaskMetricsType::CheckerDiffCount,
-                summary.diff_count as u64,
-            );
-            if let Some(sql_count) = summary.sql_count {
+            let delta_miss = summary.miss_count.saturating_sub(prev_miss);
+            let delta_diff = summary.diff_count.saturating_sub(prev_diff);
+            let delta_sql = summary.sql_count.unwrap_or(0).saturating_sub(prev_sql);
+            self.task_monitor
+                .add_no_window_metrics(TaskMetricsType::CheckerMissCount, delta_miss as u64);
+            self.task_monitor
+                .add_no_window_metrics(TaskMetricsType::CheckerDiffCount, delta_diff as u64);
+            if delta_sql > 0 {
                 self.task_monitor.add_no_window_metrics(
                     TaskMetricsType::CheckerGenerateSqlCount,
-                    sql_count as u64,
+                    delta_sql as u64,
                 );
             }
         }
@@ -638,10 +647,11 @@ impl TaskRunner {
                             lua_code: processor_config.lua_code.clone(),
                         });
 
-                let parallelizer = ParallelizerUtil::create_parallelizer(
+                let (parallelizer, remaining_checker) = ParallelizerUtil::create_parallelizer(
                     &self.config,
                     monitor.clone(),
                     rps_limiter,
+                    checker,
                 )
                 .await?;
 
@@ -658,7 +668,7 @@ impl TaskRunner {
                     data_marker,
                     lua_processor,
                     recorder,
-                    checker,
+                    checker: remaining_checker,
                 };
                 Ok(Box::new(pipeline) as Box<dyn Pipeline + Send>)
             }
@@ -702,7 +712,17 @@ impl TaskRunner {
         let enable_sqlx_log = TaskUtil::check_enable_sqlx_log(log_level);
         let is_cdc_task = matches!(self.config.extractor_basic.extract_type, ExtractType::Cdc)
             && matches!(self.config.sinker_basic.sink_type, SinkType::Write);
-        let max_retries = if is_cdc_task { 0 } else { cfg.max_retries };
+        let max_retries = if is_cdc_task {
+            if cfg.max_retries > 0 {
+                log::warn!(
+                    "Checker retries are disabled for CDC tasks; ignoring configured max_retries={}",
+                    cfg.max_retries
+                );
+            }
+            0
+        } else {
+            cfg.max_retries
+        };
         let missing = || Error::ConfigError("config [checker] target is required".into());
         let fallback_target = if matches!(self.config.sinker_basic.sink_type, SinkType::Dummy) {
             None
@@ -908,7 +928,7 @@ impl TaskRunner {
                 );
                 Ok(Some(CheckerHandle::Data(checker)))
             }
-            _ => Ok(None),
+            _ => bail!("checker not supported for db_type: {}", checker_db_type),
         }
     }
 

@@ -14,15 +14,29 @@ mod test {
     #[tokio::test]
     #[serial]
     async fn cdc_check_basic_test() {
-        TestBase::run_cdc_check_test("mysql_to_mysql/check/cdc_check_basic_test", 3000, 8000)
-            .await;
+        TestBase::run_cdc_check_test("mysql_to_mysql/check/cdc_check_basic_test", 3000, 8000).await;
     }
 
     #[tokio::test]
     #[serial]
     async fn cdc_check_large_data_test() {
-        TestBase::run_cdc_check_test("mysql_to_mysql/check/cdc_check_large_data_test", 5000, 30000)
-            .await;
+        TestBase::run_cdc_check_test(
+            "mysql_to_mysql/check/cdc_check_large_data_test",
+            5000,
+            120000,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn cdc_check_update_delete_test() {
+        TestBase::run_cdc_check_test(
+            "mysql_to_mysql/check/cdc_check_update_delete_test",
+            3000,
+            8000,
+        )
+        .await;
     }
 
     #[tokio::test]

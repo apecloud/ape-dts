@@ -16,6 +16,7 @@ use dt_common::{
     monitor::monitor::Monitor,
     utils::redis_util::RedisUtil,
 };
+use dt_connector::checker::CheckerHandle;
 use dt_parallelizer::{
     base_parallelizer::BaseParallelizer, check_parallelizer::CheckParallelizer,
     foxlake_parallelizer::FoxlakeParallelizer, merge_parallelizer::MergeParallelizer,
@@ -32,7 +33,8 @@ impl ParallelizerUtil {
         config: &TaskConfig,
         monitor: Arc<Monitor>,
         rps_limiter: Option<Ratelimiter>,
-    ) -> anyhow::Result<Box<dyn Parallelizer + Send + Sync>> {
+        checker: Option<CheckerHandle>,
+    ) -> anyhow::Result<(Box<dyn Parallelizer + Send + Sync>, Option<CheckerHandle>)> {
         let parallel_size = config.parallelizer.parallel_size;
         let parallel_type = &config.parallelizer.parallel_type;
         let base_parallelizer = BaseParallelizer {
@@ -73,11 +75,13 @@ impl ParallelizerUtil {
                     DbType::Mongo => Self::create_mongo_merger().await?,
                     _ => Self::create_rdb_merger(config).await?,
                 };
-                Box::new(CheckParallelizer {
+                let parallelizer = Box::new(CheckParallelizer {
                     base_parallelizer,
                     merger,
                     parallel_size,
-                })
+                    checker,
+                });
+                return Ok((parallelizer, None));
             }
 
             ParallelType::Serial => Box::new(SerialParallelizer { base_parallelizer }),
@@ -131,7 +135,7 @@ impl ParallelizerUtil {
                 })
             }
         };
-        Ok(parallelizer)
+        Ok((parallelizer, checker))
     }
 
     async fn create_rdb_merger(

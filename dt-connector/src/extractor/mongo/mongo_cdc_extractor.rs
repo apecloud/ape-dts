@@ -22,8 +22,7 @@ use dt_common::{
         col_value::ColValue,
         dt_data::DtData,
         mongo::{
-            mongo_cdc_source::MongoCdcSource, mongo_constant::MongoConstants,
-            mongo_key::MongoKey,
+            mongo_cdc_source::MongoCdcSource, mongo_constant::MongoConstants, mongo_key::MongoKey,
         },
         position::Position,
         row_data::RowData,
@@ -58,7 +57,10 @@ pub struct MongoCdcExtractor {
 impl MongoCdcExtractor {
     fn insert_id_from_doc(target: &mut HashMap<String, ColValue>, doc: &Document) {
         if let Some(key) = MongoKey::from_doc(doc) {
-            target.insert(MongoConstants::ID.to_string(), ColValue::String(key.to_string()));
+            target.insert(
+                MongoConstants::ID.to_string(),
+                ColValue::String(key.to_string()),
+            );
         }
     }
 }
@@ -156,10 +158,7 @@ impl MongoCdcExtractor {
                 "i" => {
                     let doc = o.unwrap().as_document().unwrap().clone();
                     Self::insert_id_from_doc(&mut after, &doc);
-                    after.insert(
-                        MongoConstants::DOC.to_string(),
-                        ColValue::MongoDoc(doc),
-                    );
+                    after.insert(MongoConstants::DOC.to_string(), ColValue::MongoDoc(doc));
                 }
                 "u" => {
                     row_type = RowType::Update;

@@ -25,8 +25,12 @@ templates and tutorials for end-to-end examples.
 
 ## Limitations
 
-- Data check is source-driven (validates Source ∈ Target) and cannot detect extra rows that exist only in the target (ghost data). This means missing deletes on the target side will not be detected.
+- Data check is source-driven (validates Source ∈ Target) and cannot detect extra rows that exist only in the target. To catch such cases, consider setting up a [Reverse Check](#reverse-check) by swapping extractor and checker configurations.
 - For MongoDB, `_id` must be a hashable type (for example ObjectId/String/Int32/Int64). Unsupported `_id` types will make the checker return an error.
+
+## DELETE Event Check
+
+In CDC + Check scenarios, the checker validates DELETE events: it queries the target by primary key, and if the row still exists in the target, it is reported as an inconsistency in `diff.log` (with empty `diff_col_values`). When `output_revise_sql=true`, a corresponding `DELETE` repair statement is automatically generated in `sql.log`.
 
 # Check Results
 

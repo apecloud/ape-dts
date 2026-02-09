@@ -6,17 +6,17 @@
 
 # [extractor]
 
-| 配置            | 作用                                              | 示例                                                           | 默认                           |
-| :-------------- | :------------------------------------------------ | :------------------------------------------------------------- | :----------------------------- |
-| db_type         | 源库类型                                          | mysql                                                          | -                              |
-| extract_type    | 拉取类型（全量：snapshot，增量：cdc）             | snapshot                                                       | -                              |
-| url             | 数据库 URL。也可以在 URL 中直接指定用户名和密码。 | mysql://127.0.0.1:3307 或 mysql://root:password@127.0.0.1:3307 |
-| username        | 数据库连接账号                                    | root                                                           |
-| password        | 数据库连接密码                                    | password                                                       | -                              |
-| max_connections | 最大连接数                                        | 10                                                             | 目前是 10，未来可能会动态适配  |
-| batch_size      | 批量拉取数据条数                                  | 10000                                                          | 和 [pipeline] buffer_size 一致 |
-| parallel_size   | 全量同步时，单表并行拉取任务数                    | 4                                                              | 1                              |
-| partition_cols | 全量同步时，指定分区列，用于数据切分，仅支持单列 | json:[{"db":"db_1","tb":"tb_1","partition_col":"id"},{"db":"db_2","tb":"tb_2","partition_col":"id"}] | - |
+| 配置            | 作用                                              | 示例                                                                                                 | 默认                           |
+| :-------------- | :------------------------------------------------ | :--------------------------------------------------------------------------------------------------- | :----------------------------- |
+| db_type         | 源库类型                                          | mysql                                                                                                | -                              |
+| extract_type    | 拉取类型（全量：snapshot，增量：cdc）             | snapshot                                                                                             | -                              |
+| url             | 数据库 URL。也可以在 URL 中直接指定用户名和密码。 | mysql://127.0.0.1:3307 或 mysql://root:password@127.0.0.1:3307                                       |
+| username        | 数据库连接账号                                    | root                                                                                                 |
+| password        | 数据库连接密码                                    | password                                                                                             | -                              |
+| max_connections | 最大连接数                                        | 10                                                                                                   | 目前是 10，未来可能会动态适配  |
+| batch_size      | 批量拉取数据条数                                  | 10000                                                                                                | 和 [pipeline] buffer_size 一致 |
+| parallel_size   | 全量同步时，单表并行拉取任务数                    | 4                                                                                                    | 1                              |
+| partition_cols  | 全量同步时，指定分区列，用于数据切分，仅支持单列  | json:[{"db":"db_1","tb":"tb_1","partition_col":"id"},{"db":"db_2","tb":"tb_2","partition_col":"id"}] | -                              |
 ## url 转义
 
 - 如果用户名/密码中包含特殊字符，需要对相应部分进行通用的 url 百分号转义，如：
@@ -51,23 +51,23 @@ Checker 有两种模式：
 目标选择规则：若 `[checker]` 提供 target（`db_type`/`url`/`username`/`password`），优先使用；
 否则回退到 `[sinker]` 的目标。
 
-| 配置                  | 作用                                      | 示例        | 默认  |
-| :-------------------- | :---------------------------------------- | :---------- | :---- |
-| queue_size            | checker 队列容量                          | 2000        | 2000  |
-| max_connections       | checker 连接池最大连接数                  | 2           | 2     |
-| batch_size            | checker 批量校验大小                      | 100         | 100   |
-| sample_rate           | checker 抽样比例（保留字段，当前未生效） | 1.0         | 1.0   |
-| output_full_row       | diff 日志是否输出全量行                   | false       | false |
-| output_revise_sql     | diff 日志是否输出修复 SQL                 | false       | false |
-| revise_match_full_row | 生成修复 SQL 时是否按全量行匹配           | false       | false |
-| retry_interval_secs   | 重试间隔（秒）                            | 0           | 0     |
-| max_retries           | 重试次数                                  | 0           | 0     |
-| check_log_dir         | 校验日志目录                              | /tmp/check  | 空（默认 runtime.log_dir/check） |
-| check_log_file_size   | 校验日志大小限制                          | 100mb       | 100mb |
-| db_type               | 校验目标库类型（覆盖 [sinker] 目标）      | mysql       | 空    |
-| url                   | 校验目标 URL（覆盖 [sinker] 目标）        | mysql://... | 空    |
-| username              | 校验目标用户名（URL 未包含时使用）        | root        | 空    |
-| password              | 校验目标密码（URL 未包含时使用）          | password    | 空    |
+| 配置                  | 作用                                     | 示例        | 默认                             |
+| :-------------------- | :--------------------------------------- | :---------- | :------------------------------- |
+| queue_size            | checker 队列容量                         | 200         | 200                              |
+| max_connections       | checker 连接池最大连接数                 | 8           | 8                                |
+| batch_size            | checker 批量校验大小                     | 100         | 100                              |
+| sample_rate           | checker 抽样比例（保留字段，当前未生效） | 1.0         | 1.0                              |
+| output_full_row       | diff 日志是否输出全量行                  | false       | false                            |
+| output_revise_sql     | diff 日志是否输出修复 SQL                | false       | false                            |
+| revise_match_full_row | 生成修复 SQL 时是否按全量行匹配          | false       | false                            |
+| retry_interval_secs   | 重试间隔（秒）                           | 0           | 0                                |
+| max_retries           | 重试次数（CDC+write 模式下强制为 0）     | 0           | 0                                |
+| check_log_dir         | 校验日志目录                             | /tmp/check  | 空（默认 runtime.log_dir/check） |
+| check_log_file_size   | 校验日志大小限制                         | 100mb       | 100mb                            |
+| db_type               | 校验目标库类型（覆盖 [sinker] 目标）     | mysql       | 空                               |
+| url                   | 校验目标 URL（覆盖 [sinker] 目标）       | mysql://... | 空                               |
+| username              | 校验目标用户名（URL 未包含时使用）       | root        | 空                               |
+| password              | 校验目标密码（URL 未包含时使用）         | password    | 空                               |
 
 # [filter]
 
@@ -181,11 +181,11 @@ Checker 有两种模式：
 不同任务类型需要不同的 parallel_type，详情请参考各个示例。
 
 # [runtime]
-| 配置 | 作用 | 示例 | 默认 |
-| :-------- | :-------- | :-------- | :-------- |
-| log_level | 日志级别 | info/warn/error/debug/trace | info |
-| log4rs_file | log4rs 配置地点，通常不需要改 | ./log4rs.yaml | ./log4rs.yaml |
-| log_dir | 日志输出目录 | ./logs | ./logs |
+| 配置        | 作用                          | 示例                        | 默认          |
+| :---------- | :---------------------------- | :-------------------------- | :------------ |
+| log_level   | 日志级别                      | info/warn/error/debug/trace | info          |
+| log4rs_file | log4rs 配置地点，通常不需要改 | ./log4rs.yaml               | ./log4rs.yaml |
+| log_dir     | 日志输出目录                  | ./logs                      | ./logs        |
 
 通常不需要修改。
 

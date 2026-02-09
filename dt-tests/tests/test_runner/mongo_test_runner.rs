@@ -71,20 +71,18 @@ impl MongoTestRunner {
             _ => {}
         }
 
-        match config.sinker {
-            SinkerConfig::Mongo {
-                url,
-                connection_auth,
-                app_name,
-                ..
-            } => {
-                dst_mongo_client = Some(
-                    TaskUtil::create_mongo_client(&url, &connection_auth, &app_name, None)
-                        .await
-                        .unwrap(),
-                );
-            }
-            _ => {}
+        if let SinkerConfig::Mongo {
+            url,
+            connection_auth,
+            app_name,
+            ..
+        } = config.sinker
+        {
+            dst_mongo_client = Some(
+                TaskUtil::create_mongo_client(&url, &connection_auth, &app_name, None)
+                    .await
+                    .unwrap(),
+            );
         }
 
         if dst_mongo_client.is_none() {
@@ -417,13 +415,7 @@ impl MongoTestRunner {
         let re = Regex::new(r"db.(\w+).insert(One|Many)\(([\w\W]+)\)").unwrap();
         let cap = re.captures(sql).unwrap();
         let tb = cap.get(1).unwrap().as_str();
-        let mut doc_content = cap.get(3).unwrap().as_str().to_string();
-
-        let oid_re = Regex::new(r#"ObjectId\("([a-fA-F0-9]{24})"\)"#).unwrap();
-        doc_content = oid_re
-            .replace_all(&doc_content, r#"{"$$oid": "$1"}"#)
-            .to_string();
-        doc_content = Self::normalize_doc_string(&doc_content);
+        let doc_content = Self::normalize_doc_string(cap.get(3).unwrap().as_str());
 
         let coll = client.database(db).collection::<Document>(tb);
         let json_value: Value = serde_json::from_str(&doc_content).unwrap();
@@ -625,7 +617,7 @@ impl MongoTestRunner {
 
     fn collect_databases(base: &BaseTestRunner) -> HashSet<String> {
         let mut dbs = HashSet::new();
-        let sections = vec![
+        let sections = [
             &base.src_prepare_sqls,
             &base.dst_prepare_sqls,
             &base.src_test_sqls,
@@ -661,9 +653,14 @@ impl MongoTestRunner {
     }
 
     fn normalize_doc_string(doc: &str) -> String {
+        let oid_re = Regex::new(r#"ObjectId\("([a-fA-F0-9]{24})"\)"#).unwrap();
+        let doc = oid_re.replace_all(doc, r#"{"$$oid":"$1"}"#).to_string();
+        let number_long_re = Regex::new(r#"NumberLong\(\s*"?(-?\d+)"?\s*\)"#).unwrap();
+        let doc = number_long_re.replace_all(&doc, "$1").to_string();
+
         let re =
             Regex::new(r"(?P<prefix>[\{\[,]\s*)(?P<key>[$A-Za-z_][A-Za-z0-9_$]*)\s*:").unwrap();
-        re.replace_all(doc, |caps: &Captures| {
+        re.replace_all(&doc, |caps: &Captures| {
             format!("{}\"{}\":", &caps["prefix"], &caps["key"])
         })
         .to_string()
@@ -713,6 +710,14 @@ mod tests {
         let doc = r#"{ "$inc": { "count": 1 } }"#;
         let normalized = MongoTestRunner::normalize_doc_string(doc);
         assert_eq!(normalized, doc);
+        serde_json::from_str::<Value>(&normalized).unwrap();
+    }
+
+    #[test]
+    fn normalize_doc_string_normalizes_numberlong_literal() {
+        let doc = r#"{ _id: NumberLong(9999999), value: NumberLong("123") }"#;
+        let normalized = MongoTestRunner::normalize_doc_string(doc);
+        assert_eq!(normalized, r#"{ "_id": 9999999, "value": 123 }"#);
         serde_json::from_str::<Value>(&normalized).unwrap();
     }
 }

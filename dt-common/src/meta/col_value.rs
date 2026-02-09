@@ -168,8 +168,10 @@ impl ColValue {
             (ColValue::String(v1), ColValue::String(v2)) => {
                 if v1 == v2 {
                     true
-                } else {
+                } else if Self::looks_like_inet(v1) || Self::looks_like_inet(v2) {
                     Self::normalize_inet(v1) == Self::normalize_inet(v2)
+                } else {
+                    false
                 }
             }
             _ => self == other,
@@ -182,15 +184,42 @@ impl ColValue {
         s.strip_suffix("/32").unwrap_or(s)
     }
 
-    pub fn hash_code(&self) -> u64 {
-        match self {
-            ColValue::None => 0,
-            _ => {
-                let mut hasher = DefaultHasher::new();
-                self.to_option_string().hash(&mut hasher);
-                hasher.finish()
+    /// Check if a string looks like an IPv4 or IPv6 address (optionally with /prefix)
+    fn looks_like_inet(s: &str) -> bool {
+        let base = s.split('/').next().unwrap_or(s);
+        // IPv4: contains dots and all parts are numeric
+        if base.contains('.') {
+            return base
+                .split('.')
+                .all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()));
+        }
+        // IPv6: contains colons
+        if base.contains(':') {
+            return base
+                .split(':')
+                .all(|p| p.is_empty() || p.bytes().all(|b| b.is_ascii_hexdigit()));
+        }
+        false
+    }
+
+    pub fn hash_code(&self) -> anyhow::Result<u64> {
+        if let ColValue::None = self {
+            return Ok(0);
+        }
+        if let ColValue::MongoDoc(doc) = self {
+            // Reject nested Document/Array in _id as they're not reliably hashable
+            for (key, value) in doc.iter() {
+                if matches!(value, Bson::Document(_) | Bson::Array(_)) {
+                    bail!(
+                        "MongoDB _id contains unhashable type at key '{}': use primitive types",
+                        key
+                    );
+                }
             }
         }
+        let mut hasher = DefaultHasher::new();
+        self.to_option_string().hash(&mut hasher);
+        Ok(hasher.finish())
     }
 
     pub fn type_name(&self) -> &'static str {

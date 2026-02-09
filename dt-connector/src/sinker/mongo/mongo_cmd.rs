@@ -15,6 +15,13 @@ pub fn build_insert_cmd(src_row_data: &RowData) -> Option<String> {
     Some(format!("db.{}.insertOne({})", src_row_data.tb, doc_js))
 }
 
+pub fn build_delete_cmd(row_data: &RowData) -> Option<String> {
+    let doc = get_doc_from_either(row_data)?;
+    let id = doc.get(MongoConstants::ID)?;
+    let filter_js = bson_to_js(&Bson::Document(doc! { MongoConstants::ID: id.clone() }));
+    Some(format!("db.{}.deleteOne({})", row_data.tb, filter_js))
+}
+
 pub fn build_update_cmd(
     src_row_data: &RowData,
     diff_col_values: &HashMap<String, DiffColValue>,
@@ -161,6 +168,14 @@ fn get_doc(src_row_data: &RowData) -> Option<&Document> {
         .ok()?
         .get(MongoConstants::DOC)?
     {
+        ColValue::MongoDoc(doc) => Some(doc),
+        _ => None,
+    }
+}
+
+fn get_doc_from_either(row_data: &RowData) -> Option<&Document> {
+    let fields = row_data.after.as_ref().or(row_data.before.as_ref())?;
+    match fields.get(MongoConstants::DOC)? {
         ColValue::MongoDoc(doc) => Some(doc),
         _ => None,
     }

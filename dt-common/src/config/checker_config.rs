@@ -21,8 +21,8 @@ pub struct CheckerConfig {
 impl Default for CheckerConfig {
     fn default() -> Self {
         Self {
-            queue_size: 2000,
-            max_connections: 2,
+            queue_size: 200,
+            max_connections: 8,
             batch_size: 100,
             sample_rate: 1.0,
             output_full_row: false,

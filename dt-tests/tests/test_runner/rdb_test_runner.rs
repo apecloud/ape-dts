@@ -121,13 +121,7 @@ impl RdbTestRunner {
             }
             DbType::Pg => {
                 src_conn_pool_pg = Some(
-                    TaskUtil::create_pg_conn_pool(
-                        &src_url,
-                        &src_connection_auth,
-                        5,
-                        false,
-                        true,
-                    )
+                    TaskUtil::create_pg_conn_pool(&src_url, &src_connection_auth, 5, false, true)
                         .await?,
                 );
             }
@@ -161,7 +155,7 @@ impl RdbTestRunner {
                             false,
                             true,
                         )
-                            .await?,
+                        .await?,
                     );
                 }
                 _ => {}
@@ -356,7 +350,7 @@ impl RdbTestRunner {
             }
 
             if line.starts_with("--") {
-                let parts: Vec<&str> = line[2..].trim().split('/').collect();
+                let parts: Vec<&str> = line.strip_prefix("--").unwrap().trim().split('/').collect();
                 let current_user = parts[0].trim().to_string();
                 let current_pwd = parts[1].trim().to_string();
 
@@ -381,8 +375,7 @@ impl RdbTestRunner {
                         }
                         Err(e) => {
                             if expect_success {
-                                assert!(
-                                    false,
+                                panic!(
                                     "MySQL pool connect failed: {} with user={}, password={}, but expect success",
                                     e, current_user, current_pwd
                                 );
@@ -397,8 +390,7 @@ impl RdbTestRunner {
                         }
                         Err(e) => {
                             if expect_success {
-                                assert!(
-                                    false,
+                                panic!(
                                     "PostgreSQL pool connect failed: {} with user={}, password={}, but expect success",
                                     e, current_user, current_pwd
                                 );
@@ -428,24 +420,22 @@ impl RdbTestRunner {
                         );
                     }
                 }
-            } else {
-                if let Some(ref pool) = pg_pool {
-                    let query = sqlx::query(line);
-                    let result = query.execute(pool).await;
+            } else if let Some(ref pool) = pg_pool {
+                let query = sqlx::query(line);
+                let result = query.execute(pool).await;
 
-                    if expect_success {
-                        assert!(
-                            result.is_ok(),
-                            "Expected success but got error: {:?}",
-                            result.err()
-                        );
-                    } else {
-                        assert!(
-                            result.is_err(),
-                            "Expected error but got success, sql: {}",
-                            line
-                        );
-                    }
+                if expect_success {
+                    assert!(
+                        result.is_ok(),
+                        "Expected success but got error: {:?}",
+                        result.err()
+                    );
+                } else {
+                    assert!(
+                        result.is_err(),
+                        "Expected error but got success, sql: {}",
+                        line
+                    );
                 }
             }
         }

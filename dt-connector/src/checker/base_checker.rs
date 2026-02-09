@@ -30,7 +30,13 @@ use dt_common::{
     utils::limit_queue::LimitedQueue,
 };
 
+/// Maximum number of rows to query in a single batch.
+/// Larger values improve throughput but may increase query latency and memory usage.
 pub const CHECKER_MAX_QUERY_BATCH: usize = 1000;
+
+/// Maximum size of the retry queue.
+/// When the queue is full, oldest entries are dropped to prevent unbounded memory growth.
+/// At 100k entries with average row size, this limits memory to a reasonable bound.
 const CHECKER_MAX_RETRY_QUEUE_SIZE: usize = 100_000;
 
 #[derive(Debug, Clone)]
@@ -67,6 +73,38 @@ impl CheckerTbMeta {
         insert_row.refresh_data_size();
 
         self.build_insert_query(&insert_row)
+    }
+
+    fn build_delete_sql(&self, dst_row_data: &RowData) -> anyhow::Result<Option<String>> {
+        if matches!(self, CheckerTbMeta::Mongo(_)) {
+            return Ok(mongo_cmd::build_delete_cmd(dst_row_data));
+        }
+        let dst_after = match &dst_row_data.after {
+            Some(after) if !after.is_empty() => after.clone(),
+            _ => return Ok(None),
+        };
+        let mut delete_row = RowData::new(
+            dst_row_data.schema.clone(),
+            dst_row_data.tb.clone(),
+            RowType::Delete,
+            Some(dst_after),
+            None,
+        );
+        delete_row.refresh_data_size();
+
+        self.build_delete_query(&delete_row)
+    }
+
+    fn build_delete_query(&self, row_data: &RowData) -> anyhow::Result<Option<String>> {
+        match self {
+            CheckerTbMeta::Mysql(meta) => RdbQueryBuilder::new_for_mysql(meta, None)
+                .get_query_sql(row_data, false)
+                .map(Some),
+            CheckerTbMeta::Pg(meta) => RdbQueryBuilder::new_for_pg(meta, None)
+                .get_query_sql(row_data, false)
+                .map(Some),
+            CheckerTbMeta::Mongo(_) => unreachable!("Mongo should be handled in build_delete_sql"),
+        }
     }
 
     fn build_diff_sql(
@@ -217,7 +255,7 @@ enum CheckerMsg {
 
 pub struct DataCheckerHandle {
     tx: mpsc::Sender<CheckerMsg>,
-    join_handle: Option<JoinHandle<()>>,
+    join_handle: Option<JoinHandle<anyhow::Result<()>>>,
     pending_rows: Arc<AtomicU64>,
     monitor: Arc<Monitor>,
 }
@@ -242,7 +280,7 @@ impl DataCheckerHandle {
             monitor.clone(),
             name,
         );
-        let join_handle = tokio::spawn(check_job.run());
+        let join_handle = tokio::spawn(async move { check_job.run().await });
 
         Self {
             tx,
@@ -262,7 +300,7 @@ impl DataCheckerHandle {
     pub async fn close(&mut self) -> anyhow::Result<()> {
         let _ = self.tx.send(CheckerMsg::Close).await;
         if let Some(handle) = self.join_handle.take() {
-            handle.await?;
+            handle.await??;
         }
         Ok(())
     }
@@ -321,9 +359,10 @@ impl<C: Checker> DataChecker<C> {
         }
     }
 
-    pub async fn run(mut self) {
+    pub async fn run(mut self) -> anyhow::Result<()> {
         log_info!("Checker [{}] background worker started.", self.name);
         let mut interval = tokio::time::interval(Duration::from_secs(1));
+        let mut first_error: Option<anyhow::Error> = None;
 
         loop {
             tokio::select! {
@@ -333,6 +372,9 @@ impl<C: Checker> DataChecker<C> {
                             let batch_size = batch.len() as u64;
                             if let Err(err) = self.check_batch(batch, true).await {
                                 log_error!("Checker [{}] batch failed: {}", self.name, err);
+                                if first_error.is_none() {
+                                    first_error = Some(err);
+                                }
                             }
                             if batch_size > 0 {
                                 self.pending_rows.fetch_sub(batch_size, Ordering::Relaxed);
@@ -343,6 +385,9 @@ impl<C: Checker> DataChecker<C> {
                         Some(CheckerMsg::Close) | None => {
                             if let Err(err) = self.shutdown().await {
                                 log_error!("Checker [{}] close failed: {}", self.name, err);
+                                if first_error.is_none() {
+                                    first_error = Some(err);
+                                }
                             }
                             break;
                         }
@@ -351,6 +396,9 @@ impl<C: Checker> DataChecker<C> {
                 _ = interval.tick() => {
                     if let Err(err) = self.process_due_retries().await {
                         log_error!("Checker [{}] retry failed: {}", self.name, err);
+                        if first_error.is_none() {
+                            first_error = Some(err);
+                        }
                     }
                 }
             }
@@ -358,6 +406,11 @@ impl<C: Checker> DataChecker<C> {
 
         self.monitor.set_counter(CounterType::CheckerPending, 0);
         log_info!("Checker [{}] background worker stopped.", self.name);
+
+        if let Some(err) = first_error {
+            return Err(err);
+        }
+        Ok(())
     }
 
     fn build_revise_sql(
@@ -371,6 +424,12 @@ impl<C: Checker> DataChecker<C> {
         if !output_revise_sql {
             return Ok(None);
         };
+
+        // DELETE row still exists in target — generate DELETE revise SQL
+        if src_row_data.row_type == RowType::Delete {
+            let dst_row = dst_row_data.context("missing dst row for delete revise")?;
+            return tb_meta.build_delete_sql(dst_row);
+        }
 
         match diff_col_values {
             None => tb_meta.build_miss_sql(src_row_data),
@@ -445,25 +504,56 @@ impl<C: Checker> DataChecker<C> {
         ctx: &mut CheckContext,
         tb_meta: &CheckerTbMeta,
         max_retries: u32,
-    ) -> anyhow::Result<(Vec<CheckLog>, Vec<CheckLog>, usize, Vec<Arc<RowData>>)> {
+    ) -> anyhow::Result<(
+        Vec<CheckLog>,
+        Vec<CheckLog>,
+        usize,
+        usize,
+        Vec<Arc<RowData>>,
+    )> {
         let mut miss = Vec::new();
         let mut diff = Vec::new();
         let mut sql_count = 0;
+        let mut skip_count = 0;
         let mut retry_rows = Vec::new();
 
         if max_retries > 0 {
             for src_row_data in src_data {
-                let key = src_row_data.get_hash_code(tb_meta.basic())?;
+                let key = match src_row_data.get_hash_code(tb_meta.basic()) {
+                    Ok(k) => k,
+                    Err(e) => {
+                        log_warn!(
+                            "Skipping row with unhashable key in {}.{}: {}",
+                            src_row_data.schema,
+                            src_row_data.tb,
+                            e
+                        );
+                        skip_count += 1;
+                        continue;
+                    }
+                };
                 let dst_row_data = dst_row_data_map.remove(&key);
                 if Self::is_inconsistent(src_row_data, dst_row_data.as_ref())? {
                     retry_rows.push(src_row_data.clone());
                 }
             }
-            return Ok((miss, diff, sql_count, retry_rows));
+            return Ok((miss, diff, sql_count, skip_count, retry_rows));
         }
 
         for src_row_data in src_data {
-            let key = src_row_data.get_hash_code(tb_meta.basic())?;
+            let key = match src_row_data.get_hash_code(tb_meta.basic()) {
+                Ok(k) => k,
+                Err(e) => {
+                    log_warn!(
+                        "Skipping row with unhashable key in {}.{}: {}",
+                        src_row_data.schema,
+                        src_row_data.tb,
+                        e
+                    );
+                    skip_count += 1;
+                    continue;
+                }
+            };
             let dst_row_data = dst_row_data_map.remove(&key);
             let check_result = Self::compare_src_dst(src_row_data, dst_row_data.as_ref())?;
             let Some(check_result) = check_result else {
@@ -483,14 +573,23 @@ impl<C: Checker> DataChecker<C> {
             .await?;
         }
 
-        Ok((miss, diff, sql_count, retry_rows))
+        Ok((miss, diff, sql_count, skip_count, retry_rows))
     }
 
     fn compare_src_dst(
         src_row: &Arc<RowData>,
         dst_row: Option<&RowData>,
     ) -> anyhow::Result<Option<CheckInconsistency>> {
-        if let Some(dst_row) = dst_row {
+        if src_row.row_type == RowType::Delete {
+            // DELETE: row should NOT exist in target
+            if dst_row.is_some() {
+                // Row still exists in target — not deleted, report as Diff
+                Ok(Some(CheckInconsistency::Diff(HashMap::new())))
+            } else {
+                // Row absent in target — consistent
+                Ok(None)
+            }
+        } else if let Some(dst_row) = dst_row {
             let diffs = Self::compare_row_data(src_row, dst_row)?;
             if diffs.is_empty() {
                 Ok(None)
@@ -756,10 +855,13 @@ impl<C: Checker> DataChecker<C> {
         tb_meta: &RdbTbMeta,
     ) -> Option<HashMap<String, Option<String>>> {
         let mut id_col_values = HashMap::with_capacity(tb_meta.id_cols.len());
-        let after = row_data.require_after().ok()?;
+        let col_values = match row_data.row_type {
+            RowType::Delete => row_data.require_before().ok()?,
+            _ => row_data.require_after().ok()?,
+        };
 
         for col in tb_meta.id_cols.iter() {
-            let val = after.get(col)?.to_option_string();
+            let val = col_values.get(col)?.to_option_string();
             id_col_values.insert(col.to_owned(), val);
         }
         Some(id_col_values)
@@ -839,7 +941,11 @@ impl<C: Checker> DataChecker<C> {
             });
         }
         if dropped > 0 {
-            log_warn!("Checker retry queue full, dropped {} oldest rows.", dropped);
+            log_warn!(
+                "Checker retry queue full (max {}), dropped {} oldest rows to prevent memory exhaustion.",
+                CHECKER_MAX_RETRY_QUEUE_SIZE,
+                dropped
+            );
             self.retry_next_at = None;
         }
     }
@@ -994,7 +1100,7 @@ impl<C: Checker> DataChecker<C> {
         let max_retries = self.ctx.max_retries;
 
         // 2. check and generate logs (inconsistencies will be retried later)
-        let (miss, diff, sql_count, retry_rows) = Self::check_and_generate_logs(
+        let (miss, diff, sql_count, skip_count, retry_rows) = Self::check_and_generate_logs(
             &checkable,
             dst_row_data_map,
             &mut self.ctx,
@@ -1007,6 +1113,7 @@ impl<C: Checker> DataChecker<C> {
         summary.end_time = chrono::Local::now().to_rfc3339();
         summary.miss_count += miss.len();
         summary.diff_count += diff.len();
+        summary.skip_count += skip_count;
         if sql_count > 0 {
             summary.sql_count = Some(summary.sql_count.unwrap_or(0) + sql_count);
         }
@@ -1057,6 +1164,10 @@ impl<C: Checker> DataChecker<C> {
     }
 
     fn is_inconsistent(src_row: &Arc<RowData>, dst_row: Option<&RowData>) -> anyhow::Result<bool> {
+        if src_row.row_type == RowType::Delete {
+            // DELETE: inconsistent if row still exists in target
+            return Ok(dst_row.is_some());
+        }
         let Some(dst_row) = dst_row else {
             return Ok(true);
         };
@@ -1092,9 +1203,13 @@ impl<C: Checker> DataChecker<C> {
 
 // check if row has null key
 pub fn has_null_key(row_data: &Arc<RowData>, id_cols: &[String]) -> bool {
-    row_data.require_after().ok().is_some_and(|after| {
+    let col_values = match row_data.row_type {
+        RowType::Delete => row_data.require_before().ok(),
+        _ => row_data.require_after().ok(),
+    };
+    col_values.is_some_and(|vals| {
         id_cols
             .iter()
-            .any(|col| matches!(after.get(col), Some(ColValue::None) | None))
+            .any(|col| matches!(vals.get(col), Some(ColValue::None) | None))
     })
 }

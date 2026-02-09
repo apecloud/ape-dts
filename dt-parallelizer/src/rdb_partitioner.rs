@@ -103,7 +103,7 @@ impl RdbPartitioner {
             .get_tb_meta(&row_data.schema, &row_data.tb)
             .await?;
         if let Some(partition_col_value) = col_values.get(&tb_meta.partition_col) {
-            Ok(partition_col_value.hash_code() as usize % partition_count)
+            Ok(partition_col_value.hash_code()? as usize % partition_count)
         } else {
             Ok(0)
         }

@@ -24,8 +24,12 @@ sample_interval=3
 
 ## 限制
 
-- 数据校验为源端驱动（仅验证 Source ∈ Target），无法发现目标端多余数据（幽灵数据）。因此，目标端删除同步缺失不会被检测到。
+- 数据校验为源端驱动（仅验证 Source ∈ Target），无法发现目标端多余数据（幽灵数据）。如需检测目标端多余数据，可通过 [反向校验](#反向校验) 交换 extractor 和 checker 配置。
 - 对于 MongoDB，`_id` 需为可哈希类型（例如 ObjectId/String/Int32/Int64）。不支持的 `_id` 类型会导致 checker 报错。
+
+## DELETE 事件校验
+
+在 CDC + Check 场景下，checker 会校验 DELETE 事件：通过主键在目标端查询，若目标端仍存在该行则判定为不一致，记录到 `diff.log`（`diff_col_values` 为空）。开启 `output_revise_sql=true` 时，会自动生成对应的 `DELETE` 修复语句写入 `sql.log`。
 
 # 校验结果
 

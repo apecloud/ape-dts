@@ -118,18 +118,25 @@ impl TestBase {
     }
 
     pub async fn run_check_test(test_dir: &str) {
-        let runner = RdbCheckTestRunner::new(test_dir).await.unwrap();
-        runner.run_check_test().await.unwrap();
-        runner.close().await.unwrap();
+        let runner = RdbCheckTestRunner::new(test_dir)
+            .await
+            .expect("Failed to create RdbCheckTestRunner");
+        runner
+            .run_check_test()
+            .await
+            .expect("Failed to run check test");
+        runner.close().await.expect("Failed to close runner");
     }
 
     pub async fn run_cdc_check_test(test_dir: &str, start_millis: u64, parse_millis: u64) {
-        let runner = RdbCheckTestRunner::new(test_dir).await.unwrap();
+        let runner = RdbCheckTestRunner::new(test_dir)
+            .await
+            .expect("Failed to create RdbCheckTestRunner");
         runner
             .run_cdc_check_test(start_millis, parse_millis)
             .await
-            .unwrap();
-        runner.close().await.unwrap();
+            .expect("Failed to run CDC check test");
+        runner.close().await.expect("Failed to close runner");
     }
 
     pub async fn run_review_test(test_dir: &str) {
