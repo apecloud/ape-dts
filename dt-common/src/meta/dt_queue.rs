@@ -47,7 +47,6 @@ impl DtQueue {
         self.cur_bytes.load(Ordering::Relaxed)
     }
 
-    #[inline(always)]
     pub async fn push(&self, mut item: DtItem) -> anyhow::Result<()> {
         let item_size = item.dt_data.get_data_size();
         loop {
@@ -68,7 +67,6 @@ impl DtQueue {
         }
     }
 
-    #[inline(always)]
     pub fn pop(&self) -> anyhow::Result<DtItem, PopError> {
         let item = self.queue.pop()?;
 
