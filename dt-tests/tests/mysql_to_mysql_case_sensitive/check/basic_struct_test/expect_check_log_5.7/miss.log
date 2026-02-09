@@ -1,3 +1,1 @@
-[("table.STRUCT_check_test_1.not_MATCH_miss", "CREATE TABLE IF NOT EXISTS `STRUCT_check_test_1`.`not_MATCH_miss` (`ID` int(11) NOT NULL  ,`text` varchar(10) CHARACTER SET utf8 COLLATE utf8_general_ci NULL  , PRIMARY KEY (`ID`)) ENGINE=InnoDB  DEFAULT CHARSET=utf8 COLLATE=utf8_general_ci")]
-key: index.STRUCT_check_test_1.not_MATCH_index.I6_miss, src_sql: CREATE  INDEX `I6_miss` ON `STRUCT_check_test_1`.`not_MATCH_index` (`index_col`) 
-key: index.STRUCT_check_test_1.not_MATCH_index.I5_diff_name_src, src_sql: CREATE  INDEX `I5_diff_name_src` ON `STRUCT_check_test_1`.`not_MATCH_index` (`index_col`) 
+{"key":"table.STRUCT_check_test_1.not_MATCH_miss","src_sql":"CREATE TABLE IF NOT EXISTS `STRUCT_check_test_1`.`not_MATCH_miss` (`ID` int(11) NOT NULL, `text` varchar(10) CHARACTER SET latin1 COLLATE latin1_swedish_ci NULL, PRIMARY KEY (`ID`)) ENGINE=InnoDB  DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci"}

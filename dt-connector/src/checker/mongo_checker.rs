@@ -12,7 +12,6 @@ use serde_json::Value as JsonValue;
 use crate::checker::base_checker::{
     CheckContext, Checker, CheckerTbMeta, DataCheckerHandle, FetchResult, CHECKER_MAX_QUERY_BATCH,
 };
-use dt_common::log_error;
 use dt_common::meta::{
     col_value::ColValue,
     mongo::{mongo_constant::MongoConstants, mongo_key::MongoKey},
@@ -20,6 +19,7 @@ use dt_common::meta::{
     row_data::RowData,
     row_type::RowType,
 };
+use dt_common::{log_error, log_warn};
 
 pub struct MongoChecker {
     mongo_client: Client,
@@ -33,8 +33,9 @@ impl Checker for MongoChecker {
             .context("fetch called with empty src rows")?;
 
         let mut meta = Self::mock_tb_meta(&first_row.schema, &first_row.tb);
-        if let Some(after) = &first_row.after {
-            meta.cols = after.keys().cloned().collect();
+        let first_row_cols = first_row.after.as_ref().or(first_row.before.as_ref());
+        if let Some(cols) = first_row_cols {
+            meta.cols = cols.keys().cloned().collect();
         }
         for col in [MongoConstants::DOC, MongoConstants::ID] {
             let col = col.to_string();
@@ -55,7 +56,15 @@ impl Checker for MongoChecker {
                 )
             })?;
 
-            Self::validate_mongo_id(&row_data.schema, &row_data.tb, &id)?;
+            if !Self::is_supported_mongo_id(&id) {
+                log_warn!(
+                    "Skipping row with unsupported _id type in {}.{}, _id: {:?}",
+                    row_data.schema,
+                    row_data.tb,
+                    id
+                );
+                continue;
+            }
             ids.push(id);
             batch_rows.push(row_data.clone());
         }
@@ -107,17 +116,9 @@ impl MongoChecker {
         DataCheckerHandle::spawn(Self { mongo_client }, ctx, buffer_size, "MongoChecker")
     }
 
-    fn validate_mongo_id(schema: &str, tb: &str, id: &Bson) -> anyhow::Result<()> {
+    fn is_supported_mongo_id(id: &Bson) -> bool {
         let doc = doc! { MongoConstants::ID: id.clone() };
-        if MongoKey::from_doc(&doc).is_none() {
-            anyhow::bail!(
-                "unsupported _id type for checker, schema: {}, tb: {}, _id: {:?}",
-                schema,
-                tb,
-                id
-            );
-        }
-        Ok(())
+        MongoKey::from_doc(&doc).is_some()
     }
 
     fn mock_tb_meta(schema: &str, tb: &str) -> RdbTbMeta {
@@ -146,13 +147,15 @@ impl MongoChecker {
     }
 
     fn get_id_from_row(row: &Arc<RowData>) -> anyhow::Result<Bson> {
-        if let Some(after) = &row.after {
-            if let Some(ColValue::MongoDoc(doc)) = after.get(MongoConstants::DOC) {
+        // For DELETE rows, after is None, so fall back to before
+        let data = row.after.as_ref().or(row.before.as_ref());
+        if let Some(fields) = data {
+            if let Some(ColValue::MongoDoc(doc)) = fields.get(MongoConstants::DOC) {
                 if let Some(id) = doc.get(MongoConstants::ID) {
                     return Ok(id.clone());
                 }
             }
-            if let Some(ColValue::String(s)) = after.get(MongoConstants::ID) {
+            if let Some(ColValue::String(s)) = fields.get(MongoConstants::ID) {
                 if let Ok(oid) = ObjectId::parse_str(s) {
                     return Ok(Bson::ObjectId(oid));
                 }

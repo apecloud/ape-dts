@@ -6,7 +6,7 @@ use std::{
 use super::task_util::TaskUtil;
 use dt_common::{
     config::{
-        config_enums::{DbType, ParallelType},
+        config_enums::{DbType, ExtractType, ParallelType},
         sinker_config::SinkerConfig,
         task_config::TaskConfig,
     },
@@ -14,6 +14,7 @@ use dt_common::{
     monitor::monitor::Monitor,
     utils::redis_util::RedisUtil,
 };
+use dt_connector::checker::CheckerHandle;
 use dt_parallelizer::{
     base_parallelizer::BaseParallelizer, check_parallelizer::CheckParallelizer,
     foxlake_parallelizer::FoxlakeParallelizer, merge_parallelizer::MergeParallelizer,
@@ -29,7 +30,9 @@ impl ParallelizerUtil {
     pub async fn create_parallelizer(
         config: &TaskConfig,
         monitor: Arc<Monitor>,
-    ) -> anyhow::Result<Box<dyn Parallelizer + Send + Sync>> {
+        rps_limiter: Option<Ratelimiter>,
+        checker: Option<CheckerHandle>,
+    ) -> anyhow::Result<(Box<dyn Parallelizer + Send + Sync>, Option<CheckerHandle>)> {
         let parallel_size = config.parallelizer.parallel_size;
         let parallel_type = &config.parallelizer.parallel_type;
         let base_parallelizer = BaseParallelizer {
@@ -69,11 +72,22 @@ impl ParallelizerUtil {
                     DbType::Mongo => Self::create_mongo_merger().await?,
                     _ => Self::create_rdb_merger(config).await?,
                 };
-                Box::new(CheckParallelizer {
+                // Only move checker into CheckParallelizer for CDC tasks,
+                // so it checks against merged data. Snapshot check keeps
+                // checker in BasePipeline (pre-merger data == actual data).
+                let is_cdc = matches!(config.extractor_basic.extract_type, ExtractType::Cdc);
+                let (inner_checker, remaining_checker) = if is_cdc {
+                    (checker, None)
+                } else {
+                    (None, checker)
+                };
+                let parallelizer = Box::new(CheckParallelizer::new(
                     base_parallelizer,
                     merger,
                     parallel_size,
-                })
+                    inner_checker,
+                ));
+                return Ok((parallelizer, remaining_checker));
             }
 
             ParallelType::Serial => Box::new(SerialParallelizer { base_parallelizer }),
@@ -127,7 +141,7 @@ impl ParallelizerUtil {
                 })
             }
         };
-        Ok(parallelizer)
+        Ok((parallelizer, checker))
     }
 
     async fn create_rdb_merger(
