@@ -38,6 +38,41 @@ impl MongoCheckTestRunner {
         start_millis: u64,
         parse_millis: u64,
     ) -> anyhow::Result<()> {
+        self.run_cdc_check_test_with_sqls(
+            start_millis,
+            parse_millis,
+            &self.base.base.src_test_sqls.clone(),
+        )
+        .await
+    }
+
+    pub async fn run_cdc_check_large_data_test(
+        &self,
+        start_millis: u64,
+        parse_millis: u64,
+        collection: &str,
+        row_count: usize,
+    ) -> anyhow::Result<()> {
+        let mut sqls = self.base.base.src_test_sqls.clone();
+        for i in 1..=row_count {
+            sqls.push(format!(
+                "db.{}.insertOne({{_id: {}, name: \"user_{}\", value: {}}})",
+                collection,
+                i,
+                i,
+                i * 100
+            ));
+        }
+        self.run_cdc_check_test_with_sqls(start_millis, parse_millis, &sqls)
+            .await
+    }
+
+    async fn run_cdc_check_test_with_sqls(
+        &self,
+        start_millis: u64,
+        parse_millis: u64,
+        src_sqls: &[String],
+    ) -> anyhow::Result<()> {
         CheckUtil::clear_check_log(&self.dst_check_log_dir);
 
         self.base.execute_prepare_sqls().await?;
@@ -49,7 +84,7 @@ impl MongoCheckTestRunner {
         TimeUtil::sleep_millis(start_millis).await;
 
         self.base
-            .execute_sqls_with_client(self.base.src_mongo_client(), &self.base.base.src_test_sqls)
+            .execute_sqls_with_client(self.base.src_mongo_client(), src_sqls)
             .await?;
         TimeUtil::sleep_millis(parse_millis).await;
 

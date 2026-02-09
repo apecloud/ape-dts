@@ -86,7 +86,7 @@ mod tests {
                 &filter_config,
                 &router_config,
             );
-            if generate_task_id.len() > 0 {
+            if !generate_task_id.is_empty() {
                 assert_eq!(new_task_id, generate_task_id);
             }
             generate_task_id = new_task_id
