@@ -518,6 +518,14 @@ impl TaskRunner {
         )
         .await?;
 
+        // snapshot check_summary before this subtask so we can compute per-subtask deltas
+        let check_summary_snapshot = if let Some(check_summary) = &task_context.check_summary {
+            let s = check_summary.lock().await;
+            Some((s.miss_count, s.diff_count, s.sql_count.unwrap_or(0)))
+        } else {
+            None
+        };
+
         // start threads
         let f1 = tokio::spawn(async move {
             extractor.extract().await.unwrap();
@@ -551,22 +559,16 @@ impl TaskRunner {
         });
         try_join!(f1, f2, f3)?;
 
-        if let Some(check_summary) = &task_context.check_summary {
+        if let (Some(check_summary), Some((prev_miss, prev_diff, _prev_sql))) =
+            (&task_context.check_summary, check_summary_snapshot)
+        {
             let summary = check_summary.lock().await;
-            self.task_monitor.add_no_window_metrics(
-                TaskMetricsType::CheckerMissCount,
-                summary.miss_count as u64,
-            );
-            self.task_monitor.add_no_window_metrics(
-                TaskMetricsType::CheckerDiffCount,
-                summary.diff_count as u64,
-            );
-            if let Some(sql_count) = summary.sql_count {
-                self.task_monitor.add_no_window_metrics(
-                    TaskMetricsType::CheckerGenerateSqlCount,
-                    sql_count as u64,
-                );
-            }
+            let delta_miss = summary.miss_count.saturating_sub(prev_miss);
+            let delta_diff = summary.diff_count.saturating_sub(prev_diff);
+            self.task_monitor
+                .add_no_window_metrics(TaskMetricsType::CheckerMissCount, delta_miss as u64);
+            self.task_monitor
+                .add_no_window_metrics(TaskMetricsType::CheckerDiffCount, delta_diff as u64);
         }
 
         // finished log
@@ -645,8 +647,13 @@ impl TaskRunner {
                             lua_code: processor_config.lua_code.clone(),
                         });
 
-                let parallelizer =
-                    ParallelizerUtil::create_parallelizer(&self.config, monitor.clone()).await?;
+                let (parallelizer, remaining_checker) = ParallelizerUtil::create_parallelizer(
+                    &self.config,
+                    monitor.clone(),
+                    rps_limiter,
+                    checker,
+                )
+                .await?;
 
                 let pipeline = BasePipeline {
                     buffer,
@@ -661,7 +668,7 @@ impl TaskRunner {
                     data_marker,
                     lua_processor,
                     recorder,
-                    checker,
+                    checker: remaining_checker,
                 };
                 Ok(Box::new(pipeline) as Box<dyn Pipeline + Send>)
             }
@@ -705,7 +712,22 @@ impl TaskRunner {
         let enable_sqlx_log = TaskUtil::check_enable_sqlx_log(log_level);
         let is_cdc_task = matches!(self.config.extractor_basic.extract_type, ExtractType::Cdc)
             && matches!(self.config.sinker_basic.sink_type, SinkType::Write);
-        let max_retries = if is_cdc_task { 0 } else { cfg.max_retries };
+        let (max_retries, retry_interval_secs) = if is_cdc_task {
+            // CDC tasks: data arrives as a stream, checker verifies immediately
+            // after sinker commits. Retries are harmful because subsequent
+            // DELETE events may remove data that was correctly written,
+            // causing false misses in the retry queue.
+            if cfg.max_retries > 0 || cfg.retry_interval_secs > 0 {
+                log_warn!(
+                    "CDC+check mode does not support retries. Ignoring max_retries={} and retry_interval_secs={} from config.",
+                    cfg.max_retries,
+                    cfg.retry_interval_secs
+                );
+            }
+            (0, 0)
+        } else {
+            (cfg.max_retries, cfg.retry_interval_secs)
+        };
         let missing = || Error::ConfigError("config [checker] target is required".into());
         let fallback_target = if matches!(self.config.sinker_basic.sink_type, SinkType::Dummy) {
             None
@@ -757,7 +779,7 @@ impl TaskRunner {
                         filter,
                         router,
                         cfg.output_revise_sql,
-                        cfg.retry_interval_secs,
+                        retry_interval_secs,
                         max_retries,
                         check_summary,
                         monitor.clone(),
@@ -779,7 +801,7 @@ impl TaskRunner {
                         filter,
                         router,
                         cfg.output_revise_sql,
-                        cfg.retry_interval_secs,
+                        retry_interval_secs,
                         max_retries,
                         check_summary,
                         monitor.clone(),
@@ -822,7 +844,7 @@ impl TaskRunner {
                         output_full_row: cfg.output_full_row,
                         output_revise_sql: cfg.output_revise_sql,
                         revise_match_full_row: cfg.revise_match_full_row,
-                        retry_interval_secs: cfg.retry_interval_secs,
+                        retry_interval_secs,
                         max_retries,
                         summary: CheckSummaryLog {
                             start_time: Local::now().to_rfc3339(),
@@ -860,7 +882,7 @@ impl TaskRunner {
                         output_full_row: cfg.output_full_row,
                         output_revise_sql: cfg.output_revise_sql,
                         revise_match_full_row: cfg.revise_match_full_row,
-                        retry_interval_secs: cfg.retry_interval_secs,
+                        retry_interval_secs,
                         max_retries,
                         summary: CheckSummaryLog {
                             start_time: Local::now().to_rfc3339(),
@@ -899,7 +921,7 @@ impl TaskRunner {
                         output_full_row: cfg.output_full_row,
                         output_revise_sql: cfg.output_revise_sql,
                         revise_match_full_row: false,
-                        retry_interval_secs: cfg.retry_interval_secs,
+                        retry_interval_secs,
                         max_retries,
                         summary: CheckSummaryLog {
                             start_time: Local::now().to_rfc3339(),
@@ -911,7 +933,7 @@ impl TaskRunner {
                 );
                 Ok(Some(CheckerHandle::Data(checker)))
             }
-            _ => Ok(None),
+            _ => bail!("checker not supported for db_type: {}", checker_db_type),
         }
     }
 

@@ -421,13 +421,13 @@ impl RedisTestRunner {
         let (src_to_compare, dst_to_compare) = if let Some(idx) = result_index {
             match (&src_result, &dst_result) {
                 (Value::Array(src_arr), Value::Array(dst_arr)) => {
-                    let src_elem = src_arr.get(idx as usize).unwrap_or(&Value::Nil);
-                    let dst_elem = dst_arr.get(idx as usize).unwrap_or(&Value::Nil);
+                    let src_elem = src_arr.get(idx).unwrap_or(&Value::Nil);
+                    let dst_elem = dst_arr.get(idx).unwrap_or(&Value::Nil);
                     (src_elem, dst_elem)
                 }
                 (Value::Set(src_set), Value::Set(dst_set)) => {
-                    let src_elem = src_set.get(idx as usize).unwrap_or(&Value::Nil);
-                    let dst_elem = dst_set.get(idx as usize).unwrap_or(&Value::Nil);
+                    let src_elem = src_set.get(idx).unwrap_or(&Value::Nil);
+                    let dst_elem = dst_set.get(idx).unwrap_or(&Value::Nil);
                     (src_elem, dst_elem)
                 }
                 _ => (&src_result, &dst_result),

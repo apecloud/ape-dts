@@ -216,13 +216,19 @@ impl RowData {
             _ => self.before.as_ref().context("row_data before is missing")?,
         };
 
-        // refer to: https://docs.oracle.com/javase/6/docs/api/java/util/List.html#hashCode%28%29
+        // refer to: https://docs.oracle.com/javase/6/docs/api/java/util/List.html#hashCode()
         let mut hash_code = 1u128;
         for col in tb_meta.id_cols.iter() {
             let col_hash_code = col_values
                 .get(col)
                 .with_context(|| format!("missing id col value: {}", col))?
-                .hash_code();
+                .hash_code()
+                .with_context(|| {
+                    format!(
+                        "unhashable _id value in schema: {}, tb: {}, col: {}",
+                        tb_meta.schema, tb_meta.tb, col
+                    )
+                })?;
             // col_hash_code is 0 if col_value is ColValue::None,
             // consider following case,
             // create table a(id int, value int, unique key(id, value));
