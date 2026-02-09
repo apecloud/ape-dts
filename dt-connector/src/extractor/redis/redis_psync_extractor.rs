@@ -27,7 +27,7 @@ use dt_common::{
         config_token_parser::{ConfigTokenParser, TokenEscapePair},
     },
     error::Error,
-    log_debug, log_error, log_info, log_position,
+    log_debug, log_error, log_info, log_position, log_warn,
     meta::{
         dt_data::DtData,
         position::Position,
@@ -57,6 +57,29 @@ pub struct RedisPsyncExtractor {
 #[async_trait]
 impl Extractor for RedisPsyncExtractor {
     async fn extract(&mut self) -> anyhow::Result<()> {
+        if let Some(recovery) = &self.recovery {
+            if let Some(position) = recovery.get_cdc_resume_position().await {
+                match &position {
+                    Position::Redis {
+                        repl_id,
+                        repl_offset,
+                        repl_port,
+                        now_db_id,
+                        ..
+                    } => {
+                        log_info!("redis psync recovery from repl_id:[{}], repl_offset:[{}], repl_port:[{}], now_db_id:[{}]", repl_id, repl_offset, repl_port, now_db_id);
+                        self.repl_id = repl_id.to_owned();
+                        self.repl_offset = *repl_offset;
+                        self.repl_port = *repl_port;
+                        self.now_db_id = *now_db_id;
+                    }
+                    _ => {
+                        log_warn!("position:{} is not a valid redis psync position", position);
+                    }
+                }
+            }
+        }
+
         log_info!(
             "RedisPsyncExtractor starts, repl_id: {}, repl_offset: {}, now_db_id: {}, 
              keepalive_interval_secs: {}, heartbeat_interval_secs: {}, heartbeat_key: {}",
