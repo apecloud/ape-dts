@@ -8,7 +8,7 @@ use ratelimit::Ratelimiter;
 use super::task_util::TaskUtil;
 use dt_common::{
     config::{
-        config_enums::{DbType, ParallelType},
+        config_enums::{DbType, ExtractType, ParallelType},
         sinker_config::SinkerConfig,
         task_config::TaskConfig,
     },
@@ -75,13 +75,22 @@ impl ParallelizerUtil {
                     DbType::Mongo => Self::create_mongo_merger().await?,
                     _ => Self::create_rdb_merger(config).await?,
                 };
-                let parallelizer = Box::new(CheckParallelizer {
+                // Only move checker into CheckParallelizer for CDC tasks,
+                // so it checks against merged data. Snapshot check keeps
+                // checker in BasePipeline (pre-merger data == actual data).
+                let is_cdc = matches!(config.extractor_basic.extract_type, ExtractType::Cdc);
+                let (inner_checker, remaining_checker) = if is_cdc {
+                    (checker, None)
+                } else {
+                    (None, checker)
+                };
+                let parallelizer = Box::new(CheckParallelizer::new(
                     base_parallelizer,
                     merger,
                     parallel_size,
-                    checker,
-                });
-                return Ok((parallelizer, None));
+                    inner_checker,
+                ));
+                return Ok((parallelizer, remaining_checker));
             }
 
             ParallelType::Serial => Box::new(SerialParallelizer { base_parallelizer }),

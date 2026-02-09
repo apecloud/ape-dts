@@ -36,7 +36,9 @@ use dt_common::log_filter::SizeLimitFilterDeserializer;
 use dt_common::{
     config::{
         checker_config::CheckerConfig,
-        config_enums::{build_task_type, DbType, ExtractType, PipelineType, SinkType, TaskType},
+        config_enums::{
+            build_task_type, DbType, ExtractType, ParallelType, PipelineType, SinkType, TaskType,
+        },
         config_token_parser::{ConfigTokenParser, TokenEscapePair},
         extractor_config::ExtractorConfig,
         sinker_config::SinkerConfig,
@@ -712,7 +714,14 @@ impl TaskRunner {
         let enable_sqlx_log = TaskUtil::check_enable_sqlx_log(log_level);
         let is_cdc_task = matches!(self.config.extractor_basic.extract_type, ExtractType::Cdc)
             && matches!(self.config.sinker_basic.sink_type, SinkType::Write);
-        let max_retries = if is_cdc_task {
+        let is_cdc_check = is_cdc_task
+            && matches!(
+                self.config.parallelizer.parallel_type,
+                ParallelType::RdbCheck
+            );
+        let max_retries = if is_cdc_task && !is_cdc_check {
+            // Non-check CDC tasks: checker runs in pipeline on pre-merge data,
+            // retries are not meaningful.
             if cfg.max_retries > 0 {
                 log::warn!(
                     "Checker retries are disabled for CDC tasks; ignoring configured max_retries={}",
