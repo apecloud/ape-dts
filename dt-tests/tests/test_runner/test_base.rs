@@ -218,6 +218,20 @@ impl TestBase {
             .unwrap();
     }
 
+    pub async fn run_mongo_cdc_check_large_data_test(
+        test_dir: &str,
+        start_millis: u64,
+        parse_millis: u64,
+        collection: &str,
+        row_count: usize,
+    ) {
+        let runner = MongoCheckTestRunner::new(test_dir).await.unwrap();
+        runner
+            .run_cdc_check_large_data_test(start_millis, parse_millis, collection, row_count)
+            .await
+            .unwrap();
+    }
+
     pub async fn run_mongo_recheck_test(test_dir: &str) {
         let runner = MongoCheckTestRunner::new(test_dir).await.unwrap();
         runner.run_recheck_test().await.unwrap();

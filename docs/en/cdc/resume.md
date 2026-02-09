@@ -2,7 +2,6 @@
 
 When starting a task, you can retrieve the latest task position from the previous execution based on the configuration, allowing you to continue the task without starting from scratch.
 
-
 ## Supported Sources
 
 - MySQL source

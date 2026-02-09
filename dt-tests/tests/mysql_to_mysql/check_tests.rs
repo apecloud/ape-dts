@@ -23,7 +23,7 @@ mod test {
         TestBase::run_cdc_check_test(
             "mysql_to_mysql/check/cdc_check_large_data_test",
             5000,
-            120000,
+            30000,
         )
         .await;
     }

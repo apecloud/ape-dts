@@ -20,7 +20,7 @@ mod test {
     #[tokio::test]
     #[serial]
     async fn cdc_check_large_data_test() {
-        TestBase::run_cdc_check_test("pg_to_pg/check/cdc_check_large_data_test", 5000, 120000)
+        TestBase::run_cdc_check_test("pg_to_pg/check/cdc_check_large_data_test", 5000, 30000)
             .await;
     }
 

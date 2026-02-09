@@ -1,27 +1,18 @@
--- Generate large batch of INSERTs (10000 rows)
-INSERT INTO test_db_1.check_large_test (id, name, value, data)
-SELECT seq.n,
-       CONCAT('user_', seq.n),
-       seq.n * 100,
-       CONCAT('data_', seq.n)
-FROM (
-    SELECT ones.i + tens.i * 10 + hundreds.i * 100 + thousands.i * 1000 + 1 AS n
-    FROM (
-        SELECT 0 AS i UNION ALL SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3 UNION ALL SELECT 4
-        UNION ALL SELECT 5 UNION ALL SELECT 6 UNION ALL SELECT 7 UNION ALL SELECT 8 UNION ALL SELECT 9
-    ) ones
-    CROSS JOIN (
-        SELECT 0 AS i UNION ALL SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3 UNION ALL SELECT 4
-        UNION ALL SELECT 5 UNION ALL SELECT 6 UNION ALL SELECT 7 UNION ALL SELECT 8 UNION ALL SELECT 9
-    ) tens
-    CROSS JOIN (
-        SELECT 0 AS i UNION ALL SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3 UNION ALL SELECT 4
-        UNION ALL SELECT 5 UNION ALL SELECT 6 UNION ALL SELECT 7 UNION ALL SELECT 8 UNION ALL SELECT 9
-    ) hundreds
-    CROSS JOIN (
-        SELECT 0 AS i UNION ALL SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3 UNION ALL SELECT 4
-        UNION ALL SELECT 5 UNION ALL SELECT 6 UNION ALL SELECT 7 UNION ALL SELECT 8 UNION ALL SELECT 9
-    ) thousands
-) AS seq
-WHERE seq.n <= 10000
-ORDER BY seq.n;
+-- Use stored procedure to generate 1000 independent INSERT events for CDC
+DROP PROCEDURE IF EXISTS test_db_1.generate_large_data;
+
+```
+CREATE PROCEDURE test_db_1.generate_large_data()
+BEGIN
+    DECLARE i INT DEFAULT 1;
+    WHILE i <= 1000 DO
+        INSERT INTO test_db_1.check_large_test (id, name, value, data)
+        VALUES (i, CONCAT('user_', i), i * 100, CONCAT('data_', i));
+        SET i = i + 1;
+    END WHILE;
+END;
+```
+
+CALL test_db_1.generate_large_data();
+
+DROP PROCEDURE IF EXISTS test_db_1.generate_large_data;
