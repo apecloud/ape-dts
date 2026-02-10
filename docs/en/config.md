@@ -61,8 +61,8 @@ takes precedence; otherwise the checker reuses the `[sinker]` target.
 | output_full_row       | output full row in diff log                        | false       | false                             |
 | output_revise_sql     | output revise SQL                                  | false       | false                             |
 | revise_match_full_row | match full row when building revise SQL            | false       | false                             |
-| retry_interval_secs   | retry interval for recheck (seconds)               | 0           | 0                                 |
-| max_retries           | retry times for recheck (CDC+write mode forces 0)  | 0           | 0                                 |
+| retry_interval_secs   | retry interval in seconds (forced to 0 in CDC+check mode) | 0           | 0                                 |
+| max_retries           | retry count (forced to 0 in CDC+check mode)                | 0           | 0                                 |
 | check_log_dir         | check log dir                                      | /tmp/check  | empty (use runtime.log_dir/check) |
 | check_log_file_size   | check log file size limit                          | 100mb       | 100mb                             |
 | db_type               | checker target db type (override sinker target)    | mysql       | empty                             |

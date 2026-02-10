@@ -60,8 +60,8 @@ Checker 有两种模式：
 | output_full_row       | diff 日志是否输出全量行                  | false       | false                            |
 | output_revise_sql     | diff 日志是否输出修复 SQL                | false       | false                            |
 | revise_match_full_row | 生成修复 SQL 时是否按全量行匹配          | false       | false                            |
-| retry_interval_secs   | 重试间隔（秒）                           | 0           | 0                                |
-| max_retries           | 重试次数（CDC+write 模式下强制为 0）     | 0           | 0                                |
+| retry_interval_secs   | 重试间隔（秒），CDC+check 模式下强制为 0  | 0           | 0                                |
+| max_retries           | 重试次数，CDC+check 模式下强制为 0        | 0           | 0                                |
 | check_log_dir         | 校验日志目录                             | /tmp/check  | 空（默认 runtime.log_dir/check） |
 | check_log_file_size   | 校验日志大小限制                         | 100mb       | 100mb                            |
 | db_type               | 校验目标库类型（覆盖 [sinker] 目标）     | mysql       | 空                               |

@@ -183,6 +183,8 @@ When `max_retries > 0`, the checker automatically retries on inconsistency:
 - Detailed miss/diff logs are only written on the final check
 - Useful when target data synchronization is not yet complete
 
+> **Note:** Retries are not supported in CDC+check mode. CDC events arrive as a stream, and subsequent DELETE events may remove data that was correctly written, causing false misses in the retry queue. Even if `max_retries` and `retry_interval_secs` are configured, they are forcibly ignored (set to 0) in CDC mode, and a warning is logged.
+
 ## Router
 
 Supports the `[router]` configuration section. Refer to [config details](../config.md) for details.

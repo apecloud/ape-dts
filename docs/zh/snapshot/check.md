@@ -183,6 +183,8 @@ url=<原 extractor 的 url>
 - 仅在最后一次检查时记录详细的 miss/diff 日志
 - 适用于目标端数据尚未完全同步的场景
 
+> **注意：** CDC+check 模式下不支持重试。CDC 事件是流式到达的，后续的 DELETE 事件可能会移除已正确写入的数据，导致重试队列中出现误报。即使配置了 `max_retries` 和 `retry_interval_secs`，CDC 模式下也会被强制忽略（设为 0），并输出警告日志。
+
 ## 路由
 
 支持 `[router]` 配置，详情请参考 [配置详解](../config.md)。

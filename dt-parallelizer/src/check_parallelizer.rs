@@ -55,17 +55,21 @@ impl Parallelizer for CheckParallelizer {
         sinkers: &[Arc<async_mutex::Mutex<Box<dyn Sinker + Send>>>],
     ) -> anyhow::Result<DataSize> {
         let mut data_size = DataSize::default();
-        let mut check_data: Vec<Arc<RowData>> = Vec::new();
+
+        // Capture the original (pre-merge) events for the checker.
+        // The merger splits UPDATE into DELETE+INSERT for the sinker,
+        // but the checker must verify the original event semantics
+        // against the final target state to avoid false diffs.
+        let check_data: Option<Vec<Arc<RowData>>> = if self.checker.is_some() {
+            Some(data.clone())
+        } else {
+            None
+        };
 
         let mut merged_data_items = self.merger.merge(data).await?;
         for tb_merged_data in merged_data_items.drain(..) {
             // delete first, then insert (same order as MergeParallelizer)
             let delete_data = tb_merged_data.delete_rows;
-            if self.checker.is_some() {
-                for row in delete_data.iter() {
-                    check_data.push(row.clone());
-                }
-            }
             data_size
                 .add_count(delete_data.len() as u64)
                 .add_bytes(delete_data.iter().map(|v| v.get_data_size()).sum());
@@ -76,11 +80,6 @@ impl Parallelizer for CheckParallelizer {
                 .await?;
 
             let batch_data = tb_merged_data.insert_rows;
-            if self.checker.is_some() {
-                for row in batch_data.iter() {
-                    check_data.push(row.clone());
-                }
-            }
             data_size
                 .add_count(batch_data.len() as u64)
                 .add_bytes(batch_data.iter().map(|v| v.get_data_size()).sum());
@@ -91,11 +90,6 @@ impl Parallelizer for CheckParallelizer {
                 .await?;
 
             let serial_data = tb_merged_data.unmerged_rows;
-            if self.checker.is_some() {
-                for row in serial_data.iter() {
-                    check_data.push(row.clone());
-                }
-            }
             data_size
                 .add_count(serial_data.len() as u64)
                 .add_bytes(serial_data.iter().map(|v| v.get_data_size()).sum());
@@ -107,9 +101,11 @@ impl Parallelizer for CheckParallelizer {
         }
 
         if let Some(checker) = &self.checker {
-            if !check_data.is_empty() {
-                if let Err(err) = checker.check_rows(check_data).await {
-                    log::warn!("checker sidecar failed: {}", err);
+            if let Some(check_data) = check_data {
+                if !check_data.is_empty() {
+                    if let Err(err) = checker.check_rows(check_data).await {
+                        log::warn!("checker sidecar failed: {}", err);
+                    }
                 }
             }
             // Wait for the checker background task to finish processing
