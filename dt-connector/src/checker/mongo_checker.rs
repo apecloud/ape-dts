@@ -27,7 +27,7 @@ pub struct MongoChecker {
 
 #[async_trait]
 impl Checker for MongoChecker {
-    async fn fetch(&mut self, src_rows: &[Arc<RowData>]) -> anyhow::Result<FetchResult> {
+    async fn fetch(&mut self, src_rows: &[RowData]) -> anyhow::Result<FetchResult> {
         let first_row = src_rows
             .first()
             .context("fetch called with empty src rows")?;
@@ -146,7 +146,7 @@ impl MongoChecker {
         )
     }
 
-    fn get_id_from_row(row: &Arc<RowData>) -> anyhow::Result<Bson> {
+    fn get_id_from_row(row: &RowData) -> anyhow::Result<Bson> {
         // For DELETE rows, after is None, so fall back to before
         let data = row.after.as_ref().or(row.before.as_ref());
         if let Some(fields) = data {
