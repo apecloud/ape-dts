@@ -39,7 +39,7 @@ pub trait Parallelizer {
 
     async fn sink_dml(
         &mut self,
-        _data: Vec<Arc<RowData>>,
+        _data: Vec<RowData>,
         _sinkers: &[Arc<async_mutex::Mutex<Box<dyn Sinker + Send>>>],
     ) -> anyhow::Result<DataSize> {
         Ok(DataSize::default())
@@ -76,7 +76,7 @@ pub trait Parallelizer {
 
 #[async_trait]
 pub trait Merger {
-    async fn merge(&mut self, data: Vec<Arc<RowData>>) -> anyhow::Result<Vec<TbMergedData>>;
+    async fn merge(&mut self, data: Vec<RowData>) -> anyhow::Result<Vec<TbMergedData>>;
 
     async fn close(&mut self) -> anyhow::Result<()> {
         Ok(())

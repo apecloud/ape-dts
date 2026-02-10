@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use async_trait::async_trait;
 
 use crate::{rdb_query_builder::RdbQueryBuilder, rdb_router::RdbRouter, Sinker};
@@ -8,6 +6,7 @@ use dt_common::{
     meta::{rdb_meta_manager::RdbMetaManager, row_data::RowData},
     monitor::monitor::Monitor,
 };
+use std::sync::Arc;
 
 #[derive(Clone)]
 pub struct SqlSinker {
@@ -19,16 +18,16 @@ pub struct SqlSinker {
 
 #[async_trait]
 impl Sinker for SqlSinker {
-    async fn sink_dml(&mut self, data: Vec<Arc<RowData>>, _batch: bool) -> anyhow::Result<()> {
+    async fn sink_dml(&mut self, data: Vec<RowData>, _batch: bool) -> anyhow::Result<()> {
         if data.is_empty() {
             return Ok(());
         }
 
         for row_data in data {
             let row_data = if self.reverse {
-                row_data.as_ref().reverse()
+                row_data.reverse()
             } else {
-                (*row_data).clone()
+                row_data
             };
 
             let query_builder =

@@ -45,7 +45,7 @@ pub struct StarRocksSinker {
 
 #[async_trait]
 impl Sinker for StarRocksSinker {
-    async fn sink_dml(&mut self, mut data: Vec<Arc<RowData>>, batch: bool) -> anyhow::Result<()> {
+    async fn sink_dml(&mut self, mut data: Vec<RowData>, batch: bool) -> anyhow::Result<()> {
         if data.is_empty() {
             return Ok(());
         }
@@ -64,7 +64,7 @@ impl Sinker for StarRocksSinker {
 }
 
 impl StarRocksSinker {
-    async fn serial_sink(&mut self, mut data: Vec<Arc<RowData>>) -> anyhow::Result<()> {
+    async fn serial_sink(&mut self, mut data: Vec<RowData>) -> anyhow::Result<()> {
         let mut data_size = 0;
 
         let data = data.as_mut_slice();
@@ -78,7 +78,7 @@ impl StarRocksSinker {
 
     async fn batch_sink(
         &mut self,
-        data: &mut [Arc<RowData>],
+        data: &mut [RowData],
         start_index: usize,
         batch_size: usize,
     ) -> anyhow::Result<()> {
@@ -89,7 +89,7 @@ impl StarRocksSinker {
 
     async fn send_data(
         &mut self,
-        data: &mut [Arc<RowData>],
+        data: &mut [RowData],
         start_index: usize,
         batch_size: usize,
     ) -> anyhow::Result<usize> {
@@ -105,7 +105,7 @@ impl StarRocksSinker {
         let mut load_data = Vec::new();
         for row_data in data.iter().skip(start_index).take(batch_size) {
             data_size += row_data.get_data_size() as usize;
-            let mut row = row_data.as_ref().clone();
+            let mut row = row_data.clone();
 
             Self::convert_row_data(&mut row, tb_meta)?;
 

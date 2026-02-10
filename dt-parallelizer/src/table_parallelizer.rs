@@ -29,7 +29,7 @@ impl Parallelizer for TableParallelizer {
 
     async fn sink_dml(
         &mut self,
-        data: Vec<Arc<RowData>>,
+        data: Vec<RowData>,
         sinkers: &[Arc<async_mutex::Mutex<Box<dyn Sinker + Send>>>],
     ) -> anyhow::Result<DataSize> {
         let data_size = DataSize {
@@ -83,8 +83,8 @@ impl Parallelizer for TableParallelizer {
 
 impl TableParallelizer {
     // partition dml vec into sub vecs by full table name
-    fn partition_dml(data: Vec<Arc<RowData>>) -> anyhow::Result<Vec<Vec<Arc<RowData>>>> {
-        let mut sub_data_map: HashMap<String, Vec<Arc<RowData>>> = HashMap::new();
+    fn partition_dml(data: Vec<RowData>) -> anyhow::Result<Vec<Vec<RowData>>> {
+        let mut sub_data_map: HashMap<String, Vec<RowData>> = HashMap::new();
         for row_data in data {
             let full_tb = format!("{}.{}", row_data.schema, row_data.tb);
             if let Some(sub_data) = sub_data_map.get_mut(&full_tb) {

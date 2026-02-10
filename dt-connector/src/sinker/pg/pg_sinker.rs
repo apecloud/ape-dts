@@ -39,7 +39,7 @@ pub struct PgSinker {
 
 #[async_trait]
 impl Sinker for PgSinker {
-    async fn sink_dml(&mut self, mut data: Vec<Arc<RowData>>, batch: bool) -> anyhow::Result<()> {
+    async fn sink_dml(&mut self, mut data: Vec<RowData>, batch: bool) -> anyhow::Result<()> {
         if data.is_empty() {
             return Ok(());
         }
@@ -137,7 +137,7 @@ impl Sinker for PgSinker {
 }
 
 impl PgSinker {
-    async fn serial_sink(&mut self, data: &[Arc<RowData>]) -> anyhow::Result<()> {
+    async fn serial_sink(&mut self, data: &[RowData]) -> anyhow::Result<()> {
         let monitor_interval = if self.monitor_interval > 0 {
             self.monitor_interval
         } else {
@@ -193,7 +193,7 @@ impl PgSinker {
 
     async fn batch_delete(
         &mut self,
-        data: &mut [Arc<RowData>],
+        data: &mut [RowData],
         start_index: usize,
         batch_size: usize,
     ) -> anyhow::Result<()> {
@@ -223,7 +223,7 @@ impl PgSinker {
 
     async fn batch_insert(
         &mut self,
-        data: &mut [Arc<RowData>],
+        data: &mut [RowData],
         start_index: usize,
         batch_size: usize,
     ) -> anyhow::Result<()> {

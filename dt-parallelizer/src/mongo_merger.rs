@@ -1,4 +1,4 @@
-use std::{collections::HashMap, sync::Arc};
+use std::collections::HashMap;
 
 use async_trait::async_trait;
 use dt_common::meta::{
@@ -14,8 +14,8 @@ pub struct MongoMerger {}
 
 #[async_trait]
 impl Merger for MongoMerger {
-    async fn merge(&mut self, data: Vec<Arc<RowData>>) -> anyhow::Result<Vec<TbMergedData>> {
-        let mut tb_data_map: HashMap<String, Vec<Arc<RowData>>> = HashMap::new();
+    async fn merge(&mut self, data: Vec<RowData>) -> anyhow::Result<Vec<TbMergedData>> {
+        let mut tb_data_map: HashMap<String, Vec<RowData>> = HashMap::new();
         for row_data in data {
             let full_tb = format!("{}.{}", row_data.schema, row_data.tb);
             if let Some(tb_data) = tb_data_map.get_mut(&full_tb) {
@@ -44,8 +44,8 @@ impl MongoMerger {
     /// partition dmls of the same table into insert vec and delete vec
     #[allow(clippy::type_complexity)]
     pub fn merge_row_data(
-        mut data: Vec<Arc<RowData>>,
-    ) -> anyhow::Result<(Vec<Arc<RowData>>, Vec<Arc<RowData>>, Vec<Arc<RowData>>)> {
+        mut data: Vec<RowData>,
+    ) -> anyhow::Result<(Vec<RowData>, Vec<RowData>, Vec<RowData>)> {
         let mut insert_map = HashMap::new();
         let mut delete_map = HashMap::new();
 
@@ -75,7 +75,7 @@ impl MongoMerger {
                         row_data.before.clone(),
                         None,
                     );
-                    delete_map.insert(id.clone(), Arc::new(delete_row));
+                    delete_map.insert(id.clone(), delete_row);
 
                     let insert_row = RowData::new(
                         row_data.schema.clone(),
@@ -84,7 +84,7 @@ impl MongoMerger {
                         None,
                         row_data.after.clone(),
                     );
-                    insert_map.insert(id, Arc::new(insert_row));
+                    insert_map.insert(id, insert_row);
                 }
             }
         }
@@ -94,7 +94,7 @@ impl MongoMerger {
         Ok((inserts, deletes, data))
     }
 
-    fn get_hash_key(row_data: &Arc<RowData>) -> Option<MongoKey> {
+    fn get_hash_key(row_data: &RowData) -> Option<MongoKey> {
         match row_data.row_type {
             RowType::Insert => {
                 if let Ok(after) = row_data.require_after() {

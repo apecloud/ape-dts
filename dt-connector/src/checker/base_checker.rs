@@ -30,11 +30,9 @@ use dt_common::{
     utils::limit_queue::LimitedQueue,
 };
 
-/// Maximum number of rows to query in a single batch.
 pub const CHECKER_MAX_QUERY_BATCH: usize = 1000;
 
-/// When the queue is full, oldest entries are dropped to prevent unbounded memory growth.
-/// At 100k entries with average row size, this limits memory to a reasonable bound.
+/// Max retry queue size. Oldest entries are evicted when full.
 const CHECKER_MAX_RETRY_QUEUE_SIZE: usize = 100_000;
 
 #[derive(Debug, Clone)]
@@ -53,7 +51,7 @@ impl CheckerTbMeta {
         }
     }
 
-    fn build_miss_sql(&self, src_row_data: &Arc<RowData>) -> anyhow::Result<Option<String>> {
+    fn build_miss_sql(&self, src_row_data: &RowData) -> anyhow::Result<Option<String>> {
         let after = match &src_row_data.after {
             Some(after) if !after.is_empty() => after.clone(),
             _ => return Ok(None),
@@ -69,8 +67,7 @@ impl CheckerTbMeta {
             Some(after),
         );
         insert_row.refresh_data_size();
-
-        self.build_insert_query(&insert_row)
+        self.build_rdb_query(&insert_row, false)
     }
 
     fn build_delete_sql(&self, dst_row_data: &RowData) -> anyhow::Result<Option<String>> {
@@ -89,25 +86,12 @@ impl CheckerTbMeta {
             None,
         );
         delete_row.refresh_data_size();
-
-        self.build_delete_query(&delete_row)
-    }
-
-    fn build_delete_query(&self, row_data: &RowData) -> anyhow::Result<Option<String>> {
-        match self {
-            CheckerTbMeta::Mysql(meta) => RdbQueryBuilder::new_for_mysql(meta, None)
-                .get_query_sql(row_data, false)
-                .map(Some),
-            CheckerTbMeta::Pg(meta) => RdbQueryBuilder::new_for_pg(meta, None)
-                .get_query_sql(row_data, false)
-                .map(Some),
-            CheckerTbMeta::Mongo(_) => unreachable!("Mongo should be handled in build_delete_sql"),
-        }
+        self.build_rdb_query(&delete_row, false)
     }
 
     fn build_diff_sql(
         &self,
-        src_row_data: &Arc<RowData>,
+        src_row_data: &RowData,
         dst_row_data: &RowData,
         diff_col_values: &HashMap<String, DiffColValue>,
         match_full_row: bool,
@@ -147,23 +131,12 @@ impl CheckerTbMeta {
             Some(update_after),
         );
         update_row.refresh_data_size();
-
-        self.build_update_query(&update_row, match_full_row)
+        self.build_rdb_query(&update_row, match_full_row)
     }
 
-    fn build_insert_query(&self, row_data: &RowData) -> anyhow::Result<Option<String>> {
-        match self {
-            CheckerTbMeta::Mysql(meta) => RdbQueryBuilder::new_for_mysql(meta, None)
-                .get_query_sql(row_data, false)
-                .map(Some),
-            CheckerTbMeta::Pg(meta) => RdbQueryBuilder::new_for_pg(meta, None)
-                .get_query_sql(row_data, false)
-                .map(Some),
-            CheckerTbMeta::Mongo(_) => unreachable!("Mongo should be handled"),
-        }
-    }
-
-    fn build_update_query(
+    /// Build SQL for insert/delete/update. When `match_full_row` is true,
+    /// use all columns as the WHERE key (for update revise SQL).
+    fn build_rdb_query(
         &self,
         row_data: &RowData,
         match_full_row: bool,
@@ -177,7 +150,6 @@ impl CheckerTbMeta {
                 } else {
                     Cow::Borrowed(meta)
                 };
-
                 RdbQueryBuilder::new_for_mysql(meta_cow.as_ref(), None)
                     .get_query_sql(row_data, false)
                     .map(Some)
@@ -190,12 +162,11 @@ impl CheckerTbMeta {
                 } else {
                     Cow::Borrowed(meta)
                 };
-
                 RdbQueryBuilder::new_for_pg(meta_cow.as_ref(), None)
                     .get_query_sql(row_data, false)
                     .map(Some)
             }
-            CheckerTbMeta::Mongo(_) => unreachable!("Mongo should be handled in build_miss_sql"),
+            CheckerTbMeta::Mongo(_) => unreachable!("Mongo handled before build_rdb_query"),
         }
     }
 
@@ -220,7 +191,7 @@ enum CheckInconsistency {
 }
 
 struct RetryItem {
-    row: Arc<RowData>,
+    row: RowData,
     retries_left: u32,
     next_retry_at: Instant,
 }
@@ -242,12 +213,12 @@ pub struct CheckContext {
 
 pub struct FetchResult {
     pub tb_meta: Arc<CheckerTbMeta>,
-    pub src_rows: Vec<Arc<RowData>>,
+    pub src_rows: Vec<RowData>,
     pub dst_rows: Vec<RowData>,
 }
 
 enum CheckerMsg {
-    ProcessBatch(Vec<Arc<RowData>>),
+    ProcessBatch(Vec<RowData>),
     Close,
 }
 
@@ -288,21 +259,11 @@ impl DataCheckerHandle {
         }
     }
 
-    pub async fn check(&self, data: Vec<Arc<RowData>>) -> anyhow::Result<()> {
+    pub async fn check(&self, data: Vec<RowData>) -> anyhow::Result<()> {
         if data.is_empty() {
             return Ok(());
         }
         self.send(data).await
-    }
-
-    /// Wait until the checker background task has processed all pending rows.
-    pub async fn wait_idle(&self) {
-        loop {
-            if self.pending_rows.load(Ordering::Relaxed) == 0 {
-                return;
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-        }
     }
 
     pub async fn close(&mut self) -> anyhow::Result<()> {
@@ -313,7 +274,7 @@ impl DataCheckerHandle {
         Ok(())
     }
 
-    async fn send(&self, data: Vec<Arc<RowData>>) -> anyhow::Result<()> {
+    async fn send(&self, data: Vec<RowData>) -> anyhow::Result<()> {
         let data_size = data.len() as u64;
         if let Err(err) = self.tx.send(CheckerMsg::ProcessBatch(data)).await {
             return Err(anyhow::anyhow!("Checker worker closed: {}", err));
@@ -327,7 +288,7 @@ impl DataCheckerHandle {
 
 #[async_trait]
 pub trait Checker: Send + Sync + 'static {
-    async fn fetch(&mut self, src_rows: &[Arc<RowData>]) -> anyhow::Result<FetchResult>;
+    async fn fetch(&mut self, src_rows: &[RowData]) -> anyhow::Result<FetchResult>;
     async fn close(&mut self) -> anyhow::Result<()> {
         Ok(())
     }
@@ -366,7 +327,7 @@ impl<C: Checker> DataChecker<C> {
     }
 
     pub async fn run(mut self) -> anyhow::Result<()> {
-        log_info!("Checker [{}] background worker started.", self.name);
+        log_info!("Checker [{}] started.", self.name);
         let mut interval = tokio::time::interval(Duration::from_secs(1));
         let mut first_error: Option<anyhow::Error> = None;
 
@@ -411,7 +372,7 @@ impl<C: Checker> DataChecker<C> {
         }
 
         self.monitor.set_counter(CounterType::CheckerPending, 0);
-        log_info!("Checker [{}] background worker stopped.", self.name);
+        log_info!("Checker [{}] stopped.", self.name);
 
         if let Some(err) = first_error {
             return Err(err);
@@ -423,7 +384,7 @@ impl<C: Checker> DataChecker<C> {
         output_revise_sql: bool,
         revise_match_full_row: bool,
         tb_meta: &CheckerTbMeta,
-        src_row_data: &Arc<RowData>,
+        src_row_data: &RowData,
         dst_row_data: Option<&RowData>,
         diff_col_values: Option<&HashMap<String, DiffColValue>>,
     ) -> anyhow::Result<Option<String>> {
@@ -431,7 +392,6 @@ impl<C: Checker> DataChecker<C> {
             return Ok(None);
         };
 
-        // DELETE row still exists in target — generate DELETE revise SQL
         if src_row_data.row_type == RowType::Delete {
             let dst_row = dst_row_data.context("missing dst row for delete revise")?;
             return tb_meta.build_delete_sql(dst_row);
@@ -461,7 +421,7 @@ impl<C: Checker> DataChecker<C> {
     #[allow(clippy::too_many_arguments)]
     async fn handle_inconsistency(
         check_result: CheckInconsistency,
-        src_row_data: &Arc<RowData>,
+        src_row_data: &RowData,
         dst_row_data: Option<&RowData>,
         ctx: &mut CheckContext,
         tb_meta: &CheckerTbMeta,
@@ -471,9 +431,8 @@ impl<C: Checker> DataChecker<C> {
     ) -> anyhow::Result<()> {
         match check_result {
             CheckInconsistency::Miss => {
-                let log = Self::build_miss_log(src_row_data, ctx, tb_meta).await?;
-                miss.push(log);
-                let revise_sql = Self::build_revise_sql(
+                miss.push(Self::build_miss_log(src_row_data, ctx, tb_meta).await?);
+                let sql = Self::build_revise_sql(
                     ctx.output_revise_sql,
                     ctx.revise_match_full_row,
                     tb_meta,
@@ -481,11 +440,11 @@ impl<C: Checker> DataChecker<C> {
                     None,
                     None,
                 )?;
-                Self::log_revise_sql(revise_sql, sql_count);
+                Self::log_revise_sql(sql, sql_count);
             }
             CheckInconsistency::Diff(diff_col_values) => {
                 let dst_row = dst_row_data.context("missing dst row in diff")?;
-                let revise_sql = Self::build_revise_sql(
+                let sql = Self::build_revise_sql(
                     ctx.output_revise_sql,
                     ctx.revise_match_full_row,
                     tb_meta,
@@ -493,30 +452,23 @@ impl<C: Checker> DataChecker<C> {
                     Some(dst_row),
                     Some(&diff_col_values),
                 )?;
-                let log =
+                diff.push(
                     Self::build_diff_log(src_row_data, dst_row, diff_col_values, ctx, tb_meta)
-                        .await?;
-                diff.push(log);
-                Self::log_revise_sql(revise_sql, sql_count);
+                        .await?,
+                );
+                Self::log_revise_sql(sql, sql_count);
             }
         }
-
         Ok(())
     }
 
     async fn check_and_generate_logs(
-        src_data: &[Arc<RowData>],
+        src_data: &[RowData],
         mut dst_row_data_map: HashMap<u128, RowData>,
         ctx: &mut CheckContext,
         tb_meta: &CheckerTbMeta,
         max_retries: u32,
-    ) -> anyhow::Result<(
-        Vec<CheckLog>,
-        Vec<CheckLog>,
-        usize,
-        usize,
-        Vec<Arc<RowData>>,
-    )> {
+    ) -> anyhow::Result<(Vec<CheckLog>, Vec<CheckLog>, usize, usize, Vec<RowData>)> {
         let mut miss = Vec::new();
         let mut diff = Vec::new();
         let mut sql_count = 0;
@@ -528,7 +480,7 @@ impl<C: Checker> DataChecker<C> {
                 Ok(k) => k,
                 Err(e) => {
                     log_warn!(
-                        "Skipping row with unhashable key in {}.{}: {}",
+                        "Skipping unhashable row in {}.{}: {}",
                         src_row_data.schema,
                         src_row_data.tb,
                         e
@@ -546,8 +498,8 @@ impl<C: Checker> DataChecker<C> {
                 continue;
             }
 
-            let check_result = Self::compare_src_dst(src_row_data, dst_row_data.as_ref())?;
-            let Some(check_result) = check_result else {
+            let Some(check_result) = Self::compare_src_dst(src_row_data, dst_row_data.as_ref())?
+            else {
                 continue;
             };
 
@@ -568,60 +520,49 @@ impl<C: Checker> DataChecker<C> {
     }
 
     fn compare_src_dst(
-        src_row: &Arc<RowData>,
+        src_row: &RowData,
         dst_row: Option<&RowData>,
     ) -> anyhow::Result<Option<CheckInconsistency>> {
         if src_row.row_type == RowType::Delete {
-            // DELETE: row should NOT exist in target
-            if dst_row.is_some() {
-                // Row still exists in target — not deleted, report as Diff
-                Ok(Some(CheckInconsistency::Diff(HashMap::new())))
-            } else {
-                // Row absent in target — consistent
-                Ok(None)
+            return Ok(dst_row
+                .is_some()
+                .then(|| CheckInconsistency::Diff(HashMap::new())));
+        }
+        match dst_row {
+            Some(dst_row) => {
+                let diffs = Self::compare_row_data(src_row, dst_row)?;
+                Ok((!diffs.is_empty()).then_some(CheckInconsistency::Diff(diffs)))
             }
-        } else if let Some(dst_row) = dst_row {
-            let diffs = Self::compare_row_data(src_row, dst_row)?;
-            if diffs.is_empty() {
-                Ok(None)
-            } else {
-                Ok(Some(CheckInconsistency::Diff(diffs)))
-            }
-        } else {
-            Ok(Some(CheckInconsistency::Miss))
+            None => Ok(Some(CheckInconsistency::Miss)),
         }
     }
 
     fn compare_row_data(
-        src_row_data: &Arc<RowData>,
+        src_row_data: &RowData,
         dst_row_data: &RowData,
     ) -> anyhow::Result<HashMap<String, DiffColValue>> {
         let src = src_row_data
             .after
             .as_ref()
-            .context("src row data after is missing")?;
+            .context("src after is missing")?;
         let dst = dst_row_data
             .after
             .as_ref()
-            .context("dst row data after is missing")?;
+            .context("dst after is missing")?;
 
-        let mut diff_col_values: Option<HashMap<String, DiffColValue>> = None;
+        let mut diff_col_values = HashMap::new();
         for (col, src_val) in src {
-            let dst_val = dst.get(col);
-            let maybe_diff = match dst_val {
+            let maybe_diff = match dst.get(col) {
                 Some(dst_val) if src_val.is_same_value(dst_val) => None,
                 Some(dst_val) => {
                     let src_type = src_val.type_name();
                     let dst_type = dst_val.type_name();
                     let type_diff = src_type != dst_type;
-                    let src_type = type_diff.then(|| src_type.to_string());
-                    let dst_type = type_diff.then(|| dst_type.to_string());
-
                     Some(DiffColValue {
                         src: src_val.to_option_string(),
                         dst: dst_val.to_option_string(),
-                        src_type,
-                        dst_type,
+                        src_type: type_diff.then(|| src_type.to_string()),
+                        dst_type: type_diff.then(|| dst_type.to_string()),
                     })
                 }
                 None => Some(DiffColValue {
@@ -632,14 +573,11 @@ impl<C: Checker> DataChecker<C> {
                 }),
             };
 
-            if let Some(diff_entry) = maybe_diff {
-                diff_col_values
-                    .get_or_insert_with(HashMap::new)
-                    .insert(col.to_owned(), diff_entry);
+            if let Some(entry) = maybe_diff {
+                diff_col_values.insert(col.to_owned(), entry);
             }
         }
 
-        let mut diff_col_values = diff_col_values.unwrap_or_default();
         if diff_col_values.contains_key(MongoConstants::DOC)
             && [src_row_data, dst_row_data].iter().any(|row| {
                 matches!(
@@ -656,14 +594,10 @@ impl<C: Checker> DataChecker<C> {
     }
 
     fn select_dst_row(
-        src_row: &Arc<RowData>,
+        src_row: &RowData,
         tb_meta: &CheckerTbMeta,
         dst_rows: Vec<RowData>,
     ) -> anyhow::Result<Option<RowData>> {
-        if dst_rows.is_empty() {
-            return Ok(None);
-        }
-
         let src_key = src_row.get_hash_code(tb_meta.basic())?;
         for row in dst_rows {
             if row.get_hash_code(tb_meta.basic())? == src_key {
@@ -676,7 +610,7 @@ impl<C: Checker> DataChecker<C> {
     async fn log_single_inconsistency(
         &mut self,
         check_result: CheckInconsistency,
-        src_row_data: &Arc<RowData>,
+        src_row_data: &RowData,
         dst_row_data: Option<&RowData>,
         tb_meta: &CheckerTbMeta,
     ) -> anyhow::Result<()> {
@@ -703,8 +637,9 @@ impl<C: Checker> DataChecker<C> {
         if sql_count > 0 {
             summary.sql_count = Some(summary.sql_count.unwrap_or(0) + sql_count);
         }
-        let monitor = self.ctx.monitor.clone();
-        monitor
+        self.ctx
+            .monitor
+            .clone()
             .add_counter(CounterType::CheckerMissCount, miss.len() as u64)
             .await
             .add_counter(CounterType::CheckerDiffCount, diff.len() as u64)
@@ -723,7 +658,7 @@ impl<C: Checker> DataChecker<C> {
 
     fn map_diff_col_values(
         reverse_router: &RdbRouter,
-        src_row_data: &Arc<RowData>,
+        src_row_data: &RowData,
         diff_col_values: HashMap<String, DiffColValue>,
     ) -> HashMap<String, DiffColValue> {
         let Some(col_map) = reverse_router.get_col_map(&src_row_data.schema, &src_row_data.tb)
@@ -733,13 +668,12 @@ impl<C: Checker> DataChecker<C> {
 
         let mut mapped = HashMap::with_capacity(diff_col_values.len());
         for (col, val) in diff_col_values {
-            if let Some(mapped_col) = col_map.get(&col) {
-                if mapped_col != &col {
-                    mapped.insert(mapped_col.clone(), val);
-                    continue;
-                }
-            }
-            mapped.insert(col, val);
+            let key = col_map
+                .get(&col)
+                .filter(|c| *c != &col)
+                .cloned()
+                .unwrap_or(col);
+            mapped.insert(key, val);
         }
         mapped
     }
@@ -752,20 +686,19 @@ impl<C: Checker> DataChecker<C> {
         if !output_full_row {
             return None;
         }
-
-        let has_col_map = reverse_router
+        if reverse_router
             .get_col_map(&dst_row_data.schema, &dst_row_data.tb)
-            .is_some();
-        if has_col_map {
-            let reverse_dst_row_data = reverse_router.route_row(dst_row_data.clone());
-            Self::clone_row_values(&reverse_dst_row_data)
+            .is_some()
+        {
+            let routed = reverse_router.route_row(dst_row_data.clone());
+            Self::clone_row_values(&routed)
         } else {
             Self::clone_row_values(dst_row_data)
         }
     }
 
     async fn build_miss_log(
-        src_row_data: &Arc<RowData>,
+        src_row_data: &RowData,
         ctx: &mut CheckContext,
         tb_meta: &CheckerTbMeta,
     ) -> anyhow::Result<CheckLog> {
@@ -779,9 +712,9 @@ impl<C: Checker> DataChecker<C> {
         let schema_changed = src_row_data.schema != mapped_schema || src_row_data.tb != mapped_tb;
 
         let routed_row = if has_col_map {
-            Cow::Owned(ctx.reverse_router.route_row(src_row_data.as_ref().clone()))
+            Cow::Owned(ctx.reverse_router.route_row(src_row_data.clone()))
         } else {
-            Cow::Borrowed(src_row_data.as_ref())
+            Cow::Borrowed(src_row_data)
         };
         let (schema, tb) = if has_col_map {
             (routed_row.schema.clone(), routed_row.tb.clone())
@@ -791,14 +724,14 @@ impl<C: Checker> DataChecker<C> {
 
         let id_col_values = if let Some(meta_manager) = ctx.extractor_meta_manager.as_mut() {
             let src_tb_meta = meta_manager.get_tb_meta(&schema, &tb).await?;
-            Self::build_id_col_values(routed_row.as_ref(), src_tb_meta)
+            Self::build_id_col_values(&routed_row, src_tb_meta)
                 .context("Failed to build ID col values")?
         } else {
-            Self::build_id_col_values(routed_row.as_ref(), tb_meta.basic()).unwrap_or_default()
+            Self::build_id_col_values(&routed_row, tb_meta.basic()).unwrap_or_default()
         };
 
         let src_row = if ctx.output_full_row {
-            Self::clone_row_values(routed_row.as_ref())
+            Self::clone_row_values(&routed_row)
         } else {
             None
         };
@@ -816,19 +749,17 @@ impl<C: Checker> DataChecker<C> {
     }
 
     async fn build_diff_log(
-        src_row_data: &Arc<RowData>,
+        src_row_data: &RowData,
         dst_row_data: &RowData,
         diff_col_values: HashMap<String, DiffColValue>,
         ctx: &mut CheckContext,
         tb_meta: &CheckerTbMeta,
     ) -> anyhow::Result<CheckLog> {
         let mut log = Self::build_miss_log(src_row_data, ctx, tb_meta).await?;
-
         log.diff_col_values =
             Self::map_diff_col_values(&ctx.reverse_router, src_row_data, diff_col_values);
         log.dst_row =
             Self::maybe_build_dst_row(&ctx.reverse_router, dst_row_data, ctx.output_full_row);
-
         Ok(log)
     }
 
@@ -843,25 +774,22 @@ impl<C: Checker> DataChecker<C> {
         row_data: &RowData,
         tb_meta: &RdbTbMeta,
     ) -> Option<HashMap<String, Option<String>>> {
-        let mut id_col_values = HashMap::with_capacity(tb_meta.id_cols.len());
         let col_values = match row_data.row_type {
             RowType::Delete => row_data.require_before().ok()?,
             _ => row_data.require_after().ok()?,
         };
-
-        for col in tb_meta.id_cols.iter() {
-            let val = col_values.get(col)?.to_option_string();
-            id_col_values.insert(col.to_owned(), val);
+        let mut id_col_values = HashMap::with_capacity(tb_meta.id_cols.len());
+        for col in &tb_meta.id_cols {
+            id_col_values.insert(col.to_owned(), col_values.get(col)?.to_option_string());
         }
         Some(id_col_values)
     }
 
     fn expand_mongo_doc_diff(
-        src_row_data: &Arc<RowData>,
+        src_row_data: &RowData,
         dst_row_data: &RowData,
         mut diff_col_values: HashMap<String, DiffColValue>,
     ) -> HashMap<String, DiffColValue> {
-        // avoid output full mongo document to diff
         diff_col_values.remove(MongoConstants::DOC);
 
         fn get_doc(row: &RowData) -> Option<&Document> {
@@ -880,35 +808,34 @@ impl<C: Checker> DataChecker<C> {
         let keys: BTreeSet<_> = src_doc
             .into_iter()
             .flat_map(Document::keys)
+            .chain(dst_doc.into_iter().flat_map(Document::keys))
             .cloned()
-            .chain(dst_doc.into_iter().flat_map(Document::keys).cloned())
             .collect();
 
         for key in keys {
-            let src_value = src_doc.as_ref().and_then(|d| d.get(&key));
-            let dst_value = dst_doc.as_ref().and_then(|d| d.get(&key));
+            let src_value = src_doc.and_then(|d| d.get(&key));
+            let dst_value = dst_doc.and_then(|d| d.get(&key));
+            if src_value == dst_value {
+                continue;
+            }
             let src_type_name = src_value.map(mongo_cmd::bson_type_name).unwrap_or("None");
             let dst_type_name = dst_value.map(mongo_cmd::bson_type_name).unwrap_or("None");
             let type_diff = src_type_name != dst_type_name;
-            let value_diff = src_value != dst_value;
-
-            if value_diff || type_diff {
-                diff_col_values.insert(
-                    key,
-                    DiffColValue {
-                        src: src_value.map(mongo_cmd::bson_to_log_literal),
-                        dst: dst_value.map(mongo_cmd::bson_to_log_literal),
-                        src_type: type_diff.then(|| src_type_name.to_string()),
-                        dst_type: type_diff.then(|| dst_type_name.to_string()),
-                    },
-                );
-            }
+            diff_col_values.insert(
+                key,
+                DiffColValue {
+                    src: src_value.map(mongo_cmd::bson_to_log_literal),
+                    dst: dst_value.map(mongo_cmd::bson_to_log_literal),
+                    src_type: type_diff.then(|| src_type_name.to_string()),
+                    dst_type: type_diff.then(|| dst_type_name.to_string()),
+                },
+            );
         }
 
         diff_col_values
     }
 
-    fn enqueue_retry_rows(&mut self, rows: Vec<Arc<RowData>>) {
+    fn enqueue_retry_rows(&mut self, rows: Vec<RowData>) {
         if rows.is_empty() {
             return;
         }
@@ -931,7 +858,7 @@ impl<C: Checker> DataChecker<C> {
         }
         if dropped > 0 {
             log_warn!(
-                "Checker retry queue full (max {}), dropped {} oldest rows to prevent memory exhaustion.",
+                "Retry queue full (max {}), dropped {} oldest rows.",
                 CHECKER_MAX_RETRY_QUEUE_SIZE,
                 dropped
             );
@@ -943,21 +870,16 @@ impl<C: Checker> DataChecker<C> {
         if self.retry_queue.is_empty() {
             return Ok(());
         }
-
         let now = Instant::now();
-        if self
-            .retry_next_at
-            .is_some_and(|next_retry_at| next_retry_at > now)
-        {
+        if self.retry_next_at.is_some_and(|t| t > now) {
             return Ok(());
         }
 
         let mut next_retry_at: Option<Instant> = None;
         let pending_len = self.retry_queue.len();
         for _ in 0..pending_len {
-            let item = match self.retry_queue.pop_front() {
-                Some(item) => item,
-                None => break,
+            let Some(item) = self.retry_queue.pop_front() else {
+                break;
             };
 
             if item.next_retry_at > now {
@@ -989,9 +911,9 @@ impl<C: Checker> DataChecker<C> {
         }
         let tb_meta = fetch_result.tb_meta;
         let dst_row = Self::select_dst_row(&item.row, tb_meta.as_ref(), fetch_result.dst_rows)?;
+
         if item.retries_left > 1 {
-            let inconsistent = Self::is_inconsistent(&item.row, dst_row.as_ref())?;
-            if !inconsistent {
+            if !Self::is_inconsistent(&item.row, dst_row.as_ref())? {
                 return Ok(None);
             }
             item.retries_left -= 1;
@@ -999,12 +921,15 @@ impl<C: Checker> DataChecker<C> {
             return Ok(Some(item));
         }
 
-        let check_result = Self::compare_src_dst(&item.row, dst_row.as_ref())?;
-        let Some(check_result) = check_result else {
-            return Ok(None);
-        };
-        self.log_single_inconsistency(check_result, &item.row, dst_row.as_ref(), tb_meta.as_ref())
+        if let Some(check_result) = Self::compare_src_dst(&item.row, dst_row.as_ref())? {
+            self.log_single_inconsistency(
+                check_result,
+                &item.row,
+                dst_row.as_ref(),
+                tb_meta.as_ref(),
+            )
             .await?;
+        }
         Ok(None)
     }
 
@@ -1036,24 +961,17 @@ impl<C: Checker> DataChecker<C> {
         Ok(())
     }
 
-    pub async fn check_batch(
-        &mut self,
-        data: Vec<Arc<RowData>>,
-        batch: bool,
-    ) -> anyhow::Result<()> {
+    pub async fn check_batch(&mut self, data: Vec<RowData>, batch: bool) -> anyhow::Result<()> {
         if data.is_empty() {
             return Ok(());
         }
-
         if !batch {
             return self.process_batch(&data, true).await;
         }
-
         let batch_size = self.ctx.batch_size;
         if batch_size == 0 {
             return Ok(());
         }
-
         for chunk in data.chunks(batch_size) {
             self.process_batch(chunk, false).await?;
         }
@@ -1062,7 +980,7 @@ impl<C: Checker> DataChecker<C> {
 
     async fn process_batch(
         &mut self,
-        data: &[Arc<RowData>],
+        data: &[RowData],
         is_serial_mode: bool,
     ) -> anyhow::Result<()> {
         if data.is_empty() {
@@ -1077,19 +995,14 @@ impl<C: Checker> DataChecker<C> {
         }
 
         let start_time = tokio::time::Instant::now();
-
-        // 1. batch fetch all dst rows and start metrics
-        let dst_rows = fetch_result.dst_rows;
-        let mut dst_row_data_map = HashMap::with_capacity(dst_rows.len());
-        for row in dst_rows {
-            let key = row.get_hash_code(tb_meta.basic())?;
-            dst_row_data_map.insert(key, row);
+        let mut dst_row_data_map = HashMap::with_capacity(fetch_result.dst_rows.len());
+        for row in fetch_result.dst_rows {
+            dst_row_data_map.insert(row.get_hash_code(tb_meta.basic())?, row);
         }
         let mut rts = LimitedQueue::new(1);
         rts.push((start_time.elapsed().as_millis() as u64, 1));
-        let max_retries = self.ctx.max_retries;
 
-        // 2. check and generate logs (inconsistencies will be retried later)
+        let max_retries = self.ctx.max_retries;
         let (miss, diff, sql_count, skip_count, retry_rows) = Self::check_and_generate_logs(
             &checkable,
             dst_row_data_map,
@@ -1098,6 +1011,7 @@ impl<C: Checker> DataChecker<C> {
             max_retries,
         )
         .await?;
+
         Self::log_dml(&miss, &diff);
         let summary = &mut self.ctx.summary;
         summary.end_time = chrono::Local::now().to_rfc3339();
@@ -1109,7 +1023,6 @@ impl<C: Checker> DataChecker<C> {
         }
         self.enqueue_retry_rows(retry_rows);
 
-        // 3. update monitor metrics
         let monitor = self.ctx.monitor.clone();
         monitor
             .add_counter(CounterType::CheckerMissCount, miss.len() as u64)
@@ -1131,8 +1044,7 @@ impl<C: Checker> DataChecker<C> {
         summary.end_time = chrono::Local::now().to_rfc3339();
         summary.is_consistent = summary.miss_count == 0 && summary.diff_count == 0;
         if let Some(global_summary) = global_summary_opt {
-            let mut global_summary = global_summary.lock().await;
-            global_summary.merge(summary);
+            global_summary.lock().await.merge(summary);
         } else {
             log_summary!("{}", summary);
         }
@@ -1143,22 +1055,15 @@ impl<C: Checker> DataChecker<C> {
         }
     }
 
-    fn is_inconsistent(src_row: &Arc<RowData>, dst_row: Option<&RowData>) -> anyhow::Result<bool> {
+    fn is_inconsistent(src_row: &RowData, dst_row: Option<&RowData>) -> anyhow::Result<bool> {
         if src_row.row_type == RowType::Delete {
-            // DELETE: inconsistent if row still exists in target
             return Ok(dst_row.is_some());
         }
         let Some(dst_row) = dst_row else {
             return Ok(true);
         };
-        let src = src_row
-            .after
-            .as_ref()
-            .context("src row data after is missing")?;
-        let dst = dst_row
-            .after
-            .as_ref()
-            .context("dst row data after is missing")?;
+        let src = src_row.after.as_ref().context("src after is missing")?;
+        let dst = dst_row.after.as_ref().context("dst after is missing")?;
 
         for (col, src_val) in src {
             match dst.get(col) {
@@ -1166,7 +1071,6 @@ impl<C: Checker> DataChecker<C> {
                 _ => return Ok(true),
             }
         }
-
         Ok(false)
     }
 
@@ -1181,8 +1085,7 @@ impl<C: Checker> DataChecker<C> {
     }
 }
 
-// check if row has null key
-pub fn has_null_key(row_data: &Arc<RowData>, id_cols: &[String]) -> bool {
+pub fn has_null_key(row_data: &RowData, id_cols: &[String]) -> bool {
     let col_values = match row_data.row_type {
         RowType::Delete => row_data.require_before().ok(),
         _ => row_data.require_after().ok(),

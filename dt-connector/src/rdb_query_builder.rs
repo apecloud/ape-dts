@@ -1,5 +1,4 @@
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
 
 use anyhow::{bail, Context};
 use dt_common::meta::{
@@ -128,7 +127,7 @@ impl RdbQueryBuilder<'_> {
 
     pub fn get_batch_delete_query<'a>(
         &self,
-        data: &'a [Arc<RowData>],
+        data: &'a [RowData],
         start_index: usize,
         batch_size: usize,
     ) -> anyhow::Result<(RdbQueryInfo<'a>, usize)> {
@@ -175,7 +174,7 @@ impl RdbQueryBuilder<'_> {
 
     pub fn get_batch_insert_query<'a>(
         &self,
-        data: &'a [Arc<RowData>],
+        data: &'a [RowData],
         start_index: usize,
         batch_size: usize,
         replace: bool,
@@ -391,7 +390,7 @@ impl RdbQueryBuilder<'_> {
 
     pub fn get_batch_select_query<'a>(
         &self,
-        data: &[&'a Arc<RowData>],
+        data: &[&'a RowData],
         start_index: usize,
         batch_size: usize,
     ) -> anyhow::Result<RdbQueryInfo<'a>> {

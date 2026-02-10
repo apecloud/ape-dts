@@ -64,7 +64,7 @@ impl Parallelizer for PartitionParallelizer {
 
     async fn sink_dml(
         &mut self,
-        data: Vec<Arc<RowData>>,
+        data: Vec<RowData>,
         sinkers: &[Arc<async_mutex::Mutex<Box<dyn Sinker + Send>>>],
     ) -> anyhow::Result<DataSize> {
         let data_size = DataSize {
