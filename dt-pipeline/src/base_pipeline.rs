@@ -326,7 +326,7 @@ impl BasePipeline {
         (data_count, last_received_position, last_commit_position)
     }
 
-    fn fetch_dml(mut data: Vec<DtItem>) -> (Vec<Arc<RowData>>, Option<Position>, Option<Position>) {
+    fn fetch_dml(mut data: Vec<DtItem>) -> (Vec<RowData>, Option<Position>, Option<Position>) {
         let mut dml_data = Vec::new();
         let mut last_received_position = Option::None;
         let mut last_commit_position = Option::None;
@@ -340,7 +340,7 @@ impl BasePipeline {
 
                 DtData::Dml { row_data } => {
                     last_received_position = Some(i.position);
-                    dml_data.push(Arc::new(row_data));
+                    dml_data.push(row_data);
                 }
 
                 _ => {}

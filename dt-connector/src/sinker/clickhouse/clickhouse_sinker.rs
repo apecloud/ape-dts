@@ -33,7 +33,7 @@ pub struct ClickhouseSinker {
 
 #[async_trait]
 impl Sinker for ClickhouseSinker {
-    async fn sink_dml(&mut self, mut data: Vec<Arc<RowData>>, _batch: bool) -> anyhow::Result<()> {
+    async fn sink_dml(&mut self, mut data: Vec<RowData>, _batch: bool) -> anyhow::Result<()> {
         if data.is_empty() {
             return Ok(());
         }
@@ -46,7 +46,7 @@ impl Sinker for ClickhouseSinker {
 impl ClickhouseSinker {
     async fn batch_sink(
         &mut self,
-        data: &mut [Arc<RowData>],
+        data: &mut [RowData],
         start_index: usize,
         batch_size: usize,
     ) -> anyhow::Result<()> {
@@ -56,7 +56,7 @@ impl ClickhouseSinker {
 
     async fn send_data(
         &mut self,
-        data: &mut [Arc<RowData>],
+        data: &mut [RowData],
         start_index: usize,
         batch_size: usize,
     ) -> anyhow::Result<usize> {
@@ -69,7 +69,7 @@ impl ClickhouseSinker {
         let mut load_data = Vec::new();
         for row_data in data.iter().skip(start_index).take(batch_size) {
             data_size += row_data.get_data_size() as usize;
-            let mut row = row_data.as_ref().clone();
+            let mut row = row_data.clone();
 
             Self::convert_row_data(&mut row)?;
 

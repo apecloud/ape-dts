@@ -57,7 +57,7 @@ impl Sinker for RedisSinker {
         Ok(())
     }
 
-    async fn sink_dml(&mut self, mut data: Vec<Arc<RowData>>, _batch: bool) -> anyhow::Result<()> {
+    async fn sink_dml(&mut self, mut data: Vec<RowData>, _batch: bool) -> anyhow::Result<()> {
         if data.is_empty() {
             return Ok(());
         }
@@ -165,7 +165,7 @@ impl RedisSinker {
 impl RedisSinker {
     async fn batch_sink_dml(
         &mut self,
-        data: &mut [Arc<RowData>],
+        data: &mut [RowData],
         start_index: usize,
         batch_size: usize,
     ) -> anyhow::Result<()> {
@@ -183,7 +183,7 @@ impl RedisSinker {
         BaseSinker::update_batch_monitor(&self.monitor, cmds.len() as u64, data_size).await
     }
 
-    async fn serial_sink_dml(&mut self, data: &mut [Arc<RowData>]) -> anyhow::Result<()> {
+    async fn serial_sink_dml(&mut self, data: &mut [RowData]) -> anyhow::Result<()> {
         let mut data_size = 0;
 
         for row_data in data.iter() {
@@ -196,10 +196,7 @@ impl RedisSinker {
         BaseSinker::update_serial_monitor(&self.monitor, data.len() as u64, data_size).await
     }
 
-    async fn dml_to_redis_cmd(
-        &mut self,
-        row_data: &Arc<RowData>,
-    ) -> anyhow::Result<Option<RedisCmd>> {
+    async fn dml_to_redis_cmd(&mut self, row_data: &RowData) -> anyhow::Result<Option<RedisCmd>> {
         if self.meta_manager.is_none() {
             return Ok(None);
         }

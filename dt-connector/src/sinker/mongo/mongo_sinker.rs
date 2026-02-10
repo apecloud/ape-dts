@@ -31,7 +31,7 @@ pub struct MongoSinker {
 
 #[async_trait]
 impl Sinker for MongoSinker {
-    async fn sink_dml(&mut self, mut data: Vec<Arc<RowData>>, batch: bool) -> anyhow::Result<()> {
+    async fn sink_dml(&mut self, mut data: Vec<RowData>, batch: bool) -> anyhow::Result<()> {
         if data.is_empty() {
             return Ok(());
         }
@@ -58,7 +58,7 @@ impl Sinker for MongoSinker {
 }
 
 impl MongoSinker {
-    async fn serial_sink(&mut self, data: Vec<Arc<RowData>>) -> anyhow::Result<()> {
+    async fn serial_sink(&mut self, data: Vec<RowData>) -> anyhow::Result<()> {
         let mut rts = LimitedQueue::new(cmp::min(100, data.len()));
         let monitor_interval = if self.monitor_interval > 0 {
             self.monitor_interval
@@ -161,7 +161,7 @@ impl MongoSinker {
 
     async fn batch_delete(
         &mut self,
-        data: &mut [Arc<RowData>],
+        data: &mut [RowData],
         start_index: usize,
         batch_size: usize,
     ) -> anyhow::Result<()> {
@@ -202,7 +202,7 @@ impl MongoSinker {
 
     async fn batch_insert(
         &mut self,
-        data: &mut [Arc<RowData>],
+        data: &mut [RowData],
         start_index: usize,
         batch_size: usize,
     ) -> anyhow::Result<()> {
