@@ -17,11 +17,9 @@ use dt_common::meta::{
     dcl_meta::dcl_data::DclData, ddl_meta::ddl_data::DdlData, dt_data::DtItem, row_data::RowData,
     struct_meta::struct_data::StructData,
 };
-use std::sync::Arc;
-
 #[async_trait]
 pub trait Sinker {
-    async fn sink_dml(&mut self, mut _data: Vec<Arc<RowData>>, _batch: bool) -> anyhow::Result<()> {
+    async fn sink_dml(&mut self, mut _data: Vec<RowData>, _batch: bool) -> anyhow::Result<()> {
         Ok(())
     }
 

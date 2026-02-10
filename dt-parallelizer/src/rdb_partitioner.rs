@@ -1,6 +1,5 @@
 use dt_common::log_debug;
 use dt_common::meta::{rdb_meta_manager::RdbMetaManager, row_data::RowData, row_type::RowType};
-use std::sync::Arc;
 
 pub struct RdbPartitioner {
     pub meta_manager: RdbMetaManager,
@@ -9,9 +8,9 @@ pub struct RdbPartitioner {
 impl RdbPartitioner {
     pub async fn partition(
         &mut self,
-        data: Vec<Arc<RowData>>,
+        data: Vec<RowData>,
         partition_count: usize,
-    ) -> anyhow::Result<Vec<Vec<Arc<RowData>>>> {
+    ) -> anyhow::Result<Vec<Vec<RowData>>> {
         let mut sub_data_items = Vec::new();
         if partition_count <= 1 {
             sub_data_items.push(data);
@@ -23,9 +22,7 @@ impl RdbPartitioner {
         }
 
         for row_data in data {
-            let partition = self
-                .get_partition_index(row_data.as_ref(), partition_count)
-                .await?;
+            let partition = self.get_partition_index(&row_data, partition_count).await?;
             sub_data_items[partition].push(row_data);
         }
 

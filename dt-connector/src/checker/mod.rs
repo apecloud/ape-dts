@@ -6,8 +6,6 @@ pub mod mysql_checker;
 pub mod pg_checker;
 pub mod struct_checker;
 
-use std::sync::Arc;
-
 use dt_common::meta::{row_data::RowData, struct_meta::struct_data::StructData};
 
 pub use base_checker::{
@@ -24,7 +22,7 @@ pub enum CheckerHandle {
 }
 
 impl CheckerHandle {
-    pub async fn check_rows(&self, data: Vec<Arc<RowData>>) -> anyhow::Result<()> {
+    pub async fn check_rows(&self, data: Vec<RowData>) -> anyhow::Result<()> {
         match self {
             CheckerHandle::Data(handle) => handle.check(data).await,
             CheckerHandle::Struct(_) => Ok(()),
@@ -42,14 +40,6 @@ impl CheckerHandle {
         match self {
             CheckerHandle::Data(handle) => handle.close().await,
             CheckerHandle::Struct(handle) => handle.close().await,
-        }
-    }
-
-    /// Wait until the checker background task has processed all pending rows.
-    pub async fn wait_idle(&self) {
-        match self {
-            CheckerHandle::Data(handle) => handle.wait_idle().await,
-            CheckerHandle::Struct(_) => {}
         }
     }
 }

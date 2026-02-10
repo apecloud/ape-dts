@@ -51,7 +51,7 @@ impl Parallelizer for CheckParallelizer {
 
     async fn sink_dml(
         &mut self,
-        data: Vec<Arc<RowData>>,
+        data: Vec<RowData>,
         sinkers: &[Arc<async_mutex::Mutex<Box<dyn Sinker + Send>>>],
     ) -> anyhow::Result<DataSize> {
         let mut data_size = DataSize::default();
@@ -60,7 +60,7 @@ impl Parallelizer for CheckParallelizer {
         // The merger splits UPDATE into DELETE+INSERT for the sinker,
         // but the checker must verify the original event semantics
         // against the final target state to avoid false diffs.
-        let check_data: Option<Vec<Arc<RowData>>> = if self.checker.is_some() {
+        let check_data: Option<Vec<RowData>> = if self.checker.is_some() {
             Some(data.clone())
         } else {
             None
@@ -108,10 +108,6 @@ impl Parallelizer for CheckParallelizer {
                     }
                 }
             }
-            // Wait for the checker background task to finish processing
-            // before returning, so the next batch's sinker writes don't
-            // race with this batch's checker queries.
-            checker.wait_idle().await;
         }
 
         Ok(data_size)
