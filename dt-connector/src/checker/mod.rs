@@ -44,4 +44,12 @@ impl CheckerHandle {
             CheckerHandle::Struct(handle) => handle.close().await,
         }
     }
+
+    /// Wait until the checker background task has processed all pending rows.
+    pub async fn wait_idle(&self) {
+        match self {
+            CheckerHandle::Data(handle) => handle.wait_idle().await,
+            CheckerHandle::Struct(_) => {}
+        }
+    }
 }

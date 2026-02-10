@@ -108,6 +108,12 @@ impl StructCheckerHandle {
         Ok(())
     }
 
+    fn collect_sqls(sqls: Vec<(String, String)>, dst_map: &mut HashMap<String, String>) {
+        for (key, sql) in sqls {
+            dst_map.insert(key, sql);
+        }
+    }
+
     async fn build_dst_sql_map(
         &self,
         dbs: &HashSet<String>,
@@ -132,14 +138,10 @@ impl StructCheckerHandle {
                     meta_manager,
                 };
                 for stmt in fetcher.get_create_database_statements("").await? {
-                    for (key, sql) in stmt.to_sqls(&self.filter)? {
-                        dst_map.insert(key, sql);
-                    }
+                    Self::collect_sqls(stmt.to_sqls(&self.filter)?, &mut dst_map);
                 }
                 for mut stmt in fetcher.get_create_table_statements("", "").await? {
-                    for (key, sql) in stmt.to_sqls(&self.filter)? {
-                        dst_map.insert(key, sql);
-                    }
+                    Self::collect_sqls(stmt.to_sqls(&self.filter)?, &mut dst_map);
                 }
             }
             DbType::Pg => {
@@ -154,19 +156,13 @@ impl StructCheckerHandle {
                     filter: Some(self.filter.clone()),
                 };
                 for stmt in fetcher.get_create_schema_statements("").await? {
-                    for (key, sql) in stmt.to_sqls(&self.filter)? {
-                        dst_map.insert(key, sql);
-                    }
+                    Self::collect_sqls(stmt.to_sqls(&self.filter)?, &mut dst_map);
                 }
                 for mut stmt in fetcher.get_create_table_statements("", "").await? {
-                    for (key, sql) in stmt.to_sqls(&self.filter)? {
-                        dst_map.insert(key, sql);
-                    }
+                    Self::collect_sqls(stmt.to_sqls(&self.filter)?, &mut dst_map);
                 }
                 for stmt in fetcher.get_create_rbac_statements().await? {
-                    for (key, sql) in stmt.to_sqls(&self.filter)? {
-                        dst_map.insert(key, sql);
-                    }
+                    Self::collect_sqls(stmt.to_sqls(&self.filter)?, &mut dst_map);
                 }
             }
             _ => bail!("struct check not supported for db_type: {}", self.db_type),
@@ -234,8 +230,7 @@ impl StructCheckerHandle {
 
         Ok((summary, sql_count))
     }
-}
-impl StructCheckerHandle {
+
     pub async fn check_struct(
         &self,
         data: Vec<dt_common::meta::struct_meta::struct_data::StructData>,
@@ -274,7 +269,7 @@ impl StructCheckerHandle {
             }
         }
 
-        let (summary, sql_count) = self
+        let (summary, _sql_count) = self
             .compare_once(&src_sql_map, &dbs, &start_time, true)
             .await?;
         if summary.miss_count > 0 {
@@ -285,11 +280,6 @@ impl StructCheckerHandle {
         if summary.diff_count > 0 {
             self.monitor
                 .add_counter(CounterType::CheckerDiffCount, summary.diff_count as u64)
-                .await;
-        }
-        if sql_count > 0 {
-            self.monitor
-                .add_counter(CounterType::CheckerGenerateSqlCount, sql_count as u64)
                 .await;
         }
         if summary.miss_count > 0 || summary.diff_count > 0 {

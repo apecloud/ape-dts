@@ -435,28 +435,6 @@ impl TaskMonitor {
                     statics.avg_by_sec,
                 );
             }
-            // checker generated sql
-            if let Some(counter) = monitor
-                .time_window_counters
-                .get(&CounterType::CheckerGenerateSqlCount)
-            {
-                let statics = counter.statistics().await;
-                calc_handler(
-                    CalcType::Min,
-                    TaskMetricsType::CheckerGenerateSqlRpsMin,
-                    statics.min_by_sec,
-                );
-                calc_handler(
-                    CalcType::Max,
-                    TaskMetricsType::CheckerGenerateSqlRpsMax,
-                    statics.max_by_sec,
-                );
-                calc_handler(
-                    CalcType::Avg,
-                    TaskMetricsType::CheckerGenerateSqlRpsAvg,
-                    statics.avg_by_sec,
-                );
-            }
         }
         calc_nowindow_metrics(&self.no_window_metrics_map, calc_monitors);
 

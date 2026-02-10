@@ -452,64 +452,54 @@ impl TaskConfig {
     }
 
     fn load_sinker_config(loader: &IniLoader) -> anyhow::Result<(BasicSinkerConfig, SinkerConfig)> {
-        if !loader.ini.sections().contains(&SINKER.to_string()) {
-            if loader.ini.sections().contains(&CHECKER.to_string()) {
-                let db_type: DbType = loader.get_required(CHECKER, DB_TYPE);
-                let url: String = loader.get_required(CHECKER, URL);
-                let connection_auth = ConnectionAuthConfig::from(loader, CHECKER);
-                let basic = BasicSinkerConfig {
-                    sink_type: SinkType::Dummy,
-                    db_type: db_type.clone(),
-                    url: url.clone(),
-                    connection_auth: connection_auth.clone(),
-                    batch_size: loader.get_with_default(CHECKER, BATCH_SIZE, 200),
-                    max_connections: loader.get_with_default(
-                        CHECKER,
-                        MAX_CONNECTIONS,
-                        DEFAULT_MAX_CONNECTIONS,
-                    ),
-                };
-                return Ok((basic, SinkerConfig::Dummy));
-            }
+        let has_sinker = loader.ini.sections().contains(&SINKER.to_string());
+        let has_checker = loader.ini.sections().contains(&CHECKER.to_string());
+
+        if !has_sinker && !has_checker {
             bail!(Error::ConfigError(
                 "config [sinker] is required when [checker] is not set".into()
             ));
         }
 
-        let sink_type = loader.get_with_default(SINKER, "sink_type", SinkType::Write);
+        let sink_type = if has_sinker {
+            loader.get_with_default(SINKER, "sink_type", SinkType::Write)
+        } else {
+            SinkType::Dummy
+        };
+
         if let SinkType::Dummy = sink_type {
-            if loader.ini.sections().contains(&CHECKER.to_string()) {
-                let db_type: DbType = if loader.contains(SINKER, DB_TYPE) {
-                    loader.get_required(SINKER, DB_TYPE)
-                } else {
-                    loader.get_required(CHECKER, DB_TYPE)
-                };
-                let url: String = if loader.contains(SINKER, URL) {
-                    loader.get_required(SINKER, URL)
-                } else {
-                    loader.get_required(CHECKER, URL)
-                };
-                let batch_size: usize = loader.get_with_default(SINKER, BATCH_SIZE, 200);
-                let max_connections =
-                    loader.get_with_default(SINKER, MAX_CONNECTIONS, DEFAULT_MAX_CONNECTIONS);
-                let connection_auth = if loader.contains(SINKER, "username") {
-                    ConnectionAuthConfig::from(loader, SINKER)
-                } else {
-                    ConnectionAuthConfig::from(loader, CHECKER)
-                };
-                return Ok((
-                    BasicSinkerConfig {
-                        sink_type,
-                        db_type,
-                        url,
-                        connection_auth,
-                        batch_size,
-                        max_connections,
-                    },
-                    SinkerConfig::Dummy,
-                ));
+            if !has_checker {
+                return Ok((BasicSinkerConfig::default(), SinkerConfig::Dummy));
             }
-            return Ok((BasicSinkerConfig::default(), SinkerConfig::Dummy));
+            // resolve each field from [sinker] if present, otherwise fall back to [checker]
+            let get_section = |key: &str| -> &str {
+                if has_sinker && loader.contains(SINKER, key) {
+                    SINKER
+                } else {
+                    CHECKER
+                }
+            };
+            let db_type: DbType = loader.get_required(get_section(DB_TYPE), DB_TYPE);
+            let url: String = loader.get_required(get_section(URL), URL);
+            let connection_auth = ConnectionAuthConfig::from(loader, get_section(USERNAME));
+            let batch_size: usize =
+                loader.get_with_default(get_section(BATCH_SIZE), BATCH_SIZE, 200);
+            let max_connections = loader.get_with_default(
+                get_section(MAX_CONNECTIONS),
+                MAX_CONNECTIONS,
+                DEFAULT_MAX_CONNECTIONS,
+            );
+            return Ok((
+                BasicSinkerConfig {
+                    sink_type,
+                    db_type,
+                    url,
+                    connection_auth,
+                    batch_size,
+                    max_connections,
+                },
+                SinkerConfig::Dummy,
+            ));
         }
 
         let db_type: DbType = loader.get_required(SINKER, DB_TYPE);

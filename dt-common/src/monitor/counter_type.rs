@@ -25,8 +25,6 @@ pub enum CounterType {
     CheckerMissCount,
     #[strum(serialize = "checker_diff_count")]
     CheckerDiffCount,
-    #[strum(serialize = "checker_generate_sql_count")]
-    CheckerGenerateSqlCount,
     #[strum(serialize = "checker_lag_seconds")]
     CheckerLagSeconds,
 
@@ -91,7 +89,6 @@ impl CounterType {
             | Self::RecordCount
             | Self::CheckerMissCount
             | Self::CheckerDiffCount
-            | Self::CheckerGenerateSqlCount
             | Self::CheckerLagSeconds
             | Self::RecordsPerQuery
             | Self::RtPerQuery
@@ -136,7 +133,6 @@ impl CounterType {
                 | Self::RecordCount
                 | Self::CheckerMissCount
                 | Self::CheckerDiffCount
-                | Self::CheckerGenerateSqlCount
                 | Self::DataBytes
                 | Self::ExtractedRecords
                 | Self::ExtractedBytes => {

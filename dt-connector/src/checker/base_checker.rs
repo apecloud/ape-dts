@@ -31,10 +31,8 @@ use dt_common::{
 };
 
 /// Maximum number of rows to query in a single batch.
-/// Larger values improve throughput but may increase query latency and memory usage.
 pub const CHECKER_MAX_QUERY_BATCH: usize = 1000;
 
-/// Maximum size of the retry queue.
 /// When the queue is full, oldest entries are dropped to prevent unbounded memory growth.
 /// At 100k entries with average row size, this limits memory to a reasonable bound.
 const CHECKER_MAX_RETRY_QUEUE_SIZE: usize = 100_000;
@@ -297,6 +295,16 @@ impl DataCheckerHandle {
         self.send(data).await
     }
 
+    /// Wait until the checker background task has processed all pending rows.
+    pub async fn wait_idle(&self) {
+        loop {
+            if self.pending_rows.load(Ordering::Relaxed) == 0 {
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    }
+
     pub async fn close(&mut self) -> anyhow::Result<()> {
         let _ = self.tx.send(CheckerMsg::Close).await;
         if let Some(handle) = self.join_handle.take() {
@@ -310,11 +318,9 @@ impl DataCheckerHandle {
         if let Err(err) = self.tx.send(CheckerMsg::ProcessBatch(data)).await {
             return Err(anyhow::anyhow!("Checker worker closed: {}", err));
         }
-        if data_size > 0 {
-            let pending = self.pending_rows.fetch_add(data_size, Ordering::Relaxed) + data_size;
-            self.monitor
-                .set_counter(CounterType::CheckerPending, pending);
-        }
+        let pending = self.pending_rows.fetch_add(data_size, Ordering::Relaxed) + data_size;
+        self.monitor
+            .set_counter(CounterType::CheckerPending, pending);
         Ok(())
     }
 }
@@ -517,29 +523,6 @@ impl<C: Checker> DataChecker<C> {
         let mut skip_count = 0;
         let mut retry_rows = Vec::new();
 
-        if max_retries > 0 {
-            for src_row_data in src_data {
-                let key = match src_row_data.get_hash_code(tb_meta.basic()) {
-                    Ok(k) => k,
-                    Err(e) => {
-                        log_warn!(
-                            "Skipping row with unhashable key in {}.{}: {}",
-                            src_row_data.schema,
-                            src_row_data.tb,
-                            e
-                        );
-                        skip_count += 1;
-                        continue;
-                    }
-                };
-                let dst_row_data = dst_row_data_map.remove(&key);
-                if Self::is_inconsistent(src_row_data, dst_row_data.as_ref())? {
-                    retry_rows.push(src_row_data.clone());
-                }
-            }
-            return Ok((miss, diff, sql_count, skip_count, retry_rows));
-        }
-
         for src_row_data in src_data {
             let key = match src_row_data.get_hash_code(tb_meta.basic()) {
                 Ok(k) => k,
@@ -555,6 +538,14 @@ impl<C: Checker> DataChecker<C> {
                 }
             };
             let dst_row_data = dst_row_data_map.remove(&key);
+
+            if max_retries > 0 {
+                if Self::is_inconsistent(src_row_data, dst_row_data.as_ref())? {
+                    retry_rows.push(src_row_data.clone());
+                }
+                continue;
+            }
+
             let check_result = Self::compare_src_dst(src_row_data, dst_row_data.as_ref())?;
             let Some(check_result) = check_result else {
                 continue;
@@ -717,8 +708,6 @@ impl<C: Checker> DataChecker<C> {
             .add_counter(CounterType::CheckerMissCount, miss.len() as u64)
             .await
             .add_counter(CounterType::CheckerDiffCount, diff.len() as u64)
-            .await
-            .add_counter(CounterType::CheckerGenerateSqlCount, sql_count as u64)
             .await;
         Ok(())
     }
@@ -972,19 +961,20 @@ impl<C: Checker> DataChecker<C> {
             };
 
             if item.next_retry_at > now {
-                next_retry_at = match next_retry_at {
-                    Some(current) => Some(current.min(item.next_retry_at)),
-                    None => Some(item.next_retry_at),
-                };
+                next_retry_at = Some(
+                    next_retry_at
+                        .map_or(item.next_retry_at, |c: Instant| c.min(item.next_retry_at)),
+                );
                 self.retry_queue.push_back(item);
                 continue;
             }
 
             if let Some(rescheduled) = self.retry_check_item(item).await? {
-                next_retry_at = match next_retry_at {
-                    Some(current) => Some(current.min(rescheduled.next_retry_at)),
-                    None => Some(rescheduled.next_retry_at),
-                };
+                next_retry_at = Some(
+                    next_retry_at.map_or(rescheduled.next_retry_at, |c: Instant| {
+                        c.min(rescheduled.next_retry_at)
+                    }),
+                );
                 self.retry_queue.push_back(rescheduled);
             }
         }
@@ -1056,7 +1046,7 @@ impl<C: Checker> DataChecker<C> {
         }
 
         if !batch {
-            return Self::serial_check(self, data).await;
+            return self.process_batch(&data, true).await;
         }
 
         let batch_size = self.ctx.batch_size;
@@ -1065,7 +1055,7 @@ impl<C: Checker> DataChecker<C> {
         }
 
         for chunk in data.chunks(batch_size) {
-            Self::batch_check(self, chunk).await?;
+            self.process_batch(chunk, false).await?;
         }
         Ok(())
     }
@@ -1125,8 +1115,6 @@ impl<C: Checker> DataChecker<C> {
             .add_counter(CounterType::CheckerMissCount, miss.len() as u64)
             .await
             .add_counter(CounterType::CheckerDiffCount, diff.len() as u64)
-            .await
-            .add_counter(CounterType::CheckerGenerateSqlCount, sql_count as u64)
             .await;
         if is_serial_mode {
             BaseSinker::update_serial_monitor(&monitor, checkable.len() as u64, 0).await?;
@@ -1134,14 +1122,6 @@ impl<C: Checker> DataChecker<C> {
             BaseSinker::update_batch_monitor(&monitor, checkable.len() as u64, 0).await?;
         }
         BaseSinker::update_monitor_rt(&monitor, &rts).await
-    }
-
-    async fn serial_check(&mut self, data: Vec<Arc<RowData>>) -> anyhow::Result<()> {
-        Self::process_batch(self, &data, true).await
-    }
-
-    async fn batch_check(&mut self, data: &[Arc<RowData>]) -> anyhow::Result<()> {
-        Self::process_batch(self, data, false).await
     }
 
     async fn finish_summary_and_meta(&mut self) -> anyhow::Result<()> {

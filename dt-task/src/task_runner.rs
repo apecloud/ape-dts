@@ -36,9 +36,7 @@ use dt_common::log_filter::SizeLimitFilterDeserializer;
 use dt_common::{
     config::{
         checker_config::CheckerConfig,
-        config_enums::{
-            build_task_type, DbType, ExtractType, ParallelType, PipelineType, SinkType, TaskType,
-        },
+        config_enums::{build_task_type, DbType, ExtractType, PipelineType, SinkType, TaskType},
         config_token_parser::{ConfigTokenParser, TokenEscapePair},
         extractor_config::ExtractorConfig,
         sinker_config::SinkerConfig,
@@ -543,23 +541,16 @@ impl TaskRunner {
         });
         try_join!(f1, f2, f3)?;
 
-        if let (Some(check_summary), Some((prev_miss, prev_diff, prev_sql))) =
+        if let (Some(check_summary), Some((prev_miss, prev_diff, _prev_sql))) =
             (&task_context.check_summary, check_summary_snapshot)
         {
             let summary = check_summary.lock().await;
             let delta_miss = summary.miss_count.saturating_sub(prev_miss);
             let delta_diff = summary.diff_count.saturating_sub(prev_diff);
-            let delta_sql = summary.sql_count.unwrap_or(0).saturating_sub(prev_sql);
             self.task_monitor
                 .add_no_window_metrics(TaskMetricsType::CheckerMissCount, delta_miss as u64);
             self.task_monitor
                 .add_no_window_metrics(TaskMetricsType::CheckerDiffCount, delta_diff as u64);
-            if delta_sql > 0 {
-                self.task_monitor.add_no_window_metrics(
-                    TaskMetricsType::CheckerGenerateSqlCount,
-                    delta_sql as u64,
-                );
-            }
         }
 
         // finished log
@@ -714,20 +705,11 @@ impl TaskRunner {
         let enable_sqlx_log = TaskUtil::check_enable_sqlx_log(log_level);
         let is_cdc_task = matches!(self.config.extractor_basic.extract_type, ExtractType::Cdc)
             && matches!(self.config.sinker_basic.sink_type, SinkType::Write);
-        let is_cdc_check = is_cdc_task
-            && matches!(
-                self.config.parallelizer.parallel_type,
-                ParallelType::RdbCheck
-            );
-        let max_retries = if is_cdc_task && !is_cdc_check {
-            // Non-check CDC tasks: checker runs in pipeline on pre-merge data,
-            // retries are not meaningful.
-            if cfg.max_retries > 0 {
-                log::warn!(
-                    "Checker retries are disabled for CDC tasks; ignoring configured max_retries={}",
-                    cfg.max_retries
-                );
-            }
+        let max_retries = if is_cdc_task {
+            // CDC tasks: data arrives as a stream, checker verifies immediately
+            // after sinker commits. Retries are harmful because subsequent
+            // DELETE events may remove data that was correctly written,
+            // causing false misses in the retry queue.
             0
         } else {
             cfg.max_retries

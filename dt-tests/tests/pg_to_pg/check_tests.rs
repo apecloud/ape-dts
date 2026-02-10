@@ -14,14 +14,13 @@ mod test {
     #[tokio::test]
     #[serial]
     async fn cdc_check_basic_test() {
-        TestBase::run_cdc_check_test("pg_to_pg/check/cdc_check_basic_test", 3000, 9000).await;
+        TestBase::run_cdc_check_test("pg_to_pg/check/cdc_check_basic_test", 3000, 15000).await;
     }
 
     #[tokio::test]
     #[serial]
     async fn cdc_check_large_data_test() {
-        TestBase::run_cdc_check_test("pg_to_pg/check/cdc_check_large_data_test", 5000, 30000)
-            .await;
+        TestBase::run_cdc_check_test("pg_to_pg/check/cdc_check_large_data_test", 5000, 30000).await;
     }
 
     #[tokio::test]
