@@ -56,7 +56,7 @@ takes precedence; otherwise the checker reuses the `[sinker]` target.
 | :-------------------- | :------------------------------------------------- | :---------- | :-------------------------------- |
 | queue_size            | checker queue capacity                             | 200         | 200                               |
 | max_connections       | max connections for checker pool                   | 8           | 8                                 |
-| batch_size            | checker batch size                                 | 100         | 100                               |
+| batch_size            | checker batch size (non-CDC tasks)                | 100         | 1                                 |
 | sample_rate           | checker sampling rate (reserved, currently unused) | 1.0         | 1.0                               |
 | output_full_row       | output full row in diff log                        | false       | false                             |
 | output_revise_sql     | output revise SQL                                  | false       | false                             |
@@ -69,6 +69,19 @@ takes precedence; otherwise the checker reuses the `[sinker]` target.
 | url                   | checker target URL (override sinker target)        | mysql://... | empty                             |
 | username              | checker target username (when URL lacks auth)      | root        | empty                             |
 | password              | checker target password (when URL lacks auth)      | password    | empty                             |
+| cdc_check_log_disk    | write periodic CDC check snapshot to disk          | false       | false                             |
+| cdc_check_log_s3      | upload periodic CDC check snapshot to S3           | false       | false                             |
+| cdc_check_log_interval_secs | interval (seconds) for periodic CDC check snapshot output | 10 | 10                               |
+| s3_bucket             | S3 bucket for check log upload                     | my-bucket   | -                                 |
+| s3_access_key         | S3 access key                                      | AKIA...     | -                                 |
+| s3_secret_key         | S3 secret key                                      | ****        | -                                 |
+| s3_region             | S3 region                                          | us-east-1   | -                                 |
+| s3_endpoint           | S3 endpoint                                        | https://... | -                                 |
+| s3_key_prefix         | S3 key prefix for check logs                       | task1/check | empty                             |
+
+Notes:
+- In CDC + checker mode (`extract_type=cdc` and `sink_type=write`), checker batch size follows `[sinker].batch_size`.
+- When `check_log_dir` is empty, `runtime.log_dir/check` is used consistently for checker logs (including CDC check outputs).
 
 # [filter]
 
