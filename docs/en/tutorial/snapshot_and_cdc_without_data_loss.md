@@ -4,6 +4,10 @@ In most data migration/import scenarios, you may want to migrate snapshot first,
 
 This article tells you what to do before starting a snapshot task, and how to configure cdc task_config.ini to avoid data loss.
 
+## CDC + Checker
+
+If you want to validate CDC-applied data after the snapshot + CDC pipeline, enable `[checker]` in the CDC task and refer to [Data Check](../snapshot/check.md) for configuration and limitations.
+
 # Source: MySQL
 
 Refer to [mysql -> mysql](./mysql_to_mysql.md) or [mysql -> kafka](./mysql_to_kafka_consumer.md) to generate snapshot_task_config.ini & cdc_task_config.ini.

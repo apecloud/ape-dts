@@ -17,8 +17,10 @@ impl LuaProcessor {
 
         for row_data in data {
             // to lua
-            let (lua_before, blob_before) = self.col_values_to_lua_table(row_data.before, &lua)?;
-            let (lua_after, blob_after) = self.col_values_to_lua_table(row_data.after, &lua)?;
+            let (lua_before, blob_before) =
+                self.col_values_to_lua_table(row_data.before.clone(), &lua)?;
+            let (lua_after, blob_after) =
+                self.col_values_to_lua_table(row_data.after.clone(), &lua)?;
 
             lua.globals().set("before", lua_before)?;
             lua.globals().set("after", lua_after)?;

@@ -175,9 +175,8 @@ db_type=pg
 extract_type=struct
 url=postgres://postgres:postgres@127.0.0.1:5433/postgres?options[statement_timeout]=10s
 
-[sinker]
+[checker]
 db_type=pg
-sink_type=check
 url=postgres://postgres:postgres@127.0.0.1:5434/postgres?options[statement_timeout]=10s
 
 [filter]
@@ -216,9 +215,8 @@ extract_type=snapshot
 url=postgres://postgres:postgres@127.0.0.1:5433/postgres?options[statement_timeout]=10s
 batch_size=10000
 
-[sinker]
+[checker]
 db_type=pg
-sink_type=check
 url=postgres://postgres:postgres@127.0.0.1:5434/postgres?options[statement_timeout]=10s
 batch_size=200
 
@@ -308,9 +306,8 @@ url=postgres://postgres:postgres@127.0.0.1:5433/postgres?options[statement_timeo
 check_log_dir=./logs/origin_check_log
 batch_size=200
 
-[sinker]
+[checker]
 db_type=pg
-sink_type=check
 url=postgres://postgres:postgres@127.0.0.1:5434/postgres?options[statement_timeout]=10s
 batch_size=200
 

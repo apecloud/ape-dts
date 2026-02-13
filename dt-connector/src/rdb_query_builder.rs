@@ -408,10 +408,13 @@ impl RdbQueryBuilder<'_> {
         let mut binds =
             Vec::with_capacity(batch_size.saturating_mul(self.rdb_tb_meta.id_cols.len()));
         for &row_data in data.iter().skip(start_index).take(batch_size) {
-            let after = row_data.require_after()?;
+            let id_values = match row_data.row_type {
+                RowType::Delete => row_data.require_before()?,
+                _ => row_data.require_after()?,
+            };
             for col in self.rdb_tb_meta.id_cols.iter() {
                 cols.push(col.clone());
-                let col_value = after.get(col);
+                let col_value = id_values.get(col);
                 if col_value.is_none() || matches!(col_value, Some(ColValue::None)) {
                     bail! {
                         "schema: {}, tb: {}, where col: {} is NULL, which should not happen in batch select",

@@ -156,7 +156,7 @@ impl PgSinker {
         }
         let mut rts = LimitedQueue::new(cmp::min(100, data.len()));
         for row_data in data.iter() {
-            data_size += row_data.data_size;
+            data_size += row_data.get_data_size() as usize;
 
             let tb_meta = self.meta_manager.get_tb_meta_by_row_data(row_data).await?;
             let query_builder = RdbQueryBuilder::new_for_pg(tb_meta, None);

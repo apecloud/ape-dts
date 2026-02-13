@@ -82,4 +82,3 @@ end_time_utc=2024-10-09 03:00:00
 # Data rollback
 If some sqls were executed incorrectly in the source and you want to roll back the data, you may:
 - generate reverse sqls and execute them from the last to the first.
-

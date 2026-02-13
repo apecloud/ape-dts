@@ -8,6 +8,11 @@ Prerequisites
 - Mongo: The source instance must be ReplicaSet;
 - For more information, refer to [init test env](../../../dt-tests/README.md).
 
+## CDC + Checker
+
+To validate CDC-applied data, enable `[checker]` in the CDC task config. See [Data Check](../snapshot/check.md) for configuration and limitations.
+If both `[checker]` and `[sinker]` specify targets, `[checker]` takes precedence.
+
 # Example: MySQL -> MySQL
 
 Refer to [task templates](../../templates/mysql_to_mysql.md) and [tutorial](../tutorial/mysql_to_mysql.md)

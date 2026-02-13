@@ -63,8 +63,7 @@ impl KafkaSinker {
 
         let mut messages = Vec::new();
         for row_data in data.iter_mut().skip(sinked_count).take(batch_size) {
-            data_size += row_data.data_size;
-
+            data_size += row_data.get_data_size();
             row_data.convert_raw_string();
             let topic = self.router.get_topic(&row_data.schema, &row_data.tb);
             let key = self.avro_converter.row_data_to_avro_key(row_data).await?;
@@ -83,16 +82,12 @@ impl KafkaSinker {
         let start_time = Instant::now();
         let mut rts = LimitedQueue::new(1);
         self.producer.send_all(&messages)?;
-        // TODO: Currently measuring RT for the entire message batch,
-        //       as kafka producer involves internal per-broker merging logic,
-        //       making it impossible to see individual broker RT. This can be optimized in the future.
         rts.push((
             start_time.elapsed().as_millis() as u64,
             messages.len() as u64,
         ));
 
-        BaseSinker::update_batch_monitor(&self.monitor, batch_size as u64, data_size as u64)
-            .await?;
+        BaseSinker::update_batch_monitor(&self.monitor, batch_size as u64, data_size).await?;
         BaseSinker::update_monitor_rt(&self.monitor, &rts).await
     }
 }

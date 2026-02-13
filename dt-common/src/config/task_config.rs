@@ -19,6 +19,7 @@ use crate::{
 };
 
 use super::{
+    checker_config::CheckerConfig,
     config_enums::{
         ConflictPolicyEnum, DbType, ExtractType, MetaCenterType, ParallelType, PipelineType,
         SinkType,
@@ -51,6 +52,7 @@ pub struct TaskConfig {
     pub filter: FilterConfig,
     pub router: RouterConfig,
     pub resumer: ResumerConfig,
+    pub checker: Option<CheckerConfig>,
     pub meta_center: Option<MetaCenterConfig>,
     pub data_marker: Option<DataMarkerConfig>,
     pub processor: Option<ProcessorConfig>,
@@ -74,6 +76,7 @@ const ROUTER: &str = "router";
 const RESUMER: &str = "resumer";
 const DATA_MARKER: &str = "data_marker";
 const PROCESSOR: &str = "processor";
+const CHECKER: &str = "checker";
 const META_CENTER: &str = "metacenter";
 // keys
 const CHECK_LOG_DIR: &str = "check_log_dir";
@@ -100,6 +103,15 @@ const DDL_CONFLICT_POLICY: &str = "ddl_conflict_policy";
 const REPLACE: &str = "replace";
 const DISABLE_FOREIGN_KEY_CHECKS: &str = "disable_foreign_key_checks";
 const RESUME_TYPE: &str = "resume_type";
+const CHECKER_QUEUE_SIZE: &str = "queue_size";
+const CHECKER_SAMPLE_RATE: &str = "sample_rate";
+const CDC_CHECK_LOG_DISK: &str = "cdc_check_log_disk";
+const CDC_CHECK_LOG_S3: &str = "cdc_check_log_s3";
+const S3_KEY_PREFIX: &str = "s3_key_prefix";
+const CDC_CHECK_LOG_INTERVAL_SECS: &str = "cdc_check_log_interval_secs";
+const USERNAME: &str = "username";
+const PASSWORD: &str = "password";
+
 // deprecated keys
 const RESUME_FROM_LOG: &str = "resume_from_log";
 const RESUME_LOG_DIR: &str = "resume_log_dir";
@@ -120,6 +132,7 @@ impl TaskConfig {
         let (extractor_basic, extractor) = Self::load_extractor_config(&loader, &pipeline)?;
         let filter = Self::load_filter_config(&loader)?;
         let router = Self::load_router_config(&loader)?;
+        let checker = Self::load_checker_config(&loader, &sinker_basic)?;
         Ok(Self {
             global: Self::load_global_config(
                 &loader,
@@ -138,6 +151,7 @@ impl TaskConfig {
             filter,
             router,
             resumer,
+            checker,
             data_marker: Self::load_data_marker_config(&loader)?,
             processor: Self::load_processor_config(&loader)?,
             meta_center: Self::load_meta_center_config(&loader)?,
@@ -442,9 +456,54 @@ impl TaskConfig {
     }
 
     fn load_sinker_config(loader: &IniLoader) -> anyhow::Result<(BasicSinkerConfig, SinkerConfig)> {
-        let sink_type = loader.get_with_default(SINKER, "sink_type", SinkType::Write);
+        let has_sinker = loader.ini.sections().contains(&SINKER.to_string());
+        let has_checker = loader.ini.sections().contains(&CHECKER.to_string());
+
+        if !has_sinker && !has_checker {
+            bail!(Error::ConfigError(
+                "config [sinker] is required when [checker] is not set".into()
+            ));
+        }
+
+        let sink_type = if has_sinker {
+            loader.get_with_default(SINKER, "sink_type", SinkType::Write)
+        } else {
+            SinkType::Dummy
+        };
+
         if let SinkType::Dummy = sink_type {
-            return Ok((BasicSinkerConfig::default(), SinkerConfig::Dummy));
+            if !has_checker {
+                return Ok((BasicSinkerConfig::default(), SinkerConfig::Dummy));
+            }
+            // resolve each field from [sinker] if present, otherwise fall back to [checker]
+            let get_section = |key: &str| -> &str {
+                if has_sinker && loader.contains(SINKER, key) {
+                    SINKER
+                } else {
+                    CHECKER
+                }
+            };
+            let db_type: DbType = loader.get_required(get_section(DB_TYPE), DB_TYPE);
+            let url: String = loader.get_required(get_section(URL), URL);
+            let connection_auth = ConnectionAuthConfig::from(loader, get_section(USERNAME));
+            let batch_size: usize =
+                loader.get_with_default(get_section(BATCH_SIZE), BATCH_SIZE, 200);
+            let max_connections = loader.get_with_default(
+                get_section(MAX_CONNECTIONS),
+                MAX_CONNECTIONS,
+                DEFAULT_MAX_CONNECTIONS,
+            );
+            return Ok((
+                BasicSinkerConfig {
+                    sink_type,
+                    db_type,
+                    url,
+                    connection_auth,
+                    batch_size,
+                    max_connections,
+                },
+                SinkerConfig::Dummy,
+            ));
         }
 
         let db_type: DbType = loader.get_required(SINKER, DB_TYPE);
@@ -452,7 +511,6 @@ impl TaskConfig {
         let batch_size: usize = loader.get_with_default(SINKER, BATCH_SIZE, 200);
         let max_connections =
             loader.get_with_default(SINKER, MAX_CONNECTIONS, DEFAULT_MAX_CONNECTIONS);
-
         let connection_auth = ConnectionAuthConfig::from(loader, SINKER);
 
         let basic = BasicSinkerConfig {
@@ -485,27 +543,6 @@ impl TaskConfig {
                     transaction_isolation: loader.get_optional(SINKER, "transaction_isolation"),
                 },
 
-                SinkType::Check => SinkerConfig::MysqlCheck {
-                    url,
-                    connection_auth,
-                    batch_size,
-                    check_log_dir: loader.get_optional(SINKER, CHECK_LOG_DIR),
-                    check_log_file_size: loader.get_with_default(
-                        SINKER,
-                        CHECK_LOG_FILE_SIZE,
-                        DEFAULT_CHECK_LOG_FILE_SIZE.to_string(),
-                    ),
-                    output_full_row: loader.get_with_default(SINKER, OUTPUT_FULL_ROW, false),
-                    output_revise_sql: loader.get_with_default(SINKER, OUTPUT_REVISE_SQL, false),
-                    revise_match_full_row: loader.get_with_default(
-                        SINKER,
-                        REVISE_MATCH_FULL_ROW,
-                        false,
-                    ),
-                    retry_interval_secs: loader.get_with_default(SINKER, RETRY_INTERVAL_SECS, 0),
-                    max_retries: loader.get_with_default(SINKER, MAX_RETRIES, 1),
-                },
-
                 SinkType::Struct => SinkerConfig::MysqlStruct {
                     url,
                     connection_auth,
@@ -532,27 +569,6 @@ impl TaskConfig {
                     ),
                 },
 
-                SinkType::Check => SinkerConfig::PgCheck {
-                    url,
-                    connection_auth,
-                    batch_size,
-                    check_log_dir: loader.get_optional(SINKER, CHECK_LOG_DIR),
-                    check_log_file_size: loader.get_with_default(
-                        SINKER,
-                        CHECK_LOG_FILE_SIZE,
-                        DEFAULT_CHECK_LOG_FILE_SIZE.to_string(),
-                    ),
-                    output_full_row: loader.get_with_default(SINKER, OUTPUT_FULL_ROW, false),
-                    output_revise_sql: loader.get_with_default(SINKER, OUTPUT_REVISE_SQL, false),
-                    revise_match_full_row: loader.get_with_default(
-                        SINKER,
-                        REVISE_MATCH_FULL_ROW,
-                        false,
-                    ),
-                    retry_interval_secs: loader.get_with_default(SINKER, RETRY_INTERVAL_SECS, 0),
-                    max_retries: loader.get_with_default(SINKER, MAX_RETRIES, 1),
-                },
-
                 SinkType::Struct => SinkerConfig::PgStruct {
                     url,
                     connection_auth,
@@ -575,31 +591,6 @@ impl TaskConfig {
                         connection_auth,
                         app_name,
                         batch_size,
-                    },
-
-                    SinkType::Check => SinkerConfig::MongoCheck {
-                        url,
-                        connection_auth,
-                        app_name,
-                        batch_size,
-                        check_log_dir: loader.get_optional(SINKER, CHECK_LOG_DIR),
-                        check_log_file_size: loader.get_with_default(
-                            SINKER,
-                            CHECK_LOG_FILE_SIZE,
-                            DEFAULT_CHECK_LOG_FILE_SIZE.to_string(),
-                        ),
-                        output_full_row: loader.get_with_default(SINKER, OUTPUT_FULL_ROW, false),
-                        output_revise_sql: loader.get_with_default(
-                            SINKER,
-                            "output_revise_sql",
-                            false,
-                        ),
-                        retry_interval_secs: loader.get_with_default(
-                            SINKER,
-                            RETRY_INTERVAL_SECS,
-                            0,
-                        ),
-                        max_retries: loader.get_with_default(SINKER, MAX_RETRIES, 1),
                     },
 
                     _ => bail! { not_supported_err },
@@ -764,6 +755,125 @@ impl TaskConfig {
             config.counter_time_window_secs = config.checkpoint_interval_secs;
         }
         config
+    }
+
+    fn load_checker_config(
+        loader: &IniLoader,
+        sinker_basic: &BasicSinkerConfig,
+    ) -> anyhow::Result<Option<CheckerConfig>> {
+        if !loader.ini.sections().contains(&CHECKER.to_string()) {
+            return Ok(None);
+        }
+
+        let default = CheckerConfig::default();
+        let mut config = CheckerConfig {
+            queue_size: loader.get_with_default(CHECKER, CHECKER_QUEUE_SIZE, default.queue_size),
+            max_connections: loader.get_with_default(
+                CHECKER,
+                MAX_CONNECTIONS,
+                default.max_connections,
+            ),
+            batch_size: loader.get_with_default(CHECKER, BATCH_SIZE, default.batch_size),
+            sample_rate: loader.get_with_default(CHECKER, CHECKER_SAMPLE_RATE, default.sample_rate),
+            output_full_row: loader.get_with_default(
+                CHECKER,
+                OUTPUT_FULL_ROW,
+                default.output_full_row,
+            ),
+            output_revise_sql: loader.get_with_default(
+                CHECKER,
+                OUTPUT_REVISE_SQL,
+                default.output_revise_sql,
+            ),
+            revise_match_full_row: loader.get_with_default(
+                CHECKER,
+                REVISE_MATCH_FULL_ROW,
+                default.revise_match_full_row,
+            ),
+            retry_interval_secs: loader.get_with_default(
+                CHECKER,
+                RETRY_INTERVAL_SECS,
+                default.retry_interval_secs,
+            ),
+            max_retries: loader.get_with_default(CHECKER, MAX_RETRIES, default.max_retries),
+            check_log_dir: loader.get_with_default(CHECKER, CHECK_LOG_DIR, default.check_log_dir),
+            check_log_file_size: loader.get_with_default(
+                CHECKER,
+                CHECK_LOG_FILE_SIZE,
+                default.check_log_file_size,
+            ),
+            cdc_check_log_disk: loader.get_with_default(
+                CHECKER,
+                CDC_CHECK_LOG_DISK,
+                default.cdc_check_log_disk,
+            ),
+            cdc_check_log_s3: loader.get_with_default(
+                CHECKER,
+                CDC_CHECK_LOG_S3,
+                default.cdc_check_log_s3,
+            ),
+            s3_config: {
+                let bucket: String = loader.get_optional(CHECKER, "s3_bucket");
+                if bucket.is_empty() {
+                    None
+                } else {
+                    Some(S3Config {
+                        bucket,
+                        access_key: loader.get_optional(CHECKER, "s3_access_key"),
+                        secret_key: loader.get_optional(CHECKER, "s3_secret_key"),
+                        region: loader.get_optional(CHECKER, "s3_region"),
+                        endpoint: loader.get_optional(CHECKER, "s3_endpoint"),
+                        root_dir: loader.get_optional(CHECKER, "s3_root_dir"),
+                        root_url: loader.get_optional(CHECKER, "s3_root_url"),
+                    })
+                }
+            },
+            s3_key_prefix: loader.get_with_default(CHECKER, S3_KEY_PREFIX, default.s3_key_prefix),
+            cdc_check_log_interval_secs: loader.get_with_default(
+                CHECKER,
+                CDC_CHECK_LOG_INTERVAL_SECS,
+                default.cdc_check_log_interval_secs,
+            ),
+            ..default
+        };
+        let (db_type, url, connection_auth) = Self::resolve_checker_target(loader, sinker_basic)?;
+        config.db_type = Some(db_type);
+        config.url = Some(url);
+        config.connection_auth = Some(connection_auth);
+        Ok(Some(config))
+    }
+
+    fn resolve_checker_target(
+        loader: &IniLoader,
+        sinker_basic: &BasicSinkerConfig,
+    ) -> anyhow::Result<(DbType, String, ConnectionAuthConfig)> {
+        let mut target = None;
+        if !sinker_basic.url.is_empty() {
+            target = Some((
+                sinker_basic.db_type.clone(),
+                sinker_basic.url.clone(),
+                sinker_basic.connection_auth.clone(),
+            ));
+        }
+
+        let checker_target_present = loader.contains(CHECKER, DB_TYPE)
+            || loader.contains(CHECKER, URL)
+            || loader.contains(CHECKER, USERNAME)
+            || loader.contains(CHECKER, PASSWORD);
+        if checker_target_present {
+            let db_type: DbType = loader.get_required(CHECKER, DB_TYPE);
+            let url: String = loader.get_required(CHECKER, URL);
+            let connection_auth = ConnectionAuthConfig::from(loader, CHECKER);
+            target = Some((db_type, url, connection_auth));
+        }
+
+        if let Some(target) = target {
+            return Ok(target);
+        }
+
+        bail!(Error::ConfigError(
+            "config [checker] target is required when [sinker] target is not set".into()
+        ))
     }
 
     fn load_runtime_config(loader: &IniLoader) -> anyhow::Result<RuntimeConfig> {

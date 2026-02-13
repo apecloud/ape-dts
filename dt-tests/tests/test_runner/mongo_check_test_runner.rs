@@ -1,4 +1,5 @@
 use super::{check_util::CheckUtil, mongo_test_runner::MongoTestRunner};
+use dt_common::utils::time_util::TimeUtil;
 use std::sync::Arc;
 
 pub struct MongoCheckTestRunner {
@@ -32,12 +33,83 @@ impl MongoCheckTestRunner {
         CheckUtil::validate_check_log(&self.expect_check_log_dir, &self.dst_check_log_dir)
     }
 
+    pub async fn run_cdc_check_test(
+        &self,
+        start_millis: u64,
+        parse_millis: u64,
+    ) -> anyhow::Result<()> {
+        self.run_cdc_check_test_with_sqls(
+            start_millis,
+            parse_millis,
+            &self.base.base.src_test_sqls.clone(),
+        )
+        .await
+    }
+
+    pub async fn run_cdc_check_large_data_test(
+        &self,
+        start_millis: u64,
+        parse_millis: u64,
+        collection: &str,
+        row_count: usize,
+    ) -> anyhow::Result<()> {
+        let mut sqls = self.base.base.src_test_sqls.clone();
+        for i in 1..=row_count {
+            sqls.push(format!(
+                "db.{}.insertOne({{_id: {}, name: \"user_{}\", value: {}}})",
+                collection,
+                i,
+                i,
+                i * 100
+            ));
+        }
+        self.run_cdc_check_test_with_sqls(start_millis, parse_millis, &sqls)
+            .await
+    }
+
+    async fn run_cdc_check_test_with_sqls(
+        &self,
+        start_millis: u64,
+        parse_millis: u64,
+        src_sqls: &[String],
+    ) -> anyhow::Result<()> {
+        CheckUtil::clear_check_log(&self.dst_check_log_dir);
+
+        self.base.execute_prepare_sqls().await?;
+        self.base
+            .execute_sqls_with_client(self.base.dst_mongo_client(), &self.base.base.dst_test_sqls)
+            .await?;
+
+        let task = self.base.base.spawn_task().await?;
+        TimeUtil::sleep_millis(start_millis).await;
+
+        self.base
+            .execute_sqls_with_client(self.base.src_mongo_client(), src_sqls)
+            .await?;
+        TimeUtil::sleep_millis(parse_millis).await;
+
+        // Mongo CDC doesn't support end_time_utc, so we must abort
+        // Summary won't be written, so we skip summary validation for Mongo CDC
+        self.base.base.abort_task(&task).await?;
+        TimeUtil::sleep_millis(3000).await;
+        CheckUtil::validate_check_log(&self.expect_check_log_dir, &self.dst_check_log_dir)?;
+        self.base.execute_clean_sqls().await?;
+        Ok(())
+    }
+
     pub async fn run_recheck_test(&self) -> anyhow::Result<()> {
         CheckUtil::clear_check_log(&self.dst_check_log_dir);
         self.base.execute_prepare_sqls().await?;
         self.base.execute_test_sqls().await?;
 
-        let retry_interval_secs = self.base.base.get_config().sinker.get_retry_interval_secs();
+        let retry_interval_secs = self
+            .base
+            .base
+            .get_config()
+            .checker
+            .as_ref()
+            .map(|checker| checker.retry_interval_secs)
+            .unwrap_or(0);
         let delay_secs = std::cmp::max(1, retry_interval_secs / 2);
 
         let sqls = self.base.base.src_test_sqls.clone();

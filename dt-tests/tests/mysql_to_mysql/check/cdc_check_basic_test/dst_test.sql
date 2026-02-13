@@ -1,0 +1,1 @@
+-- dst_test.sql is empty, all data comes from CDC sync

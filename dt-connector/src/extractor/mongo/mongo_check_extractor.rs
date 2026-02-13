@@ -18,7 +18,7 @@ use mongodb::{
 };
 
 use crate::{
-    check_log::check_log::CheckLog,
+    checker::check_log::CheckLog,
     extractor::{base_check_extractor::BaseCheckExtractor, base_extractor::BaseExtractor},
     BatchCheckExtractor, Extractor,
 };

@@ -72,17 +72,17 @@ impl MongoMerger {
                         row_data.schema.clone(),
                         row_data.tb.clone(),
                         RowType::Delete,
-                        row_data.before,
+                        row_data.before.clone(),
                         None,
                     );
                     delete_map.insert(id.clone(), delete_row);
 
                     let insert_row = RowData::new(
-                        row_data.schema,
-                        row_data.tb,
+                        row_data.schema.clone(),
+                        row_data.tb.clone(),
                         RowType::Insert,
-                        Option::None,
-                        row_data.after,
+                        None,
+                        row_data.after.clone(),
                     );
                     insert_map.insert(id, insert_row);
                 }

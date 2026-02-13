@@ -44,8 +44,9 @@ impl RdkafkaSinker {
 
         // This loop is non blocking: all messages will be sent one after the other, without waiting
         // for the results.
-        for mut row_data in data {
-            data_size += row_data.data_size;
+        for row_data in data {
+            data_size += row_data.get_data_size();
+            let mut row_data = row_data;
             row_data.convert_raw_string();
             let topic = self.router.get_topic(&row_data.schema, &row_data.tb);
             let key = self.avro_converter.row_data_to_avro_key(&row_data).await?;
@@ -74,8 +75,7 @@ impl RdkafkaSinker {
             rts.push((start_time.elapsed().as_millis() as u64, 1));
         }
 
-        BaseSinker::update_batch_monitor(&self.monitor, batch_size as u64, data_size as u64)
-            .await?;
+        BaseSinker::update_batch_monitor(&self.monitor, batch_size as u64, data_size).await?;
         BaseSinker::update_monitor_rt(&self.monitor, &rts).await
     }
 }

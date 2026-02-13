@@ -171,7 +171,7 @@ impl MysqlSinker {
         let mut data_size = 0;
         let mut rts = LimitedQueue::new(cmp::min(100, data.len()));
         for row_data in data.iter() {
-            data_size += row_data.data_size;
+            data_size += row_data.get_data_size() as usize;
             data_len += 1;
             let tb_meta = self.meta_manager.get_tb_meta_by_row_data(row_data).await?;
             let query_builder = RdbQueryBuilder::new_for_mysql(tb_meta, None);

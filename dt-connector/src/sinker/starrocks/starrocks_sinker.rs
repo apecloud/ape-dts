@@ -69,11 +69,11 @@ impl StarRocksSinker {
 
         let data = data.as_mut_slice();
         for i in 0..data.len() {
-            data_size += data[i].data_size;
+            data_size += data[i].get_data_size();
             self.send_data(data, i, 1).await?;
         }
 
-        BaseSinker::update_serial_monitor(&self.monitor, data.len() as u64, data_size as u64).await
+        BaseSinker::update_serial_monitor(&self.monitor, data.len() as u64, data_size).await
     }
 
     async fn batch_sink(
@@ -103,20 +103,21 @@ impl StarRocksSinker {
         let mut rts = LimitedQueue::new(1);
         // build stream load data
         let mut load_data = Vec::new();
-        for row_data in data.iter_mut().skip(start_index).take(batch_size) {
-            data_size += row_data.data_size;
+        for row_data in data.iter().skip(start_index).take(batch_size) {
+            data_size += row_data.get_data_size() as usize;
+            let mut row = row_data.clone();
 
-            Self::convert_row_data(row_data, tb_meta)?;
+            Self::convert_row_data(&mut row, tb_meta)?;
 
-            let col_values = if row_data.row_type == RowType::Delete {
-                let before = row_data.require_before_mut()?;
+            let mut col_values = if row.row_type == RowType::Delete {
+                let mut before = row.require_before()?.clone();
                 if self.db_type == DbType::StarRocks {
                     // SIGN_COL value
                     before.insert(SIGN_COL_NAME.into(), ColValue::Long(1));
                 }
                 before
             } else {
-                row_data.require_after_mut()?
+                row.require_after()?.clone()
             };
 
             if self.db_type == DbType::StarRocks {

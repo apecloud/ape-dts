@@ -254,7 +254,7 @@ mod tests {
                     assert_ne!(dcl_data.dcl_type, dcl_type);
                 }
                 Ok(None) => {
-                    assert!(false);
+                    panic!("Expected DCL data but got None");
                 }
                 Err(_) => {}
             };

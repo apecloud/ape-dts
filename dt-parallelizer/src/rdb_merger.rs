@@ -90,18 +90,18 @@ impl RdbMerger {
                     return Ok(());
                 }
 
-                let (delete, insert) = row_data.split_update_row_data();
+                let (delete, insert) = Self::split_update_row_data_ref(&row_data);
                 let insert_hash_code = Self::get_hash_code(&insert, tb_meta).await?;
 
                 if Self::check_collision(&merged.insert_rows, tb_meta, &insert, insert_hash_code)?
                     || Self::check_collision(&merged.delete_rows, tb_meta, &delete, hash_code)?
                 {
                     let row_data = RowData::new(
-                        delete.schema,
-                        delete.tb,
+                        delete.schema.clone(),
+                        delete.tb.clone(),
                         RowType::Update,
-                        delete.before,
-                        insert.after,
+                        delete.before.clone(),
+                        insert.after.clone(),
                     );
                     merged.unmerged_rows.push(row_data);
                     return Ok(());
@@ -166,10 +166,27 @@ impl RdbMerger {
         }
         row_data.get_hash_code(tb_meta)
     }
+
+    fn split_update_row_data_ref(row_data: &RowData) -> (RowData, RowData) {
+        let delete = RowData::new(
+            row_data.schema.clone(),
+            row_data.tb.clone(),
+            RowType::Delete,
+            row_data.before.clone(),
+            None,
+        );
+        let insert = RowData::new(
+            row_data.schema.clone(),
+            row_data.tb.clone(),
+            RowType::Insert,
+            None,
+            row_data.after.clone(),
+        );
+        (delete, insert)
+    }
 }
 
 struct RdbTbMergedData {
-    // HashMap<row_key_hash_code, RowData>
     delete_rows: HashMap<u128, RowData>,
     insert_rows: HashMap<u128, RowData>,
     unmerged_rows: Vec<RowData>,

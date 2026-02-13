@@ -159,6 +159,7 @@ url=mysql://root:123456@127.0.0.1:3307?ssl-mode=disabled
 [filter]
 do_dbs=test_db
 do_events=insert,update,delete
+do_tbs=test_db.table1,test_db.table2
 
 [sinker]
 db_type=starrocks

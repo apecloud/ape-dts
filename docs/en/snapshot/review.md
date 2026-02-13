@@ -17,8 +17,9 @@ While this configuration is similar to that of snapshot migration, the only diff
 extract_type=check_log
 check_log_dir=./dt-tests/tests/mysql_to_mysql/revise/basic_test/check_log
 
-[sinker]
-sink_type=check
+[checker]
+db_type=mysql
+url=mysql://user:pass@host:3306/db
 
 [parallelizer]
 parallel_type=rdb_check
