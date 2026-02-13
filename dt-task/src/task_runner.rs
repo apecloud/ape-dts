@@ -61,6 +61,7 @@ use dt_common::{
 use dt_connector::{
     checker::base_checker::CheckContext,
     checker::check_log::CheckSummaryLog,
+    checker::check_log_uploader::CheckLogUploader,
     checker::{
         CheckerHandle, MongoCheckerHandle, MysqlCheckerHandle, PgCheckerHandle, StructCheckerHandle,
     },
@@ -705,11 +706,28 @@ impl TaskRunner {
         let enable_sqlx_log = TaskUtil::check_enable_sqlx_log(log_level);
         let is_cdc_task = matches!(self.config.extractor_basic.extract_type, ExtractType::Cdc)
             && matches!(self.config.sinker_basic.sink_type, SinkType::Write);
+        let sinker_batch_size = self.config.sinker_basic.batch_size.max(1);
+        let checker_batch_size = if is_cdc_task {
+            if cfg.batch_size > 0 && cfg.batch_size != sinker_batch_size {
+                log_warn!(
+                    "CDC+check mode uses sinker.batch_size={}. Ignoring checker.batch_size={}.",
+                    sinker_batch_size,
+                    cfg.batch_size
+                );
+            }
+            sinker_batch_size
+        } else {
+            if cfg.batch_size == 0 {
+                log_warn!("checker.batch_size=0 is invalid. Using 1.");
+            }
+            cfg.batch_size.max(1)
+        };
+        let check_log_dir = if cfg.check_log_dir.is_empty() {
+            format!("{}/check", self.config.runtime.log_dir)
+        } else {
+            cfg.check_log_dir.clone()
+        };
         let (max_retries, retry_interval_secs) = if is_cdc_task {
-            // CDC tasks: data arrives as a stream, checker verifies immediately
-            // after sinker commits. Retries are harmful because subsequent
-            // DELETE events may remove data that was correctly written,
-            // causing false misses in the retry queue.
             if cfg.max_retries > 0 || cfg.retry_interval_secs > 0 {
                 log_warn!(
                     "CDC+check mode does not support retries. Ignoring max_retries={} and retry_interval_secs={} from config.",
@@ -808,6 +826,45 @@ impl TaskRunner {
             return Ok(Some(CheckerHandle::Struct(checker)));
         }
 
+        let s3_uploader = if cfg.cdc_check_log_s3 {
+            let s3_cfg = cfg.s3_config.as_ref().ok_or_else(|| {
+                Error::ConfigError(
+                    "cdc_check_log_s3=true but s3_bucket is missing in [checker]".into(),
+                )
+            })?;
+            let s3_client = TaskUtil::create_s3_client(s3_cfg)?;
+            Some(Arc::new(CheckLogUploader {
+                s3_client,
+                key_prefix: cfg.s3_key_prefix.clone(),
+            }))
+        } else {
+            None
+        };
+
+        let build_check_context =
+            |extractor_meta_manager, reverse_router, revise_match_full_row| CheckContext {
+                extractor_meta_manager,
+                reverse_router,
+                batch_size: checker_batch_size,
+                monitor: monitor.clone(),
+                output_full_row: cfg.output_full_row,
+                output_revise_sql: cfg.output_revise_sql,
+                revise_match_full_row,
+                retry_interval_secs,
+                max_retries,
+                is_cdc: is_cdc_task,
+                summary: CheckSummaryLog {
+                    start_time: Local::now().to_rfc3339(),
+                    ..Default::default()
+                },
+                global_summary: check_summary.clone(),
+                cdc_check_log_disk: cfg.cdc_check_log_disk,
+                cdc_check_log_s3: cfg.cdc_check_log_s3,
+                check_log_dir: check_log_dir.clone(),
+                s3_uploader: s3_uploader.clone(),
+                cdc_check_log_interval_secs: cfg.cdc_check_log_interval_secs,
+            };
+
         match checker_db_type {
             DbType::Mysql => {
                 let reverse_router = create_router!(self.config, Mysql).reverse();
@@ -829,22 +886,11 @@ impl TaskRunner {
                 let checker = MysqlCheckerHandle::spawn(
                     conn_pool,
                     meta_manager,
-                    CheckContext {
+                    build_check_context(
                         extractor_meta_manager,
                         reverse_router,
-                        batch_size: cfg.batch_size,
-                        monitor,
-                        output_full_row: cfg.output_full_row,
-                        output_revise_sql: cfg.output_revise_sql,
-                        revise_match_full_row: cfg.revise_match_full_row,
-                        retry_interval_secs,
-                        max_retries,
-                        summary: CheckSummaryLog {
-                            start_time: Local::now().to_rfc3339(),
-                            ..Default::default()
-                        },
-                        global_summary: check_summary,
-                    },
+                        cfg.revise_match_full_row,
+                    ),
                     queue_size,
                 );
                 Ok(Some(CheckerHandle::Data(checker)))
@@ -867,22 +913,11 @@ impl TaskRunner {
                 let checker = PgCheckerHandle::spawn(
                     conn_pool,
                     meta_manager,
-                    CheckContext {
+                    build_check_context(
                         extractor_meta_manager,
                         reverse_router,
-                        batch_size: cfg.batch_size,
-                        monitor,
-                        output_full_row: cfg.output_full_row,
-                        output_revise_sql: cfg.output_revise_sql,
-                        revise_match_full_row: cfg.revise_match_full_row,
-                        retry_interval_secs,
-                        max_retries,
-                        summary: CheckSummaryLog {
-                            start_time: Local::now().to_rfc3339(),
-                            ..Default::default()
-                        },
-                        global_summary: check_summary,
-                    },
+                        cfg.revise_match_full_row,
+                    ),
                     queue_size,
                 );
                 Ok(Some(CheckerHandle::Data(checker)))
@@ -906,22 +941,7 @@ impl TaskRunner {
                 .await?;
                 let checker = MongoCheckerHandle::spawn(
                     mongo_client,
-                    CheckContext {
-                        extractor_meta_manager: None,
-                        reverse_router,
-                        batch_size: cfg.batch_size,
-                        monitor,
-                        output_full_row: cfg.output_full_row,
-                        output_revise_sql: cfg.output_revise_sql,
-                        revise_match_full_row: false,
-                        retry_interval_secs,
-                        max_retries,
-                        summary: CheckSummaryLog {
-                            start_time: Local::now().to_rfc3339(),
-                            ..Default::default()
-                        },
-                        global_summary: check_summary,
-                    },
+                    build_check_context(None, reverse_router, false),
                     queue_size,
                 );
                 Ok(Some(CheckerHandle::Data(checker)))

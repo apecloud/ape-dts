@@ -1,5 +1,6 @@
 pub mod base_checker;
 pub mod check_log;
+pub mod check_log_uploader;
 pub mod log_reader;
 pub mod mongo_checker;
 pub mod mysql_checker;

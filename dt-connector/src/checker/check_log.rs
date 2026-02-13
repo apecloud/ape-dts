@@ -93,6 +93,33 @@ impl std::fmt::Display for CheckLog {
     }
 }
 
+/// Per-table miss/diff counts for CDC+Check summary.
+#[derive(Serialize, Deserialize, Clone, Default)]
+pub struct TableCheckCount {
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub miss_count: usize,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub diff_count: usize,
+}
+
+/// CDC+Check summary with per-table breakdown.
+#[derive(Serialize, Deserialize, Clone, Default)]
+pub struct CdcCheckSummaryLog {
+    pub start_time: String,
+    pub end_time: String,
+    pub is_consistent: bool,
+    pub total_miss_count: usize,
+    pub total_diff_count: usize,
+    /// key = "schema.table"
+    pub tables: HashMap<String, TableCheckCount>,
+}
+
+impl std::fmt::Display for CdcCheckSummaryLog {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", json!(self))
+    }
+}
+
 #[derive(Serialize, Deserialize)]
 pub struct StructCheckLog {
     pub key: String,

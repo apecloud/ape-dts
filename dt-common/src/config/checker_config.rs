@@ -1,4 +1,6 @@
-use super::{config_enums::DbType, connection_auth_config::ConnectionAuthConfig};
+use super::{
+    config_enums::DbType, connection_auth_config::ConnectionAuthConfig, s3_config::S3Config,
+};
 
 #[derive(Clone)]
 pub struct CheckerConfig {
@@ -16,6 +18,11 @@ pub struct CheckerConfig {
     pub db_type: Option<DbType>,
     pub url: Option<String>,
     pub connection_auth: Option<ConnectionAuthConfig>,
+    pub cdc_check_log_disk: bool,
+    pub cdc_check_log_s3: bool,
+    pub s3_config: Option<S3Config>,
+    pub s3_key_prefix: String,
+    pub cdc_check_log_interval_secs: u64,
 }
 
 impl Default for CheckerConfig {
@@ -23,7 +30,7 @@ impl Default for CheckerConfig {
         Self {
             queue_size: 200,
             max_connections: 8,
-            batch_size: 100,
+            batch_size: 1,
             sample_rate: 1.0,
             output_full_row: false,
             output_revise_sql: false,
@@ -35,6 +42,11 @@ impl Default for CheckerConfig {
             db_type: None,
             url: None,
             connection_auth: None,
+            cdc_check_log_disk: false,
+            cdc_check_log_s3: false,
+            s3_config: None,
+            s3_key_prefix: String::new(),
+            cdc_check_log_interval_secs: 10,
         }
     }
 }

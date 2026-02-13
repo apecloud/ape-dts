@@ -242,6 +242,9 @@ impl BasePipeline {
                             .unwrap_or_default()
                             .as_millis() as u64;
                         let lag_secs = now_ms.saturating_sub(ts_ms) / 1000;
+                        // Weighted lag metric (row-seconds): each row in the batch
+                        // contributes its replication lag so the batch counter can
+                        // compute the average lag by dividing total by row count.
                         let lag_value = lag_secs.saturating_mul(check_len);
                         self.monitor
                             .add_batch_counter(CounterType::CheckerLagSeconds, lag_value, check_len)

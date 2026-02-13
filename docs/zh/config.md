@@ -55,7 +55,7 @@ Checker 有两种模式：
 | :-------------------- | :--------------------------------------- | :---------- | :------------------------------- |
 | queue_size            | checker 队列容量                         | 200         | 200                              |
 | max_connections       | checker 连接池最大连接数                 | 8           | 8                                |
-| batch_size            | checker 批量校验大小                     | 100         | 100                              |
+| batch_size            | checker 批量校验大小（非 CDC 任务）     | 100         | 1                                |
 | sample_rate           | checker 抽样比例（保留字段，当前未生效） | 1.0         | 1.0                              |
 | output_full_row       | diff 日志是否输出全量行                  | false       | false                            |
 | output_revise_sql     | diff 日志是否输出修复 SQL                | false       | false                            |
@@ -68,6 +68,19 @@ Checker 有两种模式：
 | url                   | 校验目标 URL（覆盖 [sinker] 目标）       | mysql://... | 空                               |
 | username              | 校验目标用户名（URL 未包含时使用）       | root        | 空                               |
 | password              | 校验目标密码（URL 未包含时使用）         | password    | 空                               |
+| cdc_check_log_disk    | 定期将 CDC 校验快照写入磁盘              | false       | false                            |
+| cdc_check_log_s3      | 定期将 CDC 校验快照上传至 S3             | false       | false                            |
+| cdc_check_log_interval_secs | CDC 校验快照输出间隔（秒）         | 10          | 10                               |
+| s3_bucket             | 校验日志上传的 S3 存储桶                 | my-bucket   | -                                |
+| s3_access_key         | S3 访问密钥                              | AKIA...     | -                                |
+| s3_secret_key         | S3 秘密密钥                              | ****        | -                                |
+| s3_region             | S3 区域                                  | us-east-1   | -                                |
+| s3_endpoint           | S3 端点                                  | https://... | -                                |
+| s3_key_prefix         | 校验日志的 S3 键前缀                     | task1/check | 空                               |
+
+说明：
+- 在 CDC + checker 模式（`extract_type=cdc` 且 `sink_type=write`）下，checker 批量大小跟随 `[sinker].batch_size`。
+- 当 `check_log_dir` 为空时，统一使用 `runtime.log_dir/check` 作为 checker 日志目录（包含 CDC 校验输出）。
 
 # [filter]
 

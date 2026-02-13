@@ -1472,6 +1472,7 @@ dependencies = [
  "dt-common",
  "futures",
  "hex",
+ "indexmap 2.9.0",
  "kafka",
  "log",
  "log4rs",
