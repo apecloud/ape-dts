@@ -105,6 +105,10 @@ const DISABLE_FOREIGN_KEY_CHECKS: &str = "disable_foreign_key_checks";
 const RESUME_TYPE: &str = "resume_type";
 const CHECKER_QUEUE_SIZE: &str = "queue_size";
 const CHECKER_SAMPLE_RATE: &str = "sample_rate";
+const CDC_CHECK_LOG_DISK: &str = "cdc_check_log_disk";
+const CDC_CHECK_LOG_S3: &str = "cdc_check_log_s3";
+const S3_KEY_PREFIX: &str = "s3_key_prefix";
+const CDC_CHECK_LOG_INTERVAL_SECS: &str = "cdc_check_log_interval_secs";
 const USERNAME: &str = "username";
 const PASSWORD: &str = "password";
 
@@ -797,6 +801,38 @@ impl TaskConfig {
                 CHECKER,
                 CHECK_LOG_FILE_SIZE,
                 default.check_log_file_size,
+            ),
+            cdc_check_log_disk: loader.get_with_default(
+                CHECKER,
+                CDC_CHECK_LOG_DISK,
+                default.cdc_check_log_disk,
+            ),
+            cdc_check_log_s3: loader.get_with_default(
+                CHECKER,
+                CDC_CHECK_LOG_S3,
+                default.cdc_check_log_s3,
+            ),
+            s3_config: {
+                let bucket: String = loader.get_optional(CHECKER, "s3_bucket");
+                if bucket.is_empty() {
+                    None
+                } else {
+                    Some(S3Config {
+                        bucket,
+                        access_key: loader.get_optional(CHECKER, "s3_access_key"),
+                        secret_key: loader.get_optional(CHECKER, "s3_secret_key"),
+                        region: loader.get_optional(CHECKER, "s3_region"),
+                        endpoint: loader.get_optional(CHECKER, "s3_endpoint"),
+                        root_dir: loader.get_optional(CHECKER, "s3_root_dir"),
+                        root_url: loader.get_optional(CHECKER, "s3_root_url"),
+                    })
+                }
+            },
+            s3_key_prefix: loader.get_with_default(CHECKER, S3_KEY_PREFIX, default.s3_key_prefix),
+            cdc_check_log_interval_secs: loader.get_with_default(
+                CHECKER,
+                CDC_CHECK_LOG_INTERVAL_SECS,
+                default.cdc_check_log_interval_secs,
             ),
             ..default
         };
