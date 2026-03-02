@@ -301,8 +301,14 @@ SELECT {} FROM {}.{} {} ORDER BY {} ASC LIMIT {}) AS T",
                 tb_meta.basic.schema, tb_meta.basic.tb
             )
         })?;
-        let next_chunk_end_value =
-            MysqlColValueConvertor::from_query(&row, "max_value", partition_col_type)?;
+        let next_chunk_end_value = if row
+            .get_unchecked::<Option<Vec<u8>>, _>("max_value")
+            .is_some()
+        {
+            MysqlColValueConvertor::from_query(&row, "max_value", partition_col_type)?
+        } else {
+            ColValue::None
+        };
         log_debug!("next chunk end value: {:?}", next_chunk_end_value);
         if let ColValue::None = next_chunk_end_value {
             self.basic.mark_no_next_chunks();

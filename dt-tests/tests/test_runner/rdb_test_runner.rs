@@ -30,7 +30,10 @@ use dt_task::{task_runner::TaskRunner, task_util::TaskUtil};
 use sqlx::{query, types::BigDecimal, MySql, Pool, Postgres, Row};
 use tokio::task::JoinHandle;
 
-use crate::{test_config_util::TestConfigUtil, test_runner::mock_utils::mock_config::MockConfig};
+use crate::{
+    test_config_util::TestConfigUtil,
+    test_runner::mock_utils::{mock_config::MockConfig, mysql_type::MysqlType, pg_type::PgType},
+};
 
 use super::{base_test_runner::BaseTestRunner, rdb_util::RdbUtil};
 
@@ -73,18 +76,18 @@ impl RdbTestRunner {
         let dst_connection_auth = &config.sinker_basic.connection_auth;
 
         // generate mock sqls
-        // only support pg for now
         let mut unordered_compare = false;
-        let mock_config = if let DbType::Pg = src_db_type {
-            MockConfig::new(&base.task_config_file)
-        } else {
-            None
+        let mock_result: Option<(Vec<String>, Vec<String>)> = match src_db_type {
+            DbType::Pg => MockConfig::<PgType>::new(&base.task_config_file)
+                .map(|c| (c.mock_ddl_stmts(), c.mock_dml_stmts())),
+            DbType::Mysql => MockConfig::<MysqlType>::new(&base.task_config_file)
+                .map(|c| (c.mock_ddl_stmts(), c.mock_dml_stmts())),
+            _ => None,
         };
-        if let Some(mock_conf) = &mock_config {
-            let mock_ddl_stmts = mock_conf.mock_ddl_stmts();
+        if let Some((mock_ddl_stmts, mock_dml_stmts)) = mock_result {
             base.src_prepare_sqls.extend(mock_ddl_stmts.clone());
             base.dst_prepare_sqls.extend(mock_ddl_stmts);
-            base.src_test_sqls.extend(mock_conf.mock_dml_stmts());
+            base.src_test_sqls.extend(mock_dml_stmts);
 
             unordered_compare = true;
         }

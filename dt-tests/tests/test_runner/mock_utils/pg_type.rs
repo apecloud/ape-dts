@@ -4,6 +4,7 @@ use uuid::Uuid;
 
 use crate::test_runner::mock_utils::{
     constants::{ConstantValues, Constants},
+    mock_stmt::MockColType,
     random::{Random, RandomValue},
     types::{
         array::Array,
@@ -513,6 +514,40 @@ impl PgType {
             PgType::Money => Money::next_values(),
             _ => vec![],
         }
+    }
+}
+
+impl MockColType for PgType {
+    fn name(&self) -> &str {
+        PgType::name(self)
+    }
+
+    fn support_btree_index(&self) -> bool {
+        PgType::support_btree_index(self)
+    }
+
+    fn next_value_str(&self, random: &mut Random) -> String {
+        PgType::next_value_str(self, random)
+    }
+
+    fn constant_value_str(&self) -> Vec<String> {
+        PgType::constant_value_str(self)
+    }
+
+    fn schema_drop_stmt(db: &str) -> String {
+        format!("DROP SCHEMA IF EXISTS {} CASCADE;", db)
+    }
+
+    fn schema_create_stmt(db: &str) -> String {
+        format!("CREATE SCHEMA IF NOT EXISTS {};", db)
+    }
+
+    fn quote_identifier(name: &str) -> String {
+        name.to_string()
+    }
+
+    fn config_key_prefix() -> &'static str {
+        "pg_types"
     }
 }
 
