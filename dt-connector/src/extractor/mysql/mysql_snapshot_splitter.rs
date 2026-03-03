@@ -260,7 +260,7 @@ FROM
         let partition_col = &self.partition_col;
         let partition_col_type = tb_meta.get_col_type(partition_col)?;
         let mut where_clause = if tb_meta.basic.is_col_nullable(partition_col) {
-            format!("WHERE{} IS NOT NULL", quote!(partition_col))
+            format!("WHERE {} IS NOT NULL", quote!(partition_col))
         } else {
             String::new()
         };
@@ -301,14 +301,8 @@ SELECT {} FROM {}.{} {} ORDER BY {} ASC LIMIT {}) AS T",
                 tb_meta.basic.schema, tb_meta.basic.tb
             )
         })?;
-        let next_chunk_end_value = if row
-            .get_unchecked::<Option<Vec<u8>>, _>("max_value")
-            .is_some()
-        {
-            MysqlColValueConvertor::from_query(&row, "max_value", partition_col_type)?
-        } else {
-            ColValue::None
-        };
+        let next_chunk_end_value =
+            MysqlColValueConvertor::from_query(&row, "max_value", partition_col_type)?;
         log_debug!("next chunk end value: {:?}", next_chunk_end_value);
         if let ColValue::None = next_chunk_end_value {
             self.basic.mark_no_next_chunks();
