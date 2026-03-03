@@ -260,7 +260,7 @@ FROM
         let partition_col = &self.partition_col;
         let partition_col_type = tb_meta.get_col_type(partition_col)?;
         let mut where_clause = if tb_meta.basic.is_col_nullable(partition_col) {
-            format!("WHERE{} IS NOT NULL", quote!(partition_col))
+            format!("WHERE {} IS NOT NULL", quote!(partition_col))
         } else {
             String::new()
         };

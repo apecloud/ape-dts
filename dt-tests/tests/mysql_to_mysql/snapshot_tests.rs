@@ -192,4 +192,10 @@ mod test {
         runner.run_snapshot_test(false).await.unwrap();
         runner.close().await.unwrap();
     }
+
+    #[tokio::test]
+    #[serial]
+    async fn snapshot_mock_test() {
+        TestBase::run_snapshot_test("mysql_to_mysql/snapshot/mock_test").await;
+    }
 }

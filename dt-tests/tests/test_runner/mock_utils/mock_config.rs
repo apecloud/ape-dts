@@ -1,38 +1,45 @@
 use dt_common::config::ini_loader::IniLoader;
+use serde::de::DeserializeOwned;
 
 use crate::test_runner::mock_utils::{
-    mock_stmt::{Constraint, MockStmt},
-    pg_type::PgType,
+    mock_stmt::{Constraint, MockColType, MockStmt},
     random::Random,
 };
 
-pub struct MockConfig {
+pub struct MockConfig<T: MockColType> {
     pub insert_rows: usize,
-    pub mock_stmts: Vec<MockStmt>,
+    pub mock_stmts: Vec<MockStmt<T>>,
     pub seed: u64,
 }
 
-impl MockConfig {
+impl<T: MockColType + DeserializeOwned> MockConfig<T> {
     pub fn new(config_file: &str) -> Option<Self> {
         let loader = IniLoader::new(config_file);
-        let pg_types =
-            if let Some(config_map) = loader.ini.get_map().unwrap_or_default().get("mock") {
-                let pg_types = config_map
-                    .iter()
-                    .filter(|(k, _v)| k.starts_with("pg_types"))
-                    .map(|(_, v)| {
-                        serde_json::from_str::<Vec<PgType>>(v.clone().unwrap_or_default().as_str())
-                            .unwrap()
-                    })
-                    .filter(|v| !v.is_empty())
-                    .collect::<Vec<Vec<PgType>>>();
-                if pg_types.is_empty() {
-                    return None;
-                }
-                pg_types
-            } else {
+        let key_prefix = T::config_key_prefix();
+        let col_types = if let Some(config_map) =
+            loader.ini.get_map().unwrap_or_default().get("mock")
+        {
+            // Sort entries by key to ensure deterministic iteration order.
+            // HashMap iteration is non-deterministic, which would cause
+            // the RNG to be consumed in different orders across runs,
+            // producing different INSERT values even with the same seed.
+            let mut sorted_entries: Vec<_> = config_map.iter().collect();
+            sorted_entries.sort_by_key(|(k, _)| *k);
+            let col_types = sorted_entries
+                .into_iter()
+                .filter(|(k, _v)| k.starts_with(key_prefix))
+                .map(|(_, v)| {
+                    serde_json::from_str::<Vec<T>>(v.clone().unwrap_or_default().as_str()).unwrap()
+                })
+                .filter(|v| !v.is_empty())
+                .collect::<Vec<Vec<T>>>();
+            if col_types.is_empty() {
                 return None;
-            };
+            }
+            col_types
+        } else {
+            return None;
+        };
         let db_str = loader.get_with_default("mock", "db", "mock_db_1".to_string());
         let insert_rows = loader.get_with_default("mock", "insert_rows_each_table", 30);
         let seed = loader.get_with_default("mock", "seed", 777);
@@ -45,7 +52,7 @@ impl MockConfig {
                 loader.get_with_default("mock", "nullable_cols", "[]".to_string());
             let constraints: Vec<Constraint> = serde_json::from_str(&constraints_str).unwrap();
             let nullable_cols: Vec<usize> = serde_json::from_str(&nullable_cols_str).unwrap();
-            let all_types = pg_types.first().unwrap().clone();
+            let all_types = col_types.first().unwrap().clone();
             let mut mock_stmt =
                 MockStmt::new(&all_types, &db_str, &Self::gen_mock_tb_name(&mut tb_suffix))
                     .with_nullable_cols(&nullable_cols);
@@ -61,17 +68,17 @@ impl MockConfig {
         }
         // no index, all non-nullable
         mock_stmts.extend(
-            pg_types.iter().map(|types| {
+            col_types.iter().map(|types| {
                 MockStmt::new(types, &db_str, &Self::gen_mock_tb_name(&mut tb_suffix))
             }),
         );
         // no index, all nullable
-        mock_stmts.extend(pg_types.iter().map(|types| {
+        mock_stmts.extend(col_types.iter().map(|types| {
             MockStmt::new(types, &db_str, &Self::gen_mock_tb_name(&mut tb_suffix))
                 .with_nullable_cols(&(0..types.len()).collect::<Vec<usize>>())
         }));
         // single column primary index, all nullable
-        mock_stmts.extend(pg_types.iter().flat_map(|types| {
+        mock_stmts.extend(col_types.iter().flat_map(|types| {
             let mut stmts = Vec::new();
             for col_idx in 0..types.len() {
                 stmts.push(
@@ -86,7 +93,7 @@ impl MockConfig {
                 .collect::<Vec<_>>()
         }));
         // composite primary index, all nullable
-        mock_stmts.extend(pg_types.iter().flat_map(|types| {
+        mock_stmts.extend(col_types.iter().flat_map(|types| {
             let mut stmts = Vec::new();
             for col_idx in 0..types.len() {
                 for col_idx2 in (col_idx + 1)..types.len() {
@@ -103,7 +110,7 @@ impl MockConfig {
                 .collect::<Vec<_>>()
         }));
         // single column unique index, all nullable
-        mock_stmts.extend(pg_types.iter().flat_map(|types| {
+        mock_stmts.extend(col_types.iter().flat_map(|types| {
             let mut stmts = Vec::new();
             for col_idx in 0..types.len() {
                 stmts.push(
@@ -118,7 +125,7 @@ impl MockConfig {
                 .collect::<Vec<_>>()
         }));
         // composite unique index, all nullable
-        mock_stmts.extend(pg_types.iter().flat_map(|types| {
+        mock_stmts.extend(col_types.iter().flat_map(|types| {
             let mut stmts = Vec::new();
             for col_idx in 0..types.len() {
                 for col_idx2 in (col_idx + 1)..types.len() {
@@ -135,7 +142,7 @@ impl MockConfig {
                 .collect::<Vec<_>>()
         }));
         // one primary index, all unique index, all nullable
-        mock_stmts.extend(pg_types.iter().flat_map(|types| {
+        mock_stmts.extend(col_types.iter().flat_map(|types| {
             let mut stmts = Vec::new();
             for col_idx in 0..types.len() {
                 let mut stmt =
