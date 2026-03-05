@@ -64,24 +64,27 @@ takes precedence; otherwise the checker reuses the `[sinker]` target.
 | retry_interval_secs   | retry interval in seconds (forced to 0 in CDC+check mode) | 0           | 0                                 |
 | max_retries           | retry count (forced to 0 in CDC+check mode)                | 0           | 0                                 |
 | check_log_dir         | check log dir                                      | /tmp/check  | empty (use runtime.log_dir/check) |
-| check_log_file_size   | check log file size limit                          | 100mb       | 100mb                             |
+| check_log_file_size   | per-log file size limit (`diff.log` / `miss.log`) | 100mb       | 100mb                             |
+| check_log_max_rows    | per-log max rows (`diff.log` / `miss.log`)        | 1000        | 1000                              |
 | db_type               | checker target db type (override sinker target)    | mysql       | empty                             |
 | url                   | checker target URL (override sinker target)        | mysql://... | empty                             |
 | username              | checker target username (when URL lacks auth)      | root        | empty                             |
 | password              | checker target password (when URL lacks auth)      | password    | empty                             |
-| cdc_check_log_disk    | write periodic CDC check snapshot to disk          | false       | false                             |
 | cdc_check_log_s3      | upload periodic CDC check snapshot to S3           | false       | false                             |
 | cdc_check_log_interval_secs | interval (seconds) for periodic CDC check snapshot output | 10 | 10                               |
 | s3_bucket             | S3 bucket for check log upload                     | my-bucket   | -                                 |
-| s3_access_key         | S3 access key                                      | AKIA...     | -                                 |
-| s3_secret_key         | S3 secret key                                      | ****        | -                                 |
+| s3_access_key_id      | S3 access key id                                   | AKIA...     | -                                 |
+| s3_secret_access_key  | S3 secret access key                               | ****        | -                                 |
 | s3_region             | S3 region                                          | us-east-1   | -                                 |
 | s3_endpoint           | S3 endpoint                                        | https://... | -                                 |
 | s3_key_prefix         | S3 key prefix for check logs                       | task1/check | empty                             |
 
 Notes:
 - In CDC + checker mode (`extract_type=cdc` and `sink_type=write`), checker batch size follows `[sinker].batch_size`.
+- In CDC + checker mode, checker is enabled when the `[checker]` section is present.
 - When `check_log_dir` is empty, `runtime.log_dir/check` is used consistently for checker logs (including CDC check outputs).
+- In CDC + checker mode, `diff.log` / `miss.log` / `summary.log` are always written locally under `check_log_dir`; `cdc_check_log_s3` controls only S3 upload.
+- CDC check outputs apply dual limits to `diff.log` / `miss.log`: `check_log_file_size` and `check_log_max_rows`; when either threshold is hit, only the latest records are kept.
 
 # [filter]
 

@@ -83,6 +83,7 @@ const META_CENTER: &str = "metacenter";
 // keys
 const CHECK_LOG_DIR: &str = "check_log_dir";
 const CHECK_LOG_FILE_SIZE: &str = "check_log_file_size";
+const CHECK_LOG_MAX_ROWS: &str = "check_log_max_rows";
 const OUTPUT_FULL_ROW: &str = "output_full_row";
 const OUTPUT_REVISE_SQL: &str = "output_revise_sql";
 const REVISE_MATCH_FULL_ROW: &str = "revise_match_full_row";
@@ -107,7 +108,6 @@ const DISABLE_FOREIGN_KEY_CHECKS: &str = "disable_foreign_key_checks";
 const RESUME_TYPE: &str = "resume_type";
 const CHECKER_QUEUE_SIZE: &str = "queue_size";
 const CHECKER_SAMPLE_RATE: &str = "sample_rate";
-const CDC_CHECK_LOG_DISK: &str = "cdc_check_log_disk";
 const CDC_CHECK_LOG_S3: &str = "cdc_check_log_s3";
 const S3_KEY_PREFIX: &str = "s3_key_prefix";
 const CDC_CHECK_LOG_INTERVAL_SECS: &str = "cdc_check_log_interval_secs";
@@ -817,10 +817,10 @@ impl TaskConfig {
                 CHECK_LOG_FILE_SIZE,
                 default.check_log_file_size,
             ),
-            cdc_check_log_disk: loader.get_with_default(
+            check_log_max_rows: loader.get_with_default(
                 CHECKER,
-                CDC_CHECK_LOG_DISK,
-                default.cdc_check_log_disk,
+                CHECK_LOG_MAX_ROWS,
+                default.check_log_max_rows,
             ),
             cdc_check_log_s3: loader.get_with_default(
                 CHECKER,
@@ -834,8 +834,8 @@ impl TaskConfig {
                 } else {
                     Some(S3Config {
                         bucket,
-                        access_key: loader.get_optional(CHECKER, "s3_access_key"),
-                        secret_key: loader.get_optional(CHECKER, "s3_secret_key"),
+                        access_key: loader.get_optional(CHECKER, "s3_access_key_id"),
+                        secret_key: loader.get_optional(CHECKER, "s3_secret_access_key"),
                         region: loader.get_optional(CHECKER, "s3_region"),
                         endpoint: loader.get_optional(CHECKER, "s3_endpoint"),
                         root_dir: loader.get_optional(CHECKER, "s3_root_dir"),

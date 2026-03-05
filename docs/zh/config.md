@@ -63,24 +63,27 @@ Checker 有两种模式：
 | retry_interval_secs   | 重试间隔（秒），CDC+check 模式下强制为 0  | 0           | 0                                |
 | max_retries           | 重试次数，CDC+check 模式下强制为 0        | 0           | 0                                |
 | check_log_dir         | 校验日志目录                             | /tmp/check  | 空（默认 runtime.log_dir/check） |
-| check_log_file_size   | 校验日志大小限制                         | 100mb       | 100mb                            |
+| check_log_file_size   | 单类日志文件大小上限（`diff.log` / `miss.log`） | 100mb   | 100mb                            |
+| check_log_max_rows    | 单类日志最大行数（`diff.log` / `miss.log`）     | 1000    | 1000                             |
 | db_type               | 校验目标库类型（覆盖 [sinker] 目标）     | mysql       | 空                               |
 | url                   | 校验目标 URL（覆盖 [sinker] 目标）       | mysql://... | 空                               |
 | username              | 校验目标用户名（URL 未包含时使用）       | root        | 空                               |
 | password              | 校验目标密码（URL 未包含时使用）         | password    | 空                               |
-| cdc_check_log_disk    | 定期将 CDC 校验快照写入磁盘              | false       | false                            |
 | cdc_check_log_s3      | 定期将 CDC 校验快照上传至 S3             | false       | false                            |
 | cdc_check_log_interval_secs | CDC 校验快照输出间隔（秒）         | 10          | 10                               |
 | s3_bucket             | 校验日志上传的 S3 存储桶                 | my-bucket   | -                                |
-| s3_access_key         | S3 访问密钥                              | AKIA...     | -                                |
-| s3_secret_key         | S3 秘密密钥                              | ****        | -                                |
+| s3_access_key_id      | S3 访问密钥 ID                           | AKIA...     | -                                |
+| s3_secret_access_key  | S3 秘密访问密钥                          | ****        | -                                |
 | s3_region             | S3 区域                                  | us-east-1   | -                                |
 | s3_endpoint           | S3 端点                                  | https://... | -                                |
 | s3_key_prefix         | 校验日志的 S3 键前缀                     | task1/check | 空                               |
 
 说明：
 - 在 CDC + checker 模式（`extract_type=cdc` 且 `sink_type=write`）下，checker 批量大小跟随 `[sinker].batch_size`。
+- 在 CDC + checker 模式下，只要配置了 `[checker]` section 就会启用 checker。
 - 当 `check_log_dir` 为空时，统一使用 `runtime.log_dir/check` 作为 checker 日志目录（包含 CDC 校验输出）。
+- 在 CDC + checker 模式下，会始终在 `check_log_dir` 本地输出 `diff.log` / `miss.log` / `summary.log`；`cdc_check_log_s3` 仅控制是否上传 S3。
+- CDC 校验输出对 `diff.log` / `miss.log` 同时应用双上限：`check_log_file_size` 与 `check_log_max_rows`，命中任一阈值时仅保留最新记录。
 
 # [filter]
 

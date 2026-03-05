@@ -62,7 +62,19 @@ impl Pipeline for BasePipeline {
             sinker.lock().await.close().await?;
         }
         if let Some(checker) = &mut self.checker {
-            checker.close().await?;
+            let final_position = {
+                let syncer = self.syncer.lock().await;
+                if matches!(syncer.committed_position, Position::None) {
+                    syncer.received_position.clone()
+                } else {
+                    syncer.committed_position.clone()
+                }
+            };
+            if matches!(final_position, Position::None) {
+                checker.close().await?;
+            } else {
+                checker.close_with_position(Some(&final_position)).await?;
+            }
         }
         self.checker.take();
         self.parallelizer.close().await
@@ -439,16 +451,37 @@ impl BasePipeline {
         log_position!("current_position | {}", last_received_position.to_string());
         log_position!("checkpoint_position | {}", last_commit_position.to_string());
 
-        // record position for recovery if necessary
-        if let Some(handler) = &self.recorder {
-            let record_position = if matches!(last_commit_position, Position::None) {
-                last_received_position
-            } else {
-                last_commit_position
-            };
-            if let Err(e) = handler.record_position(record_position).await {
-                log_error!("failed to record position: {}, err: {}", record_position, e);
+        let record_position = if matches!(last_commit_position, Position::None) {
+            last_received_position
+        } else {
+            last_commit_position
+        };
+
+        // persist checker checkpoint first to avoid advancing position without checker state.
+        let mut checkpoint_ok = true;
+        if !matches!(record_position, Position::None) {
+            if let Some(checker) = &self.checker {
+                if let Err(e) = checker.record_checkpoint(record_position).await {
+                    log_warn!(
+                        "failed to persist checker checkpoint with position: {}, err: {}",
+                        record_position,
+                        e
+                    );
+                    checkpoint_ok = false;
+                }
             }
+        }
+        if checkpoint_ok {
+            if let Some(handler) = &self.recorder {
+                if let Err(e) = handler.record_position(record_position).await {
+                    log_error!("failed to record position: {}, err: {}", record_position, e);
+                }
+            }
+        } else {
+            log_warn!(
+                "skip recorder checkpoint because checker checkpoint failed at position: {}",
+                record_position
+            );
         }
 
         if !matches!(last_commit_position, Position::None) {

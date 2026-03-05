@@ -5,7 +5,7 @@ use dt_common::{error::Error, meta::col_value::ColValue, utils::serialize_util::
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct CheckLog {
     pub schema: String,
     pub tb: String,
