@@ -170,17 +170,17 @@ impl PrometheusMetrics {
             TaskMetricsType::SinkerSinkedBytes,
         );
         register_handler(
-            "checker_miss_count",
+            "checker_miss_total",
             "the total miss count detected by checker",
             TaskMetricsType::CheckerMissCount,
         );
         register_handler(
-            "checker_diff_count",
+            "checker_diff_total",
             "the total diff count detected by checker",
             TaskMetricsType::CheckerDiffCount,
         );
         register_handler(
-            "checker_pending",
+            "checker_queue_size",
             "the pending rows waiting for checker",
             TaskMetricsType::CheckerPending,
         );
@@ -190,7 +190,7 @@ impl PrometheusMetrics {
             TaskMetricsType::CheckerAsyncDropCount,
         );
         register_handler(
-            "checker_lag_avg_seconds",
+            "checker_lag_seconds",
             "the average checker lag in seconds",
             TaskMetricsType::CheckerLagAvgSeconds,
         );

@@ -147,8 +147,10 @@ impl MongoChecker {
     }
 
     fn get_id_from_row(row: &RowData) -> anyhow::Result<Bson> {
-        // For DELETE rows, after is None, so fall back to before
-        let data = row.after.as_ref().or(row.before.as_ref());
+        let data = match row.row_type {
+            RowType::Delete => row.before.as_ref().or(row.after.as_ref()),
+            _ => row.after.as_ref().or(row.before.as_ref()),
+        };
         if let Some(fields) = data {
             if let Some(ColValue::MongoDoc(doc)) = fields.get(MongoConstants::DOC) {
                 if let Some(id) = doc.get(MongoConstants::ID) {
@@ -180,5 +182,30 @@ impl MongoChecker {
             }
         }
         anyhow::bail!("missing _id in row data")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    #[test]
+    fn delete_row_should_read_id_from_before() {
+        let mut before = HashMap::new();
+        before.insert(
+            MongoConstants::ID.to_string(),
+            ColValue::String("delete_key".to_string()),
+        );
+        let row = RowData::new(
+            "db".to_string(),
+            "tb".to_string(),
+            RowType::Delete,
+            Some(before),
+            Some(HashMap::new()),
+        );
+
+        let id = MongoChecker::get_id_from_row(&row).expect("delete row should contain _id");
+        assert_eq!(id, Bson::String("delete_key".to_string()));
     }
 }
