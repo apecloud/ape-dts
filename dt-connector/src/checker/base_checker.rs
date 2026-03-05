@@ -3,8 +3,10 @@ use async_mutex::Mutex;
 use async_trait::async_trait;
 use indexmap::IndexMap;
 use mongodb::bson::Document;
+use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::collections::{BTreeSet, HashMap, VecDeque};
+use std::str::FromStr;
 use std::sync::{
     atomic::{AtomicU64, Ordering},
     Arc,
@@ -18,6 +20,10 @@ use crate::{
         CdcCheckSummaryLog, CheckLog, CheckSummaryLog, DiffColValue, TableCheckCount,
     },
     checker::check_log_uploader::CheckLogUploader,
+    checker::state_store::{
+        CheckerCheckpointCommit, CheckerEpochState, CheckerLifecyclePhase, CheckerStateRow,
+        CheckerStateStore,
+    },
     rdb_query_builder::RdbQueryBuilder,
     rdb_router::RdbRouter,
     sinker::base_sinker::BaseSinker,
@@ -25,8 +31,8 @@ use crate::{
 };
 use dt_common::meta::{
     col_value::ColValue, mongo::mongo_constant::MongoConstants, mysql::mysql_tb_meta::MysqlTbMeta,
-    pg::pg_tb_meta::PgTbMeta, rdb_meta_manager::RdbMetaManager, rdb_tb_meta::RdbTbMeta,
-    row_data::RowData, row_type::RowType,
+    pg::pg_tb_meta::PgTbMeta, position::Position, rdb_meta_manager::RdbMetaManager,
+    rdb_tb_meta::RdbTbMeta, row_data::RowData, row_type::RowType,
 };
 use dt_common::{
     log_diff, log_error, log_info, log_miss, log_sql, log_summary, log_warn,
@@ -35,8 +41,6 @@ use dt_common::{
 };
 
 pub const CHECKER_MAX_QUERY_BATCH: usize = 1000;
-
-const CHECKER_MAX_RETRY_QUEUE_SIZE: usize = 100_000;
 
 #[derive(Debug, Clone)]
 pub enum CheckerTbMeta {
@@ -191,10 +195,12 @@ enum CheckInconsistency {
     Diff(HashMap<String, DiffColValue>),
 }
 
-struct CheckEntry {
+#[derive(Clone, Serialize, Deserialize)]
+pub(crate) struct CheckEntry {
     log: CheckLog,
     revise_sql: Option<String>,
     is_miss: bool,
+    src_row_data: RowData,
 }
 
 const CHECKER_MAX_STORE_SIZE: usize = 100_000;
@@ -205,8 +211,57 @@ struct RetryItem {
     next_retry_at: Instant,
 }
 
+struct BoundedNdjsonBuffer {
+    size_limit: usize,
+    row_limit: usize,
+    bytes: usize,
+    lines: VecDeque<Vec<u8>>,
+}
+
+impl BoundedNdjsonBuffer {
+    fn new(size_limit: usize, row_limit: usize) -> Self {
+        Self {
+            size_limit: size_limit.max(1),
+            row_limit: row_limit.max(1),
+            bytes: 0,
+            lines: VecDeque::new(),
+        }
+    }
+
+    fn push(&mut self, log: &CheckLog) {
+        let Ok(line) = serde_json::to_vec(log) else {
+            return;
+        };
+        let line_size = line.len() + 1;
+        if line_size > self.size_limit {
+            return;
+        }
+        while self.lines.len() >= self.row_limit || self.bytes + line_size > self.size_limit {
+            let Some(front) = self.lines.pop_front() else {
+                break;
+            };
+            self.bytes = self.bytes.saturating_sub(front.len() + 1);
+        }
+        if self.lines.len() >= self.row_limit || self.bytes + line_size > self.size_limit {
+            return;
+        }
+        self.bytes += line_size;
+        self.lines.push_back(line);
+    }
+
+    fn into_bytes(self) -> Vec<u8> {
+        let mut buf = Vec::with_capacity(self.bytes);
+        for line in self.lines {
+            buf.extend_from_slice(&line);
+            buf.push(b'\n');
+        }
+        buf
+    }
+}
+
 #[derive(Clone)]
 pub struct CheckContext {
+    pub task_id: String,
     pub monitor: Arc<Monitor>,
     pub summary: CheckSummaryLog,
     pub output_revise_sql: bool,
@@ -219,17 +274,15 @@ pub struct CheckContext {
     pub retry_interval_secs: u64,
     pub max_retries: u32,
     pub is_cdc: bool,
-    pub cdc_check_log_disk: bool,
     pub cdc_check_log_s3: bool,
     pub check_log_dir: String,
+    pub cdc_check_log_max_file_size: u64,
+    pub cdc_check_log_max_rows: usize,
     pub s3_uploader: Option<Arc<CheckLogUploader>>,
     pub cdc_check_log_interval_secs: u64,
-}
-
-impl CheckContext {
-    pub fn cdc_output_enabled(&self) -> bool {
-        self.cdc_check_log_disk || self.cdc_check_log_s3
-    }
+    pub state_store: Option<Arc<dyn CheckerStateStore>>,
+    pub epoch_state: CheckerEpochState,
+    pub expected_resume_position: Option<Position>,
 }
 
 pub struct FetchResult {
@@ -240,7 +293,8 @@ pub struct FetchResult {
 
 enum CheckerMsg {
     ProcessBatch(Vec<RowData>),
-    Close,
+    RecordCheckpoint { position: Position },
+    Close { position: Option<Position> },
 }
 
 pub struct DataCheckerHandle {
@@ -248,6 +302,7 @@ pub struct DataCheckerHandle {
     join_handle: Option<JoinHandle<anyhow::Result<()>>>,
     pending_rows: Arc<AtomicU64>,
     monitor: Arc<Monitor>,
+    is_cdc: bool,
 }
 
 impl DataCheckerHandle {
@@ -257,6 +312,7 @@ impl DataCheckerHandle {
         buffer_size: usize,
         name: &str,
     ) -> Self {
+        let is_cdc = ctx.is_cdc;
         let (tx, rx) = mpsc::channel::<CheckerMsg>(buffer_size.max(1));
         let pending_rows = Arc::new(AtomicU64::new(0));
         let monitor = ctx.monitor.clone();
@@ -277,6 +333,7 @@ impl DataCheckerHandle {
             join_handle: Some(join_handle),
             pending_rows,
             monitor,
+            is_cdc,
         }
     }
 
@@ -288,9 +345,37 @@ impl DataCheckerHandle {
     }
 
     pub async fn close(&mut self) -> anyhow::Result<()> {
-        let _ = self.tx.send(CheckerMsg::Close).await;
+        self.close_with_position(None).await
+    }
+
+    pub async fn close_with_position(&mut self, position: Option<&Position>) -> anyhow::Result<()> {
+        let _ = self
+            .tx
+            .send(CheckerMsg::Close {
+                position: position.cloned(),
+            })
+            .await;
         if let Some(handle) = self.join_handle.take() {
             handle.await??;
+        }
+        Ok(())
+    }
+
+    pub async fn record_checkpoint(&self, position: &Position) -> anyhow::Result<()> {
+        if !self.is_cdc {
+            return Ok(());
+        }
+        if let Err(err) = self
+            .tx
+            .send(CheckerMsg::RecordCheckpoint {
+                position: position.clone(),
+            })
+            .await
+        {
+            return Err(anyhow::anyhow!(
+                "failed to send checker checkpoint msg: {}",
+                err
+            ));
         }
         Ok(())
     }
@@ -328,6 +413,9 @@ struct DataChecker<C: Checker> {
     store_dirty: bool,
     evicted_miss: usize,
     evicted_diff: usize,
+    epoch_state: CheckerEpochState,
+    checkpoint_seq: u64,
+    last_checkpoint_position: Option<Position>,
 }
 
 impl<C: Checker> DataChecker<C> {
@@ -341,6 +429,7 @@ impl<C: Checker> DataChecker<C> {
     ) -> Self {
         Self {
             checker,
+            epoch_state: ctx.epoch_state.clone(),
             ctx,
             retry_queue: VecDeque::new(),
             retry_next_at: None,
@@ -352,6 +441,8 @@ impl<C: Checker> DataChecker<C> {
             store_dirty: false,
             evicted_miss: 0,
             evicted_diff: 0,
+            checkpoint_seq: 0,
+            last_checkpoint_position: None,
         }
     }
 
@@ -360,7 +451,30 @@ impl<C: Checker> DataChecker<C> {
         let mut interval = tokio::time::interval(Duration::from_secs(1));
         let mut first_error: Option<anyhow::Error> = None;
 
-        let cdc_output_enabled = self.ctx.cdc_output_enabled();
+        if self.ctx.is_cdc {
+            if let Err(err) = self.load_initial_state().await {
+                log_warn!(
+                    "Checker [{}] failed to load state, start from empty store: {}",
+                    self.name,
+                    err
+                );
+            } else {
+                if let Err(err) = self.run_recheck_if_needed().await {
+                    log_warn!(
+                        "Checker [{}] failed to run recheck phase: {}",
+                        self.name,
+                        err
+                    );
+                }
+                if let Err(err) = self.persist_epoch_state().await {
+                    log_warn!(
+                        "Checker [{}] failed to persist epoch state: {}",
+                        self.name,
+                        err
+                    );
+                }
+            }
+        }
         let output_secs = self.ctx.cdc_check_log_interval_secs.max(1);
         let mut output_interval = tokio::time::interval(Duration::from_secs(output_secs));
         output_interval.tick().await;
@@ -383,7 +497,26 @@ impl<C: Checker> DataChecker<C> {
                                 self.monitor.set_counter(CounterType::CheckerPending, pending);
                             }
                         }
-                        Some(CheckerMsg::Close) | None => {
+                        Some(CheckerMsg::RecordCheckpoint { position }) => {
+                            let result = self.record_checkpoint(position).await;
+                            if let Err(err) = &result {
+                                log_warn!("Checker [{}] checkpoint persist failed: {}", self.name, err);
+                            }
+                        }
+                        Some(CheckerMsg::Close { position }) => {
+                            if let Some(position) = position.filter(|p| !matches!(p, Position::None))
+                            {
+                                self.last_checkpoint_position = Some(position);
+                            }
+                            if let Err(err) = self.shutdown().await {
+                                log_error!("Checker [{}] close failed: {}", self.name, err);
+                                if first_error.is_none() {
+                                    first_error = Some(err);
+                                }
+                            }
+                            break;
+                        }
+                        None => {
                             if let Err(err) = self.shutdown().await {
                                 log_error!("Checker [{}] close failed: {}", self.name, err);
                                 if first_error.is_none() {
@@ -402,7 +535,7 @@ impl<C: Checker> DataChecker<C> {
                         }
                     }
                 }
-                _ = output_interval.tick(), if cdc_output_enabled => {
+                _ = output_interval.tick(), if self.ctx.is_cdc => {
                     if self.store_dirty {
                         match self.snapshot_and_output().await {
                             Ok(()) => {
@@ -421,6 +554,14 @@ impl<C: Checker> DataChecker<C> {
         log_info!("Checker [{}] stopped.", self.name);
 
         if let Some(err) = first_error {
+            if self.ctx.is_cdc {
+                log_warn!(
+                    "Checker [{}] had internal errors in CDC mode, ignored to keep pipeline running: {}",
+                    self.name,
+                    err
+                );
+                return Ok(());
+            }
             return Err(err);
         }
         Ok(())
@@ -479,6 +620,7 @@ impl<C: Checker> DataChecker<C> {
                     log,
                     revise_sql,
                     is_miss: true,
+                    src_row_data: src_row_data.clone(),
                 })
             }
             CheckInconsistency::Diff(diff_col_values) => {
@@ -498,6 +640,7 @@ impl<C: Checker> DataChecker<C> {
                     log,
                     revise_sql,
                     is_miss: false,
+                    src_row_data: src_row_data.clone(),
                 })
             }
         }
@@ -702,7 +845,7 @@ impl<C: Checker> DataChecker<C> {
     }
 
     fn remove_store_entry(&mut self, key: u128) {
-        if self.store.swap_remove(&key).is_some() {
+        if self.store.shift_remove(&key).is_some() {
             self.store_dirty = true;
         }
     }
@@ -759,28 +902,26 @@ impl<C: Checker> DataChecker<C> {
         }
 
         self.store_dirty = true;
+        // For the same key, update in place instead of evicting any entry.
+        // This keeps the latest inconsistency state for that row.
         if self.store.len() >= CHECKER_MAX_STORE_SIZE && !self.store.contains_key(&key) {
             log_warn!(
                 "Inconsistency store full (max {}), evicting oldest entry.",
                 CHECKER_MAX_STORE_SIZE
             );
-            if let Some((_, evicted)) = self.store.swap_remove_index(0) {
-                if self.ctx.cdc_output_enabled() {
-                    log_warn!(
-                        "Evicted entry: schema={}, tb={}, id={:?}",
-                        evicted.log.schema,
-                        evicted.log.tb,
-                        evicted.log.id_col_values
-                    );
-                    if evicted.is_miss {
-                        self.evicted_miss += 1;
-                    } else {
-                        self.evicted_diff += 1;
-                    }
+            if let Some((_, evicted)) = self.store.shift_remove_index(0) {
+                log_warn!(
+                    "Evicted entry: schema={}, tb={}, id={:?}",
+                    evicted.log.schema,
+                    evicted.log.tb,
+                    evicted.log.id_col_values
+                );
+                if evicted.is_miss {
+                    self.evicted_miss += 1;
                 } else {
-                    self.log_entry(&evicted);
-                    self.update_summary_for_entry(&evicted);
+                    self.evicted_diff += 1;
                 }
+                self.update_summary_for_entry(&evicted);
             }
         }
         self.store.insert(key, entry);
@@ -982,25 +1123,12 @@ impl<C: Checker> DataChecker<C> {
         if self.retry_next_at.is_none_or(|current| retry_at < current) {
             self.retry_next_at = Some(retry_at);
         }
-        let mut dropped = 0usize;
         for row in rows {
-            if self.retry_queue.len() >= CHECKER_MAX_RETRY_QUEUE_SIZE {
-                self.retry_queue.pop_front();
-                dropped += 1;
-            }
             self.retry_queue.push_back(RetryItem {
                 row,
                 retries_left: self.ctx.max_retries,
                 next_retry_at: retry_at,
             });
-        }
-        if dropped > 0 {
-            log_warn!(
-                "Retry queue full (max {}), dropped {} oldest rows.",
-                CHECKER_MAX_RETRY_QUEUE_SIZE,
-                dropped
-            );
-            self.retry_next_at = None;
         }
     }
 
@@ -1165,7 +1293,7 @@ impl<C: Checker> DataChecker<C> {
         summary.is_consistent = summary.miss_count == 0 && summary.diff_count == 0;
         if let Some(global_summary) = global_summary_opt {
             global_summary.lock().await.merge(summary);
-        } else {
+        } else if !common.is_cdc {
             log_summary!("{}", summary);
         }
         if let Some(meta_manager) = common.extractor_meta_manager.as_mut() {
@@ -1195,27 +1323,47 @@ impl<C: Checker> DataChecker<C> {
     }
 
     async fn shutdown(&mut self) -> anyhow::Result<()> {
-        if !self.ctx.is_cdc {
-            self.drain_retries().await?;
-        }
-        if self.ctx.cdc_output_enabled() {
+        if self.ctx.is_cdc {
+            if self.store_dirty {
+                if let Some(position) = self.last_checkpoint_position.clone() {
+                    if let Err(err) = self.record_checkpoint(position).await {
+                        log_warn!(
+                            "Checker [{}] failed to persist final checkpoint: {}",
+                            self.name,
+                            err
+                        );
+                    } else {
+                        self.store_dirty = false;
+                    }
+                }
+            }
             if let Err(err) = self.snapshot_and_output().await {
                 log_error!("Checker [{}] final cdc output failed: {}", self.name, err);
             }
+            self.store.clear();
+        } else {
+            self.drain_retries().await?;
+            self.flush_store();
         }
-        self.flush_store();
         self.finish_summary_and_meta().await?;
         self.checker.close().await
     }
 
-    const CDC_LOG_MAX_ENTRIES: usize = 10_000;
-    const CDC_LOG_MAX_FILE_SIZE: usize = 100 * 1024 * 1024;
+    const DEFAULT_CDC_LOG_MAX_FILE_SIZE: usize = 100 * 1024 * 1024;
+    const DEFAULT_CDC_LOG_MAX_ROWS: usize = 1000;
 
     async fn snapshot_and_output(&self) -> anyhow::Result<()> {
-        let mut miss_buf: Vec<u8> = Vec::new();
-        let mut diff_buf: Vec<u8> = Vec::new();
-        let mut miss_written = 0usize;
-        let mut diff_written = 0usize;
+        let max_file_size = usize::try_from(self.ctx.cdc_check_log_max_file_size)
+            .ok()
+            .filter(|v| *v > 0)
+            .unwrap_or(Self::DEFAULT_CDC_LOG_MAX_FILE_SIZE);
+        let max_rows = if self.ctx.cdc_check_log_max_rows == 0 {
+            Self::DEFAULT_CDC_LOG_MAX_ROWS
+        } else {
+            self.ctx.cdc_check_log_max_rows
+        };
+        let mut miss_buf_builder = BoundedNdjsonBuffer::new(max_file_size, max_rows);
+        let mut diff_buf_builder = BoundedNdjsonBuffer::new(max_file_size, max_rows);
         let mut table_counts: HashMap<String, TableCheckCount> = HashMap::new();
 
         for entry in self.store.values() {
@@ -1224,12 +1372,14 @@ impl<C: Checker> DataChecker<C> {
 
             if entry.is_miss {
                 counts.miss_count += 1;
-                Self::append_entry_to_buf(&mut miss_buf, &mut miss_written, &entry.log);
+                miss_buf_builder.push(&entry.log);
             } else {
                 counts.diff_count += 1;
-                Self::append_entry_to_buf(&mut diff_buf, &mut diff_written, &entry.log);
+                diff_buf_builder.push(&entry.log);
             }
         }
+        let miss_buf = miss_buf_builder.into_bytes();
+        let diff_buf = diff_buf_builder.into_bytes();
 
         let total_miss: usize =
             table_counts.values().map(|c| c.miss_count).sum::<usize>() + self.evicted_miss;
@@ -1246,30 +1396,13 @@ impl<C: Checker> DataChecker<C> {
         };
         let summary_buf = serde_json::to_vec(&summary)?;
 
-        if self.ctx.cdc_check_log_disk {
-            Self::write_to_disk(&self.ctx.check_log_dir, &miss_buf, &diff_buf, &summary_buf)?;
-        }
+        Self::write_to_disk(&self.ctx.check_log_dir, &miss_buf, &diff_buf, &summary_buf)?;
         if self.ctx.cdc_check_log_s3 {
             self.upload_to_s3(&miss_buf, &diff_buf, &summary_buf)
                 .await?;
         }
 
         Ok(())
-    }
-
-    fn append_entry_to_buf(buf: &mut Vec<u8>, count: &mut usize, log: &CheckLog) {
-        if *count >= Self::CDC_LOG_MAX_ENTRIES {
-            return;
-        }
-        let Ok(line) = serde_json::to_string(log) else {
-            return;
-        };
-        if buf.len() + line.len() + 1 > Self::CDC_LOG_MAX_FILE_SIZE {
-            return;
-        }
-        buf.extend_from_slice(line.as_bytes());
-        buf.push(b'\n');
-        *count += 1;
     }
 
     fn write_to_disk(
@@ -1282,7 +1415,190 @@ impl<C: Checker> DataChecker<C> {
         std::fs::create_dir_all(path)?;
         std::fs::write(path.join("miss.log"), miss_buf)?;
         std::fs::write(path.join("diff.log"), diff_buf)?;
-        std::fs::write(path.join("summary.log"), summary_buf)?;
+        // Append newline so log4rs summary_logger appends on a new line
+        let mut summary_with_newline = summary_buf.to_vec();
+        summary_with_newline.push(b'\n');
+        std::fs::write(path.join("summary.log"), &summary_with_newline)?;
+        Ok(())
+    }
+
+    fn build_state_rows(&self) -> anyhow::Result<Vec<CheckerStateRow>> {
+        let mut rows = Vec::with_capacity(self.store.len());
+        for (key, entry) in &self.store {
+            rows.push(CheckerStateRow {
+                row_key: *key,
+                payload: serde_json::to_string(entry)?,
+            });
+        }
+        Ok(rows)
+    }
+
+    fn restore_store_from_rows(&mut self, rows: Vec<CheckerStateRow>) {
+        self.store.clear();
+        let keep_from = rows.len().saturating_sub(CHECKER_MAX_STORE_SIZE);
+        for row in rows.into_iter().skip(keep_from) {
+            match serde_json::from_str::<CheckEntry>(&row.payload) {
+                Ok(entry) => {
+                    self.store.insert(row.row_key, entry);
+                }
+                Err(err) => {
+                    log_warn!(
+                        "Checker [{}] failed to parse state row key [{}]: {}",
+                        self.name,
+                        row.row_key,
+                        err
+                    );
+                }
+            }
+        }
+    }
+
+    async fn load_initial_state(&mut self) -> anyhow::Result<()> {
+        if let Some(state_store) = &self.ctx.state_store {
+            if let Some(bundle) = state_store
+                .load_latest_checkpoint(&self.ctx.task_id)
+                .await
+                .with_context(|| {
+                    format!(
+                        "failed to load latest checker checkpoint for task_id {}",
+                        self.ctx.task_id
+                    )
+                })?
+            {
+                let manifest_position = match Position::from_str(&bundle.manifest.position) {
+                    Ok(position) if !matches!(position, Position::None) => Some(position),
+                    Ok(_) => None,
+                    Err(err) => {
+                        log_warn!(
+                            "Checker [{}] failed to parse checkpoint position [{}]: {}",
+                            self.name,
+                            bundle.manifest.position,
+                            err
+                        );
+                        None
+                    }
+                };
+                if let Some(expected) = &self.ctx.expected_resume_position {
+                    if manifest_position.as_ref() != Some(expected) {
+                        log_warn!(
+                            "Checker [{}] state store checkpoint position [{}] mismatches resumer position [{}], ignore checker state and start empty store",
+                            self.name,
+                            bundle.manifest.position,
+                            expected
+                        );
+                        self.last_checkpoint_position = Some(expected.clone());
+                        return Ok(());
+                    }
+                }
+                self.restore_store_from_rows(bundle.rows);
+                self.evicted_miss = bundle.manifest.evicted_miss;
+                self.evicted_diff = bundle.manifest.evicted_diff;
+                self.last_checkpoint_position = manifest_position;
+                self.epoch_state.epoch = self.epoch_state.epoch.max(bundle.manifest.epoch);
+                log_info!(
+                    "Checker [{}] restored {} store entries from state store checkpoint [{}]",
+                    self.name,
+                    self.store.len(),
+                    bundle.manifest.checkpoint_id
+                );
+                return Ok(());
+            }
+        }
+        Ok(())
+    }
+
+    async fn persist_epoch_state(&self) -> anyhow::Result<()> {
+        if let Some(state_store) = &self.ctx.state_store {
+            state_store.save_epoch_state(&self.epoch_state).await?;
+        }
+        Ok(())
+    }
+
+    async fn run_recheck_if_needed(&mut self) -> anyhow::Result<()> {
+        if !self.ctx.is_cdc {
+            return Ok(());
+        }
+        if self.epoch_state.phase != CheckerLifecyclePhase::Rechecking {
+            return Ok(());
+        }
+
+        let rows_for_recheck: Vec<RowData> = self
+            .store
+            .values()
+            .map(|entry| entry.src_row_data.clone())
+            .collect();
+        if rows_for_recheck.is_empty() {
+            self.epoch_state.phase = CheckerLifecyclePhase::Running;
+            self.persist_epoch_state().await?;
+            return Ok(());
+        }
+
+        log_info!(
+            "Checker [{}] enters RECHECKING, replay {} unresolved rows",
+            self.name,
+            rows_for_recheck.len()
+        );
+        let batch_size = self.ctx.batch_size.max(1);
+        for chunk in rows_for_recheck.chunks(batch_size) {
+            self.process_batch(chunk, false).await?;
+            if let Err(err) = self.persist_recheck_progress().await {
+                log_warn!(
+                    "Checker [{}] failed to persist recheck progress: {}",
+                    self.name,
+                    err
+                );
+            }
+        }
+        self.epoch_state.phase = CheckerLifecyclePhase::Running;
+        self.persist_epoch_state().await?;
+        log_info!(
+            "Checker [{}] RECHECKING finished, switched to RUNNING",
+            self.name
+        );
+        Ok(())
+    }
+
+    async fn persist_recheck_progress(&mut self) -> anyhow::Result<()> {
+        if !self.store_dirty {
+            return Ok(());
+        }
+        let Some(position) = self.last_checkpoint_position.clone() else {
+            return Ok(());
+        };
+        self.record_checkpoint(position).await?;
+        self.store_dirty = false;
+        Ok(())
+    }
+
+    fn next_checkpoint_id(&mut self) -> String {
+        self.checkpoint_seq = self.checkpoint_seq.wrapping_add(1);
+        format!(
+            "{}-{}",
+            chrono::Utc::now().timestamp_millis(),
+            self.checkpoint_seq
+        )
+    }
+
+    async fn record_checkpoint(&mut self, position: Position) -> anyhow::Result<()> {
+        if matches!(position, Position::None) {
+            return Ok(());
+        }
+        self.last_checkpoint_position = Some(position.clone());
+        if let Some(state_store) = self.ctx.state_store.clone() {
+            let rows = self.build_state_rows()?;
+            let checkpoint_id = self.next_checkpoint_id();
+            let commit = CheckerCheckpointCommit {
+                task_id: self.ctx.task_id.clone(),
+                checkpoint_id,
+                position: position.clone(),
+                rows,
+                epoch_state: self.epoch_state.clone(),
+                evicted_miss: self.evicted_miss,
+                evicted_diff: self.evicted_diff,
+            };
+            state_store.commit_checkpoint(&commit).await?;
+            return Ok(());
+        }
         Ok(())
     }
 
@@ -1398,6 +1714,7 @@ mod tests {
 
     fn build_context(monitor: Arc<Monitor>, is_cdc: bool, batch_size: usize) -> CheckContext {
         CheckContext {
+            task_id: "test-task".to_string(),
             monitor,
             summary: CheckSummaryLog {
                 start_time: "test".to_string(),
@@ -1418,11 +1735,19 @@ mod tests {
             retry_interval_secs: 0,
             max_retries: 0,
             is_cdc,
-            cdc_check_log_disk: false,
             cdc_check_log_s3: false,
             check_log_dir: String::new(),
+            cdc_check_log_max_file_size: 100 * 1024 * 1024,
+            cdc_check_log_max_rows: 1000,
             s3_uploader: None,
             cdc_check_log_interval_secs: 1,
+            state_store: None,
+            epoch_state: CheckerEpochState {
+                task_id: "test-task".to_string(),
+                epoch: 1,
+                phase: CheckerLifecyclePhase::Running,
+            },
+            expected_resume_position: None,
         }
     }
 
@@ -1461,6 +1786,61 @@ mod tests {
             Some(before),
             Some(after),
         )
+    }
+
+    fn build_buffer_test_log(id: i32) -> CheckLog {
+        CheckLog {
+            schema: "s1".to_string(),
+            tb: "t1".to_string(),
+            target_schema: None,
+            target_tb: None,
+            id_col_values: HashMap::from([("id".to_string(), Some(id.to_string()))]),
+            diff_col_values: HashMap::new(),
+            src_row: None,
+            dst_row: None,
+        }
+    }
+
+    fn collect_log_ids(buf: Vec<u8>) -> Vec<i32> {
+        buf.split(|b| *b == b'\n')
+            .filter(|line| !line.is_empty())
+            .map(|line| {
+                let log: CheckLog =
+                    serde_json::from_slice(line).expect("line should be valid check log json");
+                log.id_col_values
+                    .get("id")
+                    .and_then(|v| v.as_ref())
+                    .and_then(|v| v.parse::<i32>().ok())
+                    .expect("id should exist and be a valid integer")
+            })
+            .collect()
+    }
+
+    #[test]
+    fn bounded_ndjson_buffer_respects_row_limit() {
+        let mut buffer = BoundedNdjsonBuffer::new(4096, 2);
+        buffer.push(&build_buffer_test_log(1));
+        buffer.push(&build_buffer_test_log(2));
+        buffer.push(&build_buffer_test_log(3));
+
+        let ids = collect_log_ids(buffer.into_bytes());
+        assert_eq!(ids, vec![2, 3]);
+    }
+
+    #[test]
+    fn bounded_ndjson_buffer_respects_size_limit() {
+        let first = build_buffer_test_log(1);
+        let second = build_buffer_test_log(2);
+        let third = build_buffer_test_log(3);
+        let line_size = serde_json::to_vec(&first).unwrap().len() + 1;
+
+        let mut buffer = BoundedNdjsonBuffer::new(line_size * 2, 10);
+        buffer.push(&first);
+        buffer.push(&second);
+        buffer.push(&third);
+
+        let ids = collect_log_ids(buffer.into_bytes());
+        assert_eq!(ids, vec![2, 3]);
     }
 
     #[tokio::test]
@@ -1547,5 +1927,118 @@ mod tests {
         assert_eq!(data_checker.ctx.summary.diff_count, 0);
         assert!(data_checker.retry_queue.is_empty());
         assert!(data_checker.store.is_empty());
+    }
+
+    #[test]
+    fn cdc_store_same_key_should_replace_entry_without_eviction() {
+        let checker = MissingDstChecker;
+        let monitor = Arc::new(Monitor::new("checker", "test", 1, 10, 10));
+        let ctx = build_context(monitor.clone(), true, 8);
+        let (_tx, rx) = mpsc::channel(8);
+        let mut data_checker = DataChecker::new(
+            checker,
+            ctx,
+            rx,
+            Arc::new(AtomicU64::new(0)),
+            monitor,
+            "test",
+        );
+
+        let mut id_col_values = HashMap::new();
+        id_col_values.insert("id".to_string(), Some("1".to_string()));
+
+        let first = CheckEntry {
+            log: CheckLog {
+                schema: "s1".to_string(),
+                tb: "t1".to_string(),
+                target_schema: None,
+                target_tb: None,
+                id_col_values: id_col_values.clone(),
+                diff_col_values: HashMap::new(),
+                src_row: None,
+                dst_row: None,
+            },
+            revise_sql: None,
+            is_miss: true,
+            src_row_data: build_insert_row("s1", "t1", 1, "a"),
+        };
+        data_checker.store_entry(1, first);
+        assert_eq!(data_checker.store.len(), 1);
+        assert_eq!(data_checker.evicted_miss, 0);
+        assert_eq!(data_checker.evicted_diff, 0);
+
+        let mut diff_col_values = HashMap::new();
+        diff_col_values.insert(
+            "v".to_string(),
+            DiffColValue {
+                src: Some("a".to_string()),
+                dst: Some("b".to_string()),
+                src_type: None,
+                dst_type: None,
+            },
+        );
+        let second = CheckEntry {
+            log: CheckLog {
+                schema: "s1".to_string(),
+                tb: "t1".to_string(),
+                target_schema: None,
+                target_tb: None,
+                id_col_values,
+                diff_col_values,
+                src_row: None,
+                dst_row: None,
+            },
+            revise_sql: None,
+            is_miss: false,
+            src_row_data: build_insert_row("s1", "t1", 1, "b"),
+        };
+        data_checker.store_entry(1, second);
+
+        assert_eq!(data_checker.store.len(), 1);
+        assert_eq!(data_checker.evicted_miss, 0);
+        assert_eq!(data_checker.evicted_diff, 0);
+        let stored = data_checker.store.get(&1).unwrap();
+        assert!(!stored.is_miss);
+        assert_eq!(stored.log.diff_col_values.len(), 1);
+    }
+
+    #[test]
+    fn remove_store_entry_should_keep_fifo_order() {
+        let checker = MissingDstChecker;
+        let monitor = Arc::new(Monitor::new("checker", "test", 1, 10, 10));
+        let ctx = build_context(monitor.clone(), true, 8);
+        let (_tx, rx) = mpsc::channel(8);
+        let mut data_checker = DataChecker::new(
+            checker,
+            ctx,
+            rx,
+            Arc::new(AtomicU64::new(0)),
+            monitor,
+            "test",
+        );
+
+        let make_entry = |id: i32| CheckEntry {
+            log: CheckLog {
+                schema: "s1".to_string(),
+                tb: "t1".to_string(),
+                target_schema: None,
+                target_tb: None,
+                id_col_values: HashMap::from([("id".to_string(), Some(id.to_string()))]),
+                diff_col_values: HashMap::new(),
+                src_row: None,
+                dst_row: None,
+            },
+            revise_sql: None,
+            is_miss: true,
+            src_row_data: build_insert_row("s1", "t1", id, "v"),
+        };
+
+        data_checker.store_entry(1, make_entry(1));
+        data_checker.store_entry(2, make_entry(2));
+        data_checker.store_entry(3, make_entry(3));
+        data_checker.remove_store_entry(1);
+
+        let keys: Vec<u128> = data_checker.store.keys().copied().collect();
+        assert_eq!(keys, vec![2, 3]);
     }
 }

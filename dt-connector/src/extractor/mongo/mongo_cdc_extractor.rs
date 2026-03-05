@@ -211,7 +211,7 @@ impl MongoCdcExtractor {
                 "d" => {
                     row_type = RowType::Delete;
                     let doc = o.unwrap().as_document().unwrap().clone();
-                    Self::insert_id_from_doc(&mut after, &doc);
+                    Self::insert_id_from_doc(&mut before, &doc);
                     before.insert(MongoConstants::DOC.to_string(), ColValue::MongoDoc(doc));
                 }
                 // TODO, DDL
@@ -308,8 +308,8 @@ impl MongoCdcExtractor {
             let o = item.get("o");
             let mut before = HashMap::new();
             let doc = o.unwrap().as_document().unwrap().clone();
-            let mut after = HashMap::new();
-            Self::insert_id_from_doc(&mut after, &doc);
+            let after = HashMap::new();
+            Self::insert_id_from_doc(&mut before, &doc);
             before.insert(MongoConstants::DOC.to_string(), ColValue::MongoDoc(doc));
 
             data.push(Self::build_oplog_row_data(
@@ -417,7 +417,7 @@ impl MongoCdcExtractor {
                     OperationType::Delete => {
                         row_type = RowType::Delete;
                         let doc = doc.document_key.unwrap();
-                        Self::insert_id_from_doc(&mut after, &doc);
+                        Self::insert_id_from_doc(&mut before, &doc);
                         before.insert(MongoConstants::DOC.to_string(), ColValue::MongoDoc(doc));
                     }
 
