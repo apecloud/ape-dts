@@ -1,6 +1,5 @@
 pub mod base_checker;
 pub mod check_log;
-pub mod check_log_uploader;
 pub mod log_reader;
 pub mod mongo_checker;
 pub mod mysql_checker;
@@ -8,7 +7,11 @@ pub mod pg_checker;
 pub mod state_store;
 pub mod struct_checker;
 
-use dt_common::meta::{row_data::RowData, struct_meta::struct_data::StructData};
+use std::sync::Arc;
+
+use dt_common::meta::{
+    position::Position, row_data::RowData, struct_meta::struct_data::StructData,
+};
 
 pub use base_checker::{
     has_null_key, CheckContext, Checker, CheckerTbMeta, DataCheckerHandle, FetchResult,
@@ -17,8 +20,7 @@ pub use mongo_checker::MongoChecker as MongoCheckerHandle;
 pub use mysql_checker::MysqlChecker as MysqlCheckerHandle;
 pub use pg_checker::PgChecker as PgCheckerHandle;
 pub use state_store::{
-    CheckerCheckpointBundle, CheckerEpochState, CheckerLifecyclePhase, CheckerStateRow,
-    CheckerStateStore, CheckpointManifest, SqlCheckerStateStore,
+    CheckerCheckpointBundle, CheckerStateRow, CheckpointManifest, SqlCheckerStateStore,
 };
 pub use struct_checker::StructCheckerHandle;
 
@@ -28,9 +30,9 @@ pub enum CheckerHandle {
 }
 
 impl CheckerHandle {
-    pub async fn check_rows(&self, data: Vec<RowData>) -> anyhow::Result<()> {
+    pub async fn check_rows_sync(&self, data: Arc<Vec<RowData>>) -> anyhow::Result<()> {
         match self {
-            CheckerHandle::Data(handle) => handle.check(data).await,
+            CheckerHandle::Data(handle) => handle.check_sync(data).await,
             CheckerHandle::Struct(_) => Ok(()),
         }
     }
@@ -44,25 +46,19 @@ impl CheckerHandle {
 
     pub async fn close(&mut self) -> anyhow::Result<()> {
         match self {
-            CheckerHandle::Data(handle) => handle.close().await,
+            CheckerHandle::Data(handle) => handle.close_with_position(None).await,
             CheckerHandle::Struct(handle) => handle.close().await,
         }
     }
 
-    pub async fn close_with_position(
-        &mut self,
-        position: Option<&dt_common::meta::position::Position>,
-    ) -> anyhow::Result<()> {
+    pub async fn close_with_position(&mut self, position: Option<&Position>) -> anyhow::Result<()> {
         match self {
             CheckerHandle::Data(handle) => handle.close_with_position(position).await,
             CheckerHandle::Struct(handle) => handle.close().await,
         }
     }
 
-    pub async fn record_checkpoint(
-        &self,
-        position: &dt_common::meta::position::Position,
-    ) -> anyhow::Result<()> {
+    pub async fn record_checkpoint(&self, position: &Position) -> anyhow::Result<()> {
         match self {
             CheckerHandle::Data(handle) => handle.record_checkpoint(position).await,
             CheckerHandle::Struct(_) => Ok(()),

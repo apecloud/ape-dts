@@ -1,5 +1,5 @@
 pub mod base_parallelizer;
-pub mod check_parallelizer;
+pub mod checked_parallelizer;
 pub mod foxlake_parallelizer;
 pub mod merge_parallelizer;
 pub mod mongo_merger;
@@ -16,7 +16,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use dt_common::meta::{
     dcl_meta::dcl_data::DclData, ddl_meta::ddl_data::DdlData, dt_data::DtItem, dt_queue::DtQueue,
-    row_data::RowData, struct_meta::struct_data::StructData,
+    position::Position, row_data::RowData, struct_meta::struct_data::StructData,
 };
 use dt_connector::Sinker;
 use merge_parallelizer::TbMergedData;
@@ -71,6 +71,22 @@ pub trait Parallelizer {
 
     async fn close(&mut self) -> anyhow::Result<()> {
         Ok(())
+    }
+
+    async fn close_with_position(&mut self, _position: Option<&Position>) -> anyhow::Result<()> {
+        self.close().await
+    }
+
+    async fn record_checkpoint(&self, _position: &Position) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    fn has_checker(&self) -> bool {
+        false
+    }
+
+    fn checker_last_ok(&self) -> bool {
+        true
     }
 }
 

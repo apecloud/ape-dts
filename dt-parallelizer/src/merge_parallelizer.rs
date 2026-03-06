@@ -1,6 +1,6 @@
 use std::{cmp, sync::Arc};
 
-use super::base_parallelizer::BaseParallelizer;
+use super::{base_parallelizer::BaseParallelizer, snapshot_parallelizer::SnapshotParallelizer};
 use crate::{DataSize, Merger, Parallelizer};
 use async_trait::async_trait;
 use dt_common::config::sinker_config::BasicSinkerConfig;
@@ -9,6 +9,7 @@ use dt_common::meta::ddl_meta::ddl_data::DdlData;
 use dt_common::meta::dt_queue::DtQueue;
 use dt_common::meta::{
     dt_data::DtItem, rdb_meta_manager::RdbMetaManager, row_data::RowData, row_type::RowType,
+    struct_meta::struct_data::StructData,
 };
 use dt_connector::Sinker;
 
@@ -18,6 +19,13 @@ pub struct MergeParallelizer {
     pub meta_manager: Option<RdbMetaManager>,
     pub parallel_size: usize,
     pub sinker_basic_config: BasicSinkerConfig,
+    pub sink_mode: MergeSinkMode,
+}
+
+#[derive(Clone, Copy)]
+pub enum MergeSinkMode {
+    AdaptiveBatch,
+    Partitioned,
 }
 
 enum MergeType {
@@ -107,10 +115,40 @@ impl Parallelizer for MergeParallelizer {
 
         Ok(data_size)
     }
+
+    async fn sink_struct(
+        &mut self,
+        data: Vec<StructData>,
+        sinkers: &[Arc<async_mutex::Mutex<Box<dyn Sinker + Send>>>],
+    ) -> anyhow::Result<DataSize> {
+        sinkers[0].lock().await.sink_struct(data.clone()).await?;
+        Ok(DataSize {
+            count: data.len() as u64,
+            bytes: 0,
+        })
+    }
 }
 
 impl MergeParallelizer {
     async fn sink_dml_internal(
+        &self,
+        tb_merged_data_items: &mut [TbMergedData],
+        sinkers: &[Arc<async_mutex::Mutex<Box<dyn Sinker + Send>>>],
+        merge_type: MergeType,
+    ) -> anyhow::Result<DataSize> {
+        match self.sink_mode {
+            MergeSinkMode::AdaptiveBatch => {
+                self.sink_dml_adaptive(tb_merged_data_items, sinkers, merge_type)
+                    .await
+            }
+            MergeSinkMode::Partitioned => {
+                self.sink_dml_partitioned(tb_merged_data_items, sinkers, merge_type)
+                    .await
+            }
+        }
+    }
+
+    async fn sink_dml_adaptive(
         &self,
         tb_merged_data_items: &mut [TbMergedData],
         sinkers: &[Arc<async_mutex::Mutex<Box<dyn Sinker + Send>>>],
@@ -167,6 +205,41 @@ impl MergeParallelizer {
         for future in futures {
             future.await.unwrap();
         }
+        Ok(data_size)
+    }
+
+    async fn sink_dml_partitioned(
+        &self,
+        tb_merged_data_items: &mut [TbMergedData],
+        sinkers: &[Arc<async_mutex::Mutex<Box<dyn Sinker + Send>>>],
+        merge_type: MergeType,
+    ) -> anyhow::Result<DataSize> {
+        let mut data_size = DataSize::default();
+        for tb_merged_data in tb_merged_data_items.iter_mut() {
+            let data: Vec<RowData> = match merge_type {
+                MergeType::Delete => tb_merged_data.delete_rows.drain(..).collect(),
+                MergeType::Insert => tb_merged_data.insert_rows.drain(..).collect(),
+                MergeType::Unmerged => tb_merged_data.unmerged_rows.drain(..).collect(),
+            };
+            if data.is_empty() {
+                continue;
+            }
+
+            data_size
+                .add_count(data.len() as u64)
+                .add_bytes(data.iter().map(|v| v.get_data_size()).sum());
+
+            let sub_data_items = SnapshotParallelizer::partition(data, self.parallel_size)?;
+            self.base_parallelizer
+                .sink_dml(
+                    sub_data_items,
+                    sinkers,
+                    self.parallel_size,
+                    matches!(merge_type, MergeType::Insert),
+                )
+                .await?;
+        }
+
         Ok(data_size)
     }
 

@@ -31,7 +31,9 @@ impl Checker for PgChecker {
                 .await?
                 .clone(),
         ));
-        let pg_meta = tb_meta.pg()?;
+        let CheckerTbMeta::Pg(pg_meta) = tb_meta.as_ref() else {
+            unreachable!()
+        };
         let qb = RdbQueryBuilder::new_for_pg(pg_meta, None);
 
         let mut res = Vec::with_capacity(src_rows.len());
@@ -73,6 +75,7 @@ impl PgChecker {
     pub fn spawn(
         conn_pool: Pool<Postgres>,
         meta_manager: PgMetaManager,
+        task_id: String,
         ctx: CheckContext,
         buffer_size: usize,
     ) -> DataCheckerHandle {
@@ -81,6 +84,7 @@ impl PgChecker {
                 conn_pool,
                 meta_manager,
             },
+            task_id,
             ctx,
             buffer_size,
             "PgChecker",
