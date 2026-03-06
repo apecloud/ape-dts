@@ -62,11 +62,9 @@ use dt_common::{
 use dt_connector::{
     checker::base_checker::CheckContext,
     checker::check_log::CheckSummaryLog,
-    checker::check_log_uploader::CheckLogUploader,
     checker::{
-        CheckerEpochState, CheckerHandle, CheckerLifecyclePhase, CheckerStateStore,
-        MongoCheckerHandle, MysqlCheckerHandle, PgCheckerHandle, SqlCheckerStateStore,
-        StructCheckerHandle,
+        CheckerHandle, MongoCheckerHandle, MysqlCheckerHandle, PgCheckerHandle,
+        SqlCheckerStateStore, StructCheckerHandle,
     },
     data_marker::DataMarker,
     extractor::resumer::{recorder::Recorder, recovery::Recovery, ResumerDbPool},
@@ -654,7 +652,7 @@ impl TaskRunner {
                             lua_code: processor_config.lua_code.clone(),
                         });
 
-                let (parallelizer, remaining_checker) = ParallelizerUtil::create_parallelizer(
+                let parallelizer = ParallelizerUtil::create_parallelizer(
                     &self.config,
                     monitor.clone(),
                     rps_limiter,
@@ -675,7 +673,6 @@ impl TaskRunner {
                     data_marker,
                     lua_processor,
                     recorder,
-                    checker: remaining_checker,
                 };
                 Ok(Box::new(pipeline) as Box<dyn Pipeline + Send>)
             }
@@ -817,10 +814,6 @@ impl TaskRunner {
             );
         }
 
-        let epoch_state = self
-            .resolve_checker_epoch_state(state_store.as_ref())
-            .await?;
-
         let is_struct_task = matches!(
             self.config.extractor,
             ExtractorConfig::MysqlStruct { .. } | ExtractorConfig::PgStruct { .. }
@@ -882,7 +875,7 @@ impl TaskRunner {
             return Ok(Some(CheckerHandle::Struct(checker)));
         }
 
-        let s3_uploader = if cfg.cdc_check_log_s3 {
+        let s3_output = if cfg.cdc_check_log_s3 {
             let s3_cfg = cfg.s3_config.as_ref().ok_or_else(|| {
                 Error::ConfigError(
                     "cdc_check_log_s3=true but checker s3 config is missing in [checker]".into(),
@@ -894,17 +887,13 @@ impl TaskRunner {
             } else {
                 cfg.s3_key_prefix.clone()
             };
-            Some(Arc::new(CheckLogUploader {
-                s3_client,
-                key_prefix,
-            }))
+            Some((s3_client, key_prefix))
         } else {
             None
         };
 
         let build_check_context =
             |extractor_meta_manager, reverse_router, revise_match_full_row| CheckContext {
-                task_id: self.config.global.task_id.clone(),
                 extractor_meta_manager,
                 reverse_router,
                 batch_size: checker_batch_size,
@@ -920,14 +909,12 @@ impl TaskRunner {
                     ..Default::default()
                 },
                 global_summary: check_summary.clone(),
-                cdc_check_log_s3: cfg.cdc_check_log_s3,
                 check_log_dir: check_log_dir.clone(),
                 cdc_check_log_max_file_size,
                 cdc_check_log_max_rows,
-                s3_uploader: s3_uploader.clone(),
+                s3_output: s3_output.clone(),
                 cdc_check_log_interval_secs: cfg.cdc_check_log_interval_secs,
                 state_store: state_store.clone(),
-                epoch_state: epoch_state.clone(),
                 expected_resume_position: expected_resume_position.clone(),
             };
 
@@ -952,6 +939,7 @@ impl TaskRunner {
                 let checker = MysqlCheckerHandle::spawn(
                     conn_pool,
                     meta_manager,
+                    self.config.global.task_id.clone(),
                     build_check_context(
                         extractor_meta_manager,
                         reverse_router,
@@ -979,6 +967,7 @@ impl TaskRunner {
                 let checker = PgCheckerHandle::spawn(
                     conn_pool,
                     meta_manager,
+                    self.config.global.task_id.clone(),
                     build_check_context(
                         extractor_meta_manager,
                         reverse_router,
@@ -1007,6 +996,7 @@ impl TaskRunner {
                 .await?;
                 let checker = MongoCheckerHandle::spawn(
                     mongo_client,
+                    self.config.global.task_id.clone(),
                     build_check_context(None, reverse_router, false),
                     queue_size,
                 );
@@ -1023,7 +1013,7 @@ impl TaskRunner {
         checker_url: &str,
         checker_auth: &ConnectionAuthConfig,
         enable_sqlx_log: bool,
-    ) -> anyhow::Result<Option<Arc<dyn CheckerStateStore>>> {
+    ) -> anyhow::Result<Option<Arc<SqlCheckerStateStore>>> {
         if !is_cdc_task {
             return Ok(None);
         }
@@ -1047,7 +1037,7 @@ impl TaskRunner {
                     CHECKER_STATE_STORE_TABLE_PREFIX,
                 )
                 .await?;
-                Some(Arc::new(inner) as Arc<dyn CheckerStateStore>)
+                Some(Arc::new(inner))
             }
             DbType::Pg => {
                 let pool = TaskUtil::create_pg_conn_pool(
@@ -1064,7 +1054,7 @@ impl TaskRunner {
                     CHECKER_STATE_STORE_TABLE_PREFIX,
                 )
                 .await?;
-                Some(Arc::new(inner) as Arc<dyn CheckerStateStore>)
+                Some(Arc::new(inner))
             }
             _ => {
                 log_warn!(
@@ -1076,58 +1066,6 @@ impl TaskRunner {
         };
 
         Ok(store)
-    }
-
-    async fn resolve_checker_epoch_state(
-        &self,
-        state_store: Option<&Arc<dyn CheckerStateStore>>,
-    ) -> anyhow::Result<CheckerEpochState> {
-        let mut previous: Option<CheckerEpochState> = None;
-        if let Some(store) = state_store {
-            previous = store
-                .load_epoch_state(&self.config.global.task_id)
-                .await
-                .with_context(|| {
-                    format!(
-                        "failed to load checker epoch state for task_id {}",
-                        self.config.global.task_id
-                    )
-                })?;
-        }
-
-        let mut epoch = previous.as_ref().map_or(0, |state| state.epoch);
-        if previous.is_none() {
-            epoch = epoch.saturating_add(1);
-        }
-        if epoch == 0 {
-            epoch = 1;
-        }
-
-        let phase = if previous.is_some() {
-            CheckerLifecyclePhase::Rechecking
-        } else {
-            CheckerLifecyclePhase::Running
-        };
-
-        let epoch_state = CheckerEpochState {
-            task_id: self.config.global.task_id.clone(),
-            epoch,
-            phase,
-        };
-
-        if let Some(store) = state_store {
-            store
-                .save_epoch_state(&epoch_state)
-                .await
-                .with_context(|| {
-                    format!(
-                        "failed to save checker epoch state for task_id {}",
-                        self.config.global.task_id
-                    )
-                })?;
-        }
-
-        Ok(epoch_state)
     }
 
     async fn init_log4rs(&self) -> anyhow::Result<()> {

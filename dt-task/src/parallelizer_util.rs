@@ -6,7 +6,7 @@ use std::{
 use super::task_util::TaskUtil;
 use dt_common::{
     config::{
-        config_enums::{DbType, ExtractType, ParallelType},
+        config_enums::{DbType, ParallelType},
         sinker_config::SinkerConfig,
         task_config::TaskConfig,
     },
@@ -16,12 +16,19 @@ use dt_common::{
 };
 use dt_connector::checker::CheckerHandle;
 use dt_parallelizer::{
-    base_parallelizer::BaseParallelizer, check_parallelizer::CheckParallelizer,
-    foxlake_parallelizer::FoxlakeParallelizer, merge_parallelizer::MergeParallelizer,
-    mongo_merger::MongoMerger, partition_parallelizer::PartitionParallelizer,
-    rdb_merger::RdbMerger, rdb_partitioner::RdbPartitioner, redis_parallelizer::RedisParallelizer,
-    serial_parallelizer::SerialParallelizer, snapshot_parallelizer::SnapshotParallelizer,
-    table_parallelizer::TableParallelizer, Merger, Parallelizer,
+    base_parallelizer::BaseParallelizer,
+    checked_parallelizer::CheckedParallelizer,
+    foxlake_parallelizer::FoxlakeParallelizer,
+    merge_parallelizer::{MergeParallelizer, MergeSinkMode},
+    mongo_merger::MongoMerger,
+    partition_parallelizer::PartitionParallelizer,
+    rdb_merger::RdbMerger,
+    rdb_partitioner::RdbPartitioner,
+    redis_parallelizer::RedisParallelizer,
+    serial_parallelizer::SerialParallelizer,
+    snapshot_parallelizer::SnapshotParallelizer,
+    table_parallelizer::TableParallelizer,
+    Merger, Parallelizer,
 };
 
 pub struct ParallelizerUtil {}
@@ -32,7 +39,7 @@ impl ParallelizerUtil {
         monitor: Arc<Monitor>,
         rps_limiter: Option<Ratelimiter>,
         checker: Option<CheckerHandle>,
-    ) -> anyhow::Result<(Box<dyn Parallelizer + Send + Sync>, Option<CheckerHandle>)> {
+    ) -> anyhow::Result<Box<dyn Parallelizer + Send + Sync>> {
         let parallel_size = config.parallelizer.parallel_size;
         let parallel_type = &config.parallelizer.parallel_type;
         let base_parallelizer = BaseParallelizer {
@@ -64,6 +71,7 @@ impl ParallelizerUtil {
                     parallel_size,
                     sinker_basic_config: config.sinker_basic.clone(),
                     meta_manager,
+                    sink_mode: MergeSinkMode::AdaptiveBatch,
                 })
             }
 
@@ -72,22 +80,14 @@ impl ParallelizerUtil {
                     DbType::Mongo => Self::create_mongo_merger().await?,
                     _ => Self::create_rdb_merger(config).await?,
                 };
-                // Only move checker into CheckParallelizer for CDC tasks,
-                // so it checks against merged data. Snapshot check keeps
-                // checker in BasePipeline (pre-merger data == actual data).
-                let is_cdc = matches!(config.extractor_basic.extract_type, ExtractType::Cdc);
-                let (inner_checker, remaining_checker) = if is_cdc {
-                    (checker, None)
-                } else {
-                    (None, checker)
-                };
-                let parallelizer = Box::new(CheckParallelizer::new(
+                Box::new(MergeParallelizer {
                     base_parallelizer,
                     merger,
                     parallel_size,
-                    inner_checker,
-                ));
-                return Ok((parallelizer, remaining_checker));
+                    sinker_basic_config: config.sinker_basic.clone(),
+                    meta_manager: None,
+                    sink_mode: MergeSinkMode::Partitioned,
+                })
             }
 
             ParallelType::Serial => Box::new(SerialParallelizer { base_parallelizer }),
@@ -105,6 +105,7 @@ impl ParallelizerUtil {
                     parallel_size,
                     sinker_basic_config: config.sinker_basic.clone(),
                     meta_manager: None,
+                    sink_mode: MergeSinkMode::AdaptiveBatch,
                 })
             }
 
@@ -141,7 +142,15 @@ impl ParallelizerUtil {
                 })
             }
         };
-        Ok((parallelizer, checker))
+        if let Some(checker) = checker {
+            Ok(Box::new(CheckedParallelizer::new(
+                parallelizer,
+                checker,
+                matches!(&config.sinker, SinkerConfig::Dummy),
+            )))
+        } else {
+            Ok(parallelizer)
+        }
     }
 
     async fn create_rdb_merger(

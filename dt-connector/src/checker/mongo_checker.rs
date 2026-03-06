@@ -112,8 +112,19 @@ impl Checker for MongoChecker {
 }
 
 impl MongoChecker {
-    pub fn spawn(mongo_client: Client, ctx: CheckContext, buffer_size: usize) -> DataCheckerHandle {
-        DataCheckerHandle::spawn(Self { mongo_client }, ctx, buffer_size, "MongoChecker")
+    pub fn spawn(
+        mongo_client: Client,
+        task_id: String,
+        ctx: CheckContext,
+        buffer_size: usize,
+    ) -> DataCheckerHandle {
+        DataCheckerHandle::spawn(
+            Self { mongo_client },
+            task_id,
+            ctx,
+            buffer_size,
+            "MongoChecker",
+        )
     }
 
     fn is_supported_mongo_id(id: &Bson) -> bool {
