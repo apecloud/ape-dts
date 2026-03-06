@@ -31,7 +31,9 @@ impl Checker for MysqlChecker {
                 .await?
                 .clone(),
         ));
-        let mysql_meta = tb_meta.mysql()?;
+        let CheckerTbMeta::Mysql(mysql_meta) = tb_meta.as_ref() else {
+            unreachable!()
+        };
         let qb = RdbQueryBuilder::new_for_mysql(mysql_meta, None);
 
         let mut res = Vec::with_capacity(src_rows.len());
@@ -73,6 +75,7 @@ impl MysqlChecker {
     pub fn spawn(
         conn_pool: Pool<MySql>,
         meta_manager: MysqlMetaManager,
+        task_id: String,
         ctx: CheckContext,
         buffer_size: usize,
     ) -> DataCheckerHandle {
@@ -81,6 +84,7 @@ impl MysqlChecker {
                 conn_pool,
                 meta_manager,
             },
+            task_id,
             ctx,
             buffer_size,
             "MysqlChecker",

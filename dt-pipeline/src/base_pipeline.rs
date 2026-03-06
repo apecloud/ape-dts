@@ -26,9 +26,7 @@ use dt_common::{
     },
     monitor::{counter_type::CounterType, monitor::Monitor},
 };
-use dt_connector::{
-    checker::CheckerHandle, data_marker::DataMarker, extractor::resumer::recorder::Recorder, Sinker,
-};
+use dt_connector::{data_marker::DataMarker, extractor::resumer::recorder::Recorder, Sinker};
 use dt_parallelizer::{DataSize, Parallelizer};
 
 pub struct BasePipeline {
@@ -44,7 +42,6 @@ pub struct BasePipeline {
     pub data_marker: Option<Arc<RwLock<DataMarker>>>,
     pub lua_processor: Option<LuaProcessor>,
     pub recorder: Option<Arc<dyn Recorder + Send + Sync>>,
-    pub checker: Option<CheckerHandle>,
 }
 
 enum SinkMethod {
@@ -61,23 +58,21 @@ impl Pipeline for BasePipeline {
         for sinker in self.sinkers.iter_mut() {
             sinker.lock().await.close().await?;
         }
-        if let Some(checker) = &mut self.checker {
-            let final_position = {
-                let syncer = self.syncer.lock().await;
-                if matches!(syncer.committed_position, Position::None) {
-                    syncer.received_position.clone()
-                } else {
-                    syncer.committed_position.clone()
-                }
-            };
-            if matches!(final_position, Position::None) {
-                checker.close().await?;
+        let final_position = {
+            let syncer = self.syncer.lock().await;
+            if matches!(syncer.committed_position, Position::None) {
+                syncer.received_position.clone()
             } else {
-                checker.close_with_position(Some(&final_position)).await?;
+                syncer.committed_position.clone()
             }
+        };
+        if matches!(final_position, Position::None) {
+            self.parallelizer.close().await
+        } else {
+            self.parallelizer
+                .close_with_position(Some(&final_position))
+                .await
         }
-        self.checker.take();
-        self.parallelizer.close().await
     }
 
     async fn start(&mut self) -> anyhow::Result<()> {
@@ -195,21 +190,7 @@ impl BasePipeline {
                 data.push(struct_data);
             }
         }
-        let data_for_check = if self.checker.is_some() {
-            Some(data.clone())
-        } else {
-            None
-        };
         let data_size = self.parallelizer.sink_struct(data, &self.sinkers).await?;
-        if let (Some(checker), Some(data_for_check)) = (&self.checker, data_for_check) {
-            let check_only = matches!(self.sinker_config, SinkerConfig::Dummy);
-            if let Err(err) = checker.check_struct(data_for_check).await {
-                log_warn!("checker sidecar failed: {}", err);
-                if check_only {
-                    return Err(err);
-                }
-            }
-        }
         Ok((data_size, None, None))
     }
 
@@ -231,37 +212,28 @@ impl BasePipeline {
             data = lua_processor.process(data)?;
         }
 
-        let data_for_check = if self.checker.is_some() {
-            Some(data.clone())
+        let check_len = if self.parallelizer.has_checker() {
+            data.len() as u64
         } else {
-            None
+            0
         };
         let data_size = self.parallelizer.sink_dml(data, &self.sinkers).await?;
-        if let (Some(checker), Some(data_for_check)) = (&self.checker, data_for_check) {
-            let check_only = matches!(self.sinker_config, SinkerConfig::Dummy);
-            let check_len = data_for_check.len() as u64;
-            if let Err(err) = checker.check_rows(data_for_check).await {
-                log_warn!("checker sidecar failed: {}", err);
-                if check_only {
-                    return Err(err);
-                }
-            } else if check_len > 0 {
-                if let Some(position) = &last_received_position {
-                    let ts_ms = position.to_timestamp();
-                    if ts_ms > 0 {
-                        let now_ms = SystemTime::now()
-                            .duration_since(UNIX_EPOCH)
-                            .unwrap_or_default()
-                            .as_millis() as u64;
-                        let lag_secs = now_ms.saturating_sub(ts_ms) / 1000;
-                        // Weighted lag metric (row-seconds): each row in the batch
-                        // contributes its replication lag so the batch counter can
-                        // compute the average lag by dividing total by row count.
-                        let lag_value = lag_secs.saturating_mul(check_len);
-                        self.monitor
-                            .add_batch_counter(CounterType::CheckerLagSeconds, lag_value, check_len)
-                            .await;
-                    }
+        if check_len > 0 && self.parallelizer.checker_last_ok() {
+            if let Some(position) = &last_received_position {
+                let ts_ms = position.to_timestamp();
+                if ts_ms > 0 {
+                    let now_ms = SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_millis() as u64;
+                    let lag_secs = now_ms.saturating_sub(ts_ms) / 1000;
+                    // Weighted lag metric (row-seconds): each row in the batch
+                    // contributes its replication lag so the batch counter can
+                    // compute the average lag by dividing total by row count.
+                    let lag_value = lag_secs.saturating_mul(check_len);
+                    self.monitor
+                        .add_batch_counter(CounterType::CheckerLagSeconds, lag_value, check_len)
+                        .await;
                 }
             }
         }
@@ -460,15 +432,13 @@ impl BasePipeline {
         // persist checker checkpoint first to avoid advancing position without checker state.
         let mut checkpoint_ok = true;
         if !matches!(record_position, Position::None) {
-            if let Some(checker) = &self.checker {
-                if let Err(e) = checker.record_checkpoint(record_position).await {
-                    log_warn!(
-                        "failed to persist checker checkpoint with position: {}, err: {}",
-                        record_position,
-                        e
-                    );
-                    checkpoint_ok = false;
-                }
+            if let Err(e) = self.parallelizer.record_checkpoint(record_position).await {
+                log_warn!(
+                    "failed to persist checker checkpoint with position: {}, err: {}",
+                    record_position,
+                    e
+                );
+                checkpoint_ok = false;
             }
         }
         if checkpoint_ok {
