@@ -23,7 +23,7 @@ fn build_test_tb_meta(schema: &str, tb: &str) -> Arc<CheckerTbMeta> {
 
 #[async_trait]
 impl Checker for MockChecker {
-    async fn fetch(&mut self, src_rows: &[RowData]) -> anyhow::Result<FetchResult> {
+    async fn fetch(&mut self, src_rows: &[&RowData]) -> anyhow::Result<FetchResult> {
         let first = src_rows
             .first()
             .context("mock checker requires non-empty source rows")?;
@@ -48,24 +48,19 @@ impl Checker for MockChecker {
             })
             .collect();
 
-        Ok(FetchResult {
-            tb_meta,
-            src_rows: src_rows.to_vec(),
-            dst_rows,
-        })
+        Ok(FetchResult { tb_meta, dst_rows })
     }
 }
 
 #[async_trait]
 impl Checker for MissingDstChecker {
-    async fn fetch(&mut self, src_rows: &[RowData]) -> anyhow::Result<FetchResult> {
+    async fn fetch(&mut self, src_rows: &[&RowData]) -> anyhow::Result<FetchResult> {
         let first = src_rows
             .first()
             .context("mock checker requires non-empty source rows")?;
         let tb_meta = build_test_tb_meta(&first.schema, &first.tb);
         Ok(FetchResult {
             tb_meta,
-            src_rows: src_rows.to_vec(),
             dst_rows: vec![],
         })
     }
