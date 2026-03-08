@@ -281,17 +281,6 @@ impl TaskMonitor {
 
         for monitor in pipelines {
             calc_monitors.push((MonitorType::Pipeline, monitor.clone()));
-            if let Some(counter) = monitor
-                .time_window_counters
-                .get(&CounterType::CheckerLagSeconds)
-            {
-                let statics = counter.statistics().await;
-                calc_handler(
-                    CalcType::Avg,
-                    TaskMetricsType::CheckerLagAvgSeconds,
-                    statics.avg_by_count,
-                );
-            }
         }
 
         let sinkers: Vec<Arc<Monitor>> = self
@@ -525,12 +514,6 @@ fn calc_nowindow_metrics(
                     CounterType::CheckerPending,
                     TaskMetricsType::CheckerPending,
                     CalcType::Latest,
-                );
-                metric_handler(
-                    &monitor,
-                    CounterType::CheckerAsyncDropCount,
-                    TaskMetricsType::CheckerAsyncDropCount,
-                    CalcType::Add,
                 );
             }
             MonitorType::Pipeline => {

@@ -132,7 +132,13 @@ impl TaskConfig {
         let (extractor_basic, extractor) = Self::load_extractor_config(&loader, &pipeline)?;
         let filter = Self::load_filter_config(&loader)?;
         let router = Self::load_router_config(&loader)?;
+        let parallelizer = Self::load_parallelizer_config(&loader)?;
         let checker = Self::load_checker_config(&loader, &sinker_basic)?;
+        if matches!(parallelizer.parallel_type, ParallelType::RdbCheck) && checker.is_none() {
+            bail!(Error::ConfigError(
+                "config [checker] is required when [parallelizer] parallel_type=rdb_check".into()
+            ));
+        }
         Ok(Self {
             global: Self::load_global_config(
                 &loader,
@@ -143,7 +149,7 @@ impl TaskConfig {
             )?,
             extractor_basic,
             extractor,
-            parallelizer: Self::load_parallelizer_config(&loader)?,
+            parallelizer,
             pipeline,
             sinker_basic,
             sinker,
@@ -475,24 +481,31 @@ impl TaskConfig {
             if !has_checker {
                 return Ok((BasicSinkerConfig::default(), SinkerConfig::Dummy));
             }
-            // resolve each field from [sinker] if present, otherwise fall back to [checker]
-            let get_section = |key: &str| -> &str {
-                if has_sinker && loader.contains(SINKER, key) {
-                    SINKER
-                } else {
-                    CHECKER
-                }
+
+            let sinker_auth = has_sinker.then(|| ConnectionAuthConfig::from(loader, SINKER));
+            let (db_type, url, connection_auth) = Self::resolve_checker_target_with_fallbacks(
+                loader,
+                has_sinker
+                    .then(|| loader.contains_non_empty(SINKER, DB_TYPE))
+                    .filter(|present| *present)
+                    .map(|_| loader.get_required(SINKER, DB_TYPE)),
+                has_sinker
+                    .then(|| loader.contains_non_empty(SINKER, URL))
+                    .filter(|present| *present)
+                    .map(|_| loader.get_required(SINKER, URL)),
+                sinker_auth.as_ref(),
+            )?;
+            let batch_size: usize = if has_sinker && loader.contains_non_empty(SINKER, BATCH_SIZE) {
+                loader.get_with_default(SINKER, BATCH_SIZE, 200)
+            } else {
+                loader.get_with_default(CHECKER, BATCH_SIZE, 200)
             };
-            let db_type: DbType = loader.get_required(get_section(DB_TYPE), DB_TYPE);
-            let url: String = loader.get_required(get_section(URL), URL);
-            let connection_auth = ConnectionAuthConfig::from(loader, get_section(USERNAME));
-            let batch_size: usize =
-                loader.get_with_default(get_section(BATCH_SIZE), BATCH_SIZE, 200);
-            let max_connections = loader.get_with_default(
-                get_section(MAX_CONNECTIONS),
-                MAX_CONNECTIONS,
-                DEFAULT_MAX_CONNECTIONS,
-            );
+            let max_connections =
+                if has_sinker && loader.contains_non_empty(SINKER, MAX_CONNECTIONS) {
+                    loader.get_with_default(SINKER, MAX_CONNECTIONS, DEFAULT_MAX_CONNECTIONS)
+                } else {
+                    loader.get_with_default(CHECKER, MAX_CONNECTIONS, DEFAULT_MAX_CONNECTIONS)
+                };
             return Ok((
                 BasicSinkerConfig {
                     sink_type,
@@ -847,33 +860,85 @@ impl TaskConfig {
         loader: &IniLoader,
         sinker_basic: &BasicSinkerConfig,
     ) -> anyhow::Result<(DbType, String, ConnectionAuthConfig)> {
-        let mut target = None;
-        if !sinker_basic.url.is_empty() {
-            target = Some((
-                sinker_basic.db_type.clone(),
-                sinker_basic.url.clone(),
-                sinker_basic.connection_auth.clone(),
-            ));
-        }
+        let (db_type_fallback, url_fallback, auth_fallback) = if sinker_basic.url.is_empty() {
+            (None, None, None)
+        } else {
+            (
+                Some(sinker_basic.db_type.clone()),
+                Some(sinker_basic.url.clone()),
+                Some(&sinker_basic.connection_auth),
+            )
+        };
 
-        let checker_target_present = loader.contains(CHECKER, DB_TYPE)
-            || loader.contains(CHECKER, URL)
-            || loader.contains(CHECKER, USERNAME)
-            || loader.contains(CHECKER, PASSWORD);
-        if checker_target_present {
-            let db_type: DbType = loader.get_required(CHECKER, DB_TYPE);
-            let url: String = loader.get_required(CHECKER, URL);
-            let connection_auth = ConnectionAuthConfig::from(loader, CHECKER);
-            target = Some((db_type, url, connection_auth));
-        }
+        Self::resolve_checker_target_with_fallbacks(
+            loader,
+            db_type_fallback,
+            url_fallback,
+            auth_fallback,
+        )
+    }
 
-        if let Some(target) = target {
-            return Ok(target);
+    fn resolve_checker_target_with_fallbacks(
+        loader: &IniLoader,
+        db_type_fallback: Option<DbType>,
+        url_fallback: Option<String>,
+        auth_fallback: Option<&ConnectionAuthConfig>,
+    ) -> anyhow::Result<(DbType, String, ConnectionAuthConfig)> {
+        let db_type = Self::resolve_checker_db_type(loader, db_type_fallback);
+        let url = Self::resolve_checker_url(loader, url_fallback);
+
+        if let (Some(db_type), Some(url)) = (db_type, url) {
+            let connection_auth = Self::resolve_checker_connection_auth(loader, auth_fallback);
+            return Ok((db_type, url, connection_auth));
         }
 
         bail!(Error::ConfigError(
             "config [checker] target is required when [sinker] target is not set".into()
         ))
+    }
+
+    fn resolve_checker_db_type(loader: &IniLoader, fallback: Option<DbType>) -> Option<DbType> {
+        if loader.contains_non_empty(CHECKER, DB_TYPE) {
+            Some(loader.get_required(CHECKER, DB_TYPE))
+        } else {
+            fallback
+        }
+    }
+
+    fn resolve_checker_url(loader: &IniLoader, fallback: Option<String>) -> Option<String> {
+        if loader.contains_non_empty(CHECKER, URL) {
+            Some(loader.get_required(CHECKER, URL))
+        } else {
+            fallback
+        }
+    }
+
+    fn resolve_checker_connection_auth(
+        loader: &IniLoader,
+        fallback_auth: Option<&ConnectionAuthConfig>,
+    ) -> ConnectionAuthConfig {
+        let (fallback_username, fallback_password) = match fallback_auth {
+            Some(ConnectionAuthConfig::Basic { username, password }) => {
+                (Some(username.clone()), password.clone())
+            }
+            _ => (None, None),
+        };
+
+        let username = if loader.contains_non_empty(CHECKER, USERNAME) {
+            Some(loader.get_optional(CHECKER, USERNAME))
+        } else {
+            fallback_username
+        };
+        let password = if loader.contains_non_empty(CHECKER, PASSWORD) {
+            Some(loader.get_optional(CHECKER, PASSWORD))
+        } else {
+            fallback_password
+        };
+
+        match username {
+            Some(username) => ConnectionAuthConfig::Basic { username, password },
+            None => ConnectionAuthConfig::NoAuth,
+        }
     }
 
     fn load_runtime_config(loader: &IniLoader) -> anyhow::Result<RuntimeConfig> {
@@ -1059,5 +1124,225 @@ impl TaskConfig {
             workers: loader.get_with_default(metrics_section, "workers", 2),
             metrics_labels,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+    use std::sync::{Mutex, OnceLock};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn test_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+    }
+
+    fn write_temp_task_config(content: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join("ape_dts_task_config_tests");
+        fs::create_dir_all(&dir).unwrap();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = dir.join(format!("task_config_{nanos}.ini"));
+        fs::write(&path, content).unwrap();
+        path
+    }
+
+    #[test]
+    fn checker_can_override_auth_without_repeating_target_fields() {
+        let _guard = test_lock();
+        let path = write_temp_task_config(
+            "[extractor]
+db_type=mysql
+extract_type=snapshot
+url=mysql://src
+
+[sinker]
+db_type=pg
+sink_type=write
+url=postgres://dst
+username=dst_user
+password=dst_pwd
+
+[checker]
+username=checker_user
+password=checker_pwd
+",
+        );
+
+        let config = TaskConfig::new(path.to_str().unwrap()).unwrap();
+        let checker = config.checker.unwrap();
+
+        assert!(matches!(checker.db_type, Some(DbType::Pg)));
+        assert_eq!(checker.url.as_deref(), Some("postgres://dst"));
+        assert!(matches!(
+            checker.connection_auth,
+            Some(ConnectionAuthConfig::Basic { username, password })
+                if username == "checker_user" && password.as_deref() == Some("checker_pwd")
+        ));
+
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn checker_url_can_override_while_db_type_falls_back_to_sinker() {
+        let _guard = test_lock();
+        let path = write_temp_task_config(
+            "[extractor]
+db_type=mysql
+extract_type=snapshot
+url=mysql://src
+
+[sinker]
+db_type=mysql
+sink_type=write
+url=mysql://dst
+username=dst_user
+
+[checker]
+url=mysql://checker-dst
+",
+        );
+
+        let config = TaskConfig::new(path.to_str().unwrap()).unwrap();
+        let checker = config.checker.unwrap();
+
+        assert!(matches!(checker.db_type, Some(DbType::Mysql)));
+        assert_eq!(checker.url.as_deref(), Some("mysql://checker-dst"));
+        assert!(matches!(
+            checker.connection_auth,
+            Some(ConnectionAuthConfig::Basic { username, password })
+                if username == "dst_user" && password.is_none()
+        ));
+
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn checker_requires_final_target_when_sinker_target_missing() {
+        let _guard = test_lock();
+        let path = write_temp_task_config(
+            "[extractor]
+db_type=mysql
+extract_type=snapshot
+url=mysql://src
+
+[checker]
+username=checker_user
+",
+        );
+
+        let message = match TaskConfig::new(path.to_str().unwrap()) {
+            Err(err) => err.to_string(),
+            std::result::Result::Ok(_) => {
+                panic!("task config should be rejected before target resolution completes")
+            }
+        };
+        assert!(
+            message.contains("config [checker] target is required when [sinker] target is not set")
+        );
+
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn dummy_sinker_ignores_empty_target_placeholders() {
+        let _guard = test_lock();
+        let path = write_temp_task_config(
+            "[extractor]
+db_type=mysql
+extract_type=snapshot
+url=mysql://src
+
+[sinker]
+sink_type=dummy
+db_type=
+url=
+
+[checker]
+db_type=pg
+url=postgres://checker
+username=checker_user
+",
+        );
+
+        let config = TaskConfig::new(path.to_str().unwrap()).unwrap();
+        assert!(matches!(config.sinker_basic.db_type, DbType::Pg));
+        assert_eq!(config.sinker_basic.url, "postgres://checker");
+        assert!(matches!(
+            config.sinker_basic.connection_auth,
+            ConnectionAuthConfig::Basic { username, password }
+                if username == "checker_user" && password.is_none()
+        ));
+
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn rdb_check_requires_checker_section() {
+        let _guard = test_lock();
+        let path = write_temp_task_config(
+            "[extractor]
+
+db_type=mysql
+extract_type=snapshot
+url=mysql://src
+
+[sinker]
+db_type=mysql
+sink_type=write
+url=mysql://dst
+
+[parallelizer]
+parallel_type=rdb_check
+",
+        );
+
+        let message = TaskConfig::new(path.to_str().unwrap())
+            .err()
+            .expect("task config should reject rdb_check without checker")
+            .to_string();
+        assert!(message
+            .contains("config [checker] is required when [parallelizer] parallel_type=rdb_check"));
+
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn dummy_sinker_can_reuse_sinker_target_and_override_checker_auth() {
+        let _guard = test_lock();
+        let path = write_temp_task_config(
+            "[extractor]
+db_type=mysql
+extract_type=snapshot
+url=mysql://src
+
+[sinker]
+sink_type=dummy
+db_type=pg
+url=postgres://dst
+username=dst_user
+password=dst_pwd
+
+[checker]
+username=checker_user
+",
+        );
+
+        let config = TaskConfig::new(path.to_str().unwrap()).unwrap();
+        assert!(matches!(config.sinker_basic.db_type, DbType::Pg));
+        assert_eq!(config.sinker_basic.url, "postgres://dst");
+        assert!(matches!(
+            config.sinker_basic.connection_auth,
+            ConnectionAuthConfig::Basic { username, password }
+                if username == "checker_user" && password.as_deref() == Some("dst_pwd")
+        ));
+
+        let _ = fs::remove_file(path);
     }
 }

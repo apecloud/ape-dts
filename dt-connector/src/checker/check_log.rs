@@ -51,9 +51,9 @@ pub struct CheckSummaryLog {
     pub start_time: String,
     pub end_time: String,
     pub is_consistent: bool,
-    #[serde(default, skip_serializing_if = "is_zero", alias = "total_miss_count")]
+    #[serde(default, skip_serializing_if = "is_zero")]
     pub miss_count: usize,
-    #[serde(default, skip_serializing_if = "is_zero", alias = "total_diff_count")]
+    #[serde(default, skip_serializing_if = "is_zero")]
     pub diff_count: usize,
     #[serde(default, skip_serializing_if = "is_zero")]
     pub skip_count: usize,

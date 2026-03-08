@@ -240,7 +240,6 @@ async fn cdc_update_with_changed_key_should_not_mark_miss() {
     assert_eq!(data_checker.ctx.summary.miss_count, 0);
     assert_eq!(data_checker.ctx.summary.diff_count, 0);
 }
-
 #[tokio::test]
 async fn non_cdc_without_retry_should_record_miss_immediately() {
     let checker = MissingDstChecker;

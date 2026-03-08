@@ -8,7 +8,7 @@ use sqlx::{MySql, Pool};
 use dt_common::meta::{mysql::mysql_meta_manager::MysqlMetaManager, row_data::RowData};
 
 use crate::checker::base_checker::{
-    has_null_key, CheckContext, Checker, CheckerTbMeta, DataCheckerHandle, FetchResult,
+    split_query_rows, CheckContext, Checker, CheckerTbMeta, DataCheckerHandle, FetchResult,
     CHECKER_MAX_QUERY_BATCH,
 };
 use crate::rdb_query_builder::RdbQueryBuilder;
@@ -38,20 +38,15 @@ impl Checker for MysqlChecker {
 
         let mut res = Vec::with_capacity(src_rows.len());
         let check_rows: Vec<RowData> = src_rows.to_vec();
+        let (null_key_rows, queryable) = split_query_rows(&check_rows, &mysql_meta.basic.id_cols);
 
-        // Collect references to rows that have non-null keys for batch query.
-        // No need to clone again — just borrow from check_rows.
-        let queryable: Vec<&RowData> = check_rows
-            .iter()
-            .filter(|row| !has_null_key(row, &mysql_meta.basic.id_cols))
-            .collect();
-
-        if queryable.is_empty() {
-            return Ok(FetchResult {
-                tb_meta,
-                src_rows: check_rows,
-                dst_rows: res,
-            });
+        for row in null_key_rows {
+            let query_info = qb.get_select_query(row)?;
+            let query = qb.create_mysql_query(&query_info)?;
+            let mut rows = query.fetch(&self.conn_pool);
+            while let Some(row) = rows.try_next().await? {
+                res.push(RowData::from_mysql_row(&row, mysql_meta, &None));
+            }
         }
 
         for chunk in queryable.chunks(CHECKER_MAX_QUERY_BATCH) {

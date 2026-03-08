@@ -25,9 +25,6 @@ pub enum CounterType {
     CheckerMissCount,
     #[strum(serialize = "checker_diff_count")]
     CheckerDiffCount,
-    #[strum(serialize = "checker_lag_seconds")]
-    CheckerLagSeconds,
-
     // time window counter, aggregate by: avg by count
     #[strum(serialize = "record_size")]
     RecordSize,
@@ -41,9 +38,6 @@ pub enum CounterType {
     QueuedByteCurrent,
     #[strum(serialize = "checker_pending")]
     CheckerPending,
-    #[strum(serialize = "checker_async_drop_count")]
-    CheckerAsyncDropCount,
-
     #[strum(serialize = "sinked_records")]
     SinkedRecordTotal,
     #[strum(serialize = "sinked_bytes")]
@@ -89,7 +83,6 @@ impl CounterType {
             | Self::RecordCount
             | Self::CheckerMissCount
             | Self::CheckerDiffCount
-            | Self::CheckerLagSeconds
             | Self::RecordsPerQuery
             | Self::RtPerQuery
             | Self::BufferSize
@@ -104,7 +97,6 @@ impl CounterType {
             | Self::QueuedRecordCurrent
             | Self::QueuedByteCurrent
             | Self::CheckerPending
-            | Self::CheckerAsyncDropCount
             | Self::DDLRecordTotal
             | Self::Timestamp => WindowType::NoWindow,
         }
@@ -124,7 +116,7 @@ impl CounterType {
                     ]
                 }
 
-                Self::RecordSize | Self::CheckerLagSeconds => {
+                Self::RecordSize => {
                     vec![AggregateType::AvgByCount]
                 }
 
