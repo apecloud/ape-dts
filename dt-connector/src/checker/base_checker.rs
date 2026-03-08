@@ -269,7 +269,6 @@ pub struct CheckContext {
 
 pub struct FetchResult {
     pub tb_meta: Arc<CheckerTbMeta>,
-    pub src_rows: Vec<RowData>,
     pub dst_rows: Vec<RowData>,
 }
 
@@ -381,7 +380,7 @@ impl DataCheckerHandle {
 
 #[async_trait]
 pub trait Checker: Send + Sync + 'static {
-    async fn fetch(&mut self, src_rows: &[RowData]) -> anyhow::Result<FetchResult>;
+    async fn fetch(&mut self, src_rows: &[&RowData]) -> anyhow::Result<FetchResult>;
     async fn close(&mut self) -> anyhow::Result<()> {
         Ok(())
     }
