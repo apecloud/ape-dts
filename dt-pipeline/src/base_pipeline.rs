@@ -1,10 +1,8 @@
+use async_trait::async_trait;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
 };
-use std::time::{SystemTime, UNIX_EPOCH};
-
-use async_trait::async_trait;
 use tokio::{
     sync::{Mutex, RwLock},
     task::yield_now,
@@ -212,11 +210,6 @@ impl BasePipeline {
             data = lua_processor.process(data)?;
         }
 
-        let check_len = if self.parallelizer.has_checker() {
-            data.len() as u64
-        } else {
-            0
-        };
         let data_size = self.parallelizer.sink_dml(data, &self.sinkers).await?;
         Ok((data_size, last_received_position, last_commit_position))
     }

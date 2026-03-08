@@ -82,7 +82,7 @@ impl<C: Checker> DataChecker<C> {
 
     async fn check_rows(
         &mut self,
-        src_data: &[RowData],
+        src_data: &[&RowData],
         mut dst_row_data_map: HashMap<u128, RowData>,
         tb_meta: &CheckerTbMeta,
     ) -> anyhow::Result<(usize, Vec<RowData>)> {
@@ -111,7 +111,7 @@ impl<C: Checker> DataChecker<C> {
                 self.reconcile_row_inconsistency(key, src_row_data, dst_row_data.as_ref(), tb_meta)
                     .await?;
             } else if Self::compare_src_dst(src_row_data, dst_row_data.as_ref())?.is_some() {
-                retry_rows.push(src_row_data.clone());
+                retry_rows.push((*src_row_data).clone());
             }
         }
 
@@ -589,10 +589,8 @@ impl<C: Checker> DataChecker<C> {
     }
 
     async fn retry_check_item(&mut self, mut item: RetryItem) -> anyhow::Result<Option<RetryItem>> {
-        let fetch_result = self.checker.fetch(std::slice::from_ref(&item.row)).await?;
-        if fetch_result.src_rows.is_empty() {
-            return Ok(None);
-        }
+        let row_ref = &item.row;
+        let fetch_result = self.checker.fetch(std::slice::from_ref(&row_ref)).await?;
         let tb_meta = fetch_result.tb_meta;
         let dst_row = Self::select_dst_row(&item.row, tb_meta.as_ref(), fetch_result.dst_rows)?;
 
@@ -658,12 +656,12 @@ impl<C: Checker> DataChecker<C> {
         }
 
         let start_time = tokio::time::Instant::now();
-        let mut grouped: HashMap<(String, String), Vec<RowData>> = HashMap::new();
+        let mut grouped: HashMap<(&str, &str), Vec<&RowData>> = HashMap::new();
         for row in data {
             grouped
-                .entry((row.schema.clone(), row.tb.clone()))
+                .entry((row.schema.as_str(), row.tb.as_str()))
                 .or_default()
-                .push(row.clone());
+                .push(row);
         }
 
         let mut total_checked = 0usize;
@@ -672,11 +670,7 @@ impl<C: Checker> DataChecker<C> {
         for rows in grouped.into_values() {
             let fetch_result = self.checker.fetch(&rows).await?;
             let tb_meta = fetch_result.tb_meta;
-            let checkable = fetch_result.src_rows;
-            if checkable.is_empty() {
-                continue;
-            }
-            total_checked += checkable.len();
+            total_checked += rows.len();
 
             let mut dst_row_data_map = HashMap::with_capacity(fetch_result.dst_rows.len());
             for row in fetch_result.dst_rows {
@@ -684,7 +678,7 @@ impl<C: Checker> DataChecker<C> {
             }
 
             let (skip_count, table_retry_rows) = self
-                .check_rows(&checkable, dst_row_data_map, tb_meta.as_ref())
+                .check_rows(&rows, dst_row_data_map, tb_meta.as_ref())
                 .await?;
             total_skip_count += skip_count;
             retry_rows.extend(table_retry_rows);
@@ -717,7 +711,7 @@ mod tests {
 
     #[async_trait]
     impl Checker for DummyChecker {
-        async fn fetch(&mut self, _src_rows: &[RowData]) -> anyhow::Result<FetchResult> {
+        async fn fetch(&mut self, _src_rows: &[&RowData]) -> anyhow::Result<FetchResult> {
             unreachable!("hash test should not call fetch")
         }
     }

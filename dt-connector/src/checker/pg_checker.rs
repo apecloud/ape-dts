@@ -8,7 +8,7 @@ use sqlx::{Pool, Postgres};
 use dt_common::meta::{pg::pg_meta_manager::PgMetaManager, row_data::RowData};
 
 use crate::checker::base_checker::{
-    split_query_rows, CheckContext, Checker, CheckerTbMeta, DataCheckerHandle, FetchResult,
+    has_null_key, CheckContext, Checker, CheckerTbMeta, DataCheckerHandle, FetchResult,
     CHECKER_MAX_QUERY_BATCH,
 };
 use crate::rdb_query_builder::RdbQueryBuilder;
@@ -20,7 +20,7 @@ pub struct PgChecker {
 
 #[async_trait]
 impl Checker for PgChecker {
-    async fn fetch(&mut self, src_rows: &[RowData]) -> anyhow::Result<FetchResult> {
+    async fn fetch(&mut self, src_rows: &[&RowData]) -> anyhow::Result<FetchResult> {
         let first_row = src_rows
             .first()
             .context("fetch called with empty src rows")?;
@@ -37,8 +37,10 @@ impl Checker for PgChecker {
         let qb = RdbQueryBuilder::new_for_pg(pg_meta, None);
 
         let mut res = Vec::with_capacity(src_rows.len());
-        let check_rows: Vec<RowData> = src_rows.to_vec();
-        let (null_key_rows, queryable) = split_query_rows(&check_rows, &pg_meta.basic.id_cols);
+        let (null_key_rows, queryable): (Vec<&RowData>, Vec<&RowData>) = src_rows
+            .iter()
+            .copied()
+            .partition(|row| has_null_key(row, &pg_meta.basic.id_cols));
 
         for row in null_key_rows {
             let query_info = qb.get_select_query(row)?;
@@ -60,7 +62,6 @@ impl Checker for PgChecker {
 
         Ok(FetchResult {
             tb_meta,
-            src_rows: check_rows,
             dst_rows: res,
         })
     }

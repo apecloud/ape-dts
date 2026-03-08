@@ -27,7 +27,7 @@ pub struct MongoChecker {
 
 #[async_trait]
 impl Checker for MongoChecker {
-    async fn fetch(&mut self, src_rows: &[RowData]) -> anyhow::Result<FetchResult> {
+    async fn fetch(&mut self, src_rows: &[&RowData]) -> anyhow::Result<FetchResult> {
         let first_row = src_rows
             .first()
             .context("fetch called with empty src rows")?;
@@ -47,7 +47,7 @@ impl Checker for MongoChecker {
         let basic_meta = tb_meta.basic();
 
         let mut ids = Vec::with_capacity(src_rows.len());
-        for row_data in src_rows {
+        for &row_data in src_rows {
             let id = Self::get_id_from_row(row_data).with_context(|| {
                 format!(
                     "row_data missing `_id`, schema: {}, tb: {}",
@@ -70,7 +70,6 @@ impl Checker for MongoChecker {
         if ids.is_empty() {
             return Ok(FetchResult {
                 tb_meta,
-                src_rows: src_rows.to_vec(),
                 dst_rows: Vec::new(),
             });
         }
@@ -103,7 +102,6 @@ impl Checker for MongoChecker {
 
         Ok(FetchResult {
             tb_meta,
-            src_rows: src_rows.to_vec(),
             dst_rows: dst_row_data_vec,
         })
     }
@@ -242,9 +240,12 @@ mod tests {
             .expect("mongo client should parse uri");
         let mut checker = MongoChecker { mongo_client };
 
-        let result = checker.fetch(&[row]).await.expect("fetch should succeed");
+        let row_ref = &row;
+        let result = checker
+            .fetch(std::slice::from_ref(&row_ref))
+            .await
+            .expect("fetch should succeed");
 
-        assert_eq!(result.src_rows.len(), 1);
         assert!(result.dst_rows.is_empty());
     }
 }
