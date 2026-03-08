@@ -72,6 +72,37 @@ impl CheckUtil {
         Ok(())
     }
 
+    pub async fn wait_for_check_log(
+        dst_check_log_dir: &str,
+        timeout_millis: u64,
+        require_summary: bool,
+    ) -> anyhow::Result<()> {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(timeout_millis);
+        loop {
+            let miss_log = format!("{}/miss.log", dst_check_log_dir);
+            let diff_log = format!("{}/diff.log", dst_check_log_dir);
+            let summary_log = format!("{}/summary.log", dst_check_log_dir);
+            let has_miss = BaseTestRunner::check_path_exists(&miss_log)
+                && !BaseTestRunner::load_file(&miss_log).is_empty();
+            let has_diff = BaseTestRunner::check_path_exists(&diff_log)
+                && !BaseTestRunner::load_file(&diff_log).is_empty();
+            let has_summary = BaseTestRunner::check_path_exists(&summary_log)
+                && !BaseTestRunner::load_file(&summary_log).is_empty();
+            if has_summary || (!require_summary && (has_miss || has_diff)) {
+                return Ok(());
+            }
+            if std::time::Instant::now() >= deadline {
+                anyhow::bail!(
+                    "check log not ready within {} ms, require_summary={}, dir={}",
+                    timeout_millis,
+                    require_summary,
+                    dst_check_log_dir
+                );
+            }
+            dt_common::utils::time_util::TimeUtil::sleep_millis(200).await;
+        }
+    }
+
     pub fn clear_check_log(dst_check_log_dir: &str) {
         if dst_check_log_dir.is_empty() {
             return;

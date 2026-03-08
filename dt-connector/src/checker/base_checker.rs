@@ -591,6 +591,13 @@ impl<C: Checker> DataChecker<C> {
     }
 }
 
+pub fn split_query_rows<'a>(
+    rows: &'a [RowData],
+    id_cols: &[String],
+) -> (Vec<&'a RowData>, Vec<&'a RowData>) {
+    rows.iter().partition(|row| has_null_key(row, id_cols))
+}
+
 pub fn has_null_key(row_data: &RowData, id_cols: &[String]) -> bool {
     let col_values = match row_data.row_type {
         RowType::Delete => row_data.require_before().ok(),

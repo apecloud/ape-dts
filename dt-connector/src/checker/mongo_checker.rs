@@ -47,7 +47,6 @@ impl Checker for MongoChecker {
         let basic_meta = tb_meta.basic();
 
         let mut ids = Vec::with_capacity(src_rows.len());
-        let mut batch_rows = Vec::with_capacity(src_rows.len());
         for row_data in src_rows {
             let id = Self::get_id_from_row(row_data).with_context(|| {
                 format!(
@@ -58,7 +57,7 @@ impl Checker for MongoChecker {
 
             if !Self::is_supported_mongo_id(&id) {
                 log_warn!(
-                    "Skipping row with unsupported _id type in {}.{}, _id: {:?}",
+                    "Mongo checker cannot query unsupported _id type in {}.{}, _id: {:?}",
                     row_data.schema,
                     row_data.tb,
                     id
@@ -66,13 +65,12 @@ impl Checker for MongoChecker {
                 continue;
             }
             ids.push(id);
-            batch_rows.push(row_data.clone());
         }
 
         if ids.is_empty() {
             return Ok(FetchResult {
                 tb_meta,
-                src_rows: Vec::new(),
+                src_rows: src_rows.to_vec(),
                 dst_rows: Vec::new(),
             });
         }
@@ -105,7 +103,7 @@ impl Checker for MongoChecker {
 
         Ok(FetchResult {
             tb_meta,
-            src_rows: batch_rows,
+            src_rows: src_rows.to_vec(),
             dst_rows: dst_row_data_vec,
         })
     }
@@ -199,6 +197,7 @@ impl MongoChecker {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mongodb::bson::doc;
     use std::collections::HashMap;
 
     #[test]
@@ -218,5 +217,34 @@ mod tests {
 
         let id = MongoChecker::get_id_from_row(&row).expect("delete row should contain _id");
         assert_eq!(id, Bson::String("delete_key".to_string()));
+    }
+
+    #[tokio::test]
+    async fn fetch_keeps_rows_with_unsupported_id_in_src_rows() {
+        let mut after = HashMap::new();
+        after.insert(
+            MongoConstants::DOC.to_string(),
+            ColValue::MongoDoc(doc! {
+                MongoConstants::ID: { "nested": 1 },
+                "name": "user_1"
+            }),
+        );
+        let row = RowData::new(
+            "db".to_string(),
+            "tb".to_string(),
+            RowType::Insert,
+            None,
+            Some(after),
+        );
+
+        let mongo_client = Client::with_uri_str("mongodb://localhost:27017")
+            .await
+            .expect("mongo client should parse uri");
+        let mut checker = MongoChecker { mongo_client };
+
+        let result = checker.fetch(&[row]).await.expect("fetch should succeed");
+
+        assert_eq!(result.src_rows.len(), 1);
+        assert!(result.dst_rows.is_empty());
     }
 }

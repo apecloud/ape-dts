@@ -37,7 +37,6 @@ impl ParallelizerUtil {
     pub async fn create_parallelizer(
         config: &TaskConfig,
         monitor: Arc<Monitor>,
-        rps_limiter: Option<Ratelimiter>,
         checker: Option<CheckerHandle>,
     ) -> anyhow::Result<Box<dyn Parallelizer + Send + Sync>> {
         let parallel_size = config.parallelizer.parallel_size;
