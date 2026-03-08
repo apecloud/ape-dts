@@ -2,13 +2,14 @@ use std::str::FromStr;
 
 use anyhow::{Context, Result};
 use chrono::Utc;
-use sqlx::{query, ColumnIndex, Database, Decode, Row, Type};
+use sqlx::{query, ColumnIndex, Database, Decode, PgPool, Row, Type};
 
 use crate::extractor::resumer::ResumerDbPool;
 use dt_common::meta::position::Position;
 
 const DEFAULT_STATE_SCHEMA: &str = "apecloud_metadata";
 const DEFAULT_STATE_TABLE_PREFIX: &str = "apedts_checker";
+const POSTGRES_LEGACY_MANIFEST_COLUMNS: [&str; 3] = ["epoch", "check_enabled", "phase"];
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct CheckpointManifest {
@@ -167,6 +168,8 @@ impl SqlCheckerStateStore {
                     .await
                     .context("failed to create checker snapshot table")?;
 
+                self.reset_postgres_legacy_manifest_if_needed(pool).await?;
+
                 let manifest_sql = format!(
                     r#"CREATE TABLE IF NOT EXISTS {}.{} (
                       task_id varchar(255) NOT NULL,
@@ -185,6 +188,37 @@ impl SqlCheckerStateStore {
                     .context("failed to create checker manifest table")?;
             }
         }
+        Ok(())
+    }
+}
+
+impl SqlCheckerStateStore {
+    async fn reset_postgres_legacy_manifest_if_needed(&self, pool: &PgPool) -> Result<()> {
+        let columns_sql = "SELECT column_name FROM information_schema.columns WHERE table_schema = $1 AND table_name = $2";
+        let column_rows = query(columns_sql)
+            .bind(&self.schema)
+            .bind(&self.manifest_table)
+            .fetch_all(pool)
+            .await
+            .context("failed to inspect checker manifest table schema")?;
+
+        let has_legacy_columns = column_rows.into_iter().any(|row| {
+            let column_name = row.get::<String, _>("column_name");
+            POSTGRES_LEGACY_MANIFEST_COLUMNS.contains(&column_name.as_str())
+        });
+
+        if !has_legacy_columns {
+            return Ok(());
+        }
+
+        let drop_manifest_sql = format!(
+            "DROP TABLE IF EXISTS {}.{}",
+            self.schema, self.manifest_table
+        );
+        query(&drop_manifest_sql)
+            .execute(pool)
+            .await
+            .context("failed to rebuild legacy checker manifest table")?;
         Ok(())
     }
 }

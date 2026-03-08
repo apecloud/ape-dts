@@ -218,25 +218,6 @@ impl BasePipeline {
             0
         };
         let data_size = self.parallelizer.sink_dml(data, &self.sinkers).await?;
-        if check_len > 0 && self.parallelizer.checker_last_ok() {
-            if let Some(position) = &last_received_position {
-                let ts_ms = position.to_timestamp();
-                if ts_ms > 0 {
-                    let now_ms = SystemTime::now()
-                        .duration_since(UNIX_EPOCH)
-                        .unwrap_or_default()
-                        .as_millis() as u64;
-                    let lag_secs = now_ms.saturating_sub(ts_ms) / 1000;
-                    // Weighted lag metric (row-seconds): each row in the batch
-                    // contributes its replication lag so the batch counter can
-                    // compute the average lag by dividing total by row count.
-                    let lag_value = lag_secs.saturating_mul(check_len);
-                    self.monitor
-                        .add_batch_counter(CounterType::CheckerLagSeconds, lag_value, check_len)
-                        .await;
-                }
-            }
-        }
         Ok((data_size, last_received_position, last_commit_position))
     }
 
@@ -454,7 +435,7 @@ impl BasePipeline {
             );
         }
 
-        if !matches!(last_commit_position, Position::None) {
+        if checkpoint_ok && !matches!(last_commit_position, Position::None) {
             self.syncer.lock().await.committed_position = last_commit_position.to_owned();
         }
 

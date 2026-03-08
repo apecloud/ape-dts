@@ -219,9 +219,6 @@ impl<C: Checker> DataChecker<C> {
                         tb_meta.schema, tb_meta.tb, col
                     )
                 })?;
-            if col_hash_code == 0 {
-                return Ok(0);
-            }
             hash_code = 31 * hash_code + col_hash_code as u128;
         }
         Ok(hash_code)
@@ -276,7 +273,11 @@ impl<C: Checker> DataChecker<C> {
             return;
         }
 
-        match row_data.get_hash_code(tb_meta) {
+        let Some(before_values) = row_data.before.as_ref() else {
+            return;
+        };
+
+        match Self::hash_from_id_values(before_values, tb_meta) {
             Ok(old_key) if old_key != key => self.remove_store_entry(old_key),
             Ok(_) => {}
             Err(err) => {
@@ -704,5 +705,46 @@ impl<C: Checker> DataChecker<C> {
             BaseSinker::update_batch_monitor(&monitor, total_checked as u64, 0).await?;
         }
         BaseSinker::update_monitor_rt(&monitor, &rts).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use async_trait::async_trait;
+
+    struct DummyChecker;
+
+    #[async_trait]
+    impl Checker for DummyChecker {
+        async fn fetch(&mut self, _src_rows: &[RowData]) -> anyhow::Result<FetchResult> {
+            unreachable!("hash test should not call fetch")
+        }
+    }
+
+    #[test]
+    fn nullable_composite_key_hash_keeps_non_null_components() {
+        let tb_meta = RdbTbMeta {
+            schema: "s1".to_string(),
+            tb: "t1".to_string(),
+            id_cols: vec!["id1".to_string(), "id2".to_string()],
+            ..Default::default()
+        };
+
+        let values1 = HashMap::from([
+            ("id1".to_string(), ColValue::None),
+            ("id2".to_string(), ColValue::Long(1)),
+        ]);
+        let values2 = HashMap::from([
+            ("id1".to_string(), ColValue::None),
+            ("id2".to_string(), ColValue::Long(2)),
+        ]);
+
+        let hash1 = DataChecker::<DummyChecker>::hash_from_id_values(&values1, &tb_meta)
+            .expect("nullable composite key should still hash");
+        let hash2 = DataChecker::<DummyChecker>::hash_from_id_values(&values2, &tb_meta)
+            .expect("nullable composite key should still hash");
+
+        assert_ne!(hash1, hash2);
     }
 }

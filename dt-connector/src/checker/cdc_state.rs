@@ -16,6 +16,7 @@ impl<C: Checker> DataChecker<C> {
         };
         let mut miss_buf_builder = BoundedNdjsonBuffer::new(max_file_size, max_rows);
         let mut diff_buf_builder = BoundedNdjsonBuffer::new(max_file_size, max_rows);
+        let mut sql_lines = Vec::new();
         let mut table_counts: HashMap<String, TableCheckCount> = HashMap::new();
 
         for entry in self.store.values() {
@@ -29,9 +30,19 @@ impl<C: Checker> DataChecker<C> {
                 counts.diff_count += 1;
                 diff_buf_builder.push(&entry.log);
             }
+            if let Some(sql) = &entry.revise_sql {
+                sql_lines.push(sql.clone());
+            }
         }
         let miss_buf = miss_buf_builder.into_bytes();
         let diff_buf = diff_buf_builder.into_bytes();
+        let sql_buf = if sql_lines.is_empty() {
+            Vec::new()
+        } else {
+            let mut buf = sql_lines.join("\n").into_bytes();
+            buf.push(b'\n');
+            buf
+        };
 
         let total_miss: usize =
             table_counts.values().map(|c| c.miss_count).sum::<usize>() + self.evicted_miss;
@@ -46,13 +57,19 @@ impl<C: Checker> DataChecker<C> {
             diff_count: total_diff,
             skip_count: self.ctx.summary.skip_count,
             tables: table_counts,
-            ..Default::default()
+            sql_count: (!sql_lines.is_empty()).then_some(sql_lines.len()),
         };
         let summary_buf = serde_json::to_vec(&summary)?;
 
-        Self::write_to_disk(&self.ctx.check_log_dir, &miss_buf, &diff_buf, &summary_buf)?;
+        Self::write_to_disk(
+            &self.ctx.check_log_dir,
+            &miss_buf,
+            &diff_buf,
+            &sql_buf,
+            &summary_buf,
+        )?;
         if self.ctx.s3_output.is_some() {
-            self.upload_to_s3(&miss_buf, &diff_buf, &summary_buf)
+            self.upload_to_s3(&miss_buf, &diff_buf, &sql_buf, &summary_buf)
                 .await?;
         }
 
@@ -63,6 +80,7 @@ impl<C: Checker> DataChecker<C> {
         dir: &str,
         miss_buf: &[u8],
         diff_buf: &[u8],
+        sql_buf: &[u8],
         summary_buf: &[u8],
     ) -> anyhow::Result<()> {
         let path = std::path::Path::new(dir);
@@ -72,6 +90,7 @@ impl<C: Checker> DataChecker<C> {
         let mut summary_with_newline = summary_buf.to_vec();
         summary_with_newline.push(b'\n');
         std::fs::write(path.join("summary.log"), &summary_with_newline)?;
+        std::fs::write(path.join("sql.log"), sql_buf)?;
         Ok(())
     }
 
@@ -227,6 +246,7 @@ impl<C: Checker> DataChecker<C> {
         &self,
         miss_buf: &[u8],
         diff_buf: &[u8],
+        sql_buf: &[u8],
         summary_buf: &[u8],
     ) -> anyhow::Result<()> {
         let Some((s3_client, key_prefix)) = &self.ctx.s3_output else {
@@ -235,10 +255,12 @@ impl<C: Checker> DataChecker<C> {
         let p = key_prefix;
         let miss_key = format!("{p}/miss.log");
         let diff_key = format!("{p}/diff.log");
+        let sql_key = format!("{p}/sql.log");
         let summary_key = format!("{p}/summary.log");
         tokio::try_join!(
             s3_client.write(&miss_key, miss_buf.to_vec()),
             s3_client.write(&diff_key, diff_buf.to_vec()),
+            s3_client.write(&sql_key, sql_buf.to_vec()),
             s3_client.write(&summary_key, summary_buf.to_vec()),
         )?;
         Ok(())

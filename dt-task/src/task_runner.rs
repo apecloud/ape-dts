@@ -655,7 +655,6 @@ impl TaskRunner {
                 let parallelizer = ParallelizerUtil::create_parallelizer(
                     &self.config,
                     monitor.clone(),
-                    rps_limiter,
                     checker,
                 )
                 .await?;

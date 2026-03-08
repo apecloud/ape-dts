@@ -185,16 +185,6 @@ impl PrometheusMetrics {
             TaskMetricsType::CheckerPending,
         );
         register_handler(
-            "checker_async_drop_count",
-            "the total rows dropped by async checker",
-            TaskMetricsType::CheckerAsyncDropCount,
-        );
-        register_handler(
-            "checker_lag_seconds",
-            "the average checker lag in seconds",
-            TaskMetricsType::CheckerLagAvgSeconds,
-        );
-        register_handler(
             "checker_rps_min",
             "the min checked records per second of checker",
             TaskMetricsType::CheckerRpsMin,
