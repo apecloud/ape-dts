@@ -73,7 +73,8 @@ impl Parallelizer for PartitionParallelizer {
         };
 
         let sub_data = self.partitioner.partition(data, self.parallel_size).await?;
-        self.base_parallelizer
+        let _ = self
+            .base_parallelizer
             .sink_dml(sub_data, sinkers, self.parallel_size, false)
             .await?;
 

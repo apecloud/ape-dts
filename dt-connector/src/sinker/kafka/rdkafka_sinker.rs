@@ -24,17 +24,17 @@ pub struct RdkafkaSinker {
 
 #[async_trait]
 impl Sinker for RdkafkaSinker {
-    async fn sink_dml(&mut self, data: Vec<RowData>, _batch: bool) -> anyhow::Result<()> {
+    async fn sink_dml(&mut self, mut data: Vec<RowData>, _batch: bool) -> anyhow::Result<()> {
         if data.is_empty() {
             return Ok(());
         }
 
-        self.send_avro(data).await
+        self.send_avro(data.as_mut_slice()).await
     }
 }
 
 impl RdkafkaSinker {
-    async fn send_avro(&mut self, data: Vec<RowData>) -> anyhow::Result<()> {
+    async fn send_avro(&mut self, data: &mut [RowData]) -> anyhow::Result<()> {
         let batch_size = data.len();
         let mut data_size = 0;
 
@@ -44,9 +44,8 @@ impl RdkafkaSinker {
 
         // This loop is non blocking: all messages will be sent one after the other, without waiting
         // for the results.
-        for row_data in data {
+        for row_data in data.iter_mut() {
             data_size += row_data.get_data_size();
-            let mut row_data = row_data;
             row_data.convert_raw_string();
             let topic = self.router.get_topic(&row_data.schema, &row_data.tb);
             let key = self.avro_converter.row_data_to_avro_key(&row_data).await?;

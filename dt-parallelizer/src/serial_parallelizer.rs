@@ -34,7 +34,8 @@ impl Parallelizer for SerialParallelizer {
             bytes: data.iter().map(|v| v.get_data_size()).sum(),
         };
 
-        self.base_parallelizer
+        let _ = self
+            .base_parallelizer
             .sink_dml(vec![data], sinkers, 1, false)
             .await?;
 

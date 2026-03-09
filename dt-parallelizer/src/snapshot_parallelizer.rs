@@ -33,7 +33,8 @@ impl Parallelizer for SnapshotParallelizer {
         };
 
         let sub_datas = Self::partition(data, self.parallel_size)?;
-        self.base_parallelizer
+        let _ = self
+            .base_parallelizer
             .sink_dml(sub_datas, sinkers, self.parallel_size, true)
             .await?;
 

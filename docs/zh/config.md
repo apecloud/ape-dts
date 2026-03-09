@@ -51,32 +51,32 @@ Checker 有两种模式：
 目标选择规则：若 `[checker]` 提供 target（`db_type`/`url`/`username`/`password`），优先使用；
 否则回退到 `[sinker]` 的目标。
 
-| 配置                  | 作用                                     | 示例        | 默认                             |
-| :-------------------- | :--------------------------------------- | :---------- | :------------------------------- |
-| queue_size            | checker 队列容量                         | 200         | 200                              |
-| max_connections       | checker 连接池最大连接数                 | 8           | 8                                |
-| batch_size            | checker 批量校验大小（非 CDC 任务）     | 100         | 1                                |
-| sample_rate           | checker 抽样比例（保留字段，当前未生效） | 1.0         | 1.0                              |
-| output_full_row       | diff 日志是否输出全量行                  | false       | false                            |
-| output_revise_sql     | diff 日志是否输出修复 SQL                | false       | false                            |
-| revise_match_full_row | 生成修复 SQL 时是否按全量行匹配          | false       | false                            |
-| retry_interval_secs   | 重试间隔（秒），CDC+check 模式下强制为 0  | 0           | 0                                |
-| max_retries           | 重试次数，CDC+check 模式下强制为 0        | 0           | 0                                |
-| check_log_dir         | 校验日志目录                             | /tmp/check  | 空（默认 runtime.log_dir/check） |
-| check_log_file_size   | 单类日志文件大小上限（`diff.log` / `miss.log`） | 100mb   | 100mb                            |
-| check_log_max_rows    | 单类日志最大行数（`diff.log` / `miss.log`）     | 1000    | 1000                             |
-| db_type               | 校验目标库类型（覆盖 [sinker] 目标）     | mysql       | 空                               |
-| url                   | 校验目标 URL（覆盖 [sinker] 目标）       | mysql://... | 空                               |
-| username              | 校验目标用户名（URL 未包含时使用）       | root        | 空                               |
-| password              | 校验目标密码（URL 未包含时使用）         | password    | 空                               |
-| cdc_check_log_s3      | 定期将 CDC 校验快照上传至 S3             | false       | false                            |
-| cdc_check_log_interval_secs | CDC 校验快照输出间隔（秒）         | 10          | 10                               |
-| s3_bucket             | 校验日志上传的 S3 存储桶                 | my-bucket   | -                                |
-| s3_access_key_id      | S3 访问密钥 ID                           | AKIA...     | -                                |
-| s3_secret_access_key  | S3 秘密访问密钥                          | ****        | -                                |
-| s3_region             | S3 区域                                  | us-east-1   | -                                |
-| s3_endpoint           | S3 端点                                  | https://... | -                                |
-| s3_key_prefix         | 校验日志的 S3 键前缀                     | task1/check | 空                               |
+| 配置                        | 作用                                            | 示例        | 默认                             |
+| :-------------------------- | :---------------------------------------------- | :---------- | :------------------------------- |
+| queue_size                  | checker 队列容量                                | 200         | 200                              |
+| max_connections             | checker 连接池最大连接数                        | 8           | 8                                |
+| batch_size                  | checker 批量校验大小（非 CDC 任务）             | 100         | 1                                |
+| sample_rate                 | checker 抽样比例（保留字段，当前未生效）        | 1.0         | 1.0                              |
+| output_full_row             | diff 日志是否输出全量行                         | false       | false                            |
+| output_revise_sql           | diff 日志是否输出修复 SQL                       | false       | false                            |
+| revise_match_full_row       | 生成修复 SQL 时是否按全量行匹配                 | false       | false                            |
+| retry_interval_secs         | 重试间隔（秒），CDC+check 模式下强制为 0        | 0           | 0                                |
+| max_retries                 | 重试次数，CDC+check 模式下强制为 0              | 0           | 0                                |
+| check_log_dir               | 校验日志目录                                    | /tmp/check  | 空（默认 runtime.log_dir/check） |
+| check_log_file_size         | 单类日志文件大小上限（`diff.log` / `miss.log`） | 100mb       | 100mb                            |
+| check_log_max_rows          | 单类日志最大行数（`diff.log` / `miss.log`）     | 1000        | 1000                             |
+| db_type                     | 校验目标库类型（覆盖 [sinker] 目标）            | mysql       | 空                               |
+| url                         | 校验目标 URL（覆盖 [sinker] 目标）              | mysql://... | 空                               |
+| username                    | 校验目标用户名（URL 未包含时使用）              | root        | 空                               |
+| password                    | 校验目标密码（URL 未包含时使用）                | password    | 空                               |
+| cdc_check_log_s3            | 定期将 CDC 校验快照上传至 S3                    | false       | false                            |
+| cdc_check_log_interval_secs | CDC 校验快照输出间隔（秒）                      | 10          | 10                               |
+| s3_bucket                   | 校验日志上传的 S3 存储桶                        | my-bucket   | -                                |
+| s3_access_key_id            | S3 访问密钥 ID                                  | AKIA...     | -                                |
+| s3_secret_access_key        | S3 秘密访问密钥                                 | ****        | -                                |
+| s3_region                   | S3 区域                                         | us-east-1   | -                                |
+| s3_endpoint                 | S3 端点                                         | https://... | -                                |
+| s3_key_prefix               | 校验日志的 S3 键前缀                            | task1/check | 空                               |
 
 说明：
 - 在 CDC + checker 模式（`extract_type=cdc` 且 `sink_type=write`）下，checker 批量大小跟随 `[sinker].batch_size`。
@@ -191,10 +191,8 @@ Checker 有两种模式：
 | serial    | 单线程，依次单条写入目标                                                                            | 所有                    |      | 慢                                           |
 | rdb_merge | 将缓存中的增量数据（insert, update, delete）整合成 insert + delete 数据，多线程并行，且批量写入目标 | mysql/pg 增量任务       | 快   | 最终一致性，破坏源端事务在目标端重放的完整性 |
 | mongo     | rdb_merge 的 mongo 版                                                                               | mongo 增量              |      |                                              |
-| rdb_check | 和 snapshot 类似，但如果源表没有主键/唯一键，则采用单线程串行写入                                   | mysql/pg/mongo 全量校验 |      |                                              |
+| rdb_check | 校验模式；必须配置 `[checker]`，并且先写入目标端再执行校验                                          | 支持 checker 的校验任务 |      |                                              |
 | redis     | 单线程，批量/串行（由 sinker 的 batch_size 决定）写入                                               | redis 全量/增量         |      |                                              |
-
-不同任务类型需要不同的 parallel_type，详情请参考各个示例。
 
 # [runtime]
 | 配置        | 作用                          | 示例                        | 默认          |

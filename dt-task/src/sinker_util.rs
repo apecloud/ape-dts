@@ -28,9 +28,11 @@ use dt_common::{
 use super::task_util::TaskUtil;
 use crate::{extractor_util::ExtractorUtil, task_util::ConnClient};
 use dt_connector::{
+    checker::DataCheckerHandle,
     data_marker::DataMarker,
     rdb_router::RdbRouter,
     sinker::{
+        checked_sinker::wrap_checked_dml_sinker,
         clickhouse::{
             clickhouse_sinker::ClickhouseSinker, clickhouse_struct_sinker::ClickhouseStructSinker,
         },
@@ -72,12 +74,31 @@ macro_rules! create_router {
 }
 
 impl SinkerUtil {
+    fn push_sinker<S: Sinker + Send + 'static>(sub_sinkers: &mut Sinkers, sinker: S) {
+        sub_sinkers.push(Arc::new(async_mutex::Mutex::new(Box::new(sinker))));
+    }
+
+    fn push_checked_dml_sinker<S: CheckedSinkTarget + Send + 'static>(
+        sub_sinkers: &mut Sinkers,
+        sinker: S,
+        checker: &Option<DataCheckerHandle>,
+        fail_on_checker_error: bool,
+    ) {
+        sub_sinkers.push(Arc::new(async_mutex::Mutex::new(wrap_checked_dml_sinker(
+            sinker,
+            checker.clone(),
+            fail_on_checker_error,
+        ))));
+    }
+
     pub async fn create_sinkers(
         config: &TaskConfig,
         extractor_config: &ExtractorConfig,
         client: ConnClient,
         monitor: Arc<Monitor>,
         data_marker: Option<Arc<RwLock<DataMarker>>>,
+        checker: Option<DataCheckerHandle>,
+        fail_on_checker_error: bool,
     ) -> anyhow::Result<Sinkers> {
         let log_level = &config.runtime.log_level;
         let enable_sqlx_log = TaskUtil::check_enable_sqlx_log(log_level);
@@ -89,7 +110,12 @@ impl SinkerUtil {
             SinkerConfig::Dummy => {
                 for _ in 0..parallel_size {
                     let sinker = DummySinker {};
-                    sub_sinkers.push(Arc::new(async_mutex::Mutex::new(Box::new(sinker))));
+                    Self::push_checked_dml_sinker(
+                        &mut sub_sinkers,
+                        sinker,
+                        &checker,
+                        fail_on_checker_error,
+                    );
                 }
             }
 
@@ -121,7 +147,12 @@ impl SinkerUtil {
                         replace,
                         monitor_interval,
                     };
-                    sub_sinkers.push(Arc::new(async_mutex::Mutex::new(Box::new(sinker))));
+                    Self::push_checked_dml_sinker(
+                        &mut sub_sinkers,
+                        sinker,
+                        &checker,
+                        fail_on_checker_error,
+                    );
                 }
             }
 
@@ -152,7 +183,12 @@ impl SinkerUtil {
                         replace,
                         monitor_interval,
                     };
-                    sub_sinkers.push(Arc::new(async_mutex::Mutex::new(Box::new(sinker))));
+                    Self::push_checked_dml_sinker(
+                        &mut sub_sinkers,
+                        sinker,
+                        &checker,
+                        fail_on_checker_error,
+                    );
                 }
             }
 
@@ -172,7 +208,12 @@ impl SinkerUtil {
                         monitor: monitor.clone(),
                         monitor_interval,
                     };
-                    sub_sinkers.push(Arc::new(async_mutex::Mutex::new(Box::new(sinker))));
+                    Self::push_checked_dml_sinker(
+                        &mut sub_sinkers,
+                        sinker,
+                        &checker,
+                        fail_on_checker_error,
+                    );
                 }
             }
 
@@ -216,7 +257,7 @@ impl SinkerUtil {
                         avro_converter: avro_converter.clone(),
                         monitor: monitor.clone(),
                     };
-                    sub_sinkers.push(Arc::new(async_mutex::Mutex::new(Box::new(sinker))));
+                    Self::push_sinker(&mut sub_sinkers, sinker);
                 }
             }
 
@@ -240,7 +281,7 @@ impl SinkerUtil {
                     monitor: monitor.clone(),
                     monitor_interval,
                 };
-                sub_sinkers.push(Arc::new(async_mutex::Mutex::new(Box::new(sinker))));
+                Self::push_sinker(&mut sub_sinkers, sinker);
             }
 
             SinkerConfig::PgStruct {
@@ -263,7 +304,7 @@ impl SinkerUtil {
                     monitor: monitor.clone(),
                     monitor_interval,
                 };
-                sub_sinkers.push(Arc::new(async_mutex::Mutex::new(Box::new(sinker))));
+                Self::push_sinker(&mut sub_sinkers, sinker);
             }
 
             SinkerConfig::Redis {
@@ -304,7 +345,7 @@ impl SinkerUtil {
                             data_marker: data_marker.clone(),
                             key_parser: KeyParser::new(),
                         };
-                        sub_sinkers.push(Arc::new(async_mutex::Mutex::new(Box::new(sinker))));
+                        Self::push_sinker(&mut sub_sinkers, sinker);
                     }
                 } else {
                     for _ in 0..parallel_size {
@@ -321,7 +362,7 @@ impl SinkerUtil {
                             data_marker: data_marker.clone(),
                             key_parser: KeyParser::new(),
                         };
-                        sub_sinkers.push(Arc::new(async_mutex::Mutex::new(Box::new(sinker))));
+                        Self::push_sinker(&mut sub_sinkers, sinker);
                     }
                 }
             }
@@ -340,7 +381,7 @@ impl SinkerUtil {
                         freq_threshold,
                         monitor: monitor.clone(),
                     };
-                    sub_sinkers.push(Arc::new(async_mutex::Mutex::new(Box::new(sinker))));
+                    Self::push_sinker(&mut sub_sinkers, sinker);
                 }
             }
 
@@ -399,7 +440,7 @@ impl SinkerUtil {
                         sinker.hard_delete = hard_delete;
                     }
 
-                    sub_sinkers.push(Arc::new(async_mutex::Mutex::new(Box::new(sinker))));
+                    Self::push_sinker(&mut sub_sinkers, sinker);
                 }
             }
 
@@ -435,7 +476,7 @@ impl SinkerUtil {
                     extractor_meta_manager,
                     backend_count: 0,
                 };
-                sub_sinkers.push(Arc::new(async_mutex::Mutex::new(Box::new(sinker))));
+                Self::push_sinker(&mut sub_sinkers, sinker);
             }
 
             SinkerConfig::ClickHouse { url, batch_size } => {
@@ -460,7 +501,7 @@ impl SinkerUtil {
                         monitor: monitor.clone(),
                         sync_timestamp: Utc::now().timestamp_millis(),
                     };
-                    sub_sinkers.push(Arc::new(async_mutex::Mutex::new(Box::new(sinker))));
+                    Self::push_sinker(&mut sub_sinkers, sinker);
                 }
             }
 
@@ -489,7 +530,7 @@ impl SinkerUtil {
                     router,
                     extractor_meta_manager,
                 };
-                sub_sinkers.push(Arc::new(async_mutex::Mutex::new(Box::new(sinker))));
+                Self::push_sinker(&mut sub_sinkers, sinker);
             }
 
             SinkerConfig::Sql { reverse } => {
@@ -506,7 +547,7 @@ impl SinkerUtil {
                         reverse,
                         monitor: monitor.clone(),
                     };
-                    sub_sinkers.push(Arc::new(async_mutex::Mutex::new(Box::new(sinker))));
+                    Self::push_sinker(&mut sub_sinkers, sinker);
                 }
             }
 
@@ -575,7 +616,7 @@ impl SinkerUtil {
                         merger,
                         engine: engine.clone(),
                     };
-                    sub_sinkers.push(Arc::new(async_mutex::Mutex::new(Box::new(sinker))));
+                    Self::push_sinker(&mut sub_sinkers, sinker);
                 }
             }
 
@@ -621,7 +662,7 @@ impl SinkerUtil {
                         reverse_router: reverse_router.clone(),
                         orc_sequencer: orc_sequencer.clone(),
                     };
-                    sub_sinkers.push(Arc::new(async_mutex::Mutex::new(Box::new(sinker))));
+                    Self::push_sinker(&mut sub_sinkers, sinker);
                 }
             }
 
@@ -649,7 +690,7 @@ impl SinkerUtil {
                         conn_pool: conn_pool.clone(),
                         extract_type: config.extractor_basic.extract_type.clone(),
                     };
-                    sub_sinkers.push(Arc::new(async_mutex::Mutex::new(Box::new(sinker))));
+                    Self::push_sinker(&mut sub_sinkers, sinker);
                 }
             }
 
@@ -677,7 +718,7 @@ impl SinkerUtil {
                     monitor: monitor.clone(),
                     monitor_interval,
                 };
-                sub_sinkers.push(Arc::new(async_mutex::Mutex::new(Box::new(sinker))));
+                Self::push_sinker(&mut sub_sinkers, sinker);
             }
         };
         Ok(sub_sinkers)
