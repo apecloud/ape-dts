@@ -7,6 +7,7 @@ pub struct PipelineConfig {
     pub buffer_memory_mb: usize,
     // TODO: alpha feature, need more test
     pub max_rps: u64,
+    pub max_bps: u64,
     pub checkpoint_interval_secs: u64,
     pub batch_sink_interval_secs: u64,
     pub counter_time_window_secs: u64,

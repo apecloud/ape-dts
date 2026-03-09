@@ -753,6 +753,7 @@ impl TaskConfig {
             counter_time_window_secs: loader.get_optional(PIPELINE, "counter_time_window_secs"),
             counter_max_sub_count: loader.get_with_default(PIPELINE, "counter_max_sub_count", 1000),
             max_rps: loader.get_optional(PIPELINE, "max_rps"),
+            max_bps: loader.get_optional(PIPELINE, "max_bps"),
             buffer_memory_mb: loader.get_optional(PIPELINE, "buffer_memory_mb"),
             pipeline_type: loader.get_with_default(PIPELINE, "pipeline_type", PipelineType::Basic),
             http_host: loader.get_with_default(PIPELINE, "http_host", "0.0.0.0".to_string()),

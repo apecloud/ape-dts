@@ -6,6 +6,8 @@ use tokio::sync::Notify;
 
 use concurrent_queue::{ConcurrentQueue, PopError, PushError};
 
+use crate::limiter::buffer_limiter::BufferLimiter;
+
 use super::dt_data::DtItem;
 
 pub struct DtQueue {
@@ -14,16 +16,22 @@ pub struct DtQueue {
     max_bytes: u64,
     cur_bytes: AtomicU64,
     not_full: Arc<Notify>,
+    buffer_limiter: Option<Arc<BufferLimiter>>,
 }
 
 impl DtQueue {
-    pub fn new(capacity: usize, max_bytes: u64) -> Self {
+    pub fn new(
+        capacity: usize,
+        max_bytes: u64,
+        buffer_limiter: Option<Arc<BufferLimiter>>,
+    ) -> Self {
         Self {
             queue: ConcurrentQueue::bounded(capacity),
             max_bytes,
             check_memory: max_bytes > 0,
             cur_bytes: AtomicU64::new(0),
             not_full: Arc::new(Notify::new()),
+            buffer_limiter,
         }
     }
 
@@ -48,6 +56,9 @@ impl DtQueue {
     }
 
     pub async fn push(&self, mut item: DtItem) -> anyhow::Result<()> {
+        if let Some(buffer_limiter) = &self.buffer_limiter {
+            buffer_limiter.acquire(&item).await?;
+        }
         let item_size = item.dt_data.get_data_size();
         loop {
             if !self.queue.is_full() && !self.is_mem_full() {
