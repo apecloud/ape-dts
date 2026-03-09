@@ -34,12 +34,7 @@ enum MergeType {
     Unmerged,
 }
 
-impl MergeType {
-    const ALL: [Self; 3] = [Self::Delete, Self::Insert, Self::Unmerged];
-}
-
 pub struct TbMergedData {
-    pub tb: String,
     pub delete_rows: Vec<RowData>,
     pub insert_rows: Vec<RowData>,
     pub unmerged_rows: Vec<RowData>,
@@ -67,9 +62,7 @@ impl Parallelizer for MergeParallelizer {
         data: Vec<RowData>,
         sinkers: &[Arc<async_mutex::Mutex<Box<dyn Sinker + Send>>>],
     ) -> anyhow::Result<DataSize> {
-        self.sink_dml_impl(data, sinkers, false)
-            .await
-            .map(|(size, _)| size)
+        self.sink_dml_impl(data, sinkers).await
     }
 
     async fn sink_ddl(
@@ -112,78 +105,33 @@ impl Parallelizer for MergeParallelizer {
         data: Vec<StructData>,
         sinkers: &[Arc<async_mutex::Mutex<Box<dyn Sinker + Send>>>],
     ) -> anyhow::Result<DataSize> {
-        sinkers[0].lock().await.sink_struct(data.clone()).await?;
-        Ok(DataSize {
-            count: data.len() as u64,
-            bytes: 0,
-        })
+        let count = data.len() as u64;
+        sinkers[0].lock().await.sink_struct(data).await?;
+        Ok(DataSize { count, bytes: 0 })
     }
 }
 
 impl MergeParallelizer {
-    pub async fn sink_dml_checked(
+    pub(crate) async fn sink_dml_impl(
         &mut self,
         data: Vec<RowData>,
         sinkers: &[Arc<async_mutex::Mutex<Box<dyn Sinker + Send>>>],
-    ) -> anyhow::Result<(DataSize, Vec<RowData>)> {
-        self.sink_dml_impl(data, sinkers, true).await
-    }
-
-    async fn sink_dml_impl(
-        &mut self,
-        data: Vec<RowData>,
-        sinkers: &[Arc<async_mutex::Mutex<Box<dyn Sinker + Send>>>],
-        record_applied_rows: bool,
-    ) -> anyhow::Result<(DataSize, Vec<RowData>)> {
-        let mut data_size = DataSize::default();
-        let mut applied_rows = Vec::new();
-        // no need to check foreign key since foreign key checks were disabled in MySQL/Postgres connections
-        let mut tb_merged_data = self.merger.merge(data).await?;
-        for merge_type in MergeType::ALL {
-            data_size.add(
-                self.sink_dml_internal(
-                    &mut tb_merged_data,
-                    sinkers,
-                    merge_type,
-                    record_applied_rows,
-                    &mut applied_rows,
-                )
-                .await?,
-            );
-        }
-        Ok((data_size, applied_rows))
-    }
-
-    async fn sink_dml_internal(
-        &mut self,
-        tb_merged_data_items: &mut [TbMergedData],
-        sinkers: &[Arc<async_mutex::Mutex<Box<dyn Sinker + Send>>>],
-        merge_type: MergeType,
-        record_applied_rows: bool,
-        applied_rows: &mut Vec<RowData>,
     ) -> anyhow::Result<DataSize> {
-        match self.sink_mode {
-            MergeSinkMode::AdaptiveBatch => {
-                self.sink_dml_adaptive(
-                    tb_merged_data_items,
-                    sinkers,
-                    merge_type,
-                    record_applied_rows,
-                    applied_rows,
-                )
-                .await
-            }
-            MergeSinkMode::Partitioned => {
-                self.sink_dml_partitioned(
-                    tb_merged_data_items,
-                    sinkers,
-                    merge_type,
-                    record_applied_rows,
-                    applied_rows,
-                )
-                .await
-            }
+        let mut data_size = DataSize::default();
+        let mut tb_merged_data = self.merger.merge(data).await?;
+        for merge_type in [MergeType::Delete, MergeType::Insert, MergeType::Unmerged] {
+            data_size.add(match self.sink_mode {
+                MergeSinkMode::AdaptiveBatch => {
+                    self.sink_dml_adaptive(&mut tb_merged_data, sinkers, merge_type)
+                        .await?
+                }
+                MergeSinkMode::Partitioned => {
+                    self.sink_dml_partitioned(&mut tb_merged_data, sinkers, merge_type)
+                        .await?
+                }
+            });
         }
+        Ok(data_size)
     }
 
     async fn sink_dml_adaptive(
@@ -191,8 +139,6 @@ impl MergeParallelizer {
         tb_merged_data_items: &mut [TbMergedData],
         sinkers: &[Arc<async_mutex::Mutex<Box<dyn Sinker + Send>>>],
         merge_type: MergeType,
-        record_applied_rows: bool,
-        applied_rows: &mut Vec<RowData>,
     ) -> anyhow::Result<DataSize> {
         let mut futures = Vec::new();
         let mut data_size = DataSize::default();
@@ -206,9 +152,6 @@ impl MergeParallelizer {
                 continue;
             }
 
-            if record_applied_rows {
-                applied_rows.extend(data.iter().cloned());
-            }
             data_size
                 .add_count(data.len() as u64)
                 .add_bytes(data.iter().map(|v| v.get_data_size()).sum());
@@ -221,32 +164,33 @@ impl MergeParallelizer {
 
             match merge_type {
                 MergeType::Insert | MergeType::Delete => {
-                    let mut i = 0;
-                    while i < data.len() {
-                        let sub_size = cmp::min(batch_size, data.len() - i);
-                        let sub_data = data[i..i + sub_size].to_vec();
+                    let mut remaining = data;
+                    while !remaining.is_empty() {
+                        let tail = if remaining.len() > batch_size {
+                            remaining.split_off(batch_size)
+                        } else {
+                            Vec::new()
+                        };
+                        let sub_data = std::mem::replace(&mut remaining, tail);
                         let sinker = sinkers[futures.len() % self.parallel_size].clone();
                         let future = tokio::spawn(async move {
-                            sinker.lock().await.sink_dml(sub_data, true).await.unwrap();
+                            sinker.lock().await.sink_dml(sub_data, true).await
                         });
                         futures.push(future);
-                        i += batch_size;
                     }
                 }
 
                 MergeType::Unmerged => {
                     let sinker = sinkers[futures.len() % self.parallel_size].clone();
-                    let future = tokio::spawn(async move {
-                        Self::sink_unmerged_rows(sinker, data).await.unwrap();
-                    });
+                    let future =
+                        tokio::spawn(async move { Self::sink_unmerged_rows(sinker, data).await });
                     futures.push(future);
                 }
             }
         }
 
-        // wait for sub sinkers to finish and unwrap errors
         for future in futures {
-            future.await.unwrap();
+            future.await??;
         }
         Ok(data_size)
     }
@@ -256,8 +200,6 @@ impl MergeParallelizer {
         tb_merged_data_items: &mut [TbMergedData],
         sinkers: &[Arc<async_mutex::Mutex<Box<dyn Sinker + Send>>>],
         merge_type: MergeType,
-        record_applied_rows: bool,
-        applied_rows: &mut Vec<RowData>,
     ) -> anyhow::Result<DataSize> {
         let mut data_size = DataSize::default();
         for tb_merged_data in tb_merged_data_items.iter_mut() {
@@ -270,9 +212,6 @@ impl MergeParallelizer {
                 continue;
             }
 
-            if record_applied_rows {
-                applied_rows.extend(data.iter().cloned());
-            }
             data_size
                 .add_count(data.len() as u64)
                 .add_bytes(data.iter().map(|v| v.get_data_size()).sum());
@@ -295,18 +234,20 @@ impl MergeParallelizer {
         sinker: Arc<async_mutex::Mutex<Box<dyn Sinker + Send>>>,
         data: Vec<RowData>,
     ) -> anyhow::Result<()> {
-        let mut start = 0;
-        for i in 1..=data.len() {
-            if i == data.len() || data[i].row_type != data[start].row_type {
-                let sub_data = data[start..i].to_vec();
-                if data[start].row_type == RowType::Insert {
-                    sinker.lock().await.sink_dml(sub_data, true).await?;
-                } else {
-                    // for Delete / Update, the safest way is serial
-                    sinker.lock().await.sink_dml(sub_data, false).await?;
-                }
-                start = i;
-            }
+        let mut remaining = data;
+        while !remaining.is_empty() {
+            let row_type = remaining[0].row_type.clone();
+            let len = remaining
+                .iter()
+                .take_while(|row| row.row_type == row_type)
+                .count();
+            let tail = remaining.split_off(len);
+            let sub_data = std::mem::replace(&mut remaining, tail);
+            sinker
+                .lock()
+                .await
+                .sink_dml(sub_data, matches!(row_type, RowType::Insert))
+                .await?;
         }
         Ok(())
     }

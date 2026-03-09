@@ -23,9 +23,11 @@ impl Sinker for SqlSinker {
             return Ok(());
         }
 
-        for row_data in data {
+        for row_data in data.iter() {
+            let reversed;
             let row_data = if self.reverse {
-                row_data.reverse()
+                reversed = row_data.reverse();
+                &reversed
             } else {
                 row_data
             };

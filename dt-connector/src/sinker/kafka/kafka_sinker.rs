@@ -67,10 +67,7 @@ impl KafkaSinker {
             row_data.convert_raw_string();
             let topic = self.router.get_topic(&row_data.schema, &row_data.tb);
             let key = self.avro_converter.row_data_to_avro_key(row_data).await?;
-            let payload = self
-                .avro_converter
-                .row_data_to_avro_value(row_data.clone())
-                .await?;
+            let payload = self.avro_converter.row_data_to_avro_value(row_data).await?;
             messages.push(Record {
                 key,
                 value: payload,

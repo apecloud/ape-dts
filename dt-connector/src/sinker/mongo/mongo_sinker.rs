@@ -9,6 +9,7 @@ use mongodb::{
 };
 use tokio::time::Instant;
 
+use crate::sinker::checked_sinker::CheckedSinkTarget;
 use crate::{call_batch_fn, rdb_router::RdbRouter, sinker::base_sinker::BaseSinker, Sinker};
 use dt_common::{
     log_error,
@@ -37,6 +38,34 @@ impl Sinker for MongoSinker {
         }
 
         if !batch {
+            self.serial_sink(&data).await?;
+        } else {
+            match data[0].row_type {
+                RowType::Insert => {
+                    call_batch_fn!(self, data, Self::batch_insert);
+                }
+                RowType::Delete => {
+                    call_batch_fn!(self, data, Self::batch_delete);
+                }
+                _ => self.serial_sink(&data).await?,
+            }
+        }
+        Ok(())
+    }
+
+    async fn close(&mut self) -> anyhow::Result<()> {
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl CheckedSinkTarget for MongoSinker {
+    async fn sink_dml_borrowed(&mut self, data: &mut [RowData], batch: bool) -> anyhow::Result<()> {
+        if data.is_empty() {
+            return Ok(());
+        }
+
+        if !batch {
             self.serial_sink(data).await?;
         } else {
             match data[0].row_type {
@@ -51,14 +80,10 @@ impl Sinker for MongoSinker {
         }
         Ok(())
     }
-
-    async fn close(&mut self) -> anyhow::Result<()> {
-        Ok(())
-    }
 }
 
 impl MongoSinker {
-    async fn serial_sink(&mut self, data: Vec<RowData>) -> anyhow::Result<()> {
+    async fn serial_sink(&mut self, data: &[RowData]) -> anyhow::Result<()> {
         let mut rts = LimitedQueue::new(cmp::min(100, data.len()));
         let monitor_interval = if self.monitor_interval > 0 {
             self.monitor_interval
@@ -230,7 +255,7 @@ impl MongoSinker {
                 error.to_string()
             );
             let sub_data = &data[start_index..start_index + batch_size];
-            self.serial_sink(sub_data.to_vec()).await?;
+            self.serial_sink(sub_data).await?;
         }
 
         BaseSinker::update_batch_monitor(&self.monitor, batch_size as u64, data_size as u64).await

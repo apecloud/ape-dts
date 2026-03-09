@@ -174,7 +174,7 @@ async fn fetch_new(
         match i.dt_data {
             DtData::Dml { row_data } => {
                 let payload = avro_converter
-                    .row_data_to_avro_value(row_data)
+                    .row_data_to_avro_value(&row_data)
                     .await
                     .unwrap();
                 response.data.push(payload);

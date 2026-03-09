@@ -28,9 +28,8 @@ impl Merger for RdbMerger {
         }
 
         let mut results = Vec::new();
-        for (tb, mut rdb_tb_merged) in tb_data_map.drain() {
+        for (_, mut rdb_tb_merged) in tb_data_map.drain() {
             let tb_merged = TbMergedData {
-                tb,
                 insert_rows: rdb_tb_merged.get_insert_rows(),
                 delete_rows: rdb_tb_merged.get_delete_rows(),
                 unmerged_rows: rdb_tb_merged.get_unmerged_rows(),

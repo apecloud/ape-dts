@@ -39,7 +39,7 @@ impl<C: Checker> DataChecker<C> {
         ctx: &mut CheckContext,
         tb_meta: &CheckerTbMeta,
     ) -> anyhow::Result<CheckEntry> {
-        match check_result {
+        let (log, revise_sql, is_miss) = match check_result {
             CheckInconsistency::Miss => {
                 let log = Self::build_miss_log(src_row_data, ctx, tb_meta).await?;
                 let revise_sql = Self::build_revise_sql(
@@ -50,12 +50,7 @@ impl<C: Checker> DataChecker<C> {
                     None,
                     None,
                 )?;
-                Ok(CheckEntry {
-                    log,
-                    revise_sql,
-                    is_miss: true,
-                    src_row_data: src_row_data.clone(),
-                })
+                (log, revise_sql, true)
             }
             CheckInconsistency::Diff(diff_col_values) => {
                 let dst_row = dst_row_data.context("missing dst row in diff")?;
@@ -67,17 +62,49 @@ impl<C: Checker> DataChecker<C> {
                     Some(dst_row),
                     Some(&diff_col_values),
                 )?;
-                let log =
-                    Self::build_diff_log(src_row_data, dst_row, diff_col_values, ctx, tb_meta)
-                        .await?;
-                Ok(CheckEntry {
-                    log,
-                    revise_sql,
-                    is_miss: false,
-                    src_row_data: src_row_data.clone(),
-                })
+                let mut log = Self::build_miss_log(src_row_data, ctx, tb_meta).await?;
+                log.diff_col_values = if let Some(col_map) = ctx
+                    .reverse_router
+                    .get_col_map(&src_row_data.schema, &src_row_data.tb)
+                {
+                    diff_col_values
+                        .into_iter()
+                        .map(|(col, val)| {
+                            let key = col_map
+                                .get(&col)
+                                .filter(|c| *c != &col)
+                                .cloned()
+                                .unwrap_or(col);
+                            (key, val)
+                        })
+                        .collect()
+                } else {
+                    diff_col_values
+                };
+                log.dst_row = if ctx.output_full_row {
+                    if ctx
+                        .reverse_router
+                        .get_col_map(&dst_row.schema, &dst_row.tb)
+                        .is_some()
+                    {
+                        let routed = ctx.reverse_router.route_row(dst_row.clone());
+                        Self::clone_row_values(&routed)
+                    } else {
+                        Self::clone_row_values(dst_row)
+                    }
+                } else {
+                    None
+                };
+                (log, revise_sql, false)
             }
-        }
+        };
+
+        Ok(CheckEntry {
+            log,
+            revise_sql,
+            is_miss,
+            src_row_data: src_row_data.clone(),
+        })
     }
 
     async fn check_rows(
@@ -125,7 +152,7 @@ impl<C: Checker> DataChecker<C> {
         if src_row.row_type == RowType::Delete {
             return Ok(dst_row
                 .is_some()
-                .then(|| CheckInconsistency::Diff(HashMap::new())));
+                .then_some(CheckInconsistency::Diff(HashMap::new())));
         }
         match dst_row {
             Some(dst_row) => {
@@ -353,47 +380,6 @@ impl<C: Checker> DataChecker<C> {
         }
     }
 
-    fn map_diff_col_values(
-        reverse_router: &RdbRouter,
-        src_row_data: &RowData,
-        diff_col_values: HashMap<String, DiffColValue>,
-    ) -> HashMap<String, DiffColValue> {
-        let Some(col_map) = reverse_router.get_col_map(&src_row_data.schema, &src_row_data.tb)
-        else {
-            return diff_col_values;
-        };
-
-        let mut mapped = HashMap::with_capacity(diff_col_values.len());
-        for (col, val) in diff_col_values {
-            let key = col_map
-                .get(&col)
-                .filter(|c| *c != &col)
-                .cloned()
-                .unwrap_or(col);
-            mapped.insert(key, val);
-        }
-        mapped
-    }
-
-    fn maybe_build_dst_row(
-        reverse_router: &RdbRouter,
-        dst_row_data: &RowData,
-        output_full_row: bool,
-    ) -> Option<HashMap<String, ColValue>> {
-        if !output_full_row {
-            return None;
-        }
-        if reverse_router
-            .get_col_map(&dst_row_data.schema, &dst_row_data.tb)
-            .is_some()
-        {
-            let routed = reverse_router.route_row(dst_row_data.clone());
-            Self::clone_row_values(&routed)
-        } else {
-            Self::clone_row_values(dst_row_data)
-        }
-    }
-
     async fn build_miss_log(
         src_row_data: &RowData,
         ctx: &mut CheckContext,
@@ -445,21 +431,6 @@ impl<C: Checker> DataChecker<C> {
         })
     }
 
-    async fn build_diff_log(
-        src_row_data: &RowData,
-        dst_row_data: &RowData,
-        diff_col_values: HashMap<String, DiffColValue>,
-        ctx: &mut CheckContext,
-        tb_meta: &CheckerTbMeta,
-    ) -> anyhow::Result<CheckLog> {
-        let mut log = Self::build_miss_log(src_row_data, ctx, tb_meta).await?;
-        log.diff_col_values =
-            Self::map_diff_col_values(&ctx.reverse_router, src_row_data, diff_col_values);
-        log.dst_row =
-            Self::maybe_build_dst_row(&ctx.reverse_router, dst_row_data, ctx.output_full_row);
-        Ok(log)
-    }
-
     fn clone_row_values(row_data: &RowData) -> Option<HashMap<String, ColValue>> {
         match row_data.row_type {
             RowType::Insert | RowType::Update => row_data.after.clone(),
@@ -475,11 +446,12 @@ impl<C: Checker> DataChecker<C> {
             RowType::Delete => row_data.require_before().ok()?,
             _ => row_data.require_after().ok()?,
         };
-        let mut id_col_values = HashMap::with_capacity(tb_meta.id_cols.len());
-        for col in &tb_meta.id_cols {
-            id_col_values.insert(col.to_owned(), col_values.get(col)?.to_option_string());
-        }
-        Some(id_col_values)
+
+        tb_meta
+            .id_cols
+            .iter()
+            .map(|col| Some((col.to_owned(), col_values.get(col)?.to_option_string())))
+            .collect()
     }
 
     fn expand_mongo_doc_diff(
@@ -488,19 +460,22 @@ impl<C: Checker> DataChecker<C> {
         mut diff_col_values: HashMap<String, DiffColValue>,
     ) -> HashMap<String, DiffColValue> {
         diff_col_values.remove(MongoConstants::DOC);
-
-        fn get_doc(row: &RowData) -> Option<&Document> {
-            row.after
-                .as_ref()
-                .and_then(|after| after.get(MongoConstants::DOC))
-                .and_then(|val| match val {
-                    ColValue::MongoDoc(doc) => Some(doc),
-                    _ => None,
-                })
-        }
-
-        let src_doc = get_doc(src_row_data);
-        let dst_doc = get_doc(dst_row_data);
+        let src_doc = match src_row_data
+            .after
+            .as_ref()
+            .and_then(|after| after.get(MongoConstants::DOC))
+        {
+            Some(ColValue::MongoDoc(doc)) => Some(doc),
+            _ => None,
+        };
+        let dst_doc = match dst_row_data
+            .after
+            .as_ref()
+            .and_then(|after| after.get(MongoConstants::DOC))
+        {
+            Some(ColValue::MongoDoc(doc)) => Some(doc),
+            _ => None,
+        };
 
         let keys: BTreeSet<_> = src_doc
             .into_iter()
@@ -541,13 +516,12 @@ impl<C: Checker> DataChecker<C> {
         if self.retry_next_at.is_none_or(|current| retry_at < current) {
             self.retry_next_at = Some(retry_at);
         }
-        for row in rows {
-            self.retry_queue.push_back(RetryItem {
+        self.retry_queue
+            .extend(rows.into_iter().map(|row| RetryItem {
                 row,
                 retries_left: self.ctx.max_retries,
                 next_retry_at: retry_at,
-            });
-        }
+            }));
     }
 
     pub(super) async fn process_due_retries(&mut self) -> anyhow::Result<()> {
