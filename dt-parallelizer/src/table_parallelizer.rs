@@ -38,7 +38,8 @@ impl Parallelizer for TableParallelizer {
         };
 
         let sub_data = Self::partition_dml(data)?;
-        self.base_parallelizer
+        let _ = self
+            .base_parallelizer
             .sink_dml(sub_data, sinkers, self.parallel_size, false)
             .await?;
 

@@ -410,23 +410,6 @@ impl TaskRunner {
         )
         .await?;
 
-        // sinkers
-        let sinker_monitor = Arc::new(Monitor::new(
-            "sinker",
-            &single_task_id,
-            monitor_time_window_secs,
-            monitor_max_sub_count,
-            monitor_count_window,
-        ));
-        let sinkers = SinkerUtil::create_sinkers(
-            &self.config,
-            &extractor_config,
-            sinker_client.clone(),
-            sinker_monitor.clone(),
-            rw_sinker_data_marker.clone(),
-        )
-        .await?;
-
         // checker
         let checker_monitor = Arc::new(Monitor::new(
             "checker",
@@ -443,6 +426,29 @@ impl TaskRunner {
                 task_context.recovery.as_ref(),
             )
             .await?;
+        let data_checker_handle = checker.as_ref().and_then(|checker| match checker {
+            CheckerHandle::Data(handle) => Some(handle.clone()),
+            CheckerHandle::Struct(_) => None,
+        });
+
+        // sinkers
+        let sinker_monitor = Arc::new(Monitor::new(
+            "sinker",
+            &single_task_id,
+            monitor_time_window_secs,
+            monitor_max_sub_count,
+            monitor_count_window,
+        ));
+        let sinkers = SinkerUtil::create_sinkers(
+            &self.config,
+            &extractor_config,
+            sinker_client.clone(),
+            sinker_monitor.clone(),
+            rw_sinker_data_marker.clone(),
+            data_checker_handle,
+            matches!(&self.config.sinker, SinkerConfig::Dummy),
+        )
+        .await?;
 
         // pipeline
         let pipeline_monitor = Arc::new(Monitor::new(
@@ -649,7 +655,6 @@ impl TaskRunner {
                     &self.config,
                     monitor.clone(),
                     rps_limiter,
-                    checker,
                 )
                 .await?;
 
@@ -666,6 +671,7 @@ impl TaskRunner {
                     data_marker,
                     lua_processor,
                     recorder,
+                    checker,
                 };
                 Ok(Box::new(pipeline) as Box<dyn Pipeline + Send>)
             }

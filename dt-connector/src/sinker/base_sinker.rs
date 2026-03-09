@@ -67,7 +67,7 @@ macro_rules! call_batch_fn {
                 break;
             }
 
-            $batch_fn($self, &mut $data, sinked_count, batch_size).await?;
+            $batch_fn($self, &mut $data[..], sinked_count, batch_size).await?;
             sinked_count += batch_size;
         }
     };
@@ -89,7 +89,7 @@ macro_rules! sync_call_batch_fn {
                 break;
             }
 
-            $batch_fn($self, &mut $data, sinked_count, batch_size)?;
+            $batch_fn($self, &mut $data[..], sinked_count, batch_size)?;
             sinked_count += batch_size;
         }
     };

@@ -24,7 +24,9 @@ use dt_common::{
     },
     monitor::{counter_type::CounterType, monitor::Monitor},
 };
-use dt_connector::{data_marker::DataMarker, extractor::resumer::recorder::Recorder, Sinker};
+use dt_connector::{
+    checker::CheckerHandle, data_marker::DataMarker, extractor::resumer::recorder::Recorder, Sinker,
+};
 use dt_parallelizer::{DataSize, Parallelizer};
 
 pub struct BasePipeline {
@@ -40,6 +42,7 @@ pub struct BasePipeline {
     pub data_marker: Option<Arc<RwLock<DataMarker>>>,
     pub lua_processor: Option<LuaProcessor>,
     pub recorder: Option<Arc<dyn Recorder + Send + Sync>>,
+    pub checker: Option<CheckerHandle>,
 }
 
 enum SinkMethod {
@@ -64,13 +67,14 @@ impl Pipeline for BasePipeline {
                 syncer.committed_position.clone()
             }
         };
-        if matches!(final_position, Position::None) {
-            self.parallelizer.close().await
-        } else {
-            self.parallelizer
-                .close_with_position(Some(&final_position))
-                .await
+        if let Some(checker) = &mut self.checker {
+            checker
+                .close_with_position(
+                    (!matches!(final_position, Position::None)).then_some(&final_position),
+                )
+                .await?;
         }
+        self.parallelizer.close().await
     }
 
     async fn start(&mut self) -> anyhow::Result<()> {
@@ -406,13 +410,15 @@ impl BasePipeline {
         // persist checker checkpoint first to avoid advancing position without checker state.
         let mut checkpoint_ok = true;
         if !matches!(record_position, Position::None) {
-            if let Err(e) = self.parallelizer.record_checkpoint(record_position).await {
-                log_warn!(
-                    "failed to persist checker checkpoint with position: {}, err: {}",
-                    record_position,
-                    e
-                );
-                checkpoint_ok = false;
+            if let Some(checker) = &self.checker {
+                if let Err(e) = checker.record_checkpoint(record_position).await {
+                    log_warn!(
+                        "failed to persist checker checkpoint with position: {}, err: {}",
+                        record_position,
+                        e
+                    );
+                    checkpoint_ok = false;
+                }
             }
         }
         if checkpoint_ok {

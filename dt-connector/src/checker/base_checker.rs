@@ -8,7 +8,10 @@ use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::str::FromStr;
-use std::sync::Arc;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 use tokio::time::{sleep, Duration, Instant};
@@ -175,6 +178,159 @@ impl CheckerTbMeta {
     }
 }
 
+#[derive(Clone)]
+pub struct CheckContext {
+    pub monitor: Arc<Monitor>,
+    pub summary: CheckSummaryLog,
+    pub output_revise_sql: bool,
+    pub extractor_meta_manager: Option<RdbMetaManager>,
+    pub reverse_router: RdbRouter,
+    pub output_full_row: bool,
+    pub revise_match_full_row: bool,
+    pub global_summary: Option<Arc<Mutex<CheckSummaryLog>>>,
+    pub batch_size: usize,
+    pub retry_interval_secs: u64,
+    pub max_retries: u32,
+    pub is_cdc: bool,
+    pub check_log_dir: String,
+    pub cdc_check_log_max_file_size: u64,
+    pub cdc_check_log_max_rows: usize,
+    pub s3_output: Option<(Operator, String)>,
+    pub cdc_check_log_interval_secs: u64,
+    pub state_store: Option<Arc<SqlCheckerStateStore>>,
+    pub expected_resume_position: Option<Position>,
+}
+
+pub struct FetchResult {
+    pub tb_meta: Arc<CheckerTbMeta>,
+    pub dst_rows: Vec<RowData>,
+}
+
+#[async_trait]
+pub trait Checker: Send + Sync + 'static {
+    async fn fetch(&mut self, src_rows: &[&RowData]) -> anyhow::Result<FetchResult>;
+    async fn close(&mut self) -> anyhow::Result<()> {
+        Ok(())
+    }
+}
+
+enum CheckerMsg {
+    ProcessBatchSync {
+        batch: Vec<RowData>,
+        tx: oneshot::Sender<anyhow::Result<()>>,
+    },
+    RecordCheckpoint {
+        position: Position,
+        tx: oneshot::Sender<anyhow::Result<()>>,
+    },
+    Close {
+        position: Option<Position>,
+    },
+}
+
+#[derive(Clone)]
+struct DataCheckerShared {
+    tx: mpsc::Sender<CheckerMsg>,
+    is_cdc: bool,
+    last_checker_ok: Arc<AtomicBool>,
+}
+
+#[derive(Clone)]
+pub struct DataCheckerHandle {
+    shared: DataCheckerShared,
+    join_handle: Arc<Mutex<Option<JoinHandle<anyhow::Result<()>>>>>,
+}
+
+impl DataCheckerHandle {
+    pub fn spawn<C: Checker>(
+        checker: C,
+        task_id: String,
+        ctx: CheckContext,
+        buffer_size: usize,
+        name: &str,
+    ) -> Self {
+        let is_cdc = ctx.is_cdc;
+        let (tx, rx) = mpsc::channel::<CheckerMsg>(buffer_size.max(1));
+        let last_checker_ok = Arc::new(AtomicBool::new(true));
+
+        let check_job = DataChecker::new(checker, task_id, ctx, rx, name);
+        let join_handle = tokio::spawn(async move { check_job.run().await });
+
+        Self {
+            shared: DataCheckerShared {
+                tx,
+                is_cdc,
+                last_checker_ok,
+            },
+            join_handle: Arc::new(Mutex::new(Some(join_handle))),
+        }
+    }
+
+    pub async fn check_sync(&self, data: Vec<RowData>) -> anyhow::Result<()> {
+        if data.is_empty() {
+            return Ok(());
+        }
+        let (tx, rx) = oneshot::channel();
+        self.shared
+            .tx
+            .send(CheckerMsg::ProcessBatchSync { batch: data, tx })
+            .await
+            .map_err(|err| anyhow::anyhow!("Checker worker closed: {}", err))?;
+        let result = rx
+            .await
+            .map_err(|err| anyhow::anyhow!("checker sync response dropped: {}", err))?;
+        if result.is_err() {
+            self.shared.last_checker_ok.store(false, Ordering::Release);
+        }
+        result
+    }
+
+    pub async fn close_with_position(&mut self, position: Option<&Position>) -> anyhow::Result<()> {
+        let position = self
+            .shared
+            .last_checker_ok
+            .load(Ordering::Acquire)
+            .then_some(position)
+            .flatten();
+        let _ = self
+            .shared
+            .tx
+            .send(CheckerMsg::Close {
+                position: position.cloned(),
+            })
+            .await;
+        if let Some(handle) = self.join_handle.lock().await.take() {
+            handle.await??;
+        }
+        Ok(())
+    }
+
+    pub async fn record_checkpoint(&self, position: &Position) -> anyhow::Result<()> {
+        if !self.shared.is_cdc {
+            return Ok(());
+        }
+        if !self.shared.last_checker_ok.load(Ordering::Acquire) {
+            anyhow::bail!("skip checker checkpoint because previous checker run failed")
+        }
+        let (tx, rx) = oneshot::channel();
+        self.shared
+            .tx
+            .send(CheckerMsg::RecordCheckpoint {
+                position: position.clone(),
+                tx,
+            })
+            .await
+            .map_err(|err| anyhow::anyhow!("failed to send checker checkpoint msg: {}", err))?;
+        let result = rx
+            .await
+            .map_err(|err| anyhow::anyhow!("checker checkpoint response dropped: {}", err))?;
+        if result.is_ok() {
+            self.shared.last_checker_ok.store(true, Ordering::Release);
+        }
+        result
+    }
+}
+
 enum CheckInconsistency {
     Miss,
     Diff(HashMap<String, DiffColValue>),
@@ -244,148 +400,6 @@ impl BoundedNdjsonBuffer {
     }
 }
 
-#[derive(Clone)]
-pub struct CheckContext {
-    pub monitor: Arc<Monitor>,
-    pub summary: CheckSummaryLog,
-    pub output_revise_sql: bool,
-    pub extractor_meta_manager: Option<RdbMetaManager>,
-    pub reverse_router: RdbRouter,
-    pub output_full_row: bool,
-    pub revise_match_full_row: bool,
-    pub global_summary: Option<Arc<Mutex<CheckSummaryLog>>>,
-    pub batch_size: usize,
-    pub retry_interval_secs: u64,
-    pub max_retries: u32,
-    pub is_cdc: bool,
-    pub check_log_dir: String,
-    pub cdc_check_log_max_file_size: u64,
-    pub cdc_check_log_max_rows: usize,
-    pub s3_output: Option<(Operator, String)>,
-    pub cdc_check_log_interval_secs: u64,
-    pub state_store: Option<Arc<SqlCheckerStateStore>>,
-    pub expected_resume_position: Option<Position>,
-}
-
-pub struct FetchResult {
-    pub tb_meta: Arc<CheckerTbMeta>,
-    pub dst_rows: Vec<RowData>,
-}
-
-enum CheckerMsg {
-    ProcessBatchSync {
-        batch: Arc<Vec<RowData>>,
-        tx: oneshot::Sender<anyhow::Result<()>>,
-    },
-    RecordCheckpoint {
-        position: Position,
-        tx: oneshot::Sender<anyhow::Result<()>>,
-    },
-    Close {
-        position: Option<Position>,
-    },
-}
-
-pub struct DataCheckerHandle {
-    tx: mpsc::Sender<CheckerMsg>,
-    join_handle: Option<JoinHandle<anyhow::Result<()>>>,
-    is_cdc: bool,
-}
-
-impl DataCheckerHandle {
-    pub fn spawn<C: Checker>(
-        checker: C,
-        task_id: String,
-        ctx: CheckContext,
-        buffer_size: usize,
-        name: &str,
-    ) -> Self {
-        let is_cdc = ctx.is_cdc;
-        let (tx, rx) = mpsc::channel::<CheckerMsg>(buffer_size.max(1));
-
-        let check_job = DataChecker::new(checker, task_id, ctx, rx, name);
-        let join_handle = tokio::spawn(async move { check_job.run().await });
-
-        Self {
-            tx,
-            join_handle: Some(join_handle),
-            is_cdc,
-        }
-    }
-
-    pub async fn check_sync(&self, data: Arc<Vec<RowData>>) -> anyhow::Result<()> {
-        if data.is_empty() {
-            return Ok(());
-        }
-        self.send_request(
-            |tx| CheckerMsg::ProcessBatchSync { batch: data, tx },
-            "Checker worker closed",
-            "sync",
-        )
-        .await
-    }
-
-    pub async fn close_with_position(&mut self, position: Option<&Position>) -> anyhow::Result<()> {
-        let _ = self
-            .tx
-            .send(CheckerMsg::Close {
-                position: position.cloned(),
-            })
-            .await;
-        if let Some(handle) = self.join_handle.take() {
-            handle.await??;
-        }
-        Ok(())
-    }
-
-    pub async fn record_checkpoint(&self, position: &Position) -> anyhow::Result<()> {
-        if !self.is_cdc {
-            return Ok(());
-        }
-        self.send_request(
-            |tx| CheckerMsg::RecordCheckpoint {
-                position: position.clone(),
-                tx,
-            },
-            "failed to send checker checkpoint msg",
-            "checkpoint",
-        )
-        .await
-    }
-
-    async fn send_request<F>(
-        &self,
-        build_msg: F,
-        send_error: &str,
-        action: &str,
-    ) -> anyhow::Result<()>
-    where
-        F: FnOnce(oneshot::Sender<anyhow::Result<()>>) -> CheckerMsg,
-    {
-        let (tx, rx) = oneshot::channel();
-        if let Err(err) = self.tx.send(build_msg(tx)).await {
-            return Err(anyhow::anyhow!("{}: {}", send_error, err));
-        }
-        Self::receive_result(rx, action).await
-    }
-
-    async fn receive_result(
-        rx: oneshot::Receiver<anyhow::Result<()>>,
-        action: &str,
-    ) -> anyhow::Result<()> {
-        rx.await
-            .map_err(|err| anyhow::anyhow!("checker {} response dropped: {}", action, err))?
-    }
-}
-
-#[async_trait]
-pub trait Checker: Send + Sync + 'static {
-    async fn fetch(&mut self, src_rows: &[&RowData]) -> anyhow::Result<FetchResult>;
-    async fn close(&mut self) -> anyhow::Result<()> {
-        Ok(())
-    }
-}
-
 struct DataChecker<C: Checker> {
     checker: C,
     task_id: String,
@@ -427,58 +441,6 @@ impl<C: Checker> DataChecker<C> {
         }
     }
 
-    fn remember_error(first_error: &mut Option<anyhow::Error>, err: anyhow::Error) {
-        first_error.get_or_insert(err);
-    }
-
-    async fn init_cdc_state(&mut self) {
-        if !self.ctx.is_cdc {
-            return;
-        }
-        let needs_recheck = match self.load_initial_state().await {
-            Ok(needs_recheck) => needs_recheck,
-            Err(err) => {
-                log_warn!(
-                    "Checker [{}] failed to load state, start from empty store: {}",
-                    self.name,
-                    err
-                );
-                return;
-            }
-        };
-        if !needs_recheck {
-            return;
-        }
-        if let Err(err) = self.run_recheck().await {
-            log_warn!(
-                "Checker [{}] failed to run recheck phase: {}",
-                self.name,
-                err
-            );
-        }
-    }
-
-    async fn shutdown_logged(&mut self, first_error: &mut Option<anyhow::Error>) {
-        if let Err(err) = self.shutdown().await {
-            log_error!("Checker [{}] close failed: {}", self.name, err);
-            Self::remember_error(first_error, err);
-        }
-    }
-
-    async fn maybe_snapshot_and_output(&mut self) {
-        let summary_path = std::path::Path::new(&self.ctx.check_log_dir).join("summary.log");
-        let summary_ready = std::fs::metadata(&summary_path)
-            .map(|meta| meta.len() > 0)
-            .unwrap_or(false);
-        if !self.store_dirty && summary_ready {
-            return;
-        }
-        match self.snapshot_and_output().await {
-            Ok(()) => self.store_dirty = false,
-            Err(err) => log_error!("Checker [{}] cdc output failed: {}", self.name, err),
-        }
-    }
-
     pub async fn run(mut self) -> anyhow::Result<()> {
         log_info!("Checker [{}] started.", self.name);
         let mut interval = tokio::time::interval(Duration::from_secs(1));
@@ -493,7 +455,7 @@ impl<C: Checker> DataChecker<C> {
                 msg = self.rx.recv() => {
                     match msg {
                         Some(CheckerMsg::ProcessBatchSync { batch, tx }) => {
-                            let result = self.check_batch(batch.as_slice(), true).await;
+                            let result = self.check_batch(&batch, true).await;
                             let _ = tx.send(result);
                         }
                         Some(CheckerMsg::RecordCheckpoint { position, tx }) => {
@@ -504,8 +466,7 @@ impl<C: Checker> DataChecker<C> {
                             let _ = tx.send(result);
                         }
                         Some(CheckerMsg::Close { position }) => {
-                            if let Some(position) = position.filter(|p| !matches!(p, Position::None))
-                            {
+                            if let Some(position) = position.filter(|p| !matches!(p, Position::None)) {
                                 self.last_checkpoint_position = Some(position);
                             }
                             self.shutdown_logged(&mut first_error).await;
@@ -544,24 +505,6 @@ impl<C: Checker> DataChecker<C> {
         }
     }
 
-    async fn finish_summary_and_meta(&mut self) -> anyhow::Result<()> {
-        let common = &mut self.ctx;
-        let global_summary_opt = common.global_summary.clone();
-        let summary = &mut common.summary;
-        summary.end_time = chrono::Local::now().to_rfc3339();
-        summary.is_consistent = summary.miss_count == 0 && summary.diff_count == 0;
-        if let Some(global_summary) = global_summary_opt {
-            global_summary.lock().await.merge(summary);
-        } else if !common.is_cdc {
-            log_summary!("{}", summary);
-        }
-        if let Some(meta_manager) = common.extractor_meta_manager.as_mut() {
-            meta_manager.close().await
-        } else {
-            Ok(())
-        }
-    }
-
     async fn shutdown(&mut self) -> anyhow::Result<()> {
         if self.ctx.is_cdc {
             if self.store_dirty {
@@ -588,13 +531,76 @@ impl<C: Checker> DataChecker<C> {
         self.finish_summary_and_meta().await?;
         self.checker.close().await
     }
-}
 
-pub fn split_query_rows<'a>(
-    rows: &'a [RowData],
-    id_cols: &[String],
-) -> (Vec<&'a RowData>, Vec<&'a RowData>) {
-    rows.iter().partition(|row| has_null_key(row, id_cols))
+    async fn finish_summary_and_meta(&mut self) -> anyhow::Result<()> {
+        let common = &mut self.ctx;
+        let summary = &mut common.summary;
+        summary.end_time = chrono::Local::now().to_rfc3339();
+        summary.is_consistent = summary.miss_count == 0 && summary.diff_count == 0;
+        if let Some(global_summary) = common.global_summary.clone() {
+            global_summary.lock().await.merge(summary);
+        } else if !common.is_cdc {
+            log_summary!("{}", summary);
+        }
+        if let Some(meta_manager) = common.extractor_meta_manager.as_mut() {
+            meta_manager.close().await
+        } else {
+            Ok(())
+        }
+    }
+
+    async fn init_cdc_state(&mut self) {
+        if !self.ctx.is_cdc {
+            return;
+        }
+        let needs_recheck = match self.load_initial_state().await {
+            Ok(needs_recheck) => needs_recheck,
+            Err(err) => {
+                log_warn!(
+                    "Checker [{}] failed to load state, start from empty store: {}",
+                    self.name,
+                    err
+                );
+                return;
+            }
+        };
+        if !needs_recheck {
+            return;
+        }
+        if let Err(err) = self.run_recheck().await {
+            log_warn!(
+                "Checker [{}] failed to run recheck phase: {}",
+                self.name,
+                err
+            );
+        }
+    }
+
+    async fn maybe_snapshot_and_output(&mut self) {
+        let summary_path = std::path::Path::new(&self.ctx.check_log_dir).join("summary.log");
+        if !self.store_dirty
+            && std::fs::metadata(&summary_path)
+                .map(|meta| meta.len() > 0)
+                .unwrap_or(false)
+        {
+            return;
+        }
+        match self.snapshot_and_output().await {
+            Ok(()) => self.store_dirty = false,
+            Err(err) => log_error!("Checker [{}] cdc output failed: {}", self.name, err),
+        }
+    }
+
+    async fn shutdown_logged(&mut self, first_error: &mut Option<anyhow::Error>) {
+        if let Err(err) = self.shutdown().await {
+            log_error!("Checker [{}] close failed: {}", self.name, err);
+            Self::remember_error(first_error, err);
+        }
+    }
+
+    fn remember_error(first_error: &mut Option<anyhow::Error>, err: anyhow::Error) {
+        first_error.get_or_insert(err);
+    }
 }
 
 pub fn has_null_key(row_data: &RowData, id_cols: &[String]) -> bool {
