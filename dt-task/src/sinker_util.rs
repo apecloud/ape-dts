@@ -32,7 +32,7 @@ use dt_connector::{
     data_marker::DataMarker,
     rdb_router::RdbRouter,
     sinker::{
-        checked_sinker::wrap_checked_dml_sinker,
+        checked_sinker::{wrap_checked_dml_sinker, CheckedSinkTarget},
         clickhouse::{
             clickhouse_sinker::ClickhouseSinker, clickhouse_struct_sinker::ClickhouseStructSinker,
         },
