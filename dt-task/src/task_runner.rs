@@ -63,11 +63,11 @@ use dt_connector::{
     checker::base_checker::CheckContext,
     checker::check_log::CheckSummaryLog,
     checker::{
-        CheckerHandle, MongoCheckerHandle, MysqlCheckerHandle, PgCheckerHandle,
-        SqlCheckerStateStore, StructCheckerHandle,
+        CheckerHandle, CheckerStateStore, MongoCheckerHandle, MysqlCheckerHandle, PgCheckerHandle,
+        StructCheckerHandle,
     },
     data_marker::DataMarker,
-    extractor::resumer::{recorder::Recorder, recovery::Recovery, ResumerDbPool},
+    extractor::resumer::{recorder::Recorder, recovery::Recovery},
     rdb_router::RdbRouter,
     Sinker,
 };
@@ -114,6 +114,74 @@ const DEFAULT_CHECK_LOG_DIR_PLACEHOLDER: &str = "LOG_DIR_PLACEHOLDER/check";
 const DEFAULT_STATISTIC_LOG_DIR_PLACEHOLDER: &str = "LOG_DIR_PLACEHOLDER/statistic";
 
 impl TaskRunner {
+    fn derive_single_task_id(task_context_id: &str, extractor_config: &ExtractorConfig) -> String {
+        if !task_context_id.is_empty() {
+            return task_context_id.to_string();
+        }
+
+        match extractor_config {
+            ExtractorConfig::MysqlSnapshot { db, tb, .. } => format!("{}.{}", db, tb),
+            ExtractorConfig::PgSnapshot { schema, tb, .. } => format!("{}.{}", schema, tb),
+            ExtractorConfig::MongoSnapshot { db, tb, .. } => format!("{}.{}", db, tb),
+            _ => String::new(),
+        }
+    }
+
+    fn build_checker_task_id(&self, single_task_id: &str) -> String {
+        if single_task_id.is_empty() {
+            self.config.global.task_id.clone()
+        } else {
+            format!("{}::{}", self.config.global.task_id, single_task_id)
+        }
+    }
+
+    fn sanitize_checker_scope(raw: &str) -> String {
+        let mut scoped = String::with_capacity(raw.len());
+        for ch in raw.chars() {
+            if ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-') {
+                scoped.push(ch);
+            } else {
+                scoped.push('_');
+            }
+        }
+
+        if scoped.is_empty() {
+            "default".to_string()
+        } else {
+            scoped
+        }
+    }
+
+    fn build_checker_log_dir(base_dir: &str, single_task_id: &str) -> String {
+        if single_task_id.is_empty() {
+            base_dir.to_string()
+        } else {
+            format!(
+                "{}/{}",
+                base_dir.trim_end_matches('/'),
+                Self::sanitize_checker_scope(single_task_id)
+            )
+        }
+    }
+
+    fn build_checker_s3_key_prefix(&self, configured_prefix: &str, single_task_id: &str) -> String {
+        let base = if configured_prefix.is_empty() {
+            format!("{}/check", self.config.global.task_id)
+        } else {
+            configured_prefix.to_string()
+        };
+
+        if single_task_id.is_empty() {
+            base
+        } else {
+            format!(
+                "{}/{}",
+                base.trim_end_matches('/'),
+                Self::sanitize_checker_scope(single_task_id)
+            )
+        }
+    }
+
     pub fn new(task_config_file: &str) -> anyhow::Result<Self> {
         let config = TaskConfig::new(task_config_file)
             .with_context(|| format!("invalid configs in [{}]", task_config_file))?;
@@ -343,6 +411,8 @@ impl TaskRunner {
         task_context: TaskContext,
         is_multi_task: bool,
     ) -> anyhow::Result<()> {
+        let single_task_id =
+            Self::derive_single_task_id(&task_context.id, &task_context.extractor_config);
         let extractor_config = task_context.extractor_config;
         let extractor_client = task_context.extractor_client;
         let sinker_client = task_context.sinker_client;
@@ -376,13 +446,6 @@ impl TaskRunner {
         let rw_sinker_data_marker = sinker_data_marker
             .clone()
             .map(|data_marker| Arc::new(RwLock::new(data_marker)));
-
-        let single_task_id = match &extractor_config {
-            ExtractorConfig::MysqlSnapshot { db, tb, .. } => format!("{}.{}", db, tb),
-            ExtractorConfig::PgSnapshot { schema, tb, .. } => format!("{}.{}", schema, tb),
-            ExtractorConfig::MongoSnapshot { db, tb, .. } => format!("{}.{}", db, tb),
-            _ => String::new(),
-        };
 
         // extractor
         let monitor_time_window_secs = self.config.pipeline.counter_time_window_secs;
@@ -421,6 +484,7 @@ impl TaskRunner {
         let checker = self
             .create_checker(
                 self.config.checker.as_ref(),
+                &single_task_id,
                 checker_monitor.clone(),
                 task_context.check_summary.clone(),
                 task_context.recovery.as_ref(),
@@ -698,6 +762,7 @@ impl TaskRunner {
     async fn create_checker(
         &self,
         checker_config: Option<&CheckerConfig>,
+        single_task_id: &str,
         monitor: Arc<Monitor>,
         check_summary: Option<Arc<AsyncMutex<CheckSummaryLog>>>,
         recovery: Option<&Arc<dyn Recovery + Send + Sync>>,
@@ -741,11 +806,13 @@ impl TaskRunner {
             }
             cfg.batch_size.max(1)
         };
-        let check_log_dir = if cfg.check_log_dir.is_empty() {
+        let check_log_dir_base = if cfg.check_log_dir.is_empty() {
             format!("{}/check", self.config.runtime.log_dir)
         } else {
             cfg.check_log_dir.clone()
         };
+        let check_log_dir = Self::build_checker_log_dir(&check_log_dir_base, single_task_id);
+        let checker_task_id = self.build_checker_task_id(single_task_id);
         let cdc_check_log_max_file_size =
             parse_size_limit(&cfg.check_log_file_size).map_err(|e| {
                 Error::ConfigError(format!(
@@ -881,11 +948,7 @@ impl TaskRunner {
                 )
             })?;
             let s3_client = TaskUtil::create_s3_client(s3_cfg)?;
-            let key_prefix = if cfg.s3_key_prefix.is_empty() {
-                format!("{}/check", self.config.global.task_id)
-            } else {
-                cfg.s3_key_prefix.clone()
-            };
+            let key_prefix = self.build_checker_s3_key_prefix(&cfg.s3_key_prefix, single_task_id);
             Some((s3_client, key_prefix))
         } else {
             None
@@ -938,7 +1001,7 @@ impl TaskRunner {
                 let checker = MysqlCheckerHandle::spawn(
                     conn_pool,
                     meta_manager,
-                    self.config.global.task_id.clone(),
+                    checker_task_id.clone(),
                     build_check_context(
                         extractor_meta_manager,
                         reverse_router,
@@ -966,7 +1029,7 @@ impl TaskRunner {
                 let checker = PgCheckerHandle::spawn(
                     conn_pool,
                     meta_manager,
-                    self.config.global.task_id.clone(),
+                    checker_task_id.clone(),
                     build_check_context(
                         extractor_meta_manager,
                         reverse_router,
@@ -995,7 +1058,7 @@ impl TaskRunner {
                 .await?;
                 let checker = MongoCheckerHandle::spawn(
                     mongo_client,
-                    self.config.global.task_id.clone(),
+                    checker_task_id.clone(),
                     build_check_context(None, reverse_router, false),
                     queue_size,
                 );
@@ -1012,7 +1075,7 @@ impl TaskRunner {
         checker_url: &str,
         checker_auth: &ConnectionAuthConfig,
         enable_sqlx_log: bool,
-    ) -> anyhow::Result<Option<Arc<SqlCheckerStateStore>>> {
+    ) -> anyhow::Result<Option<Arc<CheckerStateStore>>> {
         if !is_cdc_task {
             return Ok(None);
         }
@@ -1030,8 +1093,8 @@ impl TaskRunner {
                     None,
                 )
                 .await?;
-                let inner = SqlCheckerStateStore::new(
-                    ResumerDbPool::MySql(pool),
+                let inner = CheckerStateStore::new_mysql(
+                    pool,
                     CHECKER_STATE_STORE_SCHEMA,
                     CHECKER_STATE_STORE_TABLE_PREFIX,
                 )
@@ -1047,8 +1110,24 @@ impl TaskRunner {
                     false,
                 )
                 .await?;
-                let inner = SqlCheckerStateStore::new(
-                    ResumerDbPool::Postgres(pool),
+                let inner = CheckerStateStore::new_postgres(
+                    pool,
+                    CHECKER_STATE_STORE_SCHEMA,
+                    CHECKER_STATE_STORE_TABLE_PREFIX,
+                )
+                .await?;
+                Some(Arc::new(inner))
+            }
+            DbType::Mongo => {
+                let client = TaskUtil::create_mongo_client(
+                    checker_url,
+                    checker_auth,
+                    "checker_state_store",
+                    Some(2),
+                )
+                .await?;
+                let inner = CheckerStateStore::new_mongo(
+                    client,
                     CHECKER_STATE_STORE_SCHEMA,
                     CHECKER_STATE_STORE_TABLE_PREFIX,
                 )
@@ -1057,7 +1136,7 @@ impl TaskRunner {
             }
             _ => {
                 log_warn!(
-                    "checker state store only supports mysql/pg sinker target, got {}. checkpoint persistence disabled.",
+                    "checker state store unsupported for target db_type [{}], checkpoint persistence is disabled.",
                     checker_db_type
                 );
                 None
@@ -1562,5 +1641,58 @@ impl TaskRunner {
             | ExtractorConfig::MongoSnapshot { .. } => self.config.runtime.tb_parallel_size,
             _ => 1,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use dt_common::config::connection_auth_config::ConnectionAuthConfig;
+
+    #[test]
+    fn derive_single_task_id_prefers_task_context_id() {
+        let extractor = ExtractorConfig::MongoSnapshot {
+            url: "mongodb://127.0.0.1:27017".to_string(),
+            connection_auth: ConnectionAuthConfig::NoAuth,
+            app_name: "APE_DTS".to_string(),
+            db: "src_db".to_string(),
+            tb: "src_tb".to_string(),
+        };
+
+        assert_eq!(
+            TaskRunner::derive_single_task_id("explicit.scope", &extractor),
+            "explicit.scope"
+        );
+    }
+
+    #[test]
+    fn derive_single_task_id_falls_back_to_snapshot_scope() {
+        let extractor = ExtractorConfig::PgSnapshot {
+            url: "postgres://127.0.0.1:5432/postgres".to_string(),
+            connection_auth: ConnectionAuthConfig::NoAuth,
+            schema: "public".to_string(),
+            tb: "users".to_string(),
+            sample_interval: 1,
+            parallel_size: 1,
+            batch_size: 1,
+            partition_cols: String::new(),
+        };
+
+        assert_eq!(
+            TaskRunner::derive_single_task_id("", &extractor),
+            "public.users"
+        );
+    }
+
+    #[test]
+    fn build_checker_log_dir_appends_sanitized_scope() {
+        assert_eq!(
+            TaskRunner::build_checker_log_dir("./logs/check", "db.one/orders:2026"),
+            "./logs/check/db.one_orders_2026"
+        );
+        assert_eq!(
+            TaskRunner::build_checker_log_dir("./logs/check", ""),
+            "./logs/check"
+        );
     }
 }

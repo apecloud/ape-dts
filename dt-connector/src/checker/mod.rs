@@ -14,7 +14,7 @@ pub use mongo_checker::MongoChecker as MongoCheckerHandle;
 pub use mysql_checker::MysqlChecker as MysqlCheckerHandle;
 pub use pg_checker::PgChecker as PgCheckerHandle;
 pub use state_store::{
-    CheckerCheckpointBundle, CheckerStateRow, CheckpointManifest, SqlCheckerStateStore,
+    CheckerCheckpointBundle, CheckerStateRow, CheckerStateStore, CheckpointManifest,
 };
 pub use struct_checker::StructCheckerHandle;
 

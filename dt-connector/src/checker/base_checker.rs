@@ -18,7 +18,7 @@ use tokio::time::{sleep, Duration, Instant};
 
 use crate::{
     checker::check_log::{CheckLog, CheckSummaryLog, DiffColValue, TableCheckCount},
-    checker::state_store::{CheckerCheckpointCommit, CheckerStateRow, SqlCheckerStateStore},
+    checker::state_store::{CheckerCheckpointCommit, CheckerStateRow, CheckerStateStore},
     rdb_query_builder::RdbQueryBuilder,
     rdb_router::RdbRouter,
     sinker::base_sinker::BaseSinker,
@@ -197,7 +197,7 @@ pub struct CheckContext {
     pub cdc_check_log_max_rows: usize,
     pub s3_output: Option<(Operator, String)>,
     pub cdc_check_log_interval_secs: u64,
-    pub state_store: Option<Arc<SqlCheckerStateStore>>,
+    pub state_store: Option<Arc<CheckerStateStore>>,
     pub expected_resume_position: Option<Position>,
 }
 

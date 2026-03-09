@@ -2,9 +2,13 @@ use std::str::FromStr;
 
 use anyhow::{Context, Result};
 use chrono::Utc;
-use sqlx::{query, ColumnIndex, Database, Decode, PgPool, Row, Type};
+use mongodb::{
+    bson::{doc, Bson, Document},
+    options::{IndexOptions, ReplaceOptions},
+    Client, IndexModel,
+};
+use sqlx::{query, ColumnIndex, Database, Decode, MySql, PgPool, Pool, Postgres, Row, Type};
 
-use crate::extractor::resumer::ResumerDbPool;
 use dt_common::meta::position::Position;
 
 const DEFAULT_STATE_SCHEMA: &str = "apecloud_metadata";
@@ -44,17 +48,57 @@ pub struct CheckerCheckpointCommit {
 }
 
 #[derive(Clone, Debug)]
-pub struct SqlCheckerStateStore {
-    pool: ResumerDbPool,
+enum CheckerStateStoreBackend {
+    MySql(Pool<MySql>),
+    Postgres(Pool<Postgres>),
+    Mongo(Client),
+}
+
+#[derive(Clone, Debug)]
+pub struct CheckerStateStore {
+    backend: CheckerStateStoreBackend,
     schema: String,
-    position_table: String,
     snapshot_table: String,
     manifest_table: String,
 }
 
-impl SqlCheckerStateStore {
-    pub async fn new(
-        pool: ResumerDbPool,
+impl CheckerStateStore {
+    pub async fn new_mysql(
+        pool: Pool<MySql>,
+        schema: &str,
+        table_prefix: &str,
+    ) -> anyhow::Result<Self> {
+        Self::new_with_backend(CheckerStateStoreBackend::MySql(pool), schema, table_prefix).await
+    }
+
+    pub async fn new_postgres(
+        pool: Pool<Postgres>,
+        schema: &str,
+        table_prefix: &str,
+    ) -> anyhow::Result<Self> {
+        Self::new_with_backend(
+            CheckerStateStoreBackend::Postgres(pool),
+            schema,
+            table_prefix,
+        )
+        .await
+    }
+
+    pub async fn new_mongo(
+        client: Client,
+        schema: &str,
+        table_prefix: &str,
+    ) -> anyhow::Result<Self> {
+        Self::new_with_backend(
+            CheckerStateStoreBackend::Mongo(client),
+            schema,
+            table_prefix,
+        )
+        .await
+    }
+
+    async fn new_with_backend(
+        backend: CheckerStateStoreBackend,
         schema: &str,
         table_prefix: &str,
     ) -> anyhow::Result<Self> {
@@ -62,9 +106,8 @@ impl SqlCheckerStateStore {
         let prefix = sanitize_identifier(table_prefix, DEFAULT_STATE_TABLE_PREFIX);
 
         let store = Self {
-            pool,
+            backend,
             schema,
-            position_table: format!("{prefix}_checkpoint_position"),
             snapshot_table: format!("{prefix}_store_snapshot"),
             manifest_table: format!("{prefix}_checkpoint_manifest"),
         };
@@ -73,27 +116,12 @@ impl SqlCheckerStateStore {
     }
 
     async fn initialization(&self) -> Result<()> {
-        match &self.pool {
-            ResumerDbPool::MySql(pool) => {
+        match &self.backend {
+            CheckerStateStoreBackend::MySql(pool) => {
                 let create_db_sql = format!("CREATE DATABASE IF NOT EXISTS `{}`", self.schema);
                 query(&create_db_sql).execute(pool).await.context(format!(
                     "failed to create checker state schema: {create_db_sql}"
                 ))?;
-
-                let position_sql = format!(
-                    r#"CREATE TABLE IF NOT EXISTS `{}`.`{}` (
-                      task_id varchar(255) NOT NULL,
-                      checkpoint_id varchar(128) NOT NULL,
-                      position_data text NOT NULL,
-                      updated_at varchar(64) NOT NULL,
-                      PRIMARY KEY (task_id, checkpoint_id)
-                    )"#,
-                    self.schema, self.position_table
-                );
-                query(&position_sql)
-                    .execute(pool)
-                    .await
-                    .context("failed to create checker checkpoint position table")?;
 
                 let snapshot_sql = format!(
                     r#"CREATE TABLE IF NOT EXISTS `{}`.`{}` (
@@ -128,7 +156,7 @@ impl SqlCheckerStateStore {
                     .await
                     .context("failed to create checker manifest table")?;
             }
-            ResumerDbPool::Postgres(pool) => {
+            CheckerStateStoreBackend::Postgres(pool) => {
                 let create_schema_sql = format!("CREATE SCHEMA IF NOT EXISTS {}", self.schema);
                 query(&create_schema_sql)
                     .execute(pool)
@@ -136,21 +164,6 @@ impl SqlCheckerStateStore {
                     .context(format!(
                         "failed to create checker state schema: {create_schema_sql}"
                     ))?;
-
-                let position_sql = format!(
-                    r#"CREATE TABLE IF NOT EXISTS {}.{} (
-                      task_id varchar(255) NOT NULL,
-                      checkpoint_id varchar(128) NOT NULL,
-                      position_data text NOT NULL,
-                      updated_at varchar(64) NOT NULL,
-                      PRIMARY KEY (task_id, checkpoint_id)
-                    )"#,
-                    self.schema, self.position_table
-                );
-                query(&position_sql)
-                    .execute(pool)
-                    .await
-                    .context("failed to create checker checkpoint position table")?;
 
                 let snapshot_sql = format!(
                     r#"CREATE TABLE IF NOT EXISTS {}.{} (
@@ -187,12 +200,42 @@ impl SqlCheckerStateStore {
                     .await
                     .context("failed to create checker manifest table")?;
             }
+            CheckerStateStoreBackend::Mongo(client) => {
+                let database = client.database(&self.schema);
+                let snapshot_collection = database.collection::<Document>(&self.snapshot_table);
+                snapshot_collection
+                    .create_index(
+                        IndexModel::builder()
+                            .keys(doc! {
+                                "task_id": 1,
+                                "checkpoint_id": 1,
+                                "row_key": 1,
+                            })
+                            .options(IndexOptions::builder().unique(true).build())
+                            .build(),
+                        None,
+                    )
+                    .await
+                    .context("failed to create checker snapshot index")?;
+
+                let manifest_collection = database.collection::<Document>(&self.manifest_table);
+                manifest_collection
+                    .create_index(
+                        IndexModel::builder()
+                            .keys(doc! { "task_id": 1 })
+                            .options(IndexOptions::builder().unique(true).build())
+                            .build(),
+                        None,
+                    )
+                    .await
+                    .context("failed to create checker manifest index")?;
+            }
         }
         Ok(())
     }
 }
 
-impl SqlCheckerStateStore {
+impl CheckerStateStore {
     async fn reset_postgres_legacy_manifest_if_needed(&self, pool: &PgPool) -> Result<()> {
         let columns_sql = "SELECT column_name FROM information_schema.columns WHERE table_schema = $1 AND table_name = $2";
         let column_rows = query(columns_sql)
@@ -223,7 +266,7 @@ impl SqlCheckerStateStore {
     }
 }
 
-impl SqlCheckerStateStore {
+impl CheckerStateStore {
     pub async fn commit_checkpoint(
         &self,
         commit: &CheckerCheckpointCommit,
@@ -237,26 +280,9 @@ impl SqlCheckerStateStore {
         let position_str = position.to_string();
         let now = Utc::now().to_rfc3339();
 
-        match &self.pool {
-            ResumerDbPool::MySql(pool) => {
+        match &self.backend {
+            CheckerStateStoreBackend::MySql(pool) => {
                 let mut tx = pool.begin().await?;
-
-                let position_sql = format!(
-                    "INSERT INTO `{}`.`{}` (task_id, checkpoint_id, position_data, updated_at)
-                    VALUES (?, ?, ?, ?)
-                    ON DUPLICATE KEY UPDATE
-                    position_data = VALUES(position_data),
-                    updated_at = VALUES(updated_at)",
-                    self.schema, self.position_table
-                );
-                query(&position_sql)
-                    .bind(task_id)
-                    .bind(checkpoint_id)
-                    .bind(&position_str)
-                    .bind(&now)
-                    .execute(&mut *tx)
-                    .await
-                    .context("failed to persist checker position")?;
 
                 let clean_current_snapshot_sql = format!(
                     "DELETE FROM `{}`.`{}` WHERE task_id = ? AND checkpoint_id = ?",
@@ -313,17 +339,6 @@ impl SqlCheckerStateStore {
                     .await
                     .context("failed to persist checker manifest")?;
 
-                let purge_old_position_sql = format!(
-                    "DELETE FROM `{}`.`{}` WHERE task_id = ? AND checkpoint_id <> ?",
-                    self.schema, self.position_table
-                );
-                query(&purge_old_position_sql)
-                    .bind(task_id)
-                    .bind(checkpoint_id)
-                    .execute(&mut *tx)
-                    .await
-                    .context("failed to purge old checker positions")?;
-
                 let purge_old_snapshot_sql = format!(
                     "DELETE FROM `{}`.`{}` WHERE task_id = ? AND checkpoint_id <> ?",
                     self.schema, self.snapshot_table
@@ -337,26 +352,8 @@ impl SqlCheckerStateStore {
 
                 tx.commit().await?;
             }
-            ResumerDbPool::Postgres(pool) => {
+            CheckerStateStoreBackend::Postgres(pool) => {
                 let mut tx = pool.begin().await?;
-
-                let position_sql = format!(
-                    "INSERT INTO {}.{} (task_id, checkpoint_id, position_data, updated_at)
-                    VALUES ($1, $2, $3, $4)
-                    ON CONFLICT (task_id, checkpoint_id)
-                    DO UPDATE SET
-                    position_data = EXCLUDED.position_data,
-                    updated_at = EXCLUDED.updated_at",
-                    self.schema, self.position_table
-                );
-                query(&position_sql)
-                    .bind(task_id)
-                    .bind(checkpoint_id)
-                    .bind(&position_str)
-                    .bind(&now)
-                    .execute(&mut *tx)
-                    .await
-                    .context("failed to persist checker position")?;
 
                 let clean_current_snapshot_sql = format!(
                     "DELETE FROM {}.{} WHERE task_id = $1 AND checkpoint_id = $2",
@@ -415,17 +412,6 @@ impl SqlCheckerStateStore {
                     .await
                     .context("failed to persist checker manifest")?;
 
-                let purge_old_position_sql = format!(
-                    "DELETE FROM {}.{} WHERE task_id = $1 AND checkpoint_id <> $2",
-                    self.schema, self.position_table
-                );
-                query(&purge_old_position_sql)
-                    .bind(task_id)
-                    .bind(checkpoint_id)
-                    .execute(&mut *tx)
-                    .await
-                    .context("failed to purge old checker positions")?;
-
                 let purge_old_snapshot_sql = format!(
                     "DELETE FROM {}.{} WHERE task_id = $1 AND checkpoint_id <> $2",
                     self.schema, self.snapshot_table
@@ -438,6 +424,70 @@ impl SqlCheckerStateStore {
                     .context("failed to purge old checker snapshots")?;
 
                 tx.commit().await?;
+            }
+            CheckerStateStoreBackend::Mongo(client) => {
+                let snapshot_collection = client
+                    .database(&self.schema)
+                    .collection::<Document>(&self.snapshot_table);
+                snapshot_collection
+                    .delete_many(
+                        doc! {
+                            "task_id": task_id,
+                            "checkpoint_id": checkpoint_id,
+                        },
+                        None,
+                    )
+                    .await
+                    .context("failed to clean current checker snapshot")?;
+
+                if !rows.is_empty() {
+                    let snapshot_docs: Vec<_> = rows
+                        .iter()
+                        .map(|row| {
+                            doc! {
+                                "task_id": task_id,
+                                "checkpoint_id": checkpoint_id,
+                                "row_key": row.row_key.to_string(),
+                                "row_payload": row.payload.as_str(),
+                                "updated_at": now.as_str(),
+                            }
+                        })
+                        .collect();
+                    snapshot_collection
+                        .insert_many(snapshot_docs, None)
+                        .await
+                        .context("failed to persist checker snapshot rows")?;
+                }
+
+                let manifest_collection = client
+                    .database(&self.schema)
+                    .collection::<Document>(&self.manifest_table);
+                manifest_collection
+                    .replace_one(
+                        doc! { "task_id": task_id },
+                        doc! {
+                            "task_id": task_id,
+                            "checkpoint_id": checkpoint_id,
+                            "position_data": position_str.as_str(),
+                            "committed_at": now.as_str(),
+                            "evicted_miss": evicted_miss as i64,
+                            "evicted_diff": evicted_diff as i64,
+                        },
+                        Some(ReplaceOptions::builder().upsert(true).build()),
+                    )
+                    .await
+                    .context("failed to persist checker manifest")?;
+
+                snapshot_collection
+                    .delete_many(
+                        doc! {
+                            "task_id": task_id,
+                            "checkpoint_id": { "$ne": checkpoint_id },
+                        },
+                        None,
+                    )
+                    .await
+                    .context("failed to purge old checker snapshots")?;
             }
         }
 
@@ -457,8 +507,8 @@ impl SqlCheckerStateStore {
         &self,
         task_id: &str,
     ) -> Result<Option<CheckerCheckpointBundle>> {
-        match &self.pool {
-            ResumerDbPool::MySql(pool) => {
+        match &self.backend {
+            CheckerStateStoreBackend::MySql(pool) => {
                 let manifest_sql = format!(
                     "SELECT checkpoint_id, position_data, committed_at, evicted_miss, evicted_diff
                     FROM `{}`.`{}`
@@ -497,7 +547,7 @@ impl SqlCheckerStateStore {
                 let rows = parse_snapshot_rows(snapshot_rows)?;
                 Ok(Some(CheckerCheckpointBundle { manifest, rows }))
             }
-            ResumerDbPool::Postgres(pool) => {
+            CheckerStateStoreBackend::Postgres(pool) => {
                 let manifest_sql = format!(
                     "SELECT checkpoint_id, position_data, committed_at, evicted_miss, evicted_diff
                     FROM {}.{}
@@ -534,6 +584,38 @@ impl SqlCheckerStateStore {
                     .fetch_all(pool)
                     .await?;
                 let rows = parse_snapshot_rows(snapshot_rows)?;
+                Ok(Some(CheckerCheckpointBundle { manifest, rows }))
+            }
+            CheckerStateStoreBackend::Mongo(client) => {
+                let manifest_collection = client
+                    .database(&self.schema)
+                    .collection::<Document>(&self.manifest_table);
+                let manifest_doc = manifest_collection
+                    .find_one(doc! { "task_id": task_id }, None)
+                    .await?
+                    .map(|doc| parse_mongo_manifest(task_id, doc))
+                    .transpose()?;
+                let Some(manifest) = manifest_doc else {
+                    return Ok(None);
+                };
+
+                let snapshot_collection = client
+                    .database(&self.schema)
+                    .collection::<Document>(&self.snapshot_table);
+                let mut cursor = snapshot_collection
+                    .find(
+                        doc! {
+                            "task_id": task_id,
+                            "checkpoint_id": manifest.checkpoint_id.as_str(),
+                        },
+                        None,
+                    )
+                    .await?;
+                let mut rows = Vec::new();
+                while cursor.advance().await? {
+                    let row_doc = cursor.deserialize_current()?;
+                    rows.push(parse_mongo_snapshot_row(row_doc)?);
+                }
                 Ok(Some(CheckerCheckpointBundle { manifest, rows }))
             }
         }
@@ -575,6 +657,48 @@ where
         rows.push(CheckerStateRow { row_key, payload });
     }
     Ok(rows)
+}
+
+fn parse_mongo_manifest(task_id: &str, doc: Document) -> Result<CheckpointManifest> {
+    Ok(build_manifest(
+        task_id,
+        ManifestParts {
+            checkpoint_id: mongo_string_field(&doc, "checkpoint_id")?,
+            position: mongo_string_field(&doc, "position_data")?,
+            committed_at: mongo_string_field(&doc, "committed_at")?,
+            evicted_miss: mongo_usize_field(&doc, "evicted_miss")?,
+            evicted_diff: mongo_usize_field(&doc, "evicted_diff")?,
+        },
+    ))
+}
+
+fn parse_mongo_snapshot_row(doc: Document) -> Result<CheckerStateRow> {
+    let row_key_raw = mongo_string_field(&doc, "row_key")?;
+    let row_key = u128::from_str(&row_key_raw)
+        .with_context(|| format!("invalid checker row key [{row_key_raw}] in state store"))?;
+    let payload = mongo_string_field(&doc, "row_payload")?;
+    Ok(CheckerStateRow { row_key, payload })
+}
+
+fn mongo_string_field(doc: &Document, field: &str) -> Result<String> {
+    match doc.get(field) {
+        Some(Bson::String(value)) => Ok(value.clone()),
+        Some(other) => {
+            anyhow::bail!("checker state store field [{field}] should be string, got {other:?}")
+        }
+        None => anyhow::bail!("checker state store missing required field [{field}]"),
+    }
+}
+
+fn mongo_usize_field(doc: &Document, field: &str) -> Result<usize> {
+    match doc.get(field) {
+        Some(Bson::Int32(value)) => Ok((*value).max(0) as usize),
+        Some(Bson::Int64(value)) => Ok((*value).max(0) as usize),
+        Some(other) => {
+            anyhow::bail!("checker state store field [{field}] should be integer, got {other:?}")
+        }
+        None => anyhow::bail!("checker state store missing required field [{field}]"),
+    }
 }
 
 fn sanitize_identifier(raw: &str, default_value: &str) -> String {
