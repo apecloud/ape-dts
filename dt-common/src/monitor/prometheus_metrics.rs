@@ -5,7 +5,7 @@ use actix_web::{middleware::Logger, web, App, HttpResponse, HttpServer, Responde
 use dashmap::DashMap;
 use prometheus::{Gauge, Opts, Registry, TextEncoder};
 
-use crate::config::config_enums::TaskType;
+use crate::config::config_enums::{TaskKind, TaskType};
 use crate::config::metrics_config::MetricsConfig;
 use crate::monitor::task_metrics::TaskMetricsType;
 
@@ -231,8 +231,8 @@ impl PrometheusMetrics {
         );
 
         if let Some(task_type) = &self.task_type {
-            match task_type {
-                TaskType::Snapshot => {
+            match task_type.kind {
+                TaskKind::Snapshot => {
                     register_handler(
                         "extractor_plan_records",
                         "the records estimated by extractor plan",
@@ -244,7 +244,7 @@ impl PrometheusMetrics {
                         TaskMetricsType::Progress,
                     );
                 }
-                TaskType::Cdc => {
+                TaskKind::Cdc => {
                     register_handler(
                         "timestamp",
                         "the timestamp of task",
@@ -256,7 +256,7 @@ impl PrometheusMetrics {
                         TaskMetricsType::SinkerDdlCount,
                     );
                 }
-                TaskType::Struct | TaskType::Check => {}
+                TaskKind::Struct => {}
             }
         }
         self
