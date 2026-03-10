@@ -192,7 +192,17 @@ impl BasePipeline {
                 data.push(struct_data);
             }
         }
-        let data_size = self.parallelizer.sink_struct(data, &self.sinkers).await?;
+        if data.is_empty() {
+            return Ok((DataSize::default(), None, None));
+        }
+
+        let data_size = self
+            .parallelizer
+            .sink_struct(data.clone(), &self.sinkers)
+            .await?;
+        if let Some(checker) = &self.checker {
+            checker.check_struct(data).await?;
+        }
         Ok((data_size, None, None))
     }
 

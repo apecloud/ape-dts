@@ -24,6 +24,16 @@ pub enum CheckerHandle {
 }
 
 impl CheckerHandle {
+    pub async fn check_struct(
+        &self,
+        data: Vec<dt_common::meta::struct_meta::struct_data::StructData>,
+    ) -> anyhow::Result<()> {
+        match self {
+            CheckerHandle::Data(_) => Ok(()),
+            CheckerHandle::Struct(handle) => handle.check_struct(data).await,
+        }
+    }
+
     pub async fn close_with_position(
         &mut self,
         position: Option<&dt_common::meta::position::Position>,
