@@ -16,5 +16,4 @@ tokio = { workspace = true }
 concurrent-queue = { workspace = true }
 log = { workspace = true }
 log4rs = { workspace = true }
-ratelimit = { workspace = true }
 anyhow = { workspace = true }
