@@ -10,7 +10,7 @@ use dt_common::meta::{
 
 use crate::{merge_parallelizer::TbMergedData, Merger};
 
-pub struct MongoMerger {}
+pub struct MongoMerger;
 
 #[async_trait]
 impl Merger for MongoMerger {
@@ -26,10 +26,9 @@ impl Merger for MongoMerger {
         }
 
         let mut results = Vec::new();
-        for (tb, tb_data) in tb_data_map.drain() {
+        for (_, tb_data) in tb_data_map.drain() {
             let (insert_rows, delete_rows, unmerged_rows) = Self::merge_row_data(tb_data)?;
             let tb_merged = TbMergedData {
-                tb,
                 insert_rows,
                 delete_rows,
                 unmerged_rows,
@@ -72,17 +71,17 @@ impl MongoMerger {
                         row_data.schema.clone(),
                         row_data.tb.clone(),
                         RowType::Delete,
-                        row_data.before,
+                        row_data.before.clone(),
                         None,
                     );
                     delete_map.insert(id.clone(), delete_row);
 
                     let insert_row = RowData::new(
-                        row_data.schema,
-                        row_data.tb,
+                        row_data.schema.clone(),
+                        row_data.tb.clone(),
                         RowType::Insert,
-                        Option::None,
-                        row_data.after,
+                        None,
+                        row_data.after.clone(),
                     );
                     insert_map.insert(id, insert_row);
                 }

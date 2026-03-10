@@ -1,6 +1,6 @@
-pub mod base_checker;
 pub mod base_sinker;
 pub mod base_struct_sinker;
+pub mod checked_sinker;
 pub mod clickhouse;
 pub mod dummy_sinker;
 pub mod foxlake;

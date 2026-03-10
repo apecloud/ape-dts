@@ -132,7 +132,7 @@ services:
     container_name: mongo-src-ci
     ports:
       - "27017:27017"
-    command: mongod --replSet rs0
+    command: mongod --replSet rs0 --bind_ip_all
     healthcheck:
       test: ["CMD", "mongo", "--eval", "db.adminCommand('ping')"]
       timeout: 5s
@@ -143,12 +143,9 @@ services:
   mongo-dst:
     image: mongo:4.4
     container_name: mongo-dst-ci
-    environment:
-      MONGO_INITDB_ROOT_USERNAME: ape_dts
-      MONGO_INITDB_ROOT_PASSWORD: 123456
     ports:
-      - "27018:27017"
-    command: mongod --replSet rs1 --auth
+      - "27016:27017"
+    command: mongod --replSet rs1 --bind_ip_all
     healthcheck:
       test: ["CMD", "mongo", "--eval", "db.adminCommand('ping')"]
       timeout: 5s

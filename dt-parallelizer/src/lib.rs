@@ -1,5 +1,4 @@
 pub mod base_parallelizer;
-pub mod check_parallelizer;
 pub mod foxlake_parallelizer;
 pub mod merge_parallelizer;
 pub mod mongo_merger;

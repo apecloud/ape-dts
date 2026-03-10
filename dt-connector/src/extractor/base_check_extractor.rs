@@ -3,7 +3,7 @@ use std::str::FromStr;
 use dt_common::log_info;
 
 use crate::{
-    check_log::{check_log::CheckLog, log_reader::LogReader},
+    checker::{check_log::CheckLog, log_reader::LogReader},
     BatchCheckExtractor,
 };
 

@@ -47,3 +47,4 @@ clickhouse = { workspace = true }
 percent-encoding = { workspace = true }
 opendal = { workspace = true }
 dashmap = {workspace = true}
+indexmap = {workspace = true}

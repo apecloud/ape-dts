@@ -1,5 +1,3 @@
-use chrono::format;
-
 use crate::test_runner::mock_utils::{pg_type::PgType, random::Random};
 
 pub struct Array {}
