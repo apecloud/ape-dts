@@ -23,19 +23,21 @@ impl BufferLimiter {
                 UnitType::Bytes,
             )));
         }
-        if config.buffer_size > 0 && config.buffer_size <= u32::MAX as usize {
+        if config.buffer_size > 0 {
             limiters.push(Box::new(
                 crate::limiter::capacity_limiter::CapacityLimiter::new(
-                    config.buffer_size as u32,
+                    config.buffer_size,
                     UnitType::Records,
                 ),
             ));
         }
-        if config.buffer_memory_mb > 0 && config.buffer_memory_mb <= u32::MAX as usize {
+        if config.buffer_memory_mb > 0
+            && (config.buffer_memory_mb as u64) <= (usize::MAX as u64) / (1024 * 1024)
+        {
             let capacity_bytes = (config.buffer_memory_mb as u64) * 1024 * 1024;
             limiters.push(Box::new(
                 crate::limiter::capacity_limiter::CapacityLimiter::new(
-                    capacity_bytes as u32,
+                    capacity_bytes as usize,
                     UnitType::Bytes,
                 ),
             ));

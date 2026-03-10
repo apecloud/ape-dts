@@ -9,9 +9,9 @@ pub struct CapacityLimiter {
 }
 
 impl CapacityLimiter {
-    pub fn new(capacity: u32, unit_type: UnitType) -> Self {
+    pub fn new(capacity: usize, unit_type: UnitType) -> Self {
         Self {
-            semaphore: Semaphore::new(capacity as usize),
+            semaphore: Semaphore::new(capacity),
             unit_type,
         }
     }
