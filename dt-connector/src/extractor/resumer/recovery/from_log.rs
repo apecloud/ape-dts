@@ -9,7 +9,10 @@ use crate::extractor::resumer::{
     CURRENT_POSITION_LOG_FLAG, TAIL_POSITION_COUNT,
 };
 use dt_common::{
-    config::{config_enums::TaskType, resumer_config::ResumerConfig},
+    config::{
+        config_enums::{TaskKind, TaskType},
+        resumer_config::ResumerConfig,
+    },
     log_warn,
     meta::position::Position,
     utils::file_util::FileUtil,
@@ -130,8 +133,8 @@ impl LogRecovery {
     }
 
     async fn initialization(&self) -> Result<()> {
-        match self.task_type {
-            TaskType::Snapshot => {
+        match self.task_type.kind {
+            TaskKind::Snapshot => {
                 if !self.resume_config_file.is_empty() {
                     self.parse_config_file(&self.resume_config_file, None, |self_ref, line| {
                         self_ref.parse_snapshot_line(line)
@@ -155,7 +158,7 @@ impl LogRecovery {
                     .await?;
                 }
             }
-            TaskType::Cdc => {
+            TaskKind::Cdc => {
                 if !self.resume_config_file.is_empty() {
                     self.parse_config_file(&self.resume_config_file, None, |self_ref, line| {
                         self_ref.parse_cdc_line(line)

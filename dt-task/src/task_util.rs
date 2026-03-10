@@ -12,7 +12,7 @@ use sqlx::{
 
 use dt_common::{
     config::{
-        config_enums::{DbType, RdbTransactionIsolation, TaskType},
+        config_enums::{DbType, RdbTransactionIsolation, TaskKind, TaskType},
         connection_auth_config::ConnectionAuthConfig,
         extractor_config::ExtractorConfig,
         global_config::GlobalConfig,
@@ -368,8 +368,8 @@ impl TaskUtil {
         schemas: &[String],
         filter: &RdbFilter,
     ) -> anyhow::Result<u64> {
-        match task_type {
-            TaskType::Snapshot => match db_type {
+        match task_type.kind {
+            TaskKind::Snapshot => match db_type {
                 DbType::Mysql => Self::estimate_mysql_snapshot(conn_pool, schemas, filter).await,
                 DbType::Pg => Self::estimate_pg_snapshot(conn_pool, schemas, filter).await,
                 _ => Ok(0),

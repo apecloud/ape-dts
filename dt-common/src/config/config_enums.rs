@@ -126,16 +126,45 @@ pub enum MetaCenterType {
     DbEngine,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Display, EnumString, IntoStaticStr)]
-pub enum TaskType {
-    #[strum(serialize = "struct")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum TaskKind {
     Struct,
-    #[strum(serialize = "snapshot")]
     Snapshot,
-    #[strum(serialize = "cdc")]
     Cdc,
-    #[strum(serialize = "check")]
-    Check,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum CheckMode {
+    Standalone,
+    Inline,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct TaskType {
+    pub kind: TaskKind,
+    pub check: Option<CheckMode>,
+}
+
+impl TaskType {
+    pub const fn new(kind: TaskKind, check: Option<CheckMode>) -> Self {
+        Self { kind, check }
+    }
+
+    pub const fn has_check(&self) -> bool {
+        self.check.is_some()
+    }
+
+    pub const fn is_inline_check(&self) -> bool {
+        matches!(self.check, Some(CheckMode::Inline))
+    }
+
+    pub const fn is_standalone_check(&self) -> bool {
+        matches!(self.check, Some(CheckMode::Standalone))
+    }
+
+    pub const fn is_cdc_inline_check(&self) -> bool {
+        matches!(self.kind, TaskKind::Cdc) && self.is_inline_check()
+    }
 }
 
 #[derive(Display, EnumString, IntoStaticStr, PartialEq, Default)]
@@ -172,10 +201,29 @@ pub fn build_task_type(
     checker_enabled: bool,
 ) -> Option<TaskType> {
     match (extract_type, sink_type, checker_enabled) {
-        (ExtractType::Struct, SinkType::Struct, _) => Some(TaskType::Struct),
-        (ExtractType::Snapshot, SinkType::Write, _) => Some(TaskType::Snapshot),
-        (ExtractType::Cdc, SinkType::Write, _) => Some(TaskType::Cdc),
-        (_, SinkType::Dummy, true) => Some(TaskType::Check),
+        (ExtractType::Struct, SinkType::Struct, false) => {
+            Some(TaskType::new(TaskKind::Struct, None))
+        }
+        (ExtractType::Struct, SinkType::Struct, true) => {
+            Some(TaskType::new(TaskKind::Struct, Some(CheckMode::Inline)))
+        }
+        (ExtractType::Struct, SinkType::Dummy, true) => {
+            Some(TaskType::new(TaskKind::Struct, Some(CheckMode::Standalone)))
+        }
+        (ExtractType::Snapshot, SinkType::Write, false) => {
+            Some(TaskType::new(TaskKind::Snapshot, None))
+        }
+        (ExtractType::Snapshot, SinkType::Write, true) => {
+            Some(TaskType::new(TaskKind::Snapshot, Some(CheckMode::Inline)))
+        }
+        (ExtractType::Snapshot, SinkType::Dummy, true) => Some(TaskType::new(
+            TaskKind::Snapshot,
+            Some(CheckMode::Standalone),
+        )),
+        (ExtractType::Cdc, SinkType::Write, false) => Some(TaskType::new(TaskKind::Cdc, None)),
+        (ExtractType::Cdc, SinkType::Write, true) => {
+            Some(TaskType::new(TaskKind::Cdc, Some(CheckMode::Inline)))
+        }
         _ => None,
     }
 }
