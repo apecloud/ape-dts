@@ -1,6 +1,7 @@
 use crate::{
-    config::pipeline_config::PipelineConfig,
+    config::limiter_config::{CapacityLimiterConfig, RateLimiterConfig},
     limiter::limiter::{Limiter, UnitType},
+    log_error,
     meta::dt_data::DtItem,
 };
 
@@ -9,39 +10,62 @@ pub struct BufferLimiter {
 }
 
 impl BufferLimiter {
-    pub fn from_config(config: &PipelineConfig) -> Option<Self> {
+    pub fn from_config(
+        rate_limiter_config: Option<&RateLimiterConfig>,
+        capacity_limiter_config: Option<&CapacityLimiterConfig>,
+    ) -> Option<Self> {
         let mut limiters: Vec<Box<dyn Limiter + Send + Sync>> = Vec::new();
-        if config.max_rps > 0 && config.max_rps <= u32::MAX as u64 {
-            limiters.push(Box::new(crate::limiter::rate_limiter::RateLimiter::new(
-                config.max_rps as u32,
-                UnitType::Records,
-            )));
-        }
-        if config.max_bps > 0 && config.max_bps <= u32::MAX as u64 {
-            limiters.push(Box::new(crate::limiter::rate_limiter::RateLimiter::new(
-                config.max_bps as u32,
-                UnitType::Bytes,
-            )));
-        }
-        if config.buffer_size > 0 {
-            limiters.push(Box::new(
-                crate::limiter::capacity_limiter::CapacityLimiter::new(
-                    config.buffer_size,
+
+        if let Some(rate_cfg) = rate_limiter_config {
+            if rate_cfg.max_rps > 0 {
+                limiters.push(Box::new(crate::limiter::rate_limiter::RateLimiter::new(
+                    rate_cfg.max_rps,
                     UnitType::Records,
-                ),
-            ));
-        }
-        if config.buffer_memory_mb > 0
-            && (config.buffer_memory_mb as u64) <= (usize::MAX as u64) / (1024 * 1024)
-        {
-            let capacity_bytes = (config.buffer_memory_mb as u64) * 1024 * 1024;
-            limiters.push(Box::new(
-                crate::limiter::capacity_limiter::CapacityLimiter::new(
-                    capacity_bytes as usize,
+                )));
+            }
+
+            if rate_cfg.max_mbps > 0 && rate_cfg.max_mbps <= (u32::MAX / (1024 * 1024)) {
+                let bps = rate_cfg.max_mbps * 1024 * 1024;
+                limiters.push(Box::new(crate::limiter::rate_limiter::RateLimiter::new(
+                    bps,
                     UnitType::Bytes,
-                ),
-            ));
+                )));
+            } else {
+                log_error!(
+                    "max_mbps={} is too large and will be ignored to prevent overflow",
+                    rate_cfg.max_mbps
+                );
+            }
         }
+
+        if let Some(cap_cfg) = capacity_limiter_config {
+            if cap_cfg.buffer_size > 0 {
+                limiters.push(Box::new(
+                    crate::limiter::capacity_limiter::CapacityLimiter::new(
+                        cap_cfg.buffer_size,
+                        UnitType::Records,
+                    ),
+                ));
+            }
+
+            if cap_cfg.buffer_memory_mb > 0
+                && cap_cfg.buffer_memory_mb as u64 <= (u32::MAX / (1024 * 1024)) as u64
+            {
+                let capacity_bytes = cap_cfg.buffer_memory_mb * 1024 * 1024;
+                limiters.push(Box::new(
+                    crate::limiter::capacity_limiter::CapacityLimiter::new(
+                        capacity_bytes,
+                        UnitType::Bytes,
+                    ),
+                ));
+            } else {
+                log_error!(
+                    "buffer_memory_mb={} is too large and will be ignored to prevent overflow",
+                    cap_cfg.buffer_memory_mb
+                );
+            }
+        }
+
         if limiters.is_empty() {
             None
         } else {
@@ -89,8 +113,7 @@ mod tests {
 
     use tokio::sync::Barrier;
 
-    use crate::config::config_enums::PipelineType;
-    use crate::config::pipeline_config::PipelineConfig;
+    use crate::config::limiter_config::{CapacityLimiterConfig, RateLimiterConfig};
     use crate::meta::dt_data::{DtData, DtItem};
     use crate::meta::foxlake::s3_file_meta::S3FileMeta;
     use crate::meta::position::Position;
@@ -99,26 +122,19 @@ mod tests {
 
     // ── helpers ──────────────────────────────────────────────────────────────
 
-    fn build_pipeline_config(
-        max_rps: u64,
-        max_bps: u64,
+    fn build_configs(
+        max_rps: u32,
+        max_mbps: u32,
         buffer_size: usize,
         buffer_memory_mb: usize,
-    ) -> PipelineConfig {
-        PipelineConfig {
-            pipeline_type: PipelineType::Basic,
-            buffer_size,
-            buffer_memory_mb,
-            max_rps,
-            max_bps,
-            checkpoint_interval_secs: 1,
-            batch_sink_interval_secs: 1,
-            counter_time_window_secs: 1,
-            counter_max_sub_count: 1000,
-            http_host: "0.0.0.0".to_string(),
-            http_port: 10231,
-            with_field_defs: true,
-        }
+    ) -> (RateLimiterConfig, CapacityLimiterConfig) {
+        (
+            RateLimiterConfig { max_rps, max_mbps },
+            CapacityLimiterConfig {
+                buffer_size,
+                buffer_memory_mb,
+            },
+        )
     }
 
     /// A record item: `get_data_size()` == 0 → only record-unit limiters apply.
@@ -165,11 +181,12 @@ mod tests {
     // ── parameter 1: max_rps (rate limiter – records/s) ──────────────────────
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn max_rps_throttles_record_throughput_multithread() {
-        const RPS: u64 = 5;
+        const RPS: u32 = 5;
         const TASKS: usize = 10;
 
+        let (rate_cfg, cap_cfg) = build_configs(RPS, 0, 0, 0);
         let limiter =
-            Arc::new(BufferLimiter::from_config(&build_pipeline_config(RPS, 0, 0, 0)).unwrap());
+            Arc::new(BufferLimiter::from_config(Some(&rate_cfg), Some(&cap_cfg)).unwrap());
         let item = Arc::new(record_item());
         let barrier = Arc::new(Barrier::new(TASKS));
 
@@ -198,15 +215,20 @@ mod tests {
         );
     }
 
-    // ── parameter 2: max_bps (rate limiter – bytes/s) ────────────────────────
+    // ── parameter 2: max_mbps (rate limiter – MB/s) ─────────────────────────
+    //
+    // With max_mbps=1 the byte quota is 1×1024×1024 = 1_048_576 tokens/s.
+    // Each item is exactly 1 MB (1_048_576 bytes), so the first task drains the
+    // full bucket immediately; the second task must wait ≈ 1 s for refill.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn max_bps_throttles_byte_throughput_multithread() {
-        const BPS: u64 = 100; // 100 bytes / sec
-        const ITEM_BYTES: usize = 100;
-        const TASKS: usize = 3;
+    async fn max_mbps_throttles_byte_throughput_multithread() {
+        const MBPS: u32 = 1; // 1 MB/s
+        const ITEM_BYTES: usize = 1024 * 1024; // exactly 1 MB per item
+        const TASKS: usize = 2; // task 1 passes instantly; task 2 waits ~1 s
 
+        let (rate_cfg, cap_cfg) = build_configs(0, MBPS, 0, 0);
         let limiter =
-            Arc::new(BufferLimiter::from_config(&build_pipeline_config(0, BPS, 0, 0)).unwrap());
+            Arc::new(BufferLimiter::from_config(Some(&rate_cfg), Some(&cap_cfg)).unwrap());
         let item = Arc::new(bytes_item(ITEM_BYTES));
         let barrier = Arc::new(Barrier::new(TASKS));
 
@@ -228,10 +250,10 @@ mod tests {
             h.await.unwrap();
         }
 
-        // 3 × 100 B at 100 B/s ≈ 3 s; assert ≥ 1 s for CI robustness
+        // 2 × 1 MB at 1 MB/s ≈ 2 s; assert ≥ 1 s for CI robustness
         assert!(
             start.elapsed() >= Duration::from_secs(1),
-            "max_bps={BPS} did not throttle: finished in {:?}",
+            "max_mbps={MBPS} did not throttle: finished in {:?}",
             start.elapsed()
         );
     }
@@ -242,9 +264,9 @@ mod tests {
         const CAPACITY: usize = 2;
         const TASKS: usize = 6;
 
-        let limiter = Arc::new(
-            BufferLimiter::from_config(&build_pipeline_config(0, 0, CAPACITY, 0)).unwrap(),
-        );
+        let (rate_cfg, cap_cfg) = build_configs(0, 0, CAPACITY, 0);
+        let limiter =
+            Arc::new(BufferLimiter::from_config(Some(&rate_cfg), Some(&cap_cfg)).unwrap());
         let item = Arc::new(record_item());
         let barrier = Arc::new(Barrier::new(TASKS));
         let in_flight = Arc::new(AtomicUsize::new(0));
@@ -293,8 +315,9 @@ mod tests {
         const CAPACITY: usize = 1_048_576 / ITEM_BYTES; // == 2
         const TASKS: usize = 6;
 
+        let (rate_cfg, cap_cfg) = build_configs(0, 0, 0, MEM_MB);
         let limiter =
-            Arc::new(BufferLimiter::from_config(&build_pipeline_config(0, 0, 0, MEM_MB)).unwrap());
+            Arc::new(BufferLimiter::from_config(Some(&rate_cfg), Some(&cap_cfg)).unwrap());
         let item = Arc::new(bytes_item(ITEM_BYTES));
         let barrier = Arc::new(Barrier::new(TASKS));
         let in_flight = Arc::new(AtomicUsize::new(0));
@@ -342,15 +365,13 @@ mod tests {
         const BUF_SIZE: usize = 2;
         const TASKS: usize = 6;
 
-        let limiter = Arc::new(
-            BufferLimiter::from_config(&build_pipeline_config(
-                10_000,     // max_rps  – high, non-binding
-                10_000_000, // max_bps  – high, non-binding
-                BUF_SIZE,   // buffer_size – binding
-                1,          // buffer_memory_mb – non-binding for 100-byte items
-            ))
-            .unwrap(),
-        );
+        // max_rps=10_000 → non-binding for 6 record-sized tasks
+        // max_mbps=10    → 10 MB/s; 6 × 100 B = 600 B << 10 MB, non-binding
+        // buffer_size=2  → binding capacity constraint
+        // buffer_memory_mb=1 → 1 MB / 100 B = 10_485 slots, non-binding
+        let (rate_cfg, cap_cfg) = build_configs(10_000, 10, BUF_SIZE, 1);
+        let limiter =
+            Arc::new(BufferLimiter::from_config(Some(&rate_cfg), Some(&cap_cfg)).unwrap());
         let item = Arc::new(bytes_item(ITEM_BYTES));
         let barrier = Arc::new(Barrier::new(TASKS));
         let in_flight = Arc::new(AtomicUsize::new(0));
@@ -403,9 +424,9 @@ mod tests {
     async fn capacity_permits_fully_restored_after_release() {
         const CAPACITY: usize = 3;
 
-        let limiter = Arc::new(
-            BufferLimiter::from_config(&build_pipeline_config(0, 0, CAPACITY, 0)).unwrap(),
-        );
+        let (rate_cfg, cap_cfg) = build_configs(0, 0, CAPACITY, 0);
+        let limiter =
+            Arc::new(BufferLimiter::from_config(Some(&rate_cfg), Some(&cap_cfg)).unwrap());
         let item = Arc::new(record_item());
 
         // Exhaust and return all permits sequentially.
@@ -450,8 +471,9 @@ mod tests {
         const MEM_MB: usize = 1;
         const ITEM_BYTES: usize = 800_000;
 
+        let (rate_cfg, cap_cfg) = build_configs(0, 0, 0, MEM_MB);
         let limiter =
-            Arc::new(BufferLimiter::from_config(&build_pipeline_config(0, 0, 0, MEM_MB)).unwrap());
+            Arc::new(BufferLimiter::from_config(Some(&rate_cfg), Some(&cap_cfg)).unwrap());
         let item = Arc::new(bytes_item(ITEM_BYTES));
 
         // First slot – should succeed immediately.

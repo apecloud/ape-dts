@@ -6,6 +6,7 @@ pub mod extractor_config;
 pub mod filter_config;
 pub mod global_config;
 pub mod ini_loader;
+pub mod limiter_config;
 pub mod meta_center_config;
 pub mod monitor_config;
 pub mod parallelizer_config;

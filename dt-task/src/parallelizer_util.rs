@@ -10,7 +10,6 @@ use dt_common::{
         sinker_config::SinkerConfig,
         task_config::TaskConfig,
     },
-    limiter::buffer_limiter::BufferLimiter,
     meta::redis::command::key_parser::KeyParser,
     monitor::monitor::Monitor,
     utils::redis_util::RedisUtil,
@@ -30,14 +29,12 @@ impl ParallelizerUtil {
     pub async fn create_parallelizer(
         config: &TaskConfig,
         monitor: Arc<Monitor>,
-        buffer_limiter: Option<Arc<BufferLimiter>>,
     ) -> anyhow::Result<Box<dyn Parallelizer + Send + Sync>> {
         let parallel_size = config.parallelizer.parallel_size;
         let parallel_type = &config.parallelizer.parallel_type;
         let base_parallelizer = BaseParallelizer {
             popped_data: VecDeque::new(),
             monitor,
-            buffer_limiter,
         };
 
         let parallelizer: Box<dyn Parallelizer + Send + Sync> = match parallel_type {

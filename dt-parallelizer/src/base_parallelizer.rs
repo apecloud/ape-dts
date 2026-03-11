@@ -5,7 +5,6 @@ use anyhow::bail;
 
 use dt_common::{
     error::Error,
-    limiter::buffer_limiter::BufferLimiter,
     meta::{
         dcl_meta::dcl_data::DclData, ddl_meta::ddl_data::DdlData, dt_data::DtItem,
         dt_queue::DtQueue, row_data::RowData,
@@ -18,7 +17,6 @@ use dt_connector::Sinker;
 pub struct BaseParallelizer {
     pub popped_data: VecDeque<DtItem>,
     pub monitor: Arc<Monitor>,
-    pub buffer_limiter: Option<Arc<BufferLimiter>>,
 }
 
 impl BaseParallelizer {
@@ -69,11 +67,8 @@ impl BaseParallelizer {
         buffer: &DtQueue,
         record_size_counter: &mut Counter,
     ) -> anyhow::Result<DtItem> {
-        match buffer.pop() {
+        match buffer.pop().await {
             Ok(item) => {
-                if let Some(buffer_limiter) = &self.buffer_limiter {
-                    buffer_limiter.release(&item).await;
-                }
                 // counter
                 record_size_counter.add(
                     item.dt_data.get_data_size(),

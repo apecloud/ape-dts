@@ -82,7 +82,8 @@ pub struct TaskContext {
     pub recorder: Option<Arc<dyn Recorder + Send + Sync>>,
     pub recovery: Option<Arc<dyn Recovery + Send + Sync>>,
     pub check_summary: Option<Arc<AsyncMutex<CheckSummaryLog>>>,
-    pub buffer_limiter: Option<Arc<BufferLimiter>>,
+    pub enqueue_limiter: Option<Arc<BufferLimiter>>,
+    pub dequeue_limiter: Option<Arc<BufferLimiter>>,
 }
 
 #[derive(Clone)]
@@ -168,7 +169,14 @@ impl TaskRunner {
             None => (None, None),
         };
         let (extractor_client, sinker_client) = ConnClient::from_config(&self.config).await?;
-        let buffer_limiter = BufferLimiter::from_config(&self.config.pipeline).map(Arc::new);
+        let enqueue_limiter = BufferLimiter::from_config(
+            Some(&self.config.extractor_basic.rate_limiter),
+            Some(&self.config.pipeline.capacity_limiter),
+        )
+        .map(Arc::new);
+        let dequeue_limiter =
+            BufferLimiter::from_config(Some(&self.config.sinker_basic.rate_limiter), None)
+                .map(Arc::new);
 
         let check_summary = match &self.config.sinker {
             SinkerConfig::MysqlCheck { .. }
@@ -198,7 +206,8 @@ impl TaskRunner {
             recorder,
             recovery,
             check_summary: check_summary.clone(),
-            buffer_limiter,
+            enqueue_limiter,
+            dequeue_limiter,
         };
 
         #[cfg(feature = "metrics")]
@@ -314,7 +323,8 @@ impl TaskRunner {
             recovery: task_context.recovery,
             check_summary: task_context.check_summary,
             partition_cols: task_context.partition_cols,
-            buffer_limiter: task_context.buffer_limiter,
+            enqueue_limiter: task_context.enqueue_limiter,
+            dequeue_limiter: task_context.dequeue_limiter,
         };
         let me = self.clone();
         join_set.spawn(async move {
@@ -336,13 +346,15 @@ impl TaskRunner {
         let router = (*task_context.router).clone();
         let recorder = task_context.recorder.clone();
         let recovery = task_context.recovery.clone();
-        let buffer_limiter = task_context.buffer_limiter;
+        let enqueue_limiter = task_context.enqueue_limiter;
+        let dequeue_limiter = task_context.dequeue_limiter;
 
-        let max_bytes = self.config.pipeline.buffer_memory_mb * 1024 * 1024;
+        let max_bytes = self.config.pipeline.capacity_limiter.buffer_memory_mb * 1024 * 1024;
         let buffer = Arc::new(DtQueue::new(
-            self.config.pipeline.buffer_size,
+            self.config.pipeline.capacity_limiter.buffer_size,
             max_bytes as u64,
-            buffer_limiter.clone(),
+            enqueue_limiter,
+            dequeue_limiter,
         ));
 
         let shut_down = Arc::new(AtomicBool::new(false));
@@ -376,7 +388,7 @@ impl TaskRunner {
         // extractor
         let monitor_time_window_secs = self.config.pipeline.counter_time_window_secs;
         let monitor_max_sub_count = self.config.pipeline.counter_max_sub_count;
-        let monitor_count_window = self.config.pipeline.buffer_size as u64;
+        let monitor_count_window = self.config.pipeline.capacity_limiter.buffer_size as u64;
         let extractor_monitor = Arc::new(Monitor::new(
             "extractor",
             &single_task_id,
@@ -435,7 +447,6 @@ impl TaskRunner {
                 pipeline_monitor.clone(),
                 rw_sinker_data_marker.clone(),
                 recorder.clone(),
-                buffer_limiter,
             )
             .await?;
 
@@ -561,7 +572,6 @@ impl TaskRunner {
         monitor: Arc<Monitor>,
         data_marker: Option<Arc<RwLock<DataMarker>>>,
         recorder: Option<Arc<dyn Recorder + Send + Sync>>,
-        buffer_limiter: Option<Arc<BufferLimiter>>,
     ) -> anyhow::Result<Box<dyn Pipeline + Send>> {
         match self.config.pipeline.pipeline_type {
             PipelineType::Basic => {
@@ -573,12 +583,8 @@ impl TaskRunner {
                             lua_code: processor_config.lua_code.clone(),
                         });
 
-                let parallelizer = ParallelizerUtil::create_parallelizer(
-                    &self.config,
-                    monitor.clone(),
-                    buffer_limiter,
-                )
-                .await?;
+                let parallelizer =
+                    ParallelizerUtil::create_parallelizer(&self.config, monitor.clone()).await?;
 
                 let pipeline = BasePipeline {
                     buffer,
@@ -998,7 +1004,8 @@ impl TaskRunner {
                 recovery: original_task_context.recovery.clone(),
                 check_summary: original_task_context.check_summary.clone(),
                 partition_cols: original_task_context.partition_cols.clone(),
-                buffer_limiter: original_task_context.buffer_limiter.clone(),
+                enqueue_limiter: original_task_context.enqueue_limiter.clone(),
+                dequeue_limiter: original_task_context.dequeue_limiter.clone(),
             });
         } else {
             for schema in schemas.iter() {
@@ -1104,7 +1111,8 @@ impl TaskRunner {
                         recovery: original_task_context.recovery.clone(),
                         check_summary: original_task_context.check_summary.clone(),
                         partition_cols: original_task_context.partition_cols.clone(),
-                        buffer_limiter: original_task_context.buffer_limiter.clone(),
+                        enqueue_limiter: original_task_context.enqueue_limiter.clone(),
+                        dequeue_limiter: original_task_context.dequeue_limiter.clone(),
                     });
                 }
 

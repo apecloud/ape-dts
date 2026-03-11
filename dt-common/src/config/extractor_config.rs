@@ -1,4 +1,6 @@
-use crate::config::connection_auth_config::ConnectionAuthConfig;
+use crate::config::{
+    connection_auth_config::ConnectionAuthConfig, limiter_config::RateLimiterConfig,
+};
 
 use super::{
     config_enums::{DbType, ExtractType},
@@ -190,4 +192,5 @@ pub struct BasicExtractorConfig {
     pub url: String,
     pub connection_auth: ConnectionAuthConfig,
     pub max_connections: u32,
+    pub rate_limiter: RateLimiterConfig,
 }

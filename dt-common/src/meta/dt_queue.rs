@@ -4,7 +4,7 @@ use std::sync::{
 };
 use tokio::sync::Notify;
 
-use concurrent_queue::{ConcurrentQueue, PopError, PushError};
+use concurrent_queue::{ConcurrentQueue, PushError};
 
 use crate::limiter::buffer_limiter::BufferLimiter;
 
@@ -16,14 +16,16 @@ pub struct DtQueue {
     max_bytes: u64,
     cur_bytes: AtomicU64,
     not_full: Arc<Notify>,
-    buffer_limiter: Option<Arc<BufferLimiter>>,
+    enqueue_limiter: Option<Arc<BufferLimiter>>,
+    dequeue_limiter: Option<Arc<BufferLimiter>>,
 }
 
 impl DtQueue {
     pub fn new(
         capacity: usize,
         max_bytes: u64,
-        buffer_limiter: Option<Arc<BufferLimiter>>,
+        enqueue_limiter: Option<Arc<BufferLimiter>>,
+        dequeue_limiter: Option<Arc<BufferLimiter>>,
     ) -> Self {
         Self {
             queue: ConcurrentQueue::bounded(capacity),
@@ -31,7 +33,8 @@ impl DtQueue {
             check_memory: max_bytes > 0,
             cur_bytes: AtomicU64::new(0),
             not_full: Arc::new(Notify::new()),
-            buffer_limiter,
+            enqueue_limiter,
+            dequeue_limiter,
         }
     }
 
@@ -56,8 +59,8 @@ impl DtQueue {
     }
 
     pub async fn push(&self, mut item: DtItem) -> anyhow::Result<()> {
-        if let Some(buffer_limiter) = &self.buffer_limiter {
-            buffer_limiter.acquire(&item).await?;
+        if let Some(enqueue_limiter) = &self.enqueue_limiter {
+            enqueue_limiter.acquire(&item).await?;
         }
         let item_size = item.dt_data.get_data_size();
         loop {
@@ -78,8 +81,15 @@ impl DtQueue {
         }
     }
 
-    pub fn pop(&self) -> anyhow::Result<DtItem, PopError> {
+    pub async fn pop(&self) -> anyhow::Result<DtItem> {
         let item = self.queue.pop()?;
+
+        if let Some(enqueue_limiter) = &self.enqueue_limiter {
+            enqueue_limiter.release(&item).await;
+        }
+        if let Some(dequeue_limiter) = &self.dequeue_limiter {
+            dequeue_limiter.acquire(&item).await?;
+        }
 
         if self.queue.is_empty() {
             self.cur_bytes.store(0, Ordering::Release);

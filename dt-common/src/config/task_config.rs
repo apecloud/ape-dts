@@ -11,8 +11,10 @@ use anyhow::{bail, Ok};
 use crate::config::metrics_config::MetricsConfig;
 use crate::{
     config::{
-        config_enums::ResumeType, connection_auth_config::ConnectionAuthConfig,
+        config_enums::ResumeType,
+        connection_auth_config::ConnectionAuthConfig,
         global_config::GlobalConfig,
+        limiter_config::{CapacityLimiterConfig, RateLimiterConfig},
     },
     error::Error,
     utils::task_util::TaskUtil,
@@ -174,18 +176,24 @@ impl TaskConfig {
         let keepalive_interval_secs: u64 =
             loader.get_with_default(EXTRACTOR, KEEPALIVE_INTERVAL_SECS, 10);
         let heartbeat_tb = loader.get_optional(EXTRACTOR, HEARTBEAT_TB);
-        let batch_size = loader.get_with_default(EXTRACTOR, BATCH_SIZE, pipeline.buffer_size);
+        let batch_size =
+            loader.get_with_default(EXTRACTOR, BATCH_SIZE, pipeline.capacity_limiter.buffer_size);
         let max_connections =
             loader.get_with_default(EXTRACTOR, MAX_CONNECTIONS, DEFAULT_MAX_CONNECTIONS);
 
         let connection_auth = ConnectionAuthConfig::from(loader, EXTRACTOR);
 
+        let rate_limiter = RateLimiterConfig {
+            max_rps: loader.get_optional(EXTRACTOR, "max_rps"),
+            max_mbps: loader.get_optional(EXTRACTOR, "max_mbps"),
+        };
         let basic = BasicExtractorConfig {
             db_type: db_type.clone(),
             extract_type: extract_type.clone(),
             url: url.clone(),
             connection_auth: connection_auth.clone(),
             max_connections,
+            rate_limiter,
         };
 
         let not_supported_err =
@@ -455,6 +463,10 @@ impl TaskConfig {
 
         let connection_auth = ConnectionAuthConfig::from(loader, SINKER);
 
+        let rate_limiter = RateLimiterConfig {
+            max_rps: loader.get_optional(SINKER, "max_rps"),
+            max_mbps: loader.get_optional(SINKER, "max_mbps"),
+        };
         let basic = BasicSinkerConfig {
             sink_type: sink_type.clone(),
             db_type: db_type.clone(),
@@ -462,6 +474,7 @@ impl TaskConfig {
             connection_auth: connection_auth.clone(),
             batch_size,
             max_connections,
+            rate_limiter,
         };
 
         let conflict_policy: ConflictPolicyEnum =
@@ -742,8 +755,12 @@ impl TaskConfig {
     }
 
     fn load_pipeline_config(loader: &IniLoader) -> PipelineConfig {
-        let mut config = PipelineConfig {
+        let capacity_limiter = CapacityLimiterConfig {
             buffer_size: loader.get_with_default(PIPELINE, "buffer_size", 16000),
+            buffer_memory_mb: loader.get_optional(PIPELINE, "buffer_memory_mb"),
+        };
+        let mut config = PipelineConfig {
+            capacity_limiter,
             checkpoint_interval_secs: loader.get_with_default(
                 PIPELINE,
                 "checkpoint_interval_secs",
@@ -752,9 +769,6 @@ impl TaskConfig {
             batch_sink_interval_secs: loader.get_optional(PIPELINE, "batch_sink_interval_secs"),
             counter_time_window_secs: loader.get_optional(PIPELINE, "counter_time_window_secs"),
             counter_max_sub_count: loader.get_with_default(PIPELINE, "counter_max_sub_count", 1000),
-            max_rps: loader.get_optional(PIPELINE, "max_rps"),
-            max_bps: loader.get_optional(PIPELINE, "max_bps"),
-            buffer_memory_mb: loader.get_optional(PIPELINE, "buffer_memory_mb"),
             pipeline_type: loader.get_with_default(PIPELINE, "pipeline_type", PipelineType::Basic),
             http_host: loader.get_with_default(PIPELINE, "http_host", "0.0.0.0".to_string()),
             http_port: loader.get_with_default(PIPELINE, "http_port", 10231),
