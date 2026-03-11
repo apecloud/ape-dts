@@ -419,6 +419,7 @@ impl BasePipeline {
 
         // persist checker checkpoint first to avoid advancing position without checker state.
         let mut checkpoint_ok = true;
+        let mut position_persisted_by_checker = false;
         if !matches!(record_position, Position::None) {
             if let Some(checker) = &self.checker {
                 if let Err(e) = checker.record_checkpoint(record_position).await {
@@ -428,10 +429,12 @@ impl BasePipeline {
                         e
                     );
                     checkpoint_ok = false;
+                } else {
+                    position_persisted_by_checker = checker.persists_position_checkpoint();
                 }
             }
         }
-        if checkpoint_ok {
+        if checkpoint_ok && !position_persisted_by_checker {
             if let Some(handler) = &self.recorder {
                 if let Err(e) = handler.record_position(record_position).await {
                     log_error!("failed to record position: {}, err: {}", record_position, e);

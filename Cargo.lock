@@ -1469,6 +1469,7 @@ dependencies = [
  "mongodb",
  "mysql-binlog-connector-rust",
  "opendal",
+ "openssl",
  "orc-format",
  "percent-encoding",
  "postgres-protocol",
