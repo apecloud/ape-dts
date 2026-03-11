@@ -4,7 +4,7 @@ use std::sync::{
 };
 use tokio::sync::Notify;
 
-use concurrent_queue::{ConcurrentQueue, PushError};
+use concurrent_queue::{ConcurrentQueue, PopError, PushError};
 
 use crate::limiter::buffer_limiter::BufferLimiter;
 
@@ -81,14 +81,17 @@ impl DtQueue {
         }
     }
 
-    pub async fn pop(&self) -> anyhow::Result<DtItem> {
+    pub async fn pop(&self) -> anyhow::Result<DtItem, PopError> {
         let item = self.queue.pop()?;
 
         if let Some(enqueue_limiter) = &self.enqueue_limiter {
             enqueue_limiter.release(&item).await;
         }
         if let Some(dequeue_limiter) = &self.dequeue_limiter {
-            dequeue_limiter.acquire(&item).await?;
+            // error can not be returned here, the item has been popped out,
+            // and the limiter acquire should not fail.
+            dequeue_limiter.acquire(&item).await.unwrap();
+            dequeue_limiter.release(&item).await;
         }
 
         if self.queue.is_empty() {
