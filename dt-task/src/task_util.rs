@@ -35,8 +35,12 @@ use dt_common::{
     rdb_filter::RdbFilter,
     system_dbs::SystemDb,
 };
-use dt_connector::extractor::resumer::{
-    build_recorder, build_recovery, recorder::Recorder, recovery::Recovery, utils::ResumerUtil,
+use dt_connector::{
+    checker::CheckerStateStore,
+    extractor::resumer::{
+        build_recorder, build_recovery, recorder::Recorder, recovery::Recovery,
+        utils::ResumerUtil,
+    },
 };
 
 pub struct TaskUtil {}
@@ -670,6 +674,7 @@ WHERE
     ) -> anyhow::Result<(
         Option<Arc<dyn Recorder + Send + Sync>>,
         Option<Arc<dyn Recovery + Send + Sync>>,
+        Option<Arc<CheckerStateStore>>,
     )> {
         let recorder_pool = match resumer_config {
             ResumerConfig::FromDB {
@@ -691,6 +696,17 @@ WHERE
             _ => None,
         };
         let recovery_pool = recorder_pool.clone();
+        let checker_state_store = if task_type.is_cdc_inline_check() {
+            if let Some(pool) = recorder_pool.clone() {
+                Some(Arc::new(
+                    CheckerStateStore::new(pool, resumer_config).await?,
+                ))
+            } else {
+                None
+            }
+        } else {
+            None
+        };
         let recorder =
             build_recorder(&global_config.task_id, resumer_config, recorder_pool).await?;
         let recovery = build_recovery(
@@ -700,7 +716,7 @@ WHERE
             recovery_pool,
         )
         .await?;
-        Ok((recorder, recovery))
+        Ok((recorder, recovery, checker_state_store))
     }
 }
 

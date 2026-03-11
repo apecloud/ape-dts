@@ -13,9 +13,7 @@ pub use base_checker::{
 pub use mongo_checker::MongoChecker as MongoCheckerHandle;
 pub use mysql_checker::MysqlChecker as MysqlCheckerHandle;
 pub use pg_checker::PgChecker as PgCheckerHandle;
-pub use state_store::{
-    CheckerCheckpointBundle, CheckerStateRow, CheckerStateStore, CheckpointManifest,
-};
+pub use state_store::{CheckerStateRow, CheckerStateStore};
 pub use struct_checker::StructCheckerHandle;
 
 pub enum CheckerHandle {
@@ -51,6 +49,13 @@ impl CheckerHandle {
         match self {
             CheckerHandle::Data(handle) => handle.record_checkpoint(position).await,
             CheckerHandle::Struct(_) => Ok(()),
+        }
+    }
+
+    pub fn persists_position_checkpoint(&self) -> bool {
+        match self {
+            CheckerHandle::Data(handle) => handle.persists_position_checkpoint(),
+            CheckerHandle::Struct(_) => false,
         }
     }
 }
