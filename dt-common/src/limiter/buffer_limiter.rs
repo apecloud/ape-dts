@@ -209,7 +209,7 @@ mod tests {
         }
 
         assert!(
-            start.elapsed() >= Duration::from_secs(1),
+            start.elapsed() >= Duration::from_millis(900),
             "max_rps={RPS} did not throttle: finished in {:?}",
             start.elapsed()
         );
@@ -250,9 +250,9 @@ mod tests {
             h.await.unwrap();
         }
 
-        // 2 × 1 MB at 1 MB/s ≈ 2 s; assert ≥ 1 s for CI robustness
+        // 2 × 1 MB at 1 MB/s ≈ 2 s; assert ≥ 900 ms to tolerate timer jitter
         assert!(
-            start.elapsed() >= Duration::from_secs(1),
+            start.elapsed() >= Duration::from_millis(900),
             "max_mbps={MBPS} did not throttle: finished in {:?}",
             start.elapsed()
         );
