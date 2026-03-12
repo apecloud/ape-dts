@@ -2,7 +2,6 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 
 use anyhow::bail;
-use ratelimit::Ratelimiter;
 
 use dt_common::{
     error::Error,
@@ -18,7 +17,6 @@ use dt_connector::Sinker;
 pub struct BaseParallelizer {
     pub popped_data: VecDeque<DtItem>,
     pub monitor: Arc<Monitor>,
-    pub rps_limiter: Option<Ratelimiter>,
 }
 
 impl BaseParallelizer {
@@ -69,18 +67,7 @@ impl BaseParallelizer {
         buffer: &DtQueue,
         record_size_counter: &mut Counter,
     ) -> anyhow::Result<DtItem> {
-        // rps limit
-        if let Some(rps_limiter) = &self.rps_limiter {
-            // refer: https://docs.rs/ratelimit/0.10.0/ratelimit/
-            if let Err(_sleep) = rps_limiter.try_wait() {
-                bail! {Error::PipelineError(format!(
-                    "reach rps limit: {}",
-                    rps_limiter.max_tokens(),
-                ))};
-            }
-        }
-
-        match buffer.pop() {
+        match buffer.pop().await {
             Ok(item) => {
                 // counter
                 record_size_counter.add(

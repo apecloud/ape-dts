@@ -79,7 +79,7 @@ impl Prechecker for RedisPrechecker {
             // should never happen since we've already checked the extractor type before into this function
             _ => 0,
         };
-        let buffer = Arc::new(DtQueue::new(1, 0));
+        let buffer = Arc::new(DtQueue::new(1, 0, None, None));
 
         let filter = RdbFilter::from_config(&self.task_config.filter, &DbType::Redis)?;
         let monitor = Arc::new(Monitor::new("extractor", "", 1, 100, 1));

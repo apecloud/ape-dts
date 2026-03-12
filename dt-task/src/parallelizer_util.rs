@@ -3,8 +3,6 @@ use std::{
     sync::Arc,
 };
 
-use ratelimit::Ratelimiter;
-
 use super::task_util::TaskUtil;
 use dt_common::{
     config::{
@@ -31,14 +29,12 @@ impl ParallelizerUtil {
     pub async fn create_parallelizer(
         config: &TaskConfig,
         monitor: Arc<Monitor>,
-        rps_limiter: Option<Ratelimiter>,
     ) -> anyhow::Result<Box<dyn Parallelizer + Send + Sync>> {
         let parallel_size = config.parallelizer.parallel_size;
         let parallel_type = &config.parallelizer.parallel_type;
         let base_parallelizer = BaseParallelizer {
             popped_data: VecDeque::new(),
             monitor,
-            rps_limiter,
         };
 
         let parallelizer: Box<dyn Parallelizer + Send + Sync> = match parallel_type {
