@@ -13,6 +13,12 @@ mod test {
 
     #[tokio::test]
     #[serial]
+    async fn cdc_custom_type_test() {
+        TestBase::run_cdc_test("pg_to_pg/cdc/custom_type_test", 3000, 9000).await;
+    }
+
+    #[tokio::test]
+    #[serial]
     async fn cdc_postgis_test() {
         TestBase::run_cdc_test("pg_to_pg/cdc/postgis_test", 3000, 9000).await;
     }
