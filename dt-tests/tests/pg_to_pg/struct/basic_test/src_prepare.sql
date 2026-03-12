@@ -107,10 +107,12 @@ CREATE INDEX index_where ON struct_it_pg2pg_1.full_index_type (where_col) WHERE 
 -- table comments:
 COMMENT ON TABLE struct_it_pg2pg_1.full_column_type IS 'Comment on full_column_type.';
 COMMENT ON TABLE struct_it_pg2pg_1.full_index_type IS 'Comment on full_index_type.';
+COMMENT ON TABLE struct_it_pg2pg_1.full_constraint_type IS 'Comment #?&^%$#@<>!''''"';
 
 -- column comments:
 COMMENT ON COLUMN struct_it_pg2pg_1.full_column_type.id IS 'Comment on full_column_type.id.';
 COMMENT ON COLUMN struct_it_pg2pg_1.full_index_type.id IS 'Comment on full_index_type.id.';
+COMMENT ON COLUMN struct_it_pg2pg_1.full_constraint_type.id IS $$Comment #?&^%$#@<>!'"$$;
 
 -- sequences
 
