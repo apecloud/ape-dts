@@ -3,7 +3,7 @@ use governor;
 
 use crate::{
     limiter::limiter::{Limiter, UnitType},
-    log_error,
+    log_error, log_warn,
 };
 
 pub struct RateLimiter {
@@ -33,23 +33,21 @@ impl RateLimiter {
 #[async_trait]
 impl Limiter for RateLimiter {
     async fn acquire(&self, n: u32) -> anyhow::Result<()> {
-        if n > 0 {
-            let num = if let Some(num) = std::num::NonZeroU32::new(n) {
-                num
-            } else {
-                // if n is 0, it means no acquire is needed, just return ok.
-                return Ok(());
-            };
-            match self.limiter.until_n_ready(num).await {
-                Ok(_) => {}
-                Err(e) => {
-                    let error_msg = format!(
-                        "`{}` exceeds max capacity `{}` of the rate limiter: {}",
-                        n, self.capacity, e
-                    );
-                    log_error!("{}", error_msg);
-                    return Err(anyhow::anyhow!(error_msg));
-                }
+        let num = if let Some(num) = std::num::NonZeroU32::new(n) {
+            num
+        } else {
+            log_warn!("Trying to acquire 0 from rate limiter, which means no acquire. Ignoring.");
+            return Ok(());
+        };
+        match self.limiter.until_n_ready(num).await {
+            Ok(_) => {}
+            Err(e) => {
+                let error_msg = format!(
+                    "`{}` exceeds max capacity `{}` of the rate limiter: {}",
+                    n, self.capacity, e
+                );
+                log_error!("{}", error_msg);
+                return Err(anyhow::anyhow!(error_msg));
             }
         }
         Ok(())
