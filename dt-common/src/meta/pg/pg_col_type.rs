@@ -12,6 +12,7 @@ pub struct PgColType {
     pub element_oid: i32,
     pub category: String,
     pub enum_values: Option<Vec<String>>,
+    pub schema_name: String,
 }
 
 impl std::fmt::Display for PgColType {

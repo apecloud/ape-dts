@@ -573,6 +573,13 @@ impl RdbQueryBuilder<'_> {
     fn get_placeholder(&self, index: usize, col: &str) -> anyhow::Result<String> {
         if let Some(tb_meta) = self.pg_tb_meta {
             let col_type = tb_meta.get_col_type(col)?;
+            if col_type.schema_name != "pg_catalog" {
+                // for user-defined types, we need to add schema name as prefix, otherwise it will cause error
+                return Ok(format!(
+                    "${}::\"{}\".\"{}\"",
+                    index, col_type.schema_name, col_type.alias
+                ));
+            }
             // TODO: workaround for types like bit(3)
             let col_type_name = if col_type.alias == "bit" {
                 "varbit"
