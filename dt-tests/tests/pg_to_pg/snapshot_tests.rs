@@ -14,6 +14,12 @@ mod test {
         TestBase::run_snapshot_test("pg_to_pg/snapshot/basic_test").await;
     }
 
+    #[tokio::test]
+    #[serial]
+    async fn snapshot_custom_type_test() {
+        TestBase::run_snapshot_test("pg_to_pg/snapshot/custom_type_test").await;
+    }
+
     /// dst table already has records with same primary keys of src table,
     /// src data should be synced to dst table by "ON CONFLICT (pk) DO UPDATE SET"
     #[tokio::test]

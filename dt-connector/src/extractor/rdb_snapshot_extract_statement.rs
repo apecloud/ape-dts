@@ -422,6 +422,7 @@ mod tests {
                 element_oid: 0,
                 category: "N".to_string(),
                 enum_values: None,
+                schema_name: "pg_catalog".to_string(),
             },
         );
         // Float type
@@ -436,6 +437,7 @@ mod tests {
                 element_oid: 0,
                 category: "N".to_string(),
                 enum_values: None,
+                schema_name: "pg_catalog".to_string(),
             },
         );
         // Text types
@@ -450,6 +452,7 @@ mod tests {
                 element_oid: 0,
                 category: "S".to_string(),
                 enum_values: None,
+                schema_name: "pg_catalog".to_string(),
             },
         );
         col_type_map.insert(
@@ -463,6 +466,7 @@ mod tests {
                 element_oid: 0,
                 category: "S".to_string(),
                 enum_values: None,
+                schema_name: "pg_catalog".to_string(),
             },
         );
         // Binary type
@@ -477,6 +481,7 @@ mod tests {
                 element_oid: 0,
                 category: "U".to_string(),
                 enum_values: None,
+                schema_name: "pg_catalog".to_string(),
             },
         );
 
