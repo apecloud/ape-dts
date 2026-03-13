@@ -62,7 +62,21 @@ impl Parallelizer for MergeParallelizer {
         data: Vec<RowData>,
         sinkers: &[Arc<async_mutex::Mutex<Box<dyn Sinker + Send>>>],
     ) -> anyhow::Result<DataSize> {
-        self.sink_dml_impl(data, sinkers).await
+        let mut data_size = DataSize::default();
+        let mut tb_merged_data = self.merger.merge(data).await?;
+        for merge_type in [MergeType::Delete, MergeType::Insert, MergeType::Unmerged] {
+            data_size.add(match self.sink_mode {
+                MergeSinkMode::AdaptiveBatch => {
+                    self.sink_dml_adaptive(&mut tb_merged_data, sinkers, merge_type)
+                        .await?
+                }
+                MergeSinkMode::Partitioned => {
+                    self.sink_dml_partitioned(&mut tb_merged_data, sinkers, merge_type)
+                        .await?
+                }
+            });
+        }
+        Ok(data_size)
     }
 
     async fn sink_ddl(
@@ -112,28 +126,6 @@ impl Parallelizer for MergeParallelizer {
 }
 
 impl MergeParallelizer {
-    pub(crate) async fn sink_dml_impl(
-        &mut self,
-        data: Vec<RowData>,
-        sinkers: &[Arc<async_mutex::Mutex<Box<dyn Sinker + Send>>>],
-    ) -> anyhow::Result<DataSize> {
-        let mut data_size = DataSize::default();
-        let mut tb_merged_data = self.merger.merge(data).await?;
-        for merge_type in [MergeType::Delete, MergeType::Insert, MergeType::Unmerged] {
-            data_size.add(match self.sink_mode {
-                MergeSinkMode::AdaptiveBatch => {
-                    self.sink_dml_adaptive(&mut tb_merged_data, sinkers, merge_type)
-                        .await?
-                }
-                MergeSinkMode::Partitioned => {
-                    self.sink_dml_partitioned(&mut tb_merged_data, sinkers, merge_type)
-                        .await?
-                }
-            });
-        }
-        Ok(data_size)
-    }
-
     async fn sink_dml_adaptive(
         &mut self,
         tb_merged_data_items: &mut [TbMergedData],
