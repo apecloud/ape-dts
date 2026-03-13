@@ -61,10 +61,10 @@ impl Pipeline for BasePipeline {
         }
         let final_position = {
             let syncer = self.syncer.lock().await;
-            if matches!(syncer.committed_position, Position::None) {
-                syncer.received_position.clone()
-            } else {
+            if matches!(syncer.received_position, Position::None) {
                 syncer.committed_position.clone()
+            } else {
+                syncer.received_position.clone()
             }
         };
         if let Some(checker) = &mut self.checker {

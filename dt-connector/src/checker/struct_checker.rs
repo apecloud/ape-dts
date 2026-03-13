@@ -177,7 +177,23 @@ impl StructCheckerHandle {
         start_time: &str,
         log_enabled: bool,
     ) -> anyhow::Result<(CheckSummaryLog, usize)> {
-        let mut dst_map = self.build_dst_sql_map(dbs).await?;
+        let dst_map = self.build_dst_sql_map(dbs).await?;
+        Ok(Self::compare_sql_maps(
+            src_sql_map,
+            dst_map,
+            start_time,
+            log_enabled,
+            self.output_revise_sql,
+        ))
+    }
+
+    fn compare_sql_maps(
+        src_sql_map: &HashMap<String, String>,
+        mut dst_map: HashMap<String, String>,
+        start_time: &str,
+        log_enabled: bool,
+        output_revise_sql: bool,
+    ) -> (CheckSummaryLog, usize) {
         let mut summary = CheckSummaryLog {
             start_time: start_time.to_string(),
             end_time: Local::now().to_rfc3339(),
@@ -197,7 +213,7 @@ impl StructCheckerHandle {
                     if log_enabled {
                         log_miss!("{}", log);
                     }
-                    if self.output_revise_sql && log_enabled {
+                    if output_revise_sql && log_enabled {
                         log_sql!("{}", src_sql);
                         sql_count += 1;
                     }
@@ -213,7 +229,7 @@ impl StructCheckerHandle {
                         if log_enabled {
                             log_diff!("{}", log);
                         }
-                        if self.output_revise_sql && log_enabled {
+                        if output_revise_sql && log_enabled {
                             log_sql!("{}", src_sql);
                             sql_count += 1;
                         }
@@ -222,13 +238,25 @@ impl StructCheckerHandle {
             }
         }
 
+        for (key, dst_sql) in dst_map {
+            let log = StructCheckLog {
+                key,
+                src_sql: None,
+                dst_sql: Some(dst_sql),
+            };
+            summary.diff_count += 1;
+            if log_enabled {
+                log_diff!("{}", log);
+            }
+        }
+
         summary.is_consistent = summary.miss_count == 0 && summary.diff_count == 0;
-        if self.output_revise_sql && sql_count > 0 {
+        if output_revise_sql && sql_count > 0 {
             summary.sql_count = Some(sql_count);
         }
         summary.end_time = Local::now().to_rfc3339();
 
-        Ok((summary, sql_count))
+        (summary, sql_count)
     }
 
     pub async fn check_struct(
@@ -291,5 +319,43 @@ impl StructCheckerHandle {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn compare_sql_maps_counts_target_only_object_as_diff() {
+        let src_sql_map = HashMap::new();
+        let mut dst_map = HashMap::new();
+        dst_map.insert(
+            "table.test_db.extra_tb".to_string(),
+            "CREATE TABLE extra_tb(id int)".to_string(),
+        );
+
+        let (summary, sql_count) =
+            StructCheckerHandle::compare_sql_maps(&src_sql_map, dst_map, "start", false, false);
+        assert_eq!(summary.miss_count, 0);
+        assert_eq!(summary.diff_count, 1);
+        assert!(!summary.is_consistent);
+        assert_eq!(sql_count, 0);
+    }
+
+    #[test]
+    fn compare_sql_maps_counts_missing_target_object_as_miss() {
+        let src_sql_map = HashMap::from([(
+            "table.test_db.src_tb".to_string(),
+            "CREATE TABLE src_tb(id int)".to_string(),
+        )]);
+        let dst_map = HashMap::new();
+
+        let (summary, sql_count) =
+            StructCheckerHandle::compare_sql_maps(&src_sql_map, dst_map, "start", false, false);
+        assert_eq!(summary.miss_count, 1);
+        assert_eq!(summary.diff_count, 0);
+        assert!(!summary.is_consistent);
+        assert_eq!(sql_count, 0);
     }
 }

@@ -2,9 +2,7 @@ use std::str::FromStr;
 
 use anyhow::{Context, Result};
 use chrono::Utc;
-use sqlx::{
-    query, ColumnIndex, Database, Decode, MySql, Pool, Postgres, QueryBuilder, Row, Type,
-};
+use sqlx::{query, ColumnIndex, Database, Decode, MySql, Pool, Postgres, QueryBuilder, Row, Type};
 
 use crate::extractor::resumer::{utils::ResumerUtil, ResumerDbPool, ResumerType};
 use dt_common::{config::resumer_config::ResumerConfig, meta::position::Position};
@@ -47,10 +45,7 @@ pub struct CheckerStateStore {
 }
 
 impl CheckerStateStore {
-    pub async fn new(
-        pool: ResumerDbPool,
-        resumer_config: &ResumerConfig,
-    ) -> anyhow::Result<Self> {
+    pub async fn new(pool: ResumerDbPool, resumer_config: &ResumerConfig) -> anyhow::Result<Self> {
         let (schema, position_table) = match resumer_config {
             ResumerConfig::FromDB {
                 table_full_name, ..

@@ -38,8 +38,7 @@ use dt_common::{
 use dt_connector::{
     checker::CheckerStateStore,
     extractor::resumer::{
-        build_recorder, build_recovery, recorder::Recorder, recovery::Recovery,
-        utils::ResumerUtil,
+        build_recorder, build_recovery, recorder::Recorder, recovery::Recovery, utils::ResumerUtil,
     },
 };
 

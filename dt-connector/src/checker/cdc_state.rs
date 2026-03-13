@@ -1,4 +1,18 @@
 use super::*;
+use std::collections::BTreeSet;
+
+fn build_identity_json(entry: &CheckEntry) -> anyhow::Result<String> {
+    serde_json::to_string(&serde_json::json!({
+        "schema": entry.log.schema,
+        "tb": entry.log.tb,
+        "id_col_values": entry.log.id_col_values,
+    }))
+    .map_err(anyhow::Error::from)
+}
+
+fn build_identity_key(identity_json: &str) -> String {
+    hex::encode(openssl::sha::sha256(identity_json.as_bytes()))
+}
 
 impl<C: Checker> DataChecker<C> {
     const DEFAULT_CDC_LOG_MAX_FILE_SIZE: usize = 100 * 1024 * 1024;
@@ -97,8 +111,11 @@ impl<C: Checker> DataChecker<C> {
     fn build_state_rows(&self) -> anyhow::Result<Vec<CheckerStateRow>> {
         let mut rows = Vec::with_capacity(self.store.len());
         for (key, entry) in &self.store {
+            let identity_json = build_identity_json(entry)?;
             rows.push(CheckerStateRow {
                 row_key: *key,
+                identity_key: build_identity_key(&identity_json),
+                identity_json,
                 payload: serde_json::to_string(entry)?,
             });
         }
@@ -123,55 +140,27 @@ impl<C: Checker> DataChecker<C> {
                 }
             }
         }
+        self.update_pending_counter();
     }
 
     pub(super) async fn load_initial_state(&mut self) -> anyhow::Result<bool> {
         if let Some(state_store) = &self.ctx.state_store {
             let task_id = &self.task_id;
-            if let Some(bundle) = state_store
-                .load_latest_checkpoint(task_id)
+            let rows = state_store
+                .load_rows(task_id)
                 .await
                 .with_context(|| {
-                    format!(
-                        "failed to load latest checker checkpoint for task_id {}",
-                        task_id
-                    )
-                })?
-            {
-                let manifest_position = match Position::from_str(&bundle.manifest.position) {
-                    Ok(position) if !matches!(position, Position::None) => Some(position),
-                    Ok(_) => None,
-                    Err(err) => {
-                        log_warn!(
-                            "Checker [{}] failed to parse checkpoint position [{}]: {}",
-                            self.name,
-                            bundle.manifest.position,
-                            err
-                        );
-                        None
-                    }
-                };
+                    format!("failed to load checker state rows for task_id {}", task_id)
+                })?;
+            if !rows.is_empty() {
                 if let Some(expected) = &self.ctx.expected_resume_position {
-                    if manifest_position.as_ref() != Some(expected) {
-                        log_warn!(
-                            "Checker [{}] state store checkpoint position [{}] mismatches resumer position [{}], ignore checker state and start empty store",
-                            self.name,
-                            bundle.manifest.position,
-                            expected
-                        );
-                        self.last_checkpoint_position = Some(expected.clone());
-                        return Ok(false);
-                    }
+                    self.last_checkpoint_position = Some(expected.clone());
                 }
-                self.restore_store_from_rows(bundle.rows);
-                self.evicted_miss = bundle.manifest.evicted_miss;
-                self.evicted_diff = bundle.manifest.evicted_diff;
-                self.last_checkpoint_position = manifest_position;
+                self.restore_store_from_rows(rows);
                 log_info!(
-                    "Checker [{}] restored {} store entries from state store checkpoint [{}]",
+                    "Checker [{}] restored {} store entries from state store",
                     self.name,
-                    self.store.len(),
-                    bundle.manifest.checkpoint_id
+                    self.store.len()
                 );
                 return Ok(!self.store.is_empty());
             }
@@ -223,20 +212,19 @@ impl<C: Checker> DataChecker<C> {
         let Some(state_store) = self.ctx.state_store.clone() else {
             return Ok(());
         };
+        let rows = self.build_state_rows()?;
+        let live_keys: BTreeSet<String> = rows.iter().map(|row| row.identity_key.clone()).collect();
+        let existing_rows = state_store.load_rows(&self.task_id).await?;
+        let deletes = existing_rows
+            .into_iter()
+            .map(|row| row.identity_key)
+            .filter(|identity_key| !live_keys.contains(identity_key))
+            .collect();
         let commit = CheckerCheckpointCommit {
             task_id: self.task_id.clone(),
-            checkpoint_id: {
-                self.checkpoint_seq = self.checkpoint_seq.wrapping_add(1);
-                format!(
-                    "{}-{}",
-                    chrono::Utc::now().timestamp_millis(),
-                    self.checkpoint_seq
-                )
-            },
             position,
-            rows: self.build_state_rows()?,
-            evicted_miss: self.evicted_miss,
-            evicted_diff: self.evicted_diff,
+            upserts: rows,
+            deletes,
         };
         state_store.commit_checkpoint(&commit).await?;
         Ok(())

@@ -254,8 +254,8 @@ async fn non_cdc_without_retry_should_record_miss_immediately() {
     assert!(data_checker.store.is_empty());
 }
 
-#[test]
-fn cdc_store_same_key_should_replace_entry_without_eviction() {
+#[tokio::test]
+async fn cdc_store_same_key_should_replace_entry_without_eviction() {
     let checker = MissingDstChecker;
     let monitor = Arc::new(Monitor::new("checker", "test", 1, 10, 10));
     let ctx = build_context(monitor.clone(), true, 8);
@@ -280,7 +280,7 @@ fn cdc_store_same_key_should_replace_entry_without_eviction() {
         is_miss: true,
         src_row_data: build_insert_row("s1", "t1", 1, "a"),
     };
-    data_checker.store_entry(1, first);
+    data_checker.store_entry(1, first).await;
     assert_eq!(data_checker.store.len(), 1);
     assert_eq!(data_checker.evicted_miss, 0);
     assert_eq!(data_checker.evicted_diff, 0);
@@ -310,7 +310,7 @@ fn cdc_store_same_key_should_replace_entry_without_eviction() {
         is_miss: false,
         src_row_data: build_insert_row("s1", "t1", 1, "b"),
     };
-    data_checker.store_entry(1, second);
+    data_checker.store_entry(1, second).await;
 
     assert_eq!(data_checker.store.len(), 1);
     assert_eq!(data_checker.evicted_miss, 0);
@@ -320,8 +320,8 @@ fn cdc_store_same_key_should_replace_entry_without_eviction() {
     assert_eq!(stored.log.diff_col_values.len(), 1);
 }
 
-#[test]
-fn remove_store_entry_should_keep_fifo_order() {
+#[tokio::test]
+async fn remove_store_entry_should_keep_fifo_order() {
     let checker = MissingDstChecker;
     let monitor = Arc::new(Monitor::new("checker", "test", 1, 10, 10));
     let ctx = build_context(monitor.clone(), true, 8);
@@ -344,9 +344,9 @@ fn remove_store_entry_should_keep_fifo_order() {
         src_row_data: build_insert_row("s1", "t1", id, "v"),
     };
 
-    data_checker.store_entry(1, make_entry(1));
-    data_checker.store_entry(2, make_entry(2));
-    data_checker.store_entry(3, make_entry(3));
+    data_checker.store_entry(1, make_entry(1)).await;
+    data_checker.store_entry(2, make_entry(2)).await;
+    data_checker.store_entry(3, make_entry(3)).await;
     data_checker.remove_store_entry(1);
 
     let keys: Vec<u128> = data_checker.store.keys().copied().collect();

@@ -14,10 +14,8 @@ use dt_common::{
     monitor::monitor::Monitor,
     utils::redis_util::RedisUtil,
 };
-use dt_connector::checker::CheckerHandle;
 use dt_parallelizer::{
     base_parallelizer::BaseParallelizer,
-    checked_parallelizer::CheckedParallelizer,
     foxlake_parallelizer::FoxlakeParallelizer,
     merge_parallelizer::{MergeParallelizer, MergeSinkMode},
     mongo_merger::MongoMerger,
@@ -37,7 +35,6 @@ impl ParallelizerUtil {
     pub async fn create_parallelizer(
         config: &TaskConfig,
         monitor: Arc<Monitor>,
-        checker: Option<CheckerHandle>,
     ) -> anyhow::Result<Box<dyn Parallelizer + Send + Sync>> {
         let parallel_size = config.parallelizer.parallel_size;
         let parallel_type = &config.parallelizer.parallel_type;
@@ -141,15 +138,7 @@ impl ParallelizerUtil {
                 })
             }
         };
-        if let Some(checker) = checker {
-            Ok(Box::new(CheckedParallelizer::new(
-                parallelizer,
-                checker,
-                matches!(&config.sinker, SinkerConfig::Dummy),
-            )))
-        } else {
-            Ok(parallelizer)
-        }
+        Ok(parallelizer)
     }
 
     async fn create_rdb_merger(
