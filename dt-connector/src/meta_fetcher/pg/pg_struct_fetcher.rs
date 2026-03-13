@@ -6,6 +6,8 @@ use dt_common::meta::struct_meta::{
         pg_create_rbac_statement::PgCreateRbacStatement,
         pg_create_schema_statement::PgCreateSchemaStatement,
         pg_create_table_statement::PgCreateTableStatement,
+        pg_create_udf_statement::PgCreateUdfStatement,
+        pg_create_udt_statement::PgCreateUdtStatement,
     },
     structure::{
         column::{Column, ColumnDefault},
@@ -17,6 +19,7 @@ use dt_common::meta::struct_meta::{
         sequence::Sequence,
         sequence_owner::SequenceOwner,
         table::Table,
+        user_defined::{PgUdf, PgUdt, PgUdtType},
     },
 };
 use dt_common::{
@@ -96,6 +99,63 @@ impl PgStructFetcher {
             members,
             privileges,
         }])
+    }
+
+    pub async fn get_udf_statements(&mut self) -> anyhow::Result<Vec<PgCreateUdfStatement>> {
+        let mut results = Vec::new();
+        let sql = "SELECT 
+                n.nspname AS schema_name,
+                p.proname AS function_name,
+                l.lanname,
+                pg_catalog.pg_get_functiondef(p.oid) AS create_statement
+            FROM pg_catalog.pg_proc p
+            JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace
+            JOIN pg_language  l ON l.oid = p.prolang
+            LEFT JOIN pg_catalog.pg_depend d
+                ON d.classid = 'pg_proc'::regclass
+                AND d.objid   = p.oid
+                AND d.deptype = 'e'
+            LEFT JOIN pg_catalog.pg_extension e
+                ON e.oid = d.refobjid
+            WHERE n.nspname NOT IN ('pg_catalog', 'information_schema')
+            AND p.prokind = 'f'                 
+            AND e.extname IS NULL
+            AND l.lanname IN ('sql','plpgsql')
+            ORDER BY p.oid
+        ";
+
+        let mut rows = sqlx::query(sql).fetch(&self.conn_pool);
+        while let Some(row) = rows.try_next().await? {
+            let schema_name = Self::get_str_with_null(&row, "schema_name")?;
+            let function_name = Self::get_str_with_null(&row, "function_name")?;
+            let lanname = Self::get_str_with_null(&row, "lanname")?;
+            let create_statement = Self::get_str_with_null(&row, "create_statement")?;
+
+            if !self.schemas.contains(&schema_name) || self.filter_schema(&schema_name) {
+                continue;
+            }
+
+            results.push(PgCreateUdfStatement {
+                udf: PgUdf {
+                    schema_name,
+                    function_name,
+                    lanname,
+                    create_statement,
+                },
+            });
+        }
+        Ok(results)
+    }
+
+    pub async fn get_udt_statements(&mut self) -> anyhow::Result<Vec<PgCreateUdtStatement>> {
+        let mut results = Vec::new();
+
+        results.extend(self.get_enum_udt_statements().await?);
+        results.extend(self.get_compose_udt_statements().await?);
+        results.extend(self.get_range_udt_statements().await?);
+        results.extend(self.get_domain_udt_statements().await?);
+
+        Ok(results)
     }
 
     async fn get_schemas(&mut self, sch: &str) -> anyhow::Result<Vec<Schema>> {
@@ -1098,6 +1158,203 @@ impl PgStructFetcher {
             });
         }
 
+        Ok(results)
+    }
+
+    async fn get_enum_udt_statements(&mut self) -> anyhow::Result<Vec<PgCreateUdtStatement>> {
+        let mut results = Vec::new();
+        let sql = "SELECT
+            format(
+                'CREATE TYPE %I.%I AS ENUM (%s);',
+                n.nspname,
+                t.typname,
+                pg_catalog.string_agg(
+                    quote_literal(e.enumlabel)::text,
+                    ', '::text
+                    ORDER BY e.enumsortorder
+                )
+            ) AS create_enum_sql
+        FROM pg_catalog.pg_type t
+        JOIN pg_catalog.pg_namespace n ON n.oid = t.typnamespace
+        JOIN pg_catalog.pg_enum e       ON e.enumtypid = t.oid
+        LEFT JOIN pg_catalog.pg_depend d
+            ON d.classid = 'pg_type'::regclass
+            AND d.objid   = t.oid
+            AND d.deptype = 'e'
+        LEFT JOIN pg_catalog.pg_extension ext
+            ON ext.oid = d.refobjid
+        WHERE t.typtype = 'e'
+        AND n.nspname NOT IN ('pg_catalog', 'information_schema')
+        AND ext.extname IS NULL
+        GROUP BY n.nspname, t.typname, t.oid
+        ORDER BY t.oid";
+
+        let mut rows = sqlx::query(sql).fetch(&self.conn_pool);
+        while let Some(row) = rows.try_next().await? {
+            let schema_name = Self::get_str_with_null(&row, "schema_name")?;
+            let typ_name = Self::get_str_with_null(&row, "typ_name")?;
+            let create_statement = Self::get_str_with_null(&row, "create_statement")?;
+
+            if !self.schemas.contains(&schema_name) || self.filter_schema(&schema_name) {
+                continue;
+            }
+
+            results.push(PgCreateUdtStatement {
+                udt: PgUdt {
+                    schema_name,
+                    typ_name,
+                    typ_type: PgUdtType::Enum,
+                    create_statement,
+                },
+            });
+        }
+        Ok(results)
+    }
+
+    async fn get_compose_udt_statements(&mut self) -> anyhow::Result<Vec<PgCreateUdtStatement>> {
+        let mut results = Vec::new();
+        let sql = "SELECT
+            format(
+                'CREATE TYPE %I.%I AS (%s);',
+                n.nspname,
+                t.typname,
+                (
+                    SELECT string_agg(
+                            format('%I %s',
+                                    a.attname,
+                                    pg_catalog.format_type(a.atttypid, a.atttypmod)),
+                            ', ' ORDER BY a.attnum
+                        )
+                    FROM pg_catalog.pg_attribute a
+                    WHERE a.attrelid = t.typrelid
+                    AND a.attnum > 0
+                    AND NOT a.attisdropped
+                )
+            ) AS create_composite_sql
+        FROM pg_catalog.pg_type t
+        JOIN pg_catalog.pg_namespace n ON n.oid = t.typnamespace
+        LEFT JOIN pg_catalog.pg_class c
+            ON c.oid = t.typrelid
+        LEFT JOIN pg_catalog.pg_depend d
+            ON d.classid = 'pg_type'::regclass
+            AND d.objid   = t.oid
+            AND d.deptype = 'e'
+        LEFT JOIN pg_catalog.pg_extension ext
+            ON ext.oid = d.refobjid
+        WHERE t.typtype = 'c'
+        AND n.nspname NOT IN ('pg_catalog', 'information_schema')
+        AND (c.oid IS NULL OR c.relkind = 'c')
+        AND ext.extname IS NULL
+        ORDER BY t.oid";
+
+        let mut rows = sqlx::query(sql).fetch(&self.conn_pool);
+        while let Some(row) = rows.try_next().await? {
+            let schema_name = Self::get_str_with_null(&row, "schema_name")?;
+            let typ_name = Self::get_str_with_null(&row, "typ_name")?;
+            let create_statement = Self::get_str_with_null(&row, "create_statement")?;
+
+            if !self.schemas.contains(&schema_name) || self.filter_schema(&schema_name) {
+                continue;
+            }
+
+            results.push(PgCreateUdtStatement {
+                udt: PgUdt {
+                    schema_name,
+                    typ_name,
+                    typ_type: PgUdtType::Composite,
+                    create_statement,
+                },
+            });
+        }
+        Ok(results)
+    }
+
+    async fn get_range_udt_statements(&mut self) -> anyhow::Result<Vec<PgCreateUdtStatement>> {
+        let mut results = Vec::new();
+        let sql = "SELECT
+            n.nspname AS schema_name,
+            t.typname AS type_name,
+            pg_catalog.format_type(r.rngsubtype, NULL) AS subtype,
+            r.rngcanonical::regprocedure AS canonical_func,
+            r.rngsubdiff::regprocedure AS subtype_diff_func
+        FROM pg_catalog.pg_type t
+        JOIN pg_catalog.pg_namespace n ON n.oid = t.typnamespace
+        JOIN pg_catalog.pg_range r      ON r.rngtypid = t.oid
+        LEFT JOIN pg_catalog.pg_depend d
+            ON d.classid = 'pg_type'::regclass
+            AND d.objid   = t.oid
+            AND d.deptype = 'e'
+        LEFT JOIN pg_catalog.pg_extension ext
+            ON ext.oid = d.refobjid
+        WHERE t.typtype = 'r'
+        AND n.nspname NOT IN ('pg_catalog', 'information_schema')
+        AND ext.extname IS NULL
+        ORDER BY t.oid";
+
+        let mut rows = sqlx::query(sql).fetch(&self.conn_pool);
+        while let Some(row) = rows.try_next().await? {
+            let schema_name = Self::get_str_with_null(&row, "schema_name")?;
+            let typ_name = Self::get_str_with_null(&row, "typ_name")?;
+            let create_statement = Self::get_str_with_null(&row, "create_statement")?;
+
+            if !self.schemas.contains(&schema_name) || self.filter_schema(&schema_name) {
+                continue;
+            }
+
+            results.push(PgCreateUdtStatement {
+                udt: PgUdt {
+                    schema_name,
+                    typ_name,
+                    typ_type: PgUdtType::Range,
+                    create_statement,
+                },
+            });
+        }
+        Ok(results)
+    }
+
+    async fn get_domain_udt_statements(&mut self) -> anyhow::Result<Vec<PgCreateUdtStatement>> {
+        let mut results = Vec::new();
+        let sql = "SELECT
+            format(
+                'CREATE DOMAIN %I.%I AS %s%s;',
+                n.nspname,
+                t.typname,
+                pg_catalog.format_type(t.typbasetype, t.typtypmod),
+                COALESCE(' ' || pg_catalog.pg_get_constraintdef(c.oid), '')
+            ) AS create_domain_sql
+        FROM pg_catalog.pg_type t
+        JOIN pg_catalog.pg_namespace n ON n.oid = t.typnamespace
+        LEFT JOIN pg_catalog.pg_constraint c ON c.contypid = t.oid
+        LEFT JOIN pg_catalog.pg_depend d
+            ON d.classid = 'pg_type'::regclass
+            AND d.objid   = t.oid
+            AND d.deptype = 'e'
+        LEFT JOIN pg_catalog.pg_extension ext
+            ON ext.oid = d.refobjid
+        WHERE t.typtype = 'd'
+        AND n.nspname NOT IN ('pg_catalog', 'information_schema')
+        AND ext.extname IS NULL
+        ORDER BY t.oid";
+        let mut rows = sqlx::query(sql).fetch(&self.conn_pool);
+        while let Some(row) = rows.try_next().await? {
+            let schema_name = Self::get_str_with_null(&row, "schema_name")?;
+            let typ_name = Self::get_str_with_null(&row, "typ_name")?;
+            let create_statement = Self::get_str_with_null(&row, "create_statement")?;
+
+            if !self.schemas.contains(&schema_name) || self.filter_schema(&schema_name) {
+                continue;
+            }
+
+            results.push(PgCreateUdtStatement {
+                udt: PgUdt {
+                    schema_name,
+                    typ_name,
+                    typ_type: PgUdtType::Domain,
+                    create_statement,
+                },
+            });
+        }
         Ok(results)
     }
 
