@@ -1,4 +1,5 @@
 use super::*;
+use dt_common::monitor::counter_type::CounterType;
 
 impl<C: Checker> DataChecker<C> {
     fn build_revise_sql(
@@ -276,22 +277,37 @@ impl<C: Checker> DataChecker<C> {
         }
     }
 
-    fn update_summary_for_entry(&mut self, entry: &CheckEntry) {
+    async fn update_summary_for_entry(&mut self, entry: &CheckEntry) {
         let summary = &mut self.ctx.summary;
         summary.end_time = chrono::Local::now().to_rfc3339();
         if entry.is_miss {
             summary.miss_count += 1;
+            self.ctx
+                .monitor
+                .add_counter(CounterType::CheckerMissCount, 1)
+                .await;
         } else {
             summary.diff_count += 1;
+            self.ctx
+                .monitor
+                .add_counter(CounterType::CheckerDiffCount, 1)
+                .await;
         }
         if entry.revise_sql.is_some() {
             summary.sql_count = Some(summary.sql_count.unwrap_or(0) + 1);
         }
     }
 
+    pub(super) fn update_pending_counter(&self) {
+        self.ctx
+            .monitor
+            .set_counter(CounterType::CheckerPending, self.store.len() as u64);
+    }
+
     pub(super) fn remove_store_entry(&mut self, key: u128) {
         if self.store.shift_remove(&key).is_some() {
             self.store_dirty = true;
+            self.update_pending_counter();
         }
     }
 
@@ -334,17 +350,17 @@ impl<C: Checker> DataChecker<C> {
                 tb_meta,
             )
             .await?;
-            self.store_entry(key, entry);
+            self.store_entry(key, entry).await;
         } else {
             self.remove_store_entry(key);
         }
         Ok(())
     }
 
-    pub(super) fn store_entry(&mut self, key: u128, entry: CheckEntry) {
+    pub(super) async fn store_entry(&mut self, key: u128, entry: CheckEntry) {
         if !self.ctx.is_cdc {
             self.log_entry(&entry);
-            self.update_summary_for_entry(&entry);
+            self.update_summary_for_entry(&entry).await;
             return;
         }
 
@@ -366,17 +382,29 @@ impl<C: Checker> DataChecker<C> {
                 } else {
                     self.evicted_diff += 1;
                 }
-                self.update_summary_for_entry(&evicted);
+                self.update_summary_for_entry(&evicted).await;
             }
         }
+        if entry.is_miss {
+            self.ctx
+                .monitor
+                .add_counter(CounterType::CheckerMissCount, 1)
+                .await;
+        } else {
+            self.ctx
+                .monitor
+                .add_counter(CounterType::CheckerDiffCount, 1)
+                .await;
+        }
         self.store.insert(key, entry);
+        self.update_pending_counter();
     }
 
-    pub(super) fn flush_store(&mut self) {
+    pub(super) async fn flush_store(&mut self) {
         let entries = std::mem::take(&mut self.store);
         for (_key, entry) in entries {
             self.log_entry(&entry);
-            self.update_summary_for_entry(&entry);
+            self.update_summary_for_entry(&entry).await;
         }
     }
 

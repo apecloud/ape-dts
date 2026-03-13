@@ -7,7 +7,6 @@ use opendal::Operator;
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::collections::{BTreeSet, HashMap, VecDeque};
-use std::str::FromStr;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
@@ -232,6 +231,7 @@ enum CheckerMsg {
 struct DataCheckerShared {
     tx: mpsc::Sender<CheckerMsg>,
     is_cdc: bool,
+    persists_position_checkpoint: bool,
     last_checker_ok: Arc<AtomicBool>,
 }
 
@@ -250,6 +250,7 @@ impl DataCheckerHandle {
         name: &str,
     ) -> Self {
         let is_cdc = ctx.is_cdc;
+        let persists_position_checkpoint = ctx.is_cdc && ctx.state_store.is_some();
         let (tx, rx) = mpsc::channel::<CheckerMsg>(buffer_size.max(1));
         let last_checker_ok = Arc::new(AtomicBool::new(true));
 
@@ -260,6 +261,7 @@ impl DataCheckerHandle {
             shared: DataCheckerShared {
                 tx,
                 is_cdc,
+                persists_position_checkpoint,
                 last_checker_ok,
             },
             join_handle: Arc::new(Mutex::new(Some(join_handle))),
@@ -328,6 +330,10 @@ impl DataCheckerHandle {
             self.shared.last_checker_ok.store(true, Ordering::Release);
         }
         result
+    }
+
+    pub fn persists_position_checkpoint(&self) -> bool {
+        self.shared.persists_position_checkpoint
     }
 }
 
@@ -524,9 +530,10 @@ impl<C: Checker> DataChecker<C> {
                 log_error!("Checker [{}] final cdc output failed: {}", self.name, err);
             }
             self.store.clear();
+            self.update_pending_counter();
         } else {
             self.drain_retries().await?;
-            self.flush_store();
+            self.flush_store().await;
         }
         self.finish_summary_and_meta().await?;
         self.checker.close().await

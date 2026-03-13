@@ -522,6 +522,7 @@ impl TaskConfig {
                     connection_auth,
                     batch_size,
                     max_connections,
+                    rate_limiter: RateLimiterConfig::default(),
                 },
                 SinkerConfig::Dummy,
             ));
@@ -999,9 +1000,13 @@ impl TaskConfig {
         runtime: &RuntimeConfig,
         sinker_basic: &BasicSinkerConfig,
     ) -> anyhow::Result<ResumerConfig> {
-        // compatible with older versions
-        if let Some(config) = Self::load_resumer_config_deprecated(loader, runtime) {
-            return Ok(config);
+        if loader.contains(RESUMER, RESUME_FROM_LOG)
+            || loader.contains(RESUMER, RESUME_LOG_DIR)
+            || loader.contains(RESUMER, RESUME_CONFIG_FILE)
+        {
+            bail!(Error::ConfigError(
+                "deprecated [resumer] keys detected; use resume_type=from_log with log_dir/config_file instead of resume_from_log/resume_log_dir/resume_config_file".into(),
+            ));
         }
 
         let resume_type = loader.get_with_default(RESUMER, RESUME_TYPE, ResumeType::Dummy);
@@ -1034,27 +1039,6 @@ impl TaskConfig {
             }),
             _ => Ok(ResumerConfig::Dummy),
         }
-    }
-
-    fn load_resumer_config_deprecated(
-        loader: &IniLoader,
-        runtime: &RuntimeConfig,
-    ) -> Option<ResumerConfig> {
-        if !loader.contains(RESUMER, RESUME_FROM_LOG) && !loader.contains(RESUMER, RESUME_LOG_DIR)
-            || !loader.contains(RESUMER, RESUME_CONFIG_FILE)
-        {
-            return None;
-        }
-        let resume_from_log = loader.get_with_default(RESUMER, RESUME_FROM_LOG, false);
-        let log_dir = if resume_from_log {
-            loader.get_with_default(RESUMER, RESUME_LOG_DIR, runtime.log_dir.clone())
-        } else {
-            String::new()
-        };
-        Some(ResumerConfig::FromLog {
-            log_dir,
-            config_file: loader.get_optional(RESUMER, RESUME_CONFIG_FILE),
-        })
     }
 
     fn load_data_marker_config(loader: &IniLoader) -> anyhow::Result<Option<DataMarkerConfig>> {
@@ -1357,6 +1341,37 @@ username=checker_user
             ConnectionAuthConfig::Basic { username, password }
                 if username == "checker_user" && password.as_deref() == Some("dst_pwd")
         ));
+
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn deprecated_resumer_log_keys_are_rejected() {
+        let _guard = test_lock();
+        let path = write_temp_task_config(
+            "[extractor]
+db_type=pg
+extract_type=snapshot
+url=postgres://src
+
+[sinker]
+db_type=pg
+sink_type=write
+url=postgres://dst
+
+[resumer]
+resume_from_log=true
+resume_log_dir=./resume_logs
+resume_config_file=./resume.config
+",
+        );
+
+        let message = TaskConfig::new(path.to_str().unwrap())
+            .err()
+            .expect("deprecated resumer keys should be rejected")
+            .to_string();
+        assert!(message.contains("deprecated [resumer] keys detected"));
+        assert!(message.contains("resume_type=from_log"));
 
         let _ = fs::remove_file(path);
     }

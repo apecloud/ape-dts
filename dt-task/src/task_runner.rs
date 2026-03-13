@@ -39,6 +39,7 @@ use dt_common::{
         config_token_parser::{ConfigTokenParser, TokenEscapePair},
         connection_auth_config::ConnectionAuthConfig,
         extractor_config::ExtractorConfig,
+        resumer_config::ResumerConfig,
         sinker_config::SinkerConfig,
         task_config::{TaskConfig, DEFAULT_CHECK_LOG_FILE_SIZE},
     },
@@ -68,6 +69,7 @@ use dt_connector::{
     },
     data_marker::DataMarker,
     extractor::resumer::{recorder::Recorder, recovery::Recovery},
+    extractor::resumer::utils::ResumerUtil,
     rdb_router::RdbRouter,
     Sinker,
 };
@@ -236,7 +238,7 @@ impl TaskRunner {
 
         let db_type = &self.config.extractor_basic.db_type;
         let router = Arc::new(RdbRouter::from_config(&self.config.router, db_type)?);
-        let (recorder, recovery) = match &self.task_type {
+        let (recorder, recovery, _checker_state_store) = match &self.task_type {
             Some(task_type) => {
                 TaskUtil::build_resumer(
                     task_type.to_owned(),
@@ -245,7 +247,7 @@ impl TaskRunner {
                 )
                 .await?
             }
-            None => (None, None),
+            None => (None, None, None),
         };
         let (extractor_client, sinker_client) = ConnClient::from_config(&self.config).await?;
         let enqueue_limiter = BufferLimiter::from_config(
@@ -313,7 +315,12 @@ impl TaskRunner {
         sinker_client.close().await?;
 
         if let Some(check_summary) = check_summary {
-            if self.config.checker.is_none() || !matches!(self.task_type, Some(TaskType::Cdc)) {
+            if self.config.checker.is_none()
+                || !self
+                    .task_type
+                    .as_ref()
+                    .is_some_and(TaskType::is_cdc_inline_check)
+            {
                 let mut summary = check_summary.lock().await;
                 summary.end_time = Local::now().to_rfc3339();
                 summary.is_consistent = summary.miss_count == 0 && summary.diff_count == 0;
@@ -491,23 +498,6 @@ impl TaskRunner {
         )
         .await?;
 
-        // sinkers
-        let sinker_monitor = Arc::new(Monitor::new(
-            "sinker",
-            &single_task_id,
-            monitor_time_window_secs,
-            monitor_max_sub_count,
-            monitor_count_window,
-        ));
-        let sinkers = SinkerUtil::create_sinkers(
-            &self.config,
-            &extractor_config,
-            sinker_client.clone(),
-            sinker_monitor.clone(),
-            rw_sinker_data_marker.clone(),
-        )
-        .await?;
-
         // checker
         let checker_monitor = Arc::new(Monitor::new(
             "checker",
@@ -525,6 +515,30 @@ impl TaskRunner {
                 task_context.recovery.as_ref(),
             )
             .await?;
+
+        // sinkers
+        let sinker_monitor = Arc::new(Monitor::new(
+            "sinker",
+            &single_task_id,
+            monitor_time_window_secs,
+            monitor_max_sub_count,
+            monitor_count_window,
+        ));
+        let sinkers = SinkerUtil::create_sinkers(
+            &self.config,
+            &extractor_config,
+            sinker_client.clone(),
+            sinker_monitor.clone(),
+            rw_sinker_data_marker.clone(),
+            checker
+                .as_ref()
+                .and_then(|handle| match handle {
+                    CheckerHandle::Data(handle) => Some(handle.clone()),
+                    CheckerHandle::Struct(_) => None,
+                }),
+            true,
+        )
+        .await?;
 
         // pipeline
         let pipeline_monitor = Arc::new(Monitor::new(
@@ -716,12 +730,8 @@ impl TaskRunner {
                             lua_code: processor_config.lua_code.clone(),
                         });
 
-                let parallelizer = ParallelizerUtil::create_parallelizer(
-                    &self.config,
-                    monitor.clone(),
-                    checker,
-                )
-                .await?;
+                let parallelizer =
+                    ParallelizerUtil::create_parallelizer(&self.config, monitor.clone()).await?;
 
                 let pipeline = BasePipeline {
                     buffer,
@@ -736,6 +746,7 @@ impl TaskRunner {
                     data_marker,
                     lua_processor,
                     recorder,
+                    checker,
                 };
                 Ok(Box::new(pipeline) as Box<dyn Pipeline + Send>)
             }
@@ -1074,76 +1085,34 @@ impl TaskRunner {
         checker_db_type: &DbType,
         checker_url: &str,
         checker_auth: &ConnectionAuthConfig,
-        enable_sqlx_log: bool,
+        _enable_sqlx_log: bool,
     ) -> anyhow::Result<Option<Arc<CheckerStateStore>>> {
         if !is_cdc_task {
             return Ok(None);
         }
 
-        const CHECKER_STATE_STORE_SCHEMA: &str = "apecloud_metadata";
-        const CHECKER_STATE_STORE_TABLE_PREFIX: &str = "apedts_checker";
-
-        let store = match checker_db_type {
-            DbType::Mysql => {
-                let pool = TaskUtil::create_mysql_conn_pool(
-                    checker_url,
-                    checker_auth,
-                    2,
-                    enable_sqlx_log,
-                    None,
-                )
-                .await?;
-                let inner = CheckerStateStore::new_mysql(
-                    pool,
-                    CHECKER_STATE_STORE_SCHEMA,
-                    CHECKER_STATE_STORE_TABLE_PREFIX,
-                )
-                .await?;
-                Some(Arc::new(inner))
-            }
-            DbType::Pg => {
-                let pool = TaskUtil::create_pg_conn_pool(
-                    checker_url,
-                    checker_auth,
-                    2,
-                    enable_sqlx_log,
-                    false,
-                )
-                .await?;
-                let inner = CheckerStateStore::new_postgres(
-                    pool,
-                    CHECKER_STATE_STORE_SCHEMA,
-                    CHECKER_STATE_STORE_TABLE_PREFIX,
-                )
-                .await?;
-                Some(Arc::new(inner))
-            }
-            DbType::Mongo => {
-                let client = TaskUtil::create_mongo_client(
-                    checker_url,
-                    checker_auth,
-                    "checker_state_store",
-                    Some(2),
-                )
-                .await?;
-                let inner = CheckerStateStore::new_mongo(
-                    client,
-                    CHECKER_STATE_STORE_SCHEMA,
-                    CHECKER_STATE_STORE_TABLE_PREFIX,
-                )
-                .await?;
-                Some(Arc::new(inner))
-            }
-            _ => {
-                log_warn!(
-                    "checker state store unsupported for target db_type [{}], checkpoint persistence is disabled.",
-                    checker_db_type
-                );
-                None
-            }
+        let Some(table_full_name) = (match checker_db_type {
+            DbType::Mysql | DbType::Pg => Some("apecloud_metadata.apedts_checker".to_string()),
+            _ => None,
+        }) else {
+            log_warn!(
+                "checker state store unsupported for target db_type [{}], checkpoint persistence is disabled.",
+                checker_db_type
+            );
+            return Ok(None);
         };
 
-        Ok(store)
+        let resumer_config = ResumerConfig::FromDB {
+            url: checker_url.to_string(),
+            connection_auth: checker_auth.clone(),
+            db_type: checker_db_type.clone(),
+            table_full_name,
+            max_connections: 2,
+        };
+        let pool = ResumerUtil::create_pool(checker_url, checker_auth, checker_db_type, 2).await?;
+        Ok(Some(Arc::new(
+            CheckerStateStore::new(pool, &resumer_config).await?,
+        )))
     }
 
     async fn init_log4rs(&self) -> anyhow::Result<()> {
