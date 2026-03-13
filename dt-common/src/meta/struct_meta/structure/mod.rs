@@ -9,3 +9,4 @@ pub mod sequence;
 pub mod sequence_owner;
 pub mod structure_type;
 pub mod table;
+pub mod user_defined;
