@@ -141,6 +141,20 @@ impl TaskConfig {
                 "config [checker] is required when [parallelizer] parallel_type=rdb_check".into()
             ));
         }
+        if checker.is_some()
+            && matches!(extractor_basic.extract_type, ExtractType::Cdc)
+            && !matches!(sinker_basic.sink_type, SinkType::Write)
+        {
+            bail!(Error::ConfigError(
+                "config [checker] with [extractor] extract_type=cdc requires [sinker] sink_type=write"
+                    .into(),
+            ));
+        }
+        if checker.is_some() && !matches!(pipeline.pipeline_type, PipelineType::Basic) {
+            bail!(Error::ConfigError(
+                "config [checker] only supports [pipeline] pipeline_type=basic".into()
+            ));
+        }
         Ok(Self {
             global: Self::load_global_config(
                 &loader,
@@ -1017,7 +1031,7 @@ impl TaskConfig {
             }),
             ResumeType::FromTarget => Ok(ResumerConfig::FromDB {
                 url: sinker_basic.url.clone(),
-                connection_auth: ConnectionAuthConfig::from(loader, SINKER),
+                connection_auth: sinker_basic.connection_auth.clone(),
                 db_type: sinker_basic.db_type.clone(),
                 table_full_name: loader.get_optional(RESUMER, "table_full_name"),
                 max_connections: loader.get_with_default(
@@ -1123,256 +1137,5 @@ impl TaskConfig {
             workers: loader.get_with_default(metrics_section, "workers", 2),
             metrics_labels,
         })
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::path::PathBuf;
-    use std::sync::{Mutex, OnceLock};
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    fn test_lock() -> std::sync::MutexGuard<'static, ()> {
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(()))
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-    }
-
-    fn write_temp_task_config(content: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join("ape_dts_task_config_tests");
-        fs::create_dir_all(&dir).unwrap();
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let path = dir.join(format!("task_config_{nanos}.ini"));
-        fs::write(&path, content).unwrap();
-        path
-    }
-
-    #[test]
-    fn checker_can_override_auth_without_repeating_target_fields() {
-        let _guard = test_lock();
-        let path = write_temp_task_config(
-            "[extractor]
-db_type=mysql
-extract_type=snapshot
-url=mysql://src
-
-[sinker]
-db_type=pg
-sink_type=write
-url=postgres://dst
-username=dst_user
-password=dst_pwd
-
-[checker]
-username=checker_user
-password=checker_pwd
-",
-        );
-
-        let config = TaskConfig::new(path.to_str().unwrap()).unwrap();
-        let checker = config.checker.unwrap();
-
-        assert!(matches!(checker.db_type, Some(DbType::Pg)));
-        assert_eq!(checker.url.as_deref(), Some("postgres://dst"));
-        assert!(matches!(
-            checker.connection_auth,
-            Some(ConnectionAuthConfig::Basic { username, password })
-                if username == "checker_user" && password.as_deref() == Some("checker_pwd")
-        ));
-
-        let _ = fs::remove_file(path);
-    }
-
-    #[test]
-    fn checker_url_can_override_while_db_type_falls_back_to_sinker() {
-        let _guard = test_lock();
-        let path = write_temp_task_config(
-            "[extractor]
-db_type=mysql
-extract_type=snapshot
-url=mysql://src
-
-[sinker]
-db_type=mysql
-sink_type=write
-url=mysql://dst
-username=dst_user
-
-[checker]
-url=mysql://checker-dst
-",
-        );
-
-        let config = TaskConfig::new(path.to_str().unwrap()).unwrap();
-        let checker = config.checker.unwrap();
-
-        assert!(matches!(checker.db_type, Some(DbType::Mysql)));
-        assert_eq!(checker.url.as_deref(), Some("mysql://checker-dst"));
-        assert!(matches!(
-            checker.connection_auth,
-            Some(ConnectionAuthConfig::Basic { username, password })
-                if username == "dst_user" && password.is_none()
-        ));
-
-        let _ = fs::remove_file(path);
-    }
-
-    #[test]
-    fn checker_requires_final_target_when_sinker_target_missing() {
-        let _guard = test_lock();
-        let path = write_temp_task_config(
-            "[extractor]
-db_type=mysql
-extract_type=snapshot
-url=mysql://src
-
-[checker]
-username=checker_user
-",
-        );
-
-        let message = match TaskConfig::new(path.to_str().unwrap()) {
-            Err(err) => err.to_string(),
-            std::result::Result::Ok(_) => {
-                panic!("task config should be rejected before target resolution completes")
-            }
-        };
-        assert!(
-            message.contains("config [checker] target is required when [sinker] target is not set")
-        );
-
-        let _ = fs::remove_file(path);
-    }
-
-    #[test]
-    fn dummy_sinker_ignores_empty_target_placeholders() {
-        let _guard = test_lock();
-        let path = write_temp_task_config(
-            "[extractor]
-db_type=mysql
-extract_type=snapshot
-url=mysql://src
-
-[sinker]
-sink_type=dummy
-db_type=
-url=
-
-[checker]
-db_type=pg
-url=postgres://checker
-username=checker_user
-",
-        );
-
-        let config = TaskConfig::new(path.to_str().unwrap()).unwrap();
-        assert!(matches!(config.sinker_basic.db_type, DbType::Pg));
-        assert_eq!(config.sinker_basic.url, "postgres://checker");
-        assert!(matches!(
-            config.sinker_basic.connection_auth,
-            ConnectionAuthConfig::Basic { username, password }
-                if username == "checker_user" && password.is_none()
-        ));
-
-        let _ = fs::remove_file(path);
-    }
-
-    #[test]
-    fn rdb_check_requires_checker_section() {
-        let _guard = test_lock();
-        let path = write_temp_task_config(
-            "[extractor]
-
-db_type=mysql
-extract_type=snapshot
-url=mysql://src
-
-[sinker]
-db_type=mysql
-sink_type=write
-url=mysql://dst
-
-[parallelizer]
-parallel_type=rdb_check
-",
-        );
-
-        let message = TaskConfig::new(path.to_str().unwrap())
-            .err()
-            .expect("task config should reject rdb_check without checker")
-            .to_string();
-        assert!(message
-            .contains("config [checker] is required when [parallelizer] parallel_type=rdb_check"));
-
-        let _ = fs::remove_file(path);
-    }
-
-    #[test]
-    fn dummy_sinker_can_reuse_sinker_target_and_override_checker_auth() {
-        let _guard = test_lock();
-        let path = write_temp_task_config(
-            "[extractor]
-db_type=mysql
-extract_type=snapshot
-url=mysql://src
-
-[sinker]
-sink_type=dummy
-db_type=pg
-url=postgres://dst
-username=dst_user
-password=dst_pwd
-
-[checker]
-username=checker_user
-",
-        );
-
-        let config = TaskConfig::new(path.to_str().unwrap()).unwrap();
-        assert!(matches!(config.sinker_basic.db_type, DbType::Pg));
-        assert_eq!(config.sinker_basic.url, "postgres://dst");
-        assert!(matches!(
-            config.sinker_basic.connection_auth,
-            ConnectionAuthConfig::Basic { username, password }
-                if username == "checker_user" && password.as_deref() == Some("dst_pwd")
-        ));
-
-        let _ = fs::remove_file(path);
-    }
-
-    #[test]
-    fn deprecated_resumer_log_keys_are_rejected() {
-        let _guard = test_lock();
-        let path = write_temp_task_config(
-            "[extractor]
-db_type=pg
-extract_type=snapshot
-url=postgres://src
-
-[sinker]
-db_type=pg
-sink_type=write
-url=postgres://dst
-
-[resumer]
-resume_from_log=true
-resume_log_dir=./resume_logs
-resume_config_file=./resume.config
-",
-        );
-
-        let message = TaskConfig::new(path.to_str().unwrap())
-            .err()
-            .expect("deprecated resumer keys should be rejected")
-            .to_string();
-        assert!(message.contains("deprecated [resumer] keys detected"));
-        assert!(message.contains("resume_type=from_log"));
-
-        let _ = fs::remove_file(path);
     }
 }

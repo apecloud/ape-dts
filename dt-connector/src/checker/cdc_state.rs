@@ -1,4 +1,5 @@
 use super::*;
+use anyhow::Context;
 use std::collections::BTreeSet;
 
 fn build_identity_json(entry: &CheckEntry) -> anyhow::Result<String> {
@@ -122,41 +123,36 @@ impl<C: Checker> DataChecker<C> {
         Ok(rows)
     }
 
-    fn restore_store_from_rows(&mut self, rows: Vec<CheckerStateRow>) {
+    pub(super) fn restore_store_from_rows(
+        &mut self,
+        rows: Vec<CheckerStateRow>,
+    ) -> anyhow::Result<()> {
         self.store.clear();
         let keep_from = rows.len().saturating_sub(CHECKER_MAX_STORE_SIZE);
         for row in rows.into_iter().skip(keep_from) {
-            match serde_json::from_str::<CheckEntry>(&row.payload) {
-                Ok(entry) => {
-                    self.store.insert(row.row_key, entry);
-                }
-                Err(err) => {
-                    log_warn!(
-                        "Checker [{}] failed to parse state row key [{}]: {}",
-                        self.name,
-                        row.row_key,
-                        err
-                    );
-                }
-            }
+            let entry = serde_json::from_str::<CheckEntry>(&row.payload).with_context(|| {
+                format!(
+                    "Checker [{}] failed to parse state row key [{}]",
+                    self.name, row.row_key
+                )
+            })?;
+            self.store.insert(row.row_key, entry);
         }
         self.update_pending_counter();
+        Ok(())
     }
 
     pub(super) async fn load_initial_state(&mut self) -> anyhow::Result<bool> {
         if let Some(state_store) = &self.ctx.state_store {
             let task_id = &self.task_id;
-            let rows = state_store
-                .load_rows(task_id)
-                .await
-                .with_context(|| {
-                    format!("failed to load checker state rows for task_id {}", task_id)
-                })?;
+            let rows = state_store.load_rows(task_id).await.with_context(|| {
+                format!("failed to load checker state rows for task_id {}", task_id)
+            })?;
             if !rows.is_empty() {
                 if let Some(expected) = &self.ctx.expected_resume_position {
                     self.last_checkpoint_position = Some(expected.clone());
                 }
-                self.restore_store_from_rows(rows);
+                self.restore_store_from_rows(rows)?;
                 log_info!(
                     "Checker [{}] restored {} store entries from state store",
                     self.name,
@@ -188,15 +184,10 @@ impl<C: Checker> DataChecker<C> {
             self.process_batch(chunk, false).await?;
             if self.store_dirty {
                 if let Some(position) = self.last_checkpoint_position.clone() {
-                    if let Err(err) = self.record_checkpoint(position).await {
-                        log_warn!(
-                            "Checker [{}] failed to persist recheck progress: {}",
-                            self.name,
-                            err
-                        );
-                    } else {
-                        self.store_dirty = false;
-                    }
+                    self.record_checkpoint(position).await.with_context(|| {
+                        format!("Checker [{}] failed to persist recheck progress", self.name)
+                    })?;
+                    self.store_dirty = false;
                 }
             }
         }

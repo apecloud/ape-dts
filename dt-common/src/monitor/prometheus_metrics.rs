@@ -181,7 +181,7 @@ impl PrometheusMetrics {
         );
         register_handler(
             "checker_queue_size",
-            "the pending rows waiting for checker",
+            "the unresolved rows currently tracked by checker",
             TaskMetricsType::CheckerPending,
         );
         register_handler(

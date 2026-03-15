@@ -37,9 +37,7 @@ use dt_common::{
         checker_config::CheckerConfig,
         config_enums::{build_task_type, DbType, ExtractType, PipelineType, SinkType, TaskType},
         config_token_parser::{ConfigTokenParser, TokenEscapePair},
-        connection_auth_config::ConnectionAuthConfig,
         extractor_config::ExtractorConfig,
-        resumer_config::ResumerConfig,
         sinker_config::SinkerConfig,
         task_config::{TaskConfig, DEFAULT_CHECK_LOG_FILE_SIZE},
     },
@@ -69,7 +67,6 @@ use dt_connector::{
     },
     data_marker::DataMarker,
     extractor::resumer::{recorder::Recorder, recovery::Recovery},
-    extractor::resumer::utils::ResumerUtil,
     rdb_router::RdbRouter,
     Sinker,
 };
@@ -91,6 +88,7 @@ pub struct TaskContext {
     pub router: Arc<RdbRouter>,
     pub recorder: Option<Arc<dyn Recorder + Send + Sync>>,
     pub recovery: Option<Arc<dyn Recovery + Send + Sync>>,
+    pub checker_state_store: Option<Arc<CheckerStateStore>>,
     pub check_summary: Option<Arc<AsyncMutex<CheckSummaryLog>>>,
     pub enqueue_limiter: Option<Arc<BufferLimiter>>,
     pub dequeue_limiter: Option<Arc<BufferLimiter>>,
@@ -156,18 +154,6 @@ impl TaskRunner {
         }
     }
 
-    fn build_checker_log_dir(base_dir: &str, single_task_id: &str) -> String {
-        if single_task_id.is_empty() {
-            base_dir.to_string()
-        } else {
-            format!(
-                "{}/{}",
-                base_dir.trim_end_matches('/'),
-                Self::sanitize_checker_scope(single_task_id)
-            )
-        }
-    }
-
     fn build_checker_s3_key_prefix(&self, configured_prefix: &str, single_task_id: &str) -> String {
         let base = if configured_prefix.is_empty() {
             format!("{}/check", self.config.global.task_id)
@@ -195,19 +181,14 @@ impl TaskRunner {
             config.checker.is_some(),
         );
         #[cfg(not(feature = "metrics"))]
-        let task_monitor = Arc::new(TaskMonitor::new(task_type.clone()));
+        let task_monitor = Arc::new(TaskMonitor::new(task_type));
 
         #[cfg(feature = "metrics")]
-        let prometheus_metrics = Arc::new(PrometheusMetrics::new(
-            task_type.clone(),
-            config.metrics.clone(),
-        ));
+        let prometheus_metrics =
+            Arc::new(PrometheusMetrics::new(task_type, config.metrics.clone()));
 
         #[cfg(feature = "metrics")]
-        let task_monitor = Arc::new(TaskMonitor::new(
-            task_type.clone(),
-            prometheus_metrics.clone(),
-        ));
+        let task_monitor = Arc::new(TaskMonitor::new(task_type, prometheus_metrics.clone()));
 
         Ok(Self {
             config,
@@ -238,7 +219,7 @@ impl TaskRunner {
 
         let db_type = &self.config.extractor_basic.db_type;
         let router = Arc::new(RdbRouter::from_config(&self.config.router, db_type)?);
-        let (recorder, recovery, _checker_state_store) = match &self.task_type {
+        let (recorder, recovery, checker_state_store) = match &self.task_type {
             Some(task_type) => {
                 TaskUtil::build_resumer(
                     task_type.to_owned(),
@@ -283,6 +264,7 @@ impl TaskRunner {
             router,
             recorder,
             recovery,
+            checker_state_store,
             check_summary: check_summary.clone(),
             enqueue_limiter,
             dequeue_limiter,
@@ -413,6 +395,7 @@ impl TaskRunner {
             router: task_context.router,
             recorder: task_context.recorder,
             recovery: task_context.recovery,
+            checker_state_store: task_context.checker_state_store,
             check_summary: task_context.check_summary,
             partition_cols: task_context.partition_cols,
             enqueue_limiter: task_context.enqueue_limiter,
@@ -440,6 +423,7 @@ impl TaskRunner {
         let router = (*task_context.router).clone();
         let recorder = task_context.recorder.clone();
         let recovery = task_context.recovery.clone();
+        let checker_state_store = task_context.checker_state_store.clone();
         let enqueue_limiter = task_context.enqueue_limiter;
         let dequeue_limiter = task_context.dequeue_limiter;
 
@@ -513,6 +497,7 @@ impl TaskRunner {
                 checker_monitor.clone(),
                 task_context.check_summary.clone(),
                 task_context.recovery.as_ref(),
+                checker_state_store,
             )
             .await?;
 
@@ -530,12 +515,10 @@ impl TaskRunner {
             sinker_client.clone(),
             sinker_monitor.clone(),
             rw_sinker_data_marker.clone(),
-            checker
-                .as_ref()
-                .and_then(|handle| match handle {
-                    CheckerHandle::Data(handle) => Some(handle.clone()),
-                    CheckerHandle::Struct(_) => None,
-                }),
+            checker.as_ref().and_then(|handle| match handle {
+                CheckerHandle::Data(handle) => Some(handle.clone()),
+                CheckerHandle::Struct(_) => None,
+            }),
             true,
         )
         .await?;
@@ -777,6 +760,7 @@ impl TaskRunner {
         monitor: Arc<Monitor>,
         check_summary: Option<Arc<AsyncMutex<CheckSummaryLog>>>,
         recovery: Option<&Arc<dyn Recovery + Send + Sync>>,
+        checker_state_store: Option<Arc<CheckerStateStore>>,
     ) -> anyhow::Result<Option<CheckerHandle>> {
         if !matches!(self.config.pipeline.pipeline_type, PipelineType::Basic) {
             return Ok(None);
@@ -822,7 +806,6 @@ impl TaskRunner {
         } else {
             cfg.check_log_dir.clone()
         };
-        let check_log_dir = Self::build_checker_log_dir(&check_log_dir_base, single_task_id);
         let checker_task_id = self.build_checker_task_id(single_task_id);
         let cdc_check_log_max_file_size =
             parse_size_limit(&cfg.check_log_file_size).map_err(|e| {
@@ -875,19 +858,9 @@ impl TaskRunner {
             .or_else(|| fallback_target.map(|(_, _, auth)| auth.clone()))
             .ok_or_else(missing)?;
 
-        let state_store = self
-            .build_checker_state_store(
-                is_cdc_task,
-                &checker_db_type,
-                &checker_url,
-                &checker_auth,
-                enable_sqlx_log,
-            )
-            .await?;
-        if is_cdc_task && state_store.is_none() {
+        if is_cdc_task && checker_state_store.is_none() {
             log_warn!(
-                "checker state store is unavailable for target db_type [{}], checkpoint persistence is disabled",
-                checker_db_type
+                "checker state store is unavailable for current [resumer] config, checkpoint persistence is disabled"
             );
         }
 
@@ -982,12 +955,12 @@ impl TaskRunner {
                     ..Default::default()
                 },
                 global_summary: check_summary.clone(),
-                check_log_dir: check_log_dir.clone(),
+                check_log_dir: check_log_dir_base.clone(),
                 cdc_check_log_max_file_size,
                 cdc_check_log_max_rows,
                 s3_output: s3_output.clone(),
                 cdc_check_log_interval_secs: cfg.cdc_check_log_interval_secs,
-                state_store: state_store.clone(),
+                state_store: checker_state_store.clone(),
                 expected_resume_position: expected_resume_position.clone(),
             };
 
@@ -1077,42 +1050,6 @@ impl TaskRunner {
             }
             _ => bail!("checker not supported for db_type: {}", checker_db_type),
         }
-    }
-
-    async fn build_checker_state_store(
-        &self,
-        is_cdc_task: bool,
-        checker_db_type: &DbType,
-        checker_url: &str,
-        checker_auth: &ConnectionAuthConfig,
-        _enable_sqlx_log: bool,
-    ) -> anyhow::Result<Option<Arc<CheckerStateStore>>> {
-        if !is_cdc_task {
-            return Ok(None);
-        }
-
-        let Some(table_full_name) = (match checker_db_type {
-            DbType::Mysql | DbType::Pg => Some("apecloud_metadata.apedts_checker".to_string()),
-            _ => None,
-        }) else {
-            log_warn!(
-                "checker state store unsupported for target db_type [{}], checkpoint persistence is disabled.",
-                checker_db_type
-            );
-            return Ok(None);
-        };
-
-        let resumer_config = ResumerConfig::FromDB {
-            url: checker_url.to_string(),
-            connection_auth: checker_auth.clone(),
-            db_type: checker_db_type.clone(),
-            table_full_name,
-            max_connections: 2,
-        };
-        let pool = ResumerUtil::create_pool(checker_url, checker_auth, checker_db_type, 2).await?;
-        Ok(Some(Arc::new(
-            CheckerStateStore::new(pool, &resumer_config).await?,
-        )))
     }
 
     async fn init_log4rs(&self) -> anyhow::Result<()> {
@@ -1483,6 +1420,7 @@ impl TaskRunner {
                 sinker_client,
                 recorder: original_task_context.recorder.clone(),
                 recovery: original_task_context.recovery.clone(),
+                checker_state_store: original_task_context.checker_state_store.clone(),
                 check_summary: original_task_context.check_summary.clone(),
                 partition_cols: original_task_context.partition_cols.clone(),
                 enqueue_limiter: original_task_context.enqueue_limiter.clone(),
@@ -1590,6 +1528,7 @@ impl TaskRunner {
                         sinker_client: sinker_client.clone(),
                         recorder: original_task_context.recorder.clone(),
                         recovery: original_task_context.recovery.clone(),
+                        checker_state_store: original_task_context.checker_state_store.clone(),
                         check_summary: original_task_context.check_summary.clone(),
                         partition_cols: original_task_context.partition_cols.clone(),
                         enqueue_limiter: original_task_context.enqueue_limiter.clone(),
@@ -1654,18 +1593,6 @@ mod tests {
         assert_eq!(
             TaskRunner::derive_single_task_id("", &extractor),
             "public.users"
-        );
-    }
-
-    #[test]
-    fn build_checker_log_dir_appends_sanitized_scope() {
-        assert_eq!(
-            TaskRunner::build_checker_log_dir("./logs/check", "db.one/orders:2026"),
-            "./logs/check/db.one_orders_2026"
-        );
-        assert_eq!(
-            TaskRunner::build_checker_log_dir("./logs/check", ""),
-            "./logs/check"
         );
     }
 }
