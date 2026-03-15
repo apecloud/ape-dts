@@ -19,6 +19,17 @@ mod test {
 
     #[tokio::test]
     #[serial]
+    async fn cdc_check_resume_test() {
+        TestBase::run_cdc_check_resume_test(
+            "mysql_to_mysql/check/cdc_check_resume_test",
+            1000,
+            1000,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    #[serial]
     async fn cdc_check_large_data_test() {
         TestBase::run_cdc_check_test(
             "mysql_to_mysql/check/cdc_check_large_data_test",
