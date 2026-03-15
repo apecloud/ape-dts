@@ -151,14 +151,14 @@ impl ColValue {
                 }
             }
             // MySQL Binlog VARCHAR/CHAR/TEXT->RawString same as String
-            (ColValue::RawString(v1) | ColValue::Blob(v1), ColValue::String(v2)) => {
+            (ColValue::RawString(v1), ColValue::String(v2)) => {
                 if let Ok(s) = String::from_utf8(v1.clone()) {
                     &s == v2
                 } else {
                     false
                 }
             }
-            (ColValue::String(v1), ColValue::RawString(v2) | ColValue::Blob(v2)) => {
+            (ColValue::String(v1), ColValue::RawString(v2)) => {
                 if let Ok(s) = String::from_utf8(v2.clone()) {
                     v1 == &s
                 } else {
@@ -465,6 +465,10 @@ mod tests {
         assert!(v2.is_same_value(&ColValue::Double(f64::NAN)));
         assert!(v3.is_same_value(&ColValue::None));
         assert!(v4.is_same_value(&ColValue::Long(7)));
+        assert!(ColValue::RawString(b"abc".to_vec()).is_same_value(&ColValue::String("abc".into())));
+        assert!(ColValue::String("abc".into()).is_same_value(&ColValue::RawString(b"abc".to_vec())));
+        assert!(!ColValue::Blob(b"abc".to_vec()).is_same_value(&ColValue::String("abc".into())));
+        assert!(!ColValue::String("abc".into()).is_same_value(&ColValue::Blob(b"abc".to_vec())));
     }
 
     #[test]

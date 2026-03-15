@@ -440,7 +440,7 @@ impl BasePipeline {
                     log_error!("failed to record position: {}, err: {}", record_position, e);
                 }
             }
-        } else {
+        } else if !checkpoint_ok {
             log_warn!(
                 "skip recorder checkpoint because checker checkpoint failed at position: {}",
                 record_position

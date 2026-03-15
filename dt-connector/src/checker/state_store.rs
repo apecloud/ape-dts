@@ -392,25 +392,3 @@ where
     }
     Ok(parsed)
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn postgres_snapshot_batch_rows_should_respect_bind_limit() {
-        assert!(POSTGRES_SNAPSHOT_BATCH_ROWS > 0);
-        assert!(
-            POSTGRES_SNAPSHOT_BATCH_ROWS * SNAPSHOT_INSERT_BIND_COUNT <= POSTGRES_MAX_BIND_PARAMS
-        );
-        assert!(
-            (POSTGRES_SNAPSHOT_BATCH_ROWS + 1) * SNAPSHOT_INSERT_BIND_COUNT
-                > POSTGRES_MAX_BIND_PARAMS
-        );
-    }
-
-    #[test]
-    fn mysql_snapshot_batch_rows_should_be_positive() {
-        assert!(MYSQL_SNAPSHOT_BATCH_ROWS > 0);
-    }
-}

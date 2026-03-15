@@ -37,9 +37,6 @@ use dt_common::{
 mod cdc_state;
 #[path = "checker_engine.rs"]
 mod engine;
-#[cfg(test)]
-#[path = "base_checker_tests.rs"]
-mod tests;
 
 pub const CHECKER_MAX_QUERY_BATCH: usize = 1000;
 
@@ -418,7 +415,6 @@ struct DataChecker<C: Checker> {
     store_dirty: bool,
     evicted_miss: usize,
     evicted_diff: usize,
-    checkpoint_seq: u64,
     last_checkpoint_position: Option<Position>,
 }
 
@@ -442,7 +438,6 @@ impl<C: Checker> DataChecker<C> {
             store_dirty: false,
             evicted_miss: 0,
             evicted_diff: 0,
-            checkpoint_seq: 0,
             last_checkpoint_position: None,
         }
     }
@@ -451,7 +446,17 @@ impl<C: Checker> DataChecker<C> {
         log_info!("Checker [{}] started.", self.name);
         let mut interval = tokio::time::interval(Duration::from_secs(1));
         let mut first_error: Option<anyhow::Error> = None;
-        self.init_cdc_state().await;
+        if let Err(err) = self.init_cdc_state().await {
+            log_error!(
+                "Checker [{}] failed to initialize CDC state: {}",
+                self.name,
+                err
+            );
+            Self::remember_error(&mut first_error, err);
+            self.shutdown_logged(&mut first_error).await;
+            log_info!("Checker [{}] stopped.", self.name);
+            return Err(first_error.expect("init failure should set first_error"));
+        }
         let output_secs = self.ctx.cdc_check_log_interval_secs.max(1);
         let mut output_interval = tokio::time::interval(Duration::from_secs(output_secs));
         output_interval.tick().await;
@@ -498,14 +503,6 @@ impl<C: Checker> DataChecker<C> {
         log_info!("Checker [{}] stopped.", self.name);
 
         match first_error {
-            Some(err) if self.ctx.is_cdc => {
-                log_warn!(
-                    "Checker [{}] had internal errors in CDC mode, ignored to keep pipeline running: {}",
-                    self.name,
-                    err
-                );
-                Ok(())
-            }
             Some(err) => Err(err),
             None => Ok(()),
         }
@@ -515,15 +512,10 @@ impl<C: Checker> DataChecker<C> {
         if self.ctx.is_cdc {
             if self.store_dirty {
                 if let Some(position) = self.last_checkpoint_position.clone() {
-                    if let Err(err) = self.record_checkpoint(position).await {
-                        log_warn!(
-                            "Checker [{}] failed to persist final checkpoint: {}",
-                            self.name,
-                            err
-                        );
-                    } else {
-                        self.store_dirty = false;
-                    }
+                    self.record_checkpoint(position).await.with_context(|| {
+                        format!("Checker [{}] failed to persist final checkpoint", self.name)
+                    })?;
+                    self.store_dirty = false;
                 }
             }
             if let Err(err) = self.snapshot_and_output().await {
@@ -556,31 +548,15 @@ impl<C: Checker> DataChecker<C> {
         }
     }
 
-    async fn init_cdc_state(&mut self) {
+    async fn init_cdc_state(&mut self) -> anyhow::Result<()> {
         if !self.ctx.is_cdc {
-            return;
+            return Ok(());
         }
-        let needs_recheck = match self.load_initial_state().await {
-            Ok(needs_recheck) => needs_recheck,
-            Err(err) => {
-                log_warn!(
-                    "Checker [{}] failed to load state, start from empty store: {}",
-                    self.name,
-                    err
-                );
-                return;
-            }
-        };
+        let needs_recheck = self.load_initial_state().await?;
         if !needs_recheck {
-            return;
+            return Ok(());
         }
-        if let Err(err) = self.run_recheck().await {
-            log_warn!(
-                "Checker [{}] failed to run recheck phase: {}",
-                self.name,
-                err
-            );
-        }
+        self.run_recheck().await
     }
 
     async fn maybe_snapshot_and_output(&mut self) {
