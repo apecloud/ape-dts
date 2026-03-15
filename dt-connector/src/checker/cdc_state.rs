@@ -15,6 +15,244 @@ fn build_identity_key(identity_json: &str) -> String {
     hex::encode(openssl::sha::sha256(identity_json.as_bytes()))
 }
 
+#[derive(Clone, Serialize, Deserialize)]
+enum PersistedColValue {
+    None,
+    Bool(bool),
+    Tiny(i8),
+    UnsignedTiny(u8),
+    Short(i16),
+    UnsignedShort(u16),
+    Long(i32),
+    UnsignedLong(u32),
+    LongLong(i64),
+    UnsignedLongLong(u64),
+    Float(f32),
+    Double(f64),
+    Decimal(String),
+    Time(String),
+    Date(String),
+    DateTime(String),
+    Timestamp(String),
+    Year(u16),
+    String(String),
+    RawString(Vec<u8>),
+    Blob(Vec<u8>),
+    Bit(u64),
+    Set(u64),
+    Enum(u32),
+    Set2(String),
+    Enum2(String),
+    Json(Vec<u8>),
+    Json2(String),
+    Json3(serde_json::Value),
+    MongoDoc(mongodb::bson::Document),
+}
+
+impl From<&ColValue> for PersistedColValue {
+    fn from(value: &ColValue) -> Self {
+        match value {
+            ColValue::None => Self::None,
+            ColValue::Bool(v) => Self::Bool(*v),
+            ColValue::Tiny(v) => Self::Tiny(*v),
+            ColValue::UnsignedTiny(v) => Self::UnsignedTiny(*v),
+            ColValue::Short(v) => Self::Short(*v),
+            ColValue::UnsignedShort(v) => Self::UnsignedShort(*v),
+            ColValue::Long(v) => Self::Long(*v),
+            ColValue::UnsignedLong(v) => Self::UnsignedLong(*v),
+            ColValue::LongLong(v) => Self::LongLong(*v),
+            ColValue::UnsignedLongLong(v) => Self::UnsignedLongLong(*v),
+            ColValue::Float(v) => Self::Float(*v),
+            ColValue::Double(v) => Self::Double(*v),
+            ColValue::Decimal(v) => Self::Decimal(v.clone()),
+            ColValue::Time(v) => Self::Time(v.clone()),
+            ColValue::Date(v) => Self::Date(v.clone()),
+            ColValue::DateTime(v) => Self::DateTime(v.clone()),
+            ColValue::Timestamp(v) => Self::Timestamp(v.clone()),
+            ColValue::Year(v) => Self::Year(*v),
+            ColValue::String(v) => Self::String(v.clone()),
+            ColValue::RawString(v) => Self::RawString(v.clone()),
+            ColValue::Blob(v) => Self::Blob(v.clone()),
+            ColValue::Bit(v) => Self::Bit(*v),
+            ColValue::Set(v) => Self::Set(*v),
+            ColValue::Enum(v) => Self::Enum(*v),
+            ColValue::Set2(v) => Self::Set2(v.clone()),
+            ColValue::Enum2(v) => Self::Enum2(v.clone()),
+            ColValue::Json(v) => Self::Json(v.clone()),
+            ColValue::Json2(v) => Self::Json2(v.clone()),
+            ColValue::Json3(v) => Self::Json3(v.clone()),
+            ColValue::MongoDoc(v) => Self::MongoDoc(v.clone()),
+        }
+    }
+}
+
+impl From<PersistedColValue> for ColValue {
+    fn from(value: PersistedColValue) -> Self {
+        match value {
+            PersistedColValue::None => Self::None,
+            PersistedColValue::Bool(v) => Self::Bool(v),
+            PersistedColValue::Tiny(v) => Self::Tiny(v),
+            PersistedColValue::UnsignedTiny(v) => Self::UnsignedTiny(v),
+            PersistedColValue::Short(v) => Self::Short(v),
+            PersistedColValue::UnsignedShort(v) => Self::UnsignedShort(v),
+            PersistedColValue::Long(v) => Self::Long(v),
+            PersistedColValue::UnsignedLong(v) => Self::UnsignedLong(v),
+            PersistedColValue::LongLong(v) => Self::LongLong(v),
+            PersistedColValue::UnsignedLongLong(v) => Self::UnsignedLongLong(v),
+            PersistedColValue::Float(v) => Self::Float(v),
+            PersistedColValue::Double(v) => Self::Double(v),
+            PersistedColValue::Decimal(v) => Self::Decimal(v),
+            PersistedColValue::Time(v) => Self::Time(v),
+            PersistedColValue::Date(v) => Self::Date(v),
+            PersistedColValue::DateTime(v) => Self::DateTime(v),
+            PersistedColValue::Timestamp(v) => Self::Timestamp(v),
+            PersistedColValue::Year(v) => Self::Year(v),
+            PersistedColValue::String(v) => Self::String(v),
+            PersistedColValue::RawString(v) => Self::RawString(v),
+            PersistedColValue::Blob(v) => Self::Blob(v),
+            PersistedColValue::Bit(v) => Self::Bit(v),
+            PersistedColValue::Set(v) => Self::Set(v),
+            PersistedColValue::Enum(v) => Self::Enum(v),
+            PersistedColValue::Set2(v) => Self::Set2(v),
+            PersistedColValue::Enum2(v) => Self::Enum2(v),
+            PersistedColValue::Json(v) => Self::Json(v),
+            PersistedColValue::Json2(v) => Self::Json2(v),
+            PersistedColValue::Json3(v) => Self::Json3(v),
+            PersistedColValue::MongoDoc(v) => Self::MongoDoc(v),
+        }
+    }
+}
+
+fn persist_col_values(
+    col_values: &Option<HashMap<String, ColValue>>,
+) -> Option<HashMap<String, PersistedColValue>> {
+    col_values.as_ref().map(|values| {
+        values
+            .iter()
+            .map(|(col, value)| (col.clone(), PersistedColValue::from(value)))
+            .collect()
+    })
+}
+
+fn restore_col_values(
+    col_values: Option<HashMap<String, PersistedColValue>>,
+) -> Option<HashMap<String, ColValue>> {
+    col_values.map(|values| {
+        values
+            .into_iter()
+            .map(|(col, value)| (col, ColValue::from(value)))
+            .collect()
+    })
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+struct PersistedRowData {
+    schema: String,
+    tb: String,
+    row_type: RowType,
+    before: Option<HashMap<String, PersistedColValue>>,
+    after: Option<HashMap<String, PersistedColValue>>,
+    data_size: usize,
+}
+
+impl From<&RowData> for PersistedRowData {
+    fn from(row_data: &RowData) -> Self {
+        Self {
+            schema: row_data.schema.clone(),
+            tb: row_data.tb.clone(),
+            row_type: row_data.row_type.clone(),
+            before: persist_col_values(&row_data.before),
+            after: persist_col_values(&row_data.after),
+            data_size: row_data.data_size,
+        }
+    }
+}
+
+impl From<PersistedRowData> for RowData {
+    fn from(row_data: PersistedRowData) -> Self {
+        RowData {
+            schema: row_data.schema,
+            tb: row_data.tb,
+            row_type: row_data.row_type,
+            before: restore_col_values(row_data.before),
+            after: restore_col_values(row_data.after),
+            data_size: row_data.data_size,
+        }
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+struct PersistedCheckLog {
+    schema: String,
+    tb: String,
+    target_schema: Option<String>,
+    target_tb: Option<String>,
+    id_col_values: HashMap<String, Option<String>>,
+    diff_col_values: HashMap<String, DiffColValue>,
+    src_row: Option<HashMap<String, PersistedColValue>>,
+    dst_row: Option<HashMap<String, PersistedColValue>>,
+}
+
+impl From<&CheckLog> for PersistedCheckLog {
+    fn from(log: &CheckLog) -> Self {
+        Self {
+            schema: log.schema.clone(),
+            tb: log.tb.clone(),
+            target_schema: log.target_schema.clone(),
+            target_tb: log.target_tb.clone(),
+            id_col_values: log.id_col_values.clone(),
+            diff_col_values: log.diff_col_values.clone(),
+            src_row: persist_col_values(&log.src_row),
+            dst_row: persist_col_values(&log.dst_row),
+        }
+    }
+}
+
+impl From<PersistedCheckLog> for CheckLog {
+    fn from(log: PersistedCheckLog) -> Self {
+        Self {
+            schema: log.schema,
+            tb: log.tb,
+            target_schema: log.target_schema,
+            target_tb: log.target_tb,
+            id_col_values: log.id_col_values,
+            diff_col_values: log.diff_col_values,
+            src_row: restore_col_values(log.src_row),
+            dst_row: restore_col_values(log.dst_row),
+        }
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+struct PersistedCheckEntry {
+    log: PersistedCheckLog,
+    revise_sql: Option<String>,
+    is_miss: bool,
+    src_row_data: PersistedRowData,
+}
+
+impl From<&CheckEntry> for PersistedCheckEntry {
+    fn from(entry: &CheckEntry) -> Self {
+        Self {
+            log: PersistedCheckLog::from(&entry.log),
+            revise_sql: entry.revise_sql.clone(),
+            is_miss: entry.is_miss,
+            src_row_data: PersistedRowData::from(&entry.src_row_data),
+        }
+    }
+}
+
+impl From<PersistedCheckEntry> for CheckEntry {
+    fn from(entry: PersistedCheckEntry) -> Self {
+        Self {
+            log: CheckLog::from(entry.log),
+            revise_sql: entry.revise_sql,
+            is_miss: entry.is_miss,
+            src_row_data: RowData::from(entry.src_row_data),
+        }
+    }
+}
+
 impl<C: Checker> DataChecker<C> {
     const DEFAULT_CDC_LOG_MAX_FILE_SIZE: usize = 100 * 1024 * 1024;
     const DEFAULT_CDC_LOG_MAX_ROWS: usize = 1000;
@@ -117,7 +355,7 @@ impl<C: Checker> DataChecker<C> {
                 row_key: *key,
                 identity_key: build_identity_key(&identity_json),
                 identity_json,
-                payload: serde_json::to_string(entry)?,
+                payload: serde_json::to_string(&PersistedCheckEntry::from(entry))?,
             });
         }
         Ok(rows)
@@ -130,13 +368,14 @@ impl<C: Checker> DataChecker<C> {
         self.store.clear();
         let keep_from = rows.len().saturating_sub(CHECKER_MAX_STORE_SIZE);
         for row in rows.into_iter().skip(keep_from) {
-            let entry = serde_json::from_str::<CheckEntry>(&row.payload).with_context(|| {
-                format!(
-                    "Checker [{}] failed to parse state row key [{}]",
-                    self.name, row.row_key
-                )
-            })?;
-            self.store.insert(row.row_key, entry);
+            let entry =
+                serde_json::from_str::<PersistedCheckEntry>(&row.payload).with_context(|| {
+                    format!(
+                        "Checker [{}] failed to parse state row key [{}]",
+                        self.name, row.row_key
+                    )
+                })?;
+            self.store.insert(row.row_key, CheckEntry::from(entry));
         }
         self.update_pending_counter();
         Ok(())
