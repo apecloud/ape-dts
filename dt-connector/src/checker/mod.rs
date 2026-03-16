@@ -22,6 +22,16 @@ pub enum CheckerHandle {
 }
 
 impl CheckerHandle {
+    pub async fn refresh_meta(
+        &self,
+        data: Vec<dt_common::meta::ddl_meta::ddl_data::DdlData>,
+    ) -> anyhow::Result<()> {
+        match self {
+            CheckerHandle::Data(handle) => handle.refresh_meta(data).await,
+            CheckerHandle::Struct(_) => Ok(()),
+        }
+    }
+
     pub async fn check_struct(
         &self,
         data: Vec<dt_common::meta::struct_meta::struct_data::StructData>,
