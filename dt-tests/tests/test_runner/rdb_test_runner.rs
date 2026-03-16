@@ -72,22 +72,14 @@ impl RdbTestRunner {
         let src_url = config.extractor_basic.url.clone();
         let src_connection_auth = config.extractor_basic.connection_auth.clone();
 
+        let dst_target = config.destination_target().unwrap();
         let mut dst_db_type = config.sinker_basic.db_type.clone();
         let mut dst_url = config.sinker_basic.url.clone();
         let mut dst_connection_auth = config.sinker_basic.connection_auth.clone();
-
-        if dst_url.is_empty() {
-            if let Some(checker) = &config.checker {
-                if let (Some(db_type), Some(url), Some(connection_auth)) = (
-                    checker.db_type.clone(),
-                    checker.url.clone(),
-                    checker.connection_auth.clone(),
-                ) {
-                    dst_db_type = db_type;
-                    dst_url = url;
-                    dst_connection_auth = connection_auth;
-                }
-            }
+        if let Some(target) = dst_target {
+            dst_db_type = target.db_type;
+            dst_url = target.url;
+            dst_connection_auth = target.connection_auth;
         }
 
         // generate mock sqls
@@ -364,7 +356,12 @@ impl RdbTestRunner {
                     old_pool.close().await;
                 }
 
-                let url = &self.config.sinker_basic.url;
+                let dst_target = self
+                    .config
+                    .destination_target()
+                    .unwrap()
+                    .expect("destination target should exist");
+                let url = &dst_target.url;
                 let conn_str = url.replace(
                     &url[url.find("://").unwrap() + 3..url.find('@').unwrap()],
                     &format!("{}:{}", current_user, current_pwd),
@@ -1223,7 +1220,11 @@ impl RdbTestRunner {
         if from == SRC {
             config.extractor_basic.db_type
         } else {
-            config.sinker_basic.db_type
+            config
+                .destination_target()
+                .unwrap()
+                .map(|target| target.db_type)
+                .unwrap_or(config.sinker_basic.db_type)
         }
     }
 

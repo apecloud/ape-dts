@@ -100,16 +100,6 @@ impl MongoTestRunner {
             }
         }
 
-        if dst_mongo_client.is_none() && config.sinker_basic.db_type == DbType::Mongo {
-            let url = &config.sinker_basic.url;
-            let connection_auth = &config.sinker_basic.connection_auth;
-            dst_mongo_client = Some(
-                TaskUtil::create_mongo_client(url, connection_auth, "", None)
-                    .await
-                    .unwrap(),
-            );
-        }
-
         // cleanup dbs before tests
         let mongo_dbs = Self::collect_databases(&base);
         if !mongo_dbs.is_empty() {

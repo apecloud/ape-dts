@@ -44,12 +44,9 @@ url=mysql://user1:abc%25%24%23%3F%40@127.0.0.1:3307?ssl-mode=disabled
 
 Checker 有两种模式：
 - 独立 checker：仅做校验任务，不做写入。设置 `sink_type=dummy` 或直接省略 `[sinker]`，
-  并在 `[checker]` 中配置校验目标（或在存在 `[sinker]` 时配置其目标）。
+  并在 `[checker]` 中显式配置校验目标。
 - CDC + checker：CDC 任务且 `sink_type=write` 时，在主链路写入后异步校验。
-  只要存在 `[checker]` section 即启用。
-
-目标选择规则：若 `[checker]` 提供 target（`db_type`/`url`/`username`/`password`），优先使用；
-否则回退到 `[sinker]` 的目标。
+  只要存在 `[checker]` section 且显式配置了 target 即启用。
 
 | 配置                        | 作用                                            | 示例        | 默认                             |
 | :-------------------------- | :---------------------------------------------- | :---------- | :------------------------------- |
@@ -65,10 +62,10 @@ Checker 有两种模式：
 | check_log_dir               | 校验日志目录                                    | /tmp/check  | 空（默认 runtime.log_dir/check） |
 | check_log_file_size         | 单类日志文件大小上限（`diff.log` / `miss.log`） | 100mb       | 100mb                            |
 | check_log_max_rows          | 单类日志最大行数（`diff.log` / `miss.log`）     | 1000        | 1000                             |
-| db_type                     | 校验目标库类型（覆盖 [sinker] 目标）            | mysql       | 空                               |
-| url                         | 校验目标 URL（覆盖 [sinker] 目标）              | mysql://... | 空                               |
-| username                    | 校验目标用户名（URL 未包含时使用）              | root        | 空                               |
-| password                    | 校验目标密码（URL 未包含时使用）                | password    | 空                               |
+| db_type                     | 校验目标库类型（必填）                          | mysql       | -                                |
+| url                         | 校验目标 URL（必填）                            | mysql://... | -                                |
+| username                    | 校验目标用户名（配置后会写入目标 URL）          | root        | 空                               |
+| password                    | 校验目标密码（配置后会写入目标 URL）            | password    | 空                               |
 | cdc_check_log_s3            | 定期将 CDC 校验快照上传至 S3                    | false       | false                            |
 | cdc_check_log_interval_secs | CDC 校验快照输出间隔（秒）                      | 10          | 10                               |
 | s3_bucket                   | 校验日志上传的 S3 存储桶                        | my-bucket   | -                                |
@@ -79,8 +76,9 @@ Checker 有两种模式：
 | s3_key_prefix               | 校验日志的 S3 键前缀                            | task1/check | 空                               |
 
 说明：
+- checker 仅支持 `[pipeline] pipeline_type=basic`。
 - 在 CDC + checker 模式（`extract_type=cdc` 且 `sink_type=write`）下，checker 批量大小跟随 `[sinker].batch_size`。
-- 在 CDC + checker 模式下，只要配置了 `[checker]` section 就会启用 checker。
+- 在 CDC + checker 模式下，需在 `[checker]` 中显式配置 target，checker 才会启用。
 - 当 `check_log_dir` 为空时，统一使用 `runtime.log_dir/check` 作为 checker 日志目录（包含 CDC 校验输出）。
 - 在 CDC + checker 模式下，会始终在 `check_log_dir` 本地输出 `diff.log` / `miss.log` / `summary.log`；`cdc_check_log_s3` 仅控制是否上传 S3。
 - CDC 校验输出对 `diff.log` / `miss.log` 同时应用双上限：`check_log_file_size` 与 `check_log_max_rows`，命中任一阈值时仅保留最新记录。
@@ -191,7 +189,7 @@ Checker 有两种模式：
 | serial    | 单线程，依次单条写入目标                                                                            | 所有                    |      | 慢                                           |
 | rdb_merge | 将缓存中的增量数据（insert, update, delete）整合成 insert + delete 数据，多线程并行，且批量写入目标 | mysql/pg 增量任务       | 快   | 最终一致性，破坏源端事务在目标端重放的完整性 |
 | mongo     | rdb_merge 的 mongo 版                                                                               | mongo 增量              |      |                                              |
-| rdb_check | 校验模式；必须配置 `[checker]`，并且先写入目标端再执行校验                                          | 支持 checker 的校验任务 |      |                                              |
+| rdb_check | 校验模式；必须配置 `[checker]`，独立校验任务不写入目标端，CDC+check 仍是先写入再校验               | 支持 checker 的校验任务 |      |                                              |
 | redis     | 单线程，批量/串行（由 sinker 的 batch_size 决定）写入                                               | redis 全量/增量         |      |                                              |
 
 # [runtime]

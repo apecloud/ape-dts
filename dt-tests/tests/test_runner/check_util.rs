@@ -118,8 +118,13 @@ impl CheckUtil {
 
     pub fn get_check_log_dir(base_test_runner: &BaseTestRunner, version: &str) -> (String, String) {
         let mut expect_check_log_dir = format!("{}/expect_check_log", base_test_runner.test_dir);
-        if !BaseTestRunner::check_path_exists(&expect_check_log_dir)
-            && base_test_runner.get_config().sinker_basic.db_type == DbType::Mysql
+        let dst_db_type = base_test_runner
+            .get_config()
+            .destination_target()
+            .unwrap()
+            .map(|target| target.db_type)
+            .unwrap_or(base_test_runner.get_config().sinker_basic.db_type.clone());
+        if !BaseTestRunner::check_path_exists(&expect_check_log_dir) && dst_db_type == DbType::Mysql
         {
             // mysql 5.7, 8.0
             if version.starts_with("5.") {

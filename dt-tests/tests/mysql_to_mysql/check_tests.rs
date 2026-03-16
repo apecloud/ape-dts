@@ -1,14 +1,24 @@
 #[cfg(test)]
 mod test {
-
     use serial_test::serial;
 
-    use crate::test_runner::test_base::TestBase;
+    use crate::test_runner::{rdb_check_test_runner::RdbCheckTestRunner, test_base::TestBase};
 
     #[tokio::test]
     #[serial]
     async fn check_basic_test() {
         TestBase::run_check_test("mysql_to_mysql/check/basic_test").await;
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn check_tb_parallel_metrics_test() {
+        let runner = RdbCheckTestRunner::new("mysql_to_mysql/check/basic_test")
+            .await
+            .expect("Failed to create RdbCheckTestRunner");
+        let result = runner.run_check_test_and_validate_task_metrics(3).await;
+        runner.close().await.expect("Failed to close runner");
+        result.expect("Failed to validate tb_parallel task metrics");
     }
 
     #[tokio::test]

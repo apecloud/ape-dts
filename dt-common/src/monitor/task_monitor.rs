@@ -152,6 +152,13 @@ impl TaskMonitor {
             .or_insert(value);
     }
 
+    pub fn get_no_window_metric(&self, metrics_type: TaskMetricsType) -> u64 {
+        self.no_window_metrics_map
+            .get(&metrics_type)
+            .map(|entry| *entry.value())
+            .unwrap_or_default()
+    }
+
     async fn calc(&self) -> Option<BTreeMap<TaskMetricsType, u64>> {
         self.task_type.as_ref()?;
 

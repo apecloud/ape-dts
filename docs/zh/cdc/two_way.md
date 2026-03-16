@@ -7,7 +7,7 @@
 ## CDC + Checker
 
 如需校验 CDC 落库后的数据，可在 CDC 任务配置中开启 `[checker]`。配置与限制请参考 [数据校验](../snapshot/check.md)。
-若 `[checker]` 与 `[sinker]` 同时指定目标，优先使用 `[checker]`。
+`[checker]` 必须显式声明自己的目标端，不再隐式复用 `[sinker]` 的目标。
 
 # 数据循环
 

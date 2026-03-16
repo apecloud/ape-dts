@@ -45,12 +45,9 @@ url=mysql://user1:abc%25%24%23%3F%40@127.0.0.1:3307?ssl-mode=disabled
 
 Checker has two modes:
 - Standalone checker: run a check task only (no data write). Set `sink_type=dummy` or omit
-  `[sinker]`, and specify the checker target in `[checker]` (or in `[sinker]` when it exists).
+  `[sinker]`, and configure the checker target explicitly in `[checker]`.
 - CDC + checker: for CDC tasks with `sink_type=write`, checker runs asynchronously after sink.
-  Enable it by adding the `[checker]` section.
-
-Target selection: if `[checker]` provides a target (`db_type`/`url`/`username`/`password`), it
-takes precedence; otherwise the checker reuses the `[sinker]` target.
+  Enable it by adding the `[checker]` section and configuring its target explicitly.
 
 | Config                      | Description                                               | Example     | Default                           |
 | :-------------------------- | :-------------------------------------------------------- | :---------- | :-------------------------------- |
@@ -66,10 +63,10 @@ takes precedence; otherwise the checker reuses the `[sinker]` target.
 | check_log_dir               | check log dir                                             | /tmp/check  | empty (use runtime.log_dir/check) |
 | check_log_file_size         | per-log file size limit (`diff.log` / `miss.log`)         | 100mb       | 100mb                             |
 | check_log_max_rows          | per-log max rows (`diff.log` / `miss.log`)                | 1000        | 1000                              |
-| db_type                     | checker target db type (override sinker target)           | mysql       | empty                             |
-| url                         | checker target URL (override sinker target)               | mysql://... | empty                             |
-| username                    | checker target username (when URL lacks auth)             | root        | empty                             |
-| password                    | checker target password (when URL lacks auth)             | password    | empty                             |
+| db_type                     | checker target db type (required)                         | mysql       | -                                 |
+| url                         | checker target URL (required)                             | mysql://... | -                                 |
+| username                    | checker target username (applied to the target URL when set) | root     | empty                             |
+| password                    | checker target password (applied to the target URL when set) | password | empty                             |
 | cdc_check_log_s3            | upload periodic CDC check snapshot to S3                  | false       | false                             |
 | cdc_check_log_interval_secs | interval (seconds) for periodic CDC check snapshot output | 10          | 10                                |
 | s3_bucket                   | S3 bucket for check log upload                            | my-bucket   | -                                 |
@@ -80,7 +77,8 @@ takes precedence; otherwise the checker reuses the `[sinker]` target.
 | s3_key_prefix               | S3 key prefix for check logs                              | task1/check | empty                             |
 
 Notes:
-- In CDC + checker mode (`extract_type=cdc`, `sink_type=write`), adding `[checker]` enables checker and makes its batch size follow `[sinker].batch_size`.
+- Checker only supports `[pipeline] pipeline_type=basic`.
+- In CDC + checker mode (`extract_type=cdc`, `sink_type=write`), configuring `[checker]` with an explicit target enables checker and makes its batch size follow `[sinker].batch_size`.
 - When `check_log_dir` is empty, `runtime.log_dir/check` is used consistently for checker logs (including CDC check outputs).
 - In CDC + checker mode, `diff.log` / `miss.log` / `summary.log` are always written locally under `check_log_dir`; `cdc_check_log_s3` controls only S3 upload.
 - CDC check outputs apply dual limits to `diff.log` / `miss.log`: `check_log_file_size` and `check_log_max_rows`; when either threshold is hit, only the latest records are kept.
@@ -191,7 +189,7 @@ Same with [filter].
 | serial    | Single thread, one by one.                                                                                                                                                                    | all                               |            | slow                 |
 | rdb_merge | Merge CDC records(insert, update, delete) in cache into insert + delete records，and then divide them into [parallel_size] partitions, each partition synced in batches in a separate thread. | CDC tasks for mysql/pg            | fast       | eventual consistency |
 | mongo     | Mongo version of rdb_merge.                                                                                                                                                                   | CDC tasks for mongo               |
-| rdb_check | Check task mode. Requires `[checker]`; rows are written first and then checked.                                                                                                               | check tasks for supported sources |
+| rdb_check | Check task mode. Requires `[checker]`; standalone check runs without writes, while CDC+check still writes first and then checks.                                                              | check tasks for supported sources |
 | redis     | Single thread, batch/serial writing(determined by [sinker] batch_size)                                                                                                                        | snapshot/CDC tasks for redis      |
 
 # [runtime]
