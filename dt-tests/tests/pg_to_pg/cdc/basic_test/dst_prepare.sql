@@ -11,6 +11,9 @@ CREATE SCHEMA Upper_Case_DB;
 DROP SCHEMA IF EXISTS "Upper_Case_DB" CASCADE;
 CREATE SCHEMA "Upper_Case_DB";
 
+DROP SCHEMA IF EXISTS pkuk CASCADE;
+CREATE SCHEMA pkuk;
+
 DROP TABLE IF EXISTS default_table;
 CREATE TABLE default_table(pk serial, val numeric(20,8), created_at timestamp, created_at_tz timestamptz, ctime time , ctime_tz timetz , cdate date , cmoney money , cbits bit(3) , csmallint smallint , cinteger integer , cbigint bigint , creal real , cbool bool , cfloat8 float8 , cnumeric numeric(6,2) , cvarchar varchar(5) , cbox box , ccircle circle , cinterval interval , cline line , clseg lseg , cpath path , cpoint point , cpolygon polygon , cchar char , ctext text , cjson json , cxml xml , cuuid uuid , cvarbit varbit(3) , cinet inet , ccidr cidr , cmacaddr macaddr , PRIMARY KEY(pk));
 
@@ -112,3 +115,58 @@ CREATE TABLE Upper_Case_DB.Upper_Case_TB (
     UNIQUE("FIELD_1", field_2, Field_3)
 );
 ```
+
+-- test all columns are primary keys
+CREATE TABLE pkuk.all_pks (pk1 INT, pk2 INT, pk3 INT, PRIMARY KEY(pk1, pk2, pk3));
+
+-- PK and Unique Col by index
+```
+CREATE TABLE pkuk.tbl_1 (
+    id          bigint PRIMARY KEY,
+    code        varchar(50) NOT NULL,
+    name        varchar(100)
+);
+```
+CREATE UNIQUE INDEX tbl_1_code_uidx ON pkuk.tbl_1 (code);
+
+-- No PK, only Unique Col by index
+```
+CREATE TABLE pkuk.tbl_2 (
+    code  varchar(21) ,
+    name  varchar(30) NOT NULL
+);
+```
+CREATE UNIQUE INDEX tbl_2_code_uidx ON pkuk.tbl_2 (name);
+
+-- PK and Unique Col by constraint
+```
+CREATE TABLE pkuk.tbl_3 (
+    id      serial PRIMARY KEY,
+    code    varchar(21) NOT NULL,
+    name    varchar(30),
+    CONSTRAINT tbl_3_code_uk UNIQUE (code)
+)
+```
+
+-- No PK, no Unique Col by constraint
+```
+CREATE TABLE pkuk.tbl_4 (
+    code    varchar(21) NOT NULL,
+    name    varchar(30) NOT NULL,
+    CONSTRAINT tbl_4_code_name_uk UNIQUE (code, name)
+);
+```
+
+-- No PK, no Unique Col by index
+```
+CREATE TABLE pkuk.tbl_5 (
+    code    varchar(21),
+    name    varchar(30)
+); 
+```
+
+INSERT INTO pkuk.all_pks VALUES(1, 2, 3),(4, 5, 6),(7, 8, 9);
+INSERT INTO pkuk.tbl_1 VALUES(1, 'code1', 'name1'),(2, 'code2', 'name2'),(3, 'code3', 'name3');
+INSERT INTO pkuk.tbl_2 VALUES('code1', 'name1'),('code1', 'name2'),('code3', 'name3');
+INSERT INTO pkuk.tbl_3 VALUES(1, 'code1', 'name1'),(2, 'code2', 'name2'),(3, 'code3', 'name3');
+INSERT INTO pkuk.tbl_4 VALUES('code1', 'name1'),('code2', 'name2'),('code3', 'name3');

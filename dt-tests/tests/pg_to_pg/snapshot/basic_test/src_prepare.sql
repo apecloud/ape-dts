@@ -99,3 +99,49 @@ CREATE VIEW test_db_1.default_table_view AS SELECT * FROM test_db_1.default_tabl
 
 -- test all columns are primary keys
 CREATE TABLE test_db_1.all_pks (pk1 INT, pk2 INT, pk3 INT, PRIMARY KEY(pk1, pk2, pk3));
+
+-- PK and Unique Col by index
+```
+CREATE TABLE test_db_1.tbl_1 (
+    id          bigint PRIMARY KEY,
+    code        varchar(50) NOT NULL,
+    name        varchar(100)
+);
+```
+CREATE UNIQUE INDEX tbl_1_code_uidx ON test_db_1.tbl_1 (code);
+
+-- No PK, only Unique Col by index
+```
+CREATE TABLE test_db_1.tbl_2 (
+    code  varchar(21) ,
+    name  varchar(30) NOT NULL
+);
+```
+CREATE UNIQUE INDEX tbl_2_code_uidx ON test_db_1.tbl_2 (name);
+
+-- PK and Unique Col by constraint
+```
+CREATE TABLE test_db_1.tbl_3 (
+    id      serial PRIMARY KEY,
+    code    varchar(21) NOT NULL,
+    name    varchar(30),
+    CONSTRAINT tbl_3_code_uk UNIQUE (code)
+)
+```
+
+-- No PK, no Unique Col by constraint
+```
+CREATE TABLE test_db_1.tbl_4 (
+    code    varchar(21) NOT NULL,
+    name    varchar(30) NOT NULL,
+    CONSTRAINT tbl_4_code_name_uk UNIQUE (code, name)
+);
+```
+
+-- No PK, no Unique Col by index
+```
+CREATE TABLE test_db_1.tbl_5 (
+    code    varchar(21),
+    name    varchar(30)
+); 
+```

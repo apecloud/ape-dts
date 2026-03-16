@@ -90,3 +90,8 @@ INSERT INTO test_db_1.where_condition_3 VALUES(1, 1),(2, 2),(3, 3),(4, 4),(5, 5)
 
 -- test all columns are primary keys
 INSERT INTO test_db_1.all_pks VALUES(1, 2, 3),(4, 5, 6),(7, 8, 9),(10, 11, 12);
+INSERT INTO test_db_1.tbl_1 VALUES(1, 'code1', 'name1'),(2, 'code2', 'name2'),(3, 'code3', 'name3');
+INSERT INTO test_db_1.tbl_2 VALUES('code1', 'name1'),('code1', 'name2'),('code3', 'name3');
+INSERT INTO test_db_1.tbl_3 VALUES(1, 'code1', 'name1'),(2, 'code2', 'name2'),(3, 'code3', 'name3');
+INSERT INTO test_db_1.tbl_4 VALUES('code1', 'name1'),('code2', 'name2'),('code3', 'name3');
+INSERT INTO test_db_1.tbl_5 VALUES('code1', 'name1'),('code2', 'name2'),('code3', 'name3');
