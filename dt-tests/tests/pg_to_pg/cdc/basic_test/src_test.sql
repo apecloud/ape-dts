@@ -169,3 +169,21 @@ INSERT INTO "Upper_Case_DB"."Upper_Case_TB" VALUES(3, 3, 3, 3, 3),(4, 4, 4, 4, 4
 UPDATE "Upper_Case_DB"."Upper_Case_TB" SET "FIELD_1"=7, field_2=7, Field_3=7, "Field_4"=7 WHERE "Id"=3;
 UPDATE "Upper_Case_DB"."Upper_Case_TB" SET "FIELD_1"=8, field_2=8, Field_3=8, "Field_4"=8 WHERE "Id"=4;
 DELETE FROM "Upper_Case_DB"."Upper_Case_TB";
+
+INSERT INTO pkuk.all_pks VALUES(1, 2, 3),(4, 5, 6),(7, 8, 9),(10, 11, 12);
+UPDATE pkuk.all_pks SET pk3=13 WHERE pk1=1;
+DELETE FROM pkuk.all_pks WHERE pk1=4;
+INSERT INTO pkuk.tbl_1 VALUES(1, 'code1', 'name1'),(2, 'code2', 'name2'),(3, 'code3', 'name3');
+UPDATE pkuk.tbl_1 SET name='name4' WHERE id=1;
+DELETE FROM pkuk.tbl_1 WHERE id=2;
+INSERT INTO pkuk.tbl_2 VALUES('code1', 'name1'),('code1', 'name2'),('code3', 'name3');
+UPDATE pkuk.tbl_2 SET code='code_updated' WHERE name='name1';
+DELETE FROM pkuk.tbl_2 WHERE name='name2';
+INSERT INTO pkuk.tbl_3 VALUES(1, 'code1', 'name1'),(2, 'code2', 'name2'),(3, 'code3', 'name3');
+UPDATE pkuk.tbl_3 SET name='name4' WHERE id=1;
+DELETE FROM pkuk.tbl_3 WHERE id=2;
+INSERT INTO pkuk.tbl_4 VALUES('code1', 'name1'),('code2', 'name2'),('code3', 'name3');
+UPDATE pkuk.tbl_4 SET name='name4' WHERE code='code1';
+DELETE FROM pkuk.tbl_4 WHERE code='code3';
+-- pkuk.tbl_5 no pk & uk, no `ALTER TABLE schema.tb_5 REPLICA IDENTITY FULL;`, cannot do update or delete
+INSERT INTO pkuk.tbl_5 VALUES('code1', 'name1'),('code2', 'name2'),('code3', 'name3');
