@@ -111,8 +111,6 @@ const CHECKER_SAMPLE_RATE: &str = "sample_rate";
 const CDC_CHECK_LOG_S3: &str = "cdc_check_log_s3";
 const S3_KEY_PREFIX: &str = "s3_key_prefix";
 const CDC_CHECK_LOG_INTERVAL_SECS: &str = "cdc_check_log_interval_secs";
-const USERNAME: &str = "username";
-const PASSWORD: &str = "password";
 
 // deprecated keys
 const RESUME_FROM_LOG: &str = "resume_from_log";
@@ -130,12 +128,11 @@ impl TaskConfig {
         let pipeline = Self::load_pipeline_config(&loader);
         let runtime = Self::load_runtime_config(&loader)?;
         let (sinker_basic, sinker) = Self::load_sinker_config(&loader)?;
-        let resumer = Self::load_resumer_config(&loader, &runtime, &sinker_basic)?;
         let (extractor_basic, extractor) = Self::load_extractor_config(&loader, &pipeline)?;
         let filter = Self::load_filter_config(&loader)?;
         let router = Self::load_router_config(&loader)?;
         let parallelizer = Self::load_parallelizer_config(&loader)?;
-        let checker = Self::load_checker_config(&loader, &sinker_basic)?;
+        let checker = Self::load_checker_config(&loader)?;
         if matches!(parallelizer.parallel_type, ParallelType::RdbCheck) && checker.is_none() {
             bail!(Error::ConfigError(
                 "config [checker] is required when [parallelizer] parallel_type=rdb_check".into()
@@ -155,11 +152,14 @@ impl TaskConfig {
                 "config [checker] only supports [pipeline] pipeline_type=basic".into()
             ));
         }
+        let resumer =
+            Self::load_resumer_config(&loader, &runtime, &sinker_basic, checker.as_ref())?;
         Ok(Self {
             global: Self::load_global_config(
                 &loader,
                 &extractor_basic,
                 &sinker_basic,
+                checker.as_ref(),
                 &filter,
                 &router,
             )?,
@@ -182,18 +182,45 @@ impl TaskConfig {
         })
     }
 
+    pub fn sink_target(&self) -> Option<BasicSinkerConfig> {
+        (!matches!(self.sinker_basic.sink_type, SinkType::Dummy)).then(|| self.sinker_basic.clone())
+    }
+
+    pub fn checker_target(&self) -> anyhow::Result<Option<BasicSinkerConfig>> {
+        self.checker
+            .as_ref()
+            .map(Self::checker_as_basic_sinker)
+            .transpose()
+    }
+
+    pub fn destination_target(&self) -> anyhow::Result<Option<BasicSinkerConfig>> {
+        if let Some(target) = self.sink_target() {
+            return Ok(Some(target));
+        }
+        self.checker_target()
+    }
+
     fn load_global_config(
         loader: &IniLoader,
         extractor_basic: &BasicExtractorConfig,
         sinker_basic: &BasicSinkerConfig,
+        checker: Option<&CheckerConfig>,
         filter: &FilterConfig,
         router: &RouterConfig,
     ) -> anyhow::Result<GlobalConfig> {
+        let identity_sinker_basic = if matches!(sinker_basic.sink_type, SinkType::Dummy) {
+            checker
+                .map(Self::checker_as_basic_sinker)
+                .transpose()?
+                .unwrap_or_else(|| sinker_basic.clone())
+        } else {
+            sinker_basic.clone()
+        };
         Ok(GlobalConfig {
             task_id: loader.get_with_default(
                 GLOBAL,
                 "task_id",
-                TaskUtil::generate_task_id(extractor_basic, sinker_basic, filter, router),
+                TaskUtil::generate_task_id(extractor_basic, &identity_sinker_basic, filter, router),
             ),
         })
     }
@@ -500,46 +527,7 @@ impl TaskConfig {
         };
 
         if let SinkType::Dummy = sink_type {
-            if !has_checker {
-                return Ok((BasicSinkerConfig::default(), SinkerConfig::Dummy));
-            }
-
-            let sinker_auth = has_sinker.then(|| ConnectionAuthConfig::from(loader, SINKER));
-            let (db_type, url, connection_auth) = Self::resolve_checker_target_with_fallbacks(
-                loader,
-                has_sinker
-                    .then(|| loader.contains_non_empty(SINKER, DB_TYPE))
-                    .filter(|present| *present)
-                    .map(|_| loader.get_required(SINKER, DB_TYPE)),
-                has_sinker
-                    .then(|| loader.contains_non_empty(SINKER, URL))
-                    .filter(|present| *present)
-                    .map(|_| loader.get_required(SINKER, URL)),
-                sinker_auth.as_ref(),
-            )?;
-            let batch_size: usize = if has_sinker && loader.contains_non_empty(SINKER, BATCH_SIZE) {
-                loader.get_with_default(SINKER, BATCH_SIZE, 200)
-            } else {
-                loader.get_with_default(CHECKER, BATCH_SIZE, 200)
-            };
-            let max_connections =
-                if has_sinker && loader.contains_non_empty(SINKER, MAX_CONNECTIONS) {
-                    loader.get_with_default(SINKER, MAX_CONNECTIONS, DEFAULT_MAX_CONNECTIONS)
-                } else {
-                    loader.get_with_default(CHECKER, MAX_CONNECTIONS, DEFAULT_MAX_CONNECTIONS)
-                };
-            return Ok((
-                BasicSinkerConfig {
-                    sink_type,
-                    db_type,
-                    url,
-                    connection_auth,
-                    batch_size,
-                    max_connections,
-                    rate_limiter: RateLimiterConfig::default(),
-                },
-                SinkerConfig::Dummy,
-            ));
+            return Ok((BasicSinkerConfig::default(), SinkerConfig::Dummy));
         }
 
         let db_type: DbType = loader.get_required(SINKER, DB_TYPE);
@@ -800,16 +788,13 @@ impl TaskConfig {
         config
     }
 
-    fn load_checker_config(
-        loader: &IniLoader,
-        sinker_basic: &BasicSinkerConfig,
-    ) -> anyhow::Result<Option<CheckerConfig>> {
+    fn load_checker_config(loader: &IniLoader) -> anyhow::Result<Option<CheckerConfig>> {
         if !loader.ini.sections().contains(&CHECKER.to_string()) {
             return Ok(None);
         }
 
         let default = CheckerConfig::default();
-        let mut config = CheckerConfig {
+        let config = CheckerConfig {
             queue_size: loader.get_with_default(CHECKER, CHECKER_QUEUE_SIZE, default.queue_size),
             max_connections: loader.get_with_default(
                 CHECKER,
@@ -877,97 +862,32 @@ impl TaskConfig {
                 CDC_CHECK_LOG_INTERVAL_SECS,
                 default.cdc_check_log_interval_secs,
             ),
+            db_type: Some(loader.get_required(CHECKER, DB_TYPE)),
+            url: Some(loader.get_required(CHECKER, URL)),
+            connection_auth: Some(ConnectionAuthConfig::from(loader, CHECKER)),
             ..default
         };
-        let (db_type, url, connection_auth) = Self::resolve_checker_target(loader, sinker_basic)?;
-        config.db_type = Some(db_type);
-        config.url = Some(url);
-        config.connection_auth = Some(connection_auth);
         Ok(Some(config))
     }
 
-    fn resolve_checker_target(
-        loader: &IniLoader,
-        sinker_basic: &BasicSinkerConfig,
-    ) -> anyhow::Result<(DbType, String, ConnectionAuthConfig)> {
-        let (db_type_fallback, url_fallback, auth_fallback) = if sinker_basic.url.is_empty() {
-            (None, None, None)
-        } else {
-            (
-                Some(sinker_basic.db_type.clone()),
-                Some(sinker_basic.url.clone()),
-                Some(&sinker_basic.connection_auth),
-            )
-        };
-
-        Self::resolve_checker_target_with_fallbacks(
-            loader,
-            db_type_fallback,
-            url_fallback,
-            auth_fallback,
-        )
-    }
-
-    fn resolve_checker_target_with_fallbacks(
-        loader: &IniLoader,
-        db_type_fallback: Option<DbType>,
-        url_fallback: Option<String>,
-        auth_fallback: Option<&ConnectionAuthConfig>,
-    ) -> anyhow::Result<(DbType, String, ConnectionAuthConfig)> {
-        let db_type = Self::resolve_checker_db_type(loader, db_type_fallback);
-        let url = Self::resolve_checker_url(loader, url_fallback);
-
-        if let (Some(db_type), Some(url)) = (db_type, url) {
-            let connection_auth = Self::resolve_checker_connection_auth(loader, auth_fallback);
-            return Ok((db_type, url, connection_auth));
-        }
-
-        bail!(Error::ConfigError(
-            "config [checker] target is required when [sinker] target is not set".into()
-        ))
-    }
-
-    fn resolve_checker_db_type(loader: &IniLoader, fallback: Option<DbType>) -> Option<DbType> {
-        if loader.contains_non_empty(CHECKER, DB_TYPE) {
-            Some(loader.get_required(CHECKER, DB_TYPE))
-        } else {
-            fallback
-        }
-    }
-
-    fn resolve_checker_url(loader: &IniLoader, fallback: Option<String>) -> Option<String> {
-        if loader.contains_non_empty(CHECKER, URL) {
-            Some(loader.get_required(CHECKER, URL))
-        } else {
-            fallback
-        }
-    }
-
-    fn resolve_checker_connection_auth(
-        loader: &IniLoader,
-        fallback_auth: Option<&ConnectionAuthConfig>,
-    ) -> ConnectionAuthConfig {
-        let (fallback_username, fallback_password) = match fallback_auth {
-            Some(ConnectionAuthConfig::Basic { username, password }) => {
-                (Some(username.clone()), password.clone())
-            }
-            _ => (None, None),
-        };
-
-        let username = if loader.contains_non_empty(CHECKER, USERNAME) {
-            Some(loader.get_optional(CHECKER, USERNAME))
-        } else {
-            fallback_username
-        };
-        let password = if loader.contains_non_empty(CHECKER, PASSWORD) {
-            Some(loader.get_optional(CHECKER, PASSWORD))
-        } else {
-            fallback_password
-        };
-
-        match username {
-            Some(username) => ConnectionAuthConfig::Basic { username, password },
-            None => ConnectionAuthConfig::NoAuth,
+    fn checker_as_basic_sinker(checker: &CheckerConfig) -> anyhow::Result<BasicSinkerConfig> {
+        match (
+            checker.db_type.clone(),
+            checker.url.clone(),
+            checker.connection_auth.clone(),
+        ) {
+            (Some(db_type), Some(url), Some(connection_auth)) => Ok(BasicSinkerConfig {
+                sink_type: SinkType::Dummy,
+                db_type,
+                url,
+                connection_auth,
+                batch_size: checker.batch_size,
+                max_connections: checker.max_connections,
+                rate_limiter: RateLimiterConfig::default(),
+            }),
+            _ => bail!(Error::ConfigError(
+                "config [checker] target is required".into()
+            )),
         }
     }
 
@@ -1013,6 +933,7 @@ impl TaskConfig {
         loader: &IniLoader,
         runtime: &RuntimeConfig,
         sinker_basic: &BasicSinkerConfig,
+        checker: Option<&CheckerConfig>,
     ) -> anyhow::Result<ResumerConfig> {
         if loader.contains(RESUMER, RESUME_FROM_LOG)
             || loader.contains(RESUMER, RESUME_LOG_DIR)
@@ -1029,17 +950,29 @@ impl TaskConfig {
                 log_dir: loader.get_with_default(RESUMER, "log_dir", runtime.log_dir.clone()),
                 config_file: loader.get_optional(RESUMER, "config_file"),
             }),
-            ResumeType::FromTarget => Ok(ResumerConfig::FromDB {
-                url: sinker_basic.url.clone(),
-                connection_auth: sinker_basic.connection_auth.clone(),
-                db_type: sinker_basic.db_type.clone(),
-                table_full_name: loader.get_optional(RESUMER, "table_full_name"),
-                max_connections: loader.get_with_default(
-                    RESUMER,
-                    MAX_CONNECTIONS,
-                    RESUMER_CONNECTION_LIMIT_DEFAULT,
-                ),
-            }),
+            ResumeType::FromTarget => {
+                let target = if matches!(sinker_basic.sink_type, SinkType::Dummy) {
+                    let Some(checker) = checker else {
+                        bail!(Error::ConfigError(
+                            "config [checker] target is required when [resumer] resume_type=from_target".into()
+                        ));
+                    };
+                    Self::checker_as_basic_sinker(checker)?
+                } else {
+                    sinker_basic.clone()
+                };
+                Ok(ResumerConfig::FromDB {
+                    url: target.url.clone(),
+                    connection_auth: target.connection_auth.clone(),
+                    db_type: target.db_type.clone(),
+                    table_full_name: loader.get_optional(RESUMER, "table_full_name"),
+                    max_connections: loader.get_with_default(
+                        RESUMER,
+                        MAX_CONNECTIONS,
+                        RESUMER_CONNECTION_LIMIT_DEFAULT,
+                    ),
+                })
+            }
             ResumeType::FromDB => Ok(ResumerConfig::FromDB {
                 url: loader.get_required(RESUMER, URL),
                 connection_auth: ConnectionAuthConfig::from(loader, RESUMER),
@@ -1137,5 +1070,89 @@ impl TaskConfig {
             workers: loader.get_with_default(metrics_section, "workers", 2),
             metrics_labels,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use configparser::ini::Ini;
+
+    fn loader_from_str(content: &str) -> IniLoader {
+        let mut ini = Ini::new();
+        ini.set_inline_comment_symbols(Some(&Vec::new()));
+        ini.read(content.to_string())
+            .expect("failed to parse inline ini");
+        IniLoader { ini }
+    }
+
+    #[test]
+    fn explicit_checker_url_keeps_embedded_credentials() {
+        let loader = loader_from_str(
+            r#"
+[checker]
+db_type=mysql
+url=mysql://reader:reader_pwd@dst-replica:3306/test_db
+"#,
+        );
+
+        let checker = TaskConfig::load_checker_config(&loader)
+            .expect("checker config should load")
+            .expect("checker config should exist");
+        let target =
+            TaskConfig::checker_as_basic_sinker(&checker).expect("checker target should resolve");
+
+        assert!(matches!(
+            target.connection_auth,
+            ConnectionAuthConfig::NoAuth
+        ));
+        let merged =
+            ConnectionAuthConfig::merge_url_with_auth(&target.url, &target.connection_auth)
+                .expect("merge should preserve embedded credentials");
+        assert_eq!(merged, "mysql://reader:reader_pwd@dst-replica:3306/test_db");
+    }
+
+    #[test]
+    fn standalone_checker_keeps_dummy_sinker_basic() {
+        let loader = loader_from_str(
+            r#"
+[checker]
+db_type=pg
+url=postgres://checker:pwd@127.0.0.1:5432/postgres
+"#,
+        );
+
+        let (sinker_basic, sinker) =
+            TaskConfig::load_sinker_config(&loader).expect("sinker config should load");
+
+        assert!(matches!(sinker, SinkerConfig::Dummy));
+        assert!(matches!(sinker_basic.sink_type, SinkType::Dummy));
+        assert!(sinker_basic.url.is_empty());
+    }
+
+    #[test]
+    #[should_panic(expected = "config [checker].db_type does not exist or is empty")]
+    fn checker_requires_explicit_db_type() {
+        let loader = loader_from_str(
+            r#"
+[checker]
+url=mysql://reader:reader_pwd@dst-replica:3306/test_db
+"#,
+        );
+
+        let _ = TaskConfig::load_checker_config(&loader);
+    }
+
+    #[test]
+    #[should_panic(expected = "config [checker].url does not exist or is empty")]
+    fn checker_requires_explicit_url() {
+        let loader = loader_from_str(
+            r#"
+[checker]
+db_type=mysql
+"#,
+        );
+
+        let _ = TaskConfig::load_checker_config(&loader);
     }
 }

@@ -444,10 +444,14 @@ impl TaskRunner {
         let (extractor_data_marker, sinker_data_marker) = if let Some(data_marker_config) =
             &self.config.data_marker
         {
+            let sinker_db_type = self
+                .config
+                .destination_target()?
+                .map(|target| target.db_type)
+                .unwrap_or(self.config.sinker_basic.db_type.clone());
             let extractor_data_marker =
                 DataMarker::from_config(data_marker_config, &self.config.extractor_basic.db_type)?;
-            let sinker_data_marker =
-                DataMarker::from_config(data_marker_config, &self.config.sinker_basic.db_type)?;
+            let sinker_data_marker = DataMarker::from_config(data_marker_config, &sinker_db_type)?;
             (Some(extractor_data_marker), Some(sinker_data_marker))
         } else {
             (None, None)
@@ -584,14 +588,6 @@ impl TaskRunner {
         )
         .await?;
 
-        // snapshot check_summary before this subtask so we can compute per-subtask deltas
-        let check_summary_snapshot = if let Some(check_summary) = &task_context.check_summary {
-            let s = check_summary.lock().await;
-            Some((s.miss_count, s.diff_count, s.sql_count.unwrap_or(0)))
-        } else {
-            None
-        };
-
         // start threads
         let f1 = tokio::spawn(async move {
             extractor.extract().await.unwrap();
@@ -625,16 +621,25 @@ impl TaskRunner {
         });
         try_join!(f1, f2, f3)?;
 
-        if let (Some(check_summary), Some((prev_miss, prev_diff, _prev_sql))) =
-            (&task_context.check_summary, check_summary_snapshot)
-        {
+        if let Some(check_summary) = &task_context.check_summary {
             let summary = check_summary.lock().await;
-            let delta_miss = summary.miss_count.saturating_sub(prev_miss);
-            let delta_diff = summary.diff_count.saturating_sub(prev_diff);
-            self.task_monitor
-                .add_no_window_metrics(TaskMetricsType::CheckerMissCount, delta_miss as u64);
-            self.task_monitor
-                .add_no_window_metrics(TaskMetricsType::CheckerDiffCount, delta_diff as u64);
+            // `check_summary` is shared across subtasks in tb-parallel snapshot/check mode.
+            // Export only the global increments that have not been reflected into task metrics yet,
+            // otherwise multiple subtasks can repeatedly account for the same miss/diff totals.
+            let delta_miss = (summary.miss_count as u64).saturating_sub(
+                self.task_monitor
+                    .get_no_window_metric(TaskMetricsType::CheckerMissCount),
+            );
+            let delta_diff = (summary.diff_count as u64).saturating_sub(
+                self.task_monitor
+                    .get_no_window_metric(TaskMetricsType::CheckerDiffCount),
+            );
+            if delta_miss > 0 || delta_diff > 0 {
+                self.task_monitor
+                    .add_no_window_metrics(TaskMetricsType::CheckerMissCount, delta_miss);
+                self.task_monitor
+                    .add_no_window_metrics(TaskMetricsType::CheckerDiffCount, delta_diff);
+            }
         }
 
         // finished log
@@ -832,31 +837,13 @@ impl TaskRunner {
         } else {
             (cfg.max_retries, cfg.retry_interval_secs)
         };
-        let missing = || Error::ConfigError("config [checker] target is required".into());
-        let fallback_target = if matches!(self.config.sinker_basic.sink_type, SinkType::Dummy) {
-            None
-        } else {
-            Some((
-                &self.config.sinker_basic.db_type,
-                &self.config.sinker_basic.url,
-                &self.config.sinker_basic.connection_auth,
-            ))
-        };
-        let checker_db_type = cfg
-            .db_type
-            .clone()
-            .or_else(|| fallback_target.map(|(db_type, _, _)| db_type.clone()))
-            .ok_or_else(missing)?;
-        let checker_url = cfg
-            .url
-            .clone()
-            .or_else(|| fallback_target.map(|(_, url, _)| url.clone()))
-            .ok_or_else(missing)?;
-        let checker_auth = cfg
-            .connection_auth
-            .clone()
-            .or_else(|| fallback_target.map(|(_, _, auth)| auth.clone()))
-            .ok_or_else(missing)?;
+        let target = self
+            .config
+            .checker_target()?
+            .ok_or_else(|| Error::ConfigError("config [checker] target is required".into()))?;
+        let checker_db_type = target.db_type;
+        let checker_url = target.url;
+        let checker_auth = target.connection_auth;
 
         if is_cdc_task && checker_state_store.is_none() {
             log_warn!(

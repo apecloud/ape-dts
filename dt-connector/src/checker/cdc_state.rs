@@ -297,10 +297,8 @@ impl<C: Checker> DataChecker<C> {
             buf
         };
 
-        let total_miss: usize =
-            table_counts.values().map(|c| c.miss_count).sum::<usize>() + self.evicted_miss;
-        let total_diff: usize =
-            table_counts.values().map(|c| c.diff_count).sum::<usize>() + self.evicted_diff;
+        let total_miss: usize = table_counts.values().map(|c| c.miss_count).sum();
+        let total_diff: usize = table_counts.values().map(|c| c.diff_count).sum();
 
         let summary = CheckSummaryLog {
             start_time: self.ctx.summary.start_time.clone(),
@@ -366,8 +364,7 @@ impl<C: Checker> DataChecker<C> {
         rows: Vec<CheckerStateRow>,
     ) -> anyhow::Result<()> {
         self.store.clear();
-        let keep_from = rows.len().saturating_sub(CHECKER_MAX_STORE_SIZE);
-        for row in rows.into_iter().skip(keep_from) {
+        for row in rows {
             let entry =
                 serde_json::from_str::<PersistedCheckEntry>(&row.payload).with_context(|| {
                     format!(

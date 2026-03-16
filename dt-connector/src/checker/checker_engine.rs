@@ -362,26 +362,6 @@ impl<C: Checker> DataChecker<C> {
         }
 
         self.store_dirty = true;
-        if self.store.len() >= CHECKER_MAX_STORE_SIZE && !self.store.contains_key(&key) {
-            log_warn!(
-                "Inconsistency store full (max {}), evicting oldest entry.",
-                CHECKER_MAX_STORE_SIZE
-            );
-            if let Some((_, evicted)) = self.store.shift_remove_index(0) {
-                log_warn!(
-                    "Evicted entry: schema={}, tb={}, id={:?}",
-                    evicted.log.schema,
-                    evicted.log.tb,
-                    evicted.log.id_col_values
-                );
-                if evicted.is_miss {
-                    self.evicted_miss += 1;
-                } else {
-                    self.evicted_diff += 1;
-                }
-                self.update_summary_for_entry(&evicted).await;
-            }
-        }
         if entry.is_miss {
             self.ctx
                 .monitor

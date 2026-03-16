@@ -72,7 +72,11 @@ impl ParallelizerUtil {
             }
 
             ParallelType::RdbCheck => {
-                let merger = match config.sinker_basic.db_type {
+                let target_db_type = config
+                    .destination_target()?
+                    .map(|target| target.db_type)
+                    .unwrap_or(config.sinker_basic.db_type.clone());
+                let merger = match target_db_type {
                     DbType::Mongo => Self::create_mongo_merger().await?,
                     _ => Self::create_rdb_merger(config).await?,
                 };

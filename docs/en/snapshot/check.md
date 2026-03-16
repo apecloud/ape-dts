@@ -4,7 +4,7 @@ After data migration, you may want to compare the source and target data row by 
 
 Supports comparison for MySQL, PostgreSQL, and MongoDB.
 
-Data check can be used with both snapshot and CDC tasks. For CDC tasks, keep `[checker]` enabled and set `extract_type=cdc`; the checker validates applied changes after they are written to the target.
+Data check can be used with both snapshot and CDC tasks. Configure the checker target explicitly in `[checker]`. For CDC tasks, keep `[checker]` enabled and set `extract_type=cdc`; the checker validates applied changes after they are written to the target.
 
 ## Example: MySQL -> MySQL
 
@@ -29,7 +29,7 @@ In CDC + Check scenarios, the checker validates DELETE events: it queries the ta
 
 # Check Results
 
-The check results are written to the log in JSON format, including diff.log, miss.log, sql.log, and summary.log. The logs are stored in the `log/check` subdirectory.
+The check results are written to the log in JSON format, including diff.log, miss.log, sql.log, and summary.log. By default, the logs are stored in `runtime.log_dir/check`; if `[checker].check_log_dir` is set, that directory is used instead.
 
 ## Difference Log (diff.log)
 
@@ -57,7 +57,7 @@ Missing logs include database (schema), table (tb), and primary/unique key (id_c
 
 ## Output Full Row
 
-When you need full row content for troubleshooting, you can enable full row logging in `[checker]`:
+When you need full row content for troubleshooting, you can enable full row logging in `[checker]` after configuring the checker target:
 
 ```
 [checker]
@@ -98,7 +98,7 @@ After enabling, all diff.log entries will append `src_row` and `dst_row`, and mi
 
 ## Output Revise SQL
 
-If you need to manually repair inconsistent data, you can enable SQL output in `[checker]`:
+If you need to manually repair inconsistent data, you can enable SQL output in `[checker]` after configuring the checker target:
 
 ```
 [checker]
@@ -166,9 +166,11 @@ Data check is source-driven and only verifies that source rows exist in the targ
 # Original: source=A, target=B
 # Reverse: source=B, target=A
 [extractor]
+db_type=<original checker db_type>
 url=<original checker url>
 
 [checker]
+db_type=<original extractor db_type>
 url=<original extractor url>
 ```
 

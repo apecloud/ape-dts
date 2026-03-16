@@ -4,7 +4,7 @@
 
 支持对 MySQL、PostgreSQL、MongoDB 进行比对。
 
-数据校验可用于 Snapshot 与 CDC 任务。若为 CDC 任务，保持 `[checker]` 开启并设置 `extract_type=cdc`，checker 会在数据写入目标端后进行校验。
+数据校验可用于 Snapshot 与 CDC 任务。请在 `[checker]` 中显式配置目标端。若为 CDC 任务，保持 `[checker]` 开启并设置 `extract_type=cdc`，checker 会在数据写入目标端后进行校验。
 
 ## 示例: MySQL -> MySQL
 
@@ -29,7 +29,7 @@ sample_interval=3
 
 # 校验结果
 
-校验结果以 JSON 格式写入日志，包括 diff.log、miss.log、sql.log 和 summary.log。日志存放在 `log/check` 子目录中。
+校验结果以 JSON 格式写入日志，包括 diff.log、miss.log、sql.log 和 summary.log。默认写入 `runtime.log_dir/check`；若配置了 `[checker].check_log_dir`，则写入该目录。
 
 ## 差异日志（diff.log）
 
@@ -57,7 +57,7 @@ sample_interval=3
 
 ## 输出完整行
 
-当需要完整行内容用于排查问题时，可以在 `[checker]` 中开启全行日志：
+当需要完整行内容用于排查问题时，可在已配置好 checker target 的前提下，在 `[checker]` 中开启全行日志：
 
 ```
 [checker]
@@ -98,7 +98,7 @@ output_full_row=true
 
 ## 输出修复 SQL
 
-如需人工修复差异数据，可以在 `[checker]` 中开启 SQL 输出：
+如需人工修复差异数据，可在已配置好 checker target 的前提下，在 `[checker]` 中开启 SQL 输出：
 
 ```
 [checker]
@@ -166,9 +166,11 @@ INSERT INTO `test_db_1`.`test_table`(`id`,`name`,`age`,`email`) VALUES(3,'Charli
 # 原始：源端=A，目标端=B
 # 反向：源端=B，目标端=A
 [extractor]
+db_type=<原 checker 的 db_type>
 url=<原 checker 的 url>
 
 [checker]
+db_type=<原 extractor 的 db_type>
 url=<原 extractor 的 url>
 ```
 

@@ -1,9 +1,15 @@
-use super::{check_util::CheckUtil, rdb_test_runner::RdbTestRunner, rdb_util::RdbUtil};
+use super::{
+    base_test_runner::BaseTestRunner, check_util::CheckUtil, rdb_test_runner::RdbTestRunner,
+    rdb_util::RdbUtil,
+};
+use crate::test_config_util::TestConfigUtil;
 use anyhow::Context;
 use dt_common::config::{config_enums::DbType, resumer_config::ResumerConfig};
 use dt_common::utils::time_util::TimeUtil;
+use dt_connector::checker::check_log::CheckSummaryLog;
 use dt_task::task_util::TaskUtil;
 use sqlx::{MySql, Pool, Postgres, Row};
+use std::{fs::File, path::Path};
 
 pub struct RdbCheckTestRunner {
     base: RdbTestRunner,
@@ -14,6 +20,69 @@ pub struct RdbCheckTestRunner {
 }
 
 impl RdbCheckTestRunner {
+    fn set_tb_parallel_size(&self, tb_parallel_size: usize) {
+        TestConfigUtil::update_task_config(
+            &self.base.base.task_config_file,
+            &self.base.base.task_config_file,
+            &[(
+                "runtime".to_string(),
+                "tb_parallel_size".to_string(),
+                tb_parallel_size.to_string(),
+            )],
+        );
+    }
+
+    fn task_log_file(&self) -> String {
+        format!("{}/task.log", self.base.config.runtime.log_dir)
+    }
+
+    fn clear_task_log(&self) -> anyhow::Result<()> {
+        let task_log_file = self.task_log_file();
+        if let Some(parent) = Path::new(&task_log_file).parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        File::create(&task_log_file)?.set_len(0)?;
+        Ok(())
+    }
+
+    fn load_summary_log(&self) -> anyhow::Result<CheckSummaryLog> {
+        let summary_log_file = format!("{}/summary.log", self.dst_check_log_dir);
+        let summary_raw = BaseTestRunner::load_file(&summary_log_file)
+            .into_iter()
+            .last()
+            .with_context(|| format!("summary log is empty: {}", summary_log_file))?;
+        serde_json::from_str(&summary_raw)
+            .with_context(|| format!("failed to parse summary log: {}", summary_raw))
+    }
+
+    fn load_task_metrics(&self) -> anyhow::Result<serde_json::Value> {
+        let task_log_file = self.task_log_file();
+        let metrics_raw = BaseTestRunner::load_file(&task_log_file)
+            .into_iter()
+            .last()
+            .with_context(|| format!("task log is empty: {}", task_log_file))?;
+        serde_json::from_str(&metrics_raw)
+            .with_context(|| format!("failed to parse task log: {}", metrics_raw))
+    }
+
+    fn assert_task_metrics_match_summary(&self) -> anyhow::Result<()> {
+        let summary = self.load_summary_log()?;
+        let task_metrics = self.load_task_metrics()?;
+
+        let miss_count = task_metrics
+            .get("checker_miss_count")
+            .and_then(serde_json::Value::as_u64)
+            .context("task metrics missing checker_miss_count")?;
+        let diff_count = task_metrics
+            .get("checker_diff_count")
+            .and_then(serde_json::Value::as_u64)
+            .context("task metrics missing checker_diff_count")?;
+
+        assert_eq!(miss_count, summary.miss_count as u64);
+        assert_eq!(diff_count, summary.diff_count as u64);
+        Ok(())
+    }
+
     fn get_resumer_tables(&self) -> anyhow::Result<(String, String)> {
         match &self.base.config.resumer {
             ResumerConfig::FromDB {
@@ -118,7 +187,12 @@ impl RdbCheckTestRunner {
             let checker_db_type = checker.db_type.as_ref();
             let checker_url = checker.url.as_ref();
             let checker_auth = checker.connection_auth.as_ref();
-            let is_override = checker_url.is_some_and(|url| url != &base.config.sinker_basic.url);
+            let sink_target_url = base.config.sink_target().map(|target| target.url);
+            let is_override = match (sink_target_url.as_ref(), checker_url) {
+                (Some(sink_url), Some(check_url)) => check_url != sink_url,
+                (None, Some(_)) => true,
+                _ => false,
+            };
 
             if is_override {
                 match (checker_db_type, checker_url, checker_auth) {
@@ -179,6 +253,16 @@ impl RdbCheckTestRunner {
         self.base.execute_clean_sqls().await?;
 
         Ok(())
+    }
+
+    pub async fn run_check_test_and_validate_task_metrics(
+        &self,
+        tb_parallel_size: usize,
+    ) -> anyhow::Result<()> {
+        self.set_tb_parallel_size(tb_parallel_size);
+        self.clear_task_log()?;
+        self.run_check_test().await?;
+        self.assert_task_metrics_match_summary()
     }
 
     pub async fn run_cdc_check_test(

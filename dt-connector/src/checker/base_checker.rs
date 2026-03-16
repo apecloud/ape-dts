@@ -373,8 +373,6 @@ pub(crate) struct CheckEntry {
     src_row_data: RowData,
 }
 
-const CHECKER_MAX_STORE_SIZE: usize = 100_000;
-
 struct RetryItem {
     row: RowData,
     retries_left: u32,
@@ -439,9 +437,8 @@ struct DataChecker<C: Checker> {
     rx: mpsc::Receiver<CheckerMsg>,
     name: String,
     store_dirty: bool,
-    evicted_miss: usize,
-    evicted_diff: usize,
     last_checkpoint_position: Option<Position>,
+    has_output_snapshot: bool,
 }
 
 impl<C: Checker> DataChecker<C> {
@@ -462,9 +459,8 @@ impl<C: Checker> DataChecker<C> {
             rx,
             name: name.to_string(),
             store_dirty: false,
-            evicted_miss: 0,
-            evicted_diff: 0,
             last_checkpoint_position: None,
+            has_output_snapshot: false,
         }
     }
 
@@ -593,16 +589,14 @@ impl<C: Checker> DataChecker<C> {
     }
 
     async fn maybe_snapshot_and_output(&mut self) {
-        let summary_path = std::path::Path::new(&self.ctx.check_log_dir).join("summary.log");
-        if !self.store_dirty
-            && std::fs::metadata(&summary_path)
-                .map(|meta| meta.len() > 0)
-                .unwrap_or(false)
-        {
+        if !self.store_dirty && self.has_output_snapshot {
             return;
         }
         match self.snapshot_and_output().await {
-            Ok(()) => self.store_dirty = false,
+            Ok(()) => {
+                self.store_dirty = false;
+                self.has_output_snapshot = true;
+            }
             Err(err) => log_error!("Checker [{}] cdc output failed: {}", self.name, err),
         }
     }
@@ -639,11 +633,17 @@ mod tests {
     use dt_common::{
         config::config_enums::DbType, meta::ddl_meta::ddl_statement::MysqlAlterTableStatement,
     };
-    use std::sync::atomic::AtomicUsize;
+    use std::{
+        fs,
+        sync::atomic::AtomicUsize,
+        time::{SystemTime, UNIX_EPOCH},
+    };
 
     struct RefreshOnlyChecker {
         refresh_count: Arc<AtomicUsize>,
     }
+
+    struct NoopChecker;
 
     #[async_trait]
     impl Checker for RefreshOnlyChecker {
@@ -657,10 +657,20 @@ mod tests {
         }
     }
 
-    fn build_check_context() -> CheckContext {
+    #[async_trait]
+    impl Checker for NoopChecker {
+        async fn fetch(&mut self, _src_rows: &[&RowData]) -> anyhow::Result<FetchResult> {
+            unreachable!("noop checker test should not call fetch")
+        }
+    }
+
+    fn build_check_context(check_log_dir: String, is_cdc: bool, start_time: &str) -> CheckContext {
         CheckContext {
             monitor: Arc::new(Monitor::new("checker", "unit-test", 1, 1, 1)),
-            summary: CheckSummaryLog::default(),
+            summary: CheckSummaryLog {
+                start_time: start_time.to_string(),
+                ..Default::default()
+            },
             output_revise_sql: false,
             extractor_meta_manager: None,
             reverse_router: RdbRouter {
@@ -675,8 +685,8 @@ mod tests {
             batch_size: 1,
             retry_interval_secs: 0,
             max_retries: 0,
-            is_cdc: false,
-            check_log_dir: ".".to_string(),
+            is_cdc,
+            check_log_dir,
             cdc_check_log_max_file_size: 1,
             cdc_check_log_max_rows: 1,
             s3_output: None,
@@ -684,6 +694,27 @@ mod tests {
             state_store: None,
             expected_resume_position: None,
         }
+    }
+
+    fn build_temp_dir(prefix: &str) -> String {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time before unix epoch")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("ape_dts_{prefix}_{unique}"));
+        fs::create_dir_all(&path).expect("failed to create temp dir");
+        path.to_string_lossy().into_owned()
+    }
+
+    fn build_cdc_checker(check_log_dir: String, start_time: &str) -> DataChecker<NoopChecker> {
+        let (_tx, rx) = mpsc::channel(1);
+        DataChecker::new(
+            NoopChecker,
+            "checker-cdc-test".to_string(),
+            build_check_context(check_log_dir, true, start_time),
+            rx,
+            "NoopChecker",
+        )
     }
 
     #[tokio::test]
@@ -694,7 +725,7 @@ mod tests {
                 refresh_count: refresh_count.clone(),
             },
             "checker-refresh-meta-test".to_string(),
-            build_check_context(),
+            build_check_context(".".to_string(), false, ""),
             1,
             "RefreshOnlyChecker",
         );
@@ -715,5 +746,22 @@ mod tests {
         handle.refresh_meta(vec![ddl]).await.unwrap();
         assert_eq!(refresh_count.load(Ordering::SeqCst), 1);
         handle.close_with_position(None).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn first_periodic_snapshot_overwrites_stale_summary_file() {
+        let dir = build_temp_dir("checker_stale_summary");
+        fs::write(format!("{dir}/summary.log"), "stale-summary\n").unwrap();
+
+        let mut checker = build_cdc_checker(dir.clone(), "fresh-run");
+        checker.maybe_snapshot_and_output().await;
+
+        let summary_raw = fs::read_to_string(format!("{dir}/summary.log")).unwrap();
+        let summary: CheckSummaryLog = serde_json::from_str(summary_raw.trim()).unwrap();
+        assert_eq!(summary.start_time, "fresh-run");
+        assert_eq!(summary.miss_count, 0);
+        assert_eq!(summary.diff_count, 0);
+
+        fs::remove_dir_all(dir).unwrap();
     }
 }
