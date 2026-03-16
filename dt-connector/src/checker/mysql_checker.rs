@@ -5,7 +5,9 @@ use async_trait::async_trait;
 use futures::TryStreamExt;
 use sqlx::{MySql, Pool};
 
-use dt_common::meta::{mysql::mysql_meta_manager::MysqlMetaManager, row_data::RowData};
+use dt_common::meta::{
+    ddl_meta::ddl_data::DdlData, mysql::mysql_meta_manager::MysqlMetaManager, row_data::RowData,
+};
 
 use crate::checker::base_checker::{
     has_null_key, CheckContext, Checker, CheckerTbMeta, DataCheckerHandle, FetchResult,
@@ -64,6 +66,13 @@ impl Checker for MysqlChecker {
             tb_meta,
             dst_rows: res,
         })
+    }
+
+    async fn refresh_meta(&mut self, data: &[DdlData]) -> anyhow::Result<()> {
+        for ddl_data in data {
+            self.meta_manager.invalidate_cache_by_ddl_data(ddl_data);
+        }
+        Ok(())
     }
 }
 

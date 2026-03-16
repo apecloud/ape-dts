@@ -242,6 +242,9 @@ impl BasePipeline {
             for sinker in self.sinkers.iter_mut() {
                 sinker.lock().await.refresh_meta(data.clone()).await?;
             }
+            if let Some(checker) = &self.checker {
+                checker.refresh_meta(data.clone()).await?;
+            }
             self.monitor
                 .add_counter(CounterType::DDLRecordTotal, data_size.count)
                 .await;

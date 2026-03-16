@@ -8,12 +8,12 @@ use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::sync::{
-    Arc,
     atomic::{AtomicBool, Ordering},
+    Arc,
 };
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
-use tokio::time::{Duration, Instant, sleep};
+use tokio::time::{sleep, Duration, Instant};
 
 use crate::{
     checker::check_log::{CheckLog, CheckSummaryLog, DiffColValue, TableCheckCount},
@@ -24,9 +24,9 @@ use crate::{
     sinker::mongo::mongo_cmd,
 };
 use dt_common::meta::{
-    col_value::ColValue, mongo::mongo_constant::MongoConstants, mysql::mysql_tb_meta::MysqlTbMeta,
-    pg::pg_tb_meta::PgTbMeta, position::Position, rdb_meta_manager::RdbMetaManager,
-    rdb_tb_meta::RdbTbMeta, row_data::RowData, row_type::RowType,
+    col_value::ColValue, ddl_meta::ddl_data::DdlData, mongo::mongo_constant::MongoConstants,
+    mysql::mysql_tb_meta::MysqlTbMeta, pg::pg_tb_meta::PgTbMeta, position::Position,
+    rdb_meta_manager::RdbMetaManager, rdb_tb_meta::RdbTbMeta, row_data::RowData, row_type::RowType,
 };
 use dt_common::{
     log_diff, log_error, log_info, log_miss, log_sql, log_summary, log_warn,
@@ -205,6 +205,9 @@ pub struct FetchResult {
 #[async_trait]
 pub trait Checker: Send + Sync + 'static {
     async fn fetch(&mut self, src_rows: &[&RowData]) -> anyhow::Result<FetchResult>;
+    async fn refresh_meta(&mut self, _data: &[DdlData]) -> anyhow::Result<()> {
+        Ok(())
+    }
     async fn close(&mut self) -> anyhow::Result<()> {
         Ok(())
     }
@@ -217,6 +220,10 @@ enum CheckerMsg {
     },
     RecordCheckpoint {
         position: Position,
+        tx: oneshot::Sender<anyhow::Result<()>>,
+    },
+    RefreshMeta {
+        data: Vec<DdlData>,
         tx: oneshot::Sender<anyhow::Result<()>>,
     },
     Close {
@@ -325,6 +332,25 @@ impl DataCheckerHandle {
             .map_err(|err| anyhow::anyhow!("checker checkpoint response dropped: {}", err))?;
         if result.is_ok() {
             self.shared.last_checker_ok.store(true, Ordering::Release);
+        }
+        result
+    }
+
+    pub async fn refresh_meta(&self, data: Vec<DdlData>) -> anyhow::Result<()> {
+        if data.is_empty() {
+            return Ok(());
+        }
+        let (tx, rx) = oneshot::channel();
+        self.shared
+            .tx
+            .send(CheckerMsg::RefreshMeta { data, tx })
+            .await
+            .map_err(|err| anyhow::anyhow!("failed to send checker refresh meta msg: {}", err))?;
+        let result = rx
+            .await
+            .map_err(|err| anyhow::anyhow!("checker refresh meta response dropped: {}", err))?;
+        if result.is_err() {
+            self.shared.last_checker_ok.store(false, Ordering::Release);
         }
         result
     }
@@ -476,6 +502,13 @@ impl<C: Checker> DataChecker<C> {
                             }
                             let _ = tx.send(result);
                         }
+                        Some(CheckerMsg::RefreshMeta { data, tx }) => {
+                            let result = self.checker.refresh_meta(&data).await;
+                            if let Err(err) = &result {
+                                log_warn!("Checker [{}] refresh meta failed: {}", self.name, err);
+                            }
+                            let _ = tx.send(result);
+                        }
                         Some(CheckerMsg::Close { position }) => {
                             if let Some(position) = position.filter(|p| !matches!(p, Position::None)) {
                                 self.last_checkpoint_position = Some(position);
@@ -596,4 +629,91 @@ pub fn has_null_key(row_data: &RowData, id_cols: &[String]) -> bool {
             .iter()
             .any(|col| matches!(vals.get(col), Some(ColValue::None) | None))
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{checker::check_log::CheckSummaryLog, rdb_router::RdbRouter};
+    use async_trait::async_trait;
+    use dt_common::{
+        config::config_enums::DbType, meta::ddl_meta::ddl_statement::MysqlAlterTableStatement,
+    };
+    use std::sync::atomic::AtomicUsize;
+
+    struct RefreshOnlyChecker {
+        refresh_count: Arc<AtomicUsize>,
+    }
+
+    #[async_trait]
+    impl Checker for RefreshOnlyChecker {
+        async fn fetch(&mut self, _src_rows: &[&RowData]) -> anyhow::Result<FetchResult> {
+            unreachable!("refresh_meta test should not call fetch")
+        }
+
+        async fn refresh_meta(&mut self, data: &[DdlData]) -> anyhow::Result<()> {
+            self.refresh_count.fetch_add(data.len(), Ordering::SeqCst);
+            Ok(())
+        }
+    }
+
+    fn build_check_context() -> CheckContext {
+        CheckContext {
+            monitor: Arc::new(Monitor::new("checker", "unit-test", 1, 1, 1)),
+            summary: CheckSummaryLog::default(),
+            output_revise_sql: false,
+            extractor_meta_manager: None,
+            reverse_router: RdbRouter {
+                schema_map: HashMap::new(),
+                tb_map: HashMap::new(),
+                col_map: HashMap::new(),
+                topic_map: HashMap::new(),
+            },
+            output_full_row: false,
+            revise_match_full_row: false,
+            global_summary: None,
+            batch_size: 1,
+            retry_interval_secs: 0,
+            max_retries: 0,
+            is_cdc: false,
+            check_log_dir: ".".to_string(),
+            cdc_check_log_max_file_size: 1,
+            cdc_check_log_max_rows: 1,
+            s3_output: None,
+            cdc_check_log_interval_secs: 1,
+            state_store: None,
+            expected_resume_position: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn refresh_meta_message_reaches_checker_worker() {
+        let refresh_count = Arc::new(AtomicUsize::new(0));
+        let mut handle = DataCheckerHandle::spawn(
+            RefreshOnlyChecker {
+                refresh_count: refresh_count.clone(),
+            },
+            "checker-refresh-meta-test".to_string(),
+            build_check_context(),
+            1,
+            "RefreshOnlyChecker",
+        );
+
+        let ddl = DdlData {
+            default_schema: "test_db".to_string(),
+            db_type: DbType::Mysql,
+            statement: dt_common::meta::ddl_meta::ddl_statement::DdlStatement::MysqlAlterTable(
+                MysqlAlterTableStatement {
+                    db: "test_db".to_string(),
+                    tb: "test_tb".to_string(),
+                    unparsed: String::new(),
+                },
+            ),
+            ..Default::default()
+        };
+
+        handle.refresh_meta(vec![ddl]).await.unwrap();
+        assert_eq!(refresh_count.load(Ordering::SeqCst), 1);
+        handle.close_with_position(None).await.unwrap();
+    }
 }
