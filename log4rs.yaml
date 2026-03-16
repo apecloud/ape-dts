@@ -16,7 +16,7 @@ appenders:
       roller:
         kind: fixed_window
         base: 1
-        count: 10
+        count: 1
         pattern: "LOG_DIR_PLACEHOLDER/default{}.log"
 
   commit_appender:
@@ -33,7 +33,7 @@ appenders:
       roller:
         kind: fixed_window
         base: 1
-        count: 10
+        count: 1
         pattern: "LOG_DIR_PLACEHOLDER/commit{}.log"
 
   position_appender:
@@ -67,7 +67,7 @@ appenders:
       roller:
         kind: fixed_window
         base: 1
-        count: 10
+        count: 1
         pattern: "LOG_DIR_PLACEHOLDER/monitor{}.log"
 
   miss_appender:
@@ -152,7 +152,7 @@ appenders:
       roller:
         kind: fixed_window
         base: 1
-        count: 10
+        count: 1
         pattern: "LOG_DIR_PLACEHOLDER/finished{}.log"
   
   task_appender:
@@ -183,7 +183,7 @@ appenders:
       roller:
         kind: fixed_window
         base: 1
-        count: 10
+        count: 1
         pattern: "LOG_DIR_PLACEHOLDER/http{}.log"
 
 loggers:
