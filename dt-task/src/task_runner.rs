@@ -193,6 +193,7 @@ impl TaskRunner {
         let task_type = build_task_type(
             &config.extractor_basic.extract_type,
             &config.sinker_basic.sink_type,
+            &config.sinker_basic.db_type,
             config.checker.is_some(),
         );
         #[cfg(not(feature = "metrics"))]

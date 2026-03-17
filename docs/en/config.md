@@ -43,11 +43,13 @@ url=mysql://user1:abc%25%24%23%3F%40@127.0.0.1:3307?ssl-mode=disabled
 
 # [checker]
 
-Checker has two modes:
-- Standalone checker: run a check task only (no data write). Set `sink_type=dummy` or omit
-  `[sinker]`, and configure the checker target explicitly in `[checker]`.
-- CDC + checker: for CDC tasks with `sink_type=write`, checker runs asynchronously after sink.
-  Enable it by adding the `[checker]` section and configuring its target explicitly.
+The `[checker]` section supports two modes:
+- Standalone check: run a check task only (no data write). This is the common mode for snapshot /
+  struct check tasks. Set `sink_type=dummy` or omit `[sinker]`, and configure the checker target
+  explicitly in `[checker]`.
+- Inline check after write: for tasks with `sink_type=write`, the checker runs after sink.
+  Snapshot tasks can use this mode on supported write sinkers. CDC+check also uses this mode and
+  requires resumer state persistence.
 
 | Config                      | Description                                               | Example     | Default                           |
 | :-------------------------- | :-------------------------------------------------------- | :---------- | :-------------------------------- |
@@ -56,12 +58,12 @@ Checker has two modes:
 | batch_size                  | checker batch size (non-CDC tasks)                        | 100         | 1                                 |
 | sample_rate                 | checker sampling rate (reserved, currently unused)        | 1.0         | 1.0                               |
 | output_full_row             | output full row in diff log                               | false       | false                             |
-| output_revise_sql           | output revise SQL                                         | false       | false                             |
+| output_revise_sql           | write generated revise SQL to `sql.log`                   | false       | false                             |
 | revise_match_full_row       | match full row when building revise SQL                   | false       | false                             |
 | retry_interval_secs         | retry interval in seconds (forced to 0 in CDC+check mode) | 0           | 0                                 |
 | max_retries                 | retry count (forced to 0 in CDC+check mode)               | 0           | 0                                 |
 | check_log_dir               | check log dir                                             | /tmp/check  | empty (use runtime.log_dir/check) |
-| check_log_file_size         | per-log file size limit (`diff.log` / `miss.log`)         | 100mb       | 100mb                             |
+| check_log_file_size         | per-log file size limit (`diff.log` / `miss.log` / `sql.log`) | 100mb   | 100mb                             |
 | check_log_max_rows          | per-log max rows (`diff.log` / `miss.log`)                | 1000        | 1000                              |
 | db_type                     | checker target db type (required)                         | mysql       | -                                 |
 | url                         | checker target URL (required)                             | mysql://... | -                                 |
@@ -78,10 +80,19 @@ Checker has two modes:
 
 Notes:
 - Checker only supports `[pipeline] pipeline_type=basic`.
-- In CDC + checker mode (`extract_type=cdc`, `sink_type=write`), configuring `[checker]` with an explicit target enables checker and makes its batch size follow `[sinker].batch_size`.
+- Struct tasks only support standalone check. If `[checker]` is enabled for struct tasks, use
+  `sink_type=dummy` or omit `[sinker]`.
+- Inline checker with `[sinker] sink_type=write` is supported for snapshot / CDC tasks only when
+  `[sinker].db_type` is `mysql`, `pg`, or `mongo`. Other write sinkers do not call
+  `check_sync`, so ape-dts rejects `[checker]` during config loading.
+- In CDC+check mode, `[resumer] resume_type=from_target` or `from_db` is required to persist
+  checker state. The checker state store backend supports MySQL/PostgreSQL only, so non-MySQL/PG
+  sink targets should use `resume_type=from_db`.
+- In CDC+check mode (`extract_type=cdc`, `sink_type=write`), configuring `[checker]` with an explicit target enables the checker and makes its batch size follow `[sinker].batch_size`.
 - When `check_log_dir` is empty, `runtime.log_dir/check` is used consistently for checker logs (including CDC check outputs).
-- In CDC + checker mode, `diff.log` / `miss.log` / `summary.log` are always written locally under `check_log_dir`; `cdc_check_log_s3` controls only S3 upload.
-- CDC check outputs apply dual limits to `diff.log` / `miss.log`: `check_log_file_size` and `check_log_max_rows`; when either threshold is hit, only the latest records are kept.
+- In CDC+check mode, periodic check snapshots are always written locally under `check_log_dir`; `cdc_check_log_s3` controls only S3 upload.
+- `check_log_file_size` limits local `diff.log` / `miss.log` / `sql.log`. `summary.log` is not size-limited.
+- `check_log_max_rows` only applies to CDC check snapshots for `diff.log` / `miss.log`; when either threshold is hit, only the latest records are kept.
 
 # [filter]
 

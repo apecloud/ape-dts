@@ -307,6 +307,7 @@ impl<C: Checker> DataChecker<C> {
     pub(super) fn remove_store_entry(&mut self, key: u128) {
         if self.store.shift_remove(&key).is_some() {
             self.store_dirty = true;
+            self.has_output_snapshot = false;
             self.update_pending_counter();
         }
     }
@@ -365,6 +366,7 @@ impl<C: Checker> DataChecker<C> {
         }
 
         self.store_dirty = true;
+        self.has_output_snapshot = false;
         if entry.is_miss {
             self.ctx
                 .monitor

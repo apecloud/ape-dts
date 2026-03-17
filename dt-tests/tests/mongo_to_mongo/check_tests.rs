@@ -13,6 +13,12 @@ mod test {
 
     #[tokio::test]
     #[serial]
+    async fn snapshot_inline_basic_test() {
+        TestBase::run_mongo_snapshot_test("mongo_to_mongo/check/snapshot_inline_basic_test").await;
+    }
+
+    #[tokio::test]
+    #[serial]
     async fn cdc_check_basic_test() {
         TestBase::run_mongo_cdc_check_test("mongo_to_mongo/check/cdc_check_basic_test", 3000, 3000)
             .await;
