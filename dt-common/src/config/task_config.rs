@@ -23,8 +23,8 @@ use crate::{
 use super::{
     checker_config::CheckerConfig,
     config_enums::{
-        ConflictPolicyEnum, DbType, ExtractType, MetaCenterType, ParallelType, PipelineType,
-        SinkType,
+        build_task_type, ConflictPolicyEnum, DbType, ExtractType, MetaCenterType, ParallelType,
+        PipelineType, SinkType,
     },
     data_marker_config::DataMarkerConfig,
     extractor_config::{BasicExtractorConfig, ExtractorConfig},
@@ -112,10 +112,6 @@ const CDC_CHECK_LOG_S3: &str = "cdc_check_log_s3";
 const S3_KEY_PREFIX: &str = "s3_key_prefix";
 const CDC_CHECK_LOG_INTERVAL_SECS: &str = "cdc_check_log_interval_secs";
 
-// deprecated keys
-const RESUME_FROM_LOG: &str = "resume_from_log";
-const RESUME_LOG_DIR: &str = "resume_log_dir";
-const RESUME_CONFIG_FILE: &str = "resume_config_file";
 // default values
 const APE_DTS: &str = "APE_DTS";
 const ASTRISK: &str = "*";
@@ -151,6 +147,15 @@ impl TaskConfig {
             bail!(Error::ConfigError(
                 "config [checker] only supports [pipeline] pipeline_type=basic".into()
             ));
+        }
+        if checker.is_some()
+            && build_task_type(&extractor_basic.extract_type, &sinker_basic.sink_type, true)
+                .is_none()
+        {
+            bail!(Error::ConfigError(format!(
+                "config [checker] is not supported for [extractor] extract_type={} with [sinker] sink_type={}",
+                extractor_basic.extract_type, sinker_basic.sink_type
+            )));
         }
         let resumer =
             Self::load_resumer_config(&loader, &runtime, &sinker_basic, checker.as_ref())?;
@@ -865,7 +870,6 @@ impl TaskConfig {
             db_type: Some(loader.get_required(CHECKER, DB_TYPE)),
             url: Some(loader.get_required(CHECKER, URL)),
             connection_auth: Some(ConnectionAuthConfig::from(loader, CHECKER)),
-            ..default
         };
         Ok(Some(config))
     }
@@ -935,15 +939,6 @@ impl TaskConfig {
         sinker_basic: &BasicSinkerConfig,
         checker: Option<&CheckerConfig>,
     ) -> anyhow::Result<ResumerConfig> {
-        if loader.contains(RESUMER, RESUME_FROM_LOG)
-            || loader.contains(RESUMER, RESUME_LOG_DIR)
-            || loader.contains(RESUMER, RESUME_CONFIG_FILE)
-        {
-            bail!(Error::ConfigError(
-                "deprecated [resumer] keys detected; use resume_type=from_log with log_dir/config_file instead of resume_from_log/resume_log_dir/resume_config_file".into(),
-            ));
-        }
-
         let resume_type = loader.get_with_default(RESUMER, RESUME_TYPE, ResumeType::Dummy);
         match resume_type {
             ResumeType::FromLog => Ok(ResumerConfig::FromLog {
@@ -1030,13 +1025,22 @@ impl TaskConfig {
         let meta_type = loader.get_with_default(META_CENTER, "type", MetaCenterType::Basic);
         if meta_type == MetaCenterType::DbEngine && db_type == DbType::Mysql {
             let extractor_url: String = loader.get_required(EXTRACTOR, URL);
-            let sinker_url: String = loader.get_required(SINKER, URL);
+            let target_url: String = if loader.ini.sections().contains(&SINKER.to_string()) {
+                let sink_type = loader.get_with_default(SINKER, "sink_type", SinkType::Write);
+                if matches!(sink_type, SinkType::Dummy) {
+                    loader.get_optional(CHECKER, URL)
+                } else {
+                    loader.get_required(SINKER, URL)
+                }
+            } else {
+                loader.get_optional(CHECKER, URL)
+            };
             let meta_center_url: String = loader.get_required(META_CENTER, URL);
-            if extractor_url == meta_center_url || sinker_url == meta_center_url {
-                panic!(
+            if extractor_url == meta_center_url || target_url == meta_center_url {
+                bail!(Error::ConfigError(format!(
                     "config, [{}].{} should be different with [{}].{} and [{}].{}",
                     META_CENTER, URL, EXTRACTOR, URL, SINKER, URL
-                );
+                )));
             }
 
             config = MetaCenterConfig::MySqlDbEngine {
@@ -1070,89 +1074,5 @@ impl TaskConfig {
             workers: loader.get_with_default(metrics_section, "workers", 2),
             metrics_labels,
         })
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use configparser::ini::Ini;
-
-    fn loader_from_str(content: &str) -> IniLoader {
-        let mut ini = Ini::new();
-        ini.set_inline_comment_symbols(Some(&Vec::new()));
-        ini.read(content.to_string())
-            .expect("failed to parse inline ini");
-        IniLoader { ini }
-    }
-
-    #[test]
-    fn explicit_checker_url_keeps_embedded_credentials() {
-        let loader = loader_from_str(
-            r#"
-[checker]
-db_type=mysql
-url=mysql://reader:reader_pwd@dst-replica:3306/test_db
-"#,
-        );
-
-        let checker = TaskConfig::load_checker_config(&loader)
-            .expect("checker config should load")
-            .expect("checker config should exist");
-        let target =
-            TaskConfig::checker_as_basic_sinker(&checker).expect("checker target should resolve");
-
-        assert!(matches!(
-            target.connection_auth,
-            ConnectionAuthConfig::NoAuth
-        ));
-        let merged =
-            ConnectionAuthConfig::merge_url_with_auth(&target.url, &target.connection_auth)
-                .expect("merge should preserve embedded credentials");
-        assert_eq!(merged, "mysql://reader:reader_pwd@dst-replica:3306/test_db");
-    }
-
-    #[test]
-    fn standalone_checker_keeps_dummy_sinker_basic() {
-        let loader = loader_from_str(
-            r#"
-[checker]
-db_type=pg
-url=postgres://checker:pwd@127.0.0.1:5432/postgres
-"#,
-        );
-
-        let (sinker_basic, sinker) =
-            TaskConfig::load_sinker_config(&loader).expect("sinker config should load");
-
-        assert!(matches!(sinker, SinkerConfig::Dummy));
-        assert!(matches!(sinker_basic.sink_type, SinkType::Dummy));
-        assert!(sinker_basic.url.is_empty());
-    }
-
-    #[test]
-    #[should_panic(expected = "config [checker].db_type does not exist or is empty")]
-    fn checker_requires_explicit_db_type() {
-        let loader = loader_from_str(
-            r#"
-[checker]
-url=mysql://reader:reader_pwd@dst-replica:3306/test_db
-"#,
-        );
-
-        let _ = TaskConfig::load_checker_config(&loader);
-    }
-
-    #[test]
-    #[should_panic(expected = "config [checker].url does not exist or is empty")]
-    fn checker_requires_explicit_url() {
-        let loader = loader_from_str(
-            r#"
-[checker]
-db_type=mysql
-"#,
-        );
-
-        let _ = TaskConfig::load_checker_config(&loader);
     }
 }

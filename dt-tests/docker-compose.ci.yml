@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   # MySQL instances for testing
   mysql-src:
@@ -77,6 +75,50 @@ services:
       start_period: 20s
       interval: 5s
 
+  mysql-src-8-0:
+    image: mysql:8.0
+    container_name: mysql-src-8-0
+    environment:
+      MYSQL_ROOT_PASSWORD: 123456
+      MYSQL_DATABASE: test_db
+    ports:
+      - "3311:3306"
+    command:
+      - mysqld
+      - --server-id=11
+      - --log-bin=mysql-bin
+      - --binlog-format=ROW
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p123456"]
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+      interval: 5s
+
+  mysql-dst-8-0:
+    image: mysql:8.0
+    container_name: mysql-dst-8-0
+    environment:
+      MYSQL_ROOT_PASSWORD: 123456
+      MYSQL_DATABASE: test_db
+    ports:
+      - "3312:3306"
+    command:
+      - mysqld
+      - --server-id=12
+      - --log-bin=mysql-bin
+      - --binlog-format=ROW
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p123456"]
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+      interval: 5s
+
   # PostgreSQL instances
   postgres-src:
     image: postgres:13
@@ -87,6 +129,30 @@ services:
       POSTGRES_DB: postgres
     ports:
       - "5433:5432"
+    command:
+      - postgres
+      - -c
+      - wal_level=logical
+      - -c
+      - max_wal_senders=10
+      - -c
+      - max_replication_slots=10
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+      interval: 5s
+
+  postgres-node3:
+    image: postgres:13
+    container_name: postgres-node3-ci
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: postgres
+    ports:
+      - "5435:5432"
     command:
       - postgres
       - -c

@@ -1,5 +1,6 @@
 #[cfg(test)]
 mod test {
+
     use serial_test::serial;
 
     use crate::test_runner::{rdb_check_test_runner::RdbCheckTestRunner, test_base::TestBase};
@@ -65,6 +66,7 @@ mod test {
     async fn check_all_cols_pk_test() {
         TestBase::run_check_test("mysql_to_mysql/check/all_cols_pk_test").await;
     }
+
     #[tokio::test]
     #[serial]
     async fn check_basic_struct_test() {

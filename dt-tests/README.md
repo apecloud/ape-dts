@@ -34,7 +34,9 @@ cargo test --package dt-tests --test integration_test -- mysql_to_mysql::cdc_tes
   - 8, compare data of source and target.
 
 # Config
-- All database urls are configured in ./tests/.env file and referenced in task_config.ini of tests.
+- The full local test matrix is configured in `./tests/.env`.
+- CI / automation defaults should use `./.env.ci`; local overrides can stay in `./tests/.env.local`.
+- task_config.ini files reference these env keys directly.
 
 ```
 [extractor]

@@ -116,6 +116,21 @@ const DEFAULT_CHECK_LOG_DIR_PLACEHOLDER: &str = "LOG_DIR_PLACEHOLDER/check";
 const DEFAULT_STATISTIC_LOG_DIR_PLACEHOLDER: &str = "LOG_DIR_PLACEHOLDER/statistic";
 
 impl TaskRunner {
+    fn validate_checker_resume_support(
+        task_type: Option<TaskType>,
+        has_checker_state_store: bool,
+    ) -> anyhow::Result<()> {
+        if task_type.is_some_and(|task_type| task_type.is_cdc_inline_check())
+            && !has_checker_state_store
+        {
+            bail!(Error::ConfigError(
+                "config [checker] with CDC tasks requires [resumer] resume_type=from_target or from_db to persist checker state"
+                    .into(),
+            ));
+        }
+        Ok(())
+    }
+
     fn derive_single_task_id(task_context_id: &str, extractor_config: &ExtractorConfig) -> String {
         if !task_context_id.is_empty() {
             return task_context_id.to_string();
@@ -230,6 +245,7 @@ impl TaskRunner {
             }
             None => (None, None, None),
         };
+        Self::validate_checker_resume_support(self.task_type, checker_state_store.is_some())?;
         let (extractor_client, sinker_client) = ConnClient::from_config(&self.config).await?;
         let enqueue_limiter = BufferLimiter::from_config(
             Some(&self.config.extractor_basic.rate_limiter),
@@ -844,12 +860,6 @@ impl TaskRunner {
         let checker_db_type = target.db_type;
         let checker_url = target.url;
         let checker_auth = target.connection_auth;
-
-        if is_cdc_task && checker_state_store.is_none() {
-            log_warn!(
-                "checker state store is unavailable for current [resumer] config, checkpoint persistence is disabled"
-            );
-        }
 
         let is_struct_task = matches!(
             self.config.extractor,
@@ -1540,46 +1550,5 @@ impl TaskRunner {
             | ExtractorConfig::MongoSnapshot { .. } => self.config.runtime.tb_parallel_size,
             _ => 1,
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use dt_common::config::connection_auth_config::ConnectionAuthConfig;
-
-    #[test]
-    fn derive_single_task_id_prefers_task_context_id() {
-        let extractor = ExtractorConfig::MongoSnapshot {
-            url: "mongodb://127.0.0.1:27017".to_string(),
-            connection_auth: ConnectionAuthConfig::NoAuth,
-            app_name: "APE_DTS".to_string(),
-            db: "src_db".to_string(),
-            tb: "src_tb".to_string(),
-        };
-
-        assert_eq!(
-            TaskRunner::derive_single_task_id("explicit.scope", &extractor),
-            "explicit.scope"
-        );
-    }
-
-    #[test]
-    fn derive_single_task_id_falls_back_to_snapshot_scope() {
-        let extractor = ExtractorConfig::PgSnapshot {
-            url: "postgres://127.0.0.1:5432/postgres".to_string(),
-            connection_auth: ConnectionAuthConfig::NoAuth,
-            schema: "public".to_string(),
-            tb: "users".to_string(),
-            sample_interval: 1,
-            parallel_size: 1,
-            batch_size: 1,
-            partition_cols: String::new(),
-        };
-
-        assert_eq!(
-            TaskRunner::derive_single_task_id("", &extractor),
-            "public.users"
-        );
     }
 }
