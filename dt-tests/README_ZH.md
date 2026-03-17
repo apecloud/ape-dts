@@ -34,7 +34,9 @@ cargo test --package dt-tests --test integration_test -- mysql_to_mysql::cdc_tes
   - 8，对比源和目标数据。
 
 # 配置
-- 所有数据库的 extractor url，sinker url 均配置在 ./tests/.env 文件，各测试用例的 task_config.ini 中引用。
+- 完整的本地测试矩阵配置在 `./tests/.env`。
+- CI / 自动化默认应使用 `./.env.ci`；本地覆盖仍放在 `./tests/.env.local`。
+- 各测试用例的 task_config.ini 直接引用这些 env key。
 
 ```
 [extractor]
