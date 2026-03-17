@@ -151,9 +151,9 @@ impl PgStructFetcher {
         let mut results = Vec::new();
 
         results.extend(self.get_enum_udt_statements().await?);
-        results.extend(self.get_compose_udt_statements().await?);
         results.extend(self.get_range_udt_statements().await?);
         results.extend(self.get_domain_udt_statements().await?);
+        results.extend(self.get_compose_udt_statements().await?);
 
         Ok(results)
     }
@@ -1163,9 +1163,9 @@ impl PgStructFetcher {
 
     async fn get_enum_udt_statements(&mut self) -> anyhow::Result<Vec<PgCreateUdtStatement>> {
         let mut results = Vec::new();
-        let sql = "SELECT
+        let sql = r#"SELECT
             format(
-                'CREATE TYPE %I.%I AS ENUM (%s);',
+                'CREATE TYPE "%I"."%I" AS ENUM (%s);',
                 n.nspname,
                 t.typname,
                 pg_catalog.string_agg(
@@ -1173,10 +1173,12 @@ impl PgStructFetcher {
                     ', '::text
                     ORDER BY e.enumsortorder
                 )
-            ) AS create_enum_sql
+            ) AS create_enum_sql,
+            n.nspname::text,
+            t.typname::text
         FROM pg_catalog.pg_type t
         JOIN pg_catalog.pg_namespace n ON n.oid = t.typnamespace
-        JOIN pg_catalog.pg_enum e       ON e.enumtypid = t.oid
+        JOIN pg_catalog.pg_enum e ON e.enumtypid = t.oid
         LEFT JOIN pg_catalog.pg_depend d
             ON d.classid = 'pg_type'::regclass
             AND d.objid   = t.oid
@@ -1187,13 +1189,13 @@ impl PgStructFetcher {
         AND n.nspname NOT IN ('pg_catalog', 'information_schema')
         AND ext.extname IS NULL
         GROUP BY n.nspname, t.typname, t.oid
-        ORDER BY t.oid";
+        ORDER BY t.oid"#;
 
         let mut rows = sqlx::query(sql).fetch(&self.conn_pool);
         while let Some(row) = rows.try_next().await? {
-            let schema_name = Self::get_str_with_null(&row, "schema_name")?;
-            let typ_name = Self::get_str_with_null(&row, "typ_name")?;
-            let create_statement = Self::get_str_with_null(&row, "create_statement")?;
+            let schema_name = Self::get_str_with_null(&row, "nspname")?;
+            let typ_name = Self::get_str_with_null(&row, "typname")?;
+            let create_statement = Self::get_str_with_null(&row, "create_enum_sql")?;
 
             if !self.schemas.contains(&schema_name) || self.filter_schema(&schema_name) {
                 continue;
@@ -1213,9 +1215,9 @@ impl PgStructFetcher {
 
     async fn get_compose_udt_statements(&mut self) -> anyhow::Result<Vec<PgCreateUdtStatement>> {
         let mut results = Vec::new();
-        let sql = "SELECT
+        let sql = r#"SELECT
             format(
-                'CREATE TYPE %I.%I AS (%s);',
+                'CREATE TYPE "%I"."%I" AS (%s);',
                 n.nspname,
                 t.typname,
                 (
@@ -1230,7 +1232,9 @@ impl PgStructFetcher {
                     AND a.attnum > 0
                     AND NOT a.attisdropped
                 )
-            ) AS create_composite_sql
+            ) AS create_composite_sql,
+            n.nspname::text,
+            t.typname::text
         FROM pg_catalog.pg_type t
         JOIN pg_catalog.pg_namespace n ON n.oid = t.typnamespace
         LEFT JOIN pg_catalog.pg_class c
@@ -1245,13 +1249,13 @@ impl PgStructFetcher {
         AND n.nspname NOT IN ('pg_catalog', 'information_schema')
         AND (c.oid IS NULL OR c.relkind = 'c')
         AND ext.extname IS NULL
-        ORDER BY t.oid";
+        ORDER BY t.oid"#;
 
         let mut rows = sqlx::query(sql).fetch(&self.conn_pool);
         while let Some(row) = rows.try_next().await? {
-            let schema_name = Self::get_str_with_null(&row, "schema_name")?;
-            let typ_name = Self::get_str_with_null(&row, "typ_name")?;
-            let create_statement = Self::get_str_with_null(&row, "create_statement")?;
+            let schema_name = Self::get_str_with_null(&row, "nspname")?;
+            let typ_name = Self::get_str_with_null(&row, "typname")?;
+            let create_statement = Self::get_str_with_null(&row, "create_composite_sql")?;
 
             if !self.schemas.contains(&schema_name) || self.filter_schema(&schema_name) {
                 continue;
@@ -1271,12 +1275,29 @@ impl PgStructFetcher {
 
     async fn get_range_udt_statements(&mut self) -> anyhow::Result<Vec<PgCreateUdtStatement>> {
         let mut results = Vec::new();
-        let sql = "SELECT
+        let sql = r#"SELECT
             n.nspname AS schema_name,
             t.typname AS type_name,
-            pg_catalog.format_type(r.rngsubtype, NULL) AS subtype,
-            r.rngcanonical::regprocedure AS canonical_func,
-            r.rngsubdiff::regprocedure AS subtype_diff_func
+            format(
+                'CREATE TYPE "%I"."%I" AS RANGE (subtype = %s%s%s);',
+                n.nspname,
+                t.typname,
+                pg_catalog.format_type(r.rngsubtype, NULL),
+                CASE
+                    WHEN r.rngcanonical <> 0::oid THEN format(
+                        ', canonical = %I',
+                        (SELECT p.proname FROM pg_catalog.pg_proc p WHERE p.oid = r.rngcanonical)
+                    )
+                    ELSE ''
+                END,
+                CASE
+                    WHEN r.rngsubdiff <> 0::oid THEN format(
+                        ', subtype_diff = %I',
+                        (SELECT p.proname FROM pg_catalog.pg_proc p WHERE p.oid = r.rngsubdiff)
+                    )
+                    ELSE ''
+                END
+            ) AS create_statement
         FROM pg_catalog.pg_type t
         JOIN pg_catalog.pg_namespace n ON n.oid = t.typnamespace
         JOIN pg_catalog.pg_range r      ON r.rngtypid = t.oid
@@ -1289,12 +1310,12 @@ impl PgStructFetcher {
         WHERE t.typtype = 'r'
         AND n.nspname NOT IN ('pg_catalog', 'information_schema')
         AND ext.extname IS NULL
-        ORDER BY t.oid";
+        ORDER BY t.oid"#;
 
         let mut rows = sqlx::query(sql).fetch(&self.conn_pool);
         while let Some(row) = rows.try_next().await? {
             let schema_name = Self::get_str_with_null(&row, "schema_name")?;
-            let typ_name = Self::get_str_with_null(&row, "typ_name")?;
+            let typ_name = Self::get_str_with_null(&row, "type_name")?;
             let create_statement = Self::get_str_with_null(&row, "create_statement")?;
 
             if !self.schemas.contains(&schema_name) || self.filter_schema(&schema_name) {
@@ -1315,14 +1336,16 @@ impl PgStructFetcher {
 
     async fn get_domain_udt_statements(&mut self) -> anyhow::Result<Vec<PgCreateUdtStatement>> {
         let mut results = Vec::new();
-        let sql = "SELECT
+        let sql = r#"SELECT
             format(
-                'CREATE DOMAIN %I.%I AS %s%s;',
+                'CREATE DOMAIN "%I"."%I" AS %s%s;',
                 n.nspname,
                 t.typname,
                 pg_catalog.format_type(t.typbasetype, t.typtypmod),
                 COALESCE(' ' || pg_catalog.pg_get_constraintdef(c.oid), '')
-            ) AS create_domain_sql
+            ) AS create_domain_sql,
+            n.nspname::text,
+            t.typname::text
         FROM pg_catalog.pg_type t
         JOIN pg_catalog.pg_namespace n ON n.oid = t.typnamespace
         LEFT JOIN pg_catalog.pg_constraint c ON c.contypid = t.oid
@@ -1335,12 +1358,12 @@ impl PgStructFetcher {
         WHERE t.typtype = 'd'
         AND n.nspname NOT IN ('pg_catalog', 'information_schema')
         AND ext.extname IS NULL
-        ORDER BY t.oid";
+        ORDER BY t.oid"#;
         let mut rows = sqlx::query(sql).fetch(&self.conn_pool);
         while let Some(row) = rows.try_next().await? {
-            let schema_name = Self::get_str_with_null(&row, "schema_name")?;
-            let typ_name = Self::get_str_with_null(&row, "typ_name")?;
-            let create_statement = Self::get_str_with_null(&row, "create_statement")?;
+            let schema_name = Self::get_str_with_null(&row, "nspname")?;
+            let typ_name = Self::get_str_with_null(&row, "typname")?;
+            let create_statement = Self::get_str_with_null(&row, "create_domain_sql")?;
 
             if !self.schemas.contains(&schema_name) || self.filter_schema(&schema_name) {
                 continue;

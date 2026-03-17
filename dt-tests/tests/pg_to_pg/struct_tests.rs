@@ -78,4 +78,18 @@ mod test {
         runner.run_struct_test_without_check().await.unwrap();
         // TestBase::run_check_test("pg_to_pg/struct/batch_test/bench_test_2/check").await;
     }
+
+    #[tokio::test]
+    #[serial]
+    async fn snapshot_udf_test() {
+        // TODO: The checking logic for UDFs has not been implemented. This test can only ensure that execution does not produce errors.
+        TestBase::run_pg_struct_test("pg_to_pg/struct/udf_test").await;
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn snapshot_udt_test() {
+        // TODO: The checking logic for UDTs has not been implemented. This test can only ensure that execution does not produce errors.
+        TestBase::run_pg_struct_test("pg_to_pg/struct/udt_test").await;
+    }
 }
