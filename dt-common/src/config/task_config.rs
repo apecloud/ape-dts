@@ -23,8 +23,8 @@ use crate::{
 use super::{
     checker_config::CheckerConfig,
     config_enums::{
-        build_task_type, ConflictPolicyEnum, DbType, ExtractType, MetaCenterType, ParallelType,
-        PipelineType, SinkType,
+        build_task_type, write_sink_supports_inline_checker, ConflictPolicyEnum, DbType,
+        ExtractType, MetaCenterType, ParallelType, PipelineType, SinkType,
     },
     data_marker_config::DataMarkerConfig,
     extractor_config::{BasicExtractorConfig, ExtractorConfig},
@@ -149,13 +149,33 @@ impl TaskConfig {
             ));
         }
         if checker.is_some()
-            && build_task_type(&extractor_basic.extract_type, &sinker_basic.sink_type, true)
-                .is_none()
+            && build_task_type(
+                &extractor_basic.extract_type,
+                &sinker_basic.sink_type,
+                &sinker_basic.db_type,
+                true,
+            )
+            .is_none()
         {
-            bail!(Error::ConfigError(format!(
-                "config [checker] is not supported for [extractor] extract_type={} with [sinker] sink_type={}",
-                extractor_basic.extract_type, sinker_basic.sink_type
-            )));
+            let message = if matches!(sinker_basic.sink_type, SinkType::Struct) {
+                format!(
+                    "config [checker] only supports standalone check for [extractor] extract_type={}; use sink_type=dummy or omit [sinker]",
+                    extractor_basic.extract_type
+                )
+            } else if matches!(sinker_basic.sink_type, SinkType::Write)
+                && !write_sink_supports_inline_checker(&sinker_basic.db_type)
+            {
+                format!(
+                    "config [checker] is not supported for [sinker] db_type={} with sink_type=write; only mysql, pg, and mongo write sinkers call checker",
+                    sinker_basic.db_type
+                )
+            } else {
+                format!(
+                    "config [checker] is not supported for [extractor] extract_type={} with [sinker] sink_type={}",
+                    extractor_basic.extract_type, sinker_basic.sink_type
+                )
+            };
+            bail!(Error::ConfigError(message));
         }
         let resumer =
             Self::load_resumer_config(&loader, &runtime, &sinker_basic, checker.as_ref())?;

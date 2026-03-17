@@ -4,15 +4,17 @@ After data migration, you may want to compare the source and target data row by 
 
 Supports comparison for MySQL, PostgreSQL, and MongoDB.
 
-Data check can be used with both snapshot and CDC tasks. Configure the checker target explicitly in `[checker]`. For CDC tasks, keep `[checker]` enabled and set `extract_type=cdc`; the checker validates applied changes after they are written to the target.
+Sampling via `sample_interval` is currently available only for MySQL/PostgreSQL snapshot checks.
+
+Data check can be used with both snapshot tasks and CDC+check. Snapshot check can run either in standalone mode (configure the checker target explicitly in `[checker]` and keep `sink_type=dummy`, or omit `[sinker]`) or as inline check after write on supported write sinkers. For CDC+check, set `extract_type=cdc`; the checker validates applied changes after they are written to the target, and `[resumer] resume_type=from_target` or `from_db` is required to persist checker state. Inline checker with `sink_type=write` is currently available when the sinker writes through MySQL, PostgreSQL, or MongoDB.
 
 ## Example: MySQL -> MySQL
 
 Refer to [task templates](../../templates/mysql_to_mysql.md) and [tutorial](../tutorial/mysql_to_mysql.md)
 
-### Sampling Check
+### Sampling Check (MySQL/PostgreSQL snapshot only)
 
-In the full check configuration, add `sample_interval` to the `[extractor]` section. For example, setting `sample_interval=3` checks every 3rd record.
+For MySQL/PostgreSQL snapshot check, add `sample_interval` to the `[extractor]` section. For example, setting `sample_interval=3` checks every 3rd record.
 ```
 [extractor]
 sample_interval=3
@@ -21,15 +23,15 @@ sample_interval=3
 ## Limitations
 
 - Data check is source-driven (validates Source ∈ Target) and cannot detect extra rows that exist only in the target. To catch such cases, consider setting up a [Reverse Check](#reverse-check) by swapping extractor and checker configurations.
-- For MongoDB, `_id` must be a hashable type (for example ObjectId/String/Int32/Int64). Unsupported `_id` types will make the checker return an error.
+- For MongoDB, `_id` should be a hashable type (for example ObjectId/String/Int32/Int64). Rows whose `_id` cannot be hashed are skipped and counted in `summary.log.skip_count`; if a fetched target row has an unhashable `_id`, the check fails.
 
 ## DELETE Event Check
 
-In CDC + Check scenarios, the checker validates DELETE events: it queries the target by primary key, and if the row still exists in the target, it is reported as an inconsistency in `diff.log` (with empty `diff_col_values`). When `output_revise_sql=true`, a corresponding `DELETE` repair statement is automatically generated in `sql.log`.
+In CDC+check scenarios, the checker validates DELETE events: it queries the target by primary key, and if the row still exists in the target, it is reported as an inconsistency in `diff.log` (with empty `diff_col_values`). When `output_revise_sql=true`, a corresponding `DELETE` repair statement is automatically generated in `sql.log`.
 
 # Check Results
 
-The check results are written to the log in JSON format, including diff.log, miss.log, sql.log, and summary.log. By default, the logs are stored in `runtime.log_dir/check`; if `[checker].check_log_dir` is set, that directory is used instead.
+`diff.log`, `miss.log`, and `summary.log` are written in JSON format. `sql.log` contains generated repair SQL. By default, these logs are stored in `runtime.log_dir/check`; if `[checker].check_log_dir` is set, that directory is used instead.
 
 ## Difference Log (diff.log)
 
@@ -64,7 +66,7 @@ When you need full row content for troubleshooting, you can enable full row logg
 output_full_row=true
 ```
 
-After enabling, all diff.log entries will append `src_row` and `dst_row`, and miss.log entries will append `src_row` (currently only supports MySQL/PG/Mongo; Redis is not supported yet). Example:
+After enabling, all `diff.log` entries append `src_row` and `dst_row`, and all `miss.log` entries append `src_row` (currently supported for MySQL, PostgreSQL, and MongoDB). Example:
 
 ```json
 {
@@ -152,10 +154,20 @@ INSERT INTO `test_db_1`.`test_table`(`id`,`name`,`age`,`email`) VALUES(3,'Charli
 
 ## Summary Log (summary.log)
 
-The summary log contains the overall results of the check, such as start_time, end_time, is_consistent, and the number of miss, diff.
+The summary log contains the overall results of the check, such as start_time, end_time, is_consistent, and the number of miss, diff, skipped rows (`skip_count`), and generated repair SQLs (`sql_count`).
+
+`skip_count` records rows skipped by the checker, for example when the row key cannot be hashed. When no rows are skipped, this field is omitted.
+
+In CDC+check mode, `summary.log` also includes `tables`, which stores per-table miss/diff counts. This field is omitted for non-CDC tasks.
 
 ```json
-{"start_time": "2023-09-01T12:00:00+08:00", "end_time": "2023-09-01T12:00:01+08:00", "is_consistent": false, "miss_count": 1, "diff_count": 2, "sql_count": 3}
+{"start_time": "2023-09-01T12:00:00+08:00", "end_time": "2023-09-01T12:00:01+08:00", "is_consistent": false, "miss_count": 1, "diff_count": 2, "skip_count": 1, "sql_count": 3}
+```
+
+CDC+check example:
+
+```json
+{"start_time":"2023-09-01T12:00:00+08:00","end_time":"2023-09-01T12:05:00+08:00","is_consistent":false,"miss_count":1,"diff_count":2,"skip_count":1,"tables":{"test_db_1.test_tb":{"miss_count":1,"diff_count":2}}}
 ```
 
 # Reverse Check
@@ -189,7 +201,7 @@ When `max_retries > 0`, the checker automatically retries on inconsistency:
 
 ## Router
 
-Supports the `[router]` configuration section. Refer to [config details](../config.md) for details.
+Data check supports `[router]`. See [config.md](../config.md) for details.
 
 ## Integration Test References
 

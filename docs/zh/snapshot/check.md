@@ -4,15 +4,17 @@
 
 支持对 MySQL、PostgreSQL、MongoDB 进行比对。
 
-数据校验可用于 Snapshot 与 CDC 任务。请在 `[checker]` 中显式配置目标端。若为 CDC 任务，保持 `[checker]` 开启并设置 `extract_type=cdc`，checker 会在数据写入目标端后进行校验。
+目前 `sample_interval` 采样仅支持 MySQL / PostgreSQL 全量校验。
+
+数据校验既可用于 snapshot 任务，也可用于 CDC+check。snapshot 校验既可以使用独立模式：在 `[checker]` 中显式配置校验目标，并保持 `sink_type=dummy`（或直接省略 `[sinker]`）；也可以在支持的 write sinker 上使用写入后的内联校验。若为 CDC+check，设置 `extract_type=cdc` 后，checker 会在数据写入目标端后进行校验，并且必须通过 `[resumer] resume_type=from_target` 或 `from_db` 持久化 checker 状态。若使用 `sink_type=write` 的内联校验，当前仅支持 MySQL、PostgreSQL、MongoDB 写入链路。
 
 ## 示例: MySQL -> MySQL
 
 参考 [任务模版](../../templates/mysql_to_mysql.md) 和 [教程](../../en/tutorial/mysql_to_mysql.md)
 
-### 抽样校验
+### 抽样校验（仅 MySQL / PostgreSQL 全量校验）
 
-在全量校验配置下，在 `[extractor]` 中添加 `sample_interval` 配置。例如设置 `sample_interval=3` 表示每 3 条记录采样 1 次。
+对 MySQL / PostgreSQL 的全量校验，可在 `[extractor]` 中添加 `sample_interval` 配置。例如设置 `sample_interval=3` 表示每 3 条记录采样 1 次。
 ```
 [extractor]
 sample_interval=3
@@ -21,15 +23,15 @@ sample_interval=3
 ## 限制
 
 - 数据校验为源端驱动（仅验证 Source ∈ Target），无法发现目标端多余数据（幽灵数据）。如需检测目标端多余数据，可通过 [反向校验](#反向校验) 交换 extractor 和 checker 配置。
-- 对于 MongoDB，`_id` 需为可哈希类型（例如 ObjectId/String/Int32/Int64）。不支持的 `_id` 类型会导致 checker 报错。
+- 对于 MongoDB，`_id` 应为可哈希类型（例如 ObjectId/String/Int32/Int64）。若某行 `_id` 无法参与哈希计算，该行会被跳过并计入 `summary.log.skip_count`；若拉取到的目标端行含有不可哈希的 `_id`，校验会失败。
 
 ## DELETE 事件校验
 
-在 CDC + Check 场景下，checker 会校验 DELETE 事件：通过主键在目标端查询，若目标端仍存在该行则判定为不一致，记录到 `diff.log`（`diff_col_values` 为空）。开启 `output_revise_sql=true` 时，会自动生成对应的 `DELETE` 修复语句写入 `sql.log`。
+在 CDC+check 场景下，checker 会校验 DELETE 事件：通过主键在目标端查询，若目标端仍存在该行则判定为不一致，记录到 `diff.log`（`diff_col_values` 为空）。开启 `output_revise_sql=true` 时，会自动生成对应的 `DELETE` 修复语句写入 `sql.log`。
 
 # 校验结果
 
-校验结果以 JSON 格式写入日志，包括 diff.log、miss.log、sql.log 和 summary.log。默认写入 `runtime.log_dir/check`；若配置了 `[checker].check_log_dir`，则写入该目录。
+`diff.log`、`miss.log`、`summary.log` 以 JSON 格式写入；`sql.log` 保存生成的修复 SQL。默认写入 `runtime.log_dir/check`；若配置了 `[checker].check_log_dir`，则写入该目录。
 
 ## 差异日志（diff.log）
 
@@ -57,14 +59,14 @@ sample_interval=3
 
 ## 输出完整行
 
-当需要完整行内容用于排查问题时，可在已配置好 checker target 的前提下，在 `[checker]` 中开启全行日志：
+当需要完整行内容用于排查问题时，可在已配置好校验目标的前提下，在 `[checker]` 中开启全行日志：
 
 ```
 [checker]
 output_full_row=true
 ```
 
-开启后，所有 diff.log 条目会追加 `src_row` 与 `dst_row`，miss.log 条目会追加 `src_row`（当前仅支持 MySQL/PG/Mongo，Redis 暂不支持）。示例：
+开启后，所有 `diff.log` 条目都会追加 `src_row` 与 `dst_row`，所有 `miss.log` 条目都会追加 `src_row`（当前支持 MySQL、PostgreSQL、MongoDB）。示例：
 
 ```json
 {
@@ -98,7 +100,7 @@ output_full_row=true
 
 ## 输出修复 SQL
 
-如需人工修复差异数据，可在已配置好 checker target 的前提下，在 `[checker]` 中开启 SQL 输出：
+如需人工修复差异数据，可在已配置好校验目标的前提下，在 `[checker]` 中开启 SQL 输出：
 
 ```
 [checker]
@@ -152,10 +154,20 @@ INSERT INTO `test_db_1`.`test_table`(`id`,`name`,`age`,`email`) VALUES(3,'Charli
 
 ## 概览日志（summary.log）
 
-概览日志包含校验的总体结果，如 start_time、end_time、is_consistent，以及 miss、diff 的数量。
+概览日志包含校验的总体结果，如 start_time、end_time、is_consistent，以及 miss、diff、跳过行数（`skip_count`）和生成修复 SQL 数量（`sql_count`）。
+
+`skip_count` 用于记录被 checker 跳过的行，例如行主键/唯一键无法参与哈希计算时。若没有跳过任何行，则该字段不会出现在日志中。
+
+在 CDC+check 模式下，`summary.log` 还会包含 `tables` 字段，用于记录每张表的 miss/diff 计数；非 CDC 任务不会输出该字段。
 
 ```json
-{"start_time": "2023-09-01T12:00:00+08:00", "end_time": "2023-09-01T12:00:01+08:00", "is_consistent": false, "miss_count": 1, "diff_count": 2, "sql_count": 3}
+{"start_time": "2023-09-01T12:00:00+08:00", "end_time": "2023-09-01T12:00:01+08:00", "is_consistent": false, "miss_count": 1, "diff_count": 2, "skip_count": 1, "sql_count": 3}
+```
+
+CDC+check 示例：
+
+```json
+{"start_time":"2023-09-01T12:00:00+08:00","end_time":"2023-09-01T12:05:00+08:00","is_consistent":false,"miss_count":1,"diff_count":2,"skip_count":1,"tables":{"test_db_1.test_tb":{"miss_count":1,"diff_count":2}}}
 ```
 
 # 反向校验
@@ -189,7 +201,7 @@ url=<原 extractor 的 url>
 
 ## 路由
 
-支持 `[router]` 配置，详情请参考 [配置详解](../config.md)。
+数据校验支持 `[router]` 配置，详情请参考 [config.md](../config.md)。
 
 ## 集成测试参考
 

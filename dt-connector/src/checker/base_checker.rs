@@ -589,12 +589,11 @@ impl<C: Checker> DataChecker<C> {
     }
 
     async fn maybe_snapshot_and_output(&mut self) {
-        if !self.store_dirty && self.has_output_snapshot {
+        if self.has_output_snapshot {
             return;
         }
         match self.snapshot_and_output().await {
             Ok(()) => {
-                self.store_dirty = false;
                 self.has_output_snapshot = true;
             }
             Err(err) => log_error!("Checker [{}] cdc output failed: {}", self.name, err),

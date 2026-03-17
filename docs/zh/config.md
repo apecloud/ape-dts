@@ -42,11 +42,11 @@ url=mysql://user1:abc%25%24%23%3F%40@127.0.0.1:3307?ssl-mode=disabled
 
 # [checker]
 
-Checker 有两种模式：
-- 独立 checker：仅做校验任务，不做写入。设置 `sink_type=dummy` 或直接省略 `[sinker]`，
-  并在 `[checker]` 中显式配置校验目标。
-- CDC + checker：CDC 任务且 `sink_type=write` 时，在主链路写入后异步校验。
-  只要存在 `[checker]` section 且显式配置了 target 即启用。
+`[checker]` 支持两种模式：
+- 独立校验：仅做校验，不做写入。通常用于 snapshot / struct 校验任务。设置
+  `sink_type=dummy` 或直接省略 `[sinker]`，并在 `[checker]` 中显式配置校验目标。
+- 写入后内联校验：当 `sink_type=write` 时，checker 会在写入后运行。snapshot 任务可在支持
+  的 write sinker 上使用该模式；CDC+check 也使用该模式，并额外要求持久化 checker 状态。
 
 | 配置                        | 作用                                            | 示例        | 默认                             |
 | :-------------------------- | :---------------------------------------------- | :---------- | :------------------------------- |
@@ -55,12 +55,12 @@ Checker 有两种模式：
 | batch_size                  | checker 批量校验大小（非 CDC 任务）             | 100         | 1                                |
 | sample_rate                 | checker 抽样比例（保留字段，当前未生效）        | 1.0         | 1.0                              |
 | output_full_row             | diff 日志是否输出全量行                         | false       | false                            |
-| output_revise_sql           | diff 日志是否输出修复 SQL                       | false       | false                            |
+| output_revise_sql           | 是否将生成的修复 SQL 写入 `sql.log`            | false       | false                            |
 | revise_match_full_row       | 生成修复 SQL 时是否按全量行匹配                 | false       | false                            |
 | retry_interval_secs         | 重试间隔（秒），CDC+check 模式下强制为 0        | 0           | 0                                |
 | max_retries                 | 重试次数，CDC+check 模式下强制为 0              | 0           | 0                                |
 | check_log_dir               | 校验日志目录                                    | /tmp/check  | 空（默认 runtime.log_dir/check） |
-| check_log_file_size         | 单类日志文件大小上限（`diff.log` / `miss.log`） | 100mb       | 100mb                            |
+| check_log_file_size         | 单类日志文件大小上限（`diff.log` / `miss.log` / `sql.log`） | 100mb | 100mb                            |
 | check_log_max_rows          | 单类日志最大行数（`diff.log` / `miss.log`）     | 1000        | 1000                             |
 | db_type                     | 校验目标库类型（必填）                          | mysql       | -                                |
 | url                         | 校验目标 URL（必填）                            | mysql://... | -                                |
@@ -77,11 +77,20 @@ Checker 有两种模式：
 
 说明：
 - checker 仅支持 `[pipeline] pipeline_type=basic`。
-- 在 CDC + checker 模式（`extract_type=cdc` 且 `sink_type=write`）下，checker 批量大小跟随 `[sinker].batch_size`。
-- 在 CDC + checker 模式下，需在 `[checker]` 中显式配置 target，checker 才会启用。
+- struct 任务只支持独立校验。若为 struct 任务启用 `[checker]`，请使用
+  `sink_type=dummy` 或直接省略 `[sinker]`。
+- 当 `[sinker] sink_type=write` 时，只有 snapshot / CDC 且 `[sinker].db_type` 为
+  `mysql`、`pg`、`mongo` 的写入链路才会实际调用 `check_sync`。其他 write sinker 不会接入
+  checker，ape-dts 会在配置加载阶段直接拒绝启用 `[checker]`。
+- 在 CDC+check 模式下，必须配置 `[resumer] resume_type=from_target` 或 `from_db` 来持久化
+  checker 状态。checker state store 后端仅支持 MySQL/PostgreSQL，因此非 MySQL/PG 的目标端应使用
+  `resume_type=from_db`。
+- 在 CDC+check 模式（`extract_type=cdc` 且 `sink_type=write`）下，checker 批量大小跟随 `[sinker].batch_size`。
+- 在 CDC+check 模式下，需在 `[checker]` 中显式配置校验目标，checker 才会启用。
 - 当 `check_log_dir` 为空时，统一使用 `runtime.log_dir/check` 作为 checker 日志目录（包含 CDC 校验输出）。
-- 在 CDC + checker 模式下，会始终在 `check_log_dir` 本地输出 `diff.log` / `miss.log` / `summary.log`；`cdc_check_log_s3` 仅控制是否上传 S3。
-- CDC 校验输出对 `diff.log` / `miss.log` 同时应用双上限：`check_log_file_size` 与 `check_log_max_rows`，命中任一阈值时仅保留最新记录。
+- 在 CDC+check 模式下，会始终先在 `check_log_dir` 本地落盘周期性校验快照；`cdc_check_log_s3` 仅控制是否上传 S3。
+- `check_log_file_size` 限制本地 `diff.log` / `miss.log` / `sql.log` 的大小，`summary.log` 不受该限制。
+- `check_log_max_rows` 仅对 CDC 校验快照的 `diff.log` / `miss.log` 生效；命中任一阈值时仅保留最新记录。
 
 # [filter]
 

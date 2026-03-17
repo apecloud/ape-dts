@@ -195,35 +195,63 @@ pub enum RdbTransactionIsolation {
     Default,
 }
 
+pub fn write_sink_supports_inline_checker(sink_db_type: &DbType) -> bool {
+    matches!(sink_db_type, DbType::Mysql | DbType::Pg | DbType::Mongo)
+}
+
+fn task_kind_from_extract_type(extract_type: &ExtractType) -> Option<TaskKind> {
+    match extract_type {
+        ExtractType::Struct => Some(TaskKind::Struct),
+        ExtractType::Snapshot => Some(TaskKind::Snapshot),
+        ExtractType::Cdc => Some(TaskKind::Cdc),
+        _ => None,
+    }
+}
+
+fn supports_task_without_checker(kind: TaskKind, sink_type: &SinkType) -> bool {
+    matches!(
+        (kind, sink_type),
+        (TaskKind::Struct, SinkType::Struct)
+            | (TaskKind::Snapshot, SinkType::Write)
+            | (TaskKind::Cdc, SinkType::Write)
+    )
+}
+
+fn supports_standalone_checker(kind: TaskKind, sink_type: &SinkType) -> bool {
+    matches!(
+        (kind, sink_type),
+        (TaskKind::Struct, SinkType::Dummy) | (TaskKind::Snapshot, SinkType::Dummy)
+    )
+}
+
+fn supports_inline_checker(kind: TaskKind, sink_type: &SinkType, sink_db_type: &DbType) -> bool {
+    matches!(
+        (kind, sink_type),
+        (TaskKind::Snapshot, SinkType::Write) | (TaskKind::Cdc, SinkType::Write)
+    ) && write_sink_supports_inline_checker(sink_db_type)
+}
+
 pub fn build_task_type(
     extract_type: &ExtractType,
     sink_type: &SinkType,
+    sink_db_type: &DbType,
     checker_enabled: bool,
 ) -> Option<TaskType> {
-    match (extract_type, sink_type, checker_enabled) {
-        (ExtractType::Struct, SinkType::Struct, false) => {
-            Some(TaskType::new(TaskKind::Struct, None))
+    let kind = task_kind_from_extract_type(extract_type)?;
+
+    let check = if !checker_enabled {
+        if supports_task_without_checker(kind, sink_type) {
+            None
+        } else {
+            return None;
         }
-        (ExtractType::Struct, SinkType::Struct, true) => {
-            Some(TaskType::new(TaskKind::Struct, Some(CheckMode::Inline)))
-        }
-        (ExtractType::Struct, SinkType::Dummy, true) => {
-            Some(TaskType::new(TaskKind::Struct, Some(CheckMode::Standalone)))
-        }
-        (ExtractType::Snapshot, SinkType::Write, false) => {
-            Some(TaskType::new(TaskKind::Snapshot, None))
-        }
-        (ExtractType::Snapshot, SinkType::Write, true) => {
-            Some(TaskType::new(TaskKind::Snapshot, Some(CheckMode::Inline)))
-        }
-        (ExtractType::Snapshot, SinkType::Dummy, true) => Some(TaskType::new(
-            TaskKind::Snapshot,
-            Some(CheckMode::Standalone),
-        )),
-        (ExtractType::Cdc, SinkType::Write, false) => Some(TaskType::new(TaskKind::Cdc, None)),
-        (ExtractType::Cdc, SinkType::Write, true) => {
-            Some(TaskType::new(TaskKind::Cdc, Some(CheckMode::Inline)))
-        }
-        _ => None,
-    }
+    } else if supports_standalone_checker(kind, sink_type) {
+        Some(CheckMode::Standalone)
+    } else if supports_inline_checker(kind, sink_type, sink_db_type) {
+        Some(CheckMode::Inline)
+    } else {
+        return None;
+    };
+
+    Some(TaskType::new(kind, check))
 }
