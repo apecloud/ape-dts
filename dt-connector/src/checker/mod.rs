@@ -10,9 +10,9 @@ pub mod struct_checker;
 pub use base_checker::{
     has_null_key, CheckContext, Checker, CheckerTbMeta, DataCheckerHandle, FetchResult,
 };
-pub use mongo_checker::MongoChecker as MongoCheckerHandle;
-pub use mysql_checker::MysqlChecker as MysqlCheckerHandle;
-pub use pg_checker::PgChecker as PgCheckerHandle;
+pub use mongo_checker::MongoChecker;
+pub use mysql_checker::MysqlChecker;
+pub use pg_checker::PgChecker;
 pub use state_store::{CheckerStateRow, CheckerStateStore};
 pub use struct_checker::StructCheckerHandle;
 

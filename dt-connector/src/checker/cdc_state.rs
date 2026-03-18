@@ -257,7 +257,7 @@ impl<C: Checker> DataChecker<C> {
     const DEFAULT_CDC_LOG_MAX_FILE_SIZE: usize = 100 * 1024 * 1024;
     const DEFAULT_CDC_LOG_MAX_ROWS: usize = 1000;
 
-    pub(super) async fn snapshot_and_output(&self) -> anyhow::Result<()> {
+    pub async fn snapshot_and_output(&self) -> anyhow::Result<()> {
         let max_file_size = usize::try_from(self.ctx.cdc_check_log_max_file_size)
             .ok()
             .filter(|v| *v > 0)
@@ -359,7 +359,7 @@ impl<C: Checker> DataChecker<C> {
         Ok(rows)
     }
 
-    pub(super) fn restore_store_from_rows(
+    pub fn restore_store_from_rows(
         &mut self,
         rows: Vec<CheckerStateRow>,
     ) -> anyhow::Result<()> {
@@ -378,7 +378,7 @@ impl<C: Checker> DataChecker<C> {
         Ok(())
     }
 
-    pub(super) async fn load_initial_state(&mut self) -> anyhow::Result<bool> {
+    pub async fn load_initial_state(&mut self) -> anyhow::Result<bool> {
         if let Some(state_store) = &self.ctx.state_store {
             let task_id = &self.task_id;
             let rows = state_store.load_rows(task_id).await.with_context(|| {
@@ -400,7 +400,7 @@ impl<C: Checker> DataChecker<C> {
         Ok(false)
     }
 
-    pub(super) async fn run_recheck(&mut self) -> anyhow::Result<()> {
+    pub async fn run_recheck(&mut self) -> anyhow::Result<()> {
         let rows_for_recheck: Vec<RowData> = self
             .store
             .values()
@@ -431,7 +431,7 @@ impl<C: Checker> DataChecker<C> {
         Ok(())
     }
 
-    pub(super) async fn record_checkpoint(&mut self, position: Position) -> anyhow::Result<()> {
+    pub async fn record_checkpoint(&mut self, position: Position) -> anyhow::Result<()> {
         if matches!(position, Position::None) {
             return Ok(());
         }

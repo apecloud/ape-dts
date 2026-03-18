@@ -9,9 +9,7 @@ use mongodb::{
 };
 use serde_json::Value as JsonValue;
 
-use crate::checker::base_checker::{
-    CheckContext, Checker, CheckerTbMeta, DataCheckerHandle, FetchResult, CHECKER_MAX_QUERY_BATCH,
-};
+use crate::checker::base_checker::{Checker, CheckerTbMeta, FetchResult, CHECKER_MAX_QUERY_BATCH};
 use dt_common::meta::{
     col_value::ColValue,
     mongo::{mongo_constant::MongoConstants, mongo_key::MongoKey},
@@ -108,19 +106,8 @@ impl Checker for MongoChecker {
 }
 
 impl MongoChecker {
-    pub fn spawn(
-        mongo_client: Client,
-        task_id: String,
-        ctx: CheckContext,
-        buffer_size: usize,
-    ) -> DataCheckerHandle {
-        DataCheckerHandle::spawn(
-            Self { mongo_client },
-            task_id,
-            ctx,
-            buffer_size,
-            "MongoChecker",
-        )
+    pub fn new(mongo_client: Client) -> Self {
+        Self { mongo_client }
     }
 
     fn is_supported_mongo_id(id: &Bson) -> bool {
