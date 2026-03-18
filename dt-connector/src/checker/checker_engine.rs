@@ -295,13 +295,13 @@ impl<C: Checker> DataChecker<C> {
         }
     }
 
-    pub(super) fn update_pending_counter(&self) {
+    pub fn update_pending_counter(&self) {
         self.ctx
             .monitor
             .set_counter(CounterType::CheckerPending, self.store.len() as u64);
     }
 
-    pub(super) fn remove_store_entry(&mut self, key: u128) {
+    pub fn remove_store_entry(&mut self, key: u128) {
         if self.store.shift_remove(&key).is_some() {
             self.store_dirty = true;
             self.has_output_snapshot = false;
@@ -355,7 +355,7 @@ impl<C: Checker> DataChecker<C> {
         Ok(())
     }
 
-    pub(super) async fn store_entry(&mut self, key: u128, entry: CheckEntry) {
+    pub async fn store_entry(&mut self, key: u128, entry: CheckEntry) {
         if !self.ctx.is_cdc {
             self.log_entry(&entry);
             self.update_summary_for_entry(&entry).await;
@@ -379,7 +379,7 @@ impl<C: Checker> DataChecker<C> {
         self.update_pending_counter();
     }
 
-    pub(super) async fn flush_store(&mut self) {
+    pub async fn flush_store(&mut self) {
         let entries = std::mem::take(&mut self.store);
         for (_key, entry) in entries {
             self.log_entry(&entry);
@@ -531,7 +531,7 @@ impl<C: Checker> DataChecker<C> {
             }));
     }
 
-    pub(super) async fn process_due_retries(&mut self) -> anyhow::Result<()> {
+    pub async fn process_due_retries(&mut self) -> anyhow::Result<()> {
         if self.retry_queue.is_empty() {
             return Ok(());
         }
@@ -591,7 +591,7 @@ impl<C: Checker> DataChecker<C> {
         Ok(None)
     }
 
-    pub(super) async fn drain_retries(&mut self) -> anyhow::Result<()> {
+    pub async fn drain_retries(&mut self) -> anyhow::Result<()> {
         while !self.retry_queue.is_empty() {
             let next_retry_at = self
                 .retry_queue
@@ -609,11 +609,7 @@ impl<C: Checker> DataChecker<C> {
         Ok(())
     }
 
-    pub(super) async fn check_batch(
-        &mut self,
-        data: &[RowData],
-        batch: bool,
-    ) -> anyhow::Result<()> {
+    pub async fn check_batch(&mut self, data: &[RowData], batch: bool) -> anyhow::Result<()> {
         if data.is_empty() {
             return Ok(());
         }
@@ -627,7 +623,7 @@ impl<C: Checker> DataChecker<C> {
         Ok(())
     }
 
-    pub(super) async fn process_batch(
+    pub async fn process_batch(
         &mut self,
         data: &[RowData],
         is_serial_mode: bool,

@@ -10,8 +10,7 @@ use dt_common::meta::{
 };
 
 use crate::checker::base_checker::{
-    has_null_key, CheckContext, Checker, CheckerTbMeta, DataCheckerHandle, FetchResult,
-    CHECKER_MAX_QUERY_BATCH,
+    has_null_key, Checker, CheckerTbMeta, FetchResult, CHECKER_MAX_QUERY_BATCH,
 };
 use crate::rdb_query_builder::RdbQueryBuilder;
 
@@ -77,22 +76,10 @@ impl Checker for PgChecker {
 }
 
 impl PgChecker {
-    pub fn spawn(
-        conn_pool: Pool<Postgres>,
-        meta_manager: PgMetaManager,
-        task_id: String,
-        ctx: CheckContext,
-        buffer_size: usize,
-    ) -> DataCheckerHandle {
-        DataCheckerHandle::spawn(
-            Self {
-                conn_pool,
-                meta_manager,
-            },
-            task_id,
-            ctx,
-            buffer_size,
-            "PgChecker",
-        )
+    pub fn new(conn_pool: Pool<Postgres>, meta_manager: PgMetaManager) -> Self {
+        Self {
+            conn_pool,
+            meta_manager,
+        }
     }
 }

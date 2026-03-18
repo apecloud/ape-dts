@@ -62,7 +62,7 @@ use dt_connector::{
     checker::base_checker::CheckContext,
     checker::check_log::CheckSummaryLog,
     checker::{
-        CheckerHandle, CheckerStateStore, MongoCheckerHandle, MysqlCheckerHandle, PgCheckerHandle,
+        CheckerHandle, CheckerStateStore, DataCheckerHandle, MongoChecker, MysqlChecker, PgChecker,
         StructCheckerHandle,
     },
     data_marker::DataMarker,
@@ -980,9 +980,8 @@ impl TaskRunner {
                         conn_pool.clone(),
                     )
                     .await?;
-                let checker = MysqlCheckerHandle::spawn(
-                    conn_pool,
-                    meta_manager,
+                let checker = DataCheckerHandle::spawn(
+                    MysqlChecker::new(conn_pool, meta_manager),
                     checker_task_id.clone(),
                     build_check_context(
                         extractor_meta_manager,
@@ -990,6 +989,7 @@ impl TaskRunner {
                         cfg.revise_match_full_row,
                     ),
                     queue_size,
+                    "MysqlChecker",
                 );
                 Ok(Some(CheckerHandle::Data(checker)))
             }
@@ -1008,9 +1008,8 @@ impl TaskRunner {
                 let meta_manager =
                     dt_common::meta::pg::pg_meta_manager::PgMetaManager::new(conn_pool.clone())
                         .await?;
-                let checker = PgCheckerHandle::spawn(
-                    conn_pool,
-                    meta_manager,
+                let checker = DataCheckerHandle::spawn(
+                    PgChecker::new(conn_pool, meta_manager),
                     checker_task_id.clone(),
                     build_check_context(
                         extractor_meta_manager,
@@ -1018,6 +1017,7 @@ impl TaskRunner {
                         cfg.revise_match_full_row,
                     ),
                     queue_size,
+                    "PgChecker",
                 );
                 Ok(Some(CheckerHandle::Data(checker)))
             }
@@ -1038,11 +1038,12 @@ impl TaskRunner {
                     Some(max_connections),
                 )
                 .await?;
-                let checker = MongoCheckerHandle::spawn(
-                    mongo_client,
+                let checker = DataCheckerHandle::spawn(
+                    MongoChecker::new(mongo_client),
                     checker_task_id.clone(),
                     build_check_context(None, reverse_router, false),
                     queue_size,
+                    "MongoChecker",
                 );
                 Ok(Some(CheckerHandle::Data(checker)))
             }

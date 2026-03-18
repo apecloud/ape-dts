@@ -225,10 +225,13 @@ fn supports_standalone_checker(kind: TaskKind, sink_type: &SinkType) -> bool {
 }
 
 fn supports_inline_checker(kind: TaskKind, sink_type: &SinkType, sink_db_type: &DbType) -> bool {
-    matches!(
-        (kind, sink_type),
-        (TaskKind::Snapshot, SinkType::Write) | (TaskKind::Cdc, SinkType::Write)
-    ) && write_sink_supports_inline_checker(sink_db_type)
+    match (kind, sink_type, sink_db_type) {
+        (TaskKind::Snapshot, SinkType::Write, db_type) => {
+            write_sink_supports_inline_checker(db_type)
+        }
+        (TaskKind::Cdc, SinkType::Write, DbType::Mysql | DbType::Pg) => true,
+        _ => false,
+    }
 }
 
 pub fn build_task_type(

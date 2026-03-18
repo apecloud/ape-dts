@@ -14,7 +14,7 @@ mod test {
     #[tokio::test]
     #[serial]
     async fn snapshot_inline_basic_test() {
-        TestBase::run_snapshot_test("pg_to_pg/check/snapshot_inline_basic_test").await;
+        TestBase::run_check_test("pg_to_pg/check/snapshot_inline_basic_test").await;
     }
 
     #[tokio::test]

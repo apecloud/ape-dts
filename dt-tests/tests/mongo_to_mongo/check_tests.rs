@@ -14,38 +14,7 @@ mod test {
     #[tokio::test]
     #[serial]
     async fn snapshot_inline_basic_test() {
-        TestBase::run_mongo_snapshot_test("mongo_to_mongo/check/snapshot_inline_basic_test").await;
-    }
-
-    #[tokio::test]
-    #[serial]
-    async fn cdc_check_basic_test() {
-        TestBase::run_mongo_cdc_check_test("mongo_to_mongo/check/cdc_check_basic_test", 3000, 3000)
-            .await;
-    }
-
-    #[tokio::test]
-    #[serial]
-    async fn cdc_check_large_data_test() {
-        TestBase::run_mongo_cdc_check_large_data_test(
-            "mongo_to_mongo/check/cdc_check_large_data_test",
-            5000,
-            30000,
-            "check_large_test",
-            1000,
-        )
-        .await;
-    }
-
-    #[tokio::test]
-    #[serial]
-    async fn cdc_check_unhashable_id_test() {
-        TestBase::run_mongo_cdc_check_test(
-            "mongo_to_mongo/check/cdc_check_unhashable_id_test",
-            3000,
-            3000,
-        )
-        .await;
+        TestBase::run_mongo_check_test("mongo_to_mongo/check/snapshot_inline_basic_test").await;
     }
 
     #[tokio::test]
