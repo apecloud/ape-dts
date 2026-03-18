@@ -65,6 +65,24 @@ impl PgStructExtractor {
             filter: Some(self.filter.to_owned()),
         };
 
+        // User-Defined Type
+        if do_global_structs && !self.filter.filter_structure(&StructureType::Udt) {
+            let udt_statements = pg_fetcher.get_udt_statements().await?;
+            for statement in udt_statements {
+                self.push_dt_data(StructStatement::PgCreateUdt(statement))
+                    .await?;
+            }
+        }
+
+        // User-Defined Function
+        if do_global_structs && !self.filter.filter_structure(&StructureType::Udf) {
+            let udf_statements = pg_fetcher.get_udf_statements().await?;
+            for statement in udf_statements {
+                self.push_dt_data(StructStatement::PgCreateUdf(statement))
+                    .await?;
+            }
+        }
+
         // schemas
         for schema_statement in pg_fetcher.get_create_schema_statements("").await? {
             self.push_dt_data(StructStatement::PgCreateSchema(schema_statement))
