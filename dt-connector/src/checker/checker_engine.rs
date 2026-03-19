@@ -345,7 +345,7 @@ impl<C: Checker> DataChecker<C> {
     pub fn remove_store_entry(&mut self, key: u128) {
         if self.store.shift_remove(&key).is_some() {
             self.store_dirty = true;
-            self.has_output_snapshot = false;
+            self.snapshot_dirty = true;
             self.update_pending_counter();
         }
     }
@@ -404,7 +404,7 @@ impl<C: Checker> DataChecker<C> {
         }
 
         self.store_dirty = true;
-        self.has_output_snapshot = false;
+        self.snapshot_dirty = true;
         if entry.is_miss {
             self.ctx
                 .monitor
@@ -708,6 +708,9 @@ impl<C: Checker> DataChecker<C> {
         let mut rts = LimitedQueue::new(1);
         rts.push((start_time.elapsed().as_millis() as u64, 1));
         self.ctx.summary.skip_count += total_skip_count;
+        if total_skip_count > 0 {
+            self.snapshot_dirty = true;
+        }
         self.enqueue_retry_rows(retry_rows);
 
         let monitor = self.ctx.monitor.clone();

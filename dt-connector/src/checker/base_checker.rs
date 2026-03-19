@@ -438,7 +438,7 @@ struct DataChecker<C: Checker> {
     name: String,
     store_dirty: bool,
     last_checkpoint_position: Option<Position>,
-    has_output_snapshot: bool,
+    snapshot_dirty: bool,
 }
 
 impl<C: Checker> DataChecker<C> {
@@ -460,7 +460,7 @@ impl<C: Checker> DataChecker<C> {
             name: name.to_string(),
             store_dirty: false,
             last_checkpoint_position: None,
-            has_output_snapshot: false,
+            snapshot_dirty: true,
         }
     }
 
@@ -538,26 +538,43 @@ impl<C: Checker> DataChecker<C> {
     }
 
     async fn shutdown(&mut self) -> anyhow::Result<()> {
-        if self.ctx.is_cdc {
-            if self.store_dirty {
-                if let Some(position) = self.last_checkpoint_position.clone() {
-                    self.record_checkpoint(position).await.with_context(|| {
-                        format!("Checker [{}] failed to persist final checkpoint", self.name)
-                    })?;
-                    self.store_dirty = false;
-                }
-            }
-            if let Err(err) = self.snapshot_and_output().await {
-                log_error!("Checker [{}] final cdc output failed: {}", self.name, err);
-            }
-            self.store.clear();
-            self.update_pending_counter();
+        let shutdown_result = if self.ctx.is_cdc {
+            self.shutdown_cdc().await
         } else {
-            self.drain_retries().await?;
-            self.flush_store().await;
+            self.shutdown_non_cdc().await
+        };
+        let summary_result = self.finish_summary_and_meta().await;
+        let close_result = self.checker.close().await;
+
+        shutdown_result?;
+        summary_result?;
+        close_result?;
+        Ok(())
+    }
+
+    async fn shutdown_cdc(&mut self) -> anyhow::Result<()> {
+        if self.store_dirty {
+            if let Some(position) = self.last_checkpoint_position.clone() {
+                self.record_checkpoint(position).await.with_context(|| {
+                    format!("Checker [{}] failed to persist final checkpoint", self.name)
+                })?;
+                self.store_dirty = false;
+            }
         }
-        self.finish_summary_and_meta().await?;
-        self.checker.close().await
+
+        let output_result = self
+            .snapshot_and_output()
+            .await
+            .with_context(|| format!("Checker [{}] final cdc output failed", self.name));
+        self.store.clear();
+        self.update_pending_counter();
+        output_result
+    }
+
+    async fn shutdown_non_cdc(&mut self) -> anyhow::Result<()> {
+        self.drain_retries().await?;
+        self.flush_store().await;
+        Ok(())
     }
 
     async fn finish_summary_and_meta(&mut self) -> anyhow::Result<()> {
@@ -589,12 +606,12 @@ impl<C: Checker> DataChecker<C> {
     }
 
     async fn maybe_snapshot_and_output(&mut self) {
-        if self.has_output_snapshot {
+        if !self.snapshot_dirty {
             return;
         }
         match self.snapshot_and_output().await {
             Ok(()) => {
-                self.has_output_snapshot = true;
+                self.snapshot_dirty = false;
             }
             Err(err) => log_error!("Checker [{}] cdc output failed: {}", self.name, err),
         }
