@@ -184,23 +184,19 @@ impl RdbCheckTestRunner {
         let mut checker_conn_pool_pg = None;
 
         if let Some(checker) = &base.config.checker {
-            let checker_db_type = checker.db_type.as_ref();
-            let checker_url = checker.url.as_ref();
-            let checker_auth = checker.connection_auth.as_ref();
             let sink_target_url = base.config.sink_target().map(|target| target.url);
-            let is_override = match (sink_target_url.as_ref(), checker_url) {
-                (Some(sink_url), Some(check_url)) => check_url != sink_url,
-                (None, Some(_)) => true,
-                _ => false,
+            let is_override = match sink_target_url.as_ref() {
+                Some(sink_url) => &checker.url != sink_url,
+                None => true,
             };
 
             if is_override {
-                match (checker_db_type, checker_url, checker_auth) {
-                    (Some(DbType::Mysql), Some(url), Some(auth)) => {
+                match checker.db_type {
+                    DbType::Mysql => {
                         checker_conn_pool_mysql = Some(
                             TaskUtil::create_mysql_conn_pool(
-                                url,
-                                auth,
+                                &checker.url,
+                                &checker.connection_auth,
                                 5,
                                 false,
                                 Some(vec!["SET FOREIGN_KEY_CHECKS=0"]),
@@ -208,9 +204,17 @@ impl RdbCheckTestRunner {
                             .await?,
                         );
                     }
-                    (Some(DbType::Pg), Some(url), Some(auth)) => {
-                        checker_conn_pool_pg =
-                            Some(TaskUtil::create_pg_conn_pool(url, auth, 5, false, true).await?);
+                    DbType::Pg => {
+                        checker_conn_pool_pg = Some(
+                            TaskUtil::create_pg_conn_pool(
+                                &checker.url,
+                                &checker.connection_auth,
+                                5,
+                                false,
+                                true,
+                            )
+                            .await?,
+                        );
                     }
                     _ => {}
                 }

@@ -165,42 +165,9 @@ impl ColValue {
                     false
                 }
             }
-            // PostgreSQL inet type normalization: 192.168.1.100 == 192.168.1.100/32
-            (ColValue::String(v1), ColValue::String(v2)) => {
-                if v1 == v2 {
-                    true
-                } else if Self::looks_like_inet(v1) || Self::looks_like_inet(v2) {
-                    Self::normalize_inet(v1) == Self::normalize_inet(v2)
-                } else {
-                    false
-                }
-            }
+            (ColValue::String(v1), ColValue::String(v2)) => v1 == v2,
             _ => self == other,
         }
-    }
-
-    /// Normalize PostgreSQL inet type values for comparison
-    /// e.g., "192.168.1.100" and "192.168.1.100/32" should be considered equal
-    fn normalize_inet(s: &str) -> &str {
-        s.strip_suffix("/32").unwrap_or(s)
-    }
-
-    /// Check if a string looks like an IPv4 or IPv6 address (optionally with /prefix)
-    fn looks_like_inet(s: &str) -> bool {
-        let base = s.split('/').next().unwrap_or(s);
-        // IPv4: contains dots and all parts are numeric
-        if base.contains('.') {
-            return base
-                .split('.')
-                .all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()));
-        }
-        // IPv6: contains colons
-        if base.contains(':') {
-            return base
-                .split(':')
-                .all(|p| p.is_empty() || p.bytes().all(|b| b.is_ascii_hexdigit()));
-        }
-        false
     }
 
     pub fn hash_code(&self) -> anyhow::Result<u64> {
@@ -469,6 +436,10 @@ mod tests {
         assert!(ColValue::String("abc".into()).is_same_value(&ColValue::RawString(b"abc".to_vec())));
         assert!(!ColValue::Blob(b"abc".to_vec()).is_same_value(&ColValue::String("abc".into())));
         assert!(!ColValue::String("abc".into()).is_same_value(&ColValue::Blob(b"abc".to_vec())));
+        assert!(
+            !ColValue::String("1.2.3.4".into())
+                .is_same_value(&ColValue::String("1.2.3.4/32".into()))
+        );
     }
 
     #[test]

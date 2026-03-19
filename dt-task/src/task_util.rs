@@ -228,33 +228,31 @@ impl TaskUtil {
         }
 
         if let Some(checker) = &config.checker {
-            if let (Some(db_type), Some(url), Some(connection_auth)) = (
-                checker.db_type.clone(),
-                checker.url.clone(),
-                checker.connection_auth.clone(),
-            ) {
-                let checker_meta_manager = match db_type {
-                    DbType::Mysql => {
-                        let mysql_meta_manager = Self::create_mysql_meta_manager(
-                            &url,
-                            &connection_auth,
-                            log_level,
-                            DbType::Mysql,
-                            None,
-                            None,
-                        )
-                        .await?;
-                        Some(RdbMetaManager::from_mysql(mysql_meta_manager))
-                    }
-                    DbType::Pg => {
-                        let pg_meta_manager =
-                            Self::create_pg_meta_manager(&url, &connection_auth, log_level).await?;
-                        Some(RdbMetaManager::from_pg(pg_meta_manager))
-                    }
-                    _ => None,
-                };
-                return Ok(checker_meta_manager);
-            }
+            let checker_meta_manager = match checker.db_type {
+                DbType::Mysql => {
+                    let mysql_meta_manager = Self::create_mysql_meta_manager(
+                        &checker.url,
+                        &checker.connection_auth,
+                        log_level,
+                        DbType::Mysql,
+                        None,
+                        None,
+                    )
+                    .await?;
+                    Some(RdbMetaManager::from_mysql(mysql_meta_manager))
+                }
+                DbType::Pg => {
+                    let pg_meta_manager = Self::create_pg_meta_manager(
+                        &checker.url,
+                        &checker.connection_auth,
+                        log_level,
+                    )
+                    .await?;
+                    Some(RdbMetaManager::from_pg(pg_meta_manager))
+                }
+                _ => None,
+            };
+            return Ok(checker_meta_manager);
         }
 
         Ok(None)

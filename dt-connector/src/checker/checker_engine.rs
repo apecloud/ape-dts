@@ -1,4 +1,5 @@
 use super::*;
+use dt_common::meta::pg::pg_value_type::PgValueType;
 use dt_common::monitor::counter_type::CounterType;
 
 impl<C: Checker> DataChecker<C> {
@@ -138,7 +139,8 @@ impl<C: Checker> DataChecker<C> {
             if self.ctx.is_cdc || self.ctx.max_retries == 0 {
                 self.reconcile_row_inconsistency(key, src_row_data, dst_row_data.as_ref(), tb_meta)
                     .await?;
-            } else if Self::compare_src_dst(src_row_data, dst_row_data.as_ref())?.is_some() {
+            } else if Self::compare_src_dst(src_row_data, dst_row_data.as_ref(), tb_meta)?.is_some()
+            {
                 retry_rows.push((*src_row_data).clone());
             }
         }
@@ -149,6 +151,7 @@ impl<C: Checker> DataChecker<C> {
     fn compare_src_dst(
         src_row: &RowData,
         dst_row: Option<&RowData>,
+        tb_meta: &CheckerTbMeta,
     ) -> anyhow::Result<Option<CheckInconsistency>> {
         if src_row.row_type == RowType::Delete {
             return Ok(dst_row
@@ -157,7 +160,7 @@ impl<C: Checker> DataChecker<C> {
         }
         match dst_row {
             Some(dst_row) => {
-                let diffs = Self::compare_row_data(src_row, dst_row)?;
+                let diffs = Self::compare_row_data(src_row, dst_row, tb_meta)?;
                 Ok((!diffs.is_empty()).then_some(CheckInconsistency::Diff(diffs)))
             }
             None => Ok(Some(CheckInconsistency::Miss)),
@@ -167,6 +170,7 @@ impl<C: Checker> DataChecker<C> {
     fn compare_row_data(
         src_row_data: &RowData,
         dst_row_data: &RowData,
+        tb_meta: &CheckerTbMeta,
     ) -> anyhow::Result<HashMap<String, DiffColValue>> {
         let src = src_row_data
             .after
@@ -183,7 +187,7 @@ impl<C: Checker> DataChecker<C> {
                 continue;
             }
             let maybe_diff = match dst.get(col) {
-                Some(dst_val) if src_val.is_same_value(dst_val) => None,
+                Some(dst_val) if Self::is_same_col_value(col, src_val, dst_val, tb_meta)? => None,
                 Some(dst_val) => {
                     let src_type = src_val.type_name();
                     let dst_type = dst_val.type_name();
@@ -221,6 +225,43 @@ impl<C: Checker> DataChecker<C> {
         }
 
         Ok(diff_col_values)
+    }
+
+    fn is_same_col_value(
+        col: &str,
+        src_val: &ColValue,
+        dst_val: &ColValue,
+        tb_meta: &CheckerTbMeta,
+    ) -> anyhow::Result<bool> {
+        if src_val.is_same_value(dst_val) {
+            return Ok(true);
+        }
+
+        let is_pg_network_col = matches!(
+            tb_meta,
+            CheckerTbMeta::Pg(meta)
+                if matches!(
+                    meta.get_col_type(col)?.value_type,
+                    PgValueType::INET | PgValueType::CIDR
+                )
+        );
+        if !is_pg_network_col {
+            return Ok(false);
+        }
+
+        Ok(match (src_val, dst_val) {
+            (ColValue::String(v1), ColValue::String(v2)) => {
+                Self::normalize_pg_network_text(v1) == Self::normalize_pg_network_text(v2)
+            }
+            _ => false,
+        })
+    }
+
+    fn normalize_pg_network_text(value: &str) -> &str {
+        value
+            .strip_suffix("/32")
+            .or_else(|| value.strip_suffix("/128"))
+            .unwrap_or(value)
     }
 
     fn lookup_hash_code(row_data: &RowData, tb_meta: &RdbTbMeta) -> anyhow::Result<u128> {
@@ -342,7 +383,7 @@ impl<C: Checker> DataChecker<C> {
         dst_row_data: Option<&RowData>,
         tb_meta: &CheckerTbMeta,
     ) -> anyhow::Result<()> {
-        if let Some(check_result) = Self::compare_src_dst(src_row_data, dst_row_data)? {
+        if let Some(check_result) = Self::compare_src_dst(src_row_data, dst_row_data, tb_meta)? {
             let entry = Self::build_check_entry(
                 check_result,
                 src_row_data,
@@ -579,7 +620,7 @@ impl<C: Checker> DataChecker<C> {
         let dst_row = Self::select_dst_row(&item.row, tb_meta.as_ref(), fetch_result.dst_rows)?;
 
         if item.retries_left > 1 {
-            if Self::compare_src_dst(&item.row, dst_row.as_ref())?.is_none() {
+            if Self::compare_src_dst(&item.row, dst_row.as_ref(), tb_meta.as_ref())?.is_none() {
                 return Ok(None);
             }
             item.retries_left -= 1;
@@ -686,6 +727,7 @@ impl<C: Checker> DataChecker<C> {
 mod tests {
     use super::*;
     use async_trait::async_trait;
+    use dt_common::meta::pg::pg_col_type::PgColType;
 
     struct DummyChecker;
 
@@ -720,5 +762,62 @@ mod tests {
             .expect("nullable composite key should still hash");
 
         assert_ne!(hash1, hash2);
+    }
+
+    fn build_row_with_after(col: &str, value: ColValue) -> RowData {
+        RowData::new(
+            "s1".to_string(),
+            "t1".to_string(),
+            RowType::Insert,
+            None,
+            Some(HashMap::from([(col.to_string(), value)])),
+        )
+    }
+
+    fn build_pg_checker_tb_meta(col: &str, alias: &str, value_type: PgValueType) -> CheckerTbMeta {
+        CheckerTbMeta::Pg(dt_common::meta::pg::pg_tb_meta::PgTbMeta {
+            basic: RdbTbMeta {
+                schema: "s1".to_string(),
+                tb: "t1".to_string(),
+                cols: vec![col.to_string()],
+                ..Default::default()
+            },
+            oid: 1,
+            col_type_map: HashMap::from([(
+                col.to_string(),
+                PgColType {
+                    value_type,
+                    name: alias.to_string(),
+                    alias: alias.to_string(),
+                    oid: 1,
+                    parent_oid: 0,
+                    element_oid: 0,
+                    category: "N".to_string(),
+                    enum_values: None,
+                    schema_name: "pg_catalog".to_string(),
+                },
+            )]),
+        })
+    }
+
+    #[test]
+    fn pg_inet_column_normalizes_default_host_prefix() {
+        let src = build_row_with_after("ip", ColValue::String("1.2.3.4".to_string()));
+        let dst = build_row_with_after("ip", ColValue::String("1.2.3.4/32".to_string()));
+        let tb_meta = build_pg_checker_tb_meta("ip", "inet", PgValueType::INET);
+
+        let diffs = DataChecker::<DummyChecker>::compare_row_data(&src, &dst, &tb_meta).unwrap();
+        assert!(diffs.is_empty());
+    }
+
+    #[test]
+    fn pg_text_column_does_not_normalize_inet_looking_strings() {
+        let src = build_row_with_after("note", ColValue::String("1.2.3.4".to_string()));
+        let dst = build_row_with_after("note", ColValue::String("1.2.3.4/32".to_string()));
+        let tb_meta = build_pg_checker_tb_meta("note", "text", PgValueType::String);
+
+        let diffs = DataChecker::<DummyChecker>::compare_row_data(&src, &dst, &tb_meta).unwrap();
+        assert_eq!(diffs.len(), 1);
+        assert!(diffs.contains_key("note"));
     }
 }

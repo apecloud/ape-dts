@@ -87,15 +87,17 @@ impl MongoTestRunner {
 
         if dst_mongo_client.is_none() {
             if let Some(checker) = config.checker.as_ref() {
-                if matches!(checker.db_type, Some(DbType::Mongo)) {
-                    if let Some(url) = checker.url.as_ref() {
-                        let connection_auth = checker.connection_auth.clone().unwrap_or_default();
-                        dst_mongo_client = Some(
-                            TaskUtil::create_mongo_client(url, &connection_auth, "", None)
-                                .await
-                                .unwrap(),
-                        );
-                    }
+                if matches!(checker.db_type, DbType::Mongo) {
+                    dst_mongo_client = Some(
+                        TaskUtil::create_mongo_client(
+                            &checker.url,
+                            &checker.connection_auth,
+                            "",
+                            None,
+                        )
+                        .await
+                        .unwrap(),
+                    );
                 }
             }
         }

@@ -79,12 +79,12 @@ url=mysql://user1:abc%25%24%23%3F%40@127.0.0.1:3307?ssl-mode=disabled
 - checker 仅支持 `[pipeline] pipeline_type=basic`。
 - struct 任务只支持独立校验。若为 struct 任务启用 `[checker]`，请使用
   `sink_type=dummy` 或直接省略 `[sinker]`。
-- 当 `[sinker] sink_type=write` 时，只有 snapshot / CDC 且 `[sinker].db_type` 为
-  `mysql`、`pg`、`mongo` 的写入链路才会实际调用 `check_sync`。其他 write sinker 不会接入
-  checker，ape-dts 会在配置加载阶段直接拒绝启用 `[checker]`。
+- 当 `[sinker] sink_type=write` 时，snapshot 的写入后内联校验仅支持 `[sinker].db_type`
+  为 `mysql`、`pg`、`mongo` 的写入链路。
+- CDC+check 当前仅支持 `[extractor] extract_type=cdc`、`[sinker] sink_type=write`，
+  且 `[sinker].db_type` 为 `mysql` 或 `pg` 的场景。
 - 在 CDC+check 模式下，必须配置 `[resumer] resume_type=from_target` 或 `from_db` 来持久化
-  checker 状态。checker state store 后端仅支持 MySQL/PostgreSQL，因此非 MySQL/PG 的目标端应使用
-  `resume_type=from_db`。
+  checker 状态。
 - 在 CDC+check 模式（`extract_type=cdc` 且 `sink_type=write`）下，checker 批量大小跟随 `[sinker].batch_size`。
 - 在 CDC+check 模式下，需在 `[checker]` 中显式配置校验目标，checker 才会启用。
 - 当 `check_log_dir` 为空时，统一使用 `runtime.log_dir/check` 作为 checker 日志目录（包含 CDC 校验输出）。

@@ -257,7 +257,7 @@ impl<C: Checker> DataChecker<C> {
     const DEFAULT_CDC_LOG_MAX_FILE_SIZE: usize = 100 * 1024 * 1024;
     const DEFAULT_CDC_LOG_MAX_ROWS: usize = 1000;
 
-    pub async fn snapshot_and_output(&self) -> anyhow::Result<()> {
+    pub async fn snapshot_and_output(&mut self) -> anyhow::Result<()> {
         let max_file_size = usize::try_from(self.ctx.cdc_check_log_max_file_size)
             .ok()
             .filter(|v| *v > 0)
@@ -310,6 +310,7 @@ impl<C: Checker> DataChecker<C> {
             tables: table_counts,
             sql_count: (!sql_lines.is_empty()).then_some(sql_lines.len()),
         };
+        self.ctx.summary = summary.clone();
         let summary_buf = serde_json::to_vec(&summary)?;
 
         Self::write_to_disk(
@@ -359,10 +360,7 @@ impl<C: Checker> DataChecker<C> {
         Ok(rows)
     }
 
-    pub fn restore_store_from_rows(
-        &mut self,
-        rows: Vec<CheckerStateRow>,
-    ) -> anyhow::Result<()> {
+    pub fn restore_store_from_rows(&mut self, rows: Vec<CheckerStateRow>) -> anyhow::Result<()> {
         self.store.clear();
         for row in rows {
             let entry =

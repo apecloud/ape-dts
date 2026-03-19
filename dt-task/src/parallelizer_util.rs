@@ -73,7 +73,7 @@ impl ParallelizerUtil {
 
             ParallelType::RdbCheck => {
                 let target_db_type = config
-                    .destination_target()?
+                    .destination_target()
                     .map(|target| target.db_type)
                     .unwrap_or(config.sinker_basic.db_type.clone());
                 let merger = match target_db_type {

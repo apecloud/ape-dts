@@ -82,12 +82,12 @@ Notes:
 - Checker only supports `[pipeline] pipeline_type=basic`.
 - Struct tasks only support standalone check. If `[checker]` is enabled for struct tasks, use
   `sink_type=dummy` or omit `[sinker]`.
-- Inline checker with `[sinker] sink_type=write` is supported for snapshot / CDC tasks only when
-  `[sinker].db_type` is `mysql`, `pg`, or `mongo`. Other write sinkers do not call
-  `check_sync`, so ape-dts rejects `[checker]` during config loading.
+- Inline checker with `[sinker] sink_type=write` is supported for snapshot tasks only when
+  `[sinker].db_type` is `mysql`, `pg`, or `mongo`.
+- CDC+check is currently supported only when `[extractor] extract_type=cdc`,
+  `[sinker] sink_type=write`, and `[sinker].db_type` is `mysql` or `pg`.
 - In CDC+check mode, `[resumer] resume_type=from_target` or `from_db` is required to persist
-  checker state. The checker state store backend supports MySQL/PostgreSQL only, so non-MySQL/PG
-  sink targets should use `resume_type=from_db`.
+  checker state.
 - In CDC+check mode (`extract_type=cdc`, `sink_type=write`), configuring `[checker]` with an explicit target enables the checker and makes its batch size follow `[sinker].batch_size`.
 - When `check_log_dir` is empty, `runtime.log_dir/check` is used consistently for checker logs (including CDC check outputs).
 - In CDC+check mode, periodic check snapshots are always written locally under `check_log_dir`; `cdc_check_log_s3` controls only S3 upload.
