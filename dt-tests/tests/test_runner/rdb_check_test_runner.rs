@@ -184,11 +184,15 @@ impl RdbCheckTestRunner {
         let mut checker_conn_pool_pg = None;
 
         if let Some(checker) = &base.config.checker {
-            let sink_target_url = base.config.sink_target().map(|target| target.url);
-            let is_override = match sink_target_url.as_ref() {
-                Some(sink_url) => &checker.url != sink_url,
-                None => true,
-            };
+            let is_override = base
+                .config
+                .sink_target()
+                .map(|target| {
+                    target.db_type != checker.db_type
+                        || target.url != checker.url
+                        || target.connection_auth != checker.connection_auth
+                })
+                .unwrap_or(true);
 
             if is_override {
                 match checker.db_type {
