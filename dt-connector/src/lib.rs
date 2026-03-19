@@ -2,7 +2,7 @@
 #![allow(clippy::needless_range_loop)]
 #![allow(clippy::comparison_chain)]
 
-pub mod check_log;
+pub mod checker;
 pub mod conn_util;
 pub mod data_marker;
 pub mod extractor;
@@ -12,12 +12,11 @@ pub mod rdb_router;
 pub mod sinker;
 
 use async_trait::async_trait;
-use check_log::check_log::CheckLog;
+use checker::check_log::CheckLog;
 use dt_common::meta::{
     dcl_meta::dcl_data::DclData, ddl_meta::ddl_data::DdlData, dt_data::DtItem, row_data::RowData,
     struct_meta::struct_data::StructData,
 };
-
 #[async_trait]
 pub trait Sinker {
     async fn sink_dml(&mut self, mut _data: Vec<RowData>, _batch: bool) -> anyhow::Result<()> {

@@ -8,6 +8,11 @@
 - Mongo：源库需为 ReplicaSet；
 - 详情请参考 [测试环境搭建](../../../dt-tests/README_ZH.md)。
 
+## CDC + Checker
+
+要校验 CDC 落库后的数据，可在 CDC 任务配置中开启 `[checker]`。配置与限制请参考 [数据校验](../snapshot/check.md)。
+`[checker]` 必须显式声明自己的目标端，不再隐式复用 `[sinker]` 的目标。
+
 # 示例: MySQL -> MySQL
 
 参考 [任务模版](../../templates/mysql_to_mysql.md) 和 [教程](../../en/tutorial/mysql_to_mysql.md)

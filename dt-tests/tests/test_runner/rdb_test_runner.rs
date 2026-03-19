@@ -68,12 +68,19 @@ impl RdbTestRunner {
         let mut dst_conn_pool_pg = None;
 
         let config = TaskConfig::new(&base.task_config_file).unwrap();
-        let src_db_type = &config.extractor_basic.db_type;
-        let dst_db_type = &config.sinker_basic.db_type;
-        let src_url = &config.extractor_basic.url;
-        let dst_url = &config.sinker_basic.url;
-        let src_connection_auth = &config.extractor_basic.connection_auth;
-        let dst_connection_auth = &config.sinker_basic.connection_auth;
+        let src_db_type = config.extractor_basic.db_type.clone();
+        let src_url = config.extractor_basic.url.clone();
+        let src_connection_auth = config.extractor_basic.connection_auth.clone();
+
+        let dst_target = config.destination_target();
+        let mut dst_db_type = config.sinker_basic.db_type.clone();
+        let mut dst_url = config.sinker_basic.url.clone();
+        let mut dst_connection_auth = config.sinker_basic.connection_auth.clone();
+        if let Some(target) = dst_target {
+            dst_db_type = target.db_type;
+            dst_url = target.url;
+            dst_connection_auth = target.connection_auth;
+        }
 
         // generate mock sqls
         let mut unordered_compare = false;
@@ -94,12 +101,12 @@ impl RdbTestRunner {
 
         let mysql_conn_settings = Some(vec!["SET FOREIGN_KEY_CHECKS=0"]);
 
-        match src_db_type {
+        match &src_db_type {
             DbType::Mysql => {
                 src_conn_pool_mysql = Some(
                     TaskUtil::create_mysql_conn_pool(
-                        src_url,
-                        src_connection_auth,
+                        &src_url,
+                        &src_connection_auth,
                         5,
                         false,
                         mysql_conn_settings.clone(),
@@ -109,7 +116,7 @@ impl RdbTestRunner {
             }
             DbType::Pg => {
                 src_conn_pool_pg = Some(
-                    TaskUtil::create_pg_conn_pool(src_url, src_connection_auth, 5, false, true)
+                    TaskUtil::create_pg_conn_pool(&src_url, &src_connection_auth, 5, false, true)
                         .await?,
                 );
             }
@@ -117,7 +124,7 @@ impl RdbTestRunner {
         }
 
         if !dst_url.is_empty() {
-            match dst_db_type {
+            match &dst_db_type {
                 DbType::Mysql
                 | DbType::Foxlake
                 | DbType::StarRocks
@@ -125,8 +132,8 @@ impl RdbTestRunner {
                 | DbType::Tidb => {
                     dst_conn_pool_mysql = Some(
                         TaskUtil::create_mysql_conn_pool(
-                            dst_url,
-                            dst_connection_auth,
+                            &dst_url,
+                            &dst_connection_auth,
                             5,
                             false,
                             mysql_conn_settings.clone(),
@@ -136,8 +143,14 @@ impl RdbTestRunner {
                 }
                 DbType::Pg => {
                     dst_conn_pool_pg = Some(
-                        TaskUtil::create_pg_conn_pool(dst_url, dst_connection_auth, 5, false, true)
-                            .await?,
+                        TaskUtil::create_pg_conn_pool(
+                            &dst_url,
+                            &dst_connection_auth,
+                            5,
+                            false,
+                            true,
+                        )
+                        .await?,
                     );
                 }
                 _ => {}
@@ -145,8 +158,8 @@ impl RdbTestRunner {
         }
 
         let config = TaskConfig::new(&base.task_config_file).unwrap();
-        let router = RdbRouter::from_config(&config.router, dst_db_type).unwrap();
-        let filter = RdbFilter::from_config(&config.filter, dst_db_type).unwrap();
+        let router = RdbRouter::from_config(&config.router, &dst_db_type).unwrap();
+        let filter = RdbFilter::from_config(&config.filter, &dst_db_type).unwrap();
         let meta_center_pool_mysql = match &config.meta_center {
             Some(MetaCenterConfig::MySqlDbEngine {
                 url,
@@ -332,7 +345,7 @@ impl RdbTestRunner {
             }
 
             if line.starts_with("--") {
-                let parts: Vec<&str> = line[2..].trim().split('/').collect();
+                let parts: Vec<&str> = line.strip_prefix("--").unwrap().trim().split('/').collect();
                 let current_user = parts[0].trim().to_string();
                 let current_pwd = parts[1].trim().to_string();
 
@@ -343,7 +356,11 @@ impl RdbTestRunner {
                     old_pool.close().await;
                 }
 
-                let url = &self.config.sinker_basic.url;
+                let dst_target = self
+                    .config
+                    .destination_target()
+                    .expect("destination target should exist");
+                let url = &dst_target.url;
                 let conn_str = url.replace(
                     &url[url.find("://").unwrap() + 3..url.find('@').unwrap()],
                     &format!("{}:{}", current_user, current_pwd),
@@ -357,8 +374,7 @@ impl RdbTestRunner {
                         }
                         Err(e) => {
                             if expect_success {
-                                assert!(
-                                    false,
+                                panic!(
                                     "MySQL pool connect failed: {} with user={}, password={}, but expect success",
                                     e, current_user, current_pwd
                                 );
@@ -373,8 +389,7 @@ impl RdbTestRunner {
                         }
                         Err(e) => {
                             if expect_success {
-                                assert!(
-                                    false,
+                                panic!(
                                     "PostgreSQL pool connect failed: {} with user={}, password={}, but expect success",
                                     e, current_user, current_pwd
                                 );
@@ -404,24 +419,22 @@ impl RdbTestRunner {
                         );
                     }
                 }
-            } else {
-                if let Some(ref pool) = pg_pool {
-                    let query = sqlx::query(line);
-                    let result = query.execute(pool).await;
+            } else if let Some(ref pool) = pg_pool {
+                let query = sqlx::query(line);
+                let result = query.execute(pool).await;
 
-                    if expect_success {
-                        assert!(
-                            result.is_ok(),
-                            "Expected success but got error: {:?}",
-                            result.err()
-                        );
-                    } else {
-                        assert!(
-                            result.is_err(),
-                            "Expected error but got success, sql: {}",
-                            line
-                        );
-                    }
+                if expect_success {
+                    assert!(
+                        result.is_ok(),
+                        "Expected success but got error: {:?}",
+                        result.err()
+                    );
+                } else {
+                    assert!(
+                        result.is_err(),
+                        "Expected error but got success, sql: {}",
+                        line
+                    );
                 }
             }
         }
@@ -1206,7 +1219,10 @@ impl RdbTestRunner {
         if from == SRC {
             config.extractor_basic.db_type
         } else {
-            config.sinker_basic.db_type
+            config
+                .destination_target()
+                .map(|target| target.db_type)
+                .unwrap_or(config.sinker_basic.db_type)
         }
     }
 

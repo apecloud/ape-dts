@@ -7,7 +7,7 @@ use crate::config::ini_loader::IniLoader;
 const BASIC_AUTH_USERNAME_KEY: &str = "username";
 const BASIC_AUTH_PASSWORD_KEY: &str = "password";
 
-#[derive(Clone, Debug, Default, Hash)]
+#[derive(Clone, Debug, Default, Hash, PartialEq, Eq)]
 pub enum ConnectionAuthConfig {
     #[default]
     NoAuth,

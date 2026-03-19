@@ -149,19 +149,44 @@ impl ColValue {
                     v1 == v2
                 }
             }
+            // MySQL Binlog VARCHAR/CHAR/TEXT->RawString same as String
+            (ColValue::RawString(v1), ColValue::String(v2)) => {
+                if let Ok(s) = String::from_utf8(v1.clone()) {
+                    &s == v2
+                } else {
+                    false
+                }
+            }
+            (ColValue::String(v1), ColValue::RawString(v2)) => {
+                if let Ok(s) = String::from_utf8(v2.clone()) {
+                    v1 == &s
+                } else {
+                    false
+                }
+            }
+            (ColValue::String(v1), ColValue::String(v2)) => v1 == v2,
             _ => self == other,
         }
     }
 
-    pub fn hash_code(&self) -> u64 {
-        match self {
-            ColValue::None => 0,
-            _ => {
-                let mut hasher = DefaultHasher::new();
-                self.to_option_string().hash(&mut hasher);
-                hasher.finish()
+    pub fn hash_code(&self) -> anyhow::Result<u64> {
+        if let ColValue::None = self {
+            return Ok(0);
+        }
+        if let ColValue::MongoDoc(doc) = self {
+            // Reject nested Document/Array in _id as they're not reliably hashable
+            for (key, value) in doc.iter() {
+                if matches!(value, Bson::Document(_) | Bson::Array(_)) {
+                    bail!(
+                        "MongoDB _id contains unhashable type at key '{}': use primitive types",
+                        key
+                    );
+                }
             }
         }
+        let mut hasher = DefaultHasher::new();
+        self.to_option_string().hash(&mut hasher);
+        Ok(hasher.finish())
     }
 
     pub fn type_name(&self) -> &'static str {
@@ -399,6 +424,12 @@ mod tests {
         assert!(v2.is_same_value(&ColValue::Double(f64::NAN)));
         assert!(v3.is_same_value(&ColValue::None));
         assert!(v4.is_same_value(&ColValue::Long(7)));
+        assert!(ColValue::RawString(b"abc".to_vec()).is_same_value(&ColValue::String("abc".into())));
+        assert!(ColValue::String("abc".into()).is_same_value(&ColValue::RawString(b"abc".to_vec())));
+        assert!(!ColValue::Blob(b"abc".to_vec()).is_same_value(&ColValue::String("abc".into())));
+        assert!(!ColValue::String("abc".into()).is_same_value(&ColValue::Blob(b"abc".to_vec())));
+        assert!(!ColValue::String("1.2.3.4".into())
+            .is_same_value(&ColValue::String("1.2.3.4/32".into())));
     }
 
     #[test]

@@ -51,7 +51,7 @@ impl Sinker for StarRocksSinker {
         }
 
         if !batch {
-            self.serial_sink(data).await?;
+            self.serial_sink(data.as_mut_slice()).await?;
         } else {
             call_batch_fn!(self, data, Self::batch_sink);
         }
@@ -64,16 +64,14 @@ impl Sinker for StarRocksSinker {
 }
 
 impl StarRocksSinker {
-    async fn serial_sink(&mut self, mut data: Vec<RowData>) -> anyhow::Result<()> {
+    async fn serial_sink(&mut self, data: &mut [RowData]) -> anyhow::Result<()> {
         let mut data_size = 0;
-
-        let data = data.as_mut_slice();
         for i in 0..data.len() {
-            data_size += data[i].data_size;
+            data_size += data[i].get_data_size();
             self.send_data(data, i, 1).await?;
         }
 
-        BaseSinker::update_serial_monitor(&self.monitor, data.len() as u64, data_size as u64).await
+        BaseSinker::update_serial_monitor(&self.monitor, data.len() as u64, data_size).await
     }
 
     async fn batch_sink(
@@ -103,20 +101,20 @@ impl StarRocksSinker {
         let mut rts = LimitedQueue::new(1);
         // build stream load data
         let mut load_data = Vec::new();
-        for row_data in data.iter_mut().skip(start_index).take(batch_size) {
-            data_size += row_data.data_size;
-
-            Self::convert_row_data(row_data, tb_meta)?;
-
-            let col_values = if row_data.row_type == RowType::Delete {
-                let before = row_data.require_before_mut()?;
+        for row_data in data.iter().skip(start_index).take(batch_size) {
+            data_size += row_data.get_data_size() as usize;
+            let mut col_values = if row_data.row_type == RowType::Delete {
+                let mut before = row_data.require_before()?.clone();
+                Self::convert_col_values(&mut before, tb_meta)?;
                 if self.db_type == DbType::StarRocks {
                     // SIGN_COL value
                     before.insert(SIGN_COL_NAME.into(), ColValue::Long(1));
                 }
                 before
             } else {
-                row_data.require_after_mut()?
+                let mut after = row_data.require_after()?.clone();
+                Self::convert_col_values(&mut after, tb_meta)?;
+                after
             };
 
             if self.db_type == DbType::StarRocks {
@@ -159,16 +157,6 @@ impl StarRocksSinker {
         Self::check_response(response).await?;
 
         Ok(data_size)
-    }
-
-    fn convert_row_data(row_data: &mut RowData, tb_meta: &MysqlTbMeta) -> anyhow::Result<()> {
-        if let Some(before) = &mut row_data.before {
-            Self::convert_col_values(before, tb_meta)?;
-        }
-        if let Some(after) = &mut row_data.after {
-            Self::convert_col_values(after, tb_meta)?;
-        }
-        Ok(())
     }
 
     fn convert_col_values(

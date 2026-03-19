@@ -9,6 +9,11 @@
 支持变更类型：
 - 仅支持 DML 变更
 
+## CDC + Checker
+
+如需校验 CDC 落库后的数据，可在 CDC 任务配置中开启 `[checker]`。配置与限制请参考 [数据校验](../snapshot/check.md)。
+`[checker]` 必须显式声明自己的目标端，不再隐式复用 `[sinker]` 的目标。
+
 # 示例
 
 ## 示例 1：生成正向 sql

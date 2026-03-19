@@ -8,6 +8,7 @@ use sqlx::{
 };
 use tokio::{sync::RwLock, time::Instant};
 
+use crate::sinker::checked_sinker::CheckedSinkTarget;
 use crate::{
     call_batch_fn, data_marker::DataMarker, rdb_query_builder::RdbQueryBuilder,
     rdb_router::RdbRouter, sinker::base_sinker::BaseSinker, Sinker,
@@ -136,6 +137,30 @@ impl Sinker for PgSinker {
     }
 }
 
+#[async_trait]
+impl CheckedSinkTarget for PgSinker {
+    async fn sink_dml_borrowed(&mut self, data: &mut [RowData], batch: bool) -> anyhow::Result<()> {
+        if data.is_empty() {
+            return Ok(());
+        }
+
+        if !batch {
+            self.serial_sink(data).await?;
+        } else {
+            match data[0].row_type {
+                RowType::Insert => {
+                    call_batch_fn!(self, data, Self::batch_insert);
+                }
+                RowType::Delete => {
+                    call_batch_fn!(self, data, Self::batch_delete);
+                }
+                _ => self.serial_sink(data).await?,
+            }
+        }
+        Ok(())
+    }
+}
+
 impl PgSinker {
     async fn serial_sink(&mut self, data: &[RowData]) -> anyhow::Result<()> {
         let monitor_interval = if self.monitor_interval > 0 {
@@ -156,7 +181,7 @@ impl PgSinker {
         }
         let mut rts = LimitedQueue::new(cmp::min(100, data.len()));
         for row_data in data.iter() {
-            data_size += row_data.data_size;
+            data_size += row_data.get_data_size() as usize;
 
             let tb_meta = self.meta_manager.get_tb_meta_by_row_data(row_data).await?;
             let query_builder = RdbQueryBuilder::new_for_pg(tb_meta, None);

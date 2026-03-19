@@ -172,28 +172,28 @@ impl RedisSinker {
         let mut data_size = 0;
 
         let mut cmds = Vec::new();
-        for row_data in data.iter_mut().skip(start_index).take(batch_size) {
-            data_size += row_data.data_size;
+        for row_data in data.iter().skip(start_index).take(batch_size) {
+            data_size += row_data.get_data_size();
             if let Some(cmd) = self.dml_to_redis_cmd(row_data).await? {
                 cmds.push(cmd);
             }
         }
         self.batch_sink(&cmds).await?;
 
-        BaseSinker::update_batch_monitor(&self.monitor, cmds.len() as u64, data_size as u64).await
+        BaseSinker::update_batch_monitor(&self.monitor, cmds.len() as u64, data_size).await
     }
 
     async fn serial_sink_dml(&mut self, data: &mut [RowData]) -> anyhow::Result<()> {
         let mut data_size = 0;
 
-        for row_data in data.iter_mut() {
-            data_size += row_data.data_size;
+        for row_data in data.iter() {
+            data_size += row_data.get_data_size();
             if let Some(cmd) = self.dml_to_redis_cmd(row_data).await? {
                 self.batch_sink(&[cmd]).await?
             }
         }
 
-        BaseSinker::update_serial_monitor(&self.monitor, data.len() as u64, data_size as u64).await
+        BaseSinker::update_serial_monitor(&self.monitor, data.len() as u64, data_size).await
     }
 
     async fn dml_to_redis_cmd(&mut self, row_data: &RowData) -> anyhow::Result<Option<RedisCmd>> {

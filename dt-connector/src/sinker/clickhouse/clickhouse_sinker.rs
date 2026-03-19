@@ -67,18 +67,18 @@ impl ClickhouseSinker {
         let mut data_size = 0;
         // build stream load data
         let mut load_data = Vec::new();
-        for row_data in data.iter_mut().skip(start_index).take(batch_size) {
-            data_size += row_data.data_size;
-
-            Self::convert_row_data(row_data)?;
-
-            let col_values = if row_data.row_type == RowType::Delete {
-                let before = row_data.require_before_mut()?;
+        for row_data in data.iter().skip(start_index).take(batch_size) {
+            data_size += row_data.get_data_size() as usize;
+            let mut col_values = if row_data.row_type == RowType::Delete {
+                let mut before = row_data.require_before()?.clone();
+                Self::convert_col_values(&mut before)?;
                 // SIGN_COL value
                 before.insert(SIGN_COL_NAME.into(), ColValue::Long(1));
                 before
             } else {
-                row_data.require_after_mut()?
+                let mut after = row_data.require_after()?.clone();
+                Self::convert_col_values(&mut after)?;
+                after
             };
 
             col_values.insert(
@@ -105,16 +105,6 @@ impl ClickhouseSinker {
         Self::check_response(response).await?;
 
         Ok(data_size)
-    }
-
-    fn convert_row_data(row_data: &mut RowData) -> anyhow::Result<()> {
-        if let Some(before) = &mut row_data.before {
-            Self::convert_col_values(before)?;
-        }
-        if let Some(after) = &mut row_data.after {
-            Self::convert_col_values(after)?;
-        }
-        Ok(())
     }
 
     fn convert_col_values(col_values: &mut HashMap<String, ColValue>) -> anyhow::Result<()> {

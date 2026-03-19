@@ -25,7 +25,7 @@ COMMENT ON TABLE struct_it_pg2pg_1.full_index_type IS 'Comment on full_index_typ
 COMMENT ON COLUMN struct_it_pg2pg_1.full_index_type.id IS 'Comment on full_index_type.id.';
 
 -- constraints
-ALTER TABLE "struct_it_pg2pg_1"."full_index_type" ADD CONSTRAINT "full_index_type_check_col_check" CHECK ((char_length((check_col)::text) > 3))
+ALTER TABLE "struct_it_pg2pg_1"."full_index_type" ADD CONSTRAINT "full_index_type_check_col_check" CHECK ((char_length((check_col)::text) > 3));
 
 -- foreign constraints
 CREATE TABLE struct_it_pg2pg_1.foreign_key_parent (pk SERIAL, parent_col_1 INTEGER UNIQUE, parent_col_2 INTEGER UNIQUE, PRIMARY KEY(pk));

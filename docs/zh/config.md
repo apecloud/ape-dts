@@ -6,17 +6,17 @@
 
 # [extractor]
 
-| 配置            | 作用                                              | 示例                                                           | 默认                           |
-| :-------------- | :------------------------------------------------ | :------------------------------------------------------------- | :----------------------------- |
-| db_type         | 源库类型                                          | mysql                                                          | -                              |
-| extract_type    | 拉取类型（全量：snapshot，增量：cdc）             | snapshot                                                       | -                              |
-| url             | 数据库 URL。也可以在 URL 中直接指定用户名和密码。 | mysql://127.0.0.1:3307 或 mysql://root:password@127.0.0.1:3307 |
-| username        | 数据库连接账号                                    | root                                                           |
-| password        | 数据库连接密码                                    | password                                                       | -                              |
-| max_connections | 最大连接数                                        | 10                                                             | 目前是 10，未来可能会动态适配  |
-| batch_size      | 批量拉取数据条数                                  | 10000                                                          | 和 [pipeline] buffer_size 一致 |
-| parallel_size   | 全量同步时，单表并行拉取任务数                    | 4                                                              | 1                              |
-| partition_cols | 全量同步时，指定分区列，用于数据切分，仅支持单列 | json:[{"db":"db_1","tb":"tb_1","partition_col":"id"},{"db":"db_2","tb":"tb_2","partition_col":"id"}] | - |
+| 配置            | 作用                                              | 示例                                                                                                 | 默认                           |
+| :-------------- | :------------------------------------------------ | :--------------------------------------------------------------------------------------------------- | :----------------------------- |
+| db_type         | 源库类型                                          | mysql                                                                                                | -                              |
+| extract_type    | 拉取类型（全量：snapshot，增量：cdc）             | snapshot                                                                                             | -                              |
+| url             | 数据库 URL。也可以在 URL 中直接指定用户名和密码。 | mysql://127.0.0.1:3307 或 mysql://root:password@127.0.0.1:3307                                       |
+| username        | 数据库连接账号                                    | root                                                                                                 |
+| password        | 数据库连接密码                                    | password                                                                                             | -                              |
+| max_connections | 最大连接数                                        | 10                                                                                                   | 目前是 10，未来可能会动态适配  |
+| batch_size      | 批量拉取数据条数                                  | 10000                                                                                                | 和 [pipeline] buffer_size 一致 |
+| parallel_size   | 全量同步时，单表并行拉取任务数                    | 4                                                                                                    | 1                              |
+| partition_cols  | 全量同步时，指定分区列，用于数据切分，仅支持单列  | json:[{"db":"db_1","tb":"tb_1","partition_col":"id"},{"db":"db_2","tb":"tb_2","partition_col":"id"}] | -                              |
 ## url 转义
 
 - 如果用户名/密码中包含特殊字符，需要对相应部分进行通用的 url 百分号转义，如：
@@ -32,13 +32,65 @@ url=mysql://user1:abc%25%24%23%3F%40@127.0.0.1:3307?ssl-mode=disabled
 | 配置            | 作用                                                                          | 示例                                                           | 默认                          |
 | :-------------- | :---------------------------------------------------------------------------- | :------------------------------------------------------------- | :---------------------------- |
 | db_type         | 目标库类型                                                                    | mysql                                                          | -                             |
-| sink_type       | 拉取类型（写入：write，校验：check）                                          | write                                                          | write                         |
+| sink_type       | 写入类型（写入：write，虚拟：dummy）                                          | write                                                          | write                         |
 | url             | 数据库 URL。也可以在 URL 中直接指定用户名和密码。                             | mysql://127.0.0.1:3307 或 mysql://root:password@127.0.0.1:3307 |
 | username        | 数据库连接账号                                                                | root                                                           |
 | password        | 数据库连接密码                                                                | password                                                       |
 | batch_size      | 批量写入数据条数，1 代表串行                                                  | 200                                                            | 200                           |
 | max_connections | 最大连接数                                                                    | 10                                                             | 目前是 10，未来可能会动态适配 |
 | replace         | 插入数据时，如果已存在于目标库，是否强行替换，适用于 mysql/pg 的全量/增量任务 | false                                                          | true                          |
+
+# [checker]
+
+`[checker]` 支持两种模式：
+- 独立校验：仅做校验，不做写入。通常用于 snapshot / struct 校验任务。设置
+  `sink_type=dummy` 或直接省略 `[sinker]`，并在 `[checker]` 中显式配置校验目标。
+- 写入后内联校验：当 `sink_type=write` 时，checker 会在写入后运行。snapshot 任务可在支持
+  的 write sinker 上使用该模式；CDC+check 也使用该模式，并额外要求持久化 checker 状态。
+
+| 配置                        | 作用                                            | 示例        | 默认                             |
+| :-------------------------- | :---------------------------------------------- | :---------- | :------------------------------- |
+| queue_size                  | checker 队列容量                                | 200         | 200                              |
+| max_connections             | checker 连接池最大连接数                        | 8           | 8                                |
+| batch_size                  | checker 批量校验大小（非 CDC 任务）             | 100         | 1                                |
+| sample_rate                 | checker 抽样比例（保留字段，当前未生效）        | 1.0         | 1.0                              |
+| output_full_row             | diff 日志是否输出全量行                         | false       | false                            |
+| output_revise_sql           | 是否将生成的修复 SQL 写入 `sql.log`            | false       | false                            |
+| revise_match_full_row       | 生成修复 SQL 时是否按全量行匹配                 | false       | false                            |
+| retry_interval_secs         | 重试间隔（秒），CDC+check 模式下强制为 0        | 0           | 0                                |
+| max_retries                 | 重试次数，CDC+check 模式下强制为 0              | 0           | 0                                |
+| check_log_dir               | 校验日志目录                                    | /tmp/check  | 空（默认 runtime.log_dir/check） |
+| check_log_file_size         | 单类日志文件大小上限（`diff.log` / `miss.log` / `sql.log`） | 100mb | 100mb                            |
+| check_log_max_rows          | 单类日志最大行数（`diff.log` / `miss.log`）     | 1000        | 1000                             |
+| db_type                     | 校验目标库类型（必填）                          | mysql       | -                                |
+| url                         | 校验目标 URL（必填）                            | mysql://... | -                                |
+| username                    | 校验目标用户名（配置后会写入目标 URL）          | root        | 空                               |
+| password                    | 校验目标密码（配置后会写入目标 URL）            | password    | 空                               |
+| cdc_check_log_s3            | 定期将 CDC 校验快照上传至 S3                    | false       | false                            |
+| cdc_check_log_interval_secs | CDC 校验快照输出间隔（秒）                      | 10          | 10                               |
+| s3_bucket                   | 校验日志上传的 S3 存储桶                        | my-bucket   | -                                |
+| s3_access_key_id            | S3 访问密钥 ID                                  | AKIA...     | -                                |
+| s3_secret_access_key        | S3 秘密访问密钥                                 | ****        | -                                |
+| s3_region                   | S3 区域                                         | us-east-1   | -                                |
+| s3_endpoint                 | S3 端点                                         | https://... | -                                |
+| s3_key_prefix               | 校验日志的 S3 键前缀                            | task1/check | 空                               |
+
+说明：
+- checker 仅支持 `[pipeline] pipeline_type=basic`。
+- struct 任务只支持独立校验。若为 struct 任务启用 `[checker]`，请使用
+  `sink_type=dummy` 或直接省略 `[sinker]`。
+- 当 `[sinker] sink_type=write` 时，snapshot 的写入后内联校验仅支持 `[sinker].db_type`
+  为 `mysql`、`pg`、`mongo` 的写入链路。
+- CDC+check 当前仅支持 `[extractor] extract_type=cdc`、`[sinker] sink_type=write`，
+  且 `[sinker].db_type` 为 `mysql` 或 `pg` 的场景。
+- 在 CDC+check 模式下，必须配置 `[resumer] resume_type=from_target` 或 `from_db` 来持久化
+  checker 状态。
+- 在 CDC+check 模式（`extract_type=cdc` 且 `sink_type=write`）下，checker 批量大小跟随 `[sinker].batch_size`。
+- 在 CDC+check 模式下，需在 `[checker]` 中显式配置校验目标，checker 才会启用。
+- 当 `check_log_dir` 为空时，统一使用 `runtime.log_dir/check` 作为 checker 日志目录（包含 CDC 校验输出）。
+- 在 CDC+check 模式下，会始终先在 `check_log_dir` 本地落盘周期性校验快照；`cdc_check_log_s3` 仅控制是否上传 S3。
+- `check_log_file_size` 限制本地 `diff.log` / `miss.log` / `sql.log` 的大小，`summary.log` 不受该限制。
+- `check_log_max_rows` 仅对 CDC 校验快照的 `diff.log` / `miss.log` 生效；命中任一阈值时仅保留最新记录。
 
 # [filter]
 
@@ -146,19 +198,37 @@ url=mysql://user1:abc%25%24%23%3F%40@127.0.0.1:3307?ssl-mode=disabled
 | serial    | 单线程，依次单条写入目标                                                                            | 所有                    |      | 慢                                           |
 | rdb_merge | 将缓存中的增量数据（insert, update, delete）整合成 insert + delete 数据，多线程并行，且批量写入目标 | mysql/pg 增量任务       | 快   | 最终一致性，破坏源端事务在目标端重放的完整性 |
 | mongo     | rdb_merge 的 mongo 版                                                                               | mongo 增量              |      |                                              |
-| rdb_check | 和 snapshot 类似，但如果源表没有主键/唯一键，则采用单线程串行写入                                   | mysql/pg/mongo 全量校验 |      |                                              |
+| rdb_check | 校验模式；必须配置 `[checker]`，独立校验任务不写入目标端，CDC+check 仍是先写入再校验               | 支持 checker 的校验任务 |      |                                              |
 | redis     | 单线程，批量/串行（由 sinker 的 batch_size 决定）写入                                               | redis 全量/增量         |      |                                              |
 
-不同任务类型需要不同的 parallel_type，详情请参考各个示例。
-
 # [runtime]
-| 配置 | 作用 | 示例 | 默认 |
-| :-------- | :-------- | :-------- | :-------- |
-| log_level | 日志级别 | info/warn/error/debug/trace | info |
-| log4rs_file | log4rs 配置地点，通常不需要改 | ./log4rs.yaml | ./log4rs.yaml |
-| log_dir | 日志输出目录 | ./logs | ./logs |
-| check_log_file_size | check 结果日志（diff/miss/sql）单文件大小，超出后停止写入（不截断、不滚动） | 100mb | 100mb |
+| 配置        | 作用                          | 示例                        | 默认          |
+| :---------- | :---------------------------- | :-------------------------- | :------------ |
+| log_level   | 日志级别                      | info/warn/error/debug/trace | info          |
+| log4rs_file | log4rs 配置地点，通常不需要改 | ./log4rs.yaml               | ./log4rs.yaml |
+| log_dir     | 日志输出目录                  | ./logs                      | ./logs        |
 
 通常不需要修改。
 
 需要注意的是，日志文件中包含了该任务的进度信息，这些信息可用于任务 [断点续传](/docs/zh/snapshot/resume.md)。所以如果你有多个任务，**请为每个任务设置独立的日志目录**。
+
+# [global]
+
+| 配置    | 作用           | 示例       | 默认 |
+| :------ | :------------- | :--------- | :--- |
+| task_id | 任务唯一标识符 | cdc_task_1 |      |
+
+在某些场景下，task_id 用于区分任务的唯一性，例如使用数据库断点续传时。默认情况下，它将根据关键配置信息自动生成。
+
+# [resumer]
+
+| 配置            | 作用                                                           | 示例                                        | 默认                                   |
+| :-------------- | :------------------------------------------------------------- | :------------------------------------------ | :------------------------------------- |
+| resume_type     | 类型: [from_log;from_target;from_db]                           | from_target                                 |                                        |
+| log_dir         | resume_type 为 from_log 时有效，日志目录位置                   | ./logs                                      |                                        |
+| url             | resume_type 为 from_db 时有效，数据库连接 URL                  | mysql://xxx:xxx@127.0.0.1:3306              |                                        |
+| db_type         | resume_type 为 from_db 时有效，数据库类型                      | mysql                                       |                                        |
+| table_full_name | resume_type 为 from_db 或 from_target 时有效，用于记录的表全名 | apecloud_metadata_test.apedts_task_position | apecloud_metadata.apedts_task_position |
+| max_connections | 断点续传连接池的最大连接数                                     | 1                                           | 1                                      |
+
+详情请参考断点续传文档：[断点续传](/docs/zh/snapshot/resume.md)。

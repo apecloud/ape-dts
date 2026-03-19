@@ -15,12 +15,18 @@ use dt_common::{
     utils::redis_util::RedisUtil,
 };
 use dt_parallelizer::{
-    base_parallelizer::BaseParallelizer, check_parallelizer::CheckParallelizer,
-    foxlake_parallelizer::FoxlakeParallelizer, merge_parallelizer::MergeParallelizer,
-    mongo_merger::MongoMerger, partition_parallelizer::PartitionParallelizer,
-    rdb_merger::RdbMerger, rdb_partitioner::RdbPartitioner, redis_parallelizer::RedisParallelizer,
-    serial_parallelizer::SerialParallelizer, snapshot_parallelizer::SnapshotParallelizer,
-    table_parallelizer::TableParallelizer, Merger, Parallelizer,
+    base_parallelizer::BaseParallelizer,
+    foxlake_parallelizer::FoxlakeParallelizer,
+    merge_parallelizer::{MergeParallelizer, MergeSinkMode},
+    mongo_merger::MongoMerger,
+    partition_parallelizer::PartitionParallelizer,
+    rdb_merger::RdbMerger,
+    rdb_partitioner::RdbPartitioner,
+    redis_parallelizer::RedisParallelizer,
+    serial_parallelizer::SerialParallelizer,
+    snapshot_parallelizer::SnapshotParallelizer,
+    table_parallelizer::TableParallelizer,
+    Merger, Parallelizer,
 };
 
 pub struct ParallelizerUtil {}
@@ -61,18 +67,26 @@ impl ParallelizerUtil {
                     parallel_size,
                     sinker_basic_config: config.sinker_basic.clone(),
                     meta_manager,
+                    sink_mode: MergeSinkMode::AdaptiveBatch,
                 })
             }
 
             ParallelType::RdbCheck => {
-                let merger = match config.sinker_basic.db_type {
+                let target_db_type = config
+                    .destination_target()
+                    .map(|target| target.db_type)
+                    .unwrap_or(config.sinker_basic.db_type.clone());
+                let merger = match target_db_type {
                     DbType::Mongo => Self::create_mongo_merger().await?,
                     _ => Self::create_rdb_merger(config).await?,
                 };
-                Box::new(CheckParallelizer {
+                Box::new(MergeParallelizer {
                     base_parallelizer,
                     merger,
                     parallel_size,
+                    sinker_basic_config: config.sinker_basic.clone(),
+                    meta_manager: None,
+                    sink_mode: MergeSinkMode::Partitioned,
                 })
             }
 
@@ -91,6 +105,7 @@ impl ParallelizerUtil {
                     parallel_size,
                     sinker_basic_config: config.sinker_basic.clone(),
                     meta_manager: None,
+                    sink_mode: MergeSinkMode::AdaptiveBatch,
                 })
             }
 

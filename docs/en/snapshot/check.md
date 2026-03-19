@@ -1,36 +1,37 @@
 # Data Check
 
-After data migration, you may want to compare the source and target data row by row and column by column. If the data volume is too large, you can perform sampling check. Please ensure that the tables to be checked have primary keys/unique keys.
+After data migration, you may want to compare the source and target data row by row and column by column. If the data volume is too large, you can perform a sampled check. Please ensure that the tables to be checked have primary keys/unique keys.
 
-Support comparison for MySQL/PG/Mongo.
+Supports comparison for MySQL, PostgreSQL, and MongoDB.
 
-# Example: MySQL -> MySQL
+Sampling via `sample_interval` is currently available only for MySQL/PostgreSQL snapshot checks.
+
+Data check can be used with both snapshot tasks and CDC+check. Snapshot check can run either in standalone mode (configure the checker target explicitly in `[checker]` and keep `sink_type=dummy`, or omit `[sinker]`) or as inline check after write on supported write sinkers. Snapshot inline check with `sink_type=write` is currently available when the sinker writes through MySQL, PostgreSQL, or MongoDB. For CDC+check, set `extract_type=cdc`; the checker validates applied changes after they are written to the target, requires `[resumer] resume_type=from_target` or `from_db` to persist checker state, and is currently supported only for MySQL/PostgreSQL write sinkers.
+
+## Example: MySQL -> MySQL
 
 Refer to [task templates](../../templates/mysql_to_mysql.md) and [tutorial](../tutorial/mysql_to_mysql.md)
 
-## Sampling Check
+### Sampling Check (MySQL/PostgreSQL snapshot only)
 
-In the full check configuration, add `sample_interval` configuration. That is, sample 1 record for every 3 records.
+For MySQL/PostgreSQL snapshot check, add `sample_interval` to the `[extractor]` section. For example, setting `sample_interval=3` checks every 3rd record.
 ```
 [extractor]
 sample_interval=3
 ```
 
-## Note
+## Limitations
 
-This configuration is similar to the full synchronization task. The only differences are:
+- Data check is source-driven (validates Source ∈ Target) and cannot detect extra rows that exist only in the target. To catch such cases, consider setting up a [Reverse Check](#reverse-check) by swapping extractor and checker configurations.
+- For MongoDB, `_id` should be a hashable type (for example ObjectId/String/Int32/Int64). Rows whose `_id` cannot be hashed are skipped and counted in `summary.log.skip_count`; if a fetched target row has an unhashable `_id`, the check fails.
 
-```
-[sinker]
-sink_type=check
+## DELETE Event Check
 
-[parallelizer]
-parallel_type=rdb_check
-```
+In CDC+check scenarios, the checker validates DELETE events: it queries the target by primary key, and if the row still exists in the target, it is reported as an inconsistency in `diff.log` (with empty `diff_col_values`). When `output_revise_sql=true`, a corresponding `DELETE` repair statement is automatically generated in `sql.log`.
 
 # Check Results
 
-The check results are written to the log in json format, including diff.log, miss.log, sql.log and summary.log. The logs are stored in the log/check subdirectory.
+`diff.log`, `miss.log`, and `summary.log` are written in JSON format. `sql.log` contains generated repair SQL. By default, these logs are stored in `runtime.log_dir/check`; if `[checker].check_log_dir` is set, that directory is used instead.
 
 ## Difference Log (diff.log)
 
@@ -42,13 +43,13 @@ Difference logs include database (schema), table (tb), primary key/unique key (i
 {"schema":"test_db_1","tb":"one_pk_no_uk","id_col_values":{"f_0":"6"},"diff_col_values":{"f_1":{"src":null,"dst":"1","src_type":"None","dst_type":"Short"}}}
 ```
 
-When the source and target types are different (such as Int32 vs Int64, or None vs Short), `src_type`/`dst_type` will appear under the corresponding column, clearly marking the type inconsistency. Mongo also applies this rule, and the difference log will output the BSON type name.
+When the source and target types are different (such as Int32 vs Int64, or None vs Short), `src_type`/`dst_type` will appear under the corresponding column, clearly marking the type inconsistency. MongoDB also applies this rule, and the difference log will output the BSON type name.
 
-Only when the route renames the schema or table, the log will supplement `target_schema`/`target_tb` to identify the real destination database table; `schema`, `tb` still represent the source, facilitating troubleshooting.
+Only when the router renames the schema or table will the log include `target_schema`/`target_tb` to identify the real destination table. `schema` and `tb` still represent the source, facilitating troubleshooting.
 
 ## Missing Log (miss.log)
 
-Missing logs include database (schema), table (tb) and primary/unique key (id_col_values). Since missing records do not have difference columns, `diff_col_values` will not be output.
+Missing logs include database (schema), table (tb), and primary/unique key (id_col_values). Since missing records do not have difference columns, `diff_col_values` will not be output.
 
 ```json
 {"schema":"test_db_1","tb":"no_pk_one_uk","id_col_values":{"f_1":"8","f_2":"1"}}
@@ -58,14 +59,14 @@ Missing logs include database (schema), table (tb) and primary/unique key (id_co
 
 ## Output Full Row
 
-When the business needs full row content for troubleshooting exceptions, you can enable full row logging in `[sinker]`:
+When you need full row content for troubleshooting, you can enable full row logging in `[checker]` after configuring the checker target:
 
 ```
-[sinker]
+[checker]
 output_full_row=true
 ```
 
-After enabling, all diff.log will append `src_row` and `dst_row`, and miss.log will append `src_row` (currently only supports MySQL/PG/Mongo, Redis is not supported yet). Example:
+After enabling, all `diff.log` entries append `src_row` and `dst_row`, and all `miss.log` entries append `src_row` (currently supported for MySQL, PostgreSQL, and MongoDB). Example:
 
 ```json
 {
@@ -99,18 +100,22 @@ After enabling, all diff.log will append `src_row` and `dst_row`, and miss.log w
 
 ## Output Revise SQL
 
-If the business needs to manually repair different data, you can enable SQL output in `[sinker]`:
+If you need to manually repair inconsistent data, you can enable SQL output in `[checker]` after configuring the checker target:
 
 ```
-[sinker]
+[checker]
 output_revise_sql=true
 # Optional: force WHERE clause to match the whole row
 revise_match_full_row=true
 ```
 
-After enabling, `INSERT` statements for missing records and `UPDATE` statements for differing records will be written to `sql.log`. When `revise_match_full_row=true`, even if the table has a primary key, it will use the entire row data to generate the WHERE condition, so as to locate the target data through the full row value. If the route is not renamed, `target_schema`/`target_tb` will not be output, and these two fields are only needed to determine the table where the SQL should be executed when renaming.
+After enabling, `INSERT` statements for missing records and `UPDATE` statements for differing records will be written to `sql.log`.
 
-The generated SQL is essentially the SQL that the sinker needs to execute to correct the target data to be consistent with the source; it directly uses the real destination schema/table, so it can be executed directly at the target (refer to `target_schema`/`target_tb` to determine the final target object when routing renames).
+When `revise_match_full_row=true`, the entire row data is used to generate the WHERE condition even if the table has a primary key, so that the target row is located by matching all column values.
+
+If the router does not rename the schema or table, `target_schema`/`target_tb` will not appear in the log. These two fields are only needed to determine the destination table when routing renames are configured.
+
+The generated SQL uses the real destination schema/table and can be executed directly at the target. When routing renames are configured, refer to `target_schema`/`target_tb` to determine the final target object.
 
 Example:
 
@@ -147,22 +152,60 @@ Missing record log example:
 INSERT INTO `test_db_1`.`test_table`(`id`,`name`,`age`,`email`) VALUES(3,'Charlie',35,'charlie@example.com');
 ```
 
-### Summary Log (summary.log)
-The summary log contains the overall results of the check, such as start_time, end_time, is_consistent, and the number of miss, diff, extra.
+## Summary Log (summary.log)
+
+The summary log contains the overall results of the check, such as start_time, end_time, is_consistent, and the number of miss, diff, skipped rows (`skip_count`), and generated repair SQLs (`sql_count`).
+
+`skip_count` records rows skipped by the checker, for example when the row key cannot be hashed. When no rows are skipped, this field is omitted.
+
+In CDC+check mode, `summary.log` also includes `tables`, which stores per-table miss/diff counts. This field is omitted for non-CDC tasks.
 
 ```json
-{"start_time": "2023-09-01T12:00:00+08:00", "end_time": "2023-09-01T12:00:01+08:00", "is_consistent": false, "miss_count": 1, "diff_count": 2, "extra_count": 1, "sql_count": 3}
+{"start_time": "2023-09-01T12:00:00+08:00", "end_time": "2023-09-01T12:00:01+08:00", "is_consistent": false, "miss_count": 1, "diff_count": 2, "skip_count": 1, "sql_count": 3}
 ```
 
+CDC+check example:
+
+```json
+{"start_time":"2023-09-01T12:00:00+08:00","end_time":"2023-09-01T12:05:00+08:00","is_consistent":false,"miss_count":1,"diff_count":2,"skip_count":1,"tables":{"test_db_1.test_tb":{"miss_count":1,"diff_count":2}}}
+```
 
 # Reverse Check
 
-Swap the [extractor] and [sinker] configurations to perform reverse check.
+Data check is source-driven and only verifies that source rows exist in the target. To detect extra rows in the target that do not exist in the source, set up a reverse check by swapping the `[extractor]` and `[checker]` target configurations:
 
-# Other Configurations
+```
+# Original: source=A, target=B
+# Reverse: source=B, target=A
+[extractor]
+db_type=<original checker db_type>
+url=<original checker url>
 
-- Support [router], please refer to [config details](../config.md) for details.
-- Refer to task_config.ini of each type of integration test:
-    - dt-tests/tests/mysql_to_mysql/check
-    - dt-tests/tests/pg_to_pg/check
-    - dt-tests/tests/mongo_to_mongo/check
+[checker]
+db_type=<original extractor db_type>
+url=<original extractor url>
+```
+
+# Configuration
+
+See [config.md](../config.md) for the full `[checker]` configuration list and target selection rules.
+
+## Retry Mechanism
+
+When `max_retries > 0`, the checker automatically retries on inconsistency:
+- No logs are written during retry attempts to reduce noise
+- Detailed miss/diff logs are only written on the final check
+- Useful when target data synchronization is not yet complete
+
+> **Note:** Retries are not supported in CDC+check mode. CDC events arrive as a stream, and subsequent DELETE events may remove data that was correctly written, causing false misses in the retry queue. Even if `max_retries` and `retry_interval_secs` are configured, they are forcibly ignored (set to 0) in CDC mode, and a warning is logged.
+
+## Router
+
+Data check supports `[router]`. See [config.md](../config.md) for details.
+
+## Integration Test References
+
+Refer to `task_config.ini` of each type of integration test:
+- dt-tests/tests/mysql_to_mysql/check
+- dt-tests/tests/pg_to_pg/check
+- dt-tests/tests/mongo_to_mongo/check

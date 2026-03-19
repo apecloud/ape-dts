@@ -365,8 +365,8 @@ impl RdbQueryBuilder<'_> {
     }
 
     pub fn get_select_query<'a>(&self, row_data: &'a RowData) -> anyhow::Result<RdbQueryInfo<'a>> {
-        let after = row_data.require_after()?;
-        let (where_sql, not_null_cols) = self.get_where_info(1, after, true)?;
+        let id_values = self.lookup_id_values(row_data)?;
+        let (where_sql, not_null_cols) = self.get_where_info(1, id_values, true)?;
         let mut sql = format!(
             "SELECT {} FROM {}.{} WHERE {}",
             self.build_extract_cols_str()?,
@@ -383,7 +383,7 @@ impl RdbQueryBuilder<'_> {
         let mut binds = Vec::with_capacity(not_null_cols.len());
         for col_name in not_null_cols.iter() {
             cols.push(col_name.clone());
-            binds.push(after.get(col_name));
+            binds.push(id_values.get(col_name));
         }
         Ok(RdbQueryInfo { sql, cols, binds })
     }
@@ -408,10 +408,10 @@ impl RdbQueryBuilder<'_> {
         let mut binds =
             Vec::with_capacity(batch_size.saturating_mul(self.rdb_tb_meta.id_cols.len()));
         for &row_data in data.iter().skip(start_index).take(batch_size) {
-            let after = row_data.require_after()?;
+            let id_values = self.lookup_id_values(row_data)?;
             for col in self.rdb_tb_meta.id_cols.iter() {
                 cols.push(col.clone());
-                let col_value = after.get(col);
+                let col_value = id_values.get(col);
                 if col_value.is_none() || matches!(col_value, Some(ColValue::None)) {
                     bail! {
                         "schema: {}, tb: {}, where col: {} is NULL, which should not happen in batch select",
@@ -422,6 +422,16 @@ impl RdbQueryBuilder<'_> {
             }
         }
         Ok(RdbQueryInfo { sql, cols, binds })
+    }
+
+    fn lookup_id_values<'a>(
+        &self,
+        row_data: &'a RowData,
+    ) -> anyhow::Result<&'a HashMap<String, ColValue>> {
+        match row_data.row_type {
+            RowType::Delete => row_data.require_before(),
+            _ => row_data.require_after(),
+        }
     }
 
     pub fn build_extract_cols_str(&self) -> anyhow::Result<String> {
@@ -627,5 +637,66 @@ impl RdbQueryBuilder<'_> {
 
     fn escape_cols(&self, cols: &Vec<String>) -> Vec<String> {
         SqlUtil::escape_cols(cols, &self.db_type)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use dt_common::meta::mysql::{mysql_col_type::MysqlColType, mysql_tb_meta::MysqlTbMeta};
+
+    fn build_mysql_meta() -> MysqlTbMeta {
+        MysqlTbMeta {
+            basic: RdbTbMeta {
+                schema: "test_schema".to_string(),
+                tb: "test_table".to_string(),
+                cols: vec!["id1".to_string(), "id2".to_string(), "v".to_string()],
+                id_cols: vec!["id1".to_string(), "id2".to_string()],
+                key_map: HashMap::from([(
+                    "PRIMARY".to_string(),
+                    vec!["id1".to_string(), "id2".to_string()],
+                )]),
+                ..Default::default()
+            },
+            col_type_map: HashMap::from([
+                ("id1".to_string(), MysqlColType::Int { unsigned: false }),
+                ("id2".to_string(), MysqlColType::Int { unsigned: false }),
+                (
+                    "v".to_string(),
+                    MysqlColType::Varchar {
+                        length: 16,
+                        charset: "utf8mb4".to_string(),
+                    },
+                ),
+            ]),
+        }
+    }
+
+    #[test]
+    fn get_select_query_uses_before_values_for_delete_rows() {
+        let meta = build_mysql_meta();
+        let builder = RdbQueryBuilder::new_for_mysql(&meta, None);
+
+        let before = HashMap::from([
+            ("id1".to_string(), ColValue::None),
+            ("id2".to_string(), ColValue::Long(7)),
+        ]);
+        let row = RowData::new(
+            "test_schema".to_string(),
+            "test_table".to_string(),
+            RowType::Delete,
+            Some(before),
+            None,
+        );
+
+        let query = builder
+            .get_select_query(&row)
+            .expect("delete row should build single-row select query");
+
+        assert!(query.sql.contains("`id1` IS NULL"));
+        assert!(query.sql.contains("`id2` = ?"));
+        assert_eq!(query.cols, vec!["id2".to_string()]);
+        assert_eq!(query.binds.len(), 1);
+        assert!(matches!(query.binds[0], Some(ColValue::Long(7))));
     }
 }
