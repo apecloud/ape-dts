@@ -428,10 +428,8 @@ mod tests {
         assert!(ColValue::String("abc".into()).is_same_value(&ColValue::RawString(b"abc".to_vec())));
         assert!(!ColValue::Blob(b"abc".to_vec()).is_same_value(&ColValue::String("abc".into())));
         assert!(!ColValue::String("abc".into()).is_same_value(&ColValue::Blob(b"abc".to_vec())));
-        assert!(
-            !ColValue::String("1.2.3.4".into())
-                .is_same_value(&ColValue::String("1.2.3.4/32".into()))
-        );
+        assert!(!ColValue::String("1.2.3.4".into())
+            .is_same_value(&ColValue::String("1.2.3.4/32".into())));
     }
 
     #[test]

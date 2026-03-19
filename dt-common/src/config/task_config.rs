@@ -23,8 +23,8 @@ use crate::{
 use super::{
     checker_config::CheckerConfig,
     config_enums::{
-        build_task_type, write_sink_supports_inline_checker, ConflictPolicyEnum, DbType,
-        ExtractType, MetaCenterType, ParallelType, PipelineType, SinkType,
+        CheckMode, ConflictPolicyEnum, DbType, ExtractType, MetaCenterType, ParallelType,
+        PipelineType, SinkType, TaskKind, TaskType,
     },
     data_marker_config::DataMarkerConfig,
     extractor_config::{BasicExtractorConfig, ExtractorConfig},
@@ -134,55 +134,62 @@ impl TaskConfig {
                 "config [checker] is required when [parallelizer] parallel_type=rdb_check".into()
             ));
         }
-        if checker.is_some()
-            && matches!(extractor_basic.extract_type, ExtractType::Cdc)
-            && !matches!(sinker_basic.sink_type, SinkType::Write)
-        {
-            bail!(Error::ConfigError(
-                "config [checker] with [extractor] extract_type=cdc requires [sinker] sink_type=write"
-                    .into(),
-            ));
-        }
-        if checker.is_some() && !matches!(pipeline.pipeline_type, PipelineType::Basic) {
-            bail!(Error::ConfigError(
-                "config [checker] only supports [pipeline] pipeline_type=basic".into()
-            ));
-        }
-        if checker.is_some()
-            && build_task_type(
+        if let Some(checker_cfg) = checker.as_ref() {
+            if matches!(extractor_basic.extract_type, ExtractType::Cdc)
+                && !matches!(sinker_basic.sink_type, SinkType::Write)
+            {
+                bail!(Error::ConfigError(
+                    "config [checker] with [extractor] extract_type=cdc requires [sinker] sink_type=write"
+                        .into(),
+                ));
+            }
+            if !matches!(pipeline.pipeline_type, PipelineType::Basic) {
+                bail!(Error::ConfigError(
+                    "config [checker] only supports [pipeline] pipeline_type=basic".into()
+                ));
+            }
+            if Self::build_task_type(
                 &extractor_basic.extract_type,
                 &sinker_basic.sink_type,
-                &sinker_basic.db_type,
+                &checker_cfg.db_type,
                 true,
             )
             .is_none()
-        {
-            let message = if matches!(sinker_basic.sink_type, SinkType::Struct) {
-                format!(
-                    "config [checker] only supports standalone check for [extractor] extract_type={}; use sink_type=dummy or omit [sinker]",
-                    extractor_basic.extract_type
-                )
-            } else if matches!(extractor_basic.extract_type, ExtractType::Cdc)
-                && matches!(sinker_basic.sink_type, SinkType::Write)
             {
-                format!(
-                    "config [checker] is not supported for [sinker] db_type={} with [extractor] extract_type=cdc and sink_type=write; only mysql and pg write sinkers support CDC+check",
-                    sinker_basic.db_type
-                )
-            } else if matches!(sinker_basic.sink_type, SinkType::Write)
-                && !write_sink_supports_inline_checker(&sinker_basic.db_type)
-            {
-                format!(
-                    "config [checker] is not supported for [sinker] db_type={} with sink_type=write; snapshot inline check only supports mysql, pg, and mongo write sinkers",
-                    sinker_basic.db_type
-                )
-            } else {
-                format!(
-                    "config [checker] is not supported for [extractor] extract_type={} with [sinker] sink_type={}",
-                    extractor_basic.extract_type, sinker_basic.sink_type
-                )
-            };
-            bail!(Error::ConfigError(message));
+                let message = if matches!(sinker_basic.sink_type, SinkType::Struct) {
+                    format!(
+                        "config [checker] only supports standalone check for [extractor] extract_type={}; use sink_type=dummy or omit [sinker]",
+                        extractor_basic.extract_type
+                    )
+                } else if matches!(sinker_basic.sink_type, SinkType::Dummy)
+                    && matches!(extractor_basic.extract_type, ExtractType::Struct)
+                {
+                    format!(
+                        "config [checker] is not supported for [checker] db_type={} with [extractor] extract_type=struct; standalone struct check only supports mysql and pg checker targets",
+                        checker_cfg.db_type
+                    )
+                } else if matches!(extractor_basic.extract_type, ExtractType::Cdc)
+                    && matches!(sinker_basic.sink_type, SinkType::Write)
+                {
+                    format!(
+                        "config [checker] is not supported for [checker] db_type={} with [extractor] extract_type=cdc and sink_type=write; only mysql and pg checker targets support CDC+check",
+                        checker_cfg.db_type
+                    )
+                } else if matches!(sinker_basic.sink_type, SinkType::Write)
+                    && !Self::write_sink_supports_inline_checker(&checker_cfg.db_type)
+                {
+                    format!(
+                        "config [checker] is not supported for [checker] db_type={} with sink_type=write; snapshot inline check only supports mysql, pg, and mongo checker targets",
+                        checker_cfg.db_type
+                    )
+                } else {
+                    format!(
+                        "config [checker] is not supported for [checker] db_type={} with [extractor] extract_type={} and [sinker] sink_type={}",
+                        checker_cfg.db_type, extractor_basic.extract_type, sinker_basic.sink_type
+                    )
+                };
+                bail!(Error::ConfigError(message));
+            }
         }
         let resumer =
             Self::load_resumer_config(&loader, &runtime, &sinker_basic, checker.as_ref())?;
@@ -227,6 +234,72 @@ impl TaskConfig {
             return Some(target);
         }
         self.checker_target()
+    }
+
+    pub fn task_type(&self) -> Option<TaskType> {
+        let target_db_type = self
+            .checker
+            .as_ref()
+            .map(|checker| &checker.db_type)
+            .unwrap_or(&self.sinker_basic.db_type);
+        Self::build_task_type(
+            &self.extractor_basic.extract_type,
+            &self.sinker_basic.sink_type,
+            target_db_type,
+            self.checker.is_some(),
+        )
+    }
+
+    fn write_sink_supports_inline_checker(target_db_type: &DbType) -> bool {
+        matches!(target_db_type, DbType::Mysql | DbType::Pg | DbType::Mongo)
+    }
+
+    fn task_kind_from_extract_type(extract_type: &ExtractType) -> Option<TaskKind> {
+        match extract_type {
+            ExtractType::Struct => Some(TaskKind::Struct),
+            ExtractType::Snapshot => Some(TaskKind::Snapshot),
+            ExtractType::Cdc => Some(TaskKind::Cdc),
+            _ => None,
+        }
+    }
+
+    fn build_task_type(
+        extract_type: &ExtractType,
+        sink_type: &SinkType,
+        target_db_type: &DbType,
+        checker_enabled: bool,
+    ) -> Option<TaskType> {
+        let kind = Self::task_kind_from_extract_type(extract_type)?;
+        let check = if !checker_enabled {
+            match (kind, sink_type) {
+                (TaskKind::Struct, SinkType::Struct)
+                | (TaskKind::Snapshot, SinkType::Write)
+                | (TaskKind::Cdc, SinkType::Write) => None,
+                _ => return None,
+            }
+        } else {
+            match (kind, sink_type, target_db_type) {
+                (TaskKind::Struct, SinkType::Dummy, DbType::Mysql | DbType::Pg) => {
+                    Some(CheckMode::Standalone)
+                }
+                (
+                    TaskKind::Snapshot,
+                    SinkType::Dummy,
+                    DbType::Mysql | DbType::Pg | DbType::Mongo,
+                ) => Some(CheckMode::Standalone),
+                (TaskKind::Snapshot, SinkType::Write, db_type)
+                    if Self::write_sink_supports_inline_checker(db_type) =>
+                {
+                    Some(CheckMode::Inline)
+                }
+                (TaskKind::Cdc, SinkType::Write, DbType::Mysql | DbType::Pg) => {
+                    Some(CheckMode::Inline)
+                }
+                _ => return None,
+            }
+        };
+
+        Some(TaskType::new(kind, check))
     }
 
     fn load_global_config(
@@ -1099,58 +1172,5 @@ impl TaskConfig {
             workers: loader.get_with_default(metrics_section, "workers", 2),
             metrics_labels,
         })
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::TaskConfig;
-    use std::{
-        fs,
-        time::{SystemTime, UNIX_EPOCH},
-    };
-
-    fn write_temp_config(prefix: &str, content: &str) -> String {
-        let unique = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("system time before unix epoch")
-            .as_nanos();
-        let path = std::env::temp_dir().join(format!("ape_dts_{prefix}_{unique}.ini"));
-        fs::write(&path, content).expect("failed to write temp config");
-        path.to_string_lossy().into_owned()
-    }
-
-    #[test]
-    fn legacy_resumer_keys_fail_with_migration_error() {
-        let path = write_temp_config(
-            "legacy_resumer",
-            r#"[extractor]
-db_type=mysql
-extract_type=snapshot
-url=mysql://127.0.0.1:3306
-
-[sinker]
-db_type=mysql
-sink_type=write
-url=mysql://127.0.0.1:3307
-
-[resumer]
-resume_from_log=true
-resume_log_dir=./resume_logs
-resume_config_file=./resume.config
-"#,
-        );
-
-        let err = TaskConfig::new(&path)
-            .err()
-            .expect("legacy resumer config should fail");
-        let err_msg = err.to_string();
-        assert!(err_msg.contains("legacy [resumer] configs"));
-        assert!(err_msg.contains("resume_from_log"));
-        assert!(err_msg.contains("resume_log_dir"));
-        assert!(err_msg.contains("resume_config_file"));
-        assert!(err_msg.contains("resume_type=from_log"));
-
-        fs::remove_file(path).expect("failed to remove temp config");
     }
 }

@@ -35,7 +35,7 @@ use dt_common::log_filter::{parse_size_limit, SizeLimitFilterDeserializer};
 use dt_common::{
     config::{
         checker_config::CheckerConfig,
-        config_enums::{build_task_type, DbType, ExtractType, PipelineType, SinkType, TaskType},
+        config_enums::{DbType, ExtractType, PipelineType, SinkType, TaskType},
         config_token_parser::{ConfigTokenParser, TokenEscapePair},
         extractor_config::ExtractorConfig,
         sinker_config::SinkerConfig,
@@ -190,12 +190,7 @@ impl TaskRunner {
     pub fn new(task_config_file: &str) -> anyhow::Result<Self> {
         let config = TaskConfig::new(task_config_file)
             .with_context(|| format!("invalid configs in [{}]", task_config_file))?;
-        let task_type = build_task_type(
-            &config.extractor_basic.extract_type,
-            &config.sinker_basic.sink_type,
-            &config.sinker_basic.db_type,
-            config.checker.is_some(),
-        );
+        let task_type = config.task_type();
         #[cfg(not(feature = "metrics"))]
         let task_monitor = Arc::new(TaskMonitor::new(task_type));
 
