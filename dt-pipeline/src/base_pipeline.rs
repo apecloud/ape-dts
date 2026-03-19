@@ -200,7 +200,7 @@ impl BasePipeline {
             .parallelizer
             .sink_struct(data.clone(), &self.sinkers)
             .await?;
-        if let Some(checker) = &self.checker {
+        if let Some(checker) = &mut self.checker {
             checker.check_struct(data).await?;
         }
         Ok((data_size, None, None))

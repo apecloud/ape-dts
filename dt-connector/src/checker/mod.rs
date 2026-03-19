@@ -33,7 +33,7 @@ impl CheckerHandle {
     }
 
     pub async fn check_struct(
-        &self,
+        &mut self,
         data: Vec<dt_common::meta::struct_meta::struct_data::StructData>,
     ) -> anyhow::Result<()> {
         match self {
