@@ -24,12 +24,6 @@ use crate::{
     rdb_router::RdbRouter,
 };
 
-struct StructCheckState {
-    src_sql_map: HashMap<String, String>,
-    dbs: HashSet<String>,
-    start_time: String,
-}
-
 pub struct StructCheckerHandle {
     db_type: DbType,
     conn_pool_mysql: Option<Pool<MySql>>,
@@ -41,7 +35,9 @@ pub struct StructCheckerHandle {
     max_retries: u32,
     global_summary: Option<Arc<Mutex<CheckSummaryLog>>>,
     monitor: Arc<Monitor>,
-    state: Arc<Mutex<StructCheckState>>,
+    src_sql_map: HashMap<String, String>,
+    dbs: HashSet<String>,
+    start_time: String,
 }
 
 impl StructCheckerHandle {
@@ -69,11 +65,9 @@ impl StructCheckerHandle {
             max_retries,
             global_summary,
             monitor,
-            state: Arc::new(Mutex::new(StructCheckState {
-                src_sql_map: HashMap::new(),
-                dbs: HashSet::new(),
-                start_time: Local::now().to_rfc3339(),
-            })),
+            src_sql_map: HashMap::new(),
+            dbs: HashSet::new(),
+            start_time: Local::now().to_rfc3339(),
         }
     }
 
@@ -88,7 +82,7 @@ impl StructCheckerHandle {
         parts.next().map(|s| s.to_string())
     }
 
-    async fn add_src_sqls(&self, struct_data: StructData) -> anyhow::Result<()> {
+    async fn add_src_sqls(&mut self, struct_data: StructData) -> anyhow::Result<()> {
         let routed = self.router.route_struct(struct_data);
         let mut statement = routed.statement;
         let sqls = statement.to_sqls(&self.filter)?;
@@ -98,12 +92,11 @@ impl StructCheckerHandle {
                 .await;
         }
 
-        let mut state = self.state.lock().await;
         for (key, sql) in sqls {
             if let Some(db) = Self::collect_db_from_key(&key) {
-                state.dbs.insert(db);
+                self.dbs.insert(db);
             }
-            state.src_sql_map.insert(key, sql);
+            self.src_sql_map.insert(key, sql);
         }
         Ok(())
     }
@@ -260,7 +253,7 @@ impl StructCheckerHandle {
     }
 
     pub async fn check_struct(
-        &self,
+        &mut self,
         data: Vec<dt_common::meta::struct_meta::struct_data::StructData>,
     ) -> anyhow::Result<()> {
         for struct_data in data {
@@ -270,19 +263,10 @@ impl StructCheckerHandle {
     }
 
     pub async fn close(&mut self) -> anyhow::Result<()> {
-        let (src_sql_map, dbs, start_time) = {
-            let state = self.state.lock().await;
-            (
-                state.src_sql_map.clone(),
-                state.dbs.clone(),
-                state.start_time.clone(),
-            )
-        };
-
         let mut retries_left = self.max_retries;
         loop {
             let (summary, _) = self
-                .compare_once(&src_sql_map, &dbs, &start_time, false)
+                .compare_once(&self.src_sql_map, &self.dbs, &self.start_time, false)
                 .await?;
             if summary.is_consistent {
                 log_info!("Structure check passed - all structures are consistent");
@@ -298,7 +282,7 @@ impl StructCheckerHandle {
         }
 
         let (summary, _sql_count) = self
-            .compare_once(&src_sql_map, &dbs, &start_time, true)
+            .compare_once(&self.src_sql_map, &self.dbs, &self.start_time, true)
             .await?;
         if summary.miss_count > 0 {
             self.monitor
