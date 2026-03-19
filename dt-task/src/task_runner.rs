@@ -242,7 +242,7 @@ impl TaskRunner {
                 || !self
                     .task_type
                     .as_ref()
-                    .is_some_and(TaskType::is_cdc_inline_check)
+                    .is_some_and(|task_type| task_type.is_cdc_inline_check())
             {
                 let mut summary = check_summary.lock().await;
                 summary.end_time = Local::now().to_rfc3339();
@@ -778,9 +778,17 @@ impl TaskRunner {
         } else {
             (cfg.max_retries, cfg.retry_interval_secs)
         };
-        let checker_db_type = cfg.db_type.clone();
-        let checker_url = cfg.url.clone();
-        let checker_auth = cfg.connection_auth.clone();
+        let checker_target = self
+            .config
+            .checker_target()
+            .ok_or_else(|| Error::ConfigError("config [checker] target is missing".into()))?;
+        let checker_db_type = checker_target.db_type.clone();
+        let checker_url = checker_target.url.clone();
+        let checker_auth = checker_target.connection_auth.clone();
+        let inline_check = self
+            .config
+            .task_type()
+            .is_some_and(|task_type| task_type.is_inline_check());
 
         let is_struct_task = matches!(
             self.config.extractor,
@@ -943,13 +951,9 @@ impl TaskRunner {
             }
             DbType::Mongo => {
                 let reverse_router = create_router!(self.config, Mongo).reverse();
-                let app_name = if !is_cdc_task {
-                    "checker"
-                } else {
-                    match &self.config.sinker {
-                        SinkerConfig::Mongo { app_name, .. } => app_name.as_str(),
-                        _ => "checker",
-                    }
+                let app_name = match (&self.config.sinker, inline_check) {
+                    (SinkerConfig::Mongo { app_name, .. }, true) => app_name.as_str(),
+                    _ => "checker",
                 };
                 let mongo_client = TaskUtil::create_mongo_client(
                     &checker_url,

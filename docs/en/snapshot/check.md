@@ -6,11 +6,121 @@ Supports comparison for MySQL, PostgreSQL, and MongoDB.
 
 Sampling via `sample_interval` is currently available only for MySQL/PostgreSQL snapshot checks.
 
-Data check can be used with both snapshot tasks and CDC+check. Snapshot check can run either in standalone mode (configure the checker target explicitly in `[checker]` and keep `sink_type=dummy`, or omit `[sinker]`) or as inline check after write on supported write sinkers. Snapshot inline check with `sink_type=write` is currently available when the sinker writes through MySQL, PostgreSQL, or MongoDB. For CDC+check, set `extract_type=cdc`; the checker validates applied changes after they are written to the target, requires `[resumer] resume_type=from_target` or `from_db` to persist checker state, and is currently supported only for MySQL/PostgreSQL write sinkers.
+Data check is documented in three flows:
+
+## Check Flows
+
+### Standalone snapshot check
+
+- Use `extract_type=snapshot`.
+- Set `sink_type=dummy` or omit `[sinker]`.
+- Configure the checker target explicitly in `[checker]`.
+- Use `parallel_type=rdb_check`.
+
+```text
+source rows
+    |
+    v
+[extractor snapshot]
+    |
+    v
+[checker] ---- query target ----> [checker target]
+    |
+    +---- consistent -------> next batch
+    |
+    `---- inconsistent -----> retry / miss.log / diff.log
+```
+
+### Inline snapshot check
+
+- Use `extract_type=snapshot` and `[sinker] sink_type=write`.
+- The checker runs after sink and reuses the parsed `[sinker]` target directly.
+- `[checker]` must not set `db_type`, `url`, `username`, or `password`.
+- Currently supported only when `[sinker].db_type` is `mysql`, `pg`, or `mongo`.
+- Keep the snapshot parallelizer (typically `parallel_type=snapshot`).
+
+```text
+source rows
+    |
+    v
+[extractor snapshot]
+    |
+    v
+[sinker write batch] -----> [target]
+    |
+    v
+[checker same batch, same target]
+    |
+    +---- consistent -------> next batch
+    |
+    `---- inconsistent -----> retry -----> exhausted? -----> miss.log / diff.log
+```
+
+- This is “write-after-check + short convergence waiting”.
+- It retries first and only writes miss/diff after the retry budget is exhausted.
+- It does **not** maintain a long-lived inconsistency store.
+
+### Inline cdc check
+
+- Use `extract_type=cdc` and `[sinker] sink_type=write`.
+- The checker validates applied CDC changes after they are written to the target.
+- The checker reuses the parsed `[sinker]` target directly.
+- `[checker]` must not set `db_type`, `url`, `username`, or `password`.
+- `[resumer] resume_type=from_target` or `from_db` is required to persist checker state.
+- Currently supported only when `[sinker].db_type` is `mysql` or `pg`.
+- Use `parallel_type=rdb_check`.
+
+```text
+source CDC events
+    |
+    v
+[extractor cdc]
+    |
+    v
+[sinker write event batch] --> [target]
+    |
+    v
+[checker same batch, same target]
+    |
+    +---- consistent --------> next batch / checkpoint
+    |
+    `---- inconsistent ------> checker state/store
+                                   |
+                                   +--> later events may reconcile old miss/diff
+                                   `--> persisted with resumer / checkpoint state
+```
+
+- This is closer to “continuous reconciliation”.
+- Inconsistencies enter checker state/store instead of being handled only by a short retry loop.
+- Later CDC events may naturally cancel or reconcile older miss/diff records.
+
+## Inline Snapshot Check vs Inline CDC Check
+
+| Aspect | Inline snapshot check | Inline cdc check |
+| :--- | :--- | :--- |
+| Check timing | Write one batch, then check that batch | Write one event batch, then check that batch |
+| First inconsistency handling | Retry first | Record into persistent inconsistency state/store |
+| When miss/diff is logged | Only after retry budget is exhausted | May be logged from the current reconciliation state |
+| Long-lived inconsistency tracking | No long-lived inconsistency store | Yes; checker state is coupled with checkpoint / state store |
+| How later writes affect old inconsistencies | Retries are short-term waiting only | Later CDC events may cancel or reconcile older miss/diff records |
+| Mental model | Write-after-check with short convergence waiting | Continuous reconciliation |
+
+Operationally:
+
+- **Inline snapshot check** is optimized for “write first, then wait briefly for convergence”.
+  After a sink batch is written, the checker validates the same batch. If target visibility is
+  slightly delayed, it retries first. Only after the retry budget is exhausted are `miss.log` and
+  `diff.log` written. It does **not** maintain a long-lived inconsistency store.
+- **Inline cdc check** is optimized for long-running reconciliation. After an event batch is
+  applied, the checker validates the resulting target state. If an inconsistency is observed, it
+  becomes part of persistent checker state/store instead of being treated as a short retry-only
+  problem. Later CDC events may naturally offset or reconcile earlier miss/diff entries, so
+  checkpoint/state persistence is more deeply coupled with the checker lifecycle.
 
 ## Example: MySQL -> MySQL
 
-Refer to [task templates](../../templates/mysql_to_mysql.md) and [tutorial](../tutorial/mysql_to_mysql.md)
+Refer to [task templates](../../templates/mysql_to_mysql.md) and [tutorial](../tutorial/mysql_to_mysql.md). The
+templates now separate standalone snapshot check, inline snapshot check, and inline cdc check.
 
 ### Sampling Check (MySQL/PostgreSQL snapshot only)
 
@@ -22,12 +132,17 @@ sample_interval=3
 
 ## Limitations
 
-- Data check is source-driven (validates Source ∈ Target) and cannot detect extra rows that exist only in the target. To catch such cases, consider setting up a [Reverse Check](#reverse-check) by swapping extractor and checker configurations.
+- Data check is source-driven (validates Source ∈ Target) and cannot detect extra rows that exist
+  only in the target. To catch such cases, consider setting up a
+  [Reverse Check](#reverse-check) by swapping source/target roles.
 - For MongoDB, `_id` should be a hashable type (for example ObjectId/String/Int32/Int64). Rows whose `_id` cannot be hashed are skipped and counted in `summary.log.skip_count`; if a fetched target row has an unhashable `_id`, the check fails.
 
-## DELETE Event Check
+## DELETE Event Check (inline cdc check)
 
-In CDC+check scenarios, the checker validates DELETE events: it queries the target by primary key, and if the row still exists in the target, it is reported as an inconsistency in `diff.log` (with empty `diff_col_values`). When `output_revise_sql=true`, a corresponding `DELETE` repair statement is automatically generated in `sql.log`.
+In inline cdc check, the checker validates DELETE events: it queries the target by primary key,
+and if the row still exists in the target, it is reported as an inconsistency in `diff.log` (with
+empty `diff_col_values`). When `output_revise_sql=true`, a corresponding `DELETE` repair statement
+is automatically generated in `sql.log`.
 
 # Check Results
 
@@ -59,7 +174,9 @@ Missing logs include database (schema), table (tb), and primary/unique key (id_c
 
 ## Output Full Row
 
-When you need full row content for troubleshooting, you can enable full row logging in `[checker]` after configuring the checker target:
+When you need full row content for troubleshooting, enable full row logging in `[checker]`. In
+standalone snapshot check, configure the checker target explicitly in `[checker]`; in inline
+snapshot check and inline cdc check, the checker reuses the parsed `[sinker]` target:
 
 ```
 [checker]
@@ -100,7 +217,9 @@ After enabling, all `diff.log` entries append `src_row` and `dst_row`, and all `
 
 ## Output Revise SQL
 
-If you need to manually repair inconsistent data, you can enable SQL output in `[checker]` after configuring the checker target:
+If you need to manually repair inconsistent data, enable SQL output in `[checker]`. In standalone
+snapshot check, configure the checker target explicitly in `[checker]`; in inline snapshot check
+and inline cdc check, the checker reuses the parsed `[sinker]` target:
 
 ```
 [checker]
@@ -158,13 +277,14 @@ The summary log contains the overall results of the check, such as start_time, e
 
 `skip_count` records rows skipped by the checker, for example when the row key cannot be hashed. When no rows are skipped, this field is omitted.
 
-In CDC+check mode, `summary.log` also includes `tables`, which stores per-table miss/diff counts. This field is omitted for non-CDC tasks.
+In inline cdc check, `summary.log` also includes `tables`, which stores per-table miss/diff
+counts. This field is omitted for non-CDC tasks.
 
 ```json
 {"start_time": "2023-09-01T12:00:00+08:00", "end_time": "2023-09-01T12:00:01+08:00", "is_consistent": false, "miss_count": 1, "diff_count": 2, "skip_count": 1, "sql_count": 3}
 ```
 
-CDC+check example:
+Inline cdc check example:
 
 ```json
 {"start_time":"2023-09-01T12:00:00+08:00","end_time":"2023-09-01T12:05:00+08:00","is_consistent":false,"miss_count":1,"diff_count":2,"skip_count":1,"tables":{"test_db_1.test_tb":{"miss_count":1,"diff_count":2}}}
@@ -172,7 +292,9 @@ CDC+check example:
 
 # Reverse Check
 
-Data check is source-driven and only verifies that source rows exist in the target. To detect extra rows in the target that do not exist in the source, set up a reverse check by swapping the `[extractor]` and `[checker]` target configurations:
+Data check is source-driven and only verifies that source rows exist in the target. To detect extra
+rows in the target that do not exist in the source, run a standalone snapshot check with the
+source/target roles swapped:
 
 ```
 # Original: source=A, target=B
@@ -197,7 +319,13 @@ When `max_retries > 0`, the checker automatically retries on inconsistency:
 - Detailed miss/diff logs are only written on the final check
 - Useful when target data synchronization is not yet complete
 
-> **Note:** Retries are not supported in CDC+check mode. CDC events arrive as a stream, and subsequent DELETE events may remove data that was correctly written, causing false misses in the retry queue. Even if `max_retries` and `retry_interval_secs` are configured, they are forcibly ignored (set to 0) in CDC mode, and a warning is logged.
+This retry behavior is the main fit for standalone snapshot check and inline snapshot check. It is
+designed for short-term convergence waiting after write, not for long-running reconciliation state.
+
+> **Note:** Retries are not supported in inline cdc check. CDC events arrive as a stream, and
+> subsequent DELETE events may remove data that was correctly written, causing false misses in the
+> retry queue. Even if `max_retries` and `retry_interval_secs` are configured, they are forcibly
+> ignored (set to 0) in CDC mode, and a warning is logged.
 
 ## Router
 

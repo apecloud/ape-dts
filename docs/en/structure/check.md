@@ -2,7 +2,8 @@
 
 After structure migration, you can choose from two verification methods. One is the built-in checker provided by ape-dts, and the other is an open-source tool called [Liquibase](./check_by_liquibase.md). This document focuses on the built-in checker.
 
-Structure check is independent of CDC. Here, `CDC+check` refers to row-level data check (see [data check docs](../snapshot/check.md)).
+Structure check is independent of CDC. Here, `inline cdc check` refers to row-level data check
+(see [data check docs](../snapshot/check.md)).
 
 ## Example: MySQL -> MySQL
 

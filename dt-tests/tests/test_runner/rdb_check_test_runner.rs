@@ -183,24 +183,24 @@ impl RdbCheckTestRunner {
         let mut checker_conn_pool_mysql = None;
         let mut checker_conn_pool_pg = None;
 
-        if let Some(checker) = &base.config.checker {
+        if let Some(checker_target) = base.config.checker_target() {
             let is_override = base
                 .config
                 .sink_target()
                 .map(|target| {
-                    target.db_type != checker.db_type
-                        || target.url != checker.url
-                        || target.connection_auth != checker.connection_auth
+                    target.db_type != checker_target.db_type
+                        || target.url != checker_target.url
+                        || target.connection_auth != checker_target.connection_auth
                 })
                 .unwrap_or(true);
 
             if is_override {
-                match checker.db_type {
+                match checker_target.db_type {
                     DbType::Mysql => {
                         checker_conn_pool_mysql = Some(
                             TaskUtil::create_mysql_conn_pool(
-                                &checker.url,
-                                &checker.connection_auth,
+                                &checker_target.url,
+                                &checker_target.connection_auth,
                                 5,
                                 false,
                                 Some(vec!["SET FOREIGN_KEY_CHECKS=0"]),
@@ -211,8 +211,8 @@ impl RdbCheckTestRunner {
                     DbType::Pg => {
                         checker_conn_pool_pg = Some(
                             TaskUtil::create_pg_conn_pool(
-                                &checker.url,
-                                &checker.connection_auth,
+                                &checker_target.url,
+                                &checker_target.connection_auth,
                                 5,
                                 false,
                                 true,

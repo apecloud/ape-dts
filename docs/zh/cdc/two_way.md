@@ -4,10 +4,12 @@
 
 此时，我们除了要配置 “源 -> 目标” 的增量任务外，还需要配置 “目标 -> 源” 的任务，以实现双向数据同步。
 
-## CDC + Checker
+## Inline cdc check
 
-如需校验 CDC 落库后的数据，可在 CDC 任务配置中开启 `[checker]`。配置与限制请参考 [数据校验](../snapshot/check.md)。
-`[checker]` 必须显式声明自己的目标端，不再隐式复用 `[sinker]` 的目标。
+如需校验 CDC 落库后的数据，可在 CDC 任务配置中开启 `[checker]`。这对应
+[数据校验](../snapshot/check.md) 中定义的 inline cdc check。
+在 inline cdc check 中，`[checker]` 会直接复用 `[sinker]` 已解析的目标端配置，
+且不接受单独设置 `db_type`、`url`、`username`、`password`。
 
 # 数据循环
 

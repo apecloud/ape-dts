@@ -9,10 +9,11 @@
 支持变更类型：
 - 仅支持 DML 变更
 
-## CDC + Checker
+## Inline cdc check
 
-如需校验 CDC 落库后的数据，可在 CDC 任务配置中开启 `[checker]`。配置与限制请参考 [数据校验](../snapshot/check.md)。
-`[checker]` 必须显式声明自己的目标端，不再隐式复用 `[sinker]` 的目标。
+本文示例使用 `sink_type=sql`，不属于 inline cdc check。若需要校验 CDC 已落库数据，请改用
+`sink_type=write` 的 CDC 任务，并参考 [数据校验](../snapshot/check.md) 中的 inline cdc
+check 说明。
 
 # 示例
 

@@ -91,6 +91,8 @@ const RETRY_INTERVAL_SECS: &str = "retry_interval_secs";
 const MAX_RETRIES: &str = "max_retries";
 const DB_TYPE: &str = "db_type";
 const URL: &str = "url";
+const USERNAME: &str = "username";
+const PASSWORD: &str = "password";
 const BATCH_SIZE: &str = "batch_size";
 const MAX_CONNECTIONS: &str = "max_connections";
 const SAMPLE_INTERVAL: &str = "sample_interval";
@@ -148,14 +150,17 @@ impl TaskConfig {
                     "config [checker] only supports [pipeline] pipeline_type=basic".into()
                 ));
             }
-            if Self::build_task_type(
+            let task_type = Self::build_task_type(
                 &extractor_basic.extract_type,
                 &sinker_basic.sink_type,
-                &checker_cfg.db_type,
+                Self::checker_target_db_type(
+                    &extractor_basic.extract_type,
+                    &sinker_basic,
+                    checker_cfg,
+                ),
                 true,
             )
-            .is_none()
-            {
+            .ok_or_else(|| {
                 let message = if matches!(sinker_basic.sink_type, SinkType::Struct) {
                     format!(
                         "config [checker] only supports standalone check for [extractor] extract_type={}; use sink_type=dummy or omit [sinker]",
@@ -172,15 +177,15 @@ impl TaskConfig {
                     && matches!(sinker_basic.sink_type, SinkType::Write)
                 {
                     format!(
-                        "config [checker] is not supported for [checker] db_type={} with [extractor] extract_type=cdc and sink_type=write; only mysql and pg checker targets support CDC+check",
-                        checker_cfg.db_type
+                        "config [checker] is not supported for [sinker] db_type={} with [extractor] extract_type=cdc and sink_type=write; only mysql and pg write sinkers support CDC+check",
+                        sinker_basic.db_type
                     )
                 } else if matches!(sinker_basic.sink_type, SinkType::Write)
-                    && !Self::write_sink_supports_inline_checker(&checker_cfg.db_type)
+                    && !Self::write_sink_supports_inline_checker(&sinker_basic.db_type)
                 {
                     format!(
-                        "config [checker] is not supported for [checker] db_type={} with sink_type=write; snapshot inline check only supports mysql, pg, and mongo checker targets",
-                        checker_cfg.db_type
+                        "config [checker] is not supported for [sinker] db_type={} with sink_type=write; snapshot inline check only supports mysql, pg, and mongo write sinkers",
+                        sinker_basic.db_type
                     )
                 } else {
                     format!(
@@ -188,8 +193,9 @@ impl TaskConfig {
                         checker_cfg.db_type, extractor_basic.extract_type, sinker_basic.sink_type
                     )
                 };
-                bail!(Error::ConfigError(message));
-            }
+                Error::ConfigError(message)
+            })?;
+            Self::validate_checker_target_config(&loader, task_type.is_inline_check())?;
         }
         let resumer =
             Self::load_resumer_config(&loader, &runtime, &sinker_basic, checker.as_ref())?;
@@ -226,7 +232,15 @@ impl TaskConfig {
     }
 
     pub fn checker_target(&self) -> Option<BasicSinkerConfig> {
-        self.checker.as_ref().map(Self::checker_as_basic_sinker)
+        let checker = self.checker.as_ref()?;
+        if self
+            .task_type()
+            .is_some_and(|task_type| task_type.is_inline_check())
+        {
+            self.sink_target()
+        } else {
+            Some(Self::checker_as_basic_sinker(checker))
+        }
     }
 
     pub fn destination_target(&self) -> Option<BasicSinkerConfig> {
@@ -240,7 +254,13 @@ impl TaskConfig {
         let target_db_type = self
             .checker
             .as_ref()
-            .map(|checker| &checker.db_type)
+            .map(|checker| {
+                Self::checker_target_db_type(
+                    &self.extractor_basic.extract_type,
+                    &self.sinker_basic,
+                    checker,
+                )
+            })
             .unwrap_or(&self.sinker_basic.db_type);
         Self::build_task_type(
             &self.extractor_basic.extract_type,
@@ -248,6 +268,54 @@ impl TaskConfig {
             target_db_type,
             self.checker.is_some(),
         )
+    }
+
+    fn checker_uses_inline_target(extract_type: &ExtractType, sink_type: &SinkType) -> bool {
+        matches!(sink_type, SinkType::Write)
+            && matches!(extract_type, ExtractType::Snapshot | ExtractType::Cdc)
+    }
+
+    fn checker_target_db_type<'a>(
+        extract_type: &ExtractType,
+        sinker_basic: &'a BasicSinkerConfig,
+        checker: &'a CheckerConfig,
+    ) -> &'a DbType {
+        if Self::checker_uses_inline_target(extract_type, &sinker_basic.sink_type) {
+            &sinker_basic.db_type
+        } else {
+            &checker.db_type
+        }
+    }
+
+    fn validate_checker_target_config(
+        loader: &IniLoader,
+        inline_check: bool,
+    ) -> anyhow::Result<()> {
+        if inline_check {
+            let forbidden_keys = [DB_TYPE, URL, USERNAME, PASSWORD]
+                .into_iter()
+                .filter(|key| loader.contains(CHECKER, key))
+                .collect::<Vec<_>>();
+            if !forbidden_keys.is_empty() {
+                bail!(Error::ConfigError(format!(
+                    "config [checker] with inline check does not accept [{}]; inline check reuses the [sinker] target",
+                    forbidden_keys.join(", ")
+                )));
+            }
+            return Ok(());
+        }
+
+        let missing_keys = [DB_TYPE, URL]
+            .into_iter()
+            .filter(|key| !loader.contains_non_empty(CHECKER, key))
+            .collect::<Vec<_>>();
+        if !missing_keys.is_empty() {
+            bail!(Error::ConfigError(format!(
+                "config [checker] standalone target requires non-empty [{}]",
+                missing_keys.join(", ")
+            )));
+        }
+        Ok(())
     }
 
     fn write_sink_supports_inline_checker(target_db_type: &DbType) -> bool {
@@ -963,8 +1031,8 @@ impl TaskConfig {
                 CDC_CHECK_LOG_INTERVAL_SECS,
                 default.cdc_check_log_interval_secs,
             ),
-            db_type: loader.get_required(CHECKER, DB_TYPE),
-            url: loader.get_required(CHECKER, URL),
+            db_type: loader.get_optional(CHECKER, DB_TYPE),
+            url: loader.get_optional(CHECKER, URL),
             connection_auth: ConnectionAuthConfig::from(loader, CHECKER),
         };
         Ok(Some(config))
@@ -1172,5 +1240,94 @@ impl TaskConfig {
             workers: loader.get_with_default(metrics_section, "workers", 2),
             metrics_labels,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::TaskConfig;
+    use std::{
+        env, fs,
+        time::{SystemTime, UNIX_EPOCH},
+    };
+
+    fn write_temp_config(content: &str) -> String {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = env::temp_dir().join(format!("ape_dts_task_config_{suffix}.ini"));
+        fs::write(&path, content).unwrap();
+        path.to_string_lossy().into_owned()
+    }
+
+    #[test]
+    fn inline_check_rejects_explicit_checker_target() {
+        let config_path = write_temp_config(
+            r#"[extractor]
+db_type=pg
+extract_type=snapshot
+url=postgres://src
+
+[sinker]
+db_type=pg
+sink_type=write
+url=postgres://dst
+
+[checker]
+db_type=pg
+url=postgres://dst
+username=tester
+password=secret
+"#,
+        );
+
+        let err = TaskConfig::new(&config_path).err().unwrap().to_string();
+        assert!(err.contains(
+            "config [checker] with inline check does not accept [db_type, url, username, password]"
+        ));
+    }
+
+    #[test]
+    fn standalone_check_requires_explicit_checker_target() {
+        let config_path = write_temp_config(
+            r#"[extractor]
+db_type=mysql
+extract_type=snapshot
+url=mysql://src
+
+[checker]
+batch_size=10
+"#,
+        );
+
+        let err = TaskConfig::new(&config_path).err().unwrap().to_string();
+        assert!(
+            err.contains("config [checker] standalone target requires non-empty [db_type, url]")
+        );
+    }
+
+    #[test]
+    fn inline_check_capability_uses_sinker_db_type() {
+        let config_path = write_temp_config(
+            r#"[extractor]
+db_type=mysql
+extract_type=snapshot
+url=mysql://src
+
+[sinker]
+db_type=kafka
+sink_type=write
+url=127.0.0.1:9092
+
+[checker]
+batch_size=10
+"#,
+        );
+
+        let err = TaskConfig::new(&config_path).err().unwrap().to_string();
+        assert!(err.contains(
+            "config [checker] is not supported for [sinker] db_type=kafka with sink_type=write"
+        ));
     }
 }

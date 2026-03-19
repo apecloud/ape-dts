@@ -2,7 +2,8 @@
 
 结构迁移后，您可使用两种校验方式：一种是 ape-dts 自带的校验器，另一种是第三方工具 [Liquibase](./check_by_liquibase.md)。本文档主要介绍前者。
 
-结构校验与 CDC 无直接关系。这里的 `CDC+check` 指行级数据校验（见 [数据校验文档](../snapshot/check.md)）。
+结构校验与 CDC 无直接关系。这里的 `inline cdc check` 指行级数据校验
+（见 [数据校验文档](../snapshot/check.md)）。
 
 ## 示例: MySQL -> MySQL
 

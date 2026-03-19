@@ -9,6 +9,12 @@ Supported databases:
 Supported data changes:
 - DML
 
+## Inline cdc check
+
+This page uses `sink_type=sql`, so it is not an inline cdc check flow. If you need to validate
+CDC-applied data, use a CDC task with `sink_type=write` and refer to
+[Data Check](../snapshot/check.md).
+
 # Examples
 
 Refer to [task templates](../../templates/mysql_to_mysql.md)

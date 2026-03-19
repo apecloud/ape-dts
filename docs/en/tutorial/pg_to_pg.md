@@ -103,6 +103,10 @@ SET search_path TO test_db;
 
 # Migrate snapshot data
 
+- To turn this into **inline snapshot check**, keep `[sinker] sink_type=write` and add a
+  `[checker]` section without target connection fields. See [Data Check](../snapshot/check.md) and
+  the Postgres template for the exact config shape.
+
 ## Prepare data
 
 ```
@@ -162,9 +166,9 @@ SELECT * FROM test_db.tb_1 ORDER BY id;
   4 |     4
 ```
 
-# Check data
+# Standalone snapshot check
 
-- check the differences between target data and source data
+- check the differences between target data and source data in standalone snapshot check mode
 
 ## Prepare data
 
@@ -325,6 +329,10 @@ docker run --rm --network host \
 - /tmp/ape_dts/review_data_task_log/check/miss.log and /tmp/ape_dts/review_data_task_log/check/diff.log should be empty
 
 # CDC task
+
+- To turn this into **inline cdc check**, add `[checker]` plus `[resumer]`, keep
+  `[sinker] sink_type=write`, and do not configure checker target fields. See
+  [Data Check](../snapshot/check.md) and the Postgres template.
 
 ## Drop replication slot if exists
 

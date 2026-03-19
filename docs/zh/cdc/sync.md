@@ -8,10 +8,12 @@
 - Mongo：源库需为 ReplicaSet；
 - 详情请参考 [测试环境搭建](../../../dt-tests/README_ZH.md)。
 
-## CDC + Checker
+## Inline cdc check
 
-要校验 CDC 落库后的数据，可在 CDC 任务配置中开启 `[checker]`。配置与限制请参考 [数据校验](../snapshot/check.md)。
-`[checker]` 必须显式声明自己的目标端，不再隐式复用 `[sinker]` 的目标。
+要校验 CDC 落库后的数据，可在 CDC 任务配置中开启 `[checker]`。这对应
+[数据校验](../snapshot/check.md) 中定义的 inline cdc check。
+在 inline cdc check 中，`[checker]` 会直接复用 `[sinker]` 已解析的目标端配置，
+且不接受单独设置 `db_type`、`url`、`username`、`password`。
 
 # 示例: MySQL -> MySQL
 

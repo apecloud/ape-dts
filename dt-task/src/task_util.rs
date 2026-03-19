@@ -227,12 +227,12 @@ impl TaskUtil {
             return Ok(meta_manager);
         }
 
-        if let Some(checker) = &config.checker {
-            let checker_meta_manager = match checker.db_type {
+        if let Some(checker_target) = config.checker_target() {
+            let checker_meta_manager = match checker_target.db_type {
                 DbType::Mysql => {
                     let mysql_meta_manager = Self::create_mysql_meta_manager(
-                        &checker.url,
-                        &checker.connection_auth,
+                        &checker_target.url,
+                        &checker_target.connection_auth,
                         log_level,
                         DbType::Mysql,
                         None,
@@ -243,8 +243,8 @@ impl TaskUtil {
                 }
                 DbType::Pg => {
                     let pg_meta_manager = Self::create_pg_meta_manager(
-                        &checker.url,
-                        &checker.connection_auth,
+                        &checker_target.url,
+                        &checker_target.connection_auth,
                         log_level,
                     )
                     .await?;

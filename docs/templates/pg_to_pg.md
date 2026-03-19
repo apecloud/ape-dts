@@ -246,7 +246,7 @@ log_dir=./logs
 
 - the output will be in {log_dir}/check/
 
-# Data check
+# Standalone snapshot check
 
 ```
 [extractor]
@@ -258,7 +258,7 @@ batch_size=10000
 [checker]
 db_type=pg
 url=postgres://postgres:postgres@127.0.0.1:5434/postgres?options[statement_timeout]=10s
-batch_size=200
+batch_size=100
 
 [filter]
 do_dbs=
@@ -287,6 +287,111 @@ log_dir=./logs
 ```
 
 - the output will be in {log_dir}/check/
+
+# Inline snapshot check
+
+```
+[extractor]
+db_type=pg
+extract_type=snapshot
+url=postgres://postgres:postgres@127.0.0.1:5433/postgres?options[statement_timeout]=10s
+batch_size=10000
+
+[sinker]
+db_type=pg
+sink_type=write
+url=postgres://postgres:postgres@127.0.0.1:5434/postgres?options[statement_timeout]=10s
+batch_size=200
+replace=true
+
+[checker]
+batch_size=200
+
+[filter]
+do_dbs=
+ignore_dbs=
+do_tbs=test_schema.a,test_schema.b
+ignore_tbs=
+do_events=insert
+
+[router]
+db_map=
+tb_map=
+col_map=
+
+[parallelizer]
+parallel_type=snapshot
+parallel_size=8
+
+[pipeline]
+buffer_size=16000
+checkpoint_interval_secs=10
+
+[runtime]
+log_level=info
+log4rs_file=./log4rs.yaml
+log_dir=./logs
+```
+
+- the output will be in {log_dir}/check/
+- `[checker]` intentionally omits `db_type` / `url` / `username` / `password`; inline snapshot
+  check reuses the parsed `[sinker]` target.
+
+# Inline cdc check
+
+```
+[extractor]
+db_type=pg
+extract_type=cdc
+url=postgres://postgres:postgres@127.0.0.1:5433/postgres?options[statement_timeout]=10s
+start_lsn=0/406DE430
+slot_name=ape_test
+heartbeat_interval_secs=1
+heartbeat_tb=heartbeat_db.ape_dts_heartbeat
+
+[checker]
+batch_size=200
+
+[resumer]
+resume_type=from_target
+table_full_name=apecloud_metadata.apedts_task_position
+
+[filter]
+do_dbs=
+ignore_dbs=
+do_tbs=test_schema.a,test_schema.b
+ignore_tbs=
+do_events=insert,update,delete
+
+[sinker]
+db_type=pg
+sink_type=write
+url=postgres://postgres:postgres@127.0.0.1:5434/postgres?options[statement_timeout]=10s
+batch_size=200
+replace=true
+
+[router]
+db_map=
+tb_map=
+col_map=
+
+[parallelizer]
+parallel_type=rdb_check
+parallel_size=8
+
+[pipeline]
+buffer_size=16000
+checkpoint_interval_secs=10
+
+[runtime]
+log_level=info
+log4rs_file=./log4rs.yaml
+log_dir=./logs
+```
+
+- the output will be in {log_dir}/check/
+- `[checker]` intentionally omits `db_type` / `url` / `username` / `password`; inline cdc check
+  reuses the parsed `[sinker]` target and requires `[resumer]`.
 
 # Data revise
 
@@ -349,7 +454,7 @@ batch_size=200
 [checker]
 db_type=pg
 url=postgres://postgres:postgres@127.0.0.1:5434/postgres?options[statement_timeout]=10s
-batch_size=200
+batch_size=100
 
 [filter]
 do_dbs=

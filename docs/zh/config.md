@@ -42,53 +42,60 @@ url=mysql://user1:abc%25%24%23%3F%40@127.0.0.1:3307?ssl-mode=disabled
 
 # [checker]
 
-`[checker]` 支持两种模式：
-- 独立校验：仅做校验，不做写入。通常用于 snapshot / struct 校验任务。设置
-  `sink_type=dummy` 或直接省略 `[sinker]`，并在 `[checker]` 中显式配置校验目标。
-- 写入后内联校验：当 `sink_type=write` 时，checker 会在写入后运行。snapshot 任务可在支持
-  的 write sinker 上使用该模式；CDC+check 也使用该模式，并额外要求持久化 checker 状态。
+`[checker]` 对应三种已文档化的数据校验形态：
+- standalone snapshot check：只运行 snapshot 校验任务，不执行写入。设置 `sink_type=dummy`
+  或直接省略 `[sinker]`，并在 `[checker]` 中显式配置校验目标。
+- inline snapshot check：用于 `sink_type=write` 的 snapshot 任务，checker 会在写入后执行，
+  并直接复用 `[sinker]` 已解析的目标端配置。
+- inline cdc check：用于 `extract_type=cdc` 且 `sink_type=write` 的 CDC 任务，checker 会在
+  写入后校验已落库变更，直接复用 `[sinker]` 目标，并要求持久化 checker 状态。
 
-| 配置                        | 作用                                            | 示例        | 默认                             |
-| :-------------------------- | :---------------------------------------------- | :---------- | :------------------------------- |
-| queue_size                  | checker 队列容量                                | 200         | 200                              |
-| max_connections             | checker 连接池最大连接数                        | 8           | 8                                |
-| batch_size                  | checker 批量校验大小（非 CDC 任务）             | 100         | 1                                |
-| sample_rate                 | checker 抽样比例（保留字段，当前未生效）        | 1.0         | 1.0                              |
-| output_full_row             | diff 日志是否输出全量行                         | false       | false                            |
-| output_revise_sql           | 是否将生成的修复 SQL 写入 `sql.log`            | false       | false                            |
-| revise_match_full_row       | 生成修复 SQL 时是否按全量行匹配                 | false       | false                            |
-| retry_interval_secs         | 重试间隔（秒），CDC+check 模式下强制为 0        | 0           | 0                                |
-| max_retries                 | 重试次数，CDC+check 模式下强制为 0              | 0           | 0                                |
-| check_log_dir               | 校验日志目录                                    | /tmp/check  | 空（默认 runtime.log_dir/check） |
-| check_log_file_size         | 单类日志文件大小上限（`diff.log` / `miss.log` / `sql.log`） | 100mb | 100mb                            |
-| check_log_max_rows          | 单类日志最大行数（`diff.log` / `miss.log`）     | 1000        | 1000                             |
-| db_type                     | 校验目标库类型（必填）                          | mysql       | -                                |
-| url                         | 校验目标 URL（必填）                            | mysql://... | -                                |
-| username                    | 校验目标用户名（配置后会写入目标 URL）          | root        | 空                               |
-| password                    | 校验目标密码（配置后会写入目标 URL）            | password    | 空                               |
-| cdc_check_log_s3            | 定期将 CDC 校验快照上传至 S3                    | false       | false                            |
-| cdc_check_log_interval_secs | CDC 校验快照输出间隔（秒）                      | 10          | 10                               |
-| s3_bucket                   | 校验日志上传的 S3 存储桶                        | my-bucket   | -                                |
-| s3_access_key_id            | S3 访问密钥 ID                                  | AKIA...     | -                                |
-| s3_secret_access_key        | S3 秘密访问密钥                                 | ****        | -                                |
-| s3_region                   | S3 区域                                         | us-east-1   | -                                |
-| s3_endpoint                 | S3 端点                                         | https://... | -                                |
-| s3_key_prefix               | 校验日志的 S3 键前缀                            | task1/check | 空                               |
+struct check 复用 standalone snapshot check 的目标选择规则。
+
+| 配置                        | 作用                                                        | 示例        | 默认                             |
+| :-------------------------- | :---------------------------------------------------------- | :---------- | :------------------------------- |
+| queue_size                  | checker 队列容量                                            | 200         | 200                              |
+| max_connections             | checker 连接池最大连接数                                    | 8           | 8                                |
+| batch_size                  | checker 批量校验大小（非 CDC 任务）                         | 100         | 100                              |
+| sample_rate                 | checker 抽样比例（保留字段，当前未生效）                    | 1.0         | 1.0                              |
+| output_full_row             | diff 日志是否输出全量行                                     | false       | false                            |
+| output_revise_sql           | 是否将生成的修复 SQL 写入 `sql.log`                         | false       | false                            |
+| revise_match_full_row       | 生成修复 SQL 时是否按全量行匹配                             | false       | false                            |
+| retry_interval_secs         | 重试间隔（秒），inline cdc check 下强制为 0                 | 0           | 0                                |
+| max_retries                 | 重试次数，inline cdc check 下强制为 0                       | 0           | 0                                |
+| check_log_dir               | 校验日志目录                                                | /tmp/check  | 空（默认 runtime.log_dir/check） |
+| check_log_file_size         | 单类日志文件大小上限（`diff.log` / `miss.log` / `sql.log`） | 100mb       | 100mb                            |
+| check_log_max_rows          | 单类日志最大行数（`diff.log` / `miss.log`）                 | 1000        | 1000                             |
+| db_type                     | 校验目标库类型（仅 standalone 目标配置）                    | mysql       | -                                |
+| url                         | 校验目标 URL（仅 standalone 目标配置）                      | mysql://... | -                                |
+| username                    | 校验目标用户名（仅 standalone 目标配置）                    | root        | 空                               |
+| password                    | 校验目标密码（仅 standalone 目标配置）                      | password    | 空                               |
+| cdc_check_log_s3            | 定期将 CDC 校验快照上传至 S3                                | false       | false                            |
+| cdc_check_log_interval_secs | CDC 校验快照输出间隔（秒）                                  | 10          | 10                               |
+| s3_bucket                   | 校验日志上传的 S3 存储桶                                    | my-bucket   | -                                |
+| s3_access_key_id            | S3 访问密钥 ID                                              | AKIA...     | -                                |
+| s3_secret_access_key        | S3 秘密访问密钥                                             | ****        | -                                |
+| s3_region                   | S3 区域                                                     | us-east-1   | -                                |
+| s3_endpoint                 | S3 端点                                                     | https://... | -                                |
+| s3_key_prefix               | 校验日志的 S3 键前缀                                        | task1/check | 空                               |
 
 说明：
 - checker 仅支持 `[pipeline] pipeline_type=basic`。
-- struct 任务只支持独立校验。若为 struct 任务启用 `[checker]`，请使用
+- struct 任务只支持 standalone 目标选择规则。若为 struct 任务启用 `[checker]`，请使用
   `sink_type=dummy` 或直接省略 `[sinker]`。
-- 当 `[sinker] sink_type=write` 时，snapshot 的写入后内联校验仅支持 `[sinker].db_type`
-  为 `mysql`、`pg`、`mongo` 的写入链路。
-- CDC+check 当前仅支持 `[extractor] extract_type=cdc`、`[sinker] sink_type=write`，
+- inline snapshot check 仅支持 `[extractor] extract_type=snapshot`、`[sinker] sink_type=write`，
+  且 `[sinker].db_type` 为 `mysql`、`pg`、`mongo` 的写入链路。
+- inline cdc check 当前仅支持 `[extractor] extract_type=cdc`、`[sinker] sink_type=write`，
   且 `[sinker].db_type` 为 `mysql` 或 `pg` 的场景。
-- 在 CDC+check 模式下，必须配置 `[resumer] resume_type=from_target` 或 `from_db` 来持久化
+- 在 inline snapshot check 与 inline cdc check 中，`[checker]` 不接受 `db_type`、`url`、
+  `username`、`password`；checker 会直接复用 `[sinker]` 已解析的目标端配置。
+- 在 inline cdc check 中，必须配置 `[resumer] resume_type=from_target` 或 `from_db` 来持久化
   checker 状态。
-- 在 CDC+check 模式（`extract_type=cdc` 且 `sink_type=write`）下，checker 批量大小跟随 `[sinker].batch_size`。
-- 在 CDC+check 模式下，需在 `[checker]` 中显式配置校验目标，checker 才会启用。
+- 在 inline cdc check（`extract_type=cdc` 且 `sink_type=write`）下，checker 批量大小跟随
+  `[sinker].batch_size`。
 - 当 `check_log_dir` 为空时，统一使用 `runtime.log_dir/check` 作为 checker 日志目录（包含 CDC 校验输出）。
-- 在 CDC+check 模式下，会始终先在 `check_log_dir` 本地落盘周期性校验快照；`cdc_check_log_s3` 仅控制是否上传 S3。
+- 在 inline cdc check 下，会始终先在 `check_log_dir` 本地落盘周期性校验快照；
+  `cdc_check_log_s3` 仅控制是否上传 S3。
 - `check_log_file_size` 限制本地 `diff.log` / `miss.log` / `sql.log` 的大小，`summary.log` 不受该限制。
 - `check_log_max_rows` 仅对 CDC 校验快照的 `diff.log` / `miss.log` 生效；命中任一阈值时仅保留最新记录。
 
@@ -192,14 +199,14 @@ url=mysql://user1:abc%25%24%23%3F%40@127.0.0.1:3307?ssl-mode=disabled
 
 ## parallel_type 类型
 
-| 类型      | 并行策略                                                                                            | 适用任务                | 优点 | 缺点                                         |
-| :-------- | :-------------------------------------------------------------------------------------------------- | :---------------------- | :--- | :------------------------------------------- |
-| snapshot  | 缓存中的数据分成 parallel_size 份，多线程并行，且批量写入目标                                       | mysql/pg/mongo 全量     | 快   |                                              |
-| serial    | 单线程，依次单条写入目标                                                                            | 所有                    |      | 慢                                           |
-| rdb_merge | 将缓存中的增量数据（insert, update, delete）整合成 insert + delete 数据，多线程并行，且批量写入目标 | mysql/pg 增量任务       | 快   | 最终一致性，破坏源端事务在目标端重放的完整性 |
-| mongo     | rdb_merge 的 mongo 版                                                                               | mongo 增量              |      |                                              |
-| rdb_check | 校验模式；必须配置 `[checker]`，独立校验任务不写入目标端，CDC+check 仍是先写入再校验               | 支持 checker 的校验任务 |      |                                              |
-| redis     | 单线程，批量/串行（由 sinker 的 batch_size 决定）写入                                               | redis 全量/增量         |      |                                              |
+| 类型      | 并行策略                                                                                                           | 适用任务                | 优点 | 缺点                                         |
+| :-------- | :----------------------------------------------------------------------------------------------------------------- | :---------------------- | :--- | :------------------------------------------- |
+| snapshot  | 缓存中的数据分成 parallel_size 份，多线程并行，且批量写入目标                                                      | mysql/pg/mongo 全量     | 快   |                                              |
+| serial    | 单线程，依次单条写入目标                                                                                           | 所有                    |      | 慢                                           |
+| rdb_merge | 将缓存中的增量数据（insert, update, delete）整合成 insert + delete 数据，多线程并行，且批量写入目标                | mysql/pg 增量任务       | 快   | 最终一致性，破坏源端事务在目标端重放的完整性 |
+| mongo     | rdb_merge 的 mongo 版                                                                                              | mongo 增量              |      |                                              |
+| rdb_check | 校验模式；必须配置 `[checker]`，standalone snapshot / struct check 不写入目标端，inline cdc check 仍是先写入再校验 | 支持 checker 的校验任务 |      |                                              |
+| redis     | 单线程，批量/串行（由 sinker 的 batch_size 决定）写入                                                              | redis 全量/增量         |      |                                              |
 
 # [runtime]
 | 配置        | 作用                          | 示例                        | 默认          |

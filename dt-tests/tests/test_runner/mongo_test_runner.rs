@@ -43,7 +43,7 @@ impl MongoTestRunner {
         let mut dst_mongo_client = None;
 
         let config = TaskConfig::new(&base.task_config_file).unwrap();
-        match config.extractor {
+        match &config.extractor {
             ExtractorConfig::MongoSnapshot {
                 url,
                 connection_auth,
@@ -76,7 +76,7 @@ impl MongoTestRunner {
             connection_auth,
             app_name,
             ..
-        } = config.sinker
+        } = &config.sinker
         {
             dst_mongo_client = Some(
                 TaskUtil::create_mongo_client(&url, &connection_auth, &app_name, None)
@@ -86,12 +86,12 @@ impl MongoTestRunner {
         }
 
         if dst_mongo_client.is_none() {
-            if let Some(checker) = config.checker.as_ref() {
-                if matches!(checker.db_type, DbType::Mongo) {
+            if let Some(checker_target) = config.checker_target() {
+                if matches!(checker_target.db_type, DbType::Mongo) {
                     dst_mongo_client = Some(
                         TaskUtil::create_mongo_client(
-                            &checker.url,
-                            &checker.connection_auth,
+                            &checker_target.url,
+                            &checker_target.connection_auth,
                             "",
                             None,
                         )
