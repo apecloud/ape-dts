@@ -463,7 +463,7 @@ impl TaskRunner {
         {
             let sinker_db_type = self
                 .config
-                .destination_target()?
+                .destination_target()
                 .map(|target| target.db_type)
                 .unwrap_or(self.config.sinker_basic.db_type.clone());
             let extractor_data_marker =
@@ -854,13 +854,9 @@ impl TaskRunner {
         } else {
             (cfg.max_retries, cfg.retry_interval_secs)
         };
-        let target = self
-            .config
-            .checker_target()?
-            .ok_or_else(|| Error::ConfigError("config [checker] target is required".into()))?;
-        let checker_db_type = target.db_type;
-        let checker_url = target.url;
-        let checker_auth = target.connection_auth;
+        let checker_db_type = cfg.db_type.clone();
+        let checker_url = cfg.url.clone();
+        let checker_auth = cfg.connection_auth.clone();
 
         let is_struct_task = matches!(
             self.config.extractor,
@@ -1023,7 +1019,7 @@ impl TaskRunner {
             }
             DbType::Mongo => {
                 let reverse_router = create_router!(self.config, Mongo).reverse();
-                let app_name = if cfg.db_type.is_some() && !is_cdc_task {
+                let app_name = if !is_cdc_task {
                     "checker"
                 } else {
                     match &self.config.sinker {

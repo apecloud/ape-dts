@@ -72,7 +72,7 @@ impl RdbTestRunner {
         let src_url = config.extractor_basic.url.clone();
         let src_connection_auth = config.extractor_basic.connection_auth.clone();
 
-        let dst_target = config.destination_target().unwrap();
+        let dst_target = config.destination_target();
         let mut dst_db_type = config.sinker_basic.db_type.clone();
         let mut dst_url = config.sinker_basic.url.clone();
         let mut dst_connection_auth = config.sinker_basic.connection_auth.clone();
@@ -359,7 +359,6 @@ impl RdbTestRunner {
                 let dst_target = self
                     .config
                     .destination_target()
-                    .unwrap()
                     .expect("destination target should exist");
                 let url = &dst_target.url;
                 let conn_str = url.replace(
@@ -1222,7 +1221,6 @@ impl RdbTestRunner {
         } else {
             config
                 .destination_target()
-                .unwrap()
                 .map(|target| target.db_type)
                 .unwrap_or(config.sinker_basic.db_type)
         }

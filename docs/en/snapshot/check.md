@@ -6,7 +6,7 @@ Supports comparison for MySQL, PostgreSQL, and MongoDB.
 
 Sampling via `sample_interval` is currently available only for MySQL/PostgreSQL snapshot checks.
 
-Data check can be used with both snapshot tasks and CDC+check. Snapshot check can run either in standalone mode (configure the checker target explicitly in `[checker]` and keep `sink_type=dummy`, or omit `[sinker]`) or as inline check after write on supported write sinkers. For CDC+check, set `extract_type=cdc`; the checker validates applied changes after they are written to the target, and `[resumer] resume_type=from_target` or `from_db` is required to persist checker state. Inline checker with `sink_type=write` is currently available when the sinker writes through MySQL, PostgreSQL, or MongoDB.
+Data check can be used with both snapshot tasks and CDC+check. Snapshot check can run either in standalone mode (configure the checker target explicitly in `[checker]` and keep `sink_type=dummy`, or omit `[sinker]`) or as inline check after write on supported write sinkers. Snapshot inline check with `sink_type=write` is currently available when the sinker writes through MySQL, PostgreSQL, or MongoDB. For CDC+check, set `extract_type=cdc`; the checker validates applied changes after they are written to the target, requires `[resumer] resume_type=from_target` or `from_db` to persist checker state, and is currently supported only for MySQL/PostgreSQL write sinkers.
 
 ## Example: MySQL -> MySQL
 

@@ -6,7 +6,7 @@
 
 目前 `sample_interval` 采样仅支持 MySQL / PostgreSQL 全量校验。
 
-数据校验既可用于 snapshot 任务，也可用于 CDC+check。snapshot 校验既可以使用独立模式：在 `[checker]` 中显式配置校验目标，并保持 `sink_type=dummy`（或直接省略 `[sinker]`）；也可以在支持的 write sinker 上使用写入后的内联校验。若为 CDC+check，设置 `extract_type=cdc` 后，checker 会在数据写入目标端后进行校验，并且必须通过 `[resumer] resume_type=from_target` 或 `from_db` 持久化 checker 状态。若使用 `sink_type=write` 的内联校验，当前仅支持 MySQL、PostgreSQL、MongoDB 写入链路。
+数据校验既可用于 snapshot 任务，也可用于 CDC+check。snapshot 校验既可以使用独立模式：在 `[checker]` 中显式配置校验目标，并保持 `sink_type=dummy`（或直接省略 `[sinker]`）；也可以在支持的 write sinker 上使用写入后的内联校验。若使用 `sink_type=write` 的 snapshot 内联校验，当前支持 MySQL、PostgreSQL、MongoDB 写入链路。若为 CDC+check，设置 `extract_type=cdc` 后，checker 会在数据写入目标端后进行校验，并且必须通过 `[resumer] resume_type=from_target` 或 `from_db` 持久化 checker 状态；当前仅支持 MySQL/PostgreSQL 写入链路。
 
 ## 示例: MySQL -> MySQL
 

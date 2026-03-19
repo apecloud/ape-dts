@@ -258,3 +258,36 @@ pub fn build_task_type(
 
     Some(TaskType::new(kind, check))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{build_task_type, CheckMode, DbType, ExtractType, SinkType, TaskKind, TaskType};
+
+    #[test]
+    fn cdc_write_checker_support_matrix_excludes_mongo() {
+        assert_eq!(
+            build_task_type(&ExtractType::Cdc, &SinkType::Write, &DbType::Mysql, true),
+            Some(TaskType::new(TaskKind::Cdc, Some(CheckMode::Inline)))
+        );
+        assert_eq!(
+            build_task_type(&ExtractType::Cdc, &SinkType::Write, &DbType::Pg, true),
+            Some(TaskType::new(TaskKind::Cdc, Some(CheckMode::Inline)))
+        );
+        assert_eq!(
+            build_task_type(&ExtractType::Cdc, &SinkType::Write, &DbType::Mongo, true),
+            None
+        );
+        assert_eq!(
+            build_task_type(&ExtractType::Cdc, &SinkType::Write, &DbType::Redis, true),
+            None
+        );
+    }
+
+    #[test]
+    fn snapshot_write_checker_support_matrix_includes_mongo() {
+        assert_eq!(
+            build_task_type(&ExtractType::Snapshot, &SinkType::Write, &DbType::Mongo, true),
+            Some(TaskType::new(TaskKind::Snapshot, Some(CheckMode::Inline)))
+        );
+    }
+}

@@ -209,7 +209,6 @@ impl RdbStructTestRunner {
         let config = TaskConfig::new(&self.base.base.task_config_file).unwrap();
         let dst_db_type = config
             .destination_target()
-            .unwrap()
             .map(|target| target.db_type)
             .unwrap_or(config.sinker_basic.db_type);
         let ddl_file = match dst_db_type {

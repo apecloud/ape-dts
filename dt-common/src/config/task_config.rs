@@ -162,11 +162,18 @@ impl TaskConfig {
                     "config [checker] only supports standalone check for [extractor] extract_type={}; use sink_type=dummy or omit [sinker]",
                     extractor_basic.extract_type
                 )
+            } else if matches!(extractor_basic.extract_type, ExtractType::Cdc)
+                && matches!(sinker_basic.sink_type, SinkType::Write)
+            {
+                format!(
+                    "config [checker] is not supported for [sinker] db_type={} with [extractor] extract_type=cdc and sink_type=write; only mysql and pg write sinkers support CDC+check",
+                    sinker_basic.db_type
+                )
             } else if matches!(sinker_basic.sink_type, SinkType::Write)
                 && !write_sink_supports_inline_checker(&sinker_basic.db_type)
             {
                 format!(
-                    "config [checker] is not supported for [sinker] db_type={} with sink_type=write; only mysql, pg, and mongo write sinkers call checker",
+                    "config [checker] is not supported for [sinker] db_type={} with sink_type=write; snapshot inline check only supports mysql, pg, and mongo write sinkers",
                     sinker_basic.db_type
                 )
             } else {
@@ -211,16 +218,13 @@ impl TaskConfig {
         (!matches!(self.sinker_basic.sink_type, SinkType::Dummy)).then(|| self.sinker_basic.clone())
     }
 
-    pub fn checker_target(&self) -> anyhow::Result<Option<BasicSinkerConfig>> {
-        self.checker
-            .as_ref()
-            .map(Self::checker_as_basic_sinker)
-            .transpose()
+    pub fn checker_target(&self) -> Option<BasicSinkerConfig> {
+        self.checker.as_ref().map(Self::checker_as_basic_sinker)
     }
 
-    pub fn destination_target(&self) -> anyhow::Result<Option<BasicSinkerConfig>> {
+    pub fn destination_target(&self) -> Option<BasicSinkerConfig> {
         if let Some(target) = self.sink_target() {
-            return Ok(Some(target));
+            return Some(target);
         }
         self.checker_target()
     }
@@ -236,7 +240,6 @@ impl TaskConfig {
         let identity_sinker_basic = if matches!(sinker_basic.sink_type, SinkType::Dummy) {
             checker
                 .map(Self::checker_as_basic_sinker)
-                .transpose()?
                 .unwrap_or_else(|| sinker_basic.clone())
         } else {
             sinker_basic.clone()
@@ -887,31 +890,22 @@ impl TaskConfig {
                 CDC_CHECK_LOG_INTERVAL_SECS,
                 default.cdc_check_log_interval_secs,
             ),
-            db_type: Some(loader.get_required(CHECKER, DB_TYPE)),
-            url: Some(loader.get_required(CHECKER, URL)),
-            connection_auth: Some(ConnectionAuthConfig::from(loader, CHECKER)),
+            db_type: loader.get_required(CHECKER, DB_TYPE),
+            url: loader.get_required(CHECKER, URL),
+            connection_auth: ConnectionAuthConfig::from(loader, CHECKER),
         };
         Ok(Some(config))
     }
 
-    fn checker_as_basic_sinker(checker: &CheckerConfig) -> anyhow::Result<BasicSinkerConfig> {
-        match (
-            checker.db_type.clone(),
-            checker.url.clone(),
-            checker.connection_auth.clone(),
-        ) {
-            (Some(db_type), Some(url), Some(connection_auth)) => Ok(BasicSinkerConfig {
-                sink_type: SinkType::Dummy,
-                db_type,
-                url,
-                connection_auth,
-                batch_size: checker.batch_size,
-                max_connections: checker.max_connections,
-                rate_limiter: RateLimiterConfig::default(),
-            }),
-            _ => bail!(Error::ConfigError(
-                "config [checker] target is required".into()
-            )),
+    fn checker_as_basic_sinker(checker: &CheckerConfig) -> BasicSinkerConfig {
+        BasicSinkerConfig {
+            sink_type: SinkType::Dummy,
+            db_type: checker.db_type.clone(),
+            url: checker.url.clone(),
+            connection_auth: checker.connection_auth.clone(),
+            batch_size: checker.batch_size,
+            max_connections: checker.max_connections,
+            rate_limiter: RateLimiterConfig::default(),
         }
     }
 
@@ -959,6 +953,17 @@ impl TaskConfig {
         sinker_basic: &BasicSinkerConfig,
         checker: Option<&CheckerConfig>,
     ) -> anyhow::Result<ResumerConfig> {
+        let legacy_keys = ["resume_from_log", "resume_log_dir", "resume_config_file"]
+            .into_iter()
+            .filter(|key| loader.contains(RESUMER, key))
+            .collect::<Vec<_>>();
+        if !legacy_keys.is_empty() {
+            bail!(Error::ConfigError(format!(
+                "legacy [resumer] configs {} are no longer supported; migrate to resume_type=from_log, log_dir, and config_file",
+                legacy_keys.join(", ")
+            )));
+        }
+
         let resume_type = loader.get_with_default(RESUMER, RESUME_TYPE, ResumeType::Dummy);
         match resume_type {
             ResumeType::FromLog => Ok(ResumerConfig::FromLog {
@@ -972,7 +977,7 @@ impl TaskConfig {
                             "config [checker] target is required when [resumer] resume_type=from_target".into()
                         ));
                     };
-                    Self::checker_as_basic_sinker(checker)?
+                    Self::checker_as_basic_sinker(checker)
                 } else {
                     sinker_basic.clone()
                 };
@@ -1094,5 +1099,58 @@ impl TaskConfig {
             workers: loader.get_with_default(metrics_section, "workers", 2),
             metrics_labels,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::TaskConfig;
+    use std::{
+        fs,
+        time::{SystemTime, UNIX_EPOCH},
+    };
+
+    fn write_temp_config(prefix: &str, content: &str) -> String {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time before unix epoch")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("ape_dts_{prefix}_{unique}.ini"));
+        fs::write(&path, content).expect("failed to write temp config");
+        path.to_string_lossy().into_owned()
+    }
+
+    #[test]
+    fn legacy_resumer_keys_fail_with_migration_error() {
+        let path = write_temp_config(
+            "legacy_resumer",
+            r#"[extractor]
+db_type=mysql
+extract_type=snapshot
+url=mysql://127.0.0.1:3306
+
+[sinker]
+db_type=mysql
+sink_type=write
+url=mysql://127.0.0.1:3307
+
+[resumer]
+resume_from_log=true
+resume_log_dir=./resume_logs
+resume_config_file=./resume.config
+"#,
+        );
+
+        let err = TaskConfig::new(&path)
+            .err()
+            .expect("legacy resumer config should fail");
+        let err_msg = err.to_string();
+        assert!(err_msg.contains("legacy [resumer] configs"));
+        assert!(err_msg.contains("resume_from_log"));
+        assert!(err_msg.contains("resume_log_dir"));
+        assert!(err_msg.contains("resume_config_file"));
+        assert!(err_msg.contains("resume_type=from_log"));
+
+        fs::remove_file(path).expect("failed to remove temp config");
     }
 }
