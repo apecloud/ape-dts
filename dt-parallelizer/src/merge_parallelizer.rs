@@ -13,6 +13,7 @@ use dt_common::meta::{
 };
 use dt_connector::Sinker;
 
+// Shared parallelizer for merge and checker flows.
 pub struct MergeParallelizer {
     pub base_parallelizer: BaseParallelizer,
     pub merger: Box<dyn Merger + Send + Sync>,

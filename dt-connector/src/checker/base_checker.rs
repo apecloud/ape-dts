@@ -8,12 +8,12 @@ use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
     Arc,
+    atomic::{AtomicBool, Ordering},
 };
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
-use tokio::time::{sleep, Duration, Instant};
+use tokio::time::{Duration, Instant, sleep};
 
 use crate::{
     checker::check_log::{CheckLog, CheckSummaryLog, DiffColValue, TableCheckCount},
@@ -379,42 +379,58 @@ struct RetryItem {
     next_retry_at: Instant,
 }
 
-struct BoundedNdjsonBuffer {
+struct BoundedLineBuffer {
     size_limit: usize,
-    row_limit: usize,
+    row_limit: Option<usize>,
     bytes: usize,
     lines: VecDeque<Vec<u8>>,
 }
 
-impl BoundedNdjsonBuffer {
-    fn new(size_limit: usize, row_limit: usize) -> Self {
+impl BoundedLineBuffer {
+    fn new(size_limit: usize, row_limit: Option<usize>) -> Self {
         Self {
             size_limit: size_limit.max(1),
-            row_limit: row_limit.max(1),
+            row_limit: row_limit.map(|limit| limit.max(1)),
             bytes: 0,
             lines: VecDeque::new(),
         }
     }
 
-    fn push(&mut self, log: &CheckLog) {
-        let Ok(line) = serde_json::to_vec(log) else {
-            return;
-        };
+    fn push_bytes(&mut self, line: Vec<u8>) {
         let line_size = line.len() + 1;
         if line_size > self.size_limit {
             return;
         }
-        while self.lines.len() >= self.row_limit || self.bytes + line_size > self.size_limit {
+        while self
+            .row_limit
+            .is_some_and(|limit| self.lines.len() >= limit)
+            || self.bytes + line_size > self.size_limit
+        {
             let Some(front) = self.lines.pop_front() else {
                 break;
             };
             self.bytes = self.bytes.saturating_sub(front.len() + 1);
         }
-        if self.lines.len() >= self.row_limit || self.bytes + line_size > self.size_limit {
+        if self
+            .row_limit
+            .is_some_and(|limit| self.lines.len() >= limit)
+            || self.bytes + line_size > self.size_limit
+        {
             return;
         }
         self.bytes += line_size;
         self.lines.push_back(line);
+    }
+
+    fn push_str(&mut self, line: &str) {
+        self.push_bytes(line.as_bytes().to_vec());
+    }
+
+    fn push_json<T: Serialize>(&mut self, value: &T) {
+        let Ok(line) = serde_json::to_vec(value) else {
+            return;
+        };
+        self.push_bytes(line);
     }
 
     fn into_bytes(self) -> Vec<u8> {

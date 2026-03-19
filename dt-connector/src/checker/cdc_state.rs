@@ -1,12 +1,18 @@
 use super::*;
 use anyhow::Context;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 fn build_identity_json(entry: &CheckEntry) -> anyhow::Result<String> {
+    let id_col_values = entry
+        .log
+        .id_col_values
+        .iter()
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect::<BTreeMap<_, _>>();
     serde_json::to_string(&serde_json::json!({
         "schema": entry.log.schema,
         "tb": entry.log.tb,
-        "id_col_values": entry.log.id_col_values,
+        "id_col_values": id_col_values,
     }))
     .map_err(anyhow::Error::from)
 }
@@ -267,9 +273,10 @@ impl<C: Checker> DataChecker<C> {
         } else {
             self.ctx.cdc_check_log_max_rows
         };
-        let mut miss_buf_builder = BoundedNdjsonBuffer::new(max_file_size, max_rows);
-        let mut diff_buf_builder = BoundedNdjsonBuffer::new(max_file_size, max_rows);
-        let mut sql_lines = Vec::new();
+        let mut miss_buf_builder = BoundedLineBuffer::new(max_file_size, Some(max_rows));
+        let mut diff_buf_builder = BoundedLineBuffer::new(max_file_size, Some(max_rows));
+        let mut sql_buf_builder = BoundedLineBuffer::new(max_file_size, None);
+        let mut total_sql_count = 0usize;
         let mut table_counts: HashMap<String, TableCheckCount> = HashMap::new();
 
         for entry in self.store.values() {
@@ -278,24 +285,19 @@ impl<C: Checker> DataChecker<C> {
 
             if entry.is_miss {
                 counts.miss_count += 1;
-                miss_buf_builder.push(&entry.log);
+                miss_buf_builder.push_json(&entry.log);
             } else {
                 counts.diff_count += 1;
-                diff_buf_builder.push(&entry.log);
+                diff_buf_builder.push_json(&entry.log);
             }
             if let Some(sql) = &entry.revise_sql {
-                sql_lines.push(sql.clone());
+                total_sql_count += 1;
+                sql_buf_builder.push_str(sql);
             }
         }
         let miss_buf = miss_buf_builder.into_bytes();
         let diff_buf = diff_buf_builder.into_bytes();
-        let sql_buf = if sql_lines.is_empty() {
-            Vec::new()
-        } else {
-            let mut buf = sql_lines.join("\n").into_bytes();
-            buf.push(b'\n');
-            buf
-        };
+        let sql_buf = sql_buf_builder.into_bytes();
 
         let total_miss: usize = table_counts.values().map(|c| c.miss_count).sum();
         let total_diff: usize = table_counts.values().map(|c| c.diff_count).sum();
@@ -308,7 +310,7 @@ impl<C: Checker> DataChecker<C> {
             diff_count: total_diff,
             skip_count: self.ctx.summary.skip_count,
             tables: table_counts,
-            sql_count: (!sql_lines.is_empty()).then_some(sql_lines.len()),
+            sql_count: (total_sql_count > 0).then_some(total_sql_count),
         };
         self.ctx.summary = summary.clone();
         let summary_buf = serde_json::to_vec(&summary)?;

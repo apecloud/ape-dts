@@ -116,77 +116,6 @@ const DEFAULT_CHECK_LOG_DIR_PLACEHOLDER: &str = "LOG_DIR_PLACEHOLDER/check";
 const DEFAULT_STATISTIC_LOG_DIR_PLACEHOLDER: &str = "LOG_DIR_PLACEHOLDER/statistic";
 
 impl TaskRunner {
-    fn validate_checker_resume_support(
-        task_type: Option<TaskType>,
-        has_checker_state_store: bool,
-    ) -> anyhow::Result<()> {
-        if task_type.is_some_and(|task_type| task_type.is_cdc_inline_check())
-            && !has_checker_state_store
-        {
-            bail!(Error::ConfigError(
-                "config [checker] with CDC tasks requires [resumer] resume_type=from_target or from_db to persist checker state"
-                    .into(),
-            ));
-        }
-        Ok(())
-    }
-
-    fn derive_single_task_id(task_context_id: &str, extractor_config: &ExtractorConfig) -> String {
-        if !task_context_id.is_empty() {
-            return task_context_id.to_string();
-        }
-
-        match extractor_config {
-            ExtractorConfig::MysqlSnapshot { db, tb, .. } => format!("{}.{}", db, tb),
-            ExtractorConfig::PgSnapshot { schema, tb, .. } => format!("{}.{}", schema, tb),
-            ExtractorConfig::MongoSnapshot { db, tb, .. } => format!("{}.{}", db, tb),
-            _ => String::new(),
-        }
-    }
-
-    fn build_checker_task_id(&self, single_task_id: &str) -> String {
-        if single_task_id.is_empty() {
-            self.config.global.task_id.clone()
-        } else {
-            format!("{}::{}", self.config.global.task_id, single_task_id)
-        }
-    }
-
-    fn sanitize_checker_scope(raw: &str) -> String {
-        let mut scoped = String::with_capacity(raw.len());
-        for ch in raw.chars() {
-            if ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-') {
-                scoped.push(ch);
-            } else {
-                scoped.push('_');
-            }
-        }
-
-        if scoped.is_empty() {
-            "default".to_string()
-        } else {
-            scoped
-        }
-    }
-
-    fn build_checker_s3_key_prefix(&self, configured_prefix: &str, single_task_id: &str) -> String {
-        let base = if configured_prefix.is_empty() {
-            format!("{}/check", self.config.global.task_id)
-        } else {
-            configured_prefix.to_string()
-        };
-
-        if single_task_id.is_empty() {
-            base
-        } else {
-            format!(
-                "{}/{}",
-                base.trim_end_matches('/'),
-                Self::sanitize_checker_scope(single_task_id)
-            )
-        }
-    }
-
     pub fn new(task_config_file: &str) -> anyhow::Result<Self> {
         let config = TaskConfig::new(task_config_file)
             .with_context(|| format!("invalid configs in [{}]", task_config_file))?;
@@ -1542,6 +1471,77 @@ impl TaskRunner {
             | ExtractorConfig::FoxlakeS3 { .. }
             | ExtractorConfig::MongoSnapshot { .. } => self.config.runtime.tb_parallel_size,
             _ => 1,
+        }
+    }
+
+    fn validate_checker_resume_support(
+        task_type: Option<TaskType>,
+        has_checker_state_store: bool,
+    ) -> anyhow::Result<()> {
+        if task_type.is_some_and(|task_type| task_type.is_cdc_inline_check())
+            && !has_checker_state_store
+        {
+            bail!(Error::ConfigError(
+                "config [checker] with CDC tasks requires [resumer] resume_type=from_target or from_db to persist checker state"
+                    .into(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn derive_single_task_id(task_context_id: &str, extractor_config: &ExtractorConfig) -> String {
+        if !task_context_id.is_empty() {
+            return task_context_id.to_string();
+        }
+
+        match extractor_config {
+            ExtractorConfig::MysqlSnapshot { db, tb, .. } => format!("{}.{}", db, tb),
+            ExtractorConfig::PgSnapshot { schema, tb, .. } => format!("{}.{}", schema, tb),
+            ExtractorConfig::MongoSnapshot { db, tb, .. } => format!("{}.{}", db, tb),
+            _ => String::new(),
+        }
+    }
+
+    fn build_checker_task_id(&self, single_task_id: &str) -> String {
+        if single_task_id.is_empty() {
+            self.config.global.task_id.clone()
+        } else {
+            format!("{}::{}", self.config.global.task_id, single_task_id)
+        }
+    }
+
+    fn sanitize_checker_scope(raw: &str) -> String {
+        let mut scoped = String::with_capacity(raw.len());
+        for ch in raw.chars() {
+            if ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-') {
+                scoped.push(ch);
+            } else {
+                scoped.push('_');
+            }
+        }
+
+        if scoped.is_empty() {
+            "default".to_string()
+        } else {
+            scoped
+        }
+    }
+
+    fn build_checker_s3_key_prefix(&self, configured_prefix: &str, single_task_id: &str) -> String {
+        let base = if configured_prefix.is_empty() {
+            format!("{}/check", self.config.global.task_id)
+        } else {
+            configured_prefix.to_string()
+        };
+
+        if single_task_id.is_empty() {
+            base
+        } else {
+            format!(
+                "{}/{}",
+                base.trim_end_matches('/'),
+                Self::sanitize_checker_scope(single_task_id)
+            )
         }
     }
 }
