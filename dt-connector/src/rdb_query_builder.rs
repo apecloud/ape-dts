@@ -1,19 +1,23 @@
 use std::collections::{HashMap, HashSet};
 
 use anyhow::{bail, Context};
-use dt_common::meta::{
-    adaptor::{
-        pg_col_value_convertor::PgColValueConvertor,
-        sqlx_ext::{SqlxMysqlExt, SqlxPgExt},
+use dt_common::{
+    config::config_enums::DbType,
+    error::Error,
+    meta::{
+        adaptor::{
+            pg_col_value_convertor::PgColValueConvertor,
+            sqlx_ext::{SqlxMysqlExt, SqlxPgExt},
+        },
+        col_value::ColValue,
+        mysql::{mysql_col_type::MysqlColType, mysql_tb_meta::MysqlTbMeta},
+        pg::pg_tb_meta::PgTbMeta,
+        rdb_tb_meta::RdbTbMeta,
+        row_data::RowData,
+        row_type::RowType,
     },
-    col_value::ColValue,
-    mysql::{mysql_col_type::MysqlColType, mysql_tb_meta::MysqlTbMeta},
-    pg::pg_tb_meta::PgTbMeta,
-    rdb_tb_meta::RdbTbMeta,
-    row_data::RowData,
-    row_type::RowType,
+    utils::sql_util::SqlUtil,
 };
-use dt_common::{config::config_enums::DbType, error::Error, utils::sql_util::SqlUtil};
 use sqlx::{mysql::MySqlArguments, postgres::PgArguments, query::Query, MySql, Postgres};
 
 pub struct RdbQueryInfo<'a> {
@@ -225,9 +229,18 @@ impl RdbQueryBuilder<'_> {
         if self.db_type == DbType::Pg {
             let mut index = query_info.cols.len() + 1;
             let after = row_data.require_after()?;
-            let mut set_pairs = Vec::with_capacity(self.rdb_tb_meta.cols.len());
+            let mut set_pairs = Vec::new();
+            let key_cols = self
+                .rdb_tb_meta
+                .key_map
+                .values()
+                .flatten()
+                .collect::<HashSet<&String>>();
             for col in self.rdb_tb_meta.cols.iter() {
                 if self.rdb_tb_meta.id_cols.contains(col) {
+                    continue;
+                }
+                if !row_data.is_not_origin && key_cols.contains(col) {
                     continue;
                 }
                 let sql_value = self.get_sql_value(index, col, &after.get(col), placeholder)?;
