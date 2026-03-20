@@ -63,7 +63,7 @@ impl MongoTestRunner {
                 ..
             } => {
                 src_mongo_client = Some(
-                    TaskUtil::create_mongo_client(&url, &connection_auth, &app_name, None)
+                    TaskUtil::create_mongo_client(url, connection_auth, app_name, None)
                         .await
                         .unwrap(),
                 );
@@ -79,7 +79,7 @@ impl MongoTestRunner {
         } = &config.sinker
         {
             dst_mongo_client = Some(
-                TaskUtil::create_mongo_client(&url, &connection_auth, &app_name, None)
+                TaskUtil::create_mongo_client(url, connection_auth, app_name, None)
                     .await
                     .unwrap(),
             );

@@ -57,10 +57,9 @@ Struct check follows the same standalone target-selection rules as standalone sn
 
 | Config                      | Description                                                   | Example     | Default                           |
 | :-------------------------- | :------------------------------------------------------------ | :---------- | :-------------------------------- |
-| queue_size                  | checker queue capacity                                        | 200         | 200                               |
+| queue_size                  | checker queue capacity, counted in pending batches/messages   | 200         | 200                               |
 | max_connections             | max connections for checker pool                              | 8           | 8                                 |
-| batch_size                  | checker batch size (non-CDC tasks)                            | 100         | 100                               |
-| sample_rate                 | checker sampling rate (reserved, currently unused)            | 1.0         | 1.0                               |
+| batch_size                  | checker processing batch size for non-CDC tasks               | 200         | 200                               |
 | output_full_row             | output full row in diff log                                   | false       | false                             |
 | output_revise_sql           | write generated revise SQL to `sql.log`                       | false       | false                             |
 | revise_match_full_row       | match full row when building revise SQL                       | false       | false                             |
@@ -84,18 +83,31 @@ Struct check follows the same standalone target-selection rules as standalone sn
 
 Notes:
 - Checker only supports `[pipeline] pipeline_type=basic`.
+- `queue_size` counts queued checker work items, not rows. A full queue means the checker worker is
+  already holding `queue_size` pending batches/messages.
+- In inline write-after-check flows, hitting `queue_size` applies backpressure to the write path:
+  new writes wait until the checker queue has capacity instead of silently dropping check work.
+- In inline write-after-check flows, checker runtime failures are treated as task failures. Data
+  inconsistency results (`diff` / `miss`) still go to check logs and summaries, but checker
+  execution errors do not complete silently.
+- For inline write-after-check flows, one queued batch is usually close to the effective sink batch
+  size. In practice this is often about `[sinker].batch_size` rows, but the final batch may be
+  smaller and upstream partitioning can also change the actual count.
+- For standalone / dummy-sinker check flows, queued batch size is decided by the upstream
+  parallelizer. After dequeue, the checker processes non-CDC rows in chunks of `[checker].batch_size`.
 - Struct tasks only support the standalone target-selection rules above. If `[checker]` is enabled
   for struct tasks, use `sink_type=dummy` or omit `[sinker]`.
 - Inline snapshot check is supported only when `[extractor] extract_type=snapshot`,
   `[sinker] sink_type=write`, and `[sinker].db_type` is `mysql`, `pg`, or `mongo`.
 - Inline cdc check is currently supported only when `[extractor] extract_type=cdc`,
   `[sinker] sink_type=write`, and `[sinker].db_type` is `mysql` or `pg`.
+- In inline cdc check, the checker ignores `[checker].batch_size` and uses `[sinker].batch_size`.
+  For example, if `[sinker].batch_size=100` and `queue_size=200`, the checker queue can hold about
+  200 pending batches, which is roughly 20,000 rows when batches are full.
 - In inline snapshot check and inline cdc check, `[checker]` must not set `db_type`, `url`,
   `username`, or `password`; the checker always reuses the parsed `[sinker]` target.
 - In inline cdc check, `[resumer] resume_type=from_target` or `from_db` is required to persist
   checker state.
-- In inline cdc check (`extract_type=cdc`, `sink_type=write`), `[checker].batch_size` is accepted
-  but the effective batch size still follows `[sinker].batch_size`.
 - When `check_log_dir` is empty, `runtime.log_dir/check` is used consistently for checker logs (including CDC check outputs).
 - In inline cdc check, periodic check snapshots are always written locally under `check_log_dir`;
   `cdc_check_log_s3` controls only S3 upload.

@@ -20,26 +20,20 @@ pub trait CheckedSinkTarget: Sinker {
 pub struct CheckedSinker<S> {
     inner: S,
     checker: DataCheckerHandle,
-    fail_on_checker_error: bool,
 }
 
 impl<S> CheckedSinker<S> {
-    pub fn new(inner: S, checker: DataCheckerHandle, fail_on_checker_error: bool) -> Self {
-        Self {
-            inner,
-            checker,
-            fail_on_checker_error,
-        }
+    pub fn new(inner: S, checker: DataCheckerHandle) -> Self {
+        Self { inner, checker }
     }
 }
 
 pub fn wrap_checked_dml_sinker<S: CheckedSinkTarget + Send + 'static>(
     sinker: S,
     checker: Option<DataCheckerHandle>,
-    fail_on_checker_error: bool,
 ) -> Box<dyn Sinker + Send> {
     if let Some(checker) = checker {
-        Box::new(CheckedSinker::new(sinker, checker, fail_on_checker_error))
+        Box::new(CheckedSinker::new(sinker, checker))
     } else {
         Box::new(sinker)
     }
@@ -49,14 +43,8 @@ pub fn wrap_checked_dml_sinker<S: CheckedSinkTarget + Send + 'static>(
 impl<S: CheckedSinkTarget + Send> Sinker for CheckedSinker<S> {
     async fn sink_dml(&mut self, mut data: Vec<RowData>, batch: bool) -> anyhow::Result<()> {
         self.inner.sink_dml_borrowed(&mut data, batch).await?;
-        match self.checker.check_sync(data).await {
-            Ok(()) => Ok(()),
-            Err(err) if self.fail_on_checker_error => Err(err),
-            Err(err) => {
-                log::warn!("checker sidecar failed: {}", err);
-                Ok(())
-            }
-        }
+        self.checker.enqueue_check(data).await?;
+        Ok(())
     }
 
     async fn sink_ddl(&mut self, data: Vec<DdlData>, batch: bool) -> anyhow::Result<()> {

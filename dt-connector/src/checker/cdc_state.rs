@@ -259,6 +259,11 @@ impl From<PersistedCheckEntry> for CheckEntry {
     }
 }
 
+enum PreparedCheckpointWrite {
+    PositionOnly { task_id: String, position: Position },
+    Full(CheckerCheckpointCommit),
+}
+
 impl<C: Checker> DataChecker<C> {
     const DEFAULT_CDC_LOG_MAX_FILE_SIZE: usize = 100 * 1024 * 1024;
     const DEFAULT_CDC_LOG_MAX_ROWS: usize = 1000;
@@ -350,10 +355,10 @@ impl<C: Checker> DataChecker<C> {
 
     fn build_state_rows(&self) -> anyhow::Result<Vec<CheckerStateRow>> {
         let mut rows = Vec::with_capacity(self.store.len());
-        for (key, entry) in &self.store {
+        for (store_key, entry) in &self.store {
             let identity_json = build_identity_json(entry)?;
             rows.push(CheckerStateRow {
-                row_key: *key,
+                row_key: store_key.row_key,
                 identity_key: build_identity_key(&identity_json),
                 identity_json,
                 payload: serde_json::to_string(&PersistedCheckEntry::from(entry))?,
@@ -372,7 +377,9 @@ impl<C: Checker> DataChecker<C> {
                         self.name, row.row_key
                     )
                 })?;
-            self.store.insert(row.row_key, CheckEntry::from(entry));
+            let entry = CheckEntry::from(entry);
+            let store_key = CheckerStoreKey::from_row_data(&entry.src_row_data, row.row_key);
+            self.store.insert(store_key, entry);
         }
         self.update_pending_counter();
         Ok(())
@@ -431,6 +438,35 @@ impl<C: Checker> DataChecker<C> {
         Ok(())
     }
 
+    fn prepare_checkpoint_write(
+        &self,
+        position: Position,
+        existing_rows: Option<Vec<CheckerStateRow>>,
+    ) -> anyhow::Result<PreparedCheckpointWrite> {
+        if !self.store_dirty {
+            return Ok(PreparedCheckpointWrite::PositionOnly {
+                task_id: self.task_id.clone(),
+                position,
+            });
+        }
+
+        let rows = self.build_state_rows()?;
+        let live_keys: BTreeSet<String> = rows.iter().map(|row| row.identity_key.clone()).collect();
+        let deletes = existing_rows
+            .unwrap_or_default()
+            .into_iter()
+            .map(|row| row.identity_key)
+            .filter(|identity_key| !live_keys.contains(identity_key))
+            .collect();
+
+        Ok(PreparedCheckpointWrite::Full(CheckerCheckpointCommit {
+            task_id: self.task_id.clone(),
+            position,
+            upserts: rows,
+            deletes,
+        }))
+    }
+
     pub async fn record_checkpoint(&mut self, position: Position) -> anyhow::Result<()> {
         if matches!(position, Position::None) {
             return Ok(());
@@ -439,21 +475,23 @@ impl<C: Checker> DataChecker<C> {
         let Some(state_store) = self.ctx.state_store.clone() else {
             return Ok(());
         };
-        let rows = self.build_state_rows()?;
-        let live_keys: BTreeSet<String> = rows.iter().map(|row| row.identity_key.clone()).collect();
-        let existing_rows = state_store.load_rows(&self.task_id).await?;
-        let deletes = existing_rows
-            .into_iter()
-            .map(|row| row.identity_key)
-            .filter(|identity_key| !live_keys.contains(identity_key))
-            .collect();
-        let commit = CheckerCheckpointCommit {
-            task_id: self.task_id.clone(),
-            position,
-            upserts: rows,
-            deletes,
+
+        let checkpoint_write = if self.store_dirty {
+            let existing_rows = state_store.load_rows(&self.task_id).await?;
+            self.prepare_checkpoint_write(position, Some(existing_rows))?
+        } else {
+            self.prepare_checkpoint_write(position, None)?
         };
-        state_store.commit_checkpoint(&commit).await?;
+
+        match checkpoint_write {
+            PreparedCheckpointWrite::PositionOnly { task_id, position } => {
+                state_store.commit_position(&task_id, &position).await?;
+            }
+            PreparedCheckpointWrite::Full(commit) => {
+                state_store.commit_checkpoint(&commit).await?;
+                self.store_dirty = false;
+            }
+        }
         Ok(())
     }
 

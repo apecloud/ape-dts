@@ -464,7 +464,6 @@ impl TaskRunner {
                 CheckerHandle::Data(handle) => Some(handle.clone()),
                 CheckerHandle::Struct(_) => None,
             }),
-            true,
         )
         .await?;
 

@@ -13,7 +13,7 @@ use dt_common::meta::{
 };
 
 use mongodb::{
-    bson::{doc, Document},
+    bson::{doc, oid::ObjectId, Bson, Document},
     Client,
 };
 
@@ -65,7 +65,7 @@ impl BatchCheckExtractor for MongoCheckExtractor {
             if let Some(Some(col_value)) = check_log.id_col_values.get(MongoConstants::ID) {
                 let key: MongoKey = serde_json::from_str(col_value)
                     .with_context(|| format!("invalid mongo _id: {}", col_value))?;
-                ids.push(key.to_mongo_id());
+                ids.push(Self::normalize_lookup_id(key));
             }
         }
 
@@ -101,5 +101,37 @@ impl BatchCheckExtractor for MongoCheckExtractor {
                 .unwrap();
         }
         Ok(())
+    }
+}
+
+impl MongoCheckExtractor {
+    fn normalize_lookup_id(key: MongoKey) -> Bson {
+        match key {
+            MongoKey::String(value) => ObjectId::parse_str(&value)
+                .map(Bson::ObjectId)
+                .unwrap_or_else(|_| Bson::String(value)),
+            other => other.to_mongo_id(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::MongoCheckExtractor;
+    use dt_common::meta::mongo::mongo_key::MongoKey;
+    use mongodb::bson::{oid::ObjectId, Bson};
+
+    #[test]
+    fn stringified_object_id_uses_object_id_lookup() {
+        let oid = ObjectId::new();
+        let normalized = MongoCheckExtractor::normalize_lookup_id(MongoKey::String(oid.to_hex()));
+        assert_eq!(normalized, Bson::ObjectId(oid));
+    }
+
+    #[test]
+    fn non_object_id_string_stays_string_lookup() {
+        let normalized =
+            MongoCheckExtractor::normalize_lookup_id(MongoKey::String("plain-id".to_string()));
+        assert_eq!(normalized, Bson::String("plain-id".to_string()));
     }
 }

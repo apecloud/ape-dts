@@ -119,8 +119,18 @@ impl<C: Checker> DataChecker<C> {
         let mut retry_rows = Vec::new();
 
         for src_row_data in src_data {
-            let key = match Self::lookup_hash_code(src_row_data, tb_meta.basic()) {
-                Ok(k) => k,
+            let key = match Self::lookup_match_key(src_row_data, tb_meta.basic()) {
+                Ok(Some(k)) => k,
+                Ok(None) => {
+                    self.cleanup_stale_update_key(src_row_data, tb_meta.basic(), None);
+                    log_warn!(
+                        "Skipping row with NULL key component in {}.{}.",
+                        src_row_data.schema,
+                        src_row_data.tb
+                    );
+                    skip_count += 1;
+                    continue;
+                }
                 Err(e) => {
                     log_warn!(
                         "Skipping unhashable row in {}.{}: {}",
@@ -133,7 +143,7 @@ impl<C: Checker> DataChecker<C> {
                 }
             };
 
-            self.cleanup_stale_update_key(src_row_data, tb_meta.basic(), key);
+            self.cleanup_stale_update_key(src_row_data, tb_meta.basic(), Some(key));
             let dst_row_data = dst_row_data_map.remove(&key);
 
             if self.ctx.is_cdc || self.ctx.max_retries == 0 {
@@ -272,6 +282,19 @@ impl<C: Checker> DataChecker<C> {
         Self::hash_from_id_values(id_values, tb_meta)
     }
 
+    fn lookup_match_key(row_data: &RowData, tb_meta: &RdbTbMeta) -> anyhow::Result<Option<u128>> {
+        let key = Self::lookup_hash_code(row_data, tb_meta)?;
+        Ok((key != 0).then_some(key))
+    }
+
+    fn match_key_from_values(
+        id_values: &HashMap<String, ColValue>,
+        tb_meta: &RdbTbMeta,
+    ) -> anyhow::Result<Option<u128>> {
+        let key = Self::hash_from_id_values(id_values, tb_meta)?;
+        Ok((key != 0).then_some(key))
+    }
+
     fn hash_from_id_values(
         id_values: &HashMap<String, ColValue>,
         tb_meta: &RdbTbMeta,
@@ -288,6 +311,9 @@ impl<C: Checker> DataChecker<C> {
                         tb_meta.schema, tb_meta.tb, col
                     )
                 })?;
+            if col_hash_code == 0 {
+                return Ok(0);
+            }
             hash_code = 31 * hash_code + col_hash_code as u128;
         }
         Ok(hash_code)
@@ -298,9 +324,11 @@ impl<C: Checker> DataChecker<C> {
         tb_meta: &CheckerTbMeta,
         dst_rows: Vec<RowData>,
     ) -> anyhow::Result<Option<RowData>> {
-        let src_key = Self::lookup_hash_code(src_row, tb_meta.basic())?;
+        let Some(src_key) = Self::lookup_match_key(src_row, tb_meta.basic())? else {
+            return Ok(None);
+        };
         for row in dst_rows {
-            if Self::lookup_hash_code(&row, tb_meta.basic())? == src_key {
+            if Self::lookup_match_key(&row, tb_meta.basic())? == Some(src_key) {
                 return Ok(Some(row));
             }
         }
@@ -345,15 +373,21 @@ impl<C: Checker> DataChecker<C> {
             .set_counter(CounterType::CheckerPending, self.store.len() as u64);
     }
 
-    pub fn remove_store_entry(&mut self, key: u128) {
-        if self.store.shift_remove(&key).is_some() {
+    pub fn remove_store_entry(&mut self, row_data: &RowData, row_key: u128) {
+        let store_key = CheckerStoreKey::from_row_data(row_data, row_key);
+        if self.store.shift_remove(&store_key).is_some() {
             self.store_dirty = true;
             self.snapshot_dirty = true;
             self.update_pending_counter();
         }
     }
 
-    fn cleanup_stale_update_key(&mut self, row_data: &RowData, tb_meta: &RdbTbMeta, key: u128) {
+    fn cleanup_stale_update_key(
+        &mut self,
+        row_data: &RowData,
+        tb_meta: &RdbTbMeta,
+        new_key: Option<u128>,
+    ) {
         if row_data.row_type != RowType::Update {
             return;
         }
@@ -362,8 +396,10 @@ impl<C: Checker> DataChecker<C> {
             return;
         };
 
-        match Self::hash_from_id_values(before_values, tb_meta) {
-            Ok(old_key) if old_key != key => self.remove_store_entry(old_key),
+        match Self::match_key_from_values(before_values, tb_meta) {
+            Ok(Some(old_key)) if Some(old_key) != new_key => {
+                self.remove_store_entry(row_data, old_key);
+            }
             Ok(_) => {}
             Err(err) => {
                 log_warn!(
@@ -378,7 +414,7 @@ impl<C: Checker> DataChecker<C> {
 
     async fn reconcile_row_inconsistency(
         &mut self,
-        key: u128,
+        row_key: u128,
         src_row_data: &RowData,
         dst_row_data: Option<&RowData>,
         tb_meta: &CheckerTbMeta,
@@ -392,14 +428,14 @@ impl<C: Checker> DataChecker<C> {
                 tb_meta,
             )
             .await?;
-            self.store_entry(key, entry).await;
+            self.store_entry(src_row_data, row_key, entry).await;
         } else {
-            self.remove_store_entry(key);
+            self.remove_store_entry(src_row_data, row_key);
         }
         Ok(())
     }
 
-    pub async fn store_entry(&mut self, key: u128, entry: CheckEntry) {
+    pub async fn store_entry(&mut self, row_data: &RowData, row_key: u128, entry: CheckEntry) {
         if !self.ctx.is_cdc {
             self.log_entry(&entry);
             self.update_summary_for_entry(&entry).await;
@@ -419,7 +455,8 @@ impl<C: Checker> DataChecker<C> {
                 .add_counter(CounterType::CheckerDiffCount, 1)
                 .await;
         }
-        self.store.insert(key, entry);
+        let store_key = CheckerStoreKey::from_row_data(row_data, row_key);
+        self.store.insert(store_key, entry);
         self.update_pending_counter();
     }
 
@@ -617,6 +654,17 @@ impl<C: Checker> DataChecker<C> {
         let row_ref = &item.row;
         let fetch_result = self.checker.fetch(std::slice::from_ref(&row_ref)).await?;
         let tb_meta = fetch_result.tb_meta;
+        let Some(key) = Self::lookup_match_key(&item.row, tb_meta.basic())? else {
+            self.cleanup_stale_update_key(&item.row, tb_meta.basic(), None);
+            log_warn!(
+                "Skipping retry row with NULL key component in {}.{}.",
+                item.row.schema,
+                item.row.tb
+            );
+            self.ctx.summary.skip_count += 1;
+            self.snapshot_dirty = true;
+            return Ok(None);
+        };
         let dst_row = Self::select_dst_row(&item.row, tb_meta.as_ref(), fetch_result.dst_rows)?;
 
         if item.retries_left > 1 {
@@ -628,8 +676,7 @@ impl<C: Checker> DataChecker<C> {
             return Ok(Some(item));
         }
 
-        let key = Self::lookup_hash_code(&item.row, tb_meta.basic())?;
-        self.cleanup_stale_update_key(&item.row, tb_meta.basic(), key);
+        self.cleanup_stale_update_key(&item.row, tb_meta.basic(), Some(key));
         self.reconcile_row_inconsistency(key, &item.row, dst_row.as_ref(), tb_meta.as_ref())
             .await?;
         Ok(None)
@@ -695,7 +742,9 @@ impl<C: Checker> DataChecker<C> {
 
             let mut dst_row_data_map = HashMap::with_capacity(fetch_result.dst_rows.len());
             for row in fetch_result.dst_rows {
-                dst_row_data_map.insert(Self::lookup_hash_code(&row, tb_meta.basic())?, row);
+                if let Some(key) = Self::lookup_match_key(&row, tb_meta.basic())? {
+                    dst_row_data_map.insert(key, row);
+                }
             }
 
             let (skip_count, table_retry_rows) = self
@@ -731,6 +780,9 @@ mod tests {
     use super::*;
     use async_trait::async_trait;
     use dt_common::meta::pg::pg_col_type::PgColType;
+    use dt_common::monitor::monitor::Monitor;
+    use std::sync::Arc;
+    use tokio::sync::mpsc;
 
     struct DummyChecker;
 
@@ -742,7 +794,7 @@ mod tests {
     }
 
     #[test]
-    fn nullable_composite_key_hash_keeps_non_null_components() {
+    fn nullable_composite_key_hash_returns_zero() {
         let tb_meta = RdbTbMeta {
             schema: "s1".to_string(),
             tb: "t1".to_string(),
@@ -760,11 +812,205 @@ mod tests {
         ]);
 
         let hash1 = DataChecker::<DummyChecker>::hash_from_id_values(&values1, &tb_meta)
-            .expect("nullable composite key should still hash");
+            .expect("nullable composite key should return 0");
         let hash2 = DataChecker::<DummyChecker>::hash_from_id_values(&values2, &tb_meta)
-            .expect("nullable composite key should still hash");
+            .expect("nullable composite key should return 0");
 
-        assert_ne!(hash1, hash2);
+        assert_eq!(hash1, 0);
+        assert_eq!(hash2, 0);
+    }
+
+    fn build_test_context() -> CheckContext {
+        CheckContext {
+            monitor: Arc::new(Monitor::new("checker", "unit-test", 1, 1, 1)),
+            summary: CheckSummaryLog {
+                start_time: "2026-03-19T00:00:00Z".to_string(),
+                ..Default::default()
+            },
+            output_revise_sql: false,
+            extractor_meta_manager: None,
+            reverse_router: RdbRouter {
+                schema_map: HashMap::new(),
+                tb_map: HashMap::new(),
+                col_map: HashMap::new(),
+                topic_map: HashMap::new(),
+            },
+            output_full_row: false,
+            revise_match_full_row: false,
+            global_summary: None,
+            batch_size: 1,
+            retry_interval_secs: 0,
+            max_retries: 0,
+            is_cdc: false,
+            check_log_dir: String::new(),
+            cdc_check_log_max_file_size: 1,
+            cdc_check_log_max_rows: 1,
+            s3_output: None,
+            cdc_check_log_interval_secs: 1,
+            state_store: None,
+            expected_resume_position: None,
+        }
+    }
+
+    fn build_cdc_test_context() -> CheckContext {
+        let mut ctx = build_test_context();
+        ctx.is_cdc = true;
+        ctx
+    }
+
+    fn build_check_entry(src_row_data: RowData) -> CheckEntry {
+        CheckEntry {
+            log: CheckLog {
+                schema: src_row_data.schema.clone(),
+                tb: src_row_data.tb.clone(),
+                target_schema: None,
+                target_tb: None,
+                id_col_values: HashMap::new(),
+                diff_col_values: HashMap::new(),
+                src_row: None,
+                dst_row: None,
+            },
+            revise_sql: None,
+            is_miss: true,
+            src_row_data,
+        }
+    }
+
+    #[tokio::test]
+    async fn check_rows_skips_zero_key_and_cleans_stale_update_entry() {
+        let tb_meta = Arc::new(CheckerTbMeta::Mongo(RdbTbMeta {
+            schema: "s1".to_string(),
+            tb: "t1".to_string(),
+            id_cols: vec!["id1".to_string(), "id2".to_string()],
+            ..Default::default()
+        }));
+        let before_values = HashMap::from([
+            ("id1".to_string(), ColValue::Long(1)),
+            ("id2".to_string(), ColValue::Long(2)),
+        ]);
+        let after_values = HashMap::from([
+            ("id1".to_string(), ColValue::None),
+            ("id2".to_string(), ColValue::Long(2)),
+        ]);
+        let src_row = RowData::new(
+            "s1".to_string(),
+            "t1".to_string(),
+            RowType::Update,
+            Some(before_values.clone()),
+            Some(after_values),
+        );
+        let old_key =
+            DataChecker::<DummyChecker>::hash_from_id_values(&before_values, tb_meta.basic())
+                .expect("non-null before key should hash");
+        let (_tx, rx) = mpsc::channel(1);
+        let mut data_checker = DataChecker::new(
+            DummyChecker,
+            "task-1".to_string(),
+            build_test_context(),
+            rx,
+            "unit-test",
+            Arc::new(CheckerRuntimeState::default()),
+        );
+        let store_key = CheckerStoreKey::from_row_data(&src_row, old_key);
+        data_checker
+            .store
+            .insert(store_key, build_check_entry(src_row.clone()));
+
+        let (skip_count, retry_rows) = data_checker
+            .check_rows(&[&src_row], HashMap::new(), tb_meta.as_ref())
+            .await
+            .unwrap();
+
+        assert_eq!(skip_count, 1);
+        assert!(retry_rows.is_empty());
+        assert!(data_checker.store.is_empty());
+    }
+
+    #[tokio::test]
+    async fn cdc_store_scopes_same_row_key_by_table() {
+        let tb_meta = RdbTbMeta {
+            schema: "s1".to_string(),
+            tb: "t1".to_string(),
+            id_cols: vec!["id".to_string()],
+            ..Default::default()
+        };
+        let row1 = RowData::new(
+            "s1".to_string(),
+            "t1".to_string(),
+            RowType::Insert,
+            None,
+            Some(HashMap::from([("id".to_string(), ColValue::Long(1))])),
+        );
+        let row2 = RowData::new(
+            "s1".to_string(),
+            "t2".to_string(),
+            RowType::Insert,
+            None,
+            Some(HashMap::from([("id".to_string(), ColValue::Long(1))])),
+        );
+        let row_key = DataChecker::<DummyChecker>::lookup_match_key(&row1, &tb_meta)
+            .expect("row key lookup should succeed")
+            .expect("row key should exist");
+
+        let (_tx, rx) = mpsc::channel(1);
+        let mut data_checker = DataChecker::new(
+            DummyChecker,
+            "task-1".to_string(),
+            build_cdc_test_context(),
+            rx,
+            "unit-test",
+            Arc::new(CheckerRuntimeState::default()),
+        );
+
+        data_checker
+            .store_entry(&row1, row_key, build_check_entry(row1.clone()))
+            .await;
+        data_checker
+            .store_entry(&row2, row_key, build_check_entry(row2.clone()))
+            .await;
+
+        assert_eq!(data_checker.store.len(), 2);
+
+        data_checker.remove_store_entry(&row1, row_key);
+        assert_eq!(data_checker.store.len(), 1);
+        assert_eq!(
+            data_checker.store.values().next().unwrap().src_row_data.tb,
+            "t2"
+        );
+    }
+
+    #[test]
+    fn select_dst_row_ignores_zero_key_rows() {
+        let tb_meta = CheckerTbMeta::Mongo(RdbTbMeta {
+            schema: "s1".to_string(),
+            tb: "t1".to_string(),
+            id_cols: vec!["id1".to_string(), "id2".to_string()],
+            ..Default::default()
+        });
+        let src_row = RowData::new(
+            "s1".to_string(),
+            "t1".to_string(),
+            RowType::Insert,
+            None,
+            Some(HashMap::from([
+                ("id1".to_string(), ColValue::Long(1)),
+                ("id2".to_string(), ColValue::Long(2)),
+            ])),
+        );
+        let dst_row = RowData::new(
+            "s1".to_string(),
+            "t1".to_string(),
+            RowType::Insert,
+            None,
+            Some(HashMap::from([
+                ("id1".to_string(), ColValue::None),
+                ("id2".to_string(), ColValue::Long(2)),
+            ])),
+        );
+
+        let selected =
+            DataChecker::<DummyChecker>::select_dst_row(&src_row, &tb_meta, vec![dst_row]).unwrap();
+        assert!(selected.is_none());
     }
 
     fn build_row_with_after(col: &str, value: ColValue) -> RowData {

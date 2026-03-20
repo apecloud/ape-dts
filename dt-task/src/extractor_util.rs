@@ -164,6 +164,7 @@ impl ExtractorUtil {
                     meta_manager,
                     check_log_dir,
                     batch_size,
+                    replay_diff_as_update: config.checker.is_none(),
                     base_extractor,
                     filter,
                 };
@@ -277,6 +278,7 @@ impl ExtractorUtil {
                     meta_manager,
                     check_log_dir,
                     batch_size,
+                    replay_diff_as_update: config.checker.is_none(),
                     base_extractor,
                     filter,
                 };

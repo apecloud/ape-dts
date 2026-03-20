@@ -318,6 +318,25 @@ impl CheckerStateStore {
         Ok(())
     }
 
+    pub async fn commit_position(&self, task_id: &str, position: &Position) -> Result<()> {
+        match &self.backend {
+            CheckerStateStoreBackend::MySql(pool) => {
+                let mut tx = pool.begin().await?;
+                self.upsert_mysql_cdc_position(&mut tx, task_id, position)
+                    .await?;
+                tx.commit().await?;
+            }
+            CheckerStateStoreBackend::Postgres(pool) => {
+                let mut tx = pool.begin().await?;
+                self.upsert_postgres_cdc_position(&mut tx, task_id, position)
+                    .await?;
+                tx.commit().await?;
+            }
+        }
+
+        Ok(())
+    }
+
     pub async fn commit_checkpoint(&self, commit: &CheckerCheckpointCommit) -> Result<()> {
         let now = Utc::now().to_rfc3339();
 

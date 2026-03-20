@@ -33,6 +33,7 @@ pub struct PgCheckExtractor {
     pub filter: RdbFilter,
     pub check_log_dir: String,
     pub batch_size: usize,
+    pub replay_diff_as_update: bool,
 }
 
 #[async_trait]
@@ -75,7 +76,7 @@ impl BatchCheckExtractor for PgCheckExtractor {
         while let Some(row) = rows.try_next().await.unwrap() {
             let mut row_data = RowData::from_pg_row(&row, &tb_meta, &ignore_cols);
 
-            if is_diff {
+            if is_diff && self.replay_diff_as_update {
                 row_data.row_type = RowType::Update;
                 row_data.before = row_data.after.clone();
             }

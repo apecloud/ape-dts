@@ -54,10 +54,9 @@ struct check 复用 standalone snapshot check 的目标选择规则。
 
 | 配置                        | 作用                                                        | 示例        | 默认                             |
 | :-------------------------- | :---------------------------------------------------------- | :---------- | :------------------------------- |
-| queue_size                  | checker 队列容量                                            | 200         | 200                              |
+| queue_size                  | checker 队列容量，按待处理批次/消息数计数                  | 200         | 200                              |
 | max_connections             | checker 连接池最大连接数                                    | 8           | 8                                |
-| batch_size                  | checker 批量校验大小（非 CDC 任务）                         | 100         | 100                              |
-| sample_rate                 | checker 抽样比例（保留字段，当前未生效）                    | 1.0         | 1.0                              |
+| batch_size                  | checker 的非 CDC 任务处理批大小                             | 200         | 200                              |
 | output_full_row             | diff 日志是否输出全量行                                     | false       | false                            |
 | output_revise_sql           | 是否将生成的修复 SQL 写入 `sql.log`                         | false       | false                            |
 | revise_match_full_row       | 生成修复 SQL 时是否按全量行匹配                             | false       | false                            |
@@ -81,18 +80,29 @@ struct check 复用 standalone snapshot check 的目标选择规则。
 
 说明：
 - checker 仅支持 `[pipeline] pipeline_type=basic`。
+- `queue_size` 统计的是 checker 队列中的待处理批次/消息数，不是行数。队列满表示 checker worker
+  手里已经积压了 `queue_size` 个待处理批次。
+- 在 inline 写后校验链路里，打满 `queue_size` 会对写入路径施加背压：新的写入会等待 checker
+  队列腾出容量，而不是静默丢弃待校验批次。
+- 在 inline 写后校验链路里，checker 的运行时失败会按任务失败处理。数据不一致结果（`diff` /
+  `miss`）仍然只写入校验日志与 summary，但 checker 执行错误不会再静默完成。
+- 对 inline 写后校验链路来说，一个排队批次通常接近实际写入批大小；实践中多数情况下约等于
+  `[sinker].batch_size` 行，但最后一个批次可能更小，上游分片策略也会影响实际条数。
+- 对 standalone / dummy-sinker 校验链路来说，进入队列的单批大小由上游 parallelizer 决定；
+  出队后，checker 会再按 `[checker].batch_size` 对非 CDC 数据做内部切块处理。
 - struct 任务只支持 standalone 目标选择规则。若为 struct 任务启用 `[checker]`，请使用
   `sink_type=dummy` 或直接省略 `[sinker]`。
 - inline snapshot check 仅支持 `[extractor] extract_type=snapshot`、`[sinker] sink_type=write`，
   且 `[sinker].db_type` 为 `mysql`、`pg`、`mongo` 的写入链路。
 - inline cdc check 当前仅支持 `[extractor] extract_type=cdc`、`[sinker] sink_type=write`，
   且 `[sinker].db_type` 为 `mysql` 或 `pg` 的场景。
+- 在 inline cdc check 中，checker 会忽略 `[checker].batch_size`，直接使用
+  `[sinker].batch_size`。例如 `[sinker].batch_size=100`、`queue_size=200` 时，队列最多可积压
+  200 个待处理批次；若这些批次都打满，大约就是 20,000 行待校验数据。
 - 在 inline snapshot check 与 inline cdc check 中，`[checker]` 不接受 `db_type`、`url`、
   `username`、`password`；checker 会直接复用 `[sinker]` 已解析的目标端配置。
 - 在 inline cdc check 中，必须配置 `[resumer] resume_type=from_target` 或 `from_db` 来持久化
   checker 状态。
-- 在 inline cdc check（`extract_type=cdc` 且 `sink_type=write`）下，checker 批量大小跟随
-  `[sinker].batch_size`。
 - 当 `check_log_dir` 为空时，统一使用 `runtime.log_dir/check` 作为 checker 日志目录（包含 CDC 校验输出）。
 - 在 inline cdc check 下，会始终先在 `check_log_dir` 本地落盘周期性校验快照；
   `cdc_check_log_s3` 仅控制是否上传 S3。

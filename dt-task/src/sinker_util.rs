@@ -82,12 +82,10 @@ impl SinkerUtil {
         sub_sinkers: &mut Sinkers,
         sinker: S,
         checker: &Option<DataCheckerHandle>,
-        fail_on_checker_error: bool,
     ) {
         sub_sinkers.push(Arc::new(async_mutex::Mutex::new(wrap_checked_dml_sinker(
             sinker,
             checker.clone(),
-            fail_on_checker_error,
         ))));
     }
 
@@ -98,7 +96,6 @@ impl SinkerUtil {
         monitor: Arc<Monitor>,
         data_marker: Option<Arc<RwLock<DataMarker>>>,
         checker: Option<DataCheckerHandle>,
-        fail_on_checker_error: bool,
     ) -> anyhow::Result<Sinkers> {
         let log_level = &config.runtime.log_level;
         let enable_sqlx_log = TaskUtil::check_enable_sqlx_log(log_level);
@@ -110,12 +107,7 @@ impl SinkerUtil {
             SinkerConfig::Dummy => {
                 for _ in 0..parallel_size {
                     let sinker = DummySinker {};
-                    Self::push_checked_dml_sinker(
-                        &mut sub_sinkers,
-                        sinker,
-                        &checker,
-                        fail_on_checker_error,
-                    );
+                    Self::push_checked_dml_sinker(&mut sub_sinkers, sinker, &checker);
                 }
             }
 
@@ -147,12 +139,7 @@ impl SinkerUtil {
                         replace,
                         monitor_interval,
                     };
-                    Self::push_checked_dml_sinker(
-                        &mut sub_sinkers,
-                        sinker,
-                        &checker,
-                        fail_on_checker_error,
-                    );
+                    Self::push_checked_dml_sinker(&mut sub_sinkers, sinker, &checker);
                 }
             }
 
@@ -183,12 +170,7 @@ impl SinkerUtil {
                         replace,
                         monitor_interval,
                     };
-                    Self::push_checked_dml_sinker(
-                        &mut sub_sinkers,
-                        sinker,
-                        &checker,
-                        fail_on_checker_error,
-                    );
+                    Self::push_checked_dml_sinker(&mut sub_sinkers, sinker, &checker);
                 }
             }
 
@@ -208,12 +190,7 @@ impl SinkerUtil {
                         monitor: monitor.clone(),
                         monitor_interval,
                     };
-                    Self::push_checked_dml_sinker(
-                        &mut sub_sinkers,
-                        sinker,
-                        &checker,
-                        fail_on_checker_error,
-                    );
+                    Self::push_checked_dml_sinker(&mut sub_sinkers, sinker, &checker);
                 }
             }
 
