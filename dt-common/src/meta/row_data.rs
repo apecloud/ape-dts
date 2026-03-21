@@ -254,6 +254,12 @@ impl RowData {
         Ok(hash_code)
     }
 
+    pub fn contains_unchanged_toast(&self) -> bool {
+        self.after
+            .as_ref()
+            .is_some_and(|values| values.values().any(ColValue::is_unchanged_toast))
+    }
+
     pub fn refresh_data_size(&mut self) {
         self.data_size = self.get_data_malloc_size();
     }

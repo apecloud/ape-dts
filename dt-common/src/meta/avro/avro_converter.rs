@@ -328,7 +328,7 @@ impl AvroConverter {
             ColValue::MongoDoc(v) => Value::String(v.to_string()),
 
             ColValue::Bool(v) => Value::Boolean(*v),
-            ColValue::None => Value::Null,
+            ColValue::None | ColValue::UnchangedToast => Value::Null,
         }
     }
 
