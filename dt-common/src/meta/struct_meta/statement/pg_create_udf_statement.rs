@@ -19,7 +19,7 @@ impl PgCreateUdfStatement {
             return Ok(sqls);
         }
 
-        let sql = format!(r#"{}"#, self.udf.create_statement);
+        let sql = self.udf.create_statement.to_string();
         sqls.push((String::new(), sql));
         Ok(sqls)
     }

@@ -63,6 +63,11 @@ impl RdbMerger {
             .get_tb_meta(&row_data.schema, &row_data.tb)
             .await?;
 
+        if row_data.contains_unchanged_toast() {
+            merged.unmerged_rows.push(row_data);
+            return Ok(());
+        }
+
         // case 1: table has no primary/unique key
         // case 2: any key col value is NULL
         let hash_code = Self::get_hash_code(&row_data, tb_meta).await?;
