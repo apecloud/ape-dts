@@ -1,4 +1,5 @@
 use anyhow::{anyhow, Context};
+use super::struct_checker::StructCheckerHandle;
 use async_mutex::Mutex;
 use async_trait::async_trait;
 use indexmap::IndexMap;
@@ -293,6 +294,11 @@ pub struct DataCheckerHandle {
     join_handle: Arc<Mutex<Option<JoinHandle<anyhow::Result<()>>>>>,
 }
 
+pub enum CheckerHandle {
+    Data(DataCheckerHandle),
+    Struct(StructCheckerHandle),
+}
+
 impl DataCheckerHandle {
     pub fn spawn<C: Checker>(
         checker: C,
@@ -398,6 +404,46 @@ impl DataCheckerHandle {
 
     pub fn persists_position_checkpoint(&self) -> bool {
         self.shared.persists_position_checkpoint
+    }
+}
+
+impl CheckerHandle {
+    pub async fn refresh_meta(&self, data: Vec<DdlData>) -> anyhow::Result<()> {
+        match self {
+            CheckerHandle::Data(handle) => handle.refresh_meta(data).await,
+            CheckerHandle::Struct(_) => Ok(()),
+        }
+    }
+
+    pub async fn check_struct(
+        &mut self,
+        data: Vec<dt_common::meta::struct_meta::struct_data::StructData>,
+    ) -> anyhow::Result<()> {
+        match self {
+            CheckerHandle::Data(_) => Ok(()),
+            CheckerHandle::Struct(handle) => handle.check_struct(data).await,
+        }
+    }
+
+    pub async fn close_with_position(&mut self, position: Option<&Position>) -> anyhow::Result<()> {
+        match self {
+            CheckerHandle::Data(handle) => handle.close_with_position(position).await,
+            CheckerHandle::Struct(handle) => handle.close().await,
+        }
+    }
+
+    pub async fn record_checkpoint(&self, position: &Position) -> anyhow::Result<()> {
+        match self {
+            CheckerHandle::Data(handle) => handle.record_checkpoint(position).await,
+            CheckerHandle::Struct(_) => Ok(()),
+        }
+    }
+
+    pub fn persists_position_checkpoint(&self) -> bool {
+        match self {
+            CheckerHandle::Data(handle) => handle.persists_position_checkpoint(),
+            CheckerHandle::Struct(_) => false,
+        }
     }
 }
 

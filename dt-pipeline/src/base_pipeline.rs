@@ -61,18 +61,10 @@ impl Pipeline for BasePipeline {
         }
         let final_position = {
             let syncer = self.syncer.lock().await;
-            if matches!(syncer.received_position, Position::None) {
-                syncer.committed_position.clone()
-            } else {
-                syncer.received_position.clone()
-            }
+            Self::checker_close_position(&syncer)
         };
         if let Some(checker) = &mut self.checker {
-            checker
-                .close_with_position(
-                    (!matches!(final_position, Position::None)).then_some(&final_position),
-                )
-                .await?;
+            checker.close_with_position(final_position.as_ref()).await?;
         }
         self.parallelizer.close().await
     }
@@ -165,6 +157,15 @@ impl Pipeline for BasePipeline {
 }
 
 impl BasePipeline {
+    fn checker_close_position(syncer: &Syncer) -> Option<Position> {
+        let final_position = if matches!(syncer.received_position, Position::None) {
+            syncer.committed_position.clone()
+        } else {
+            syncer.received_position.clone()
+        };
+        (!matches!(final_position, Position::None)).then_some(final_position)
+    }
+
     async fn sink_raw(
         &mut self,
         all_data: Vec<DtItem>,
@@ -556,6 +557,39 @@ mod tests {
             schema: "test_db".to_string(),
             tb: "test_tb".to_string(),
         }
+    }
+
+    #[test]
+    fn checker_close_position_prefers_safe_committed_position() {
+        let received = Position::RdbSnapshotFinished {
+            db_type: "mysql".to_string(),
+            schema: "s1".to_string(),
+            tb: "received".to_string(),
+        };
+        let committed = Position::RdbSnapshotFinished {
+            db_type: "mysql".to_string(),
+            schema: "s1".to_string(),
+            tb: "committed".to_string(),
+        };
+        let syncer = Syncer {
+            received_position: received,
+            committed_position: committed.clone(),
+        };
+
+        assert_eq!(
+            BasePipeline::checker_close_position(&syncer),
+            Some(committed),
+        );
+    }
+
+    #[test]
+    fn checker_close_position_does_not_use_uncommitted_received_position() {
+        let syncer = Syncer {
+            received_position: build_position(),
+            committed_position: Position::None,
+        };
+
+        assert_eq!(BasePipeline::checker_close_position(&syncer), None);
     }
 
     #[tokio::test]

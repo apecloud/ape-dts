@@ -24,6 +24,7 @@ fn build_identity_key(identity_json: &str) -> String {
 #[derive(Clone, Serialize, Deserialize)]
 enum PersistedColValue {
     None,
+    UnchangedToast,
     Bool(bool),
     Tiny(i8),
     UnsignedTiny(u8),
@@ -59,6 +60,7 @@ impl From<&ColValue> for PersistedColValue {
     fn from(value: &ColValue) -> Self {
         match value {
             ColValue::None => Self::None,
+            ColValue::UnchangedToast => Self::UnchangedToast,
             ColValue::Bool(v) => Self::Bool(*v),
             ColValue::Tiny(v) => Self::Tiny(*v),
             ColValue::UnsignedTiny(v) => Self::UnsignedTiny(*v),
@@ -96,6 +98,7 @@ impl From<PersistedColValue> for ColValue {
     fn from(value: PersistedColValue) -> Self {
         match value {
             PersistedColValue::None => Self::None,
+            PersistedColValue::UnchangedToast => Self::UnchangedToast,
             PersistedColValue::Bool(v) => Self::Bool(v),
             PersistedColValue::Tiny(v) => Self::Tiny(v),
             PersistedColValue::UnsignedTiny(v) => Self::UnsignedTiny(v),
@@ -159,6 +162,7 @@ struct PersistedRowData {
     before: Option<HashMap<String, PersistedColValue>>,
     after: Option<HashMap<String, PersistedColValue>>,
     data_size: usize,
+    is_not_origin: bool,
 }
 
 impl From<&RowData> for PersistedRowData {
@@ -170,6 +174,7 @@ impl From<&RowData> for PersistedRowData {
             before: persist_col_values(&row_data.before),
             after: persist_col_values(&row_data.after),
             data_size: row_data.data_size,
+            is_not_origin: row_data.is_not_origin,
         }
     }
 }
@@ -183,6 +188,7 @@ impl From<PersistedRowData> for RowData {
             before: restore_col_values(row_data.before),
             after: restore_col_values(row_data.after),
             data_size: row_data.data_size,
+            is_not_origin: row_data.is_not_origin,
         }
     }
 }
