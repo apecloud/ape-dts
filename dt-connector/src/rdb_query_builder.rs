@@ -1101,4 +1101,43 @@ mod tests {
             r#"ON CONFLICT ("id") DO UPDATE SET "code"=EXCLUDED."code","name"=EXCLUDED."name""#
         ));
     }
+
+    #[test]
+    fn test_pg_update_query_skips_unchanged_toast_cols() {
+        let tb_meta = build_pg_tb_meta();
+        let row_data = build_update_row_data_with_unchanged_toast(false);
+        let builder = RdbQueryBuilder::new_for_pg(&tb_meta, None);
+
+        let query_info = builder.get_query_info(&row_data, false).unwrap();
+
+        assert!(query_info.sql.contains(r#""name"="#));
+        assert!(!query_info.sql.contains(r#""code"="#));
+    }
+
+    #[test]
+    fn test_pg_replace_pk_changed_update_with_unchanged_toast_falls_back_to_update() {
+        let tb_meta = build_pg_tb_meta();
+        let row_data = build_update_row_data_with_unchanged_toast(true);
+        let builder = RdbQueryBuilder::new_for_pg(&tb_meta, None);
+
+        let query_info = builder.get_query_info(&row_data, true).unwrap();
+
+        assert!(query_info.sql.starts_with(r#"UPDATE "public"."t1" SET"#));
+        assert!(!query_info.sql.contains("WITH deleted AS"));
+        assert!(!query_info.sql.contains(r#""code"="#));
+    }
+
+    #[test]
+    fn test_pg_update_query_with_only_unchanged_toast_does_not_include_toast_cols() {
+        let tb_meta = build_pg_tb_meta();
+        let row_data = build_update_row_data_with_only_unchanged_toast();
+        let builder = RdbQueryBuilder::new_for_pg(&tb_meta, None);
+
+        let query_info = builder.get_query_info(&row_data, false).unwrap();
+
+        assert!(query_info.sql.starts_with(r#"UPDATE "public"."t1" SET"#));
+        assert!(query_info.sql.contains(r#""id"="#));
+        assert!(!query_info.sql.contains(r#""code"="#));
+        assert!(!query_info.sql.contains(r#""name"="#));
+    }
 }
