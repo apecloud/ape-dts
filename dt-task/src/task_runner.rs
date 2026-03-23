@@ -11,13 +11,7 @@ use anyhow::{bail, Context};
 use chrono::Local;
 use log4rs::config::{Config, Deserializers, RawConfig};
 use tokio::{
-    fs::{metadata, File},
-    io::AsyncReadExt,
-    select,
-    sync::{Mutex, RwLock},
-    task::JoinSet,
-    time::Duration,
-    try_join,
+    fs::{File, metadata}, io::AsyncReadExt, runtime::Handle, select, sync::{Mutex, RwLock}, task::JoinSet, time::Duration, try_join
 };
 
 use super::{
@@ -143,6 +137,9 @@ impl TaskRunner {
 
     pub async fn start_task(&self) -> anyhow::Result<()> {
         self.init_log4rs().await?;
+
+        let worker_thread_cnt = Handle::current().metrics().num_workers();
+        log_info!("ape-dts started with {} worker thread(s)", worker_thread_cnt);
 
         panic::set_hook(Box::new(|panic_info| {
             let backtrace = std::backtrace::Backtrace::capture();
