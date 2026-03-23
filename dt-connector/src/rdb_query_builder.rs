@@ -246,11 +246,11 @@ impl RdbQueryBuilder<'_> {
                 return self.get_pg_replace_query(row_data, placeholder, &key_cols);
             }
 
-            return self.get_pg_origin_replace_query(row_data, placeholder, &key_cols);
+            self.get_pg_origin_replace_query(row_data, placeholder, &key_cols)
         } else {
             let mut query_info = self.get_insert_query(row_data, placeholder)?;
             query_info.sql = format!("REPLACE{}", query_info.sql.trim_start_matches("INSERT"));
-            return Ok(query_info);
+            Ok(query_info)
         }
     }
 

@@ -1,6 +1,6 @@
 use crate::{
     config::limiter_config::{CapacityLimiterConfig, RateLimiterConfig},
-    limiter::limiter::{Limiter, UnitType},
+    limiter::{Limiter, UnitType},
     log_error,
     meta::dt_data::DtItem,
 };
