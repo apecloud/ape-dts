@@ -418,14 +418,23 @@ impl RdbQueryBuilder<'_> {
     ) -> anyhow::Result<RdbQueryInfo<'a>> {
         let before = row_data.require_before()?;
         let (where_sql, not_null_cols) = self.get_where_info(1, before, placeholder)?;
+        let escaped_schema = self.escape(&self.rdb_tb_meta.schema);
+        let escaped_tb = self.escape(&self.rdb_tb_meta.tb);
         let mut sql = format!(
             "DELETE FROM {}.{} WHERE {}",
-            self.escape(&self.rdb_tb_meta.schema),
-            self.escape(&self.rdb_tb_meta.tb),
-            where_sql
+            escaped_schema, escaped_tb, where_sql
         );
         if self.rdb_tb_meta.key_map.is_empty() {
-            sql += " LIMIT 1";
+            if self.db_type == DbType::Pg {
+                sql = format!(
+                    "DELETE FROM {schema}.{tb} WHERE ctid IN (SELECT ctid FROM {schema}.{tb} WHERE {where_sql} LIMIT 1)",
+                    schema = escaped_schema,
+                    tb = escaped_tb,
+                    where_sql = where_sql,
+                );
+            } else {
+                sql += " LIMIT 1";
+            }
         }
 
         let mut cols = Vec::with_capacity(self.rdb_tb_meta.id_cols.len());
@@ -466,15 +475,27 @@ impl RdbQueryBuilder<'_> {
         }
 
         let (where_sql, not_null_cols) = self.get_where_info(index, before, placeholder)?;
+        let escaped_schema = self.escape(&self.rdb_tb_meta.schema);
+        let escaped_tb = self.escape(&self.rdb_tb_meta.tb);
         let mut sql = format!(
             "UPDATE {}.{} SET {} WHERE {}",
-            self.escape(&self.rdb_tb_meta.schema),
-            self.escape(&self.rdb_tb_meta.tb),
+            escaped_schema,
+            escaped_tb,
             set_pairs.join(","),
             where_sql,
         );
         if self.rdb_tb_meta.key_map.is_empty() {
-            sql += " LIMIT 1";
+            if self.db_type == DbType::Pg {
+                sql = format!(
+                    "UPDATE {schema}.{tb} SET {set_sql} WHERE ctid IN (SELECT ctid FROM {schema}.{tb} WHERE {where_sql} LIMIT 1)",
+                    schema = escaped_schema,
+                    tb = escaped_tb,
+                    set_sql = set_pairs.join(","),
+                    where_sql = where_sql,
+                );
+            } else {
+                sql += " LIMIT 1";
+            }
         }
 
         let mut cols = set_cols.clone();
@@ -932,6 +953,31 @@ mod tests {
         tb_meta
     }
 
+    fn build_pg_tb_meta_without_keys() -> PgTbMeta {
+        let mut col_type_map = HashMap::new();
+        col_type_map.insert("id".to_string(), build_pg_col_type("int4"));
+        col_type_map.insert("code".to_string(), build_pg_col_type("text"));
+        col_type_map.insert("name".to_string(), build_pg_col_type("text"));
+
+        PgTbMeta {
+            basic: RdbTbMeta {
+                schema: "public".to_string(),
+                tb: "t1".to_string(),
+                cols: vec!["id".to_string(), "code".to_string(), "name".to_string()],
+                col_origin_type_map: HashMap::new(),
+                key_map: HashMap::new(),
+                order_cols: vec![],
+                partition_col: "id".to_string(),
+                id_cols: vec!["id".to_string(), "code".to_string(), "name".to_string()],
+                foreign_keys: vec![],
+                ref_by_foreign_keys: vec![],
+                nullable_cols: HashSet::new(),
+            },
+            oid: 1,
+            col_type_map,
+        }
+    }
+
     fn build_insert_row_data(is_not_origin: bool) -> RowData {
         let mut after = HashMap::new();
         after.insert("id".to_string(), ColValue::Long(1));
@@ -1017,6 +1063,41 @@ mod tests {
             RowType::Update,
             Some(before),
             Some(after),
+        )
+    }
+
+    fn build_plain_update_row_data() -> RowData {
+        let mut before = HashMap::new();
+        before.insert("id".to_string(), ColValue::Long(1));
+        before.insert("code".to_string(), ColValue::String("xx".to_string()));
+        before.insert("name".to_string(), ColValue::String("n1".to_string()));
+
+        let mut after = HashMap::new();
+        after.insert("id".to_string(), ColValue::Long(1));
+        after.insert("code".to_string(), ColValue::String("xx".to_string()));
+        after.insert("name".to_string(), ColValue::String("n2".to_string()));
+
+        RowData::new(
+            "public".to_string(),
+            "t1".to_string(),
+            RowType::Update,
+            Some(before),
+            Some(after),
+        )
+    }
+
+    fn build_delete_row_data() -> RowData {
+        let mut before = HashMap::new();
+        before.insert("id".to_string(), ColValue::Long(1));
+        before.insert("code".to_string(), ColValue::String("xx".to_string()));
+        before.insert("name".to_string(), ColValue::String("n1".to_string()));
+
+        RowData::new(
+            "public".to_string(),
+            "t1".to_string(),
+            RowType::Delete,
+            Some(before),
+            None,
         )
     }
 
@@ -1139,5 +1220,37 @@ mod tests {
         assert!(query_info.sql.contains(r#""id"="#));
         assert!(!query_info.sql.contains(r#""code"="#));
         assert!(!query_info.sql.contains(r#""name"="#));
+    }
+
+    #[test]
+    fn test_pg_delete_without_keys_uses_ctid_limit_one() {
+        let tb_meta = build_pg_tb_meta_without_keys();
+        let row_data = build_delete_row_data();
+        let builder = RdbQueryBuilder::new_for_pg(&tb_meta, None);
+
+        let query_info = builder.get_query_info(&row_data, false).unwrap();
+
+        assert!(query_info
+            .sql
+            .contains(r#"DELETE FROM "public"."t1" WHERE ctid IN ("#));
+        assert!(query_info
+            .sql
+            .contains(r#"SELECT ctid FROM "public"."t1" WHERE"#));
+        assert!(query_info.sql.contains("LIMIT 1"));
+    }
+
+    #[test]
+    fn test_pg_update_without_keys_uses_ctid_limit_one() {
+        let tb_meta = build_pg_tb_meta_without_keys();
+        let row_data = build_plain_update_row_data();
+        let builder = RdbQueryBuilder::new_for_pg(&tb_meta, None);
+
+        let query_info = builder.get_query_info(&row_data, false).unwrap();
+
+        assert!(query_info.sql.starts_with(r#"UPDATE "public"."t1" SET"#));
+        assert!(query_info
+            .sql
+            .contains(r#"WHERE ctid IN (SELECT ctid FROM "public"."t1" WHERE"#));
+        assert!(query_info.sql.contains("LIMIT 1"));
     }
 }
