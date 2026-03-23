@@ -19,7 +19,7 @@ impl PgCreateUdtStatement {
             return Ok(sqls);
         }
 
-        let sql = format!(r#"{}"#, self.udt.create_statement);
+        let sql = self.udt.create_statement.to_string();
         sqls.push((String::new(), sql));
         Ok(sqls)
     }

@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use governor;
 
 use crate::{
-    limiter::limiter::{Limiter, UnitType},
+    limiter::{Limiter, UnitType},
     log_error, log_warn,
 };
 
