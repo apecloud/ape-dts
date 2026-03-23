@@ -17,6 +17,7 @@ dt-pipeline = { path = "../dt-pipeline", version = "0.1.0" }
 
 sqlx = { workspace = true }
 async-mutex = { workspace = true }
+async-trait = { workspace = true }
 mongodb = { workspace = true }
 tokio = { workspace = true }
 concurrent-queue = { workspace = true }

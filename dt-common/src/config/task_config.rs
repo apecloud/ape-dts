@@ -299,6 +299,13 @@ impl TaskConfig {
         )
     }
 
+    fn checker_target_keys_in_use(loader: &IniLoader) -> Vec<&'static str> {
+        [DB_TYPE, URL, USERNAME, PASSWORD]
+            .into_iter()
+            .filter(|key| loader.contains(CHECKER, key))
+            .collect()
+    }
+
     fn checker_uses_inline_target(extract_type: &ExtractType, sink_type: &SinkType) -> bool {
         matches!(sink_type, SinkType::Write)
             && matches!(extract_type, ExtractType::Snapshot | ExtractType::Cdc)
@@ -341,13 +348,11 @@ impl TaskConfig {
         inline_check: bool,
     ) -> anyhow::Result<()> {
         if inline_check {
-            let forbidden_keys = [DB_TYPE, URL, USERNAME, PASSWORD]
-                .into_iter()
-                .filter(|key| loader.contains(CHECKER, key))
-                .collect::<Vec<_>>();
+            let forbidden_keys = Self::checker_target_keys_in_use(loader);
             if !forbidden_keys.is_empty() {
                 bail!(Error::ConfigError(format!(
-                    "config [checker] with inline check does not accept [{}]; inline check reuses the [sinker] target",
+                    "inline check does not accept [checker].{}; configure the inline check target via [sinker].{}",
+                    forbidden_keys.join(", "),
                     forbidden_keys.join(", ")
                 )));
             }
@@ -1289,4 +1294,44 @@ impl TaskConfig {
             metrics_labels,
         })
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{
+        fs,
+        time::{SystemTime, UNIX_EPOCH},
+    };
+
+    fn build_temp_ini(contents: &str) -> String {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time before unix epoch")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("ape_dts_task_config_{unique}.ini"));
+        fs::write(&path, contents).expect("failed to write temp ini");
+        path.to_string_lossy().into_owned()
+    }
+
+    #[test]
+    fn inline_check_error_mentions_sinker_config_for_target_keys() {
+        let path = build_temp_ini(
+            r#"
+[checker]
+db_type=mysql
+url=mysql://127.0.0.1:3306/test
+"#,
+        );
+        let loader = IniLoader::new(&path);
+
+        let err = TaskConfig::validate_checker_target_config(&loader, true)
+            .expect_err("inline check should reject standalone checker target config");
+        let err_msg = err.to_string();
+        assert!(err_msg.contains("[checker].db_type, url"));
+        assert!(err_msg.contains("[sinker].db_type, url"));
+
+        fs::remove_file(path).expect("failed to remove temp ini");
+    }
+
 }

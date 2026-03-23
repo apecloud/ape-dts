@@ -99,14 +99,7 @@ impl MongoSnapshotExtractor {
             })?;
             let object_id = Self::get_object_id(&doc);
 
-            let mut after = HashMap::new();
-            let id: String = if let Some(key) = MongoKey::from_doc(&doc) {
-                key.to_string()
-            } else {
-                String::new()
-            };
-            after.insert(MongoConstants::ID.to_string(), ColValue::String(id));
-            after.insert(MongoConstants::DOC.to_string(), ColValue::MongoDoc(doc));
+            let after = Self::build_after_cols(&doc);
             let row_data = RowData::new(
                 self.db.clone(),
                 self.tb.clone(),
@@ -136,6 +129,19 @@ impl MongoSnapshotExtractor {
         Ok(())
     }
 
+    fn build_after_cols(doc: &Document) -> HashMap<String, ColValue> {
+        let mut after = HashMap::new();
+        let id = MongoKey::from_doc(doc)
+            .map(|key| ColValue::String(key.to_string()))
+            .unwrap_or(ColValue::None);
+        after.insert(MongoConstants::ID.to_string(), id);
+        after.insert(
+            MongoConstants::DOC.to_string(),
+            ColValue::MongoDoc(doc.clone()),
+        );
+        after
+    }
+
     fn get_object_id(doc: &Document) -> String {
         if let Some(id) = doc.get(MongoConstants::ID) {
             match id {
@@ -144,5 +150,34 @@ impl MongoSnapshotExtractor {
             }
         }
         String::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::MongoSnapshotExtractor;
+    use dt_common::meta::{
+        col_value::ColValue,
+        mongo::mongo_constant::MongoConstants,
+    };
+    use mongodb::bson::doc;
+
+    #[test]
+    fn unsupported_mongo_id_is_encoded_as_none_for_checker_skip() {
+        let doc = doc! {
+            MongoConstants::ID: { "nested": 1 },
+            "name": "user_1",
+        };
+
+        let cols = MongoSnapshotExtractor::build_after_cols(&doc);
+
+        assert!(matches!(
+            cols.get(MongoConstants::ID),
+            Some(ColValue::None)
+        ));
+        assert!(matches!(
+            cols.get(MongoConstants::DOC),
+            Some(ColValue::MongoDoc(_))
+        ));
     }
 }

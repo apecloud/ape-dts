@@ -94,6 +94,22 @@
 - 不一致会进入 checker state/store，而不是只走短 retry。
 - checkpoint / state store 与 checker 生命周期耦合更深。
 
+#### Inline cdc check 的配置约束
+
+会直接报配置错误（`ConfigError`）的情况：
+
+- 未启用 `[checker]`，但 `[parallelizer] parallel_type=rdb_check`。
+- `[pipeline] pipeline_type` 不是 `basic`。
+- `[extractor] extract_type=cdc`，但 `[sinker] sink_type` 不是 `write`。
+- `[sinker].db_type` 不是 `mysql` 或 `pg`。
+- 在 `[checker]` 中配置了 `db_type`、`url`、`username`、`password`。
+- 未配置 `[resumer] resume_type=from_target` 或 `from_db`，导致 checker 无法持久化状态。
+
+会继续生效或被强制改写的配置：
+
+- `[checker].batch_size`：继续生效，且不会 fallback 到 `[sinker].batch_size`。
+- `[checker].max_retries` 与 `[checker].retry_interval_secs`：inline cdc check 下强制按 0 处理。
+
 ## 示例: MySQL -> MySQL
 
 参考 [任务模版](../../templates/mysql_to_mysql.md) 和 [教程](../../en/tutorial/mysql_to_mysql.md)。模板中已将 standalone snapshot check、inline snapshot check、inline cdc check 分开列出。

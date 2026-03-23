@@ -96,13 +96,18 @@ struct check 复用 standalone snapshot check 的目标选择规则。
   且 `[sinker].db_type` 为 `mysql`、`pg`、`mongo` 的写入链路。
 - inline cdc check 当前仅支持 `[extractor] extract_type=cdc`、`[sinker] sink_type=write`，
   且 `[sinker].db_type` 为 `mysql` 或 `pg` 的场景。
-- 在 inline cdc check 中，checker 会忽略 `[checker].batch_size`，直接使用
-  `[sinker].batch_size`。例如 `[sinker].batch_size=100`、`queue_size=200` 时，队列最多可积压
-  200 个待处理批次；若这些批次都打满，大约就是 20,000 行待校验数据。
+- 在 inline cdc check 中，checker 使用 `[checker].batch_size`，不会 fallback 到
+  `[sinker].batch_size`。例如 `[checker].batch_size=100`、`queue_size=200` 时，队列最多可积压 200 个待处理批次；若这些批次都打满，大约就是 20,000 行待校验数据。
 - 在 inline snapshot check 与 inline cdc check 中，`[checker]` 不接受 `db_type`、`url`、
   `username`、`password`；checker 会直接复用 `[sinker]` 已解析的目标端配置。
 - 在 inline cdc check 中，必须配置 `[resumer] resume_type=from_target` 或 `from_db` 来持久化
   checker 状态。
+- 对 inline cdc check，下面这些组合会直接报 `ConfigError`：缺少 `[checker]` 且
+  `parallel_type=rdb_check`；`[pipeline].pipeline_type != basic`；`[sinker].sink_type != write`；
+  `[sinker].db_type` 不属于 `mysql` / `pg`；以及在 `[checker]` 中显式填写目标端字段
+  `db_type` / `url` / `username` / `password`。
+- 对 inline cdc check，`[checker].batch_size` 会继续生效并控制 checker 分块；
+  `max_retries` 与 `retry_interval_secs` 会强制按 0 处理。
 - 当 `check_log_dir` 为空时，统一使用 `runtime.log_dir/check` 作为 checker 日志目录（包含 CDC 校验输出）。
 - 在 inline cdc check 下，会始终先在 `check_log_dir` 本地落盘周期性校验快照；
   `cdc_check_log_s3` 仅控制是否上传 S3。

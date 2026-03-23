@@ -101,13 +101,19 @@ Notes:
   `[sinker] sink_type=write`, and `[sinker].db_type` is `mysql`, `pg`, or `mongo`.
 - Inline cdc check is currently supported only when `[extractor] extract_type=cdc`,
   `[sinker] sink_type=write`, and `[sinker].db_type` is `mysql` or `pg`.
-- In inline cdc check, the checker ignores `[checker].batch_size` and uses `[sinker].batch_size`.
-  For example, if `[sinker].batch_size=100` and `queue_size=200`, the checker queue can hold about
-  200 pending batches, which is roughly 20,000 rows when batches are full.
+- In inline cdc check, the checker uses `[checker].batch_size`. It does not fall back to
+  `[sinker].batch_size`. For example, if `[checker].batch_size=100` and `queue_size=200`, the
+  checker queue can hold about 200 pending batches, which is roughly 20,000 rows when batches are full.
 - In inline snapshot check and inline cdc check, `[checker]` must not set `db_type`, `url`,
   `username`, or `password`; the checker always reuses the parsed `[sinker]` target.
 - In inline cdc check, `[resumer] resume_type=from_target` or `from_db` is required to persist
   checker state.
+- In inline cdc check, the following combinations fail fast with `ConfigError`: no `[checker]`
+  while `[parallelizer].parallel_type=rdb_check`; `[pipeline].pipeline_type != basic`;
+  `[sinker].sink_type != write`; `[sinker].db_type` not in `mysql` / `pg`; or any target field
+  (`db_type` / `url` / `username` / `password`) set under `[checker]`.
+- In inline cdc check, `[checker].batch_size` remains effective and controls checker chunking.
+  `[checker].max_retries` / `[checker].retry_interval_secs` are still forced to `0`.
 - When `check_log_dir` is empty, `runtime.log_dir/check` is used consistently for checker logs (including CDC check outputs).
 - In inline cdc check, periodic check snapshots are always written locally under `check_log_dir`;
   `cdc_check_log_s3` controls only S3 upload.

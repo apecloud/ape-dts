@@ -12,7 +12,7 @@ use tokio::{
 use crate::{lua_processor::LuaProcessor, Pipeline};
 use dt_common::{
     config::sinker_config::SinkerConfig,
-    log_error, log_info, log_position, log_warn,
+    log_error, log_info, log_position,
     meta::{
         dcl_meta::dcl_data::DclData,
         ddl_meta::ddl_data::DdlData,
@@ -147,7 +147,7 @@ impl Pipeline for BasePipeline {
                     &last_received_position,
                     &last_commit_position,
                 )
-                .await;
+                .await?;
 
             self.monitor
                 .add_counter(CounterType::SinkedRecordTotal, data_size.count)
@@ -159,7 +159,7 @@ impl Pipeline for BasePipeline {
         }
 
         self.record_checkpoint(None, &last_received_position, &last_commit_position)
-            .await;
+            .await?;
         Ok(())
     }
 }
@@ -404,10 +404,10 @@ impl BasePipeline {
         last_checkpoint_time: Option<Instant>,
         last_received_position: &Position,
         last_commit_position: &Position,
-    ) -> Instant {
+    ) -> anyhow::Result<Instant> {
         if let Some(last) = last_checkpoint_time {
             if last.elapsed().as_secs() < self.checkpoint_interval_secs {
-                return last;
+                return Ok(last);
             }
         }
 
@@ -421,36 +421,22 @@ impl BasePipeline {
         };
 
         // persist checker checkpoint first to avoid advancing position without checker state.
-        let mut checkpoint_ok = true;
         let mut position_persisted_by_checker = false;
         if !matches!(record_position, Position::None) {
             if let Some(checker) = &self.checker {
-                if let Err(e) = checker.record_checkpoint(record_position).await {
-                    log_warn!(
-                        "failed to persist checker checkpoint with position: {}, err: {}",
-                        record_position,
-                        e
-                    );
-                    checkpoint_ok = false;
-                } else {
-                    position_persisted_by_checker = checker.persists_position_checkpoint();
-                }
+                checker.record_checkpoint(record_position).await?;
+                position_persisted_by_checker = checker.persists_position_checkpoint();
             }
         }
-        if checkpoint_ok && !position_persisted_by_checker {
+        if !position_persisted_by_checker {
             if let Some(handler) = &self.recorder {
                 if let Err(e) = handler.record_position(record_position).await {
                     log_error!("failed to record position: {}, err: {}", record_position, e);
                 }
             }
-        } else if !checkpoint_ok {
-            log_warn!(
-                "skip recorder checkpoint because checker checkpoint failed at position: {}",
-                record_position
-            );
         }
 
-        if checkpoint_ok && !matches!(last_commit_position, Position::None) {
+        if !matches!(last_commit_position, Position::None) {
             self.syncer.lock().await.committed_position = last_commit_position.to_owned();
         }
 
@@ -459,6 +445,174 @@ impl BasePipeline {
             last_received_position.to_timestamp(),
         );
 
-        Instant::now()
+        Ok(Instant::now())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use async_trait::async_trait;
+    use dt_common::{
+        meta::{
+            dt_data::{DtData, DtItem},
+            dt_queue::DtQueue,
+            position::Position,
+            row_data::RowData,
+            row_type::RowType,
+        },
+        monitor::monitor::Monitor,
+    };
+    use dt_connector::{
+        checker::{check_log::CheckSummaryLog, CheckContext, Checker, CheckerHandle, FetchResult},
+        rdb_router::RdbRouter,
+    };
+    use dt_parallelizer::{DataSize, Parallelizer};
+    use std::{collections::HashMap, sync::Arc, time::Duration};
+    use tokio::sync::Mutex;
+
+    struct StaticDrainParallelizer;
+
+    #[async_trait]
+    impl Parallelizer for StaticDrainParallelizer {
+        fn get_name(&self) -> String {
+            "static-drain-test".to_string()
+        }
+
+        async fn drain(&mut self, buffer: &DtQueue) -> anyhow::Result<Vec<DtItem>> {
+            let mut items = Vec::new();
+            while let Ok(item) = buffer.pop().await {
+                items.push(item);
+            }
+            Ok(items)
+        }
+
+        async fn sink_dml(
+            &mut self,
+            data: Vec<RowData>,
+            _sinkers: &[Arc<async_mutex::Mutex<Box<dyn Sinker + Send>>>],
+        ) -> anyhow::Result<DataSize> {
+            Ok(DataSize {
+                count: data.len() as u64,
+                bytes: 0,
+            })
+        }
+    }
+
+    struct FailingFetchChecker;
+
+    #[async_trait]
+    impl Checker for FailingFetchChecker {
+        async fn fetch(&mut self, _src_rows: &[&RowData]) -> anyhow::Result<FetchResult> {
+            anyhow::bail!("forced checker fetch failure")
+        }
+    }
+
+    fn build_check_context() -> CheckContext {
+        CheckContext {
+            monitor: Arc::new(Monitor::new("checker", "pipeline-test", 1, 1, 1)),
+            summary: CheckSummaryLog::default(),
+            output_revise_sql: false,
+            extractor_meta_manager: None,
+            reverse_router: RdbRouter {
+                schema_map: HashMap::new(),
+                tb_map: HashMap::new(),
+                col_map: HashMap::new(),
+                topic_map: HashMap::new(),
+            },
+            output_full_row: false,
+            revise_match_full_row: false,
+            global_summary: None,
+            batch_size: 1,
+            retry_interval_secs: 0,
+            max_retries: 0,
+            is_cdc: true,
+            check_log_dir: ".".to_string(),
+            cdc_check_log_max_file_size: 1,
+            cdc_check_log_max_rows: 1,
+            s3_output: None,
+            cdc_check_log_interval_secs: 1,
+            state_store: None,
+            expected_resume_position: None,
+        }
+    }
+
+    fn build_row_data() -> RowData {
+        RowData::new(
+            "test_db".to_string(),
+            "test_tb".to_string(),
+            RowType::Insert,
+            None,
+            Some(HashMap::from([(
+                "id".to_string(),
+                dt_common::meta::col_value::ColValue::Long(1),
+            )])),
+        )
+    }
+
+    fn build_position() -> Position {
+        Position::RdbSnapshotFinished {
+            db_type: "mysql".to_string(),
+            schema: "test_db".to_string(),
+            tb: "test_tb".to_string(),
+        }
+    }
+
+    #[tokio::test]
+    async fn start_fails_fast_when_checker_checkpoint_returns_error() {
+        let handle = dt_connector::checker::DataCheckerHandle::spawn(
+            FailingFetchChecker,
+            "pipeline-checkpoint-fail-fast".to_string(),
+            build_check_context(),
+            4,
+            "FailingFetchChecker",
+        );
+        handle.enqueue_check(vec![build_row_data()]).await.unwrap();
+
+        let checkpoint = build_position();
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                if handle.record_checkpoint(&checkpoint).await.is_err() {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("checker should enter failed state before pipeline starts");
+
+        let buffer = Arc::new(DtQueue::new(8, 0, None, None));
+        buffer
+            .push(DtItem {
+                dt_data: DtData::Dml {
+                    row_data: build_row_data(),
+                },
+                position: checkpoint.clone(),
+                data_origin_node: String::new(),
+            })
+            .await
+            .unwrap();
+
+        let mut pipeline = BasePipeline {
+            buffer,
+            parallelizer: Box::new(StaticDrainParallelizer),
+            sinker_config: SinkerConfig::Dummy,
+            sinkers: Vec::new(),
+            shut_down: Arc::new(AtomicBool::new(true)),
+            checkpoint_interval_secs: 0,
+            batch_sink_interval_secs: 0,
+            syncer: Arc::new(Mutex::new(Syncer::default())),
+            monitor: Arc::new(Monitor::new("pipeline", "test", 1, 1, 1)),
+            data_marker: None,
+            lua_processor: None,
+            recorder: None,
+            checker: Some(CheckerHandle::Data(handle)),
+        };
+
+        let result = pipeline.start().await;
+        assert!(
+            result.is_err(),
+            "pipeline should stop on checker checkpoint failure"
+        );
     }
 }

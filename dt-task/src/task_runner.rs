@@ -17,7 +17,6 @@ use tokio::{
     sync::{Mutex, RwLock},
     task::JoinSet,
     time::Duration,
-    try_join,
 };
 
 use super::{
@@ -68,7 +67,7 @@ use dt_connector::{
     data_marker::DataMarker,
     extractor::resumer::{recorder::Recorder, recovery::Recovery},
     rdb_router::RdbRouter,
-    Sinker,
+    Extractor, Sinker,
 };
 use dt_pipeline::{
     base_pipeline::BasePipeline, http_server_pipeline::HttpServerPipeline,
@@ -114,6 +113,28 @@ const LOG_DIR_PLACEHOLDER: &str = "LOG_DIR_PLACEHOLDER";
 const CHECK_LOG_FILE_SIZE_PLACEHOLDER: &str = "CHECK_LOG_FILE_SIZE_PLACEHOLDER";
 const DEFAULT_CHECK_LOG_DIR_PLACEHOLDER: &str = "LOG_DIR_PLACEHOLDER/check";
 const DEFAULT_STATISTIC_LOG_DIR_PLACEHOLDER: &str = "LOG_DIR_PLACEHOLDER/statistic";
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SingleTaskWorker {
+    Extractor,
+    Pipeline,
+    Monitor,
+}
+
+impl SingleTaskWorker {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Extractor => "extractor",
+            Self::Pipeline => "pipeline",
+            Self::Monitor => "monitor",
+        }
+    }
+}
+
+enum SingleTaskWorkerResult {
+    Completed(SingleTaskWorker),
+    Failed(SingleTaskWorker, anyhow::Error),
+}
 
 impl TaskRunner {
     pub fn new(task_config_file: &str) -> anyhow::Result<Self> {
@@ -221,7 +242,9 @@ impl TaskRunner {
             ExtractorConfig::MysqlStruct { .. } | ExtractorConfig::PgStruct { .. } => {
                 let mut pending_tasks = self.build_pending_tasks(task_context, false).await?;
                 if let Some(task_context) = pending_tasks.pop_front() {
-                    self.clone().start_single_task(task_context, false).await?
+                    self.clone()
+                        .start_single_task(task_context, false, None)
+                        .await?
                 }
             }
 
@@ -230,7 +253,11 @@ impl TaskRunner {
             | ExtractorConfig::MongoSnapshot { .. }
             | ExtractorConfig::FoxlakeS3 { .. } => self.start_multi_task(task_context).await?,
 
-            _ => self.clone().start_single_task(task_context, false).await?,
+            _ => {
+                self.clone()
+                    .start_single_task(task_context, false, None)
+                    .await?
+            }
         };
 
         // close connections
@@ -285,13 +312,20 @@ impl TaskRunner {
 
         let task_parallel_size = self.get_task_parallel_size();
         let semaphore = Arc::new(tokio::sync::Semaphore::new(task_parallel_size));
+        let task_group_cancel = Arc::new(AtomicBool::new(false));
         let mut join_set: JoinSet<(String, anyhow::Result<()>)> = JoinSet::new();
+        let mut first_error = None;
 
         // initialize the task pool to its maximum capacity
         while join_set.len() < task_parallel_size && !pending_tasks.is_empty() {
             if let Some(task_context) = pending_tasks.pop_front() {
                 self.clone()
-                    .spawn_single_task(task_context, &mut join_set, &semaphore)
+                    .spawn_single_task(
+                        task_context,
+                        &mut join_set,
+                        &semaphore,
+                        task_group_cancel.clone(),
+                    )
                     .await?;
             }
         }
@@ -300,23 +334,51 @@ impl TaskRunner {
         while let Some(result) = join_set.join_next().await {
             match result {
                 Ok((_, Ok(()))) => {
-                    if let Some(task_context) = pending_tasks.pop_front() {
-                        self.clone()
-                            .spawn_single_task(task_context, &mut join_set, &semaphore)
-                            .await?;
+                    if first_error.is_none() {
+                        if let Some(task_context) = pending_tasks.pop_front() {
+                            self.clone()
+                                .spawn_single_task(
+                                    task_context,
+                                    &mut join_set,
+                                    &semaphore,
+                                    task_group_cancel.clone(),
+                                )
+                                .await?;
+                        }
                     }
                 }
                 Ok((single_task_id, Err(e))) => {
-                    bail!("single task: [{}] failed, error: {}", single_task_id, e)
+                    if first_error.is_none() {
+                        task_group_cancel.store(true, Ordering::Release);
+                        first_error = Some(anyhow::anyhow!(
+                            "single task: [{}] failed, error: {}",
+                            single_task_id,
+                            e
+                        ));
+                    } else {
+                        log_error!(
+                            "single task [{}] also failed after task group cancellation, error: {}",
+                            single_task_id,
+                            e
+                        );
+                    }
                 }
                 Err(e) => {
-                    bail!("join error: {}", e)
+                    if first_error.is_none() {
+                        task_group_cancel.store(true, Ordering::Release);
+                        first_error = Some(anyhow::anyhow!("join error: {}", e));
+                    } else {
+                        log_error!("join error after task group cancellation: {}", e);
+                    }
                 }
             }
         }
 
         global_shut_down.store(true, Ordering::Release);
         global_monitor_task.await?;
+        if let Some(err) = first_error {
+            return Err(err);
+        }
         Ok(())
     }
 
@@ -325,6 +387,7 @@ impl TaskRunner {
         task_context: TaskContext,
         join_set: &mut JoinSet<(String, anyhow::Result<()>)>,
         semaphore: &Arc<tokio::sync::Semaphore>,
+        parent_cancel: Arc<AtomicBool>,
     ) -> anyhow::Result<()> {
         let single_task_id = task_context.id;
         let semaphore = Arc::clone(semaphore);
@@ -345,7 +408,9 @@ impl TaskRunner {
         let me = self.clone();
         join_set.spawn(async move {
             let _permit = semaphore.acquire().await.unwrap();
-            let res = me.start_single_task(task_context, true).await;
+            let res = me
+                .start_single_task(task_context, true, Some(parent_cancel))
+                .await;
             (single_task_id, res)
         });
         Ok(())
@@ -355,6 +420,7 @@ impl TaskRunner {
         self,
         task_context: TaskContext,
         is_multi_task: bool,
+        parent_cancel: Option<Arc<AtomicBool>>,
     ) -> anyhow::Result<()> {
         let single_task_id =
             Self::derive_single_task_id(&task_context.id, &task_context.extractor_config);
@@ -401,6 +467,13 @@ impl TaskRunner {
             .clone()
             .map(|data_marker| Arc::new(RwLock::new(data_marker)));
 
+        self.pre_single_task(
+            extractor_client.clone(),
+            sinker_client.clone(),
+            sinker_data_marker,
+        )
+        .await?;
+
         // extractor
         let monitor_time_window_secs = self.config.pipeline.counter_time_window_secs;
         let monitor_max_sub_count = self.config.pipeline.counter_max_sub_count;
@@ -412,7 +485,7 @@ impl TaskRunner {
             monitor_max_sub_count,
             monitor_count_window,
         ));
-        let mut extractor = ExtractorUtil::create_extractor(
+        let extractor = ExtractorUtil::create_extractor(
             &self.config,
             &extractor_config,
             extractor_client.clone(),
@@ -426,6 +499,7 @@ impl TaskRunner {
             recovery,
         )
         .await?;
+        let extractor = Arc::new(Mutex::new(extractor));
 
         // checker
         let checker_monitor = Arc::new(Monitor::new(
@@ -476,7 +550,7 @@ impl TaskRunner {
             monitor_count_window,
         ));
 
-        let mut pipeline = self
+        let pipeline = self
             .create_pipeline(
                 buffer,
                 shut_down.clone(),
@@ -488,28 +562,141 @@ impl TaskRunner {
                 checker,
             )
             .await?;
+        let pipeline = Arc::new(Mutex::new(pipeline));
 
-        // add monitors to global monitors
+        self.register_single_task_monitors(
+            &single_task_id,
+            extractor_monitor.clone(),
+            pipeline_monitor.clone(),
+            sinker_monitor.clone(),
+            checker_monitor.clone(),
+        )
+        .await;
+
+        let interval_secs = self.config.pipeline.checkpoint_interval_secs;
+        let tasks: Vec<Arc<TaskMonitor>> = if is_multi_task {
+            vec![]
+        } else {
+            vec![self.task_monitor.clone()]
+        };
+        let monitor_shut_down = shut_down.clone();
+        let monitor_task = tokio::spawn(async move {
+            Self::flush_monitors_generic::<Monitor, TaskMonitor>(
+                interval_secs,
+                monitor_shut_down,
+                &[
+                    extractor_monitor,
+                    pipeline_monitor,
+                    sinker_monitor,
+                    checker_monitor,
+                ],
+                &tasks,
+            )
+            .await;
+            SingleTaskWorkerResult::Completed(SingleTaskWorker::Monitor)
+        });
+        let parent_cancel_forwarder = parent_cancel.map(|parent_cancel| {
+            let shut_down = shut_down.clone();
+            tokio::spawn(async move {
+                Self::wait_for_shutdown(parent_cancel).await;
+                shut_down.store(true, Ordering::Release);
+            })
+        });
+
+        let worker_result = Self::run_single_task_workers(
+            extractor.clone(),
+            pipeline.clone(),
+            monitor_task,
+            shut_down.clone(),
+        )
+        .await;
+
+        if let Some(handle) = parent_cancel_forwarder {
+            handle.abort();
+            let _ = handle.await;
+        }
+
+        if worker_result.is_ok() {
+            if let Some(check_summary) = &task_context.check_summary {
+                let summary = check_summary.lock().await;
+                // `check_summary` is shared across subtasks in tb-parallel snapshot/check mode.
+                // Export only the global increments that have not been reflected into task metrics yet,
+                // otherwise multiple subtasks can repeatedly account for the same miss/diff totals.
+                let delta_miss = (summary.miss_count as u64).saturating_sub(
+                    self.task_monitor
+                        .get_no_window_metric(TaskMetricsType::CheckerMissCount),
+                );
+                let delta_diff = (summary.diff_count as u64).saturating_sub(
+                    self.task_monitor
+                        .get_no_window_metric(TaskMetricsType::CheckerDiffCount),
+                );
+                if delta_miss > 0 || delta_diff > 0 {
+                    self.task_monitor
+                        .add_no_window_metrics(TaskMetricsType::CheckerMissCount, delta_miss);
+                    self.task_monitor
+                        .add_no_window_metrics(TaskMetricsType::CheckerDiffCount, delta_diff);
+                }
+            }
+
+            let (schema, tb) = match &extractor_config {
+                ExtractorConfig::MysqlSnapshot { db, tb, .. }
+                | ExtractorConfig::MongoSnapshot { db, tb, .. } => (db.to_owned(), tb.to_owned()),
+                ExtractorConfig::PgSnapshot { schema, tb, .. }
+                | ExtractorConfig::FoxlakeS3 { schema, tb, .. } => {
+                    (schema.to_owned(), tb.to_owned())
+                }
+                _ => (String::new(), String::new()),
+            };
+            if !tb.is_empty() {
+                let finish_position = Position::RdbSnapshotFinished {
+                    db_type: self.config.extractor_basic.db_type.to_string(),
+                    schema,
+                    tb,
+                };
+                log_finished!("{}", finish_position.to_string());
+                self.task_monitor
+                    .add_no_window_metrics(TaskMetricsType::FinishedProgressCount, 1);
+
+                if let Some(handler) = &recorder {
+                    if let Err(e) = handler.record_position(&finish_position).await {
+                        log_error!("failed to record position: {}, err: {}", finish_position, e);
+                    }
+                }
+            }
+        }
+
+        self.unregister_single_task_monitors(&single_task_id).await;
+        worker_result
+    }
+
+    async fn register_single_task_monitors(
+        &self,
+        single_task_id: &str,
+        extractor_monitor: Arc<Monitor>,
+        pipeline_monitor: Arc<Monitor>,
+        sinker_monitor: Arc<Monitor>,
+        checker_monitor: Arc<Monitor>,
+    ) {
         tokio::join!(
             async {
                 self.extractor_monitor
-                    .add_monitor(&single_task_id, extractor_monitor.clone());
+                    .add_monitor(single_task_id, extractor_monitor.clone());
             },
             async {
                 self.pipeline_monitor
-                    .add_monitor(&single_task_id, pipeline_monitor.clone());
+                    .add_monitor(single_task_id, pipeline_monitor.clone());
             },
             async {
                 self.sinker_monitor
-                    .add_monitor(&single_task_id, sinker_monitor.clone());
+                    .add_monitor(single_task_id, sinker_monitor.clone());
             },
             async {
                 self.checker_monitor
-                    .add_monitor(&single_task_id, checker_monitor.clone());
+                    .add_monitor(single_task_id, checker_monitor.clone());
             },
             async {
                 self.task_monitor.register(
-                    &single_task_id,
+                    single_task_id,
                     vec![
                         (MonitorType::Extractor, extractor_monitor.clone()),
                         (MonitorType::Pipeline, pipeline_monitor.clone()),
@@ -519,111 +706,25 @@ impl TaskRunner {
                 );
             }
         );
+    }
 
-        // do pre operations before task starts
-        self.pre_single_task(
-            extractor_client.clone(),
-            sinker_client.clone(),
-            sinker_data_marker,
-        )
-        .await?;
-
-        // start threads
-        let f1 = tokio::spawn(async move {
-            extractor.extract().await.unwrap();
-            extractor.close().await.unwrap();
-        });
-
-        let f2 = tokio::spawn(async move {
-            pipeline.start().await.unwrap();
-            pipeline.stop().await.unwrap();
-        });
-
-        let interval_secs = self.config.pipeline.checkpoint_interval_secs;
-        let tasks: Vec<Arc<TaskMonitor>> = if is_multi_task {
-            vec![]
-        } else {
-            vec![self.task_monitor.clone()]
-        };
-        let f3 = tokio::spawn(async move {
-            Self::flush_monitors_generic::<Monitor, TaskMonitor>(
-                interval_secs,
-                shut_down,
-                &[
-                    extractor_monitor,
-                    pipeline_monitor,
-                    sinker_monitor,
-                    checker_monitor,
-                ],
-                &tasks,
-            )
-            .await
-        });
-        try_join!(f1, f2, f3)?;
-
-        if let Some(check_summary) = &task_context.check_summary {
-            let summary = check_summary.lock().await;
-            // `check_summary` is shared across subtasks in tb-parallel snapshot/check mode.
-            // Export only the global increments that have not been reflected into task metrics yet,
-            // otherwise multiple subtasks can repeatedly account for the same miss/diff totals.
-            let delta_miss = (summary.miss_count as u64).saturating_sub(
-                self.task_monitor
-                    .get_no_window_metric(TaskMetricsType::CheckerMissCount),
-            );
-            let delta_diff = (summary.diff_count as u64).saturating_sub(
-                self.task_monitor
-                    .get_no_window_metric(TaskMetricsType::CheckerDiffCount),
-            );
-            if delta_miss > 0 || delta_diff > 0 {
-                self.task_monitor
-                    .add_no_window_metrics(TaskMetricsType::CheckerMissCount, delta_miss);
-                self.task_monitor
-                    .add_no_window_metrics(TaskMetricsType::CheckerDiffCount, delta_diff);
-            }
-        }
-
-        // finished log
-        let (schema, tb) = match &extractor_config {
-            ExtractorConfig::MysqlSnapshot { db, tb, .. }
-            | ExtractorConfig::MongoSnapshot { db, tb, .. } => (db.to_owned(), tb.to_owned()),
-            ExtractorConfig::PgSnapshot { schema, tb, .. }
-            | ExtractorConfig::FoxlakeS3 { schema, tb, .. } => (schema.to_owned(), tb.to_owned()),
-            _ => (String::new(), String::new()),
-        };
-        if !tb.is_empty() {
-            let finish_position = Position::RdbSnapshotFinished {
-                db_type: self.config.extractor_basic.db_type.to_string(),
-                schema,
-                tb,
-            };
-            log_finished!("{}", finish_position.to_string());
-            self.task_monitor
-                .add_no_window_metrics(TaskMetricsType::FinishedProgressCount, 1);
-
-            if let Some(handler) = &recorder {
-                if let Err(e) = handler.record_position(&finish_position).await {
-                    log_error!("failed to record position: {}, err: {}", finish_position, e);
-                }
-            }
-        }
-
-        // remove monitors from global monitors
+    async fn unregister_single_task_monitors(&self, single_task_id: &str) {
         tokio::join!(
             async {
-                self.extractor_monitor.remove_monitor(&single_task_id);
+                self.extractor_monitor.remove_monitor(single_task_id);
             },
             async {
-                self.pipeline_monitor.remove_monitor(&single_task_id);
+                self.pipeline_monitor.remove_monitor(single_task_id);
             },
             async {
-                self.sinker_monitor.remove_monitor(&single_task_id);
+                self.sinker_monitor.remove_monitor(single_task_id);
             },
             async {
-                self.checker_monitor.remove_monitor(&single_task_id);
+                self.checker_monitor.remove_monitor(single_task_id);
             },
             async {
                 self.task_monitor.unregister(
-                    &single_task_id,
+                    single_task_id,
                     vec![
                         MonitorType::Extractor,
                         MonitorType::Pipeline,
@@ -633,8 +734,167 @@ impl TaskRunner {
                 );
             }
         );
+    }
+
+    async fn run_single_task_workers(
+        extractor: Arc<Mutex<Box<dyn Extractor + Send>>>,
+        pipeline: Arc<Mutex<Box<dyn Pipeline + Send>>>,
+        monitor_task: tokio::task::JoinHandle<SingleTaskWorkerResult>,
+        shut_down: Arc<AtomicBool>,
+    ) -> anyhow::Result<()> {
+        let mut join_set = JoinSet::new();
+
+        let extractor_worker = extractor.clone();
+        join_set.spawn(async move {
+            match Self::run_extractor_worker(extractor_worker).await {
+                Ok(()) => SingleTaskWorkerResult::Completed(SingleTaskWorker::Extractor),
+                Err(err) => SingleTaskWorkerResult::Failed(SingleTaskWorker::Extractor, err),
+            }
+        });
+
+        let pipeline_worker = pipeline.clone();
+        join_set.spawn(async move {
+            match Self::run_pipeline_worker(pipeline_worker).await {
+                Ok(()) => SingleTaskWorkerResult::Completed(SingleTaskWorker::Pipeline),
+                Err(err) => SingleTaskWorkerResult::Failed(SingleTaskWorker::Pipeline, err),
+            }
+        });
+
+        join_set.spawn(async move {
+            match monitor_task.await {
+                Ok(result) => result,
+                Err(err) => SingleTaskWorkerResult::Failed(
+                    SingleTaskWorker::Monitor,
+                    anyhow::anyhow!("monitor task join error: {}", err),
+                ),
+            }
+        });
+
+        let mut extractor_done = false;
+        let mut pipeline_done = false;
+        let mut failure = None;
+
+        while let Some(result) = join_set.join_next().await {
+            match result {
+                Ok(SingleTaskWorkerResult::Completed(kind)) => match kind {
+                    SingleTaskWorker::Extractor => extractor_done = true,
+                    SingleTaskWorker::Pipeline => pipeline_done = true,
+                    SingleTaskWorker::Monitor => {}
+                },
+                Ok(SingleTaskWorkerResult::Failed(kind, err)) => {
+                    failure = Some((Some(kind), err));
+                    break;
+                }
+                Err(err) => {
+                    failure = Some((
+                        None,
+                        anyhow::anyhow!("single task worker join error: {}", err),
+                    ));
+                    break;
+                }
+            }
+        }
+
+        if let Some((failed_worker, err)) = failure {
+            shut_down.store(true, Ordering::Release);
+            join_set.abort_all();
+
+            while let Some(result) = join_set.join_next().await {
+                match result {
+                    Ok(SingleTaskWorkerResult::Completed(kind)) => match kind {
+                        SingleTaskWorker::Extractor => extractor_done = true,
+                        SingleTaskWorker::Pipeline => pipeline_done = true,
+                        SingleTaskWorker::Monitor => {}
+                    },
+                    Ok(SingleTaskWorkerResult::Failed(kind, shutdown_err)) => {
+                        log_error!(
+                            "single task worker [{}] also failed during shutdown, error: {:#}",
+                            kind.as_str(),
+                            shutdown_err
+                        );
+                    }
+                    Err(join_err) if !join_err.is_cancelled() => {
+                        log_error!(
+                            "single task worker join error during shutdown: {}",
+                            join_err
+                        );
+                    }
+                    Err(_) => {}
+                }
+            }
+
+            if !extractor_done && failed_worker != Some(SingleTaskWorker::Extractor) {
+                if let Err(clean_err) = Self::close_extractor_after_abort(extractor).await {
+                    log_error!(
+                        "failed to close extractor after task error: {:#}",
+                        clean_err
+                    );
+                }
+            }
+            if !pipeline_done && failed_worker != Some(SingleTaskWorker::Pipeline) {
+                if let Err(clean_err) = Self::stop_pipeline_after_abort(pipeline).await {
+                    log_error!("failed to stop pipeline after task error: {:#}", clean_err);
+                }
+            }
+
+            return Err(err);
+        }
 
         Ok(())
+    }
+
+    async fn run_extractor_worker(
+        extractor: Arc<Mutex<Box<dyn Extractor + Send>>>,
+    ) -> anyhow::Result<()> {
+        let extract_result = {
+            let mut extractor = extractor.lock().await;
+            extractor.extract().await
+        };
+        let close_result = {
+            let mut extractor = extractor.lock().await;
+            extractor.close().await
+        };
+
+        extract_result.context("extractor.extract failed")?;
+        close_result.context("extractor.close failed")?;
+        Ok(())
+    }
+
+    async fn run_pipeline_worker(
+        pipeline: Arc<Mutex<Box<dyn Pipeline + Send>>>,
+    ) -> anyhow::Result<()> {
+        let start_result = {
+            let mut pipeline = pipeline.lock().await;
+            pipeline.start().await
+        };
+        let stop_result = {
+            let mut pipeline = pipeline.lock().await;
+            pipeline.stop().await
+        };
+
+        start_result.context("pipeline.start failed")?;
+        stop_result.context("pipeline.stop failed")?;
+        Ok(())
+    }
+
+    async fn close_extractor_after_abort(
+        extractor: Arc<Mutex<Box<dyn Extractor + Send>>>,
+    ) -> anyhow::Result<()> {
+        let mut extractor = extractor.lock().await;
+        extractor
+            .close()
+            .await
+            .context("extractor.close after abort failed")
+    }
+
+    async fn stop_pipeline_after_abort(
+        pipeline: Arc<Mutex<Box<dyn Pipeline + Send>>>,
+    ) -> anyhow::Result<()> {
+        let mut pipeline = pipeline.lock().await;
+        pipeline
+            .stop()
+            .await
+            .context("pipeline.stop after abort failed")
     }
 
     async fn create_pipeline(
@@ -730,22 +990,7 @@ impl TaskRunner {
         } else {
             None
         };
-        let sinker_batch_size = self.config.sinker_basic.batch_size.max(1);
-        let checker_batch_size = if is_cdc_task {
-            if cfg.batch_size > 0 && cfg.batch_size != sinker_batch_size {
-                log_warn!(
-                    "CDC+check mode uses sinker.batch_size={}. Ignoring checker.batch_size={}.",
-                    sinker_batch_size,
-                    cfg.batch_size
-                );
-            }
-            sinker_batch_size
-        } else {
-            if cfg.batch_size == 0 {
-                log_warn!("checker.batch_size=0 is invalid. Using 1.");
-            }
-            cfg.batch_size.max(1)
-        };
+        let checker_batch_size = Self::resolve_checker_batch_size(cfg);
         let check_log_dir_base = if cfg.check_log_dir.is_empty() {
             format!("{}/check", self.config.runtime.log_dir)
         } else {
@@ -1513,6 +1758,13 @@ impl TaskRunner {
         }
     }
 
+    fn resolve_checker_batch_size(cfg: &CheckerConfig) -> usize {
+        if cfg.batch_size == 0 {
+            log_warn!("checker.batch_size=0 is invalid. Using 1.");
+        }
+        cfg.batch_size.max(1)
+    }
+
     fn sanitize_checker_scope(raw: &str) -> String {
         let mut scoped = String::with_capacity(raw.len());
         for ch in raw.chars() {
@@ -1546,5 +1798,101 @@ impl TaskRunner {
                 Self::sanitize_checker_scope(single_task_id)
             )
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use async_trait::async_trait;
+    use std::{
+        future::pending,
+        sync::atomic::{AtomicUsize, Ordering},
+        time::Duration,
+    };
+
+    struct BlockingExtractor {
+        close_count: Arc<AtomicUsize>,
+    }
+
+    #[async_trait]
+    impl Extractor for BlockingExtractor {
+        async fn extract(&mut self) -> anyhow::Result<()> {
+            pending::<()>().await;
+            Ok(())
+        }
+
+        async fn close(&mut self) -> anyhow::Result<()> {
+            self.close_count.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+    }
+
+    struct FailingPipeline {
+        stop_count: Arc<AtomicUsize>,
+    }
+
+    #[async_trait]
+    impl Pipeline for FailingPipeline {
+        async fn start(&mut self) -> anyhow::Result<()> {
+            anyhow::bail!("forced pipeline failure")
+        }
+
+        async fn stop(&mut self) -> anyhow::Result<()> {
+            self.stop_count.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn pipeline_failure_triggers_orderly_shutdown_and_cleanup() {
+        let shut_down = Arc::new(AtomicBool::new(false));
+        let extractor_close_count = Arc::new(AtomicUsize::new(0));
+        let pipeline_stop_count = Arc::new(AtomicUsize::new(0));
+
+        let extractor: Arc<Mutex<Box<dyn Extractor + Send>>> =
+            Arc::new(Mutex::new(Box::new(BlockingExtractor {
+                close_count: extractor_close_count.clone(),
+            })));
+        let pipeline: Arc<Mutex<Box<dyn Pipeline + Send>>> =
+            Arc::new(Mutex::new(Box::new(FailingPipeline {
+                stop_count: pipeline_stop_count.clone(),
+            })));
+        let monitor_shutdown = shut_down.clone();
+        let monitor_task = tokio::spawn(async move {
+            TaskRunner::wait_for_shutdown(monitor_shutdown).await;
+            SingleTaskWorkerResult::Completed(SingleTaskWorker::Monitor)
+        });
+
+        let result = tokio::time::timeout(
+            Duration::from_secs(2),
+            TaskRunner::run_single_task_workers(
+                extractor,
+                pipeline,
+                monitor_task,
+                shut_down.clone(),
+            ),
+        )
+        .await
+        .expect("worker coordination should not hang")
+        .expect_err("pipeline error should be returned");
+
+        assert!(
+            result.to_string().contains("pipeline.start failed"),
+            "unexpected error: {result:#}"
+        );
+        assert!(shut_down.load(Ordering::Acquire));
+        assert_eq!(extractor_close_count.load(Ordering::SeqCst), 1);
+        assert_eq!(pipeline_stop_count.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn inline_cdc_check_batch_size_always_uses_checker_batch_size() {
+        let mut cfg = dt_common::config::checker_config::CheckerConfig::default();
+        cfg.batch_size = 32;
+        assert_eq!(TaskRunner::resolve_checker_batch_size(&cfg), 32);
+
+        cfg.batch_size = 0;
+        assert_eq!(TaskRunner::resolve_checker_batch_size(&cfg), 1);
     }
 }

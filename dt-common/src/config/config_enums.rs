@@ -126,6 +126,11 @@ pub enum MetaCenterType {
     DbEngine,
 }
 
+// TaskKind/TaskType model the regular extractor lifecycle only:
+// struct / snapshot / cdc and their optional check mode.
+//
+// They intentionally do not cover ad-hoc replay/file/statistic extractors such as:
+// check_log, snapshot_file, scan, reshard, foxlake_s3, or snapshot_and_cdc.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TaskKind {
     Struct,
@@ -139,6 +144,8 @@ pub enum CheckMode {
     Inline,
 }
 
+// TaskType is used by recovery/recorder/metrics paths that only apply to the
+// regular struct/snapshot/cdc lifecycle.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct TaskType {
     pub kind: TaskKind,

@@ -94,6 +94,22 @@ source CDC events
 - Inconsistencies enter checker state/store instead of being handled only by a short retry loop.
 - Later CDC events may naturally cancel or reconcile older miss/diff records.
 
+#### Inline cdc check configuration constraints
+
+These combinations fail fast with `ConfigError`:
+
+- `[parallelizer] parallel_type=rdb_check` without enabling `[checker]`.
+- `[pipeline] pipeline_type` is not `basic`.
+- `[extractor] extract_type=cdc` but `[sinker] sink_type` is not `write`.
+- `[sinker].db_type` is not `mysql` or `pg`.
+- Any of `db_type`, `url`, `username`, or `password` is set in `[checker]`.
+- `[resumer] resume_type` is missing or not `from_target` / `from_db`, so checker state cannot be persisted.
+
+These settings remain effective or are forced in inline cdc check:
+
+- `[checker].batch_size`: stays effective and does not fall back to `[sinker].batch_size`.
+- `[checker].max_retries` and `[checker].retry_interval_secs`: always forced to `0`.
+
 ## Inline Snapshot Check vs Inline CDC Check
 
 | Aspect | Inline snapshot check | Inline cdc check |
