@@ -966,11 +966,12 @@ mod tests {
                 cols: vec!["id".to_string(), "code".to_string(), "name".to_string()],
                 col_origin_type_map: HashMap::new(),
                 key_map: HashMap::new(),
-                order_col: None,
+                order_cols: vec![],
                 partition_col: "id".to_string(),
                 id_cols: vec!["id".to_string(), "code".to_string(), "name".to_string()],
                 foreign_keys: vec![],
                 ref_by_foreign_keys: vec![],
+                nullable_cols: HashSet::new(),
             },
             oid: 1,
             col_type_map,
@@ -1229,8 +1230,12 @@ mod tests {
 
         let query_info = builder.get_query_info(&row_data, false).unwrap();
 
-        assert!(query_info.sql.contains(r#"DELETE FROM "public"."t1" WHERE ctid IN ("#));
-        assert!(query_info.sql.contains(r#"SELECT ctid FROM "public"."t1" WHERE"#));
+        assert!(query_info
+            .sql
+            .contains(r#"DELETE FROM "public"."t1" WHERE ctid IN ("#));
+        assert!(query_info
+            .sql
+            .contains(r#"SELECT ctid FROM "public"."t1" WHERE"#));
         assert!(query_info.sql.contains("LIMIT 1"));
     }
 
@@ -1243,7 +1248,9 @@ mod tests {
         let query_info = builder.get_query_info(&row_data, false).unwrap();
 
         assert!(query_info.sql.starts_with(r#"UPDATE "public"."t1" SET"#));
-        assert!(query_info.sql.contains(r#"WHERE ctid IN (SELECT ctid FROM "public"."t1" WHERE"#));
+        assert!(query_info
+            .sql
+            .contains(r#"WHERE ctid IN (SELECT ctid FROM "public"."t1" WHERE"#));
         assert!(query_info.sql.contains("LIMIT 1"));
     }
 }
