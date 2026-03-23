@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize, Serializer};
 #[allow(dead_code)]
 pub enum ColValue {
     None,
+    UnchangedToast,
     Bool(bool),
     Tiny(i8),
     UnsignedTiny(u8),
@@ -155,7 +156,7 @@ impl ColValue {
 
     pub fn hash_code(&self) -> u64 {
         match self {
-            ColValue::None => 0,
+            ColValue::None | ColValue::UnchangedToast => 0,
             _ => {
                 let mut hasher = DefaultHasher::new();
                 self.to_option_string().hash(&mut hasher);
@@ -196,6 +197,7 @@ impl ColValue {
             ColValue::Json2(_) => "Json2",
             ColValue::Json3(_) => "Json3",
             ColValue::MongoDoc(_) => "MongoDoc",
+            ColValue::UnchangedToast => "UnchangedToast",
         }
     }
 
@@ -230,8 +232,12 @@ impl ColValue {
             ColValue::Blob(v) => Some(hex::encode(v)),
             ColValue::MongoDoc(v) => Some(Self::mongo_doc_to_string(v)),
             ColValue::Bool(v) => Some(v.to_string()),
-            ColValue::None => Option::None,
+            ColValue::None | ColValue::UnchangedToast => Option::None,
         }
+    }
+
+    pub fn is_unchanged_toast(&self) -> bool {
+        matches!(self, ColValue::UnchangedToast)
     }
 
     pub fn is_nan(&self) -> bool {
@@ -267,7 +273,7 @@ impl ColValue {
             ColValue::Json(v) | ColValue::Blob(v) | ColValue::RawString(v) => v.len(),
             ColValue::Json3(v) => v.to_string().len(),
             ColValue::MongoDoc(v) => Self::get_bson_size_doc(v),
-            ColValue::None => 0,
+            ColValue::None | ColValue::UnchangedToast => 0,
         }
     }
 
@@ -350,7 +356,7 @@ impl Serialize for ColValue {
             ColValue::MongoDoc(v) => Bson::Document(v.clone())
                 .into_relaxed_extjson()
                 .serialize(serializer),
-            ColValue::None => serializer.serialize_none(),
+            ColValue::None | ColValue::UnchangedToast => serializer.serialize_none(),
         }
     }
 }

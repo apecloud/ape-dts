@@ -485,6 +485,9 @@ impl BaseChecker {
 
         let mut diff_col_values = HashMap::new();
         for (col, src_val) in src {
+            if src_val.is_unchanged_toast() {
+                continue;
+            }
             let dst_val = dst.get(col);
             let maybe_diff = match dst_val {
                 Some(dst_val) if src_val == dst_val => None,

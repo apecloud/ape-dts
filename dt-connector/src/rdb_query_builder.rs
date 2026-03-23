@@ -127,7 +127,10 @@ impl RdbQueryBuilder<'_> {
                 }
             }
             RowType::Update => {
-                if replace && self.db_type == DbType::Pg && self.check_primary_key_changed(row_data)
+                if replace
+                    && self.db_type == DbType::Pg
+                    && !row_data.contains_unchanged_toast()
+                    && self.check_primary_key_changed(row_data)
                 {
                     self.get_pg_pk_changed_update_replace_query(row_data, placeholder)
                 } else {
@@ -443,10 +446,13 @@ impl RdbQueryBuilder<'_> {
         let after = row_data.require_after()?;
 
         let mut index = 1;
-        let mut set_cols: Vec<String> = after.keys().cloned().collect();
-        set_cols.sort();
-        let mut set_pairs = Vec::with_capacity(self.rdb_tb_meta.cols.len());
-        for col in set_cols.iter() {
+        let mut set_cols = Vec::new();
+        let mut set_pairs = Vec::new();
+        for (col, col_value) in after.iter() {
+            if col_value.is_unchanged_toast() {
+                continue;
+            }
+            set_cols.push(col.clone());
             let sql_value = self.get_sql_value(index, col, &after.get(col), placeholder)?;
             set_pairs.push(format!("{}={}", self.escape(col), sql_value));
             index += 1;
@@ -689,16 +695,21 @@ impl RdbQueryBuilder<'_> {
             return self.get_placeholder(index, col);
         }
 
-        let col_value = match col_value {
-            Some(value) => value,
-            None => return Ok("NULL".to_string()),
-        };
-
-        if self.mysql_tb_meta.is_some() {
-            return self.get_mysql_sql_value(col, col_value);
+        if col_value.is_none() {
+            return Ok("NULL".to_string());
+        }
+        if col_value.unwrap().is_unchanged_toast() {
+            bail! {Error::Unexpected(format!(
+                "schema: {}, tb: {}, col: {}, UnchangedToast should not be converted to sql value directly",
+                self.rdb_tb_meta.schema, self.rdb_tb_meta.tb, col
+            ))}
         }
 
-        Ok(self.get_pg_sql_value(col_value))
+        if self.mysql_tb_meta.is_some() {
+            return self.get_mysql_sql_value(col, col_value.unwrap());
+        }
+
+        Ok(self.get_pg_sql_value(col_value.unwrap()))
     }
 
     fn get_pg_sql_value(&self, col_value: &ColValue) -> String {
@@ -966,6 +977,49 @@ mod tests {
         )
     }
 
+    fn build_update_row_data_with_unchanged_toast(pk_changed: bool) -> RowData {
+        let mut before = HashMap::new();
+        before.insert("id".to_string(), ColValue::Long(1));
+        before.insert("code".to_string(), ColValue::String("xx".to_string()));
+        before.insert("name".to_string(), ColValue::String("n1".to_string()));
+
+        let mut after = HashMap::new();
+        after.insert(
+            "id".to_string(),
+            ColValue::Long(if pk_changed { 2 } else { 1 }),
+        );
+        after.insert("code".to_string(), ColValue::UnchangedToast);
+        after.insert("name".to_string(), ColValue::String("n2".to_string()));
+
+        RowData::new(
+            "public".to_string(),
+            "t1".to_string(),
+            RowType::Update,
+            Some(before),
+            Some(after),
+        )
+    }
+
+    fn build_update_row_data_with_only_unchanged_toast() -> RowData {
+        let mut before = HashMap::new();
+        before.insert("id".to_string(), ColValue::Long(1));
+        before.insert("code".to_string(), ColValue::String("xx".to_string()));
+        before.insert("name".to_string(), ColValue::String("n1".to_string()));
+
+        let mut after = HashMap::new();
+        after.insert("id".to_string(), ColValue::Long(1));
+        after.insert("code".to_string(), ColValue::UnchangedToast);
+        after.insert("name".to_string(), ColValue::UnchangedToast);
+
+        RowData::new(
+            "public".to_string(),
+            "t1".to_string(),
+            RowType::Update,
+            Some(before),
+            Some(after),
+        )
+    }
+
     #[test]
     fn test_pg_origin_replace_query_skips_any_unique_conflict() {
         let tb_meta = build_pg_tb_meta();
@@ -1046,5 +1100,44 @@ mod tests {
         assert!(query_info.sql.contains(
             r#"ON CONFLICT ("id") DO UPDATE SET "code"=EXCLUDED."code","name"=EXCLUDED."name""#
         ));
+    }
+
+    #[test]
+    fn test_pg_update_query_skips_unchanged_toast_cols() {
+        let tb_meta = build_pg_tb_meta();
+        let row_data = build_update_row_data_with_unchanged_toast(false);
+        let builder = RdbQueryBuilder::new_for_pg(&tb_meta, None);
+
+        let query_info = builder.get_query_info(&row_data, false).unwrap();
+
+        assert!(query_info.sql.contains(r#""name"="#));
+        assert!(!query_info.sql.contains(r#""code"="#));
+    }
+
+    #[test]
+    fn test_pg_replace_pk_changed_update_with_unchanged_toast_falls_back_to_update() {
+        let tb_meta = build_pg_tb_meta();
+        let row_data = build_update_row_data_with_unchanged_toast(true);
+        let builder = RdbQueryBuilder::new_for_pg(&tb_meta, None);
+
+        let query_info = builder.get_query_info(&row_data, true).unwrap();
+
+        assert!(query_info.sql.starts_with(r#"UPDATE "public"."t1" SET"#));
+        assert!(!query_info.sql.contains("WITH deleted AS"));
+        assert!(!query_info.sql.contains(r#""code"="#));
+    }
+
+    #[test]
+    fn test_pg_update_query_with_only_unchanged_toast_does_not_include_toast_cols() {
+        let tb_meta = build_pg_tb_meta();
+        let row_data = build_update_row_data_with_only_unchanged_toast();
+        let builder = RdbQueryBuilder::new_for_pg(&tb_meta, None);
+
+        let query_info = builder.get_query_info(&row_data, false).unwrap();
+
+        assert!(query_info.sql.starts_with(r#"UPDATE "public"."t1" SET"#));
+        assert!(query_info.sql.contains(r#""id"="#));
+        assert!(!query_info.sql.contains(r#""code"="#));
+        assert!(!query_info.sql.contains(r#""name"="#));
     }
 }
