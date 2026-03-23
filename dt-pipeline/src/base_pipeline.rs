@@ -158,12 +158,8 @@ impl Pipeline for BasePipeline {
 
 impl BasePipeline {
     fn checker_close_position(syncer: &Syncer) -> Option<Position> {
-        let final_position = if matches!(syncer.received_position, Position::None) {
-            syncer.committed_position.clone()
-        } else {
-            syncer.received_position.clone()
-        };
-        (!matches!(final_position, Position::None)).then_some(final_position)
+        (!matches!(syncer.committed_position, Position::None))
+            .then_some(syncer.committed_position.clone())
     }
 
     async fn sink_raw(

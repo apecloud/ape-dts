@@ -265,9 +265,12 @@ impl From<PersistedCheckEntry> for CheckEntry {
     }
 }
 
-enum PreparedCheckpointWrite {
+pub(super) enum PreparedCheckpointWrite {
     PositionOnly { task_id: String, position: Position },
-    Full(CheckerCheckpointCommit),
+    Full {
+        commit: CheckerCheckpointCommit,
+        persisted_identity_keys: BTreeSet<String>,
+    },
 }
 
 impl<C: Checker> DataChecker<C> {
@@ -375,7 +378,9 @@ impl<C: Checker> DataChecker<C> {
 
     pub fn restore_store_from_rows(&mut self, rows: Vec<CheckerStateRow>) -> anyhow::Result<()> {
         self.store.clear();
+        let mut persisted_identity_keys = BTreeSet::new();
         for row in rows {
+            persisted_identity_keys.insert(row.identity_key.clone());
             let entry =
                 serde_json::from_str::<PersistedCheckEntry>(&row.payload).with_context(|| {
                     format!(
@@ -387,6 +392,7 @@ impl<C: Checker> DataChecker<C> {
             let store_key = CheckerStoreKey::from_row_data(&entry.src_row_data, row.row_key);
             self.store.insert(store_key, entry);
         }
+        self.persisted_identity_keys = Some(persisted_identity_keys);
         self.update_pending_counter();
         Ok(())
     }
@@ -409,6 +415,7 @@ impl<C: Checker> DataChecker<C> {
                 );
                 return Ok(!self.store.is_empty());
             }
+            self.persisted_identity_keys = Some(BTreeSet::new());
         }
         Ok(false)
     }
@@ -444,10 +451,9 @@ impl<C: Checker> DataChecker<C> {
         Ok(())
     }
 
-    fn prepare_checkpoint_write(
+    pub(super) fn prepare_checkpoint_write(
         &self,
         position: Position,
-        existing_rows: Option<Vec<CheckerStateRow>>,
     ) -> anyhow::Result<PreparedCheckpointWrite> {
         if !self.store_dirty {
             return Ok(PreparedCheckpointWrite::PositionOnly {
@@ -458,19 +464,24 @@ impl<C: Checker> DataChecker<C> {
 
         let rows = self.build_state_rows()?;
         let live_keys: BTreeSet<String> = rows.iter().map(|row| row.identity_key.clone()).collect();
-        let deletes = existing_rows
-            .unwrap_or_default()
+        let deletes = self
+            .persisted_identity_keys
+            .as_ref()
             .into_iter()
-            .map(|row| row.identity_key)
-            .filter(|identity_key| !live_keys.contains(identity_key))
+            .flatten()
+            .filter(|identity_key| !live_keys.contains(*identity_key))
+            .cloned()
             .collect();
 
-        Ok(PreparedCheckpointWrite::Full(CheckerCheckpointCommit {
-            task_id: self.task_id.clone(),
-            position,
-            upserts: rows,
-            deletes,
-        }))
+        Ok(PreparedCheckpointWrite::Full {
+            commit: CheckerCheckpointCommit {
+                task_id: self.task_id.clone(),
+                position,
+                upserts: rows,
+                deletes,
+            },
+            persisted_identity_keys: live_keys,
+        })
     }
 
     pub async fn record_checkpoint(&mut self, position: Position) -> anyhow::Result<()> {
@@ -482,20 +493,19 @@ impl<C: Checker> DataChecker<C> {
             return Ok(());
         };
 
-        let checkpoint_write = if self.store_dirty {
-            let existing_rows = state_store.load_rows(&self.task_id).await?;
-            self.prepare_checkpoint_write(position, Some(existing_rows))?
-        } else {
-            self.prepare_checkpoint_write(position, None)?
-        };
+        let checkpoint_write = self.prepare_checkpoint_write(position)?;
 
         match checkpoint_write {
             PreparedCheckpointWrite::PositionOnly { task_id, position } => {
                 state_store.commit_position(&task_id, &position).await?;
             }
-            PreparedCheckpointWrite::Full(commit) => {
+            PreparedCheckpointWrite::Full {
+                commit,
+                persisted_identity_keys,
+            } => {
                 state_store.commit_checkpoint(&commit).await?;
                 self.store_dirty = false;
+                self.persisted_identity_keys = Some(persisted_identity_keys);
             }
         }
         Ok(())

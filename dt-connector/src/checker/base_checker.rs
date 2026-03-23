@@ -542,6 +542,7 @@ struct DataChecker<C: Checker> {
     name: String,
     store_dirty: bool,
     last_checkpoint_position: Option<Position>,
+    persisted_identity_keys: Option<BTreeSet<String>>,
     snapshot_dirty: bool,
 }
 
@@ -554,6 +555,7 @@ impl<C: Checker> DataChecker<C> {
         name: &str,
         runtime_state: Arc<CheckerRuntimeState>,
     ) -> Self {
+        let persisted_identity_keys = ctx.state_store.as_ref().map(|_| BTreeSet::new());
         Self {
             checker,
             task_id,
@@ -566,6 +568,7 @@ impl<C: Checker> DataChecker<C> {
             name: name.to_string(),
             store_dirty: false,
             last_checkpoint_position: None,
+            persisted_identity_keys,
             snapshot_dirty: true,
         }
     }
@@ -774,6 +777,7 @@ pub fn has_null_key(row_data: &RowData, id_cols: &[String]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::cdc_state::PreparedCheckpointWrite;
     use crate::{checker::check_log::CheckSummaryLog, rdb_router::RdbRouter};
     use async_trait::async_trait;
     use dt_common::{
@@ -870,6 +874,14 @@ mod tests {
         )
     }
 
+    fn build_position() -> Position {
+        Position::RdbSnapshotFinished {
+            db_type: "mysql".to_string(),
+            schema: "test_db".to_string(),
+            tb: "test_tb".to_string(),
+        }
+    }
+
     fn build_cdc_checker(check_log_dir: String, start_time: &str) -> DataChecker<NoopChecker> {
         let (_tx, rx) = mpsc::channel(1);
         DataChecker::new(
@@ -880,6 +892,24 @@ mod tests {
             "NoopChecker",
             Arc::new(CheckerRuntimeState::default()),
         )
+    }
+
+    fn build_check_entry(row_data: &RowData, is_miss: bool) -> CheckEntry {
+        CheckEntry {
+            log: CheckLog {
+                schema: row_data.schema.clone(),
+                tb: row_data.tb.clone(),
+                target_schema: None,
+                target_tb: None,
+                id_col_values: HashMap::from([("id".to_string(), Some("1".to_string()))]),
+                diff_col_values: HashMap::new(),
+                src_row: None,
+                dst_row: None,
+            },
+            revise_sql: None,
+            is_miss,
+            src_row_data: row_data.clone(),
+        }
     }
 
     #[tokio::test]
@@ -961,5 +991,34 @@ mod tests {
 
         assert!(result.is_err());
         assert!(handle.close_with_position(Some(&checkpoint)).await.is_err());
+    }
+
+    #[test]
+    fn prepare_checkpoint_write_uses_cached_identity_keys_for_deletes() {
+        let mut checker = build_cdc_checker(".".to_string(), "");
+        let row_data = build_row_data();
+        let row_key = 1;
+        let store_key = CheckerStoreKey::from_row_data(&row_data, row_key);
+        checker
+            .store
+            .insert(store_key, build_check_entry(&row_data, true));
+        checker.store_dirty = true;
+        checker.persisted_identity_keys = Some(BTreeSet::from(["stale-key".to_string()]));
+
+        let checkpoint_write = checker.prepare_checkpoint_write(build_position()).unwrap();
+
+        match checkpoint_write {
+            PreparedCheckpointWrite::Full {
+                commit,
+                persisted_identity_keys,
+            } => {
+                assert_eq!(commit.deletes, vec!["stale-key".to_string()]);
+                assert_eq!(persisted_identity_keys.len(), 1);
+                assert_eq!(persisted_identity_keys, BTreeSet::from([commit.upserts[0].identity_key.clone()]));
+            }
+            PreparedCheckpointWrite::PositionOnly { .. } => {
+                panic!("dirty checker should produce full checkpoint write");
+            }
+        }
     }
 }
