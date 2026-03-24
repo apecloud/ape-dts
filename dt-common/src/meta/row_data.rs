@@ -23,6 +23,7 @@ pub struct RowData {
     pub before: Option<HashMap<String, ColValue>>,
     pub after: Option<HashMap<String, ColValue>>,
     pub data_size: usize,
+    pub is_not_origin: bool,
 }
 
 impl std::fmt::Display for RowData {
@@ -46,9 +47,22 @@ impl RowData {
             before,
             after,
             data_size: 0,
+            is_not_origin: false,
         };
         me.data_size = me.get_data_malloc_size();
         me
+    }
+
+    pub fn new_no_origin(
+        schema: String,
+        tb: String,
+        row_type: RowType,
+        before: Option<HashMap<String, ColValue>>,
+        after: Option<HashMap<String, ColValue>>,
+    ) -> Self {
+        let mut data = Self::new(schema, tb, row_type, before, after);
+        data.is_not_origin = true;
+        data
     }
 
     pub fn reverse(&self) -> Self {
@@ -65,11 +79,12 @@ impl RowData {
             before: self.after.clone(),
             after: self.before.clone(),
             data_size: self.data_size,
+            is_not_origin: false,
         }
     }
 
     pub fn split_update_row_data(self) -> (RowData, RowData) {
-        let delete = RowData::new(
+        let delete = RowData::new_no_origin(
             self.schema.clone(),
             self.tb.clone(),
             RowType::Delete,
@@ -77,7 +92,8 @@ impl RowData {
             None,
         );
 
-        let insert = RowData::new(self.schema, self.tb, RowType::Insert, None, self.after);
+        let insert =
+            RowData::new_no_origin(self.schema, self.tb, RowType::Insert, None, self.after);
         (delete, insert)
     }
 
@@ -216,13 +232,19 @@ impl RowData {
             _ => self.before.as_ref().context("row_data before is missing")?,
         };
 
-        // refer to: https://docs.oracle.com/javase/6/docs/api/java/util/List.html#hashCode%28%29
+        // refer to: https://docs.oracle.com/javase/6/docs/api/java/util/List.html#hashCode()
         let mut hash_code = 1u128;
         for col in tb_meta.id_cols.iter() {
             let col_hash_code = col_values
                 .get(col)
                 .with_context(|| format!("missing id col value: {}", col))?
-                .hash_code();
+                .hash_code()
+                .with_context(|| {
+                    format!(
+                        "unhashable _id value in schema: {}, tb: {}, col: {}",
+                        tb_meta.schema, tb_meta.tb, col
+                    )
+                })?;
             // col_hash_code is 0 if col_value is ColValue::None,
             // consider following case,
             // create table a(id int, value int, unique key(id, value));
@@ -236,6 +258,12 @@ impl RowData {
             hash_code = 31 * hash_code + col_hash_code as u128;
         }
         Ok(hash_code)
+    }
+
+    pub fn contains_unchanged_toast(&self) -> bool {
+        self.after
+            .as_ref()
+            .is_some_and(|values| values.values().any(ColValue::is_unchanged_toast))
     }
 
     pub fn refresh_data_size(&mut self) {

@@ -10,7 +10,6 @@ use std::{
 use anyhow::{bail, Context};
 use chrono::Local;
 use log4rs::config::{Config, Deserializers, RawConfig};
-use ratelimit::Ratelimiter;
 use tokio::{
     fs::{metadata, File},
     io::AsyncReadExt,
@@ -35,6 +34,7 @@ static LOG_HANDLE: StdMutex<Option<log4rs::Handle>> = StdMutex::new(None);
 use dt_common::log_filter::SizeLimitFilterDeserializer;
 use dt_common::{
     config::{
+        checker_config::CheckerConfig,
         config_enums::{build_task_type, DbType, ExtractType, PipelineType, SinkType, TaskType},
         config_token_parser::{ConfigTokenParser, TokenEscapePair},
         extractor_config::ExtractorConfig,
@@ -42,6 +42,7 @@ use dt_common::{
         task_config::{TaskConfig, DEFAULT_CHECK_LOG_FILE_SIZE},
     },
     error::Error,
+    limiter::buffer_limiter::BufferLimiter,
     log_error, log_finished, log_info, log_warn,
     meta::{
         avro::avro_converter::AvroConverter, dt_queue::DtQueue, position::Position,
@@ -58,10 +59,10 @@ use dt_common::{
     utils::{sql_util::SqlUtil, time_util::TimeUtil},
 };
 use dt_connector::{
-    checker::base_checker::CheckerCommon,
+    checker::base_checker::CheckContext,
     checker::check_log::CheckSummaryLog,
     checker::{
-        CheckerHandle, CheckerMode, MongoCheckerHandle, MysqlCheckerHandle, PgCheckerHandle,
+        CheckerHandle, MongoCheckerHandle, MysqlCheckerHandle, PgCheckerHandle, StructCheckerHandle,
     },
     data_marker::DataMarker,
     extractor::resumer::{recorder::Recorder, recovery::Recovery},
@@ -87,6 +88,8 @@ pub struct TaskContext {
     pub recorder: Option<Arc<dyn Recorder + Send + Sync>>,
     pub recovery: Option<Arc<dyn Recovery + Send + Sync>>,
     pub check_summary: Option<Arc<AsyncMutex<CheckSummaryLog>>>,
+    pub enqueue_limiter: Option<Arc<BufferLimiter>>,
+    pub dequeue_limiter: Option<Arc<BufferLimiter>>,
 }
 
 #[derive(Clone)]
@@ -96,6 +99,7 @@ pub struct TaskRunner {
     extractor_monitor: Arc<GroupMonitor>,
     pipeline_monitor: Arc<GroupMonitor>,
     sinker_monitor: Arc<GroupMonitor>,
+    checker_monitor: Arc<GroupMonitor>,
     task_monitor: Arc<TaskMonitor>,
     #[cfg(feature = "metrics")]
     prometheus_metrics: Arc<PrometheusMetrics>,
@@ -116,6 +120,7 @@ impl TaskRunner {
         let task_type = build_task_type(
             &config.extractor_basic.extract_type,
             &config.sinker_basic.sink_type,
+            config.checker.is_some(),
         );
         #[cfg(not(feature = "metrics"))]
         let task_monitor = Arc::new(TaskMonitor::new(task_type.clone()));
@@ -137,6 +142,7 @@ impl TaskRunner {
             extractor_monitor: Arc::new(GroupMonitor::new("extractor", "global")),
             pipeline_monitor: Arc::new(GroupMonitor::new("pipeline", "global")),
             sinker_monitor: Arc::new(GroupMonitor::new("sinker", "global")),
+            checker_monitor: Arc::new(GroupMonitor::new("checker", "global")),
             task_monitor,
             #[cfg(feature = "metrics")]
             prometheus_metrics,
@@ -172,6 +178,14 @@ impl TaskRunner {
             None => (None, None),
         };
         let (extractor_client, sinker_client) = ConnClient::from_config(&self.config).await?;
+        let enqueue_limiter = BufferLimiter::from_config(
+            Some(&self.config.extractor_basic.rate_limiter),
+            Some(&self.config.pipeline.capacity_limiter),
+        )
+        .map(Arc::new);
+        let dequeue_limiter =
+            BufferLimiter::from_config(Some(&self.config.sinker_basic.rate_limiter), None)
+                .map(Arc::new);
 
         let check_summary = self.config.checker.as_ref().map(|_| {
             Arc::new(AsyncMutex::new(CheckSummaryLog {
@@ -198,6 +212,8 @@ impl TaskRunner {
             recorder,
             recovery,
             check_summary: check_summary.clone(),
+            enqueue_limiter,
+            dequeue_limiter,
         };
 
         #[cfg(feature = "metrics")]
@@ -227,13 +243,14 @@ impl TaskRunner {
         sinker_client.close().await?;
 
         if let Some(check_summary) = check_summary {
-            let summary = check_summary.lock().await;
-            if summary.miss_count > 0 || summary.diff_count > 0 || summary.extra_count > 0 {
-                dt_common::log_summary!("{}", summary);
-            }
+            let mut summary = check_summary.lock().await;
+            summary.end_time = Local::now().to_rfc3339();
+            summary.is_consistent = summary.miss_count == 0 && summary.diff_count == 0;
+            dt_common::log_summary!("{}", summary);
         }
 
         log_finished!("task finished");
+        log::logger().flush();
         Ok(())
     }
 
@@ -247,12 +264,18 @@ impl TaskRunner {
         let extractor_monitor = self.extractor_monitor.clone();
         let pipeline_monitor = self.pipeline_monitor.clone();
         let sinker_monitor = self.sinker_monitor.clone();
+        let checker_monitor = self.checker_monitor.clone();
         let task_monitor = self.task_monitor.clone();
         let global_monitor_task = tokio::spawn(async move {
             Self::flush_monitors_generic::<GroupMonitor, TaskMonitor>(
                 interval_secs,
                 global_shut_down_clone,
-                &[extractor_monitor, pipeline_monitor, sinker_monitor],
+                &[
+                    extractor_monitor,
+                    pipeline_monitor,
+                    sinker_monitor,
+                    checker_monitor,
+                ],
                 &[task_monitor],
             )
             .await
@@ -313,6 +336,8 @@ impl TaskRunner {
             recovery: task_context.recovery,
             check_summary: task_context.check_summary,
             partition_cols: task_context.partition_cols,
+            enqueue_limiter: task_context.enqueue_limiter,
+            dequeue_limiter: task_context.dequeue_limiter,
         };
         let me = self.clone();
         join_set.spawn(async move {
@@ -334,11 +359,15 @@ impl TaskRunner {
         let router = (*task_context.router).clone();
         let recorder = task_context.recorder.clone();
         let recovery = task_context.recovery.clone();
+        let enqueue_limiter = task_context.enqueue_limiter;
+        let dequeue_limiter = task_context.dequeue_limiter;
 
-        let max_bytes = self.config.pipeline.buffer_memory_mb * 1024 * 1024;
+        let max_bytes = self.config.pipeline.capacity_limiter.buffer_memory_mb * 1024 * 1024;
         let buffer = Arc::new(DtQueue::new(
-            self.config.pipeline.buffer_size,
+            self.config.pipeline.capacity_limiter.buffer_size,
             max_bytes as u64,
+            enqueue_limiter,
+            dequeue_limiter,
         ));
 
         let shut_down = Arc::new(AtomicBool::new(false));
@@ -372,7 +401,7 @@ impl TaskRunner {
         // extractor
         let monitor_time_window_secs = self.config.pipeline.counter_time_window_secs;
         let monitor_max_sub_count = self.config.pipeline.counter_max_sub_count;
-        let monitor_count_window = self.config.pipeline.buffer_size as u64;
+        let monitor_count_window = self.config.pipeline.capacity_limiter.buffer_size as u64;
         let extractor_monitor = Arc::new(Monitor::new(
             "extractor",
             &single_task_id,
@@ -412,6 +441,22 @@ impl TaskRunner {
         )
         .await?;
 
+        // checker
+        let checker_monitor = Arc::new(Monitor::new(
+            "checker",
+            &single_task_id,
+            monitor_time_window_secs,
+            monitor_max_sub_count,
+            monitor_count_window,
+        ));
+        let checker = self
+            .create_checker(
+                self.config.checker.as_ref(),
+                checker_monitor.clone(),
+                task_context.check_summary.clone(),
+            )
+            .await?;
+
         // pipeline
         let pipeline_monitor = Arc::new(Monitor::new(
             "pipeline",
@@ -420,10 +465,6 @@ impl TaskRunner {
             monitor_max_sub_count,
             monitor_count_window,
         ));
-
-        let checker = self
-            .create_checker(sinker_monitor.clone(), task_context.check_summary.clone())
-            .await?;
 
         let mut pipeline = self
             .create_pipeline(
@@ -453,12 +494,17 @@ impl TaskRunner {
                     .add_monitor(&single_task_id, sinker_monitor.clone());
             },
             async {
+                self.checker_monitor
+                    .add_monitor(&single_task_id, checker_monitor.clone());
+            },
+            async {
                 self.task_monitor.register(
                     &single_task_id,
                     vec![
                         (MonitorType::Extractor, extractor_monitor.clone()),
                         (MonitorType::Pipeline, pipeline_monitor.clone()),
                         (MonitorType::Sinker, sinker_monitor.clone()),
+                        (MonitorType::Checker, checker_monitor.clone()),
                     ],
                 );
             }
@@ -471,6 +517,14 @@ impl TaskRunner {
             sinker_data_marker,
         )
         .await?;
+
+        // snapshot check_summary before this subtask so we can compute per-subtask deltas
+        let check_summary_snapshot = if let Some(check_summary) = &task_context.check_summary {
+            let s = check_summary.lock().await;
+            Some((s.miss_count, s.diff_count, s.sql_count.unwrap_or(0)))
+        } else {
+            None
+        };
 
         // start threads
         let f1 = tokio::spawn(async move {
@@ -493,27 +547,28 @@ impl TaskRunner {
             Self::flush_monitors_generic::<Monitor, TaskMonitor>(
                 interval_secs,
                 shut_down,
-                &[extractor_monitor, pipeline_monitor, sinker_monitor],
+                &[
+                    extractor_monitor,
+                    pipeline_monitor,
+                    sinker_monitor,
+                    checker_monitor,
+                ],
                 &tasks,
             )
             .await
         });
         try_join!(f1, f2, f3)?;
 
-        if let Some(check_summary) = &task_context.check_summary {
+        if let (Some(check_summary), Some((prev_miss, prev_diff, _prev_sql))) =
+            (&task_context.check_summary, check_summary_snapshot)
+        {
             let summary = check_summary.lock().await;
-            self.task_monitor.add_no_window_metrics(
-                TaskMetricsType::CheckerMissCount,
-                summary.miss_count as u64,
-            );
-            self.task_monitor.add_no_window_metrics(
-                TaskMetricsType::CheckerDiffCount,
-                summary.diff_count as u64,
-            );
-            if let Some(sql_count) = summary.sql_count {
-                self.task_monitor
-                    .add_no_window_metrics(TaskMetricsType::CheckerSqlCount, sql_count as u64);
-            }
+            let delta_miss = summary.miss_count.saturating_sub(prev_miss);
+            let delta_diff = summary.diff_count.saturating_sub(prev_diff);
+            self.task_monitor
+                .add_no_window_metrics(TaskMetricsType::CheckerMissCount, delta_miss as u64);
+            self.task_monitor
+                .add_no_window_metrics(TaskMetricsType::CheckerDiffCount, delta_diff as u64);
         }
 
         // finished log
@@ -553,12 +608,16 @@ impl TaskRunner {
                 self.sinker_monitor.remove_monitor(&single_task_id);
             },
             async {
+                self.checker_monitor.remove_monitor(&single_task_id);
+            },
+            async {
                 self.task_monitor.unregister(
                     &single_task_id,
                     vec![
                         MonitorType::Extractor,
                         MonitorType::Pipeline,
                         MonitorType::Sinker,
+                        MonitorType::Checker,
                     ],
                 );
             }
@@ -576,21 +635,10 @@ impl TaskRunner {
         monitor: Arc<Monitor>,
         data_marker: Option<Arc<RwLock<DataMarker>>>,
         recorder: Option<Arc<dyn Recorder + Send + Sync>>,
-        checker: Option<Box<dyn CheckerHandle>>,
+        checker: Option<CheckerHandle>,
     ) -> anyhow::Result<Box<dyn Pipeline + Send>> {
         match self.config.pipeline.pipeline_type {
             PipelineType::Basic => {
-                let rps_limiter = if self.config.pipeline.max_rps > 0 {
-                    Some(
-                        Ratelimiter::builder(self.config.pipeline.max_rps, Duration::from_secs(1))
-                            .max_tokens(self.config.pipeline.max_rps)
-                            .initial_available(self.config.pipeline.max_rps)
-                            .build()?,
-                    )
-                } else {
-                    None
-                };
-
                 let lua_processor =
                     self.config
                         .processor
@@ -599,10 +647,11 @@ impl TaskRunner {
                             lua_code: processor_config.lua_code.clone(),
                         });
 
-                let parallelizer = ParallelizerUtil::create_parallelizer(
+                let (parallelizer, remaining_checker) = ParallelizerUtil::create_parallelizer(
                     &self.config,
                     monitor.clone(),
-                    rps_limiter,
+                    None,
+                    checker,
                 )
                 .await?;
 
@@ -619,7 +668,7 @@ impl TaskRunner {
                     data_marker,
                     lua_processor,
                     recorder,
-                    checker,
+                    checker: remaining_checker,
                 };
                 Ok(Box::new(pipeline) as Box<dyn Pipeline + Send>)
             }
@@ -645,53 +694,126 @@ impl TaskRunner {
 
     async fn create_checker(
         &self,
+        checker_config: Option<&CheckerConfig>,
         monitor: Arc<Monitor>,
         check_summary: Option<Arc<AsyncMutex<CheckSummaryLog>>>,
-    ) -> anyhow::Result<Option<Box<dyn CheckerHandle>>> {
+    ) -> anyhow::Result<Option<CheckerHandle>> {
         if !matches!(self.config.pipeline.pipeline_type, PipelineType::Basic) {
             return Ok(None);
         }
 
-        let cfg = match self.config.checker.as_ref() {
+        let cfg = match checker_config {
             Some(cfg) => cfg,
             None => return Ok(None),
         };
         let max_connections = cfg.max_connections.max(1);
         let queue_size = cfg.queue_size.max(1);
-        let mode = if cfg.drop_on_full {
-            CheckerMode::AsyncDrop {
-                buffer_size: queue_size,
-            }
-        } else {
-            CheckerMode::AsyncBlocking {
-                buffer_size: queue_size,
-            }
-        };
         let log_level = &self.config.runtime.log_level;
         let enable_sqlx_log = TaskUtil::check_enable_sqlx_log(log_level);
-
-        let use_sinker_target = self.config.extractor_basic.extract_type == ExtractType::Cdc
-            && self.config.sinker_basic.sink_type == SinkType::Write;
-        let (checker_db_type, checker_url, checker_auth) = if use_sinker_target {
-            (
-                self.config.sinker_basic.db_type.clone(),
-                self.config.sinker_basic.url.clone(),
-                self.config.sinker_basic.connection_auth.clone(),
-            )
-        } else {
-            match &cfg.db_type {
-                Some(db_type) => (
-                    db_type.clone(),
-                    cfg.url.clone().unwrap_or_default(),
-                    cfg.connection_auth.clone().unwrap_or_default(),
-                ),
-                None => (
-                    self.config.sinker_basic.db_type.clone(),
-                    self.config.sinker_basic.url.clone(),
-                    self.config.sinker_basic.connection_auth.clone(),
-                ),
+        let is_cdc_task = matches!(self.config.extractor_basic.extract_type, ExtractType::Cdc)
+            && matches!(self.config.sinker_basic.sink_type, SinkType::Write);
+        let (max_retries, retry_interval_secs) = if is_cdc_task {
+            // CDC tasks: data arrives as a stream, checker verifies immediately
+            // after sinker commits. Retries are harmful because subsequent
+            // DELETE events may remove data that was correctly written,
+            // causing false misses in the retry queue.
+            if cfg.max_retries > 0 || cfg.retry_interval_secs > 0 {
+                log_warn!(
+                    "CDC+check mode does not support retries. Ignoring max_retries={} and retry_interval_secs={} from config.",
+                    cfg.max_retries,
+                    cfg.retry_interval_secs
+                );
             }
+            (0, 0)
+        } else {
+            (cfg.max_retries, cfg.retry_interval_secs)
         };
+        let missing = || Error::ConfigError("config [checker] target is required".into());
+        let fallback_target = if matches!(self.config.sinker_basic.sink_type, SinkType::Dummy) {
+            None
+        } else {
+            Some((
+                &self.config.sinker_basic.db_type,
+                &self.config.sinker_basic.url,
+                &self.config.sinker_basic.connection_auth,
+            ))
+        };
+        let checker_db_type = cfg
+            .db_type
+            .clone()
+            .or_else(|| fallback_target.map(|(db_type, _, _)| db_type.clone()))
+            .ok_or_else(missing)?;
+        let checker_url = cfg
+            .url
+            .clone()
+            .or_else(|| fallback_target.map(|(_, url, _)| url.clone()))
+            .ok_or_else(missing)?;
+        let checker_auth = cfg
+            .connection_auth
+            .clone()
+            .or_else(|| fallback_target.map(|(_, _, auth)| auth.clone()))
+            .ok_or_else(missing)?;
+
+        let is_struct_task = matches!(
+            self.config.extractor,
+            ExtractorConfig::MysqlStruct { .. } | ExtractorConfig::PgStruct { .. }
+        );
+
+        if is_struct_task {
+            let filter = RdbFilter::from_config(&self.config.filter, &checker_db_type)?;
+            let router = RdbRouter::from_config(&self.config.router, &checker_db_type)?;
+            let checker = match checker_db_type {
+                DbType::Mysql => {
+                    let conn_pool = TaskUtil::create_mysql_conn_pool(
+                        &checker_url,
+                        &checker_auth,
+                        max_connections,
+                        enable_sqlx_log,
+                        None,
+                    )
+                    .await?;
+                    StructCheckerHandle::new(
+                        checker_db_type,
+                        Some(conn_pool),
+                        None,
+                        filter,
+                        router,
+                        cfg.output_revise_sql,
+                        retry_interval_secs,
+                        max_retries,
+                        check_summary,
+                        monitor.clone(),
+                    )
+                }
+                DbType::Pg => {
+                    let conn_pool = TaskUtil::create_pg_conn_pool(
+                        &checker_url,
+                        &checker_auth,
+                        max_connections,
+                        enable_sqlx_log,
+                        false,
+                    )
+                    .await?;
+                    StructCheckerHandle::new(
+                        checker_db_type,
+                        None,
+                        Some(conn_pool),
+                        filter,
+                        router,
+                        cfg.output_revise_sql,
+                        retry_interval_secs,
+                        max_retries,
+                        check_summary,
+                        monitor.clone(),
+                    )
+                }
+                _ => bail!(
+                    "struct check not supported for db_type: {}",
+                    checker_db_type
+                ),
+            };
+            return Ok(Some(CheckerHandle::Struct(checker)));
+        }
 
         match checker_db_type {
             DbType::Mysql => {
@@ -711,10 +833,10 @@ impl TaskRunner {
                         conn_pool.clone(),
                     )
                     .await?;
-                let checker = MysqlCheckerHandle::new(
+                let checker = MysqlCheckerHandle::spawn(
                     conn_pool,
                     meta_manager,
-                    CheckerCommon {
+                    CheckContext {
                         extractor_meta_manager,
                         reverse_router,
                         batch_size: cfg.batch_size,
@@ -722,17 +844,17 @@ impl TaskRunner {
                         output_full_row: cfg.output_full_row,
                         output_revise_sql: cfg.output_revise_sql,
                         revise_match_full_row: cfg.revise_match_full_row,
-                        retry_interval_secs: cfg.retry_interval_secs,
-                        max_retries: cfg.max_retries,
+                        retry_interval_secs,
+                        max_retries,
                         summary: CheckSummaryLog {
                             start_time: Local::now().to_rfc3339(),
                             ..Default::default()
                         },
                         global_summary: check_summary,
                     },
-                    mode,
+                    queue_size,
                 );
-                Ok(Some(Box::new(checker)))
+                Ok(Some(CheckerHandle::Data(checker)))
             }
             DbType::Pg => {
                 let reverse_router = create_router!(self.config, Pg).reverse();
@@ -749,10 +871,10 @@ impl TaskRunner {
                 let meta_manager =
                     dt_common::meta::pg::pg_meta_manager::PgMetaManager::new(conn_pool.clone())
                         .await?;
-                let checker = PgCheckerHandle::new(
+                let checker = PgCheckerHandle::spawn(
                     conn_pool,
                     meta_manager,
-                    CheckerCommon {
+                    CheckContext {
                         extractor_meta_manager,
                         reverse_router,
                         batch_size: cfg.batch_size,
@@ -760,21 +882,21 @@ impl TaskRunner {
                         output_full_row: cfg.output_full_row,
                         output_revise_sql: cfg.output_revise_sql,
                         revise_match_full_row: cfg.revise_match_full_row,
-                        retry_interval_secs: cfg.retry_interval_secs,
-                        max_retries: cfg.max_retries,
+                        retry_interval_secs,
+                        max_retries,
                         summary: CheckSummaryLog {
                             start_time: Local::now().to_rfc3339(),
                             ..Default::default()
                         },
                         global_summary: check_summary,
                     },
-                    mode,
+                    queue_size,
                 );
-                Ok(Some(Box::new(checker)))
+                Ok(Some(CheckerHandle::Data(checker)))
             }
             DbType::Mongo => {
                 let reverse_router = create_router!(self.config, Mongo).reverse();
-                let app_name = if cfg.db_type.is_some() && !use_sinker_target {
+                let app_name = if cfg.db_type.is_some() && !is_cdc_task {
                     "checker"
                 } else {
                     match &self.config.sinker {
@@ -789,9 +911,9 @@ impl TaskRunner {
                     Some(max_connections),
                 )
                 .await?;
-                let checker = MongoCheckerHandle::new(
+                let checker = MongoCheckerHandle::spawn(
                     mongo_client,
-                    CheckerCommon {
+                    CheckContext {
                         extractor_meta_manager: None,
                         reverse_router,
                         batch_size: cfg.batch_size,
@@ -799,19 +921,19 @@ impl TaskRunner {
                         output_full_row: cfg.output_full_row,
                         output_revise_sql: cfg.output_revise_sql,
                         revise_match_full_row: false,
-                        retry_interval_secs: cfg.retry_interval_secs,
-                        max_retries: cfg.max_retries,
+                        retry_interval_secs,
+                        max_retries,
                         summary: CheckSummaryLog {
                             start_time: Local::now().to_rfc3339(),
                             ..Default::default()
                         },
                         global_summary: check_summary,
                     },
-                    mode,
+                    queue_size,
                 );
-                Ok(Some(Box::new(checker)))
+                Ok(Some(CheckerHandle::Data(checker)))
             }
-            _ => Ok(None),
+            _ => bail!("checker not supported for db_type: {}", checker_db_type),
         }
     }
 
@@ -1185,6 +1307,8 @@ impl TaskRunner {
                 recovery: original_task_context.recovery.clone(),
                 check_summary: original_task_context.check_summary.clone(),
                 partition_cols: original_task_context.partition_cols.clone(),
+                enqueue_limiter: original_task_context.enqueue_limiter.clone(),
+                dequeue_limiter: original_task_context.dequeue_limiter.clone(),
             });
         } else {
             for schema in schemas.iter() {
@@ -1290,6 +1414,8 @@ impl TaskRunner {
                         recovery: original_task_context.recovery.clone(),
                         check_summary: original_task_context.check_summary.clone(),
                         partition_cols: original_task_context.partition_cols.clone(),
+                        enqueue_limiter: original_task_context.enqueue_limiter.clone(),
+                        dequeue_limiter: original_task_context.dequeue_limiter.clone(),
                     });
                 }
 

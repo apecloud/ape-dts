@@ -153,7 +153,8 @@ impl LuaProcessor {
             | ColValue::Blob(_)
             | ColValue::Json(_)
             | ColValue::MongoDoc(_)
-            | ColValue::None => mlua::Value::NULL,
+            | ColValue::None
+            | ColValue::UnchangedToast => mlua::Value::NULL,
         };
         Ok(lua_value)
     }

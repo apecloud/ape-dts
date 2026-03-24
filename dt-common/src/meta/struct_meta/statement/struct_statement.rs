@@ -1,4 +1,10 @@
-use crate::rdb_filter::RdbFilter;
+use crate::{
+    meta::struct_meta::statement::{
+        pg_create_udf_statement::PgCreateUdfStatement,
+        pg_create_udt_statement::PgCreateUdtStatement,
+    },
+    rdb_filter::RdbFilter,
+};
 
 use super::{
     mysql_create_database_statement::MysqlCreateDatabaseStatement,
@@ -15,6 +21,8 @@ pub enum StructStatement {
     MysqlCreateTable(MysqlCreateTableStatement),
     PgCreateTable(PgCreateTableStatement),
     PgCreateRbac(PgCreateRbacStatement),
+    PgCreateUdf(PgCreateUdfStatement),
+    PgCreateUdt(PgCreateUdtStatement),
     #[default]
     Unknown,
 }
@@ -27,6 +35,8 @@ impl StructStatement {
             Self::MysqlCreateTable(s) => s.to_sqls(filter),
             Self::PgCreateTable(s) => s.to_sqls(filter),
             Self::PgCreateRbac(s) => s.to_sqls(filter),
+            Self::PgCreateUdf(s) => s.to_sqls(filter),
+            Self::PgCreateUdt(s) => s.to_sqls(filter),
             _ => Ok(vec![]),
         }
     }

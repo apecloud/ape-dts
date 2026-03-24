@@ -60,7 +60,7 @@ pub enum ExtractType {
     FoxlakeS3,
 }
 
-#[derive(Display, EnumString, IntoStaticStr, Clone, Debug, Default, Hash, PartialEq, Eq)]
+#[derive(Display, EnumString, IntoStaticStr, Clone, Debug, Default, Hash)]
 pub enum SinkType {
     #[default]
     #[strum(serialize = "dummy")]
@@ -126,16 +126,45 @@ pub enum MetaCenterType {
     DbEngine,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Display, EnumString, IntoStaticStr)]
-pub enum TaskType {
-    #[strum(serialize = "struct")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum TaskKind {
     Struct,
-    #[strum(serialize = "snapshot")]
     Snapshot,
-    #[strum(serialize = "cdc")]
     Cdc,
-    #[strum(serialize = "check")]
-    Check,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum CheckMode {
+    Standalone,
+    Inline,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct TaskType {
+    pub kind: TaskKind,
+    pub check: Option<CheckMode>,
+}
+
+impl TaskType {
+    pub const fn new(kind: TaskKind, check: Option<CheckMode>) -> Self {
+        Self { kind, check }
+    }
+
+    pub const fn has_check(&self) -> bool {
+        self.check.is_some()
+    }
+
+    pub const fn is_inline_check(&self) -> bool {
+        matches!(self.check, Some(CheckMode::Inline))
+    }
+
+    pub const fn is_standalone_check(&self) -> bool {
+        matches!(self.check, Some(CheckMode::Standalone))
+    }
+
+    pub const fn is_cdc_inline_check(&self) -> bool {
+        matches!(self.kind, TaskKind::Cdc) && self.is_inline_check()
+    }
 }
 
 #[derive(Display, EnumString, IntoStaticStr, PartialEq, Default)]
@@ -166,12 +195,35 @@ pub enum RdbTransactionIsolation {
     Default,
 }
 
-pub fn build_task_type(extract_type: &ExtractType, sink_type: &SinkType) -> Option<TaskType> {
-    match (extract_type, sink_type) {
-        (ExtractType::Struct, SinkType::Struct) => Some(TaskType::Struct),
-        (ExtractType::Snapshot, SinkType::Write) => Some(TaskType::Snapshot),
-        (ExtractType::Cdc, SinkType::Write) => Some(TaskType::Cdc),
-        (ExtractType::Snapshot, SinkType::Dummy) => Some(TaskType::Check),
+pub fn build_task_type(
+    extract_type: &ExtractType,
+    sink_type: &SinkType,
+    checker_enabled: bool,
+) -> Option<TaskType> {
+    match (extract_type, sink_type, checker_enabled) {
+        (ExtractType::Struct, SinkType::Struct, false) => {
+            Some(TaskType::new(TaskKind::Struct, None))
+        }
+        (ExtractType::Struct, SinkType::Struct, true) => {
+            Some(TaskType::new(TaskKind::Struct, Some(CheckMode::Inline)))
+        }
+        (ExtractType::Struct, SinkType::Dummy, true) => {
+            Some(TaskType::new(TaskKind::Struct, Some(CheckMode::Standalone)))
+        }
+        (ExtractType::Snapshot, SinkType::Write, false) => {
+            Some(TaskType::new(TaskKind::Snapshot, None))
+        }
+        (ExtractType::Snapshot, SinkType::Write, true) => {
+            Some(TaskType::new(TaskKind::Snapshot, Some(CheckMode::Inline)))
+        }
+        (ExtractType::Snapshot, SinkType::Dummy, true) => Some(TaskType::new(
+            TaskKind::Snapshot,
+            Some(CheckMode::Standalone),
+        )),
+        (ExtractType::Cdc, SinkType::Write, false) => Some(TaskType::new(TaskKind::Cdc, None)),
+        (ExtractType::Cdc, SinkType::Write, true) => {
+            Some(TaskType::new(TaskKind::Cdc, Some(CheckMode::Inline)))
+        }
         _ => None,
     }
 }

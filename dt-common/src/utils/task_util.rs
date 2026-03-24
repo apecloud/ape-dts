@@ -36,6 +36,7 @@ mod tests {
             connection_auth_config::ConnectionAuthConfig,
             extractor_config::BasicExtractorConfig,
             filter_config::FilterConfig,
+            limiter_config::RateLimiterConfig,
             router_config::RouterConfig,
             sinker_config::BasicSinkerConfig,
         },
@@ -50,6 +51,7 @@ mod tests {
             url: "mysql://localhost:3306/test".to_string(),
             connection_auth: ConnectionAuthConfig::NoAuth,
             max_connections: 10,
+            rate_limiter: RateLimiterConfig::default(),
         };
         let sinker_config = BasicSinkerConfig {
             db_type: DbType::Mysql,
@@ -58,6 +60,7 @@ mod tests {
             connection_auth: ConnectionAuthConfig::NoAuth,
             batch_size: 0,
             max_connections: 10,
+            rate_limiter: RateLimiterConfig::default(),
         };
         let mut filter_config = FilterConfig {
             do_schemas: "db1,db2".to_string(),
@@ -86,7 +89,7 @@ mod tests {
                 &filter_config,
                 &router_config,
             );
-            if generate_task_id.len() > 0 {
+            if !generate_task_id.is_empty() {
                 assert_eq!(new_task_id, generate_task_id);
             }
             generate_task_id = new_task_id

@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize, Serializer};
 #[allow(dead_code)]
 pub enum ColValue {
     None,
+    UnchangedToast,
     Bool(bool),
     Tiny(i8),
     UnsignedTiny(u8),
@@ -149,19 +150,79 @@ impl ColValue {
                     v1 == v2
                 }
             }
+            // MySQL Binlog VARCHAR/CHAR/TEXT->RawString same as String
+            (ColValue::RawString(v1) | ColValue::Blob(v1), ColValue::String(v2)) => {
+                if let Ok(s) = String::from_utf8(v1.clone()) {
+                    &s == v2
+                } else {
+                    false
+                }
+            }
+            (ColValue::String(v1), ColValue::RawString(v2) | ColValue::Blob(v2)) => {
+                if let Ok(s) = String::from_utf8(v2.clone()) {
+                    v1 == &s
+                } else {
+                    false
+                }
+            }
+            // PostgreSQL inet type normalization: 192.168.1.100 == 192.168.1.100/32
+            (ColValue::String(v1), ColValue::String(v2)) => {
+                if v1 == v2 {
+                    true
+                } else if Self::looks_like_inet(v1) || Self::looks_like_inet(v2) {
+                    Self::normalize_inet(v1) == Self::normalize_inet(v2)
+                } else {
+                    false
+                }
+            }
             _ => self == other,
         }
     }
 
-    pub fn hash_code(&self) -> u64 {
-        match self {
-            ColValue::None => 0,
-            _ => {
-                let mut hasher = DefaultHasher::new();
-                self.to_option_string().hash(&mut hasher);
-                hasher.finish()
+    /// Normalize PostgreSQL inet type values for comparison
+    /// e.g., "192.168.1.100" and "192.168.1.100/32" should be considered equal
+    fn normalize_inet(s: &str) -> &str {
+        s.strip_suffix("/32").unwrap_or(s)
+    }
+
+    /// Check if a string looks like an IPv4 or IPv6 address (optionally with /prefix)
+    fn looks_like_inet(s: &str) -> bool {
+        let base = s.split('/').next().unwrap_or(s);
+        // IPv4: contains dots and all parts are numeric
+        if base.contains('.') {
+            return base
+                .split('.')
+                .all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()));
+        }
+        // IPv6: contains colons
+        if base.contains(':') {
+            return base
+                .split(':')
+                .all(|p| p.is_empty() || p.bytes().all(|b| b.is_ascii_hexdigit()));
+        }
+        false
+    }
+
+    pub fn hash_code(&self) -> anyhow::Result<u64> {
+        if matches!(self, ColValue::None | ColValue::UnchangedToast) {
+            return Ok(0);
+        }
+
+        if let ColValue::MongoDoc(doc) = self {
+            // Reject nested Document/Array in _id as they're not reliably hashable
+            for (key, value) in doc.iter() {
+                if matches!(value, Bson::Document(_) | Bson::Array(_)) {
+                    bail!(
+                        "MongoDB _id contains unhashable type at key '{}': use primitive types",
+                        key
+                    );
+                }
             }
         }
+
+        let mut hasher = DefaultHasher::new();
+        self.to_option_string().hash(&mut hasher);
+        Ok(hasher.finish())
     }
 
     pub fn type_name(&self) -> &'static str {
@@ -196,6 +257,7 @@ impl ColValue {
             ColValue::Json2(_) => "Json2",
             ColValue::Json3(_) => "Json3",
             ColValue::MongoDoc(_) => "MongoDoc",
+            ColValue::UnchangedToast => "UnchangedToast",
         }
     }
 
@@ -230,8 +292,12 @@ impl ColValue {
             ColValue::Blob(v) => Some(hex::encode(v)),
             ColValue::MongoDoc(v) => Some(Self::mongo_doc_to_string(v)),
             ColValue::Bool(v) => Some(v.to_string()),
-            ColValue::None => Option::None,
+            ColValue::None | ColValue::UnchangedToast => Option::None,
         }
+    }
+
+    pub fn is_unchanged_toast(&self) -> bool {
+        matches!(self, ColValue::UnchangedToast)
     }
 
     pub fn is_nan(&self) -> bool {
@@ -267,7 +333,7 @@ impl ColValue {
             ColValue::Json(v) | ColValue::Blob(v) | ColValue::RawString(v) => v.len(),
             ColValue::Json3(v) => v.to_string().len(),
             ColValue::MongoDoc(v) => Self::get_bson_size_doc(v),
-            ColValue::None => 0,
+            ColValue::None | ColValue::UnchangedToast => 0,
         }
     }
 
@@ -350,7 +416,7 @@ impl Serialize for ColValue {
             ColValue::MongoDoc(v) => Bson::Document(v.clone())
                 .into_relaxed_extjson()
                 .serialize(serializer),
-            ColValue::None => serializer.serialize_none(),
+            ColValue::None | ColValue::UnchangedToast => serializer.serialize_none(),
         }
     }
 }

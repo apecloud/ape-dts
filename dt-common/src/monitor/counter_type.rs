@@ -15,14 +15,18 @@ pub enum CounterType {
     ExtractedRecords,
     #[strum(serialize = "extracted_bytes")]
     ExtractedBytes,
-
-    // time window counter, aggregate by: sum, avg/max/min by count
     #[strum(serialize = "records_per_query")]
     RecordsPerQuery,
     #[strum(serialize = "rt_per_query")]
     RtPerQuery,
     #[strum(serialize = "buffer_size")]
     BufferSize,
+    #[strum(serialize = "checker_miss_count")]
+    CheckerMissCount,
+    #[strum(serialize = "checker_diff_count")]
+    CheckerDiffCount,
+    #[strum(serialize = "checker_lag_seconds")]
+    CheckerLagSeconds,
 
     // time window counter, aggregate by: avg by count
     #[strum(serialize = "record_size")]
@@ -35,6 +39,10 @@ pub enum CounterType {
     QueuedRecordCurrent,
     #[strum(serialize = "queued_bytes")]
     QueuedByteCurrent,
+    #[strum(serialize = "checker_pending")]
+    CheckerPending,
+    #[strum(serialize = "checker_async_drop_count")]
+    CheckerAsyncDropCount,
 
     #[strum(serialize = "sinked_records")]
     SinkedRecordTotal,
@@ -79,6 +87,9 @@ impl CounterType {
             Self::BatchWriteFailures
             | Self::SerialWrites
             | Self::RecordCount
+            | Self::CheckerMissCount
+            | Self::CheckerDiffCount
+            | Self::CheckerLagSeconds
             | Self::RecordsPerQuery
             | Self::RtPerQuery
             | Self::BufferSize
@@ -92,6 +103,8 @@ impl CounterType {
             | Self::SinkedByteTotal
             | Self::QueuedRecordCurrent
             | Self::QueuedByteCurrent
+            | Self::CheckerPending
+            | Self::CheckerAsyncDropCount
             | Self::DDLRecordTotal
             | Self::Timestamp => WindowType::NoWindow,
         }
@@ -111,13 +124,15 @@ impl CounterType {
                     ]
                 }
 
-                Self::RecordSize => {
+                Self::RecordSize | Self::CheckerLagSeconds => {
                     vec![AggregateType::AvgByCount]
                 }
 
                 Self::BatchWriteFailures
                 | Self::SerialWrites
                 | Self::RecordCount
+                | Self::CheckerMissCount
+                | Self::CheckerDiffCount
                 | Self::DataBytes
                 | Self::ExtractedRecords
                 | Self::ExtractedBytes => {

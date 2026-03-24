@@ -19,6 +19,7 @@ pub struct TaskMonitor {
     extractors: DashMap<String, Arc<Monitor>>,
     pipelines: DashMap<String, Arc<Monitor>>,
     sinkers: DashMap<String, Arc<Monitor>>,
+    checkers: DashMap<String, Arc<Monitor>>,
 
     no_window_metrics_map: DashMap<TaskMetricsType, u64>,
     #[cfg(feature = "metrics")]
@@ -30,6 +31,7 @@ pub enum MonitorType {
     Extractor,
     Pipeline,
     Sinker,
+    Checker,
 }
 
 enum CalcType {
@@ -65,6 +67,7 @@ impl TaskMonitor {
             extractors: DashMap::new(),
             pipelines: DashMap::new(),
             sinkers: DashMap::new(),
+            checkers: DashMap::new(),
             no_window_metrics_map: DashMap::new(),
         }
     }
@@ -76,6 +79,7 @@ impl TaskMonitor {
             extractors: DashMap::new(),
             pipelines: DashMap::new(),
             sinkers: DashMap::new(),
+            checkers: DashMap::new(),
             no_window_metrics_map: DashMap::new(),
             prometheus_metrics,
         }
@@ -101,6 +105,9 @@ impl TaskMonitor {
                 MonitorType::Sinker => {
                     self.sinkers.insert(task_id.to_string(), monitor);
                 }
+                MonitorType::Checker => {
+                    self.checkers.insert(task_id.to_string(), monitor);
+                }
             }
         }
     }
@@ -118,12 +125,21 @@ impl TaskMonitor {
                         calc_monitors.push((MonitorType::Extractor, monitor.clone()));
                     };
                 }
+                MonitorType::Pipeline => {
+                    if let Some((_, monitor)) = self.pipelines.remove(task_id) {
+                        calc_monitors.push((MonitorType::Pipeline, monitor.clone()));
+                    };
+                }
                 MonitorType::Sinker => {
                     if let Some((_, monitor)) = self.sinkers.remove(task_id) {
                         calc_monitors.push((MonitorType::Sinker, monitor.clone()));
                     };
                 }
-                _ => {}
+                MonitorType::Checker => {
+                    if let Some((_, monitor)) = self.checkers.remove(task_id) {
+                        calc_monitors.push((MonitorType::Checker, monitor.clone()));
+                    };
+                }
             }
         }
         calc_nowindow_metrics(&self.no_window_metrics_map, calc_monitors);
@@ -265,6 +281,17 @@ impl TaskMonitor {
 
         for monitor in pipelines {
             calc_monitors.push((MonitorType::Pipeline, monitor.clone()));
+            if let Some(counter) = monitor
+                .time_window_counters
+                .get(&CounterType::CheckerLagSeconds)
+            {
+                let statics = counter.statistics().await;
+                calc_handler(
+                    CalcType::Avg,
+                    TaskMetricsType::CheckerLagAvgSeconds,
+                    statics.avg_by_count,
+                );
+            }
         }
 
         let sinkers: Vec<Arc<Monitor>> = self
@@ -332,6 +359,79 @@ impl TaskMonitor {
                 calc_handler(
                     CalcType::Avg,
                     TaskMetricsType::SinkerBpsAvg,
+                    statics.avg_by_sec,
+                );
+            }
+        }
+
+        let checkers: Vec<Arc<Monitor>> = self
+            .checkers
+            .iter()
+            .map(|item| item.value().clone())
+            .collect();
+
+        for monitor in checkers {
+            calc_monitors.push((MonitorType::Checker, monitor.clone()));
+            // checker checked records
+            if let Some(counter) = monitor.time_window_counters.get(&CounterType::RecordCount) {
+                let statics = counter.statistics().await;
+                calc_handler(
+                    CalcType::Min,
+                    TaskMetricsType::CheckerRpsMin,
+                    statics.min_by_sec,
+                );
+                calc_handler(
+                    CalcType::Max,
+                    TaskMetricsType::CheckerRpsMax,
+                    statics.max_by_sec,
+                );
+                calc_handler(
+                    CalcType::Avg,
+                    TaskMetricsType::CheckerRpsAvg,
+                    statics.avg_by_sec,
+                );
+            }
+            // checker miss
+            if let Some(counter) = monitor
+                .time_window_counters
+                .get(&CounterType::CheckerMissCount)
+            {
+                let statics = counter.statistics().await;
+                calc_handler(
+                    CalcType::Min,
+                    TaskMetricsType::CheckerMissRpsMin,
+                    statics.min_by_sec,
+                );
+                calc_handler(
+                    CalcType::Max,
+                    TaskMetricsType::CheckerMissRpsMax,
+                    statics.max_by_sec,
+                );
+                calc_handler(
+                    CalcType::Avg,
+                    TaskMetricsType::CheckerMissRpsAvg,
+                    statics.avg_by_sec,
+                );
+            }
+            // checker diff
+            if let Some(counter) = monitor
+                .time_window_counters
+                .get(&CounterType::CheckerDiffCount)
+            {
+                let statics = counter.statistics().await;
+                calc_handler(
+                    CalcType::Min,
+                    TaskMetricsType::CheckerDiffRpsMin,
+                    statics.min_by_sec,
+                );
+                calc_handler(
+                    CalcType::Max,
+                    TaskMetricsType::CheckerDiffRpsMax,
+                    statics.max_by_sec,
+                );
+                calc_handler(
+                    CalcType::Avg,
+                    TaskMetricsType::CheckerDiffRpsAvg,
                     statics.avg_by_sec,
                 );
             }
@@ -419,6 +519,20 @@ fn calc_nowindow_metrics(
         match monitor_type {
             MonitorType::Extractor => {}
             MonitorType::Sinker => {}
+            MonitorType::Checker => {
+                metric_handler(
+                    &monitor,
+                    CounterType::CheckerPending,
+                    TaskMetricsType::CheckerPending,
+                    CalcType::Latest,
+                );
+                metric_handler(
+                    &monitor,
+                    CounterType::CheckerAsyncDropCount,
+                    TaskMetricsType::CheckerAsyncDropCount,
+                    CalcType::Add,
+                );
+            }
             MonitorType::Pipeline => {
                 metric_handler(
                     &monitor,

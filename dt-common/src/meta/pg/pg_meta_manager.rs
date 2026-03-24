@@ -81,7 +81,13 @@ impl PgMetaManager {
             let oid = Self::get_oid(&self.conn_pool, schema, tb).await?;
             let (cols, col_origin_type_map, col_type_map, nullable_cols) =
                 Self::parse_cols(&self.conn_pool, &mut self.type_registry, schema, tb).await?;
-            let key_map = Self::parse_keys(&self.conn_pool, schema, tb).await?;
+            let mut key_map = Self::parse_keys(&self.conn_pool, schema, tb).await?;
+            // unique indexes (e.g. CREATE UNIQUE INDEX) are not in table_constraints;
+            let unique_index_keys =
+                Self::parse_unique_index_keys(&self.conn_pool, schema, tb).await?;
+            for (k, v) in unique_index_keys {
+                key_map.entry(k).or_insert(v);
+            }
             let (order_cols, partition_col, id_cols) =
                 RdbMetaManager::parse_rdb_cols(&key_map, &cols, &nullable_cols)?;
             // disable get_foreign_keys since we don't support foreign key check
@@ -234,6 +240,43 @@ impl PgMetaManager {
             } else {
                 key_map.insert(key_name, vec![col_name]);
             }
+        }
+        Ok(key_map)
+    }
+
+    async fn parse_unique_index_keys(
+        conn_pool: &Pool<Postgres>,
+        schema: &str,
+        tb: &str,
+    ) -> anyhow::Result<HashMap<String, Vec<String>>> {
+        let sql = format!(
+            r#"
+            SELECT
+                i.relname AS index_name,
+                a.attname AS col_name,
+                k.ord AS ord
+            FROM pg_class t
+            JOIN pg_namespace n ON n.oid = t.relnamespace
+            JOIN pg_index ix ON ix.indrelid = t.oid
+            JOIN pg_class i ON i.oid = ix.indexrelid
+            LEFT JOIN pg_constraint c
+                   ON c.conindid = ix.indexrelid
+                  AND c.contype IN ('p','u')
+            CROSS JOIN LATERAL unnest(ix.indkey) WITH ORDINALITY AS k(attnum, ord)
+            JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = k.attnum
+                AND a.attnum > 0 AND NOT a.attisdropped
+            WHERE n.nspname = '{}' AND t.relname = '{}'
+              AND ix.indisunique
+              AND c.oid IS NULL
+            ORDER BY i.relname, k.ord"#,
+            schema, tb
+        );
+        let mut rows = sqlx::query(&sql).fetch(conn_pool);
+        let mut key_map: HashMap<String, Vec<String>> = HashMap::new();
+        while let Some(row) = rows.try_next().await? {
+            let index_name: String = row.try_get("index_name")?;
+            let col_name: String = row.try_get("col_name")?;
+            key_map.entry(index_name).or_default().push(col_name);
         }
         Ok(key_map)
     }

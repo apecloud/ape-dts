@@ -56,7 +56,8 @@ pub struct CheckSummaryLog {
     #[serde(default, skip_serializing_if = "is_zero")]
     pub diff_count: usize,
     #[serde(default, skip_serializing_if = "is_zero")]
-    pub extra_count: usize,
+    pub skip_count: usize,
+
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sql_count: Option<usize>,
 }
@@ -73,7 +74,7 @@ impl CheckSummaryLog {
         self.is_consistent = self.is_consistent && other.is_consistent;
         self.miss_count += other.miss_count;
         self.diff_count += other.diff_count;
-        self.extra_count += other.extra_count;
+        self.skip_count += other.skip_count;
         if let Some(sql_count) = other.sql_count {
             self.sql_count = Some(self.sql_count.unwrap_or(0) + sql_count);
         }
@@ -103,7 +104,10 @@ pub struct StructCheckLog {
 
 impl std::fmt::Display for StructCheckLog {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let s = serde_json::to_string(self).unwrap_or_else(|_| "{}".to_string());
+        let s = serde_json::to_string(self).unwrap_or_else(|e| {
+            log::warn!("Failed to serialize StructCheckLog: {}", e);
+            "{}".to_string()
+        });
         write!(f, "{}", s)
     }
 }

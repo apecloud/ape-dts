@@ -1,12 +1,13 @@
+pub mod checker_config;
 pub mod config_enums;
 pub mod config_token_parser;
-pub mod checker_config;
 pub mod connection_auth_config;
 pub mod data_marker_config;
 pub mod extractor_config;
 pub mod filter_config;
 pub mod global_config;
 pub mod ini_loader;
+pub mod limiter_config;
 pub mod meta_center_config;
 pub mod monitor_config;
 pub mod parallelizer_config;

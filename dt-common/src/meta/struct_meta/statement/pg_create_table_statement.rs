@@ -199,12 +199,12 @@ impl PgCreateTableStatement {
     fn comment_to_sql(comment: &Comment) -> String {
         if comment.column_name.is_empty() {
             format!(
-                r#"COMMENT ON TABLE "{}"."{}" is '{}'"#,
+                r#"COMMENT ON TABLE "{}"."{}" is $${}$$"#,
                 comment.schema_name, comment.table_name, comment.comment
             )
         } else {
             format!(
-                r#"COMMENT ON COLUMN "{}"."{}"."{}" IS '{}'"#,
+                r#"COMMENT ON COLUMN "{}"."{}"."{}" IS $${}$$"#,
                 comment.schema_name, comment.table_name, comment.column_name, comment.comment
             )
         }

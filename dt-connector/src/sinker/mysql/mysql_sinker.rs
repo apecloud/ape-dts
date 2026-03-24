@@ -179,10 +179,12 @@ impl MysqlSinker {
             let query = query_builder.create_mysql_query(&query_info)?;
 
             let start_time = Instant::now();
-            query
-                .execute(&mut tx)
-                .await
-                .with_context(|| format!("serial sink failed, row_data: [{}]", row_data))?;
+            query.execute(&mut tx).await.with_context(|| {
+                format!(
+                    "serial sink failed, sql: [{}], row_data: [{}]",
+                    query_info.sql, row_data
+                )
+            })?;
 
             rts.push((start_time.elapsed().as_millis() as u64, 1));
             if last_monitor_time.elapsed().as_secs() >= monitor_interval {

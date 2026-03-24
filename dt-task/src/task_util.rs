@@ -12,7 +12,7 @@ use sqlx::{
 
 use dt_common::{
     config::{
-        config_enums::{DbType, RdbTransactionIsolation, TaskType},
+        config_enums::{DbType, RdbTransactionIsolation, TaskKind, TaskType},
         connection_auth_config::ConnectionAuthConfig,
         extractor_config::ExtractorConfig,
         global_config::GlobalConfig,
@@ -33,13 +33,11 @@ use dt_common::{
         rdb_meta_manager::RdbMetaManager,
     },
     rdb_filter::RdbFilter,
+    system_dbs::SystemDb,
 };
 use dt_connector::extractor::resumer::{
     build_recorder, build_recovery, recorder::Recorder, recovery::Recovery, utils::ResumerUtil,
 };
-
-const MYSQL_SYS_DBS: [&str; 4] = ["information_schema", "mysql", "performance_schema", "sys"];
-const PG_SYS_SCHEMAS: [&str; 2] = ["pg_catalog", "information_schema"];
 
 pub struct TaskUtil {}
 
@@ -220,9 +218,7 @@ impl TaskUtil {
                 Some(RdbMetaManager::from_pg(pg_meta_manager))
             }
 
-            _ => {
-                None
-            }
+            _ => None,
         };
         if meta_manager.is_some() {
             return Ok(meta_manager);
@@ -249,8 +245,7 @@ impl TaskUtil {
                     }
                     DbType::Pg => {
                         let pg_meta_manager =
-                            Self::create_pg_meta_manager(&url, &connection_auth, log_level)
-                                .await?;
+                            Self::create_pg_meta_manager(&url, &connection_auth, log_level).await?;
                         Some(RdbMetaManager::from_pg(pg_meta_manager))
                     }
                     _ => None,
@@ -373,8 +368,8 @@ impl TaskUtil {
         schemas: &[String],
         filter: &RdbFilter,
     ) -> anyhow::Result<u64> {
-        match task_type {
-            TaskType::Snapshot => match db_type {
+        match task_type.kind {
+            TaskKind::Snapshot => match db_type {
                 DbType::Mysql => Self::estimate_mysql_snapshot(conn_pool, schemas, filter).await,
                 DbType::Pg => Self::estimate_pg_snapshot(conn_pool, schemas, filter).await,
                 _ => Ok(0),
@@ -402,7 +397,7 @@ impl TaskUtil {
                 sql,
                 schemas
                     .iter()
-                    .filter(|s| !MYSQL_SYS_DBS.contains(&s.as_str()))
+                    .filter(|s| !SystemDb::is_system_db(s, &DbType::Mysql))
                     .map(|s| format!("'{}'", s))
                     .collect::<Vec<_>>()
                     .join(",")
@@ -456,7 +451,7 @@ WHERE
                 sql,
                 schemas
                     .iter()
-                    .filter(|s| !PG_SYS_SCHEMAS.contains(&s.as_str()))
+                    .filter(|s| !SystemDb::is_system_db(s, &DbType::Pg))
                     .map(|s| format!("'{}'", s))
                     .collect::<Vec<_>>()
                     .join(",")
@@ -544,7 +539,7 @@ WHERE
         let mut rows = sqlx::query(sql).fetch(conn_pool);
         while let Some(row) = rows.try_next().await.unwrap() {
             let schema: String = row.try_get(0)?;
-            if PG_SYS_SCHEMAS.contains(&schema.as_str()) {
+            if SystemDb::is_system_db(&schema, &DbType::Pg) {
                 continue;
             }
             schemas.push(schema);
@@ -592,7 +587,7 @@ WHERE
         let mut rows = sqlx::query(sql).fetch(conn_pool);
         while let Some(row) = rows.try_next().await.unwrap() {
             let db: String = row.try_get(0)?;
-            if MYSQL_SYS_DBS.contains(&db.as_str()) {
+            if SystemDb::is_system_db(&db, &DbType::Mysql) {
                 continue;
             }
             dbs.push(db);
@@ -630,7 +625,12 @@ WHERE
                 bail!("client is not found")
             }
         };
-        let dbs = client.list_database_names(None, None).await?;
+        let dbs = client
+            .list_database_names(None, None)
+            .await?
+            .into_iter()
+            .filter(|name| !SystemDb::is_system_db(name, &DbType::Mongo))
+            .collect();
         Ok(dbs)
     }
 
@@ -724,7 +724,8 @@ impl ConnClient {
                 "`extractor.max_connections` must be greater than 0".into()
             ));
         }
-        if sinker_max_connections < 1 {
+        let sinker_exists = !matches!(task_config.sinker, SinkerConfig::Dummy);
+        if sinker_exists && sinker_max_connections < 1 {
             bail!(Error::ConfigError(
                 "`sinker.max_connections` must be greater than 0".into()
             ));

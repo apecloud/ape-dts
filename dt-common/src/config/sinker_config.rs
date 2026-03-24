@@ -5,6 +5,7 @@ use super::{
 use crate::config::{
     config_enums::{RdbTransactionIsolation, SinkType},
     connection_auth_config::ConnectionAuthConfig,
+    limiter_config::RateLimiterConfig,
 };
 
 #[derive(Clone, Debug)]
@@ -150,4 +151,5 @@ pub struct BasicSinkerConfig {
     pub connection_auth: ConnectionAuthConfig,
     pub batch_size: usize,
     pub max_connections: u32,
+    pub rate_limiter: RateLimiterConfig,
 }

@@ -198,7 +198,7 @@ impl PgValueType {
             "int8" | "oid" => PgValueType::Int64,
             "float4" => PgValueType::Float32,
             "float8" => PgValueType::Float64,
-            "char" => PgValueType::Char,
+            "\"char\"" => PgValueType::Char,
             "text" | "varchar" | "bpchar" => PgValueType::String,
             "bytea" => PgValueType::Bytes,
             "json" | "jsonb" => PgValueType::JSON,
