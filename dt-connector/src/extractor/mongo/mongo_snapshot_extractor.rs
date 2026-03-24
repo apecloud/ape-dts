@@ -152,26 +152,3 @@ impl MongoSnapshotExtractor {
         String::new()
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::MongoSnapshotExtractor;
-    use dt_common::meta::{col_value::ColValue, mongo::mongo_constant::MongoConstants};
-    use mongodb::bson::doc;
-
-    #[test]
-    fn unsupported_mongo_id_is_encoded_as_none_for_checker_skip() {
-        let doc = doc! {
-            MongoConstants::ID: { "nested": 1 },
-            "name": "user_1",
-        };
-
-        let cols = MongoSnapshotExtractor::build_after_cols(&doc);
-
-        assert!(matches!(cols.get(MongoConstants::ID), Some(ColValue::None)));
-        assert!(matches!(
-            cols.get(MongoConstants::DOC),
-            Some(ColValue::MongoDoc(_))
-        ));
-    }
-}

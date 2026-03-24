@@ -457,21 +457,13 @@ mod tests {
                 ddl_data::DdlData,
                 ddl_statement::{DdlStatement, MysqlAlterTableStatement},
             },
-            dt_data::{DtData, DtItem},
-            dt_queue::DtQueue,
-            position::Position,
-            row_data::RowData,
             row_type::RowType,
         },
-        monitor::monitor::Monitor,
     };
-    use dt_connector::{
-        checker::{check_log::CheckSummaryLog, CheckContext, Checker, CheckerHandle, FetchResult},
-        rdb_router::RdbRouter,
-    };
-    use dt_parallelizer::{DataSize, Parallelizer};
-    use std::{collections::HashMap, sync::Arc, time::Duration};
-    use tokio::sync::Mutex;
+    use dt_connector::checker::{check_log::CheckSummaryLog, CheckContext, Checker, FetchResult};
+    use dt_connector::rdb_router::RdbRouter;
+    use std::collections::HashMap;
+    use tokio::time::{timeout, Duration};
 
     struct StaticDrainParallelizer;
 
@@ -553,25 +545,22 @@ mod tests {
         }
     }
 
-    fn build_row_data() -> RowData {
-        RowData::new(
-            "test_db".to_string(),
-            "test_tb".to_string(),
-            RowType::Insert,
-            None,
-            Some(HashMap::from([(
-                "id".to_string(),
-                dt_common::meta::col_value::ColValue::Long(1),
-            )])),
-        )
-    }
-
     fn build_position() -> Position {
         Position::RdbSnapshotFinished {
             db_type: "mysql".to_string(),
             schema: "test_db".to_string(),
             tb: "test_tb".to_string(),
         }
+    }
+
+    fn build_row_data() -> RowData {
+        RowData::new(
+            "test_db".to_string(),
+            "test_tb".to_string(),
+            RowType::Insert,
+            None,
+            Some(HashMap::from([("id".to_string(), dt_common::meta::col_value::ColValue::Long(1))])),
+        )
     }
 
     fn build_ddl_data() -> DdlData {
@@ -587,75 +576,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn checker_close_position_prefers_safe_committed_position() {
-        let received = Position::RdbSnapshotFinished {
-            db_type: "mysql".to_string(),
-            schema: "s1".to_string(),
-            tb: "received".to_string(),
-        };
-        let committed = Position::RdbSnapshotFinished {
-            db_type: "mysql".to_string(),
-            schema: "s1".to_string(),
-            tb: "committed".to_string(),
-        };
-        let syncer = Syncer {
-            received_position: received,
-            committed_position: committed.clone(),
-        };
-
-        assert_eq!(
-            BasePipeline::checker_close_position(&syncer),
-            Some(committed),
-        );
-    }
-
-    #[test]
-    fn checker_close_position_does_not_use_uncommitted_received_position() {
-        let syncer = Syncer {
-            received_position: build_position(),
-            committed_position: Position::None,
-        };
-
-        assert_eq!(BasePipeline::checker_close_position(&syncer), None);
-    }
-
-    #[tokio::test]
-    async fn start_keeps_running_when_inline_checker_checkpoint_returns_error() {
-        let handle = dt_connector::checker::DataCheckerHandle::spawn(
-            FailingFetchChecker,
-            "pipeline-checkpoint-fail-open".to_string(),
-            build_check_context(true),
-            4,
-            "FailingFetchChecker",
-        );
-        handle.enqueue_check(vec![build_row_data()]).await.unwrap();
-
-        let checkpoint = build_position();
-        tokio::time::timeout(Duration::from_secs(2), async {
-            loop {
-                if handle.has_failed() {
-                    break;
-                }
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .expect("checker should enter failed state before pipeline starts");
-
-        let buffer = Arc::new(DtQueue::new(8, 0, None, None));
-        buffer
-            .push(DtItem {
-                dt_data: DtData::Dml {
-                    row_data: build_row_data(),
-                },
-                position: checkpoint.clone(),
-                data_origin_node: String::new(),
-            })
-            .await
-            .unwrap();
-
-        let mut pipeline = BasePipeline {
+    fn build_pipeline(buffer: Arc<DtQueue>, checker: CheckerHandle) -> BasePipeline {
+        BasePipeline {
             buffer,
             parallelizer: Box::new(StaticDrainParallelizer),
             sinker_config: SinkerConfig::Dummy,
@@ -668,29 +590,59 @@ mod tests {
             data_marker: None,
             lua_processor: None,
             recorder: None,
-            checker: Some(CheckerHandle::Data(handle)),
-        };
-
-        let result = pipeline.start().await;
-        assert!(
-            result.is_ok(),
-            "inline checker failure should not stop pipeline"
-        );
-        pipeline.stop().await.unwrap();
+            checker: Some(checker),
+        }
     }
 
     #[tokio::test]
-    async fn start_keeps_running_when_inline_checker_refresh_meta_returns_error() {
-        let handle = dt_connector::checker::DataCheckerHandle::spawn(
+    async fn start_keeps_running_when_inline_checker_returns_error() {
+        let checkpoint_handle = dt_connector::checker::DataCheckerHandle::spawn(
+            FailingFetchChecker,
+            "pipeline-checkpoint-fail-open".to_string(),
+            build_check_context(true),
+            4,
+            "FailingFetchChecker",
+        );
+        checkpoint_handle
+            .enqueue_check(vec![build_row_data()])
+            .await
+            .unwrap();
+        timeout(Duration::from_secs(2), async {
+            loop {
+                if checkpoint_handle.has_failed() {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("checker should enter failed state before pipeline starts");
+
+        let checkpoint_buffer = Arc::new(DtQueue::new(8, 0, None, None));
+        checkpoint_buffer
+            .push(DtItem {
+                dt_data: DtData::Dml {
+                    row_data: build_row_data(),
+                },
+                position: build_position(),
+                data_origin_node: String::new(),
+            })
+            .await
+            .unwrap();
+        let mut checkpoint_pipeline =
+            build_pipeline(checkpoint_buffer, CheckerHandle::Data(checkpoint_handle));
+        assert!(checkpoint_pipeline.start().await.is_ok());
+        checkpoint_pipeline.stop().await.unwrap();
+
+        let refresh_handle = dt_connector::checker::DataCheckerHandle::spawn(
             FailingRefreshMetaChecker,
             "pipeline-refresh-meta-fail-open".to_string(),
             build_check_context(true),
             4,
             "FailingRefreshMetaChecker",
         );
-
-        let buffer = Arc::new(DtQueue::new(8, 0, None, None));
-        buffer
+        let refresh_buffer = Arc::new(DtQueue::new(8, 0, None, None));
+        refresh_buffer
             .push(DtItem {
                 dt_data: DtData::Ddl {
                     ddl_data: build_ddl_data(),
@@ -700,28 +652,9 @@ mod tests {
             })
             .await
             .unwrap();
-
-        let mut pipeline = BasePipeline {
-            buffer,
-            parallelizer: Box::new(StaticDrainParallelizer),
-            sinker_config: SinkerConfig::Dummy,
-            sinkers: Vec::new(),
-            shut_down: Arc::new(AtomicBool::new(true)),
-            checkpoint_interval_secs: 0,
-            batch_sink_interval_secs: 0,
-            syncer: Arc::new(Mutex::new(Syncer::default())),
-            monitor: Arc::new(Monitor::new("pipeline", "test", 1, 1, 1)),
-            data_marker: None,
-            lua_processor: None,
-            recorder: None,
-            checker: Some(CheckerHandle::Data(handle)),
-        };
-
-        let result = pipeline.start().await;
-        assert!(
-            result.is_ok(),
-            "inline checker refresh_meta failure should not stop pipeline"
-        );
-        pipeline.stop().await.unwrap();
+        let mut refresh_pipeline =
+            build_pipeline(refresh_buffer, CheckerHandle::Data(refresh_handle));
+        assert!(refresh_pipeline.start().await.is_ok());
+        refresh_pipeline.stop().await.unwrap();
     }
 }

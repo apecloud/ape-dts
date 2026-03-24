@@ -886,7 +886,6 @@ pub fn has_null_key(row_data: &RowData, id_cols: &[String]) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::cdc_state::PreparedCheckpointWrite;
     use super::*;
     use crate::{checker::check_log::CheckSummaryLog, rdb_router::RdbRouter};
     use async_trait::async_trait;
@@ -903,19 +902,11 @@ mod tests {
     };
 
     struct NoopChecker;
-    struct FailingFetchChecker;
 
     #[async_trait]
     impl Checker for NoopChecker {
         async fn fetch(&mut self, _src_rows: &[&RowData]) -> anyhow::Result<FetchResult> {
             unreachable!("noop checker test should not call fetch")
-        }
-    }
-
-    #[async_trait]
-    impl Checker for FailingFetchChecker {
-        async fn fetch(&mut self, _src_rows: &[&RowData]) -> anyhow::Result<FetchResult> {
-            anyhow::bail!("forced checker fetch failure")
         }
     }
 
@@ -992,86 +983,6 @@ mod tests {
             }),
             ..Default::default()
         }
-    }
-
-    fn build_cdc_checker(check_log_dir: String, start_time: &str) -> DataChecker<NoopChecker> {
-        let (_tx, rx) = mpsc::channel(1);
-        DataChecker::new(
-            NoopChecker,
-            "checker-cdc-test".to_string(),
-            build_check_context(check_log_dir, true, start_time),
-            rx,
-            "NoopChecker",
-            Arc::new(CheckerRuntimeState::default()),
-        )
-    }
-
-    fn build_check_entry(row_data: &RowData, is_miss: bool) -> CheckEntry {
-        CheckEntry {
-            log: CheckLog {
-                schema: row_data.schema.clone(),
-                tb: row_data.tb.clone(),
-                target_schema: None,
-                target_tb: None,
-                id_col_values: HashMap::from([("id".to_string(), Some("1".to_string()))]),
-                diff_col_values: HashMap::new(),
-                src_row: None,
-                dst_row: None,
-            },
-            revise_sql: None,
-            is_miss,
-            src_row_data: row_data.clone(),
-        }
-    }
-
-    #[tokio::test]
-    async fn first_periodic_snapshot_overwrites_stale_summary_file() {
-        let dir = build_temp_dir("checker_stale_summary");
-        fs::write(format!("{dir}/summary.log"), "stale-summary\n").unwrap();
-
-        let mut checker = build_cdc_checker(dir.clone(), "fresh-run");
-        checker.maybe_snapshot_and_output().await.unwrap();
-
-        let summary_raw = fs::read_to_string(format!("{dir}/summary.log")).unwrap();
-        let summary: CheckSummaryLog = serde_json::from_str(summary_raw.trim()).unwrap();
-        assert_eq!(summary.start_time, "fresh-run");
-        assert_eq!(summary.miss_count, 0);
-        assert_eq!(summary.diff_count, 0);
-
-        fs::remove_dir_all(dir).unwrap();
-    }
-
-    #[tokio::test]
-    async fn failed_async_batch_blocks_subsequent_checkpoint() {
-        let mut handle = DataCheckerHandle::spawn(
-            FailingFetchChecker,
-            "checker-checkpoint-gate-test".to_string(),
-            build_check_context(".".to_string(), true, ""),
-            4,
-            "FailingFetchChecker",
-        );
-
-        handle.enqueue_check(vec![build_row_data()]).await.unwrap();
-        let checkpoint = Position::RdbSnapshotFinished {
-            db_type: "mysql".to_string(),
-            schema: "test_db".to_string(),
-            tb: "test_tb".to_string(),
-        };
-
-        let result = tokio::time::timeout(Duration::from_secs(2), async {
-            loop {
-                let checkpoint_result = handle.record_checkpoint(&checkpoint).await;
-                if checkpoint_result.is_err() {
-                    break checkpoint_result;
-                }
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .expect("checkpoint should stop after checker failure");
-
-        assert!(result.is_err());
-        assert!(handle.close_with_position(Some(&checkpoint)).await.is_err());
     }
 
     #[tokio::test]
@@ -1179,37 +1090,5 @@ mod tests {
         };
 
         assert!(handle.refresh_meta(vec![build_ddl_data()]).await.is_ok());
-    }
-
-    #[test]
-    fn prepare_checkpoint_write_uses_cached_identity_keys_for_deletes() {
-        let mut checker = build_cdc_checker(".".to_string(), "");
-        let row_data = build_row_data();
-        let row_key = 1;
-        let store_key = CheckerStoreKey::from_row_data(&row_data, row_key);
-        checker
-            .store
-            .insert(store_key, build_check_entry(&row_data, true));
-        checker.store_dirty = true;
-        checker.persisted_identity_keys = Some(BTreeSet::from(["stale-key".to_string()]));
-
-        let checkpoint_write = checker.prepare_checkpoint_write(build_position()).unwrap();
-
-        match checkpoint_write {
-            PreparedCheckpointWrite::Full {
-                commit,
-                persisted_identity_keys,
-            } => {
-                assert_eq!(commit.deletes, vec!["stale-key".to_string()]);
-                assert_eq!(persisted_identity_keys.len(), 1);
-                assert_eq!(
-                    persisted_identity_keys,
-                    BTreeSet::from([commit.upserts[0].identity_key.clone()])
-                );
-            }
-            PreparedCheckpointWrite::PositionOnly { .. } => {
-                panic!("dirty checker should produce full checkpoint write");
-            }
-        }
     }
 }

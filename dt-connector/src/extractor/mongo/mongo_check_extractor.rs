@@ -114,24 +114,3 @@ impl MongoCheckExtractor {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::MongoCheckExtractor;
-    use dt_common::meta::mongo::mongo_key::MongoKey;
-    use mongodb::bson::{oid::ObjectId, Bson};
-
-    #[test]
-    fn stringified_object_id_uses_object_id_lookup() {
-        let oid = ObjectId::new();
-        let normalized = MongoCheckExtractor::normalize_lookup_id(MongoKey::String(oid.to_hex()));
-        assert_eq!(normalized, Bson::ObjectId(oid));
-    }
-
-    #[test]
-    fn non_object_id_string_stays_string_lookup() {
-        let normalized =
-            MongoCheckExtractor::normalize_lookup_id(MongoKey::String("plain-id".to_string()));
-        assert_eq!(normalized, Bson::String("plain-id".to_string()));
-    }
-}

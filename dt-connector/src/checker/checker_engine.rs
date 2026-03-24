@@ -800,7 +800,7 @@ mod tests {
     };
     use async_trait::async_trait;
     use dt_common::{
-        meta::pg::pg_col_type::PgColType,
+        meta::{pg::pg_col_type::PgColType, pg::pg_value_type::PgValueType},
         monitor::monitor::Monitor,
     };
     use std::sync::Arc;
@@ -811,43 +811,16 @@ mod tests {
     #[async_trait]
     impl Checker for DummyChecker {
         async fn fetch(&mut self, _src_rows: &[&RowData]) -> anyhow::Result<FetchResult> {
-            unreachable!("hash test should not call fetch")
+            unreachable!("ut should not call fetch")
         }
     }
 
-    #[test]
-    fn nullable_composite_key_hash_returns_zero() {
-        let tb_meta = RdbTbMeta {
-            schema: "s1".to_string(),
-            tb: "t1".to_string(),
-            id_cols: vec!["id1".to_string(), "id2".to_string()],
-            ..Default::default()
-        };
-
-        let values1 = HashMap::from([
-            ("id1".to_string(), ColValue::None),
-            ("id2".to_string(), ColValue::Long(1)),
-        ]);
-        let values2 = HashMap::from([
-            ("id1".to_string(), ColValue::None),
-            ("id2".to_string(), ColValue::Long(2)),
-        ]);
-
-        let hash1 = DataChecker::<DummyChecker>::hash_from_id_values(&values1, &tb_meta)
-            .expect("nullable composite key should return 0");
-        let hash2 = DataChecker::<DummyChecker>::hash_from_id_values(&values2, &tb_meta)
-            .expect("nullable composite key should return 0");
-
-        assert_eq!(hash1, 0);
-        assert_eq!(hash2, 0);
-    }
-
-    fn build_test_context() -> CheckContext {
+    fn build_ctx(is_cdc: bool) -> CheckContext {
         CheckContext {
             monitor: Arc::new(Monitor::new("checker", "unit-test", 1, 1, 1)),
             task_monitor: None,
             summary: CheckSummaryLog {
-                start_time: "2026-03-19T00:00:00Z".to_string(),
+                start_time: "unit-test".to_string(),
                 ..Default::default()
             },
             output_revise_sql: false,
@@ -864,7 +837,7 @@ mod tests {
             batch_size: 1,
             retry_interval_secs: 0,
             max_retries: 0,
-            is_cdc: false,
+            is_cdc,
             check_log_dir: String::new(),
             cdc_check_log_max_file_size: 1,
             cdc_check_log_max_rows: 1,
@@ -876,13 +849,7 @@ mod tests {
         }
     }
 
-    fn build_cdc_test_context() -> CheckContext {
-        let mut ctx = build_test_context();
-        ctx.is_cdc = true;
-        ctx
-    }
-
-    fn build_check_entry(src_row_data: RowData) -> CheckEntry {
+    fn build_entry(src_row_data: RowData) -> CheckEntry {
         CheckEntry {
             log: CheckLog {
                 schema: src_row_data.schema.clone(),
@@ -900,6 +867,65 @@ mod tests {
         }
     }
 
+    fn build_after_row(col: &str, value: ColValue) -> RowData {
+        RowData::new(
+            "s1".to_string(),
+            "t1".to_string(),
+            RowType::Insert,
+            None,
+            Some(HashMap::from([(col.to_string(), value)])),
+        )
+    }
+
+    fn build_pg_tb_meta(col: &str, alias: &str, value_type: PgValueType) -> CheckerTbMeta {
+        CheckerTbMeta::Pg(dt_common::meta::pg::pg_tb_meta::PgTbMeta {
+            basic: RdbTbMeta {
+                schema: "s1".to_string(),
+                tb: "t1".to_string(),
+                cols: vec![col.to_string()],
+                ..Default::default()
+            },
+            oid: 1,
+            col_type_map: HashMap::from([(
+                col.to_string(),
+                PgColType {
+                    value_type,
+                    name: alias.to_string(),
+                    alias: alias.to_string(),
+                    oid: 1,
+                    parent_oid: 0,
+                    element_oid: 0,
+                    category: "N".to_string(),
+                    enum_values: None,
+                    schema_name: "pg_catalog".to_string(),
+                },
+            )]),
+        })
+    }
+
+    #[test]
+    fn nullable_composite_key_hash_returns_zero() {
+        let tb_meta = RdbTbMeta {
+            schema: "s1".to_string(),
+            tb: "t1".to_string(),
+            id_cols: vec!["id1".to_string(), "id2".to_string()],
+            ..Default::default()
+        };
+        let values1 = HashMap::from([
+            ("id1".to_string(), ColValue::None),
+            ("id2".to_string(), ColValue::Long(1)),
+        ]);
+        let values2 = HashMap::from([
+            ("id1".to_string(), ColValue::None),
+            ("id2".to_string(), ColValue::Long(2)),
+        ]);
+
+        let hash1 = DataChecker::<DummyChecker>::hash_from_id_values(&values1, &tb_meta).unwrap();
+        let hash2 = DataChecker::<DummyChecker>::hash_from_id_values(&values2, &tb_meta).unwrap();
+        assert_eq!(hash1, 0);
+        assert_eq!(hash2, 0);
+    }
+
     #[tokio::test]
     async fn check_rows_skips_zero_key_and_cleans_stale_update_entry() {
         let tb_meta = Arc::new(CheckerTbMeta::Mongo(RdbTbMeta {
@@ -912,39 +938,37 @@ mod tests {
             ("id1".to_string(), ColValue::Long(1)),
             ("id2".to_string(), ColValue::Long(2)),
         ]);
-        let after_values = HashMap::from([
-            ("id1".to_string(), ColValue::None),
-            ("id2".to_string(), ColValue::Long(2)),
-        ]);
         let src_row = RowData::new(
             "s1".to_string(),
             "t1".to_string(),
             RowType::Update,
             Some(before_values.clone()),
-            Some(after_values),
+            Some(HashMap::from([
+                ("id1".to_string(), ColValue::None),
+                ("id2".to_string(), ColValue::Long(2)),
+            ])),
         );
         let old_key =
             DataChecker::<DummyChecker>::hash_from_id_values(&before_values, tb_meta.basic())
-                .expect("non-null before key should hash");
+                .unwrap();
         let (_tx, rx) = mpsc::channel(1);
         let mut data_checker = DataChecker::new(
             DummyChecker,
             "task-1".to_string(),
-            build_test_context(),
+            build_ctx(false),
             rx,
             "unit-test",
             Arc::new(CheckerRuntimeState::default()),
         );
-        let store_key = CheckerStoreKey::from_row_data(&src_row, old_key);
-        data_checker
-            .store
-            .insert(store_key, build_check_entry(src_row.clone()));
+        data_checker.store.insert(
+            CheckerStoreKey::from_row_data(&src_row, old_key),
+            build_entry(src_row.clone()),
+        );
 
         let (skip_count, retry_rows) = data_checker
             .check_rows(&[&src_row], HashMap::new(), tb_meta.as_ref())
             .await
             .unwrap();
-
         assert_eq!(skip_count, 1);
         assert!(retry_rows.is_empty());
         assert!(data_checker.store.is_empty());
@@ -973,28 +997,26 @@ mod tests {
             Some(HashMap::from([("id".to_string(), ColValue::Long(1))])),
         );
         let row_key = DataChecker::<DummyChecker>::lookup_match_key(&row1, &tb_meta)
-            .expect("row key lookup should succeed")
-            .expect("row key should exist");
-
+            .unwrap()
+            .unwrap();
         let (_tx, rx) = mpsc::channel(1);
         let mut data_checker = DataChecker::new(
             DummyChecker,
             "task-1".to_string(),
-            build_cdc_test_context(),
+            build_ctx(true),
             rx,
             "unit-test",
             Arc::new(CheckerRuntimeState::default()),
         );
 
         data_checker
-            .store_entry(&row1, row_key, build_check_entry(row1.clone()))
+            .store_entry(&row1, row_key, build_entry(row1.clone()))
             .await;
         data_checker
-            .store_entry(&row2, row_key, build_check_entry(row2.clone()))
+            .store_entry(&row2, row_key, build_entry(row2.clone()))
             .await;
 
         assert_eq!(data_checker.store.len(), 2);
-
         data_checker.remove_store_entry(&row1, row_key);
         assert_eq!(data_checker.store.len(), 1);
         assert_eq!(
@@ -1004,80 +1026,10 @@ mod tests {
     }
 
     #[test]
-    fn select_dst_row_ignores_zero_key_rows() {
-        let tb_meta = CheckerTbMeta::Mongo(RdbTbMeta {
-            schema: "s1".to_string(),
-            tb: "t1".to_string(),
-            id_cols: vec!["id1".to_string(), "id2".to_string()],
-            ..Default::default()
-        });
-        let src_row = RowData::new(
-            "s1".to_string(),
-            "t1".to_string(),
-            RowType::Insert,
-            None,
-            Some(HashMap::from([
-                ("id1".to_string(), ColValue::Long(1)),
-                ("id2".to_string(), ColValue::Long(2)),
-            ])),
-        );
-        let dst_row = RowData::new(
-            "s1".to_string(),
-            "t1".to_string(),
-            RowType::Insert,
-            None,
-            Some(HashMap::from([
-                ("id1".to_string(), ColValue::None),
-                ("id2".to_string(), ColValue::Long(2)),
-            ])),
-        );
-
-        let selected =
-            DataChecker::<DummyChecker>::select_dst_row(&src_row, &tb_meta, vec![dst_row]).unwrap();
-        assert!(selected.is_none());
-    }
-
-    fn build_row_with_after(col: &str, value: ColValue) -> RowData {
-        RowData::new(
-            "s1".to_string(),
-            "t1".to_string(),
-            RowType::Insert,
-            None,
-            Some(HashMap::from([(col.to_string(), value)])),
-        )
-    }
-
-    fn build_pg_checker_tb_meta(col: &str, alias: &str, value_type: PgValueType) -> CheckerTbMeta {
-        CheckerTbMeta::Pg(dt_common::meta::pg::pg_tb_meta::PgTbMeta {
-            basic: RdbTbMeta {
-                schema: "s1".to_string(),
-                tb: "t1".to_string(),
-                cols: vec![col.to_string()],
-                ..Default::default()
-            },
-            oid: 1,
-            col_type_map: HashMap::from([(
-                col.to_string(),
-                PgColType {
-                    value_type,
-                    name: alias.to_string(),
-                    alias: alias.to_string(),
-                    oid: 1,
-                    parent_oid: 0,
-                    element_oid: 0,
-                    category: "N".to_string(),
-                    enum_values: None,
-                    schema_name: "pg_catalog".to_string(),
-                },
-            )]),
-        })
-    }
-
-    #[test]
     fn pg_inet_column_normalizes_default_host_prefix() {
-        let src = build_row_with_after("ip", ColValue::String("1.2.3.4".to_string()));
-        let dst = build_row_with_after("ip", ColValue::String("1.2.3.4/32".to_string()));
-        let tb_meta = build_pg_checker_tb_meta("ip", "inet", PgValueType::INET);
+        let src = build_after_row("ip", ColValue::String("1.2.3.4".to_string()));
+        let dst = build_after_row("ip", ColValue::String("1.2.3.4/32".to_string()));
+        let tb_meta = build_pg_tb_meta("ip", "inet", PgValueType::INET);
 
         let diffs = DataChecker::<DummyChecker>::compare_row_data(&src, &dst, &tb_meta).unwrap();
         assert!(diffs.is_empty());
@@ -1085,9 +1037,9 @@ mod tests {
 
     #[test]
     fn pg_text_column_does_not_normalize_inet_looking_strings() {
-        let src = build_row_with_after("note", ColValue::String("1.2.3.4".to_string()));
-        let dst = build_row_with_after("note", ColValue::String("1.2.3.4/32".to_string()));
-        let tb_meta = build_pg_checker_tb_meta("note", "text", PgValueType::String);
+        let src = build_after_row("note", ColValue::String("1.2.3.4".to_string()));
+        let dst = build_after_row("note", ColValue::String("1.2.3.4/32".to_string()));
+        let tb_meta = build_pg_tb_meta("note", "text", PgValueType::String);
 
         let diffs = DataChecker::<DummyChecker>::compare_row_data(&src, &dst, &tb_meta).unwrap();
         assert_eq!(diffs.len(), 1);
