@@ -1333,5 +1333,4 @@ url=mysql://127.0.0.1:3306/test
 
         fs::remove_file(path).expect("failed to remove temp ini");
     }
-
 }

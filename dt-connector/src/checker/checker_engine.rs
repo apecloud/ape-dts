@@ -1,6 +1,13 @@
-use super::*;
+use super::{
+    log_diff, log_miss, log_sql, log_warn, mongo_cmd, sleep, BaseSinker, CheckContext, CheckEntry,
+    CheckInconsistency, CheckLog, Checker, CheckerStoreKey, CheckerTbMeta, ColValue, Cow,
+    DataChecker, DiffColValue, Document, Duration, HashMap, Instant, LimitedQueue, MongoConstants,
+    RdbTbMeta, RetryItem, RowData, RowType,
+};
+use anyhow::Context;
 use dt_common::meta::pg::pg_value_type::PgValueType;
-use dt_common::monitor::counter_type::CounterType;
+use dt_common::monitor::{counter_type::CounterType, task_metrics::TaskMetricsType};
+use std::collections::BTreeSet;
 
 impl<C: Checker> DataChecker<C> {
     fn build_revise_sql(
@@ -303,18 +310,18 @@ impl<C: Checker> DataChecker<C> {
         for col in &tb_meta.id_cols {
             let col_hash_code = id_values
                 .get(col)
-                .with_context(|| format!("missing id col value: {}", col))?
+                .with_context(|| format!("missing id col value: {col}"))?
                 .hash_code()
                 .with_context(|| {
                     format!(
-                        "unhashable _id value in schema: {}, tb: {}, col: {}",
-                        tb_meta.schema, tb_meta.tb, col
+                        "unhashable _id value in schema: {}, tb: {}, col: {col}",
+                        tb_meta.schema, tb_meta.tb
                     )
                 })?;
             if col_hash_code == 0 {
                 return Ok(0);
             }
-            hash_code = 31 * hash_code + col_hash_code as u128;
+            hash_code = 31 * hash_code + u128::from(col_hash_code);
         }
         Ok(hash_code)
     }
@@ -335,7 +342,7 @@ impl<C: Checker> DataChecker<C> {
         Ok(None)
     }
 
-    fn log_entry(&self, entry: &CheckEntry) {
+    fn log_entry(entry: &CheckEntry) {
         if entry.is_miss {
             log_miss!("{}", entry.log);
         } else {
@@ -346,25 +353,43 @@ impl<C: Checker> DataChecker<C> {
         }
     }
 
-    async fn update_summary_for_entry(&mut self, entry: &CheckEntry) {
-        let summary = &mut self.ctx.summary;
-        summary.end_time = chrono::Local::now().to_rfc3339();
+    fn checker_metric_types(entry: &CheckEntry) -> (TaskMetricsType, CounterType) {
         if entry.is_miss {
-            summary.miss_count += 1;
-            self.ctx
-                .monitor
-                .add_counter(CounterType::CheckerMissCount, 1)
-                .await;
+            (
+                TaskMetricsType::CheckerMissCount,
+                CounterType::CheckerMissCount,
+            )
         } else {
-            summary.diff_count += 1;
-            self.ctx
-                .monitor
-                .add_counter(CounterType::CheckerDiffCount, 1)
-                .await;
+            (
+                TaskMetricsType::CheckerDiffCount,
+                CounterType::CheckerDiffCount,
+            )
         }
-        if entry.revise_sql.is_some() {
-            summary.sql_count = Some(summary.sql_count.unwrap_or(0) + 1);
+    }
+
+    async fn add_entry_metrics(&self, entry: &CheckEntry) {
+        let (task_metric, counter_type) = Self::checker_metric_types(entry);
+        if let Some(task_monitor) = &self.ctx.task_monitor {
+            task_monitor.add_no_window_metrics(task_metric, 1);
         }
+        self.ctx.monitor.add_counter(counter_type, 1).await;
+    }
+
+    async fn update_summary_for_entry(&mut self, entry: &CheckEntry) {
+        {
+            let summary = &mut self.ctx.summary;
+            summary.end_time = chrono::Local::now().to_rfc3339();
+            if entry.is_miss {
+                summary.miss_count += 1;
+            } else {
+                summary.diff_count += 1;
+            }
+            if entry.revise_sql.is_some() {
+                summary.sql_count = Some(summary.sql_count.unwrap_or(0) + 1);
+            }
+        }
+
+        self.add_entry_metrics(entry).await;
     }
 
     pub fn update_pending_counter(&self) {
@@ -437,24 +462,14 @@ impl<C: Checker> DataChecker<C> {
 
     pub async fn store_entry(&mut self, row_data: &RowData, row_key: u128, entry: CheckEntry) {
         if !self.ctx.is_cdc {
-            self.log_entry(&entry);
+            Self::log_entry(&entry);
             self.update_summary_for_entry(&entry).await;
             return;
         }
 
         self.store_dirty = true;
         self.snapshot_dirty = true;
-        if entry.is_miss {
-            self.ctx
-                .monitor
-                .add_counter(CounterType::CheckerMissCount, 1)
-                .await;
-        } else {
-            self.ctx
-                .monitor
-                .add_counter(CounterType::CheckerDiffCount, 1)
-                .await;
-        }
+        self.add_entry_metrics(&entry).await;
         let store_key = CheckerStoreKey::from_row_data(row_data, row_key);
         self.store.insert(store_key, entry);
         self.update_pending_counter();
@@ -463,7 +478,7 @@ impl<C: Checker> DataChecker<C> {
     pub async fn flush_store(&mut self) {
         let entries = std::mem::take(&mut self.store);
         for (_key, entry) in entries {
-            self.log_entry(&entry);
+            Self::log_entry(&entry);
             self.update_summary_for_entry(&entry).await;
         }
     }
@@ -578,8 +593,8 @@ impl<C: Checker> DataChecker<C> {
             if src_value == dst_value {
                 continue;
             }
-            let src_type_name = src_value.map(mongo_cmd::bson_type_name).unwrap_or("None");
-            let dst_type_name = dst_value.map(mongo_cmd::bson_type_name).unwrap_or("None");
+            let src_type_name = src_value.map_or("None", mongo_cmd::bson_type_name);
+            let dst_type_name = dst_value.map_or("None", mongo_cmd::bson_type_name);
             let type_diff = src_type_name != dst_type_name;
             diff_col_values.insert(
                 key,
@@ -758,7 +773,8 @@ impl<C: Checker> DataChecker<C> {
         }
 
         let mut rts = LimitedQueue::new(1);
-        rts.push((start_time.elapsed().as_millis() as u64, 1));
+        let elapsed_millis = u64::try_from(start_time.elapsed().as_millis()).unwrap_or(u64::MAX);
+        rts.push((elapsed_millis, 1));
         self.ctx.summary.skip_count += total_skip_count;
         if total_skip_count > 0 {
             self.snapshot_dirty = true;
@@ -778,9 +794,15 @@ impl<C: Checker> DataChecker<C> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{
+        checker::{base_checker::CheckerRuntimeState, check_log::CheckSummaryLog, FetchResult},
+        rdb_router::RdbRouter,
+    };
     use async_trait::async_trait;
-    use dt_common::meta::pg::pg_col_type::PgColType;
-    use dt_common::monitor::monitor::Monitor;
+    use dt_common::{
+        meta::pg::pg_col_type::PgColType,
+        monitor::monitor::Monitor,
+    };
     use std::sync::Arc;
     use tokio::sync::mpsc;
 
@@ -823,6 +845,7 @@ mod tests {
     fn build_test_context() -> CheckContext {
         CheckContext {
             monitor: Arc::new(Monitor::new("checker", "unit-test", 1, 1, 1)),
+            task_monitor: None,
             summary: CheckSummaryLog {
                 start_time: "2026-03-19T00:00:00Z".to_string(),
                 ..Default::default()
@@ -849,6 +872,7 @@ mod tests {
             cdc_check_log_interval_secs: 1,
             state_store: None,
             expected_resume_position: None,
+            fail_open_on_runtime_error: false,
         }
     }
 

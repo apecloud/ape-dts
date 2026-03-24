@@ -451,7 +451,12 @@ mod tests {
     use super::*;
     use async_trait::async_trait;
     use dt_common::{
+        config::config_enums::DbType,
         meta::{
+            ddl_meta::{
+                ddl_data::DdlData,
+                ddl_statement::{DdlStatement, MysqlAlterTableStatement},
+            },
             dt_data::{DtData, DtItem},
             dt_queue::DtQueue,
             position::Position,
@@ -497,6 +502,7 @@ mod tests {
     }
 
     struct FailingFetchChecker;
+    struct FailingRefreshMetaChecker;
 
     #[async_trait]
     impl Checker for FailingFetchChecker {
@@ -505,9 +511,21 @@ mod tests {
         }
     }
 
-    fn build_check_context() -> CheckContext {
+    #[async_trait]
+    impl Checker for FailingRefreshMetaChecker {
+        async fn fetch(&mut self, _src_rows: &[&RowData]) -> anyhow::Result<FetchResult> {
+            unreachable!("refresh_meta failure test should not call fetch")
+        }
+
+        async fn refresh_meta(&mut self, _data: &[DdlData]) -> anyhow::Result<()> {
+            anyhow::bail!("forced checker refresh_meta failure")
+        }
+    }
+
+    fn build_check_context(fail_open_on_runtime_error: bool) -> CheckContext {
         CheckContext {
             monitor: Arc::new(Monitor::new("checker", "pipeline-test", 1, 1, 1)),
+            task_monitor: None,
             summary: CheckSummaryLog::default(),
             output_revise_sql: false,
             extractor_meta_manager: None,
@@ -531,6 +549,7 @@ mod tests {
             cdc_check_log_interval_secs: 1,
             state_store: None,
             expected_resume_position: None,
+            fail_open_on_runtime_error,
         }
     }
 
@@ -552,6 +571,19 @@ mod tests {
             db_type: "mysql".to_string(),
             schema: "test_db".to_string(),
             tb: "test_tb".to_string(),
+        }
+    }
+
+    fn build_ddl_data() -> DdlData {
+        DdlData {
+            default_schema: "test_db".to_string(),
+            db_type: DbType::Mysql,
+            statement: DdlStatement::MysqlAlterTable(MysqlAlterTableStatement {
+                db: "test_db".to_string(),
+                tb: "test_tb".to_string(),
+                unparsed: "ALTER TABLE test_tb ADD COLUMN c1 INT".to_string(),
+            }),
+            ..Default::default()
         }
     }
 
@@ -589,11 +621,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn start_fails_fast_when_checker_checkpoint_returns_error() {
+    async fn start_keeps_running_when_inline_checker_checkpoint_returns_error() {
         let handle = dt_connector::checker::DataCheckerHandle::spawn(
             FailingFetchChecker,
-            "pipeline-checkpoint-fail-fast".to_string(),
-            build_check_context(),
+            "pipeline-checkpoint-fail-open".to_string(),
+            build_check_context(true),
             4,
             "FailingFetchChecker",
         );
@@ -602,7 +634,7 @@ mod tests {
         let checkpoint = build_position();
         tokio::time::timeout(Duration::from_secs(2), async {
             loop {
-                if handle.record_checkpoint(&checkpoint).await.is_err() {
+                if handle.has_failed() {
                     break;
                 }
                 tokio::task::yield_now().await;
@@ -641,8 +673,55 @@ mod tests {
 
         let result = pipeline.start().await;
         assert!(
-            result.is_err(),
-            "pipeline should stop on checker checkpoint failure"
+            result.is_ok(),
+            "inline checker failure should not stop pipeline"
         );
+        pipeline.stop().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn start_keeps_running_when_inline_checker_refresh_meta_returns_error() {
+        let handle = dt_connector::checker::DataCheckerHandle::spawn(
+            FailingRefreshMetaChecker,
+            "pipeline-refresh-meta-fail-open".to_string(),
+            build_check_context(true),
+            4,
+            "FailingRefreshMetaChecker",
+        );
+
+        let buffer = Arc::new(DtQueue::new(8, 0, None, None));
+        buffer
+            .push(DtItem {
+                dt_data: DtData::Ddl {
+                    ddl_data: build_ddl_data(),
+                },
+                position: build_position(),
+                data_origin_node: String::new(),
+            })
+            .await
+            .unwrap();
+
+        let mut pipeline = BasePipeline {
+            buffer,
+            parallelizer: Box::new(StaticDrainParallelizer),
+            sinker_config: SinkerConfig::Dummy,
+            sinkers: Vec::new(),
+            shut_down: Arc::new(AtomicBool::new(true)),
+            checkpoint_interval_secs: 0,
+            batch_sink_interval_secs: 0,
+            syncer: Arc::new(Mutex::new(Syncer::default())),
+            monitor: Arc::new(Monitor::new("pipeline", "test", 1, 1, 1)),
+            data_marker: None,
+            lua_processor: None,
+            recorder: None,
+            checker: Some(CheckerHandle::Data(handle)),
+        };
+
+        let result = pipeline.start().await;
+        assert!(
+            result.is_ok(),
+            "inline checker refresh_meta failure should not stop pipeline"
+        );
+        pipeline.stop().await.unwrap();
     }
 }

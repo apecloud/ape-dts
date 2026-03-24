@@ -617,27 +617,6 @@ impl TaskRunner {
         }
 
         if worker_result.is_ok() {
-            if let Some(check_summary) = &task_context.check_summary {
-                let summary = check_summary.lock().await;
-                // `check_summary` is shared across subtasks in tb-parallel snapshot/check mode.
-                // Export only the global increments that have not been reflected into task metrics yet,
-                // otherwise multiple subtasks can repeatedly account for the same miss/diff totals.
-                let delta_miss = (summary.miss_count as u64).saturating_sub(
-                    self.task_monitor
-                        .get_no_window_metric(TaskMetricsType::CheckerMissCount),
-                );
-                let delta_diff = (summary.diff_count as u64).saturating_sub(
-                    self.task_monitor
-                        .get_no_window_metric(TaskMetricsType::CheckerDiffCount),
-                );
-                if delta_miss > 0 || delta_diff > 0 {
-                    self.task_monitor
-                        .add_no_window_metrics(TaskMetricsType::CheckerMissCount, delta_miss);
-                    self.task_monitor
-                        .add_no_window_metrics(TaskMetricsType::CheckerDiffCount, delta_diff);
-                }
-            }
-
             let (schema, tb) = match &extractor_config {
                 ExtractorConfig::MysqlSnapshot { db, tb, .. }
                 | ExtractorConfig::MongoSnapshot { db, tb, .. } => (db.to_owned(), tb.to_owned()),
@@ -1063,6 +1042,7 @@ impl TaskRunner {
                         max_retries,
                         check_summary,
                         monitor.clone(),
+                        Some(self.task_monitor.clone()),
                     )
                 }
                 DbType::Pg => {
@@ -1085,6 +1065,7 @@ impl TaskRunner {
                         max_retries,
                         check_summary,
                         monitor.clone(),
+                        Some(self.task_monitor.clone()),
                     )
                 }
                 _ => bail!(
@@ -1114,6 +1095,7 @@ impl TaskRunner {
                 reverse_router,
                 batch_size: checker_batch_size,
                 monitor: monitor.clone(),
+                task_monitor: Some(self.task_monitor.clone()),
                 output_full_row: cfg.output_full_row,
                 output_revise_sql: cfg.output_revise_sql,
                 revise_match_full_row,
@@ -1132,6 +1114,7 @@ impl TaskRunner {
                 cdc_check_log_interval_secs: cfg.cdc_check_log_interval_secs,
                 state_store: checker_state_store.clone(),
                 expected_resume_position: expected_resume_position.clone(),
+                fail_open_on_runtime_error: inline_check,
             };
 
         match checker_db_type {
@@ -1888,8 +1871,10 @@ mod tests {
 
     #[test]
     fn inline_cdc_check_batch_size_always_uses_checker_batch_size() {
-        let mut cfg = dt_common::config::checker_config::CheckerConfig::default();
-        cfg.batch_size = 32;
+        let mut cfg = dt_common::config::checker_config::CheckerConfig {
+            batch_size: 32,
+            ..Default::default()
+        };
         assert_eq!(TaskRunner::resolve_checker_batch_size(&cfg), 32);
 
         cfg.batch_size = 0;

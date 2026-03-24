@@ -1,5 +1,5 @@
-use anyhow::{anyhow, Context};
 use super::struct_checker::StructCheckerHandle;
+use anyhow::{anyhow, Context};
 use async_mutex::Mutex;
 use async_trait::async_trait;
 use indexmap::IndexMap;
@@ -31,7 +31,8 @@ use dt_common::meta::{
 };
 use dt_common::{
     log_diff, log_error, log_info, log_miss, log_sql, log_summary, log_warn,
-    monitor::monitor::Monitor, utils::limit_queue::LimitedQueue,
+    monitor::{monitor::Monitor, task_monitor::TaskMonitor},
+    utils::limit_queue::LimitedQueue,
 };
 
 #[path = "cdc_state.rs"]
@@ -178,6 +179,7 @@ impl CheckerTbMeta {
 #[derive(Clone)]
 pub struct CheckContext {
     pub monitor: Arc<Monitor>,
+    pub task_monitor: Option<Arc<TaskMonitor>>,
     pub summary: CheckSummaryLog,
     pub output_revise_sql: bool,
     pub extractor_meta_manager: Option<RdbMetaManager>,
@@ -196,6 +198,7 @@ pub struct CheckContext {
     pub cdc_check_log_interval_secs: u64,
     pub state_store: Option<Arc<CheckerStateStore>>,
     pub expected_resume_position: Option<Position>,
+    pub fail_open_on_runtime_error: bool,
 }
 
 pub struct FetchResult {
@@ -286,6 +289,7 @@ struct DataCheckerShared {
     is_cdc: bool,
     persists_position_checkpoint: bool,
     runtime_state: Arc<CheckerRuntimeState>,
+    fail_open_on_runtime_error: bool,
 }
 
 #[derive(Clone)]
@@ -300,6 +304,10 @@ pub enum CheckerHandle {
 }
 
 impl DataCheckerHandle {
+    fn should_ignore_runtime_failure(&self) -> bool {
+        self.shared.fail_open_on_runtime_error && self.shared.runtime_state.has_failed()
+    }
+
     pub fn spawn<C: Checker>(
         checker: C,
         task_id: String,
@@ -309,6 +317,7 @@ impl DataCheckerHandle {
     ) -> Self {
         let is_cdc = ctx.is_cdc;
         let persists_position_checkpoint = ctx.is_cdc && ctx.state_store.is_some();
+        let fail_open_on_runtime_error = ctx.fail_open_on_runtime_error;
         let (tx, rx) = mpsc::channel::<CheckerMsg>(buffer_size.max(1));
         let runtime_state = Arc::new(CheckerRuntimeState::default());
 
@@ -321,13 +330,21 @@ impl DataCheckerHandle {
                 is_cdc,
                 persists_position_checkpoint,
                 runtime_state,
+                fail_open_on_runtime_error,
             },
             join_handle: Arc::new(Mutex::new(Some(join_handle))),
         }
     }
 
+    pub fn has_failed(&self) -> bool {
+        self.shared.runtime_state.has_failed()
+    }
+
     pub async fn enqueue_check(&self, data: Vec<RowData>) -> anyhow::Result<()> {
         if data.is_empty() {
+            return Ok(());
+        }
+        if self.should_ignore_runtime_failure() {
             return Ok(());
         }
         if let Some(err) = self
@@ -337,11 +354,16 @@ impl DataCheckerHandle {
         {
             return Err(err);
         }
-        self.shared
+        let result = self
+            .shared
             .tx
             .send(CheckerMsg::ProcessBatchAsync { batch: data })
             .await
-            .map_err(|err| anyhow::anyhow!("failed to enqueue checker batch: {}", err))
+            .map_err(|err| anyhow::anyhow!("failed to enqueue checker batch: {}", err));
+        if result.is_err() && self.should_ignore_runtime_failure() {
+            return Ok(());
+        }
+        result
     }
 
     pub async fn close_with_position(&mut self, position: Option<&Position>) -> anyhow::Result<()> {
@@ -352,13 +374,23 @@ impl DataCheckerHandle {
         };
         let _ = self.shared.tx.send(CheckerMsg::Close { position }).await;
         if let Some(handle) = self.join_handle.lock().await.take() {
-            handle.await??;
+            match handle.await {
+                Ok(Ok(())) => {}
+                Ok(Err(err)) if self.should_ignore_runtime_failure() => {
+                    log_warn!("checker disabled after runtime failure: {}", err);
+                }
+                Ok(Err(err)) => return Err(err),
+                Err(err) => return Err(err.into()),
+            }
         }
         Ok(())
     }
 
     pub async fn record_checkpoint(&self, position: &Position) -> anyhow::Result<()> {
         if !self.shared.is_cdc {
+            return Ok(());
+        }
+        if self.should_ignore_runtime_failure() {
             return Ok(());
         }
         if let Some(err) = self
@@ -369,20 +401,34 @@ impl DataCheckerHandle {
             return Err(err);
         }
         let (tx, rx) = oneshot::channel();
-        self.shared
+        let send_result = self
+            .shared
             .tx
             .send(CheckerMsg::RecordCheckpoint {
                 position: position.clone(),
                 tx,
             })
             .await
-            .map_err(|err| anyhow::anyhow!("failed to send checker checkpoint msg: {}", err))?;
-        rx.await
-            .map_err(|err| anyhow::anyhow!("checker checkpoint response dropped: {}", err))?
+            .map_err(|err| anyhow::anyhow!("failed to send checker checkpoint msg: {}", err));
+        if send_result.is_err() && self.should_ignore_runtime_failure() {
+            return Ok(());
+        }
+        send_result?;
+        match rx.await {
+            Ok(result) => result,
+            Err(_err) if self.should_ignore_runtime_failure() => Ok(()),
+            Err(err) => Err(anyhow::anyhow!(
+                "checker checkpoint response dropped: {}",
+                err
+            )),
+        }
     }
 
     pub async fn refresh_meta(&self, data: Vec<DdlData>) -> anyhow::Result<()> {
         if data.is_empty() {
+            return Ok(());
+        }
+        if self.should_ignore_runtime_failure() {
             return Ok(());
         }
         if let Some(err) = self
@@ -393,17 +439,28 @@ impl DataCheckerHandle {
             return Err(err);
         }
         let (tx, rx) = oneshot::channel();
-        self.shared
+        let send_result = self
+            .shared
             .tx
             .send(CheckerMsg::RefreshMeta { data, tx })
             .await
-            .map_err(|err| anyhow::anyhow!("failed to send checker refresh meta msg: {}", err))?;
-        rx.await
-            .map_err(|err| anyhow::anyhow!("checker refresh meta response dropped: {}", err))?
+            .map_err(|err| anyhow::anyhow!("failed to send checker refresh meta msg: {}", err));
+        if send_result.is_err() && self.should_ignore_runtime_failure() {
+            return Ok(());
+        }
+        send_result?;
+        match rx.await {
+            Ok(result) => result,
+            Err(_err) if self.should_ignore_runtime_failure() => Ok(()),
+            Err(err) => Err(anyhow::anyhow!(
+                "checker refresh meta response dropped: {}",
+                err
+            )),
+        }
     }
 
     pub fn persists_position_checkpoint(&self) -> bool {
-        self.shared.persists_position_checkpoint
+        self.shared.persists_position_checkpoint && !self.shared.runtime_state.has_failed()
     }
 }
 
@@ -547,6 +604,24 @@ struct DataChecker<C: Checker> {
 }
 
 impl<C: Checker> DataChecker<C> {
+    async fn handle_runtime_failure(
+        &mut self,
+        first_error: &mut Option<anyhow::Error>,
+        err: anyhow::Error,
+    ) -> bool {
+        self.runtime_state.mark_failed(&err);
+        Self::remember_error(first_error, err);
+        if !self.ctx.fail_open_on_runtime_error {
+            return false;
+        }
+        log_warn!(
+            "Checker [{}] runtime failed and has been disabled; main task will continue without checking.",
+            self.name
+        );
+        self.shutdown_logged(first_error).await;
+        true
+    }
+
     pub fn new(
         checker: C,
         task_id: String,
@@ -583,9 +658,9 @@ impl<C: Checker> DataChecker<C> {
                 self.name,
                 err
             );
-            self.runtime_state.mark_failed(&err);
-            Self::remember_error(&mut first_error, err);
-            self.shutdown_logged(&mut first_error).await;
+            if !self.handle_runtime_failure(&mut first_error, err).await {
+                self.shutdown_logged(&mut first_error).await;
+            }
             log_info!("Checker [{}] stopped.", self.name);
             return Err(first_error.expect("init failure should set first_error"));
         }
@@ -600,8 +675,9 @@ impl<C: Checker> DataChecker<C> {
                         Some(CheckerMsg::ProcessBatchAsync { batch }) => {
                             if let Err(err) = self.check_batch(&batch, true).await {
                                 log_error!("Checker [{}] async batch failed: {}", self.name, err);
-                                self.runtime_state.mark_failed(&err);
-                                Self::remember_error(&mut first_error, err);
+                                if self.handle_runtime_failure(&mut first_error, err).await {
+                                    break;
+                                }
                             }
                         }
                         Some(CheckerMsg::RecordCheckpoint { position, tx }) => {
@@ -614,8 +690,16 @@ impl<C: Checker> DataChecker<C> {
                             };
                             if let Err(err) = &result {
                                 log_error!("Checker [{}] checkpoint persist failed: {}", self.name, err);
-                                self.runtime_state.mark_failed(err);
-                                Self::remember_error(&mut first_error, anyhow!("{:#}", err));
+                                if self
+                                    .handle_runtime_failure(
+                                        &mut first_error,
+                                        anyhow!("{:#}", err),
+                                    )
+                                    .await
+                                {
+                                    let _ = tx.send(Ok(()));
+                                    break;
+                                }
                             }
                             let _ = tx.send(result);
                         }
@@ -629,8 +713,16 @@ impl<C: Checker> DataChecker<C> {
                             };
                             if let Err(err) = &result {
                                 log_error!("Checker [{}] refresh meta failed: {}", self.name, err);
-                                self.runtime_state.mark_failed(err);
-                                Self::remember_error(&mut first_error, anyhow!("{:#}", err));
+                                if self
+                                    .handle_runtime_failure(
+                                        &mut first_error,
+                                        anyhow!("{:#}", err),
+                                    )
+                                    .await
+                                {
+                                    let _ = tx.send(Ok(()));
+                                    break;
+                                }
                             }
                             let _ = tx.send(result);
                         }
@@ -653,12 +745,18 @@ impl<C: Checker> DataChecker<C> {
                 _ = interval.tick() => {
                     if let Err(err) = self.process_due_retries().await {
                         log_error!("Checker [{}] retry failed: {}", self.name, err);
-                        self.runtime_state.mark_failed(&err);
-                        Self::remember_error(&mut first_error, err);
+                        if self.handle_runtime_failure(&mut first_error, err).await {
+                            break;
+                        }
                     }
                 }
                 _ = output_interval.tick(), if self.ctx.is_cdc => {
-                    self.maybe_snapshot_and_output().await;
+                    if let Err(err) = self.maybe_snapshot_and_output().await {
+                        log_error!("Checker [{}] cdc output failed: {}", self.name, err);
+                        if self.handle_runtime_failure(&mut first_error, err).await {
+                            break;
+                        }
+                    }
                 }
             }
         }
@@ -695,10 +793,24 @@ impl<C: Checker> DataChecker<C> {
             }
         }
 
-        let output_result = self
-            .snapshot_and_output()
-            .await
-            .with_context(|| format!("Checker [{}] final cdc output failed", self.name));
+        let output_result =
+            if self.runtime_state.has_failed() && self.ctx.fail_open_on_runtime_error {
+                match self.snapshot_and_output().await {
+                    Ok(()) => Ok(()),
+                    Err(err) => {
+                        log_warn!(
+                            "Checker [{}] final cdc output also failed after checker disable: {}",
+                            self.name,
+                            err
+                        );
+                        Ok(())
+                    }
+                }
+            } else {
+                self.snapshot_and_output()
+                    .await
+                    .with_context(|| format!("Checker [{}] final cdc output failed", self.name))
+            };
         self.store.clear();
         self.update_pending_counter();
         output_result
@@ -714,7 +826,8 @@ impl<C: Checker> DataChecker<C> {
         let common = &mut self.ctx;
         let summary = &mut common.summary;
         summary.end_time = chrono::Local::now().to_rfc3339();
-        summary.is_consistent = summary.miss_count == 0 && summary.diff_count == 0;
+        summary.is_consistent =
+            !self.runtime_state.has_failed() && summary.miss_count == 0 && summary.diff_count == 0;
         if let Some(global_summary) = common.global_summary.clone() {
             global_summary.lock().await.merge(summary);
         } else if !common.is_cdc {
@@ -738,16 +851,13 @@ impl<C: Checker> DataChecker<C> {
         self.run_recheck().await
     }
 
-    async fn maybe_snapshot_and_output(&mut self) {
+    async fn maybe_snapshot_and_output(&mut self) -> anyhow::Result<()> {
         if !self.snapshot_dirty {
-            return;
+            return Ok(());
         }
-        match self.snapshot_and_output().await {
-            Ok(()) => {
-                self.snapshot_dirty = false;
-            }
-            Err(err) => log_error!("Checker [{}] cdc output failed: {}", self.name, err),
-        }
+        self.snapshot_and_output().await?;
+        self.snapshot_dirty = false;
+        Ok(())
     }
 
     async fn shutdown_logged(&mut self, first_error: &mut Option<anyhow::Error>) {
@@ -776,37 +886,24 @@ pub fn has_null_key(row_data: &RowData, id_cols: &[String]) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::cdc_state::PreparedCheckpointWrite;
+    use super::*;
     use crate::{checker::check_log::CheckSummaryLog, rdb_router::RdbRouter};
     use async_trait::async_trait;
     use dt_common::{
-        config::config_enums::DbType, meta::ddl_meta::ddl_statement::MysqlAlterTableStatement,
+        config::config_enums::DbType,
+        meta::ddl_meta::{
+            ddl_data::DdlData,
+            ddl_statement::{DdlStatement, MysqlAlterTableStatement},
+        },
     };
     use std::{
         fs,
-        sync::atomic::{AtomicUsize, Ordering},
         time::{SystemTime, UNIX_EPOCH},
     };
 
-    struct RefreshOnlyChecker {
-        refresh_count: Arc<AtomicUsize>,
-    }
-
     struct NoopChecker;
     struct FailingFetchChecker;
-
-    #[async_trait]
-    impl Checker for RefreshOnlyChecker {
-        async fn fetch(&mut self, _src_rows: &[&RowData]) -> anyhow::Result<FetchResult> {
-            unreachable!("refresh_meta test should not call fetch")
-        }
-
-        async fn refresh_meta(&mut self, data: &[DdlData]) -> anyhow::Result<()> {
-            self.refresh_count.fetch_add(data.len(), Ordering::SeqCst);
-            Ok(())
-        }
-    }
 
     #[async_trait]
     impl Checker for NoopChecker {
@@ -825,6 +922,7 @@ mod tests {
     fn build_check_context(check_log_dir: String, is_cdc: bool, start_time: &str) -> CheckContext {
         CheckContext {
             monitor: Arc::new(Monitor::new("checker", "unit-test", 1, 1, 1)),
+            task_monitor: None,
             summary: CheckSummaryLog {
                 start_time: start_time.to_string(),
                 ..Default::default()
@@ -851,6 +949,7 @@ mod tests {
             cdc_check_log_interval_secs: 1,
             state_store: None,
             expected_resume_position: None,
+            fail_open_on_runtime_error: false,
         }
     }
 
@@ -879,6 +978,19 @@ mod tests {
             db_type: "mysql".to_string(),
             schema: "test_db".to_string(),
             tb: "test_tb".to_string(),
+        }
+    }
+
+    fn build_ddl_data() -> DdlData {
+        DdlData {
+            default_schema: "test_db".to_string(),
+            db_type: DbType::Mysql,
+            statement: DdlStatement::MysqlAlterTable(MysqlAlterTableStatement {
+                db: "test_db".to_string(),
+                tb: "test_tb".to_string(),
+                unparsed: "ALTER TABLE test_tb ADD COLUMN c1 INT".to_string(),
+            }),
+            ..Default::default()
         }
     }
 
@@ -913,43 +1025,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn refresh_meta_message_reaches_checker_worker() {
-        let refresh_count = Arc::new(AtomicUsize::new(0));
-        let mut handle = DataCheckerHandle::spawn(
-            RefreshOnlyChecker {
-                refresh_count: refresh_count.clone(),
-            },
-            "checker-refresh-meta-test".to_string(),
-            build_check_context(".".to_string(), false, ""),
-            1,
-            "RefreshOnlyChecker",
-        );
-
-        let ddl = DdlData {
-            default_schema: "test_db".to_string(),
-            db_type: DbType::Mysql,
-            statement: dt_common::meta::ddl_meta::ddl_statement::DdlStatement::MysqlAlterTable(
-                MysqlAlterTableStatement {
-                    db: "test_db".to_string(),
-                    tb: "test_tb".to_string(),
-                    unparsed: String::new(),
-                },
-            ),
-            ..Default::default()
-        };
-
-        handle.refresh_meta(vec![ddl]).await.unwrap();
-        assert_eq!(refresh_count.load(Ordering::SeqCst), 1);
-        handle.close_with_position(None).await.unwrap();
-    }
-
-    #[tokio::test]
     async fn first_periodic_snapshot_overwrites_stale_summary_file() {
         let dir = build_temp_dir("checker_stale_summary");
         fs::write(format!("{dir}/summary.log"), "stale-summary\n").unwrap();
 
         let mut checker = build_cdc_checker(dir.clone(), "fresh-run");
-        checker.maybe_snapshot_and_output().await;
+        checker.maybe_snapshot_and_output().await.unwrap();
 
         let summary_raw = fs::read_to_string(format!("{dir}/summary.log")).unwrap();
         let summary: CheckSummaryLog = serde_json::from_str(summary_raw.trim()).unwrap();
@@ -993,6 +1074,113 @@ mod tests {
         assert!(handle.close_with_position(Some(&checkpoint)).await.is_err());
     }
 
+    #[tokio::test]
+    async fn periodic_snapshot_failure_disables_inline_checker_without_failing_close() {
+        let dir = build_temp_dir("checker_snapshot_fail_open");
+        let occupied_path = format!("{dir}/occupied_path");
+        fs::write(&occupied_path, "not-a-directory").unwrap();
+
+        let mut ctx = build_check_context(occupied_path.clone(), true, "fail-open");
+        ctx.fail_open_on_runtime_error = true;
+        let mut handle = DataCheckerHandle::spawn(
+            NoopChecker,
+            "checker-snapshot-fail-open".to_string(),
+            ctx,
+            1,
+            "NoopChecker",
+        );
+
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                if handle.has_failed() {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("periodic snapshot failure should mark checker failed");
+
+        let checkpoint = build_position();
+        assert!(handle.enqueue_check(vec![build_row_data()]).await.is_ok());
+        assert!(handle.record_checkpoint(&checkpoint).await.is_ok());
+        assert!(handle.close_with_position(Some(&checkpoint)).await.is_ok());
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn failed_fail_open_checker_stops_claiming_checkpoint_persistence() {
+        let (tx, _rx) = mpsc::channel(1);
+        let runtime_state = Arc::new(CheckerRuntimeState::default());
+        runtime_state.mark_failed_message("disabled".to_string());
+        let handle = DataCheckerHandle {
+            shared: DataCheckerShared {
+                tx,
+                is_cdc: true,
+                persists_position_checkpoint: true,
+                runtime_state,
+                fail_open_on_runtime_error: true,
+            },
+            join_handle: Arc::new(Mutex::new(None)),
+        };
+
+        assert!(
+            !handle.persists_position_checkpoint(),
+            "disabled fail-open checker should not claim checkpoint persistence"
+        );
+    }
+
+    #[tokio::test]
+    async fn fail_open_checkpoint_response_drop_is_ignored() {
+        let (tx, mut rx) = mpsc::channel(1);
+        let runtime_state = Arc::new(CheckerRuntimeState::default());
+        let runtime_state_clone = runtime_state.clone();
+        tokio::spawn(async move {
+            if let Some(CheckerMsg::RecordCheckpoint { .. }) = rx.recv().await {
+                runtime_state_clone.mark_failed_message("disabled".to_string());
+            }
+        });
+
+        let handle = DataCheckerHandle {
+            shared: DataCheckerShared {
+                tx,
+                is_cdc: true,
+                persists_position_checkpoint: true,
+                runtime_state,
+                fail_open_on_runtime_error: true,
+            },
+            join_handle: Arc::new(Mutex::new(None)),
+        };
+
+        assert!(handle.record_checkpoint(&build_position()).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn fail_open_refresh_meta_response_drop_is_ignored() {
+        let (tx, mut rx) = mpsc::channel(1);
+        let runtime_state = Arc::new(CheckerRuntimeState::default());
+        let runtime_state_clone = runtime_state.clone();
+        tokio::spawn(async move {
+            if let Some(CheckerMsg::RefreshMeta { .. }) = rx.recv().await {
+                runtime_state_clone.mark_failed_message("disabled".to_string());
+            }
+        });
+
+        let handle = DataCheckerHandle {
+            shared: DataCheckerShared {
+                tx,
+                is_cdc: true,
+                persists_position_checkpoint: true,
+                runtime_state,
+                fail_open_on_runtime_error: true,
+            },
+            join_handle: Arc::new(Mutex::new(None)),
+        };
+
+        assert!(handle.refresh_meta(vec![build_ddl_data()]).await.is_ok());
+    }
+
     #[test]
     fn prepare_checkpoint_write_uses_cached_identity_keys_for_deletes() {
         let mut checker = build_cdc_checker(".".to_string(), "");
@@ -1014,7 +1202,10 @@ mod tests {
             } => {
                 assert_eq!(commit.deletes, vec!["stale-key".to_string()]);
                 assert_eq!(persisted_identity_keys.len(), 1);
-                assert_eq!(persisted_identity_keys, BTreeSet::from([commit.upserts[0].identity_key.clone()]));
+                assert_eq!(
+                    persisted_identity_keys,
+                    BTreeSet::from([commit.upserts[0].identity_key.clone()])
+                );
             }
             PreparedCheckpointWrite::PositionOnly { .. } => {
                 panic!("dirty checker should produce full checkpoint write");

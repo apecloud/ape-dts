@@ -156,10 +156,7 @@ impl MongoSnapshotExtractor {
 #[cfg(test)]
 mod tests {
     use super::MongoSnapshotExtractor;
-    use dt_common::meta::{
-        col_value::ColValue,
-        mongo::mongo_constant::MongoConstants,
-    };
+    use dt_common::meta::{col_value::ColValue, mongo::mongo_constant::MongoConstants};
     use mongodb::bson::doc;
 
     #[test]
@@ -171,10 +168,7 @@ mod tests {
 
         let cols = MongoSnapshotExtractor::build_after_cols(&doc);
 
-        assert!(matches!(
-            cols.get(MongoConstants::ID),
-            Some(ColValue::None)
-        ));
+        assert!(matches!(cols.get(MongoConstants::ID), Some(ColValue::None)));
         assert!(matches!(
             cols.get(MongoConstants::DOC),
             Some(ColValue::MongoDoc(_))

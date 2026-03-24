@@ -266,7 +266,10 @@ impl From<PersistedCheckEntry> for CheckEntry {
 }
 
 pub(super) enum PreparedCheckpointWrite {
-    PositionOnly { task_id: String, position: Position },
+    PositionOnly {
+        task_id: String,
+        position: Position,
+    },
     Full {
         commit: CheckerCheckpointCommit,
         persisted_identity_keys: BTreeSet<String>,
@@ -319,7 +322,7 @@ impl<C: Checker> DataChecker<C> {
         let summary = CheckSummaryLog {
             start_time: self.ctx.summary.start_time.clone(),
             end_time: chrono::Local::now().to_rfc3339(),
-            is_consistent: total_miss == 0 && total_diff == 0,
+            is_consistent: !self.runtime_state.has_failed() && total_miss == 0 && total_diff == 0,
             miss_count: total_miss,
             diff_count: total_diff,
             skip_count: self.ctx.summary.skip_count,
