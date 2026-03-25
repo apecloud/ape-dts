@@ -17,3 +17,6 @@ concurrent-queue = { workspace = true }
 log = { workspace = true }
 log4rs = { workspace = true }
 anyhow = { workspace = true }
+
+[dev-dependencies]
+mongodb = { workspace = true }

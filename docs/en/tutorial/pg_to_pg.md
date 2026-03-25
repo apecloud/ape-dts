@@ -103,9 +103,8 @@ SET search_path TO test_db;
 
 # Migrate snapshot data
 
-- To turn this into **inline snapshot check**, keep `[sinker] sink_type=write` and add a
-  `[checker]` section without target connection fields. See [Data Check](../snapshot/check.md) and
-  the Postgres template for the exact config shape.
+- To turn this into **inline snapshot check**, keep `[sinker] sink_type=write` and add a `[checker]` section without target connection fields.
+- See [Data Check](../snapshot/check.md#inline-snapshot-check) and the Postgres template for the exact config shape.
 
 ## Prepare data
 
@@ -330,9 +329,7 @@ docker run --rm --network host \
 
 # CDC task
 
-- To turn this into **inline cdc check**, add `[checker]` plus `[resumer]`, keep
-  `[sinker] sink_type=write`, and do not configure checker target fields. See
-  [Data Check](../snapshot/check.md) and the Postgres template.
+- To turn this into **inline cdc check**, add `[checker]` plus `[resumer]`, keep `[sinker] sink_type=write`, switch `[parallelizer] parallel_type=rdb_check`, and do not configure checker target fields. See [Data Check](../snapshot/check.md#inline-cdc-check) and the Postgres template.
 
 ## Drop replication slot if exists
 

@@ -457,7 +457,11 @@ impl RdbQueryBuilder<'_> {
         let mut index = 1;
         let mut set_cols = Vec::new();
         let mut set_pairs = Vec::new();
-        for (col, col_value) in after.iter() {
+        // pin the order of cols
+        for col in self.rdb_tb_meta.cols.iter() {
+            let Some(col_value) = after.get(col) else {
+                continue;
+            };
             if col_value.is_unchanged_toast() {
                 continue;
             }
@@ -570,7 +574,10 @@ impl RdbQueryBuilder<'_> {
     }
 
     pub fn get_select_query<'a>(&self, row_data: &'a RowData) -> anyhow::Result<RdbQueryInfo<'a>> {
-        let id_values = self.lookup_id_values(row_data)?;
+        let id_values = match row_data.row_type {
+            RowType::Delete => row_data.require_before()?,
+            _ => row_data.require_after()?,
+        };
         let (where_sql, not_null_cols) = self.get_where_info(1, id_values, true)?;
         let mut sql = format!(
             "SELECT {} FROM {}.{} WHERE {}",
@@ -613,7 +620,10 @@ impl RdbQueryBuilder<'_> {
         let mut binds =
             Vec::with_capacity(batch_size.saturating_mul(self.rdb_tb_meta.id_cols.len()));
         for &row_data in data.iter().skip(start_index).take(batch_size) {
-            let id_values = self.lookup_id_values(row_data)?;
+            let id_values = match row_data.row_type {
+                RowType::Delete => row_data.require_before()?,
+                _ => row_data.require_after()?,
+            };
             for col in self.rdb_tb_meta.id_cols.iter() {
                 cols.push(col.clone());
                 let col_value = id_values.get(col);
@@ -627,16 +637,6 @@ impl RdbQueryBuilder<'_> {
             }
         }
         Ok(RdbQueryInfo { sql, cols, binds })
-    }
-
-    fn lookup_id_values<'a>(
-        &self,
-        row_data: &'a RowData,
-    ) -> anyhow::Result<&'a HashMap<String, ColValue>> {
-        match row_data.row_type {
-            RowType::Delete => row_data.require_before(),
-            _ => row_data.require_after(),
-        }
     }
 
     pub fn build_extract_cols_str(&self) -> anyhow::Result<String> {

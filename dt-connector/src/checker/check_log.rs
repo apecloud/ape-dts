@@ -57,12 +57,6 @@ pub struct CheckSummaryLog {
     pub diff_count: usize,
     #[serde(default, skip_serializing_if = "is_zero")]
     pub skip_count: usize,
-    #[serde(
-        default,
-        skip_serializing_if = "HashMap::is_empty",
-        serialize_with = "SerializeUtil::ordered_map"
-    )]
-    pub tables: HashMap<String, TableCheckCount>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sql_count: Option<usize>,
 }
@@ -80,11 +74,6 @@ impl CheckSummaryLog {
         self.miss_count += other.miss_count;
         self.diff_count += other.diff_count;
         self.skip_count += other.skip_count;
-        for (table, counts) in &other.tables {
-            let merged = self.tables.entry(table.clone()).or_default();
-            merged.miss_count += counts.miss_count;
-            merged.diff_count += counts.diff_count;
-        }
         if let Some(sql_count) = other.sql_count {
             self.sql_count = Some(self.sql_count.unwrap_or(0) + sql_count);
         }
@@ -101,15 +90,6 @@ impl std::fmt::Display for CheckLog {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", json!(self))
     }
-}
-
-/// Per-table miss/diff counts for CDC+Check summary.
-#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
-pub struct TableCheckCount {
-    #[serde(default, skip_serializing_if = "is_zero")]
-    pub miss_count: usize,
-    #[serde(default, skip_serializing_if = "is_zero")]
-    pub diff_count: usize,
 }
 
 #[derive(Serialize, Deserialize)]

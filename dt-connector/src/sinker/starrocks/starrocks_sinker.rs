@@ -5,7 +5,7 @@ use anyhow::bail;
 use async_trait::async_trait;
 use chrono::Utc;
 use reqwest::{header, Client, Method, Response, StatusCode};
-use serde_json::{json, Value};
+use serde_json::Value;
 use tokio::time::Instant;
 
 use dt_common::{
@@ -100,22 +100,17 @@ impl StarRocksSinker {
         let mut data_size = 0;
         let mut rts = LimitedQueue::new(1);
         // build stream load data
-        let mut load_data = Vec::new();
-        for row_data in data.iter().skip(start_index).take(batch_size) {
+        let mut load_data = Vec::with_capacity(batch_size);
+        for row_data in data.iter_mut().skip(start_index).take(batch_size) {
             data_size += row_data.get_data_size() as usize;
-            let mut col_values = if row_data.row_type == RowType::Delete {
-                let mut before = row_data.require_before()?.clone();
-                Self::convert_col_values(&mut before, tb_meta)?;
-                if self.db_type == DbType::StarRocks {
-                    // SIGN_COL value
-                    before.insert(SIGN_COL_NAME.into(), ColValue::Long(1));
-                }
-                before
-            } else {
-                let mut after = row_data.require_after()?.clone();
-                Self::convert_col_values(&mut after, tb_meta)?;
-                after
-            };
+            let is_delete = row_data.row_type == RowType::Delete;
+            Self::convert_row_data(row_data, tb_meta)?;
+            let col_values = Self::active_col_values_mut(row_data)?;
+
+            if is_delete && self.db_type == DbType::StarRocks {
+                // SIGN_COL value
+                col_values.insert(SIGN_COL_NAME.into(), ColValue::Long(1));
+            }
 
             if self.db_type == DbType::StarRocks {
                 col_values.insert(
@@ -141,13 +136,13 @@ impl StarRocksSinker {
             op = "delete";
         }
 
-        let body = json!(load_data).to_string();
+        let body = serde_json::to_string(&load_data)?;
         // do stream load
         let url = format!(
             "http://{}:{}/api/{}/{}/_stream_load",
             self.host, self.port, db, tb
         );
-        let request = self.build_request(&url, op, &body)?;
+        let request = self.build_request(&url, op, body)?;
 
         let start_time = Instant::now();
         let response = self.http_client.execute(request).await?;
@@ -202,7 +197,26 @@ impl StarRocksSinker {
         Ok(())
     }
 
-    fn build_request(&self, url: &str, op: &str, body: &str) -> anyhow::Result<reqwest::Request> {
+    fn convert_row_data(row_data: &mut RowData, tb_meta: &MysqlTbMeta) -> anyhow::Result<()> {
+        if let Some(before) = &mut row_data.before {
+            Self::convert_col_values(before, tb_meta)?;
+        }
+        if let Some(after) = &mut row_data.after {
+            Self::convert_col_values(after, tb_meta)?;
+        }
+        Ok(())
+    }
+
+    fn active_col_values_mut(
+        row_data: &mut RowData,
+    ) -> anyhow::Result<&mut HashMap<String, ColValue>> {
+        match row_data.row_type {
+            RowType::Delete => row_data.require_before_mut(),
+            _ => row_data.require_after_mut(),
+        }
+    }
+
+    fn build_request(&self, url: &str, op: &str, body: String) -> anyhow::Result<reqwest::Request> {
         let password = if self.password.is_empty() {
             None
         } else {
@@ -217,7 +231,7 @@ impl StarRocksSinker {
             .header("format", "json")
             .header("strip_outer_array", "true")
             .header("timezone", "UTC")
-            .body(body.to_string());
+            .body(body);
         // by default, the __op will be upsert
         if !op.is_empty() {
             match self.db_type {

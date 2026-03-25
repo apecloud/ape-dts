@@ -239,6 +239,7 @@ impl BasePipeline {
             for sinker in self.sinkers.iter_mut() {
                 sinker.lock().await.refresh_meta(data.clone()).await?;
             }
+            // cdc+check also needs refreshed table metadata after sink ddl changes the target schema
             if let Some(checker) = &self.checker {
                 checker.refresh_meta(data.clone()).await?;
             }

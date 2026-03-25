@@ -107,9 +107,8 @@ SHOW TABLES IN test_db;
 ```
 
 # Migrate snapshot data
-- To turn this into **inline snapshot check**, keep `[sinker] sink_type=write` and add a
-  `[checker]` section without target connection fields. See [Data Check](../snapshot/check.md) and
-  the MySQL template for the exact config shape.
+- To turn this into **inline snapshot check**, keep `[sinker] sink_type=write` and add a `[checker]` section without target connection fields.
+- See [Data Check](../snapshot/check.md#inline-snapshot-check) and the MySQL template for the exact config shape.
 ## Prepare data
 ```
 mysql -h127.0.0.1 -uroot -p123456 -P3307
@@ -321,8 +320,7 @@ docker run --rm --network host \
 # Cdc task
 
 - To turn this into **inline cdc check**, add `[checker]` plus `[resumer]`, keep
-  `[sinker] sink_type=write`, and do not configure checker target fields. See
-  [Data Check](../snapshot/check.md) and the MySQL template.
+  `[sinker] sink_type=write`, switch `[parallelizer] parallel_type=rdb_check`, and do not configure checker target fields. See [Data Check](../snapshot/check.md#inline-cdc-check) and the MySQL template.
 
 ## Start task
 ```

@@ -398,8 +398,7 @@ log4rs_file=./log4rs.yaml
 ```
 
 - the output will be in {log_dir}/check/
-- `[checker]` intentionally omits `db_type` / `url` / `username` / `password`; inline cdc check
-  reuses the parsed `[sinker]` target and requires `[resumer]`.
+- `[checker]` intentionally omits `db_type` / `url` / `username` / `password`; inline cdc check reuses the parsed `[sinker]` target, requires `[resumer]`, and uses `[parallelizer] parallel_type=rdb_check`.
 
 # Data revise
 

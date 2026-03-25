@@ -17,7 +17,7 @@ use tokio::task::JoinHandle;
 use tokio::time::{sleep, Duration, Instant};
 
 use crate::{
-    checker::check_log::{CheckLog, CheckSummaryLog, DiffColValue, TableCheckCount},
+    checker::check_log::{CheckLog, CheckSummaryLog, DiffColValue},
     checker::state_store::{CheckerCheckpointCommit, CheckerStateRow, CheckerStateStore},
     rdb_query_builder::RdbQueryBuilder,
     rdb_router::RdbRouter,
@@ -258,10 +258,6 @@ struct CheckerRuntimeState {
 }
 
 impl CheckerRuntimeState {
-    fn mark_failed(&self, err: &anyhow::Error) {
-        self.mark_failed_message(format!("{:#}", err));
-    }
-
     fn mark_failed_message(&self, message: String) {
         self.failed.store(true, Ordering::Release);
         let mut guard = self.first_error.lock().unwrap();
@@ -609,7 +605,7 @@ impl<C: Checker> DataChecker<C> {
         first_error: &mut Option<anyhow::Error>,
         err: anyhow::Error,
     ) -> bool {
-        self.runtime_state.mark_failed(&err);
+        self.runtime_state.mark_failed_message(format!("{:#}", err));
         Self::remember_error(first_error, err);
         if !self.ctx.fail_open_on_runtime_error {
             return false;
@@ -770,9 +766,41 @@ impl<C: Checker> DataChecker<C> {
 
     async fn shutdown(&mut self) -> anyhow::Result<()> {
         let shutdown_result = if self.ctx.is_cdc {
-            self.shutdown_cdc().await
+            // CDC shutdown: persist final checkpoint, perform final output, then clear in-memory state.
+            if self.store_dirty && !self.runtime_state.has_failed() {
+                if let Some(position) = self.last_checkpoint_position.clone() {
+                    self.record_checkpoint(position).await.with_context(|| {
+                        format!("Checker [{}] failed to persist final checkpoint", self.name)
+                    })?;
+                    self.store_dirty = false;
+                }
+            }
+
+            let output_result =
+                if self.runtime_state.has_failed() && self.ctx.fail_open_on_runtime_error {
+                    match self.snapshot_and_output().await {
+                        Ok(()) => Ok(()),
+                        Err(err) => {
+                            log_warn!(
+                            "Checker [{}] final cdc output also failed after checker disable: {}",
+                            self.name,
+                            err
+                        );
+                            Ok(())
+                        }
+                    }
+                } else {
+                    self.snapshot_and_output()
+                        .await
+                        .with_context(|| format!("Checker [{}] final cdc output failed", self.name))
+                };
+            self.store.clear();
+            self.update_pending_counter();
+            output_result
         } else {
-            self.shutdown_non_cdc().await
+            self.drain_retries().await?;
+            self.flush_store().await;
+            Ok(())
         };
         let summary_result = self.finish_summary_and_meta().await;
         let close_result = self.checker.close().await;
@@ -780,45 +808,6 @@ impl<C: Checker> DataChecker<C> {
         shutdown_result?;
         summary_result?;
         close_result?;
-        Ok(())
-    }
-
-    async fn shutdown_cdc(&mut self) -> anyhow::Result<()> {
-        if self.store_dirty && !self.runtime_state.has_failed() {
-            if let Some(position) = self.last_checkpoint_position.clone() {
-                self.record_checkpoint(position).await.with_context(|| {
-                    format!("Checker [{}] failed to persist final checkpoint", self.name)
-                })?;
-                self.store_dirty = false;
-            }
-        }
-
-        let output_result =
-            if self.runtime_state.has_failed() && self.ctx.fail_open_on_runtime_error {
-                match self.snapshot_and_output().await {
-                    Ok(()) => Ok(()),
-                    Err(err) => {
-                        log_warn!(
-                            "Checker [{}] final cdc output also failed after checker disable: {}",
-                            self.name,
-                            err
-                        );
-                        Ok(())
-                    }
-                }
-            } else {
-                self.snapshot_and_output()
-                    .await
-                    .with_context(|| format!("Checker [{}] final cdc output failed", self.name))
-            };
-        self.store.clear();
-        self.update_pending_counter();
-        output_result
-    }
-
-    async fn shutdown_non_cdc(&mut self) -> anyhow::Result<()> {
-        self.drain_retries().await?;
-        self.flush_store().await;
         Ok(())
     }
 

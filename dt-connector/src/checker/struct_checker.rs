@@ -79,15 +79,6 @@ impl StructCheckerHandle {
 
     /// Extracts database/schema name from a key in format "type.db.table"
     ///
-    /// # Examples
-    /// - "table.mydb.users" -> Some("mydb")
-    /// - "index.testdb.orders.idx_name" -> Some("testdb")
-    fn collect_db_from_key(key: &str) -> Option<String> {
-        let mut parts = key.split('.');
-        parts.next()?;
-        parts.next().map(|s| s.to_string())
-    }
-
     async fn add_src_sqls(&mut self, struct_data: StructData) -> anyhow::Result<()> {
         let routed = self.router.route_struct(struct_data);
         let mut statement = routed.statement;
@@ -99,8 +90,10 @@ impl StructCheckerHandle {
         }
 
         for (key, sql) in sqls {
-            if let Some(db) = Self::collect_db_from_key(&key) {
-                self.dbs.insert(db);
+            let mut parts = key.split('.');
+            parts.next();
+            if let Some(db) = parts.next() {
+                self.dbs.insert(db.to_string());
             }
             self.src_sql_map.insert(key, sql);
         }

@@ -4,19 +4,69 @@ use super::{
 };
 use crate::test_config_util::TestConfigUtil;
 use anyhow::Context;
-use dt_common::config::{config_enums::DbType, resumer_config::ResumerConfig};
+use chrono::Utc;
 use dt_common::utils::time_util::TimeUtil;
-use dt_connector::checker::check_log::CheckSummaryLog;
-use dt_task::task_util::TaskUtil;
-use sqlx::{MySql, Pool, Postgres, Row};
-use std::{fs::File, path::Path};
+use dt_common::{
+    config::resumer_config::ResumerConfig,
+    meta::{col_value::ColValue, position::Position, row_data::RowData, row_type::RowType},
+};
+use dt_connector::checker::{
+    check_log::{CheckSummaryLog, DiffColValue},
+    state_store::{CheckerCheckpointCommit, CheckerStateRow},
+    CheckerStateStore,
+};
+use dt_connector::extractor::resumer::{
+    recorder::to_database::DatabaseRecorder, utils::ResumerUtil, ResumerType,
+};
+use serde::Serialize;
+use sqlx::{query, Row};
+use std::{
+    collections::{BTreeMap, HashMap},
+    fs::File,
+    path::Path,
+};
 
 pub struct RdbCheckTestRunner {
     base: RdbTestRunner,
     dst_check_log_dir: String,
     expect_check_log_dir: String,
-    checker_conn_pool_mysql: Option<Pool<MySql>>,
-    checker_conn_pool_pg: Option<Pool<Postgres>>,
+}
+
+#[derive(Serialize)]
+enum SeedPersistedColValue {
+    Long(i32),
+    String(String),
+}
+
+#[derive(Serialize)]
+struct SeedPersistedRowData {
+    schema: String,
+    tb: String,
+    row_type: RowType,
+    before: Option<HashMap<String, SeedPersistedColValue>>,
+    after: Option<HashMap<String, SeedPersistedColValue>>,
+    data_size: usize,
+    is_not_origin: bool,
+}
+
+#[derive(Serialize)]
+struct SeedPersistedCheckLog {
+    schema: String,
+    tb: String,
+    target_schema: Option<String>,
+    target_tb: Option<String>,
+    id_col_values: HashMap<String, Option<String>>,
+    diff_col_values: HashMap<String, DiffColValue>,
+    src_row: Option<HashMap<String, SeedPersistedColValue>>,
+    dst_row: Option<HashMap<String, SeedPersistedColValue>>,
+}
+
+#[derive(Serialize)]
+struct SeedPersistedCheckEntry {
+    log: SeedPersistedCheckLog,
+    revise_sql: Option<String>,
+    is_miss: bool,
+    src_row_data: SeedPersistedRowData,
 }
 
 impl RdbCheckTestRunner {
@@ -100,16 +150,6 @@ impl RdbCheckTestRunner {
         }
     }
 
-    async fn execute_checker_sqls(&self, sqls: &[String]) -> anyhow::Result<()> {
-        if let Some(pool) = &self.checker_conn_pool_mysql {
-            RdbUtil::execute_sqls_mysql(pool, &sqls.to_vec()).await?;
-        }
-        if let Some(pool) = &self.checker_conn_pool_pg {
-            RdbUtil::execute_sqls_pg(pool, sqls).await?;
-        }
-        Ok(())
-    }
-
     async fn reset_resumer_backend(&self) -> anyhow::Result<()> {
         let (schema, _) = self.get_resumer_tables()?;
         if let Some(pool) = &self.base.dst_conn_pool_mysql {
@@ -175,73 +215,201 @@ impl RdbCheckTestRunner {
         anyhow::bail!("no sinker pool available for querying resumer position rows")
     }
 
+    async fn create_checker_state_store(&self) -> anyhow::Result<CheckerStateStore> {
+        let ResumerConfig::FromDB {
+            url,
+            connection_auth,
+            db_type,
+            max_connections,
+            ..
+        } = &self.base.config.resumer
+        else {
+            anyhow::bail!("checker state store requires ResumerConfig::FromDB");
+        };
+        let pool = ResumerUtil::create_pool(url, connection_auth, db_type, *max_connections as u32)
+            .await?;
+        CheckerStateStore::new(pool, &self.base.config.resumer).await
+    }
+
+    async fn ensure_resumer_tables(&self) -> anyhow::Result<()> {
+        let ResumerConfig::FromDB {
+            url,
+            connection_auth,
+            db_type,
+            max_connections,
+            ..
+        } = &self.base.config.resumer
+        else {
+            anyhow::bail!("resumer tables require ResumerConfig::FromDB");
+        };
+        let pool = ResumerUtil::create_pool(url, connection_auth, db_type, *max_connections as u32)
+            .await?;
+        let _recorder = DatabaseRecorder::new(
+            &self.base.config.global.task_id,
+            &self.base.config.resumer,
+            pool,
+        )
+        .await?;
+        Ok(())
+    }
+
+    async fn fetch_current_mysql_cdc_position(&self) -> anyhow::Result<Position> {
+        let pool = self
+            .base
+            .src_conn_pool_mysql
+            .as_ref()
+            .context("source MySQL pool is required for CDC resume tests")?;
+        let row = query("show master status").fetch_one(pool).await?;
+        let binlog_file: String = row.try_get(0)?;
+        let binlog_position: u32 = row.try_get(1)?;
+        Ok(Position::MysqlCdc {
+            server_id: String::new(),
+            binlog_filename: binlog_file,
+            next_event_position: binlog_position,
+            gtid_set: String::new(),
+            timestamp: Position::format_timestamp_millis(Utc::now().timestamp_millis()),
+        })
+    }
+
+    fn compute_seed_row_key(id: i32) -> anyhow::Result<u128> {
+        let col_hash_code = ColValue::Long(id).hash_code()?;
+        Ok(31 * 1u128 + u128::from(col_hash_code))
+    }
+
+    fn to_seed_persisted_col_map(
+        values: &HashMap<String, ColValue>,
+    ) -> anyhow::Result<HashMap<String, SeedPersistedColValue>> {
+        values
+            .iter()
+            .map(|(col, value)| {
+                let persisted = match value {
+                    ColValue::Long(v) => SeedPersistedColValue::Long(*v),
+                    ColValue::String(v) => SeedPersistedColValue::String(v.clone()),
+                    _ => anyhow::bail!(
+                        "unsupported seed col value for {col}: {}",
+                        value.type_name()
+                    ),
+                };
+                Ok((col.clone(), persisted))
+            })
+            .collect()
+    }
+
+    fn build_seed_unresolved_row() -> anyhow::Result<CheckerStateRow> {
+        let mut after = HashMap::new();
+        after.insert("id".to_string(), ColValue::Long(2));
+        after.insert("name".to_string(), ColValue::String("bob".to_string()));
+        after.insert("value".to_string(), ColValue::Long(250));
+        let src_row_data = RowData::new(
+            "test_db_1".to_string(),
+            "check_test".to_string(),
+            RowType::Insert,
+            None,
+            Some(after),
+        );
+
+        let id_col_values = HashMap::from([("id".to_string(), Some("2".to_string()))]);
+        let diff_col_values = HashMap::from([(
+            "value".to_string(),
+            DiffColValue {
+                src: Some("250".to_string()),
+                dst: Some("999".to_string()),
+                src_type: None,
+                dst_type: None,
+            },
+        )]);
+
+        let payload = serde_json::to_string(&SeedPersistedCheckEntry {
+            log: SeedPersistedCheckLog {
+                schema: "test_db_1".to_string(),
+                tb: "check_test".to_string(),
+                target_schema: None,
+                target_tb: None,
+                id_col_values: id_col_values.clone(),
+                diff_col_values,
+                src_row: None,
+                dst_row: None,
+            },
+            revise_sql: None,
+            is_miss: false,
+            src_row_data: SeedPersistedRowData {
+                schema: src_row_data.schema.clone(),
+                tb: src_row_data.tb.clone(),
+                row_type: src_row_data.row_type.clone(),
+                before: None,
+                after: Some(Self::to_seed_persisted_col_map(
+                    src_row_data.require_after()?,
+                )?),
+                data_size: src_row_data.data_size,
+                is_not_origin: src_row_data.is_not_origin,
+            },
+        })?;
+
+        let identity_json = serde_json::to_string(&serde_json::json!({
+            "schema": "test_db_1",
+            "tb": "check_test",
+            "id_col_values": BTreeMap::from([("id".to_string(), Some("2".to_string()))]),
+        }))?;
+
+        Ok(CheckerStateRow {
+            row_key: Self::compute_seed_row_key(2)?,
+            identity_key: "seed-unresolved-row-2".to_string(),
+            identity_json,
+            payload,
+        })
+    }
+
+    async fn seed_cdc_position_only(&self, position: Position) -> anyhow::Result<()> {
+        self.ensure_resumer_tables().await?;
+        let (schema, table) = self.get_resumer_tables()?;
+        let task_id = &self.base.config.global.task_id;
+        if let Some(pool) = &self.base.dst_conn_pool_mysql {
+            let sql = format!(
+                "INSERT INTO `{}`.`{}` (task_id, resumer_type, position_key, position_data) \
+                 VALUES (?, ?, ?, ?) \
+                 ON DUPLICATE KEY UPDATE position_data = VALUES(position_data), updated_at = CURRENT_TIMESTAMP",
+                schema, table
+            );
+            sqlx::query(&sql)
+                .bind(task_id)
+                .bind(ResumerType::CdcDoing.to_string())
+                .bind(ResumerUtil::get_key_from_position(&position))
+                .bind(position.to_string())
+                .execute(pool)
+                .await?;
+            return Ok(());
+        }
+        anyhow::bail!("only MySQL resume seed is implemented in this test runner")
+    }
+
+    async fn seed_checker_state_resume_metadata(&self) -> anyhow::Result<()> {
+        self.ensure_resumer_tables().await?;
+        let store = self.create_checker_state_store().await?;
+        let position = self.fetch_current_mysql_cdc_position().await?;
+        let row = Self::build_seed_unresolved_row()?;
+        let commit = CheckerCheckpointCommit {
+            task_id: self.base.config.global.task_id.clone(),
+            position,
+            upserts: vec![row],
+            deletes: Vec::new(),
+        };
+        store.commit_checkpoint(&commit).await
+    }
+
     pub async fn new(relative_test_dir: &str) -> anyhow::Result<Self> {
         let base = RdbTestRunner::new(relative_test_dir).await?;
         let version = base.get_dst_mysql_version().await;
         let (expect_check_log_dir, dst_check_log_dir) =
             CheckUtil::get_check_log_dir(&base.base, &version);
-        let mut checker_conn_pool_mysql = None;
-        let mut checker_conn_pool_pg = None;
-
-        if let Some(checker_target) = base.config.checker_target() {
-            let is_override = base
-                .config
-                .sink_target()
-                .map(|target| {
-                    target.db_type != checker_target.db_type
-                        || target.url != checker_target.url
-                        || target.connection_auth != checker_target.connection_auth
-                })
-                .unwrap_or(true);
-
-            if is_override {
-                match checker_target.db_type {
-                    DbType::Mysql => {
-                        checker_conn_pool_mysql = Some(
-                            TaskUtil::create_mysql_conn_pool(
-                                &checker_target.url,
-                                &checker_target.connection_auth,
-                                5,
-                                false,
-                                Some(vec!["SET FOREIGN_KEY_CHECKS=0"]),
-                            )
-                            .await?,
-                        );
-                    }
-                    DbType::Pg => {
-                        checker_conn_pool_pg = Some(
-                            TaskUtil::create_pg_conn_pool(
-                                &checker_target.url,
-                                &checker_target.connection_auth,
-                                5,
-                                false,
-                                true,
-                            )
-                            .await?,
-                        );
-                    }
-                    _ => {}
-                }
-            }
-        }
-
         Ok(Self {
             base,
             dst_check_log_dir,
             expect_check_log_dir,
-            checker_conn_pool_mysql,
-            checker_conn_pool_pg,
         })
     }
 
     pub async fn close(&self) -> anyhow::Result<()> {
         self.base.close().await?;
-        if let Some(pool) = &self.checker_conn_pool_mysql {
-            pool.close().await;
-        }
-        if let Some(pool) = &self.checker_conn_pool_pg {
-            pool.close().await;
-        }
         Ok(())
     }
 
@@ -297,7 +465,41 @@ impl RdbCheckTestRunner {
         Ok(())
     }
 
-    pub async fn run_cdc_check_resume_test(
+    pub async fn run_cdc_position_resume_test(
+        &self,
+        start_millis: u64,
+        parse_millis: u64,
+    ) -> anyhow::Result<()> {
+        self.reset_resumer_backend().await?;
+        self.base.execute_prepare_sqls().await?;
+        let (src_db_tbs, dst_db_tbs) = self.base.get_compare_db_tbs()?;
+        let split_at = std::cmp::max(1, self.base.base.src_test_sqls.len() / 2);
+        let (first_half, second_half) = self.base.base.src_test_sqls.split_at(split_at);
+        self.base.execute_src_sqls(&first_half.to_vec()).await?;
+        self.base.execute_dst_sqls(&first_half.to_vec()).await?;
+        let seeded_position = self.fetch_current_mysql_cdc_position().await?;
+        self.seed_cdc_position_only(seeded_position).await?;
+        let cdc_positions = self.get_resumer_cdc_position_count().await?;
+        assert!(
+            cdc_positions > 0,
+            "expected seeded CDC position to persist before resume"
+        );
+
+        let resumed_task = self.base.spawn_cdc_task(start_millis, parse_millis).await?;
+        self.base.execute_src_sqls(&second_half.to_vec()).await?;
+        self.base.base.wait_task_finish(&resumed_task).await?;
+        TimeUtil::sleep_millis(3000).await;
+        assert!(
+            self.base
+                .compare_data_for_tbs(&src_db_tbs, &dst_db_tbs)
+                .await?
+        );
+        self.base.execute_clean_sqls().await?;
+        self.reset_resumer_backend().await?;
+        Ok(())
+    }
+
+    pub async fn run_cdc_checker_state_resume_test(
         &self,
         start_millis: u64,
         parse_millis: u64,
@@ -306,34 +508,20 @@ impl RdbCheckTestRunner {
 
         self.reset_resumer_backend().await?;
         self.base.execute_prepare_sqls().await?;
-        self.execute_checker_sqls(&self.base.base.dst_prepare_sqls)
-            .await?;
-        self.base
-            .execute_dst_sqls(&self.base.base.dst_test_sqls)
-            .await?;
-        self.execute_checker_sqls(&self.base.base.dst_test_sqls)
-            .await?;
-
-        let task = self.base.spawn_cdc_task(start_millis, parse_millis).await?;
         self.base
             .execute_src_sqls(&self.base.base.src_test_sqls)
             .await?;
-        self.base.base.wait_task_finish(&task).await?;
-        TimeUtil::sleep_millis(3000).await;
+        self.base
+            .execute_dst_sqls(&self.base.base.src_test_sqls)
+            .await?;
+        self.seed_checker_state_resume_metadata().await?;
 
         let unresolved_rows = self.get_resumer_unresolved_row_count().await?;
         assert!(
             unresolved_rows > 0,
-            "expected unresolved checker rows to persist into resumer backend after first run"
-        );
-        let cdc_positions = self.get_resumer_cdc_position_count().await?;
-        assert!(
-            cdc_positions > 0,
-            "expected CDC position to persist into resumer backend after first run"
+            "expected seeded unresolved checker rows to exist before resume"
         );
 
-        self.execute_checker_sqls(&self.base.base.src_test_sqls)
-            .await?;
         CheckUtil::clear_check_log(&self.dst_check_log_dir);
 
         let resumed_task = self.base.spawn_cdc_task(start_millis, parse_millis).await?;
@@ -347,6 +535,12 @@ impl RdbCheckTestRunner {
         );
 
         CheckUtil::validate_check_log(&self.expect_check_log_dir, &self.dst_check_log_dir)?;
+        let (src_db_tbs, dst_db_tbs) = self.base.get_compare_db_tbs()?;
+        assert!(
+            self.base
+                .compare_data_for_tbs(&src_db_tbs, &dst_db_tbs)
+                .await?
+        );
         self.base.execute_clean_sqls().await?;
         self.reset_resumer_backend().await?;
         Ok(())

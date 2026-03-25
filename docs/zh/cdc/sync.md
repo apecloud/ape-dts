@@ -8,12 +8,19 @@
 - Mongo：源库需为 ReplicaSet；
 - 详情请参考 [测试环境搭建](../../../dt-tests/README_ZH.md)。
 
-## Inline cdc check
+## 校验 CDC 落库数据
 
-要校验 CDC 落库后的数据，可在 CDC 任务配置中开启 `[checker]`。这对应
-[数据校验](../snapshot/check.md) 中定义的 inline cdc check。
-在 inline cdc check 中，`[checker]` 会直接复用 `[sinker]` 已解析的目标端配置，
-且不接受单独设置 `db_type`、`url`、`username`、`password`。
+若需要在 CDC 链路中同时做数据校验，请使用 [数据校验](../snapshot/check.md#inline-cdc-check) 中定义的 inline cdc check。
+
+相较默认的纯 CDC 同步链路，inline cdc check 还要求：
+- 保持 `[sinker] sink_type=write`
+- 增加 `[checker]`
+- 增加 `[resumer] resume_type=from_target` 或 `from_db`
+- 使用 `[parallelizer] parallel_type=rdb_check`
+
+在该模式下，checker 会直接复用 `[sinker]` 已解析的目标端配置，因此 `[checker]` 不接受单独设置 `db_type`、`url`、`username`、`password`。
+
+当前该模式仅支持 MySQL / PostgreSQL 的 write sinker。
 
 # 示例: MySQL -> MySQL
 
@@ -21,7 +28,8 @@
 
 # 并发算法
 
-- MySQL/PG：parallel_type=rdb_merge
+- MySQL/PG：普通 CDC 同步使用 `parallel_type=rdb_merge`；inline cdc check 使用
+  `parallel_type=rdb_check`
 - Mongo：parallel_type=mongo
 - Redis：parallel_type=redis
 

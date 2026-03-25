@@ -17,10 +17,8 @@ fn build_identity_json(entry: &CheckEntry) -> anyhow::Result<String> {
     .map_err(anyhow::Error::from)
 }
 
-fn build_identity_key(identity_json: &str) -> String {
-    hex::encode(openssl::sha::sha256(identity_json.as_bytes()))
-}
-
+// Checker state needs a stable round-trip format; ColValue serde is optimized for readable JSON output.
+// If this keeps growing, move it into a shared persistence codec near ColValue instead of duplicating variants here.
 #[derive(Clone, Serialize, Deserialize)]
 enum PersistedColValue {
     None,
@@ -294,17 +292,15 @@ impl<C: Checker> DataChecker<C> {
         let mut diff_buf_builder = BoundedLineBuffer::new(max_file_size, Some(max_rows));
         let mut sql_buf_builder = BoundedLineBuffer::new(max_file_size, None);
         let mut total_sql_count = 0usize;
-        let mut table_counts: HashMap<String, TableCheckCount> = HashMap::new();
+        let mut total_miss = 0usize;
+        let mut total_diff = 0usize;
 
         for entry in self.store.values() {
-            let tb_key = format!("{}.{}", entry.log.schema, entry.log.tb);
-            let counts = table_counts.entry(tb_key).or_default();
-
             if entry.is_miss {
-                counts.miss_count += 1;
+                total_miss += 1;
                 miss_buf_builder.push_json(&entry.log);
             } else {
-                counts.diff_count += 1;
+                total_diff += 1;
                 diff_buf_builder.push_json(&entry.log);
             }
             if let Some(sql) = &entry.revise_sql {
@@ -316,9 +312,6 @@ impl<C: Checker> DataChecker<C> {
         let diff_buf = diff_buf_builder.into_bytes();
         let sql_buf = sql_buf_builder.into_bytes();
 
-        let total_miss: usize = table_counts.values().map(|c| c.miss_count).sum();
-        let total_diff: usize = table_counts.values().map(|c| c.diff_count).sum();
-
         let summary = CheckSummaryLog {
             start_time: self.ctx.summary.start_time.clone(),
             end_time: chrono::Local::now().to_rfc3339(),
@@ -326,7 +319,6 @@ impl<C: Checker> DataChecker<C> {
             miss_count: total_miss,
             diff_count: total_diff,
             skip_count: self.ctx.summary.skip_count,
-            tables: table_counts,
             sql_count: (total_sql_count > 0).then_some(total_sql_count),
         };
         self.ctx.summary = summary.clone();
@@ -371,7 +363,7 @@ impl<C: Checker> DataChecker<C> {
             let identity_json = build_identity_json(entry)?;
             rows.push(CheckerStateRow {
                 row_key: store_key.row_key,
-                identity_key: build_identity_key(&identity_json),
+                identity_key: hex::encode(openssl::sha::sha256(identity_json.as_bytes())),
                 identity_json,
                 payload: serde_json::to_string(&PersistedCheckEntry::from(entry))?,
             });

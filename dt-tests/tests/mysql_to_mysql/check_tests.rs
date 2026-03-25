@@ -24,17 +24,34 @@ mod test {
 
     #[tokio::test]
     #[serial]
+    async fn snapshot_inline_basic_test() {
+        TestBase::run_check_test("mysql_to_mysql/check/snapshot_inline_basic_test").await;
+    }
+
+    #[tokio::test]
+    #[serial]
     async fn cdc_check_basic_test() {
         TestBase::run_cdc_check_test("mysql_to_mysql/check/cdc_check_basic_test", 3000, 8000).await;
     }
 
     #[tokio::test]
     #[serial]
-    async fn cdc_check_resume_test() {
-        TestBase::run_cdc_check_resume_test(
-            "mysql_to_mysql/check/cdc_check_resume_test",
+    async fn cdc_position_resume_test() {
+        TestBase::run_cdc_position_resume_test(
+            "mysql_to_mysql/check/cdc_position_resume_test",
             1000,
             1000,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn cdc_checker_state_resume_test() {
+        TestBase::run_cdc_checker_state_resume_test(
+            "mysql_to_mysql/check/cdc_checker_state_resume_test",
+            3000,
+            3000,
         )
         .await;
     }

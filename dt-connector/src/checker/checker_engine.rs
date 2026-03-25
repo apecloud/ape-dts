@@ -281,16 +281,12 @@ impl<C: Checker> DataChecker<C> {
             .unwrap_or(value)
     }
 
-    fn lookup_hash_code(row_data: &RowData, tb_meta: &RdbTbMeta) -> anyhow::Result<u128> {
+    fn lookup_match_key(row_data: &RowData, tb_meta: &RdbTbMeta) -> anyhow::Result<Option<u128>> {
         let id_values = match row_data.row_type {
             RowType::Delete => row_data.require_before()?,
             _ => row_data.require_after()?,
         };
-        Self::hash_from_id_values(id_values, tb_meta)
-    }
-
-    fn lookup_match_key(row_data: &RowData, tb_meta: &RdbTbMeta) -> anyhow::Result<Option<u128>> {
-        let key = Self::lookup_hash_code(row_data, tb_meta)?;
+        let key = Self::hash_from_id_values(id_values, tb_meta)?;
         Ok((key != 0).then_some(key))
     }
 
@@ -369,6 +365,7 @@ impl<C: Checker> DataChecker<C> {
 
     async fn add_entry_metrics(&self, entry: &CheckEntry) {
         let (task_metric, counter_type) = Self::checker_metric_types(entry);
+        // Update both task-level cumulative metrics and checker-level windowed counters.
         if let Some(task_monitor) = &self.ctx.task_monitor {
             task_monitor.add_no_window_metrics(task_metric, 1);
         }

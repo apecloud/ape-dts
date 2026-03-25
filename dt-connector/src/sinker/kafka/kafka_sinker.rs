@@ -76,6 +76,9 @@ impl KafkaSinker {
             });
         }
 
+        // TODO: Currently measuring RT for the entire message batch,
+        //       as kafka producer involves internal per-broker merging logic,
+        //       making it impossible to see individual broker RT. This can be optimized in the future.
         let start_time = Instant::now();
         let mut rts = LimitedQueue::new(1);
         self.producer.send_all(&messages)?;

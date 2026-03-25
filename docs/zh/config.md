@@ -32,7 +32,7 @@ url=mysql://user1:abc%25%24%23%3F%40@127.0.0.1:3307?ssl-mode=disabled
 | 配置            | 作用                                                                          | 示例                                                           | 默认                          |
 | :-------------- | :---------------------------------------------------------------------------- | :------------------------------------------------------------- | :---------------------------- |
 | db_type         | 目标库类型                                                                    | mysql                                                          | -                             |
-| sink_type       | 写入类型（写入：write，虚拟：dummy）                                          | write                                                          | write                         |
+| sink_type       | 写入类型（写入：write，空写入：dummy）                                          | write                                                          | write                         |
 | url             | 数据库 URL。也可以在 URL 中直接指定用户名和密码。                             | mysql://127.0.0.1:3307 或 mysql://root:password@127.0.0.1:3307 |
 | username        | 数据库连接账号                                                                | root                                                           |
 | password        | 数据库连接密码                                                                | password                                                       |
@@ -52,33 +52,35 @@ url=mysql://user1:abc%25%24%23%3F%40@127.0.0.1:3307?ssl-mode=disabled
 
 struct check 复用 standalone snapshot check 的目标选择规则。
 
-| 配置                        | 作用                                                        | 示例        | 默认                             |
-| :-------------------------- | :---------------------------------------------------------- | :---------- | :------------------------------- |
-| queue_size                  | checker 队列容量，按待处理批次/消息数计数                  | 200         | 200                              |
-| max_connections             | checker 连接池最大连接数                                    | 8           | 8                                |
-| batch_size                  | checker 的非 CDC 任务处理批大小                             | 200         | 200                              |
-| output_full_row             | diff 日志是否输出全量行                                     | false       | false                            |
-| output_revise_sql           | 是否将生成的修复 SQL 写入 `sql.log`                         | false       | false                            |
-| revise_match_full_row       | 生成修复 SQL 时是否按全量行匹配                             | false       | false                            |
-| retry_interval_secs         | 重试间隔（秒），inline cdc check 下强制为 0                 | 0           | 0                                |
-| max_retries                 | 重试次数，inline cdc check 下强制为 0                       | 0           | 0                                |
-| check_log_dir               | 校验日志目录                                                | /tmp/check  | 空（默认 runtime.log_dir/check） |
-| check_log_file_size         | 单类日志文件大小上限（`diff.log` / `miss.log` / `sql.log`） | 100mb       | 100mb                            |
-| check_log_max_rows          | 单类日志最大行数（`diff.log` / `miss.log`）                 | 1000        | 1000                             |
-| db_type                     | 校验目标库类型（仅 standalone 目标配置）                    | mysql       | -                                |
-| url                         | 校验目标 URL（仅 standalone 目标配置）                      | mysql://... | -                                |
-| username                    | 校验目标用户名（仅 standalone 目标配置）                    | root        | 空                               |
-| password                    | 校验目标密码（仅 standalone 目标配置）                      | password    | 空                               |
-| cdc_check_log_s3            | 定期将 CDC 校验快照上传至 S3                                | false       | false                            |
-| cdc_check_log_interval_secs | CDC 校验快照输出间隔（秒）                                  | 10          | 10                               |
-| s3_bucket                   | 校验日志上传的 S3 存储桶                                    | my-bucket   | -                                |
-| s3_access_key_id            | S3 访问密钥 ID                                              | AKIA...     | -                                |
-| s3_secret_access_key        | S3 秘密访问密钥                                             | ****        | -                                |
-| s3_region                   | S3 区域                                                     | us-east-1   | -                                |
-| s3_endpoint                 | S3 端点                                                     | https://... | -                                |
-| s3_key_prefix               | 校验日志的 S3 键前缀                                        | task1/check | 空                               |
+| 配置                        | 作用                                                           | 示例        | 默认                             |
+| :-------------------------- | :------------------------------------------------------------- | :---------- | :------------------------------- |
+| queue_size                  | checker 队列容量，按待处理批次/消息数计数                      | 200         | 200                              |
+| max_connections             | checker 连接池最大连接数                                       | 8           | 8                                |
+| batch_size                  | checker 的分块大小；inline cdc check 下也用于控制 checker 分块 | 200         | 200                              |
+| output_full_row             | diff 日志是否输出全量行                                        | false       | false                            |
+| output_revise_sql           | 是否将生成的修复 SQL 写入 `sql.log`                            | false       | false                            |
+| revise_match_full_row       | 生成修复 SQL 时是否按全量行匹配                                | false       | false                            |
+| retry_interval_secs         | 重试间隔（秒），inline cdc check 下强制为 0                    | 0           | 0                                |
+| max_retries                 | 重试次数，inline cdc check 下强制为 0                          | 0           | 0                                |
+| check_log_dir               | 校验日志目录                                                   | /tmp/check  | 空（默认 runtime.log_dir/check） |
+| check_log_file_size         | 单类日志文件大小上限（`diff.log` / `miss.log` / `sql.log`）    | 100mb       | 100mb                            |
+| check_log_max_rows          | 单类日志最大行数（`diff.log` / `miss.log`）                    | 1000        | 1000                             |
+| db_type                     | 校验目标库类型（仅 standalone 目标配置）                       | mysql       | -                                |
+| url                         | 校验目标 URL（仅 standalone 目标配置）                         | mysql://... | -                                |
+| username                    | 校验目标用户名（仅 standalone 目标配置）                       | root        | 空                               |
+| password                    | 校验目标密码（仅 standalone 目标配置）                         | password    | 空                               |
+| cdc_check_log_s3            | 定期将 CDC 校验快照上传至 S3                                   | false       | false                            |
+| cdc_check_log_interval_secs | CDC 校验快照输出间隔（秒）                                     | 10          | 10                               |
+| s3_bucket                   | 校验日志上传的 S3 存储桶                                       | my-bucket   | -                                |
+| s3_access_key_id            | S3 访问密钥 ID                                                 | AKIA...     | -                                |
+| s3_secret_access_key        | S3 秘密访问密钥                                                | ****        | -                                |
+| s3_region                   | S3 区域                                                        | us-east-1   | -                                |
+| s3_endpoint                 | S3 端点                                                        | https://... | -                                |
+| s3_key_prefix               | 校验日志的 S3 键前缀                                           | task1/check | 空                               |
 
 说明：
+
+**通用行为**
 - checker 仅支持 `[pipeline] pipeline_type=basic`。
 - `queue_size` 统计的是 checker 队列中的待处理批次/消息数，不是行数。队列满表示 checker worker
   手里已经积压了 `queue_size` 个待处理批次。
@@ -86,12 +88,13 @@ struct check 复用 standalone snapshot check 的目标选择规则。
   队列腾出容量，而不是静默丢弃待校验批次。
 - 在 inline 写后校验链路里，checker 的运行时失败会按任务失败处理。数据不一致结果（`diff` /
   `miss`）仍然只写入校验日志与 summary，但 checker 执行错误不会再静默完成。
+
+**目标选择与适用形态**
 - 对 inline 写后校验链路来说，一个排队批次通常接近实际写入批大小；实践中多数情况下约等于
   `[sinker].batch_size` 行，但最后一个批次可能更小，上游分片策略也会影响实际条数。
 - 对 standalone / dummy-sinker 校验链路来说，进入队列的单批大小由上游 parallelizer 决定；
   出队后，checker 会再按 `[checker].batch_size` 对非 CDC 数据做内部切块处理。
-- struct 任务只支持 standalone 目标选择规则。若为 struct 任务启用 `[checker]`，请使用
-  `sink_type=dummy` 或直接省略 `[sinker]`。
+- struct 任务只支持 standalone 目标选择规则。若为 struct 任务启用 `[checker]`，请使用 `sink_type=dummy` 或直接省略 `[sinker]`。
 - inline snapshot check 仅支持 `[extractor] extract_type=snapshot`、`[sinker] sink_type=write`，
   且 `[sinker].db_type` 为 `mysql`、`pg`、`mongo` 的写入链路。
 - inline cdc check 当前仅支持 `[extractor] extract_type=cdc`、`[sinker] sink_type=write`，
@@ -106,6 +109,8 @@ struct check 复用 standalone snapshot check 的目标选择规则。
   `parallel_type=rdb_check`；`[pipeline].pipeline_type != basic`；`[sinker].sink_type != write`；
   `[sinker].db_type` 不属于 `mysql` / `pg`；以及在 `[checker]` 中显式填写目标端字段
   `db_type` / `url` / `username` / `password`。
+
+**inline cdc check 的日志 / 重试行为**
 - 对 inline cdc check，`[checker].batch_size` 会继续生效并控制 checker 分块；
   `max_retries` 与 `retry_interval_secs` 会强制按 0 处理。
 - 当 `check_log_dir` 为空时，统一使用 `runtime.log_dir/check` 作为 checker 日志目录（包含 CDC 校验输出）。

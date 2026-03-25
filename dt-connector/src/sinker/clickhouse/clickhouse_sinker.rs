@@ -4,7 +4,6 @@ use anyhow::bail;
 use async_trait::async_trait;
 use chrono::Utc;
 use reqwest::{Client, Method, Response, StatusCode};
-use serde_json::json;
 use tokio::time::Instant;
 
 use crate::{call_batch_fn, sinker::base_sinker::BaseSinker, Sinker};
@@ -66,21 +65,17 @@ impl ClickhouseSinker {
 
         let mut data_size = 0;
         // build stream load data
-        let mut load_data = Vec::new();
-        for row_data in data.iter().skip(start_index).take(batch_size) {
+        let mut load_data = Vec::with_capacity(batch_size);
+        for row_data in data.iter_mut().skip(start_index).take(batch_size) {
             data_size += row_data.get_data_size() as usize;
-            let mut col_values = if row_data.row_type == RowType::Delete {
-                let mut before = row_data.require_before()?.clone();
-                Self::convert_col_values(&mut before)?;
-                // SIGN_COL value
-                before.insert(SIGN_COL_NAME.into(), ColValue::Long(1));
-                before
-            } else {
-                let mut after = row_data.require_after()?.clone();
-                Self::convert_col_values(&mut after)?;
-                after
-            };
+            let is_delete = row_data.row_type == RowType::Delete;
+            Self::convert_row_data(row_data)?;
+            let col_values = Self::active_col_values_mut(row_data)?;
 
+            if is_delete {
+                // SIGN_COL value
+                col_values.insert(SIGN_COL_NAME.into(), ColValue::Long(1));
+            }
             col_values.insert(
                 TIMESTAMP_COL_NAME.into(),
                 ColValue::LongLong(self.sync_timestamp),
@@ -89,12 +84,12 @@ impl ClickhouseSinker {
         }
 
         // curl -X POST -d @data.json 'http://localhost:8123/?query=INSERT%20INTO%test_db.tb_1%20FORMAT%20JSON' --user admin:123456
-        let body = json!(load_data).to_string();
+        let body = serde_json::to_string(&load_data)?;
         let url = format!(
             "http://{}:{}/?query=INSERT INTO {}.{} FORMAT JSON",
             self.host, self.port, db, tb
         );
-        let request = self.build_request(&url, &body)?;
+        let request = self.build_request(&url, body)?;
 
         let start_time = Instant::now();
         let mut rts = LimitedQueue::new(1);
@@ -145,7 +140,26 @@ impl ClickhouseSinker {
         Ok(())
     }
 
-    fn build_request(&self, url: &str, body: &str) -> anyhow::Result<reqwest::Request> {
+    fn convert_row_data(row_data: &mut RowData) -> anyhow::Result<()> {
+        if let Some(before) = &mut row_data.before {
+            Self::convert_col_values(before)?;
+        }
+        if let Some(after) = &mut row_data.after {
+            Self::convert_col_values(after)?;
+        }
+        Ok(())
+    }
+
+    fn active_col_values_mut(
+        row_data: &mut RowData,
+    ) -> anyhow::Result<&mut HashMap<String, ColValue>> {
+        match row_data.row_type {
+            RowType::Delete => row_data.require_before_mut(),
+            _ => row_data.require_after_mut(),
+        }
+    }
+
+    fn build_request(&self, url: &str, body: String) -> anyhow::Result<reqwest::Request> {
         let password = if self.password.is_empty() {
             None
         } else {
@@ -156,7 +170,7 @@ impl ClickhouseSinker {
             .http_client
             .request(Method::POST, url)
             .basic_auth(&self.username, password)
-            .body(body.to_string());
+            .body(body);
         Ok(post.build()?)
     }
 

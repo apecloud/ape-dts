@@ -4,12 +4,15 @@ In a distributed system, the source and target databases may not necessarily hav
 
 To enable two-way data sync, we need to configure CDC tasks for both "source -> target" and "target -> source" directions.
 
-## Inline cdc check
+## Validate CDC-applied data
 
-If you want to validate CDC-applied data, enable `[checker]` in the CDC task config. This is the
-inline cdc check flow described in [Data Check](../snapshot/check.md).
-In inline cdc check, `[checker]` reuses the parsed `[sinker]` target directly and must not
-set its own `db_type`, `url`, `username`, or `password`.
+If you also want validation in each CDC direction, use the [inline cdc check flow](../snapshot/check.md#inline-cdc-check).
+
+For each task, keep `[sinker] sink_type=write`, add `[checker]`, add `[resumer] resume_type=from_target` or `from_db`, and use `[parallelizer] parallel_type=rdb_check`.
+
+The checker reuses the parsed `[sinker]` target directly, so `[checker]` must not set `db_type`, `url`, `username`, or `password`.
+
+This flow is currently supported only for MySQL and PostgreSQL write sinkers.
 
 # Cyclic replication
 

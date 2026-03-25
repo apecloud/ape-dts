@@ -275,9 +275,8 @@ impl TaskConfig {
 
     pub fn task_type(&self) -> Option<TaskType> {
         if matches!(self.extractor_basic.extract_type, ExtractType::CheckLog) {
-            // check_log tasks replay previously generated check logs instead of participating in
-            // the regular struct/snapshot/cdc task lifecycle. Keep them outside TaskType so
-            // TaskRunner will not initialize recorder/recovery/checker state store for them.
+            // check_log replays existing check logs, so it stays outside TaskType to skip
+            // recorder/recovery/checker-store initialization.
             return None;
         }
         let target_db_type = self
@@ -297,13 +296,6 @@ impl TaskConfig {
             target_db_type,
             self.checker.is_some(),
         )
-    }
-
-    fn checker_target_keys_in_use(loader: &IniLoader) -> Vec<&'static str> {
-        [DB_TYPE, URL, USERNAME, PASSWORD]
-            .into_iter()
-            .filter(|key| loader.contains(CHECKER, key))
-            .collect()
     }
 
     fn checker_uses_inline_target(extract_type: &ExtractType, sink_type: &SinkType) -> bool {
@@ -348,7 +340,10 @@ impl TaskConfig {
         inline_check: bool,
     ) -> anyhow::Result<()> {
         if inline_check {
-            let forbidden_keys = Self::checker_target_keys_in_use(loader);
+            let forbidden_keys = [DB_TYPE, URL, USERNAME, PASSWORD]
+                .into_iter()
+                .filter(|key| loader.contains(CHECKER, key))
+                .collect::<Vec<_>>();
             if !forbidden_keys.is_empty() {
                 bail!(Error::ConfigError(format!(
                     "inline check does not accept [checker].{}; configure the inline check target via [sinker].{}",
@@ -361,7 +356,12 @@ impl TaskConfig {
 
         let missing_keys = [DB_TYPE, URL]
             .into_iter()
-            .filter(|key| !loader.contains_non_empty(CHECKER, key))
+            .filter(|key| {
+                loader
+                    .ini
+                    .get(CHECKER, key)
+                    .is_none_or(|value| value.is_empty())
+            })
             .collect::<Vec<_>>();
         if !missing_keys.is_empty() {
             bail!(Error::ConfigError(format!(

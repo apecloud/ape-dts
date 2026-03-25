@@ -8,12 +8,19 @@ Prerequisites
 - Mongo: The source instance must be ReplicaSet;
 - For more information, refer to [init test env](../../../dt-tests/README.md).
 
-## Inline cdc check
+## Validate CDC-applied data
 
-To validate CDC-applied data, enable `[checker]` in the CDC task config. This is the inline cdc
-check flow described in [Data Check](../snapshot/check.md).
-In inline cdc check, `[checker]` reuses the parsed `[sinker]` target directly and must not
-set its own `db_type`, `url`, `username`, or `password`.
+If you need validation in the CDC pipeline, use the [inline cdc check flow](../snapshot/check.md#inline-cdc-check).
+
+Compared with the default CDC-only sync path, inline cdc check requires:
+- keep `[sinker] sink_type=write`
+- add `[checker]`
+- add `[resumer] resume_type=from_target` or `from_db`
+- use `[parallelizer] parallel_type=rdb_check`
+
+The checker reuses the parsed `[sinker]` target directly, so `[checker]` must not set `db_type`, `url`, `username`, or `password`.
+
+This flow is currently supported only for MySQL and PostgreSQL write sinkers.
 
 # Example: MySQL -> MySQL
 
@@ -21,7 +28,7 @@ Refer to [task templates](../../templates/mysql_to_mysql.md) and [tutorial](../t
 
 # Parallelizer
 
-- MySQL/PG: parallel_type=rdb_merge
+- MySQL/PG: `parallel_type=rdb_merge` for normal CDC sync; `parallel_type=rdb_check` for inline cdc check
 - Mongo: parallel_type=mongo
 - Redis: parallel_type=redis
 

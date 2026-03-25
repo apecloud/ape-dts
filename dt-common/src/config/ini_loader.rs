@@ -62,12 +62,6 @@ impl IniLoader {
         self.ini.get(section, key).is_some()
     }
 
-    pub fn contains_non_empty(&self, section: &str, key: &str) -> bool {
-        self.ini
-            .get(section, key)
-            .is_some_and(|value| !value.is_empty())
-    }
-
     fn parse_value<T>(section: &str, key: &str, value: &str) -> anyhow::Result<T>
     where
         T: FromStr,
