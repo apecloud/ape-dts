@@ -773,23 +773,7 @@ impl<C: Checker> DataChecker<C> {
                 self.clear_persisted_rows_after_fail_open().await?;
             }
 
-            let output_result = if self.runtime_state.has_failed() {
-                match self.snapshot_and_output().await {
-                    Ok(()) => Ok(()),
-                    Err(err) => {
-                        log_warn!(
-                            "Checker [{}] final cdc output also failed after checker disable: {}",
-                            self.name,
-                            err
-                        );
-                        Ok(())
-                    }
-                }
-            } else {
-                self.snapshot_and_output()
-                    .await
-                    .with_context(|| format!("Checker [{}] final cdc output failed", self.name))
-            };
+            let output_result = self.finalize_cdc_output().await;
             self.store.clear();
             self.update_pending_counter();
             output_result
@@ -823,6 +807,40 @@ impl<C: Checker> DataChecker<C> {
         self.persisted_identity_keys = Some(BTreeSet::new());
         self.store_dirty = false;
         Ok(())
+    }
+
+    async fn finalize_cdc_output(&mut self) -> anyhow::Result<()> {
+        match self.snapshot_and_output().await {
+            Ok(()) => Ok(()),
+            Err(err) if self.runtime_state.has_failed() => {
+                log_warn!(
+                    "Checker [{}] final cdc output also failed after checker disable: {}",
+                    self.name,
+                    err
+                );
+                Ok(())
+            }
+            Err(err) => {
+                log_warn!(
+                    "Checker [{}] final cdc output failed during shutdown; treating it as fail-open: {}",
+                    self.name,
+                    err
+                );
+                self.runtime_state.mark_failed_message(format!("{:#}", err));
+                self.clear_persisted_rows_after_fail_open().await?;
+                match self.snapshot_and_output().await {
+                    Ok(()) => Ok(()),
+                    Err(err) => {
+                        log_warn!(
+                            "Checker [{}] final cdc output also failed after checker disable: {}",
+                            self.name,
+                            err
+                        );
+                        Ok(())
+                    }
+                }
+            }
+        }
     }
 
     async fn finish_summary_and_meta(&mut self) -> anyhow::Result<()> {

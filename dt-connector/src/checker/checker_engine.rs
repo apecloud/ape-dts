@@ -1,8 +1,8 @@
 use super::{
-    log_diff, log_miss, log_sql, log_warn, mongo_cmd, sleep, BaseSinker, CheckContext, CheckEntry,
-    CheckInconsistency, CheckLog, Checker, CheckerStoreKey, CheckerTbMeta, ColValue, Cow,
-    DataChecker, DiffColValue, Document, Duration, HashMap, Instant, LimitedQueue, MongoConstants,
-    RdbTbMeta, RetryItem, RowData, RowType,
+    BaseSinker, CheckContext, CheckEntry, CheckInconsistency, CheckLog, Checker, CheckerStoreKey,
+    CheckerTbMeta, ColValue, Cow, DataChecker, DiffColValue, Document, Duration, HashMap, Instant,
+    LimitedQueue, MongoConstants, RdbTbMeta, RetryItem, RowData, RowType, log_diff, log_miss,
+    log_sql, log_warn, mongo_cmd, sleep,
 };
 use anyhow::Context;
 use dt_common::meta::pg::pg_value_type::PgValueType;
@@ -792,7 +792,7 @@ impl<C: Checker> DataChecker<C> {
 mod tests {
     use super::*;
     use crate::{
-        checker::{base_checker::CheckerRuntimeState, check_log::CheckSummaryLog, FetchResult},
+        checker::{FetchResult, base_checker::CheckerRuntimeState, check_log::CheckSummaryLog},
         rdb_router::RdbRouter,
     };
     use async_trait::async_trait;
