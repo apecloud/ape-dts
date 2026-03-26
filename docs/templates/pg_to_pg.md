@@ -141,6 +141,46 @@ log4rs_file=./log4rs.yaml
 
 - refer to [create slot and get starting lsn](/docs/en/tutorial/snapshot_and_cdc_without_data_loss.md)
 
+## Replica identity for tables without primary keys
+
+For Postgres CDC, `UPDATE` and `DELETE` on tables without a primary key can fail unless the source table is configured with a replica identity that provides enough old-row information. The recommended practice is to check and fix this before creating the publication / starting CDC.
+
+If a table has no primary key, set either:
+
+- `REPLICA IDENTITY FULL`, or
+- `REPLICA IDENTITY USING INDEX ...` on a suitable unique index
+
+This repo provides a helper script:
+
+```bash
+scripts/pg_replica_identity.sh --mode check --url 'postgres://postgres:postgres@127.0.0.1:5433/postgres'
+```
+
+Available modes:
+
+- `check`: list tables that have no primary key and are still using `REPLICA IDENTITY DEFAULT` / `NOTHING`
+- `plan`: print `ALTER TABLE ... REPLICA IDENTITY FULL` statements, but do not execute them
+- `apply`: execute those `ALTER TABLE ... REPLICA IDENTITY FULL` statements
+
+Examples:
+
+```bash
+# 1) Check all non-system schemas
+scripts/pg_replica_identity.sh --mode check --url 'postgres://postgres:postgres@127.0.0.1:5433/postgres'
+
+# 2) Print ALTER statements for selected schemas only
+scripts/pg_replica_identity.sh --mode plan --url 'postgres://postgres:postgres@127.0.0.1:5433/postgres' --schemas public,test_schema
+
+# 3) Execute the ALTER statements
+scripts/pg_replica_identity.sh --mode apply --url 'postgres://postgres:postgres@127.0.0.1:5433/postgres'
+```
+
+Note:
+
+- The script only targets tables that have no primary key and are not already configured with replica identity `FULL` or `INDEX`.
+- It includes ordinary tables and partitioned tables (`relkind in ('r', 'p')`).
+- Run it before creating the publication / replication slot for the CDC task whenever possible.
+
 # CDC with ddl capture
 
 - Refer to [tutorial](/docs/en/tutorial/pg_to_pg.md) for how to enable ddl capture in source Postgres.
