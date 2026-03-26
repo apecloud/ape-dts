@@ -1,6 +1,9 @@
 use std::{cmp, sync::Arc};
 
-use super::{base_parallelizer::BaseParallelizer, snapshot_parallelizer::SnapshotParallelizer};
+use super::{
+    base_parallelizer::BaseParallelizer, mongo_merger::MongoMerger,
+    snapshot_parallelizer::SnapshotParallelizer,
+};
 use crate::{DataSize, Merger, Parallelizer};
 use async_trait::async_trait;
 use dt_common::config::sinker_config::BasicSinkerConfig;
@@ -20,13 +23,15 @@ pub struct MergeParallelizer {
     pub meta_manager: Option<RdbMetaManager>,
     pub parallel_size: usize,
     pub sinker_basic_config: BasicSinkerConfig,
-    pub sink_mode: MergeSinkMode,
+    sink_mode: MergeSinkMode,
 }
 
 #[derive(Clone, Copy)]
-pub enum MergeSinkMode {
-    AdaptiveBatch,
-    Partitioned,
+enum MergeSinkMode {
+    // Normal sync path (`rdb_merge` / `mongo`)
+    Sync,
+    // Checker path (`rdb_check`, including inline CDC check)
+    Check,
 }
 
 enum MergeType {
@@ -67,11 +72,11 @@ impl Parallelizer for MergeParallelizer {
         let mut tb_merged_data = self.merger.merge(data).await?;
         for merge_type in [MergeType::Delete, MergeType::Insert, MergeType::Unmerged] {
             data_size.add(match self.sink_mode {
-                MergeSinkMode::AdaptiveBatch => {
+                MergeSinkMode::Sync => {
                     self.sink_dml_adaptive(&mut tb_merged_data, sinkers, merge_type)
                         .await?
                 }
-                MergeSinkMode::Partitioned => {
+                MergeSinkMode::Check => {
                     self.sink_dml_partitioned(&mut tb_merged_data, sinkers, merge_type)
                         .await?
                 }
@@ -127,6 +132,55 @@ impl Parallelizer for MergeParallelizer {
 }
 
 impl MergeParallelizer {
+    pub fn for_rdb_merge(
+        base_parallelizer: BaseParallelizer,
+        merger: Box<dyn Merger + Send + Sync>,
+        parallel_size: usize,
+        sinker_basic_config: BasicSinkerConfig,
+        meta_manager: Option<RdbMetaManager>,
+    ) -> Self {
+        Self {
+            base_parallelizer,
+            merger,
+            meta_manager,
+            parallel_size,
+            sinker_basic_config,
+            sink_mode: MergeSinkMode::Sync,
+        }
+    }
+
+    pub fn for_rdb_check(
+        base_parallelizer: BaseParallelizer,
+        merger: Box<dyn Merger + Send + Sync>,
+        parallel_size: usize,
+        sinker_basic_config: BasicSinkerConfig,
+    ) -> Self {
+        Self {
+            sink_mode: MergeSinkMode::Check,
+            ..Self::for_rdb_merge(
+                base_parallelizer,
+                merger,
+                parallel_size,
+                sinker_basic_config,
+                None,
+            )
+        }
+    }
+
+    pub fn for_mongo(
+        base_parallelizer: BaseParallelizer,
+        parallel_size: usize,
+        sinker_basic_config: BasicSinkerConfig,
+    ) -> Self {
+        Self::for_rdb_merge(
+            base_parallelizer,
+            Box::new(MongoMerger {}),
+            parallel_size,
+            sinker_basic_config,
+            None,
+        )
+    }
+
     async fn sink_dml_adaptive(
         &mut self,
         tb_merged_data_items: &mut [TbMergedData],

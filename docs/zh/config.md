@@ -86,8 +86,10 @@ struct check 复用 standalone snapshot check 的目标选择规则。
   手里已经积压了 `queue_size` 个待处理批次。
 - 在 inline 写后校验链路里，打满 `queue_size` 会对写入路径施加背压：新的写入会等待 checker
   队列腾出容量，而不是静默丢弃待校验批次。
-- 在 inline 写后校验链路里，checker 的运行时失败会按任务失败处理。数据不一致结果（`diff` /
-  `miss`）仍然只写入校验日志与 summary，但 checker 执行错误不会再静默完成。
+- 在 inline 写后校验链路里，checker 的运行时失败按 best-effort / fail-open 处理：checker
+  会被禁用，主任务继续运行，后续数据不再经过校验。
+- 对启用了 checker state 持久化的 inline cdc check，fail-open 时会清空已持久化的 unresolved
+  rows，避免后续 resume 重放陈旧的 checker state。
 
 **目标选择与适用形态**
 - 对 inline 写后校验链路来说，一个排队批次通常接近实际写入批大小；实践中多数情况下约等于

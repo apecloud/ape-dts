@@ -198,7 +198,6 @@ pub struct CheckContext {
     pub cdc_check_log_interval_secs: u64,
     pub state_store: Option<Arc<CheckerStateStore>>,
     pub expected_resume_position: Option<Position>,
-    pub fail_open_on_runtime_error: bool,
 }
 
 pub struct FetchResult {
@@ -285,7 +284,6 @@ struct DataCheckerShared {
     is_cdc: bool,
     persists_position_checkpoint: bool,
     runtime_state: Arc<CheckerRuntimeState>,
-    fail_open_on_runtime_error: bool,
 }
 
 #[derive(Clone)]
@@ -301,7 +299,7 @@ pub enum CheckerHandle {
 
 impl DataCheckerHandle {
     fn should_ignore_runtime_failure(&self) -> bool {
-        self.shared.fail_open_on_runtime_error && self.shared.runtime_state.has_failed()
+        self.shared.runtime_state.has_failed()
     }
 
     pub fn spawn<C: Checker>(
@@ -313,7 +311,6 @@ impl DataCheckerHandle {
     ) -> Self {
         let is_cdc = ctx.is_cdc;
         let persists_position_checkpoint = ctx.is_cdc && ctx.state_store.is_some();
-        let fail_open_on_runtime_error = ctx.fail_open_on_runtime_error;
         let (tx, rx) = mpsc::channel::<CheckerMsg>(buffer_size.max(1));
         let runtime_state = Arc::new(CheckerRuntimeState::default());
 
@@ -326,7 +323,6 @@ impl DataCheckerHandle {
                 is_cdc,
                 persists_position_checkpoint,
                 runtime_state,
-                fail_open_on_runtime_error,
             },
             join_handle: Arc::new(Mutex::new(Some(join_handle))),
         }
@@ -607,9 +603,6 @@ impl<C: Checker> DataChecker<C> {
     ) -> bool {
         self.runtime_state.mark_failed_message(format!("{:#}", err));
         Self::remember_error(first_error, err);
-        if !self.ctx.fail_open_on_runtime_error {
-            return false;
-        }
         log_warn!(
             "Checker [{}] runtime failed and has been disabled; main task will continue without checking.",
             self.name
@@ -776,24 +769,27 @@ impl<C: Checker> DataChecker<C> {
                 }
             }
 
-            let output_result =
-                if self.runtime_state.has_failed() && self.ctx.fail_open_on_runtime_error {
-                    match self.snapshot_and_output().await {
-                        Ok(()) => Ok(()),
-                        Err(err) => {
-                            log_warn!(
+            if self.runtime_state.has_failed() {
+                self.clear_persisted_rows_after_fail_open().await?;
+            }
+
+            let output_result = if self.runtime_state.has_failed() {
+                match self.snapshot_and_output().await {
+                    Ok(()) => Ok(()),
+                    Err(err) => {
+                        log_warn!(
                             "Checker [{}] final cdc output also failed after checker disable: {}",
                             self.name,
                             err
                         );
-                            Ok(())
-                        }
+                        Ok(())
                     }
-                } else {
-                    self.snapshot_and_output()
-                        .await
-                        .with_context(|| format!("Checker [{}] final cdc output failed", self.name))
-                };
+                }
+            } else {
+                self.snapshot_and_output()
+                    .await
+                    .with_context(|| format!("Checker [{}] final cdc output failed", self.name))
+            };
             self.store.clear();
             self.update_pending_counter();
             output_result
@@ -808,6 +804,24 @@ impl<C: Checker> DataChecker<C> {
         shutdown_result?;
         summary_result?;
         close_result?;
+        Ok(())
+    }
+
+    async fn clear_persisted_rows_after_fail_open(&mut self) -> anyhow::Result<()> {
+        let Some(state_store) = self.ctx.state_store.clone() else {
+            return Ok(());
+        };
+        state_store
+            .clear_rows(&self.task_id)
+            .await
+            .with_context(|| {
+                format!(
+                    "Checker [{}] failed to clear persisted unresolved rows after fail-open",
+                    self.name
+                )
+            })?;
+        self.persisted_identity_keys = Some(BTreeSet::new());
+        self.store_dirty = false;
         Ok(())
     }
 
@@ -929,7 +943,6 @@ mod tests {
             cdc_check_log_interval_secs: 1,
             state_store: None,
             expected_resume_position: None,
-            fail_open_on_runtime_error: false,
         }
     }
 
@@ -980,8 +993,7 @@ mod tests {
         let occupied_path = format!("{dir}/occupied_path");
         fs::write(&occupied_path, "not-a-directory").unwrap();
 
-        let mut ctx = build_check_context(occupied_path.clone(), true, "fail-open");
-        ctx.fail_open_on_runtime_error = true;
+        let ctx = build_check_context(occupied_path.clone(), true, "fail-open");
         let mut handle = DataCheckerHandle::spawn(
             NoopChecker,
             "checker-snapshot-fail-open".to_string(),
@@ -1020,7 +1032,6 @@ mod tests {
                 is_cdc: true,
                 persists_position_checkpoint: true,
                 runtime_state,
-                fail_open_on_runtime_error: true,
             },
             join_handle: Arc::new(Mutex::new(None)),
         };
@@ -1048,7 +1059,6 @@ mod tests {
                 is_cdc: true,
                 persists_position_checkpoint: true,
                 runtime_state,
-                fail_open_on_runtime_error: true,
             },
             join_handle: Arc::new(Mutex::new(None)),
         };
@@ -1073,7 +1083,6 @@ mod tests {
                 is_cdc: true,
                 persists_position_checkpoint: true,
                 runtime_state,
-                fail_open_on_runtime_error: true,
             },
             join_handle: Arc::new(Mutex::new(None)),
         };

@@ -89,9 +89,10 @@ Notes:
   already holding `queue_size` pending batches/messages.
 - In inline write-after-check flows, hitting `queue_size` applies backpressure to the write path:
   new writes wait until the checker queue has capacity instead of silently dropping check work.
-- In inline write-after-check flows, checker runtime failures are treated as task failures. Data
-  inconsistency results (`diff` / `miss`) still go to check logs and summaries, but checker
-  execution errors do not complete silently.
+- In inline write-after-check flows, checker runtime failures are handled as best-effort fail-open
+  events: the checker is disabled and the main task continues without further checking.
+- For inline cdc check with checker state persistence enabled, fail-open clears persisted
+  unresolved rows so resume does not replay stale checker state later.
 
 **Flow selection and target rules**
 - For inline write-after-check flows, one queued batch is usually close to the effective sink batch

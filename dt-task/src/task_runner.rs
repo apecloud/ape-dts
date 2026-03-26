@@ -13,10 +13,8 @@ use log4rs::config::{Config, Deserializers, RawConfig};
 use tokio::{
     fs::{metadata, File},
     io::AsyncReadExt,
-    select,
     sync::{Mutex, RwLock},
     task::JoinSet,
-    time::Duration,
 };
 
 use super::{
@@ -24,8 +22,10 @@ use super::{
     parallelizer_util::ParallelizerUtil,
     sinker_util::SinkerUtil,
 };
-use crate::create_router;
-use crate::task_util::{ConnClient, TaskUtil};
+use crate::{
+    create_router,
+    task_util::{ConnClient, TaskUtil},
+};
 use async_mutex::Mutex as AsyncMutex;
 use std::sync::Mutex as StdMutex;
 
@@ -55,7 +55,7 @@ use dt_common::{
         FlushableMonitor,
     },
     rdb_filter::RdbFilter,
-    utils::{sql_util::SqlUtil, time_util::TimeUtil},
+    utils::sql_util::SqlUtil,
 };
 use dt_connector::{
     checker::base_checker::CheckContext,
@@ -131,11 +131,6 @@ impl SingleTaskWorker {
     }
 }
 
-enum SingleTaskWorkerResult {
-    Completed(SingleTaskWorker),
-    Failed(SingleTaskWorker, anyhow::Error),
-}
-
 impl TaskRunner {
     pub fn new(task_config_file: &str) -> anyhow::Result<Self> {
         let config = TaskConfig::new(task_config_file)
@@ -191,7 +186,16 @@ impl TaskRunner {
             }
             None => (None, None, None),
         };
-        Self::validate_checker_resume_support(self.task_type, checker_state_store.is_some())?;
+        if self
+            .task_type
+            .is_some_and(|task_type| task_type.is_cdc_inline_check())
+            && checker_state_store.is_none()
+        {
+            bail!(Error::ConfigError(
+                "config [checker] with CDC tasks requires [resumer] resume_type=from_target or from_db to persist checker state"
+                    .into(),
+            ));
+        }
         let (extractor_client, sinker_client) = ConnClient::from_config(&self.config).await?;
         let enqueue_limiter = BufferLimiter::from_config(
             Some(&self.config.extractor_basic.rate_limiter),
@@ -295,17 +299,18 @@ impl TaskRunner {
         let sinker_monitor = self.sinker_monitor.clone();
         let checker_monitor = self.checker_monitor.clone();
         let task_monitor = self.task_monitor.clone();
+        let global_flush_monitors: Vec<Arc<dyn FlushableMonitor + Send + Sync>> = vec![
+            extractor_monitor,
+            pipeline_monitor,
+            sinker_monitor,
+            checker_monitor,
+            task_monitor,
+        ];
         let global_monitor_task = tokio::spawn(async move {
-            Self::flush_monitors_generic::<GroupMonitor, TaskMonitor>(
+            TaskUtil::flush_monitors(
                 interval_secs,
                 global_shut_down_clone,
-                &[
-                    extractor_monitor,
-                    pipeline_monitor,
-                    sinker_monitor,
-                    checker_monitor,
-                ],
-                &[task_monitor],
+                &global_flush_monitors,
             )
             .await
         });
@@ -393,17 +398,7 @@ impl TaskRunner {
         let semaphore = Arc::clone(semaphore);
         let task_context = TaskContext {
             id: single_task_id.clone(),
-            extractor_config: task_context.extractor_config,
-            extractor_client: task_context.extractor_client,
-            sinker_client: task_context.sinker_client,
-            router: task_context.router,
-            recorder: task_context.recorder,
-            recovery: task_context.recovery,
-            checker_state_store: task_context.checker_state_store,
-            check_summary: task_context.check_summary,
-            partition_cols: task_context.partition_cols,
-            enqueue_limiter: task_context.enqueue_limiter,
-            dequeue_limiter: task_context.dequeue_limiter,
+            ..task_context
         };
         let me = self.clone();
         join_set.spawn(async move {
@@ -474,17 +469,20 @@ impl TaskRunner {
         )
         .await?;
 
-        // extractor
         let monitor_time_window_secs = self.config.pipeline.counter_time_window_secs;
         let monitor_max_sub_count = self.config.pipeline.counter_max_sub_count;
         let monitor_count_window = self.config.pipeline.capacity_limiter.buffer_size as u64;
-        let extractor_monitor = Arc::new(Monitor::new(
-            "extractor",
-            &single_task_id,
-            monitor_time_window_secs,
-            monitor_max_sub_count,
-            monitor_count_window,
-        ));
+        let build_monitor = |name| {
+            Arc::new(Monitor::new(
+                name,
+                &single_task_id,
+                monitor_time_window_secs,
+                monitor_max_sub_count,
+                monitor_count_window,
+            ))
+        };
+
+        let extractor_monitor = build_monitor("extractor");
         let extractor = ExtractorUtil::create_extractor(
             &self.config,
             &extractor_config,
@@ -501,14 +499,7 @@ impl TaskRunner {
         .await?;
         let extractor = Arc::new(Mutex::new(extractor));
 
-        // checker
-        let checker_monitor = Arc::new(Monitor::new(
-            "checker",
-            &single_task_id,
-            monitor_time_window_secs,
-            monitor_max_sub_count,
-            monitor_count_window,
-        ));
+        let checker_monitor = build_monitor("checker");
         let checker = self
             .create_checker(
                 self.config.checker.as_ref(),
@@ -520,14 +511,7 @@ impl TaskRunner {
             )
             .await?;
 
-        // sinkers
-        let sinker_monitor = Arc::new(Monitor::new(
-            "sinker",
-            &single_task_id,
-            monitor_time_window_secs,
-            monitor_max_sub_count,
-            monitor_count_window,
-        ));
+        let sinker_monitor = build_monitor("sinker");
         let sinkers = SinkerUtil::create_sinkers(
             &self.config,
             &extractor_config,
@@ -541,15 +525,7 @@ impl TaskRunner {
         )
         .await?;
 
-        // pipeline
-        let pipeline_monitor = Arc::new(Monitor::new(
-            "pipeline",
-            &single_task_id,
-            monitor_time_window_secs,
-            monitor_max_sub_count,
-            monitor_count_window,
-        ));
-
+        let pipeline_monitor = build_monitor("pipeline");
         let pipeline = self
             .create_pipeline(
                 buffer,
@@ -564,41 +540,48 @@ impl TaskRunner {
             .await?;
         let pipeline = Arc::new(Mutex::new(pipeline));
 
-        self.register_single_task_monitors(
+        self.extractor_monitor
+            .add_monitor(&single_task_id, extractor_monitor.clone());
+        self.pipeline_monitor
+            .add_monitor(&single_task_id, pipeline_monitor.clone());
+        self.sinker_monitor
+            .add_monitor(&single_task_id, sinker_monitor.clone());
+        self.checker_monitor
+            .add_monitor(&single_task_id, checker_monitor.clone());
+        self.task_monitor.register(
             &single_task_id,
+            vec![
+                (MonitorType::Extractor, extractor_monitor.clone()),
+                (MonitorType::Pipeline, pipeline_monitor.clone()),
+                (MonitorType::Sinker, sinker_monitor.clone()),
+                (MonitorType::Checker, checker_monitor.clone()),
+            ],
+        );
+
+        let interval_secs = self.config.pipeline.checkpoint_interval_secs;
+        let mut single_task_flush_monitors: Vec<Arc<dyn FlushableMonitor + Send + Sync>> = vec![
             extractor_monitor.clone(),
             pipeline_monitor.clone(),
             sinker_monitor.clone(),
             checker_monitor.clone(),
-        )
-        .await;
-
-        let interval_secs = self.config.pipeline.checkpoint_interval_secs;
-        let tasks: Vec<Arc<TaskMonitor>> = if is_multi_task {
-            vec![]
-        } else {
-            vec![self.task_monitor.clone()]
-        };
+        ];
+        if !is_multi_task {
+            single_task_flush_monitors.push(self.task_monitor.clone());
+        }
         let monitor_shut_down = shut_down.clone();
         let monitor_task = tokio::spawn(async move {
-            Self::flush_monitors_generic::<Monitor, TaskMonitor>(
+            TaskUtil::flush_monitors(
                 interval_secs,
                 monitor_shut_down,
-                &[
-                    extractor_monitor,
-                    pipeline_monitor,
-                    sinker_monitor,
-                    checker_monitor,
-                ],
-                &tasks,
+                &single_task_flush_monitors,
             )
             .await;
-            SingleTaskWorkerResult::Completed(SingleTaskWorker::Monitor)
+            Ok(())
         });
         let parent_cancel_forwarder = parent_cancel.map(|parent_cancel| {
             let shut_down = shut_down.clone();
             tokio::spawn(async move {
-                Self::wait_for_shutdown(parent_cancel).await;
+                TaskUtil::wait_for_shutdown(parent_cancel).await;
                 shut_down.store(true, Ordering::Release);
             })
         });
@@ -644,123 +627,69 @@ impl TaskRunner {
             }
         }
 
-        self.unregister_single_task_monitors(&single_task_id).await;
+        self.extractor_monitor.remove_monitor(&single_task_id);
+        self.pipeline_monitor.remove_monitor(&single_task_id);
+        self.sinker_monitor.remove_monitor(&single_task_id);
+        self.checker_monitor.remove_monitor(&single_task_id);
+        self.task_monitor.unregister(
+            &single_task_id,
+            vec![
+                MonitorType::Extractor,
+                MonitorType::Pipeline,
+                MonitorType::Sinker,
+                MonitorType::Checker,
+            ],
+        );
         worker_result
-    }
-
-    async fn register_single_task_monitors(
-        &self,
-        single_task_id: &str,
-        extractor_monitor: Arc<Monitor>,
-        pipeline_monitor: Arc<Monitor>,
-        sinker_monitor: Arc<Monitor>,
-        checker_monitor: Arc<Monitor>,
-    ) {
-        tokio::join!(
-            async {
-                self.extractor_monitor
-                    .add_monitor(single_task_id, extractor_monitor.clone());
-            },
-            async {
-                self.pipeline_monitor
-                    .add_monitor(single_task_id, pipeline_monitor.clone());
-            },
-            async {
-                self.sinker_monitor
-                    .add_monitor(single_task_id, sinker_monitor.clone());
-            },
-            async {
-                self.checker_monitor
-                    .add_monitor(single_task_id, checker_monitor.clone());
-            },
-            async {
-                self.task_monitor.register(
-                    single_task_id,
-                    vec![
-                        (MonitorType::Extractor, extractor_monitor.clone()),
-                        (MonitorType::Pipeline, pipeline_monitor.clone()),
-                        (MonitorType::Sinker, sinker_monitor.clone()),
-                        (MonitorType::Checker, checker_monitor.clone()),
-                    ],
-                );
-            }
-        );
-    }
-
-    async fn unregister_single_task_monitors(&self, single_task_id: &str) {
-        tokio::join!(
-            async {
-                self.extractor_monitor.remove_monitor(single_task_id);
-            },
-            async {
-                self.pipeline_monitor.remove_monitor(single_task_id);
-            },
-            async {
-                self.sinker_monitor.remove_monitor(single_task_id);
-            },
-            async {
-                self.checker_monitor.remove_monitor(single_task_id);
-            },
-            async {
-                self.task_monitor.unregister(
-                    single_task_id,
-                    vec![
-                        MonitorType::Extractor,
-                        MonitorType::Pipeline,
-                        MonitorType::Sinker,
-                        MonitorType::Checker,
-                    ],
-                );
-            }
-        );
     }
 
     async fn run_single_task_workers(
         extractor: Arc<Mutex<Box<dyn Extractor + Send>>>,
         pipeline: Arc<Mutex<Box<dyn Pipeline + Send>>>,
-        monitor_task: tokio::task::JoinHandle<SingleTaskWorkerResult>,
+        monitor_task: tokio::task::JoinHandle<anyhow::Result<()>>,
         shut_down: Arc<AtomicBool>,
     ) -> anyhow::Result<()> {
         let mut join_set = JoinSet::new();
 
         let extractor_worker = extractor.clone();
         join_set.spawn(async move {
-            match Self::run_extractor_worker(extractor_worker).await {
-                Ok(()) => SingleTaskWorkerResult::Completed(SingleTaskWorker::Extractor),
-                Err(err) => SingleTaskWorkerResult::Failed(SingleTaskWorker::Extractor, err),
-            }
+            (
+                SingleTaskWorker::Extractor,
+                Self::run_extractor_worker(extractor_worker).await,
+            )
         });
 
         let pipeline_worker = pipeline.clone();
         join_set.spawn(async move {
-            match Self::run_pipeline_worker(pipeline_worker).await {
-                Ok(()) => SingleTaskWorkerResult::Completed(SingleTaskWorker::Pipeline),
-                Err(err) => SingleTaskWorkerResult::Failed(SingleTaskWorker::Pipeline, err),
-            }
+            (
+                SingleTaskWorker::Pipeline,
+                Self::run_pipeline_worker(pipeline_worker).await,
+            )
         });
 
         join_set.spawn(async move {
-            match monitor_task.await {
-                Ok(result) => result,
-                Err(err) => SingleTaskWorkerResult::Failed(
-                    SingleTaskWorker::Monitor,
-                    anyhow::anyhow!("monitor task join error: {}", err),
-                ),
-            }
+            (
+                SingleTaskWorker::Monitor,
+                monitor_task
+                    .await
+                    .context("monitor task join error")
+                    .and_then(|result| result),
+            )
         });
 
         let mut extractor_done = false;
         let mut pipeline_done = false;
         let mut failure = None;
+        let mut mark_done = |kind| match kind {
+            SingleTaskWorker::Extractor => extractor_done = true,
+            SingleTaskWorker::Pipeline => pipeline_done = true,
+            SingleTaskWorker::Monitor => {}
+        };
 
         while let Some(result) = join_set.join_next().await {
             match result {
-                Ok(SingleTaskWorkerResult::Completed(kind)) => match kind {
-                    SingleTaskWorker::Extractor => extractor_done = true,
-                    SingleTaskWorker::Pipeline => pipeline_done = true,
-                    SingleTaskWorker::Monitor => {}
-                },
-                Ok(SingleTaskWorkerResult::Failed(kind, err)) => {
+                Ok((kind, Ok(()))) => mark_done(kind),
+                Ok((kind, Err(err))) => {
                     failure = Some((Some(kind), err));
                     break;
                 }
@@ -780,12 +709,8 @@ impl TaskRunner {
 
             while let Some(result) = join_set.join_next().await {
                 match result {
-                    Ok(SingleTaskWorkerResult::Completed(kind)) => match kind {
-                        SingleTaskWorker::Extractor => extractor_done = true,
-                        SingleTaskWorker::Pipeline => pipeline_done = true,
-                        SingleTaskWorker::Monitor => {}
-                    },
-                    Ok(SingleTaskWorkerResult::Failed(kind, shutdown_err)) => {
+                    Ok((kind, Ok(()))) => mark_done(kind),
+                    Ok((kind, Err(shutdown_err))) => {
                         log_error!(
                             "single task worker [{}] also failed during shutdown, error: {:#}",
                             kind.as_str(),
@@ -969,13 +894,20 @@ impl TaskRunner {
         } else {
             None
         };
-        let checker_batch_size = Self::resolve_checker_batch_size(cfg);
+        let checker_batch_size = cfg.batch_size.max(1);
+        if cfg.batch_size == 0 {
+            log_warn!("checker.batch_size=0 is invalid. Using 1.");
+        }
         let check_log_dir_base = if cfg.check_log_dir.is_empty() {
             format!("{}/check", self.config.runtime.log_dir)
         } else {
             cfg.check_log_dir.clone()
         };
-        let checker_task_id = self.build_checker_task_id(single_task_id);
+        let checker_task_id = if single_task_id.is_empty() {
+            self.config.global.task_id.clone()
+        } else {
+            format!("{}::{}", self.config.global.task_id, single_task_id)
+        };
         let cdc_check_log_max_file_size =
             parse_size_limit(&cfg.check_log_file_size).map_err(|e| {
                 Error::ConfigError(format!(
@@ -1083,11 +1015,40 @@ impl TaskRunner {
                 )
             })?;
             let s3_client = TaskUtil::create_s3_client(s3_cfg)?;
-            let key_prefix = self.build_checker_s3_key_prefix(&cfg.s3_key_prefix, single_task_id);
+            let key_prefix = if single_task_id.is_empty() {
+                if cfg.s3_key_prefix.is_empty() {
+                    format!("{}/check", self.config.global.task_id)
+                } else {
+                    cfg.s3_key_prefix.clone()
+                }
+            } else {
+                let base = if cfg.s3_key_prefix.is_empty() {
+                    format!("{}/check", self.config.global.task_id)
+                } else {
+                    cfg.s3_key_prefix.clone()
+                };
+                let scope = single_task_id
+                    .chars()
+                    .map(|ch| {
+                        if ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-') {
+                            ch
+                        } else {
+                            '_'
+                        }
+                    })
+                    .collect::<String>();
+                let scope = if scope.is_empty() {
+                    "default".to_string()
+                } else {
+                    scope
+                };
+                format!("{}/{}", base.trim_end_matches('/'), scope)
+            };
             Some((s3_client, key_prefix))
         } else {
             None
         };
+        let state_store = checker_state_store.clone();
 
         let build_check_context =
             |extractor_meta_manager, reverse_router, revise_match_full_row| CheckContext {
@@ -1112,9 +1073,8 @@ impl TaskRunner {
                 cdc_check_log_max_rows,
                 s3_output: s3_output.clone(),
                 cdc_check_log_interval_secs: cfg.cdc_check_log_interval_secs,
-                state_store: checker_state_store.clone(),
+                state_store: state_store.clone(),
                 expected_resume_position: expected_resume_position.clone(),
-                fail_open_on_runtime_error: inline_check,
             };
 
         match checker_db_type {
@@ -1266,73 +1226,6 @@ impl TaskRunner {
             *handle_guard = Some(handle);
         }
         Ok(())
-    }
-
-    async fn flush_monitors_generic<T1, T2>(
-        interval_secs: u64,
-        shut_down: Arc<AtomicBool>,
-        t1_monitors: &[Arc<T1>],
-        t2_monitors: &[Arc<T2>],
-    ) where
-        T1: FlushableMonitor + Send + Sync + 'static,
-        T2: FlushableMonitor + Send + Sync + 'static,
-    {
-        let mut interval = tokio::time::interval(Duration::from_secs(interval_secs));
-        interval.tick().await;
-
-        loop {
-            if shut_down.load(Ordering::Acquire) {
-                Self::do_flush_monitors(t1_monitors, t2_monitors).await;
-                break;
-            }
-
-            select! {
-                _ = interval.tick() => {
-                    Self::do_flush_monitors(t1_monitors, t2_monitors).await;
-                }
-                _ = Self::wait_for_shutdown(shut_down.clone()) => {
-                    log_info!("task shutdown detected, do final flush");
-                    Self::do_flush_monitors(t1_monitors, t2_monitors).await;
-                    break;
-                }
-            }
-        }
-    }
-
-    async fn wait_for_shutdown(shut_down: Arc<AtomicBool>) {
-        loop {
-            if shut_down.load(Ordering::Acquire) {
-                break;
-            }
-            TimeUtil::sleep_millis(100).await;
-        }
-    }
-
-    async fn do_flush_monitors<T1, T2>(t1_monitors: &[Arc<T1>], t2_monitors: &[Arc<T2>])
-    where
-        T1: FlushableMonitor + Send + Sync + 'static,
-        T2: FlushableMonitor + Send + Sync + 'static,
-    {
-        let t1_futures = t1_monitors
-            .iter()
-            .map(|monitor| {
-                let monitor = monitor.clone();
-                async move { monitor.flush().await }
-            })
-            .collect::<Vec<_>>();
-
-        let t2_futures = t2_monitors
-            .iter()
-            .map(|monitor| {
-                let monitor = monitor.clone();
-                async move { monitor.flush().await }
-            })
-            .collect::<Vec<_>>();
-
-        tokio::join!(
-            futures::future::join_all(t1_futures),
-            futures::future::join_all(t2_futures)
-        );
     }
 
     async fn pre_single_task(
@@ -1705,21 +1598,6 @@ impl TaskRunner {
         }
     }
 
-    fn validate_checker_resume_support(
-        task_type: Option<TaskType>,
-        has_checker_state_store: bool,
-    ) -> anyhow::Result<()> {
-        if task_type.is_some_and(|task_type| task_type.is_cdc_inline_check())
-            && !has_checker_state_store
-        {
-            bail!(Error::ConfigError(
-                "config [checker] with CDC tasks requires [resumer] resume_type=from_target or from_db to persist checker state"
-                    .into(),
-            ));
-        }
-        Ok(())
-    }
-
     fn derive_single_task_id(task_context_id: &str, extractor_config: &ExtractorConfig) -> String {
         if !task_context_id.is_empty() {
             return task_context_id.to_string();
@@ -1730,56 +1608,6 @@ impl TaskRunner {
             ExtractorConfig::PgSnapshot { schema, tb, .. } => format!("{}.{}", schema, tb),
             ExtractorConfig::MongoSnapshot { db, tb, .. } => format!("{}.{}", db, tb),
             _ => String::new(),
-        }
-    }
-
-    fn build_checker_task_id(&self, single_task_id: &str) -> String {
-        if single_task_id.is_empty() {
-            self.config.global.task_id.clone()
-        } else {
-            format!("{}::{}", self.config.global.task_id, single_task_id)
-        }
-    }
-
-    fn resolve_checker_batch_size(cfg: &CheckerConfig) -> usize {
-        if cfg.batch_size == 0 {
-            log_warn!("checker.batch_size=0 is invalid. Using 1.");
-        }
-        cfg.batch_size.max(1)
-    }
-
-    fn sanitize_checker_scope(raw: &str) -> String {
-        let mut scoped = String::with_capacity(raw.len());
-        for ch in raw.chars() {
-            if ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-') {
-                scoped.push(ch);
-            } else {
-                scoped.push('_');
-            }
-        }
-
-        if scoped.is_empty() {
-            "default".to_string()
-        } else {
-            scoped
-        }
-    }
-
-    fn build_checker_s3_key_prefix(&self, configured_prefix: &str, single_task_id: &str) -> String {
-        let base = if configured_prefix.is_empty() {
-            format!("{}/check", self.config.global.task_id)
-        } else {
-            configured_prefix.to_string()
-        };
-
-        if single_task_id.is_empty() {
-            base
-        } else {
-            format!(
-                "{}/{}",
-                base.trim_end_matches('/'),
-                Self::sanitize_checker_scope(single_task_id)
-            )
         }
     }
 }

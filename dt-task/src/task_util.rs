@@ -1,7 +1,14 @@
-use std::{str::FromStr, sync::Arc, time::Duration};
+use std::{
+    str::FromStr,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+    time::Duration,
+};
 
 use anyhow::bail;
-use futures::TryStreamExt;
+use futures::{future::join_all, TryStreamExt};
 use mongodb::{bson::doc, options::ClientOptions};
 use opendal::Operator;
 use sqlx::{
@@ -32,6 +39,7 @@ use dt_common::{
         pg::pg_meta_manager::PgMetaManager,
         rdb_meta_manager::RdbMetaManager,
     },
+    monitor::FlushableMonitor,
     rdb_filter::RdbFilter,
     system_dbs::SystemDb,
 };
@@ -41,6 +49,7 @@ use dt_connector::{
         build_recorder, build_recovery, recorder::Recorder, recovery::Recovery, utils::ResumerUtil,
     },
 };
+use tokio::select;
 
 pub struct TaskUtil {}
 
@@ -714,6 +723,44 @@ WHERE
         )
         .await?;
         Ok((recorder, recovery, checker_state_store))
+    }
+
+    pub async fn flush_monitors(
+        interval_secs: u64,
+        shut_down: Arc<AtomicBool>,
+        monitors: &[Arc<dyn FlushableMonitor + Send + Sync>],
+    ) {
+        let mut interval = tokio::time::interval(Duration::from_secs(interval_secs));
+        interval.tick().await;
+
+        loop {
+            if shut_down.load(Ordering::Acquire) {
+                Self::flush_monitor_batch(monitors).await;
+                break;
+            }
+
+            select! {
+                _ = interval.tick() => Self::flush_monitor_batch(monitors).await,
+                _ = Self::wait_for_shutdown(shut_down.clone()) => {
+                    log_info!("task shutdown detected, do final flush");
+                    Self::flush_monitor_batch(monitors).await;
+                    break;
+                }
+            }
+        }
+    }
+
+    pub async fn wait_for_shutdown(shut_down: Arc<AtomicBool>) {
+        while !shut_down.load(Ordering::Acquire) {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    }
+
+    async fn flush_monitor_batch(monitors: &[Arc<dyn FlushableMonitor + Send + Sync>]) {
+        join_all(monitors.iter().cloned().map(|monitor| async move {
+            monitor.flush().await;
+        }))
+        .await;
     }
 }
 

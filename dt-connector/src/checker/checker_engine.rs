@@ -842,7 +842,6 @@ mod tests {
             cdc_check_log_interval_secs: 1,
             state_store: None,
             expected_resume_position: None,
-            fail_open_on_runtime_error: false,
         }
     }
 

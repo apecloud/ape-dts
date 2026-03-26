@@ -82,6 +82,63 @@ impl RdbCheckTestRunner {
         );
     }
 
+    fn set_cdc_check_log_interval_secs(&self, secs: u64) {
+        TestConfigUtil::update_task_config(
+            &self.base.base.task_config_file,
+            &self.base.base.task_config_file,
+            &[(
+                "checker".to_string(),
+                "cdc_check_log_interval_secs".to_string(),
+                secs.to_string(),
+            )],
+        );
+    }
+
+    fn enable_checker_s3_fail_open_trigger(&self) {
+        TestConfigUtil::update_task_config(
+            &self.base.base.task_config_file,
+            &self.base.base.task_config_file,
+            &[
+                (
+                    "checker".to_string(),
+                    "cdc_check_log_s3".to_string(),
+                    "true".to_string(),
+                ),
+                (
+                    "checker".to_string(),
+                    "s3_bucket".to_string(),
+                    "fail-open-checker".to_string(),
+                ),
+                (
+                    "checker".to_string(),
+                    "s3_access_key_id".to_string(),
+                    "dummy-access-key".to_string(),
+                ),
+                (
+                    "checker".to_string(),
+                    "s3_secret_access_key".to_string(),
+                    "dummy-secret-key".to_string(),
+                ),
+                (
+                    "checker".to_string(),
+                    "s3_region".to_string(),
+                    "us-east-1".to_string(),
+                ),
+                (
+                    "checker".to_string(),
+                    "s3_endpoint".to_string(),
+                    "http://127.0.0.1:1".to_string(),
+                ),
+                (
+                    "checker".to_string(),
+                    "s3_key_prefix".to_string(),
+                    "fail-open".to_string(),
+                ),
+            ],
+        );
+        self.set_cdc_check_log_interval_secs(1);
+    }
+
     fn task_log_file(&self) -> String {
         format!("{}/task.log", self.base.config.runtime.log_dir)
     }
@@ -543,6 +600,47 @@ impl RdbCheckTestRunner {
         );
         self.base.execute_clean_sqls().await?;
         self.reset_resumer_backend().await?;
+        Ok(())
+    }
+
+    pub async fn run_cdc_fail_open_clears_checker_state_test(
+        &self,
+        start_millis: u64,
+        parse_millis: u64,
+    ) -> anyhow::Result<()> {
+        self.reset_resumer_backend().await?;
+        self.base.execute_prepare_sqls().await?;
+        self.seed_checker_state_resume_metadata().await?;
+
+        let unresolved_rows = self.get_resumer_unresolved_row_count().await?;
+        assert!(
+            unresolved_rows > 0,
+            "expected seeded unresolved checker rows before fail-open"
+        );
+
+        self.enable_checker_s3_fail_open_trigger();
+        let task_result = async {
+            let task = self.base.spawn_cdc_task(start_millis, parse_millis).await?;
+            self.base.base.wait_task_finish(&task).await?;
+            TimeUtil::sleep_millis(1500).await;
+
+            let unresolved_rows_after = self.get_resumer_unresolved_row_count().await?;
+            assert_eq!(
+                unresolved_rows_after, 0,
+                "expected fail-open to clear persisted unresolved checker rows"
+            );
+            Ok::<(), anyhow::Error>(())
+        }
+        .await;
+
+        let cleanup_result = async {
+            self.base.execute_clean_sqls().await?;
+            self.reset_resumer_backend().await
+        }
+        .await;
+
+        task_result?;
+        cleanup_result?;
         Ok(())
     }
 

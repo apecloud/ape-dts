@@ -160,6 +160,15 @@ impl TaskConfig {
                         .into(),
                 ));
             }
+            if matches!(extractor_basic.extract_type, ExtractType::Cdc)
+                && matches!(sinker_basic.sink_type, SinkType::Write)
+                && !matches!(parallelizer.parallel_type, ParallelType::RdbCheck)
+            {
+                bail!(Error::ConfigError(
+                    "config [checker] with [extractor] extract_type=cdc and [sinker] sink_type=write requires [parallelizer] parallel_type=rdb_check"
+                        .into(),
+                ));
+            }
             if !matches!(pipeline.pipeline_type, PipelineType::Basic) {
                 bail!(Error::ConfigError(
                     "config [checker] only supports [pipeline] pipeline_type=basic".into()
@@ -1293,5 +1302,72 @@ impl TaskConfig {
             workers: loader.get_with_default(metrics_section, "workers", 2),
             metrics_labels,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        fs,
+        path::PathBuf,
+        time::{SystemTime, UNIX_EPOCH},
+    };
+
+    use super::TaskConfig;
+
+    fn cdc_inline_check_config(parallel_type: &str) -> String {
+        format!(
+            r#"[extractor]
+db_type=mysql
+extract_type=cdc
+url=mysql://127.0.0.1:3306
+server_id=1
+
+[sinker]
+db_type=mysql
+sink_type=write
+url=mysql://127.0.0.1:3307
+
+[checker]
+batch_size=2
+
+[parallelizer]
+parallel_type={parallel_type}
+"#
+        )
+    }
+
+    fn write_temp_task_config(contents: &str) -> PathBuf {
+        let unique_id = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("ape_dts_task_config_{unique_id}.ini"));
+        fs::write(&path, contents).unwrap();
+        path
+    }
+
+    #[test]
+    fn cdc_inline_check_requires_rdb_check_parallelizer() {
+        let config_path = write_temp_task_config(&cdc_inline_check_config("rdb_merge"));
+        let result = TaskConfig::new(config_path.to_str().unwrap());
+        fs::remove_file(config_path).unwrap();
+
+        match result {
+            Err(err) => assert_eq!(
+                err.to_string(),
+                "config error: config [checker] with [extractor] extract_type=cdc and [sinker] sink_type=write requires [parallelizer] parallel_type=rdb_check"
+            ),
+            Ok(_) => panic!("expected config validation error"),
+        }
+    }
+
+    #[test]
+    fn cdc_inline_check_accepts_rdb_check_parallelizer() {
+        let config_path = write_temp_task_config(&cdc_inline_check_config("rdb_check"));
+        let result = TaskConfig::new(config_path.to_str().unwrap());
+        fs::remove_file(config_path).unwrap();
+
+        assert!(result.is_ok());
     }
 }
