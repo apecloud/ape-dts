@@ -676,12 +676,11 @@ impl RdbQueryBuilder<'_> {
                         self.get_sql_value(index, col, &col_value_map.get(col), placeholder)?;
                     where_sql = format!("{} {} = {}", where_sql, escaped_col, sql_value);
                     not_null_cols.push(col.clone());
+                    index += 1;
                 }
             } else {
                 where_sql = format!("{} {} IS NULL", where_sql, escaped_col);
             }
-
-            index += 1;
         }
         Ok((where_sql.trim_start().into(), not_null_cols))
     }
