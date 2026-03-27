@@ -664,12 +664,11 @@ impl RdbQueryBuilder<'_> {
                         self.get_sql_value(index, col, &col_value_map.get(col), placeholder)?;
                     where_sql = format!("{} {} = {}", where_sql, escaped_col, sql_value);
                     not_null_cols.push(col.clone());
+                    index += 1;
                 }
             } else {
                 where_sql = format!("{} {} IS NULL", where_sql, escaped_col);
             }
-
-            index += 1;
         }
         Ok((where_sql.trim_start().into(), not_null_cols))
     }
@@ -1196,8 +1195,12 @@ mod tests {
 
         let query_info = builder.get_query_info(&row_data, false).unwrap();
 
-        assert!(query_info.sql.contains(r#"DELETE FROM "public"."t1" WHERE ctid IN ("#));
-        assert!(query_info.sql.contains(r#"SELECT ctid FROM "public"."t1" WHERE"#));
+        assert!(query_info
+            .sql
+            .contains(r#"DELETE FROM "public"."t1" WHERE ctid IN ("#));
+        assert!(query_info
+            .sql
+            .contains(r#"SELECT ctid FROM "public"."t1" WHERE"#));
         assert!(query_info.sql.contains("LIMIT 1"));
     }
 
@@ -1210,7 +1213,9 @@ mod tests {
         let query_info = builder.get_query_info(&row_data, false).unwrap();
 
         assert!(query_info.sql.starts_with(r#"UPDATE "public"."t1" SET"#));
-        assert!(query_info.sql.contains(r#"WHERE ctid IN (SELECT ctid FROM "public"."t1" WHERE"#));
+        assert!(query_info
+            .sql
+            .contains(r#"WHERE ctid IN (SELECT ctid FROM "public"."t1" WHERE"#));
         assert!(query_info.sql.contains("LIMIT 1"));
     }
 }
