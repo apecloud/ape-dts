@@ -1,30 +1,24 @@
 DROP SCHEMA IF EXISTS nopk CASCADE;
 CREATE SCHEMA nopk;
 
-```
 CREATE TABLE nopk.t1 (
     a INT,
     b VARCHAR(50),
     c INT
 );
-```
 ALTER TABLE nopk.t1 REPLICA IDENTITY FULL;
 
-```
 CREATE TABLE nopk.t2 (
     a INT,
     b VARCHAR(50),
     c VARCHAR(50),
     d INT
 );
-```
 ALTER TABLE nopk.t2 REPLICA IDENTITY FULL;
 
-```
 CREATE TABLE nopk.t3 (
     a INT,
     b INT,
     c INT
 );
-```
 ALTER TABLE nopk.t3 REPLICA IDENTITY FULL;
