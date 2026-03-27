@@ -8,4 +8,5 @@ DELETE FROM nopk.t2;
 
 INSERT INTO nopk.t3 VALUES (NULL, 2, 3);
 UPDATE nopk.t3 SET c = 30 WHERE a IS NULL AND b = 2 AND c = 3;
+UPDATE nopk.t3 SET c = NULL WHERE a IS NULL AND b = 2 AND c = 30;
 DELETE FROM nopk.t3;
