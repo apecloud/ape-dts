@@ -66,7 +66,7 @@ RUN --mount=type=cache,target=$CARGO_HOME/git,rw \
     if [ -n "${BUILD_TARGET}" ]; then \
         BUILD_ARGS="${BUILD_ARGS} --target ${BUILD_TARGET}" ; \
     fi ; \
-    cargo build --release ${BUILD_ARGS} --features metrics && \
+    RUSTFLAGS="--cfg tokio_unstable" cargo build --release ${BUILD_ARGS} --features metrics && \
     mkdir -p bin/ && \
     cp /app/target/release/${MODULE_NAME} bin/
 

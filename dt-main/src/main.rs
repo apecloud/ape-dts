@@ -7,6 +7,7 @@ const ENV_SHUTDOWN_TIMEOUT_SECS: &str = "SHUTDOWN_TIMEOUT_SECS";
 
 #[tokio::main]
 async fn main() {
+    console_subscriber::init();
     env::set_var("RUST_BACKTRACE", "1");
 
     tokio::spawn(async {
