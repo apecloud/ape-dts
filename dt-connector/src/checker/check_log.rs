@@ -38,7 +38,9 @@ pub struct CheckLog {
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct DiffColValue {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub src: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dst: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub src_type: Option<String>,

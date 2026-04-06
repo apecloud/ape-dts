@@ -14,6 +14,11 @@ The checker reuses the parsed `[sinker]` target directly, so `[checker]` must no
 
 This flow is currently supported only for MySQL and PostgreSQL write sinkers.
 
+Inline cdc check is best-effort here as well: writes stay on the main path. If the checker queue
+reaches `[checker].queue_size`, the oldest pending checker batch is dropped instead of blocking new
+writes. If the checker fails at runtime, inline checking is disabled and CDC sync continues without
+further checking.
+
 # Cyclic replication
 
 The main challenge for two-way data sync is to avoid data cyclic replication. Considering the following scenario:

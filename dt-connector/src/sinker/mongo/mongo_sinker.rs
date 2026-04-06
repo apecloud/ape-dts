@@ -9,7 +9,7 @@ use mongodb::{
 };
 use tokio::time::Instant;
 
-use crate::sinker::checked_sinker::CheckedSinkTarget;
+use crate::sinker::check_sinker::CheckWrappedSink;
 use crate::{call_batch_fn, rdb_router::RdbRouter, sinker::base_sinker::BaseSinker, Sinker};
 use dt_common::{
     log_error,
@@ -59,7 +59,7 @@ impl Sinker for MongoSinker {
 }
 
 #[async_trait]
-impl CheckedSinkTarget for MongoSinker {
+impl CheckWrappedSink for MongoSinker {
     async fn sink_dml_borrowed(&mut self, data: &mut [RowData], batch: bool) -> anyhow::Result<()> {
         if data.is_empty() {
             return Ok(());

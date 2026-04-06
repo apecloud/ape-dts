@@ -93,6 +93,8 @@
 - 更像“持续对账”。
 - 不一致会进入 checker state/store，而不是只走短 retry。
 - checkpoint / state store 与 checker 生命周期耦合更深。
+- 运行时错误按单次操作处理：记录错误日志，不影响主写入链路，并继续处理后续 checker 消息。
+- checkpoint / 元数据刷新这类控制信号与 checker DML 积压解耦，不会因为排队批次过多而阻塞主链路。
 
 #### Inline cdc check 的配置约束
 
@@ -108,6 +110,8 @@
 会继续生效或被强制改写的配置：
 
 - `[checker].batch_size`：继续生效，且不会 fallback 到 `[sinker].batch_size`。
+- `[checker].queue_size`：按待处理 checker DML 批次数计数；队列满时会丢弃最旧的待校验批次并记录
+  warning 日志。checkpoint、`refresh_meta` 等控制信号会绕过这条队列。
 - `[checker].max_retries` 与 `[checker].retry_interval_secs`：inline cdc check 下强制按 0 处理。
 
 ## 示例: MySQL -> MySQL

@@ -2,27 +2,34 @@ use super::*;
 use anyhow::Context;
 use std::collections::{BTreeMap, BTreeSet};
 
-fn build_identity_json(entry: &CheckEntry) -> anyhow::Result<String> {
+#[derive(Serialize)]
+struct IdentityJsonRef<'a> {
+    schema: &'a str,
+    tb: &'a str,
+    id_col_values: BTreeMap<&'a str, &'a Option<String>>,
+}
+
+fn build_identity_json_ref(entry: &CheckEntry) -> IdentityJsonRef<'_> {
     let id_col_values = entry
         .log
         .id_col_values
         .iter()
-        .map(|(key, value)| (key.clone(), value.clone()))
+        .map(|(key, value)| (key.as_str(), value))
         .collect::<BTreeMap<_, _>>();
-    serde_json::to_string(&serde_json::json!({
-        "schema": entry.log.schema,
-        "tb": entry.log.tb,
-        "id_col_values": id_col_values,
-    }))
-    .map_err(anyhow::Error::from)
+    IdentityJsonRef {
+        schema: &entry.log.schema,
+        tb: &entry.log.tb,
+        id_col_values,
+    }
 }
 
-// Checker state needs a stable round-trip format; ColValue serde is optimized for readable JSON output.
-// If this keeps growing, move it into a shared persistence codec near ColValue instead of duplicating variants here.
+fn build_identity_json(entry: &CheckEntry) -> anyhow::Result<String> {
+    serde_json::to_string(&build_identity_json_ref(entry)).map_err(anyhow::Error::from)
+}
+
 #[derive(Clone, Serialize, Deserialize)]
-enum PersistedColValue {
+enum PersistedKeyValue {
     None,
-    UnchangedToast,
     Bool(bool),
     Tiny(i8),
     UnsignedTiny(u8),
@@ -32,8 +39,6 @@ enum PersistedColValue {
     UnsignedLong(u32),
     LongLong(i64),
     UnsignedLongLong(u64),
-    Float(f32),
-    Double(f64),
     Decimal(String),
     Time(String),
     Date(String),
@@ -41,24 +46,12 @@ enum PersistedColValue {
     Timestamp(String),
     Year(u16),
     String(String),
-    RawString(Vec<u8>),
-    Blob(Vec<u8>),
-    Bit(u64),
-    Set(u64),
-    Enum(u32),
-    Set2(String),
-    Enum2(String),
-    Json(Vec<u8>),
-    Json2(String),
-    Json3(serde_json::Value),
-    MongoDoc(mongodb::bson::Document),
 }
 
-impl From<&ColValue> for PersistedColValue {
-    fn from(value: &ColValue) -> Self {
-        match value {
+impl PersistedKeyValue {
+    fn try_from_col_value(value: &ColValue) -> anyhow::Result<Self> {
+        Ok(match value {
             ColValue::None => Self::None,
-            ColValue::UnchangedToast => Self::UnchangedToast,
             ColValue::Bool(v) => Self::Bool(*v),
             ColValue::Tiny(v) => Self::Tiny(*v),
             ColValue::UnsignedTiny(v) => Self::UnsignedTiny(*v),
@@ -68,8 +61,6 @@ impl From<&ColValue> for PersistedColValue {
             ColValue::UnsignedLong(v) => Self::UnsignedLong(*v),
             ColValue::LongLong(v) => Self::LongLong(*v),
             ColValue::UnsignedLongLong(v) => Self::UnsignedLongLong(*v),
-            ColValue::Float(v) => Self::Float(*v),
-            ColValue::Double(v) => Self::Double(*v),
             ColValue::Decimal(v) => Self::Decimal(v.clone()),
             ColValue::Time(v) => Self::Time(v.clone()),
             ColValue::Date(v) => Self::Date(v.clone()),
@@ -77,188 +68,71 @@ impl From<&ColValue> for PersistedColValue {
             ColValue::Timestamp(v) => Self::Timestamp(v.clone()),
             ColValue::Year(v) => Self::Year(*v),
             ColValue::String(v) => Self::String(v.clone()),
-            ColValue::RawString(v) => Self::RawString(v.clone()),
-            ColValue::Blob(v) => Self::Blob(v.clone()),
-            ColValue::Bit(v) => Self::Bit(*v),
-            ColValue::Set(v) => Self::Set(*v),
-            ColValue::Enum(v) => Self::Enum(*v),
-            ColValue::Set2(v) => Self::Set2(v.clone()),
-            ColValue::Enum2(v) => Self::Enum2(v.clone()),
-            ColValue::Json(v) => Self::Json(v.clone()),
-            ColValue::Json2(v) => Self::Json2(v.clone()),
-            ColValue::Json3(v) => Self::Json3(v.clone()),
-            ColValue::MongoDoc(v) => Self::MongoDoc(v.clone()),
+            other => anyhow::bail!(
+                "unsupported pk col value for checkpoint: {}",
+                other.type_name()
+            ),
+        })
+    }
+
+    fn into_col_value(self) -> ColValue {
+        match self {
+            PersistedKeyValue::None => ColValue::None,
+            PersistedKeyValue::Bool(v) => ColValue::Bool(v),
+            PersistedKeyValue::Tiny(v) => ColValue::Tiny(v),
+            PersistedKeyValue::UnsignedTiny(v) => ColValue::UnsignedTiny(v),
+            PersistedKeyValue::Short(v) => ColValue::Short(v),
+            PersistedKeyValue::UnsignedShort(v) => ColValue::UnsignedShort(v),
+            PersistedKeyValue::Long(v) => ColValue::Long(v),
+            PersistedKeyValue::UnsignedLong(v) => ColValue::UnsignedLong(v),
+            PersistedKeyValue::LongLong(v) => ColValue::LongLong(v),
+            PersistedKeyValue::UnsignedLongLong(v) => ColValue::UnsignedLongLong(v),
+            PersistedKeyValue::Decimal(v) => ColValue::Decimal(v),
+            PersistedKeyValue::Time(v) => ColValue::Time(v),
+            PersistedKeyValue::Date(v) => ColValue::Date(v),
+            PersistedKeyValue::DateTime(v) => ColValue::DateTime(v),
+            PersistedKeyValue::Timestamp(v) => ColValue::Timestamp(v),
+            PersistedKeyValue::Year(v) => ColValue::Year(v),
+            PersistedKeyValue::String(v) => ColValue::String(v),
         }
     }
 }
 
-impl From<PersistedColValue> for ColValue {
-    fn from(value: PersistedColValue) -> Self {
-        match value {
-            PersistedColValue::None => Self::None,
-            PersistedColValue::UnchangedToast => Self::UnchangedToast,
-            PersistedColValue::Bool(v) => Self::Bool(v),
-            PersistedColValue::Tiny(v) => Self::Tiny(v),
-            PersistedColValue::UnsignedTiny(v) => Self::UnsignedTiny(v),
-            PersistedColValue::Short(v) => Self::Short(v),
-            PersistedColValue::UnsignedShort(v) => Self::UnsignedShort(v),
-            PersistedColValue::Long(v) => Self::Long(v),
-            PersistedColValue::UnsignedLong(v) => Self::UnsignedLong(v),
-            PersistedColValue::LongLong(v) => Self::LongLong(v),
-            PersistedColValue::UnsignedLongLong(v) => Self::UnsignedLongLong(v),
-            PersistedColValue::Float(v) => Self::Float(v),
-            PersistedColValue::Double(v) => Self::Double(v),
-            PersistedColValue::Decimal(v) => Self::Decimal(v),
-            PersistedColValue::Time(v) => Self::Time(v),
-            PersistedColValue::Date(v) => Self::Date(v),
-            PersistedColValue::DateTime(v) => Self::DateTime(v),
-            PersistedColValue::Timestamp(v) => Self::Timestamp(v),
-            PersistedColValue::Year(v) => Self::Year(v),
-            PersistedColValue::String(v) => Self::String(v),
-            PersistedColValue::RawString(v) => Self::RawString(v),
-            PersistedColValue::Blob(v) => Self::Blob(v),
-            PersistedColValue::Bit(v) => Self::Bit(v),
-            PersistedColValue::Set(v) => Self::Set(v),
-            PersistedColValue::Enum(v) => Self::Enum(v),
-            PersistedColValue::Set2(v) => Self::Set2(v),
-            PersistedColValue::Enum2(v) => Self::Enum2(v),
-            PersistedColValue::Json(v) => Self::Json(v),
-            PersistedColValue::Json2(v) => Self::Json2(v),
-            PersistedColValue::Json3(v) => Self::Json3(v),
-            PersistedColValue::MongoDoc(v) => Self::MongoDoc(v),
-        }
-    }
+#[derive(Clone, Serialize, Deserialize)]
+struct PersistedRecheckKey {
+    schema: String,
+    tb: String,
+    is_delete: bool,
+    pk: BTreeMap<String, PersistedKeyValue>,
 }
 
-fn persist_col_values(
-    col_values: &Option<HashMap<String, ColValue>>,
-) -> Option<HashMap<String, PersistedColValue>> {
-    col_values.as_ref().map(|values| {
-        values
+impl PersistedRecheckKey {
+    fn try_from_key(key: &RecheckKey) -> anyhow::Result<Self> {
+        let pk = key
+            .pk
             .iter()
-            .map(|(col, value)| (col.clone(), PersistedColValue::from(value)))
-            .collect()
-    })
-}
-
-fn restore_col_values(
-    col_values: Option<HashMap<String, PersistedColValue>>,
-) -> Option<HashMap<String, ColValue>> {
-    col_values.map(|values| {
-        values
-            .into_iter()
-            .map(|(col, value)| (col, ColValue::from(value)))
-            .collect()
-    })
-}
-
-#[derive(Clone, Serialize, Deserialize)]
-struct PersistedRowData {
-    schema: String,
-    tb: String,
-    row_type: RowType,
-    before: Option<HashMap<String, PersistedColValue>>,
-    after: Option<HashMap<String, PersistedColValue>>,
-    data_size: usize,
-    is_not_origin: bool,
-}
-
-impl From<&RowData> for PersistedRowData {
-    fn from(row_data: &RowData) -> Self {
-        Self {
-            schema: row_data.schema.clone(),
-            tb: row_data.tb.clone(),
-            row_type: row_data.row_type.clone(),
-            before: persist_col_values(&row_data.before),
-            after: persist_col_values(&row_data.after),
-            data_size: row_data.data_size,
-            is_not_origin: row_data.is_not_origin,
-        }
+            .map(|(col, value)| {
+                PersistedKeyValue::try_from_col_value(value).map(|value| (col.clone(), value))
+            })
+            .collect::<anyhow::Result<BTreeMap<_, _>>>()?;
+        Ok(Self {
+            schema: key.schema.clone(),
+            tb: key.tb.clone(),
+            is_delete: key.is_delete,
+            pk,
+        })
     }
-}
 
-impl From<PersistedRowData> for RowData {
-    fn from(row_data: PersistedRowData) -> Self {
-        RowData {
-            schema: row_data.schema,
-            tb: row_data.tb,
-            row_type: row_data.row_type,
-            before: restore_col_values(row_data.before),
-            after: restore_col_values(row_data.after),
-            data_size: row_data.data_size,
-            is_not_origin: row_data.is_not_origin,
-        }
-    }
-}
-
-#[derive(Clone, Serialize, Deserialize)]
-struct PersistedCheckLog {
-    schema: String,
-    tb: String,
-    target_schema: Option<String>,
-    target_tb: Option<String>,
-    id_col_values: HashMap<String, Option<String>>,
-    diff_col_values: HashMap<String, DiffColValue>,
-    src_row: Option<HashMap<String, PersistedColValue>>,
-    dst_row: Option<HashMap<String, PersistedColValue>>,
-}
-
-impl From<&CheckLog> for PersistedCheckLog {
-    fn from(log: &CheckLog) -> Self {
-        Self {
-            schema: log.schema.clone(),
-            tb: log.tb.clone(),
-            target_schema: log.target_schema.clone(),
-            target_tb: log.target_tb.clone(),
-            id_col_values: log.id_col_values.clone(),
-            diff_col_values: log.diff_col_values.clone(),
-            src_row: persist_col_values(&log.src_row),
-            dst_row: persist_col_values(&log.dst_row),
-        }
-    }
-}
-
-impl From<PersistedCheckLog> for CheckLog {
-    fn from(log: PersistedCheckLog) -> Self {
-        Self {
-            schema: log.schema,
-            tb: log.tb,
-            target_schema: log.target_schema,
-            target_tb: log.target_tb,
-            id_col_values: log.id_col_values,
-            diff_col_values: log.diff_col_values,
-            src_row: restore_col_values(log.src_row),
-            dst_row: restore_col_values(log.dst_row),
-        }
-    }
-}
-
-#[derive(Clone, Serialize, Deserialize)]
-struct PersistedCheckEntry {
-    log: PersistedCheckLog,
-    revise_sql: Option<String>,
-    is_miss: bool,
-    src_row_data: PersistedRowData,
-}
-
-impl From<&CheckEntry> for PersistedCheckEntry {
-    fn from(entry: &CheckEntry) -> Self {
-        Self {
-            log: PersistedCheckLog::from(&entry.log),
-            revise_sql: entry.revise_sql.clone(),
-            is_miss: entry.is_miss,
-            src_row_data: PersistedRowData::from(&entry.src_row_data),
-        }
-    }
-}
-
-impl From<PersistedCheckEntry> for CheckEntry {
-    fn from(entry: PersistedCheckEntry) -> Self {
-        Self {
-            log: CheckLog::from(entry.log),
-            revise_sql: entry.revise_sql,
-            is_miss: entry.is_miss,
-            src_row_data: RowData::from(entry.src_row_data),
+    fn into_key(self) -> RecheckKey {
+        RecheckKey {
+            schema: self.schema,
+            tb: self.tb,
+            is_delete: self.is_delete,
+            pk: self
+                .pk
+                .into_iter()
+                .map(|(col, value)| (col, value.into_col_value()))
+                .collect(),
         }
     }
 }
@@ -296,7 +170,7 @@ impl<C: Checker> DataChecker<C> {
         let mut total_diff = 0usize;
 
         for entry in self.store.values() {
-            if entry.is_miss {
+            if entry.is_miss() {
                 total_miss += 1;
                 miss_buf_builder.push_json(&entry.log);
             } else {
@@ -315,7 +189,7 @@ impl<C: Checker> DataChecker<C> {
         let summary = CheckSummaryLog {
             start_time: self.ctx.summary.start_time.clone(),
             end_time: chrono::Local::now().to_rfc3339(),
-            is_consistent: !self.runtime_state.has_failed() && total_miss == 0 && total_diff == 0,
+            is_consistent: total_miss == 0 && total_diff == 0,
             miss_count: total_miss,
             diff_count: total_diff,
             skip_count: self.ctx.summary.skip_count,
@@ -353,7 +227,9 @@ impl<C: Checker> DataChecker<C> {
         let mut summary_with_newline = summary_buf.to_vec();
         summary_with_newline.push(b'\n');
         std::fs::write(path.join("summary.log"), &summary_with_newline)?;
-        std::fs::write(path.join("sql.log"), sql_buf)?;
+        if !sql_buf.is_empty() {
+            std::fs::write(path.join("sql.log"), sql_buf)?;
+        }
         Ok(())
     }
 
@@ -365,7 +241,7 @@ impl<C: Checker> DataChecker<C> {
                 row_key: store_key.row_key,
                 identity_key: hex::encode(openssl::sha::sha256(identity_json.as_bytes())),
                 identity_json,
-                payload: serde_json::to_string(&PersistedCheckEntry::from(entry))?,
+                payload: serde_json::to_string(&PersistedRecheckKey::try_from_key(&entry.key)?)?,
             });
         }
         Ok(rows)
@@ -376,20 +252,90 @@ impl<C: Checker> DataChecker<C> {
         let mut persisted_identity_keys = BTreeSet::new();
         for row in rows {
             persisted_identity_keys.insert(row.identity_key.clone());
-            let entry =
-                serde_json::from_str::<PersistedCheckEntry>(&row.payload).with_context(|| {
+            let key =
+                serde_json::from_str::<PersistedRecheckKey>(&row.payload).with_context(|| {
                     format!(
                         "Checker [{}] failed to parse state row key [{}]",
                         self.name, row.row_key
                     )
                 })?;
-            let entry = CheckEntry::from(entry);
-            let store_key = CheckerStoreKey::from_row_data(&entry.src_row_data, row.row_key);
+            let key = key.into_key();
+            let entry = self.build_restored_entry(key.clone());
+            let store_key = CheckerStoreKey::new(&key.schema, &key.tb, row.row_key);
             self.store.insert(store_key, entry);
         }
         self.persisted_identity_keys = Some(persisted_identity_keys);
         self.update_pending_counter();
         Ok(())
+    }
+
+    fn build_restored_entry(&self, key: RecheckKey) -> CheckEntry {
+        let lookup_row = key.to_lookup_row();
+        let source_row = self.ctx.reverse_router.route_row(lookup_row.clone());
+        let id_col_values = match source_row.row_type {
+            RowType::Delete => source_row.before.as_ref(),
+            _ => source_row.after.as_ref(),
+        }
+        .map(|values| {
+            values
+                .iter()
+                .map(|(col, value)| (col.clone(), value.to_option_string()))
+                .collect()
+        })
+        .unwrap_or_default();
+        let schema_changed =
+            source_row.schema != lookup_row.schema || source_row.tb != lookup_row.tb;
+
+        CheckEntry {
+            key,
+            log: CheckLog {
+                schema: source_row.schema,
+                tb: source_row.tb,
+                target_schema: schema_changed.then(|| lookup_row.schema),
+                target_tb: schema_changed.then(|| lookup_row.tb),
+                id_col_values,
+                diff_col_values: HashMap::new(),
+                src_row: None,
+                dst_row: None,
+            },
+            revise_sql: None,
+            diff_cols: Some(Vec::new()),
+        }
+    }
+
+    async fn refetch_source_rows(&self, keys: &[RecheckKey]) -> anyhow::Result<Vec<RowData>> {
+        let source_checker = self
+            .ctx
+            .source_checker
+            .clone()
+            .context("missing source_checker for cdc recheck")?;
+        let forward_router = self.ctx.reverse_router.reverse();
+        let lookup_rows = keys
+            .iter()
+            .map(RecheckKey::to_lookup_row)
+            .map(|row| self.ctx.reverse_router.route_row(row))
+            .collect::<Vec<_>>();
+        let mut grouped = HashMap::<(&str, &str), Vec<&RowData>>::new();
+        for row in &lookup_rows {
+            grouped
+                .entry((row.schema.as_str(), row.tb.as_str()))
+                .or_default()
+                .push(row);
+        }
+
+        let mut checker = source_checker.lock().await;
+        let mut rows = Vec::new();
+        for group in grouped.into_values() {
+            rows.extend(
+                checker
+                    .fetch(&group)
+                    .await?
+                    .dst_rows
+                    .into_iter()
+                    .map(|row| forward_router.route_row(row)),
+            );
+        }
+        Ok(rows)
     }
 
     pub async fn load_initial_state(&mut self) -> anyhow::Result<bool> {
@@ -416,23 +362,93 @@ impl<C: Checker> DataChecker<C> {
     }
 
     pub async fn run_recheck(&mut self) -> anyhow::Result<()> {
-        let rows_for_recheck: Vec<RowData> = self
-            .store
-            .values()
-            .map(|entry| entry.src_row_data.clone())
-            .collect();
-        if rows_for_recheck.is_empty() {
+        let keys_for_recheck: Vec<RecheckKey> =
+            self.store.values().map(|entry| entry.key.clone()).collect();
+        if keys_for_recheck.is_empty() {
             return Ok(());
         }
 
         log_info!(
-            "Checker [{}] enters RECHECKING, replay {} unresolved rows",
+            "Checker [{}] enters RECHECKING, replay {} unresolved keys",
             self.name,
-            rows_for_recheck.len()
+            keys_for_recheck.len()
         );
         let batch_size = self.ctx.batch_size.max(1);
-        for chunk in rows_for_recheck.chunks(batch_size) {
-            self.process_batch(chunk, false).await?;
+        for chunk in keys_for_recheck.chunks(batch_size) {
+            let mut grouped = HashMap::<(&str, &str), Vec<RecheckKey>>::new();
+            for key in chunk {
+                grouped
+                    .entry((key.schema.as_str(), key.tb.as_str()))
+                    .or_default()
+                    .push(key.clone());
+            }
+            for keys in grouped.into_values() {
+                let lookup_rows = keys
+                    .iter()
+                    .map(RecheckKey::to_lookup_row)
+                    .collect::<Vec<_>>();
+                let lookup_refs = lookup_rows.iter().collect::<Vec<_>>();
+                let fetch_result = self.checker.fetch(&lookup_refs).await?;
+                let tb_meta = fetch_result.tb_meta;
+                let source_rows = self.refetch_source_rows(&keys).await?;
+                let mut source_map = HashMap::new();
+                for row in source_rows {
+                    if let Some(row_key) = Self::lookup_match_key(&row, tb_meta.basic())? {
+                        source_map.insert(row_key, row);
+                    }
+                }
+                let mut target_map = HashMap::new();
+                for row in fetch_result.dst_rows {
+                    if let Some(row_key) = Self::lookup_match_key(&row, tb_meta.basic())? {
+                        target_map.insert(row_key, row);
+                    }
+                }
+
+                for (key, lookup_row) in keys.iter().zip(lookup_rows.iter()) {
+                    let Some(row_key) = Self::lookup_match_key(lookup_row, tb_meta.basic())? else {
+                        continue;
+                    };
+                    match (source_map.remove(&row_key), target_map.remove(&row_key)) {
+                        (Some(source_row), Some(target_row)) => {
+                            if let Some(check_result) = Self::compare_src_dst(
+                                &source_row,
+                                Some(&target_row),
+                                tb_meta.as_ref(),
+                            )? {
+                                let entry = Self::build_check_entry(
+                                    check_result,
+                                    &source_row,
+                                    Some(&target_row),
+                                    &mut self.ctx,
+                                    tb_meta.as_ref(),
+                                )
+                                .await?;
+                                self.store_entry(lookup_row, row_key, entry).await;
+                            } else {
+                                self.remove_store_entry(lookup_row, row_key);
+                            }
+                        }
+                        (Some(source_row), None) => {
+                            let entry = Self::build_check_entry(
+                                CheckInconsistency::Miss,
+                                &source_row,
+                                None,
+                                &mut self.ctx,
+                                tb_meta.as_ref(),
+                            )
+                            .await?;
+                            self.store_entry(lookup_row, row_key, entry).await;
+                        }
+                        (None, Some(_)) => {
+                            let entry = self.build_restored_entry(key.clone());
+                            self.store_entry(lookup_row, row_key, entry).await;
+                        }
+                        (None, None) => {
+                            self.remove_store_entry(lookup_row, row_key);
+                        }
+                    }
+                }
+            }
             if self.store_dirty {
                 if let Some(position) = self.last_checkpoint_position.clone() {
                     self.record_checkpoint(position).await.with_context(|| {
@@ -519,14 +535,172 @@ impl<C: Checker> DataChecker<C> {
         let p = key_prefix;
         let miss_key = format!("{p}/miss.log");
         let diff_key = format!("{p}/diff.log");
-        let sql_key = format!("{p}/sql.log");
         let summary_key = format!("{p}/summary.log");
-        tokio::try_join!(
-            s3_client.write(&miss_key, miss_buf.to_vec()),
-            s3_client.write(&diff_key, diff_buf.to_vec()),
-            s3_client.write(&sql_key, sql_buf.to_vec()),
-            s3_client.write(&summary_key, summary_buf.to_vec()),
-        )?;
+        if sql_buf.is_empty() {
+            tokio::try_join!(
+                s3_client.write(&miss_key, miss_buf.to_vec()),
+                s3_client.write(&diff_key, diff_buf.to_vec()),
+                s3_client.write(&summary_key, summary_buf.to_vec()),
+            )?;
+        } else {
+            let sql_key = format!("{p}/sql.log");
+            tokio::try_join!(
+                s3_client.write(&miss_key, miss_buf.to_vec()),
+                s3_client.write(&diff_key, diff_buf.to_vec()),
+                s3_client.write(&sql_key, sql_buf.to_vec()),
+                s3_client.write(&summary_key, summary_buf.to_vec()),
+            )?;
+        }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use async_trait::async_trait;
+    use serde_json::Value;
+    use tokio::sync::mpsc;
+
+    fn build_recheck_key() -> RecheckKey {
+        RecheckKey {
+            schema: "target_db".to_string(),
+            tb: "target_tb".to_string(),
+            is_delete: false,
+            pk: BTreeMap::from([
+                ("a".to_string(), ColValue::Long(1)),
+                ("b".to_string(), ColValue::String("2".to_string())),
+            ]),
+        }
+    }
+
+    #[test]
+    fn identity_json_ref_preserves_sorted_id_columns() {
+        let entry = CheckEntry {
+            key: build_recheck_key(),
+            log: CheckLog {
+                schema: "test_db".to_string(),
+                tb: "test_tb".to_string(),
+                target_schema: None,
+                target_tb: None,
+                id_col_values: HashMap::from([
+                    ("b".to_string(), Some("2".to_string())),
+                    ("a".to_string(), Some("1".to_string())),
+                ]),
+                diff_col_values: HashMap::new(),
+                src_row: None,
+                dst_row: None,
+            },
+            revise_sql: None,
+            diff_cols: Some(vec!["v".to_string()]),
+        };
+
+        let identity_json = serde_json::to_string(&build_identity_json_ref(&entry)).unwrap();
+        assert_eq!(
+            identity_json,
+            r#"{"schema":"test_db","tb":"test_tb","id_col_values":{"a":"1","b":"2"}}"#
+        );
+    }
+
+    #[test]
+    fn persisted_recheck_key_omits_full_rows_and_logs() {
+        let payload =
+            serde_json::to_value(PersistedRecheckKey::try_from_key(&build_recheck_key()).unwrap())
+                .unwrap();
+        let Value::Object(payload) = payload else {
+            panic!("payload should be a json object");
+        };
+
+        assert!(payload.contains_key("schema"));
+        assert!(payload.contains_key("tb"));
+        assert!(payload.contains_key("is_delete"));
+        assert!(payload.contains_key("pk"));
+    }
+
+    struct StaticChecker {
+        tb_meta: Arc<CheckerTbMeta>,
+        rows: Vec<RowData>,
+    }
+
+    #[async_trait]
+    impl Checker for StaticChecker {
+        async fn fetch(&mut self, _src_rows: &[&RowData]) -> anyhow::Result<FetchResult> {
+            Ok(FetchResult {
+                tb_meta: self.tb_meta.clone(),
+                dst_rows: self.rows.clone(),
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn run_recheck_removes_key_when_source_and_target_are_both_missing() {
+        let tb_meta = Arc::new(CheckerTbMeta::Mongo(
+            dt_common::meta::rdb_tb_meta::RdbTbMeta {
+                schema: "target_db".to_string(),
+                tb: "target_tb".to_string(),
+                id_cols: vec!["a".to_string(), "b".to_string()],
+                ..Default::default()
+            },
+        ));
+        let (_control_tx, control_rx) = mpsc::unbounded_channel();
+        let mut checker = DataChecker::new(
+            StaticChecker {
+                tb_meta: tb_meta.clone(),
+                rows: Vec::new(),
+            },
+            "task-1".to_string(),
+            CheckContext {
+                monitor: Arc::new(Monitor::new("checker", "unit-test", 1, 1, 1)),
+                task_monitor: None,
+                summary: CheckSummaryLog {
+                    start_time: "unit-test".to_string(),
+                    ..Default::default()
+                },
+                output_revise_sql: false,
+                extractor_meta_manager: None,
+                reverse_router: RdbRouter {
+                    schema_map: HashMap::new(),
+                    tb_map: HashMap::new(),
+                    col_map: HashMap::new(),
+                    topic_map: HashMap::new(),
+                },
+                output_full_row: false,
+                revise_match_full_row: false,
+                global_summary: None,
+                batch_size: 1,
+                retry_interval_secs: 0,
+                max_retries: 0,
+                is_cdc: true,
+                check_log_dir: String::new(),
+                cdc_check_log_max_file_size: 1,
+                cdc_check_log_max_rows: 1,
+                s3_output: None,
+                cdc_check_log_interval_secs: 1,
+                state_store: None,
+                source_checker: Some(Arc::new(Mutex::new(Box::new(StaticChecker {
+                    tb_meta: tb_meta.clone(),
+                    rows: Vec::new(),
+                })))),
+                expected_resume_position: None,
+            },
+            super::super::CheckerIo {
+                batch_queue: Arc::new(std::sync::Mutex::new(LimitedQueue::new(1))),
+                batch_notify: Arc::new(tokio::sync::Notify::new()),
+                control_rx,
+            },
+            "unit-test",
+        );
+        let key = build_recheck_key();
+        let row_key =
+            DataChecker::<StaticChecker>::lookup_match_key(&key.to_lookup_row(), tb_meta.basic())
+                .unwrap()
+                .unwrap();
+        checker.store.insert(
+            CheckerStoreKey::new(&key.schema, &key.tb, row_key),
+            checker.build_restored_entry(key),
+        );
+
+        checker.run_recheck().await.unwrap();
+        assert!(checker.store.is_empty());
     }
 }

@@ -388,34 +388,6 @@ impl CheckerStateStore {
             }
         }
     }
-
-    pub async fn clear_rows(&self, task_id: &str) -> Result<()> {
-        match &self.backend {
-            CheckerStateStoreBackend::MySql(pool) => {
-                let sql = format!(
-                    "DELETE FROM `{}`.`{}` WHERE task_id = ?",
-                    self.schema, self.rows_table
-                );
-                query(&sql)
-                    .bind(task_id)
-                    .execute(pool)
-                    .await
-                    .context("failed to clear checker unresolved rows")?;
-            }
-            CheckerStateStoreBackend::Postgres(pool) => {
-                let sql = format!(
-                    "DELETE FROM {}.{} WHERE task_id = $1",
-                    self.schema, self.rows_table
-                );
-                query(&sql)
-                    .bind(task_id)
-                    .execute(pool)
-                    .await
-                    .context("failed to clear checker unresolved rows")?;
-            }
-        }
-        Ok(())
-    }
 }
 
 fn parse_snapshot_rows<DB: Database, R: Row<Database = DB>>(

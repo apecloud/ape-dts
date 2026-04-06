@@ -85,14 +85,12 @@ Notes:
 
 **General behavior**
 - Checker only supports `[pipeline] pipeline_type=basic`.
-- `queue_size` counts queued checker work items, not rows. A full queue means the checker worker is
-  already holding `queue_size` pending batches/messages.
-- In inline write-after-check flows, hitting `queue_size` applies backpressure to the write path:
-  new writes wait until the checker queue has capacity instead of silently dropping check work.
-- In inline write-after-check flows, checker runtime failures are handled as best-effort fail-open
-  events: the checker is disabled and the main task continues without further checking.
-- For inline cdc check with checker state persistence enabled, fail-open clears persisted
-  unresolved rows so resume does not replay stale checker state later.
+- `queue_size` counts queued checker DML batches, not rows. Control signals such as checkpoint and
+  `refresh_meta` bypass this queue.
+- In inline write-after-check flows, if the checker DML queue is full, the oldest pending batch is
+  dropped with a warning log instead of blocking the write path.
+- Checker runtime errors (batch check failure, checkpoint failure, output failure) are logged but do
+  not affect the main CDC write path. Checkpoint and meta refresh delivery remain best-effort.
 
 **Flow selection and target rules**
 - For inline write-after-check flows, one queued batch is usually close to the effective sink batch

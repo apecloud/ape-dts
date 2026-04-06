@@ -241,7 +241,7 @@ impl BasePipeline {
             }
             // cdc+check also needs refreshed table metadata after sink ddl changes the target schema
             if let Some(checker) = &self.checker {
-                checker.refresh_meta(data.clone()).await?;
+                let _ = checker.refresh_meta(data.clone()).await;
             }
             self.monitor
                 .add_counter(CounterType::DDLRecordTotal, data_size.count)
@@ -418,19 +418,14 @@ impl BasePipeline {
             last_commit_position
         };
 
-        // persist checker checkpoint first to avoid advancing position without checker state.
-        let mut position_persisted_by_checker = false;
         if !matches!(record_position, Position::None) {
             if let Some(checker) = &self.checker {
-                checker.record_checkpoint(record_position).await?;
-                position_persisted_by_checker = checker.persists_position_checkpoint();
+                let _ = checker.record_checkpoint(record_position).await;
             }
         }
-        if !position_persisted_by_checker {
-            if let Some(handler) = &self.recorder {
-                if let Err(e) = handler.record_position(record_position).await {
-                    log_error!("failed to record position: {}, err: {}", record_position, e);
-                }
+        if let Some(handler) = &self.recorder {
+            if let Err(e) = handler.record_position(record_position).await {
+                log_error!("failed to record position: {}, err: {}", record_position, e);
             }
         }
 

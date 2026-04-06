@@ -61,8 +61,8 @@ use dt_connector::{
     checker::base_checker::CheckContext,
     checker::check_log::CheckSummaryLog,
     checker::{
-        CheckerHandle, CheckerStateStore, DataCheckerHandle, MongoChecker, MysqlChecker, PgChecker,
-        StructCheckerHandle,
+        Checker, CheckerHandle, CheckerStateStore, DataCheckerHandle, MongoChecker, MysqlChecker,
+        PgChecker, StructCheckerHandle,
     },
     data_marker::DataMarker,
     extractor::resumer::{recorder::Recorder, recovery::Recovery},
@@ -1051,7 +1051,10 @@ impl TaskRunner {
         let state_store = checker_state_store.clone();
 
         let build_check_context =
-            |extractor_meta_manager, reverse_router, revise_match_full_row| CheckContext {
+            |extractor_meta_manager,
+             reverse_router,
+             source_checker: Option<Arc<AsyncMutex<Box<dyn Checker>>>>,
+             revise_match_full_row| CheckContext {
                 extractor_meta_manager,
                 reverse_router,
                 batch_size: checker_batch_size,
@@ -1074,6 +1077,7 @@ impl TaskRunner {
                 s3_output: s3_output.clone(),
                 cdc_check_log_interval_secs: cfg.cdc_check_log_interval_secs,
                 state_store: state_store.clone(),
+                source_checker,
                 expected_resume_position: expected_resume_position.clone(),
             };
 
@@ -1082,6 +1086,9 @@ impl TaskRunner {
                 let reverse_router = create_router!(self.config, Mysql).reverse();
                 let extractor_meta_manager =
                     ExtractorUtil::get_extractor_meta_manager(&self.config).await?;
+                let source_checker = self
+                    .create_source_checker(is_cdc_task, enable_sqlx_log)
+                    .await?;
                 let conn_pool = TaskUtil::create_mysql_conn_pool(
                     &checker_url,
                     &checker_auth,
@@ -1101,6 +1108,7 @@ impl TaskRunner {
                     build_check_context(
                         extractor_meta_manager,
                         reverse_router,
+                        source_checker,
                         cfg.revise_match_full_row,
                     ),
                     queue_size,
@@ -1112,6 +1120,9 @@ impl TaskRunner {
                 let reverse_router = create_router!(self.config, Pg).reverse();
                 let extractor_meta_manager =
                     ExtractorUtil::get_extractor_meta_manager(&self.config).await?;
+                let source_checker = self
+                    .create_source_checker(is_cdc_task, enable_sqlx_log)
+                    .await?;
                 let conn_pool = TaskUtil::create_pg_conn_pool(
                     &checker_url,
                     &checker_auth,
@@ -1129,6 +1140,7 @@ impl TaskRunner {
                     build_check_context(
                         extractor_meta_manager,
                         reverse_router,
+                        source_checker,
                         cfg.revise_match_full_row,
                     ),
                     queue_size,
@@ -1138,6 +1150,9 @@ impl TaskRunner {
             }
             DbType::Mongo => {
                 let reverse_router = create_router!(self.config, Mongo).reverse();
+                let source_checker = self
+                    .create_source_checker(is_cdc_task, enable_sqlx_log)
+                    .await?;
                 let app_name = match (&self.config.sinker, inline_check) {
                     (SinkerConfig::Mongo { app_name, .. }, true) => app_name.as_str(),
                     _ => "checker",
@@ -1152,7 +1167,7 @@ impl TaskRunner {
                 let checker = DataCheckerHandle::spawn(
                     MongoChecker::new(mongo_client),
                     checker_task_id.clone(),
-                    build_check_context(None, reverse_router, false),
+                    build_check_context(None, reverse_router, source_checker, false),
                     queue_size,
                     "MongoChecker",
                 );
@@ -1160,6 +1175,59 @@ impl TaskRunner {
             }
             _ => bail!("checker not supported for db_type: {}", checker_db_type),
         }
+    }
+
+    async fn create_source_checker(
+        &self,
+        is_cdc_task: bool,
+        enable_sqlx_log: bool,
+    ) -> anyhow::Result<Option<Arc<AsyncMutex<Box<dyn Checker>>>>> {
+        if !is_cdc_task {
+            return Ok(None);
+        }
+
+        let checker: Box<dyn Checker> = match self.config.extractor_basic.db_type {
+            DbType::Mysql => {
+                let pool = TaskUtil::create_mysql_conn_pool(
+                    &self.config.extractor_basic.url,
+                    &self.config.extractor_basic.connection_auth,
+                    1,
+                    enable_sqlx_log,
+                    None,
+                )
+                .await?;
+                let meta_manager =
+                    dt_common::meta::mysql::mysql_meta_manager::MysqlMetaManager::new(pool.clone())
+                        .await?;
+                Box::new(MysqlChecker::new(pool, meta_manager))
+            }
+            DbType::Pg => {
+                let pool = TaskUtil::create_pg_conn_pool(
+                    &self.config.extractor_basic.url,
+                    &self.config.extractor_basic.connection_auth,
+                    1,
+                    enable_sqlx_log,
+                    false,
+                )
+                .await?;
+                let meta_manager =
+                    dt_common::meta::pg::pg_meta_manager::PgMetaManager::new(pool.clone()).await?;
+                Box::new(PgChecker::new(pool, meta_manager))
+            }
+            DbType::Mongo => {
+                let client = TaskUtil::create_mongo_client(
+                    &self.config.extractor_basic.url,
+                    &self.config.extractor_basic.connection_auth,
+                    "checker-source",
+                    Some(1),
+                )
+                .await?;
+                Box::new(MongoChecker::new(client))
+            }
+            _ => return Ok(None),
+        };
+
+        Ok(Some(Arc::new(AsyncMutex::new(checker))))
     }
 
     async fn init_log4rs(&self) -> anyhow::Result<()> {

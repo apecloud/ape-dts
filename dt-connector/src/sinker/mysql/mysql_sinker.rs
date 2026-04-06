@@ -8,7 +8,7 @@ use sqlx::{
 };
 use tokio::{sync::RwLock, time::Instant};
 
-use crate::sinker::checked_sinker::CheckedSinkTarget;
+use crate::sinker::check_sinker::CheckWrappedSink;
 use crate::{
     call_batch_fn, data_marker::DataMarker, rdb_query_builder::RdbQueryBuilder,
     rdb_router::RdbRouter, sinker::base_sinker::BaseSinker, Sinker,
@@ -153,7 +153,7 @@ impl Sinker for MysqlSinker {
 }
 
 #[async_trait]
-impl CheckedSinkTarget for MysqlSinker {
+impl CheckWrappedSink for MysqlSinker {
     async fn sink_dml_borrowed(&mut self, data: &mut [RowData], batch: bool) -> anyhow::Result<()> {
         if data.is_empty() {
             return Ok(());

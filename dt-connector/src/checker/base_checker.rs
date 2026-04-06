@@ -1,5 +1,4 @@
 use super::struct_checker::StructCheckerHandle;
-use anyhow::{anyhow, Context};
 use async_mutex::Mutex;
 use async_trait::async_trait;
 use indexmap::IndexMap;
@@ -7,12 +6,12 @@ use mongodb::bson::Document;
 use opendal::Operator;
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
-use std::collections::{BTreeSet, HashMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicU64, Ordering},
     Arc, Mutex as StdMutex,
 };
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{mpsc, Notify};
 use tokio::task::JoinHandle;
 use tokio::time::{sleep, Duration, Instant};
 
@@ -197,6 +196,7 @@ pub struct CheckContext {
     pub s3_output: Option<(Operator, String)>,
     pub cdc_check_log_interval_secs: u64,
     pub state_store: Option<Arc<CheckerStateStore>>,
+    pub source_checker: Option<Arc<Mutex<Box<dyn Checker>>>>,
     pub expected_resume_position: Option<Position>,
 }
 
@@ -213,10 +213,10 @@ struct CheckerStoreKey {
 }
 
 impl CheckerStoreKey {
-    fn from_row_data(row_data: &RowData, row_key: u128) -> Self {
+    fn new(schema: &str, tb: &str, row_key: u128) -> Self {
         Self {
-            schema: row_data.schema.clone(),
-            tb: row_data.tb.clone(),
+            schema: schema.to_string(),
+            tb: tb.to_string(),
             row_key,
         }
     }
@@ -233,57 +233,19 @@ pub trait Checker: Send + Sync + 'static {
     }
 }
 
-enum CheckerMsg {
-    ProcessBatchAsync {
-        batch: Vec<RowData>,
-    },
-    RecordCheckpoint {
-        position: Position,
-        tx: oneshot::Sender<anyhow::Result<()>>,
-    },
-    RefreshMeta {
-        data: Vec<DdlData>,
-        tx: oneshot::Sender<anyhow::Result<()>>,
-    },
-    Close {
-        position: Option<Position>,
-    },
-}
-
-#[derive(Default)]
-struct CheckerRuntimeState {
-    failed: AtomicBool,
-    first_error: StdMutex<Option<String>>,
-}
-
-impl CheckerRuntimeState {
-    fn mark_failed_message(&self, message: String) {
-        self.failed.store(true, Ordering::Release);
-        let mut guard = self.first_error.lock().unwrap();
-        if guard.is_none() {
-            *guard = Some(message);
-        }
-    }
-
-    fn has_failed(&self) -> bool {
-        self.failed.load(Ordering::Acquire)
-    }
-
-    fn error(&self, context: &str) -> Option<anyhow::Error> {
-        self.first_error
-            .lock()
-            .unwrap()
-            .clone()
-            .map(|message| anyhow!("{}: {}", context, message))
-    }
+enum CheckerControlMsg {
+    RecordCheckpoint { position: Position },
+    RefreshMeta { data: Vec<DdlData> },
+    Close { position: Option<Position> },
 }
 
 #[derive(Clone)]
 struct DataCheckerShared {
-    tx: mpsc::Sender<CheckerMsg>,
+    batch_queue: Arc<StdMutex<LimitedQueue<Vec<RowData>>>>,
+    batch_notify: Arc<Notify>,
+    control_tx: mpsc::UnboundedSender<CheckerControlMsg>,
+    dropped_batches: Arc<AtomicU64>,
     is_cdc: bool,
-    persists_position_checkpoint: bool,
-    runtime_state: Arc<CheckerRuntimeState>,
 }
 
 #[derive(Clone)]
@@ -298,10 +260,6 @@ pub enum CheckerHandle {
 }
 
 impl DataCheckerHandle {
-    fn should_ignore_runtime_failure(&self) -> bool {
-        self.shared.runtime_state.has_failed()
-    }
-
     pub fn spawn<C: Checker>(
         checker: C,
         task_id: String,
@@ -310,69 +268,73 @@ impl DataCheckerHandle {
         name: &str,
     ) -> Self {
         let is_cdc = ctx.is_cdc;
-        let persists_position_checkpoint = ctx.is_cdc && ctx.state_store.is_some();
-        let (tx, rx) = mpsc::channel::<CheckerMsg>(buffer_size.max(1));
-        let runtime_state = Arc::new(CheckerRuntimeState::default());
+        let batch_queue = Arc::new(StdMutex::new(LimitedQueue::new(buffer_size.max(1))));
+        let batch_notify = Arc::new(Notify::new());
+        let (control_tx, control_rx) = mpsc::unbounded_channel::<CheckerControlMsg>();
 
-        let check_job = DataChecker::new(checker, task_id, ctx, rx, name, runtime_state.clone());
+        let check_job = DataChecker::new(
+            checker,
+            task_id,
+            ctx,
+            CheckerIo {
+                batch_queue: batch_queue.clone(),
+                batch_notify: batch_notify.clone(),
+                control_rx,
+            },
+            name,
+        );
         let join_handle = tokio::spawn(async move { check_job.run().await });
 
         Self {
             shared: DataCheckerShared {
-                tx,
+                batch_queue,
+                batch_notify,
+                control_tx,
+                dropped_batches: Arc::new(AtomicU64::new(0)),
                 is_cdc,
-                persists_position_checkpoint,
-                runtime_state,
             },
             join_handle: Arc::new(Mutex::new(Some(join_handle))),
         }
-    }
-
-    pub fn has_failed(&self) -> bool {
-        self.shared.runtime_state.has_failed()
     }
 
     pub async fn enqueue_check(&self, data: Vec<RowData>) -> anyhow::Result<()> {
         if data.is_empty() {
             return Ok(());
         }
-        if self.should_ignore_runtime_failure() {
-            return Ok(());
+        let dropped = {
+            let mut queue = self.shared.batch_queue.lock().unwrap();
+            queue.push_with_eviction(data)
+        };
+        if dropped.is_some() {
+            let dropped_batches = self.shared.dropped_batches.fetch_add(1, Ordering::Relaxed) + 1;
+            if dropped_batches == 1 || dropped_batches % 100 == 0 {
+                log_warn!(
+                    "checker queue overflowed; dropped oldest batch, total dropped batches: {}",
+                    dropped_batches
+                );
+            }
         }
-        if let Some(err) = self
-            .shared
-            .runtime_state
-            .error("skip checker enqueue because checker already failed")
-        {
-            return Err(err);
-        }
-        let result = self
-            .shared
-            .tx
-            .send(CheckerMsg::ProcessBatchAsync { batch: data })
-            .await
-            .map_err(|err| anyhow::anyhow!("failed to enqueue checker batch: {}", err));
-        if result.is_err() && self.should_ignore_runtime_failure() {
-            return Ok(());
-        }
-        result
+        self.shared.batch_notify.notify_one();
+        Ok(())
     }
 
     pub async fn close_with_position(&mut self, position: Option<&Position>) -> anyhow::Result<()> {
-        let position = if self.shared.runtime_state.has_failed() {
-            None
-        } else {
-            position.cloned()
-        };
-        let _ = self.shared.tx.send(CheckerMsg::Close { position }).await;
+        if self
+            .shared
+            .control_tx
+            .send(CheckerControlMsg::Close {
+                position: position.cloned(),
+            })
+            .is_err()
+        {
+            log_warn!("checker close signal dropped because checker already stopped");
+        }
+        self.shared.batch_notify.notify_one();
         if let Some(handle) = self.join_handle.lock().await.take() {
             match handle.await {
                 Ok(Ok(())) => {}
-                Ok(Err(err)) if self.should_ignore_runtime_failure() => {
-                    log_warn!("checker disabled after runtime failure: {}", err);
-                }
-                Ok(Err(err)) => return Err(err),
-                Err(err) => return Err(err.into()),
+                Ok(Err(err)) => log_warn!("checker task ended with error: {}", err),
+                Err(err) => log_warn!("checker task join failed: {}", err),
             }
         }
         Ok(())
@@ -382,77 +344,32 @@ impl DataCheckerHandle {
         if !self.shared.is_cdc {
             return Ok(());
         }
-        if self.should_ignore_runtime_failure() {
-            return Ok(());
-        }
-        if let Some(err) = self
+        if self
             .shared
-            .runtime_state
-            .error("skip checker checkpoint because checker already failed")
-        {
-            return Err(err);
-        }
-        let (tx, rx) = oneshot::channel();
-        let send_result = self
-            .shared
-            .tx
-            .send(CheckerMsg::RecordCheckpoint {
+            .control_tx
+            .send(CheckerControlMsg::RecordCheckpoint {
                 position: position.clone(),
-                tx,
             })
-            .await
-            .map_err(|err| anyhow::anyhow!("failed to send checker checkpoint msg: {}", err));
-        if send_result.is_err() && self.should_ignore_runtime_failure() {
-            return Ok(());
+            .is_err()
+        {
+            log_warn!("checker checkpoint signal dropped because checker already stopped");
         }
-        send_result?;
-        match rx.await {
-            Ok(result) => result,
-            Err(_err) if self.should_ignore_runtime_failure() => Ok(()),
-            Err(err) => Err(anyhow::anyhow!(
-                "checker checkpoint response dropped: {}",
-                err
-            )),
-        }
+        Ok(())
     }
 
     pub async fn refresh_meta(&self, data: Vec<DdlData>) -> anyhow::Result<()> {
         if data.is_empty() {
             return Ok(());
         }
-        if self.should_ignore_runtime_failure() {
-            return Ok(());
-        }
-        if let Some(err) = self
+        if self
             .shared
-            .runtime_state
-            .error("skip checker refresh_meta because checker already failed")
+            .control_tx
+            .send(CheckerControlMsg::RefreshMeta { data })
+            .is_err()
         {
-            return Err(err);
+            log_warn!("checker refresh_meta signal dropped because checker already stopped");
         }
-        let (tx, rx) = oneshot::channel();
-        let send_result = self
-            .shared
-            .tx
-            .send(CheckerMsg::RefreshMeta { data, tx })
-            .await
-            .map_err(|err| anyhow::anyhow!("failed to send checker refresh meta msg: {}", err));
-        if send_result.is_err() && self.should_ignore_runtime_failure() {
-            return Ok(());
-        }
-        send_result?;
-        match rx.await {
-            Ok(result) => result,
-            Err(_err) if self.should_ignore_runtime_failure() => Ok(()),
-            Err(err) => Err(anyhow::anyhow!(
-                "checker refresh meta response dropped: {}",
-                err
-            )),
-        }
-    }
-
-    pub fn persists_position_checkpoint(&self) -> bool {
-        self.shared.persists_position_checkpoint && !self.shared.runtime_state.has_failed()
+        Ok(())
     }
 }
 
@@ -487,13 +404,6 @@ impl CheckerHandle {
             CheckerHandle::Struct(_) => Ok(()),
         }
     }
-
-    pub fn persists_position_checkpoint(&self) -> bool {
-        match self {
-            CheckerHandle::Data(handle) => handle.persists_position_checkpoint(),
-            CheckerHandle::Struct(_) => false,
-        }
-    }
 }
 
 enum CheckInconsistency {
@@ -501,12 +411,80 @@ enum CheckInconsistency {
     Diff(HashMap<String, DiffColValue>),
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub(crate) struct RecheckKey {
+    schema: String,
+    tb: String,
+    is_delete: bool,
+    pk: BTreeMap<String, ColValue>,
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 pub(crate) struct CheckEntry {
+    key: RecheckKey,
     log: CheckLog,
     revise_sql: Option<String>,
-    is_miss: bool,
-    src_row_data: RowData,
+    diff_cols: Option<Vec<String>>,
+}
+
+impl RecheckKey {
+    fn from_row_data(row_data: &RowData, id_cols: &[String]) -> anyhow::Result<Self> {
+        let values = match row_data.row_type {
+            RowType::Delete => row_data.require_before()?,
+            _ => row_data.require_after()?,
+        };
+        let pk = id_cols
+            .iter()
+            .map(|col| {
+                values
+                    .get(col)
+                    .cloned()
+                    .map(|value| (col.clone(), value))
+                    .ok_or_else(|| anyhow::anyhow!("missing id col value: {col}"))
+            })
+            .collect::<anyhow::Result<BTreeMap<_, _>>>()?;
+        Ok(Self {
+            schema: row_data.schema.clone(),
+            tb: row_data.tb.clone(),
+            is_delete: row_data.row_type == RowType::Delete,
+            pk,
+        })
+    }
+
+    fn to_lookup_row(&self) -> RowData {
+        let values = self
+            .pk
+            .iter()
+            .map(|(col, value)| (col.clone(), value.clone()))
+            .collect::<HashMap<_, _>>();
+        if self.is_delete {
+            RowData::new(
+                self.schema.clone(),
+                self.tb.clone(),
+                RowType::Delete,
+                Some(values),
+                None,
+            )
+        } else {
+            RowData::new(
+                self.schema.clone(),
+                self.tb.clone(),
+                RowType::Insert,
+                None,
+                Some(values),
+            )
+        }
+    }
+}
+
+impl CheckEntry {
+    fn is_miss(&self) -> bool {
+        self.diff_cols.is_none()
+    }
+
+    fn counts_as_diff(&self) -> bool {
+        self.diff_cols.is_some()
+    }
 }
 
 struct RetryItem {
@@ -583,11 +561,12 @@ struct DataChecker<C: Checker> {
     checker: C,
     task_id: String,
     ctx: CheckContext,
-    runtime_state: Arc<CheckerRuntimeState>,
     retry_queue: VecDeque<RetryItem>,
     retry_next_at: Option<Instant>,
     store: IndexMap<CheckerStoreKey, CheckEntry>,
-    rx: mpsc::Receiver<CheckerMsg>,
+    batch_queue: Arc<StdMutex<LimitedQueue<Vec<RowData>>>>,
+    batch_notify: Arc<Notify>,
+    control_rx: mpsc::UnboundedReceiver<CheckerControlMsg>,
     name: String,
     store_dirty: bool,
     last_checkpoint_position: Option<Position>,
@@ -595,40 +574,25 @@ struct DataChecker<C: Checker> {
     snapshot_dirty: bool,
 }
 
-impl<C: Checker> DataChecker<C> {
-    async fn handle_runtime_failure(
-        &mut self,
-        first_error: &mut Option<anyhow::Error>,
-        err: anyhow::Error,
-    ) -> bool {
-        self.runtime_state.mark_failed_message(format!("{:#}", err));
-        Self::remember_error(first_error, err);
-        log_warn!(
-            "Checker [{}] runtime failed and has been disabled; main task will continue without checking.",
-            self.name
-        );
-        self.shutdown_logged(first_error).await;
-        true
-    }
+struct CheckerIo {
+    batch_queue: Arc<StdMutex<LimitedQueue<Vec<RowData>>>>,
+    batch_notify: Arc<Notify>,
+    control_rx: mpsc::UnboundedReceiver<CheckerControlMsg>,
+}
 
-    pub fn new(
-        checker: C,
-        task_id: String,
-        ctx: CheckContext,
-        rx: mpsc::Receiver<CheckerMsg>,
-        name: &str,
-        runtime_state: Arc<CheckerRuntimeState>,
-    ) -> Self {
+impl<C: Checker> DataChecker<C> {
+    pub fn new(checker: C, task_id: String, ctx: CheckContext, io: CheckerIo, name: &str) -> Self {
         let persisted_identity_keys = ctx.state_store.as_ref().map(|_| BTreeSet::new());
         Self {
             checker,
             task_id,
             ctx,
-            runtime_state,
             retry_queue: VecDeque::new(),
             retry_next_at: None,
             store: IndexMap::new(),
-            rx,
+            batch_queue: io.batch_queue,
+            batch_notify: io.batch_notify,
+            control_rx: io.control_rx,
             name: name.to_string(),
             store_dirty: false,
             last_checkpoint_position: None,
@@ -640,18 +604,12 @@ impl<C: Checker> DataChecker<C> {
     pub async fn run(mut self) -> anyhow::Result<()> {
         log_info!("Checker [{}] started.", self.name);
         let mut interval = tokio::time::interval(Duration::from_secs(1));
-        let mut first_error: Option<anyhow::Error> = None;
         if let Err(err) = self.init_cdc_state().await {
             log_error!(
                 "Checker [{}] failed to initialize CDC state: {}",
                 self.name,
                 err
             );
-            if !self.handle_runtime_failure(&mut first_error, err).await {
-                self.shutdown_logged(&mut first_error).await;
-            }
-            log_info!("Checker [{}] stopped.", self.name);
-            return Err(first_error.expect("init failure should set first_error"));
         }
         let output_secs = self.ctx.cdc_check_log_interval_secs.max(1);
         let mut output_interval = tokio::time::interval(Duration::from_secs(output_secs));
@@ -659,196 +617,115 @@ impl<C: Checker> DataChecker<C> {
 
         loop {
             tokio::select! {
-                msg = self.rx.recv() => {
+                biased;
+                msg = self.control_rx.recv() => {
                     match msg {
-                        Some(CheckerMsg::ProcessBatchAsync { batch }) => {
-                            if let Err(err) = self.check_batch(&batch, true).await {
-                                log_error!("Checker [{}] async batch failed: {}", self.name, err);
-                                if self.handle_runtime_failure(&mut first_error, err).await {
-                                    break;
-                                }
+                        Some(msg) => {
+                            if self.handle_control_msg(msg).await {
+                                break;
                             }
                         }
-                        Some(CheckerMsg::RecordCheckpoint { position, tx }) => {
-                            let result = if let Some(err) = self.runtime_state.error(
-                                "skip checker checkpoint because checker already failed",
-                            ) {
-                                Err(err)
-                            } else {
-                                self.record_checkpoint(position).await
-                            };
-                            if let Err(err) = &result {
-                                log_error!("Checker [{}] checkpoint persist failed: {}", self.name, err);
-                                if self
-                                    .handle_runtime_failure(
-                                        &mut first_error,
-                                        anyhow!("{:#}", err),
-                                    )
-                                    .await
-                                {
-                                    let _ = tx.send(Ok(()));
-                                    break;
-                                }
-                            }
-                            let _ = tx.send(result);
-                        }
-                        Some(CheckerMsg::RefreshMeta { data, tx }) => {
-                            let result = if let Some(err) = self.runtime_state.error(
-                                "skip checker refresh_meta because checker already failed",
-                            ) {
-                                Err(err)
-                            } else {
-                                self.checker.refresh_meta(&data).await
-                            };
-                            if let Err(err) = &result {
-                                log_error!("Checker [{}] refresh meta failed: {}", self.name, err);
-                                if self
-                                    .handle_runtime_failure(
-                                        &mut first_error,
-                                        anyhow!("{:#}", err),
-                                    )
-                                    .await
-                                {
-                                    let _ = tx.send(Ok(()));
-                                    break;
-                                }
-                            }
-                            let _ = tx.send(result);
-                        }
-                        Some(CheckerMsg::Close { position }) => {
-                            if let Some(position) = position
-                                .filter(|p| !matches!(p, Position::None))
-                                .filter(|_| !self.runtime_state.has_failed())
-                            {
-                                self.last_checkpoint_position = Some(position);
-                            }
-                            self.shutdown_logged(&mut first_error).await;
-                            break;
-                        }
-                        None => {
-                            self.shutdown_logged(&mut first_error).await;
-                            break;
-                        }
+                        None => break,
+                    }
+                }
+                _ = self.batch_notify.notified() => {
+                    if self.drain_pending_batches().await {
+                        break;
                     }
                 }
                 _ = interval.tick() => {
                     if let Err(err) = self.process_due_retries().await {
                         log_error!("Checker [{}] retry failed: {}", self.name, err);
-                        if self.handle_runtime_failure(&mut first_error, err).await {
-                            break;
-                        }
                     }
                 }
                 _ = output_interval.tick(), if self.ctx.is_cdc => {
                     if let Err(err) = self.maybe_snapshot_and_output().await {
                         log_error!("Checker [{}] cdc output failed: {}", self.name, err);
-                        if self.handle_runtime_failure(&mut first_error, err).await {
-                            break;
-                        }
                     }
                 }
             }
         }
+        if let Err(err) = self.shutdown().await {
+            log_error!("Checker [{}] shutdown failed: {}", self.name, err);
+        }
         log_info!("Checker [{}] stopped.", self.name);
+        Ok(())
+    }
 
-        match first_error {
-            Some(err) => Err(err),
-            None => Ok(()),
+    async fn handle_control_msg(&mut self, msg: CheckerControlMsg) -> bool {
+        match msg {
+            CheckerControlMsg::RecordCheckpoint { position } => {
+                if let Err(err) = self.record_checkpoint(position).await {
+                    log_error!("Checker [{}] checkpoint failed: {}", self.name, err);
+                }
+            }
+            CheckerControlMsg::RefreshMeta { data } => {
+                if let Err(err) = self.checker.refresh_meta(&data).await {
+                    log_error!("Checker [{}] refresh_meta failed: {}", self.name, err);
+                }
+            }
+            CheckerControlMsg::Close { position } => {
+                if let Some(position) = position.filter(|p| !matches!(p, Position::None)) {
+                    self.last_checkpoint_position = Some(position);
+                }
+                return true;
+            }
+        }
+        false
+    }
+
+    async fn drain_pending_batches(&mut self) -> bool {
+        loop {
+            while let Ok(msg) = self.control_rx.try_recv() {
+                if self.handle_control_msg(msg).await {
+                    return true;
+                }
+            }
+
+            let batch = {
+                let mut queue = self.batch_queue.lock().unwrap();
+                queue.pop()
+            };
+            let Some(batch) = batch else {
+                return false;
+            };
+
+            if let Err(err) = self.check_batch(&batch, true).await {
+                log_error!("Checker [{}] batch failed: {}", self.name, err);
+            }
         }
     }
 
     async fn shutdown(&mut self) -> anyhow::Result<()> {
-        let shutdown_result = if self.ctx.is_cdc {
-            // CDC shutdown: persist final checkpoint, perform final output, then clear in-memory state.
-            if self.store_dirty && !self.runtime_state.has_failed() {
+        if self.ctx.is_cdc {
+            if self.store_dirty {
                 if let Some(position) = self.last_checkpoint_position.clone() {
-                    self.record_checkpoint(position).await.with_context(|| {
-                        format!("Checker [{}] failed to persist final checkpoint", self.name)
-                    })?;
-                    self.store_dirty = false;
-                }
-            }
-
-            if self.runtime_state.has_failed() {
-                self.clear_persisted_rows_after_fail_open().await?;
-            }
-
-            let output_result = self.finalize_cdc_output().await;
-            self.store.clear();
-            self.update_pending_counter();
-            output_result
-        } else {
-            self.drain_retries().await?;
-            self.flush_store().await;
-            Ok(())
-        };
-        let summary_result = self.finish_summary_and_meta().await;
-        let close_result = self.checker.close().await;
-
-        shutdown_result?;
-        summary_result?;
-        close_result?;
-        Ok(())
-    }
-
-    async fn clear_persisted_rows_after_fail_open(&mut self) -> anyhow::Result<()> {
-        let Some(state_store) = self.ctx.state_store.clone() else {
-            return Ok(());
-        };
-        state_store
-            .clear_rows(&self.task_id)
-            .await
-            .with_context(|| {
-                format!(
-                    "Checker [{}] failed to clear persisted unresolved rows after fail-open",
-                    self.name
-                )
-            })?;
-        self.persisted_identity_keys = Some(BTreeSet::new());
-        self.store_dirty = false;
-        Ok(())
-    }
-
-    async fn finalize_cdc_output(&mut self) -> anyhow::Result<()> {
-        match self.snapshot_and_output().await {
-            Ok(()) => Ok(()),
-            Err(err) if self.runtime_state.has_failed() => {
-                log_warn!(
-                    "Checker [{}] final cdc output also failed after checker disable: {}",
-                    self.name,
-                    err
-                );
-                Ok(())
-            }
-            Err(err) => {
-                log_warn!(
-                    "Checker [{}] final cdc output failed during shutdown; treating it as fail-open: {}",
-                    self.name,
-                    err
-                );
-                self.runtime_state.mark_failed_message(format!("{:#}", err));
-                self.clear_persisted_rows_after_fail_open().await?;
-                match self.snapshot_and_output().await {
-                    Ok(()) => Ok(()),
-                    Err(err) => {
-                        log_warn!(
-                            "Checker [{}] final cdc output also failed after checker disable: {}",
-                            self.name,
-                            err
-                        );
-                        Ok(())
+                    if let Err(err) = self.record_checkpoint(position).await {
+                        log_error!("Checker [{}] final checkpoint failed: {}", self.name, err);
                     }
                 }
             }
+            if let Err(err) = self.snapshot_and_output().await {
+                log_error!("Checker [{}] final output failed: {}", self.name, err);
+            }
+            self.store.clear();
+            self.update_pending_counter();
+        } else {
+            if let Err(err) = self.drain_retries().await {
+                log_error!("Checker [{}] drain retries failed: {}", self.name, err);
+            }
+            self.flush_store().await;
         }
+        self.finish_summary_and_meta().await?;
+        let _ = self.checker.close().await;
+        Ok(())
     }
 
     async fn finish_summary_and_meta(&mut self) -> anyhow::Result<()> {
         let common = &mut self.ctx;
         let summary = &mut common.summary;
         summary.end_time = chrono::Local::now().to_rfc3339();
-        summary.is_consistent =
-            !self.runtime_state.has_failed() && summary.miss_count == 0 && summary.diff_count == 0;
+        summary.is_consistent = summary.miss_count == 0 && summary.diff_count == 0;
         if let Some(global_summary) = common.global_summary.clone() {
             global_summary.lock().await.merge(summary);
         } else if !common.is_cdc {
@@ -880,17 +757,6 @@ impl<C: Checker> DataChecker<C> {
         self.snapshot_dirty = false;
         Ok(())
     }
-
-    async fn shutdown_logged(&mut self, first_error: &mut Option<anyhow::Error>) {
-        if let Err(err) = self.shutdown().await {
-            log_error!("Checker [{}] close failed: {}", self.name, err);
-            Self::remember_error(first_error, err);
-        }
-    }
-
-    fn remember_error(first_error: &mut Option<anyhow::Error>, err: anyhow::Error) {
-        first_error.get_or_insert(err);
-    }
 }
 
 pub fn has_null_key(row_data: &RowData, id_cols: &[String]) -> bool {
@@ -903,208 +769,4 @@ pub fn has_null_key(row_data: &RowData, id_cols: &[String]) -> bool {
             .iter()
             .any(|col| matches!(vals.get(col), Some(ColValue::None) | None))
     })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::{checker::check_log::CheckSummaryLog, rdb_router::RdbRouter};
-    use async_trait::async_trait;
-    use dt_common::{
-        config::config_enums::DbType,
-        meta::ddl_meta::{
-            ddl_data::DdlData,
-            ddl_statement::{DdlStatement, MysqlAlterTableStatement},
-        },
-    };
-    use std::{
-        fs,
-        time::{SystemTime, UNIX_EPOCH},
-    };
-
-    struct NoopChecker;
-
-    #[async_trait]
-    impl Checker for NoopChecker {
-        async fn fetch(&mut self, _src_rows: &[&RowData]) -> anyhow::Result<FetchResult> {
-            unreachable!("noop checker test should not call fetch")
-        }
-    }
-
-    fn build_check_context(check_log_dir: String, is_cdc: bool, start_time: &str) -> CheckContext {
-        CheckContext {
-            monitor: Arc::new(Monitor::new("checker", "unit-test", 1, 1, 1)),
-            task_monitor: None,
-            summary: CheckSummaryLog {
-                start_time: start_time.to_string(),
-                ..Default::default()
-            },
-            output_revise_sql: false,
-            extractor_meta_manager: None,
-            reverse_router: RdbRouter {
-                schema_map: HashMap::new(),
-                tb_map: HashMap::new(),
-                col_map: HashMap::new(),
-                topic_map: HashMap::new(),
-            },
-            output_full_row: false,
-            revise_match_full_row: false,
-            global_summary: None,
-            batch_size: 1,
-            retry_interval_secs: 0,
-            max_retries: 0,
-            is_cdc,
-            check_log_dir,
-            cdc_check_log_max_file_size: 1,
-            cdc_check_log_max_rows: 1,
-            s3_output: None,
-            cdc_check_log_interval_secs: 1,
-            state_store: None,
-            expected_resume_position: None,
-        }
-    }
-
-    fn build_temp_dir(prefix: &str) -> String {
-        let unique = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("system time before unix epoch")
-            .as_nanos();
-        let path = std::env::temp_dir().join(format!("ape_dts_{prefix}_{unique}"));
-        fs::create_dir_all(&path).expect("failed to create temp dir");
-        path.to_string_lossy().into_owned()
-    }
-
-    fn build_row_data() -> RowData {
-        RowData::new(
-            "test_db".to_string(),
-            "test_tb".to_string(),
-            RowType::Insert,
-            None,
-            Some(HashMap::from([("id".to_string(), ColValue::Long(1))])),
-        )
-    }
-
-    fn build_position() -> Position {
-        Position::RdbSnapshotFinished {
-            db_type: "mysql".to_string(),
-            schema: "test_db".to_string(),
-            tb: "test_tb".to_string(),
-        }
-    }
-
-    fn build_ddl_data() -> DdlData {
-        DdlData {
-            default_schema: "test_db".to_string(),
-            db_type: DbType::Mysql,
-            statement: DdlStatement::MysqlAlterTable(MysqlAlterTableStatement {
-                db: "test_db".to_string(),
-                tb: "test_tb".to_string(),
-                unparsed: "ALTER TABLE test_tb ADD COLUMN c1 INT".to_string(),
-            }),
-            ..Default::default()
-        }
-    }
-
-    #[tokio::test]
-    async fn periodic_snapshot_failure_disables_inline_checker_without_failing_close() {
-        let dir = build_temp_dir("checker_snapshot_fail_open");
-        let occupied_path = format!("{dir}/occupied_path");
-        fs::write(&occupied_path, "not-a-directory").unwrap();
-
-        let ctx = build_check_context(occupied_path.clone(), true, "fail-open");
-        let mut handle = DataCheckerHandle::spawn(
-            NoopChecker,
-            "checker-snapshot-fail-open".to_string(),
-            ctx,
-            1,
-            "NoopChecker",
-        );
-
-        tokio::time::timeout(Duration::from_secs(2), async {
-            loop {
-                if handle.has_failed() {
-                    break;
-                }
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .expect("periodic snapshot failure should mark checker failed");
-
-        let checkpoint = build_position();
-        assert!(handle.enqueue_check(vec![build_row_data()]).await.is_ok());
-        assert!(handle.record_checkpoint(&checkpoint).await.is_ok());
-        assert!(handle.close_with_position(Some(&checkpoint)).await.is_ok());
-
-        fs::remove_dir_all(dir).unwrap();
-    }
-
-    #[tokio::test]
-    async fn failed_fail_open_checker_stops_claiming_checkpoint_persistence() {
-        let (tx, _rx) = mpsc::channel(1);
-        let runtime_state = Arc::new(CheckerRuntimeState::default());
-        runtime_state.mark_failed_message("disabled".to_string());
-        let handle = DataCheckerHandle {
-            shared: DataCheckerShared {
-                tx,
-                is_cdc: true,
-                persists_position_checkpoint: true,
-                runtime_state,
-            },
-            join_handle: Arc::new(Mutex::new(None)),
-        };
-
-        assert!(
-            !handle.persists_position_checkpoint(),
-            "disabled fail-open checker should not claim checkpoint persistence"
-        );
-    }
-
-    #[tokio::test]
-    async fn fail_open_checkpoint_response_drop_is_ignored() {
-        let (tx, mut rx) = mpsc::channel(1);
-        let runtime_state = Arc::new(CheckerRuntimeState::default());
-        let runtime_state_clone = runtime_state.clone();
-        tokio::spawn(async move {
-            if let Some(CheckerMsg::RecordCheckpoint { .. }) = rx.recv().await {
-                runtime_state_clone.mark_failed_message("disabled".to_string());
-            }
-        });
-
-        let handle = DataCheckerHandle {
-            shared: DataCheckerShared {
-                tx,
-                is_cdc: true,
-                persists_position_checkpoint: true,
-                runtime_state,
-            },
-            join_handle: Arc::new(Mutex::new(None)),
-        };
-
-        assert!(handle.record_checkpoint(&build_position()).await.is_ok());
-    }
-
-    #[tokio::test]
-    async fn fail_open_refresh_meta_response_drop_is_ignored() {
-        let (tx, mut rx) = mpsc::channel(1);
-        let runtime_state = Arc::new(CheckerRuntimeState::default());
-        let runtime_state_clone = runtime_state.clone();
-        tokio::spawn(async move {
-            if let Some(CheckerMsg::RefreshMeta { .. }) = rx.recv().await {
-                runtime_state_clone.mark_failed_message("disabled".to_string());
-            }
-        });
-
-        let handle = DataCheckerHandle {
-            shared: DataCheckerShared {
-                tx,
-                is_cdc: true,
-                persists_position_checkpoint: true,
-                runtime_state,
-            },
-            join_handle: Arc::new(Mutex::new(None)),
-        };
-
-        assert!(handle.refresh_meta(vec![build_ddl_data()]).await.is_ok());
-    }
 }

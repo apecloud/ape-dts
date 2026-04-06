@@ -82,14 +82,12 @@ struct check 复用 standalone snapshot check 的目标选择规则。
 
 **通用行为**
 - checker 仅支持 `[pipeline] pipeline_type=basic`。
-- `queue_size` 统计的是 checker 队列中的待处理批次/消息数，不是行数。队列满表示 checker worker
-  手里已经积压了 `queue_size` 个待处理批次。
-- 在 inline 写后校验链路里，打满 `queue_size` 会对写入路径施加背压：新的写入会等待 checker
-  队列腾出容量，而不是静默丢弃待校验批次。
-- 在 inline 写后校验链路里，checker 的运行时失败按 best-effort / fail-open 处理：checker
-  会被禁用，主任务继续运行，后续数据不再经过校验。
-- 对启用了 checker state 持久化的 inline cdc check，fail-open 时会清空已持久化的 unresolved
-  rows，避免后续 resume 重放陈旧的 checker state。
+- `queue_size` 统计的是 checker DML 队列中的待处理批次数，不是行数。checkpoint、`refresh_meta`
+  这类控制信号会绕过这条队列。
+- 在 inline 写后校验链路里，如果 checker DML 队列已满，会丢弃最旧的待校验批次并记录 warning
+  日志，而不是阻塞写入路径。
+- checker 运行时错误（批次校验失败、checkpoint 失败、输出失败）只会记录日志，不影响主 CDC
+  写入链路；checkpoint 和元数据刷新投递仍按 best-effort 处理。
 
 **目标选择与适用形态**
 - 对 inline 写后校验链路来说，一个排队批次通常接近实际写入批大小；实践中多数情况下约等于

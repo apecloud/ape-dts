@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 
-use crate::{sinker::checked_sinker::CheckedSinkTarget, Sinker};
+use crate::{sinker::check_sinker::CheckWrappedSink, Sinker};
 use dt_common::meta::row_data::RowData;
 
 pub struct DummySinker {}
@@ -9,7 +9,7 @@ pub struct DummySinker {}
 impl Sinker for DummySinker {}
 
 #[async_trait]
-impl CheckedSinkTarget for DummySinker {
+impl CheckWrappedSink for DummySinker {
     async fn sink_dml_borrowed(
         &mut self,
         _data: &mut [RowData],

@@ -108,6 +108,9 @@ These combinations fail fast with `ConfigError`:
 These settings remain effective or are forced in inline cdc check:
 
 - `[checker].batch_size`: stays effective and does not fall back to `[sinker].batch_size`.
+- `[checker].queue_size`: counts pending checker DML batches. If the queue is full, the oldest
+  pending checker batch is dropped instead of blocking the write path. Control signals such as
+  checkpoint and `refresh_meta` bypass this queue.
 - `[checker].max_retries` and `[checker].retry_interval_secs`: always forced to `0`.
 
 ## Inline Snapshot Check vs Inline CDC Check
@@ -132,6 +135,9 @@ Operationally:
   becomes part of persistent checker state/store instead of being treated as a short retry-only
   problem. Later CDC events may naturally offset or reconcile earlier miss/diff entries, so
   checkpoint/state persistence is more deeply coupled with the checker lifecycle.
+  Runtime errors are handled per operation: the checker logs the error, keeps the main write path
+  running, and continues processing subsequent checker messages. Checkpoint/meta-refresh delivery is
+  also decoupled from checker batch backlog so the write path does not wait behind queued DML.
 
 ## Example: MySQL -> MySQL
 

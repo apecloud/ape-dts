@@ -1,15 +1,18 @@
 use super::{
-    BaseSinker, CheckContext, CheckEntry, CheckInconsistency, CheckLog, Checker, CheckerStoreKey,
-    CheckerTbMeta, ColValue, Cow, DataChecker, DiffColValue, Document, Duration, HashMap, Instant,
-    LimitedQueue, MongoConstants, RdbTbMeta, RetryItem, RowData, RowType, log_diff, log_miss,
-    log_sql, log_warn, mongo_cmd, sleep,
+    log_diff, log_miss, log_sql, log_warn, mongo_cmd, sleep, BaseSinker, CheckContext, CheckEntry,
+    CheckInconsistency, CheckLog, Checker, CheckerStoreKey, CheckerTbMeta, ColValue, Cow,
+    DataChecker, DiffColValue, Document, Duration, HashMap, Instant, MongoConstants, RdbTbMeta,
+    RecheckKey, RetryItem, RowData, RowType,
 };
 use anyhow::Context;
 use dt_common::meta::pg::pg_value_type::PgValueType;
 use dt_common::monitor::{counter_type::CounterType, task_metrics::TaskMetricsType};
+use dt_common::utils::limit_queue::LimitedQueue;
 use std::collections::BTreeSet;
 
 impl<C: Checker> DataChecker<C> {
+    const MAX_DIFF_COLS: usize = 8;
+
     fn build_revise_sql(
         output_revise_sql: bool,
         revise_match_full_row: bool,
@@ -41,14 +44,15 @@ impl<C: Checker> DataChecker<C> {
         }
     }
 
-    async fn build_check_entry(
+    pub(super) async fn build_check_entry(
         check_result: CheckInconsistency,
         src_row_data: &RowData,
         dst_row_data: Option<&RowData>,
         ctx: &mut CheckContext,
         tb_meta: &CheckerTbMeta,
     ) -> anyhow::Result<CheckEntry> {
-        let (log, revise_sql, is_miss) = match check_result {
+        let key = RecheckKey::from_row_data(src_row_data, &tb_meta.basic().id_cols)?;
+        let (log, revise_sql, diff_cols) = match check_result {
             CheckInconsistency::Miss => {
                 let log = Self::build_miss_log(src_row_data, ctx, tb_meta).await?;
                 let revise_sql = Self::build_revise_sql(
@@ -59,7 +63,7 @@ impl<C: Checker> DataChecker<C> {
                     None,
                     None,
                 )?;
-                (log, revise_sql, true)
+                (log, revise_sql, None)
             }
             CheckInconsistency::Diff(diff_col_values) => {
                 let dst_row = dst_row_data.context("missing dst row in diff")?;
@@ -72,7 +76,7 @@ impl<C: Checker> DataChecker<C> {
                     Some(&diff_col_values),
                 )?;
                 let mut log = Self::build_miss_log(src_row_data, ctx, tb_meta).await?;
-                log.diff_col_values = if let Some(col_map) = ctx
+                let routed_diffs = if let Some(col_map) = ctx
                     .reverse_router
                     .get_col_map(&src_row_data.schema, &src_row_data.tb)
                 {
@@ -90,7 +94,23 @@ impl<C: Checker> DataChecker<C> {
                 } else {
                     diff_col_values
                 };
-                log.dst_row = if ctx.output_full_row {
+                let diff_cols = Self::summarize_diff_cols(&routed_diffs);
+                log.diff_col_values = routed_diffs
+                    .into_keys()
+                    .filter(|col| diff_cols.contains(col))
+                    .map(|col| {
+                        (
+                            col,
+                            DiffColValue {
+                                src: None,
+                                dst: None,
+                                src_type: None,
+                                dst_type: None,
+                            },
+                        )
+                    })
+                    .collect();
+                log.dst_row = if ctx.output_full_row && !ctx.is_cdc {
                     if ctx
                         .reverse_router
                         .get_col_map(&dst_row.schema, &dst_row.tb)
@@ -104,16 +124,23 @@ impl<C: Checker> DataChecker<C> {
                 } else {
                     None
                 };
-                (log, revise_sql, false)
+                (log, revise_sql, Some(diff_cols))
             }
         };
 
         Ok(CheckEntry {
+            key,
             log,
-            revise_sql,
-            is_miss,
-            src_row_data: src_row_data.clone(),
+            revise_sql: (!ctx.is_cdc).then_some(revise_sql).flatten(),
+            diff_cols,
         })
+    }
+
+    fn summarize_diff_cols(diff_col_values: &HashMap<String, DiffColValue>) -> Vec<String> {
+        let mut cols = diff_col_values.keys().cloned().collect::<Vec<_>>();
+        cols.sort();
+        cols.truncate(Self::MAX_DIFF_COLS);
+        cols
     }
 
     async fn check_rows(
@@ -165,7 +192,7 @@ impl<C: Checker> DataChecker<C> {
         Ok((skip_count, retry_rows))
     }
 
-    fn compare_src_dst(
+    pub(super) fn compare_src_dst(
         src_row: &RowData,
         dst_row: Option<&RowData>,
         tb_meta: &CheckerTbMeta,
@@ -281,7 +308,10 @@ impl<C: Checker> DataChecker<C> {
             .unwrap_or(value)
     }
 
-    fn lookup_match_key(row_data: &RowData, tb_meta: &RdbTbMeta) -> anyhow::Result<Option<u128>> {
+    pub(super) fn lookup_match_key(
+        row_data: &RowData,
+        tb_meta: &RdbTbMeta,
+    ) -> anyhow::Result<Option<u128>> {
         let id_values = match row_data.row_type {
             RowType::Delete => row_data.require_before()?,
             _ => row_data.require_after()?,
@@ -339,7 +369,7 @@ impl<C: Checker> DataChecker<C> {
     }
 
     fn log_entry(entry: &CheckEntry) {
-        if entry.is_miss {
+        if entry.is_miss() {
             log_miss!("{}", entry.log);
         } else {
             log_diff!("{}", entry.log);
@@ -350,7 +380,7 @@ impl<C: Checker> DataChecker<C> {
     }
 
     fn checker_metric_types(entry: &CheckEntry) -> (TaskMetricsType, CounterType) {
-        if entry.is_miss {
+        if entry.is_miss() {
             (
                 TaskMetricsType::CheckerMissCount,
                 CounterType::CheckerMissCount,
@@ -376,9 +406,9 @@ impl<C: Checker> DataChecker<C> {
         {
             let summary = &mut self.ctx.summary;
             summary.end_time = chrono::Local::now().to_rfc3339();
-            if entry.is_miss {
+            if entry.is_miss() {
                 summary.miss_count += 1;
-            } else {
+            } else if entry.counts_as_diff() {
                 summary.diff_count += 1;
             }
             if entry.revise_sql.is_some() {
@@ -396,7 +426,7 @@ impl<C: Checker> DataChecker<C> {
     }
 
     pub fn remove_store_entry(&mut self, row_data: &RowData, row_key: u128) {
-        let store_key = CheckerStoreKey::from_row_data(row_data, row_key);
+        let store_key = CheckerStoreKey::new(&row_data.schema, &row_data.tb, row_key);
         if self.store.shift_remove(&store_key).is_some() {
             self.store_dirty = true;
             self.snapshot_dirty = true;
@@ -467,7 +497,7 @@ impl<C: Checker> DataChecker<C> {
         self.store_dirty = true;
         self.snapshot_dirty = true;
         self.add_entry_metrics(&entry).await;
-        let store_key = CheckerStoreKey::from_row_data(row_data, row_key);
+        let store_key = CheckerStoreKey::new(&row_data.schema, &row_data.tb, row_key);
         self.store.insert(store_key, entry);
         self.update_pending_counter();
     }
@@ -513,7 +543,7 @@ impl<C: Checker> DataChecker<C> {
             Self::build_id_col_values(&routed_row, tb_meta.basic()).unwrap_or_default()
         };
 
-        let src_row = if ctx.output_full_row {
+        let src_row = if ctx.output_full_row && !ctx.is_cdc {
             Self::clone_row_values(&routed_row)
         } else {
             None
@@ -792,7 +822,7 @@ impl<C: Checker> DataChecker<C> {
 mod tests {
     use super::*;
     use crate::{
-        checker::{FetchResult, base_checker::CheckerRuntimeState, check_log::CheckSummaryLog},
+        checker::{check_log::CheckSummaryLog, FetchResult},
         rdb_router::RdbRouter,
     };
     use async_trait::async_trait;
@@ -841,12 +871,22 @@ mod tests {
             s3_output: None,
             cdc_check_log_interval_secs: 1,
             state_store: None,
+            source_checker: None,
             expected_resume_position: None,
         }
     }
 
     fn build_entry(src_row_data: RowData) -> CheckEntry {
+        let key_values = src_row_data
+            .after
+            .as_ref()
+            .or(src_row_data.before.as_ref())
+            .unwrap()
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
         CheckEntry {
+            key: RecheckKey::from_row_data(&src_row_data, &key_values).unwrap(),
             log: CheckLog {
                 schema: src_row_data.schema.clone(),
                 tb: src_row_data.tb.clone(),
@@ -858,8 +898,7 @@ mod tests {
                 dst_row: None,
             },
             revise_sql: None,
-            is_miss: true,
-            src_row_data,
+            diff_cols: None,
         }
     }
 
@@ -947,17 +986,20 @@ mod tests {
         let old_key =
             DataChecker::<DummyChecker>::hash_from_id_values(&before_values, tb_meta.basic())
                 .unwrap();
-        let (_tx, rx) = mpsc::channel(1);
+        let (_control_tx, control_rx) = mpsc::unbounded_channel();
         let mut data_checker = DataChecker::new(
             DummyChecker,
             "task-1".to_string(),
             build_ctx(false),
-            rx,
+            super::super::CheckerIo {
+                batch_queue: Arc::new(std::sync::Mutex::new(LimitedQueue::new(1))),
+                batch_notify: Arc::new(tokio::sync::Notify::new()),
+                control_rx,
+            },
             "unit-test",
-            Arc::new(CheckerRuntimeState::default()),
         );
         data_checker.store.insert(
-            CheckerStoreKey::from_row_data(&src_row, old_key),
+            CheckerStoreKey::new(&src_row.schema, &src_row.tb, old_key),
             build_entry(src_row.clone()),
         );
 
@@ -995,14 +1037,17 @@ mod tests {
         let row_key = DataChecker::<DummyChecker>::lookup_match_key(&row1, &tb_meta)
             .unwrap()
             .unwrap();
-        let (_tx, rx) = mpsc::channel(1);
+        let (_control_tx, control_rx) = mpsc::unbounded_channel();
         let mut data_checker = DataChecker::new(
             DummyChecker,
             "task-1".to_string(),
             build_ctx(true),
-            rx,
+            super::super::CheckerIo {
+                batch_queue: Arc::new(std::sync::Mutex::new(LimitedQueue::new(1))),
+                batch_notify: Arc::new(tokio::sync::Notify::new()),
+                control_rx,
+            },
             "unit-test",
-            Arc::new(CheckerRuntimeState::default()),
         );
 
         data_checker
@@ -1015,10 +1060,7 @@ mod tests {
         assert_eq!(data_checker.store.len(), 2);
         data_checker.remove_store_entry(&row1, row_key);
         assert_eq!(data_checker.store.len(), 1);
-        assert_eq!(
-            data_checker.store.values().next().unwrap().src_row_data.tb,
-            "t2"
-        );
+        assert_eq!(data_checker.store.values().next().unwrap().key.tb, "t2");
     }
 
     #[test]

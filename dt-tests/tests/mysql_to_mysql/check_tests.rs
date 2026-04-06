@@ -58,17 +58,6 @@ mod test {
 
     #[tokio::test]
     #[serial]
-    async fn cdc_fail_open_clears_checker_state_test() {
-        TestBase::run_cdc_fail_open_clears_checker_state_test(
-            "mysql_to_mysql/check/cdc_checker_state_resume_test",
-            0,
-            1000,
-        )
-        .await;
-    }
-
-    #[tokio::test]
-    #[serial]
     async fn cdc_check_large_data_test() {
         TestBase::run_cdc_check_test(
             "mysql_to_mysql/check/cdc_check_large_data_test",

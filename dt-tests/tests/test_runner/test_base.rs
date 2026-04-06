@@ -169,21 +169,6 @@ impl TestBase {
         runner.close().await.expect("Failed to close runner");
     }
 
-    pub async fn run_cdc_fail_open_clears_checker_state_test(
-        test_dir: &str,
-        start_millis: u64,
-        parse_millis: u64,
-    ) {
-        let runner = RdbCheckTestRunner::new(test_dir)
-            .await
-            .expect("Failed to create RdbCheckTestRunner");
-        runner
-            .run_cdc_fail_open_clears_checker_state_test(start_millis, parse_millis)
-            .await
-            .expect("Failed to run CDC fail-open checker-state cleanup test");
-        runner.close().await.expect("Failed to close runner");
-    }
-
     pub async fn run_review_test(test_dir: &str) {
         let runner = RdbCheckTestRunner::new(test_dir).await.unwrap();
         runner.run_review_test().await.unwrap();
