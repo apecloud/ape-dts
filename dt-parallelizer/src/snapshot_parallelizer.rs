@@ -1,11 +1,11 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use dt_common::meta::{dt_data::DtItem, dt_queue::DtQueue, row_data::RowData};
+use dt_connector::Sinker;
 
 use super::base_parallelizer::BaseParallelizer;
 use crate::{DataSize, Parallelizer};
-use dt_common::meta::{dt_data::DtItem, dt_queue::DtQueue, row_data::RowData};
-use dt_connector::Sinker;
 
 pub struct SnapshotParallelizer {
     pub base_parallelizer: BaseParallelizer,

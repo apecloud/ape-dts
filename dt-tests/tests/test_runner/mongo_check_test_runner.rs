@@ -1,5 +1,6 @@
-use super::{check_util::CheckUtil, mongo_test_runner::MongoTestRunner};
 use std::sync::Arc;
+
+use super::{check_util::CheckUtil, mongo_test_runner::MongoTestRunner};
 
 pub struct MongoCheckTestRunner {
     base: Arc<MongoTestRunner>,

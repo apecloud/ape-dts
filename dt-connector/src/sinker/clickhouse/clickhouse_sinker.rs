@@ -6,7 +6,6 @@ use chrono::Utc;
 use reqwest::{Client, Method, Response, StatusCode};
 use tokio::time::Instant;
 
-use crate::{call_batch_fn, sinker::base_sinker::BaseSinker, Sinker};
 use dt_common::{
     config::config_enums::DbType,
     error::Error,
@@ -14,6 +13,8 @@ use dt_common::{
     monitor::monitor::Monitor,
     utils::{limit_queue::LimitedQueue, sql_util::SqlUtil},
 };
+
+use crate::{call_batch_fn, sinker::base_sinker::BaseSinker, Sinker};
 
 const SIGN_COL_NAME: &str = "_ape_dts_is_deleted";
 const TIMESTAMP_COL_NAME: &str = "_ape_dts_timestamp";

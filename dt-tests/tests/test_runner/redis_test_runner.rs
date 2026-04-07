@@ -1,6 +1,3 @@
-use crate::test_runner::redis_test_util::RedisTestUtil;
-
-use super::{base_test_runner::BaseTestRunner, redis_cluster_connection::RedisClusterConnection};
 use anyhow::bail;
 use dt_common::{
     config::{
@@ -16,6 +13,9 @@ use dt_common::{
 };
 
 use redis::{Connection, Value};
+
+use super::{base_test_runner::BaseTestRunner, redis_cluster_connection::RedisClusterConnection};
+use crate::test_runner::redis_test_util::RedisTestUtil;
 
 pub struct RedisTestRunner {
     pub base: BaseTestRunner,

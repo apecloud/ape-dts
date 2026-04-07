@@ -1,14 +1,14 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-
-use super::base_parallelizer::BaseParallelizer;
-use crate::{DataSize, Parallelizer};
 use dt_common::meta::{
     dcl_meta::dcl_data::DclData, ddl_meta::ddl_data::DdlData, dt_data::DtItem, dt_queue::DtQueue,
     row_data::RowData, struct_meta::struct_data::StructData,
 };
 use dt_connector::Sinker;
+
+use super::base_parallelizer::BaseParallelizer;
+use crate::{DataSize, Parallelizer};
 
 pub struct SerialParallelizer {
     pub base_parallelizer: BaseParallelizer,

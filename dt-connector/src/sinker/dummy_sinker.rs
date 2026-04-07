@@ -1,7 +1,7 @@
 use async_trait::async_trait;
+use dt_common::meta::row_data::RowData;
 
 use crate::{sinker::check_sinker::CheckWrappedSink, Sinker};
-use dt_common::meta::row_data::RowData;
 
 pub struct DummySinker {}
 

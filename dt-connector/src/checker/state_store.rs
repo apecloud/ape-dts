@@ -4,8 +4,9 @@ use anyhow::{Context, Result};
 use chrono::Utc;
 use sqlx::{query, ColumnIndex, Database, Decode, MySql, Pool, Postgres, QueryBuilder, Row, Type};
 
-use crate::extractor::resumer::{utils::ResumerUtil, ResumerDbPool, ResumerType};
 use dt_common::{config::resumer_config::ResumerConfig, meta::position::Position};
+
+use crate::extractor::resumer::{utils::ResumerUtil, ResumerDbPool, ResumerType};
 
 const DEFAULT_ROWS_TABLE: &str = "apedts_unconsistent_rows";
 const SNAPSHOT_INSERT_BIND_COUNT: usize = 6;

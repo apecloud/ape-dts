@@ -1,9 +1,6 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-
-use super::{base_parallelizer::BaseParallelizer, rdb_partitioner::RdbPartitioner};
-use crate::{DataSize, Parallelizer};
 use dt_common::meta::{
     dt_data::{DtData, DtItem},
     dt_queue::DtQueue,
@@ -11,6 +8,9 @@ use dt_common::meta::{
 };
 use dt_common::monitor::counter::Counter;
 use dt_connector::Sinker;
+
+use super::{base_parallelizer::BaseParallelizer, rdb_partitioner::RdbPartitioner};
+use crate::{DataSize, Parallelizer};
 
 pub struct PartitionParallelizer {
     pub base_parallelizer: BaseParallelizer,

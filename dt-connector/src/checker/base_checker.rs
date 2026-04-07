@@ -1,4 +1,3 @@
-use super::struct_checker::StructCheckerHandle;
 use async_mutex::Mutex;
 use async_trait::async_trait;
 use indexmap::IndexMap;
@@ -15,6 +14,7 @@ use tokio::sync::{mpsc, Notify};
 use tokio::task::JoinHandle;
 use tokio::time::{sleep, Duration, Instant};
 
+use super::struct_checker::StructCheckerHandle;
 use crate::{
     checker::check_log::{CheckLog, CheckSummaryLog, DiffColValue},
     checker::state_store::{CheckerCheckpointCommit, CheckerStateRow, CheckerStateStore},

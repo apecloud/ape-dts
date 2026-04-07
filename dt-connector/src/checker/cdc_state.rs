@@ -1,6 +1,7 @@
-use super::*;
 use anyhow::Context;
 use std::collections::{BTreeMap, BTreeSet};
+
+use super::*;
 
 #[derive(Serialize)]
 struct IdentityJsonRef<'a> {

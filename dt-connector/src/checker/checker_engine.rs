@@ -1,14 +1,15 @@
+use anyhow::Context;
+use dt_common::meta::pg::pg_value_type::PgValueType;
+use dt_common::monitor::{counter_type::CounterType, task_metrics::TaskMetricsType};
+use dt_common::utils::limit_queue::LimitedQueue;
+use std::collections::BTreeSet;
+
 use super::{
     log_diff, log_miss, log_sql, log_warn, mongo_cmd, sleep, BaseSinker, CheckContext, CheckEntry,
     CheckInconsistency, CheckLog, Checker, CheckerStoreKey, CheckerTbMeta, ColValue, Cow,
     DataChecker, DiffColValue, Document, Duration, HashMap, Instant, MongoConstants, RdbTbMeta,
     RecheckKey, RetryItem, RowData, RowType,
 };
-use anyhow::Context;
-use dt_common::meta::pg::pg_value_type::PgValueType;
-use dt_common::monitor::{counter_type::CounterType, task_metrics::TaskMetricsType};
-use dt_common::utils::limit_queue::LimitedQueue;
-use std::collections::BTreeSet;
 
 impl<C: Checker> DataChecker<C> {
     const MAX_DIFF_COLS: usize = 8;

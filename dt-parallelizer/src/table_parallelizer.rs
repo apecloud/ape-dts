@@ -1,6 +1,5 @@
 use std::{collections::HashMap, sync::Arc};
 
-use crate::{DataSize, Parallelizer};
 use async_trait::async_trait;
 use dt_common::meta::{
     ddl_meta::ddl_data::DdlData,
@@ -11,6 +10,7 @@ use dt_common::meta::{
 use dt_connector::Sinker;
 
 use super::base_parallelizer::BaseParallelizer;
+use crate::{DataSize, Parallelizer};
 
 pub struct TableParallelizer {
     pub base_parallelizer: BaseParallelizer,

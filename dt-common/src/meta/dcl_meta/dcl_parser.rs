@@ -1,8 +1,3 @@
-use crate::config::config_enums::DbType;
-use crate::error::Error;
-use crate::meta::dcl_meta::dcl_data::DclData;
-use crate::meta::dcl_meta::dcl_statement::{DclStatement, OriginStatement};
-use crate::meta::dcl_meta::dcl_type::DclType;
 use anyhow::bail;
 use nom::branch::alt;
 use nom::bytes::complete::tag_no_case;
@@ -11,6 +6,16 @@ use nom::sequence::tuple;
 use nom::IResult;
 use regex::Regex;
 use std::borrow::Cow;
+
+use crate::{
+    config::config_enums::DbType,
+    error::Error,
+    meta::dcl_meta::{
+        dcl_data::DclData,
+        dcl_statement::{DclStatement, OriginStatement},
+        dcl_type::DclType,
+    },
+};
 
 pub struct DclParser {
     db_type: DbType,

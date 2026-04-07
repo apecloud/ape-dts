@@ -8,11 +8,6 @@ use redis::ConnectionLike;
 use redis::Value;
 use tokio::{sync::RwLock, time::Instant};
 
-use super::entry_rewriter::EntryRewriter;
-use crate::call_batch_fn;
-use crate::data_marker::DataMarker;
-use crate::sinker::base_sinker::BaseSinker;
-use crate::Sinker;
 use dt_common::error::Error;
 use dt_common::log_debug;
 use dt_common::meta::dt_data::DtData;
@@ -27,6 +22,9 @@ use dt_common::meta::redis::redis_write_method::RedisWriteMethod;
 use dt_common::meta::row_data::RowData;
 use dt_common::meta::row_type::RowType;
 use dt_common::monitor::monitor::Monitor;
+
+use super::entry_rewriter::EntryRewriter;
+use crate::{call_batch_fn, data_marker::DataMarker, sinker::base_sinker::BaseSinker, Sinker};
 
 pub struct RedisSinker {
     pub cluster_node: Option<ClusterNode>,

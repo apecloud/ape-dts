@@ -1,6 +1,5 @@
 use std::{cmp, collections::HashMap, str::FromStr, sync::Arc};
 
-use crate::{call_batch_fn, sinker::base_sinker::BaseSinker, Sinker};
 use anyhow::bail;
 use async_trait::async_trait;
 use chrono::Utc;
@@ -24,6 +23,8 @@ use dt_common::{
     monitor::monitor::Monitor,
     utils::{limit_queue::LimitedQueue, sql_util::SqlUtil},
 };
+
+use crate::{call_batch_fn, sinker::base_sinker::BaseSinker, Sinker};
 
 const SIGN_COL_NAME: &str = "_ape_dts_is_deleted";
 const TIMESTAMP_COL_NAME: &str = "_ape_dts_timestamp";

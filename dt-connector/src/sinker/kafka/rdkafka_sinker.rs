@@ -5,12 +5,13 @@ use async_trait::async_trait;
 use rdkafka::producer::{FutureProducer, FutureRecord};
 use tokio::{time::Duration, time::Instant};
 
-use crate::{rdb_router::RdbRouter, sinker::base_sinker::BaseSinker, Sinker};
 use dt_common::{
     meta::{avro::avro_converter::AvroConverter, row_data::RowData},
     monitor::monitor::Monitor,
     utils::limit_queue::LimitedQueue,
 };
+
+use crate::{rdb_router::RdbRouter, sinker::base_sinker::BaseSinker, Sinker};
 
 // Deprecated: use KafkaSinker instead
 pub struct RdkafkaSinker {
