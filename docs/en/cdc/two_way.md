@@ -8,7 +8,7 @@ To enable two-way data sync, we need to configure CDC tasks for both "source -> 
 
 If you also want validation in each CDC direction, use the [inline cdc check flow](../snapshot/check.md#inline-cdc-check).
 
-For each task, keep `[sinker] sink_type=write`, add `[checker]`, add `[resumer] resume_type=from_target` or `from_db`, and use `[parallelizer] parallel_type=rdb_check`.
+For each task, keep `[sinker] sink_type=write`, add `[checker] enable=true`, add `[resumer] resume_type=from_target` or `from_db`, and use `[parallelizer] parallel_type=rdb_merge`.
 
 The checker reuses the parsed `[sinker]` target directly, so `[checker]` must not set `db_type`, `url`, `username`, or `password`.
 

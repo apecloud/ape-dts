@@ -14,9 +14,9 @@
 
 相较默认的纯 CDC 同步链路，inline cdc check 还要求：
 - 保持 `[sinker] sink_type=write`
-- 增加 `[checker]`
+- 增加 `[checker] enable=true`
 - 增加 `[resumer] resume_type=from_target` 或 `from_db`
-- 使用 `[parallelizer] parallel_type=rdb_check`
+- 使用 `[parallelizer] parallel_type=rdb_merge`
 
 在该模式下，checker 会直接复用 `[sinker]` 已解析的目标端配置，因此 `[checker]` 不接受单独设置 `db_type`、`url`、`username`、`password`。
 
@@ -28,8 +28,7 @@
 
 # 并发算法
 
-- MySQL/PG：普通 CDC 同步使用 `parallel_type=rdb_merge`；inline cdc check 使用
-  `parallel_type=rdb_check`
+- MySQL/PG：普通 CDC 同步与 inline cdc check 都使用 `parallel_type=rdb_merge`
 - Mongo：parallel_type=mongo
 - Redis：parallel_type=redis
 

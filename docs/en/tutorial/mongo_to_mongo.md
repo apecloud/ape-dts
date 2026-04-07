@@ -128,6 +128,7 @@ extract_type=snapshot
 url=mongodb://127.0.0.1:27017
 
 [checker]
+enable=true
 db_type=mongo
 url=mongodb://ape_dts:123456@127.0.0.1:27018
 
@@ -136,7 +137,7 @@ do_dbs=test_db
 do_events=insert
 
 [parallelizer]
-parallel_type=rdb_check
+parallel_type=mongo
 parallel_size=8
 
 [pipeline]
@@ -228,6 +229,7 @@ url=mongodb://127.0.0.1:27017
 check_log_dir=./check_data_task_log
 
 [checker]
+enable=true
 db_type=mongo
 url=mongodb://ape_dts:123456@127.0.0.1:27018
 
@@ -235,7 +237,7 @@ url=mongodb://ape_dts:123456@127.0.0.1:27018
 do_events=*
 
 [parallelizer]
-parallel_type=rdb_check
+parallel_type=mongo
 parallel_size=8
 
 [pipeline]

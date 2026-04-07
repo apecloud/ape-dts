@@ -144,6 +144,7 @@ extract_type=snapshot
 url=mongodb://ape_dts:123456@mongo1:9042/?replicaSet=rs0
 
 [checker]
+enable=true
 db_type=mongo
 url=mongodb://ape_dts:123456@127.0.0.1:27018
 batch_size=100
@@ -161,7 +162,7 @@ tb_map=
 col_map=
 
 [parallelizer]
-parallel_type=rdb_check
+parallel_type=mongo
 parallel_size=8
 
 [pipeline]
@@ -190,6 +191,7 @@ url=mongodb://ape_dts:123456@127.0.0.1:27018
 batch_size=200
 
 [checker]
+enable=true
 batch_size=200
 
 [filter]
@@ -284,6 +286,7 @@ check_log_dir=./logs/origin_check_log
 batch_size=200
 
 [checker]
+enable=true
 db_type=mongo
 url=mongodb://ape_dts:123456@127.0.0.1:27018
 batch_size=100
@@ -301,7 +304,7 @@ tb_map=
 col_map=
 
 [parallelizer]
-parallel_type=rdb_check
+parallel_type=mongo
 parallel_size=8
 
 [pipeline]

@@ -14,9 +14,9 @@ If you need validation in the CDC pipeline, use the [inline cdc check flow](../s
 
 Compared with the default CDC-only sync path, inline cdc check requires:
 - keep `[sinker] sink_type=write`
-- add `[checker]`
+- add `[checker] enable=true`
 - add `[resumer] resume_type=from_target` or `from_db`
-- use `[parallelizer] parallel_type=rdb_check`
+- use `[parallelizer] parallel_type=rdb_merge`
 
 The checker reuses the parsed `[sinker]` target directly, so `[checker]` must not set `db_type`, `url`, `username`, or `password`.
 
@@ -33,7 +33,7 @@ Refer to [task templates](../../templates/mysql_to_mysql.md) and [tutorial](../t
 
 # Parallelizer
 
-- MySQL/PG: `parallel_type=rdb_merge` for normal CDC sync; `parallel_type=rdb_check` for inline cdc check
+- MySQL/PG: `parallel_type=rdb_merge` for normal CDC sync and inline cdc check
 - Mongo: parallel_type=mongo
 - Redis: parallel_type=redis
 

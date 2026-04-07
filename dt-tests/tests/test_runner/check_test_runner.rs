@@ -8,10 +8,10 @@ use chrono::Utc;
 use dt_common::utils::time_util::TimeUtil;
 use dt_common::{
     config::resumer_config::ResumerConfig,
-    meta::{col_value::ColValue, position::Position, row_data::RowData, row_type::RowType},
+    meta::{col_value::ColValue, position::Position},
 };
 use dt_connector::checker::{
-    check_log::{CheckSummaryLog, DiffColValue},
+    check_log::CheckSummaryLog,
     state_store::{CheckerCheckpointCommit, CheckerStateRow},
     CheckerStateStore,
 };
@@ -19,57 +19,30 @@ use dt_connector::extractor::resumer::{
     recorder::to_database::DatabaseRecorder, utils::ResumerUtil, ResumerType,
 };
 use serde::Serialize;
+use serde_json::Value;
 use sqlx::{query, Row};
-use std::{
-    collections::{BTreeMap, HashMap},
-    fs::File,
-    path::Path,
-};
+use std::{collections::BTreeMap, fs::File, path::Path};
 
-pub struct RdbCheckTestRunner {
+pub struct CheckTestRunner {
     base: RdbTestRunner,
     dst_check_log_dir: String,
     expect_check_log_dir: String,
 }
 
 #[derive(Serialize)]
-enum SeedPersistedColValue {
+enum SeedPersistedKeyValue {
     Long(i32),
-    String(String),
 }
 
 #[derive(Serialize)]
-struct SeedPersistedRowData {
+struct SeedPersistedRecheckKey {
     schema: String,
     tb: String,
-    row_type: RowType,
-    before: Option<HashMap<String, SeedPersistedColValue>>,
-    after: Option<HashMap<String, SeedPersistedColValue>>,
-    data_size: usize,
-    is_not_origin: bool,
+    is_delete: bool,
+    pk: BTreeMap<String, SeedPersistedKeyValue>,
 }
 
-#[derive(Serialize)]
-struct SeedPersistedCheckLog {
-    schema: String,
-    tb: String,
-    target_schema: Option<String>,
-    target_tb: Option<String>,
-    id_col_values: HashMap<String, Option<String>>,
-    diff_col_values: HashMap<String, DiffColValue>,
-    src_row: Option<HashMap<String, SeedPersistedColValue>>,
-    dst_row: Option<HashMap<String, SeedPersistedColValue>>,
-}
-
-#[derive(Serialize)]
-struct SeedPersistedCheckEntry {
-    log: SeedPersistedCheckLog,
-    revise_sql: Option<String>,
-    is_miss: bool,
-    src_row_data: SeedPersistedRowData,
-}
-
-impl RdbCheckTestRunner {
+impl CheckTestRunner {
     fn set_tb_parallel_size(&self, tb_parallel_size: usize) {
         TestConfigUtil::update_task_config(
             &self.base.base.task_config_file,
@@ -276,73 +249,12 @@ impl RdbCheckTestRunner {
         Ok(31u128 + u128::from(col_hash_code))
     }
 
-    fn to_seed_persisted_col_map(
-        values: &HashMap<String, ColValue>,
-    ) -> anyhow::Result<HashMap<String, SeedPersistedColValue>> {
-        values
-            .iter()
-            .map(|(col, value)| {
-                let persisted = match value {
-                    ColValue::Long(v) => SeedPersistedColValue::Long(*v),
-                    ColValue::String(v) => SeedPersistedColValue::String(v.clone()),
-                    _ => anyhow::bail!(
-                        "unsupported seed col value for {col}: {}",
-                        value.type_name()
-                    ),
-                };
-                Ok((col.clone(), persisted))
-            })
-            .collect()
-    }
-
     fn build_seed_unresolved_row() -> anyhow::Result<CheckerStateRow> {
-        let mut after = HashMap::new();
-        after.insert("id".to_string(), ColValue::Long(2));
-        after.insert("name".to_string(), ColValue::String("bob".to_string()));
-        after.insert("value".to_string(), ColValue::Long(250));
-        let src_row_data = RowData::new(
-            "test_db_1".to_string(),
-            "check_test".to_string(),
-            RowType::Insert,
-            None,
-            Some(after),
-        );
-
-        let id_col_values = HashMap::from([("id".to_string(), Some("2".to_string()))]);
-        let diff_col_values = HashMap::from([(
-            "value".to_string(),
-            DiffColValue {
-                src: Some("250".to_string()),
-                dst: Some("999".to_string()),
-                src_type: None,
-                dst_type: None,
-            },
-        )]);
-
-        let payload = serde_json::to_string(&SeedPersistedCheckEntry {
-            log: SeedPersistedCheckLog {
-                schema: "test_db_1".to_string(),
-                tb: "check_test".to_string(),
-                target_schema: None,
-                target_tb: None,
-                id_col_values: id_col_values.clone(),
-                diff_col_values,
-                src_row: None,
-                dst_row: None,
-            },
-            revise_sql: None,
-            is_miss: false,
-            src_row_data: SeedPersistedRowData {
-                schema: src_row_data.schema.clone(),
-                tb: src_row_data.tb.clone(),
-                row_type: src_row_data.row_type.clone(),
-                before: None,
-                after: Some(Self::to_seed_persisted_col_map(
-                    src_row_data.require_after()?,
-                )?),
-                data_size: src_row_data.data_size,
-                is_not_origin: src_row_data.is_not_origin,
-            },
+        let payload = serde_json::to_string(&SeedPersistedRecheckKey {
+            schema: "test_db_1".to_string(),
+            tb: "check_test".to_string(),
+            is_delete: false,
+            pk: BTreeMap::from([("id".to_string(), SeedPersistedKeyValue::Long(2))]),
         })?;
 
         let identity_json = serde_json::to_string(&serde_json::json!({
@@ -593,4 +505,18 @@ impl RdbCheckTestRunner {
         CheckUtil::clear_check_log(&self.dst_check_log_dir);
         self.run_check_test().await
     }
+}
+
+#[test]
+fn seed_unresolved_row_payload_only_contains_recheck_key() {
+    let row = CheckTestRunner::build_seed_unresolved_row().unwrap();
+    let Value::Object(payload) = serde_json::from_str(&row.payload).unwrap() else {
+        panic!("payload should be a json object");
+    };
+
+    assert!(payload.contains_key("schema"));
+    assert!(payload.contains_key("tb"));
+    assert!(payload.contains_key("is_delete"));
+    assert!(payload.contains_key("pk"));
+    assert_eq!(payload.len(), 4);
 }

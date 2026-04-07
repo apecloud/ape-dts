@@ -6,7 +6,7 @@ This article tells you what to do before starting a snapshot task, and how to co
 
 ## Validate CDC-applied data
 
-If you want to validate CDC-applied data after the snapshot + CDC pipeline, use [inline cdc check](../snapshot/check.md#inline-cdc-check) on the CDC task: keep `[sinker] sink_type=write`, add `[checker]`, add `[resumer]`, and switch `[parallelizer] parallel_type=rdb_check`.
+If you want to validate CDC-applied data after the snapshot + CDC pipeline, use [inline cdc check](../snapshot/check.md#inline-cdc-check) on the CDC task: keep `[sinker] sink_type=write`, add `[checker] enable=true`, add `[resumer]`, and keep `[parallelizer] parallel_type=rdb_merge`.
 
 This flow is currently supported only for MySQL and PostgreSQL write sinkers.
 

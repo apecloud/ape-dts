@@ -14,8 +14,9 @@ Data check is documented in three flows:
 
 - Use `extract_type=snapshot`.
 - Set `sink_type=dummy` or omit `[sinker]`.
-- Configure the checker target explicitly in `[checker]`.
-- Use `parallel_type=rdb_check`.
+- Configure the checker target explicitly in `[checker]`, and set `[checker].enable=true`.
+- Use the merge-style parallelizer for the target type: `parallel_type=rdb_merge` for MySQL/PG,
+  `parallel_type=mongo` for MongoDB.
 
 ```text
 source rows
@@ -65,10 +66,11 @@ source rows
 - Use `extract_type=cdc` and `[sinker] sink_type=write`.
 - The checker validates applied CDC changes after they are written to the target.
 - The checker reuses the parsed `[sinker]` target directly.
+- Set `[checker].enable=true`.
 - `[checker]` must not set `db_type`, `url`, `username`, or `password`.
 - `[resumer] resume_type=from_target` or `from_db` is required to persist checker state.
 - Currently supported only when `[sinker].db_type` is `mysql` or `pg`.
-- Use `parallel_type=rdb_check`.
+- Use `parallel_type=rdb_merge`.
 
 ```text
 source CDC events
@@ -98,9 +100,10 @@ source CDC events
 
 These combinations fail fast with `ConfigError`:
 
-- `[parallelizer] parallel_type=rdb_check` without enabling `[checker]`.
+- `[checker]` section is present but `enable` is missing.
 - `[pipeline] pipeline_type` is not `basic`.
 - `[extractor] extract_type=cdc` but `[sinker] sink_type` is not `write`.
+- `[parallelizer] parallel_type` is not `rdb_merge`.
 - `[sinker].db_type` is not `mysql` or `pg`.
 - Any of `db_type`, `url`, `username`, or `password` is set in `[checker]`.
 - `[resumer] resume_type` is missing or not `from_target` / `from_db`, so checker state cannot be persisted.
@@ -202,6 +205,7 @@ snapshot check and inline cdc check, the checker reuses the parsed `[sinker]` ta
 
 ```
 [checker]
+enable=true
 output_full_row=true
 ```
 
@@ -245,6 +249,7 @@ and inline cdc check, the checker reuses the parsed `[sinker]` target:
 
 ```
 [checker]
+enable=true
 output_revise_sql=true
 # Optional: force WHERE clause to match the whole row
 revise_match_full_row=true
@@ -326,6 +331,7 @@ db_type=<original checker db_type>
 url=<original checker url>
 
 [checker]
+enable=true
 db_type=<original extractor db_type>
 url=<original extractor url>
 ```

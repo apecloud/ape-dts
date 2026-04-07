@@ -54,6 +54,7 @@ struct check 复用 standalone snapshot check 的目标选择规则。
 
 | 配置                        | 作用                                                           | 示例        | 默认                             |
 | :-------------------------- | :------------------------------------------------------------- | :---------- | :------------------------------- |
+| enable                      | `[checker]` section 出现时是否启用 checker                     | true        | 必填                             |
 | queue_size                  | checker 队列容量，按待处理批次/消息数计数                      | 200         | 200                              |
 | max_connections             | checker 连接池最大连接数                                       | 8           | 8                                |
 | batch_size                  | checker 的分块大小；inline cdc check 下也用于控制 checker 分块 | 200         | 200                              |
@@ -98,17 +99,18 @@ struct check 复用 standalone snapshot check 的目标选择规则。
 - inline snapshot check 仅支持 `[extractor] extract_type=snapshot`、`[sinker] sink_type=write`，
   且 `[sinker].db_type` 为 `mysql`、`pg`、`mongo` 的写入链路。
 - inline cdc check 当前仅支持 `[extractor] extract_type=cdc`、`[sinker] sink_type=write`，
-  且 `[sinker].db_type` 为 `mysql` 或 `pg` 的场景。
+  `[checker].enable=true`、`[parallelizer].parallel_type=rdb_merge`，且 `[sinker].db_type`
+  为 `mysql` 或 `pg` 的场景。
 - 在 inline cdc check 中，checker 使用 `[checker].batch_size`，不会 fallback 到
   `[sinker].batch_size`。例如 `[checker].batch_size=100`、`queue_size=200` 时，队列最多可积压 200 个待处理批次；若这些批次都打满，大约就是 20,000 行待校验数据。
 - 在 inline snapshot check 与 inline cdc check 中，`[checker]` 不接受 `db_type`、`url`、
   `username`、`password`；checker 会直接复用 `[sinker]` 已解析的目标端配置。
 - 在 inline cdc check 中，必须配置 `[resumer] resume_type=from_target` 或 `from_db` 来持久化
   checker 状态。
-- 对 inline cdc check，下面这些组合会直接报 `ConfigError`：缺少 `[checker]` 且
-  `parallel_type=rdb_check`；`[pipeline].pipeline_type != basic`；`[sinker].sink_type != write`；
-  `[sinker].db_type` 不属于 `mysql` / `pg`；以及在 `[checker]` 中显式填写目标端字段
-  `db_type` / `url` / `username` / `password`。
+- 对 inline cdc check，下面这些组合会直接报 `ConfigError`：出现 `[checker]` section 但缺少
+  `enable`；`[pipeline].pipeline_type != basic`；`[sinker].sink_type != write`；
+  `[parallelizer].parallel_type != rdb_merge`；`[sinker].db_type` 不属于 `mysql` / `pg`；
+  以及在 `[checker]` 中显式填写目标端字段 `db_type` / `url` / `username` / `password`。
 
 **inline cdc check 的日志 / 重试行为**
 - 对 inline cdc check，`[checker].batch_size` 会继续生效并控制 checker 分块；
@@ -223,9 +225,8 @@ struct check 复用 standalone snapshot check 的目标选择规则。
 | :-------- | :----------------------------------------------------------------------------------------------------------------- | :---------------------- | :--- | :------------------------------------------- |
 | snapshot  | 缓存中的数据分成 parallel_size 份，多线程并行，且批量写入目标                                                      | mysql/pg/mongo 全量     | 快   |                                              |
 | serial    | 单线程，依次单条写入目标                                                                                           | 所有                    |      | 慢                                           |
-| rdb_merge | 将缓存中的增量数据（insert, update, delete）整合成 insert + delete 数据，多线程并行，且批量写入目标                | mysql/pg 增量任务       | 快   | 最终一致性，破坏源端事务在目标端重放的完整性 |
-| mongo     | rdb_merge 的 mongo 版                                                                                              | mongo 增量              |      |                                              |
-| rdb_check | 校验模式；必须配置 `[checker]`，standalone snapshot / struct check 不写入目标端，inline cdc check 仍是先写入再校验 | 支持 checker 的校验任务 |      |                                              |
+| rdb_merge | 将缓存中的行级变更整合成适合写入的 insert + delete 批次，再按 parallel_size 并行下发。`[checker].enable=true` 时，MySQL/PG 的 checker 相关链路会在内部复用它并切换到 check sink mode | mysql/pg 增量、校验、review、revise | 快   | 最终一致性，破坏源端事务在目标端重放的完整性 |
+| mongo     | merge parallelizer 的 Mongo 版。`[checker].enable=true` 时，Mongo 的 checker 相关链路也会在内部复用它并切换到 check sink mode | mongo 增量、校验、review |      |                                              |
 | redis     | 单线程，批量/串行（由 sinker 的 batch_size 决定）写入                                                              | redis 全量/增量         |      |                                              |
 
 # [runtime]

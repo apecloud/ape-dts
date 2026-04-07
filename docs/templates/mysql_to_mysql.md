@@ -223,6 +223,7 @@ extract_type=struct
 url=mysql://root:123456@127.0.0.1:3307?ssl-mode=disabled
 
 [checker]
+enable=true
 db_type=mysql
 url=mysql://root:123456@127.0.0.1:3308?ssl-mode=disabled
 
@@ -263,6 +264,7 @@ url=mysql://root:123456@127.0.0.1:3307?ssl-mode=disabled
 batch_size=10000
 
 [checker]
+enable=true
 db_type=mysql
 url=mysql://root:123456@127.0.0.1:3308?ssl-mode=disabled
 batch_size=100
@@ -280,7 +282,7 @@ tb_map=
 col_map=
 
 [parallelizer]
-parallel_type=rdb_check
+parallel_type=rdb_merge
 parallel_size=8
 
 [pipeline]
@@ -312,6 +314,7 @@ batch_size=200
 replace=true
 
 [checker]
+enable=true
 batch_size=200
 
 [filter]
@@ -372,6 +375,7 @@ url=mysql://root:123456@127.0.0.1:3308?ssl-mode=disabled
 replace=true
 
 [checker]
+enable=true
 batch_size=200
 
 [resumer]
@@ -384,7 +388,7 @@ col_map=
 db_map=
 
 [parallelizer]
-parallel_type=rdb_check
+parallel_type=rdb_merge
 parallel_size=8
 
 [pipeline]
@@ -398,7 +402,7 @@ log4rs_file=./log4rs.yaml
 ```
 
 - the output will be in {log_dir}/check/
-- `[checker]` intentionally omits `db_type` / `url` / `username` / `password`; inline cdc check reuses the parsed `[sinker]` target, requires `[resumer]`, and uses `[parallelizer] parallel_type=rdb_check`.
+- `[checker]` intentionally omits `db_type` / `url` / `username` / `password`; inline cdc check reuses the parsed `[sinker]` target, requires `[checker].enable=true` plus `[resumer]`, and uses `[parallelizer] parallel_type=rdb_merge`.
 
 # Data revise
 
@@ -459,6 +463,7 @@ check_log_dir=./logs/origin_check_log
 batch_size=200
 
 [checker]
+enable=true
 db_type=mysql
 url=mysql://root:123456@127.0.0.1:3308?ssl-mode=disabled
 batch_size=100
@@ -476,7 +481,7 @@ tb_map=
 col_map=
 
 [parallelizer]
-parallel_type=rdb_check
+parallel_type=rdb_merge
 parallel_size=8
 
 [pipeline]

@@ -30,7 +30,7 @@ pub struct MergeParallelizer {
 enum MergeSinkMode {
     // Normal sync path (`rdb_merge` / `mongo`)
     Sync,
-    // Checker path (`rdb_check`, including inline CDC check)
+    // Check path for checker-enabled flows on top of merge-style parallelizers.
     Check,
 }
 
@@ -149,7 +149,7 @@ impl MergeParallelizer {
         }
     }
 
-    pub fn for_rdb_check(
+    pub fn for_check(
         base_parallelizer: BaseParallelizer,
         merger: Box<dyn Merger + Send + Sync>,
         parallel_size: usize,

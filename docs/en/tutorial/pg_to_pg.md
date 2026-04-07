@@ -190,6 +190,7 @@ extract_type=snapshot
 url=postgres://postgres:postgres@127.0.0.1:5433/postgres?options[statement_timeout]=10s
 
 [checker]
+enable=true
 db_type=pg
 url=postgres://postgres:postgres@127.0.0.1:5434/postgres?options[statement_timeout]=10s
 
@@ -198,7 +199,7 @@ do_dbs=test_db
 do_events=insert
 
 [parallelizer]
-parallel_type=rdb_check
+parallel_type=rdb_merge
 parallel_size=8
 
 [pipeline]
@@ -299,6 +300,7 @@ url=postgres://postgres:postgres@127.0.0.1:5433/postgres?options[statement_timeo
 check_log_dir=./check_data_task_log
 
 [checker]
+enable=true
 db_type=pg
 url=postgres://postgres:postgres@127.0.0.1:5434/postgres?options[statement_timeout]=10s
 
@@ -306,7 +308,7 @@ url=postgres://postgres:postgres@127.0.0.1:5434/postgres?options[statement_timeo
 do_events=*
 
 [parallelizer]
-parallel_type=rdb_check
+parallel_type=rdb_merge
 parallel_size=8
 
 [pipeline]
@@ -329,7 +331,10 @@ docker run --rm --network host \
 
 # CDC task
 
-- To turn this into **inline cdc check**, add `[checker]` plus `[resumer]`, keep `[sinker] sink_type=write`, switch `[parallelizer] parallel_type=rdb_check`, and do not configure checker target fields. See [Data Check](../snapshot/check.md#inline-cdc-check) and the Postgres template.
+- To turn this into **inline cdc check**, add `[checker] enable=true` plus `[resumer]`, keep
+  `[sinker] sink_type=write`, use `[parallelizer] parallel_type=rdb_merge`, and do not configure
+  checker target fields. See [Data Check](../snapshot/check.md#inline-cdc-check) and the Postgres
+  template.
 
 ## Drop replication slot if exists
 

@@ -6,7 +6,7 @@ use std::{
 use super::task_util::TaskUtil;
 use dt_common::{
     config::{
-        config_enums::{DbType, ParallelType},
+        config_enums::ParallelType,
         sinker_config::SinkerConfig,
         task_config::TaskConfig,
     },
@@ -53,32 +53,8 @@ impl ParallelizerUtil {
             }
 
             ParallelType::RdbMerge => {
-                let merger = Self::create_rdb_merger(config).await?;
-                let meta_manager = TaskUtil::create_rdb_meta_manager(config).await?;
-                Box::new(MergeParallelizer::for_rdb_merge(
-                    base_parallelizer,
-                    merger,
-                    parallel_size,
-                    config.sinker_basic.clone(),
-                    meta_manager,
-                ))
-            }
-
-            ParallelType::RdbCheck => {
-                let target_db_type = config
-                    .destination_target()
-                    .map(|target| target.db_type)
-                    .unwrap_or(config.sinker_basic.db_type.clone());
-                let merger = match target_db_type {
-                    DbType::Mongo => Self::create_mongo_merger().await?,
-                    _ => Self::create_rdb_merger(config).await?,
-                };
-                Box::new(MergeParallelizer::for_rdb_check(
-                    base_parallelizer,
-                    merger,
-                    parallel_size,
-                    config.sinker_basic.clone(),
-                ))
+                Self::create_rdb_merge_parallelizer(config, base_parallelizer, parallel_size)
+                    .await?
             }
 
             ParallelType::Serial => Box::new(SerialParallelizer { base_parallelizer }),
@@ -88,11 +64,9 @@ impl ParallelizerUtil {
                 parallel_size,
             }),
 
-            ParallelType::Mongo => Box::new(MergeParallelizer::for_mongo(
-                base_parallelizer,
-                parallel_size,
-                config.sinker_basic.clone(),
-            )),
+            ParallelType::Mongo => {
+                Self::create_mongo_parallelizer(config, base_parallelizer, parallel_size).await?
+            }
 
             ParallelType::Redis => {
                 let mut slot_node_map = HashMap::new();
@@ -147,5 +121,50 @@ impl ParallelizerUtil {
     async fn create_rdb_partitioner(config: &TaskConfig) -> anyhow::Result<RdbPartitioner> {
         let meta_manager = TaskUtil::create_rdb_meta_manager(config).await?.unwrap();
         Ok(RdbPartitioner { meta_manager })
+    }
+
+    async fn create_rdb_merge_parallelizer(
+        config: &TaskConfig,
+        base_parallelizer: BaseParallelizer,
+        parallel_size: usize,
+    ) -> anyhow::Result<Box<dyn Parallelizer + Send + Sync>> {
+        let merger = Self::create_rdb_merger(config).await?;
+        if config.checker.is_some() {
+            Ok(Box::new(MergeParallelizer::for_check(
+                base_parallelizer,
+                merger,
+                parallel_size,
+                config.sinker_basic.clone(),
+            )))
+        } else {
+            Ok(Box::new(MergeParallelizer::for_rdb_merge(
+                base_parallelizer,
+                merger,
+                parallel_size,
+                config.sinker_basic.clone(),
+                TaskUtil::create_rdb_meta_manager(config).await?,
+            )))
+        }
+    }
+
+    async fn create_mongo_parallelizer(
+        config: &TaskConfig,
+        base_parallelizer: BaseParallelizer,
+        parallel_size: usize,
+    ) -> anyhow::Result<Box<dyn Parallelizer + Send + Sync>> {
+        if config.checker.is_some() {
+            Ok(Box::new(MergeParallelizer::for_check(
+                base_parallelizer,
+                Self::create_mongo_merger().await?,
+                parallel_size,
+                config.sinker_basic.clone(),
+            )))
+        } else {
+            Ok(Box::new(MergeParallelizer::for_mongo(
+                base_parallelizer,
+                parallel_size,
+                config.sinker_basic.clone(),
+            )))
+        }
     }
 }

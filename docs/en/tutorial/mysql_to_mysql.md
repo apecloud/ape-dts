@@ -188,6 +188,7 @@ extract_type=snapshot
 url=mysql://root:123456@127.0.0.1:3307?ssl-mode=disabled
 
 [checker]
+enable=true
 db_type=mysql
 url=mysql://root:123456@127.0.0.1:3308?ssl-mode=disabled
 
@@ -196,7 +197,7 @@ do_dbs=test_db
 do_events=insert
 
 [parallelizer]
-parallel_type=rdb_check
+parallel_type=rdb_merge
 parallel_size=8
 
 [pipeline]
@@ -290,6 +291,7 @@ url=mysql://root:123456@127.0.0.1:3307?ssl-mode=disabled
 check_log_dir=./check_data_task_log
 
 [checker]
+enable=true
 db_type=mysql
 url=mysql://root:123456@127.0.0.1:3308?ssl-mode=disabled
 
@@ -297,7 +299,7 @@ url=mysql://root:123456@127.0.0.1:3308?ssl-mode=disabled
 do_events=*
 
 [parallelizer]
-parallel_type=rdb_check
+parallel_type=rdb_merge
 parallel_size=8
 
 [pipeline]
@@ -319,8 +321,10 @@ docker run --rm --network host \
 
 # Cdc task
 
-- To turn this into **inline cdc check**, add `[checker]` plus `[resumer]`, keep
-  `[sinker] sink_type=write`, switch `[parallelizer] parallel_type=rdb_check`, and do not configure checker target fields. See [Data Check](../snapshot/check.md#inline-cdc-check) and the MySQL template.
+- To turn this into **inline cdc check**, add `[checker] enable=true` plus `[resumer]`, keep
+  `[sinker] sink_type=write`, use `[parallelizer] parallel_type=rdb_merge`, and do not configure
+  checker target fields. See [Data Check](../snapshot/check.md#inline-cdc-check) and the MySQL
+  template.
 
 ## Start task
 ```

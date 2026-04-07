@@ -57,6 +57,7 @@ Struct check follows the same standalone target-selection rules as standalone sn
 
 | Config                      | Description                                                            | Example     | Default                           |
 | :-------------------------- | :--------------------------------------------------------------------- | :---------- | :-------------------------------- |
+| enable                      | whether to enable the checker when `[checker]` section is present      | true        | required                          |
 | queue_size                  | checker queue capacity, counted in pending batches/messages            | 200         | 200                               |
 | max_connections             | max connections for checker pool                                       | 8           | 8                                 |
 | batch_size                  | checker chunk size; also used for checker chunking in inline cdc check | 200         | 200                               |
@@ -102,7 +103,8 @@ Notes:
 - Inline snapshot check is supported only when `[extractor] extract_type=snapshot`,
   `[sinker] sink_type=write`, and `[sinker].db_type` is `mysql`, `pg`, or `mongo`.
 - Inline cdc check is currently supported only when `[extractor] extract_type=cdc`,
-  `[sinker] sink_type=write`, and `[sinker].db_type` is `mysql` or `pg`.
+  `[sinker] sink_type=write`, `[checker].enable=true`, `[parallelizer].parallel_type=rdb_merge`,
+  and `[sinker].db_type` is `mysql` or `pg`.
 - In inline cdc check, the checker uses `[checker].batch_size`. It does not fall back to
   `[sinker].batch_size`. For example, if `[checker].batch_size=100` and `queue_size=200`, the
   checker queue can hold about 200 pending batches, which is roughly 20,000 rows when batches are full.
@@ -110,10 +112,10 @@ Notes:
   `username`, or `password`; the checker always reuses the parsed `[sinker]` target.
 - In inline cdc check, `[resumer] resume_type=from_target` or `from_db` is required to persist
   checker state.
-- In inline cdc check, the following combinations fail fast with `ConfigError`: no `[checker]`
-  while `[parallelizer].parallel_type=rdb_check`; `[pipeline].pipeline_type != basic`;
-  `[sinker].sink_type != write`; `[sinker].db_type` not in `mysql` / `pg`; or any target field
-  (`db_type` / `url` / `username` / `password`) set under `[checker]`.
+- In inline cdc check, the following combinations fail fast with `ConfigError`: `[checker]`
+  section present without `enable`; `[pipeline].pipeline_type != basic`; `[sinker].sink_type != write`;
+  `[parallelizer].parallel_type != rdb_merge`; `[sinker].db_type` not in `mysql` / `pg`; or any
+  target field (`db_type` / `url` / `username` / `password`) set under `[checker]`.
 
 **Inline cdc check log / retry behavior**
 - In inline cdc check, `[checker].batch_size` remains effective and controls checker chunking.
@@ -228,9 +230,8 @@ Same with [filter].
 | :-------- | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :-------------------------------- | :--------- | :------------------- |
 | snapshot  | Records in cache are divided into [parallel_size] partitions, and each partition will be synced in batches in a separate thread.                                                              | snapshot tasks for mysql/pg/mongo | fast       |                      |
 | serial    | Single thread, one by one.                                                                                                                                                                    | all                               |            | slow                 |
-| rdb_merge | Merge CDC records(insert, update, delete) in cache into insert + delete records，and then divide them into [parallel_size] partitions, each partition synced in batches in a separate thread. | CDC tasks for mysql/pg            | fast       | eventual consistency |
-| mongo     | Mongo version of rdb_merge.                                                                                                                                                                   | CDC tasks for mongo               |
-| rdb_check | Check task mode. Requires `[checker]`; standalone snapshot / struct check runs without writes, while inline cdc check still writes first and then checks.                                     | check tasks for supported sources |
+| rdb_merge | Merge row changes in cache into write-friendly insert + delete batches, then divide them into [parallel_size] partitions for parallel syncing. When `[checker].enable=true`, checker-enabled MySQL/PG flows reuse this parallelizer and switch to check sink mode internally. | mysql/pg CDC, check, review, revise | fast       | eventual consistency |
+| mongo     | Mongo version of merge parallelization. When `[checker].enable=true`, checker-enabled Mongo flows reuse this parallelizer and switch to check sink mode internally.                            | mongo CDC, check, review          |
 | redis     | Single thread, batch/serial writing(determined by [sinker] batch_size)                                                                                                                        | snapshot/CDC tasks for redis      |
 
 # [runtime]

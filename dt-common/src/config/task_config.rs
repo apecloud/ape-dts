@@ -89,6 +89,7 @@ const OUTPUT_REVISE_SQL: &str = "output_revise_sql";
 const REVISE_MATCH_FULL_ROW: &str = "revise_match_full_row";
 const RETRY_INTERVAL_SECS: &str = "retry_interval_secs";
 const MAX_RETRIES: &str = "max_retries";
+const ENABLE: &str = "enable";
 const DB_TYPE: &str = "db_type";
 const URL: &str = "url";
 const USERNAME: &str = "username";
@@ -136,21 +137,6 @@ impl TaskConfig {
         let router = Self::load_router_config(&loader)?;
         let parallelizer = Self::load_parallelizer_config(&loader)?;
         let checker = Self::load_checker_config(&loader)?;
-        if matches!(parallelizer.parallel_type, ParallelType::RdbCheck)
-            && checker.is_none()
-            && !(matches!(
-                Self::check_log_mode(
-                    &extractor_basic.extract_type,
-                    &sinker_basic.sink_type,
-                    false,
-                ),
-                Some(CheckLogMode::Revise)
-            ) && Self::check_log_target_supported(&sinker_basic.db_type))
-        {
-            bail!(Error::ConfigError(
-                "config [checker] is required when [parallelizer] parallel_type=rdb_check".into()
-            ));
-        }
         if let Some(checker_cfg) = checker.as_ref() {
             if matches!(extractor_basic.extract_type, ExtractType::Cdc)
                 && !matches!(sinker_basic.sink_type, SinkType::Write)
@@ -162,10 +148,10 @@ impl TaskConfig {
             }
             if matches!(extractor_basic.extract_type, ExtractType::Cdc)
                 && matches!(sinker_basic.sink_type, SinkType::Write)
-                && !matches!(parallelizer.parallel_type, ParallelType::RdbCheck)
+                && !matches!(parallelizer.parallel_type, ParallelType::RdbMerge)
             {
                 bail!(Error::ConfigError(
-                    "config [checker] with [extractor] extract_type=cdc and [sinker] sink_type=write requires [parallelizer] parallel_type=rdb_check"
+                    "config [checker].enable=true with [extractor] extract_type=cdc and [sinker] sink_type=write currently supports only [parallelizer] parallel_type=rdb_merge"
                         .into(),
                 ));
             }
@@ -1024,6 +1010,14 @@ impl TaskConfig {
         if !loader.ini.sections().contains(&CHECKER.to_string()) {
             return Ok(None);
         }
+        if !loader.contains(CHECKER, ENABLE) {
+            bail!(Error::ConfigError(
+                "config [checker].enable is required when [checker] section is present".into(),
+            ));
+        }
+        if !loader.get_with_default(CHECKER, ENABLE, false) {
+            return Ok(None);
+        }
 
         let default = CheckerConfig::default();
         let config = CheckerConfig {
@@ -1329,6 +1323,7 @@ sink_type=write
 url=mysql://127.0.0.1:3307
 
 [checker]
+enable=true
 batch_size=2
 
 [parallelizer]
@@ -1348,26 +1343,60 @@ parallel_type={parallel_type}
     }
 
     #[test]
-    fn cdc_inline_check_requires_rdb_check_parallelizer() {
+    fn cdc_inline_check_accepts_rdb_merge_parallelizer_when_checker_enabled() {
         let config_path = write_temp_task_config(&cdc_inline_check_config("rdb_merge"));
+        let result = TaskConfig::new(config_path.to_str().unwrap());
+        fs::remove_file(config_path).unwrap();
+
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn cdc_inline_check_rejects_serial_parallelizer_when_checker_enabled() {
+        let config_path = write_temp_task_config(&cdc_inline_check_config("serial"));
         let result = TaskConfig::new(config_path.to_str().unwrap());
         fs::remove_file(config_path).unwrap();
 
         match result {
             Err(err) => assert_eq!(
                 err.to_string(),
-                "config error: config [checker] with [extractor] extract_type=cdc and [sinker] sink_type=write requires [parallelizer] parallel_type=rdb_check"
+                "config error: config [checker].enable=true with [extractor] extract_type=cdc and [sinker] sink_type=write currently supports only [parallelizer] parallel_type=rdb_merge"
             ),
             Ok(_) => panic!("expected config validation error"),
         }
     }
 
     #[test]
-    fn cdc_inline_check_accepts_rdb_check_parallelizer() {
-        let config_path = write_temp_task_config(&cdc_inline_check_config("rdb_check"));
+    fn cdc_inline_check_requires_explicit_checker_enable_field() {
+        let config_path = write_temp_task_config(
+            r#"[extractor]
+db_type=mysql
+extract_type=cdc
+url=mysql://127.0.0.1:3306
+server_id=1
+
+[sinker]
+db_type=mysql
+sink_type=write
+url=mysql://127.0.0.1:3307
+
+[checker]
+batch_size=2
+
+[parallelizer]
+parallel_type=rdb_merge
+"#,
+        );
         let result = TaskConfig::new(config_path.to_str().unwrap());
         fs::remove_file(config_path).unwrap();
 
-        assert!(result.is_ok());
+        match result {
+            Err(err) => assert_eq!(
+                err.to_string(),
+                "config error: config [checker].enable is required when [checker] section is present"
+            ),
+            Ok(_) => panic!("expected config validation error"),
+        }
     }
+
 }

@@ -89,8 +89,6 @@ pub enum ParallelType {
     RdbPartition,
     #[strum(serialize = "rdb_merge")]
     RdbMerge,
-    #[strum(serialize = "rdb_check")]
-    RdbCheck,
     #[strum(serialize = "table")]
     Table,
     #[strum(serialize = "mongo")]
