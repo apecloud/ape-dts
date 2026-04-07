@@ -99,15 +99,15 @@ impl BaseParallelizer {
         parallel_size: usize,
         batch: bool,
     ) -> anyhow::Result<()> {
-        let mut join_set = tokio::task::JoinSet::new();
-        for i in 0..sub_data_items.len() {
-            let data = sub_data_items.remove(0);
-            let sinker = sinkers[i % parallel_size].clone();
-            join_set.spawn(async move { sinker.lock().await.sink_dml(data, batch).await });
-        }
-        while let Some(result) = join_set.join_next().await {
-            result??;
-        }
+        // let mut join_set = tokio::task::JoinSet::new();
+        // for i in 0..sub_data_items.len() {
+        //     let data = sub_data_items.remove(0);
+        //     let sinker = sinkers[i % parallel_size].clone();
+        //     join_set.spawn(async move { sinker.lock().await.sink_dml(data, batch).await });
+        // }
+        // while let Some(result) = join_set.join_next().await {
+        //     result??;
+        // }
         Ok(())
     }
 

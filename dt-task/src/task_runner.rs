@@ -20,6 +20,7 @@ use tokio::{
     time::Duration,
     try_join,
 };
+use tracing::{info, instrument};
 
 use super::{
     extractor_util::{ExtractorUtil, PartitionCols},
@@ -265,15 +266,15 @@ impl TaskRunner {
         let pipeline_monitor = self.pipeline_monitor.clone();
         let sinker_monitor = self.sinker_monitor.clone();
         let task_monitor = self.task_monitor.clone();
-        let global_monitor_task = tokio::spawn(async move {
-            Self::flush_monitors_generic::<GroupMonitor, TaskMonitor>(
-                interval_secs,
-                global_shut_down_clone,
-                &[extractor_monitor, pipeline_monitor, sinker_monitor],
-                &[task_monitor],
-            )
-            .await
-        });
+        // let global_monitor_task = tokio::spawn(async move {
+        //     Self::flush_monitors_generic::<GroupMonitor, TaskMonitor>(
+        //         interval_secs,
+        //         global_shut_down_clone,
+        //         &[extractor_monitor, pipeline_monitor, sinker_monitor],
+        //         &[task_monitor],
+        //     )
+        //     .await
+        // });
 
         let task_parallel_size = self.get_task_parallel_size();
         let semaphore = Arc::new(tokio::sync::Semaphore::new(task_parallel_size));
@@ -308,7 +309,7 @@ impl TaskRunner {
         }
 
         global_shut_down.store(true, Ordering::Release);
-        global_monitor_task.await?;
+        // global_monitor_task.await?;
         Ok(())
     }
 
@@ -497,10 +498,10 @@ impl TaskRunner {
             extractor.close().await.unwrap();
         });
 
-        let f2 = tokio::spawn(async move {
-            pipeline.start().await.unwrap();
-            pipeline.stop().await.unwrap();
-        });
+        // let f2 = tokio::spawn(async move {
+        //     pipeline.start().await.unwrap();
+        //     pipeline.stop().await.unwrap();
+        // });
 
         let interval_secs = self.config.pipeline.checkpoint_interval_secs;
         let tasks: Vec<Arc<TaskMonitor>> = if is_multi_task {
@@ -508,16 +509,16 @@ impl TaskRunner {
         } else {
             vec![self.task_monitor.clone()]
         };
-        let f3 = tokio::spawn(async move {
-            Self::flush_monitors_generic::<Monitor, TaskMonitor>(
-                interval_secs,
-                shut_down,
-                &[extractor_monitor, pipeline_monitor, sinker_monitor],
-                &tasks,
-            )
-            .await
-        });
-        try_join!(f1, f2, f3)?;
+        // let f3 = tokio::spawn(async move {
+        //     Self::flush_monitors_generic::<Monitor, TaskMonitor>(
+        //         interval_secs,
+        //         shut_down,
+        //         &[extractor_monitor, pipeline_monitor, sinker_monitor],
+        //         &tasks,
+        //     )
+        //     .await
+        // });
+        try_join!(f1)?;
 
         // finished log
         let (schema, tb) = match &extractor_config {

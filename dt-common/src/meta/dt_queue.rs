@@ -59,26 +59,27 @@ impl DtQueue {
     }
 
     pub async fn push(&self, mut item: DtItem) -> anyhow::Result<()> {
-        if let Some(enqueue_limiter) = &self.enqueue_limiter {
-            enqueue_limiter.acquire(&item).await?;
-        }
-        let item_size = item.dt_data.get_data_size();
-        loop {
-            if !self.queue.is_full() && !self.is_mem_full() {
-                let res = self.queue.push(item);
-                match res {
-                    Ok(_) => {
-                        self.cur_bytes.fetch_add(item_size, Ordering::Release);
-                        return Ok(());
-                    }
-                    Err(PushError::Full(returned_item)) => {
-                        item = returned_item;
-                    }
-                    Err(e) => return Err(e.into()),
-                }
-            }
-            self.not_full.notified().await;
-        }
+        // if let Some(enqueue_limiter) = &self.enqueue_limiter {
+        //     enqueue_limiter.acquire(&item).await?;
+        // }
+        // let item_size = item.dt_data.get_data_size();
+        // loop {
+        //     if !self.queue.is_full() && !self.is_mem_full() {
+        //         let res = self.queue.push(item);
+        //         match res {
+        //             Ok(_) => {
+        //                 self.cur_bytes.fetch_add(item_size, Ordering::Release);
+        //                 return Ok(());
+        //             }
+        //             Err(PushError::Full(returned_item)) => {
+        //                 item = returned_item;
+        //             }
+        //             Err(e) => return Err(e.into()),
+        //         }
+        //     }
+        //     self.not_full.notified().await;
+        // }
+        Ok(())
     }
 
     pub async fn pop(&self) -> anyhow::Result<DtItem, PopError> {
