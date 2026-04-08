@@ -8,8 +8,6 @@ use anyhow::bail;
 use mongodb::bson::{Bson, Document};
 use serde::{Deserialize, Serialize, Serializer};
 
-// #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-// #[serde(tag = "type", content = "value")]
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[allow(dead_code)]
 pub enum ColValue {
@@ -420,6 +418,9 @@ impl From<Bson> for ColValue {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::meta::tagged_col_value_map;
+    use crate::meta::tagged_col_value_map::TaggedColValueDef as MetaTaggedColValueDef;
+    use std::collections::BTreeMap;
 
     #[test]
     fn test_is_same_value() {
@@ -468,5 +469,17 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn test_tagged_col_value_map_is_exposed_from_meta() {
+        let values = BTreeMap::from([("id".to_string(), ColValue::Long(7))]);
+        let mut json = serde_json::Serializer::new(Vec::new());
+        tagged_col_value_map::serialize(&values, &mut json).unwrap();
+    }
+
+    #[test]
+    fn test_tagged_col_value_def_is_exposed_from_meta() {
+        let _ = std::any::type_name::<MetaTaggedColValueDef>();
     }
 }

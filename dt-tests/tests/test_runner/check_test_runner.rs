@@ -18,7 +18,6 @@ use dt_connector::checker::{
 use dt_connector::extractor::resumer::{
     recorder::to_database::DatabaseRecorder, utils::ResumerUtil, ResumerType,
 };
-use serde::Serialize;
 use serde_json::Value;
 use sqlx::{query, Row};
 use std::{collections::BTreeMap, fs::File, path::Path};
@@ -27,19 +26,6 @@ pub struct CheckTestRunner {
     base: RdbTestRunner,
     dst_check_log_dir: String,
     expect_check_log_dir: String,
-}
-
-#[derive(Serialize)]
-enum SeedPersistedKeyValue {
-    Long(i32),
-}
-
-#[derive(Serialize)]
-struct SeedPersistedRecheckKey {
-    schema: String,
-    tb: String,
-    is_delete: bool,
-    pk: BTreeMap<String, SeedPersistedKeyValue>,
 }
 
 impl CheckTestRunner {
@@ -250,12 +236,14 @@ impl CheckTestRunner {
     }
 
     fn build_seed_unresolved_row() -> anyhow::Result<CheckerStateRow> {
-        let payload = serde_json::to_string(&SeedPersistedRecheckKey {
-            schema: "test_db_1".to_string(),
-            tb: "check_test".to_string(),
-            is_delete: false,
-            pk: BTreeMap::from([("id".to_string(), SeedPersistedKeyValue::Long(2))]),
-        })?;
+        let payload = serde_json::to_string(&serde_json::json!({
+            "schema": "test_db_1",
+            "tb": "check_test",
+            "is_delete": false,
+            "pk": {
+                "id": {"Long": 2}
+            }
+        }))?;
 
         let identity_json = serde_json::to_string(&serde_json::json!({
             "schema": "test_db_1",

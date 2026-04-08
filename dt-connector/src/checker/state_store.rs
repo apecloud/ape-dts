@@ -95,7 +95,7 @@ impl CheckerStateStore {
                     .context("failed to create checker unresolved rows table")?;
             }
             CheckerStateStoreBackend::Postgres(pool) => {
-                let create_schema_sql = format!("CREATE SCHEMA IF NOT EXISTS {}", self.schema);
+                let create_schema_sql = format!("CREATE SCHEMA IF NOT EXISTS \"{}\"", self.schema);
                 query(&create_schema_sql)
                     .execute(pool)
                     .await
@@ -104,7 +104,7 @@ impl CheckerStateStore {
                     ))?;
 
                 let rows_sql = format!(
-                    r#"CREATE TABLE IF NOT EXISTS {}.{} (
+                    r#"CREATE TABLE IF NOT EXISTS "{}"."{}" (
                           task_id varchar(255) NOT NULL,
                           identity_key char(64) NOT NULL,
                           row_key varchar(64) NOT NULL,
@@ -179,7 +179,7 @@ impl CheckerStateStore {
         }
 
         let prefix = format!(
-            "INSERT INTO {}.{} \
+            "INSERT INTO \"{}\".\"{}\" \
             (task_id, identity_key, row_key, identity_json, row_payload, updated_at) ",
             self.schema, self.rows_table
         );
@@ -247,7 +247,7 @@ impl CheckerStateStore {
     ) -> Result<()> {
         for chunk in identity_keys.chunks(SNAPSHOT_DELETE_BATCH_ROWS) {
             let mut builder = QueryBuilder::<Postgres>::new(format!(
-                "DELETE FROM {}.{} WHERE task_id = ",
+                "DELETE FROM \"{}\".\"{}\" WHERE task_id = ",
                 self.schema, self.rows_table
             ));
             builder.push_bind(task_id);
@@ -300,7 +300,7 @@ impl CheckerStateStore {
         position: &Position,
     ) -> Result<()> {
         let sql = format!(
-            "INSERT INTO {}.{} (task_id, resumer_type, position_key, position_data) \
+            "INSERT INTO \"{}\".\"{}\" (task_id, resumer_type, position_key, position_data) \
              VALUES ($1, $2, $3, $4) \
              ON CONFLICT (task_id, resumer_type, position_key) \
              DO UPDATE SET \
@@ -381,7 +381,7 @@ impl CheckerStateStore {
             CheckerStateStoreBackend::Postgres(pool) => {
                 let sql = format!(
                     "SELECT row_key, identity_key, identity_json, row_payload \
-                     FROM {}.{} WHERE task_id = $1 ORDER BY identity_key",
+                     FROM \"{}\".\"{}\" WHERE task_id = $1 ORDER BY identity_key",
                     self.schema, self.rows_table
                 );
                 let rows = query(&sql).bind(task_id).fetch_all(pool).await?;

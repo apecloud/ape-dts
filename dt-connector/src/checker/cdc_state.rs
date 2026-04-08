@@ -1,7 +1,15 @@
 use anyhow::Context;
-use std::collections::{BTreeMap, BTreeSet};
+use serde::Serialize;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
-use super::*;
+use super::{
+    BoundedLineBuffer, CheckEntry, CheckInconsistency, Checker, CheckerStoreKey, DataChecker,
+    RecheckKey,
+};
+use crate::checker::check_log::{CheckLog, CheckSummaryLog};
+use crate::checker::state_store::{CheckerCheckpointCommit, CheckerStateRow};
+use dt_common::meta::{position::Position, row_data::RowData, row_type::RowType};
+use dt_common::{log_info, log_warn};
 
 #[derive(Serialize)]
 struct IdentityJsonRef<'a> {
@@ -28,117 +36,7 @@ fn build_identity_json(entry: &CheckEntry) -> anyhow::Result<String> {
     serde_json::to_string(&build_identity_json_ref(entry)).map_err(anyhow::Error::from)
 }
 
-#[derive(Clone, Serialize, Deserialize)]
-enum PersistedKeyValue {
-    None,
-    Bool(bool),
-    Tiny(i8),
-    UnsignedTiny(u8),
-    Short(i16),
-    UnsignedShort(u16),
-    Long(i32),
-    UnsignedLong(u32),
-    LongLong(i64),
-    UnsignedLongLong(u64),
-    Decimal(String),
-    Time(String),
-    Date(String),
-    DateTime(String),
-    Timestamp(String),
-    Year(u16),
-    String(String),
-}
-
-impl PersistedKeyValue {
-    fn try_from_col_value(value: &ColValue) -> anyhow::Result<Self> {
-        Ok(match value {
-            ColValue::None => Self::None,
-            ColValue::Bool(v) => Self::Bool(*v),
-            ColValue::Tiny(v) => Self::Tiny(*v),
-            ColValue::UnsignedTiny(v) => Self::UnsignedTiny(*v),
-            ColValue::Short(v) => Self::Short(*v),
-            ColValue::UnsignedShort(v) => Self::UnsignedShort(*v),
-            ColValue::Long(v) => Self::Long(*v),
-            ColValue::UnsignedLong(v) => Self::UnsignedLong(*v),
-            ColValue::LongLong(v) => Self::LongLong(*v),
-            ColValue::UnsignedLongLong(v) => Self::UnsignedLongLong(*v),
-            ColValue::Decimal(v) => Self::Decimal(v.clone()),
-            ColValue::Time(v) => Self::Time(v.clone()),
-            ColValue::Date(v) => Self::Date(v.clone()),
-            ColValue::DateTime(v) => Self::DateTime(v.clone()),
-            ColValue::Timestamp(v) => Self::Timestamp(v.clone()),
-            ColValue::Year(v) => Self::Year(*v),
-            ColValue::String(v) => Self::String(v.clone()),
-            other => anyhow::bail!(
-                "unsupported pk col value for checkpoint: {}",
-                other.type_name()
-            ),
-        })
-    }
-
-    fn into_col_value(self) -> ColValue {
-        match self {
-            PersistedKeyValue::None => ColValue::None,
-            PersistedKeyValue::Bool(v) => ColValue::Bool(v),
-            PersistedKeyValue::Tiny(v) => ColValue::Tiny(v),
-            PersistedKeyValue::UnsignedTiny(v) => ColValue::UnsignedTiny(v),
-            PersistedKeyValue::Short(v) => ColValue::Short(v),
-            PersistedKeyValue::UnsignedShort(v) => ColValue::UnsignedShort(v),
-            PersistedKeyValue::Long(v) => ColValue::Long(v),
-            PersistedKeyValue::UnsignedLong(v) => ColValue::UnsignedLong(v),
-            PersistedKeyValue::LongLong(v) => ColValue::LongLong(v),
-            PersistedKeyValue::UnsignedLongLong(v) => ColValue::UnsignedLongLong(v),
-            PersistedKeyValue::Decimal(v) => ColValue::Decimal(v),
-            PersistedKeyValue::Time(v) => ColValue::Time(v),
-            PersistedKeyValue::Date(v) => ColValue::Date(v),
-            PersistedKeyValue::DateTime(v) => ColValue::DateTime(v),
-            PersistedKeyValue::Timestamp(v) => ColValue::Timestamp(v),
-            PersistedKeyValue::Year(v) => ColValue::Year(v),
-            PersistedKeyValue::String(v) => ColValue::String(v),
-        }
-    }
-}
-
-#[derive(Clone, Serialize, Deserialize)]
-struct PersistedRecheckKey {
-    schema: String,
-    tb: String,
-    is_delete: bool,
-    pk: BTreeMap<String, PersistedKeyValue>,
-}
-
-impl PersistedRecheckKey {
-    fn try_from_key(key: &RecheckKey) -> anyhow::Result<Self> {
-        let pk = key
-            .pk
-            .iter()
-            .map(|(col, value)| {
-                PersistedKeyValue::try_from_col_value(value).map(|value| (col.clone(), value))
-            })
-            .collect::<anyhow::Result<BTreeMap<_, _>>>()?;
-        Ok(Self {
-            schema: key.schema.clone(),
-            tb: key.tb.clone(),
-            is_delete: key.is_delete,
-            pk,
-        })
-    }
-
-    fn into_key(self) -> RecheckKey {
-        RecheckKey {
-            schema: self.schema,
-            tb: self.tb,
-            is_delete: self.is_delete,
-            pk: self
-                .pk
-                .into_iter()
-                .map(|(col, value)| (col, value.into_col_value()))
-                .collect(),
-        }
-    }
-}
-
-pub(super) enum PreparedCheckpointWrite {
+enum PreparedCheckpointWrite {
     PositionOnly {
         task_id: String,
         position: Position,
@@ -153,6 +51,7 @@ impl<C: Checker> DataChecker<C> {
     const DEFAULT_CDC_LOG_MAX_FILE_SIZE: usize = 100 * 1024 * 1024;
     const DEFAULT_CDC_LOG_MAX_ROWS: usize = 1000;
 
+    /// Writes a point-in-time snapshot whose miss/diff counts reflect current unresolved entries rather than cumulative metrics.
     pub async fn snapshot_and_output(&mut self) -> anyhow::Result<()> {
         let max_file_size = usize::try_from(self.ctx.cdc_check_log_max_file_size)
             .ok()
@@ -207,8 +106,16 @@ impl<C: Checker> DataChecker<C> {
             &summary_buf,
         )?;
         if self.ctx.s3_output.is_some() {
-            self.upload_to_s3(&miss_buf, &diff_buf, &sql_buf, &summary_buf)
-                .await?;
+            if self.init_failed {
+                log_warn!(
+                    "Checker [{}] skipping S3 upload because CDC state initialization failed; \
+                     historical inconsistency records are preserved on S3",
+                    self.name
+                );
+            } else {
+                self.upload_to_s3(&miss_buf, &diff_buf, &sql_buf, &summary_buf)
+                    .await?;
+            }
         }
 
         Ok(())
@@ -242,7 +149,7 @@ impl<C: Checker> DataChecker<C> {
                 row_key: store_key.row_key,
                 identity_key: hex::encode(openssl::sha::sha256(identity_json.as_bytes())),
                 identity_json,
-                payload: serde_json::to_string(&PersistedRecheckKey::try_from_key(&entry.key)?)?,
+                payload: serde_json::to_string(&entry.key)?,
             });
         }
         Ok(rows)
@@ -253,14 +160,12 @@ impl<C: Checker> DataChecker<C> {
         let mut persisted_identity_keys = BTreeSet::new();
         for row in rows {
             persisted_identity_keys.insert(row.identity_key.clone());
-            let key =
-                serde_json::from_str::<PersistedRecheckKey>(&row.payload).with_context(|| {
-                    format!(
-                        "Checker [{}] failed to parse state row key [{}]",
-                        self.name, row.row_key
-                    )
-                })?;
-            let key = key.into_key();
+            let key = serde_json::from_str::<RecheckKey>(&row.payload).with_context(|| {
+                format!(
+                    "Checker [{}] failed to parse state row key [{}]",
+                    self.name, row.row_key
+                )
+            })?;
             let entry = self.build_restored_entry(key.clone());
             let store_key = CheckerStoreKey::new(&key.schema, &key.tb, row.row_key);
             self.store.insert(store_key, entry);
@@ -292,8 +197,8 @@ impl<C: Checker> DataChecker<C> {
             log: CheckLog {
                 schema: source_row.schema,
                 tb: source_row.tb,
-                target_schema: schema_changed.then(|| lookup_row.schema),
-                target_tb: schema_changed.then(|| lookup_row.tb),
+                target_schema: schema_changed.then_some(lookup_row.schema),
+                target_tb: schema_changed.then_some(lookup_row.tb),
                 id_col_values,
                 diff_col_values: HashMap::new(),
                 src_row: None,
@@ -463,7 +368,7 @@ impl<C: Checker> DataChecker<C> {
         Ok(())
     }
 
-    pub(super) fn prepare_checkpoint_write(
+    fn prepare_checkpoint_write(
         &self,
         position: Position,
     ) -> anyhow::Result<PreparedCheckpointWrite> {
@@ -558,9 +463,16 @@ impl<C: Checker> DataChecker<C> {
 
 #[cfg(test)]
 mod tests {
+    use super::super::{CheckContext, Checker, CheckerIo, CheckerTbMeta, DataChecker, FetchResult};
     use super::*;
+    use crate::checker::check_log::{CheckLog, CheckSummaryLog};
+    use crate::rdb_router::RdbRouter;
+    use async_mutex::Mutex;
     use async_trait::async_trait;
+    use dt_common::meta::col_value::ColValue;
+    use dt_common::{monitor::monitor::Monitor, utils::limit_queue::LimitedQueue};
     use serde_json::Value;
+    use std::sync::Arc;
     use tokio::sync::mpsc;
 
     fn build_recheck_key() -> RecheckKey {
@@ -604,10 +516,8 @@ mod tests {
     }
 
     #[test]
-    fn persisted_recheck_key_omits_full_rows_and_logs() {
-        let payload =
-            serde_json::to_value(PersistedRecheckKey::try_from_key(&build_recheck_key()).unwrap())
-                .unwrap();
+    fn recheck_key_serializes_pk_as_tagged_col_values() {
+        let payload = serde_json::to_value(build_recheck_key()).unwrap();
         let Value::Object(payload) = payload else {
             panic!("payload should be a json object");
         };
@@ -616,6 +526,30 @@ mod tests {
         assert!(payload.contains_key("tb"));
         assert!(payload.contains_key("is_delete"));
         assert!(payload.contains_key("pk"));
+        assert_eq!(
+            payload.get("pk").unwrap(),
+            &serde_json::json!({
+                "a": {"Long": 1},
+                "b": {"String": "2"},
+            })
+        );
+    }
+
+    #[test]
+    fn recheck_key_round_trips_tagged_pk_payload() {
+        let payload = serde_json::json!({
+            "schema": "target_db",
+            "tb": "target_tb",
+            "is_delete": false,
+            "pk": {
+                "a": {"Long": 1},
+                "b": {"String": "2"},
+            }
+        });
+
+        let key = serde_json::from_value::<RecheckKey>(payload.clone()).unwrap();
+        assert_eq!(key, build_recheck_key());
+        assert_eq!(serde_json::to_value(key).unwrap(), payload);
     }
 
     struct StaticChecker {
@@ -684,7 +618,7 @@ mod tests {
                 })))),
                 expected_resume_position: None,
             },
-            super::super::CheckerIo {
+            CheckerIo {
                 batch_queue: Arc::new(std::sync::Mutex::new(LimitedQueue::new(1))),
                 batch_notify: Arc::new(tokio::sync::Notify::new()),
                 control_rx,

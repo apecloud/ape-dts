@@ -1,7 +1,6 @@
 use async_mutex::Mutex;
 use async_trait::async_trait;
 use indexmap::IndexMap;
-use mongodb::bson::Document;
 use opendal::Operator;
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
@@ -12,24 +11,23 @@ use std::sync::{
 };
 use tokio::sync::{mpsc, Notify};
 use tokio::task::JoinHandle;
-use tokio::time::{sleep, Duration, Instant};
+use tokio::time::{Duration, Instant};
 
 use super::struct_checker::StructCheckerHandle;
 use crate::{
     checker::check_log::{CheckLog, CheckSummaryLog, DiffColValue},
-    checker::state_store::{CheckerCheckpointCommit, CheckerStateRow, CheckerStateStore},
+    checker::state_store::CheckerStateStore,
     rdb_query_builder::RdbQueryBuilder,
     rdb_router::RdbRouter,
-    sinker::base_sinker::BaseSinker,
     sinker::mongo::mongo_cmd,
 };
 use dt_common::meta::{
-    col_value::ColValue, ddl_meta::ddl_data::DdlData, mongo::mongo_constant::MongoConstants,
-    mysql::mysql_tb_meta::MysqlTbMeta, pg::pg_tb_meta::PgTbMeta, position::Position,
-    rdb_meta_manager::RdbMetaManager, rdb_tb_meta::RdbTbMeta, row_data::RowData, row_type::RowType,
+    col_value::ColValue, ddl_meta::ddl_data::DdlData, mysql::mysql_tb_meta::MysqlTbMeta,
+    pg::pg_tb_meta::PgTbMeta, position::Position, rdb_meta_manager::RdbMetaManager,
+    rdb_tb_meta::RdbTbMeta, row_data::RowData, row_type::RowType,
 };
 use dt_common::{
-    log_diff, log_error, log_info, log_miss, log_sql, log_summary, log_warn,
+    log_error, log_info, log_summary, log_warn,
     monitor::{monitor::Monitor, task_monitor::TaskMonitor},
     utils::limit_queue::LimitedQueue,
 };
@@ -37,7 +35,7 @@ use dt_common::{
 #[path = "cdc_state.rs"]
 mod cdc_state;
 #[path = "checker_engine.rs"]
-mod engine;
+mod checker_engine;
 
 pub const CHECKER_MAX_QUERY_BATCH: usize = 1000;
 
@@ -416,6 +414,7 @@ pub(crate) struct RecheckKey {
     schema: String,
     tb: String,
     is_delete: bool,
+    #[serde(with = "dt_common::meta::tagged_col_value_map")]
     pk: BTreeMap<String, ColValue>,
 }
 
@@ -568,10 +567,14 @@ struct DataChecker<C: Checker> {
     batch_notify: Arc<Notify>,
     control_rx: mpsc::UnboundedReceiver<CheckerControlMsg>,
     name: String,
+    /// Tracks store changes since the last DB checkpoint and is cleared by `record_checkpoint`.
     store_dirty: bool,
     last_checkpoint_position: Option<Position>,
     persisted_identity_keys: Option<BTreeSet<String>>,
+    /// Tracks store or summary changes since the last log or S3 output and is cleared by `snapshot_and_output`.
     snapshot_dirty: bool,
+    /// Set when `init_cdc_state` fails to avoid overwriting historical inconsistency records.
+    init_failed: bool,
 }
 
 struct CheckerIo {
@@ -598,6 +601,7 @@ impl<C: Checker> DataChecker<C> {
             last_checkpoint_position: None,
             persisted_identity_keys,
             snapshot_dirty: true,
+            init_failed: false,
         }
     }
 
@@ -610,6 +614,7 @@ impl<C: Checker> DataChecker<C> {
                 self.name,
                 err
             );
+            self.init_failed = true;
         }
         let output_secs = self.ctx.cdc_check_log_interval_secs.max(1);
         let mut output_interval = tokio::time::interval(Duration::from_secs(output_secs));

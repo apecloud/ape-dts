@@ -1,14 +1,24 @@
 use anyhow::Context;
-use dt_common::meta::pg::pg_value_type::PgValueType;
-use dt_common::monitor::{counter_type::CounterType, task_metrics::TaskMetricsType};
-use dt_common::utils::limit_queue::LimitedQueue;
-use std::collections::BTreeSet;
+use mongodb::bson::Document;
+use std::borrow::Cow;
+use std::collections::{BTreeSet, HashMap};
+use tokio::time::{sleep, Duration, Instant};
 
 use super::{
-    log_diff, log_miss, log_sql, log_warn, mongo_cmd, sleep, BaseSinker, CheckContext, CheckEntry,
-    CheckInconsistency, CheckLog, Checker, CheckerStoreKey, CheckerTbMeta, ColValue, Cow,
-    DataChecker, DiffColValue, Document, Duration, HashMap, Instant, MongoConstants, RdbTbMeta,
-    RecheckKey, RetryItem, RowData, RowType,
+    CheckContext, CheckEntry, CheckInconsistency, Checker, CheckerStoreKey, CheckerTbMeta,
+    DataChecker, RecheckKey, RetryItem,
+};
+use crate::checker::check_log::{CheckLog, DiffColValue};
+use crate::sinker::base_sinker::BaseSinker;
+use crate::sinker::mongo::mongo_cmd;
+use dt_common::meta::{
+    col_value::ColValue, mongo::mongo_constant::MongoConstants, pg::pg_value_type::PgValueType,
+    rdb_tb_meta::RdbTbMeta, row_data::RowData, row_type::RowType,
+};
+use dt_common::{
+    log_diff, log_miss, log_sql, log_warn,
+    monitor::{counter_type::CounterType, task_metrics::TaskMetricsType},
+    utils::limit_queue::LimitedQueue,
 };
 
 impl<C: Checker> DataChecker<C> {
@@ -45,7 +55,7 @@ impl<C: Checker> DataChecker<C> {
         }
     }
 
-    pub(super) async fn build_check_entry(
+    pub async fn build_check_entry(
         check_result: CheckInconsistency,
         src_row_data: &RowData,
         dst_row_data: Option<&RowData>,
@@ -193,7 +203,7 @@ impl<C: Checker> DataChecker<C> {
         Ok((skip_count, retry_rows))
     }
 
-    pub(super) fn compare_src_dst(
+    pub fn compare_src_dst(
         src_row: &RowData,
         dst_row: Option<&RowData>,
         tb_meta: &CheckerTbMeta,
@@ -309,7 +319,7 @@ impl<C: Checker> DataChecker<C> {
             .unwrap_or(value)
     }
 
-    pub(super) fn lookup_match_key(
+    pub fn lookup_match_key(
         row_data: &RowData,
         tb_meta: &RdbTbMeta,
     ) -> anyhow::Result<Option<u128>> {
@@ -329,6 +339,7 @@ impl<C: Checker> DataChecker<C> {
         Ok((key != 0).then_some(key))
     }
 
+    /// Computes a PK composite hash with `31 * h + col_hash` and returns 0 when any PK column is NULL.
     fn hash_from_id_values(
         id_values: &HashMap<String, ColValue>,
         tb_meta: &RdbTbMeta,
@@ -396,13 +407,14 @@ impl<C: Checker> DataChecker<C> {
 
     async fn add_entry_metrics(&self, entry: &CheckEntry) {
         let (task_metric, counter_type) = Self::checker_metric_types(entry);
-        // Update both task-level cumulative metrics and checker-level windowed counters.
+        // Update both cumulative task metrics and checker window counters.
         if let Some(task_monitor) = &self.ctx.task_monitor {
             task_monitor.add_no_window_metrics(task_metric, 1);
         }
         self.ctx.monitor.add_counter(counter_type, 1).await;
     }
 
+    /// Updates cumulative Prometheus summary counters, which differ from point-in-time unresolved snapshot counts.
     async fn update_summary_for_entry(&mut self, entry: &CheckEntry) {
         {
             let summary = &mut self.ctx.summary;
@@ -821,15 +833,14 @@ impl<C: Checker> DataChecker<C> {
 
 #[cfg(test)]
 mod tests {
+    use super::super::{CheckContext, CheckerIo, FetchResult};
     use super::*;
-    use crate::{
-        checker::{check_log::CheckSummaryLog, FetchResult},
-        rdb_router::RdbRouter,
-    };
+    use crate::{checker::check_log::CheckSummaryLog, rdb_router::RdbRouter};
     use async_trait::async_trait;
     use dt_common::{
         meta::{pg::pg_col_type::PgColType, pg::pg_value_type::PgValueType},
         monitor::monitor::Monitor,
+        utils::limit_queue::LimitedQueue,
     };
     use std::sync::Arc;
     use tokio::sync::mpsc;
@@ -992,7 +1003,7 @@ mod tests {
             DummyChecker,
             "task-1".to_string(),
             build_ctx(false),
-            super::super::CheckerIo {
+            CheckerIo {
                 batch_queue: Arc::new(std::sync::Mutex::new(LimitedQueue::new(1))),
                 batch_notify: Arc::new(tokio::sync::Notify::new()),
                 control_rx,
@@ -1043,7 +1054,7 @@ mod tests {
             DummyChecker,
             "task-1".to_string(),
             build_ctx(true),
-            super::super::CheckerIo {
+            CheckerIo {
                 batch_queue: Arc::new(std::sync::Mutex::new(LimitedQueue::new(1))),
                 batch_notify: Arc::new(tokio::sync::Notify::new()),
                 control_rx,

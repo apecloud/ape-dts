@@ -7,8 +7,8 @@ use futures::executor::block_on;
 use crate::test_runner::rdb_test_runner::DST;
 
 use super::{
-    mongo_check_test_runner::MongoCheckTestRunner, mongo_test_runner::MongoTestRunner,
-    precheck_test_runner::PrecheckTestRunner, check_test_runner::CheckTestRunner,
+    check_test_runner::CheckTestRunner, mongo_check_test_runner::MongoCheckTestRunner,
+    mongo_test_runner::MongoTestRunner, precheck_test_runner::PrecheckTestRunner,
     rdb_kafka_rdb_test_runner::RdbKafkaRdbTestRunner, rdb_lua_test_runner::RdbLuaTestRunner,
     rdb_redis_test_runner::RdbRedisTestRunner, rdb_sql_test_runner::RdbSqlTestRunner,
     rdb_starrocks_test_runner::RdbStarRocksTestRunner, rdb_struct_test_runner::RdbStructTestRunner,

@@ -1398,5 +1398,4 @@ parallel_type=rdb_merge
             Ok(_) => panic!("expected config validation error"),
         }
     }
-
 }
