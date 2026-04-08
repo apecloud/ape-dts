@@ -46,13 +46,13 @@ jobs:
       - name: Build for x86_64
         if: contains(inputs.platforms, 'linux/amd64')
         run: |
-          cross build --target x86_64-unknown-linux-gnu --release --features metrics
+          cross build --target x86_64-unknown-linux-gnu --release
           cp target/x86_64-unknown-linux-gnu/release/dt-main amd64-unknown-linux-gnu-dt-main
 
       - name: Build for aarch64
         if: contains(inputs.platforms, 'linux/arm64')
         run: |
-          cross build --target aarch64-unknown-linux-gnu --release --features metrics
+          cross build --target aarch64-unknown-linux-gnu --release
           cp target/aarch64-unknown-linux-gnu/release/dt-main arm64-unknown-linux-gnu-dt-main
 
       - name: Set up docker buildx
