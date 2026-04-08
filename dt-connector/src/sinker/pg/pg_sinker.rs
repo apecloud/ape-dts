@@ -8,7 +8,7 @@ use sqlx::{
 };
 use tokio::{sync::RwLock, time::Instant};
 
-use crate::sinker::check_sinker::CheckWrappedSink;
+use crate::sinker::checkable_sinker::CheckableSink;
 use crate::{
     call_batch_fn, data_marker::DataMarker, rdb_query_builder::RdbQueryBuilder,
     rdb_router::RdbRouter, sinker::base_sinker::BaseSinker, Sinker,
@@ -138,7 +138,7 @@ impl Sinker for PgSinker {
 }
 
 #[async_trait]
-impl CheckWrappedSink for PgSinker {
+impl CheckableSink for PgSinker {
     async fn sink_dml_borrowed(&mut self, data: &mut [RowData], batch: bool) -> anyhow::Result<()> {
         if data.is_empty() {
             return Ok(());

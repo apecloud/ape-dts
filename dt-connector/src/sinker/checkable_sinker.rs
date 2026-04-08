@@ -13,34 +13,34 @@ macro_rules! delegate_inner {
 }
 
 #[async_trait]
-pub trait CheckWrappedSink: Sinker {
+pub trait CheckableSink: Sinker {
     async fn sink_dml_borrowed(&mut self, data: &mut [RowData], batch: bool) -> anyhow::Result<()>;
 }
 
-pub struct CheckWrappedSinker<S> {
+pub struct SinkerWithChecker<S> {
     inner: S,
     checker: DataCheckerHandle,
 }
 
-impl<S> CheckWrappedSinker<S> {
+impl<S> SinkerWithChecker<S> {
     pub fn new(inner: S, checker: DataCheckerHandle) -> Self {
         Self { inner, checker }
     }
 }
 
-pub fn wrap_check_sinker<S: CheckWrappedSink + Send + 'static>(
+pub fn wrap_sinker_with_checker<S: CheckableSink + Send + 'static>(
     sinker: S,
     checker: Option<DataCheckerHandle>,
 ) -> Box<dyn Sinker + Send> {
     if let Some(checker) = checker {
-        Box::new(CheckWrappedSinker::new(sinker, checker))
+        Box::new(SinkerWithChecker::new(sinker, checker))
     } else {
         Box::new(sinker)
     }
 }
 
 #[async_trait]
-impl<S: CheckWrappedSink + Send> Sinker for CheckWrappedSinker<S> {
+impl<S: CheckableSink + Send> Sinker for SinkerWithChecker<S> {
     async fn sink_dml(&mut self, mut data: Vec<RowData>, batch: bool) -> anyhow::Result<()> {
         self.inner.sink_dml_borrowed(&mut data, batch).await?;
         let _ = self.checker.enqueue_check(data).await;
