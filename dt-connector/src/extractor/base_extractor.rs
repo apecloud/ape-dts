@@ -10,16 +10,12 @@ use dt_common::{
     config::{
         config_enums::DbType,
         config_token_parser::{ConfigTokenParser, TokenEscapePair},
-    },
-    error::Error,
-    log_debug, log_error, log_info,
-    meta::{
+    }, error::Error, log_debug, log_error, log_info, meta::{
         dcl_meta::{dcl_data::DclData, dcl_parser::DclParser},
         ddl_meta::ddl_data::DdlData,
         dt_queue::DtQueue,
         struct_meta::struct_data::StructData,
-    },
-    utils::sql_util::SqlUtil,
+    }, task_context::TaskContext, utils::sql_util::SqlUtil
 };
 use dt_common::{
     meta::{
@@ -42,6 +38,7 @@ pub struct BaseExtractor {
     pub monitor: ExtractorMonitor,
     pub data_marker: Option<DataMarker>,
     pub time_filter: TimeFilter,
+    pub task_context: TaskContext,
 }
 
 impl BaseExtractor {

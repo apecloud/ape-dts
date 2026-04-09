@@ -11,7 +11,7 @@ use anyhow::{bail, Ok};
 use crate::config::metrics_config::MetricsConfig;
 use crate::{
     config::{
-        config_enums::ResumeType,
+        config_enums::{RdbParallelType, ResumeType},
         connection_auth_config::ConnectionAuthConfig,
         global_config::GlobalConfig,
         limiter_config::{CapacityLimiterConfig, RateLimiterConfig},
@@ -206,8 +206,10 @@ impl TaskConfig {
                     connection_auth,
                     db: String::new(),
                     tb: String::new(),
+                    db_tbs: HashMap::new(),
                     sample_interval: loader.get_with_default(EXTRACTOR, SAMPLE_INTERVAL, 1),
                     parallel_size: loader.get_with_default(EXTRACTOR, PARALLEL_SIZE, 1),
+                    parallel_type: loader.get_with_default(EXTRACTOR, "parallel_type", RdbParallelType::Table),
                     batch_size,
                     partition_cols: loader.get_optional(EXTRACTOR, PARTITION_COLS),
                 },
@@ -279,6 +281,7 @@ impl TaskConfig {
                         url,
                         schema: String::new(),
                         tb: String::new(),
+                        schema_tbs: HashMap::new(),
                         s3_config,
                         batch_size,
                     }
@@ -293,8 +296,10 @@ impl TaskConfig {
                     connection_auth,
                     schema: String::new(),
                     tb: String::new(),
+                    schema_tbs: HashMap::new(),
                     sample_interval: loader.get_with_default(EXTRACTOR, SAMPLE_INTERVAL, 1),
                     parallel_size: loader.get_with_default(EXTRACTOR, PARALLEL_SIZE, 1),
+                    parallel_type: loader.get_with_default(EXTRACTOR, "parallel_type", RdbParallelType::Table),
                     batch_size,
                     partition_cols: loader.get_optional(EXTRACTOR, PARTITION_COLS),
                 },
@@ -348,6 +353,7 @@ impl TaskConfig {
                         app_name,
                         db: String::new(),
                         tb: String::new(),
+                        db_tbs: HashMap::new(),
                     },
 
                     ExtractType::Cdc => ExtractorConfig::MongoCdc {

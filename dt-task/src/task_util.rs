@@ -697,16 +697,6 @@ impl ConnClient {
         let enable_sqlx_log = TaskUtil::check_enable_sqlx_log(&task_config.runtime.log_level);
         let extractor_max_connections = task_config.extractor_basic.max_connections;
         let sinker_max_connections = task_config.sinker_basic.max_connections;
-        if extractor_max_connections < 1 {
-            bail!(Error::ConfigError(
-                "`extractor.max_connections` must be greater than 0".into()
-            ));
-        }
-        if sinker_max_connections < 1 {
-            bail!(Error::ConfigError(
-                "`sinker.max_connections` must be greater than 0".into()
-            ));
-        }
 
         let extractor_client = match &task_config.extractor {
             ExtractorConfig::MysqlSnapshot {

@@ -39,6 +39,10 @@ impl GroupMonitor {
         self.monitors.insert(id.to_string(), monitor);
     }
 
+    pub fn get_monitor(&self, id: &str) -> Option<Arc<Monitor>> {
+        self.monitors.get(id).map(|entry| entry.value().clone())
+    }
+
     pub fn remove_monitor(&self, id: &str) {
         // keep statistics of no_window counters before removing:
         // eg. 2025-02-18 05:43:37.028889 | pipeline | global | sinked_count | latest=4199364

@@ -13,23 +13,18 @@ use dt_common::{
         config_enums::{DbType, ExtractType},
         extractor_config::ExtractorConfig,
         task_config::TaskConfig,
-    },
-    meta::{
+    }, meta::{
         avro::avro_converter::AvroConverter, dt_queue::DtQueue,
         mongo::mongo_cdc_source::MongoCdcSource, mysql::mysql_meta_manager::MysqlMetaManager,
         pg::pg_meta_manager::PgMetaManager, rdb_meta_manager::RdbMetaManager,
         redis::redis_statistic_type::RedisStatisticType, syncer::Syncer,
-    },
-    monitor::monitor::Monitor,
-    rdb_filter::RdbFilter,
-    time_filter::TimeFilter,
-    utils::redis_util::RedisUtil,
+    }, monitor::{group_monitor::GroupMonitor, monitor::Monitor, task_monitor::TaskMonitor}, rdb_filter::RdbFilter, task_context::TaskContext, time_filter::TimeFilter, utils::redis_util::RedisUtil
 };
 use dt_connector::{
     data_marker::DataMarker,
     extractor::{
         base_extractor::BaseExtractor,
-        extractor_monitor::ExtractorMonitor,
+        extractor_monitor::{self, ExtractorMonitor},
         foxlake::foxlake_s3_extractor::FoxlakeS3Extractor,
         kafka::kafka_extractor::KafkaExtractor,
         mongo::{
@@ -80,6 +75,7 @@ impl ExtractorUtil {
         data_marker: Option<DataMarker>,
         router: RdbRouter,
         recovery: Option<Arc<dyn Recovery + Send + Sync>>,
+        task_context: TaskContext,
     ) -> anyhow::Result<Box<dyn Extractor + Send>> {
         let mut base_extractor = BaseExtractor {
             buffer,
@@ -88,6 +84,7 @@ impl ExtractorUtil {
             monitor: ExtractorMonitor::new(monitor).await,
             data_marker,
             time_filter: TimeFilter::default(),
+            task_context,
         };
 
         let filter = RdbFilter::from_config(&config.filter, &config.extractor_basic.db_type)?;

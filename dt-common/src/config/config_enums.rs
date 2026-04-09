@@ -168,6 +168,15 @@ pub enum RdbTransactionIsolation {
     Default,
 }
 
+#[derive(Display, EnumString, IntoStaticStr, PartialEq, Default, Clone, Debug)]
+pub enum RdbParallelType {
+    #[default]
+    #[strum(serialize = "table")]
+    Table,
+    #[strum(serialize = "chunk")]
+    Chunk,
+}
+
 pub fn build_task_type(extract_type: &ExtractType, sink_type: &SinkType) -> Option<TaskType> {
     match (extract_type, sink_type) {
         (ExtractType::Struct, SinkType::Struct) => Some(TaskType::Struct),

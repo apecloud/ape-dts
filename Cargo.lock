@@ -1548,6 +1548,7 @@ dependencies = [
  "dt-task",
  "futures",
  "mongodb",
+ "prometheus",
  "redis",
  "regex",
  "sqlx",

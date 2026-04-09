@@ -1,5 +1,8 @@
+use core::task;
 use std::{
-    collections::VecDeque,
+    collections::{HashMap, VecDeque},
+    f32::consts::E,
+    hash::Hash,
     panic,
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -16,6 +19,7 @@ use tokio::{
     runtime::Handle,
     select,
     sync::{Mutex, RwLock},
+    task::JoinHandle,
     task::JoinSet,
     time::Duration,
     try_join,
@@ -31,7 +35,6 @@ use async_mutex::Mutex as AsyncMutex;
 use std::sync::Mutex as StdMutex;
 
 static LOG_HANDLE: StdMutex<Option<log4rs::Handle>> = StdMutex::new(None);
-use dt_common::log_filter::SizeLimitFilterDeserializer;
 use dt_common::{
     config::{
         config_enums::{build_task_type, DbType, PipelineType, TaskType},
@@ -55,8 +58,10 @@ use dt_common::{
         FlushableMonitor,
     },
     rdb_filter::RdbFilter,
+    task_context::TaskContext,
     utils::{sql_util::SqlUtil, time_util::TimeUtil},
 };
+use dt_common::{log_filter::SizeLimitFilterDeserializer, monitor::monitor_util::MonitorUtil};
 use dt_connector::{
     check_log::check_log::CheckSummaryLog,
     data_marker::DataMarker,
@@ -73,7 +78,13 @@ use dt_pipeline::{
 use dt_common::monitor::prometheus_metrics::PrometheusMetrics;
 
 #[derive(Clone)]
-pub struct TaskContext {
+pub struct TaskInfo {
+    pub extractor_config: ExtractorConfig,
+    pub no_data: bool,
+}
+
+#[derive(Clone)]
+pub struct TaskContext1 {
     pub id: String,
     pub extractor_config: ExtractorConfig,
     pub extractor_client: ConnClient,
@@ -91,6 +102,7 @@ pub struct TaskContext {
 pub struct TaskRunner {
     task_type: Option<TaskType>,
     config: TaskConfig,
+    filter: RdbFilter,
     extractor_monitor: Arc<GroupMonitor>,
     pipeline_monitor: Arc<GroupMonitor>,
     sinker_monitor: Arc<GroupMonitor>,
@@ -131,6 +143,7 @@ impl TaskRunner {
         ));
 
         Ok(Self {
+            filter: RdbFilter::from_config(&config.filter, &config.extractor_basic.db_type)?,
             config,
             extractor_monitor: Arc::new(GroupMonitor::new("extractor", "global")),
             pipeline_monitor: Arc::new(GroupMonitor::new("pipeline", "global")),
@@ -203,41 +216,37 @@ impl TaskRunner {
             _ => None,
         };
 
-        let task_context = TaskContext {
-            id: String::new(),
-            extractor_config: self.config.extractor.clone(),
-            extractor_client: extractor_client.clone(),
-            partition_cols,
-            sinker_client: sinker_client.clone(),
-            router,
-            recorder,
-            recovery,
-            check_summary: check_summary.clone(),
-            enqueue_limiter,
-            dequeue_limiter,
-        };
-
         #[cfg(feature = "metrics")]
         self.prometheus_metrics
             .initialization()
             .start_metrics()
             .await;
 
-        match &self.config.extractor {
-            ExtractorConfig::MysqlStruct { .. } | ExtractorConfig::PgStruct { .. } => {
-                let mut pending_tasks = self.build_pending_tasks(task_context, false).await?;
-                if let Some(task_context) = pending_tasks.pop_front() {
-                    self.clone().start_single_task(task_context, false).await?
-                }
-            }
+        let task_info = self.get_task_info(extractor_client.clone(), recovery.clone()).await?;
+        if task_info.no_data {
+            log_info!("task finished");
+            return Ok(());
+        }
 
-            ExtractorConfig::MysqlSnapshot { .. }
-            | ExtractorConfig::PgSnapshot { .. }
-            | ExtractorConfig::MongoSnapshot { .. }
-            | ExtractorConfig::FoxlakeS3 { .. } => self.start_multi_task(task_context).await?,
+        let monitor_shut_down = Arc::new(AtomicBool::new(false));
+        let global_monitor_handle = self.spawn_global_monitor(monitor_shut_down.clone());
 
-            _ => self.clone().start_single_task(task_context, false).await?,
-        };
+        let task_runner = self.clone();
+        let _ = tokio::spawn(task_runner.create_task( true,
+            task_info.extractor_config,
+            extractor_client.clone(),
+            partition_cols,
+            sinker_client.clone(),
+            router,
+            recorder,
+            recovery,
+            check_summary.clone(),
+            enqueue_limiter,
+            dequeue_limiter,
+        )).await;
+
+        monitor_shut_down.store(true, Ordering::Release);
+        global_monitor_handle.await?;
 
         // close connections
         extractor_client.close().await?;
@@ -254,107 +263,37 @@ impl TaskRunner {
         Ok(())
     }
 
-    async fn start_multi_task(&self, task_context: TaskContext) -> anyhow::Result<()> {
-        let mut pending_tasks = self.build_pending_tasks(task_context, true).await?;
-
-        // start a thread to flush global monitors
-        let global_shut_down = Arc::new(AtomicBool::new(false));
-        let global_shut_down_clone = global_shut_down.clone();
+    fn spawn_global_monitor(&self, shut_down: Arc<AtomicBool>) -> JoinHandle<()> {
         let interval_secs = self.config.pipeline.checkpoint_interval_secs;
         let extractor_monitor = self.extractor_monitor.clone();
         let pipeline_monitor = self.pipeline_monitor.clone();
         let sinker_monitor = self.sinker_monitor.clone();
         let task_monitor = self.task_monitor.clone();
-        let global_monitor_task = tokio::spawn(async move {
-            Self::flush_monitors_generic::<GroupMonitor, TaskMonitor>(
+        tokio::spawn(async move {
+            MonitorUtil::flush_monitors_generic::<GroupMonitor, TaskMonitor>(
                 interval_secs,
-                global_shut_down_clone,
+                shut_down,
                 &[extractor_monitor, pipeline_monitor, sinker_monitor],
                 &[task_monitor],
             )
             .await
-        });
-
-        let task_parallel_size = self.get_task_parallel_size();
-        let semaphore = Arc::new(tokio::sync::Semaphore::new(task_parallel_size));
-        let mut join_set: JoinSet<(String, anyhow::Result<()>)> = JoinSet::new();
-
-        // initialize the task pool to its maximum capacity
-        while join_set.len() < task_parallel_size && !pending_tasks.is_empty() {
-            if let Some(task_context) = pending_tasks.pop_front() {
-                self.clone()
-                    .spawn_single_task(task_context, &mut join_set, &semaphore)
-                    .await?;
-            }
-        }
-
-        // when a task is completed, if there are still pending tables, add a new task
-        while let Some(result) = join_set.join_next().await {
-            match result {
-                Ok((_, Ok(()))) => {
-                    if let Some(task_context) = pending_tasks.pop_front() {
-                        self.clone()
-                            .spawn_single_task(task_context, &mut join_set, &semaphore)
-                            .await?;
-                    }
-                }
-                Ok((single_task_id, Err(e))) => {
-                    bail!("single task: [{}] failed, error: {}", single_task_id, e)
-                }
-                Err(e) => {
-                    bail!("join error: {}", e)
-                }
-            }
-        }
-
-        global_shut_down.store(true, Ordering::Release);
-        global_monitor_task.await?;
-        Ok(())
+        })
     }
 
-    async fn spawn_single_task(
+    async fn create_task(
         self,
-        task_context: TaskContext,
-        join_set: &mut JoinSet<(String, anyhow::Result<()>)>,
-        semaphore: &Arc<tokio::sync::Semaphore>,
-    ) -> anyhow::Result<()> {
-        let single_task_id = task_context.id;
-        let semaphore = Arc::clone(semaphore);
-        let task_context = TaskContext {
-            id: single_task_id.clone(),
-            extractor_config: task_context.extractor_config,
-            extractor_client: task_context.extractor_client,
-            sinker_client: task_context.sinker_client,
-            router: task_context.router,
-            recorder: task_context.recorder,
-            recovery: task_context.recovery,
-            check_summary: task_context.check_summary,
-            partition_cols: task_context.partition_cols,
-            enqueue_limiter: task_context.enqueue_limiter,
-            dequeue_limiter: task_context.dequeue_limiter,
-        };
-        let me = self.clone();
-        join_set.spawn(async move {
-            let _permit = semaphore.acquire().await.unwrap();
-            let res = me.start_single_task(task_context, true).await;
-            (single_task_id, res)
-        });
-        Ok(())
-    }
-
-    async fn start_single_task(
-        self,
-        task_context: TaskContext,
         is_multi_task: bool,
+        extractor_config: ExtractorConfig,
+        extractor_client: ConnClient,
+        partition_cols: Option<Arc<PartitionCols>>,
+        sinker_client: ConnClient,
+        router: Arc<RdbRouter>,
+        recorder: Option<Arc<dyn Recorder + Send + Sync>>,
+        recovery: Option<Arc<dyn Recovery + Send + Sync>>,
+        check_summary: Option<Arc<AsyncMutex<CheckSummaryLog>>>,
+        enqueue_limiter: Option<Arc<BufferLimiter>>,
+        dequeue_limiter: Option<Arc<BufferLimiter>>,
     ) -> anyhow::Result<()> {
-        let extractor_config = task_context.extractor_config;
-        let extractor_client = task_context.extractor_client;
-        let sinker_client = task_context.sinker_client;
-        let router = (*task_context.router).clone();
-        let recorder = task_context.recorder.clone();
-        let recovery = task_context.recovery.clone();
-        let enqueue_limiter = task_context.enqueue_limiter;
-        let dequeue_limiter = task_context.dequeue_limiter;
 
         let max_bytes = self.config.pipeline.capacity_limiter.buffer_memory_mb * 1024 * 1024;
         let buffer = Arc::new(DtQueue::new(
@@ -365,6 +304,14 @@ impl TaskRunner {
         ));
 
         let shut_down = Arc::new(AtomicBool::new(false));
+        let task_context = TaskContext {
+            task_config: self.config.clone(),
+            extractor_monitor: self.extractor_monitor.clone(),
+            pipeline_monitor: self.pipeline_monitor.clone(),
+            sinker_monitor: self.sinker_monitor.clone(),
+            task_monitor: self.task_monitor.clone(),
+            shut_down: shut_down.clone(),
+        };
         let syncer = Arc::new(Mutex::new(Syncer {
             received_position: Position::None,
             committed_position: Position::None,
@@ -407,14 +354,15 @@ impl TaskRunner {
             &self.config,
             &extractor_config,
             extractor_client.clone(),
-            task_context.partition_cols,
+            partition_cols,
             buffer.clone(),
             shut_down.clone(),
             syncer.clone(),
             extractor_monitor.clone(),
             extractor_data_marker,
-            router,
+            (*router).clone(),
             recovery,
+            task_context.clone(),
         )
         .await?;
 
@@ -432,7 +380,7 @@ impl TaskRunner {
             sinker_client.clone(),
             sinker_monitor.clone(),
             rw_sinker_data_marker.clone(),
-            task_context.check_summary.clone(),
+            check_summary.clone(),
         )
         .await?;
 
@@ -484,7 +432,7 @@ impl TaskRunner {
         );
 
         // do pre operations before task starts
-        self.pre_single_task(
+        self.create_task_tables(
             extractor_client.clone(),
             sinker_client.clone(),
             sinker_data_marker,
@@ -520,29 +468,29 @@ impl TaskRunner {
         try_join!(f1, f2, f3)?;
 
         // finished log
-        let (schema, tb) = match &extractor_config {
-            ExtractorConfig::MysqlSnapshot { db, tb, .. }
-            | ExtractorConfig::MongoSnapshot { db, tb, .. } => (db.to_owned(), tb.to_owned()),
-            ExtractorConfig::PgSnapshot { schema, tb, .. }
-            | ExtractorConfig::FoxlakeS3 { schema, tb, .. } => (schema.to_owned(), tb.to_owned()),
-            _ => (String::new(), String::new()),
-        };
-        if !tb.is_empty() {
-            let finish_position = Position::RdbSnapshotFinished {
-                db_type: self.config.extractor_basic.db_type.to_string(),
-                schema,
-                tb,
-            };
-            log_finished!("{}", finish_position.to_string());
-            self.task_monitor
-                .add_no_window_metrics(TaskMetricsType::FinishedProgressCount, 1);
+        // let (schema, tb) = match &extractor_config {
+        //     ExtractorConfig::MysqlSnapshot { db, tb, .. }
+        //     | ExtractorConfig::MongoSnapshot { db, tb, .. } => (db.to_owned(), tb.to_owned()),
+        //     ExtractorConfig::PgSnapshot { schema, tb, .. }
+        //     | ExtractorConfig::FoxlakeS3 { schema, tb, .. } => (schema.to_owned(), tb.to_owned()),
+        //     _ => (String::new(), String::new()),
+        // };
+        // if !tb.is_empty() {
+        //     let finish_position = Position::RdbSnapshotFinished {
+        //         db_type: self.config.extractor_basic.db_type.to_string(),
+        //         schema,
+        //         tb,
+        //     };
+        //     log_finished!("{}", finish_position.to_string());
+        //     self.task_monitor
+        //         .add_no_window_metrics(TaskMetricsType::FinishedProgressCount, 1);
 
-            if let Some(handler) = &recorder {
-                if let Err(e) = handler.record_position(&finish_position).await {
-                    log_error!("failed to record position: {}, err: {}", finish_position, e);
-                }
-            }
-        }
+        //     if let Some(handler) = &recorder {
+        //         if let Err(e) = handler.record_position(&finish_position).await {
+        //             log_error!("failed to record position: {}, err: {}", finish_position, e);
+        //         }
+        //     }
+        // }
 
         // remove monitors from global monitors
         tokio::join!(
@@ -774,7 +722,7 @@ impl TaskRunner {
         );
     }
 
-    async fn pre_single_task(
+    async fn create_task_tables(
         &self,
         extractor_client: ConnClient,
         sinker_client: ConnClient,
@@ -920,18 +868,13 @@ impl TaskRunner {
         Ok(())
     }
 
-    async fn build_pending_tasks(
-        &self,
-        original_task_context: TaskContext,
-        is_multi_task: bool,
-    ) -> anyhow::Result<VecDeque<TaskContext>> {
+    async fn get_task_info(&self, extractor_client: ConnClient, recovery: Option<Arc<dyn Recovery + Send + Sync>>) -> anyhow::Result<TaskInfo> {
         let db_type = &self.config.extractor_basic.db_type;
-        let filter = RdbFilter::from_config(&self.config.filter, db_type)?;
+        let filter = &self.filter;
 
-        let mut pending_tasks = VecDeque::new();
-
+        let mut schema_tbs = HashMap::new();
         let schemas =
-            TaskUtil::list_schemas(&original_task_context.extractor_client.clone(), db_type)
+            TaskUtil::list_schemas(&extractor_client, db_type)
                 .await?
                 .iter()
                 .filter(|schema| !filter.filter_schema(schema))
@@ -939,18 +882,27 @@ impl TaskRunner {
                 .collect::<Vec<_>>();
         if schemas.is_empty() {
             log_warn!("no schemas to extract");
-            return Ok(pending_tasks);
+            return Ok(TaskInfo {
+                extractor_config: self.config.extractor.clone(),
+                no_data: true,
+            });
         }
 
-        if is_multi_task {
+        if matches!(
+            self.config.extractor,
+            ExtractorConfig::MysqlSnapshot { .. }
+                | ExtractorConfig::PgSnapshot { .. }
+                | ExtractorConfig::MongoSnapshot { .. }
+                | ExtractorConfig::FoxlakeS3 { .. }
+        ) {
             if let Some(task_type) = &self.task_type {
                 log_info!("begin to estimate record count");
                 let record_count = TaskUtil::estimate_record_count(
                     task_type,
-                    &original_task_context.extractor_client.clone(),
+                    &extractor_client,
                     db_type,
                     &schemas,
-                    &filter,
+                    filter,
                 )
                 .await?;
                 log_info!("estimate record count: {}", record_count);
@@ -960,185 +912,156 @@ impl TaskRunner {
             }
         }
 
-        let router = original_task_context.router.clone();
-        let extractor_client = original_task_context.extractor_client.clone();
-        let sinker_client = original_task_context.sinker_client.clone();
+        match &self.config.extractor {
+            ExtractorConfig::MysqlStruct {
+                url,
+                connection_auth,
+                db,
+                db_batch_size,
+                ..
+            } => {
+                return Ok(TaskInfo {
+                    extractor_config: ExtractorConfig::MysqlStruct {
+                        url: url.clone(),
+                        connection_auth: connection_auth.clone(),
+                        db: db.clone(),
+                        dbs: schemas,
+                        db_batch_size: *db_batch_size,
+                    },
+                    no_data: false,
+                });
+            }
+            ExtractorConfig::PgStruct {
+                url,
+                connection_auth,
+                schema,
+                db_batch_size,
+                ..
+            } => {
+                return Ok(TaskInfo {
+                    extractor_config: ExtractorConfig::PgStruct {
+                        url: url.clone(),
+                        connection_auth: connection_auth.clone(),
+                        schema: schema.clone(),
+                        schemas,
+                        do_global_structs: true,
+                        db_batch_size: *db_batch_size,
+                    },
+                    no_data: false,
+                })
+            }
+            _ => {}
+        };
+        for schema in schemas.iter() {
+            // find pending tables
+            let tbs = TaskUtil::list_tbs(
+                &extractor_client,
+                schema,
+                db_type,
+            )
+            .await?;
 
-        let is_db_extractor_config = matches!(
-            &self.config.extractor,
-            ExtractorConfig::MysqlStruct { .. } | ExtractorConfig::PgStruct { .. }
-        );
-        if is_db_extractor_config {
-            let db_extractor_config = match &self.config.extractor {
-                ExtractorConfig::MysqlStruct {
-                    url,
-                    connection_auth,
-                    db,
-                    db_batch_size,
-                    ..
-                } => ExtractorConfig::MysqlStruct {
-                    url: url.clone(),
-                    connection_auth: connection_auth.clone(),
-                    db: db.clone(),
-                    dbs: schemas,
-                    db_batch_size: *db_batch_size,
-                },
-                ExtractorConfig::PgStruct {
-                    url,
-                    connection_auth,
-                    schema,
-                    db_batch_size,
-                    ..
-                } => ExtractorConfig::PgStruct {
-                    url: url.clone(),
-                    connection_auth: connection_auth.clone(),
-                    schema: schema.clone(),
-                    schemas,
-                    do_global_structs: true,
-                    db_batch_size: *db_batch_size,
-                },
-                _ => {
-                    bail! {Error::ConfigError("unsupported extractor config type".into())}
-                }
-            };
-            pending_tasks.push_back(TaskContext {
-                extractor_config: db_extractor_config,
-                router,
-                id: "".to_string(),
-                extractor_client,
-                sinker_client,
-                recorder: original_task_context.recorder.clone(),
-                recovery: original_task_context.recovery.clone(),
-                check_summary: original_task_context.check_summary.clone(),
-                partition_cols: original_task_context.partition_cols.clone(),
-                enqueue_limiter: original_task_context.enqueue_limiter.clone(),
-                dequeue_limiter: original_task_context.dequeue_limiter.clone(),
-            });
-        } else {
-            for schema in schemas.iter() {
-                // find pending tables
-                let tbs = TaskUtil::list_tbs(
-                    &original_task_context.extractor_client.clone(),
-                    schema,
-                    db_type,
-                )
-                .await?;
+            self.task_monitor
+                .add_no_window_metrics(TaskMetricsType::TotalProgressCount, tbs.len() as u64);
+            let mut finished_tbs = 0;
 
-                self.task_monitor
-                    .add_no_window_metrics(TaskMetricsType::TotalProgressCount, tbs.len() as u64);
-                let mut finished_tbs = 0;
-
-                for tb in tbs.iter() {
-                    if let Some(recovery_handler) = original_task_context.recovery.as_ref() {
-                        if recovery_handler.check_snapshot_finished(schema, tb).await {
-                            log_info!("schema: {}, tb: {}, already finished", schema, tb);
-                            finished_tbs += 1;
-                            continue;
-                        }
-                    }
-
-                    if filter.filter_event(schema, tb, &RowType::Insert) {
-                        log_info!("schema: {}, tb: {}, insert events filtered", schema, tb);
+            let mut tables = Vec::new();
+            for tb in tbs.iter() {
+                if let Some(recovery_handler) = recovery.as_ref() {
+                    if recovery_handler.check_snapshot_finished(schema, tb).await {
+                        log_info!("schema: {}, tb: {}, already finished", schema, tb);
+                        finished_tbs += 1;
                         continue;
                     }
-                    let tb_extractor_config = match &self.config.extractor {
-                        ExtractorConfig::MysqlSnapshot {
-                            url,
-                            connection_auth,
-                            sample_interval,
-                            parallel_size,
-                            batch_size,
-                            ..
-                        } => ExtractorConfig::MysqlSnapshot {
-                            url: url.clone(),
-                            connection_auth: connection_auth.clone(),
-                            db: schema.clone(),
-                            tb: tb.clone(),
-                            sample_interval: *sample_interval,
-                            parallel_size: *parallel_size,
-                            batch_size: *batch_size,
-                            partition_cols: String::new(),
-                        },
-
-                        ExtractorConfig::PgSnapshot {
-                            url,
-                            connection_auth,
-                            sample_interval,
-                            parallel_size,
-                            batch_size,
-                            ..
-                        } => ExtractorConfig::PgSnapshot {
-                            url: url.clone(),
-                            connection_auth: connection_auth.clone(),
-                            schema: schema.clone(),
-                            tb: tb.clone(),
-                            sample_interval: *sample_interval,
-                            parallel_size: *parallel_size,
-                            batch_size: *batch_size,
-                            partition_cols: String::new(),
-                        },
-
-                        ExtractorConfig::MongoSnapshot {
-                            url,
-                            connection_auth,
-                            app_name,
-                            ..
-                        } => ExtractorConfig::MongoSnapshot {
-                            url: url.clone(),
-                            connection_auth: connection_auth.clone(),
-                            app_name: app_name.clone(),
-                            db: schema.clone(),
-                            tb: tb.clone(),
-                        },
-
-                        ExtractorConfig::FoxlakeS3 {
-                            url,
-                            s3_config,
-                            batch_size,
-                            ..
-                        } => ExtractorConfig::FoxlakeS3 {
-                            url: url.clone(),
-                            schema: schema.clone(),
-                            tb: tb.clone(),
-                            s3_config: s3_config.clone(),
-                            batch_size: *batch_size,
-                        },
-
-                        _ => {
-                            bail! {Error::ConfigError("unsupported extractor config for `runtime.tb_parallel_size`".into())};
-                        }
-                    };
-                    pending_tasks.push_back(TaskContext {
-                        extractor_config: tb_extractor_config,
-                        router: router.clone(),
-                        id: format!("{}.{}", schema, tb),
-                        extractor_client: extractor_client.clone(),
-                        sinker_client: sinker_client.clone(),
-                        recorder: original_task_context.recorder.clone(),
-                        recovery: original_task_context.recovery.clone(),
-                        check_summary: original_task_context.check_summary.clone(),
-                        partition_cols: original_task_context.partition_cols.clone(),
-                        enqueue_limiter: original_task_context.enqueue_limiter.clone(),
-                        dequeue_limiter: original_task_context.dequeue_limiter.clone(),
-                    });
                 }
 
-                self.task_monitor.add_no_window_metrics(
-                    TaskMetricsType::FinishedProgressCount,
-                    finished_tbs as u64,
-                );
+                if filter.filter_event(schema, tb, &RowType::Insert) {
+                    log_info!("schema: {}, tb: {}, insert events filtered", schema, tb);
+                    continue;
+                }
+                tables.push(tb.to_owned());
             }
-        }
-        Ok(pending_tasks)
-    }
+            schema_tbs.insert(schema.clone(), tables);
 
-    fn get_task_parallel_size(&self) -> usize {
-        match &self.config.extractor {
-            ExtractorConfig::MysqlSnapshot { .. }
-            | ExtractorConfig::PgSnapshot { .. }
-            | ExtractorConfig::FoxlakeS3 { .. }
-            | ExtractorConfig::MongoSnapshot { .. } => self.config.runtime.tb_parallel_size,
-            _ => 1,
+            self.task_monitor
+                .add_no_window_metrics(TaskMetricsType::FinishedProgressCount, finished_tbs as u64);
         }
+        let extractor_config = match &self.config.extractor {
+            ExtractorConfig::MysqlSnapshot {
+                url,
+                connection_auth,
+                sample_interval,
+                parallel_size,
+                parallel_type,
+                batch_size,
+                ..
+            } => ExtractorConfig::MysqlSnapshot {
+                url: url.clone(),
+                connection_auth: connection_auth.clone(),
+                db: String::new(),
+                tb: String::new(),
+                db_tbs: schema_tbs,
+                sample_interval: *sample_interval,
+                parallel_size: *parallel_size,
+                parallel_type: parallel_type.clone(),
+                batch_size: *batch_size,
+                partition_cols: String::new(),
+            },
+
+            ExtractorConfig::PgSnapshot {
+                url,
+                connection_auth,
+                sample_interval,
+                parallel_size,
+                parallel_type,
+                batch_size,
+                ..
+            } => ExtractorConfig::PgSnapshot {
+                url: url.clone(),
+                connection_auth: connection_auth.clone(),
+                schema: String::new(),
+                tb: String::new(),
+                schema_tbs,
+                sample_interval: *sample_interval,
+                parallel_size: *parallel_size,
+                parallel_type: parallel_type.clone(),
+                batch_size: *batch_size,
+                partition_cols: String::new(),
+            },
+
+            ExtractorConfig::MongoSnapshot {
+                url,
+                connection_auth,
+                app_name,
+                ..
+            } => ExtractorConfig::MongoSnapshot {
+                url: url.clone(),
+                connection_auth: connection_auth.clone(),
+                app_name: app_name.clone(),
+                db: String::new(),
+                tb: String::new(),
+                db_tbs: schema_tbs,
+            },
+
+            ExtractorConfig::FoxlakeS3 {
+                url,
+                s3_config,
+                batch_size,
+                ..
+            } => ExtractorConfig::FoxlakeS3 {
+                url: url.clone(),
+                schema: String::new(),
+                tb: String::new(),
+                schema_tbs,
+                s3_config: s3_config.clone(),
+                batch_size: *batch_size,
+            },
+
+            _ => self.config.extractor.clone(),
+        };
+        Ok(TaskInfo {
+            extractor_config,
+            no_data: false,
+        })
     }
 }
