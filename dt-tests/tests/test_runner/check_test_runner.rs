@@ -7,7 +7,9 @@ use anyhow::Context;
 use chrono::Utc;
 use dt_common::utils::time_util::TimeUtil;
 use dt_common::{
+    config::checker_config::CheckerConfig,
     config::resumer_config::ResumerConfig,
+    log_filter::parse_size_limit,
     meta::{col_value::ColValue, position::Position},
 };
 use dt_connector::checker::{
@@ -20,7 +22,7 @@ use dt_connector::extractor::resumer::{
 };
 use serde_json::Value;
 use sqlx::{query, Row};
-use std::{collections::BTreeMap, fs::File, path::Path};
+use std::{fs::File, path::Path};
 
 pub struct CheckTestRunner {
     base: RdbTestRunner,
@@ -244,17 +246,10 @@ impl CheckTestRunner {
                 "id": {"Long": 2}
             }
         }))?;
-
-        let identity_json = serde_json::to_string(&serde_json::json!({
-            "schema": "test_db_1",
-            "tb": "check_test",
-            "id_col_values": BTreeMap::from([("id".to_string(), Some("2".to_string()))]),
-        }))?;
-
         Ok(CheckerStateRow {
             row_key: Self::compute_seed_row_key(2)?,
-            identity_key: "seed-unresolved-row-2".to_string(),
-            identity_json,
+            identity_key: "e047ce68cb388deeef447750eb072dc0534ea18ece6a7179702898ed0b9fa5ab"
+                .to_string(),
             payload,
         })
     }
@@ -324,7 +319,23 @@ impl CheckTestRunner {
         // start task
         self.base.base.start_task().await?;
 
-        CheckUtil::validate_check_log(&self.expect_check_log_dir, &self.dst_check_log_dir)?;
+        let default_check_log_file_size = CheckerConfig::default().check_log_file_size;
+        let check_log_file_size = self
+            .base
+            .config
+            .checker
+            .as_ref()
+            .map(|cfg| cfg.check_log_file_size.clone())
+            .unwrap_or(default_check_log_file_size.clone());
+        if check_log_file_size == default_check_log_file_size {
+            CheckUtil::validate_check_log(&self.expect_check_log_dir, &self.dst_check_log_dir)?;
+        } else {
+            CheckUtil::validate_check_log_with_size_limit(
+                &self.expect_check_log_dir,
+                &self.dst_check_log_dir,
+                parse_size_limit(&check_log_file_size)?,
+            )?;
+        }
 
         self.base.execute_clean_sqls().await?;
 

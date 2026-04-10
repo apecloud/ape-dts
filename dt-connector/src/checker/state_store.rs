@@ -9,17 +9,32 @@ use dt_common::{config::resumer_config::ResumerConfig, meta::position::Position}
 use crate::extractor::resumer::{utils::ResumerUtil, ResumerDbPool, ResumerType};
 
 const DEFAULT_ROWS_TABLE: &str = "apedts_unconsistent_rows";
-const SNAPSHOT_INSERT_BIND_COUNT: usize = 6;
+const SNAPSHOT_INSERT_BIND_COUNT: usize = 5;
 const MYSQL_SNAPSHOT_BATCH_ROWS: usize = 1000;
 const POSTGRES_MAX_BIND_PARAMS: usize = 65_535;
 const POSTGRES_SNAPSHOT_BATCH_ROWS: usize = POSTGRES_MAX_BIND_PARAMS / SNAPSHOT_INSERT_BIND_COUNT;
 const SNAPSHOT_DELETE_BATCH_ROWS: usize = 1000;
 
+fn build_mysql_load_rows_sql(schema: &str, rows_table: &str) -> String {
+    format!(
+        "SELECT row_key, identity_key, row_payload \
+         FROM `{}`.`{}` WHERE task_id = ? ORDER BY identity_key",
+        schema, rows_table
+    )
+}
+
+fn build_postgres_load_rows_sql(schema: &str, rows_table: &str) -> String {
+    format!(
+        "SELECT row_key, identity_key, row_payload \
+         FROM \"{}\".\"{}\" WHERE task_id = $1 ORDER BY identity_key",
+        schema, rows_table
+    )
+}
+
 #[derive(Clone, Debug)]
 pub struct CheckerStateRow {
     pub row_key: u128,
     pub identity_key: String,
-    pub identity_json: String,
     pub payload: String,
 }
 
@@ -82,7 +97,6 @@ impl CheckerStateStore {
                           task_id varchar(255) NOT NULL,
                           identity_key char(64) NOT NULL,
                           row_key varchar(64) NOT NULL,
-                          identity_json longtext NOT NULL,
                           row_payload longtext NOT NULL,
                           updated_at varchar(64) NOT NULL,
                           PRIMARY KEY (task_id, identity_key)
@@ -108,7 +122,6 @@ impl CheckerStateStore {
                           task_id varchar(255) NOT NULL,
                           identity_key char(64) NOT NULL,
                           row_key varchar(64) NOT NULL,
-                          identity_json text NOT NULL,
                           row_payload text NOT NULL,
                           updated_at varchar(64) NOT NULL,
                           PRIMARY KEY (task_id, identity_key)
@@ -137,7 +150,7 @@ impl CheckerStateStore {
 
         let prefix = format!(
             "INSERT INTO `{}`.`{}` \
-            (task_id, identity_key, row_key, identity_json, row_payload, updated_at) ",
+            (task_id, identity_key, row_key, row_payload, updated_at) ",
             self.schema, self.rows_table
         );
         for chunk in rows.chunks(MYSQL_SNAPSHOT_BATCH_ROWS) {
@@ -146,14 +159,12 @@ impl CheckerStateStore {
                 b.push_bind(task_id)
                     .push_bind(&row.identity_key)
                     .push_bind(row.row_key.to_string())
-                    .push_bind(&row.identity_json)
                     .push_bind(&row.payload)
                     .push_bind(now);
             });
             builder.push(
                 " ON DUPLICATE KEY UPDATE \
                  row_key = VALUES(row_key), \
-                 identity_json = VALUES(identity_json), \
                  row_payload = VALUES(row_payload), \
                  updated_at = VALUES(updated_at)",
             );
@@ -180,7 +191,7 @@ impl CheckerStateStore {
 
         let prefix = format!(
             "INSERT INTO \"{}\".\"{}\" \
-            (task_id, identity_key, row_key, identity_json, row_payload, updated_at) ",
+            (task_id, identity_key, row_key, row_payload, updated_at) ",
             self.schema, self.rows_table
         );
         for chunk in rows.chunks(POSTGRES_SNAPSHOT_BATCH_ROWS.max(1)) {
@@ -189,14 +200,12 @@ impl CheckerStateStore {
                 b.push_bind(task_id)
                     .push_bind(&row.identity_key)
                     .push_bind(row.row_key.to_string())
-                    .push_bind(&row.identity_json)
                     .push_bind(&row.payload)
                     .push_bind(now);
             });
             builder.push(
                 " ON CONFLICT (task_id, identity_key) DO UPDATE SET \
                  row_key = EXCLUDED.row_key, \
-                 identity_json = EXCLUDED.identity_json, \
                  row_payload = EXCLUDED.row_payload, \
                  updated_at = EXCLUDED.updated_at",
             );
@@ -370,20 +379,12 @@ impl CheckerStateStore {
     pub async fn load_rows(&self, task_id: &str) -> Result<Vec<CheckerStateRow>> {
         match &self.backend {
             CheckerStateStoreBackend::MySql(pool) => {
-                let sql = format!(
-                    "SELECT row_key, identity_key, identity_json, row_payload \
-                     FROM `{}`.`{}` WHERE task_id = ? ORDER BY identity_key",
-                    self.schema, self.rows_table
-                );
+                let sql = build_mysql_load_rows_sql(&self.schema, &self.rows_table);
                 let rows = query(&sql).bind(task_id).fetch_all(pool).await?;
                 parse_snapshot_rows(rows)
             }
             CheckerStateStoreBackend::Postgres(pool) => {
-                let sql = format!(
-                    "SELECT row_key, identity_key, identity_json, row_payload \
-                     FROM \"{}\".\"{}\" WHERE task_id = $1 ORDER BY identity_key",
-                    self.schema, self.rows_table
-                );
+                let sql = build_postgres_load_rows_sql(&self.schema, &self.rows_table);
                 let rows = query(&sql).bind(task_id).fetch_all(pool).await?;
                 parse_snapshot_rows(rows)
             }
@@ -406,9 +407,22 @@ where
         parsed.push(CheckerStateRow {
             row_key,
             identity_key: row.get::<String, _>("identity_key"),
-            identity_json: row.get::<String, _>("identity_json"),
             payload: row.get::<String, _>("row_payload"),
         });
     }
     Ok(parsed)
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn load_rows_queries_do_not_select_identity_json() {
+        let mysql_sql = super::build_mysql_load_rows_sql("test_schema", "test_rows");
+        let postgres_sql = super::build_postgres_load_rows_sql("test_schema", "test_rows");
+
+        assert!(!mysql_sql.contains("identity_json"));
+        assert!(!postgres_sql.contains("identity_json"));
+        assert!(mysql_sql.contains("row_payload"));
+        assert!(postgres_sql.contains("row_payload"));
+    }
 }

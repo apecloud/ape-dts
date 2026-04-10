@@ -728,14 +728,33 @@ impl TaskConfig {
         Ok((basic, extractor))
     }
 
+    fn is_checker_enabled(loader: &IniLoader) -> anyhow::Result<bool> {
+        if !loader.ini.sections().contains(&CHECKER.to_string()) {
+            return Ok(false);
+        }
+        if !loader.contains(CHECKER, ENABLE) {
+            bail!(Error::ConfigError(
+                "config [checker].enable is required when [checker] section is present".into(),
+            ));
+        }
+        Ok(loader.get_with_default(CHECKER, ENABLE, false))
+    }
+
     fn load_sinker_config(loader: &IniLoader) -> anyhow::Result<(BasicSinkerConfig, SinkerConfig)> {
         let has_sinker = loader.ini.sections().contains(&SINKER.to_string());
         let has_checker = loader.ini.sections().contains(&CHECKER.to_string());
 
-        if !has_sinker && !has_checker {
-            bail!(Error::ConfigError(
-                "config [sinker] is required when [checker] is not set".into()
-            ));
+        if !has_sinker {
+            if !has_checker {
+                bail!(Error::ConfigError(
+                    "config [sinker] is required when [checker] is not set".into()
+                ));
+            }
+            if !Self::is_checker_enabled(loader)? {
+                bail!(Error::ConfigError(
+                    "config [sinker] is required unless [checker].enable=true".into()
+                ));
+            }
         }
 
         let sink_type = if has_sinker {
@@ -1007,15 +1026,7 @@ impl TaskConfig {
     }
 
     fn load_checker_config(loader: &IniLoader) -> anyhow::Result<Option<CheckerConfig>> {
-        if !loader.ini.sections().contains(&CHECKER.to_string()) {
-            return Ok(None);
-        }
-        if !loader.contains(CHECKER, ENABLE) {
-            bail!(Error::ConfigError(
-                "config [checker].enable is required when [checker] section is present".into(),
-            ));
-        }
-        if !loader.get_with_default(CHECKER, ENABLE, false) {
+        if !Self::is_checker_enabled(loader)? {
             return Ok(None);
         }
 
@@ -1394,6 +1405,30 @@ parallel_type=rdb_merge
             Err(err) => assert_eq!(
                 err.to_string(),
                 "config error: config [checker].enable is required when [checker] section is present"
+            ),
+            Ok(_) => panic!("expected config validation error"),
+        }
+    }
+
+    #[test]
+    fn disabled_checker_still_requires_sinker_section() {
+        let config_path = write_temp_task_config(
+            r#"[extractor]
+db_type=mysql
+extract_type=snapshot
+url=mysql://127.0.0.1:3306
+
+[checker]
+enable=false
+"#,
+        );
+        let result = TaskConfig::new(config_path.to_str().unwrap());
+        fs::remove_file(config_path).unwrap();
+
+        match result {
+            Err(err) => assert_eq!(
+                err.to_string(),
+                "config error: config [sinker] is required unless [checker].enable=true"
             ),
             Ok(_) => panic!("expected config validation error"),
         }

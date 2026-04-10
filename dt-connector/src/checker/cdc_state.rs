@@ -1,6 +1,6 @@
 use anyhow::Context;
-use serde::Serialize;
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap};
+use std::fmt::Write;
 
 use super::{
     BoundedLineBuffer, CheckEntry, CheckInconsistency, Checker, CheckerStoreKey, DataChecker,
@@ -11,40 +11,80 @@ use crate::checker::state_store::{CheckerCheckpointCommit, CheckerStateRow};
 use dt_common::meta::{position::Position, row_data::RowData, row_type::RowType};
 use dt_common::{log_info, log_warn};
 
-#[derive(Serialize)]
-struct IdentityJsonRef<'a> {
-    schema: &'a str,
-    tb: &'a str,
-    id_col_values: BTreeMap<&'a str, &'a Option<String>>,
+fn push_json_string(buf: &mut String, value: &str) {
+    buf.push('"');
+    for ch in value.chars() {
+        match ch {
+            '"' => buf.push_str("\\\""),
+            '\\' => buf.push_str("\\\\"),
+            '\u{08}' => buf.push_str("\\b"),
+            '\u{0C}' => buf.push_str("\\f"),
+            '\n' => buf.push_str("\\n"),
+            '\r' => buf.push_str("\\r"),
+            '\t' => buf.push_str("\\t"),
+            c if c <= '\u{1F}' => write!(buf, "\\u{:04x}", c as u32).unwrap(),
+            c => buf.push(c),
+        }
+    }
+    buf.push('"');
 }
 
-fn build_identity_json_ref(entry: &CheckEntry) -> IdentityJsonRef<'_> {
+fn build_identity_json_from_parts(
+    schema: &str,
+    tb: &str,
+    id_col_values: &[(&str, &Option<String>)],
+) -> String {
+    let mut id_col_values = id_col_values.to_vec();
+    id_col_values.sort_unstable_by(|(left, _), (right, _)| left.cmp(right));
+    let mut buf = String::with_capacity(schema.len() + tb.len() + id_col_values.len() * 32 + 40);
+    buf.push_str(r#"{"schema":"#);
+    push_json_string(&mut buf, schema);
+    buf.push_str(r#","tb":"#);
+    push_json_string(&mut buf, tb);
+    buf.push_str(r#","id_col_values":{"#);
+    for (idx, (key, value)) in id_col_values.iter().enumerate() {
+        if idx > 0 {
+            buf.push(',');
+        }
+        push_json_string(&mut buf, key);
+        buf.push(':');
+        match value {
+            Some(value) => push_json_string(&mut buf, value),
+            None => buf.push_str("null"),
+        }
+    }
+    buf.push_str("}}");
+    buf
+}
+
+pub(super) fn build_identity_json(entry: &CheckEntry) -> String {
     let id_col_values = entry
         .log
         .id_col_values
         .iter()
         .map(|(key, value)| (key.as_str(), value))
-        .collect::<BTreeMap<_, _>>();
-    IdentityJsonRef {
-        schema: &entry.log.schema,
-        tb: &entry.log.tb,
-        id_col_values,
-    }
+        .collect::<Vec<_>>();
+    build_identity_json_from_parts(&entry.log.schema, &entry.log.tb, &id_col_values)
 }
 
-fn build_identity_json(entry: &CheckEntry) -> anyhow::Result<String> {
-    serde_json::to_string(&build_identity_json_ref(entry)).map_err(anyhow::Error::from)
+pub(super) fn build_identity_key(entry: &CheckEntry) -> String {
+    hex::encode(openssl::sha::sha256(build_identity_json(entry).as_bytes()))
+}
+
+fn build_state_row(
+    store_key: &CheckerStoreKey,
+    entry: &CheckEntry,
+) -> anyhow::Result<CheckerStateRow> {
+    Ok(CheckerStateRow {
+        row_key: store_key.row_key,
+        identity_key: build_identity_key(entry),
+        payload: serde_json::to_string(&entry.key)?,
+    })
 }
 
 enum PreparedCheckpointWrite {
-    PositionOnly {
-        task_id: String,
-        position: Position,
-    },
-    Full {
-        commit: CheckerCheckpointCommit,
-        persisted_identity_keys: BTreeSet<String>,
-    },
+    PositionOnly { task_id: String, position: Position },
+    Full { commit: CheckerCheckpointCommit },
 }
 
 impl<C: Checker> DataChecker<C> {
@@ -53,6 +93,14 @@ impl<C: Checker> DataChecker<C> {
 
     /// Writes a point-in-time snapshot whose miss/diff counts reflect current unresolved entries rather than cumulative metrics.
     pub async fn snapshot_and_output(&mut self) -> anyhow::Result<()> {
+        if self.init_failed {
+            log_warn!(
+                "Checker [{}] skipping latest snapshot publish because CDC state initialization failed",
+                self.name
+            );
+            return Ok(());
+        }
+        self.account_dropped_item_skips();
         let max_file_size = usize::try_from(self.ctx.cdc_check_log_max_file_size)
             .ok()
             .filter(|v| *v > 0)
@@ -89,12 +137,14 @@ impl<C: Checker> DataChecker<C> {
         let summary = CheckSummaryLog {
             start_time: self.ctx.summary.start_time.clone(),
             end_time: chrono::Local::now().to_rfc3339(),
-            is_consistent: total_miss == 0 && total_diff == 0,
+            is_consistent: false,
             miss_count: total_miss,
             diff_count: total_diff,
             skip_count: self.ctx.summary.skip_count,
             sql_count: (total_sql_count > 0).then_some(total_sql_count),
         };
+        let mut summary = summary;
+        summary.is_consistent = super::is_summary_consistent(&summary, self.init_failed);
         self.ctx.summary = summary.clone();
         let summary_buf = serde_json::to_vec(&summary)?;
 
@@ -106,16 +156,8 @@ impl<C: Checker> DataChecker<C> {
             &summary_buf,
         )?;
         if self.ctx.s3_output.is_some() {
-            if self.init_failed {
-                log_warn!(
-                    "Checker [{}] skipping S3 upload because CDC state initialization failed; \
-                     historical inconsistency records are preserved on S3",
-                    self.name
-                );
-            } else {
-                self.upload_to_s3(&miss_buf, &diff_buf, &sql_buf, &summary_buf)
-                    .await?;
-            }
+            self.upload_to_s3(&miss_buf, &diff_buf, &sql_buf, &summary_buf)
+                .await?;
         }
 
         Ok(())
@@ -137,20 +179,21 @@ impl<C: Checker> DataChecker<C> {
         std::fs::write(path.join("summary.log"), &summary_with_newline)?;
         if !sql_buf.is_empty() {
             std::fs::write(path.join("sql.log"), sql_buf)?;
+        } else if let Err(err) = std::fs::remove_file(path.join("sql.log")) {
+            if err.kind() != std::io::ErrorKind::NotFound {
+                return Err(err.into());
+            }
         }
         Ok(())
     }
 
-    fn build_state_rows(&self) -> anyhow::Result<Vec<CheckerStateRow>> {
-        let mut rows = Vec::with_capacity(self.store.len());
-        for (store_key, entry) in &self.store {
-            let identity_json = build_identity_json(entry)?;
-            rows.push(CheckerStateRow {
-                row_key: store_key.row_key,
-                identity_key: hex::encode(openssl::sha::sha256(identity_json.as_bytes())),
-                identity_json,
-                payload: serde_json::to_string(&entry.key)?,
-            });
+    fn build_dirty_state_rows(&self) -> anyhow::Result<Vec<CheckerStateRow>> {
+        let mut rows = Vec::with_capacity(self.dirty_upserts.len());
+        for store_key in &self.dirty_upserts {
+            let Some(entry) = self.store.get(store_key) else {
+                continue;
+            };
+            rows.push(build_state_row(store_key, entry)?);
         }
         Ok(rows)
     }
@@ -379,16 +422,8 @@ impl<C: Checker> DataChecker<C> {
             });
         }
 
-        let rows = self.build_state_rows()?;
-        let live_keys: BTreeSet<String> = rows.iter().map(|row| row.identity_key.clone()).collect();
-        let deletes = self
-            .persisted_identity_keys
-            .as_ref()
-            .into_iter()
-            .flatten()
-            .filter(|identity_key| !live_keys.contains(*identity_key))
-            .cloned()
-            .collect();
+        let rows = self.build_dirty_state_rows()?;
+        let deletes = self.dirty_deletes.values().cloned().collect();
 
         Ok(PreparedCheckpointWrite::Full {
             commit: CheckerCheckpointCommit {
@@ -397,7 +432,6 @@ impl<C: Checker> DataChecker<C> {
                 upserts: rows,
                 deletes,
             },
-            persisted_identity_keys: live_keys,
         })
     }
 
@@ -406,6 +440,9 @@ impl<C: Checker> DataChecker<C> {
             return Ok(());
         }
         self.last_checkpoint_position = Some(position.clone());
+        if self.init_failed {
+            return Ok(());
+        }
         let Some(state_store) = self.ctx.state_store.clone() else {
             return Ok(());
         };
@@ -416,13 +453,19 @@ impl<C: Checker> DataChecker<C> {
             PreparedCheckpointWrite::PositionOnly { task_id, position } => {
                 state_store.commit_position(&task_id, &position).await?;
             }
-            PreparedCheckpointWrite::Full {
-                commit,
-                persisted_identity_keys,
-            } => {
+            PreparedCheckpointWrite::Full { commit } => {
                 state_store.commit_checkpoint(&commit).await?;
+                if let Some(persisted_identity_keys) = self.persisted_identity_keys.as_mut() {
+                    for identity_key in &commit.deletes {
+                        persisted_identity_keys.remove(identity_key);
+                    }
+                    for row in &commit.upserts {
+                        persisted_identity_keys.insert(row.identity_key.clone());
+                    }
+                }
                 self.store_dirty = false;
-                self.persisted_identity_keys = Some(persisted_identity_keys);
+                self.dirty_upserts.clear();
+                self.dirty_deletes.clear();
             }
         }
         Ok(())
@@ -448,6 +491,7 @@ impl<C: Checker> DataChecker<C> {
                 s3_client.write(&diff_key, diff_buf.to_vec()),
                 s3_client.write(&summary_key, summary_buf.to_vec()),
             )?;
+            s3_client.delete(&format!("{p}/sql.log")).await?;
         } else {
             let sql_key = format!("{p}/sql.log");
             tokio::try_join!(
@@ -465,92 +509,16 @@ impl<C: Checker> DataChecker<C> {
 mod tests {
     use super::super::{CheckContext, Checker, CheckerIo, CheckerTbMeta, DataChecker, FetchResult};
     use super::*;
-    use crate::checker::check_log::{CheckLog, CheckSummaryLog};
+    use crate::checker::check_log::CheckSummaryLog;
     use crate::rdb_router::RdbRouter;
-    use async_mutex::Mutex;
     use async_trait::async_trait;
-    use dt_common::meta::col_value::ColValue;
     use dt_common::{monitor::monitor::Monitor, utils::limit_queue::LimitedQueue};
-    use serde_json::Value;
+    use opendal::{services::Memory, Operator};
+    use std::fs;
+    use std::path::{Path, PathBuf};
     use std::sync::Arc;
+    use std::time::{SystemTime, UNIX_EPOCH};
     use tokio::sync::mpsc;
-
-    fn build_recheck_key() -> RecheckKey {
-        RecheckKey {
-            schema: "target_db".to_string(),
-            tb: "target_tb".to_string(),
-            is_delete: false,
-            pk: BTreeMap::from([
-                ("a".to_string(), ColValue::Long(1)),
-                ("b".to_string(), ColValue::String("2".to_string())),
-            ]),
-        }
-    }
-
-    #[test]
-    fn identity_json_ref_preserves_sorted_id_columns() {
-        let entry = CheckEntry {
-            key: build_recheck_key(),
-            log: CheckLog {
-                schema: "test_db".to_string(),
-                tb: "test_tb".to_string(),
-                target_schema: None,
-                target_tb: None,
-                id_col_values: HashMap::from([
-                    ("b".to_string(), Some("2".to_string())),
-                    ("a".to_string(), Some("1".to_string())),
-                ]),
-                diff_col_values: HashMap::new(),
-                src_row: None,
-                dst_row: None,
-            },
-            revise_sql: None,
-            diff_cols: Some(vec!["v".to_string()]),
-        };
-
-        let identity_json = serde_json::to_string(&build_identity_json_ref(&entry)).unwrap();
-        assert_eq!(
-            identity_json,
-            r#"{"schema":"test_db","tb":"test_tb","id_col_values":{"a":"1","b":"2"}}"#
-        );
-    }
-
-    #[test]
-    fn recheck_key_serializes_pk_as_tagged_col_values() {
-        let payload = serde_json::to_value(build_recheck_key()).unwrap();
-        let Value::Object(payload) = payload else {
-            panic!("payload should be a json object");
-        };
-
-        assert!(payload.contains_key("schema"));
-        assert!(payload.contains_key("tb"));
-        assert!(payload.contains_key("is_delete"));
-        assert!(payload.contains_key("pk"));
-        assert_eq!(
-            payload.get("pk").unwrap(),
-            &serde_json::json!({
-                "a": {"Long": 1},
-                "b": {"String": "2"},
-            })
-        );
-    }
-
-    #[test]
-    fn recheck_key_round_trips_tagged_pk_payload() {
-        let payload = serde_json::json!({
-            "schema": "target_db",
-            "tb": "target_tb",
-            "is_delete": false,
-            "pk": {
-                "a": {"Long": 1},
-                "b": {"String": "2"},
-            }
-        });
-
-        let key = serde_json::from_value::<RecheckKey>(payload.clone()).unwrap();
-        assert_eq!(key, build_recheck_key());
-        assert_eq!(serde_json::to_value(key).unwrap(), payload);
-    }
 
     struct StaticChecker {
         tb_meta: Arc<CheckerTbMeta>,
@@ -567,20 +535,38 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn run_recheck_removes_key_when_source_and_target_are_both_missing() {
+    fn unique_temp_dir(name: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!("ape-dts-{name}-{nanos}"))
+    }
+
+    fn read_file(path: &Path) -> String {
+        fs::read_to_string(path).unwrap()
+    }
+
+    fn build_memory_operator() -> Operator {
+        Operator::new(Memory::default()).unwrap().finish()
+    }
+
+    fn build_cdc_checker(
+        check_log_dir: PathBuf,
+        s3_output: Option<(Operator, String)>,
+    ) -> DataChecker<StaticChecker> {
         let tb_meta = Arc::new(CheckerTbMeta::Mongo(
             dt_common::meta::rdb_tb_meta::RdbTbMeta {
                 schema: "target_db".to_string(),
                 tb: "target_tb".to_string(),
-                id_cols: vec!["a".to_string(), "b".to_string()],
+                id_cols: vec!["id".to_string()],
                 ..Default::default()
             },
         ));
         let (_control_tx, control_rx) = mpsc::unbounded_channel();
-        let mut checker = DataChecker::new(
+        DataChecker::new(
             StaticChecker {
-                tb_meta: tb_meta.clone(),
+                tb_meta,
                 rows: Vec::new(),
             },
             "task-1".to_string(),
@@ -606,36 +592,82 @@ mod tests {
                 retry_interval_secs: 0,
                 max_retries: 0,
                 is_cdc: true,
-                check_log_dir: String::new(),
-                cdc_check_log_max_file_size: 1,
-                cdc_check_log_max_rows: 1,
-                s3_output: None,
+                check_log_dir: check_log_dir.display().to_string(),
+                cdc_check_log_max_file_size: 1024,
+                cdc_check_log_max_rows: 100,
+                s3_output,
                 cdc_check_log_interval_secs: 1,
                 state_store: None,
-                source_checker: Some(Arc::new(Mutex::new(Box::new(StaticChecker {
-                    tb_meta: tb_meta.clone(),
-                    rows: Vec::new(),
-                })))),
+                source_checker: None,
                 expected_resume_position: None,
             },
             CheckerIo {
                 batch_queue: Arc::new(std::sync::Mutex::new(LimitedQueue::new(1))),
                 batch_notify: Arc::new(tokio::sync::Notify::new()),
+                dropped_items: Arc::new(std::sync::atomic::AtomicU64::new(0)),
                 control_rx,
             },
             "unit-test",
-        );
-        let key = build_recheck_key();
-        let row_key =
-            DataChecker::<StaticChecker>::lookup_match_key(&key.to_lookup_row(), tb_meta.basic())
-                .unwrap()
-                .unwrap();
-        checker.store.insert(
-            CheckerStoreKey::new(&key.schema, &key.tb, row_key),
-            checker.build_restored_entry(key),
-        );
+        )
+    }
 
-        checker.run_recheck().await.unwrap();
-        assert!(checker.store.is_empty());
+    #[tokio::test]
+    async fn snapshot_and_output_removes_stale_sql_log_locally_and_on_s3_when_empty() {
+        let dir = unique_temp_dir("checker-empty-sql-local");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("sql.log"), "stale sql;\n").unwrap();
+        let op = build_memory_operator();
+        op.write("prefix/sql.log", "stale sql;\n").await.unwrap();
+        let mut checker = build_cdc_checker(dir.clone(), Some((op.clone(), "prefix".to_string())));
+
+        checker.snapshot_and_output().await.unwrap();
+
+        assert!(!dir.join("sql.log").exists());
+        assert!(op.stat("prefix/sql.log").await.is_err());
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn snapshot_and_output_skips_local_and_s3_publish_when_init_failed() {
+        let dir = unique_temp_dir("checker-init-failed");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("miss.log"), "old miss\n").unwrap();
+        fs::write(dir.join("diff.log"), "old diff\n").unwrap();
+        fs::write(dir.join("summary.log"), "old summary\n").unwrap();
+        fs::write(dir.join("sql.log"), "old sql;\n").unwrap();
+        let op = build_memory_operator();
+        op.write("prefix/miss.log", "old miss\n").await.unwrap();
+        op.write("prefix/diff.log", "old diff\n").await.unwrap();
+        op.write("prefix/summary.log", "old summary\n")
+            .await
+            .unwrap();
+        op.write("prefix/sql.log", "old sql;\n").await.unwrap();
+
+        let mut checker = build_cdc_checker(dir.clone(), Some((op.clone(), "prefix".to_string())));
+        checker.init_failed = true;
+
+        checker.snapshot_and_output().await.unwrap();
+
+        assert_eq!(read_file(&dir.join("miss.log")), "old miss\n");
+        assert_eq!(read_file(&dir.join("diff.log")), "old diff\n");
+        assert_eq!(read_file(&dir.join("summary.log")), "old summary\n");
+        assert_eq!(read_file(&dir.join("sql.log")), "old sql;\n");
+        assert_eq!(
+            String::from_utf8(op.read("prefix/miss.log").await.unwrap().to_vec()).unwrap(),
+            "old miss\n"
+        );
+        assert_eq!(
+            String::from_utf8(op.read("prefix/diff.log").await.unwrap().to_vec()).unwrap(),
+            "old diff\n"
+        );
+        assert_eq!(
+            String::from_utf8(op.read("prefix/summary.log").await.unwrap().to_vec()).unwrap(),
+            "old summary\n"
+        );
+        assert_eq!(
+            String::from_utf8(op.read("prefix/sql.log").await.unwrap().to_vec()).unwrap(),
+            "old sql;\n"
+        );
+        fs::remove_dir_all(dir).unwrap();
     }
 }

@@ -47,10 +47,7 @@ struct TaggedColValueRef<'a>(#[serde(with = "TaggedColValueDef")] &'a ColValue);
 #[derive(Deserialize)]
 struct TaggedColValue(#[serde(with = "TaggedColValueDef")] ColValue);
 
-pub fn serialize<S>(
-    values: &BTreeMap<String, ColValue>,
-    serializer: S,
-) -> Result<S::Ok, S::Error>
+pub fn serialize<S>(values: &BTreeMap<String, ColValue>, serializer: S) -> Result<S::Ok, S::Error>
 where
     S: Serializer,
 {

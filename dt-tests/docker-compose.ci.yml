@@ -279,7 +279,7 @@ services:
 
   # ClickHouse for testing
   clickhouse:
-    image: yandex/clickhouse-server:21.8
+    image: clickhouse/clickhouse-server:24.10
     container_name: clickhouse-ci
     environment:
       CLICKHOUSE_USER: admin

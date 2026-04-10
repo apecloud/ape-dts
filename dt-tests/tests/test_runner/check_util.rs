@@ -1,5 +1,5 @@
 use serde_json::Value;
-use std::{collections::HashSet, fs::File};
+use std::{collections::HashSet, fs, fs::File};
 
 use dt_common::config::config_enums::DbType;
 
@@ -34,42 +34,84 @@ impl CheckUtil {
             assert!(expect_sql_logs.contains(&log))
         }
 
-        // summary log contains time, so we can't compare it directly
-        // but we can compare the count
-        assert_eq!(expect_summary_logs.len(), actual_summary_logs.len());
+        Self::validate_summary_logs(expect_summary_logs, actual_summary_logs)?;
 
-        // validate summary log structure if present
-        if !actual_summary_logs.is_empty() {
-            let mut expect_summaries = Vec::new();
-            for log in expect_summary_logs {
-                let summary: dt_connector::checker::check_log::CheckSummaryLog =
-                    serde_json::from_str(&log).map_err(|e| {
-                        anyhow::anyhow!("Failed to parse expect summary log: {}, error: {}", log, e)
-                    })?;
-                expect_summaries.push(summary);
-            }
+        Ok(())
+    }
 
-            let mut actual_summaries = Vec::new();
-            for log in actual_summary_logs {
-                let summary: dt_connector::checker::check_log::CheckSummaryLog =
-                    serde_json::from_str(&log).map_err(|e| {
-                        anyhow::anyhow!("Failed to parse actual summary log: {}, error: {}", log, e)
-                    })?;
-                actual_summaries.push(summary);
-            }
+    pub fn validate_check_log_with_size_limit(
+        expect_check_log_dir: &str,
+        dst_check_log_dir: &str,
+        size_limit: u64,
+    ) -> anyhow::Result<()> {
+        let (_, _, expect_summary_logs, _) = Self::load_check_log(expect_check_log_dir);
+        let (actual_miss_logs, actual_diff_logs, actual_summary_logs, actual_sql_logs) =
+            Self::load_check_log(dst_check_log_dir);
 
-            for (expect, actual) in expect_summaries.iter().zip(actual_summaries.iter()) {
-                assert_eq!(
-                    expect.is_consistent, actual.is_consistent,
-                    "is_consistent mismatch"
+        Self::validate_summary_logs(expect_summary_logs, actual_summary_logs)?;
+        assert!(
+            !actual_miss_logs.is_empty()
+                || !actual_diff_logs.is_empty()
+                || !actual_sql_logs.is_empty(),
+            "expected at least one size-limited checker log entry"
+        );
+
+        for file in ["miss.log", "diff.log", "sql.log"] {
+            let path = format!("{}/{}", dst_check_log_dir, file);
+            if let Ok(metadata) = fs::metadata(&path) {
+                assert!(
+                    metadata.len() <= size_limit,
+                    "{} exceeds size limit: {} > {}",
+                    path,
+                    metadata.len(),
+                    size_limit
                 );
-                assert_eq!(expect.miss_count, actual.miss_count, "miss_count mismatch");
-                assert_eq!(expect.diff_count, actual.diff_count, "diff_count mismatch");
-                assert_eq!(expect.skip_count, actual.skip_count, "skip_count mismatch");
-                assert_eq!(expect.sql_count, actual.sql_count, "sql_count mismatch");
             }
         }
 
+        Ok(())
+    }
+
+    fn validate_summary_logs(
+        expect_summary_logs: HashSet<String>,
+        actual_summary_logs: HashSet<String>,
+    ) -> anyhow::Result<()> {
+        // summary log contains time, so we can't compare it directly
+        // but we can compare the count and summary fields
+        assert_eq!(expect_summary_logs.len(), actual_summary_logs.len());
+
+        if actual_summary_logs.is_empty() {
+            return Ok(());
+        }
+
+        let mut expect_summaries = Vec::new();
+        for log in expect_summary_logs {
+            let summary: dt_connector::checker::check_log::CheckSummaryLog =
+                serde_json::from_str(&log).map_err(|e| {
+                    anyhow::anyhow!("Failed to parse expect summary log: {}, error: {}", log, e)
+                })?;
+            expect_summaries.push(summary);
+        }
+
+        let mut actual_summaries = Vec::new();
+        for log in actual_summary_logs {
+            let summary: dt_connector::checker::check_log::CheckSummaryLog =
+                serde_json::from_str(&log).map_err(|e| {
+                    anyhow::anyhow!("Failed to parse actual summary log: {}, error: {}", log, e)
+                })?;
+            actual_summaries.push(summary);
+        }
+
+        for (expect, actual) in expect_summaries.iter().zip(actual_summaries.iter()) {
+            assert_eq!(
+                expect.is_consistent, actual.is_consistent,
+                "is_consistent mismatch"
+            );
+            assert_eq!(expect.miss_count, actual.miss_count, "miss_count mismatch");
+            assert_eq!(expect.diff_count, actual.diff_count, "diff_count mismatch");
+            assert_eq!(expect.skip_count, actual.skip_count, "skip_count mismatch");
+            assert_eq!(expect.sql_count, actual.sql_count, "sql_count mismatch");
+        }
         Ok(())
     }
 

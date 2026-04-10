@@ -38,9 +38,9 @@ pub struct CheckLog {
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct DiffColValue {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub src: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub dst: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub src_type: Option<String>,
@@ -119,5 +119,49 @@ impl FromStr for CheckLog {
         serde_json::from_str(str)
             .with_context(|| format!("invalid check log: [{}]", str))
             .map_err(|e| Error::Unexpected(e.to_string()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn check_log_serializes_null_diff_endpoints() {
+        let log = CheckLog {
+            schema: "s1".to_string(),
+            tb: "t1".to_string(),
+            target_schema: None,
+            target_tb: None,
+            id_col_values: HashMap::from([("id".to_string(), Some("1".to_string()))]),
+            diff_col_values: HashMap::from([(
+                "name".to_string(),
+                DiffColValue {
+                    src: None,
+                    dst: Some("dst".to_string()),
+                    src_type: Some("None".to_string()),
+                    dst_type: Some("String".to_string()),
+                },
+            )]),
+            src_row: None,
+            dst_row: None,
+        };
+
+        let actual: serde_json::Value = serde_json::from_str(&log.to_string()).unwrap();
+        let expected = json!({
+            "schema": "s1",
+            "tb": "t1",
+            "id_col_values": { "id": "1" },
+            "diff_col_values": {
+                "name": {
+                    "src": null,
+                    "dst": "dst",
+                    "src_type": "None",
+                    "dst_type": "String"
+                }
+            }
+        });
+
+        assert_eq!(actual, expected);
     }
 }

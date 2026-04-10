@@ -1,6 +1,6 @@
 use async_mutex::Mutex;
 use async_trait::async_trait;
-use indexmap::IndexMap;
+use indexmap::{IndexMap, IndexSet};
 use opendal::Operator;
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
@@ -38,6 +38,10 @@ mod cdc_state;
 mod checker_engine;
 
 pub const CHECKER_MAX_QUERY_BATCH: usize = 1000;
+
+pub(super) fn is_summary_consistent(summary: &CheckSummaryLog, init_failed: bool) -> bool {
+    !init_failed && summary.miss_count == 0 && summary.diff_count == 0 && summary.skip_count == 0
+}
 
 #[derive(Debug, Clone)]
 pub enum CheckerTbMeta {
@@ -243,6 +247,7 @@ struct DataCheckerShared {
     batch_notify: Arc<Notify>,
     control_tx: mpsc::UnboundedSender<CheckerControlMsg>,
     dropped_batches: Arc<AtomicU64>,
+    dropped_items: Arc<AtomicU64>,
     is_cdc: bool,
 }
 
@@ -268,6 +273,7 @@ impl DataCheckerHandle {
         let is_cdc = ctx.is_cdc;
         let batch_queue = Arc::new(StdMutex::new(LimitedQueue::new(buffer_size.max(1))));
         let batch_notify = Arc::new(Notify::new());
+        let dropped_items = Arc::new(AtomicU64::new(0));
         let (control_tx, control_rx) = mpsc::unbounded_channel::<CheckerControlMsg>();
 
         let check_job = DataChecker::new(
@@ -277,6 +283,7 @@ impl DataCheckerHandle {
             CheckerIo {
                 batch_queue: batch_queue.clone(),
                 batch_notify: batch_notify.clone(),
+                dropped_items: dropped_items.clone(),
                 control_rx,
             },
             name,
@@ -289,6 +296,7 @@ impl DataCheckerHandle {
                 batch_notify,
                 control_tx,
                 dropped_batches: Arc::new(AtomicU64::new(0)),
+                dropped_items,
                 is_cdc,
             },
             join_handle: Arc::new(Mutex::new(Some(join_handle))),
@@ -303,7 +311,11 @@ impl DataCheckerHandle {
             let mut queue = self.shared.batch_queue.lock().unwrap();
             queue.push_with_eviction(data)
         };
-        if dropped.is_some() {
+        if let Some(dropped) = dropped {
+            self.shared.dropped_items.fetch_add(
+                u64::try_from(dropped.len()).unwrap_or(u64::MAX),
+                Ordering::Relaxed,
+            );
             let dropped_batches = self.shared.dropped_batches.fetch_add(1, Ordering::Relaxed) + 1;
             if dropped_batches == 1 || dropped_batches % 100 == 0 {
                 log_warn!(
@@ -352,6 +364,7 @@ impl DataCheckerHandle {
         {
             log_warn!("checker checkpoint signal dropped because checker already stopped");
         }
+        self.shared.batch_notify.notify_one();
         Ok(())
     }
 
@@ -563,23 +576,28 @@ struct DataChecker<C: Checker> {
     retry_queue: VecDeque<RetryItem>,
     retry_next_at: Option<Instant>,
     store: IndexMap<CheckerStoreKey, CheckEntry>,
+    dirty_upserts: IndexSet<CheckerStoreKey>,
+    dirty_deletes: IndexMap<CheckerStoreKey, String>,
     batch_queue: Arc<StdMutex<LimitedQueue<Vec<RowData>>>>,
     batch_notify: Arc<Notify>,
+    dropped_items: Arc<AtomicU64>,
     control_rx: mpsc::UnboundedReceiver<CheckerControlMsg>,
     name: String,
-    /// Tracks store changes since the last DB checkpoint and is cleared by `record_checkpoint`.
+    // Tracks store changes since the last DB checkpoint and is cleared by `record_checkpoint`.
     store_dirty: bool,
     last_checkpoint_position: Option<Position>,
     persisted_identity_keys: Option<BTreeSet<String>>,
-    /// Tracks store or summary changes since the last log or S3 output and is cleared by `snapshot_and_output`.
+    // Tracks store or summary changes since the last log or S3 output and is cleared by `snapshot_and_output`.
     snapshot_dirty: bool,
-    /// Set when `init_cdc_state` fails to avoid overwriting historical inconsistency records.
+    // Set when `init_cdc_state` fails to avoid overwriting historical inconsistency records.
     init_failed: bool,
+    close_requested: bool,
 }
 
 struct CheckerIo {
     batch_queue: Arc<StdMutex<LimitedQueue<Vec<RowData>>>>,
     batch_notify: Arc<Notify>,
+    dropped_items: Arc<AtomicU64>,
     control_rx: mpsc::UnboundedReceiver<CheckerControlMsg>,
 }
 
@@ -593,8 +611,11 @@ impl<C: Checker> DataChecker<C> {
             retry_queue: VecDeque::new(),
             retry_next_at: None,
             store: IndexMap::new(),
+            dirty_upserts: IndexSet::new(),
+            dirty_deletes: IndexMap::new(),
             batch_queue: io.batch_queue,
             batch_notify: io.batch_notify,
+            dropped_items: io.dropped_items,
             control_rx: io.control_rx,
             name: name.to_string(),
             store_dirty: false,
@@ -602,6 +623,22 @@ impl<C: Checker> DataChecker<C> {
             persisted_identity_keys,
             snapshot_dirty: true,
             init_failed: false,
+            close_requested: false,
+        }
+    }
+
+    fn account_dropped_item_skips(&mut self) {
+        let delta = self.dropped_items.swap(0, Ordering::Relaxed);
+        if delta == 0 {
+            return;
+        }
+        self.ctx.summary.skip_count = self
+            .ctx
+            .summary
+            .skip_count
+            .saturating_add(usize::try_from(delta).unwrap_or(usize::MAX));
+        if self.ctx.is_cdc {
+            self.snapshot_dirty = true;
         }
     }
 
@@ -621,22 +658,21 @@ impl<C: Checker> DataChecker<C> {
         output_interval.tick().await;
 
         loop {
+            if self.close_requested {
+                self.drain_pending_batches().await;
+                break;
+            }
+
             tokio::select! {
                 biased;
                 msg = self.control_rx.recv() => {
                     match msg {
-                        Some(msg) => {
-                            if self.handle_control_msg(msg).await {
-                                break;
-                            }
-                        }
-                        None => break,
+                        Some(msg) => self.handle_control_msg(msg).await,
+                        None => self.close_requested = true,
                     }
                 }
                 _ = self.batch_notify.notified() => {
-                    if self.drain_pending_batches().await {
-                        break;
-                    }
+                    self.drain_pending_batches().await;
                 }
                 _ = interval.tick() => {
                     if let Err(err) = self.process_due_retries().await {
@@ -657,7 +693,7 @@ impl<C: Checker> DataChecker<C> {
         Ok(())
     }
 
-    async fn handle_control_msg(&mut self, msg: CheckerControlMsg) -> bool {
+    async fn handle_control_msg(&mut self, msg: CheckerControlMsg) {
         match msg {
             CheckerControlMsg::RecordCheckpoint { position } => {
                 if let Err(err) = self.record_checkpoint(position).await {
@@ -673,18 +709,16 @@ impl<C: Checker> DataChecker<C> {
                 if let Some(position) = position.filter(|p| !matches!(p, Position::None)) {
                     self.last_checkpoint_position = Some(position);
                 }
-                return true;
+                self.close_requested = true;
             }
         }
-        false
     }
 
-    async fn drain_pending_batches(&mut self) -> bool {
+    async fn drain_pending_batches(&mut self) {
         loop {
+            self.account_dropped_item_skips();
             while let Ok(msg) = self.control_rx.try_recv() {
-                if self.handle_control_msg(msg).await {
-                    return true;
-                }
+                self.handle_control_msg(msg).await;
             }
 
             let batch = {
@@ -692,7 +726,7 @@ impl<C: Checker> DataChecker<C> {
                 queue.pop()
             };
             let Some(batch) = batch else {
-                return false;
+                return;
             };
 
             if let Err(err) = self.check_batch(&batch, true).await {
@@ -727,10 +761,11 @@ impl<C: Checker> DataChecker<C> {
     }
 
     async fn finish_summary_and_meta(&mut self) -> anyhow::Result<()> {
+        self.account_dropped_item_skips();
         let common = &mut self.ctx;
         let summary = &mut common.summary;
         summary.end_time = chrono::Local::now().to_rfc3339();
-        summary.is_consistent = summary.miss_count == 0 && summary.diff_count == 0;
+        summary.is_consistent = is_summary_consistent(summary, self.init_failed);
         if let Some(global_summary) = common.global_summary.clone() {
             global_summary.lock().await.merge(summary);
         } else if !common.is_cdc {
@@ -774,4 +809,163 @@ pub fn has_null_key(row_data: &RowData, id_cols: &[String]) -> bool {
             .iter()
             .any(|col| matches!(vals.get(col), Some(ColValue::None) | None))
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{checker::check_log::CheckSummaryLog, rdb_router::RdbRouter};
+    use async_trait::async_trait;
+    use dt_common::{meta::row_type::RowType, monitor::monitor::Monitor};
+    use std::collections::HashMap;
+    use std::sync::Arc;
+    use tokio::{
+        sync::{mpsc, Notify},
+        time::{timeout, Duration},
+    };
+
+    #[derive(Clone)]
+    struct BlockingFetchChecker {
+        fetch_started: mpsc::UnboundedSender<()>,
+        fetch_gate: Arc<Notify>,
+    }
+
+    #[async_trait]
+    impl Checker for BlockingFetchChecker {
+        async fn fetch(&mut self, _src_rows: &[&RowData]) -> anyhow::Result<FetchResult> {
+            let _ = self.fetch_started.send(());
+            self.fetch_gate.notified().await;
+            Err(anyhow::anyhow!("unit-test fetch failure"))
+        }
+    }
+
+    fn build_ctx() -> CheckContext {
+        CheckContext {
+            monitor: Arc::new(Monitor::new("checker", "unit-test", 1, 1, 1)),
+            task_monitor: None,
+            summary: CheckSummaryLog {
+                start_time: "unit-test".to_string(),
+                ..Default::default()
+            },
+            output_revise_sql: false,
+            extractor_meta_manager: None,
+            reverse_router: RdbRouter {
+                schema_map: HashMap::new(),
+                tb_map: HashMap::new(),
+                col_map: HashMap::new(),
+                topic_map: HashMap::new(),
+            },
+            output_full_row: false,
+            revise_match_full_row: false,
+            global_summary: None,
+            batch_size: 1,
+            retry_interval_secs: 0,
+            max_retries: 0,
+            is_cdc: false,
+            check_log_dir: String::new(),
+            cdc_check_log_max_file_size: 1,
+            cdc_check_log_max_rows: 1,
+            s3_output: None,
+            cdc_check_log_interval_secs: 1,
+            state_store: None,
+            source_checker: None,
+            expected_resume_position: None,
+        }
+    }
+
+    fn build_row(id: i32) -> RowData {
+        RowData::new(
+            "s1".to_string(),
+            "t1".to_string(),
+            RowType::Insert,
+            None,
+            Some(HashMap::from([("id".to_string(), ColValue::Long(id))])),
+        )
+    }
+
+    #[tokio::test]
+    async fn enqueue_check_tracks_dropped_item_count() {
+        let (control_tx, _control_rx) = mpsc::unbounded_channel();
+        let handle = DataCheckerHandle {
+            shared: DataCheckerShared {
+                batch_queue: Arc::new(StdMutex::new(LimitedQueue::new(1))),
+                batch_notify: Arc::new(Notify::new()),
+                control_tx,
+                dropped_batches: Arc::new(AtomicU64::new(0)),
+                dropped_items: Arc::new(AtomicU64::new(0)),
+                is_cdc: false,
+            },
+            join_handle: Arc::new(Mutex::new(None)),
+        };
+
+        handle
+            .enqueue_check(vec![build_row(1), build_row(2)])
+            .await
+            .unwrap();
+        handle.enqueue_check(vec![build_row(3)]).await.unwrap();
+
+        assert_eq!(handle.shared.dropped_batches.load(Ordering::Relaxed), 1);
+        assert_eq!(handle.shared.dropped_items.load(Ordering::Relaxed), 2);
+    }
+
+    #[tokio::test]
+    async fn record_checkpoint_does_not_wait_for_older_batches_to_finish() {
+        let (fetch_started_tx, mut fetch_started_rx) = mpsc::unbounded_channel();
+        let fetch_gate = Arc::new(Notify::new());
+        let mut ctx = build_ctx();
+        ctx.is_cdc = true;
+        let handle = DataCheckerHandle::spawn(
+            BlockingFetchChecker {
+                fetch_started: fetch_started_tx,
+                fetch_gate: fetch_gate.clone(),
+            },
+            "task-1".to_string(),
+            ctx,
+            4,
+            "unit-test",
+        );
+        let mut handle = handle;
+
+        handle.enqueue_check(vec![build_row(1)]).await.unwrap();
+        timeout(Duration::from_secs(1), fetch_started_rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+
+        let checkpoint = Position::Kafka {
+            topic: "test".to_string(),
+            partition: 0,
+            offset: 1,
+        };
+        timeout(
+            Duration::from_millis(50),
+            handle.record_checkpoint(&checkpoint),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+
+        fetch_gate.notify_waiters();
+        timeout(Duration::from_secs(1), handle.close_with_position(None))
+            .await
+            .unwrap()
+            .unwrap();
+    }
+
+    #[test]
+    fn summary_with_skips_is_not_consistent() {
+        let summary = CheckSummaryLog {
+            skip_count: 1,
+            ..Default::default()
+        };
+
+        assert!(!super::is_summary_consistent(&summary, false));
+    }
+
+    #[test]
+    fn summary_with_init_failure_is_not_consistent() {
+        let summary = CheckSummaryLog::default();
+
+        assert!(!super::is_summary_consistent(&summary, true));
+    }
 }
