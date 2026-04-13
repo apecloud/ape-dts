@@ -12,7 +12,7 @@ use tokio::{
 use crate::{lua_processor::LuaProcessor, Pipeline};
 use dt_common::{
     config::sinker_config::SinkerConfig,
-    log_error, log_info, log_position,
+    log_error, log_info, log_position, log_warn,
     meta::{
         dcl_meta::dcl_data::DclData,
         ddl_meta::ddl_data::DdlData,
@@ -64,7 +64,9 @@ impl Pipeline for BasePipeline {
             Self::checker_close_position(&syncer)
         };
         if let Some(checker) = &mut self.checker {
-            checker.close_with_position(final_position.as_ref()).await?;
+            if let Err(err) = checker.close_with_position(final_position.as_ref()).await {
+                log_warn!("checker close failed: {}", err);
+            }
         }
         self.parallelizer.close().await
     }
@@ -198,7 +200,9 @@ impl BasePipeline {
             .sink_struct(data.clone(), &self.sinkers)
             .await?;
         if let Some(checker) = &mut self.checker {
-            checker.check_struct(data).await?;
+            if let Err(err) = checker.check_struct(data).await {
+                log_error!("checker check_struct failed: {}", err);
+            }
         }
         Ok((data_size, None, None))
     }
@@ -241,7 +245,9 @@ impl BasePipeline {
             }
             // cdc+check also needs refreshed table metadata after sink ddl changes the target schema
             if let Some(checker) = &self.checker {
-                let _ = checker.refresh_meta(data.clone()).await;
+                if let Err(err) = checker.refresh_meta(data.clone()).await {
+                    log_warn!("checker refresh_meta failed: {}", err);
+                }
             }
             self.monitor
                 .add_counter(CounterType::DDLRecordTotal, data_size.count)
@@ -420,7 +426,9 @@ impl BasePipeline {
 
         if !matches!(record_position, Position::None) {
             if let Some(checker) = &self.checker {
-                let _ = checker.record_checkpoint(record_position).await;
+                if let Err(err) = checker.record_checkpoint(record_position).await {
+                    log_warn!("checker checkpoint failed: {}", err);
+                }
             }
         }
         if let Some(handler) = &self.recorder {

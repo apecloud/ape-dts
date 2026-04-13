@@ -5,6 +5,8 @@ use serde::{ser::SerializeMap, Deserialize, Deserializer, Serialize, Serializer}
 
 use super::col_value::ColValue;
 
+// Serde definition for tagged ColValue maps, currently used to persist
+// checker-state primary keys for inconsistent rows.
 #[derive(Serialize, Deserialize)]
 #[serde(remote = "ColValue")]
 pub enum TaggedColValueDef {

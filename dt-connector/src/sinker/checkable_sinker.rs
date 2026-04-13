@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use dt_common::log_warn;
 use dt_common::meta::{
     dcl_meta::dcl_data::DclData, ddl_meta::ddl_data::DdlData, dt_data::DtItem, row_data::RowData,
     struct_meta::struct_data::StructData,
@@ -43,7 +44,9 @@ pub fn wrap_sinker_with_checker<S: CheckableSink + Send + 'static>(
 impl<S: CheckableSink + Send> Sinker for SinkerWithChecker<S> {
     async fn sink_dml(&mut self, mut data: Vec<RowData>, batch: bool) -> anyhow::Result<()> {
         self.inner.sink_dml_borrowed(&mut data, batch).await?;
-        let _ = self.checker.enqueue_check(data).await;
+        if let Err(err) = self.checker.enqueue_check(data).await {
+            log_warn!("checker enqueue_check failed: {}", err);
+        }
         Ok(())
     }
 
