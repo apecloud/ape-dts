@@ -29,22 +29,23 @@ or metadata refresh delivery on the main path.
 
 ## Local benchmark reference
 
-This section keeps only the most decision-relevant local findings from `1,000,000`-row
-`mixed_write` reruns.
+The table below records local quick reruns for `1,000,000`-row `mixed_write`.
+Use it as a local reference only.
 
-Terminology:
-- `sysbench tx events` / `pgbench tx events` means transaction events reported by the workload tool itself.
-- They are **not** CDC row counts and **not** binlog / WAL event counts.
-- `Workload duration` comes from the workload tool (`sysbench` / `pgbench`) itself.
-- `End-to-end catch-up` is shown as status here because these quick reruns did not record a uniform second-level catch-up timestamp.
-- `Source-to-sinker workload end timestamp` means the absolute timestamp when the source workload finishes generating new changes.
-- `Catch-up tail after source workload` means the elapsed time from that workload-end timestamp until target data catches up and checker pending reaches `0`.
-- `Pipeline fill` = `pipeline_queue_peak / [pipeline].buffer_size`
-- `Checker fill` = `checker_queue_peak / [checker].queue_size`
-- `Sinker avg rate` / `Checker avg rate` is the arithmetic mean of non-zero `avg_by_sec` samples in `monitor.log` during the run.
-- `Sinker decay vs off` compares the checked run against the unchecked run at the same engine and thread count.
-- `Checker diff total` counts diffs detected during runtime, not necessarily final remaining mismatches after catch-up.
-- `Final equal` means source and target matched after catch-up by row count / checksum or aggregate verification.
+Notes:
+- MySQL rows use `sysbench`; PostgreSQL rows use `pgbench`.
+- This table uses `mixed_write` with `1,000,000` rows and workload threads `32` / `64`.
+- `check off` means CDC only: `[extractor] extract_type=cdc`, `[sinker] sink_type=write`,
+  `[parallelizer] parallel_type=rdb_merge`.
+- `check on` means the same CDC path plus inline cdc check:
+  `[checker] enable=true`, `[checker] batch_size=200`, and
+  `[resumer] resume_type=from_target`.
+- The shared task-side tuning in these reruns is:
+  `[sinker] batch_size=200`, `[parallelizer] parallel_size=8`,
+  `[pipeline] buffer_size=16000`, `[pipeline] checkpoint_interval_secs=10`.
+- `Workload tx events` is the workload tool's own transaction count, not the CDC row count.
+- `Sinker decay vs off` compares each `check on` row with the `check off` row at the same engine and thread count.
+- `Final equal` means the final validation passed after catch-up.
 
 | Engine     | Threads | Mode        | Workload tx events |          TPS | Workload duration | End-to-end catch-up | Sinker avg rate | Checker avg rate | Sinker decay vs off | Pipeline fill | Checker fill | Queue drops | Checker diff total | Final equal |
 | ---------- | ------: | ----------- | -----------------: | -----------: | ----------------: | ------------------- | --------------: | ---------------: | ------------------: | ------------: | -----------: | ----------: | -----------------: | ----------- |
@@ -57,11 +58,11 @@ Terminology:
 | PostgreSQL |    `64` | `check off` |           `106898` |  `7158.22/s` |             `15s` | `caught up`         |    `10562.80/s` |              `-` |          `baseline` |        `100%` |          `-` |         `0` |                `-` | `yes`       |
 | PostgreSQL |    `64` | `check on`  |           `156715` | `10169.59/s` |             `15s` | `caught up`         |     `2869.77/s` |      `5433.13/s` |            `-72.8%` |        `100%` |       `9.6%` |         `0` |            `25058` | `yes`       |
 
-Key takeaways:
-- Across these reruns, the pipeline fills before the checker queue does.
-- In the MySQL reruns, enabling checker did not bring the checker queue close to saturation, but it still reduced sinker average rate.
-- In the PostgreSQL reruns, enabling checker can move the pipeline from partial occupancy to full occupancy while checker queue usage stays low and sinker average rate drops sharply.
-- All listed reruns eventually caught up to equal final source / target data, but transient checker diffs still appeared in checked runs.
+From the table:
+- All listed runs show `Queue drops = 0`.
+- All listed runs show `Final equal = yes`.
+- In all listed `check on` runs, `Sinker avg rate` is lower than the matching `check off` run.
+- In the PostgreSQL `check on` rows, `Pipeline fill` is `100%` while `Checker fill` stays below `10%`.
 
 # Example: MySQL -> MySQL
 

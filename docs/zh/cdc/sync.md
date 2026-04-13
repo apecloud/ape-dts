@@ -29,22 +29,22 @@ checker 侧的运行时错误会被记录日志，但不会阻塞主路径上的
 
 ## 本地性能测试参考
 
-这里仅保留最有决策价值的本地复测结果，聚焦 `1,000,000` 行 `mixed_write` 工作负载下
-MySQL / PostgreSQL 的 `32 / 64` 两档并发。
+下表记录了 `1,000,000` 行 `mixed_write` 的本地 quick rerun，仅作为本地参考。
 
-术语说明：
-- `sysbench tx events` / `pgbench tx events` 指压测工具自身统计的事务事件数。
-- 它们**不是** CDC 行数，也**不是** binlog / WAL event 数。
-- `Workload 时长` 取自压测工具（`sysbench` / `pgbench`）本身。
-- `End-to-end 追平` 在这里用状态表示，因为这批 quick rerun 没有统一记录到秒级追平时间。
-- `Source-to-sinker workload 结束绝对时间` 指 source workload 停止产生新变更的绝对时间点。
-- `Catch-up tail after source workload` 指从 source workload 结束，到 target 数据追平且 checker pending 清零之间的额外耗时。
-- `Pipeline 填充率` = `pipeline_queue_peak / [pipeline].buffer_size`
-- `Checker 填充率` = `checker_queue_peak / [checker].queue_size`
-- `Sinker 平均速率` / `Checker 平均速率` 取自 `monitor.log` 中非零 `avg_by_sec` 样本的算术平均值。
-- `Sinker 相比 off 衰减` 表示同引擎、同并发下，开启 checker 后的 sinker 平均速率相对 `check off` 的下降比例。
-- `Checker diff total` 表示运行过程中观测到的 diff 数，不等于任务结束后仍残留的不一致数。
-- `最终一致` 表示任务追平后，source / target 通过了最终一致性校验。
+说明：
+- MySQL 行使用 `sysbench`，PostgreSQL 行使用 `pgbench`。
+- 这组数据使用 `1,000,000` 行的 `mixed_write`，workload 并发为 `32` / `64`。
+- `check off` 表示纯 CDC 路径：`[extractor] extract_type=cdc`、`[sinker] sink_type=write`、
+  `[parallelizer] parallel_type=rdb_merge`。
+- `check on` 表示在相同 CDC 路径上启用 inline cdc check：
+  `[checker] enable=true`、`[checker] batch_size=200`、
+  `[resumer] resume_type=from_target`。
+- 这组复测共用的任务侧调优参数为：
+  `[sinker] batch_size=200`、`[parallelizer] parallel_size=8`、
+  `[pipeline] buffer_size=16000`、`[pipeline] checkpoint_interval_secs=10`。
+- `Workload tx events` 是压测工具自身统计的事务数，不是 CDC 行数。
+- `Sinker 相比 off 衰减` 表示同引擎、同并发下，`check on` 相对 `check off` 的对比结果。
+- `最终一致` 表示追平后的最终校验通过。
 
 | 引擎       | 并发 | 模式        | Workload tx events |          TPS | Workload 时长 | End-to-end 追平 | Sinker 平均速率 | Checker 平均速率 | Sinker 相比 off 衰减 | Pipeline 填充率 | Checker 填充率 | Queue drops | Checker diff total | 最终一致 |
 | ---------- | ---: | ----------- | -----------------: | -----------: | ------------: | --------------- | --------------: | ---------------: | -------------------: | --------------: | -------------: | ----------: | -----------------: | -------- |
@@ -57,11 +57,11 @@ MySQL / PostgreSQL 的 `32 / 64` 两档并发。
 | PostgreSQL | `64` | `check off` |           `106898` |  `7158.22/s` |         `15s` | `caught up`     |    `10562.80/s` |              `-` |           `baseline` |          `100%` |            `-` |         `0` |                `-` | `yes`    |
 | PostgreSQL | `64` | `check on`  |           `156715` | `10169.59/s` |         `15s` | `caught up`     |     `2869.77/s` |      `5433.13/s` |             `-72.8%` |          `100%` |         `9.6%` |         `0` |            `25058` | `yes`    |
 
-简化结论：
-- 这组复测里，先满的是 pipeline，不是 checker queue。
-- MySQL `32 / 64` 两档下，开启 checker 后 checker queue 仍远未满，但 sinker 平均速率已经明显下降。
-- PostgreSQL `32` 线程下，开启 checker 会把 pipeline 从未满直接推到满载，同时 sinker 平均速率下降更明显。
-- 所有 `check on` 复测都没有触发 queue drop，且最终都能追平到一致状态。
+从表格可直接看到：
+- 所有样本的 `Queue drops` 都是 `0`。
+- 所有样本的 `最终一致` 都是 `yes`。
+- 所有 `check on` 样本的 `Sinker 平均速率` 都低于对应的 `check off` 样本。
+- PostgreSQL 的 `check on` 两行里，`Pipeline 填充率` 都是 `100%`，而 `Checker 填充率` 仍低于 `10%`。
 
 # 示例: MySQL -> MySQL
 
