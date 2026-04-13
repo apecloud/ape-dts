@@ -582,6 +582,7 @@ struct DataChecker<C: Checker> {
     batch_notify: Arc<Notify>,
     dropped_items: Arc<AtomicU64>,
     control_rx: mpsc::UnboundedReceiver<CheckerControlMsg>,
+    pending_controls: VecDeque<CheckerControlMsg>,
     name: String,
     // Tracks store changes since the last DB checkpoint and is cleared by `record_checkpoint`.
     store_dirty: bool,
@@ -617,6 +618,7 @@ impl<C: Checker> DataChecker<C> {
             batch_notify: io.batch_notify,
             dropped_items: io.dropped_items,
             control_rx: io.control_rx,
+            pending_controls: VecDeque::new(),
             name: name.to_string(),
             store_dirty: false,
             last_checkpoint_position: None,
@@ -667,7 +669,10 @@ impl<C: Checker> DataChecker<C> {
                 biased;
                 msg = self.control_rx.recv() => {
                     match msg {
-                        Some(msg) => self.handle_control_msg(msg).await,
+                        Some(msg) => {
+                            self.pending_controls.push_back(msg);
+                            self.drain_pending_batches().await;
+                        }
                         None => self.close_requested = true,
                     }
                 }
@@ -714,18 +719,26 @@ impl<C: Checker> DataChecker<C> {
         }
     }
 
+    fn collect_pending_controls(&mut self) {
+        while let Ok(msg) = self.control_rx.try_recv() {
+            self.pending_controls.push_back(msg);
+        }
+    }
+
     async fn drain_pending_batches(&mut self) {
         loop {
             self.account_dropped_item_skips();
-            while let Ok(msg) = self.control_rx.try_recv() {
-                self.handle_control_msg(msg).await;
-            }
+            self.collect_pending_controls();
 
             let batch = {
                 let mut queue = self.batch_queue.lock().unwrap();
                 queue.pop()
             };
             let Some(batch) = batch else {
+                if let Some(msg) = self.pending_controls.pop_front() {
+                    self.handle_control_msg(msg).await;
+                    continue;
+                }
                 return;
             };
 

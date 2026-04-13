@@ -40,6 +40,10 @@ enum MergeType {
     Unmerged,
 }
 
+fn should_partition_in_check_mode(merge_type: &MergeType) -> bool {
+    matches!(merge_type, MergeType::Insert)
+}
+
 pub struct TbMergedData {
     pub delete_rows: Vec<RowData>,
     pub insert_rows: Vec<RowData>,
@@ -263,14 +267,15 @@ impl MergeParallelizer {
                 .add_count(data.len() as u64)
                 .add_bytes(data.iter().map(|v| v.get_data_size()).sum());
 
+            if !should_partition_in_check_mode(&merge_type) {
+                let sinker = sinkers[0].clone();
+                Self::sink_unmerged_rows(sinker, data).await?;
+                continue;
+            }
+
             let sub_data_items = SnapshotParallelizer::partition(data, self.parallel_size)?;
             self.base_parallelizer
-                .sink_dml(
-                    sub_data_items,
-                    sinkers,
-                    self.parallel_size,
-                    matches!(merge_type, MergeType::Insert),
-                )
+                .sink_dml(sub_data_items, sinkers, self.parallel_size, true)
                 .await?;
         }
 
@@ -297,5 +302,25 @@ impl MergeParallelizer {
                 .await?;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{should_partition_in_check_mode, MergeType};
+
+    #[test]
+    fn check_mode_partitions_insert_rows() {
+        assert!(should_partition_in_check_mode(&MergeType::Insert));
+    }
+
+    #[test]
+    fn check_mode_does_not_partition_delete_rows() {
+        assert!(!should_partition_in_check_mode(&MergeType::Delete));
+    }
+
+    #[test]
+    fn check_mode_does_not_partition_unmerged_rows() {
+        assert!(!should_partition_in_check_mode(&MergeType::Unmerged));
     }
 }

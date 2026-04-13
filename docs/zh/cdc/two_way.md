@@ -14,6 +14,10 @@
 
 当前该模式仅支持 MySQL / PostgreSQL 的 write sinker。
 
+这里的 inline cdc check 同样是 best-effort 的：写入仍走主路径。若 checker 队列达到
+`[checker].queue_size`，会淘汰最旧的待校验 batch，而不是阻塞新的写入。checker 侧的
+运行时错误会被记录日志，但不会阻塞主路径上的 CDC 写入、checkpoint 持久化或元数据刷新。
+
 # 数据循环
 
 双向同步的主要难点是避免数据的循环复制，考虑如下场景：

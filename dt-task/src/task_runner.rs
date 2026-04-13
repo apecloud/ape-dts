@@ -114,6 +114,14 @@ const CHECK_LOG_FILE_SIZE_PLACEHOLDER: &str = "CHECK_LOG_FILE_SIZE_PLACEHOLDER";
 const DEFAULT_CHECK_LOG_DIR_PLACEHOLDER: &str = "LOG_DIR_PLACEHOLDER/check";
 const DEFAULT_STATISTIC_LOG_DIR_PLACEHOLDER: &str = "LOG_DIR_PLACEHOLDER/statistic";
 
+fn init_task_check_summary() -> CheckSummaryLog {
+    CheckSummaryLog {
+        start_time: Local::now().to_rfc3339(),
+        is_consistent: true,
+        ..Default::default()
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SingleTaskWorker {
     Extractor,
@@ -206,12 +214,11 @@ impl TaskRunner {
             BufferLimiter::from_config(Some(&self.config.sinker_basic.rate_limiter), None)
                 .map(Arc::new);
 
-        let check_summary = self.config.checker.as_ref().map(|_| {
-            Arc::new(AsyncMutex::new(CheckSummaryLog {
-                start_time: Local::now().to_rfc3339(),
-                ..Default::default()
-            }))
-        });
+        let check_summary = self
+            .config
+            .checker
+            .as_ref()
+            .map(|_| Arc::new(AsyncMutex::new(init_task_check_summary())));
 
         let partition_cols = match &self.config.extractor {
             ExtractorConfig::MysqlSnapshot { partition_cols, .. }
@@ -277,7 +284,6 @@ impl TaskRunner {
             {
                 let mut summary = check_summary.lock().await;
                 summary.end_time = Local::now().to_rfc3339();
-                summary.is_consistent = summary.miss_count == 0 && summary.diff_count == 0;
                 dt_common::log_summary!("{}", summary);
             }
         }
