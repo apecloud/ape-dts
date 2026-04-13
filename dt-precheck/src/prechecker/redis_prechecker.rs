@@ -14,8 +14,10 @@ use dt_common::{
         config_enums::{DbType, ExtractType},
         extractor_config::ExtractorConfig,
         task_config::TaskConfig,
-    }, meta::{dt_queue::DtQueue, syncer::Syncer}, monitor::{group_monitor::GroupMonitor, monitor::Monitor, prometheus_metrics::PrometheusMetrics, task_monitor::TaskMonitor}, rdb_filter::RdbFilter, task_context::TaskContext, time_filter::TimeFilter
+    }, meta::{dt_queue::DtQueue, syncer::Syncer}, monitor::{group_monitor::GroupMonitor, monitor::Monitor, task_monitor::TaskMonitor}, rdb_filter::RdbFilter, task_context::TaskContext, time_filter::TimeFilter
 };
+#[cfg(feature = "metrics")]
+use dt_common::monitor::prometheus_metrics::PrometheusMetrics;
 use dt_connector::{
     extractor::{
         base_extractor::BaseExtractor,

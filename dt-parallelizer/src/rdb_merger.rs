@@ -104,6 +104,7 @@ impl RdbMerger {
                     let row_data = RowData::new(
                         delete.schema,
                         delete.tb,
+                        0,
                         RowType::Update,
                         delete.before,
                         insert.after,

@@ -71,6 +71,7 @@ impl MongoMerger {
                     let delete_row = RowData::new(
                         row_data.schema.clone(),
                         row_data.tb.clone(),
+                        0,
                         RowType::Delete,
                         row_data.before,
                         None,
@@ -80,6 +81,7 @@ impl MongoMerger {
                     let insert_row = RowData::new(
                         row_data.schema,
                         row_data.tb,
+                        0,
                         RowType::Insert,
                         Option::None,
                         row_data.after,

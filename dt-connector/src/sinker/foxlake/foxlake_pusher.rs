@@ -34,7 +34,6 @@ use dt_common::{
         row_type::RowType,
         time::dt_utc_time::DtNaiveTime,
     },
-    monitor::monitor::Monitor,
     utils::{limit_queue::LimitedQueue, time_util::TimeUtil},
 };
 
@@ -42,7 +41,7 @@ pub struct FoxlakePusher {
     pub url: String,
     pub batch_size: usize,
     pub meta_manager: MysqlMetaManager,
-    pub monitor: Arc<Monitor>,
+    pub base_sinker: BaseSinker,
     pub s3_client: Operator,
     pub s3_config: S3Config,
     pub extract_type: ExtractType,
@@ -89,7 +88,7 @@ impl FoxlakePusher {
         let batch_size = items.len();
         let (_, all_data_size) = self.batch_push(items, false).await?;
 
-        BaseSinker::update_batch_monitor(&self.monitor, batch_size as u64, all_data_size as u64)
+        self.base_sinker.update_batch_monitor(batch_size as u64, all_data_size as u64)
             .await
     }
 
@@ -203,7 +202,7 @@ impl FoxlakePusher {
             future.await.unwrap();
             rts.push((start_time.elapsed().as_millis() as u64, 1));
         }
-        BaseSinker::update_monitor_rt(&self.monitor, &rts).await?;
+        self.base_sinker.update_monitor_rt(&rts).await?;
 
         Ok((s3_file_metas, all_data_size))
     }

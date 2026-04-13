@@ -1,4 +1,4 @@
-use std::{cmp, collections::HashMap, str::FromStr, sync::Arc};
+use std::{cmp, collections::HashMap, str::FromStr};
 
 use crate::{call_batch_fn, sinker::base_sinker::BaseSinker, Sinker};
 use anyhow::bail;
@@ -21,7 +21,6 @@ use dt_common::{
         row_data::RowData,
         row_type::RowType,
     },
-    monitor::monitor::Monitor,
     utils::{limit_queue::LimitedQueue, sql_util::SqlUtil},
 };
 
@@ -38,7 +37,7 @@ pub struct StarRocksSinker {
     pub username: String,
     pub password: String,
     pub meta_manager: MysqlMetaManager,
-    pub monitor: Arc<Monitor>,
+    pub base_sinker: BaseSinker,
     pub sync_timestamp: i64,
     pub hard_delete: bool,
 }
@@ -73,7 +72,7 @@ impl StarRocksSinker {
             self.send_data(data, i, 1).await?;
         }
 
-        BaseSinker::update_serial_monitor(&self.monitor, data.len() as u64, data_size as u64).await
+        self.base_sinker.update_serial_monitor(data.len() as u64, data_size as u64).await
     }
 
     async fn batch_sink(
@@ -84,7 +83,7 @@ impl StarRocksSinker {
     ) -> anyhow::Result<()> {
         let data_size = self.send_data(data, start_index, batch_size).await?;
 
-        BaseSinker::update_batch_monitor(&self.monitor, batch_size as u64, data_size as u64).await
+        self.base_sinker.update_batch_monitor(batch_size as u64, data_size as u64).await
     }
 
     async fn send_data(
@@ -154,7 +153,7 @@ impl StarRocksSinker {
         let start_time = Instant::now();
         let response = self.http_client.execute(request).await?;
         rts.push((start_time.elapsed().as_millis() as u64, 1));
-        BaseSinker::update_monitor_rt(&self.monitor, &rts).await?;
+        self.base_sinker.update_monitor_rt(&rts).await?;
 
         Self::check_response(response).await?;
 

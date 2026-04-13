@@ -19,6 +19,8 @@ use super::{
 pub struct RowData {
     pub schema: String,
     pub tb: String,
+    #[serde(skip)]
+    pub chunk_id: u64, // used for snapshot data
     pub row_type: RowType,
     pub before: Option<HashMap<String, ColValue>>,
     pub after: Option<HashMap<String, ColValue>>,
@@ -36,6 +38,7 @@ impl RowData {
     pub fn new(
         schema: String,
         tb: String,
+        chunk_id: u64,
         row_type: RowType,
         before: Option<HashMap<String, ColValue>>,
         after: Option<HashMap<String, ColValue>>,
@@ -43,6 +46,7 @@ impl RowData {
         let mut me = Self {
             schema,
             tb,
+            chunk_id,
             row_type,
             before,
             after,
@@ -56,11 +60,12 @@ impl RowData {
     pub fn new_no_origin(
         schema: String,
         tb: String,
+        chunk_id: u64,
         row_type: RowType,
         before: Option<HashMap<String, ColValue>>,
         after: Option<HashMap<String, ColValue>>,
     ) -> Self {
-        let mut data = Self::new(schema, tb, row_type, before, after);
+        let mut data = Self::new(schema, tb, chunk_id, row_type, before, after);
         data.is_not_origin = true;
         data
     }
@@ -75,6 +80,7 @@ impl RowData {
         Self {
             schema: self.schema.clone(),
             tb: self.tb.clone(),
+            chunk_id: self.chunk_id,
             row_type,
             before: self.after.clone(),
             after: self.before.clone(),
@@ -87,13 +93,14 @@ impl RowData {
         let delete = RowData::new_no_origin(
             self.schema.clone(),
             self.tb.clone(),
+            self.chunk_id,
             RowType::Delete,
             self.before,
             None,
         );
 
         let insert =
-            RowData::new_no_origin(self.schema, self.tb, RowType::Insert, None, self.after);
+            RowData::new_no_origin(self.schema, self.tb, self.chunk_id, RowType::Insert, None, self.after);
         (delete, insert)
     }
 
@@ -158,6 +165,7 @@ impl RowData {
         Self::new(
             tb_meta.schema.clone(),
             tb_meta.tb.clone(),
+            0,
             RowType::Insert,
             None,
             Some(after),

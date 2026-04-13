@@ -1,5 +1,4 @@
 use std::cmp;
-use std::sync::Arc;
 
 use anyhow::bail;
 use sqlx::{query, MySql, Pool, Postgres};
@@ -8,7 +7,7 @@ use tokio::time::Instant;
 use crate::sinker::base_sinker::BaseSinker;
 use dt_common::{
     config::config_enums::ConflictPolicyEnum, error::Error, log_error, log_info,
-    meta::struct_meta::struct_data::StructData, monitor::monitor::Monitor, rdb_filter::RdbFilter,
+    meta::struct_meta::struct_data::StructData, rdb_filter::RdbFilter,
     utils::limit_queue::LimitedQueue,
 };
 
@@ -25,14 +24,9 @@ impl BaseStructSinker {
         conflict_policy: &ConflictPolicyEnum,
         data: Vec<StructData>,
         filter: &RdbFilter,
-        monitor: &Arc<Monitor>,
-        monitor_interval: u64,
+        base_sinker: &BaseSinker,
     ) -> anyhow::Result<()> {
-        let monitor_interval_secs = if monitor_interval > 0 {
-            monitor_interval
-        } else {
-            10
-        };
+        let monitor_interval_secs = base_sinker.monitor_interval_secs();
         let mut rts = LimitedQueue::new(cmp::min(100, data.len()));
         let mut last_monitor_time = Instant::now();
 
@@ -57,8 +51,8 @@ impl BaseStructSinker {
                 }
                 rts.push((start_time.elapsed().as_millis() as u64, 1));
                 if last_monitor_time.elapsed().as_secs() >= monitor_interval_secs {
-                    BaseSinker::update_serial_monitor(monitor, data_len as u64, 0).await?;
-                    BaseSinker::update_monitor_rt(monitor, &rts).await?;
+                    base_sinker.update_serial_monitor(data_len as u64, 0).await?;
+                    base_sinker.update_monitor_rt(&rts).await?;
                     rts.clear();
                     data_len = 0;
                     last_monitor_time = Instant::now();
@@ -67,8 +61,8 @@ impl BaseStructSinker {
         }
 
         if data_len > 0 {
-            BaseSinker::update_serial_monitor(monitor, data_len as u64, 0).await?;
-            BaseSinker::update_monitor_rt(monitor, &rts).await?;
+            base_sinker.update_serial_monitor(data_len as u64, 0).await?;
+            base_sinker.update_monitor_rt(&rts).await?;
         }
         Ok(())
     }

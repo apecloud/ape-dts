@@ -26,7 +26,6 @@ use dt_common::meta::redis::redis_object::RedisObject;
 use dt_common::meta::redis::redis_write_method::RedisWriteMethod;
 use dt_common::meta::row_data::RowData;
 use dt_common::meta::row_type::RowType;
-use dt_common::monitor::monitor::Monitor;
 
 pub struct RedisSinker {
     pub cluster_node: Option<ClusterNode>,
@@ -36,7 +35,7 @@ pub struct RedisSinker {
     pub version: f32,
     pub method: RedisWriteMethod,
     pub meta_manager: Option<RdbMetaManager>,
-    pub monitor: Arc<Monitor>,
+    pub base_sinker: BaseSinker,
     pub data_marker: Option<Arc<RwLock<DataMarker>>>,
     pub key_parser: KeyParser,
 }
@@ -97,7 +96,7 @@ impl RedisSinker {
 
         self.batch_sink(&cmds).await?;
 
-        BaseSinker::update_batch_monitor(&self.monitor, cmds.len() as u64, data_size).await
+        self.base_sinker.update_batch_monitor(cmds.len() as u64, data_size).await
     }
 
     async fn serial_sink_raw(&mut self, data: &mut [DtItem]) -> anyhow::Result<()> {
@@ -111,7 +110,7 @@ impl RedisSinker {
             }
         }
 
-        BaseSinker::update_serial_monitor(&self.monitor, data.len() as u64, data_size).await
+        self.base_sinker.update_serial_monitor(data.len() as u64, data_size).await
     }
 
     fn rewrite_entry(&mut self, dt_data: &mut DtData) -> anyhow::Result<Vec<RedisCmd>> {
@@ -180,7 +179,7 @@ impl RedisSinker {
         }
         self.batch_sink(&cmds).await?;
 
-        BaseSinker::update_batch_monitor(&self.monitor, cmds.len() as u64, data_size as u64).await
+        self.base_sinker.update_batch_monitor(cmds.len() as u64, data_size as u64).await
     }
 
     async fn serial_sink_dml(&mut self, data: &mut [RowData]) -> anyhow::Result<()> {
@@ -193,7 +192,7 @@ impl RedisSinker {
             }
         }
 
-        BaseSinker::update_serial_monitor(&self.monitor, data.len() as u64, data_size as u64).await
+        self.base_sinker.update_serial_monitor(data.len() as u64, data_size as u64).await
     }
 
     async fn dml_to_redis_cmd(&mut self, row_data: &RowData) -> anyhow::Result<Option<RedisCmd>> {
@@ -290,7 +289,7 @@ impl RedisSinker {
         let start_time = Instant::now();
         let result = self.conn.req_packed_commands(&packed_cmds, 0, count);
         rts.push((start_time.elapsed().as_millis() as u64, 1));
-        BaseSinker::update_monitor_rt(&self.monitor, &rts).await?;
+        self.base_sinker.update_monitor_rt(&rts).await?;
 
         match result {
             Err(error) => {

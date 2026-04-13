@@ -73,6 +73,7 @@ impl CheckerTbMeta {
         let mut insert_row = RowData::new(
             src_row_data.schema.clone(),
             src_row_data.tb.clone(),
+            0,
             RowType::Insert,
             None,
             Some(after),
@@ -119,6 +120,7 @@ impl CheckerTbMeta {
         let mut update_row = RowData::new(
             src_row_data.schema.clone(),
             src_row_data.tb.clone(),
+            0,
             RowType::Update,
             Some(update_before),
             Some(update_after),
@@ -947,12 +949,13 @@ impl BaseChecker {
 
         // 5. update monitor metrics
         let monitor = checker.common_mut().monitor.clone();
+        let base_sinker = BaseSinker::new(monitor, 0);
         if is_serial_mode {
-            BaseSinker::update_serial_monitor(&monitor, data.len() as u64, 0).await?;
+            base_sinker.update_serial_monitor(data.len() as u64, 0).await?;
         } else {
-            BaseSinker::update_batch_monitor(&monitor, data.len() as u64, 0).await?;
+            base_sinker.update_batch_monitor(data.len() as u64, 0).await?;
         }
-        BaseSinker::update_monitor_rt(&monitor, &rts).await
+        base_sinker.update_monitor_rt(&rts).await
     }
 
     async fn serial_check<B: Checker>(checker: &mut B, data: Vec<RowData>) -> anyhow::Result<()> {

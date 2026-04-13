@@ -90,7 +90,7 @@ impl Checker for MongoChecker {
             .collection::<Document>(&basic_meta.tb);
         let mut cursor = collection.find(filter, None).await?;
         rts.push((start_time.elapsed().as_millis() as u64, 1));
-        BaseSinker::update_monitor_rt(&self.common.monitor, &rts).await?;
+        BaseSinker::new(self.common.monitor.clone(), 0).update_monitor_rt(&rts).await?;
 
         while cursor.advance().await? {
             let doc = cursor.deserialize_current()?;
@@ -126,6 +126,7 @@ impl MongoChecker {
         RowData::new(
             schema.to_string(),
             tb.to_string(),
+            0,
             dt_common::meta::row_type::RowType::Insert,
             None,
             Some(dst_after),

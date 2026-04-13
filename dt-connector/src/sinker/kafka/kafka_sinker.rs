@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use async_trait::async_trait;
 use kafka::producer::{Producer, Record};
 use tokio::time::Instant;
@@ -7,7 +5,6 @@ use tokio::time::Instant;
 use crate::{call_batch_fn, rdb_router::RdbRouter, sinker::base_sinker::BaseSinker, Sinker};
 use dt_common::{
     meta::{avro::avro_converter::AvroConverter, ddl_meta::ddl_data::DdlData, row_data::RowData},
-    monitor::monitor::Monitor,
     utils::limit_queue::LimitedQueue,
 };
 
@@ -16,7 +13,7 @@ pub struct KafkaSinker {
     pub router: RdbRouter,
     pub producer: Producer,
     pub avro_converter: AvroConverter,
-    pub monitor: Arc<Monitor>,
+    pub base_sinker: BaseSinker,
 }
 
 #[async_trait]
@@ -91,8 +88,8 @@ impl KafkaSinker {
             messages.len() as u64,
         ));
 
-        BaseSinker::update_batch_monitor(&self.monitor, batch_size as u64, data_size as u64)
+        self.base_sinker.update_batch_monitor(batch_size as u64, data_size as u64)
             .await?;
-        BaseSinker::update_monitor_rt(&self.monitor, &rts).await
+        self.base_sinker.update_monitor_rt(&rts).await
     }
 }

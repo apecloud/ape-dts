@@ -85,6 +85,7 @@ impl BatchCheckExtractor for MongoCheckExtractor {
             let mut row_data = RowData::new(
                 schema.clone(),
                 tb.clone(),
+                0,
                 RowType::Insert,
                 None,
                 Some(after),

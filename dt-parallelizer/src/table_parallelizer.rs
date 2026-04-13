@@ -3,10 +3,7 @@ use std::{collections::HashMap, sync::Arc};
 use crate::{DataSize, Parallelizer};
 use async_trait::async_trait;
 use dt_common::meta::{
-    ddl_meta::ddl_data::DdlData,
-    dt_data::{DtData, DtItem},
-    dt_queue::DtQueue,
-    row_data::RowData,
+    ddl_meta::ddl_data::DdlData, dt_data::{DtData, DtItem}, dt_queue::DtQueue, row_data::RowData
 };
 use dt_connector::Sinker;
 
@@ -78,6 +75,10 @@ impl Parallelizer for TableParallelizer {
             .await?;
 
         Ok(data_size)
+    }
+
+    fn drain_ctl_data(&mut self) -> Vec<DtItem> {
+        self.base_parallelizer.drain_ctl_data()
     }
 }
 

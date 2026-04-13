@@ -364,6 +364,7 @@ impl BasePipeline {
                 DtData::Begin {} | DtData::Commit { .. } | DtData::Heartbeat {} => {
                     continue;
                 }
+                _ => return SinkMethod::Raw,
             }
         }
         SinkMethod::Raw

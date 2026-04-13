@@ -35,6 +35,7 @@ impl ParallelizerUtil {
         let base_parallelizer = BaseParallelizer {
             popped_data: VecDeque::new(),
             monitor,
+            popped_ctl_data: Vec::new(),
         };
 
         let parallelizer: Box<dyn Parallelizer + Send + Sync> = match parallel_type {

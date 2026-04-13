@@ -249,6 +249,7 @@ impl MysqlCdcExtractor {
                     let row_data = RowData::new(
                         table_map_event.database_name.clone(),
                         table_map_event.table_name.clone(),
+                        0,
                         RowType::Insert,
                         None,
                         Some(col_values),
@@ -275,6 +276,7 @@ impl MysqlCdcExtractor {
                     let row_data = RowData::new(
                         table_map_event.database_name.clone(),
                         table_map_event.table_name.clone(),
+                        0,
                         RowType::Update,
                         Some(col_values_before),
                         Some(col_values_after),
@@ -298,6 +300,7 @@ impl MysqlCdcExtractor {
                     let row_data = RowData::new(
                         table_map_event.database_name.clone(),
                         table_map_event.table_name.clone(),
+                        0,
                         RowType::Delete,
                         Some(col_values),
                         None,

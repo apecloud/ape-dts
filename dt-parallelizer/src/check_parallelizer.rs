@@ -5,7 +5,8 @@ use async_trait::async_trait;
 use super::{base_parallelizer::BaseParallelizer, snapshot_parallelizer::SnapshotParallelizer};
 use crate::{DataSize, Merger, Parallelizer};
 use dt_common::meta::{
-    dt_data::DtItem, dt_queue::DtQueue, row_data::RowData, struct_meta::struct_data::StructData,
+    dt_data::DtItem, dt_queue::DtQueue, row_data::RowData,
+    struct_meta::struct_data::StructData,
 };
 use dt_connector::Sinker;
 
@@ -73,5 +74,9 @@ impl Parallelizer for CheckParallelizer {
         };
         sinkers[0].lock().await.sink_struct(data).await?;
         Ok(data_size)
+    }
+
+    fn drain_ctl_data(&mut self) -> Vec<DtItem> {
+        self.base_parallelizer.drain_ctl_data()
     }
 }

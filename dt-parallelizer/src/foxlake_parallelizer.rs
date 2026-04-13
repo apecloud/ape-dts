@@ -64,6 +64,12 @@ impl Parallelizer for FoxlakeParallelizer {
 
         Ok(data_size)
     }
+
+    fn drain_ctl_data(&mut self) -> Vec<DtItem> {
+        self.snapshot_parallelizer
+            .base_parallelizer
+            .drain_ctl_data()
+    }
 }
 
 impl FoxlakeParallelizer {

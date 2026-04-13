@@ -224,7 +224,7 @@ impl AvroConverter {
             let before = self.avro_to_col_values(avro_map.remove(BEFORE));
             let after = self.avro_to_col_values(avro_map.remove(AFTER));
             Ok(DtData::Dml {
-                row_data: RowData::new(schema, tb, RowType::from_str(&operation)?, before, after),
+                row_data: RowData::new(schema, tb, 0, RowType::from_str(&operation)?, before, after),
             })
         }
     }
@@ -405,7 +405,7 @@ mod tests {
 
         let mut avro_converter = AvroConverter::new(None, false);
         let mut row_data =
-            RowData::new(schema.into(), tb.into(), RowType::Insert, None, Some(after));
+            RowData::new(schema.into(), tb.into(), 0, RowType::Insert, None, Some(after));
 
         // insert
         validate_row_data(&mut avro_converter, &row_data).await;

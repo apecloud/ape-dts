@@ -36,6 +36,10 @@ impl DtItem {
     pub fn get_data_size(&self) -> u64 {
         self.dt_data.get_data_size()
     }
+
+    pub fn is_ctl(&self) -> bool {
+        self.dt_data.is_ctl()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -64,6 +68,8 @@ pub enum DtData {
     Foxlake {
         file_meta: S3FileMeta,
     },
+    #[serde(skip)]
+    DtCtl {}, // control data used for pipeline and parallelizer internal, such as pre-finish position, etc.
 }
 
 impl DtData {
@@ -81,6 +87,10 @@ impl DtData {
 
     pub fn is_dcl(&self) -> bool {
         matches!(self, DtData::Dcl { .. })
+    }
+
+    pub fn is_ctl(&self) -> bool {
+        matches!(self, DtData::DtCtl { .. })
     }
 
     pub fn get_data_size(&self) -> u64 {

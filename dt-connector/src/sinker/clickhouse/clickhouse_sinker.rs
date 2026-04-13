@@ -1,4 +1,4 @@
-use std::{cmp, collections::HashMap, sync::Arc};
+use std::{cmp, collections::HashMap};
 
 use anyhow::bail;
 use async_trait::async_trait;
@@ -12,7 +12,6 @@ use dt_common::{
     config::config_enums::DbType,
     error::Error,
     meta::{col_value::ColValue, row_data::RowData, row_type::RowType},
-    monitor::monitor::Monitor,
     utils::{limit_queue::LimitedQueue, sql_util::SqlUtil},
 };
 
@@ -27,7 +26,7 @@ pub struct ClickhouseSinker {
     pub port: String,
     pub username: String,
     pub password: String,
-    pub monitor: Arc<Monitor>,
+    pub base_sinker: BaseSinker,
     pub sync_timestamp: i64,
 }
 
@@ -51,7 +50,7 @@ impl ClickhouseSinker {
         batch_size: usize,
     ) -> anyhow::Result<()> {
         let data_size = self.send_data(data, start_index, batch_size).await?;
-        BaseSinker::update_batch_monitor(&self.monitor, batch_size as u64, data_size as u64).await
+        self.base_sinker.update_batch_monitor(batch_size as u64, data_size as u64).await
     }
 
     async fn send_data(
@@ -100,7 +99,7 @@ impl ClickhouseSinker {
         let mut rts = LimitedQueue::new(1);
         let response = self.http_client.execute(request).await?;
         rts.push((start_time.elapsed().as_millis() as u64, 1));
-        BaseSinker::update_monitor_rt(&self.monitor, &rts).await?;
+        self.base_sinker.update_monitor_rt(&rts).await?;
 
         Self::check_response(response).await?;
 

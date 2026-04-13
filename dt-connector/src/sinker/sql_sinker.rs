@@ -1,12 +1,9 @@
-use std::sync::Arc;
-
 use async_trait::async_trait;
 
-use crate::{rdb_query_builder::RdbQueryBuilder, rdb_router::RdbRouter, Sinker};
+use crate::{rdb_query_builder::RdbQueryBuilder, rdb_router::RdbRouter, sinker::base_sinker::BaseSinker, Sinker};
 use dt_common::{
     log_sql,
     meta::{rdb_meta_manager::RdbMetaManager, row_data::RowData},
-    monitor::monitor::Monitor,
 };
 
 #[derive(Clone)]
@@ -14,7 +11,7 @@ pub struct SqlSinker {
     pub meta_manager: RdbMetaManager,
     pub router: RdbRouter,
     pub reverse: bool,
-    pub monitor: Arc<Monitor>,
+    pub base_sinker: BaseSinker,
 }
 
 #[async_trait]

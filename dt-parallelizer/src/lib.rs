@@ -10,13 +10,13 @@ pub mod redis_parallelizer;
 pub mod serial_parallelizer;
 pub mod snapshot_parallelizer;
 pub mod table_parallelizer;
+pub mod row_data_partitioner;
 
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use dt_common::meta::{
-    dcl_meta::dcl_data::DclData, ddl_meta::ddl_data::DdlData, dt_data::DtItem, dt_queue::DtQueue,
-    row_data::RowData, struct_meta::struct_data::StructData,
+    dcl_meta::dcl_data::DclData, ddl_meta::ddl_data::DdlData, dt_data::DtItem, dt_queue::DtQueue, row_data::RowData, struct_meta::struct_data::StructData
 };
 use dt_connector::Sinker;
 use merge_parallelizer::TbMergedData;
@@ -67,6 +67,10 @@ pub trait Parallelizer {
         _sinkers: &[Arc<async_mutex::Mutex<Box<dyn Sinker + Send>>>],
     ) -> anyhow::Result<DataSize> {
         Ok(DataSize::default())
+    }
+
+    fn drain_ctl_data(&mut self) -> Vec<DtItem> {
+        Vec::new()
     }
 
     async fn close(&mut self) -> anyhow::Result<()> {

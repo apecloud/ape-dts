@@ -6,8 +6,7 @@ use anyhow::bail;
 use dt_common::{
     error::Error,
     meta::{
-        dcl_meta::dcl_data::DclData, ddl_meta::ddl_data::DdlData, dt_data::DtItem,
-        dt_queue::DtQueue, row_data::RowData,
+        dcl_meta::dcl_data::DclData, ddl_meta::ddl_data::DdlData, dt_data::DtItem, dt_queue::DtQueue, row_data::RowData
     },
     monitor::{counter::Counter, counter_type::CounterType, monitor::Monitor},
 };
@@ -17,6 +16,7 @@ use dt_connector::Sinker;
 pub struct BaseParallelizer {
     pub popped_data: VecDeque<DtItem>,
     pub monitor: Arc<Monitor>,
+    pub popped_ctl_data: Vec<DtItem>,
 }
 
 impl BaseParallelizer {
@@ -29,6 +29,10 @@ impl BaseParallelizer {
         let mut record_size_counter = Counter::new(0, 0);
         // ddls and dmls should be drained separately
         while let Ok(item) = self.pop(buffer, &mut record_size_counter).await {
+            if item.dt_data.is_ctl() {
+                self.popped_ctl_data.push(item);
+                continue;
+            }
             if data.is_empty()
                 || (data[0].get_row_sql_type() == item.get_row_sql_type()
                     && data[0].data_origin_node == item.data_origin_node)
@@ -171,5 +175,10 @@ impl BaseParallelizer {
             result??;
         }
         Ok(())
+    }
+
+    #[inline]
+    pub fn drain_ctl_data(&mut self) -> Vec<DtItem> {
+        self.popped_ctl_data.drain(..).collect()
     }
 }
