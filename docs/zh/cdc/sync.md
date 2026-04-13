@@ -46,25 +46,16 @@ MySQL / PostgreSQL 的 `32 / 64` 两档并发。
 - `Checker diff total` 表示运行过程中观测到的 diff 数，不等于任务结束后仍残留的不一致数。
 - `最终一致` 表示任务追平后，source / target 通过了最终一致性校验。
 
-后续如果继续做 benchmark，建议在上面的汇总表之外额外记录这两个字段：
-
-- `Source-to-sinker workload 结束绝对时间`
-- `Catch-up tail after source workload`
-
-这两个时间点最适合解释一种常见现象：`Workload 时长` 看起来差不多，但 `Sinker 平均速率`
-差很多。因为真正的代价可能并没有体现在 source workload 窗口里，而是被推迟到了
-workload 结束之后的追平尾巴。
-
-| 引擎 | 并发 | 模式 | Workload tx events | TPS | Workload 时长 | End-to-end 追平 | Sinker 平均速率 | Checker 平均速率 | Sinker 相比 off 衰减 | Pipeline 填充率 | Checker 填充率 | Queue drops | Checker diff total | 最终一致 |
-|---|---:|---|---:|---:|---:|---|---:|---:|---:|---:|---:|---:|---:|---|
-| MySQL | `32` | `check off` | `10364` | `687.30/s` | `15.08s` | `caught up` | `3662.41/s` | `-` | `baseline` | `100%` | `-` | `0` | `-` | `yes` |
-| MySQL | `32` | `check on` | `7733` | `514.10/s` | `15.03s` | `caught up` | `1810.09/s` | `1803.50/s` | `-50.6%` | `100%` | `0%` | `0` | `560` | `yes` |
-| MySQL | `64` | `check off` | `11857` | `787.87/s` | `15.05s` | `caught up` | `4298.00/s` | `-` | `baseline` | `100%` | `-` | `0` | `-` | `yes` |
-| MySQL | `64` | `check on` | `11857` | `786.17/s` | `15.08s` | `caught up` | `2989.77/s` | `3005.42/s` | `-30.4%` | `100%` | `2.25%` | `0` | `654` | `yes` |
-| PostgreSQL | `32` | `check off` | `96302` | `6420.84/s` | `15s` | `caught up` | `9547.28/s` | `-` | `baseline` | `16.0%` | `-` | `0` | `-` | `yes` |
-| PostgreSQL | `32` | `check on` | `114086` | `7611.53/s` | `15s` | `caught up` | `2918.79/s` | `5519.26/s` | `-69.4%` | `100%` | `2.8%` | `0` | `18625` | `yes` |
-| PostgreSQL | `64` | `check off` | `106898` | `7158.22/s` | `15s` | `caught up` | `10562.80/s` | `-` | `baseline` | `100%` | `-` | `0` | `-` | `yes` |
-| PostgreSQL | `64` | `check on` | `156715` | `10169.59/s` | `15s` | `caught up` | `2869.77/s` | `5433.13/s` | `-72.8%` | `100%` | `9.6%` | `0` | `25058` | `yes` |
+| 引擎       | 并发 | 模式        | Workload tx events |          TPS | Workload 时长 | End-to-end 追平 | Sinker 平均速率 | Checker 平均速率 | Sinker 相比 off 衰减 | Pipeline 填充率 | Checker 填充率 | Queue drops | Checker diff total | 最终一致 |
+| ---------- | ---: | ----------- | -----------------: | -----------: | ------------: | --------------- | --------------: | ---------------: | -------------------: | --------------: | -------------: | ----------: | -----------------: | -------- |
+| MySQL      | `32` | `check off` |            `10364` |   `687.30/s` |      `15.08s` | `caught up`     |     `3662.41/s` |              `-` |           `baseline` |          `100%` |            `-` |         `0` |                `-` | `yes`    |
+| MySQL      | `32` | `check on`  |             `7733` |   `514.10/s` |      `15.03s` | `caught up`     |     `1810.09/s` |      `1803.50/s` |             `-50.6%` |          `100%` |           `0%` |         `0` |              `560` | `yes`    |
+| MySQL      | `64` | `check off` |            `11857` |   `787.87/s` |      `15.05s` | `caught up`     |     `4298.00/s` |              `-` |           `baseline` |          `100%` |            `-` |         `0` |                `-` | `yes`    |
+| MySQL      | `64` | `check on`  |            `11857` |   `786.17/s` |      `15.08s` | `caught up`     |     `2989.77/s` |      `3005.42/s` |             `-30.4%` |          `100%` |        `2.25%` |         `0` |              `654` | `yes`    |
+| PostgreSQL | `32` | `check off` |            `96302` |  `6420.84/s` |         `15s` | `caught up`     |     `9547.28/s` |              `-` |           `baseline` |         `16.0%` |            `-` |         `0` |                `-` | `yes`    |
+| PostgreSQL | `32` | `check on`  |           `114086` |  `7611.53/s` |         `15s` | `caught up`     |     `2918.79/s` |      `5519.26/s` |             `-69.4%` |          `100%` |         `2.8%` |         `0` |            `18625` | `yes`    |
+| PostgreSQL | `64` | `check off` |           `106898` |  `7158.22/s` |         `15s` | `caught up`     |    `10562.80/s` |              `-` |           `baseline` |          `100%` |            `-` |         `0` |                `-` | `yes`    |
+| PostgreSQL | `64` | `check on`  |           `156715` | `10169.59/s` |         `15s` | `caught up`     |     `2869.77/s` |      `5433.13/s` |             `-72.8%` |          `100%` |         `9.6%` |         `0` |            `25058` | `yes`    |
 
 简化结论：
 - 这组复测里，先满的是 pipeline，不是 checker queue。
