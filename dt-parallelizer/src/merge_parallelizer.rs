@@ -1,9 +1,6 @@
 use std::{cmp, sync::Arc};
 
-use super::{
-    base_parallelizer::BaseParallelizer, mongo_merger::MongoMerger,
-    snapshot_parallelizer::SnapshotParallelizer,
-};
+use super::{base_parallelizer::BaseParallelizer, mongo_merger::MongoMerger};
 use crate::{DataSize, Merger, Parallelizer};
 use async_trait::async_trait;
 use dt_common::config::sinker_config::BasicSinkerConfig;
@@ -23,25 +20,12 @@ pub struct MergeParallelizer {
     pub meta_manager: Option<RdbMetaManager>,
     pub parallel_size: usize,
     pub sinker_basic_config: BasicSinkerConfig,
-    sink_mode: MergeSinkMode,
-}
-
-#[derive(Clone, Copy)]
-enum MergeSinkMode {
-    // Normal sync path (`rdb_merge` / `mongo`)
-    Sync,
-    // Check path for checker-enabled flows on top of merge-style parallelizers.
-    Check,
 }
 
 enum MergeType {
     Insert,
     Delete,
     Unmerged,
-}
-
-fn should_partition_in_check_mode(merge_type: &MergeType) -> bool {
-    matches!(merge_type, MergeType::Insert)
 }
 
 pub struct TbMergedData {
@@ -75,16 +59,10 @@ impl Parallelizer for MergeParallelizer {
         let mut data_size = DataSize::default();
         let mut tb_merged_data = self.merger.merge(data).await?;
         for merge_type in [MergeType::Delete, MergeType::Insert, MergeType::Unmerged] {
-            data_size.add(match self.sink_mode {
-                MergeSinkMode::Sync => {
-                    self.sink_dml_adaptive(&mut tb_merged_data, sinkers, merge_type)
-                        .await?
-                }
-                MergeSinkMode::Check => {
-                    self.sink_dml_partitioned(&mut tb_merged_data, sinkers, merge_type)
-                        .await?
-                }
-            });
+            data_size.add(
+                self.sink_dml_adaptive(&mut tb_merged_data, sinkers, merge_type)
+                    .await?,
+            );
         }
         Ok(data_size)
     }
@@ -149,7 +127,6 @@ impl MergeParallelizer {
             meta_manager,
             parallel_size,
             sinker_basic_config,
-            sink_mode: MergeSinkMode::Sync,
         }
     }
 
@@ -159,16 +136,13 @@ impl MergeParallelizer {
         parallel_size: usize,
         sinker_basic_config: BasicSinkerConfig,
     ) -> Self {
-        Self {
-            sink_mode: MergeSinkMode::Check,
-            ..Self::for_rdb_merge(
-                base_parallelizer,
-                merger,
-                parallel_size,
-                sinker_basic_config,
-                None,
-            )
-        }
+        Self::for_rdb_merge(
+            base_parallelizer,
+            merger,
+            parallel_size,
+            sinker_basic_config,
+            None,
+        )
     }
 
     pub fn for_mongo(
@@ -246,42 +220,6 @@ impl MergeParallelizer {
         Ok(data_size)
     }
 
-    async fn sink_dml_partitioned(
-        &mut self,
-        tb_merged_data_items: &mut [TbMergedData],
-        sinkers: &[Arc<async_mutex::Mutex<Box<dyn Sinker + Send>>>],
-        merge_type: MergeType,
-    ) -> anyhow::Result<DataSize> {
-        let mut data_size = DataSize::default();
-        for tb_merged_data in tb_merged_data_items.iter_mut() {
-            let data: Vec<RowData> = match merge_type {
-                MergeType::Delete => tb_merged_data.delete_rows.drain(..).collect(),
-                MergeType::Insert => tb_merged_data.insert_rows.drain(..).collect(),
-                MergeType::Unmerged => tb_merged_data.unmerged_rows.drain(..).collect(),
-            };
-            if data.is_empty() {
-                continue;
-            }
-
-            data_size
-                .add_count(data.len() as u64)
-                .add_bytes(data.iter().map(|v| v.get_data_size()).sum());
-
-            if !should_partition_in_check_mode(&merge_type) {
-                let sinker = sinkers[0].clone();
-                Self::sink_unmerged_rows(sinker, data).await?;
-                continue;
-            }
-
-            let sub_data_items = SnapshotParallelizer::partition(data, self.parallel_size)?;
-            self.base_parallelizer
-                .sink_dml(sub_data_items, sinkers, self.parallel_size, true)
-                .await?;
-        }
-
-        Ok(data_size)
-    }
-
     async fn sink_unmerged_rows(
         sinker: Arc<async_mutex::Mutex<Box<dyn Sinker + Send>>>,
         data: Vec<RowData>,
@@ -307,20 +245,93 @@ impl MergeParallelizer {
 
 #[cfg(test)]
 mod tests {
-    use super::{should_partition_in_check_mode, MergeType};
+    use std::sync::{Arc, Mutex};
 
-    #[test]
-    fn check_mode_partitions_insert_rows() {
-        assert!(should_partition_in_check_mode(&MergeType::Insert));
+    use async_trait::async_trait;
+    use dt_common::{
+        config::sinker_config::BasicSinkerConfig,
+        meta::{row_data::RowData, row_type::RowType},
+    };
+    use dt_connector::Sinker;
+
+    use crate::{base_parallelizer::BaseParallelizer, Merger, Parallelizer};
+
+    use super::{MergeParallelizer, TbMergedData};
+
+    #[derive(Debug, PartialEq, Eq)]
+    struct SinkCall {
+        sinker_id: usize,
+        batch: bool,
+        row_count: usize,
     }
 
-    #[test]
-    fn check_mode_does_not_partition_delete_rows() {
-        assert!(!should_partition_in_check_mode(&MergeType::Delete));
+    struct RecordingSinker {
+        sinker_id: usize,
+        calls: Arc<Mutex<Vec<SinkCall>>>,
     }
 
-    #[test]
-    fn check_mode_does_not_partition_unmerged_rows() {
-        assert!(!should_partition_in_check_mode(&MergeType::Unmerged));
+    #[async_trait]
+    impl Sinker for RecordingSinker {
+        async fn sink_dml(&mut self, data: Vec<RowData>, batch: bool) -> anyhow::Result<()> {
+            self.calls.lock().unwrap().push(SinkCall {
+                sinker_id: self.sinker_id,
+                batch,
+                row_count: data.len(),
+            });
+            Ok(())
+        }
+    }
+
+    struct PassthroughMerger;
+
+    #[async_trait]
+    impl Merger for PassthroughMerger {
+        async fn merge(&mut self, data: Vec<RowData>) -> anyhow::Result<Vec<TbMergedData>> {
+            Ok(vec![TbMergedData {
+                delete_rows: data,
+                insert_rows: Vec::new(),
+                unmerged_rows: Vec::new(),
+            }])
+        }
+    }
+
+    #[tokio::test]
+    async fn check_mode_delete_rows_keep_adaptive_multi_sinker_dispatch() {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let sinkers = (0..2)
+            .map(|sinker_id| {
+                Arc::new(async_mutex::Mutex::new(Box::new(RecordingSinker {
+                    sinker_id,
+                    calls: calls.clone(),
+                })
+                    as Box<dyn Sinker + Send>))
+            })
+            .collect::<Vec<_>>();
+
+        let mut parallelizer = MergeParallelizer::for_check(
+            BaseParallelizer::default(),
+            Box::new(PassthroughMerger),
+            2,
+            BasicSinkerConfig {
+                batch_size: 1,
+                ..Default::default()
+            },
+        );
+
+        let data = vec![
+            RowData::new("test".into(), "tb".into(), RowType::Delete, None, None),
+            RowData::new("test".into(), "tb".into(), RowType::Delete, None, None),
+            RowData::new("test".into(), "tb".into(), RowType::Delete, None, None),
+            RowData::new("test".into(), "tb".into(), RowType::Delete, None, None),
+        ];
+
+        parallelizer.sink_dml(data, &sinkers).await.unwrap();
+
+        let calls = calls.lock().unwrap();
+        assert_eq!(calls.len(), 2);
+        assert!(calls.iter().all(|call| call.batch));
+        assert!(calls.iter().any(|call| call.sinker_id == 0));
+        assert!(calls.iter().any(|call| call.sinker_id == 1));
+        assert!(calls.iter().all(|call| call.row_count == 2));
     }
 }
