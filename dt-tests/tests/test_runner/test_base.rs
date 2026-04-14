@@ -7,8 +7,8 @@ use futures::executor::block_on;
 use crate::test_runner::rdb_test_runner::DST;
 
 use super::{
-    mongo_check_test_runner::MongoCheckTestRunner, mongo_test_runner::MongoTestRunner,
-    precheck_test_runner::PrecheckTestRunner, rdb_check_test_runner::RdbCheckTestRunner,
+    check_test_runner::CheckTestRunner, mongo_check_test_runner::MongoCheckTestRunner,
+    mongo_test_runner::MongoTestRunner, precheck_test_runner::PrecheckTestRunner,
     rdb_kafka_rdb_test_runner::RdbKafkaRdbTestRunner, rdb_lua_test_runner::RdbLuaTestRunner,
     rdb_redis_test_runner::RdbRedisTestRunner, rdb_sql_test_runner::RdbSqlTestRunner,
     rdb_starrocks_test_runner::RdbStarRocksTestRunner, rdb_struct_test_runner::RdbStructTestRunner,
@@ -118,25 +118,71 @@ impl TestBase {
     }
 
     pub async fn run_check_test(test_dir: &str) {
-        let runner = RdbCheckTestRunner::new(test_dir).await.unwrap();
-        runner.run_check_test().await.unwrap();
-        runner.close().await.unwrap();
+        let runner = CheckTestRunner::new(test_dir)
+            .await
+            .expect("Failed to create CheckTestRunner");
+        runner
+            .run_check_test()
+            .await
+            .expect("Failed to run check test");
+        runner.close().await.expect("Failed to close runner");
+    }
+
+    pub async fn run_cdc_check_test(test_dir: &str, start_millis: u64, parse_millis: u64) {
+        let runner = CheckTestRunner::new(test_dir)
+            .await
+            .expect("Failed to create CheckTestRunner");
+        runner
+            .run_cdc_check_test(start_millis, parse_millis)
+            .await
+            .expect("Failed to run CDC check test");
+        runner.close().await.expect("Failed to close runner");
+    }
+
+    pub async fn run_cdc_position_resume_test(
+        test_dir: &str,
+        start_millis: u64,
+        parse_millis: u64,
+    ) {
+        let runner = CheckTestRunner::new(test_dir)
+            .await
+            .expect("Failed to create CheckTestRunner");
+        runner
+            .run_cdc_position_resume_test(start_millis, parse_millis)
+            .await
+            .expect("Failed to run CDC position resume test");
+        runner.close().await.expect("Failed to close runner");
+    }
+
+    pub async fn run_cdc_checker_state_resume_test(
+        test_dir: &str,
+        start_millis: u64,
+        parse_millis: u64,
+    ) {
+        let runner = CheckTestRunner::new(test_dir)
+            .await
+            .expect("Failed to create CheckTestRunner");
+        runner
+            .run_cdc_checker_state_resume_test(start_millis, parse_millis)
+            .await
+            .expect("Failed to run CDC checker-state resume test");
+        runner.close().await.expect("Failed to close runner");
     }
 
     pub async fn run_review_test(test_dir: &str) {
-        let runner = RdbCheckTestRunner::new(test_dir).await.unwrap();
+        let runner = CheckTestRunner::new(test_dir).await.unwrap();
         runner.run_review_test().await.unwrap();
         runner.close().await.unwrap();
     }
 
     pub async fn run_revise_test(test_dir: &str) {
-        let runner = RdbCheckTestRunner::new(test_dir).await.unwrap();
+        let runner = CheckTestRunner::new(test_dir).await.unwrap();
         runner.run_revise_test().await.unwrap();
         runner.close().await.unwrap();
     }
 
     pub async fn run_recheck_test(test_dir: &str) {
-        let runner = RdbCheckTestRunner::new(test_dir).await.unwrap();
+        let runner = CheckTestRunner::new(test_dir).await.unwrap();
         runner.run_recheck_test().await.unwrap();
         runner.close().await.unwrap();
     }

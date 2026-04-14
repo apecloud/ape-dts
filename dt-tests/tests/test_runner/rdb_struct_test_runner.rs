@@ -207,7 +207,11 @@ impl RdbStructTestRunner {
 
     pub async fn load_expect_ddl_sqls(&self) -> HashMap<String, String> {
         let config = TaskConfig::new(&self.base.base.task_config_file).unwrap();
-        let ddl_file = match config.sinker_basic.db_type {
+        let dst_db_type = config
+            .destination_target()
+            .map(|target| target.db_type)
+            .unwrap_or(config.sinker_basic.db_type);
+        let ddl_file = match dst_db_type {
             DbType::Mysql => {
                 let version = self.base.get_dst_mysql_version().await;
                 if version.starts_with("5.") {

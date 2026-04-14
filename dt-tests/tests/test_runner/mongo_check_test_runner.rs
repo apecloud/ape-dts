@@ -1,5 +1,6 @@
-use super::{check_util::CheckUtil, mongo_test_runner::MongoTestRunner};
 use std::sync::Arc;
+
+use super::{check_util::CheckUtil, mongo_test_runner::MongoTestRunner};
 
 pub struct MongoCheckTestRunner {
     base: Arc<MongoTestRunner>,
@@ -37,7 +38,14 @@ impl MongoCheckTestRunner {
         self.base.execute_prepare_sqls().await?;
         self.base.execute_test_sqls().await?;
 
-        let retry_interval_secs = self.base.base.get_config().sinker.get_retry_interval_secs();
+        let retry_interval_secs = self
+            .base
+            .base
+            .get_config()
+            .checker
+            .as_ref()
+            .map(|checker| checker.retry_interval_secs)
+            .unwrap_or(0);
         let delay_secs = std::cmp::max(1, retry_interval_secs / 2);
 
         let sqls = self.base.base.src_test_sqls.clone();

@@ -6,13 +6,24 @@ use dt_common::meta::{
     col_value::ColValue, mongo::mongo_constant::MongoConstants, row_data::RowData,
 };
 
-use crate::check_log::check_log::DiffColValue;
+use crate::checker::check_log::DiffColValue;
 
 pub fn build_insert_cmd(src_row_data: &RowData) -> Option<String> {
     let doc = get_doc(src_row_data)?;
     let doc_js = bson_to_js(&Bson::Document(doc.clone()));
 
     Some(format!("db.{}.insertOne({})", src_row_data.tb, doc_js))
+}
+
+pub fn build_delete_cmd(row_data: &RowData) -> Option<String> {
+    let fields = row_data.after.as_ref().or(row_data.before.as_ref())?;
+    let doc = match fields.get(MongoConstants::DOC)? {
+        ColValue::MongoDoc(doc) => doc,
+        _ => return None,
+    };
+    let id = doc.get(MongoConstants::ID)?;
+    let filter_js = bson_to_js(&Bson::Document(doc! { MongoConstants::ID: id.clone() }));
+    Some(format!("db.{}.deleteOne({})", row_data.tb, filter_js))
 }
 
 pub fn build_update_cmd(

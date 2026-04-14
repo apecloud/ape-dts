@@ -4,6 +4,20 @@
 
 此时，我们除了要配置 “源 -> 目标” 的增量任务外，还需要配置 “目标 -> 源” 的任务，以实现双向数据同步。
 
+## 校验 CDC 落库数据
+
+若希望在双向同步的每个 CDC 方向上都做数据校验，请使用 [数据校验](../snapshot/check.md#inline-cdc-check) 中定义的 inline cdc check。
+
+对每个任务，都要保持 `[sinker] sink_type=write`，增加 `[checker] enable=true`，增加 `[resumer] resume_type=from_target` 或 `from_db`，并使用 `[parallelizer] parallel_type=rdb_merge`。
+
+在该模式下，checker 会直接复用 `[sinker]` 已解析的目标端配置，因此 `[checker]` 不接受单独设置 `db_type`、`url`、`username`、`password`。
+
+当前该模式仅支持 MySQL / PostgreSQL 的 write sinker。
+
+这里的 inline cdc check 同样是 best-effort 的：写入仍走主路径。若 checker 队列达到
+`[checker].queue_size`，会淘汰最旧的待校验 batch，而不是阻塞新的写入。checker 侧的
+运行时错误会被记录日志，但不会阻塞主路径上的 CDC 写入、checkpoint 持久化或元数据刷新。
+
 # 数据循环
 
 双向同步的主要难点是避免数据的循环复制，考虑如下场景：

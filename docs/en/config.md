@@ -6,17 +6,17 @@ Different tasks may require extra configs, refer to [task templates](/docs/templ
 
 # [extractor]
 
-| Config          | Description                                                                  | Example                                                        | Default                                                 |
-| :-------------- | :--------------------------------------------------------------------------- | :------------------------------------------------------------- | :------------------------------------------------------ |
-| db_type         | source database type                                                         | mysql                                                          | -                                                       |
-| extract_type    | snapshot, cdc                                                                | snapshot                                                       | -                                                       |
-| url             | database URL. You can specify the username and password directly in the URL. | mysql://127.0.0.1:3307 or mysql://root:password@127.0.0.1:3307 |
-| username        | database connection username                                                 | root                                                           |
-| password        | database connection password                                                 | password                                                       | -                                                       |
-| max_connections | max connections for source database                                          | 10                                                             | currently 10, may be dynamically adjusted in the future |
-| batch_size      | number of extracted records in a batch                                       | 10000                                                          | same as [pipeline] buffer_size                          |
-| parallel_size   | number of workers for extracting a table                                     | 4                                                              | 1                         |
-| partition_cols  | partition column for data splitting during snapshot migration, only single column supported          | json:[{"db":"db_1","tb":"tb_1","partition_col":"id"},{"db":"db_2","tb":"tb_2","partition_col":"id"}]                                 | -       |
+| Config          | Description                                                                                 | Example                                                                                              | Default                                                 |
+| :-------------- | :------------------------------------------------------------------------------------------ | :--------------------------------------------------------------------------------------------------- | :------------------------------------------------------ |
+| db_type         | source database type                                                                        | mysql                                                                                                | -                                                       |
+| extract_type    | snapshot, cdc                                                                               | snapshot                                                                                             | -                                                       |
+| url             | database URL. You can specify the username and password directly in the URL.                | mysql://127.0.0.1:3307 or mysql://root:password@127.0.0.1:3307                                       |
+| username        | database connection username                                                                | root                                                                                                 |
+| password        | database connection password                                                                | password                                                                                             | -                                                       |
+| max_connections | max connections for source database                                                         | 10                                                                                                   | currently 10, may be dynamically adjusted in the future |
+| batch_size      | number of extracted records in a batch                                                      | 10000                                                                                                | same as [pipeline] buffer_size                          |
+| parallel_size   | number of workers for extracting a table                                                    | 4                                                                                                    | 1                                                       |
+| partition_cols  | partition column for data splitting during snapshot migration, only single column supported | json:[{"db":"db_1","tb":"tb_1","partition_col":"id"},{"db":"db_2","tb":"tb_2","partition_col":"id"}] | -                                                       |
 
 ## URL escaping
 
@@ -33,13 +33,98 @@ url=mysql://user1:abc%25%24%23%3F%40@127.0.0.1:3307?ssl-mode=disabled
 | Config          | Description                                                                                                                          | Example                                                        | Default                                                 |
 | :-------------- | :----------------------------------------------------------------------------------------------------------------------------------- | :------------------------------------------------------------- | :------------------------------------------------------ |
 | db_type         | target database type                                                                                                                 | mysql                                                          | -                                                       |
-| sink_type       | write, check                                                                                                                         | write                                                          | write                                                   |
+| sink_type       | write, dummy                                                                                                                         | write                                                          | write                                                   |
 | url             | database URL. You can specify the username and password directly in the URL.                                                         | mysql://127.0.0.1:3307 or mysql://root:password@127.0.0.1:3307 |
 | username        | database connection username                                                                                                         | root                                                           |
 | password        | database connection password                                                                                                         | password                                                       | -                                                       |
-| max_connections | max connections for source database                                                                                                  | 10                                                             | currently 10, may be dynamically adjusted in the future |
+| max_connections | max connections for target database                                                                                                  | 10                                                             | currently 10, may be dynamically adjusted in the future |
 | batch_size      | number of records written in a batch, 1 for serial                                                                                   | 200                                                            | 200                                                     |
 | replace         | when inserting data, whether to force replacement if data already exists in target database, used in snapshot/cdc tasks for MySQL/PG | false                                                          | true                                                    |
+
+# [checker]
+
+The `[checker]` section is used by three documented data check flows:
+- Standalone snapshot check: run a snapshot check task only (no data write). Set
+  `sink_type=dummy` or omit `[sinker]`, and configure the checker target explicitly in
+  `[checker]`.
+- Inline snapshot check: for snapshot tasks with `sink_type=write`, the checker runs after sink
+  and reuses the parsed `[sinker]` target directly.
+- Inline cdc check: for CDC tasks with `extract_type=cdc` and `sink_type=write`, the checker
+  validates applied changes after write, reuses the parsed `[sinker]` target, and requires
+  resumer state persistence.
+
+Struct check follows the same standalone target-selection rules as standalone snapshot check.
+
+| Config                      | Description                                                            | Example     | Default                           |
+| :-------------------------- | :--------------------------------------------------------------------- | :---------- | :-------------------------------- |
+| enable                      | whether to enable the checker when `[checker]` section is present      | true        | required                          |
+| queue_size                  | checker queue capacity, counted in pending batches/messages            | 200         | 200                               |
+| max_connections             | max connections for checker pool                                       | 8           | 8                                 |
+| batch_size                  | checker chunk size; also used for checker chunking in inline cdc check | 200         | 200                               |
+| output_full_row             | output full row in diff log                                            | false       | false                             |
+| output_revise_sql           | write generated revise SQL to `sql.log`                                | false       | false                             |
+| revise_match_full_row       | match full row when building revise SQL                                | false       | false                             |
+| retry_interval_secs         | retry interval in seconds (forced to 0 in inline cdc check)            | 0           | 0                                 |
+| max_retries                 | retry count (forced to 0 in inline cdc check)                          | 0           | 0                                 |
+| check_log_dir               | check log dir                                                          | /tmp/check  | empty (use runtime.log_dir/check) |
+| check_log_file_size         | per-log file size limit (`diff.log` / `miss.log` / `sql.log`)          | 100mb       | 100mb                             |
+| check_log_max_rows          | per-log max rows (`diff.log` / `miss.log`)                             | 1000        | 1000                              |
+| db_type                     | checker target db type (standalone target only)                        | mysql       | -                                 |
+| url                         | checker target URL (standalone target only)                            | mysql://... | -                                 |
+| username                    | checker target username (standalone target only)                       | root        | empty                             |
+| password                    | checker target password (standalone target only)                       | password    | empty                             |
+| cdc_check_log_s3            | upload periodic CDC check snapshot to S3                               | false       | false                             |
+| cdc_check_log_interval_secs | interval (seconds) for periodic CDC check snapshot output              | 10          | 10                                |
+| s3_bucket                   | S3 bucket for check log upload                                         | my-bucket   | -                                 |
+| s3_access_key_id            | S3 access key id                                                       | AKIA...     | -                                 |
+| s3_secret_access_key        | S3 secret access key                                                   | ****        | -                                 |
+| s3_region                   | S3 region                                                              | us-east-1   | -                                 |
+| s3_endpoint                 | S3 endpoint                                                            | https://... | -                                 |
+| s3_key_prefix               | S3 key prefix for check logs                                           | task1/check | empty                             |
+
+Notes:
+
+**General behavior**
+- Checker only supports `[pipeline] pipeline_type=basic`.
+- `queue_size` counts queued checker DML batches, not rows. Control signals such as checkpoint and
+  `refresh_meta` bypass this queue.
+- In inline write-after-check flows, if the checker DML queue is full, the oldest pending batch is
+  dropped with a warning log instead of blocking the write path.
+- Checker runtime errors (batch check failure, checkpoint failure, output failure) are logged but do
+  not affect the main CDC write path. Checkpoint and meta refresh delivery remain best-effort.
+
+**Flow selection and target rules**
+- For inline write-after-check flows, one queued batch is usually close to the effective sink batch
+  size. In practice this is often about `[sinker].batch_size` rows, but the final batch may be
+  smaller and upstream partitioning can also change the actual count.
+- For standalone / dummy-sinker check flows, queued batch size is decided by the upstream
+  parallelizer. After dequeue, the checker processes non-CDC rows in chunks of `[checker].batch_size`.
+- Struct tasks only support the standalone target-selection rules above. If `[checker]` is enabled for struct tasks, use `sink_type=dummy` or omit `[sinker]`.
+- Inline snapshot check is supported only when `[extractor] extract_type=snapshot`,
+  `[sinker] sink_type=write`, and `[sinker].db_type` is `mysql`, `pg`, or `mongo`.
+- Inline cdc check is currently supported only when `[extractor] extract_type=cdc`,
+  `[sinker] sink_type=write`, `[checker].enable=true`, `[parallelizer].parallel_type=rdb_merge`,
+  and `[sinker].db_type` is `mysql` or `pg`.
+- In inline cdc check, the checker uses `[checker].batch_size`. It does not fall back to
+  `[sinker].batch_size`. For example, if `[checker].batch_size=100` and `queue_size=200`, the
+  checker queue can hold about 200 pending batches, which is roughly 20,000 rows when batches are full.
+- In inline snapshot check and inline cdc check, `[checker]` must not set `db_type`, `url`,
+  `username`, or `password`; the checker always reuses the parsed `[sinker]` target.
+- In inline cdc check, `[resumer] resume_type=from_target` or `from_db` is required to persist
+  checker state.
+- In inline cdc check, the following combinations fail fast with `ConfigError`: `[checker]`
+  section present without `enable`; `[pipeline].pipeline_type != basic`; `[sinker].sink_type != write`;
+  `[parallelizer].parallel_type != rdb_merge`; `[sinker].db_type` not in `mysql` / `pg`; or any
+  target field (`db_type` / `url` / `username` / `password`) set under `[checker]`.
+
+**Inline cdc check log / retry behavior**
+- In inline cdc check, `[checker].batch_size` remains effective and controls checker chunking.
+  `[checker].max_retries` / `[checker].retry_interval_secs` are still forced to `0`.
+- When `check_log_dir` is empty, `runtime.log_dir/check` is used consistently for checker logs (including CDC check outputs).
+- In inline cdc check, periodic check snapshots are always written locally under `check_log_dir`;
+  `cdc_check_log_s3` controls only S3 upload.
+- `check_log_file_size` limits local `diff.log` / `miss.log` / `sql.log`. `summary.log` is not size-limited.
+- `check_log_max_rows` only applies to CDC check snapshots for `diff.log` / `miss.log`; when either threshold is hit, only the latest records are kept.
 
 # [filter]
 
@@ -145,19 +230,17 @@ Same with [filter].
 | :-------- | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :-------------------------------- | :--------- | :------------------- |
 | snapshot  | Records in cache are divided into [parallel_size] partitions, and each partition will be synced in batches in a separate thread.                                                              | snapshot tasks for mysql/pg/mongo | fast       |                      |
 | serial    | Single thread, one by one.                                                                                                                                                                    | all                               |            | slow                 |
-| rdb_merge | Merge CDC records(insert, update, delete) in cache into insert + delete records，and then divide them into [parallel_size] partitions, each partition synced in batches in a separate thread. | CDC tasks for mysql/pg            | fast       | eventual consistency |
-| mongo     | Mongo version of rdb_merge.                                                                                                                                                                   | CDC tasks for mongo               |
-| rdb_check | Similar to snapshot. But if the source table does not have primary/unique keys, records will be synced in serial.                                                                             | check tasks for mysql/pg/mongo    |
+| rdb_merge | Merge row changes in cache into write-friendly insert + delete batches, then divide them into [parallel_size] partitions for parallel syncing. When `[checker].enable=true`, checker-enabled MySQL/PG flows reuse this parallelizer and switch to check sink mode internally. | mysql/pg CDC, check, review, revise | fast       | eventual consistency |
+| mongo     | Mongo version of merge parallelization. When `[checker].enable=true`, checker-enabled Mongo flows reuse this parallelizer and switch to check sink mode internally.                            | mongo CDC, check, review          |
 | redis     | Single thread, batch/serial writing(determined by [sinker] batch_size)                                                                                                                        | snapshot/CDC tasks for redis      |
 
 # [runtime]
 
-| Config              | Description                                                                                                 | Example                     | Default       |
-| :------------------ | :---------------------------------------------------------------------------------------------------------- | :-------------------------- | :------------ |
-| log_level           | level                                                                                                       | info/warn/error/debug/trace | info          |
-| log4rs_file         | log4rs config file                                                                                          | ./log4rs.yaml               | ./log4rs.yaml |
-| log_dir             | output dir                                                                                                  | ./logs                      | ./logs        |
-| check_log_file_size | Max size of check result logs (miss/diff/sql); when exceeded, new logs are dropped (no rotation/truncation) | 100mb                       | 100mb         |
+| Config      | Description        | Example                     | Default       |
+| :---------- | :----------------- | :-------------------------- | :------------ |
+| log_level   | level              | info/warn/error/debug/trace | info          |
+| log4rs_file | log4rs config file | ./log4rs.yaml               | ./log4rs.yaml |
+| log_dir     | output dir         | ./logs                      | ./logs        |
 
 Note that the log files contain progress information for the task, which can be used for task [resuming at breakpoint](/docs/en/snapshot/resume.md). Therefore, if you have multiple tasks, **please set up separate log directories for each task**.
 

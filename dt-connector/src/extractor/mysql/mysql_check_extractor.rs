@@ -14,7 +14,7 @@ use sqlx::{MySql, Pool};
 use std::collections::HashMap;
 
 use crate::{
-    check_log::check_log::CheckLog,
+    checker::check_log::CheckLog,
     extractor::{base_check_extractor::BaseCheckExtractor, base_extractor::BaseExtractor},
     rdb_query_builder::RdbQueryBuilder,
     BatchCheckExtractor, Extractor,
@@ -27,6 +27,7 @@ pub struct MysqlCheckExtractor {
     pub filter: RdbFilter,
     pub check_log_dir: String,
     pub batch_size: usize,
+    pub replay_diff_as_update: bool,
 }
 
 #[async_trait]
@@ -57,15 +58,11 @@ impl BatchCheckExtractor for MysqlCheckExtractor {
 
         let ignore_cols = self.filter.get_ignore_cols(db, tb);
         let query_builder = RdbQueryBuilder::new_for_mysql(tb_meta, ignore_cols);
-        let check_row_data_refs: Vec<&RowData> = check_row_data_items.iter().collect();
+        let batch_refs: Vec<&RowData> = check_row_data_items.iter().collect();
         let query_info = if check_logs.len() == 1 {
             query_builder.get_select_query(&check_row_data_items[0])?
         } else {
-            query_builder.get_batch_select_query(
-                &check_row_data_refs,
-                0,
-                check_row_data_refs.len(),
-            )?
+            query_builder.get_batch_select_query(&batch_refs, 0, batch_refs.len())?
         };
         let query = query_builder.create_mysql_query(&query_info)?;
 
@@ -73,7 +70,7 @@ impl BatchCheckExtractor for MysqlCheckExtractor {
         while let Some(row) = rows.try_next().await.unwrap() {
             let mut row_data = RowData::from_mysql_row(&row, tb_meta, &ignore_cols);
 
-            if is_diff {
+            if is_diff && self.replay_diff_as_update {
                 row_data.row_type = RowType::Update;
                 row_data.before = row_data.after.clone();
             }

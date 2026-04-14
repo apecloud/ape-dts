@@ -84,10 +84,10 @@ log4rs_file=./log4rs.yaml
 
 - [extractor]
 
-| Config | Description | Example | Default |
-| :-------- | :-------- | :-------- | :-------- |
-| source | op_log / change_stream, change_stream is recommended if the source mongo version is 6.0+ | op_log | change_stream |
-| start_timestamp | the starting UTC timestamp to pull op logs from | 1728525445 | 0, which means from newest |
+| Config          | Description                                                                              | Example    | Default                    |
+| :-------------- | :--------------------------------------------------------------------------------------- | :--------- | :------------------------- |
+| source          | op_log / change_stream, change_stream is recommended if the source mongo version is 6.0+ | op_log     | change_stream              |
+| start_timestamp | the starting UTC timestamp to pull op logs from                                          | 1728525445 | 0, which means from newest |
 
 # CDC, by change_stream
 ```
@@ -132,11 +132,52 @@ log4rs_file=./log4rs.yaml
 
 - [extractor]
 
-| Config | Description | Example | Default |
-| :-------- | :-------- | :-------- | :-------- |
-| resume_token | the resume_token to pull change stream from | - | empty, which means from newest |
+| Config       | Description                                 | Example | Default                        |
+| :----------- | :------------------------------------------ | :------ | :----------------------------- |
+| resume_token | the resume_token to pull change stream from | -       | empty, which means from newest |
 
-# Data check
+# Standalone snapshot check
+```
+[extractor]
+db_type=mongo
+extract_type=snapshot
+url=mongodb://ape_dts:123456@mongo1:9042/?replicaSet=rs0
+
+[checker]
+enable=true
+db_type=mongo
+url=mongodb://ape_dts:123456@127.0.0.1:27018
+batch_size=100
+
+[filter]
+do_dbs=
+ignore_dbs=
+do_tbs=test_db_1.*,test_db_2.*
+ignore_tbs=
+do_events=insert
+
+[router]
+db_map=
+tb_map=
+col_map=
+
+[parallelizer]
+parallel_type=mongo
+parallel_size=8
+
+[pipeline]
+buffer_size=16000
+checkpoint_interval_secs=10
+
+[runtime]
+log_level=info
+log4rs_file=./log4rs.yaml
+log_dir=./logs
+```
+
+- the output will be in {log_dir}/check/
+
+# Inline snapshot check
 ```
 [extractor]
 db_type=mongo
@@ -145,8 +186,12 @@ url=mongodb://ape_dts:123456@mongo1:9042/?replicaSet=rs0
 
 [sinker]
 db_type=mongo
-sink_type=check
+sink_type=write
 url=mongodb://ape_dts:123456@127.0.0.1:27018
+batch_size=200
+
+[checker]
+enable=true
 batch_size=200
 
 [filter]
@@ -162,7 +207,7 @@ tb_map=
 col_map=
 
 [parallelizer]
-parallel_type=rdb_check
+parallel_type=snapshot
 parallel_size=8
 
 [pipeline]
@@ -176,6 +221,13 @@ log_dir=./logs
 ```
 
 - the output will be in {log_dir}/check/
+- `[checker]` intentionally omits `db_type` / `url` / `username` / `password`; inline snapshot
+  check reuses the parsed `[sinker]` target.
+
+# Inline cdc check
+
+MongoDB CDC currently does not support inline cdc check. Use standalone snapshot check or inline
+snapshot check instead.
 
 # Data revise
 ```
@@ -220,9 +272,9 @@ log_dir=./logs
 
 - [extractor]
 
-| Config | Description | Example | Default |
-| :-------- | :-------- | :-------- | :-------- |
-| check_log_dir | the directory of check log, required | ./check_task/logs/check | - |
+| Config        | Description                          | Example                 | Default |
+| :------------ | :----------------------------------- | :---------------------- | :------ |
+| check_log_dir | the directory of check log, required | ./check_task/logs/check | -       |
 
 # Data review
 ```
@@ -233,11 +285,11 @@ url=mongodb://ape_dts:123456@mongo1:9042/?replicaSet=rs0
 check_log_dir=./logs/origin_check_log
 batch_size=200
 
-[sinker]
+[checker]
+enable=true
 db_type=mongo
-sink_type=check
 url=mongodb://ape_dts:123456@127.0.0.1:27018
-batch_size=200
+batch_size=100
 
 [filter]
 do_dbs=
@@ -252,7 +304,7 @@ tb_map=
 col_map=
 
 [parallelizer]
-parallel_type=rdb_check
+parallel_type=mongo
 parallel_size=8
 
 [pipeline]

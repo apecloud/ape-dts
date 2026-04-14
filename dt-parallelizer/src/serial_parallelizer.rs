@@ -1,14 +1,14 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-
-use super::base_parallelizer::BaseParallelizer;
-use crate::{DataSize, Parallelizer};
 use dt_common::meta::{
     dcl_meta::dcl_data::DclData, ddl_meta::ddl_data::DdlData, dt_data::DtItem, dt_queue::DtQueue,
     row_data::RowData, struct_meta::struct_data::StructData,
 };
 use dt_connector::Sinker;
+
+use super::base_parallelizer::BaseParallelizer;
+use crate::{DataSize, Parallelizer};
 
 pub struct SerialParallelizer {
     pub base_parallelizer: BaseParallelizer,
@@ -31,10 +31,11 @@ impl Parallelizer for SerialParallelizer {
     ) -> anyhow::Result<DataSize> {
         let data_size = DataSize {
             count: data.len() as u64,
-            bytes: data.iter().map(|v| v.data_size as u64).sum(),
+            bytes: data.iter().map(|v| v.get_data_size()).sum(),
         };
 
-        self.base_parallelizer
+        let _ = self
+            .base_parallelizer
             .sink_dml(vec![data], sinkers, 1, false)
             .await?;
 

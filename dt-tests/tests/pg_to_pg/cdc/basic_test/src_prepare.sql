@@ -138,7 +138,7 @@ CREATE TABLE pkuk.tbl_3 (
     code    varchar(21) NOT NULL,
     name    varchar(30),
     CONSTRAINT tbl_3_code_uk UNIQUE (code)
-)
+);
 
 -- No PK, no Unique Col by constraint
 CREATE TABLE pkuk.tbl_4 (

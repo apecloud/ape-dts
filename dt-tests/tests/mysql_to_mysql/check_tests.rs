@@ -3,7 +3,7 @@ mod test {
 
     use serial_test::serial;
 
-    use crate::test_runner::test_base::TestBase;
+    use crate::test_runner::{check_test_runner::CheckTestRunner, test_base::TestBase};
 
     #[tokio::test]
     #[serial]
@@ -13,9 +13,77 @@ mod test {
 
     #[tokio::test]
     #[serial]
+    async fn check_tb_parallel_metrics_test() {
+        let runner = CheckTestRunner::new("mysql_to_mysql/check/basic_test")
+            .await
+            .expect("Failed to create CheckTestRunner");
+        let result = runner.run_check_test_and_validate_task_metrics(3).await;
+        runner.close().await.expect("Failed to close runner");
+        result.expect("Failed to validate tb_parallel task metrics");
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn snapshot_inline_basic_test() {
+        TestBase::run_check_test("mysql_to_mysql/check/snapshot_inline_basic_test").await;
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn cdc_check_basic_test() {
+        TestBase::run_cdc_check_test("mysql_to_mysql/check/cdc_check_basic_test", 3000, 8000).await;
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn cdc_position_resume_test() {
+        TestBase::run_cdc_position_resume_test(
+            "mysql_to_mysql/check/cdc_position_resume_test",
+            1000,
+            1000,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn cdc_checker_state_resume_test() {
+        TestBase::run_cdc_checker_state_resume_test(
+            "mysql_to_mysql/check/cdc_checker_state_resume_test",
+            3000,
+            3000,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn cdc_check_large_data_test() {
+        TestBase::run_cdc_check_test(
+            "mysql_to_mysql/check/cdc_check_large_data_test",
+            5000,
+            30000,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn cdc_check_update_delete_test() {
+        TestBase::run_cdc_check_test(
+            "mysql_to_mysql/check/cdc_check_update_delete_test",
+            5000,
+            30000,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    #[serial]
     async fn check_all_cols_pk_test() {
         TestBase::run_check_test("mysql_to_mysql/check/all_cols_pk_test").await;
     }
+
     #[tokio::test]
     #[serial]
     async fn check_basic_struct_test() {

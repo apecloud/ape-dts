@@ -9,6 +9,8 @@
 支持变更类型：
 - 仅支持 DML 变更
 
+本文示例使用 `sink_type=sql`，不属于 inline cdc check。若需要校验 CDC 已落库数据，请改用 `sink_type=write` 的 CDC 任务，并参考 [数据校验](../snapshot/check.md#inline-cdc-check) 中的 inline cdc check 说明。
+
 # 示例
 
 ## 示例 1：生成正向 sql

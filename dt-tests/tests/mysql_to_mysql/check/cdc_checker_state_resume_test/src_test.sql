@@ -1,0 +1,1 @@
+UPDATE test_db_1.check_test SET value = 250 WHERE id = 2;

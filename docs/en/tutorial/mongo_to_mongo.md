@@ -29,6 +29,8 @@ docker run -d --name dst-mongo \
 ```
 
 # Migrate snapshot data
+- To turn this into **inline snapshot check**, keep `[sinker] sink_type=write` and add a `[checker]` section without target connection fields.
+- See [Data Check](../snapshot/check.md#inline-snapshot-check) and the Mongo template for the exact config shape.
 ## Prepare data
 ```
 docker exec -it src-mongo mongosh --quiet
@@ -103,8 +105,8 @@ docker exec -it dst-mongo mongosh \
 ]
 ```
 
-# Check data
-- check the differences between target data and source data
+# Standalone snapshot check
+- check the differences between target data and source data in standalone snapshot check mode
 
 ## Prepare data
 - change target table records
@@ -125,9 +127,9 @@ db_type=mongo
 extract_type=snapshot
 url=mongodb://127.0.0.1:27017
 
-[sinker]
+[checker]
+enable=true
 db_type=mongo
-sink_type=check
 url=mongodb://ape_dts:123456@127.0.0.1:27018
 
 [filter]
@@ -135,7 +137,7 @@ do_dbs=test_db
 do_events=insert
 
 [parallelizer]
-parallel_type=rdb_check
+parallel_type=mongo
 parallel_size=8
 
 [pipeline]
@@ -226,16 +228,16 @@ extract_type=check_log
 url=mongodb://127.0.0.1:27017
 check_log_dir=./check_data_task_log
 
-[sinker]
+[checker]
+enable=true
 db_type=mongo
-sink_type=check
 url=mongodb://ape_dts:123456@127.0.0.1:27018
 
 [filter]
 do_events=*
 
 [parallelizer]
-parallel_type=rdb_check
+parallel_type=mongo
 parallel_size=8
 
 [pipeline]
@@ -256,6 +258,9 @@ docker run --rm --network host \
 - /tmp/ape_dts/review_data_task_log/check/miss.log and /tmp/ape_dts/review_data_task_log/check/diff.log should be empty
 
 # Cdc task
+
+- Mongo CDC currently does **not** support inline cdc check. Use standalone snapshot check or
+  inline snapshot check instead.
 
 ## Start task
 ```

@@ -1,6 +1,6 @@
 use crate::{
     config::limiter_config::{CapacityLimiterConfig, RateLimiterConfig},
-    limiter::{Limiter, UnitType},
+    limiter::base_limiter::{Limiter, UnitType},
     log_error,
     meta::dt_data::DtItem,
 };
@@ -30,7 +30,7 @@ impl BufferLimiter {
                     bps,
                     UnitType::Bytes,
                 )));
-            } else {
+            } else if rate_cfg.max_mbps > 0 {
                 log_error!(
                     "max_mbps={} is too large and will be ignored to prevent overflow",
                     rate_cfg.max_mbps
@@ -58,7 +58,7 @@ impl BufferLimiter {
                         UnitType::Bytes,
                     ),
                 ));
-            } else {
+            } else if cap_cfg.buffer_memory_mb > 0 {
                 log_error!(
                     "buffer_memory_mb={} is too large and will be ignored to prevent overflow",
                     cap_cfg.buffer_memory_mb

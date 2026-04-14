@@ -4,6 +4,7 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
+use anyhow::anyhow;
 use log::Record;
 use log4rs::{
     config::{Deserialize, Deserializers},
@@ -71,6 +72,42 @@ impl Deserialize for SizeLimitFilterDeserializer {
     }
 }
 
+fn parse_size_limit_bytes(v: &str) -> Result<u64, String> {
+    let (number, unit) = match v.find(|c: char| !c.is_ascii_digit()) {
+        Some(n) => (v[..n].trim(), Some(v[n..].trim())),
+        None => (v.trim(), None),
+    };
+
+    let number = number
+        .parse::<u64>()
+        .map_err(|_| format!("invalid size number: {number}"))?;
+
+    let unit = match unit {
+        Some(u) => u,
+        None => return Ok(number),
+    };
+
+    let number = if unit.eq_ignore_ascii_case("b") {
+        Some(number)
+    } else if unit.eq_ignore_ascii_case("kb") || unit.eq_ignore_ascii_case("kib") {
+        number.checked_mul(1024)
+    } else if unit.eq_ignore_ascii_case("mb") || unit.eq_ignore_ascii_case("mib") {
+        number.checked_mul(1024 * 1024)
+    } else if unit.eq_ignore_ascii_case("gb") || unit.eq_ignore_ascii_case("gib") {
+        number.checked_mul(1024 * 1024 * 1024)
+    } else if unit.eq_ignore_ascii_case("tb") || unit.eq_ignore_ascii_case("tib") {
+        number.checked_mul(1024 * 1024 * 1024 * 1024)
+    } else {
+        return Err(format!("invalid size unit: {unit}"));
+    };
+
+    number.ok_or_else(|| format!("size overflow: {v}"))
+}
+
+pub fn parse_size_limit(v: &str) -> anyhow::Result<u64> {
+    parse_size_limit_bytes(v).map_err(|e| anyhow!(e))
+}
+
 fn deserialize_limit<'de, D>(d: D) -> Result<u64, D::Error>
 where
     D: serde::Deserializer<'de>,
@@ -109,50 +146,8 @@ where
         where
             E: serde::de::Error,
         {
-            let (number, unit) = match v.find(|c: char| !c.is_ascii_digit()) {
-                Some(n) => (v[..n].trim(), Some(v[n..].trim())),
-                None => (v.trim(), None),
-            };
-
-            let number = match number.parse::<u64>() {
-                Ok(n) => n,
-                Err(_) => {
-                    return Err(E::invalid_value(
-                        serde::de::Unexpected::Str(number),
-                        &"a number",
-                    ))
-                }
-            };
-
-            let unit = match unit {
-                Some(u) => u,
-                None => return Ok(number),
-            };
-
-            let number = if unit.eq_ignore_ascii_case("b") {
-                Some(number)
-            } else if unit.eq_ignore_ascii_case("kb") || unit.eq_ignore_ascii_case("kib") {
-                number.checked_mul(1024)
-            } else if unit.eq_ignore_ascii_case("mb") || unit.eq_ignore_ascii_case("mib") {
-                number.checked_mul(1024 * 1024)
-            } else if unit.eq_ignore_ascii_case("gb") || unit.eq_ignore_ascii_case("gib") {
-                number.checked_mul(1024 * 1024 * 1024)
-            } else if unit.eq_ignore_ascii_case("tb") || unit.eq_ignore_ascii_case("tib") {
-                number.checked_mul(1024 * 1024 * 1024 * 1024)
-            } else {
-                return Err(E::invalid_value(
-                    serde::de::Unexpected::Str(unit),
-                    &"a valid unit",
-                ));
-            };
-
-            match number {
-                Some(n) => Ok(n),
-                None => Err(E::invalid_value(
-                    serde::de::Unexpected::Str(v),
-                    &"a byte size",
-                )),
-            }
+            parse_size_limit_bytes(v)
+                .map_err(|_| E::invalid_value(serde::de::Unexpected::Str(v), &"a byte size"))
         }
     }
 

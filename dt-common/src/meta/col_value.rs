@@ -8,8 +8,6 @@ use anyhow::bail;
 use mongodb::bson::{Bson, Document};
 use serde::{Deserialize, Serialize, Serializer};
 
-// #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-// #[serde(tag = "type", content = "value")]
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[allow(dead_code)]
 pub enum ColValue {
@@ -150,19 +148,46 @@ impl ColValue {
                     v1 == v2
                 }
             }
+            // MySQL Binlog VARCHAR/CHAR/TEXT->RawString same as String
+            (ColValue::RawString(v1), ColValue::String(v2)) => {
+                if let Ok(s) = String::from_utf8(v1.clone()) {
+                    &s == v2
+                } else {
+                    false
+                }
+            }
+            (ColValue::String(v1), ColValue::RawString(v2)) => {
+                if let Ok(s) = String::from_utf8(v2.clone()) {
+                    v1 == &s
+                } else {
+                    false
+                }
+            }
+            (ColValue::String(v1), ColValue::String(v2)) => v1 == v2,
             _ => self == other,
         }
     }
 
-    pub fn hash_code(&self) -> u64 {
-        match self {
-            ColValue::None | ColValue::UnchangedToast => 0,
-            _ => {
-                let mut hasher = DefaultHasher::new();
-                self.to_option_string().hash(&mut hasher);
-                hasher.finish()
+    pub fn hash_code(&self) -> anyhow::Result<u64> {
+        if matches!(self, ColValue::None | ColValue::UnchangedToast) {
+            return Ok(0);
+        }
+
+        if let ColValue::MongoDoc(doc) = self {
+            // Reject nested Document/Array in _id as they're not reliably hashable
+            for (key, value) in doc.iter() {
+                if matches!(value, Bson::Document(_) | Bson::Array(_)) {
+                    bail!(
+                        "MongoDB _id contains unhashable type at key '{}': use primitive types",
+                        key
+                    );
+                }
             }
         }
+
+        let mut hasher = DefaultHasher::new();
+        self.to_option_string().hash(&mut hasher);
+        Ok(hasher.finish())
     }
 
     pub fn type_name(&self) -> &'static str {
@@ -393,6 +418,9 @@ impl From<Bson> for ColValue {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::meta::tagged_col_value_map;
+    use crate::meta::tagged_col_value_map::TaggedColValueDef as MetaTaggedColValueDef;
+    use std::collections::BTreeMap;
 
     #[test]
     fn test_is_same_value() {
@@ -441,5 +469,17 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn test_tagged_col_value_map_is_exposed_from_meta() {
+        let values = BTreeMap::from([("id".to_string(), ColValue::Long(7))]);
+        let mut json = serde_json::Serializer::new(Vec::new());
+        tagged_col_value_map::serialize(&values, &mut json).unwrap();
+    }
+
+    #[test]
+    fn test_tagged_col_value_def_is_exposed_from_meta() {
+        let _ = std::any::type_name::<MetaTaggedColValueDef>();
     }
 }

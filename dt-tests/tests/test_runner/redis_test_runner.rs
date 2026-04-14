@@ -1,6 +1,3 @@
-use crate::test_runner::redis_test_util::RedisTestUtil;
-
-use super::{base_test_runner::BaseTestRunner, redis_cluster_connection::RedisClusterConnection};
 use anyhow::bail;
 use dt_common::{
     config::{
@@ -16,6 +13,9 @@ use dt_common::{
 };
 
 use redis::{Connection, Value};
+
+use super::{base_test_runner::BaseTestRunner, redis_cluster_connection::RedisClusterConnection};
+use crate::test_runner::redis_test_util::RedisTestUtil;
 
 pub struct RedisTestRunner {
     pub base: BaseTestRunner,
@@ -421,13 +421,13 @@ impl RedisTestRunner {
         let (src_to_compare, dst_to_compare) = if let Some(idx) = result_index {
             match (&src_result, &dst_result) {
                 (Value::Array(src_arr), Value::Array(dst_arr)) => {
-                    let src_elem = src_arr.get(idx as usize).unwrap_or(&Value::Nil);
-                    let dst_elem = dst_arr.get(idx as usize).unwrap_or(&Value::Nil);
+                    let src_elem = src_arr.get(idx).unwrap_or(&Value::Nil);
+                    let dst_elem = dst_arr.get(idx).unwrap_or(&Value::Nil);
                     (src_elem, dst_elem)
                 }
                 (Value::Set(src_set), Value::Set(dst_set)) => {
-                    let src_elem = src_set.get(idx as usize).unwrap_or(&Value::Nil);
-                    let dst_elem = dst_set.get(idx as usize).unwrap_or(&Value::Nil);
+                    let src_elem = src_set.get(idx).unwrap_or(&Value::Nil);
+                    let dst_elem = dst_set.get(idx).unwrap_or(&Value::Nil);
                     (src_elem, dst_elem)
                 }
                 _ => (&src_result, &dst_result),

@@ -5,7 +5,7 @@ use actix_web::{middleware::Logger, web, App, HttpResponse, HttpServer, Responde
 use dashmap::DashMap;
 use prometheus::{Gauge, Opts, Registry, TextEncoder};
 
-use crate::config::config_enums::TaskType;
+use crate::config::config_enums::{TaskKind, TaskType};
 use crate::config::metrics_config::MetricsConfig;
 use crate::monitor::task_metrics::TaskMetricsType;
 
@@ -169,10 +169,70 @@ impl PrometheusMetrics {
             "the bytes of records sinked",
             TaskMetricsType::SinkerSinkedBytes,
         );
+        register_handler(
+            "checker_miss_total",
+            "the total miss count detected by checker",
+            TaskMetricsType::CheckerMissCount,
+        );
+        register_handler(
+            "checker_diff_total",
+            "the total diff count detected by checker",
+            TaskMetricsType::CheckerDiffCount,
+        );
+        register_handler(
+            "checker_queue_size",
+            "the unresolved rows currently tracked by checker",
+            TaskMetricsType::CheckerPending,
+        );
+        register_handler(
+            "checker_rps_min",
+            "the min checked records per second of checker",
+            TaskMetricsType::CheckerRpsMin,
+        );
+        register_handler(
+            "checker_rps_max",
+            "the max checked records per second of checker",
+            TaskMetricsType::CheckerRpsMax,
+        );
+        register_handler(
+            "checker_rps_avg",
+            "the average checked records per second of checker",
+            TaskMetricsType::CheckerRpsAvg,
+        );
+        register_handler(
+            "checker_miss_rps_min",
+            "the min miss records per second of checker",
+            TaskMetricsType::CheckerMissRpsMin,
+        );
+        register_handler(
+            "checker_miss_rps_max",
+            "the max miss records per second of checker",
+            TaskMetricsType::CheckerMissRpsMax,
+        );
+        register_handler(
+            "checker_miss_rps_avg",
+            "the average miss records per second of checker",
+            TaskMetricsType::CheckerMissRpsAvg,
+        );
+        register_handler(
+            "checker_diff_rps_min",
+            "the min diff records per second of checker",
+            TaskMetricsType::CheckerDiffRpsMin,
+        );
+        register_handler(
+            "checker_diff_rps_max",
+            "the max diff records per second of checker",
+            TaskMetricsType::CheckerDiffRpsMax,
+        );
+        register_handler(
+            "checker_diff_rps_avg",
+            "the average diff records per second of checker",
+            TaskMetricsType::CheckerDiffRpsAvg,
+        );
 
         if let Some(task_type) = &self.task_type {
-            match task_type {
-                TaskType::Snapshot => {
+            match task_type.kind {
+                TaskKind::Snapshot => {
                     register_handler(
                         "extractor_plan_records",
                         "the records estimated by extractor plan",
@@ -184,7 +244,7 @@ impl PrometheusMetrics {
                         TaskMetricsType::Progress,
                     );
                 }
-                TaskType::Cdc => {
+                TaskKind::Cdc => {
                     register_handler(
                         "timestamp",
                         "the timestamp of task",
@@ -196,7 +256,7 @@ impl PrometheusMetrics {
                         TaskMetricsType::SinkerDdlCount,
                     );
                 }
-                TaskType::Struct | TaskType::Check => {}
+                TaskKind::Struct => {}
             }
         }
         self
@@ -222,12 +282,19 @@ impl PrometheusMetrics {
                 .default_service(web::route().to(not_found_handler))
         })
         .workers(self.config.workers as usize)
-        .shutdown_timeout(10)
-        .bind(&addr)
-        .unwrap()
-        .run();
+        .shutdown_timeout(10);
 
-        tokio::spawn(server)
+        match server.bind(&addr) {
+            Ok(server) => tokio::spawn(server.run()),
+            Err(err) => {
+                log::warn!(
+                    "Failed to bind metrics server on {} (metrics disabled): {}",
+                    addr,
+                    err
+                );
+                tokio::spawn(async move { Err(err) })
+            }
+        }
     }
 }
 

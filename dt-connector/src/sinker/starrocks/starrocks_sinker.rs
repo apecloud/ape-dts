@@ -1,11 +1,10 @@
 use std::{cmp, collections::HashMap, str::FromStr, sync::Arc};
 
-use crate::{call_batch_fn, sinker::base_sinker::BaseSinker, Sinker};
 use anyhow::bail;
 use async_trait::async_trait;
 use chrono::Utc;
 use reqwest::{header, Client, Method, Response, StatusCode};
-use serde_json::{json, Value};
+use serde_json::Value;
 use tokio::time::Instant;
 
 use dt_common::{
@@ -24,6 +23,8 @@ use dt_common::{
     monitor::monitor::Monitor,
     utils::{limit_queue::LimitedQueue, sql_util::SqlUtil},
 };
+
+use crate::{call_batch_fn, sinker::base_sinker::BaseSinker, Sinker};
 
 const SIGN_COL_NAME: &str = "_ape_dts_is_deleted";
 const TIMESTAMP_COL_NAME: &str = "_ape_dts_timestamp";
@@ -51,7 +52,7 @@ impl Sinker for StarRocksSinker {
         }
 
         if !batch {
-            self.serial_sink(data).await?;
+            self.serial_sink(data.as_mut_slice()).await?;
         } else {
             call_batch_fn!(self, data, Self::batch_sink);
         }
@@ -64,16 +65,14 @@ impl Sinker for StarRocksSinker {
 }
 
 impl StarRocksSinker {
-    async fn serial_sink(&mut self, mut data: Vec<RowData>) -> anyhow::Result<()> {
+    async fn serial_sink(&mut self, data: &mut [RowData]) -> anyhow::Result<()> {
         let mut data_size = 0;
-
-        let data = data.as_mut_slice();
         for i in 0..data.len() {
-            data_size += data[i].data_size;
+            data_size += data[i].get_data_size();
             self.send_data(data, i, 1).await?;
         }
 
-        BaseSinker::update_serial_monitor(&self.monitor, data.len() as u64, data_size as u64).await
+        BaseSinker::update_serial_monitor(&self.monitor, data.len() as u64, data_size).await
     }
 
     async fn batch_sink(
@@ -102,22 +101,17 @@ impl StarRocksSinker {
         let mut data_size = 0;
         let mut rts = LimitedQueue::new(1);
         // build stream load data
-        let mut load_data = Vec::new();
+        let mut load_data = Vec::with_capacity(batch_size);
         for row_data in data.iter_mut().skip(start_index).take(batch_size) {
-            data_size += row_data.data_size;
-
+            data_size += row_data.get_data_size() as usize;
+            let is_delete = row_data.row_type == RowType::Delete;
             Self::convert_row_data(row_data, tb_meta)?;
+            let col_values = Self::active_col_values_mut(row_data)?;
 
-            let col_values = if row_data.row_type == RowType::Delete {
-                let before = row_data.require_before_mut()?;
-                if self.db_type == DbType::StarRocks {
-                    // SIGN_COL value
-                    before.insert(SIGN_COL_NAME.into(), ColValue::Long(1));
-                }
-                before
-            } else {
-                row_data.require_after_mut()?
-            };
+            if is_delete && self.db_type == DbType::StarRocks {
+                // SIGN_COL value
+                col_values.insert(SIGN_COL_NAME.into(), ColValue::Long(1));
+            }
 
             if self.db_type == DbType::StarRocks {
                 col_values.insert(
@@ -143,13 +137,13 @@ impl StarRocksSinker {
             op = "delete";
         }
 
-        let body = json!(load_data).to_string();
+        let body = serde_json::to_string(&load_data)?;
         // do stream load
         let url = format!(
             "http://{}:{}/api/{}/{}/_stream_load",
             self.host, self.port, db, tb
         );
-        let request = self.build_request(&url, op, &body)?;
+        let request = self.build_request(&url, op, body)?;
 
         let start_time = Instant::now();
         let response = self.http_client.execute(request).await?;
@@ -159,16 +153,6 @@ impl StarRocksSinker {
         Self::check_response(response).await?;
 
         Ok(data_size)
-    }
-
-    fn convert_row_data(row_data: &mut RowData, tb_meta: &MysqlTbMeta) -> anyhow::Result<()> {
-        if let Some(before) = &mut row_data.before {
-            Self::convert_col_values(before, tb_meta)?;
-        }
-        if let Some(after) = &mut row_data.after {
-            Self::convert_col_values(after, tb_meta)?;
-        }
-        Ok(())
     }
 
     fn convert_col_values(
@@ -214,7 +198,26 @@ impl StarRocksSinker {
         Ok(())
     }
 
-    fn build_request(&self, url: &str, op: &str, body: &str) -> anyhow::Result<reqwest::Request> {
+    fn convert_row_data(row_data: &mut RowData, tb_meta: &MysqlTbMeta) -> anyhow::Result<()> {
+        if let Some(before) = &mut row_data.before {
+            Self::convert_col_values(before, tb_meta)?;
+        }
+        if let Some(after) = &mut row_data.after {
+            Self::convert_col_values(after, tb_meta)?;
+        }
+        Ok(())
+    }
+
+    fn active_col_values_mut(
+        row_data: &mut RowData,
+    ) -> anyhow::Result<&mut HashMap<String, ColValue>> {
+        match row_data.row_type {
+            RowType::Delete => row_data.require_before_mut(),
+            _ => row_data.require_after_mut(),
+        }
+    }
+
+    fn build_request(&self, url: &str, op: &str, body: String) -> anyhow::Result<reqwest::Request> {
         let password = if self.password.is_empty() {
             None
         } else {
@@ -229,7 +232,7 @@ impl StarRocksSinker {
             .header("format", "json")
             .header("strip_outer_array", "true")
             .header("timezone", "UTC")
-            .body(body.to_string());
+            .body(body);
         // by default, the __op will be upsert
         if !op.is_empty() {
             match self.db_type {

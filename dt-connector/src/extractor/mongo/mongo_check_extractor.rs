@@ -13,12 +13,12 @@ use dt_common::meta::{
 };
 
 use mongodb::{
-    bson::{doc, Document},
+    bson::{doc, oid::ObjectId, Bson, Document},
     Client,
 };
 
 use crate::{
-    check_log::check_log::CheckLog,
+    checker::check_log::CheckLog,
     extractor::{base_check_extractor::BaseCheckExtractor, base_extractor::BaseExtractor},
     BatchCheckExtractor, Extractor,
 };
@@ -65,7 +65,7 @@ impl BatchCheckExtractor for MongoCheckExtractor {
             if let Some(Some(col_value)) = check_log.id_col_values.get(MongoConstants::ID) {
                 let key: MongoKey = serde_json::from_str(col_value)
                     .with_context(|| format!("invalid mongo _id: {}", col_value))?;
-                ids.push(key.to_mongo_id());
+                ids.push(Self::normalize_lookup_id(key));
             }
         }
 
@@ -101,5 +101,16 @@ impl BatchCheckExtractor for MongoCheckExtractor {
                 .unwrap();
         }
         Ok(())
+    }
+}
+
+impl MongoCheckExtractor {
+    fn normalize_lookup_id(key: MongoKey) -> Bson {
+        match key {
+            MongoKey::String(value) => ObjectId::parse_str(&value)
+                .map(Bson::ObjectId)
+                .unwrap_or_else(|_| Bson::String(value)),
+            other => other.to_mongo_id(),
+        }
     }
 }

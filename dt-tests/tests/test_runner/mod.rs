@@ -1,10 +1,10 @@
 pub mod base_test_runner;
+pub mod check_test_runner;
 pub mod check_util;
 pub mod mock_utils;
 pub mod mongo_check_test_runner;
 pub mod mongo_test_runner;
 pub mod precheck_test_runner;
-pub mod rdb_check_test_runner;
 pub mod rdb_clickhouse_test_runner;
 pub mod rdb_cycle_test_runner;
 pub mod rdb_kafka_rdb_test_runner;

@@ -1,1 +1,0 @@
-key: index.STRUCT_check_test_1.not_MATCH_index.I5_diff_name_dst, dst_sql: CREATE  INDEX `I5_diff_name_dst` ON `STRUCT_check_test_1`.`not_MATCH_index` (`index_col`) 

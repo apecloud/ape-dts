@@ -1,9 +1,6 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-
-use super::{base_parallelizer::BaseParallelizer, rdb_partitioner::RdbPartitioner};
-use crate::{DataSize, Parallelizer};
 use dt_common::meta::{
     dt_data::{DtData, DtItem},
     dt_queue::DtQueue,
@@ -11,6 +8,9 @@ use dt_common::meta::{
 };
 use dt_common::monitor::counter::Counter;
 use dt_connector::Sinker;
+
+use super::{base_parallelizer::BaseParallelizer, rdb_partitioner::RdbPartitioner};
+use crate::{DataSize, Parallelizer};
 
 pub struct PartitionParallelizer {
     pub base_parallelizer: BaseParallelizer,
@@ -73,7 +73,8 @@ impl Parallelizer for PartitionParallelizer {
         };
 
         let sub_data = self.partitioner.partition(data, self.parallel_size).await?;
-        self.base_parallelizer
+        let _ = self
+            .base_parallelizer
             .sink_dml(sub_data, sinkers, self.parallel_size, false)
             .await?;
 

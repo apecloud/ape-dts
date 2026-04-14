@@ -1462,12 +1462,14 @@ dependencies = [
  "dt-common",
  "futures",
  "hex",
+ "indexmap 2.9.0",
  "kafka",
  "log",
  "log4rs",
  "mongodb",
  "mysql-binlog-connector-rust",
  "opendal",
+ "openssl",
  "orc-format",
  "percent-encoding",
  "postgres-protocol",
@@ -1509,6 +1511,7 @@ dependencies = [
  "dt-connector",
  "log",
  "log4rs",
+ "mongodb",
  "tokio",
 ]
 
@@ -1561,6 +1564,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-mutex",
+ "async-trait",
  "chrono",
  "clickhouse",
  "concurrent-queue",
@@ -1612,6 +1616,7 @@ dependencies = [
  "log",
  "log4rs",
  "mongodb",
+ "openssl",
  "project-root",
  "rand 0.9.2",
  "rdkafka",

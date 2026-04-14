@@ -1,7 +1,14 @@
-use std::{str::FromStr, sync::Arc, time::Duration};
+use std::{
+    str::FromStr,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+    time::Duration,
+};
 
 use anyhow::bail;
-use futures::TryStreamExt;
+use futures::{future::join_all, TryStreamExt};
 use mongodb::{bson::doc, options::ClientOptions};
 use opendal::Operator;
 use sqlx::{
@@ -12,7 +19,7 @@ use sqlx::{
 
 use dt_common::{
     config::{
-        config_enums::{DbType, RdbTransactionIsolation, TaskType},
+        config_enums::{DbType, RdbTransactionIsolation, TaskKind, TaskType},
         connection_auth_config::ConnectionAuthConfig,
         extractor_config::ExtractorConfig,
         global_config::GlobalConfig,
@@ -32,12 +39,17 @@ use dt_common::{
         pg::pg_meta_manager::PgMetaManager,
         rdb_meta_manager::RdbMetaManager,
     },
+    monitor::FlushableMonitor,
     rdb_filter::RdbFilter,
     system_dbs::SystemDb,
 };
-use dt_connector::extractor::resumer::{
-    build_recorder, build_recovery, recorder::Recorder, recovery::Recovery, utils::ResumerUtil,
+use dt_connector::{
+    checker::CheckerStateStore,
+    extractor::resumer::{
+        build_recorder, build_recovery, recorder::Recorder, recovery::Recovery, utils::ResumerUtil,
+    },
 };
+use tokio::select;
 
 pub struct TaskUtil {}
 
@@ -162,11 +174,6 @@ impl TaskUtil {
                 url,
                 connection_auth,
                 ..
-            }
-            | SinkerConfig::MysqlCheck {
-                url,
-                connection_auth,
-                ..
             } => {
                 let mysql_meta_manager = Self::create_mysql_meta_manager(
                     url,
@@ -177,7 +184,7 @@ impl TaskUtil {
                     None,
                 )
                 .await?;
-                RdbMetaManager::from_mysql(mysql_meta_manager)
+                Some(RdbMetaManager::from_mysql(mysql_meta_manager))
             }
 
             // In Doris/Starrocks, you can NOT get UNIQUE KEY by "SHOW INDEXES" or from "information_schema.STATISTICS",
@@ -198,7 +205,7 @@ impl TaskUtil {
                             None,
                         )
                         .await?;
-                        RdbMetaManager::from_mysql(mysql_meta_manager)
+                        Some(RdbMetaManager::from_mysql(mysql_meta_manager))
                     }
                     ExtractorConfig::PgCdc {
                         url,
@@ -207,9 +214,9 @@ impl TaskUtil {
                     } => {
                         let pg_meta_manager =
                             Self::create_pg_meta_manager(url, connection_auth, log_level).await?;
-                        RdbMetaManager::from_pg(pg_meta_manager)
+                        Some(RdbMetaManager::from_pg(pg_meta_manager))
                     }
-                    _ => return Ok(None),
+                    _ => None,
                 }
             }
 
@@ -217,22 +224,47 @@ impl TaskUtil {
                 url,
                 connection_auth,
                 ..
-            }
-            | SinkerConfig::PgCheck {
-                url,
-                connection_auth,
-                ..
             } => {
                 let pg_meta_manager =
                     Self::create_pg_meta_manager(url, connection_auth, log_level).await?;
-                RdbMetaManager::from_pg(pg_meta_manager)
+                Some(RdbMetaManager::from_pg(pg_meta_manager))
             }
 
-            _ => {
-                return Ok(None);
-            }
+            _ => None,
         };
-        Ok(Some(meta_manager))
+        if meta_manager.is_some() {
+            return Ok(meta_manager);
+        }
+
+        if let Some(checker_target) = config.checker_target() {
+            let checker_meta_manager = match checker_target.db_type {
+                DbType::Mysql => {
+                    let mysql_meta_manager = Self::create_mysql_meta_manager(
+                        &checker_target.url,
+                        &checker_target.connection_auth,
+                        log_level,
+                        DbType::Mysql,
+                        None,
+                        None,
+                    )
+                    .await?;
+                    Some(RdbMetaManager::from_mysql(mysql_meta_manager))
+                }
+                DbType::Pg => {
+                    let pg_meta_manager = Self::create_pg_meta_manager(
+                        &checker_target.url,
+                        &checker_target.connection_auth,
+                        log_level,
+                    )
+                    .await?;
+                    Some(RdbMetaManager::from_pg(pg_meta_manager))
+                }
+                _ => None,
+            };
+            return Ok(checker_meta_manager);
+        }
+
+        Ok(None)
     }
 
     pub async fn create_mysql_meta_manager(
@@ -346,8 +378,8 @@ impl TaskUtil {
         schemas: &[String],
         filter: &RdbFilter,
     ) -> anyhow::Result<u64> {
-        match task_type {
-            TaskType::Snapshot => match db_type {
+        match task_type.kind {
+            TaskKind::Snapshot => match db_type {
                 DbType::Mysql => Self::estimate_mysql_snapshot(conn_pool, schemas, filter).await,
                 DbType::Pg => Self::estimate_pg_snapshot(conn_pool, schemas, filter).await,
                 _ => Ok(0),
@@ -648,6 +680,7 @@ WHERE
     ) -> anyhow::Result<(
         Option<Arc<dyn Recorder + Send + Sync>>,
         Option<Arc<dyn Recovery + Send + Sync>>,
+        Option<Arc<CheckerStateStore>>,
     )> {
         let recorder_pool = match resumer_config {
             ResumerConfig::FromDB {
@@ -669,6 +702,17 @@ WHERE
             _ => None,
         };
         let recovery_pool = recorder_pool.clone();
+        let checker_state_store = if task_type.is_cdc_inline_check() {
+            if let Some(pool) = recorder_pool.clone() {
+                Some(Arc::new(
+                    CheckerStateStore::new(pool, resumer_config).await?,
+                ))
+            } else {
+                None
+            }
+        } else {
+            None
+        };
         let recorder =
             build_recorder(&global_config.task_id, resumer_config, recorder_pool).await?;
         let recovery = build_recovery(
@@ -678,7 +722,45 @@ WHERE
             recovery_pool,
         )
         .await?;
-        Ok((recorder, recovery))
+        Ok((recorder, recovery, checker_state_store))
+    }
+
+    pub async fn flush_monitors(
+        interval_secs: u64,
+        shut_down: Arc<AtomicBool>,
+        monitors: &[Arc<dyn FlushableMonitor + Send + Sync>],
+    ) {
+        let mut interval = tokio::time::interval(Duration::from_secs(interval_secs));
+        interval.tick().await;
+
+        loop {
+            if shut_down.load(Ordering::Acquire) {
+                Self::flush_monitor_batch(monitors).await;
+                break;
+            }
+
+            select! {
+                _ = interval.tick() => Self::flush_monitor_batch(monitors).await,
+                _ = Self::wait_for_shutdown(shut_down.clone()) => {
+                    log_info!("task shutdown detected, do final flush");
+                    Self::flush_monitor_batch(monitors).await;
+                    break;
+                }
+            }
+        }
+    }
+
+    pub async fn wait_for_shutdown(shut_down: Arc<AtomicBool>) {
+        while !shut_down.load(Ordering::Acquire) {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    }
+
+    async fn flush_monitor_batch(monitors: &[Arc<dyn FlushableMonitor + Send + Sync>]) {
+        join_all(monitors.iter().cloned().map(|monitor| async move {
+            monitor.flush().await;
+        }))
+        .await;
     }
 }
 
@@ -702,7 +784,8 @@ impl ConnClient {
                 "`extractor.max_connections` must be greater than 0".into()
             ));
         }
-        if sinker_max_connections < 1 {
+        let sinker_exists = !matches!(task_config.sinker, SinkerConfig::Dummy);
+        if sinker_exists && sinker_max_connections < 1 {
             bail!(Error::ConfigError(
                 "`sinker.max_connections` must be greater than 0".into()
             ));
@@ -822,11 +905,6 @@ impl ConnClient {
                 url,
                 connection_auth,
                 ..
-            }
-            | SinkerConfig::MysqlCheck {
-                url,
-                connection_auth,
-                ..
             } => ConnClient::MySQL(
                 TaskUtil::create_mysql_conn_pool(
                     url,
@@ -856,11 +934,6 @@ impl ConnClient {
                 url,
                 connection_auth,
                 ..
-            }
-            | SinkerConfig::PgCheck {
-                url,
-                connection_auth,
-                ..
             } => ConnClient::PostgreSQL(
                 TaskUtil::create_pg_conn_pool(
                     url,
@@ -872,12 +945,6 @@ impl ConnClient {
                 .await?,
             ),
             SinkerConfig::Mongo {
-                url,
-                connection_auth,
-                app_name,
-                ..
-            }
-            | SinkerConfig::MongoCheck {
                 url,
                 connection_auth,
                 app_name,

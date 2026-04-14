@@ -3,7 +3,7 @@ use std::{str::FromStr, sync::Arc};
 use anyhow::{bail, Context};
 use kafka::producer::{Producer, RequiredAcks};
 use reqwest::{redirect::Policy, Url};
-use sqlx::types::chrono::{Local, Utc};
+use sqlx::types::chrono::Utc;
 use tokio::sync::{Mutex, RwLock};
 
 use dt_common::{
@@ -28,11 +28,11 @@ use dt_common::{
 use super::task_util::TaskUtil;
 use crate::{extractor_util::ExtractorUtil, task_util::ConnClient};
 use dt_connector::{
-    check_log::check_log::CheckSummaryLog,
+    checker::DataCheckerHandle,
     data_marker::DataMarker,
     rdb_router::RdbRouter,
     sinker::{
-        base_checker::CheckerCommon,
+        checkable_sinker::{wrap_sinker_with_checker, CheckableSink},
         clickhouse::{
             clickhouse_sinker::ClickhouseSinker, clickhouse_struct_sinker::ClickhouseStructSinker,
         },
@@ -43,12 +43,9 @@ use dt_connector::{
             orc_sequencer::OrcSequencer,
         },
         kafka::kafka_sinker::KafkaSinker,
-        mongo::{mongo_checker::MongoChecker, mongo_sinker::MongoSinker},
-        mysql::{
-            mysql_checker::MysqlChecker, mysql_sinker::MysqlSinker,
-            mysql_struct_sinker::MysqlStructSinker,
-        },
-        pg::{pg_checker::PgChecker, pg_sinker::PgSinker, pg_struct_sinker::PgStructSinker},
+        mongo::mongo_sinker::MongoSinker,
+        mysql::{mysql_sinker::MysqlSinker, mysql_struct_sinker::MysqlStructSinker},
+        pg::{pg_sinker::PgSinker, pg_struct_sinker::PgStructSinker},
         redis::{redis_sinker::RedisSinker, redis_statistic_sinker::RedisStatisticSinker},
         sql_sinker::SqlSinker,
         starrocks::{
@@ -77,13 +74,28 @@ macro_rules! create_router {
 }
 
 impl SinkerUtil {
+    fn push_sinker<S: Sinker + Send + 'static>(sub_sinkers: &mut Sinkers, sinker: S) {
+        sub_sinkers.push(Arc::new(async_mutex::Mutex::new(Box::new(sinker))));
+    }
+
+    fn push_checkable_sinker<S: CheckableSink + Send + 'static>(
+        sub_sinkers: &mut Sinkers,
+        sinker: S,
+        checker: &Option<DataCheckerHandle>,
+    ) {
+        sub_sinkers.push(Arc::new(async_mutex::Mutex::new(wrap_sinker_with_checker(
+            sinker,
+            checker.clone(),
+        ))));
+    }
+
     pub async fn create_sinkers(
         config: &TaskConfig,
         extractor_config: &ExtractorConfig,
         client: ConnClient,
         monitor: Arc<Monitor>,
         data_marker: Option<Arc<RwLock<DataMarker>>>,
-        check_summary: Option<Arc<async_mutex::Mutex<CheckSummaryLog>>>,
+        checker: Option<DataCheckerHandle>,
     ) -> anyhow::Result<Sinkers> {
         let log_level = &config.runtime.log_level;
         let enable_sqlx_log = TaskUtil::check_enable_sqlx_log(log_level);
@@ -95,7 +107,7 @@ impl SinkerUtil {
             SinkerConfig::Dummy => {
                 for _ in 0..parallel_size {
                     let sinker = DummySinker {};
-                    sub_sinkers.push(Arc::new(async_mutex::Mutex::new(Box::new(sinker))));
+                    Self::push_checkable_sinker(&mut sub_sinkers, sinker, &checker);
                 }
             }
 
@@ -127,56 +139,7 @@ impl SinkerUtil {
                         replace,
                         monitor_interval,
                     };
-                    sub_sinkers.push(Arc::new(async_mutex::Mutex::new(Box::new(sinker))));
-                }
-            }
-
-            SinkerConfig::MysqlCheck {
-                batch_size,
-                output_full_row,
-                output_revise_sql,
-                revise_match_full_row,
-                retry_interval_secs,
-                max_retries,
-                ..
-            } => {
-                let reverse_router = create_router!(config, Mysql).reverse();
-                let filter = create_filter!(config, Mysql);
-                let extractor_meta_manager = ExtractorUtil::get_extractor_meta_manager(config)
-                    .await?
-                    .unwrap();
-
-                let conn_pool = match client {
-                    ConnClient::MySQL(conn_pool) => conn_pool,
-                    _ => {
-                        bail!("connection pool not found");
-                    }
-                };
-                let meta_manager = MysqlMetaManager::new(conn_pool.clone()).await?;
-
-                for _ in 0..parallel_size {
-                    let sinker = MysqlChecker {
-                        conn_pool: conn_pool.clone(),
-                        meta_manager: meta_manager.clone(),
-                        common: CheckerCommon {
-                            extractor_meta_manager: Some(extractor_meta_manager.clone()),
-                            reverse_router: reverse_router.clone(),
-                            batch_size,
-                            monitor: monitor.clone(),
-                            filter: filter.clone(),
-                            output_full_row,
-                            output_revise_sql,
-                            revise_match_full_row,
-                            retry_interval_secs,
-                            max_retries,
-                            summary: CheckSummaryLog {
-                                start_time: Local::now().to_rfc3339(),
-                                ..Default::default()
-                            },
-                            global_summary: check_summary.clone(),
-                        },
-                    };
-                    sub_sinkers.push(Arc::new(async_mutex::Mutex::new(Box::new(sinker))));
+                    Self::push_checkable_sinker(&mut sub_sinkers, sinker, &checker);
                 }
             }
 
@@ -207,56 +170,7 @@ impl SinkerUtil {
                         replace,
                         monitor_interval,
                     };
-                    sub_sinkers.push(Arc::new(async_mutex::Mutex::new(Box::new(sinker))));
-                }
-            }
-
-            SinkerConfig::PgCheck {
-                batch_size,
-                output_full_row,
-                output_revise_sql,
-                revise_match_full_row,
-                retry_interval_secs,
-                max_retries,
-                ..
-            } => {
-                let reverse_router = create_router!(config, Pg).reverse();
-                let filter = create_filter!(config, Pg);
-                let extractor_meta_manager = ExtractorUtil::get_extractor_meta_manager(config)
-                    .await?
-                    .unwrap();
-
-                let conn_pool = match client {
-                    ConnClient::PostgreSQL(conn_pool) => conn_pool,
-                    _ => {
-                        bail!("connection pool not found");
-                    }
-                };
-                let meta_manager = PgMetaManager::new(conn_pool.clone()).await?;
-
-                for _ in 0..parallel_size {
-                    let sinker = PgChecker {
-                        conn_pool: conn_pool.clone(),
-                        meta_manager: meta_manager.clone(),
-                        common: CheckerCommon {
-                            extractor_meta_manager: Some(extractor_meta_manager.clone()),
-                            reverse_router: reverse_router.clone(),
-                            batch_size,
-                            monitor: monitor.clone(),
-                            filter: filter.clone(),
-                            output_full_row,
-                            output_revise_sql,
-                            revise_match_full_row,
-                            retry_interval_secs,
-                            max_retries,
-                            summary: CheckSummaryLog {
-                                start_time: Local::now().to_rfc3339(),
-                                ..Default::default()
-                            },
-                            global_summary: check_summary.clone(),
-                        },
-                    };
-                    sub_sinkers.push(Arc::new(async_mutex::Mutex::new(Box::new(sinker))));
+                    Self::push_checkable_sinker(&mut sub_sinkers, sinker, &checker);
                 }
             }
 
@@ -276,48 +190,7 @@ impl SinkerUtil {
                         monitor: monitor.clone(),
                         monitor_interval,
                     };
-                    sub_sinkers.push(Arc::new(async_mutex::Mutex::new(Box::new(sinker))));
-                }
-            }
-
-            SinkerConfig::MongoCheck {
-                batch_size,
-                output_full_row,
-                output_revise_sql,
-                retry_interval_secs,
-                max_retries,
-                ..
-            } => {
-                let reverse_router = create_router!(config, Mongo).reverse();
-                let filter = create_filter!(config, Mongo);
-                let mongo_client = match client {
-                    ConnClient::MongoDB(mongo_client) => mongo_client,
-                    _ => {
-                        bail!("connection pool not found");
-                    }
-                };
-                for _ in 0..parallel_size {
-                    let sinker = MongoChecker {
-                        mongo_client: mongo_client.clone(),
-                        common: CheckerCommon {
-                            extractor_meta_manager: None,
-                            reverse_router: reverse_router.clone(),
-                            batch_size,
-                            monitor: monitor.clone(),
-                            filter: filter.clone(),
-                            output_full_row,
-                            output_revise_sql,
-                            revise_match_full_row: false,
-                            retry_interval_secs,
-                            max_retries,
-                            summary: CheckSummaryLog {
-                                start_time: Local::now().to_rfc3339(),
-                                ..Default::default()
-                            },
-                            global_summary: check_summary.clone(),
-                        },
-                    };
-                    sub_sinkers.push(Arc::new(async_mutex::Mutex::new(Box::new(sinker))));
+                    Self::push_checkable_sinker(&mut sub_sinkers, sinker, &checker);
                 }
             }
 
@@ -361,7 +234,7 @@ impl SinkerUtil {
                         avro_converter: avro_converter.clone(),
                         monitor: monitor.clone(),
                     };
-                    sub_sinkers.push(Arc::new(async_mutex::Mutex::new(Box::new(sinker))));
+                    Self::push_sinker(&mut sub_sinkers, sinker);
                 }
             }
 
@@ -385,7 +258,7 @@ impl SinkerUtil {
                     monitor: monitor.clone(),
                     monitor_interval,
                 };
-                sub_sinkers.push(Arc::new(async_mutex::Mutex::new(Box::new(sinker))));
+                Self::push_sinker(&mut sub_sinkers, sinker);
             }
 
             SinkerConfig::PgStruct {
@@ -408,7 +281,7 @@ impl SinkerUtil {
                     monitor: monitor.clone(),
                     monitor_interval,
                 };
-                sub_sinkers.push(Arc::new(async_mutex::Mutex::new(Box::new(sinker))));
+                Self::push_sinker(&mut sub_sinkers, sinker);
             }
 
             SinkerConfig::Redis {
@@ -449,7 +322,7 @@ impl SinkerUtil {
                             data_marker: data_marker.clone(),
                             key_parser: KeyParser::new(),
                         };
-                        sub_sinkers.push(Arc::new(async_mutex::Mutex::new(Box::new(sinker))));
+                        Self::push_sinker(&mut sub_sinkers, sinker);
                     }
                 } else {
                     for _ in 0..parallel_size {
@@ -466,7 +339,7 @@ impl SinkerUtil {
                             data_marker: data_marker.clone(),
                             key_parser: KeyParser::new(),
                         };
-                        sub_sinkers.push(Arc::new(async_mutex::Mutex::new(Box::new(sinker))));
+                        Self::push_sinker(&mut sub_sinkers, sinker);
                     }
                 }
             }
@@ -485,7 +358,7 @@ impl SinkerUtil {
                         freq_threshold,
                         monitor: monitor.clone(),
                     };
-                    sub_sinkers.push(Arc::new(async_mutex::Mutex::new(Box::new(sinker))));
+                    Self::push_sinker(&mut sub_sinkers, sinker);
                 }
             }
 
@@ -544,7 +417,7 @@ impl SinkerUtil {
                         sinker.hard_delete = hard_delete;
                     }
 
-                    sub_sinkers.push(Arc::new(async_mutex::Mutex::new(Box::new(sinker))));
+                    Self::push_sinker(&mut sub_sinkers, sinker);
                 }
             }
 
@@ -580,7 +453,7 @@ impl SinkerUtil {
                     extractor_meta_manager,
                     backend_count: 0,
                 };
-                sub_sinkers.push(Arc::new(async_mutex::Mutex::new(Box::new(sinker))));
+                Self::push_sinker(&mut sub_sinkers, sinker);
             }
 
             SinkerConfig::ClickHouse { url, batch_size } => {
@@ -605,7 +478,7 @@ impl SinkerUtil {
                         monitor: monitor.clone(),
                         sync_timestamp: Utc::now().timestamp_millis(),
                     };
-                    sub_sinkers.push(Arc::new(async_mutex::Mutex::new(Box::new(sinker))));
+                    Self::push_sinker(&mut sub_sinkers, sinker);
                 }
             }
 
@@ -634,7 +507,7 @@ impl SinkerUtil {
                     router,
                     extractor_meta_manager,
                 };
-                sub_sinkers.push(Arc::new(async_mutex::Mutex::new(Box::new(sinker))));
+                Self::push_sinker(&mut sub_sinkers, sinker);
             }
 
             SinkerConfig::Sql { reverse } => {
@@ -651,7 +524,7 @@ impl SinkerUtil {
                         reverse,
                         monitor: monitor.clone(),
                     };
-                    sub_sinkers.push(Arc::new(async_mutex::Mutex::new(Box::new(sinker))));
+                    Self::push_sinker(&mut sub_sinkers, sinker);
                 }
             }
 
@@ -720,7 +593,7 @@ impl SinkerUtil {
                         merger,
                         engine: engine.clone(),
                     };
-                    sub_sinkers.push(Arc::new(async_mutex::Mutex::new(Box::new(sinker))));
+                    Self::push_sinker(&mut sub_sinkers, sinker);
                 }
             }
 
@@ -766,7 +639,7 @@ impl SinkerUtil {
                         reverse_router: reverse_router.clone(),
                         orc_sequencer: orc_sequencer.clone(),
                     };
-                    sub_sinkers.push(Arc::new(async_mutex::Mutex::new(Box::new(sinker))));
+                    Self::push_sinker(&mut sub_sinkers, sinker);
                 }
             }
 
@@ -794,7 +667,7 @@ impl SinkerUtil {
                         conn_pool: conn_pool.clone(),
                         extract_type: config.extractor_basic.extract_type.clone(),
                     };
-                    sub_sinkers.push(Arc::new(async_mutex::Mutex::new(Box::new(sinker))));
+                    Self::push_sinker(&mut sub_sinkers, sinker);
                 }
             }
 
@@ -822,7 +695,7 @@ impl SinkerUtil {
                     monitor: monitor.clone(),
                     monitor_interval,
                 };
-                sub_sinkers.push(Arc::new(async_mutex::Mutex::new(Box::new(sinker))));
+                Self::push_sinker(&mut sub_sinkers, sinker);
             }
         };
         Ok(sub_sinkers)

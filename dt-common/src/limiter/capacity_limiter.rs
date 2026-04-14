@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use tokio::sync::Semaphore;
 
-use crate::limiter::{Limiter, UnitType};
+use crate::limiter::base_limiter::{Limiter, UnitType};
 
 pub struct CapacityLimiter {
     semaphore: Semaphore,

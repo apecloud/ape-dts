@@ -99,14 +99,7 @@ impl MongoSnapshotExtractor {
             })?;
             let object_id = Self::get_object_id(&doc);
 
-            let mut after = HashMap::new();
-            let id: String = if let Some(key) = MongoKey::from_doc(&doc) {
-                key.to_string()
-            } else {
-                String::new()
-            };
-            after.insert(MongoConstants::ID.to_string(), ColValue::String(id));
-            after.insert(MongoConstants::DOC.to_string(), ColValue::MongoDoc(doc));
+            let after = Self::build_after_cols(&doc);
             let row_data = RowData::new(
                 self.db.clone(),
                 self.tb.clone(),
@@ -134,6 +127,19 @@ impl MongoSnapshotExtractor {
             self.base_extractor.monitor.counters.pushed_record_count
         );
         Ok(())
+    }
+
+    fn build_after_cols(doc: &Document) -> HashMap<String, ColValue> {
+        let mut after = HashMap::new();
+        let id = MongoKey::from_doc(doc)
+            .map(|key| ColValue::String(key.to_string()))
+            .unwrap_or(ColValue::None);
+        after.insert(MongoConstants::ID.to_string(), id);
+        after.insert(
+            MongoConstants::DOC.to_string(),
+            ColValue::MongoDoc(doc.clone()),
+        );
+        after
     }
 
     fn get_object_id(doc: &Document) -> String {

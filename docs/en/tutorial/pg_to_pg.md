@@ -103,6 +103,9 @@ SET search_path TO test_db;
 
 # Migrate snapshot data
 
+- To turn this into **inline snapshot check**, keep `[sinker] sink_type=write` and add a `[checker]` section without target connection fields.
+- See [Data Check](../snapshot/check.md#inline-snapshot-check) and the Postgres template for the exact config shape.
+
 ## Prepare data
 
 ```
@@ -162,9 +165,9 @@ SELECT * FROM test_db.tb_1 ORDER BY id;
   4 |     4
 ```
 
-# Check data
+# Standalone snapshot check
 
-- check the differences between target data and source data
+- check the differences between target data and source data in standalone snapshot check mode
 
 ## Prepare data
 
@@ -186,9 +189,9 @@ db_type=pg
 extract_type=snapshot
 url=postgres://postgres:postgres@127.0.0.1:5433/postgres?options[statement_timeout]=10s
 
-[sinker]
+[checker]
+enable=true
 db_type=pg
-sink_type=check
 url=postgres://postgres:postgres@127.0.0.1:5434/postgres?options[statement_timeout]=10s
 
 [filter]
@@ -196,7 +199,7 @@ do_dbs=test_db
 do_events=insert
 
 [parallelizer]
-parallel_type=rdb_check
+parallel_type=rdb_merge
 parallel_size=8
 
 [pipeline]
@@ -296,16 +299,16 @@ extract_type=check_log
 url=postgres://postgres:postgres@127.0.0.1:5433/postgres?options[statement_timeout]=10s
 check_log_dir=./check_data_task_log
 
-[sinker]
+[checker]
+enable=true
 db_type=pg
-sink_type=check
 url=postgres://postgres:postgres@127.0.0.1:5434/postgres?options[statement_timeout]=10s
 
 [filter]
 do_events=*
 
 [parallelizer]
-parallel_type=rdb_check
+parallel_type=rdb_merge
 parallel_size=8
 
 [pipeline]
@@ -327,6 +330,11 @@ docker run --rm --network host \
 - /tmp/ape_dts/review_data_task_log/check/miss.log and /tmp/ape_dts/review_data_task_log/check/diff.log should be empty
 
 # CDC task
+
+- To turn this into **inline cdc check**, add `[checker] enable=true` plus `[resumer]`, keep
+  `[sinker] sink_type=write`, use `[parallelizer] parallel_type=rdb_merge`, and do not configure
+  checker target fields. See [Data Check](../snapshot/check.md#inline-cdc-check) and the Postgres
+  template.
 
 ## Drop replication slot if exists
 

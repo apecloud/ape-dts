@@ -457,7 +457,11 @@ impl RdbQueryBuilder<'_> {
         let mut index = 1;
         let mut set_cols = Vec::new();
         let mut set_pairs = Vec::new();
-        for (col, col_value) in after.iter() {
+        // pin the order of cols
+        for col in self.rdb_tb_meta.cols.iter() {
+            let Some(col_value) = after.get(col) else {
+                continue;
+            };
             if col_value.is_unchanged_toast() {
                 continue;
             }
@@ -570,8 +574,11 @@ impl RdbQueryBuilder<'_> {
     }
 
     pub fn get_select_query<'a>(&self, row_data: &'a RowData) -> anyhow::Result<RdbQueryInfo<'a>> {
-        let after = row_data.require_after()?;
-        let (where_sql, not_null_cols) = self.get_where_info(1, after, true)?;
+        let id_values = match row_data.row_type {
+            RowType::Delete => row_data.require_before()?,
+            _ => row_data.require_after()?,
+        };
+        let (where_sql, not_null_cols) = self.get_where_info(1, id_values, true)?;
         let mut sql = format!(
             "SELECT {} FROM {}.{} WHERE {}",
             self.build_extract_cols_str()?,
@@ -588,7 +595,7 @@ impl RdbQueryBuilder<'_> {
         let mut binds = Vec::with_capacity(not_null_cols.len());
         for col_name in not_null_cols.iter() {
             cols.push(col_name.clone());
-            binds.push(after.get(col_name));
+            binds.push(id_values.get(col_name));
         }
         Ok(RdbQueryInfo { sql, cols, binds })
     }
@@ -613,10 +620,13 @@ impl RdbQueryBuilder<'_> {
         let mut binds =
             Vec::with_capacity(batch_size.saturating_mul(self.rdb_tb_meta.id_cols.len()));
         for &row_data in data.iter().skip(start_index).take(batch_size) {
-            let after = row_data.require_after()?;
+            let id_values = match row_data.row_type {
+                RowType::Delete => row_data.require_before()?,
+                _ => row_data.require_after()?,
+            };
             for col in self.rdb_tb_meta.id_cols.iter() {
                 cols.push(col.clone());
-                let col_value = after.get(col);
+                let col_value = id_values.get(col);
                 if col_value.is_none() || matches!(col_value, Some(ColValue::None)) {
                     bail! {
                         "schema: {}, tb: {}, where col: {} is NULL, which should not happen in batch select",

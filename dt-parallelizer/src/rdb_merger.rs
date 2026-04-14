@@ -28,9 +28,8 @@ impl Merger for RdbMerger {
         }
 
         let mut results = Vec::new();
-        for (tb, mut rdb_tb_merged) in tb_data_map.drain() {
+        for (_, mut rdb_tb_merged) in tb_data_map.drain() {
             let tb_merged = TbMergedData {
-                tb,
                 insert_rows: rdb_tb_merged.get_insert_rows(),
                 delete_rows: rdb_tb_merged.get_delete_rows(),
                 unmerged_rows: rdb_tb_merged.get_unmerged_rows(),
@@ -95,7 +94,21 @@ impl RdbMerger {
                     return Ok(());
                 }
 
-                let (delete, insert) = row_data.split_update_row_data();
+                let delete = RowData::new(
+                    row_data.schema.clone(),
+                    row_data.tb.clone(),
+                    RowType::Delete,
+                    row_data.before,
+                    None,
+                );
+                let insert = RowData::new(
+                    row_data.schema,
+                    row_data.tb,
+                    RowType::Insert,
+                    None,
+                    row_data.after,
+                );
+
                 let insert_hash_code = Self::get_hash_code(&insert, tb_meta).await?;
 
                 if Self::check_collision(&merged.insert_rows, tb_meta, &insert, insert_hash_code)?
@@ -174,7 +187,6 @@ impl RdbMerger {
 }
 
 struct RdbTbMergedData {
-    // HashMap<row_key_hash_code, RowData>
     delete_rows: HashMap<u128, RowData>,
     insert_rows: HashMap<u128, RowData>,
     unmerged_rows: Vec<RowData>,

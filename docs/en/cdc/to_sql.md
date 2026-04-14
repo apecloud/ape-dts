@@ -9,6 +9,8 @@ Supported databases:
 Supported data changes:
 - DML
 
+This page documents `sink_type=sql`, so it is not an inline cdc check flow. If you need to validate CDC-applied data, use a CDC task with `sink_type=write` and follow the [inline cdc check guide](../snapshot/check.md#inline-cdc-check).
+
 # Examples
 
 Refer to [task templates](../../templates/mysql_to_mysql.md)
@@ -82,4 +84,3 @@ end_time_utc=2024-10-09 03:00:00
 # Data rollback
 If some sqls were executed incorrectly in the source and you want to roll back the data, you may:
 - generate reverse sqls and execute them from the last to the first.
-

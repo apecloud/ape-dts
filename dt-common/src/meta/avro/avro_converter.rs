@@ -75,7 +75,7 @@ impl AvroConverter {
         Ok(String::new())
     }
 
-    pub async fn row_data_to_avro_value(&mut self, row_data: RowData) -> anyhow::Result<Vec<u8>> {
+    pub async fn row_data_to_avro_value(&mut self, row_data: &RowData) -> anyhow::Result<Vec<u8>> {
         let mut cols = vec![];
         let mut merge_cols = |col_values: &Option<HashMap<String, ColValue>>| {
             if let Some(value) = col_values {
@@ -111,7 +111,7 @@ impl AvroConverter {
             Value::Union(0, Box::new(Value::Null))
         } else {
             let mut fields = vec![];
-            let tb_meta = self.get_tb_meta(&row_data).await?;
+            let tb_meta = self.get_tb_meta(row_data).await?;
             for col in cols.iter() {
                 let mut column_type = String::new();
                 if let Some(tb_meta) = tb_meta {
@@ -140,8 +140,8 @@ impl AvroConverter {
         };
 
         let value = Value::Record(vec![
-            (SCHEMA.into(), Value::String(row_data.schema)),
-            (TB.into(), Value::String(row_data.tb)),
+            (SCHEMA.into(), Value::String(row_data.schema.clone())),
+            (TB.into(), Value::String(row_data.tb.clone())),
             (
                 OPERATION.into(),
                 Value::String(row_data.row_type.to_string()),
@@ -437,7 +437,7 @@ mod tests {
 
     async fn validate_row_data(avro_converter: &mut AvroConverter, row_data: &RowData) {
         let payload = avro_converter
-            .row_data_to_avro_value(row_data.clone())
+            .row_data_to_avro_value(row_data)
             .await
             .unwrap();
         let dt_data = avro_converter.avro_value_to_dt_data(payload).unwrap();

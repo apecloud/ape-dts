@@ -10,7 +10,7 @@ use dt_common::meta::{
 
 use crate::{merge_parallelizer::TbMergedData, Merger};
 
-pub struct MongoMerger {}
+pub struct MongoMerger;
 
 #[async_trait]
 impl Merger for MongoMerger {
@@ -26,10 +26,9 @@ impl Merger for MongoMerger {
         }
 
         let mut results = Vec::new();
-        for (tb, tb_data) in tb_data_map.drain() {
+        for (_, tb_data) in tb_data_map.drain() {
             let (insert_rows, delete_rows, unmerged_rows) = Self::merge_row_data(tb_data)?;
             let tb_merged = TbMergedData {
-                tb,
                 insert_rows,
                 delete_rows,
                 unmerged_rows,
@@ -44,54 +43,49 @@ impl MongoMerger {
     /// partition dmls of the same table into insert vec and delete vec
     #[allow(clippy::type_complexity)]
     pub fn merge_row_data(
-        mut data: Vec<RowData>,
+        data: Vec<RowData>,
     ) -> anyhow::Result<(Vec<RowData>, Vec<RowData>, Vec<RowData>)> {
         let mut insert_map = HashMap::new();
         let mut delete_map = HashMap::new();
+        let mut unmerged_rows = Vec::new();
+        let mut iter = data.into_iter();
 
-        while !data.is_empty() {
-            let hash_key = Self::get_hash_key(&data[0]);
-            if hash_key.is_none() {
+        while let Some(row_data) = iter.next() {
+            let Some(id) = Self::get_hash_key(&row_data) else {
+                unmerged_rows.push(row_data);
+                unmerged_rows.extend(iter);
                 break;
+            };
+
+            if row_data.row_type == RowType::Insert {
+                insert_map.insert(id, row_data);
+                continue;
             }
 
-            let id = hash_key.unwrap();
-            let row_data = data.remove(0);
-            match row_data.row_type {
-                RowType::Insert => {
-                    insert_map.insert(id, row_data);
-                }
-
-                RowType::Delete => {
-                    insert_map.remove(&id);
-                    delete_map.insert(id, row_data);
-                }
-
-                RowType::Update => {
-                    let delete_row = RowData::new(
-                        row_data.schema.clone(),
-                        row_data.tb.clone(),
-                        RowType::Delete,
-                        row_data.before,
-                        None,
-                    );
-                    delete_map.insert(id.clone(), delete_row);
-
-                    let insert_row = RowData::new(
-                        row_data.schema,
-                        row_data.tb,
-                        RowType::Insert,
-                        Option::None,
-                        row_data.after,
-                    );
-                    insert_map.insert(id, insert_row);
-                }
+            if row_data.row_type == RowType::Delete {
+                insert_map.remove(&id);
+                delete_map.insert(id, row_data);
+                continue;
             }
+
+            let schema = row_data.schema;
+            let tb = row_data.tb;
+            let delete_row = RowData::new(
+                schema.clone(),
+                tb.clone(),
+                RowType::Delete,
+                row_data.before,
+                None,
+            );
+            delete_map.insert(id.clone(), delete_row);
+
+            let insert_row = RowData::new(schema, tb, RowType::Insert, None, row_data.after);
+            insert_map.insert(id, insert_row);
         }
 
         let inserts = insert_map.drain().map(|i| i.1).collect::<Vec<_>>();
         let deletes = delete_map.drain().map(|i| i.1).collect::<Vec<_>>();
-        Ok((inserts, deletes, data))
+        Ok((inserts, deletes, unmerged_rows))
     }
 
     fn get_hash_key(row_data: &RowData) -> Option<MongoKey> {
