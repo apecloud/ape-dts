@@ -94,18 +94,32 @@ impl RdbMerger {
                     return Ok(());
                 }
 
-                let (delete, insert) = Self::split_update_row_data_ref(&row_data);
+                let delete = RowData::new(
+                    row_data.schema.clone(),
+                    row_data.tb.clone(),
+                    RowType::Delete,
+                    row_data.before,
+                    None,
+                );
+                let insert = RowData::new(
+                    row_data.schema,
+                    row_data.tb,
+                    RowType::Insert,
+                    None,
+                    row_data.after,
+                );
+
                 let insert_hash_code = Self::get_hash_code(&insert, tb_meta).await?;
 
                 if Self::check_collision(&merged.insert_rows, tb_meta, &insert, insert_hash_code)?
                     || Self::check_collision(&merged.delete_rows, tb_meta, &delete, hash_code)?
                 {
                     let row_data = RowData::new(
-                        delete.schema.clone(),
-                        delete.tb.clone(),
+                        delete.schema,
+                        delete.tb,
                         RowType::Update,
-                        delete.before.clone(),
-                        insert.after.clone(),
+                        delete.before,
+                        insert.after,
                     );
                     merged.unmerged_rows.push(row_data);
                     return Ok(());
@@ -169,24 +183,6 @@ impl RdbMerger {
             return Ok(0);
         }
         row_data.get_hash_code(tb_meta)
-    }
-
-    fn split_update_row_data_ref(row_data: &RowData) -> (RowData, RowData) {
-        let delete = RowData::new(
-            row_data.schema.clone(),
-            row_data.tb.clone(),
-            RowType::Delete,
-            row_data.before.clone(),
-            None,
-        );
-        let insert = RowData::new(
-            row_data.schema.clone(),
-            row_data.tb.clone(),
-            RowType::Insert,
-            None,
-            row_data.after.clone(),
-        );
-        (delete, insert)
     }
 }
 
