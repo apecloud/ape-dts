@@ -3,8 +3,10 @@ use std::sync::Arc;
 use async_trait::async_trait;
 
 use super::base_parallelizer::BaseParallelizer;
-use crate::{DataSize, Parallelizer};
-use dt_common::meta::{dt_data::DtItem, dt_queue::DtQueue, row_data::RowData};
+use crate::{table_partitioner::TablePartitioner, DataSize, Parallelizer};
+use dt_common::meta::{
+    dt_data::DtItem, dt_queue::DtQueue, row_data::RowData, struct_meta::structure::table::Table,
+};
 use dt_connector::Sinker;
 
 pub struct SnapshotParallelizer {
@@ -32,7 +34,7 @@ impl Parallelizer for SnapshotParallelizer {
             bytes: data.iter().map(|v| v.data_size as u64).sum(),
         };
 
-        let sub_datas = Self::partition(data, self.parallel_size)?;
+        let sub_datas = TablePartitioner::partition_dml(data)?;
         self.base_parallelizer
             .sink_dml(sub_datas, sinkers, self.parallel_size, true)
             .await?;

@@ -10,7 +10,7 @@ pub mod redis_parallelizer;
 pub mod serial_parallelizer;
 pub mod snapshot_parallelizer;
 pub mod table_parallelizer;
-pub mod row_data_partitioner;
+pub mod table_partitioner;
 
 use std::sync::Arc;
 
