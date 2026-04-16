@@ -6,8 +6,8 @@ use mongodb::{bson::doc, options::ClientOptions};
 use rusoto_core::Region;
 use rusoto_s3::S3Client;
 use sqlx::{
-    mysql::{MySqlConnectOptions, MySqlPoolOptions},
-    postgres::{PgConnectOptions, PgPoolOptions},
+    mysql::{MySqlConnectOptions, MySqlPoolOptions, MySqlSslMode},
+    postgres::{PgConnectOptions, PgPoolOptions, PgSslMode},
     ConnectOptions, Executor, MySql, Pool, Postgres, Row,
 };
 
@@ -60,6 +60,17 @@ impl TaskUtil {
 
         if !enable_sqlx_log {
             conn_options.disable_statement_logging();
+        }
+
+        if let Some(ssl) = connection_auth.ssl_config() {
+            conn_options = conn_options.ssl_mode(MySqlSslMode::Required);
+            if !ssl.ssl_ca_path.is_empty() {
+                conn_options = conn_options.ssl_ca(&ssl.ssl_ca_path);
+            }
+            // Note: the current sqlx fork does not support client certificate
+            // authentication (ssl_cert_path / ssl_key_path) via connect options.
+        } else {
+            conn_options = conn_options.ssl_mode(MySqlSslMode::Disabled);
         }
 
         let mut conn_pool = MySqlPoolOptions::new().max_connections(max_connections);
@@ -131,6 +142,17 @@ impl TaskUtil {
 
         if !enable_sqlx_log {
             conn_options.disable_statement_logging();
+        }
+
+        if let Some(ssl) = connection_auth.ssl_config() {
+            conn_options = conn_options.ssl_mode(PgSslMode::Require);
+            if !ssl.ssl_ca_path.is_empty() {
+                conn_options = conn_options.ssl_root_cert(&ssl.ssl_ca_path);
+            }
+            // Note: the current sqlx fork does not support client certificate
+            // authentication (ssl_cert_path / ssl_key_path) via connect options.
+        } else {
+            conn_options = conn_options.ssl_mode(PgSslMode::Disable);
         }
 
         let mut pool_options = PgPoolOptions::new().max_connections(max_connections);
@@ -206,8 +228,12 @@ impl TaskUtil {
                         connection_auth,
                         ..
                     } => {
-                        let pg_meta_manager =
-                            Self::create_pg_meta_manager(url, connection_auth, log_level).await?;
+                        let pg_meta_manager = Self::create_pg_meta_manager(
+                            url,
+                            connection_auth,
+                            log_level,
+                        )
+                        .await?;
                         RdbMetaManager::from_pg(pg_meta_manager)
                     }
                     _ => return Ok(None),
@@ -224,8 +250,12 @@ impl TaskUtil {
                 connection_auth,
                 ..
             } => {
-                let pg_meta_manager =
-                    Self::create_pg_meta_manager(url, connection_auth, log_level).await?;
+                let pg_meta_manager = Self::create_pg_meta_manager(
+                    url,
+                    connection_auth,
+                    log_level,
+                )
+                .await?;
                 RdbMetaManager::from_pg(pg_meta_manager)
             }
 
