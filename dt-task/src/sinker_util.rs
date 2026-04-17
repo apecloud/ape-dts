@@ -114,6 +114,7 @@ impl SinkerUtil {
 
             SinkerConfig::Mysql {
                 url,
+                connection_auth,
                 batch_size,
                 replace,
                 ..
@@ -131,6 +132,7 @@ impl SinkerUtil {
                 for _ in 0..parallel_size {
                     let sinker = MysqlSinker {
                         url: url.to_string(),
+                        connection_auth: connection_auth.clone(),
                         conn_pool: conn_pool.clone(),
                         meta_manager: meta_manager.clone(),
                         router: router.clone(),
@@ -146,6 +148,7 @@ impl SinkerUtil {
 
             SinkerConfig::Pg {
                 url,
+                connection_auth,
                 batch_size,
                 replace,
                 ..
@@ -162,6 +165,7 @@ impl SinkerUtil {
                 for _ in 0..parallel_size {
                     let sinker = PgSinker {
                         url: url.to_string(),
+                        connection_auth: connection_auth.clone(),
                         conn_pool: conn_pool.clone(),
                         meta_manager: meta_manager.clone(),
                         router: router.clone(),

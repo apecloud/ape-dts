@@ -8,7 +8,7 @@ use super::ssl_config::SslConfig;
 
 const BASIC_AUTH_USERNAME_KEY: &str = "username";
 const BASIC_AUTH_PASSWORD_KEY: &str = "password";
-const SSL_ENABLE_KEY: &str = "ssl_enable";
+const SSL_MODE_KEY: &str = "ssl_mode";
 
 #[derive(Clone, Debug, Default, Hash, PartialEq, Eq)]
 pub enum ConnectionAuthConfig {
@@ -21,7 +21,7 @@ pub enum ConnectionAuthConfig {
     },
 
     BasicSsl {
-        username: String,
+        username: Option<String>,
         password: Option<String>,
         ssl_config: SslConfig,
     },
@@ -29,9 +29,6 @@ pub enum ConnectionAuthConfig {
 
 impl ConnectionAuthConfig {
     pub fn from(loader: &IniLoader, section: &str) -> Self {
-        let has_username = loader.contains(section, BASIC_AUTH_USERNAME_KEY);
-        let ssl_enable: bool = loader.get_optional(section, SSL_ENABLE_KEY);
-
         let username = || loader.get_optional(section, BASIC_AUTH_USERNAME_KEY);
         let password = || {
             if loader.contains(section, BASIC_AUTH_PASSWORD_KEY) {
@@ -40,21 +37,28 @@ impl ConnectionAuthConfig {
                 None
             }
         };
-        let ssl_config = || SslConfig::from(loader, section);
 
-        match (has_username, ssl_enable) {
-            (true, true) => ConnectionAuthConfig::BasicSsl {
-                username: username(),
+        if loader.contains(section, SSL_MODE_KEY) {
+            let username = if loader.contains(section, BASIC_AUTH_USERNAME_KEY) {
+                Some(username())
+            } else {
+                None
+            };
+            return ConnectionAuthConfig::BasicSsl {
+                username,
                 password: password(),
-                ssl_config: ssl_config(),
-            },
-            (true, false) => ConnectionAuthConfig::Basic {
-                username: username(),
-                password: password(),
-            },
-            // ssl_enable without username is treated as NoAuth
-            _ => ConnectionAuthConfig::NoAuth,
+                ssl_config: SslConfig::from(loader, section),
+            };
         }
+
+        if loader.contains(section, BASIC_AUTH_USERNAME_KEY) {
+            return ConnectionAuthConfig::Basic {
+                username: username(),
+                password: password(),
+            };
+        }
+
+        ConnectionAuthConfig::NoAuth
     }
 
     pub fn ssl_config(&self) -> Option<&SslConfig> {
@@ -71,7 +75,9 @@ impl ConnectionAuthConfig {
         match connection_auth {
             ConnectionAuthConfig::Basic { username, password }
             | ConnectionAuthConfig::BasicSsl {
-                username, password, ..
+                username: Some(username),
+                password,
+                ..
             } => {
                 if !username.is_empty() {
                     parsed_url
@@ -87,7 +93,7 @@ impl ConnectionAuthConfig {
                     }
                 }
             }
-            ConnectionAuthConfig::NoAuth => {}
+            _ => {}
         }
 
         Ok(parsed_url.to_string())
