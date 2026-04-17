@@ -6,8 +6,8 @@ use mongodb::{bson::doc, options::ClientOptions};
 use rusoto_core::Region;
 use rusoto_s3::S3Client;
 use sqlx::{
-    mysql::{MySqlConnectOptions, MySqlPoolOptions, MySqlSslMode},
-    postgres::{PgConnectOptions, PgPoolOptions, PgSslMode},
+    mysql::{MySqlConnectOptions, MySqlPoolOptions},
+    postgres::{PgConnectOptions, PgPoolOptions},
     ConnectOptions, Executor, MySql, Pool, Postgres, Row,
 };
 
@@ -63,14 +63,7 @@ impl TaskUtil {
         }
 
         if let Some(ssl) = connection_auth.ssl_config() {
-            conn_options = conn_options.ssl_mode(MySqlSslMode::Required);
-            if !ssl.ssl_ca_path.is_empty() {
-                conn_options = conn_options.ssl_ca(&ssl.ssl_ca_path);
-            }
-            // Note: the current sqlx fork does not support client certificate
-            // authentication (ssl_cert_path / ssl_key_path) via connect options.
-        } else {
-            conn_options = conn_options.ssl_mode(MySqlSslMode::Disabled);
+            conn_options = ssl.apply_mysql(conn_options);
         }
 
         let mut conn_pool = MySqlPoolOptions::new().max_connections(max_connections);
@@ -145,14 +138,7 @@ impl TaskUtil {
         }
 
         if let Some(ssl) = connection_auth.ssl_config() {
-            conn_options = conn_options.ssl_mode(PgSslMode::Require);
-            if !ssl.ssl_ca_path.is_empty() {
-                conn_options = conn_options.ssl_root_cert(&ssl.ssl_ca_path);
-            }
-            // Note: the current sqlx fork does not support client certificate
-            // authentication (ssl_cert_path / ssl_key_path) via connect options.
-        } else {
-            conn_options = conn_options.ssl_mode(PgSslMode::Disable);
+            conn_options = ssl.apply_pg(conn_options);
         }
 
         let mut pool_options = PgPoolOptions::new().max_connections(max_connections);

@@ -13,6 +13,7 @@ use crate::{
     rdb_router::RdbRouter, sinker::base_sinker::BaseSinker, Sinker,
 };
 use dt_common::{
+    config::connection_auth_config::ConnectionAuthConfig,
     log_error, log_info,
     meta::{
         dcl_meta::dcl_data::DclData,
@@ -28,6 +29,7 @@ use dt_common::{
 #[derive(Clone)]
 pub struct MysqlSinker {
     pub url: String,
+    pub connection_auth: ConnectionAuthConfig,
     pub conn_pool: Pool<MySql>,
     pub meta_manager: MysqlMetaManager,
     pub router: RdbRouter,
@@ -90,6 +92,10 @@ impl Sinker for MysqlSinker {
                         conn_options = conn_options.database(&db);
                     }
                 }
+            }
+
+            if let Some(ssl) = self.connection_auth.ssl_config() {
+                conn_options = ssl.apply_mysql(conn_options);
             }
 
             let start_time = Instant::now();

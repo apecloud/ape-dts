@@ -13,6 +13,7 @@ use crate::{
     rdb_router::RdbRouter, sinker::base_sinker::BaseSinker, Sinker,
 };
 use dt_common::{
+    config::connection_auth_config::ConnectionAuthConfig,
     log_error, log_info,
     meta::{
         ddl_meta::{ddl_data::DdlData, ddl_type::DdlType},
@@ -27,6 +28,7 @@ use dt_common::{
 #[derive(Clone)]
 pub struct PgSinker {
     pub url: String,
+    pub connection_auth: ConnectionAuthConfig,
     pub conn_pool: Pool<Postgres>,
     pub meta_manager: PgMetaManager,
     pub router: RdbRouter,
@@ -75,8 +77,13 @@ impl Sinker for PgSinker {
             let (schema, _tb) = ddl_data.get_schema_tb();
             data_size += ddl_data.get_data_size();
             data_len += 1;
-            let conn_options = PgConnectOptions::from_str(&self.url)?;
+            let mut conn_options = PgConnectOptions::from_str(&self.url)?;
             let mut pool_options = PgPoolOptions::new().max_connections(1);
+
+            if let Some(ssl) = self.connection_auth.ssl_config() {
+                conn_options = ssl.apply_pg(conn_options);
+            }
+
             let sql = format!("SET search_path = '{}';", schema);
 
             if !schema.is_empty() {
