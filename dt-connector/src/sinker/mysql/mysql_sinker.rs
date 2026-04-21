@@ -85,7 +85,11 @@ impl Sinker for MysqlSinker {
             log_info!("sink ddl, db: {}, sql: {}", db, sql);
 
             // create a tmp connection with database since sqlx conn pool does NOT support `USE db`
-            let mut conn_options = MySqlConnectOptions::from_str(&self.url)?;
+            let final_url = ConnectionAuthConfig::merge_url_with_auth(
+                self.url.as_str(),
+                &self.connection_auth,
+            )?;
+            let mut conn_options = MySqlConnectOptions::from_str(final_url.as_str())?;
             if !db.is_empty() {
                 match ddl_data.ddl_type {
                     DdlType::CreateDatabase | DdlType::DropDatabase | DdlType::AlterDatabase => {}
@@ -94,7 +98,6 @@ impl Sinker for MysqlSinker {
                     }
                 }
             }
-
             if let Some(ssl) = self.connection_auth.ssl_config() {
                 conn_options = ssl.apply_mysql(conn_options);
             }

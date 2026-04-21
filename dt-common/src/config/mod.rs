@@ -2,7 +2,6 @@ pub mod checker_config;
 pub mod config_enums;
 pub mod config_token_parser;
 pub mod connection_auth_config;
-pub mod ssl_config;
 pub mod data_marker_config;
 pub mod extractor_config;
 pub mod filter_config;
@@ -19,6 +18,7 @@ pub mod router_config;
 pub mod runtime_config;
 pub mod s3_config;
 pub mod sinker_config;
+pub mod ssl_config;
 pub mod task_config;
 
 #[cfg(feature = "metrics")]

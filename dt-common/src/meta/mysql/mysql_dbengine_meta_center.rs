@@ -7,10 +7,7 @@ use sqlx::{
 };
 
 use crate::{
-    config::{
-        config_enums::ConflictPolicyEnum,
-        connection_auth_config::ConnectionAuthConfig,
-    },
+    config::{config_enums::ConflictPolicyEnum, connection_auth_config::ConnectionAuthConfig},
     log_error, log_info,
     meta::ddl_meta::{ddl_data::DdlData, ddl_type::DdlType},
 };

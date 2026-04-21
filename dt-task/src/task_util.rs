@@ -238,41 +238,11 @@ impl TaskUtil {
                 Some(RdbMetaManager::from_pg(pg_meta_manager))
             }
 
-            _ => None,
+            _ => {
+                return Ok(None);
+            }
         };
-        if meta_manager.is_some() {
-            return Ok(meta_manager);
-        }
-
-        if let Some(checker_target) = config.checker_target() {
-            let checker_meta_manager = match checker_target.db_type {
-                DbType::Mysql => {
-                    let mysql_meta_manager = Self::create_mysql_meta_manager(
-                        &checker_target.url,
-                        &checker_target.connection_auth,
-                        log_level,
-                        DbType::Mysql,
-                        None,
-                        None,
-                    )
-                    .await?;
-                    Some(RdbMetaManager::from_mysql(mysql_meta_manager))
-                }
-                DbType::Pg => {
-                    let pg_meta_manager = Self::create_pg_meta_manager(
-                        &checker_target.url,
-                        &checker_target.connection_auth,
-                        log_level,
-                    )
-                    .await?;
-                    Some(RdbMetaManager::from_pg(pg_meta_manager))
-                }
-                _ => None,
-            };
-            return Ok(checker_meta_manager);
-        }
-
-        Ok(None)
+        Ok(Some(meta_manager))
     }
 
     pub async fn create_mysql_meta_manager(

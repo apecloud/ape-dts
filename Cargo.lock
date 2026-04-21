@@ -1472,6 +1472,7 @@ dependencies = [
  "openssl",
  "orc-format",
  "percent-encoding",
+ "postgres-openssl",
  "postgres-protocol",
  "postgres-types",
  "rdkafka",
@@ -3571,6 +3572,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c33a9471896f1c69cecef8d20cbe2f7accd12527ce60845ff44c153bb2a21b49"
 
 [[package]]
+name = "postgres-openssl"
+version = "0.5.0"
+source = "git+https://github.com/apecloud/rust-postgres#39a35f10cb9dca1ef0fd988100b22716dfbd5c7d"
+dependencies = [
+ "futures",
+ "openssl",
+ "tokio",
+ "tokio-openssl",
+ "tokio-postgres",
+]
+
+[[package]]
 name = "postgres-protocol"
 version = "0.6.1"
 source = "git+https://github.com/apecloud/rust-postgres#39a35f10cb9dca1ef0fd988100b22716dfbd5c7d"
@@ -5306,6 +5319,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "tokio-openssl"
+version = "0.6.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "59df6849caa43bb7567f9a36f863c447d95a11d5903c9cc334ba32576a27eadd"
+dependencies = [
+ "openssl",
+ "openssl-sys",
+ "tokio",
+]
+
+[[package]]
 name = "tokio-postgres"
 version = "0.7.1"
 source = "git+https://github.com/apecloud/rust-postgres#39a35f10cb9dca1ef0fd988100b22716dfbd5c7d"
@@ -5936,7 +5960,7 @@ version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf221c93e13a30d793f7645a0e7762c55d169dbb0a49671918a2319d289b10bb"
 dependencies = [
- "windows-sys 0.59.0",
+ "windows-sys 0.48.0",
 ]
 
 [[package]]

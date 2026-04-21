@@ -10,10 +10,7 @@ use crate::extractor::resumer::{
     ResumerDbPool, ResumerType, DEFAULT_POSITION_KEY, DEFAULT_RESUMER_SCHEMA, DEFAULT_RESUMER_TABLE,
 };
 use dt_common::{
-    config::{
-        config_enums::DbType,
-        connection_auth_config::ConnectionAuthConfig,
-    },
+    config::{config_enums::DbType, connection_auth_config::ConnectionAuthConfig},
     meta::position::Position,
 };
 
