@@ -10,8 +10,7 @@ use tokio::sync::{Mutex, RwLock};
 use dt_common::{
     config::{
         config_enums::DbType, connection_auth_config::ConnectionAuthConfig,
-        extractor_config::ExtractorConfig, sinker_config::SinkerConfig,
-        task_config::TaskConfig,
+        extractor_config::ExtractorConfig, sinker_config::SinkerConfig, task_config::TaskConfig,
     },
     meta::{
         avro::avro_converter::AvroConverter,

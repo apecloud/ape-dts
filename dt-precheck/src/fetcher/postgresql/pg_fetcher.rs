@@ -3,8 +3,7 @@ use std::collections::HashMap;
 use anyhow::bail;
 use async_trait::async_trait;
 use dt_common::{
-    config::connection_auth_config::ConnectionAuthConfig,
-    error::Error, rdb_filter::RdbFilter,
+    config::connection_auth_config::ConnectionAuthConfig, error::Error, rdb_filter::RdbFilter,
 };
 use dt_task::task_util::TaskUtil;
 use futures::{Stream, TryStreamExt};

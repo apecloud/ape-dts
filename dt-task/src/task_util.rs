@@ -214,12 +214,8 @@ impl TaskUtil {
                         connection_auth,
                         ..
                     } => {
-                        let pg_meta_manager = Self::create_pg_meta_manager(
-                            url,
-                            connection_auth,
-                            log_level,
-                        )
-                        .await?;
+                        let pg_meta_manager =
+                            Self::create_pg_meta_manager(url, connection_auth, log_level).await?;
                         RdbMetaManager::from_pg(pg_meta_manager)
                     }
                     _ => return Ok(None),
@@ -236,12 +232,8 @@ impl TaskUtil {
                 connection_auth,
                 ..
             } => {
-                let pg_meta_manager = Self::create_pg_meta_manager(
-                    url,
-                    connection_auth,
-                    log_level,
-                )
-                .await?;
+                let pg_meta_manager =
+                    Self::create_pg_meta_manager(url, connection_auth, log_level).await?;
                 RdbMetaManager::from_pg(pg_meta_manager)
             }
 

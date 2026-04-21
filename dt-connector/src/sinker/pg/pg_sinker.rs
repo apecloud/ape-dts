@@ -63,6 +63,10 @@ impl Sinker for PgSinker {
     }
 
     async fn sink_ddl(&mut self, data: Vec<DdlData>, _batch: bool) -> anyhow::Result<()> {
+        if data.len() <= 0 {
+            return Ok(());
+        }
+
         let mut rts = LimitedQueue::new(cmp::min(100, data.len()));
         let monitor_interval = if self.monitor_interval > 0 {
             self.monitor_interval
@@ -77,9 +81,13 @@ impl Sinker for PgSinker {
             let (schema, _tb) = ddl_data.get_schema_tb();
             data_size += ddl_data.get_data_size();
             data_len += 1;
-            let mut conn_options = PgConnectOptions::from_str(&self.url)?;
-            let mut pool_options = PgPoolOptions::new().max_connections(1);
 
+            let final_url = ConnectionAuthConfig::merge_url_with_auth(
+                self.url.as_str(),
+                &self.connection_auth,
+            )?;
+            let mut conn_options = PgConnectOptions::from_str(final_url.as_str())?;
+            let mut pool_options = PgPoolOptions::new().max_connections(1);
             if let Some(ssl) = self.connection_auth.ssl_config() {
                 conn_options = ssl.apply_pg(conn_options);
             }

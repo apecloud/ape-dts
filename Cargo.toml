@@ -32,6 +32,7 @@ serial_test = "3.0.0"
 async-trait = "0.1.64"
 async-recursion = "1.0.2"
 tokio-postgres = {git = "https://github.com/apecloud/rust-postgres"}
+postgres-openssl = {git = "https://github.com/apecloud/rust-postgres"}
 postgres-protocol = {git = "https://github.com/apecloud/rust-postgres"}
 postgres-types= {git = "https://github.com/apecloud/rust-postgres"}
 tokio = { version = "1.25.0", features = ["full"] }
