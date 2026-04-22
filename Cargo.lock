@@ -366,6 +366,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "async-dup"
+version = "1.2.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7c2886ab563af5038f79ec016dd7b87947ed138b794e8dd64992962c9cca0411"
+dependencies = [
+ "async-lock",
+ "futures-io",
+]
+
+[[package]]
 name = "async-executor"
 version = "1.13.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -506,6 +516,19 @@ dependencies = [
  "pin-utils",
  "slab",
  "wasm-bindgen-futures",
+]
+
+[[package]]
+name = "async-std-openssl"
+version = "0.6.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "408a76b00fc49b11fe78f1f7a90557a3c887af1d4570fb33e15a70eb7e6b95ee"
+dependencies = [
+ "async-dup",
+ "async-std",
+ "futures-util",
+ "openssl",
+ "openssl-sys",
 ]
 
 [[package]]
@@ -3056,6 +3079,7 @@ source = "git+https://github.com/apecloud/mysql-binlog-connector-rust?tag=v0.3.4
 dependencies = [
  "async-recursion",
  "async-std",
+ "async-std-openssl",
  "base64 0.22.1",
  "byteorder",
  "dotenv",
@@ -3063,6 +3087,7 @@ dependencies = [
  "log",
  "mysql_common",
  "num_enum",
+ "openssl",
  "percent-encoding",
  "serde",
  "serde_json",
