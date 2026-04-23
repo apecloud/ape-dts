@@ -3,6 +3,7 @@ use async_trait::async_trait;
 pub mod counter;
 pub mod counter_type;
 pub mod group_monitor;
+pub mod monitor_util;
 pub mod task_metrics;
 pub mod task_monitor;
 

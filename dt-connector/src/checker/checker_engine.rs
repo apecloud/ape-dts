@@ -10,7 +10,6 @@ use super::{
     DataChecker, RecheckKey, RetryItem,
 };
 use crate::checker::check_log::{CheckLog, DiffColValue};
-use crate::sinker::base_sinker::BaseSinker;
 use crate::sinker::mongo::mongo_cmd;
 use dt_common::meta::{
     col_value::ColValue, mongo::mongo_constant::MongoConstants, pg::pg_value_type::PgValueType,
@@ -822,13 +821,18 @@ impl<C: Checker> DataChecker<C> {
         }
         self.enqueue_retry_rows(retry_rows);
 
-        let monitor = self.ctx.monitor.clone();
         if is_serial_mode {
-            BaseSinker::update_serial_monitor(&monitor, total_checked as u64, 0).await?;
+            self.ctx
+                .base_sinker
+                .update_serial_monitor(total_checked as u64, 0)
+                .await?;
         } else {
-            BaseSinker::update_batch_monitor(&monitor, total_checked as u64, 0).await?;
+            self.ctx
+                .base_sinker
+                .update_batch_monitor(total_checked as u64, 0)
+                .await?;
         }
-        BaseSinker::update_monitor_rt(&monitor, &rts).await
+        self.ctx.base_sinker.update_monitor_rt(&rts).await
     }
 }
 
@@ -836,6 +840,7 @@ impl<C: Checker> DataChecker<C> {
 mod tests {
     use super::super::{CheckContext, FetchResult};
     use super::*;
+    use crate::sinker::base_sinker::BaseSinker;
     use crate::{checker::check_log::CheckSummaryLog, rdb_router::RdbRouter};
     use async_trait::async_trait;
     use dt_common::monitor::monitor::Monitor;
@@ -853,6 +858,7 @@ mod tests {
     fn build_ctx(is_cdc: bool) -> CheckContext {
         CheckContext {
             monitor: Arc::new(Monitor::new("checker", "unit-test", 1, 1, 1)),
+            base_sinker: BaseSinker::default(),
             task_monitor: None,
             summary: CheckSummaryLog {
                 start_time: "unit-test".to_string(),
@@ -916,6 +922,7 @@ mod tests {
         let src = RowData::new(
             "s1".to_string(),
             "t1".to_string(),
+            0,
             RowType::Insert,
             None,
             Some(HashMap::from([
@@ -926,6 +933,7 @@ mod tests {
         let dst = RowData::new(
             "s1".to_string(),
             "t1".to_string(),
+            0,
             RowType::Insert,
             None,
             Some(HashMap::from([

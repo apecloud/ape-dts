@@ -134,6 +134,7 @@ impl MongoChecker {
         RowData::new(
             schema.to_string(),
             tb.to_string(),
+            0,
             RowType::Insert,
             None,
             Some(dst_after),

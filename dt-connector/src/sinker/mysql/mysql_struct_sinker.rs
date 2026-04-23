@@ -1,16 +1,17 @@
-use std::sync::Arc;
-
 use async_trait::async_trait;
 use sqlx::{MySql, Pool};
 
 use crate::{
     rdb_router::RdbRouter,
-    sinker::base_struct_sinker::{BaseStructSinker, DBConnPool},
+    sinker::{
+        base_sinker::BaseSinker,
+        base_struct_sinker::{BaseStructSinker, DBConnPool},
+    },
     Sinker,
 };
 use dt_common::{
     config::config_enums::ConflictPolicyEnum, meta::struct_meta::struct_data::StructData,
-    monitor::monitor::Monitor, rdb_filter::RdbFilter,
+    rdb_filter::RdbFilter,
 };
 
 #[derive(Clone)]
@@ -19,8 +20,7 @@ pub struct MysqlStructSinker {
     pub conflict_policy: ConflictPolicyEnum,
     pub filter: RdbFilter,
     pub router: RdbRouter,
-    pub monitor: Arc<Monitor>,
-    pub monitor_interval: u64,
+    pub base_sinker: BaseSinker,
 }
 
 #[async_trait]
@@ -31,8 +31,7 @@ impl Sinker for MysqlStructSinker {
             &self.conflict_policy,
             data,
             &self.filter,
-            &self.monitor,
-            self.monitor_interval,
+            &self.base_sinker,
         )
         .await
     }

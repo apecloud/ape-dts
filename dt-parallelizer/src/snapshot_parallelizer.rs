@@ -5,7 +5,7 @@ use dt_common::meta::{dt_data::DtItem, dt_queue::DtQueue, row_data::RowData};
 use dt_connector::Sinker;
 
 use super::base_parallelizer::BaseParallelizer;
-use crate::{DataSize, Parallelizer};
+use crate::{table_partitioner::TablePartitioner, DataSize, Parallelizer};
 
 pub struct SnapshotParallelizer {
     pub base_parallelizer: BaseParallelizer,
@@ -32,9 +32,8 @@ impl Parallelizer for SnapshotParallelizer {
             bytes: data.iter().map(|v| v.get_data_size()).sum(),
         };
 
-        let sub_datas = Self::partition(data, self.parallel_size)?;
-        let _ = self
-            .base_parallelizer
+        let sub_datas = TablePartitioner::partition_dml(data)?;
+        self.base_parallelizer
             .sink_dml(sub_datas, sinkers, self.parallel_size, true)
             .await?;
 
@@ -57,6 +56,10 @@ impl Parallelizer for SnapshotParallelizer {
             .await?;
 
         Ok(data_size)
+    }
+
+    fn drain_ctl_data(&mut self) -> Vec<DtItem> {
+        self.base_parallelizer.drain_ctl_data()
     }
 }
 

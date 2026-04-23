@@ -9,6 +9,7 @@ pub mod redis_parallelizer;
 pub mod serial_parallelizer;
 pub mod snapshot_parallelizer;
 pub mod table_parallelizer;
+pub mod table_partitioner;
 
 use std::sync::Arc;
 
@@ -66,6 +67,10 @@ pub trait Parallelizer {
         _sinkers: &[Arc<async_mutex::Mutex<Box<dyn Sinker + Send>>>],
     ) -> anyhow::Result<DataSize> {
         Ok(DataSize::default())
+    }
+
+    fn drain_ctl_data(&mut self) -> Vec<DtItem> {
+        Vec::new()
     }
 
     async fn close(&mut self) -> anyhow::Result<()> {

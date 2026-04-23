@@ -1,4 +1,4 @@
-use std::{cmp, sync::Arc};
+use std::cmp;
 
 use anyhow::Context;
 use async_trait::async_trait;
@@ -17,7 +17,6 @@ use dt_common::{
         col_value::ColValue, mongo::mongo_constant::MongoConstants, row_data::RowData,
         row_type::RowType,
     },
-    monitor::monitor::Monitor,
     utils::limit_queue::LimitedQueue,
 };
 
@@ -26,8 +25,7 @@ pub struct MongoSinker {
     pub router: RdbRouter,
     pub batch_size: usize,
     pub mongo_client: Client,
-    pub monitor: Arc<Monitor>,
-    pub monitor_interval: u64,
+    pub base_sinker: BaseSinker,
 }
 
 #[async_trait]
@@ -85,11 +83,7 @@ impl CheckableSink for MongoSinker {
 impl MongoSinker {
     async fn serial_sink(&mut self, data: &[RowData]) -> anyhow::Result<()> {
         let mut rts = LimitedQueue::new(cmp::min(100, data.len()));
-        let monitor_interval = if self.monitor_interval > 0 {
-            self.monitor_interval
-        } else {
-            10
-        };
+        let monitor_interval = self.base_sinker.monitor_interval_secs();
         let mut data_size = 0;
         let mut data_len = 0;
         let mut last_monitor_time = Instant::now();
@@ -166,9 +160,10 @@ impl MongoSinker {
             }
 
             if last_monitor_time.elapsed().as_secs() >= monitor_interval {
-                BaseSinker::update_serial_monitor(&self.monitor, data_len as u64, data_size as u64)
+                self.base_sinker
+                    .update_serial_monitor(data_len as u64, data_size as u64)
                     .await?;
-                BaseSinker::update_monitor_rt(&self.monitor, &rts).await?;
+                self.base_sinker.update_monitor_rt(&rts).await?;
                 rts.clear();
                 data_size = 0;
                 data_len = 0;
@@ -177,9 +172,10 @@ impl MongoSinker {
         }
 
         if data_len > 0 || data_size > 0 {
-            BaseSinker::update_serial_monitor(&self.monitor, data_len as u64, data_size as u64)
+            self.base_sinker
+                .update_serial_monitor(data_len as u64, data_size as u64)
                 .await?;
-            BaseSinker::update_monitor_rt(&self.monitor, &rts).await?;
+            self.base_sinker.update_monitor_rt(&rts).await?;
         }
         Ok(())
     }
@@ -220,9 +216,10 @@ impl MongoSinker {
         collection.delete_many(query, None).await?;
         rts.push((start_time.elapsed().as_millis() as u64, 1));
 
-        BaseSinker::update_batch_monitor(&self.monitor, batch_size as u64, data_size as u64)
+        self.base_sinker
+            .update_batch_monitor(batch_size as u64, data_size as u64)
             .await?;
-        BaseSinker::update_monitor_rt(&self.monitor, &rts).await
+        self.base_sinker.update_monitor_rt(&rts).await
     }
 
     async fn batch_insert(
@@ -258,7 +255,9 @@ impl MongoSinker {
             self.serial_sink(sub_data).await?;
         }
 
-        BaseSinker::update_batch_monitor(&self.monitor, batch_size as u64, data_size as u64).await
+        self.base_sinker
+            .update_batch_monitor(batch_size as u64, data_size as u64)
+            .await
     }
 
     async fn upsert(

@@ -350,7 +350,7 @@ impl MongoCdcExtractor {
             operation_time: ts.time,
             timestamp: Position::format_timestamp_millis(ts.time as i64 * 1000),
         };
-        let row_data = RowData::new(db, tb, row_type, before, after);
+        let row_data = RowData::new(db, tb, 0, row_type, before, after);
         (row_data, position)
     }
 
@@ -445,7 +445,7 @@ impl MongoCdcExtractor {
                     }
                 }
 
-                let row_data = RowData::new(db, tb, row_type, Some(before), Some(after));
+                let row_data = RowData::new(db, tb, 0, row_type, Some(before), Some(after));
                 self.push_row_to_buf(row_data, position).await?;
             }
         }

@@ -47,7 +47,7 @@ impl LuaProcessor {
             let schema = lua.globals().get("schema")?;
             let tb = lua.globals().get("tb")?;
             let row_type = RowType::from_str(&row_type)?;
-            let new_row_data = RowData::new(schema, tb, row_type, before, after);
+            let new_row_data = RowData::new(schema, tb, 0, row_type, before, after);
             new_data.push(new_row_data);
         }
 

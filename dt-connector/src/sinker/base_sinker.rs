@@ -5,15 +5,34 @@ use dt_common::{
     utils::limit_queue::LimitedQueue,
 };
 
-pub struct BaseSinker {}
+#[derive(Clone, Default)]
+pub struct BaseSinker {
+    pub monitor: Arc<Monitor>,
+    pub monitor_interval: u64,
+}
 
 impl BaseSinker {
+    pub fn new(monitor: Arc<Monitor>, monitor_interval: u64) -> Self {
+        Self {
+            monitor,
+            monitor_interval,
+        }
+    }
+
+    pub fn monitor_interval_secs(&self) -> u64 {
+        if self.monitor_interval > 0 {
+            self.monitor_interval
+        } else {
+            10
+        }
+    }
+
     pub async fn update_batch_monitor(
-        monitor: &Arc<Monitor>,
+        &self,
         batch_size: u64,
         data_size: u64,
     ) -> anyhow::Result<()> {
-        monitor
+        self.monitor
             .add_counter(CounterType::RecordsPerQuery, batch_size)
             .await
             .add_counter(CounterType::RecordCount, batch_size)
@@ -24,11 +43,11 @@ impl BaseSinker {
     }
 
     pub async fn update_serial_monitor(
-        monitor: &Arc<Monitor>,
+        &self,
         record_count: u64,
         data_size: u64,
     ) -> anyhow::Result<()> {
-        monitor
+        self.monitor
             .add_batch_counter(CounterType::RecordsPerQuery, record_count, record_count)
             .await
             .add_counter(CounterType::RecordCount, record_count)
@@ -40,11 +59,8 @@ impl BaseSinker {
         Ok(())
     }
 
-    pub async fn update_monitor_rt(
-        monitor: &Arc<Monitor>,
-        rts: &LimitedQueue<(u64, u64)>,
-    ) -> anyhow::Result<()> {
-        monitor
+    pub async fn update_monitor_rt(&self, rts: &LimitedQueue<(u64, u64)>) -> anyhow::Result<()> {
+        self.monitor
             .add_multi_counter(CounterType::RtPerQuery, rts)
             .await;
         Ok(())

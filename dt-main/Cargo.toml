@@ -7,7 +7,7 @@ edition = "2021"
 workspace = true
 
 [features]
-metrics = ["dt-task/metrics"]
+metrics = ["dt-task/metrics", "dt-precheck/metrics"]
 
 [dependencies]
 dt-task = {path = "../dt-task", version = "0.1.0"}

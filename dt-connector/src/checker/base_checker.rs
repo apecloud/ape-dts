@@ -14,6 +14,7 @@ use tokio::task::JoinHandle;
 use tokio::time::{Duration, Instant};
 
 use super::struct_checker::StructCheckerHandle;
+use crate::sinker::base_sinker::BaseSinker;
 use crate::{
     checker::check_log::{CheckLog, CheckSummaryLog, DiffColValue},
     checker::state_store::CheckerStateStore,
@@ -70,6 +71,7 @@ impl CheckerTbMeta {
         let mut insert_row = RowData::new(
             src_row_data.schema.clone(),
             src_row_data.tb.clone(),
+            0,
             RowType::Insert,
             None,
             Some(after),
@@ -89,6 +91,7 @@ impl CheckerTbMeta {
         let mut delete_row = RowData::new(
             dst_row_data.schema.clone(),
             dst_row_data.tb.clone(),
+            0,
             RowType::Delete,
             Some(dst_after),
             None,
@@ -134,6 +137,7 @@ impl CheckerTbMeta {
         let mut update_row = RowData::new(
             src_row_data.schema.clone(),
             src_row_data.tb.clone(),
+            0,
             RowType::Update,
             Some(update_before),
             Some(update_after),
@@ -180,6 +184,7 @@ impl CheckerTbMeta {
 #[derive(Clone)]
 pub struct CheckContext {
     pub monitor: Arc<Monitor>,
+    pub base_sinker: BaseSinker,
     pub task_monitor: Option<Arc<TaskMonitor>>,
     pub summary: CheckSummaryLog,
     pub output_revise_sql: bool,
@@ -473,6 +478,7 @@ impl RecheckKey {
             RowData::new(
                 self.schema.clone(),
                 self.tb.clone(),
+                0,
                 RowType::Delete,
                 Some(values),
                 None,
@@ -481,6 +487,7 @@ impl RecheckKey {
             RowData::new(
                 self.schema.clone(),
                 self.tb.clone(),
+                0,
                 RowType::Insert,
                 None,
                 Some(values),
@@ -855,6 +862,7 @@ mod tests {
     fn build_ctx() -> CheckContext {
         CheckContext {
             monitor: Arc::new(Monitor::new("checker", "unit-test", 1, 1, 1)),
+            base_sinker: BaseSinker::default(),
             task_monitor: None,
             summary: CheckSummaryLog {
                 start_time: "unit-test".to_string(),
@@ -890,6 +898,7 @@ mod tests {
         RowData::new(
             "s1".to_string(),
             "t1".to_string(),
+            0,
             RowType::Insert,
             None,
             Some(HashMap::from([("id".to_string(), ColValue::Long(id))])),

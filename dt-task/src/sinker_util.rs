@@ -32,6 +32,7 @@ use dt_connector::{
     data_marker::DataMarker,
     rdb_router::RdbRouter,
     sinker::{
+        base_sinker::BaseSinker,
         checkable_sinker::{wrap_sinker_with_checker, CheckableSink},
         clickhouse::{
             clickhouse_sinker::ClickhouseSinker, clickhouse_struct_sinker::ClickhouseStructSinker,
@@ -134,10 +135,9 @@ impl SinkerUtil {
                         meta_manager: meta_manager.clone(),
                         router: router.clone(),
                         batch_size,
-                        monitor: monitor.clone(),
+                        base_sinker: BaseSinker::new(monitor.clone(), monitor_interval),
                         data_marker: data_marker.clone(),
                         replace,
-                        monitor_interval,
                     };
                     Self::push_checkable_sinker(&mut sub_sinkers, sinker, &checker);
                 }
@@ -165,10 +165,9 @@ impl SinkerUtil {
                         meta_manager: meta_manager.clone(),
                         router: router.clone(),
                         batch_size,
-                        monitor: monitor.clone(),
+                        base_sinker: BaseSinker::new(monitor.clone(), monitor_interval),
                         data_marker: data_marker.clone(),
                         replace,
-                        monitor_interval,
                     };
                     Self::push_checkable_sinker(&mut sub_sinkers, sinker, &checker);
                 }
@@ -187,8 +186,7 @@ impl SinkerUtil {
                         batch_size,
                         router: router.clone(),
                         mongo_client: mongo_client.clone(),
-                        monitor: monitor.clone(),
-                        monitor_interval,
+                        base_sinker: BaseSinker::new(monitor.clone(), monitor_interval),
                     };
                     Self::push_checkable_sinker(&mut sub_sinkers, sinker, &checker);
                 }
@@ -232,7 +230,7 @@ impl SinkerUtil {
                         router: router.clone(),
                         producer,
                         avro_converter: avro_converter.clone(),
-                        monitor: monitor.clone(),
+                        base_sinker: BaseSinker::new(monitor.clone(), monitor_interval),
                     };
                     Self::push_sinker(&mut sub_sinkers, sinker);
                 }
@@ -255,8 +253,7 @@ impl SinkerUtil {
                     conflict_policy: conflict_policy.clone(),
                     filter: filter.clone(),
                     router,
-                    monitor: monitor.clone(),
-                    monitor_interval,
+                    base_sinker: BaseSinker::new(monitor.clone(), monitor_interval),
                 };
                 Self::push_sinker(&mut sub_sinkers, sinker);
             }
@@ -278,8 +275,7 @@ impl SinkerUtil {
                     conflict_policy: conflict_policy.clone(),
                     filter: filter.clone(),
                     router,
-                    monitor: monitor.clone(),
-                    monitor_interval,
+                    base_sinker: BaseSinker::new(monitor.clone(), monitor_interval),
                 };
                 Self::push_sinker(&mut sub_sinkers, sinker);
             }
@@ -318,7 +314,7 @@ impl SinkerUtil {
                             version,
                             method: method.clone(),
                             meta_manager: meta_manager.clone(),
-                            monitor: monitor.clone(),
+                            base_sinker: BaseSinker::new(monitor.clone(), monitor_interval),
                             data_marker: data_marker.clone(),
                             key_parser: KeyParser::new(),
                         };
@@ -335,7 +331,7 @@ impl SinkerUtil {
                             version,
                             method: method.clone(),
                             meta_manager: meta_manager.clone(),
-                            monitor: monitor.clone(),
+                            base_sinker: BaseSinker::new(monitor.clone(), monitor_interval),
                             data_marker: data_marker.clone(),
                             key_parser: KeyParser::new(),
                         };
@@ -356,7 +352,7 @@ impl SinkerUtil {
                         statistic_type: statistic_type.clone(),
                         data_size_threshold,
                         freq_threshold,
-                        monitor: monitor.clone(),
+                        base_sinker: BaseSinker::new(monitor.clone(), monitor_interval),
                     };
                     Self::push_sinker(&mut sub_sinkers, sinker);
                 }
@@ -409,7 +405,7 @@ impl SinkerUtil {
                         password,
                         batch_size,
                         meta_manager,
-                        monitor: monitor.clone(),
+                        base_sinker: BaseSinker::new(monitor.clone(), monitor_interval),
                         sync_timestamp: Utc::now().timestamp_millis(),
                         hard_delete: false,
                     };
@@ -475,7 +471,7 @@ impl SinkerUtil {
                         username,
                         password,
                         batch_size,
-                        monitor: monitor.clone(),
+                        base_sinker: BaseSinker::new(monitor.clone(), monitor_interval),
                         sync_timestamp: Utc::now().timestamp_millis(),
                     };
                     Self::push_sinker(&mut sub_sinkers, sinker);
@@ -522,7 +518,7 @@ impl SinkerUtil {
                         meta_manager,
                         router: router.clone(),
                         reverse,
-                        monitor: monitor.clone(),
+                        base_sinker: BaseSinker::new(monitor.clone(), monitor_interval),
                     };
                     Self::push_sinker(&mut sub_sinkers, sinker);
                 }
@@ -566,7 +562,7 @@ impl SinkerUtil {
                         batch_memory_bytes: batch_memory_mb * 1024 * 1024,
                         s3_config: s3_config.clone(),
                         s3_client: s3_client.clone(),
-                        monitor: monitor.clone(),
+                        base_sinker: BaseSinker::new(monitor.clone(), monitor_interval),
                         schema,
                         tb,
                         reverse_router: reverse_router.clone(),
@@ -577,7 +573,7 @@ impl SinkerUtil {
                         batch_size,
                         s3_config: s3_config.clone(),
                         s3_client: s3_client.clone(),
-                        monitor: monitor.clone(),
+                        base_sinker: BaseSinker::new(monitor.clone(), monitor_interval),
                         conn_pool: conn_pool.clone(),
                         extract_type: config.extractor_basic.extract_type.clone(),
                     };
@@ -586,7 +582,7 @@ impl SinkerUtil {
                         url: url.to_string(),
                         meta_manager,
                         batch_size,
-                        monitor: monitor.clone(),
+                        base_sinker: BaseSinker::new(monitor.clone(), monitor_interval),
                         conn_pool: conn_pool.clone(),
                         router: router.clone(),
                         pusher,
@@ -633,7 +629,7 @@ impl SinkerUtil {
                         batch_memory_bytes: batch_memory_mb * 1024 * 1024,
                         s3_config: s3_config.clone(),
                         s3_client: s3_client.clone(),
-                        monitor: monitor.clone(),
+                        base_sinker: BaseSinker::new(monitor.clone(), monitor_interval),
                         schema,
                         tb,
                         reverse_router: reverse_router.clone(),
@@ -663,7 +659,7 @@ impl SinkerUtil {
                         batch_size,
                         s3_config: s3_config.clone(),
                         s3_client: s3_client.clone(),
-                        monitor: monitor.clone(),
+                        base_sinker: BaseSinker::new(monitor.clone(), monitor_interval),
                         conn_pool: conn_pool.clone(),
                         extract_type: config.extractor_basic.extract_type.clone(),
                     };
@@ -692,8 +688,7 @@ impl SinkerUtil {
                     filter,
                     router,
                     engine,
-                    monitor: monitor.clone(),
-                    monitor_interval,
+                    base_sinker: BaseSinker::new(monitor.clone(), monitor_interval),
                 };
                 Self::push_sinker(&mut sub_sinkers, sinker);
             }

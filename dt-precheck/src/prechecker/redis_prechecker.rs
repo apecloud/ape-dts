@@ -9,6 +9,8 @@ use crate::{
     fetcher::{redis::redis_fetcher::RedisFetcher, traits::Fetcher},
     meta::{check_item::CheckItem, check_result::CheckResult},
 };
+#[cfg(feature = "metrics")]
+use dt_common::monitor::prometheus_metrics::PrometheusMetrics;
 use dt_common::{
     config::{
         config_enums::{DbType, ExtractType},
@@ -16,8 +18,9 @@ use dt_common::{
         task_config::TaskConfig,
     },
     meta::{dt_queue::DtQueue, syncer::Syncer},
-    monitor::monitor::Monitor,
+    monitor::{group_monitor::GroupMonitor, monitor::Monitor, task_monitor::TaskMonitor},
     rdb_filter::RdbFilter,
+    task_context::TaskContext,
     time_filter::TimeFilter,
 };
 use dt_connector::{
@@ -83,6 +86,19 @@ impl Prechecker for RedisPrechecker {
 
         let filter = RdbFilter::from_config(&self.task_config.filter, &DbType::Redis)?;
         let monitor = Arc::new(Monitor::new("extractor", "", 1, 100, 1));
+
+        #[cfg(not(feature = "metrics"))]
+        let task_monitor = Arc::new(TaskMonitor::new(None));
+
+        #[cfg(feature = "metrics")]
+        let prometheus_metrics = Arc::new(PrometheusMetrics::new(
+            None,
+            self.task_config.metrics.clone(),
+        ));
+
+        #[cfg(feature = "metrics")]
+        let task_monitor = Arc::new(TaskMonitor::new(None, prometheus_metrics.clone()));
+
         let base_extractor = BaseExtractor {
             buffer,
             router: RdbRouter::from_config(&self.task_config.router, &DbType::Redis)?,
@@ -90,6 +106,14 @@ impl Prechecker for RedisPrechecker {
             monitor: ExtractorMonitor::new(monitor).await,
             data_marker: None,
             time_filter: TimeFilter::default(),
+            task_context: TaskContext {
+                task_config: self.task_config.clone(),
+                extractor_monitor: Arc::new(GroupMonitor::new("extractor", "")),
+                pipeline_monitor: Arc::new(GroupMonitor::new("pipeline", "")),
+                sinker_monitor: Arc::new(GroupMonitor::new("sinker", "")),
+                task_monitor,
+                shut_down: Arc::new(AtomicBool::new(false)),
+            },
         };
 
         let mut psyncer = RedisPsyncExtractor {

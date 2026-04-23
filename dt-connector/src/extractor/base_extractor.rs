@@ -19,6 +19,7 @@ use dt_common::{
         dt_queue::DtQueue,
         struct_meta::struct_data::StructData,
     },
+    task_context::TaskContext,
     utils::sql_util::SqlUtil,
 };
 use dt_common::{
@@ -42,6 +43,7 @@ pub struct BaseExtractor {
     pub monitor: ExtractorMonitor,
     pub data_marker: Option<DataMarker>,
     pub time_filter: TimeFilter,
+    pub task_context: TaskContext,
 }
 
 impl BaseExtractor {

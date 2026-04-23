@@ -331,6 +331,7 @@ impl PgCdcExtractor {
         let row_data = RowData::new(
             tb_meta.basic.schema,
             tb_meta.basic.tb,
+            0,
             RowType::Insert,
             None,
             Some(col_values),
@@ -378,6 +379,7 @@ impl PgCdcExtractor {
         let row_data = RowData::new(
             basic.schema.clone(),
             basic.tb.clone(),
+            0,
             RowType::Update,
             Some(col_values_before),
             Some(col_values_after),
@@ -410,6 +412,7 @@ impl PgCdcExtractor {
         let row_data = RowData::new(
             tb_meta.basic.schema,
             tb_meta.basic.tb,
+            0,
             RowType::Delete,
             Some(col_values),
             None,

@@ -22,6 +22,7 @@ use dt_common::{
     },
     monitor::monitor::Monitor,
     rdb_filter::RdbFilter,
+    task_context::TaskContext,
     time_filter::TimeFilter,
     utils::redis_util::RedisUtil,
 };
@@ -80,6 +81,7 @@ impl ExtractorUtil {
         data_marker: Option<DataMarker>,
         router: RdbRouter,
         recovery: Option<Arc<dyn Recovery + Send + Sync>>,
+        task_context: TaskContext,
     ) -> anyhow::Result<Box<dyn Extractor + Send>> {
         let mut base_extractor = BaseExtractor {
             buffer,
@@ -88,6 +90,7 @@ impl ExtractorUtil {
             monitor: ExtractorMonitor::new(monitor).await,
             data_marker,
             time_filter: TimeFilter::default(),
+            task_context,
         };
 
         let filter = RdbFilter::from_config(&config.filter, &config.extractor_basic.db_type)?;

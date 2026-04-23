@@ -103,6 +103,7 @@ impl MongoSnapshotExtractor {
             let row_data = RowData::new(
                 self.db.clone(),
                 self.tb.clone(),
+                0,
                 RowType::Insert,
                 None,
                 Some(after),
