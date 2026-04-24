@@ -18,7 +18,7 @@ pub enum SslMode {
     VerifyFull,
 }
 
-#[derive(Clone, Debug, Hash)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub struct SslConfig {
     pub ssl_mode: SslMode,
     pub ssl_ca_path: String,

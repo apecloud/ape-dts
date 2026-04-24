@@ -242,7 +242,7 @@ impl TaskUtil {
                 return Ok(None);
             }
         };
-        Ok(Some(meta_manager))
+        Ok(meta_manager)
     }
 
     pub async fn create_mysql_meta_manager(
