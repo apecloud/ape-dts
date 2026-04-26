@@ -3,7 +3,7 @@ ARG DIST_IMG=gcr.io/distroless/cc:debug
 
 ARG RUST_VERSION=1.85
 # ARG RUST_IMG_ALT=-slim-bullseye
-ARG RUST_IMG_ALT=-bullseye
+ARG RUST_IMG_ALT=-bookworm
 
 FROM --platform=${BUILDPLATFORM} rust:${RUST_VERSION}${RUST_IMG_ALT} as builder
 
