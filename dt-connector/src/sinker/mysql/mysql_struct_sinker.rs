@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use async_trait::async_trait;
 use sqlx::{MySql, Pool};
 
@@ -10,7 +8,7 @@ use crate::{
 };
 use dt_common::{
     config::config_enums::ConflictPolicyEnum, meta::struct_meta::struct_data::StructData,
-    monitor::monitor::Monitor, rdb_filter::RdbFilter,
+    monitor::task_monitor::TaskMonitorHandle, rdb_filter::RdbFilter,
 };
 
 #[derive(Clone)]
@@ -19,7 +17,7 @@ pub struct MysqlStructSinker {
     pub conflict_policy: ConflictPolicyEnum,
     pub filter: RdbFilter,
     pub router: RdbRouter,
-    pub monitor: Arc<Monitor>,
+    pub monitor: TaskMonitorHandle,
     pub monitor_interval: u64,
 }
 

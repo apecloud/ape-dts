@@ -1,4 +1,4 @@
-use std::{cmp, collections::HashMap, str::FromStr, sync::Arc};
+use std::{cmp, collections::HashMap, str::FromStr};
 
 use anyhow::bail;
 use async_trait::async_trait;
@@ -20,7 +20,7 @@ use dt_common::{
         row_data::RowData,
         row_type::RowType,
     },
-    monitor::monitor::Monitor,
+    monitor::task_monitor::TaskMonitorHandle,
     utils::{limit_queue::LimitedQueue, sql_util::SqlUtil},
 };
 
@@ -39,7 +39,7 @@ pub struct StarRocksSinker {
     pub username: String,
     pub password: String,
     pub meta_manager: MysqlMetaManager,
-    pub monitor: Arc<Monitor>,
+    pub monitor: TaskMonitorHandle,
     pub sync_timestamp: i64,
     pub hard_delete: bool,
 }

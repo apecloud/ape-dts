@@ -22,7 +22,7 @@ use dt_common::{
         row_data::RowData,
         syncer::Syncer,
     },
-    monitor::{counter_type::CounterType, monitor::Monitor},
+    monitor::{counter_type::CounterType, task_monitor::TaskMonitorHandle},
 };
 use dt_connector::{
     checker::CheckerHandle, data_marker::DataMarker, extractor::resumer::recorder::Recorder, Sinker,
@@ -38,7 +38,7 @@ pub struct BasePipeline {
     pub checkpoint_interval_secs: u64,
     pub batch_sink_interval_secs: u64,
     pub syncer: Arc<Mutex<Syncer>>,
-    pub monitor: Arc<Monitor>,
+    pub monitor: TaskMonitorHandle,
     pub data_marker: Option<Arc<RwLock<DataMarker>>>,
     pub lua_processor: Option<LuaProcessor>,
     pub recorder: Option<Arc<dyn Recorder + Send + Sync>>,

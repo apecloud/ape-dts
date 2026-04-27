@@ -34,7 +34,7 @@ use dt_common::{
         row_type::RowType,
         time::dt_utc_time::DtNaiveTime,
     },
-    monitor::monitor::Monitor,
+    monitor::task_monitor::TaskMonitorHandle,
     utils::{limit_queue::LimitedQueue, time_util::TimeUtil},
 };
 
@@ -42,7 +42,7 @@ pub struct FoxlakePusher {
     pub url: String,
     pub batch_size: usize,
     pub meta_manager: MysqlMetaManager,
-    pub monitor: Arc<Monitor>,
+    pub monitor: TaskMonitorHandle,
     pub s3_client: Operator,
     pub s3_config: S3Config,
     pub extract_type: ExtractType,

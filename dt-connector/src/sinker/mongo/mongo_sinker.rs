@@ -1,4 +1,4 @@
-use std::{cmp, sync::Arc};
+use std::cmp;
 
 use anyhow::Context;
 use async_trait::async_trait;
@@ -17,7 +17,7 @@ use dt_common::{
         col_value::ColValue, mongo::mongo_constant::MongoConstants, row_data::RowData,
         row_type::RowType,
     },
-    monitor::monitor::Monitor,
+    monitor::task_monitor::TaskMonitorHandle,
     utils::limit_queue::LimitedQueue,
 };
 
@@ -26,7 +26,7 @@ pub struct MongoSinker {
     pub router: RdbRouter,
     pub batch_size: usize,
     pub mongo_client: Client,
-    pub monitor: Arc<Monitor>,
+    pub monitor: TaskMonitorHandle,
     pub monitor_interval: u64,
 }
 

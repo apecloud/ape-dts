@@ -1,8 +1,6 @@
-use std::sync::Arc;
-
 use tokio::time::Instant;
 
-use dt_common::monitor::{counter_type::CounterType, monitor::Monitor};
+use dt_common::monitor::{counter_type::CounterType, task_monitor::TaskMonitorHandle};
 
 #[derive(Clone, Default)]
 pub struct ExtractorCounters {
@@ -24,7 +22,7 @@ impl ExtractorCounters {
 }
 
 pub struct ExtractorMonitor {
-    pub monitor: Arc<Monitor>,
+    pub monitor: TaskMonitorHandle,
     pub count_window: u64,
     pub time_window_secs: u64,
     pub last_flush_time: Instant,
@@ -33,9 +31,9 @@ pub struct ExtractorMonitor {
 }
 
 impl ExtractorMonitor {
-    pub async fn new(monitor: Arc<Monitor>) -> Self {
-        let count_window = monitor.count_window;
-        let time_window_secs = monitor.time_window_secs;
+    pub async fn new(monitor: TaskMonitorHandle) -> Self {
+        let count_window = monitor.count_window();
+        let time_window_secs = monitor.time_window_secs();
         Self {
             monitor,
             last_flush_time: Instant::now(),

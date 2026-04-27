@@ -1,4 +1,4 @@
-use std::{cmp, sync::Arc};
+use std::cmp;
 
 use anyhow::bail;
 use async_trait::async_trait;
@@ -7,7 +7,7 @@ use tokio::{time::Duration, time::Instant};
 
 use dt_common::{
     meta::{avro::avro_converter::AvroConverter, row_data::RowData},
-    monitor::monitor::Monitor,
+    monitor::task_monitor::TaskMonitorHandle,
     utils::limit_queue::LimitedQueue,
 };
 
@@ -19,7 +19,7 @@ pub struct RdkafkaSinker {
     pub router: RdbRouter,
     pub producer: FutureProducer,
     pub avro_converter: AvroConverter,
-    pub monitor: Arc<Monitor>,
+    pub monitor: TaskMonitorHandle,
     pub queue_timeout_secs: u64,
 }
 

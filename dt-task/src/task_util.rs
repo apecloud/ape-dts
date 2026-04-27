@@ -729,7 +729,7 @@ WHERE
         interval_secs: u64,
         shut_down: Arc<AtomicBool>,
         monitors: &[Arc<dyn FlushableMonitor + Send + Sync>],
-    ) {
+    ) -> anyhow::Result<()> {
         let mut interval = tokio::time::interval(Duration::from_secs(interval_secs));
         interval.tick().await;
 
@@ -748,6 +748,7 @@ WHERE
                 }
             }
         }
+        Ok(())
     }
 
     pub async fn wait_for_shutdown(shut_down: Arc<AtomicBool>) {

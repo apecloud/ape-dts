@@ -21,7 +21,7 @@ use dt_common::{
         row_data::RowData,
         row_type::RowType,
     },
-    monitor::monitor::Monitor,
+    monitor::task_monitor::TaskMonitorHandle,
     utils::limit_queue::LimitedQueue,
 };
 
@@ -32,7 +32,7 @@ pub struct PgSinker {
     pub meta_manager: PgMetaManager,
     pub router: RdbRouter,
     pub batch_size: usize,
-    pub monitor: Arc<Monitor>,
+    pub monitor: TaskMonitorHandle,
     pub data_marker: Option<Arc<RwLock<DataMarker>>>,
     pub replace: bool,
     pub monitor_interval: u64,

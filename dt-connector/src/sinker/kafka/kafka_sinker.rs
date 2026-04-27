@@ -1,12 +1,10 @@
-use std::sync::Arc;
-
 use async_trait::async_trait;
 use kafka::producer::{Producer, Record};
 use tokio::time::Instant;
 
 use dt_common::{
     meta::{avro::avro_converter::AvroConverter, ddl_meta::ddl_data::DdlData, row_data::RowData},
-    monitor::monitor::Monitor,
+    monitor::task_monitor::TaskMonitorHandle,
     utils::limit_queue::LimitedQueue,
 };
 
@@ -17,7 +15,7 @@ pub struct KafkaSinker {
     pub router: RdbRouter,
     pub producer: Producer,
     pub avro_converter: AvroConverter,
-    pub monitor: Arc<Monitor>,
+    pub monitor: TaskMonitorHandle,
 }
 
 #[async_trait]

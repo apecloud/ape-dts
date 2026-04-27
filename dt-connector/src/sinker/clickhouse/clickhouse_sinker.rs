@@ -1,4 +1,4 @@
-use std::{cmp, collections::HashMap, sync::Arc};
+use std::{cmp, collections::HashMap};
 
 use anyhow::bail;
 use async_trait::async_trait;
@@ -10,7 +10,7 @@ use dt_common::{
     config::config_enums::DbType,
     error::Error,
     meta::{col_value::ColValue, row_data::RowData, row_type::RowType},
-    monitor::monitor::Monitor,
+    monitor::task_monitor::TaskMonitorHandle,
     utils::{limit_queue::LimitedQueue, sql_util::SqlUtil},
 };
 
@@ -27,7 +27,7 @@ pub struct ClickhouseSinker {
     pub port: String,
     pub username: String,
     pub password: String,
-    pub monitor: Arc<Monitor>,
+    pub monitor: TaskMonitorHandle,
     pub sync_timestamp: i64,
 }
 

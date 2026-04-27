@@ -20,7 +20,7 @@ use dt_common::{
             redis_write_method::RedisWriteMethod,
         },
     },
-    monitor::monitor::Monitor,
+    monitor::task_monitor::TaskMonitorHandle,
     rdb_filter::RdbFilter,
     utils::redis_util::RedisUtil,
 };
@@ -93,7 +93,7 @@ impl SinkerUtil {
         config: &TaskConfig,
         extractor_config: &ExtractorConfig,
         client: ConnClient,
-        monitor: Arc<Monitor>,
+        monitor: TaskMonitorHandle,
         data_marker: Option<Arc<RwLock<DataMarker>>>,
         checker: Option<DataCheckerHandle>,
     ) -> anyhow::Result<Sinkers> {

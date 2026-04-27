@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use anyhow::Context;
 use async_trait::async_trait;
 use opendal::Operator;
@@ -11,13 +9,13 @@ use dt_common::{
     config::{config_enums::ExtractType, s3_config::S3Config},
     log_debug, log_info,
     meta::dt_data::{DtData, DtItem},
-    monitor::monitor::Monitor,
+    monitor::task_monitor::TaskMonitorHandle,
     utils::limit_queue::LimitedQueue,
 };
 
 pub struct FoxlakeMerger {
     pub batch_size: usize,
-    pub monitor: Arc<Monitor>,
+    pub monitor: TaskMonitorHandle,
     pub s3_client: Operator,
     pub s3_config: S3Config,
     pub conn_pool: Pool<MySql>,

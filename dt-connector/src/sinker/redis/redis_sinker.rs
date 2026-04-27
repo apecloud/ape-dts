@@ -21,7 +21,7 @@ use dt_common::meta::redis::redis_object::RedisObject;
 use dt_common::meta::redis::redis_write_method::RedisWriteMethod;
 use dt_common::meta::row_data::RowData;
 use dt_common::meta::row_type::RowType;
-use dt_common::monitor::monitor::Monitor;
+use dt_common::monitor::task_monitor::TaskMonitorHandle;
 
 use super::entry_rewriter::EntryRewriter;
 use crate::{call_batch_fn, data_marker::DataMarker, sinker::base_sinker::BaseSinker, Sinker};
@@ -34,7 +34,7 @@ pub struct RedisSinker {
     pub version: f32,
     pub method: RedisWriteMethod,
     pub meta_manager: Option<RdbMetaManager>,
-    pub monitor: Arc<Monitor>,
+    pub monitor: TaskMonitorHandle,
     pub data_marker: Option<Arc<RwLock<DataMarker>>>,
     pub key_parser: KeyParser,
 }

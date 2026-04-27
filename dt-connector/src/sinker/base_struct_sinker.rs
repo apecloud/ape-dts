@@ -1,15 +1,13 @@
-use std::cmp;
-use std::sync::Arc;
-
 use anyhow::bail;
 use sqlx::{query, MySql, Pool, Postgres};
+use std::cmp;
 use tokio::time::Instant;
 
 use crate::sinker::base_sinker::BaseSinker;
 use dt_common::{
     config::config_enums::ConflictPolicyEnum, error::Error, log_error, log_info,
-    meta::struct_meta::struct_data::StructData, monitor::monitor::Monitor, rdb_filter::RdbFilter,
-    utils::limit_queue::LimitedQueue,
+    meta::struct_meta::struct_data::StructData, monitor::task_monitor::TaskMonitorHandle,
+    rdb_filter::RdbFilter, utils::limit_queue::LimitedQueue,
 };
 
 pub struct BaseStructSinker {}
@@ -25,7 +23,7 @@ impl BaseStructSinker {
         conflict_policy: &ConflictPolicyEnum,
         data: Vec<StructData>,
         filter: &RdbFilter,
-        monitor: &Arc<Monitor>,
+        monitor: &TaskMonitorHandle,
         monitor_interval: u64,
     ) -> anyhow::Result<()> {
         let monitor_interval_secs = if monitor_interval > 0 {

@@ -398,9 +398,7 @@ impl<C: Checker> DataChecker<C> {
     async fn add_entry_metrics(&self, entry: &CheckEntry) {
         let (task_metric, counter_type) = Self::checker_metric_types(entry);
         // Update both cumulative task metrics and checker window counters.
-        if let Some(task_monitor) = &self.ctx.task_monitor {
-            task_monitor.add_no_window_metrics(task_metric, 1);
-        }
+        self.ctx.monitor.add_no_window_metrics(task_metric, 1);
         self.ctx.monitor.add_counter(counter_type, 1).await;
     }
 
@@ -838,8 +836,7 @@ mod tests {
     use super::*;
     use crate::{checker::check_log::CheckSummaryLog, rdb_router::RdbRouter};
     use async_trait::async_trait;
-    use dt_common::monitor::monitor::Monitor;
-    use std::sync::Arc;
+    use dt_common::monitor::task_monitor::TaskMonitorHandle;
 
     struct DummyChecker;
 
@@ -852,8 +849,7 @@ mod tests {
 
     fn build_ctx(is_cdc: bool) -> CheckContext {
         CheckContext {
-            monitor: Arc::new(Monitor::new("checker", "unit-test", 1, 1, 1)),
-            task_monitor: None,
+            monitor: TaskMonitorHandle::default(),
             summary: CheckSummaryLog {
                 start_time: "unit-test".to_string(),
                 ..Default::default()

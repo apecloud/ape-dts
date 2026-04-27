@@ -1,3 +1,5 @@
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use async_trait::async_trait;
 use dashmap::DashMap;
 
@@ -9,7 +11,6 @@ use crate::log_monitor;
 use crate::monitor::counter_type::AggregateType;
 use crate::utils::limit_queue::LimitedQueue;
 
-#[derive(Default)]
 pub struct Monitor {
     pub name: String,
     pub description: String,
@@ -18,6 +19,7 @@ pub struct Monitor {
     pub time_window_secs: u64,
     pub max_sub_count: u64,
     pub count_window: u64,
+    active: AtomicBool,
 }
 
 #[async_trait]
@@ -43,7 +45,52 @@ impl Monitor {
             time_window_secs,
             max_sub_count,
             count_window,
+            active: AtomicBool::new(true),
         }
+    }
+
+    pub fn activate(&self) {
+        self.active.store(true, Ordering::Release);
+    }
+
+    pub fn deactivate(&self) {
+        self.active.store(false, Ordering::Release);
+    }
+
+    pub fn is_active(&self) -> bool {
+        self.active.load(Ordering::Acquire)
+    }
+
+    pub async fn has_live_time_window_data(&self) -> bool {
+        self.has_live_time_window_data_in(self.time_window_secs).await
+    }
+
+    pub async fn has_live_time_window_data_in(&self, time_window_secs: u64) -> bool {
+        let counter_types: Vec<CounterType> = self
+            .time_window_counters
+            .iter()
+            .map(|entry| entry.key().clone())
+            .collect();
+        for counter_type in counter_types {
+            if let Some(counter) = self.time_window_counters.get(&counter_type) {
+                if counter.has_live_data_in_window(time_window_secs).await {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    pub async fn is_inactive_and_expired(&self) -> bool {
+        self.is_inactive_and_expired_in(self.time_window_secs).await
+    }
+
+    pub async fn is_inactive_and_expired_in(&self, time_window_secs: u64) -> bool {
+        if self.is_active() {
+            return false;
+        }
+
+        !self.has_live_time_window_data_in(time_window_secs).await
     }
 
     pub async fn flush(&self) {
@@ -93,7 +140,7 @@ impl Monitor {
         }
     }
 
-    pub async fn add_batch_counter(
+    pub(crate) async fn add_batch_counter(
         &self,
         counter_type: CounterType,
         value: u64,
@@ -105,11 +152,11 @@ impl Monitor {
         self.add_counter_internal(counter_type, value, count).await
     }
 
-    pub async fn add_counter(&self, counter_type: CounterType, value: u64) -> &Self {
+    pub(crate) async fn add_counter(&self, counter_type: CounterType, value: u64) -> &Self {
         self.add_counter_internal(counter_type, value, 1).await
     }
 
-    pub fn set_counter(&self, counter_type: CounterType, value: u64) -> &Self {
+    pub(crate) fn set_counter(&self, counter_type: CounterType, value: u64) -> &Self {
         if let WindowType::NoWindow = counter_type.get_window_type() {
             self.no_window_counters
                 .entry(counter_type)
@@ -119,7 +166,7 @@ impl Monitor {
         self
     }
 
-    pub async fn add_multi_counter(
+    pub(crate) async fn add_multi_counter(
         &self,
         counter_type: CounterType,
         entry: &LimitedQueue<(u64, u64)>,

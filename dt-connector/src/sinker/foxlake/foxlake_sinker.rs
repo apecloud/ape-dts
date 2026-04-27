@@ -1,4 +1,4 @@
-use std::{str::FromStr, sync::Arc};
+use std::str::FromStr;
 
 use anyhow::Ok;
 use async_trait::async_trait;
@@ -17,14 +17,14 @@ use dt_common::{
         mysql::mysql_meta_manager::MysqlMetaManager,
         position::Position,
     },
-    monitor::monitor::Monitor,
+    monitor::task_monitor::TaskMonitorHandle,
 };
 
 pub struct FoxlakeSinker {
     pub url: String,
     pub batch_size: usize,
     pub meta_manager: MysqlMetaManager,
-    pub monitor: Arc<Monitor>,
+    pub monitor: TaskMonitorHandle,
     pub conn_pool: Pool<MySql>,
     pub router: RdbRouter,
     pub pusher: FoxlakePusher,

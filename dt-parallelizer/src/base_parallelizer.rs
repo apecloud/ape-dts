@@ -9,14 +9,14 @@ use dt_common::{
         dcl_meta::dcl_data::DclData, ddl_meta::ddl_data::DdlData, dt_data::DtItem,
         dt_queue::DtQueue, row_data::RowData,
     },
-    monitor::{counter::Counter, counter_type::CounterType, monitor::Monitor},
+    monitor::{counter::Counter, counter_type::CounterType, task_monitor::TaskMonitorHandle},
 };
 use dt_connector::Sinker;
 
 #[derive(Default)]
 pub struct BaseParallelizer {
     pub popped_data: VecDeque<DtItem>,
-    pub monitor: Arc<Monitor>,
+    pub monitor: TaskMonitorHandle,
 }
 
 impl BaseParallelizer {

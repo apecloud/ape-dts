@@ -20,7 +20,7 @@ use dt_common::{
         avro::avro_converter::AvroConverter, dt_data::DtData, dt_queue::DtQueue,
         position::Position, syncer::Syncer,
     },
-    monitor::{counter_type::CounterType, monitor::Monitor},
+    monitor::{counter_type::CounterType, task_monitor::TaskMonitorHandle},
 };
 use dt_parallelizer::base_parallelizer::BaseParallelizer;
 
@@ -30,7 +30,7 @@ type PositionInfo = (Option<Position>, Option<Position>);
 pub struct HttpServerPipeline {
     pub buffer: Arc<DtQueue>,
     pub syncer: Arc<Mutex<Syncer>>,
-    pub monitor: Arc<Monitor>,
+    pub monitor: TaskMonitorHandle,
     pub avro_converter: AvroConverter,
     pub checkpoint_interval_secs: u64,
     pub batch_sink_interval_secs: u64,
@@ -81,7 +81,7 @@ impl HttpServerPipeline {
     pub fn new(
         buffer: Arc<DtQueue>,
         syncer: Arc<Mutex<Syncer>>,
-        monitor: Arc<Monitor>,
+        monitor: TaskMonitorHandle,
         avro_converter: AvroConverter,
         checkpoint_interval_secs: u64,
         batch_sink_interval_secs: u64,

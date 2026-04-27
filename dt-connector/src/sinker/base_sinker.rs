@@ -1,7 +1,5 @@
-use std::sync::Arc;
-
 use dt_common::{
-    monitor::{counter_type::CounterType, monitor::Monitor},
+    monitor::{counter_type::CounterType, task_monitor::TaskMonitorHandle},
     utils::limit_queue::LimitedQueue,
 };
 
@@ -9,7 +7,7 @@ pub struct BaseSinker {}
 
 impl BaseSinker {
     pub async fn update_batch_monitor(
-        monitor: &Arc<Monitor>,
+        monitor: &TaskMonitorHandle,
         batch_size: u64,
         data_size: u64,
     ) -> anyhow::Result<()> {
@@ -24,7 +22,7 @@ impl BaseSinker {
     }
 
     pub async fn update_serial_monitor(
-        monitor: &Arc<Monitor>,
+        monitor: &TaskMonitorHandle,
         record_count: u64,
         data_size: u64,
     ) -> anyhow::Result<()> {
@@ -41,7 +39,7 @@ impl BaseSinker {
     }
 
     pub async fn update_monitor_rt(
-        monitor: &Arc<Monitor>,
+        monitor: &TaskMonitorHandle,
         rts: &LimitedQueue<(u64, u64)>,
     ) -> anyhow::Result<()> {
         monitor

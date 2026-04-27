@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use async_trait::async_trait;
 use serde::Serialize;
 use serde_json::json;
@@ -8,13 +6,13 @@ use dt_common::log_statistic;
 use dt_common::meta::dt_data::DtData;
 use dt_common::meta::dt_data::DtItem;
 use dt_common::meta::redis::redis_statistic_type::RedisStatisticType;
-use dt_common::monitor::monitor::Monitor;
+use dt_common::monitor::task_monitor::TaskMonitorHandle;
 
 use crate::Sinker;
 
 pub struct RedisStatisticSinker {
     pub statistic_type: RedisStatisticType,
-    pub monitor: Arc<Monitor>,
+    pub monitor: TaskMonitorHandle,
     pub data_size_threshold: usize,
     pub freq_threshold: i64,
 }

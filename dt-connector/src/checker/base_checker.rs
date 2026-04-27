@@ -27,8 +27,7 @@ use dt_common::meta::{
     rdb_tb_meta::RdbTbMeta, row_data::RowData, row_type::RowType,
 };
 use dt_common::{
-    log_error, log_info, log_summary, log_warn,
-    monitor::{monitor::Monitor, task_monitor::TaskMonitor},
+    log_error, log_info, log_summary, log_warn, monitor::task_monitor::TaskMonitorHandle,
     utils::limit_queue::LimitedQueue,
 };
 
@@ -179,8 +178,7 @@ impl CheckerTbMeta {
 
 #[derive(Clone)]
 pub struct CheckContext {
-    pub monitor: Arc<Monitor>,
-    pub task_monitor: Option<Arc<TaskMonitor>>,
+    pub monitor: TaskMonitorHandle,
     pub summary: CheckSummaryLog,
     pub output_revise_sql: bool,
     pub extractor_meta_manager: Option<RdbMetaManager>,
@@ -854,8 +852,7 @@ mod tests {
 
     fn build_ctx() -> CheckContext {
         CheckContext {
-            monitor: Arc::new(Monitor::new("checker", "unit-test", 1, 1, 1)),
-            task_monitor: None,
+            monitor: TaskMonitorHandle::default(),
             summary: CheckSummaryLog {
                 start_time: "unit-test".to_string(),
                 ..Default::default()
