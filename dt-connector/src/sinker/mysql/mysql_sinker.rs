@@ -14,6 +14,7 @@ use crate::{
     rdb_router::RdbRouter, sinker::base_sinker::BaseSinker, Sinker,
 };
 use dt_common::{
+    config::connection_auth_config::ConnectionAuthConfig,
     log_error, log_info,
     meta::{
         dcl_meta::dcl_data::DclData,
@@ -29,6 +30,7 @@ use dt_common::{
 #[derive(Clone)]
 pub struct MysqlSinker {
     pub url: String,
+    pub connection_auth: ConnectionAuthConfig,
     pub conn_pool: Pool<MySql>,
     pub meta_manager: MysqlMetaManager,
     pub router: RdbRouter,
@@ -83,7 +85,11 @@ impl Sinker for MysqlSinker {
             log_info!("sink ddl, db: {}, sql: {}", db, sql);
 
             // create a tmp connection with database since sqlx conn pool does NOT support `USE db`
-            let mut conn_options = MySqlConnectOptions::from_str(&self.url)?;
+            let final_url = ConnectionAuthConfig::merge_url_with_auth(
+                self.url.as_str(),
+                &self.connection_auth,
+            )?;
+            let mut conn_options = MySqlConnectOptions::from_str(final_url.as_str())?;
             if !db.is_empty() {
                 match ddl_data.ddl_type {
                     DdlType::CreateDatabase | DdlType::DropDatabase | DdlType::AlterDatabase => {}
@@ -91,6 +97,9 @@ impl Sinker for MysqlSinker {
                         conn_options = conn_options.database(&db);
                     }
                 }
+            }
+            if let Some(ssl) = self.connection_auth.ssl_config() {
+                conn_options = ssl.apply_mysql(conn_options);
             }
 
             let start_time = Instant::now();

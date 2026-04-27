@@ -56,11 +56,28 @@ impl MysqlDbEngineMetaCenter {
             }
         }
 
-        if let ConnectionAuthConfig::Basic { username, password } = &self.connection_auth {
-            conn_options = conn_options.username(username);
-            if let Some(password_real) = password {
-                conn_options = conn_options.password(password_real);
+        match &self.connection_auth {
+            ConnectionAuthConfig::Basic { username, password } => {
+                conn_options = conn_options.username(username);
+                if let Some(pwd) = password {
+                    conn_options = conn_options.password(pwd);
+                }
             }
+            ConnectionAuthConfig::BasicSsl {
+                username, password, ..
+            } => {
+                if let Some(name) = username {
+                    conn_options = conn_options.username(name);
+                }
+                if let Some(pwd) = password {
+                    conn_options = conn_options.password(pwd);
+                }
+            }
+            _ => {}
+        }
+
+        if let Some(ssl) = self.connection_auth.ssl_config() {
+            conn_options = ssl.apply_mysql(conn_options);
         }
 
         let conn_pool = MySqlPoolOptions::new()

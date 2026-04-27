@@ -1,0 +1,3 @@
+DROP TABLE IF EXISTS public.numeric_table;
+
+CREATE TABLE public.numeric_table (pk SERIAL, si SMALLINT, i INTEGER, bi BIGINT, r REAL, db DOUBLE PRECISION, ss SMALLSERIAL, bs BIGSERIAL, b BOOLEAN, PRIMARY KEY(pk));

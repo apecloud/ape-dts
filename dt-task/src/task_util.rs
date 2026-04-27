@@ -73,6 +73,10 @@ impl TaskUtil {
             conn_options.disable_statement_logging();
         }
 
+        if let Some(ssl) = connection_auth.ssl_config() {
+            conn_options = ssl.apply_mysql(conn_options);
+        }
+
         let mut conn_pool = MySqlPoolOptions::new().max_connections(max_connections);
         if let Some(settings) = after_connect_settings {
             if !settings.is_empty() {
@@ -142,6 +146,10 @@ impl TaskUtil {
 
         if !enable_sqlx_log {
             conn_options.disable_statement_logging();
+        }
+
+        if let Some(ssl) = connection_auth.ssl_config() {
+            conn_options = ssl.apply_pg(conn_options);
         }
 
         let mut pool_options = PgPoolOptions::new().max_connections(max_connections);
@@ -230,41 +238,11 @@ impl TaskUtil {
                 Some(RdbMetaManager::from_pg(pg_meta_manager))
             }
 
-            _ => None,
+            _ => {
+                return Ok(None);
+            }
         };
-        if meta_manager.is_some() {
-            return Ok(meta_manager);
-        }
-
-        if let Some(checker_target) = config.checker_target() {
-            let checker_meta_manager = match checker_target.db_type {
-                DbType::Mysql => {
-                    let mysql_meta_manager = Self::create_mysql_meta_manager(
-                        &checker_target.url,
-                        &checker_target.connection_auth,
-                        log_level,
-                        DbType::Mysql,
-                        None,
-                        None,
-                    )
-                    .await?;
-                    Some(RdbMetaManager::from_mysql(mysql_meta_manager))
-                }
-                DbType::Pg => {
-                    let pg_meta_manager = Self::create_pg_meta_manager(
-                        &checker_target.url,
-                        &checker_target.connection_auth,
-                        log_level,
-                    )
-                    .await?;
-                    Some(RdbMetaManager::from_pg(pg_meta_manager))
-                }
-                _ => None,
-            };
-            return Ok(checker_meta_manager);
-        }
-
-        Ok(None)
+        Ok(meta_manager)
     }
 
     pub async fn create_mysql_meta_manager(

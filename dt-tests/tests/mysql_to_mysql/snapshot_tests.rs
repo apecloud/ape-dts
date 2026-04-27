@@ -16,6 +16,13 @@ mod test {
 
     #[tokio::test]
     #[serial]
+    #[ignore = "requires SSL-enabled MySQL instances and configured ssl_ca_path"]
+    async fn snapshot_ssl_test() {
+        TestBase::run_snapshot_test("mysql_to_mysql/snapshot/ssl_test").await;
+    }
+
+    #[tokio::test]
+    #[serial]
     async fn snapshot_on_duplicate_test() {
         TestBase::run_snapshot_test("mysql_to_mysql/snapshot/on_duplicate_test").await;
     }

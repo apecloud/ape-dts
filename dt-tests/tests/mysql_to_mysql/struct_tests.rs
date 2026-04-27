@@ -65,4 +65,16 @@ mod test {
         runner.run_struct_test_without_check().await.unwrap();
         // TestBase::run_check_test("mysql_to_mysql/struct/batch_test/bench_test_1/check").await;
     }
+
+    #[tokio::test]
+    #[serial]
+    #[ignore = "requires SSL-enabled MySQL instances and configured ssl_ca_path"]
+    async fn struct_ssl_test() {
+        let mut runner = RdbStructTestRunner::new("mysql_to_mysql/struct/ssl_test")
+            .await
+            .unwrap();
+        runner.run_struct_test_without_check().await.unwrap();
+        runner.base.execute_clean_sqls().await.unwrap();
+        runner.close().await.unwrap();
+    }
 }

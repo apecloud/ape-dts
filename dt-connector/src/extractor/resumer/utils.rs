@@ -48,8 +48,12 @@ impl ResumerUtil {
 
         match db_type {
             DbType::Mysql => {
-                let conn_options = MySqlConnectOptions::from_str(&final_url)
+                let mut conn_options = MySqlConnectOptions::from_str(&final_url)
                     .context("failed to parse MySQL connection URL")?;
+
+                if let Some(ssl) = connection_auth.ssl_config() {
+                    conn_options = ssl.apply_mysql(conn_options);
+                }
 
                 let pool = MySqlPoolOptions::new()
                     .max_connections(max_connections)
@@ -60,8 +64,12 @@ impl ResumerUtil {
                 Ok(ResumerDbPool::MySql(pool))
             }
             DbType::Pg => {
-                let conn_options = PgConnectOptions::from_str(&final_url)
+                let mut conn_options = PgConnectOptions::from_str(&final_url)
                     .context("failed to parse PostgreSQL connection URL")?;
+
+                if let Some(ssl) = connection_auth.ssl_config() {
+                    conn_options = ssl.apply_pg(conn_options);
+                }
 
                 let pool = PgPoolOptions::new()
                     .max_connections(max_connections)

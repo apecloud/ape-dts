@@ -92,4 +92,11 @@ mod test {
         // TODO: The checking logic for UDTs has not been implemented. This test can only ensure that execution does not produce errors.
         TestBase::run_pg_struct_test("pg_to_pg/struct/udt_test").await;
     }
+
+    #[tokio::test]
+    #[serial]
+    #[ignore = "requires SSL-enabled PostgreSQL instances and configured ssl_ca_path"]
+    async fn struct_ssl_test() {
+        TestBase::run_pg_struct_test("pg_to_pg/struct/ssl_test").await;
+    }
 }
