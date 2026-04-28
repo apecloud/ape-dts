@@ -41,6 +41,15 @@ impl Extractor for MongoSnapshotExtractor {
             self.tb
         );
         self.extract_internal().await?;
+        self.base_extractor.push_snapshot_finished(
+            &self.db,
+            &self.tb,
+            Position::RdbSnapshotFinished {
+                db_type: DbType::Mongo.to_string(),
+                schema: self.db.clone(),
+                tb: self.tb.clone(),
+            },
+        )?;
         self.base_extractor.wait_task_finish().await
     }
 

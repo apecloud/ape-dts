@@ -17,10 +17,10 @@ use crate::{base_pipeline::BasePipeline, Pipeline};
 use dt_common::{
     log_position,
     meta::{
-        avro::avro_converter::AvroConverter, dt_data::DtData, dt_queue::DtQueue,
-        position::Position, syncer::Syncer,
+        avro::avro_converter::AvroConverter, dt_ctl_queue::DtCtlQueue, dt_data::DtData,
+        dt_queue::DtQueue, position::Position, syncer::Syncer,
     },
-    monitor::{counter_type::CounterType, monitor::Monitor},
+    monitor::{counter_type::CounterType, task_monitor::TaskMonitorHandle},
 };
 use dt_parallelizer::base_parallelizer::BaseParallelizer;
 
@@ -30,7 +30,9 @@ type PositionInfo = (Option<Position>, Option<Position>);
 pub struct HttpServerPipeline {
     pub buffer: Arc<DtQueue>,
     pub syncer: Arc<Mutex<Syncer>>,
-    pub monitor: Arc<Monitor>,
+    pub monitor: TaskMonitorHandle,
+    pub monitor_task_id: String,
+    pub ctl_buffer: Arc<DtCtlQueue>,
     pub avro_converter: AvroConverter,
     pub checkpoint_interval_secs: u64,
     pub batch_sink_interval_secs: u64,
@@ -81,7 +83,9 @@ impl HttpServerPipeline {
     pub fn new(
         buffer: Arc<DtQueue>,
         syncer: Arc<Mutex<Syncer>>,
-        monitor: Arc<Monitor>,
+        monitor: TaskMonitorHandle,
+        monitor_task_id: String,
+        ctl_buffer: Arc<DtCtlQueue>,
         avro_converter: AvroConverter,
         checkpoint_interval_secs: u64,
         batch_sink_interval_secs: u64,
@@ -92,6 +96,8 @@ impl HttpServerPipeline {
             buffer,
             syncer,
             monitor,
+            monitor_task_id,
+            ctl_buffer,
             avro_converter,
             checkpoint_interval_secs,
             batch_sink_interval_secs,
@@ -155,6 +161,7 @@ async fn fetch_new(
     // get data from buffer
     let mut parallelizer = BaseParallelizer {
         monitor: pipeline.monitor.clone(),
+        monitor_task_id: pipeline.monitor_task_id.clone(),
         ..Default::default()
     };
     let data = parallelizer
@@ -195,9 +202,17 @@ async fn fetch_new(
     // update monitor
     pipeline
         .monitor
-        .add_counter(CounterType::BufferSize, pipeline.buffer.len() as u64)
+        .add_counter(
+            &pipeline.monitor_task_id,
+            CounterType::BufferSize,
+            pipeline.buffer.len() as u64,
+        )
         .await
-        .add_counter(CounterType::SinkedRecordTotal, response.data.len() as u64)
+        .add_counter(
+            &pipeline.monitor_task_id,
+            CounterType::SinkedRecordTotal,
+            response.data.len() as u64,
+        )
         .await;
 
     // update pending_ack_data & pending_ack_positions

@@ -3,6 +3,7 @@ use std::{cmp, path::PathBuf, str::FromStr, sync::Arc};
 use anyhow::Context;
 use async_trait::async_trait;
 use dt_common::{
+    config::config_enums::DbType,
     config::s3_config::S3Config,
     log_debug, log_info, log_warn,
     meta::{dt_data::DtData, foxlake::s3_file_meta::S3FileMeta, position::Position},
@@ -39,6 +40,15 @@ impl Extractor for FoxlakeS3Extractor {
             self.batch_size
         );
         self.extract_internal().await?;
+        self.base_extractor.push_snapshot_finished(
+            &self.schema,
+            &self.tb,
+            Position::RdbSnapshotFinished {
+                db_type: DbType::Foxlake.to_string(),
+                schema: self.schema.clone(),
+                tb: self.tb.clone(),
+            },
+        )?;
         self.base_extractor.wait_task_finish().await
     }
 }

@@ -15,14 +15,13 @@ use dt_common::{
         task_config::TaskConfig,
     },
     meta::{
-        avro::avro_converter::AvroConverter, dt_queue::DtQueue,
+        avro::avro_converter::AvroConverter, dt_ctl_queue::DtCtlQueue, dt_queue::DtQueue,
         mongo::mongo_cdc_source::MongoCdcSource, mysql::mysql_meta_manager::MysqlMetaManager,
         pg::pg_meta_manager::PgMetaManager, rdb_meta_manager::RdbMetaManager,
         redis::redis_statistic_type::RedisStatisticType, syncer::Syncer,
     },
-    monitor::monitor::Monitor,
+    monitor::task_monitor::TaskMonitorHandle,
     rdb_filter::RdbFilter,
-    task_context::TaskContext,
     time_filter::TimeFilter,
     utils::redis_util::RedisUtil,
 };
@@ -75,22 +74,23 @@ impl ExtractorUtil {
         extractor_client: ConnClient,
         partition_cols: Option<Arc<PartitionCols>>,
         buffer: Arc<DtQueue>,
+        ctl_buffer: Arc<DtCtlQueue>,
         shut_down: Arc<AtomicBool>,
         syncer: Arc<Mutex<Syncer>>,
-        monitor: Arc<Monitor>,
+        monitor: TaskMonitorHandle,
+        monitor_task_id: String,
         data_marker: Option<DataMarker>,
         router: RdbRouter,
         recovery: Option<Arc<dyn Recovery + Send + Sync>>,
-        task_context: TaskContext,
     ) -> anyhow::Result<Box<dyn Extractor + Send>> {
         let mut base_extractor = BaseExtractor {
             buffer,
+            ctl_buffer,
             router,
             shut_down,
-            monitor: ExtractorMonitor::new(monitor).await,
+            monitor: ExtractorMonitor::new(monitor, monitor_task_id).await,
             data_marker,
             time_filter: TimeFilter::default(),
-            task_context,
         };
 
         let filter = RdbFilter::from_config(&config.filter, &config.extractor_basic.db_type)?;

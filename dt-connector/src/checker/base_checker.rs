@@ -14,12 +14,12 @@ use tokio::task::JoinHandle;
 use tokio::time::{Duration, Instant};
 
 use super::struct_checker::StructCheckerHandle;
-use crate::sinker::base_sinker::BaseSinker;
 use crate::{
     checker::check_log::{CheckLog, CheckSummaryLog, DiffColValue},
     checker::state_store::CheckerStateStore,
     rdb_query_builder::RdbQueryBuilder,
     rdb_router::RdbRouter,
+    sinker::base_sinker::BaseSinker,
     sinker::mongo::mongo_cmd,
 };
 use dt_common::meta::{
@@ -28,8 +28,7 @@ use dt_common::meta::{
     rdb_tb_meta::RdbTbMeta, row_data::RowData, row_type::RowType,
 };
 use dt_common::{
-    log_error, log_info, log_summary, log_warn,
-    monitor::{monitor::Monitor, task_monitor::TaskMonitor},
+    log_error, log_info, log_summary, log_warn, monitor::task_monitor::TaskMonitorHandle,
     utils::limit_queue::LimitedQueue,
 };
 
@@ -183,9 +182,9 @@ impl CheckerTbMeta {
 
 #[derive(Clone)]
 pub struct CheckContext {
-    pub monitor: Arc<Monitor>,
+    pub monitor: TaskMonitorHandle,
+    pub monitor_task_id: String,
     pub base_sinker: BaseSinker,
-    pub task_monitor: Option<Arc<TaskMonitor>>,
     pub summary: CheckSummaryLog,
     pub output_revise_sql: bool,
     pub extractor_meta_manager: Option<RdbMetaManager>,
@@ -205,6 +204,35 @@ pub struct CheckContext {
     pub state_store: Option<Arc<CheckerStateStore>>,
     pub source_checker: Option<Arc<Mutex<Box<dyn Checker>>>>,
     pub expected_resume_position: Option<Position>,
+}
+
+impl CheckContext {
+    pub async fn add_checker_counter(
+        &self,
+        counter_type: dt_common::monitor::counter_type::CounterType,
+        value: u64,
+    ) {
+        self.monitor
+            .add_counter(&self.monitor_task_id, counter_type, value)
+            .await;
+    }
+
+    pub fn set_checker_counter(
+        &self,
+        counter_type: dt_common::monitor::counter_type::CounterType,
+        value: u64,
+    ) {
+        self.monitor
+            .set_counter(&self.monitor_task_id, counter_type, value);
+    }
+
+    pub fn add_checker_metric(
+        &self,
+        metrics_type: dt_common::monitor::task_metrics::TaskMetricsType,
+        value: u64,
+    ) {
+        self.monitor.add_no_window_metrics(metrics_type, value);
+    }
 }
 
 pub struct FetchResult {
@@ -861,9 +889,9 @@ mod tests {
 
     fn build_ctx() -> CheckContext {
         CheckContext {
-            monitor: Arc::new(Monitor::new("checker", "unit-test", 1, 1, 1)),
-            base_sinker: BaseSinker::default(),
-            task_monitor: None,
+            monitor: TaskMonitorHandle::default(),
+            monitor_task_id: "unit-test".to_string(),
+            base_sinker: BaseSinker::new(TaskMonitorHandle::default(), "unit-test".to_string(), 1),
             summary: CheckSummaryLog {
                 start_time: "unit-test".to_string(),
                 ..Default::default()

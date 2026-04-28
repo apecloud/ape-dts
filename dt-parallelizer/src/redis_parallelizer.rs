@@ -120,8 +120,4 @@ impl Parallelizer for RedisParallelizer {
 
         Ok(data_size)
     }
-
-    fn drain_ctl_data(&mut self) -> Vec<DtItem> {
-        self.base_parallelizer.drain_ctl_data()
-    }
 }

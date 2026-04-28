@@ -15,7 +15,6 @@ use tokio::{
     io::AsyncReadExt,
     runtime::Handle,
     sync::{Mutex, RwLock},
-    task::JoinHandle,
     task::JoinSet,
 };
 
@@ -46,21 +45,19 @@ use dt_common::{
     limiter::buffer_limiter::BufferLimiter,
     log_error, log_finished, log_info, log_warn,
     meta::{
-        avro::avro_converter::AvroConverter, dt_queue::DtQueue, position::Position,
-        row_type::RowType, syncer::Syncer,
+        avro::avro_converter::AvroConverter, dt_ctl_queue::DtCtlQueue, dt_queue::DtQueue,
+        position::Position, row_type::RowType, syncer::Syncer,
     },
     monitor::{
-        group_monitor::GroupMonitor,
         monitor::Monitor,
+        monitor_task_id,
         task_metrics::TaskMetricsType,
-        task_monitor::{MonitorType, TaskMonitor},
+        task_monitor::{MonitorType, TaskMonitor, TaskMonitorHandle},
         FlushableMonitor,
     },
     rdb_filter::RdbFilter,
-    task_context::TaskContext,
     utils::sql_util::SqlUtil,
 };
-use dt_common::monitor::monitor_util::MonitorUtil;
 use dt_connector::{
     checker::base_checker::CheckContext,
     checker::check_log::CheckSummaryLog,
@@ -71,6 +68,7 @@ use dt_connector::{
     data_marker::DataMarker,
     extractor::resumer::{recorder::Recorder, recovery::Recovery},
     rdb_router::RdbRouter,
+    sinker::base_sinker::BaseSinker,
     Extractor, Sinker,
 };
 use dt_pipeline::{
@@ -92,10 +90,6 @@ pub struct TaskRunner {
     task_type: Option<TaskType>,
     config: TaskConfig,
     filter: RdbFilter,
-    extractor_monitor: Arc<GroupMonitor>,
-    pipeline_monitor: Arc<GroupMonitor>,
-    sinker_monitor: Arc<GroupMonitor>,
-    checker_monitor: Arc<GroupMonitor>,
     task_monitor: Arc<TaskMonitor>,
     #[cfg(feature = "metrics")]
     prometheus_metrics: Arc<PrometheusMetrics>,
@@ -152,10 +146,6 @@ impl TaskRunner {
         Ok(Self {
             filter: RdbFilter::from_config(&config.filter, &config.extractor_basic.db_type)?,
             config,
-            extractor_monitor: Arc::new(GroupMonitor::new("extractor", "global")),
-            pipeline_monitor: Arc::new(GroupMonitor::new("pipeline", "global")),
-            sinker_monitor: Arc::new(GroupMonitor::new("sinker", "global")),
-            checker_monitor: Arc::new(GroupMonitor::new("checker", "global")),
             task_monitor,
             #[cfg(feature = "metrics")]
             prometheus_metrics,
@@ -240,12 +230,9 @@ impl TaskRunner {
             .get_task_info(extractor_client.clone(), recovery.clone())
             .await?;
         if !task_info.no_data {
-            let monitor_shut_down = Arc::new(AtomicBool::new(false));
-            let global_monitor_handle = self.spawn_global_monitor(monitor_shut_down.clone());
-
             self.clone()
                 .create_task(
-                    true,
+                    false,
                     task_info.extractor_config,
                     extractor_client.clone(),
                     partition_cols,
@@ -259,9 +246,6 @@ impl TaskRunner {
                     dequeue_limiter,
                 )
                 .await?;
-
-            monitor_shut_down.store(true, Ordering::Release);
-            global_monitor_handle.await?;
         }
 
         // close connections
@@ -286,29 +270,6 @@ impl TaskRunner {
         Ok(())
     }
 
-    fn spawn_global_monitor(&self, shut_down: Arc<AtomicBool>) -> JoinHandle<()> {
-        let interval_secs = self.config.pipeline.checkpoint_interval_secs;
-        let extractor_monitor = self.extractor_monitor.clone();
-        let pipeline_monitor = self.pipeline_monitor.clone();
-        let sinker_monitor = self.sinker_monitor.clone();
-        let checker_monitor = self.checker_monitor.clone();
-        let task_monitor = self.task_monitor.clone();
-        tokio::spawn(async move {
-            MonitorUtil::flush_monitors_generic::<GroupMonitor, TaskMonitor>(
-                interval_secs,
-                shut_down,
-                &[
-                    extractor_monitor,
-                    pipeline_monitor,
-                    sinker_monitor,
-                    checker_monitor,
-                ],
-                &[task_monitor],
-            )
-            .await
-        })
-    }
-
     async fn create_task(
         self,
         is_multi_task: bool,
@@ -331,16 +292,9 @@ impl TaskRunner {
             enqueue_limiter,
             dequeue_limiter,
         ));
+        let ctl_buffer = Arc::new(DtCtlQueue::new());
 
         let shut_down = Arc::new(AtomicBool::new(false));
-        let task_context = TaskContext {
-            task_config: self.config.clone(),
-            extractor_monitor: self.extractor_monitor.clone(),
-            pipeline_monitor: self.pipeline_monitor.clone(),
-            sinker_monitor: self.sinker_monitor.clone(),
-            task_monitor: self.task_monitor.clone(),
-            shut_down: shut_down.clone(),
-        };
         let syncer = Arc::new(Mutex::new(Syncer {
             received_position: Position::None,
             committed_position: Position::None,
@@ -364,7 +318,7 @@ impl TaskRunner {
         let rw_sinker_data_marker = sinker_data_marker
             .clone()
             .map(|data_marker| Arc::new(RwLock::new(data_marker)));
-        let single_task_id = Self::derive_single_task_id("", &extractor_config);
+        let single_task_id = monitor_task_id::from_task_context_or_extractor("", &extractor_config);
 
         let monitor_time_window_secs = self.config.pipeline.counter_time_window_secs;
         let monitor_max_sub_count = self.config.pipeline.counter_max_sub_count;
@@ -380,29 +334,40 @@ impl TaskRunner {
         };
 
         let extractor_monitor = build_monitor("extractor");
+        let extractor_monitor_handle = self.task_monitor.handle(
+            MonitorType::Extractor,
+            monitor_time_window_secs,
+            monitor_count_window,
+        );
         let extractor = ExtractorUtil::create_extractor(
             &self.config,
             &extractor_config,
             extractor_client.clone(),
             partition_cols,
             buffer.clone(),
+            ctl_buffer.clone(),
             shut_down.clone(),
             syncer.clone(),
-            extractor_monitor.clone(),
+            extractor_monitor_handle,
+            single_task_id.clone(),
             extractor_data_marker,
             (*router).clone(),
             recovery.clone(),
-            task_context.clone(),
         )
         .await?;
         let extractor = Arc::new(Mutex::new(extractor));
 
         let checker_monitor = build_monitor("checker");
+        let checker_monitor_handle = self.task_monitor.handle(
+            MonitorType::Checker,
+            monitor_time_window_secs,
+            monitor_count_window,
+        );
         let checker = self
             .create_checker(
                 self.config.checker.as_ref(),
                 &single_task_id,
-                checker_monitor.clone(),
+                checker_monitor_handle,
                 check_summary.clone(),
                 recovery.as_ref(),
                 checker_state_store.clone(),
@@ -410,11 +375,17 @@ impl TaskRunner {
             .await?;
 
         let sinker_monitor = build_monitor("sinker");
+        let sinker_monitor_handle = self.task_monitor.handle(
+            MonitorType::Sinker,
+            monitor_time_window_secs,
+            monitor_count_window,
+        );
         let sinkers = SinkerUtil::create_sinkers(
             &self.config,
             &extractor_config,
             sinker_client.clone(),
-            sinker_monitor.clone(),
+            sinker_monitor_handle,
+            single_task_id.clone(),
             rw_sinker_data_marker.clone(),
             checker.as_ref().and_then(|handle| match handle {
                 CheckerHandle::Data(handle) => Some(handle.clone()),
@@ -424,13 +395,20 @@ impl TaskRunner {
         .await?;
 
         let pipeline_monitor = build_monitor("pipeline");
+        let pipeline_monitor_handle = self.task_monitor.handle(
+            MonitorType::Pipeline,
+            monitor_time_window_secs,
+            monitor_count_window,
+        );
         let pipeline = self
             .create_pipeline(
                 buffer,
                 shut_down.clone(),
                 syncer,
                 sinkers,
-                pipeline_monitor.clone(),
+                pipeline_monitor_handle,
+                self.config.global.task_id.clone(), // pipline metrics are shared
+                ctl_buffer.clone(),
                 rw_sinker_data_marker.clone(),
                 recorder.clone(),
                 checker,
@@ -438,14 +416,6 @@ impl TaskRunner {
             .await?;
         let pipeline = Arc::new(Mutex::new(pipeline));
 
-        self.extractor_monitor
-            .add_monitor(&single_task_id, extractor_monitor.clone());
-        self.pipeline_monitor
-            .add_monitor(&single_task_id, pipeline_monitor.clone());
-        self.sinker_monitor
-            .add_monitor(&single_task_id, sinker_monitor.clone());
-        self.checker_monitor
-            .add_monitor(&single_task_id, checker_monitor.clone());
         self.task_monitor.register(
             &single_task_id,
             vec![
@@ -465,15 +435,12 @@ impl TaskRunner {
         .await?;
 
         let interval_secs = self.config.pipeline.checkpoint_interval_secs;
-        let mut single_task_flush_monitors: Vec<Arc<dyn FlushableMonitor + Send + Sync>> = vec![
-            extractor_monitor.clone(),
-            pipeline_monitor.clone(),
-            sinker_monitor.clone(),
-            checker_monitor.clone(),
-        ];
-        if !is_multi_task {
-            single_task_flush_monitors.push(self.task_monitor.clone());
-        }
+        let single_task_flush_monitors: Vec<Arc<dyn FlushableMonitor + Send + Sync>> =
+            if is_multi_task {
+                Vec::new()
+            } else {
+                vec![self.task_monitor.clone()]
+            };
         let monitor_shut_down = shut_down.clone();
         let monitor_task = tokio::spawn(async move {
             TaskUtil::flush_monitors(
@@ -517,38 +484,6 @@ impl TaskRunner {
         )
         .await;
 
-        if worker_result.is_ok() {
-            let (schema, tb) = match &extractor_config {
-                ExtractorConfig::MysqlSnapshot { db, tb, .. }
-                | ExtractorConfig::MongoSnapshot { db, tb, .. } => (db.to_owned(), tb.to_owned()),
-                ExtractorConfig::PgSnapshot { schema, tb, .. }
-                | ExtractorConfig::FoxlakeS3 { schema, tb, .. } => {
-                    (schema.to_owned(), tb.to_owned())
-                }
-                _ => (String::new(), String::new()),
-            };
-            if !tb.is_empty() {
-                let finish_position = Position::RdbSnapshotFinished {
-                    db_type: self.config.extractor_basic.db_type.to_string(),
-                    schema,
-                    tb,
-                };
-                log_finished!("{}", finish_position.to_string());
-                self.task_monitor
-                    .add_no_window_metrics(TaskMetricsType::FinishedProgressCount, 1);
-
-                if let Some(handler) = &recorder {
-                    if let Err(e) = handler.record_position(&finish_position).await {
-                        log_error!("failed to record position: {}, err: {}", finish_position, e);
-                    }
-                }
-            }
-        }
-
-        self.extractor_monitor.remove_monitor(&single_task_id);
-        self.pipeline_monitor.remove_monitor(&single_task_id);
-        self.sinker_monitor.remove_monitor(&single_task_id);
-        self.checker_monitor.remove_monitor(&single_task_id);
         self.task_monitor.unregister(
             &single_task_id,
             vec![
@@ -725,7 +660,9 @@ impl TaskRunner {
         shut_down: Arc<AtomicBool>,
         syncer: Arc<Mutex<Syncer>>,
         sinkers: Vec<Arc<AsyncMutex<Box<dyn Sinker + Send>>>>,
-        monitor: Arc<Monitor>,
+        monitor: TaskMonitorHandle,
+        monitor_task_id: String,
+        ctl_buffer: Arc<DtCtlQueue>,
         data_marker: Option<Arc<RwLock<DataMarker>>>,
         recorder: Option<Arc<dyn Recorder + Send + Sync>>,
         checker: Option<CheckerHandle>,
@@ -740,8 +677,12 @@ impl TaskRunner {
                             lua_code: processor_config.lua_code.clone(),
                         });
 
-                let parallelizer =
-                    ParallelizerUtil::create_parallelizer(&self.config, monitor.clone()).await?;
+                let parallelizer = ParallelizerUtil::create_parallelizer(
+                    &self.config,
+                    monitor.clone(),
+                    monitor_task_id.clone(),
+                )
+                .await?;
 
                 let pipeline = BasePipeline {
                     buffer,
@@ -753,6 +694,9 @@ impl TaskRunner {
                     batch_sink_interval_secs: self.config.pipeline.batch_sink_interval_secs,
                     syncer,
                     monitor,
+                    monitor_task_id,
+                    ctl_buffer,
+                    pending_dtctls: HashMap::new(),
                     data_marker,
                     lua_processor,
                     recorder,
@@ -769,6 +713,8 @@ impl TaskRunner {
                     buffer,
                     syncer,
                     monitor,
+                    monitor_task_id,
+                    ctl_buffer,
                     avro_converter,
                     self.config.pipeline.checkpoint_interval_secs,
                     self.config.pipeline.batch_sink_interval_secs,
@@ -784,7 +730,7 @@ impl TaskRunner {
         &self,
         checker_config: Option<&CheckerConfig>,
         single_task_id: &str,
-        monitor: Arc<Monitor>,
+        monitor: TaskMonitorHandle,
         check_summary: Option<Arc<AsyncMutex<CheckSummaryLog>>>,
         recovery: Option<&Arc<dyn Recovery + Send + Sync>>,
         checker_state_store: Option<Arc<CheckerStateStore>>,
@@ -892,7 +838,7 @@ impl TaskRunner {
                         max_retries,
                         check_summary,
                         monitor.clone(),
-                        Some(self.task_monitor.clone()),
+                        single_task_id.to_string(),
                     )
                 }
                 DbType::Pg => {
@@ -915,7 +861,7 @@ impl TaskRunner {
                         max_retries,
                         check_summary,
                         monitor.clone(),
-                        Some(self.task_monitor.clone()),
+                        single_task_id.to_string(),
                     )
                 }
                 _ => bail!(
@@ -977,11 +923,12 @@ impl TaskRunner {
                 reverse_router,
                 batch_size: checker_batch_size,
                 monitor: monitor.clone(),
-                base_sinker: dt_connector::sinker::base_sinker::BaseSinker::new(
+                monitor_task_id: single_task_id.to_string(),
+                base_sinker: BaseSinker::new(
                     monitor.clone(),
-                    0,
+                    single_task_id.to_string(),
+                    self.config.pipeline.checkpoint_interval_secs,
                 ),
-                task_monitor: Some(self.task_monitor.clone()),
                 output_full_row: cfg.output_full_row,
                 output_revise_sql: cfg.output_revise_sql,
                 revise_match_full_row,
@@ -1557,18 +1504,5 @@ impl TaskRunner {
             extractor_config,
             no_data: false,
         })
-    }
-
-    fn derive_single_task_id(task_context_id: &str, extractor_config: &ExtractorConfig) -> String {
-        if !task_context_id.is_empty() {
-            return task_context_id.to_string();
-        }
-
-        match extractor_config {
-            ExtractorConfig::MysqlSnapshot { db, tb, .. } => format!("{}.{}", db, tb),
-            ExtractorConfig::PgSnapshot { schema, tb, .. } => format!("{}.{}", schema, tb),
-            ExtractorConfig::MongoSnapshot { db, tb, .. } => format!("{}.{}", db, tb),
-            _ => String::new(),
-        }
     }
 }

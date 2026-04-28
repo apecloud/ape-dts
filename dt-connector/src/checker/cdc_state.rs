@@ -512,7 +512,7 @@ mod tests {
     use crate::checker::check_log::CheckSummaryLog;
     use crate::rdb_router::RdbRouter;
     use async_trait::async_trait;
-    use dt_common::{monitor::monitor::Monitor, utils::limit_queue::LimitedQueue};
+    use dt_common::{monitor::task_monitor::TaskMonitorHandle, utils::limit_queue::LimitedQueue};
     use opendal::{services::Memory, Operator};
     use std::fs;
     use std::path::{Path, PathBuf};
@@ -571,8 +571,13 @@ mod tests {
             },
             "task-1".to_string(),
             CheckContext {
-                monitor: Arc::new(Monitor::new("checker", "unit-test", 1, 1, 1)),
-                task_monitor: None,
+                monitor: TaskMonitorHandle::default(),
+                monitor_task_id: "unit-test".to_string(),
+                base_sinker: crate::sinker::base_sinker::BaseSinker::new(
+                    TaskMonitorHandle::default(),
+                    "unit-test".to_string(),
+                    1,
+                ),
                 summary: CheckSummaryLog {
                     start_time: "unit-test".to_string(),
                     ..Default::default()

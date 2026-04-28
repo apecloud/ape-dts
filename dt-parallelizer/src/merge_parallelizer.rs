@@ -101,11 +101,6 @@ impl Parallelizer for MergeParallelizer {
 
         Ok(data_size)
     }
-
-    fn drain_ctl_data(&mut self) -> Vec<DtItem> {
-        self.base_parallelizer.drain_ctl_data()
-    }
-
     async fn sink_struct(
         &mut self,
         data: Vec<StructData>,

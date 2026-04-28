@@ -79,6 +79,15 @@ impl Extractor for PgSnapshotExtractor {
             self.parallel_size
         );
         self.extract_internal().await?;
+        self.base_extractor.push_snapshot_finished(
+            &self.schema,
+            &self.tb,
+            Position::RdbSnapshotFinished {
+                db_type: DbType::Pg.to_string(),
+                schema: self.schema.clone(),
+                tb: self.tb.clone(),
+            },
+        )?;
         self.base_extractor.wait_task_finish().await
     }
 
@@ -471,10 +480,12 @@ impl PgSnapshotExtractor {
     ) -> anyhow::Result<()> {
         let row_data = router.route_row(row_data);
         let dt_data = DtData::Dml { row_data };
+        let task_id = dt_common::monitor::monitor_task_id::from_dt_data(&dt_data);
         let item = DtItem {
             dt_data,
             position,
             data_origin_node: String::new(),
+            task_id,
         };
         log_debug!("extracted item: {:?}", item);
         buffer.push(item).await

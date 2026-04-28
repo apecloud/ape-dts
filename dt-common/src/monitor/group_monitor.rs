@@ -36,22 +36,19 @@ impl GroupMonitor {
     }
 
     pub fn add_monitor(&self, id: &str, monitor: Arc<Monitor>) {
+        monitor.clear_tombstone();
         self.monitors.insert(id.to_string(), monitor);
     }
 
-    pub fn get_monitor(&self, id: &str) -> Option<Arc<Monitor>> {
-        self.monitors.get(id).map(|entry| entry.value().clone())
+    pub fn remove_monitor(&self, id: &str) {
+        self.monitors.remove(id);
     }
 
-    pub fn remove_monitor(&self, id: &str) {
-        // keep statistics of no_window counters before removing:
-        // eg. 2025-02-18 05:43:37.028889 | pipeline | global | sinked_count | latest=4199364
-        if let Some((_, monitor)) = self.monitors.remove(id) {
-            Self::refresh_no_window_counter_statistics_map(
-                &self.no_window_counter_statistics_map,
-                &monitor,
-            );
-        }
+    pub fn settle_no_window_monitor(&self, monitor: &Arc<Monitor>) {
+        Self::refresh_no_window_counter_statistics_map(
+            &self.no_window_counter_statistics_map,
+            monitor,
+        );
     }
 
     pub async fn flush(&self) {
@@ -74,6 +71,10 @@ impl GroupMonitor {
 
             for counter_type in counter_types {
                 if let Some(counter) = monitor.time_window_counters.get(&counter_type) {
+                    if !counter.has_live_data().await {
+                        continue;
+                    }
+
                     let statistics = counter.statistics().await;
                     window_counter_statistics_map
                         .entry(counter_type)
@@ -81,10 +82,14 @@ impl GroupMonitor {
                         .push(statistics);
                 }
             }
-            Self::refresh_no_window_counter_statistics_map(
-                &no_window_counter_statistics_map,
-                &monitor,
-            );
+
+            // Tombstoned monitors already settle their no-window counters during unregister.
+            if !monitor.is_tombstone() {
+                Self::refresh_no_window_counter_statistics_map(
+                    &no_window_counter_statistics_map,
+                    &monitor,
+                );
+            }
         }
 
         for (counter_type, statistics_vec) in window_counter_statistics_map {

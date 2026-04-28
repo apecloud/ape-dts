@@ -9,15 +9,15 @@ use dt_common::{
         dcl_meta::dcl_data::DclData, ddl_meta::ddl_data::DdlData, dt_data::DtItem,
         dt_queue::DtQueue, row_data::RowData,
     },
-    monitor::{counter::Counter, counter_type::CounterType, monitor::Monitor},
+    monitor::{counter::Counter, counter_type::CounterType, task_monitor::TaskMonitorHandle},
 };
 use dt_connector::Sinker;
 
 #[derive(Default)]
 pub struct BaseParallelizer {
     pub popped_data: VecDeque<DtItem>,
-    pub monitor: Arc<Monitor>,
-    pub popped_ctl_data: Vec<DtItem>,
+    pub monitor: TaskMonitorHandle,
+    pub monitor_task_id: String,
 }
 
 impl BaseParallelizer {
@@ -30,10 +30,6 @@ impl BaseParallelizer {
         let mut record_size_counter = Counter::new(0, 0);
         // ddls and dmls should be drained separately
         while let Ok(item) = self.pop(buffer, &mut record_size_counter).await {
-            if item.dt_data.is_ctl() {
-                self.popped_ctl_data.push(item);
-                continue;
-            }
             if data.is_empty()
                 || (data[0].get_row_sql_type() == item.get_row_sql_type()
                     && data[0].data_origin_node == item.data_origin_node)
@@ -74,7 +70,6 @@ impl BaseParallelizer {
     ) -> anyhow::Result<DtItem> {
         match buffer.pop().await {
             Ok(item) => {
-                // counter
                 record_size_counter.add(
                     item.dt_data.get_data_size(),
                     item.dt_data.get_data_count() as u64,
@@ -89,6 +84,7 @@ impl BaseParallelizer {
         if record_size_counter.value > 0 {
             self.monitor
                 .add_batch_counter(
+                    &self.monitor_task_id,
                     CounterType::RecordSize,
                     record_size_counter.value,
                     record_size_counter.count,
@@ -176,10 +172,5 @@ impl BaseParallelizer {
             result??;
         }
         Ok(())
-    }
-
-    #[inline]
-    pub fn drain_ctl_data(&mut self) -> Vec<DtItem> {
-        self.popped_ctl_data.drain(..).collect()
     }
 }

@@ -1,11 +1,11 @@
+use crate::{
+    rdb_query_builder::RdbQueryBuilder, rdb_router::RdbRouter, sinker::base_sinker::BaseSinker,
+    Sinker,
+};
 use async_trait::async_trait;
 use dt_common::{
     log_sql,
     meta::{rdb_meta_manager::RdbMetaManager, row_data::RowData},
-};
-use crate::{
-    rdb_query_builder::RdbQueryBuilder, rdb_router::RdbRouter, sinker::base_sinker::BaseSinker,
-    Sinker,
 };
 
 #[derive(Clone)]

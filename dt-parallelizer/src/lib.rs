@@ -69,10 +69,6 @@ pub trait Parallelizer {
         Ok(DataSize::default())
     }
 
-    fn drain_ctl_data(&mut self) -> Vec<DtItem> {
-        Vec::new()
-    }
-
     async fn close(&mut self) -> anyhow::Result<()> {
         Ok(())
     }

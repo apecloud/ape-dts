@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use std::collections::HashMap;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
@@ -12,17 +13,21 @@ use tokio::{
 use crate::{lua_processor::LuaProcessor, Pipeline};
 use dt_common::{
     config::sinker_config::SinkerConfig,
-    log_error, log_info, log_position, log_warn,
+    log_error, log_finished, log_info, log_position, log_warn,
     meta::{
         dcl_meta::dcl_data::DclData,
         ddl_meta::ddl_data::DdlData,
+        dt_ctl::DtCtl,
+        dt_ctl_queue::DtCtlQueue,
         dt_data::{DtData, DtItem},
         dt_queue::DtQueue,
         position::Position,
         row_data::RowData,
         syncer::Syncer,
     },
-    monitor::{counter_type::CounterType, monitor::Monitor},
+    monitor::{
+        counter_type::CounterType, task_metrics::TaskMetricsType, task_monitor::TaskMonitorHandle,
+    },
 };
 use dt_connector::{
     checker::CheckerHandle, data_marker::DataMarker, extractor::resumer::recorder::Recorder, Sinker,
@@ -38,7 +43,10 @@ pub struct BasePipeline {
     pub checkpoint_interval_secs: u64,
     pub batch_sink_interval_secs: u64,
     pub syncer: Arc<Mutex<Syncer>>,
-    pub monitor: Arc<Monitor>,
+    pub monitor: TaskMonitorHandle,
+    pub monitor_task_id: String,
+    pub ctl_buffer: Arc<DtCtlQueue>,
+    pub pending_dtctls: HashMap<String, DtCtl>,
     pub data_marker: Option<Arc<RwLock<DataMarker>>>,
     pub lua_processor: Option<LuaProcessor>,
     pub recorder: Option<Arc<dyn Recorder + Send + Sync>>,
@@ -85,20 +93,34 @@ impl Pipeline for BasePipeline {
         let mut last_commit_position = Position::None;
         let mut record_time = Instant::now();
 
-        while !self.shut_down.load(Ordering::Acquire) || !self.buffer.is_empty() {
+        while !self.shut_down.load(Ordering::Acquire)
+            || !self.buffer.is_empty()
+            || !self.ctl_buffer.is_empty()
+            || !self.pending_dtctls.is_empty()
+        {
             // to avoid too many sub counters, only add counter when buffer is not empty
             if !self.buffer.is_empty() {
                 self.monitor
-                    .add_counter(CounterType::BufferSize, self.buffer.len() as u64)
+                    .add_counter(
+                        &self.monitor_task_id,
+                        CounterType::BufferSize,
+                        self.buffer.len() as u64,
+                    )
                     .await;
             }
             if record_time.elapsed().as_secs() > 1 {
                 let len = self.buffer.len() as u64;
                 let size = self.buffer.get_curr_size();
-                self.monitor
-                    .set_counter(CounterType::QueuedRecordCurrent, len);
-                self.monitor
-                    .set_counter(CounterType::QueuedByteCurrent, size);
+                self.monitor.set_counter(
+                    &self.monitor_task_id,
+                    CounterType::QueuedRecordCurrent,
+                    len,
+                );
+                self.monitor.set_counter(
+                    &self.monitor_task_id,
+                    CounterType::QueuedByteCurrent,
+                    size,
+                );
                 record_time = Instant::now();
             }
 
@@ -144,16 +166,29 @@ impl Pipeline for BasePipeline {
                 .await?;
 
             self.monitor
-                .add_counter(CounterType::SinkedRecordTotal, data_size.count)
+                .add_counter(
+                    &self.monitor_task_id,
+                    CounterType::SinkedRecordTotal,
+                    data_size.count,
+                )
                 .await
-                .add_counter(CounterType::SinkedByteTotal, data_size.bytes)
+                .add_counter(
+                    &self.monitor_task_id,
+                    CounterType::SinkedByteTotal,
+                    data_size.bytes,
+                )
                 .await;
+
+            self.collect_pending_dtctls();
+            self.try_finish_snapshot_tasks().await?;
 
             yield_now().await;
         }
 
         self.record_checkpoint(None, &last_received_position, &last_commit_position)
             .await?;
+        self.collect_pending_dtctls();
+        self.try_finish_snapshot_tasks().await?;
         Ok(())
     }
 }
@@ -242,7 +277,11 @@ impl BasePipeline {
                 }
             }
             self.monitor
-                .add_counter(CounterType::DDLRecordTotal, data_size.count)
+                .add_counter(
+                    &self.monitor_task_id,
+                    CounterType::DDLRecordTotal,
+                    data_size.count,
+                )
                 .await;
             Ok((data_size, last_received_position, last_commit_position))
         } else {
@@ -387,13 +426,56 @@ impl BasePipeline {
                     _ => return SinkMethod::Dml,
                 },
                 DtData::Redis { .. } | DtData::Foxlake { .. } => return SinkMethod::Raw,
-                DtData::Begin {} | DtData::Commit { .. } | DtData::Heartbeat {} => {
-                    continue;
-                }
-                _ => return SinkMethod::Raw,
+                DtData::Begin {} | DtData::Commit { .. } | DtData::Heartbeat {} => continue,
             }
         }
         SinkMethod::Raw
+    }
+
+    fn collect_pending_dtctls(&mut self) {
+        while let Some(ctl) = self.ctl_buffer.try_pop() {
+            self.pending_dtctls.insert(ctl.task_id().to_string(), ctl);
+        }
+    }
+
+    async fn try_finish_snapshot_tasks(&mut self) -> anyhow::Result<()> {
+        if !self.buffer.is_empty() {
+            return Ok(());
+        }
+
+        let finished_task_ids: Vec<String> = self
+            .pending_dtctls
+            .iter()
+            .map(|(task_id, _)| task_id.clone())
+            .collect();
+
+        for task_id in finished_task_ids {
+            let Some(ctl) = self.pending_dtctls.remove(&task_id) else {
+                continue;
+            };
+
+            match ctl {
+                DtCtl::SnapshotExtractFinished {
+                    finish_position, ..
+                } => {
+                    log_position!("checkpoint_position | {}", finish_position.to_string());
+                    self.monitor
+                        .add_no_window_metrics(TaskMetricsType::FinishedProgressCount, 1);
+                    log_finished!("{}", finish_position.to_string());
+                    if let Some(handler) = &self.recorder {
+                        if let Err(err) = handler.record_position(&finish_position).await {
+                            log_error!(
+                                "failed to record finish position: {}, err: {}",
+                                finish_position,
+                                err
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(())
     }
 
     async fn record_checkpoint(
@@ -435,6 +517,7 @@ impl BasePipeline {
         }
 
         self.monitor.set_counter(
+            &self.monitor_task_id,
             CounterType::Timestamp,
             last_received_position.to_timestamp(),
         );

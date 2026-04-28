@@ -57,10 +57,6 @@ impl Parallelizer for SnapshotParallelizer {
 
         Ok(data_size)
     }
-
-    fn drain_ctl_data(&mut self) -> Vec<DtItem> {
-        self.base_parallelizer.drain_ctl_data()
-    }
 }
 
 impl SnapshotParallelizer {

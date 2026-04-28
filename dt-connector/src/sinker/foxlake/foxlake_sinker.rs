@@ -108,6 +108,7 @@ impl FoxlakeSinker {
                 dt_data: DtData::Foxlake { file_meta },
                 position: Position::None,
                 data_origin_node: String::new(),
+                task_id: String::new(),
             };
             dt_items.push(dt_item);
         }
