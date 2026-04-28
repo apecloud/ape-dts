@@ -1,4 +1,4 @@
-use std::str::FromStr;
+use std::{str::FromStr, time::Duration};
 
 use anyhow::{bail, Ok};
 use sqlx::{
@@ -82,6 +82,8 @@ impl MysqlDbEngineMetaCenter {
 
         let conn_pool = MySqlPoolOptions::new()
             .max_connections(1)
+            .acquire_timeout(Duration::from_secs(15))
+            .idle_timeout(Some(Duration::from_secs(5 * 60)))
             .connect_with(conn_options)
             .await?;
         let query = sqlx::query(&ddl_data.query);

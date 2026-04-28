@@ -72,7 +72,10 @@ impl TaskUtil {
                 .no_engine_substitution(false)
         }
 
-        let mut conn_pool = MySqlPoolOptions::new().max_connections(max_connections);
+        let mut conn_pool = MySqlPoolOptions::new()
+            .max_connections(max_connections)
+            .acquire_timeout(Duration::from_secs(15))
+            .idle_timeout(Some(Duration::from_secs(5 * 60)));
         if let Some(settings) = after_connect_settings {
             if !settings.is_empty() {
                 conn_pool = conn_pool.after_connect(move |conn, _meta| {

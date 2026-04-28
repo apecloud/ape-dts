@@ -1,4 +1,4 @@
-use std::str::FromStr;
+use std::{str::FromStr, time::Duration};
 
 use anyhow::{bail, Context, Result};
 use sqlx::{
@@ -57,6 +57,8 @@ impl ResumerUtil {
 
                 let pool = MySqlPoolOptions::new()
                     .max_connections(max_connections)
+                    .acquire_timeout(Duration::from_secs(15))
+                    .idle_timeout(Some(Duration::from_secs(5 * 60)))
                     .connect_with(conn_options)
                     .await
                     .context("failed to create MySQL connection pool")?;
