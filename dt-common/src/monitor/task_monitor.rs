@@ -7,7 +7,7 @@ use super::{group_monitor::GroupMonitor, monitor::Monitor};
 #[cfg(feature = "metrics")]
 use crate::monitor::prometheus_metrics::PrometheusMetrics;
 use crate::{
-    config::config_enums::TaskType,
+    config::config_enums::{TaskKind, TaskType},
     log_task,
     monitor::{counter_type::CounterType, task_metrics::TaskMetricsType, FlushableMonitor},
     utils::limit_queue::LimitedQueue,
@@ -16,10 +16,10 @@ use crate::{
 #[derive(Clone)]
 pub struct TaskMonitor {
     task_type: Option<TaskType>,
-    extractor_group_monitor: Arc<GroupMonitor>,
-    pipeline_group_monitor: Arc<GroupMonitor>,
-    sinker_group_monitor: Arc<GroupMonitor>,
-    checker_group_monitor: Arc<GroupMonitor>,
+    extractor_group_monitor: Option<Arc<GroupMonitor>>,
+    pipeline_group_monitor: Option<Arc<GroupMonitor>>,
+    sinker_group_monitor: Option<Arc<GroupMonitor>>,
+    checker_group_monitor: Option<Arc<GroupMonitor>>,
 
     extractors: DashMap<String, Arc<Monitor>>,
     pipelines: DashMap<String, Arc<Monitor>>,
@@ -64,9 +64,13 @@ impl FlushableMonitor for TaskMonitor {
             return;
         }
 
+        self.cleanup_monitors().await;
+
         for monitor in self.collect_monitors() {
             monitor.flush().await;
         }
+
+        self.flush_global().await;
 
         self.reset_before_calc();
         if let Some(metrics) = self.calc().await {
@@ -74,36 +78,18 @@ impl FlushableMonitor for TaskMonitor {
             #[cfg(feature = "metrics")]
             self.prometheus_metrics.set_metrics(&metrics);
         }
-
-        self.flush_global().await;
     }
 }
 
 impl TaskMonitor {
     #[cfg(not(feature = "metrics"))]
-    pub fn new(task_type: Option<TaskType>, time_window_secs: u64) -> Self {
+    pub fn new(task_type: Option<TaskType>) -> Self {
         Self {
             task_type,
-            extractor_group_monitor: Arc::new(GroupMonitor::new(
-                "extractor",
-                "global",
-                time_window_secs,
-            )),
-            pipeline_group_monitor: Arc::new(GroupMonitor::new(
-                "pipeline",
-                "global",
-                time_window_secs,
-            )),
-            sinker_group_monitor: Arc::new(GroupMonitor::new(
-                "sinker",
-                "global",
-                time_window_secs,
-            )),
-            checker_group_monitor: Arc::new(GroupMonitor::new(
-                "checker",
-                "global",
-                time_window_secs,
-            )),
+            extractor_group_monitor: Self::build_group_monitor(task_type, "extractor"),
+            pipeline_group_monitor: Self::build_group_monitor(task_type, "pipeline"),
+            sinker_group_monitor: Self::build_group_monitor(task_type, "sinker"),
+            checker_group_monitor: Self::build_group_monitor(task_type, "checker"),
             extractors: DashMap::new(),
             pipelines: DashMap::new(),
             sinkers: DashMap::new(),
@@ -113,33 +99,13 @@ impl TaskMonitor {
     }
 
     #[cfg(feature = "metrics")]
-    pub fn new(
-        task_type: Option<TaskType>,
-        time_window_secs: u64,
-        prometheus_metrics: Arc<PrometheusMetrics>,
-    ) -> Self {
+    pub fn new(task_type: Option<TaskType>, prometheus_metrics: Arc<PrometheusMetrics>) -> Self {
         Self {
             task_type,
-            extractor_group_monitor: Arc::new(GroupMonitor::new(
-                "extractor",
-                "global",
-                time_window_secs,
-            )),
-            pipeline_group_monitor: Arc::new(GroupMonitor::new(
-                "pipeline",
-                "global",
-                time_window_secs,
-            )),
-            sinker_group_monitor: Arc::new(GroupMonitor::new(
-                "sinker",
-                "global",
-                time_window_secs,
-            )),
-            checker_group_monitor: Arc::new(GroupMonitor::new(
-                "checker",
-                "global",
-                time_window_secs,
-            )),
+            extractor_group_monitor: Self::build_group_monitor(task_type, "extractor"),
+            pipeline_group_monitor: Self::build_group_monitor(task_type, "pipeline"),
+            sinker_group_monitor: Self::build_group_monitor(task_type, "sinker"),
+            checker_group_monitor: Self::build_group_monitor(task_type, "checker"),
             extractors: DashMap::new(),
             pipelines: DashMap::new(),
             sinkers: DashMap::new(),
@@ -147,6 +113,11 @@ impl TaskMonitor {
             no_window_metrics_map: DashMap::new(),
             prometheus_metrics,
         }
+    }
+
+    fn build_group_monitor(task_type: Option<TaskType>, name: &str) -> Option<Arc<GroupMonitor>> {
+        matches!(task_type, Some(task_type) if task_type.kind == TaskKind::Snapshot)
+            .then(|| Arc::new(GroupMonitor::new(name, "global")))
     }
 
     pub fn get_task_type(&self) -> Option<&TaskType> {
@@ -161,23 +132,31 @@ impl TaskMonitor {
         for (monitor_type, monitor) in monitors {
             match monitor_type {
                 MonitorType::Extractor => {
-                    self.extractor_group_monitor
-                        .add_monitor(task_id, monitor.clone());
+                    monitor.clear_tombstone();
+                    if let Some(group_monitor) = &self.extractor_group_monitor {
+                        group_monitor.add_monitor(task_id, monitor.clone());
+                    }
                     self.extractors.insert(task_id.to_string(), monitor);
                 }
                 MonitorType::Pipeline => {
-                    self.pipeline_group_monitor
-                        .add_monitor(task_id, monitor.clone());
+                    monitor.clear_tombstone();
+                    if let Some(group_monitor) = &self.pipeline_group_monitor {
+                        group_monitor.add_monitor(task_id, monitor.clone());
+                    }
                     self.pipelines.insert(task_id.to_string(), monitor);
                 }
                 MonitorType::Sinker => {
-                    self.sinker_group_monitor
-                        .add_monitor(task_id, monitor.clone());
+                    monitor.clear_tombstone();
+                    if let Some(group_monitor) = &self.sinker_group_monitor {
+                        group_monitor.add_monitor(task_id, monitor.clone());
+                    }
                     self.sinkers.insert(task_id.to_string(), monitor);
                 }
                 MonitorType::Checker => {
-                    self.checker_group_monitor
-                        .add_monitor(task_id, monitor.clone());
+                    monitor.clear_tombstone();
+                    if let Some(group_monitor) = &self.checker_group_monitor {
+                        group_monitor.add_monitor(task_id, monitor.clone());
+                    }
                     self.checkers.insert(task_id.to_string(), monitor);
                 }
             }
@@ -193,28 +172,54 @@ impl TaskMonitor {
         for monitor_type in monitors {
             match monitor_type {
                 MonitorType::Extractor => {
-                    if let Some((_, monitor)) = self.extractors.remove(task_id) {
-                        monitor.deactivate();
+                    if let Some(monitor) = self
+                        .extractors
+                        .get(task_id)
+                        .map(|entry| entry.value().clone())
+                    {
+                        monitor.mark_tombstone();
+                        if let Some(group_monitor) = &self.extractor_group_monitor {
+                            group_monitor.settle_no_window_monitor(&monitor);
+                        }
                         calc_monitors.push((MonitorType::Extractor, monitor.clone()));
-                    };
+                    }
                 }
                 MonitorType::Pipeline => {
-                    if let Some((_, monitor)) = self.pipelines.remove(task_id) {
-                        monitor.deactivate();
+                    if let Some(monitor) = self
+                        .pipelines
+                        .get(task_id)
+                        .map(|entry| entry.value().clone())
+                    {
+                        monitor.mark_tombstone();
+                        if let Some(group_monitor) = &self.pipeline_group_monitor {
+                            group_monitor.settle_no_window_monitor(&monitor);
+                        }
                         calc_monitors.push((MonitorType::Pipeline, monitor.clone()));
-                    };
+                    }
                 }
                 MonitorType::Sinker => {
-                    if let Some((_, monitor)) = self.sinkers.remove(task_id) {
-                        monitor.deactivate();
+                    if let Some(monitor) =
+                        self.sinkers.get(task_id).map(|entry| entry.value().clone())
+                    {
+                        monitor.mark_tombstone();
+                        if let Some(group_monitor) = &self.sinker_group_monitor {
+                            group_monitor.settle_no_window_monitor(&monitor);
+                        }
                         calc_monitors.push((MonitorType::Sinker, monitor.clone()));
-                    };
+                    }
                 }
                 MonitorType::Checker => {
-                    if let Some((_, monitor)) = self.checkers.remove(task_id) {
-                        monitor.deactivate();
+                    if let Some(monitor) = self
+                        .checkers
+                        .get(task_id)
+                        .map(|entry| entry.value().clone())
+                    {
+                        monitor.mark_tombstone();
+                        if let Some(group_monitor) = &self.checker_group_monitor {
+                            group_monitor.settle_no_window_monitor(&monitor);
+                        }
                         calc_monitors.push((MonitorType::Checker, monitor.clone()));
-                    };
+                    }
                 }
             }
         }
@@ -344,6 +349,9 @@ impl TaskMonitor {
             .collect();
 
         for monitor in extractors {
+            if monitor.is_tombstone() {
+                continue;
+            }
             calc_monitors.push((MonitorType::Extractor, monitor.clone()));
             // extractor rps
             if let Some(counter) = monitor
@@ -436,6 +444,9 @@ impl TaskMonitor {
             .collect();
 
         for monitor in pipelines {
+            if monitor.is_tombstone() {
+                continue;
+            }
             calc_monitors.push((MonitorType::Pipeline, monitor.clone()));
         }
 
@@ -446,6 +457,9 @@ impl TaskMonitor {
             .collect();
 
         for monitor in sinkers {
+            if monitor.is_tombstone() {
+                continue;
+            }
             calc_monitors.push((MonitorType::Sinker, monitor.clone()));
             // sinker rt
             if let Some(counter) = monitor.time_window_counters.get(&CounterType::RtPerQuery) {
@@ -516,6 +530,9 @@ impl TaskMonitor {
             .collect();
 
         for monitor in checkers {
+            if monitor.is_tombstone() {
+                continue;
+            }
             calc_monitors.push((MonitorType::Checker, monitor.clone()));
             // checker checked records
             if let Some(counter) = monitor.time_window_counters.get(&CounterType::RecordCount) {
@@ -616,29 +633,71 @@ impl TaskMonitor {
             .remove(&TaskMetricsType::PipelineQueueBytes);
     }
 
+    async fn cleanup_monitors(&self) {
+        self.cleanup_monitor_map(&self.extractors, self.extractor_group_monitor.as_ref())
+            .await;
+        self.cleanup_monitor_map(&self.pipelines, self.pipeline_group_monitor.as_ref())
+            .await;
+        self.cleanup_monitor_map(&self.sinkers, self.sinker_group_monitor.as_ref())
+            .await;
+        self.cleanup_monitor_map(&self.checkers, self.checker_group_monitor.as_ref())
+            .await;
+    }
+
+    async fn cleanup_monitor_map(
+        &self,
+        monitors: &DashMap<String, Arc<Monitor>>,
+        group_monitor: Option<&Arc<GroupMonitor>>,
+    ) {
+        let monitor_entries: Vec<(String, Arc<Monitor>)> = monitors
+            .iter()
+            .map(|entry| (entry.key().clone(), entry.value().clone()))
+            .collect();
+
+        for (task_id, monitor) in monitor_entries {
+            if !monitor.is_tombstone_and_expired().await {
+                continue;
+            }
+
+            if monitors.remove(&task_id).is_some() {
+                if let Some(group_monitor) = group_monitor {
+                    group_monitor.remove_monitor(&task_id);
+                }
+            }
+        }
+    }
+
     async fn flush_global(&self) {
-        self.extractor_group_monitor.flush().await;
-        self.pipeline_group_monitor.flush().await;
-        self.sinker_group_monitor.flush().await;
-        self.checker_group_monitor.flush().await;
+        if let Some(group_monitor) = &self.extractor_group_monitor {
+            group_monitor.flush().await;
+        }
+        if let Some(group_monitor) = &self.pipeline_group_monitor {
+            group_monitor.flush().await;
+        }
+        if let Some(group_monitor) = &self.sinker_group_monitor {
+            group_monitor.flush().await;
+        }
+        if let Some(group_monitor) = &self.checker_group_monitor {
+            group_monitor.flush().await;
+        }
     }
 
     fn get_monitor(&self, task_id: &str, monitor_type: &MonitorType) -> Option<Arc<Monitor>> {
-        let monitor = match monitor_type {
-            MonitorType::Extractor => self
-                .extractors
-                .get(task_id)
-                .map(|entry| entry.value().clone()),
-            MonitorType::Pipeline => self
-                .pipelines
-                .get(task_id)
-                .map(|entry| entry.value().clone()),
-            MonitorType::Sinker => self.sinkers.get(task_id).map(|entry| entry.value().clone()),
-            MonitorType::Checker => self
-                .checkers
-                .get(task_id)
-                .map(|entry| entry.value().clone()),
-        };
+        let monitor =
+            match monitor_type {
+                MonitorType::Extractor => self.extractors.get(task_id).and_then(|entry| {
+                    (!entry.value().is_tombstone()).then(|| entry.value().clone())
+                }),
+                MonitorType::Pipeline => self.pipelines.get(task_id).and_then(|entry| {
+                    (!entry.value().is_tombstone()).then(|| entry.value().clone())
+                }),
+                MonitorType::Sinker => self.sinkers.get(task_id).and_then(|entry| {
+                    (!entry.value().is_tombstone()).then(|| entry.value().clone())
+                }),
+                MonitorType::Checker => self.checkers.get(task_id).and_then(|entry| {
+                    (!entry.value().is_tombstone()).then(|| entry.value().clone())
+                }),
+            };
 
         if monitor.is_none() {
             log::debug!(

@@ -14,7 +14,6 @@ use crate::monitor::counter_type::AggregateType;
 pub struct GroupMonitor {
     name: String,
     description: String,
-    time_window_secs: u64,
     monitors: DashMap<String, Arc<Monitor>>,
     no_window_counter_statistics_map: DashMap<CounterType, DashMap<AggregateType, u64>>,
 }
@@ -27,78 +26,69 @@ impl FlushableMonitor for GroupMonitor {
 }
 
 impl GroupMonitor {
-    pub fn new(name: &str, description: &str, time_window_secs: u64) -> Self {
+    pub fn new(name: &str, description: &str) -> Self {
         Self {
             name: name.into(),
             description: description.into(),
-            time_window_secs,
             monitors: DashMap::new(),
             no_window_counter_statistics_map: DashMap::new(),
         }
     }
 
     pub fn add_monitor(&self, id: &str, monitor: Arc<Monitor>) {
-        monitor.activate();
+        monitor.clear_tombstone();
         self.monitors.insert(id.to_string(), monitor);
     }
 
     pub fn remove_monitor(&self, id: &str) {
-        // keep statistics of no_window counters before removing:
-        // eg. 2025-02-18 05:43:37.028889 | pipeline | global | sinked_count | latest=4199364
-        if let Some((_, monitor)) = self.monitors.remove(id) {
-            Self::refresh_no_window_counter_statistics_map(
-                &self.no_window_counter_statistics_map,
-                &monitor,
-            );
-        }
+        self.monitors.remove(id);
+    }
+
+    pub fn settle_no_window_monitor(&self, monitor: &Arc<Monitor>) {
+        Self::refresh_no_window_counter_statistics_map(
+            &self.no_window_counter_statistics_map,
+            monitor,
+        );
     }
 
     pub async fn flush(&self) {
         let window_counter_statistics_map: DashMap<CounterType, Vec<WindowCounterStatistics>> =
             DashMap::new();
         let no_window_counter_statistics_map = self.no_window_counter_statistics_map.clone();
-        let mut expired_monitor_ids = Vec::new();
 
-        let monitors: Vec<(String, Arc<Monitor>)> = self
+        let monitors: Vec<Arc<Monitor>> = self
             .monitors
             .iter()
-            .map(|entry| (entry.key().clone(), entry.value().clone()))
+            .map(|entry| entry.value().clone())
             .collect();
 
-        for (monitor_id, monitor) in monitors {
-            let should_remove = monitor
-                .is_inactive_and_expired_in(self.time_window_secs)
-                .await;
+        for monitor in monitors {
+            let counter_types: Vec<CounterType> = monitor
+                .time_window_counters
+                .iter()
+                .map(|entry| entry.key().clone())
+                .collect();
 
-            if !should_remove {
-                let counter_types: Vec<CounterType> = monitor
-                    .time_window_counters
-                    .iter()
-                    .map(|entry| entry.key().clone())
-                    .collect();
-
-                for counter_type in counter_types {
-                    if let Some(counter) = monitor.time_window_counters.get(&counter_type) {
-                        if !counter.has_live_data_in_window(self.time_window_secs).await {
-                            continue;
-                        }
-
-                        let statistics = counter.statistics_in_window(self.time_window_secs).await;
-                        window_counter_statistics_map
-                            .entry(counter_type)
-                            .or_default()
-                            .push(statistics);
+            for counter_type in counter_types {
+                if let Some(counter) = monitor.time_window_counters.get(&counter_type) {
+                    if !counter.has_live_data().await {
+                        continue;
                     }
+
+                    let statistics = counter.statistics().await;
+                    window_counter_statistics_map
+                        .entry(counter_type)
+                        .or_default()
+                        .push(statistics);
                 }
             }
 
-            Self::refresh_no_window_counter_statistics_map(
-                &no_window_counter_statistics_map,
-                &monitor,
-            );
-
-            if should_remove {
-                expired_monitor_ids.push(monitor_id);
+            // Tombstoned monitors already settle their no-window counters during unregister.
+            if !monitor.is_tombstone() {
+                Self::refresh_no_window_counter_statistics_map(
+                    &no_window_counter_statistics_map,
+                    &monitor,
+                );
             }
         }
 
@@ -133,10 +123,6 @@ impl GroupMonitor {
                 }
             }
             log_monitor!("{}", log);
-        }
-
-        for monitor_id in expired_monitor_ids {
-            self.remove_monitor(&monitor_id);
         }
     }
 

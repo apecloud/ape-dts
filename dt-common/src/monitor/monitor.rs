@@ -19,7 +19,7 @@ pub struct Monitor {
     pub time_window_secs: u64,
     pub max_sub_count: u64,
     pub count_window: u64,
-    active: AtomicBool,
+    tombstone: AtomicBool,
 }
 
 #[async_trait]
@@ -45,24 +45,25 @@ impl Monitor {
             time_window_secs,
             max_sub_count,
             count_window,
-            active: AtomicBool::new(true),
+            tombstone: AtomicBool::new(false),
         }
     }
 
-    pub fn activate(&self) {
-        self.active.store(true, Ordering::Release);
+    pub fn clear_tombstone(&self) {
+        self.tombstone.store(false, Ordering::Release);
     }
 
-    pub fn deactivate(&self) {
-        self.active.store(false, Ordering::Release);
+    pub fn mark_tombstone(&self) {
+        self.tombstone.store(true, Ordering::Release);
     }
 
-    pub fn is_active(&self) -> bool {
-        self.active.load(Ordering::Acquire)
+    pub fn is_tombstone(&self) -> bool {
+        self.tombstone.load(Ordering::Acquire)
     }
 
     pub async fn has_live_time_window_data(&self) -> bool {
-        self.has_live_time_window_data_in(self.time_window_secs).await
+        self.has_live_time_window_data_in(self.time_window_secs)
+            .await
     }
 
     pub async fn has_live_time_window_data_in(&self, time_window_secs: u64) -> bool {
@@ -81,16 +82,12 @@ impl Monitor {
         false
     }
 
-    pub async fn is_inactive_and_expired(&self) -> bool {
-        self.is_inactive_and_expired_in(self.time_window_secs).await
-    }
-
-    pub async fn is_inactive_and_expired_in(&self, time_window_secs: u64) -> bool {
-        if self.is_active() {
+    pub async fn is_tombstone_and_expired(&self) -> bool {
+        if !self.is_tombstone() {
             return false;
         }
 
-        !self.has_live_time_window_data_in(time_window_secs).await
+        !self.has_live_time_window_data().await
     }
 
     pub async fn flush(&self) {

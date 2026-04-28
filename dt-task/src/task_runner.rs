@@ -139,20 +139,15 @@ impl TaskRunner {
         let config = TaskConfig::new(task_config_file)
             .with_context(|| format!("invalid configs in [{}]", task_config_file))?;
         let task_type = config.task_type();
-        let monitor_time_window_secs = config.pipeline.counter_time_window_secs;
         #[cfg(not(feature = "metrics"))]
-        let task_monitor = Arc::new(TaskMonitor::new(task_type, monitor_time_window_secs));
+        let task_monitor = Arc::new(TaskMonitor::new(task_type));
 
         #[cfg(feature = "metrics")]
         let prometheus_metrics =
             Arc::new(PrometheusMetrics::new(task_type, config.metrics.clone()));
 
         #[cfg(feature = "metrics")]
-        let task_monitor = Arc::new(TaskMonitor::new(
-            task_type,
-            monitor_time_window_secs,
-            prometheus_metrics.clone(),
-        ));
+        let task_monitor = Arc::new(TaskMonitor::new(task_type, prometheus_metrics.clone()));
 
         Ok(Self {
             config,
@@ -630,10 +625,7 @@ impl TaskRunner {
             MonitorType::Sinker,
             MonitorType::Checker,
         ];
-        // flush monitors before unregistering to make sure the latest metrics are collected and logged
-        self.task_monitor
-            .flush_monitors(&single_task_id, &unregister_monitors)
-            .await;
+
         self.task_monitor
             .unregister(&single_task_id, unregister_monitors);
         worker_result
