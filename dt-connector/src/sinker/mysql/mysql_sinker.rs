@@ -1,4 +1,4 @@
-use std::{cmp, str::FromStr, sync::Arc};
+use std::{cmp, str::FromStr, sync::Arc, time::Duration};
 
 use anyhow::Context;
 use async_trait::async_trait;
@@ -106,6 +106,8 @@ impl Sinker for MysqlSinker {
 
             let conn_pool = MySqlPoolOptions::new()
                 .max_connections(1)
+                .acquire_timeout(Duration::from_secs(15))
+                .idle_timeout(Some(Duration::from_secs(5 * 60)))
                 .connect_with(conn_options)
                 .await?;
             query.execute(&conn_pool).await?;
