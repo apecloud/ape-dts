@@ -45,6 +45,7 @@ pub struct TaskUtil {}
 impl TaskUtil {
     pub async fn create_mysql_conn_pool(
         url: &str,
+        db_type: &DbType,
         connection_auth: &ConnectionAuthConfig,
         max_connections: u32,
         enable_sqlx_log: bool,
@@ -54,16 +55,21 @@ impl TaskUtil {
 
         let mut conn_options = MySqlConnectOptions::from_str(&final_url)?;
         // The default character set is `utf8mb4`
-        conn_options
+        conn_options = conn_options
             .log_statements(log::LevelFilter::Debug)
             .log_slow_statements(log::LevelFilter::Debug, Duration::from_secs(1));
 
         if !enable_sqlx_log {
-            conn_options.disable_statement_logging();
+            conn_options = conn_options.disable_statement_logging();
         }
 
         if let Some(ssl) = connection_auth.ssl_config() {
             conn_options = ssl.apply_mysql(conn_options);
+        }
+        if !matches!(db_type, DbType::Mysql) {
+            conn_options = conn_options
+                .pipes_as_concat(false)
+                .no_engine_substitution(false)
         }
 
         let mut conn_pool = MySqlPoolOptions::new().max_connections(max_connections);
@@ -129,12 +135,12 @@ impl TaskUtil {
         let final_url = ConnectionAuthConfig::merge_url_with_auth(url, connection_auth)?;
 
         let mut conn_options = PgConnectOptions::from_str(&final_url)?;
-        conn_options
+        conn_options = conn_options
             .log_statements(log::LevelFilter::Debug)
             .log_slow_statements(log::LevelFilter::Debug, Duration::from_secs(1));
 
         if !enable_sqlx_log {
-            conn_options.disable_statement_logging();
+            conn_options = conn_options.disable_statement_logging();
         }
 
         if let Some(ssl) = connection_auth.ssl_config() {
@@ -256,7 +262,15 @@ impl TaskUtil {
         let conn_pool = match &conn_pool_opt {
             Some(conn_pool) => conn_pool.clone(),
             None => {
-                Self::create_mysql_conn_pool(url, connection_auth, 1, enable_sqlx_log, None).await?
+                Self::create_mysql_conn_pool(
+                    url,
+                    &db_type,
+                    connection_auth,
+                    1,
+                    enable_sqlx_log,
+                    None,
+                )
+                .await?
             }
         };
         let mut meta_manager = MysqlMetaManager::new_mysql_compatible(conn_pool, db_type).await?;
@@ -271,8 +285,15 @@ impl TaskUtil {
             let meta_center_conn_pool = match &conn_pool_opt {
                 Some(conn_pool) => conn_pool.clone(),
                 None => {
-                    Self::create_mysql_conn_pool(url, connection_auth, 1, enable_sqlx_log, None)
-                        .await?
+                    Self::create_mysql_conn_pool(
+                        url,
+                        &DbType::Mysql,
+                        connection_auth,
+                        1,
+                        enable_sqlx_log,
+                        None,
+                    )
+                    .await?
                 }
             };
             let meta_center = MysqlDbEngineMetaCenter::new(
@@ -747,6 +768,7 @@ impl ConnClient {
             } => ConnClient::MySQL(
                 TaskUtil::create_mysql_conn_pool(
                     url,
+                    &DbType::Mysql,
                     connection_auth,
                     extractor_max_connections,
                     enable_sqlx_log,
@@ -826,6 +848,7 @@ impl ConnClient {
                 ConnClient::MySQL(
                     TaskUtil::create_mysql_conn_pool(
                         url,
+                        &DbType::Mysql,
                         connection_auth,
                         sinker_max_connections,
                         enable_sqlx_log,
@@ -846,6 +869,7 @@ impl ConnClient {
             } => ConnClient::MySQL(
                 TaskUtil::create_mysql_conn_pool(
                     url,
+                    &DbType::Mysql,
                     connection_auth,
                     sinker_max_connections,
                     enable_sqlx_log,

@@ -457,6 +457,7 @@ impl SinkerUtil {
                         .build()?;
                     let conn_pool = TaskUtil::create_mysql_conn_pool(
                         &url,
+                        &DbType::StarRocks,
                         &connection_auth,
                         parallel_size * 2,
                         enable_sqlx_log,
@@ -502,6 +503,7 @@ impl SinkerUtil {
             } => {
                 let conn_pool = TaskUtil::create_mysql_conn_pool(
                     &url,
+                    &DbType::StarRocks,
                     &connection_auth,
                     2,
                     enable_sqlx_log,
@@ -610,6 +612,7 @@ impl SinkerUtil {
                 let reverse_router = router.reverse();
                 let conn_pool = TaskUtil::create_mysql_conn_pool(
                     &url,
+                    &DbType::Foxlake,
                     &ConnectionAuthConfig::NoAuth,
                     parallel_size * 2,
                     enable_sqlx_log,
@@ -676,6 +679,7 @@ impl SinkerUtil {
             } => {
                 let conn_pool = TaskUtil::create_mysql_conn_pool(
                     &url,
+                    &DbType::Foxlake,
                     &ConnectionAuthConfig::NoAuth,
                     parallel_size * 2,
                     enable_sqlx_log,
@@ -721,6 +725,7 @@ impl SinkerUtil {
             } => {
                 let conn_pool = TaskUtil::create_mysql_conn_pool(
                     &url,
+                    &DbType::Foxlake,
                     &ConnectionAuthConfig::NoAuth,
                     parallel_size * 2,
                     enable_sqlx_log,
@@ -751,6 +756,7 @@ impl SinkerUtil {
                 let router = create_router!(task_config, Mysql);
                 let conn_pool = TaskUtil::create_mysql_conn_pool(
                     &url,
+                    &DbType::Foxlake,
                     &ConnectionAuthConfig::NoAuth,
                     parallel_size * 2,
                     enable_sqlx_log,

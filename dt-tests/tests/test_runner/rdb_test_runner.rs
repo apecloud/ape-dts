@@ -75,6 +75,7 @@ impl RdbTestRunner {
                 src_conn_pool_mysql = Some(
                     TaskUtil::create_mysql_conn_pool(
                         src_url,
+                        &src_db_type,
                         src_connection_auth,
                         1,
                         false,
@@ -102,6 +103,7 @@ impl RdbTestRunner {
                     dst_conn_pool_mysql = Some(
                         TaskUtil::create_mysql_conn_pool(
                             dst_url,
+                            &dst_db_type,
                             dst_connection_auth,
                             1,
                             false,
@@ -131,6 +133,7 @@ impl RdbTestRunner {
             }) => Some(
                 TaskUtil::create_mysql_conn_pool(
                     url,
+                    &DbType::Mysql,
                     connection_auth,
                     1,
                     false,
