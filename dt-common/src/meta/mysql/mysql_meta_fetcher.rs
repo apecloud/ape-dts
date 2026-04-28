@@ -151,7 +151,7 @@ impl MysqlMetaFetcher {
             sqlx::query(&sql).bind(schema).bind(tb).fetch(conn_pool)
         } else {
             // for starrocks
-            sqlx::query(&sql).disable_arguments().fetch(conn_pool)
+            sqlx::raw_sql(&sql).fetch(conn_pool)
         };
 
         while let Some(row) = rows.try_next().await? {
@@ -170,8 +170,8 @@ impl MysqlMetaFetcher {
 
         if cols.is_empty() {
             bail! {Error::MetadataError(format!(
-                "failed to get table metadata for: `{}`.`{}`",
-                schema, tb
+                    "failed to get table metadata for: `{}`.`{}`",
+                    schema, tb
             )) }
         }
         Ok((cols, col_origin_type_map, col_type_map, nullable_cols))
@@ -331,7 +331,7 @@ impl MysqlMetaFetcher {
     ) -> anyhow::Result<HashMap<String, Vec<String>>> {
         let mut key_map: HashMap<String, Vec<String>> = HashMap::new();
         let sql = format!("SHOW INDEXES FROM `{}`.`{}`", schema, tb);
-        let mut rows = sqlx::query(&sql).disable_arguments().fetch(conn_pool);
+        let mut rows = sqlx::raw_sql(&sql).fetch(conn_pool);
         while let Some(row) = rows.try_next().await? {
             let non_unique: i8 = row.try_get("Non_unique")?;
             if non_unique == 1 {
@@ -373,7 +373,7 @@ impl MysqlMetaFetcher {
     ) -> anyhow::Result<(Vec<ForeignKey>, Vec<ForeignKey>)> {
         let mut foreign_keys = Vec::new();
         let mut ref_by_foreign_keys = Vec::new();
-        if matches!(db_type, DbType::StarRocks | DbType::Doris) {
+        if !matches!(db_type, DbType::Mysql) {
             return Ok((foreign_keys, ref_by_foreign_keys));
         }
 
@@ -431,7 +431,7 @@ impl MysqlMetaFetcher {
 
     async fn init_version(&mut self) -> anyhow::Result<()> {
         let sql = "SELECT VERSION()";
-        let mut rows = sqlx::query(sql).disable_arguments().fetch(&self.conn_pool);
+        let mut rows = sqlx::raw_sql(sql).fetch(&self.conn_pool);
         if let Some(row) = rows.try_next().await? {
             let version: String = row.get_unchecked(0);
             self.version = version.trim().into();
