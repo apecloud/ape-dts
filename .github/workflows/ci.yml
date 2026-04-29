@@ -20,6 +20,11 @@ on:
       - "**/*.jpg"
       - "**/*.svg"
   workflow_dispatch:
+    inputs:
+      run_integration_tests:
+        description: "Run integration tests (spins up Docker services per suite)"
+        type: boolean
+        default: false
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -131,3 +136,138 @@ jobs:
 
       - name: Run doc tests
         run: cargo test --workspace --doc --exclude dt-tests
+
+  integration-test:
+    name: "Integration / ${{ matrix.suite }}"
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_integration_tests == true }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # ── MySQL ──────────────────────────────────────────────────────────
+          - suite: mysql_to_mysql
+            services: mysql-src mysql-dst mysql-meta
+            filter: "test(mysql_to_mysql::)"
+
+          - suite: mysql_to_mysql_case_sensitive
+            services: mysql-src-8-0 mysql-dst-8-0
+            filter: "test(mysql_to_mysql_case_sensitive::)"
+
+          - suite: mysql_to_mysql_lua
+            services: mysql-src mysql-dst mysql-meta
+            filter: "test(mysql_to_mysql_lua::)"
+
+          # ── PostgreSQL ─────────────────────────────────────────────────────
+          - suite: pg_to_pg
+            services: postgres-src postgres-dst postgres-node3
+            filter: "test(pg_to_pg::)"
+
+          - suite: pg_to_pg_lua
+            services: postgres-src postgres-dst
+            filter: "test(pg_to_pg_lua::)"
+
+          # ── MongoDB ────────────────────────────────────────────────────────
+          - suite: mongo_to_mongo
+            services: mongo-src mongo-dst
+            filter: "test(mongo_to_mongo::)"
+
+          # ── Redis 7.0 + Graph ──────────────────────────────────────────────
+          # Only 7.0 and FalkorDB/graph are in docker-compose.ci.yml.
+          # Multi-version suites (2.8/4.0/5.0/6.0/6.2/8.0) are excluded from CI.
+          - suite: redis_to_redis_7_0
+            services: redis-src redis-dst
+            filter: "test(redis_to_redis::cdc_7_0) | test(redis_to_redis::snapshot_7_0) | test(redis_to_redis::snapshot_and_cdc_7_0)"
+
+          - suite: redis_to_redis_graph
+            services: falkordb-src falkordb-dst
+            filter: "test(redis_to_redis::cdc_graph) | test(redis_to_redis::snapshot_graph)"
+
+          # ── Cross-stack ────────────────────────────────────────────────────
+          - suite: mysql_to_clickhouse
+            services: mysql-src clickhouse
+            filter: "test(mysql_to_clickhouse::)"
+
+          - suite: pg_to_clickhouse
+            services: postgres-src clickhouse
+            filter: "test(pg_to_clickhouse::)"
+
+          - suite: mysql_to_redis
+            services: mysql-src redis-dst
+            filter: "test(mysql_to_redis::)"
+
+          - suite: log_reader
+            services: mysql-src postgres-src mongo-src
+            filter: "test(log_reader::)"
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Start required services
+        working-directory: dt-tests
+        run: docker compose -f docker-compose.ci.yml up -d ${{ matrix.services }}
+
+      - name: Wait for services to be healthy
+        working-directory: dt-tests
+        run: |
+          timeout 120 bash -c '
+            while docker compose -f docker-compose.ci.yml ps | grep -q "starting"; do
+              echo "Waiting for containers to finish starting..."
+              sleep 5
+            done
+            echo "All services ready."
+          '
+
+      - name: Initialize MongoDB replica sets
+        if: contains(matrix.services, 'mongo')
+        working-directory: dt-tests
+        run: |
+          if echo "${{ matrix.services }}" | grep -q "mongo-src"; then
+            docker compose -f docker-compose.ci.yml exec -T mongo-src \
+              mongosh --eval 'rs.initiate({_id:"rs0",members:[{_id:0,host:"mongo-src:27017"}]})'
+            sleep 3
+          fi
+          if echo "${{ matrix.services }}" | grep -q "mongo-dst"; then
+            docker compose -f docker-compose.ci.yml exec -T mongo-dst \
+              mongosh --eval 'rs.initiate({_id:"rs1",members:[{_id:0,host:"mongo-dst:27017"}]})'
+            sleep 3
+          fi
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: integration-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
+
+      - name: Run integration tests — ${{ matrix.suite }}
+        working-directory: dt-tests
+        env:
+          ENV_FILE_PATH: .env.ci
+        run: |
+          cargo nextest run \
+            --package dt-tests \
+            --test integration_test \
+            --no-fail-fast \
+            -E "${{ matrix.filter }}"
+
+      - name: Dump container logs on failure
+        if: failure()
+        working-directory: dt-tests
+        run: docker compose -f docker-compose.ci.yml logs --tail=200
+
+      - name: Stop services
+        if: always()
+        working-directory: dt-tests
+        run: docker compose -f docker-compose.ci.yml down -v
