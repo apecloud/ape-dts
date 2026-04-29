@@ -564,6 +564,12 @@ impl TaskConfig {
                         schema: String::new(),
                         tb: String::new(),
                         schema_tbs: HashMap::new(),
+                        parallel_size: loader.get_with_default(EXTRACTOR, PARALLEL_SIZE, 1),
+                        parallel_type: loader.get_with_default(
+                            EXTRACTOR,
+                            "parallel_type",
+                            RdbParallelType::Table,
+                        ),
                         s3_config,
                         batch_size,
                     }
@@ -640,6 +646,12 @@ impl TaskConfig {
                         db: String::new(),
                         tb: String::new(),
                         db_tbs: HashMap::new(),
+                        parallel_size: loader.get_with_default(EXTRACTOR, PARALLEL_SIZE, 1),
+                        parallel_type: loader.get_with_default(
+                            EXTRACTOR,
+                            "parallel_type",
+                            RdbParallelType::Table,
+                        ),
                     },
 
                     ExtractType::Cdc => ExtractorConfig::MongoCdc {

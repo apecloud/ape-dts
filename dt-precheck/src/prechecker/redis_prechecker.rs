@@ -9,23 +9,20 @@ use crate::{
     fetcher::{redis::redis_fetcher::RedisFetcher, traits::Fetcher},
     meta::{check_item::CheckItem, check_result::CheckResult},
 };
-#[cfg(feature = "metrics")]
-use dt_common::monitor::prometheus_metrics::PrometheusMetrics;
 use dt_common::{
     config::{
         config_enums::{DbType, ExtractType},
         extractor_config::ExtractorConfig,
         task_config::TaskConfig,
     },
-    meta::{dt_queue::DtQueue, syncer::Syncer},
-    monitor::{group_monitor::GroupMonitor, monitor::Monitor, task_monitor::TaskMonitor},
+    meta::{dt_ctl_queue::DtCtlQueue, dt_queue::DtQueue, syncer::Syncer},
+    monitor::task_monitor::{MonitorType, TaskMonitorHandle},
     rdb_filter::RdbFilter,
-    task_context::TaskContext,
     time_filter::TimeFilter,
 };
 use dt_connector::{
     extractor::{
-        base_extractor::BaseExtractor,
+        base_extractor::{BaseExtractor, ExtractState},
         extractor_monitor::ExtractorMonitor,
         redis::{redis_client::RedisClient, redis_psync_extractor::RedisPsyncExtractor},
     },
@@ -83,37 +80,21 @@ impl Prechecker for RedisPrechecker {
             _ => 0,
         };
         let buffer = Arc::new(DtQueue::new(1, 0, None, None));
+        let ctl_buffer = Arc::new(DtCtlQueue::new());
 
         let filter = RdbFilter::from_config(&self.task_config.filter, &DbType::Redis)?;
-        let monitor = Arc::new(Monitor::new("extractor", "", 1, 100, 1));
-
-        #[cfg(not(feature = "metrics"))]
-        let task_monitor = Arc::new(TaskMonitor::new(None));
-
-        #[cfg(feature = "metrics")]
-        let prometheus_metrics = Arc::new(PrometheusMetrics::new(
-            None,
-            self.task_config.metrics.clone(),
-        ));
-
-        #[cfg(feature = "metrics")]
-        let task_monitor = Arc::new(TaskMonitor::new(None, prometheus_metrics.clone()));
+        let monitor = TaskMonitorHandle::noop(MonitorType::Extractor);
 
         let base_extractor = BaseExtractor {
             buffer,
+            ctl_buffer,
             router: RdbRouter::from_config(&self.task_config.router, &DbType::Redis)?,
             shut_down: Arc::new(AtomicBool::new(false)),
-            monitor: ExtractorMonitor::new(monitor).await,
+        };
+        let extract_state = ExtractState {
+            monitor: ExtractorMonitor::new(monitor, String::new()).await,
             data_marker: None,
             time_filter: TimeFilter::default(),
-            task_context: TaskContext {
-                task_config: self.task_config.clone(),
-                extractor_monitor: Arc::new(GroupMonitor::new("extractor", "")),
-                pipeline_monitor: Arc::new(GroupMonitor::new("pipeline", "")),
-                sinker_monitor: Arc::new(GroupMonitor::new("sinker", "")),
-                task_monitor,
-                shut_down: Arc::new(AtomicBool::new(false)),
-            },
         };
 
         let mut psyncer = RedisPsyncExtractor {
@@ -124,6 +105,7 @@ impl Prechecker for RedisPrechecker {
             repl_port,
             filter,
             base_extractor,
+            extract_state,
             extract_type: ExtractType::Snapshot,
             syncer: Arc::new(Mutex::new(Syncer::default())),
             keepalive_interval_secs: 0,

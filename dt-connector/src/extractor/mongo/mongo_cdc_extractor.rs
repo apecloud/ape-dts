@@ -12,7 +12,10 @@ use serde_json::json;
 use tokio::{sync::Mutex, time::Instant};
 
 use crate::{
-    extractor::{base_extractor::BaseExtractor, resumer::recovery::Recovery},
+    extractor::{
+        base_extractor::{BaseExtractor, ExtractState},
+        resumer::recovery::Recovery,
+    },
     Extractor,
 };
 use dt_common::{
@@ -42,6 +45,7 @@ use mongodb::{
 
 pub struct MongoCdcExtractor {
     pub base_extractor: BaseExtractor,
+    pub extract_state: ExtractState,
     pub filter: RdbFilter,
     pub resume_token: String,
     pub start_timestamp: u32,
@@ -84,7 +88,7 @@ impl Extractor for MongoCdcExtractor {
                             operation_time
                         );
                         self.base_extractor
-                            .push_dt_data(DtData::Heartbeat {}, position)
+                            .push_dt_data(&mut self.extract_state, DtData::Heartbeat {}, position)
                             .await?;
                     }
                     _ => {
@@ -108,7 +112,9 @@ impl Extractor for MongoCdcExtractor {
             MongoCdcSource::OpLog => self.extract_oplog().await?,
             MongoCdcSource::ChangeStream => self.extract_change_stream().await?,
         }
-        self.base_extractor.wait_task_finish().await
+        self.base_extractor
+            .wait_task_finish(&mut self.extract_state)
+            .await
     }
 
     async fn close(&mut self) -> anyhow::Result<()> {
@@ -464,13 +470,15 @@ impl MongoCdcExtractor {
             .filter
             .filter_event(&row_data.schema, &row_data.tb, &row_data.row_type)
         {
-            self.base_extractor.record_extracted_metrics_row(&row_data);
+            self.extract_state.record_extracted_metrics_row(&row_data);
             return self
                 .base_extractor
-                .push_dt_data(DtData::Heartbeat {}, position)
+                .push_dt_data(&mut self.extract_state, DtData::Heartbeat {}, position)
                 .await;
         }
-        self.base_extractor.push_row(row_data, position).await
+        self.base_extractor
+            .push_row(&mut self.extract_state, row_data, position)
+            .await
     }
 
     fn parse_start_timestamp(&mut self) -> Timestamp {

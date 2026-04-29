@@ -15,13 +15,17 @@ use std::collections::HashMap;
 
 use crate::{
     checker::check_log::CheckLog,
-    extractor::{base_check_extractor::BaseCheckExtractor, base_extractor::BaseExtractor},
+    extractor::{
+        base_check_extractor::BaseCheckExtractor,
+        base_extractor::{BaseExtractor, ExtractState},
+    },
     rdb_query_builder::RdbQueryBuilder,
     BatchCheckExtractor, Extractor,
 };
 
 pub struct MysqlCheckExtractor {
     pub base_extractor: BaseExtractor,
+    pub extract_state: ExtractState,
     pub conn_pool: Pool<MySql>,
     pub meta_manager: MysqlMetaManager,
     pub filter: RdbFilter,
@@ -39,7 +43,9 @@ impl Extractor for MysqlCheckExtractor {
             batch_size: self.batch_size,
         };
         base_check_extractor.extract(self).await?;
-        self.base_extractor.wait_task_finish().await
+        self.base_extractor
+            .wait_task_finish(&mut self.extract_state)
+            .await
     }
 
     async fn close(&mut self) -> anyhow::Result<()> {
@@ -76,7 +82,7 @@ impl BatchCheckExtractor for MysqlCheckExtractor {
             }
 
             self.base_extractor
-                .push_row(row_data, Position::None)
+                .push_row(&mut self.extract_state, row_data, Position::None)
                 .await?;
         }
         Ok(())

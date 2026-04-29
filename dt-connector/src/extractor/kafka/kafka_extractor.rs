@@ -9,7 +9,10 @@ use rdkafka::{
 use tokio::sync::Mutex;
 
 use crate::{
-    extractor::{base_extractor::BaseExtractor, resumer::recovery::Recovery},
+    extractor::{
+        base_extractor::{BaseExtractor, ExtractState},
+        resumer::recovery::Recovery,
+    },
     Extractor,
 };
 use dt_common::{
@@ -19,6 +22,7 @@ use dt_common::{
 
 pub struct KafkaExtractor {
     pub base_extractor: BaseExtractor,
+    pub extract_state: ExtractState,
     pub url: String,
     pub group: String,
     pub topic: String,
@@ -74,7 +78,9 @@ impl KafkaExtractor {
                     partition: self.partition,
                     offset: msg.offset(),
                 };
-                self.base_extractor.push_dt_data(dt_data, position).await?;
+                self.base_extractor
+                    .push_dt_data(&mut self.extract_state, dt_data, position)
+                    .await?;
             }
         }
     }

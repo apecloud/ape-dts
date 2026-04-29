@@ -8,9 +8,6 @@ edition = "2021"
 [lints]
 workspace = true
 
-[features]
-metrics = ["dt-common/metrics", "prometheus"]
-
 [dependencies]
 dt-common = { path = "../dt-common", version = "0.1.0"}
 dt-task = { path = "../dt-task", version = "0.1.0" }
@@ -27,4 +24,3 @@ mongodb = { workspace = true }
 concurrent-queue = { workspace = true }
 redis = { workspace = true }
 anyhow = { workspace = true }
-prometheus = { version = "0.14.0", optional = true }

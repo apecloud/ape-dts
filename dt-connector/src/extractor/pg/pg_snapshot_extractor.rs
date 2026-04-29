@@ -3,7 +3,7 @@ use std::{
     sync::Arc,
 };
 
-use anyhow::bail;
+use anyhow::{anyhow, bail};
 use async_trait::async_trait;
 use futures::TryStreamExt;
 use sqlx::{Pool, Postgres};
@@ -11,24 +11,24 @@ use tokio::task::JoinSet;
 
 use crate::{
     extractor::{
-        base_extractor::BaseExtractor,
+        base_extractor::{BaseExtractor, ExtractState},
         base_splitter::SnapshotChunk,
+        extractor_monitor::ExtractorMonitor,
         pg::pg_snapshot_splitter::PgSnapshotSplitter,
         rdb_snapshot_extract_statement::{OrderKeyPredicateType, RdbSnapshotExtractStatement},
         resumer::recovery::Recovery,
     },
-    rdb_router::RdbRouter,
     Extractor,
 };
+use dt_common::monitor::{monitor_task_id, task_monitor::TaskMonitorHandle};
 use dt_common::utils::sql_util::PG_ESCAPE;
 use dt_common::{
-    config::config_enums::DbType,
+    config::config_enums::{DbType, RdbParallelType},
     log_debug, log_info,
     meta::{
         adaptor::{pg_col_value_convertor::PgColValueConvertor, sqlx_ext::SqlxPgExt},
         col_value::ColValue,
-        dt_data::{DtData, DtItem},
-        dt_queue::DtQueue,
+        dt_data::DtData,
         order_key::OrderKey,
         pg::{pg_col_type::PgColType, pg_meta_manager::PgMetaManager, pg_tb_meta::PgTbMeta},
         position::Position,
@@ -43,6 +43,7 @@ use quote_pg as quote;
 
 pub struct PgSnapshotExtractor {
     pub base_extractor: BaseExtractor,
+    pub extract_state: ExtractState,
     pub conn_pool: Pool<Postgres>,
     pub meta_manager: PgMetaManager,
     pub filter: RdbFilter,
@@ -51,8 +52,30 @@ pub struct PgSnapshotExtractor {
     pub sample_interval: u64,
     pub schema: String,
     pub tb: String,
+    pub schema_tbs: HashMap<String, Vec<String>>,
+    pub parallel_type: RdbParallelType,
     pub user_defined_partition_col: String,
     pub recovery: Option<Arc<dyn Recovery + Send + Sync>>,
+}
+
+#[derive(Clone)]
+struct PgSnapshotShared {
+    conn_pool: Pool<Postgres>,
+    meta_manager: PgMetaManager,
+    filter: RdbFilter,
+    batch_size: usize,
+    parallel_size: usize,
+    sample_interval: u64,
+    recovery: Option<Arc<dyn Recovery + Send + Sync>>,
+}
+
+struct PgTableWorker {
+    shared: PgSnapshotShared,
+    base_extractor: BaseExtractor,
+    extract_state: ExtractState,
+    schema: String,
+    tb: String,
+    user_defined_partition_col: String,
 }
 
 struct ParallelExtractCtx<'a> {
@@ -64,21 +87,244 @@ struct ParallelExtractCtx<'a> {
     pub sql_range: &'a String,
     pub chunk: SnapshotChunk,
     pub ignore_cols: &'a Option<HashSet<String>>,
-    pub buffer: &'a Arc<DtQueue>,
-    pub router: &'a Arc<RdbRouter>,
+    pub base_extractor: BaseExtractor,
+    pub extract_state: ExtractState,
+}
+
+struct TableMonitorGuard {
+    handle: TaskMonitorHandle,
+    task_id: String,
+}
+
+impl Drop for TableMonitorGuard {
+    fn drop(&mut self) {
+        self.handle.unregister_monitor(&self.task_id);
+    }
 }
 
 #[async_trait]
 impl Extractor for PgSnapshotExtractor {
     async fn extract(&mut self) -> anyhow::Result<()> {
+        if self.parallel_size < 1 {
+            bail!("parallel_size must be greater than 0");
+        }
+
+        let tables = self.collect_tables();
+        log_info!(
+            "PgSnapshotExtractor starts, tables: {}, parallel_type: {:?}, parallel_size: {}",
+            tables.len(),
+            self.parallel_type,
+            self.parallel_size
+        );
+
+        match self.parallel_type {
+            RdbParallelType::Table => self.extract_by_table_parallel(tables).await?,
+            RdbParallelType::Chunk => self.extract_by_chunk_tables(tables).await?,
+        }
+
+        self.base_extractor
+            .wait_task_finish(&mut self.extract_state)
+            .await
+    }
+
+    async fn close(&mut self) -> anyhow::Result<()> {
+        Ok(())
+    }
+}
+
+impl PgSnapshotExtractor {
+    fn shared(&self) -> PgSnapshotShared {
+        PgSnapshotShared {
+            conn_pool: self.conn_pool.clone(),
+            meta_manager: self.meta_manager.clone(),
+            filter: self.filter.clone(),
+            batch_size: self.batch_size,
+            parallel_size: self.parallel_size,
+            sample_interval: self.sample_interval,
+            recovery: self.recovery.clone(),
+        }
+    }
+
+    fn collect_tables(&self) -> Vec<(String, String)> {
+        if !self.schema.is_empty() && !self.tb.is_empty() {
+            return vec![(self.schema.clone(), self.tb.clone())];
+        }
+
+        let mut tables = Vec::new();
+        for (schema, tbs) in &self.schema_tbs {
+            for tb in tbs {
+                tables.push((schema.clone(), tb.clone()));
+            }
+        }
+        tables
+    }
+
+    async fn run_table_worker(
+        &self,
+        schema: String,
+        tb: String,
+        user_defined_partition_col: String,
+    ) -> anyhow::Result<()> {
+        let task_id = monitor_task_id::from_schema_tb(&schema, &tb);
+        let monitor_handle = self.extract_state.monitor.monitor.clone();
+        let monitor = monitor_handle.build_monitor("extractor", &task_id);
+        monitor_handle.register_monitor(&task_id, monitor.clone());
+        let _guard = TableMonitorGuard {
+            handle: monitor_handle.clone(),
+            task_id: task_id.clone(),
+        };
+
+        let extractor_monitor = ExtractorMonitor::new(monitor_handle.clone(), task_id).await;
+        let data_marker = self.extract_state.data_marker.clone();
+        let extract_state = self
+            .extract_state
+            .derive_for_table(extractor_monitor, data_marker)
+            .await;
+
+        let mut worker = PgTableWorker {
+            shared: self.shared(),
+            base_extractor: self.base_extractor.clone(),
+            extract_state,
+            schema,
+            tb,
+            user_defined_partition_col,
+        };
+        let res = worker
+            .extract_single_table(matches!(self.parallel_type, RdbParallelType::Chunk))
+            .await;
+        worker.extract_state.monitor.try_flush(true).await;
+        res
+    }
+
+    async fn extract_by_table_parallel(&self, tables: Vec<(String, String)>) -> anyhow::Result<()> {
+        let mut join_set = JoinSet::new();
+        let mut iter = tables.into_iter();
+
+        while join_set.len() < self.parallel_size {
+            let Some((schema, tb)) = iter.next() else {
+                break;
+            };
+            let partition_col = if self.schema == schema && self.tb == tb {
+                self.user_defined_partition_col.clone()
+            } else {
+                String::new()
+            };
+            let this = self.clone_for_dispatch();
+            join_set.spawn(async move { this.run_table_worker(schema, tb, partition_col).await });
+        }
+
+        while let Some(result) = join_set.join_next().await {
+            result.map_err(|e| anyhow!("pg table worker join error: {}", e))??;
+
+            if let Some((schema, tb)) = iter.next() {
+                let partition_col = if self.schema == schema && self.tb == tb {
+                    self.user_defined_partition_col.clone()
+                } else {
+                    String::new()
+                };
+                let this = self.clone_for_dispatch();
+                join_set
+                    .spawn(async move { this.run_table_worker(schema, tb, partition_col).await });
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn extract_by_chunk_tables(&self, tables: Vec<(String, String)>) -> anyhow::Result<()> {
+        for (schema, tb) in tables {
+            let partition_col = if self.schema == schema && self.tb == tb {
+                self.user_defined_partition_col.clone()
+            } else {
+                String::new()
+            };
+            self.run_table_worker(schema, tb, partition_col).await?;
+        }
+        Ok(())
+    }
+
+    fn clone_for_dispatch(&self) -> Self {
+        Self {
+            base_extractor: self.base_extractor.clone(),
+            extract_state: ExtractState {
+                monitor: ExtractorMonitor {
+                    monitor: self.extract_state.monitor.monitor.clone(),
+                    default_task_id: self.extract_state.monitor.default_task_id.clone(),
+                    count_window: self.extract_state.monitor.count_window,
+                    time_window_secs: self.extract_state.monitor.time_window_secs,
+                    last_flush_time: tokio::time::Instant::now(),
+                    flushed_counters: Default::default(),
+                    counters: Default::default(),
+                },
+                data_marker: self.extract_state.data_marker.clone(),
+                time_filter: self.extract_state.time_filter.clone(),
+            },
+            conn_pool: self.conn_pool.clone(),
+            meta_manager: self.meta_manager.clone(),
+            filter: self.filter.clone(),
+            batch_size: self.batch_size,
+            parallel_size: self.parallel_size,
+            sample_interval: self.sample_interval,
+            schema: self.schema.clone(),
+            tb: self.tb.clone(),
+            schema_tbs: self.schema_tbs.clone(),
+            parallel_type: self.parallel_type.clone(),
+            user_defined_partition_col: self.user_defined_partition_col.clone(),
+            recovery: self.recovery.clone(),
+        }
+    }
+}
+
+impl PgTableWorker {
+    async fn extract_single_table(&mut self, enable_chunk_parallel: bool) -> anyhow::Result<()> {
         log_info!(
             "PgSnapshotExtractor starts, schema: {}, tb: {}, batch_size: {}, parallel_size: {}",
             quote!(&self.schema),
             quote!(&self.tb),
-            self.batch_size,
-            self.parallel_size
+            self.shared.batch_size,
+            self.shared.parallel_size
         );
-        self.extract_internal().await?;
+
+        let mut tb_meta = self
+            .shared
+            .meta_manager
+            .get_tb_meta(&self.schema, &self.tb)
+            .await?
+            .to_owned();
+        let user_defined_partition_col = &self.user_defined_partition_col;
+        self.validate_user_defined(&mut tb_meta, user_defined_partition_col)?;
+        let mut splitter = PgSnapshotSplitter::new(
+            &tb_meta,
+            self.shared.conn_pool.clone(),
+            self.shared.batch_size,
+            if !user_defined_partition_col.is_empty() {
+                user_defined_partition_col.clone()
+            } else {
+                tb_meta.basic.partition_col.clone()
+            },
+        );
+
+        let extracted_count = if enable_chunk_parallel {
+            if user_defined_partition_col.is_empty()
+                && self.shared.parallel_size <= 1
+                && !tb_meta.basic.order_cols.is_empty()
+            {
+                self.serial_extract(&tb_meta).await?
+            } else {
+                self.parallel_extract_by_batch(&tb_meta, &mut splitter)
+                    .await?
+            }
+        } else {
+            self.serial_extract(&tb_meta).await?
+        };
+
+        log_info!(
+            "end extracting data from {}.{}, all count: {}",
+            quote!(&self.schema),
+            quote!(&self.tb),
+            extracted_count
+        );
+
         self.base_extractor.push_snapshot_finished(
             &self.schema,
             &self.tb,
@@ -88,49 +334,6 @@ impl Extractor for PgSnapshotExtractor {
                 tb: self.tb.clone(),
             },
         )?;
-        self.base_extractor.wait_task_finish().await
-    }
-
-    async fn close(&mut self) -> anyhow::Result<()> {
-        Ok(())
-    }
-}
-
-impl PgSnapshotExtractor {
-    async fn extract_internal(&mut self) -> anyhow::Result<()> {
-        let mut tb_meta = self
-            .meta_manager
-            .get_tb_meta(&self.schema, &self.tb)
-            .await?
-            .to_owned();
-        let user_defined_partition_col = &self.user_defined_partition_col;
-        self.validate_user_defined(&mut tb_meta, user_defined_partition_col)?;
-        let mut splitter = PgSnapshotSplitter::new(
-            &tb_meta,
-            self.conn_pool.clone(),
-            self.batch_size,
-            if !user_defined_partition_col.is_empty() {
-                user_defined_partition_col.clone()
-            } else {
-                tb_meta.basic.partition_col.clone()
-            },
-        );
-        let extracted_count = if user_defined_partition_col.is_empty()
-            && self.parallel_size <= 1
-            && !tb_meta.basic.order_cols.is_empty()
-        {
-            self.serial_extract(&tb_meta).await?
-        } else {
-            self.parallel_extract_by_batch(&tb_meta, &mut splitter)
-                .await?
-        };
-
-        log_info!(
-            "end extracting data from {}.{}, all count: {}",
-            quote!(&self.schema),
-            quote!(&self.tb),
-            extracted_count
-        );
         Ok(())
     }
 
@@ -152,8 +355,10 @@ impl PgSnapshotExtractor {
             quote!(&self.tb)
         );
 
-        let ignore_cols = self.filter.get_ignore_cols(&self.schema, &self.tb);
+        let base_count = self.extract_state.monitor.counters.pushed_record_count;
+        let ignore_cols = self.shared.filter.get_ignore_cols(&self.schema, &self.tb);
         let where_condition = self
+            .shared
             .filter
             .get_where_condition(&self.schema, &self.tb)
             .cloned()
@@ -163,14 +368,14 @@ impl PgSnapshotExtractor {
             .with_where_condition(&where_condition)
             .build()?;
 
-        let mut rows = sqlx::query(&sql).fetch(&self.conn_pool);
+        let mut rows = sqlx::query(&sql).fetch(&self.shared.conn_pool);
         while let Some(row) = rows.try_next().await? {
             let row_data = RowData::from_pg_row(&row, tb_meta, &ignore_cols);
             self.base_extractor
-                .push_row(row_data, Position::None)
+                .push_row(&mut self.extract_state, row_data, Position::None)
                 .await?;
         }
-        Ok(self.base_extractor.monitor.counters.pushed_record_count)
+        Ok(self.extract_state.monitor.counters.pushed_record_count - base_count)
     }
 
     async fn extract_by_batch(
@@ -185,8 +390,9 @@ impl PgSnapshotExtractor {
         }
         let mut extracted_count = 0u64;
         let mut start_values = resume_values;
-        let ignore_cols = self.filter.get_ignore_cols(&self.schema, &self.tb);
+        let ignore_cols = self.shared.filter.get_ignore_cols(&self.schema, &self.tb);
         let where_condition = self
+            .shared
             .filter
             .get_where_condition(&self.schema, &self.tb)
             .cloned()
@@ -196,15 +402,16 @@ impl PgSnapshotExtractor {
             .with_order_cols(&tb_meta.basic.order_cols)
             .with_where_condition(&where_condition)
             .with_predicate_type(OrderKeyPredicateType::None)
-            .with_limit(self.batch_size)
+            .with_limit(self.shared.batch_size)
             .build()?;
         let sql_from_value = RdbSnapshotExtractStatement::from(tb_meta)
             .with_ignore_cols(ignore_cols.unwrap_or(&HashSet::new()))
             .with_order_cols(&tb_meta.basic.order_cols)
             .with_where_condition(&where_condition)
             .with_predicate_type(OrderKeyPredicateType::GreaterThan)
-            .with_limit(self.batch_size)
+            .with_limit(self.shared.batch_size)
             .build()?;
+
         loop {
             let bind_values = start_values.clone();
             let query = if start_from_beginning {
@@ -212,18 +419,18 @@ impl PgSnapshotExtractor {
                 sqlx::query(&sql_from_beginning)
             } else {
                 let mut query = sqlx::query(&sql_from_value);
-                for order_col in tb_meta.basic.order_cols.iter() {
+                for order_col in &tb_meta.basic.order_cols {
                     let order_col_type = tb_meta.get_col_type(order_col)?;
                     query = query.bind_col_value(bind_values.get(order_col), order_col_type)
                 }
                 query
             };
 
-            let mut rows = query.fetch(&self.conn_pool);
+            let mut rows = query.fetch(&self.shared.conn_pool);
             let mut slice_count = 0usize;
 
             while let Some(row) = rows.try_next().await? {
-                for order_col in tb_meta.basic.order_cols.iter() {
+                for order_col in &tb_meta.basic.order_cols {
                     let order_col_type = tb_meta.get_col_type(order_col)?;
                     if let Some(value) = start_values.get_mut(order_col) {
                         *value = PgColValueConvertor::from_query(&row, order_col, order_col_type)?;
@@ -238,23 +445,22 @@ impl PgSnapshotExtractor {
                 }
                 extracted_count += 1;
                 slice_count += 1;
-                // sampling may be used in check scenario
-                if extracted_count % self.sample_interval != 0 {
+                if extracted_count % self.shared.sample_interval != 0 {
                     continue;
                 }
 
                 let row_data = RowData::from_pg_row(&row, tb_meta, &ignore_cols);
                 let position = tb_meta.basic.build_position(&DbType::Pg, &start_values);
-                self.base_extractor.push_row(row_data, position).await?;
+                self.base_extractor
+                    .push_row(&mut self.extract_state, row_data, position)
+                    .await?;
             }
 
-            // all data extracted
-            if slice_count < self.batch_size {
+            if slice_count < self.shared.batch_size {
                 break;
             }
         }
 
-        // extract rows with NULL
         if tb_meta
             .basic
             .order_cols
@@ -275,8 +481,9 @@ impl PgSnapshotExtractor {
         order_cols: &Vec<String>,
     ) -> anyhow::Result<u64> {
         let mut extracted_count = 0u64;
-        let ignore_cols = self.filter.get_ignore_cols(&self.schema, &self.tb);
+        let ignore_cols = self.shared.filter.get_ignore_cols(&self.schema, &self.tb);
         let where_condition = self
+            .shared
             .filter
             .get_where_condition(&self.schema, &self.tb)
             .cloned()
@@ -288,12 +495,12 @@ impl PgSnapshotExtractor {
             .with_predicate_type(OrderKeyPredicateType::IsNull)
             .build()?;
 
-        let mut rows = sqlx::query(&sql_for_null).fetch(&self.conn_pool);
+        let mut rows = sqlx::query(&sql_for_null).fetch(&self.shared.conn_pool);
         while let Some(row) = rows.try_next().await? {
             extracted_count += 1;
             let row_data = RowData::from_pg_row(&row, tb_meta, &ignore_cols);
             self.base_extractor
-                .push_row(row_data, Position::None)
+                .push_row(&mut self.extract_state, row_data, Position::None)
                 .await?;
         }
         Ok(extracted_count)
@@ -304,7 +511,10 @@ impl PgSnapshotExtractor {
         tb_meta: &PgTbMeta,
         splitter: &mut PgSnapshotSplitter<'_>,
     ) -> anyhow::Result<u64> {
-        log_info!("parallel extracting, parallel_size: {}", self.parallel_size);
+        log_info!(
+            "parallel extracting, parallel_size: {}",
+            self.shared.parallel_size
+        );
         let order_cols = vec![splitter.get_partition_col()];
         let partition_col = &order_cols[0];
         let partition_col_type = tb_meta.get_col_type(partition_col)?;
@@ -312,10 +522,15 @@ impl PgSnapshotExtractor {
         splitter.init(&resume_values)?;
 
         let mut extract_cnt = 0u64;
-        let parallel_size = self.parallel_size;
-        let router = Arc::new(self.base_extractor.router.clone());
-        let ignore_cols = self.filter.get_ignore_cols(&self.schema, &self.tb).cloned();
+        let monitor_handle = self.extract_state.monitor.monitor.clone();
+        let task_id = self.extract_state.monitor.default_task_id.clone();
+        let ignore_cols = self
+            .shared
+            .filter
+            .get_ignore_cols(&self.schema, &self.tb)
+            .cloned();
         let where_condition = self
+            .shared
             .filter
             .get_where_condition(&self.schema, &self.tb)
             .cloned()
@@ -332,10 +547,10 @@ impl PgSnapshotExtractor {
             .with_where_condition(&where_condition)
             .with_predicate_type(OrderKeyPredicateType::Range)
             .build()?;
-        let mut parallel_cnt = 0;
+        let mut parallel_cnt = 0usize;
         let mut join_set: JoinSet<anyhow::Result<(u64, u64, ColValue)>> = JoinSet::new();
         let mut pending_chunks = VecDeque::new();
-        while parallel_cnt < parallel_size {
+        while parallel_cnt < self.shared.parallel_size {
             pending_chunks.extend(splitter.get_next_chunks().await?.into_iter());
             if let Some(chunk) = pending_chunks.pop_front() {
                 if let (ColValue::None, ColValue::None) = &chunk.chunk_range {
@@ -346,7 +561,6 @@ impl PgSnapshotExtractor {
                             quote!(&self.tb)
                         );
                     }
-                    // no split
                     log_info!(
                         "table {}.{} has no split chunk, extracting by single batch extractor",
                         quote!(&self.schema),
@@ -357,7 +571,7 @@ impl PgSnapshotExtractor {
 
                 Self::spawn_sub_parallel_extract(
                     ParallelExtractCtx {
-                        conn_pool: &self.conn_pool,
+                        conn_pool: &self.shared.conn_pool,
                         tb_meta,
                         partition_col,
                         partition_col_type,
@@ -365,8 +579,15 @@ impl PgSnapshotExtractor {
                         sql_range: &sql_range,
                         chunk,
                         ignore_cols: &ignore_cols,
-                        buffer: &self.base_extractor.buffer,
-                        router: &router,
+                        base_extractor: self.base_extractor.clone(),
+                        extract_state: self
+                            .extract_state
+                            .derive_for_table(
+                                ExtractorMonitor::new(monitor_handle.clone(), task_id.clone())
+                                    .await,
+                                self.extract_state.data_marker.clone(),
+                            )
+                            .await,
                     },
                     &mut join_set,
                 )
@@ -385,7 +606,6 @@ impl PgSnapshotExtractor {
                 self.send_checkpoint_position(position).await?;
             }
             extract_cnt += cnt;
-            // spawn new extract task
             if let Some(chunk) = if !pending_chunks.is_empty() {
                 pending_chunks.pop_front()
             } else {
@@ -394,7 +614,7 @@ impl PgSnapshotExtractor {
             } {
                 Self::spawn_sub_parallel_extract(
                     ParallelExtractCtx {
-                        conn_pool: &self.conn_pool,
+                        conn_pool: &self.shared.conn_pool,
                         tb_meta,
                         partition_col,
                         partition_col_type,
@@ -402,8 +622,15 @@ impl PgSnapshotExtractor {
                         sql_range: &sql_range,
                         chunk,
                         ignore_cols: &ignore_cols,
-                        buffer: &self.base_extractor.buffer,
-                        router: &router,
+                        base_extractor: self.base_extractor.clone(),
+                        extract_state: self
+                            .extract_state
+                            .derive_for_table(
+                                ExtractorMonitor::new(monitor_handle.clone(), task_id.clone())
+                                    .await,
+                                self.extract_state.data_marker.clone(),
+                            )
+                            .await,
                     },
                     &mut join_set,
                 )
@@ -429,8 +656,8 @@ impl PgSnapshotExtractor {
         let sql_range = extract_ctx.sql_range.clone();
         let chunk = extract_ctx.chunk;
         let ignore_cols = extract_ctx.ignore_cols.clone();
-        let router = extract_ctx.router.clone();
-        let buffer = extract_ctx.buffer.clone();
+        let base_extractor = extract_ctx.base_extractor.clone();
+        let mut extract_state = extract_ctx.extract_state;
 
         log_debug!(
             "extract by partition_col: {}, chunk range: {:?}",
@@ -464,40 +691,26 @@ impl PgSnapshotExtractor {
                 partition_col_value =
                     PgColValueConvertor::from_query(&row, &partition_col, &partition_col_type)?;
                 let row_data = RowData::from_pg_row(&row, &tb_meta, &ignore_cols.as_ref());
-                Self::push_row(&buffer, &router, row_data, Position::None).await?;
+                base_extractor
+                    .push_row(&mut extract_state, row_data, Position::None)
+                    .await?;
                 extracted_cnt += 1;
             }
+            extract_state.monitor.try_flush(true).await;
             Ok((chunk_id, extracted_cnt, partition_col_value))
         });
         Ok(())
     }
 
-    pub async fn push_row(
-        buffer: &Arc<DtQueue>,
-        router: &Arc<RdbRouter>,
-        row_data: RowData,
-        position: Position,
-    ) -> anyhow::Result<()> {
-        let row_data = router.route_row(row_data);
-        let dt_data = DtData::Dml { row_data };
-        let task_id = dt_common::monitor::monitor_task_id::from_dt_data(&dt_data);
-        let item = DtItem {
-            dt_data,
-            position,
-            data_origin_node: String::new(),
-            task_id,
-        };
-        log_debug!("extracted item: {:?}", item);
-        buffer.push(item).await
-    }
-
     async fn send_checkpoint_position(&mut self, position: Position) -> anyhow::Result<()> {
         let commit = DtData::Commit { xid: String::new() };
-        self.base_extractor.push_dt_data(commit, position).await?;
+        self.base_extractor
+            .push_dt_data(&mut self.extract_state, commit, position)
+            .await?;
         Ok(())
     }
 
-    pub fn validate_user_defined(
+    fn validate_user_defined(
         &self,
         tb_meta: &mut PgTbMeta,
         user_defined_partition_col: &String,
@@ -505,7 +718,6 @@ impl PgSnapshotExtractor {
         if user_defined_partition_col.is_empty() {
             return Ok(());
         }
-        // if user defined partition col is set, use it
         if tb_meta.basic.has_col(user_defined_partition_col) {
             return Ok(());
         }
@@ -524,7 +736,7 @@ impl PgSnapshotExtractor {
         check_point: bool,
     ) -> anyhow::Result<HashMap<String, ColValue>> {
         let mut resume_values: HashMap<String, ColValue> = HashMap::new();
-        if let Some(handler) = &self.recovery {
+        if let Some(handler) = &self.shared.recovery {
             if let Some(Position::RdbSnapshot {
                 schema,
                 tb,
@@ -571,7 +783,7 @@ impl PgSnapshotExtractor {
                         Some(v) => PgColValueConvertor::from_str(
                             tb_meta.get_col_type(order_col)?,
                             &v,
-                            &mut self.meta_manager,
+                            &mut self.shared.meta_manager,
                         )?,
                         None => ColValue::None,
                     };

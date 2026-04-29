@@ -44,6 +44,7 @@ pub struct TaskMonitorHandle {
     task_monitor: Option<Arc<TaskMonitor>>,
     monitor_type: MonitorType,
     time_window_secs: u64,
+    max_sub_count: u64,
     count_window: u64,
 }
 
@@ -229,12 +230,14 @@ impl TaskMonitor {
         self: &Arc<Self>,
         monitor_type: MonitorType,
         time_window_secs: u64,
+        max_sub_count: u64,
         count_window: u64,
     ) -> TaskMonitorHandle {
         TaskMonitorHandle {
             task_monitor: Some(self.clone()),
             monitor_type,
             time_window_secs,
+            max_sub_count,
             count_window,
         }
     }
@@ -723,6 +726,7 @@ impl TaskMonitorHandle {
             task_monitor: None,
             monitor_type,
             time_window_secs: 0,
+            max_sub_count: 0,
             count_window: 0,
         }
     }
@@ -781,6 +785,28 @@ impl TaskMonitorHandle {
     pub fn add_no_window_metrics(&self, metrics_type: TaskMetricsType, value: u64) {
         if let Some(task_monitor) = &self.task_monitor {
             task_monitor.add_no_window_metrics(metrics_type, value);
+        }
+    }
+
+    pub fn build_monitor(&self, name: &str, task_id: &str) -> Arc<Monitor> {
+        Arc::new(Monitor::new(
+            name,
+            task_id,
+            self.time_window_secs,
+            self.max_sub_count,
+            self.count_window,
+        ))
+    }
+
+    pub fn register_monitor(&self, task_id: &str, monitor: Arc<Monitor>) {
+        if let Some(task_monitor) = &self.task_monitor {
+            task_monitor.register(task_id, vec![(self.monitor_type.clone(), monitor)]);
+        }
+    }
+
+    pub fn unregister_monitor(&self, task_id: &str) {
+        if let Some(task_monitor) = &self.task_monitor {
+            task_monitor.unregister(task_id, vec![self.monitor_type.clone()]);
         }
     }
 

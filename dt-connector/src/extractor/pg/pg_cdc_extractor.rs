@@ -27,7 +27,9 @@ use tokio_postgres::replication::LogicalReplicationStream;
 
 use crate::{
     extractor::{
-        base_extractor::BaseExtractor, pg::pg_cdc_client::PgCdcClient, resumer::recovery::Recovery,
+        base_extractor::{BaseExtractor, ExtractState},
+        pg::pg_cdc_client::PgCdcClient,
+        resumer::recovery::Recovery,
     },
     Extractor,
 };
@@ -54,6 +56,7 @@ use dt_common::{
 
 pub struct PgCdcExtractor {
     pub base_extractor: BaseExtractor,
+    pub extract_state: ExtractState,
     pub meta_manager: PgMetaManager,
     pub conn_pool: Pool<Postgres>,
     pub filter: RdbFilter,
@@ -83,7 +86,7 @@ impl Extractor for PgCdcExtractor {
                         self.start_lsn = lsn.to_owned();
                         log_info!("cdc recovery from lsn:[{}]", lsn);
                         self.base_extractor
-                            .push_dt_data(DtData::Heartbeat {}, position)
+                            .push_dt_data(&mut self.extract_state, DtData::Heartbeat {}, position)
                             .await?;
                     }
                     _ => {
@@ -103,7 +106,9 @@ impl Extractor for PgCdcExtractor {
             self.ddl_meta_tb,
         );
         self.extract_internal().await?;
-        self.base_extractor.wait_task_finish().await
+        self.base_extractor
+            .wait_task_finish(&mut self.extract_state)
+            .await
     }
 
     async fn close(&mut self) -> anyhow::Result<()> {
@@ -150,7 +155,7 @@ impl PgCdcExtractor {
 
         // refer: https://www.postgresql.org/docs/10/protocol-replication.html to get WAL data details
         loop {
-            if self.base_extractor.time_filter.ended {
+            if self.extract_state.time_filter.ended {
                 // cdc stream will be dropped automatically if postgres receives no keepalive ack
                 return Ok(());
             }
@@ -175,7 +180,7 @@ impl PgCdcExtractor {
 
                             let timestamp = begin.timestamp() / 1_000_000 + SECS_FROM_1970_TO_2000;
                             BaseExtractor::update_time_filter(
-                                &mut self.base_extractor.time_filter,
+                                &mut self.extract_state.time_filter,
                                 timestamp as u32,
                                 &position,
                             );
@@ -186,7 +191,7 @@ impl PgCdcExtractor {
                             position = get_position(&last_tx_end_lsn, commit.timestamp());
                             let commit = DtData::Commit { xid: xid.clone() };
                             self.base_extractor
-                                .push_dt_data(commit, position.clone())
+                                .push_dt_data(&mut self.extract_state, commit, position.clone())
                                 .await?;
                         }
 
@@ -197,19 +202,19 @@ impl PgCdcExtractor {
                         Type(_typee) => {}
 
                         Insert(insert) => {
-                            if self.base_extractor.time_filter.started {
+                            if self.extract_state.time_filter.started {
                                 self.decode_insert(&insert, &position, &ddl_meta).await?;
                             }
                         }
 
                         Update(update) => {
-                            if self.base_extractor.time_filter.started {
+                            if self.extract_state.time_filter.started {
                                 self.decode_update(&update, &position).await?;
                             }
                         }
 
                         Delete(delete) => {
-                            if self.base_extractor.time_filter.started {
+                            if self.extract_state.time_filter.started {
                                 self.decode_delete(&delete, &position).await?;
                             }
                         }
@@ -277,7 +282,7 @@ impl PgCdcExtractor {
         // if the tb is filtered, we won't try to get the tb_meta since we may get privilege errors,
         // but we need to keep the oid —— tb_meta map which may be used for decoding events,
         // the built-in object used by datamarker, although it is not in filter config, still needs to get tb_meta.
-        if self.filter.filter_tb(schema, tb) && !self.base_extractor.is_data_marker_info(schema, tb)
+        if self.filter.filter_tb(schema, tb) && !self.extract_state.is_data_marker_info(schema, tb)
         {
             let tb_meta = Self::mock_pg_tb_meta(schema, tb, event.rel_id() as i32);
             self.meta_manager
@@ -322,7 +327,7 @@ impl PgCdcExtractor {
             .meta_manager
             .get_tb_meta_by_oid(event.rel_id() as i32)?;
         if self.filter_event(&tb_meta, RowType::Insert) {
-            self.base_extractor
+            self.extract_state
                 .record_extracted_metrics(1, size_of_val(event) as u64);
             return Ok(());
         }
@@ -338,7 +343,7 @@ impl PgCdcExtractor {
         );
 
         if ddl_meta.len() == 2 && row_data.schema == ddl_meta[0] && row_data.tb == ddl_meta[1] {
-            self.base_extractor
+            self.extract_state
                 .record_extracted_metrics(1, size_of_val(event) as u64);
             return self.decode_ddl(&row_data, position).await;
         }
@@ -355,7 +360,7 @@ impl PgCdcExtractor {
             .meta_manager
             .get_tb_meta_by_oid(event.rel_id() as i32)?;
         if self.filter_event(&tb_meta, RowType::Update) {
-            self.base_extractor
+            self.extract_state
                 .record_extracted_metrics(1, size_of_val(event) as u64);
             return Ok(());
         }
@@ -396,7 +401,7 @@ impl PgCdcExtractor {
             .meta_manager
             .get_tb_meta_by_oid(event.rel_id() as i32)?;
         if self.filter_event(&tb_meta, RowType::Delete) {
-            self.base_extractor
+            self.extract_state
                 .record_extracted_metrics(1, size_of_val(event) as u64);
             return Ok(());
         }
@@ -467,7 +472,7 @@ impl PgCdcExtractor {
 
                 if !self.filter.filter_ddl(&schema, &tb, &ddl_data.ddl_type) {
                     self.base_extractor
-                        .push_ddl(ddl_data, position.clone())
+                        .push_ddl(&mut self.extract_state, ddl_data, position.clone())
                         .await?;
                 }
             }
@@ -522,7 +527,9 @@ impl PgCdcExtractor {
         row_data: RowData,
         position: Position,
     ) -> anyhow::Result<()> {
-        self.base_extractor.push_row(row_data, position).await
+        self.base_extractor
+            .push_row(&mut self.extract_state, row_data, position)
+            .await
     }
 
     fn filter_event(&mut self, tb_meta: &PgTbMeta, row_type: RowType) -> bool {
@@ -530,7 +537,7 @@ impl PgCdcExtractor {
         let tb = &tb_meta.basic.tb;
         let filtered = self.filter.filter_event(schema, tb, &row_type);
         if filtered {
-            return !self.base_extractor.is_data_marker_info(schema, tb);
+            return !self.extract_state.is_data_marker_info(schema, tb);
         }
         filtered
     }

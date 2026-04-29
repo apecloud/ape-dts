@@ -108,7 +108,7 @@ impl RdbPartitioner {
 
     pub fn partition_for_row_data(
         &mut self,
-        data: Vec<RowData>,
+        _data: Vec<RowData>,
     ) -> anyhow::Result<Vec<Vec<RowData>>> {
         todo!()
     }

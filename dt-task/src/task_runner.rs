@@ -337,6 +337,7 @@ impl TaskRunner {
         let extractor_monitor_handle = self.task_monitor.handle(
             MonitorType::Extractor,
             monitor_time_window_secs,
+            monitor_max_sub_count,
             monitor_count_window,
         );
         let extractor = ExtractorUtil::create_extractor(
@@ -361,6 +362,7 @@ impl TaskRunner {
         let checker_monitor_handle = self.task_monitor.handle(
             MonitorType::Checker,
             monitor_time_window_secs,
+            monitor_max_sub_count,
             monitor_count_window,
         );
         let checker = self
@@ -378,6 +380,7 @@ impl TaskRunner {
         let sinker_monitor_handle = self.task_monitor.handle(
             MonitorType::Sinker,
             monitor_time_window_secs,
+            monitor_max_sub_count,
             monitor_count_window,
         );
         let sinkers = SinkerUtil::create_sinkers(
@@ -398,6 +401,7 @@ impl TaskRunner {
         let pipeline_monitor_handle = self.task_monitor.handle(
             MonitorType::Pipeline,
             monitor_time_window_secs,
+            monitor_max_sub_count,
             monitor_count_window,
         );
         let pipeline = self
@@ -1474,6 +1478,8 @@ impl TaskRunner {
                 url,
                 connection_auth,
                 app_name,
+                parallel_size,
+                parallel_type,
                 ..
             } => ExtractorConfig::MongoSnapshot {
                 url: url.clone(),
@@ -1482,11 +1488,15 @@ impl TaskRunner {
                 db: String::new(),
                 tb: String::new(),
                 db_tbs: schema_tbs,
+                parallel_size: *parallel_size,
+                parallel_type: parallel_type.clone(),
             },
 
             ExtractorConfig::FoxlakeS3 {
                 url,
                 s3_config,
+                parallel_size,
+                parallel_type,
                 batch_size,
                 ..
             } => ExtractorConfig::FoxlakeS3 {
@@ -1494,6 +1504,8 @@ impl TaskRunner {
                 schema: String::new(),
                 tb: String::new(),
                 schema_tbs,
+                parallel_size: *parallel_size,
+                parallel_type: parallel_type.clone(),
                 s3_config: s3_config.clone(),
                 batch_size: *batch_size,
             },

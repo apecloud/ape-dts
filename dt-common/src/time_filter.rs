@@ -2,6 +2,7 @@ use anyhow::Context;
 
 use crate::utils::time_util::TimeUtil;
 
+#[derive(Clone)]
 pub struct TimeFilter {
     // timestamp in UTC
     pub start_timestamp: u32,
