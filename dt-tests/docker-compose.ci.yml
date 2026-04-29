@@ -1,7 +1,7 @@
 services:
   # MySQL instances for testing
   mysql-src:
-    image: mysql:5.7
+    image: mysql:8.0
     container_name: mysql-src-ci
     environment:
       MYSQL_ROOT_PASSWORD: 123456
@@ -16,8 +16,8 @@ services:
       - --gtid-mode=ON
       - --enforce-gtid-consistency=ON
       - --log-slave-updates=ON
-      - --character-set-server=utf8mb4
-      - --collation-server=utf8mb4_unicode_ci
+      # - --character-set-server=utf8mb4
+      # - --collation-server=utf8mb4_unicode_ci
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p123456"]
       timeout: 5s
@@ -26,7 +26,7 @@ services:
       interval: 5s
 
   mysql-dst:
-    image: mysql:5.7
+    image: mysql:8.0
     container_name: mysql-dst-ci
     environment:
       MYSQL_ROOT_PASSWORD: 123456
@@ -35,14 +35,15 @@ services:
       - "3308:3306"
     command:
       - mysqld
+      # Kept enabled because mysql-dst is reused as node2/source in mysql_to_mysql cycle CDC tests.
       - --server-id=2
       - --log-bin=mysql-bin
       - --binlog-format=ROW
       - --gtid-mode=ON
       - --enforce-gtid-consistency=ON
       - --log-slave-updates=ON
-      - --character-set-server=utf8mb4
-      - --collation-server=utf8mb4_unicode_ci
+      # - --character-set-server=utf8mb4
+      # - --collation-server=utf8mb4_unicode_ci
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p123456"]
       timeout: 5s
@@ -51,7 +52,7 @@ services:
       interval: 5s
 
   mysql-meta:
-    image: mysql:5.7
+    image: mysql:8.0
     container_name: mysql-meta-ci
     environment:
       MYSQL_ROOT_PASSWORD: 123456
@@ -66,8 +67,8 @@ services:
       - --gtid-mode=ON
       - --enforce-gtid-consistency=ON
       - --log-slave-updates=ON
-      - --character-set-server=utf8mb4
-      - --collation-server=utf8mb4_unicode_ci
+      # - --character-set-server=utf8mb4
+      # - --collation-server=utf8mb4_unicode_ci
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p123456"]
       timeout: 5s
@@ -88,8 +89,8 @@ services:
       - --server-id=11
       - --log-bin=mysql-bin
       - --binlog-format=ROW
-      - --character-set-server=utf8mb4
-      - --collation-server=utf8mb4_unicode_ci
+      # - --character-set-server=utf8mb4
+      # - --collation-server=utf8mb4_unicode_ci
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p123456"]
       timeout: 5s
@@ -110,8 +111,8 @@ services:
       - --server-id=12
       - --log-bin=mysql-bin
       - --binlog-format=ROW
-      - --character-set-server=utf8mb4
-      - --collation-server=utf8mb4_unicode_ci
+      # - --character-set-server=utf8mb4
+      # - --collation-server=utf8mb4_unicode_ci
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p123456"]
       timeout: 5s
@@ -121,7 +122,7 @@ services:
 
   # PostgreSQL instances
   postgres-src:
-    image: postgres:13
+    image: postgis/postgis:13-3.4
     container_name: postgres-src-ci
     environment:
       POSTGRES_USER: postgres
@@ -137,15 +138,17 @@ services:
       - max_wal_senders=10
       - -c
       - max_replication_slots=10
+    volumes:
+      - ./docker/postgres-init:/docker-entrypoint-initdb.d
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      test: ["CMD-SHELL", "psql -U postgres -c 'SELECT 1'"]
       timeout: 5s
       retries: 5
       start_period: 20s
       interval: 5s
 
   postgres-node3:
-    image: postgres:13
+    image: postgis/postgis:13-3.4
     container_name: postgres-node3-ci
     environment:
       POSTGRES_USER: postgres
@@ -162,14 +165,14 @@ services:
       - -c
       - max_replication_slots=10
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      test: ["CMD-SHELL", "psql -U postgres -c 'SELECT 1'"]
       timeout: 5s
       retries: 5
       start_period: 20s
       interval: 5s
 
   postgres-dst:
-    image: postgres:13
+    image: postgis/postgis:13-3.4
     container_name: postgres-dst-ci
     environment:
       POSTGRES_USER: postgres
@@ -179,14 +182,17 @@ services:
       - "5434:5432"
     command:
       - postgres
+      # Kept enabled because postgres-dst is reused as node2/source in pg_to_pg cycle CDC tests.
       - -c
       - wal_level=logical
       - -c
       - max_wal_senders=10
       - -c
       - max_replication_slots=10
+    volumes:
+      - ./docker/postgres-init:/docker-entrypoint-initdb.d
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      test: ["CMD-SHELL", "psql -U postgres -c 'SELECT 1'"]
       timeout: 5s
       retries: 5
       start_period: 20s
@@ -198,9 +204,14 @@ services:
     container_name: mongo-src-ci
     ports:
       - "27017:27017"
-    command: mongod --replSet rs0 --bind_ip_all
+    volumes:
+      - ./docker/mongo-init/mongo-keyfile:/run/secrets/mongo-keyfile:ro
+      - ./docker/mongo-init/start-mongo-rs.sh:/usr/local/bin/start-mongo-rs.sh:ro
+    entrypoint:
+      - bash
+      - /usr/local/bin/start-mongo-rs.sh
     healthcheck:
-      test: ["CMD", "mongo", "--eval", "db.adminCommand('ping')"]
+      test: ["CMD", "mongo", "admin", "-u", "root", "-p", "123456", "--quiet", "--eval", "quit(db.isMaster().ismaster ? 0 : 1)"]
       timeout: 5s
       retries: 5
       start_period: 20s
@@ -209,11 +220,14 @@ services:
   mongo-dst:
     image: mongo:4.4
     container_name: mongo-dst-ci
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: root
+      MONGO_INITDB_ROOT_PASSWORD: 123456
     ports:
       - "27016:27017"
-    command: mongod --replSet rs1 --bind_ip_all
+    command: mongod --bind_ip_all
     healthcheck:
-      test: ["CMD", "mongo", "--eval", "db.adminCommand('ping')"]
+      test: ["CMD", "mongo", "admin", "-u", "root", "-p", "123456", "--eval", "db.adminCommand('ping')"]
       timeout: 5s
       retries: 5
       start_period: 20s

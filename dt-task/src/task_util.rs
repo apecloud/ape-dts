@@ -26,7 +26,7 @@ use dt_common::{
         meta_center_config::MetaCenterConfig,
         resumer_config::ResumerConfig,
         s3_config::S3Config,
-        sinker_config::SinkerConfig,
+        sinker_config::{BasicSinkerConfig, SinkerConfig},
         task_config::TaskConfig,
     },
     error::Error,
@@ -54,6 +54,36 @@ use tokio::select;
 pub struct TaskUtil {}
 
 impl TaskUtil {
+    pub async fn create_rdb_meta_manager_for_target(
+        target: &BasicSinkerConfig,
+        log_level: &str,
+    ) -> anyhow::Result<Option<RdbMetaManager>> {
+        let meta_manager = match target.db_type {
+            DbType::Mysql | DbType::Tidb => {
+                let mysql_meta_manager = Self::create_mysql_meta_manager(
+                    &target.url,
+                    &target.connection_auth,
+                    log_level,
+                    target.db_type.clone(),
+                    None,
+                    None,
+                )
+                .await?;
+                Some(RdbMetaManager::from_mysql(mysql_meta_manager))
+            }
+
+            DbType::Pg => {
+                let pg_meta_manager =
+                    Self::create_pg_meta_manager(&target.url, &target.connection_auth, log_level)
+                        .await?;
+                Some(RdbMetaManager::from_pg(pg_meta_manager))
+            }
+
+            _ => None,
+        };
+        Ok(meta_manager)
+    }
+
     pub async fn create_mysql_conn_pool(
         url: &str,
         connection_auth: &ConnectionAuthConfig,
@@ -233,15 +263,26 @@ impl TaskUtil {
                 connection_auth,
                 ..
             } => {
-                let pg_meta_manager =
-                    Self::create_pg_meta_manager(url, connection_auth, log_level).await?;
-                Some(RdbMetaManager::from_pg(pg_meta_manager))
+                let target = BasicSinkerConfig {
+                    db_type: DbType::Pg,
+                    url: url.clone(),
+                    connection_auth: connection_auth.clone(),
+                    ..config.sinker_basic.clone()
+                };
+                Self::create_rdb_meta_manager_for_target(&target, log_level).await?
             }
 
-            _ => {
-                return Ok(None);
-            }
+            _ => None,
         };
+
+        if meta_manager.is_some() {
+            return Ok(meta_manager);
+        }
+
+        if let Some(target) = config.checker_target() {
+            return Self::create_rdb_meta_manager_for_target(&target, log_level).await;
+        }
+
         Ok(meta_manager)
     }
 

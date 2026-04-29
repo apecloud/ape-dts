@@ -22,8 +22,8 @@ CREATE TABLE struct_it_mysql2mysql_1.full_column_type (id INT UNSIGNED AUTO_INCR
     date_col DATE COMMENT 'date_col_comment',
     datetime_col DATETIME COMMENT 'datetime_col_comment',
     datetime_col2 DATETIME(6) COMMENT 'datetime_col2_comment',
-    timestamp_col TIMESTAMP COMMENT 'timestamp_col_comment',
-    timestamp_col2 TIMESTAMP(6) COMMENT 'timestamp_col2_comment',
+    timestamp_col TIMESTAMP NULL DEFAULT NULL COMMENT 'timestamp_col_comment',
+    timestamp_col2 TIMESTAMP(6) NULL DEFAULT NULL COMMENT 'timestamp_col2_comment',
     time_col TIME COMMENT 'time_col_comment',
     time_col2 TIME(2) COMMENT 'time_col2_comment',
     year_col YEAR COMMENT 'year_col_comment',
@@ -167,7 +167,7 @@ CREATE TABLE struct_it_mysql2mysql_1.case_sensitive_column_name (
   `Age` int(11) NOT NULL DEFAULT '100',
   `GRADE` int(11) NOT NULL DEFAULT '100',
   PRIMARY KEY (`id`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8
+) ENGINE=InnoDB DEFAULT CHARSET=utf8;
 
 -- contain db system keywords
 CREATE TABLE struct_it_mysql2mysql_1.match (
@@ -184,4 +184,3 @@ CREATE TABLE struct_it_mysql2mysql_1.match (
 CREATE INDEX idx_index_on_index ON struct_it_mysql2mysql_1.match(offset);
 CREATE INDEX idx_key_col ON struct_it_mysql2mysql_1.match(`match`);
 CREATE UNIQUE INDEX uniq_unique_col ON struct_it_mysql2mysql_1.match(unique_col);
-

@@ -155,10 +155,15 @@ impl RdbSqlTestRunner {
     ) -> anyhow::Result<Vec<String>> {
         let config = self.src_to_sql_runner.base.get_config();
 
-        // clear sql.log if exists
-        let log_file = format!("{}/sql.log", config.runtime.log_dir);
-        if BaseTestRunner::check_path_exists(&log_file) {
-            File::create(&log_file).unwrap().set_len(0).unwrap();
+        // sql_logger is written under the checker log directory in our shared log4rs config.
+        let log_files = [
+            format!("{}/sql.log", config.runtime.log_dir),
+            format!("{}/check/sql.log", config.runtime.log_dir),
+        ];
+        for log_file in &log_files {
+            if BaseTestRunner::check_path_exists(log_file) {
+                File::create(log_file).unwrap().set_len(0).unwrap();
+            }
         }
 
         // start task to generate sql file
@@ -168,7 +173,13 @@ impl RdbSqlTestRunner {
             self.start_pg_task(start_millis, parse_millis).await?
         }
 
-        let gernated_sqls = BaseTestRunner::load_file(&log_file);
+        let gernated_sqls = log_files
+            .iter()
+            .find_map(|log_file| {
+                let sqls = BaseTestRunner::load_file(log_file);
+                (!sqls.is_empty()).then_some(sqls)
+            })
+            .unwrap_or_default();
         assert!(!gernated_sqls.is_empty());
         Ok(gernated_sqls)
     }

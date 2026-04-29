@@ -35,7 +35,9 @@ cargo test --package dt-tests --test integration_test -- mysql_to_mysql::cdc_tes
 
 # Config
 - The full local test matrix is configured in `./tests/.env`.
-- CI / automation defaults should use `./.env.ci`; local overrides can stay in `./tests/.env.local`.
+- `./scripts/run-integration-tests.sh` uses `./tests/.env` plus `./docker-compose.integration.yml` by default.
+- `./docker-compose.integration.yml` keeps fixed ports and aligns with the existing local env conventions.
+- Local overrides can stay in `./tests/.env.local`.
 - task_config.ini files reference these env keys directly.
 
 ```
@@ -45,6 +47,56 @@ url={mysql_extractor_url}
 [sinker]
 url={mysql_sinker_url}
 ```
+
+## Local integration runner
+
+```bash
+# List available suites
+./scripts/run-integration-tests.sh --list-suites
+
+# Run one suite end-to-end
+./scripts/run-integration-tests.sh --suite mysql_to_mysql --all
+
+# Start containers and keep them running for later steps
+./scripts/run-integration-tests.sh --suite mysql_to_mysql --up --wait --keep-docker
+
+# Check whether each suite's containers can start successfully
+./scripts/run-integration-tests.sh --suite all --up --wait --down-each-suite --keep-going
+
+# Run tests against already-started containers
+./scripts/run-integration-tests.sh --suite mysql_to_mysql --test --runner nextest --keep-docker
+
+# Show stdout/stderr for successful tests too
+./scripts/run-integration-tests.sh --suite mysql_to_mysql --test --show-test-output
+
+# Run one exact test case
+./scripts/run-integration-tests.sh --suite mysql_to_mysql --test -- --exact snapshot_tests::test::snapshot_basic_test
+
+# Dump docker logs for the current suite
+./scripts/run-integration-tests.sh --suite mysql_to_mysql --logs --keep-docker
+
+# Stop all integration containers
+./scripts/run-integration-tests.sh --suite mysql_to_mysql --down
+
+# Dump docker logs automatically when a test step fails
+./scripts/run-integration-tests.sh --suite mysql_to_mysql --all --logs-on-failure
+
+# Write logs to a custom directory
+./scripts/run-integration-tests.sh --suite mysql_to_mysql --all --log-dir /tmp/dt-it-logs
+
+# Run multiple suites and continue after failures
+./scripts/run-integration-tests.sh --suite mysql_to_mysql --suite pg_to_pg --keep-going --all
+```
+
+- The suite matrix lives at the top of `./scripts/run-integration-tests.sh`.
+- Step flags map directly to CI-style phases: `--up`, `--wait`, `--test`, `--logs`, `--down`.
+- The script requires `cargo nextest`.
+- Test cases inside a suite are run serially.
+- The script enables `RUST_BACKTRACE=1` and `RUST_LIB_BACKTRACE=1` by default unless you override them.
+- Script flow logs are written per suite to `../tmp/integration-logs/<timestamp-pid>/<suite>.log`.
+- Test runner output is written separately to `../tmp/integration-logs/<timestamp-pid>/<suite>/tests.log`.
+- The script cleans up `docker compose` services on exit by default; use `--keep-docker` to skip that cleanup.
+- Use `--down-each-suite` when you want to run many suites in one command but avoid service/port conflicts between suites.
 
 # Init test env
 

@@ -138,6 +138,10 @@ impl PgCdcClient {
             match key.as_ref() {
                 "sslmode" => ssl_mode = Some(Self::parse_url_ssl_mode(value.as_ref())?),
                 "sslrootcert" => ssl_ca_path = Some(value.into_owned()),
+                // Replication connections are parsed by tokio-postgres directly and
+                // do not understand app-layer wrapped options like
+                // `options[statement_timeout]=10s`.
+                k if Self::should_strip_replication_query_param(k) => {}
                 _ => other_pairs.push((key.into_owned(), value.into_owned())),
             }
         }
@@ -150,6 +154,10 @@ impl PgCdcClient {
         });
 
         Ok((parsed.to_string(), ssl_config))
+    }
+
+    fn should_strip_replication_query_param(key: &str) -> bool {
+        matches!(key, "options") || key.starts_with("options[")
     }
 
     fn parse_url_ssl_mode(value: &str) -> anyhow::Result<SslMode> {
@@ -376,5 +384,20 @@ mod tests {
         let (_, ssl_config) = client.build_replication_config().unwrap();
 
         assert_eq!(ssl_config.ssl_mode, SslMode::Disable);
+    }
+
+    #[test]
+    fn build_replication_config_strips_wrapped_options_params() {
+        let client = build_client(
+            "postgres://url_user:url_pass@localhost:5432/test_db?options[statement_timeout]=10s",
+            ConnectionAuthConfig::NoAuth,
+        );
+
+        let (config, ssl_config) = client.build_replication_config().unwrap();
+
+        assert_eq!(ssl_config.ssl_mode, SslMode::Disable);
+        assert_eq!(config.get_user(), Some("url_user"));
+        assert_eq!(config.get_password(), Some("url_pass".as_bytes()));
+        assert_eq!(config.get_dbname(), Some("test_db"));
     }
 }

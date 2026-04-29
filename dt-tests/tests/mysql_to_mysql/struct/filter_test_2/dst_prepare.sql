@@ -14,7 +14,7 @@ CREATE TABLE struct_it_mysql2mysql_1.full_index_type (
   `composite_index_col2` varchar(255) CHARACTER SET utf8mb3 COLLATE utf8mb3_general_ci DEFAULT NULL, 
   `composite_index_col3` varchar(255) CHARACTER SET utf8mb3 COLLATE utf8mb3_general_ci DEFAULT NULL, 
   PRIMARY KEY (`id`)
-) ENGINE = InnoDB DEFAULT CHARSET = utf8mb3
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb3;
 
 CREATE UNIQUE INDEX unique_index ON struct_it_mysql2mysql_1.full_index_type (unique_col);
 

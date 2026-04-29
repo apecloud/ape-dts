@@ -44,4 +44,4 @@ CREATE TABLE sync_db_test_types.`test_types` (
   `c_set` set('value1','value2') DEFAULT NULL,
   `c_json` json DEFAULT NULL,
   PRIMARY KEY (`c_pk`)
-) AUTO_INCREMENT=394 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+) AUTO_INCREMENT=394 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
