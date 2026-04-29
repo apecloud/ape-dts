@@ -1,24 +1,22 @@
 use std::{cmp, collections::HashMap, path::PathBuf, str::FromStr, sync::Arc};
 
-use anyhow::{anyhow, Context};
+use anyhow::Context;
 use async_trait::async_trait;
 use dt_common::{
     config::config_enums::{DbType, RdbParallelType},
     config::s3_config::S3Config,
     log_debug, log_info, log_warn,
     meta::{dt_data::DtData, foxlake::s3_file_meta::S3FileMeta, position::Position},
-    monitor::{monitor_task_id, task_monitor::TaskMonitorHandle},
     utils::time_util::TimeUtil,
 };
 use opendal::options::ListOptions;
 use opendal::Operator;
-use tokio::task::JoinSet;
 
 use crate::{
     extractor::{
         base_extractor::{BaseExtractor, ExtractState},
-        extractor_monitor::ExtractorMonitor,
         resumer::recovery::Recovery,
+        snapshot_dispatcher::SnapshotDispatcher,
     },
     Extractor,
 };
@@ -30,8 +28,6 @@ pub struct FoxlakeS3Extractor {
     pub extract_state: ExtractState,
     pub batch_size: usize,
     pub parallel_size: usize,
-    pub schema: String,
-    pub tb: String,
     pub schema_tbs: HashMap<String, Vec<String>>,
     pub parallel_type: RdbParallelType,
     pub recovery: Option<Arc<dyn Recovery + Send + Sync>>,
@@ -39,17 +35,6 @@ pub struct FoxlakeS3Extractor {
 
 const FINISHED: &str = "finished";
 const WAIT_FILE_SECS: u64 = 5;
-
-struct TableMonitorGuard {
-    handle: TaskMonitorHandle,
-    task_id: String,
-}
-
-impl Drop for TableMonitorGuard {
-    fn drop(&mut self) {
-        self.handle.unregister_monitor(&self.task_id);
-    }
-}
 
 #[async_trait]
 impl Extractor for FoxlakeS3Extractor {
@@ -62,25 +47,18 @@ impl Extractor for FoxlakeS3Extractor {
         }
 
         let tables = self.collect_tables();
-        let mut join_set = JoinSet::new();
-        let mut iter = tables.into_iter();
-
-        while join_set.len() < self.parallel_size {
-            let Some((schema, tb)) = iter.next() else {
-                break;
-            };
-            let this = self.clone_for_dispatch();
-            join_set.spawn(async move { this.run_table_worker(schema, tb).await });
-        }
-
-        while let Some(result) = join_set.join_next().await {
-            result.map_err(|e| anyhow!("foxlake table worker join error: {}", e))??;
-
-            if let Some((schema, tb)) = iter.next() {
-                let this = self.clone_for_dispatch();
-                join_set.spawn(async move { this.run_table_worker(schema, tb).await });
-            }
-        }
+        let this = self.clone_for_dispatch();
+        SnapshotDispatcher::dispatch_tables(
+            tables,
+            self.parallel_type.clone(),
+            self.parallel_size,
+            "foxlake table worker",
+            move |(schema, tb)| {
+                let this = this.clone_for_dispatch();
+                async move { this.run_table_worker(schema, tb).await }
+            },
+        )
+        .await?;
 
         self.base_extractor
             .wait_task_finish(&mut self.extract_state)
@@ -90,10 +68,6 @@ impl Extractor for FoxlakeS3Extractor {
 
 impl FoxlakeS3Extractor {
     fn collect_tables(&self) -> Vec<(String, String)> {
-        if !self.schema.is_empty() && !self.tb.is_empty() {
-            return vec![(self.schema.clone(), self.tb.clone())];
-        }
-
         let mut tables = Vec::new();
         for (schema, tbs) in &self.schema_tbs {
             for tb in tbs {
@@ -108,23 +82,9 @@ impl FoxlakeS3Extractor {
             s3_config: self.s3_config.clone(),
             s3_client: self.s3_client.clone(),
             base_extractor: self.base_extractor.clone(),
-            extract_state: ExtractState {
-                monitor: ExtractorMonitor {
-                    monitor: self.extract_state.monitor.monitor.clone(),
-                    default_task_id: self.extract_state.monitor.default_task_id.clone(),
-                    count_window: self.extract_state.monitor.count_window,
-                    time_window_secs: self.extract_state.monitor.time_window_secs,
-                    last_flush_time: tokio::time::Instant::now(),
-                    flushed_counters: Default::default(),
-                    counters: Default::default(),
-                },
-                data_marker: self.extract_state.data_marker.clone(),
-                time_filter: self.extract_state.time_filter.clone(),
-            },
+            extract_state: SnapshotDispatcher::clone_extract_state(&self.extract_state),
             batch_size: self.batch_size,
             parallel_size: self.parallel_size,
-            schema: self.schema.clone(),
-            tb: self.tb.clone(),
             schema_tbs: self.schema_tbs.clone(),
             parallel_type: self.parallel_type.clone(),
             recovery: self.recovery.clone(),
@@ -132,21 +92,12 @@ impl FoxlakeS3Extractor {
     }
 
     async fn run_table_worker(&self, schema: String, tb: String) -> anyhow::Result<()> {
-        let task_id = monitor_task_id::from_schema_tb(&schema, &tb);
-        let monitor_handle = self.extract_state.monitor.monitor.clone();
-        let monitor = monitor_handle.build_monitor("extractor", &task_id);
-        monitor_handle.register_monitor(&task_id, monitor.clone());
-        let _guard = TableMonitorGuard {
-            handle: monitor_handle.clone(),
-            task_id: task_id.clone(),
-        };
-
-        let extractor_monitor = ExtractorMonitor::new(monitor_handle.clone(), task_id).await;
-        let data_marker = self.extract_state.data_marker.clone();
-        let mut extract_state = self
-            .extract_state
-            .derive_for_table(extractor_monitor, data_marker)
-            .await;
+        let (mut extract_state, _guard) = SnapshotDispatcher::derive_table_extract_state(
+            &self.extract_state,
+            &schema,
+            &tb,
+        )
+        .await;
         let base_extractor = self.base_extractor.clone();
 
         log_info!(

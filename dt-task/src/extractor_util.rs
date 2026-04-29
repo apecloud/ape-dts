@@ -101,8 +101,6 @@ impl ExtractorUtil {
             ExtractorConfig::MysqlSnapshot {
                 url,
                 connection_auth,
-                db,
-                tb,
                 db_tbs,
                 sample_interval,
                 parallel_size,
@@ -125,15 +123,9 @@ impl ExtractorUtil {
                     Some(conn_pool.clone()),
                 )
                 .await?;
-                let db_tb = (db, tb);
-                let user_defined_partition_col = partition_cols
-                    .map(|m| m.get(&db_tb).cloned().unwrap_or_default())
-                    .unwrap_or_default();
                 let extractor = MysqlSnapshotExtractor {
                     conn_pool,
                     meta_manager,
-                    db: db_tb.0,
-                    tb: db_tb.1,
                     db_tbs,
                     batch_size,
                     sample_interval: sample_interval as u64,
@@ -143,7 +135,10 @@ impl ExtractorUtil {
                     extract_state,
                     filter,
                     recovery,
-                    user_defined_partition_col,
+                    partition_cols: partition_cols
+                        .as_ref()
+                        .map(|m| m.as_ref().clone())
+                        .unwrap_or_default(),
                 };
                 Box::new(extractor)
             }
@@ -239,8 +234,6 @@ impl ExtractorUtil {
             }
 
             ExtractorConfig::PgSnapshot {
-                schema,
-                tb,
                 schema_tbs,
                 sample_interval,
                 parallel_size,
@@ -254,10 +247,6 @@ impl ExtractorUtil {
                         bail!("connection pool not found");
                     }
                 };
-                let sch_tb = (schema, tb);
-                let user_defined_partition_col = partition_cols
-                    .map(|m| m.get(&sch_tb).cloned().unwrap_or_default())
-                    .unwrap_or_default();
                 let meta_manager = PgMetaManager::new(conn_pool.clone()).await?;
                 let extractor = PgSnapshotExtractor {
                     conn_pool,
@@ -265,15 +254,16 @@ impl ExtractorUtil {
                     batch_size,
                     parallel_size,
                     sample_interval: sample_interval as u64,
-                    schema: sch_tb.0,
-                    tb: sch_tb.1,
                     schema_tbs,
                     parallel_type,
                     base_extractor,
                     extract_state,
                     filter,
                     recovery,
-                    user_defined_partition_col,
+                    partition_cols: partition_cols
+                        .as_ref()
+                        .map(|m| m.as_ref().clone())
+                        .unwrap_or_default(),
                 };
                 Box::new(extractor)
             }
@@ -346,8 +336,6 @@ impl ExtractorUtil {
             }
 
             ExtractorConfig::MongoSnapshot {
-                db,
-                tb,
                 db_tbs,
                 parallel_size,
                 parallel_type,
@@ -358,8 +346,6 @@ impl ExtractorUtil {
                     _ => bail!("connection pool not found"),
                 };
                 let extractor = MongoSnapshotExtractor {
-                    db,
-                    tb,
                     db_tbs,
                     parallel_type,
                     parallel_size,
@@ -619,8 +605,6 @@ impl ExtractorUtil {
             }
 
             ExtractorConfig::FoxlakeS3 {
-                schema,
-                tb,
                 schema_tbs,
                 parallel_size,
                 s3_config,
@@ -630,8 +614,6 @@ impl ExtractorUtil {
             } => {
                 let s3_client = TaskUtil::create_s3_client(&s3_config)?;
                 let extractor = FoxlakeS3Extractor {
-                    schema,
-                    tb,
                     schema_tbs,
                     s3_config,
                     s3_client,

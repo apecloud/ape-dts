@@ -1,19 +1,18 @@
 use std::{collections::HashMap, sync::Arc};
 
-use anyhow::{anyhow, bail};
+use anyhow::bail;
 use async_trait::async_trait;
 use mongodb::{
     bson::{doc, oid::ObjectId, Bson, Document},
     options::FindOptions,
     Client,
 };
-use tokio::task::JoinSet;
 
 use crate::{
     extractor::{
         base_extractor::{BaseExtractor, ExtractState},
-        extractor_monitor::ExtractorMonitor,
         resumer::recovery::Recovery,
+        snapshot_dispatcher::SnapshotDispatcher,
     },
     Extractor,
 };
@@ -28,30 +27,16 @@ use dt_common::{
         row_data::RowData,
         row_type::RowType,
     },
-    monitor::{monitor_task_id, task_monitor::TaskMonitorHandle},
 };
 
 pub struct MongoSnapshotExtractor {
     pub base_extractor: BaseExtractor,
     pub extract_state: ExtractState,
-    pub db: String,
-    pub tb: String,
     pub db_tbs: HashMap<String, Vec<String>>,
     pub parallel_type: RdbParallelType,
     pub parallel_size: usize,
     pub mongo_client: Client,
     pub recovery: Option<Arc<dyn Recovery + Send + Sync>>,
-}
-
-struct TableMonitorGuard {
-    handle: TaskMonitorHandle,
-    task_id: String,
-}
-
-impl Drop for TableMonitorGuard {
-    fn drop(&mut self) {
-        self.handle.unregister_monitor(&self.task_id);
-    }
 }
 
 #[async_trait]
@@ -65,25 +50,18 @@ impl Extractor for MongoSnapshotExtractor {
         }
 
         let tables = self.collect_tables();
-        let mut join_set = JoinSet::new();
-        let mut iter = tables.into_iter();
-
-        while join_set.len() < self.parallel_size {
-            let Some((db, tb)) = iter.next() else {
-                break;
-            };
-            let this = self.clone_for_dispatch();
-            join_set.spawn(async move { this.run_table_worker(db, tb).await });
-        }
-
-        while let Some(result) = join_set.join_next().await {
-            result.map_err(|e| anyhow!("mongo table worker join error: {}", e))??;
-
-            if let Some((db, tb)) = iter.next() {
-                let this = self.clone_for_dispatch();
-                join_set.spawn(async move { this.run_table_worker(db, tb).await });
-            }
-        }
+        let this = self.clone_for_dispatch();
+        SnapshotDispatcher::dispatch_tables(
+            tables,
+            self.parallel_type.clone(),
+            self.parallel_size,
+            "mongo table worker",
+            move |(db, tb)| {
+                let this = this.clone_for_dispatch();
+                async move { this.run_table_worker(db, tb).await }
+            },
+        )
+        .await?;
 
         self.base_extractor
             .wait_task_finish(&mut self.extract_state)
@@ -97,10 +75,6 @@ impl Extractor for MongoSnapshotExtractor {
 
 impl MongoSnapshotExtractor {
     fn collect_tables(&self) -> Vec<(String, String)> {
-        if !self.db.is_empty() && !self.tb.is_empty() {
-            return vec![(self.db.clone(), self.tb.clone())];
-        }
-
         let mut tables = Vec::new();
         for (db, tbs) in &self.db_tbs {
             for tb in tbs {
@@ -113,21 +87,7 @@ impl MongoSnapshotExtractor {
     fn clone_for_dispatch(&self) -> Self {
         Self {
             base_extractor: self.base_extractor.clone(),
-            extract_state: ExtractState {
-                monitor: ExtractorMonitor {
-                    monitor: self.extract_state.monitor.monitor.clone(),
-                    default_task_id: self.extract_state.monitor.default_task_id.clone(),
-                    count_window: self.extract_state.monitor.count_window,
-                    time_window_secs: self.extract_state.monitor.time_window_secs,
-                    last_flush_time: tokio::time::Instant::now(),
-                    flushed_counters: Default::default(),
-                    counters: Default::default(),
-                },
-                data_marker: self.extract_state.data_marker.clone(),
-                time_filter: self.extract_state.time_filter.clone(),
-            },
-            db: self.db.clone(),
-            tb: self.tb.clone(),
+            extract_state: SnapshotDispatcher::clone_extract_state(&self.extract_state),
             db_tbs: self.db_tbs.clone(),
             parallel_type: self.parallel_type.clone(),
             parallel_size: self.parallel_size,
@@ -137,21 +97,8 @@ impl MongoSnapshotExtractor {
     }
 
     async fn run_table_worker(&self, db: String, tb: String) -> anyhow::Result<()> {
-        let task_id = monitor_task_id::from_schema_tb(&db, &tb);
-        let monitor_handle = self.extract_state.monitor.monitor.clone();
-        let monitor = monitor_handle.build_monitor("extractor", &task_id);
-        monitor_handle.register_monitor(&task_id, monitor.clone());
-        let _guard = TableMonitorGuard {
-            handle: monitor_handle.clone(),
-            task_id: task_id.clone(),
-        };
-
-        let extractor_monitor = ExtractorMonitor::new(monitor_handle.clone(), task_id).await;
-        let data_marker = self.extract_state.data_marker.clone();
-        let mut extract_state = self
-            .extract_state
-            .derive_for_table(extractor_monitor, data_marker)
-            .await;
+        let (mut extract_state, _guard) =
+            SnapshotDispatcher::derive_table_extract_state(&self.extract_state, &db, &tb).await;
         let base_extractor = self.base_extractor.clone();
 
         log_info!("MongoSnapshotExtractor starts, schema: {}, tb: {}", db, tb);
