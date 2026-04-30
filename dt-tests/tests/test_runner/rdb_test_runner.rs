@@ -709,15 +709,16 @@ impl RdbTestRunner {
                     continue;
                 }
 
-                println!(
-                    "row index: {}, col: {}, src_col_value: {:?}, dst_col_value: {:?}",
-                    i, src_col, src_col_value, dst_col_value
-                );
-
                 if Self::compare_col_value(src_col_value, dst_col_value, &src_db_type, &dst_db_type)
                 {
                     continue;
                 }
+
+                println!(
+                    "mismatch row index: {}, col: {}, src_col_value: {:?}, dst_col_value: {:?}",
+                    i, src_col, src_col_value, dst_col_value
+                );
+
                 return false;
             }
         }
@@ -974,8 +975,8 @@ impl RdbTestRunner {
 
     async fn fetch_mysql_binlog_position(&self) -> anyhow::Result<(String, u32)> {
         if let Some(pool) = &self.src_conn_pool_mysql {
-            let row = query("show master status").fetch_one(pool).await?;
-            let binlog_file: String = row.try_get(0)?;
+            let row = sqlx::raw_sql("show master status").fetch_one(pool).await?;
+            let binlog_file = SqlUtil::try_get_mysql_string(&row, 0)?;
             let binlog_position = row.try_get(1)?;
             Ok((binlog_file, binlog_position))
         } else {

@@ -27,6 +27,7 @@ use dt_common::{
         },
     },
     rdb_filter::RdbFilter,
+    utils::sql_util::SqlUtil,
 };
 
 pub struct MysqlStructFetcher {
@@ -199,9 +200,12 @@ impl MysqlStructFetcher {
             let extra = Self::get_str_with_null(&row, "EXTRA")?;
             let column_name = Self::get_str_with_null(&row, "COLUMN_NAME")?;
             let column_type = Self::get_str_with_null(&row, "COLUMN_TYPE")?;
-            let column_default = if let Some(column_default_str) = row.get("COLUMN_DEFAULT") {
+            let column_default =
+                if let Some(column_default_str) =
+                    SqlUtil::try_get_mysql_optional_string(&row, "COLUMN_DEFAULT")?
+                {
                 Some(
-                    self.parse_column_default(&column_type, column_default_str, &extra)
+                    self.parse_column_default(&column_type, &column_default_str, &extra)
                         .await?,
                 )
             } else {
@@ -536,20 +540,17 @@ impl MysqlStructFetcher {
 
     async fn get_information_schema_tables(&mut self) -> anyhow::Result<HashSet<String>> {
         let mut tbs = HashSet::new();
-        let sql = "SHOW TABLES IN INFORMATION_SCHEMA";
+        let sql = "SELECT table_name FROM information_schema.tables WHERE table_schema = 'information_schema'";
         let mut rows = sqlx::query(sql).fetch(&self.conn_pool);
         while let Some(row) = rows.try_next().await? {
-            let tb: String = row.get(0);
+            let tb = SqlUtil::try_get_mysql_string(&row, 0)?;
             tbs.insert(tb.to_lowercase());
         }
         Ok(tbs)
     }
 
     fn get_str_with_null(row: &MySqlRow, col_name: &str) -> anyhow::Result<String> {
-        if let Some(str) = row.get(col_name) {
-            return Ok(str);
-        }
-        Ok(String::new())
+        Ok(SqlUtil::try_get_mysql_optional_string(row, col_name)?.unwrap_or_default())
     }
 
     fn filter_tb(&mut self, db: &str, tb: &str) -> bool {

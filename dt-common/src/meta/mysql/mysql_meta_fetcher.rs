@@ -1,17 +1,19 @@
+use futures::TryStreamExt;
 use std::collections::HashMap;
 
-use crate::{config::config_enums::DbType, error::Error, meta::ddl_meta::ddl_data::DdlData};
 use anyhow::{bail, Ok};
-use futures::TryStreamExt;
-
 use sqlx::{mysql::MySqlRow, MySql, Pool, Row};
 
-use crate::meta::{
-    foreign_key::ForeignKey, rdb_meta_manager::RdbMetaManager, rdb_tb_meta::RdbTbMeta,
-    row_data::RowData,
-};
-
 use super::{mysql_col_type::MysqlColType, mysql_tb_meta::MysqlTbMeta};
+use crate::{
+    config::config_enums::DbType,
+    error::Error,
+    meta::{
+        ddl_meta::ddl_data::DdlData, foreign_key::ForeignKey, rdb_meta_manager::RdbMetaManager,
+        rdb_tb_meta::RdbTbMeta, row_data::RowData,
+    },
+    utils::sql_util::SqlUtil,
+};
 
 #[derive(Clone)]
 pub struct MysqlMetaFetcher {
@@ -148,7 +150,7 @@ impl MysqlMetaFetcher {
         };
 
         while let Some(row) = rows.try_next().await? {
-            let col: String = row.try_get(COLUMN_NAME)?;
+            let col = SqlUtil::try_get_mysql_string(&row, COLUMN_NAME)?;
             // Column and index names are not case sensitive on any platform, nor are column aliases.
             cols.push(col.clone());
             let (origin_type, col_type) = Self::get_col_type(&row).await?;
@@ -166,9 +168,9 @@ impl MysqlMetaFetcher {
     }
 
     async fn get_col_type(row: &MySqlRow) -> anyhow::Result<(String, MysqlColType)> {
-        let column_type: String = row.try_get(COLUMN_TYPE)?;
-        let data_type: String = row.try_get(DATA_TYPE)?;
-        let is_nullable = row.try_get::<String, _>(IS_NULLABLE)?.to_lowercase() == "yes";
+        let column_type = SqlUtil::try_get_mysql_string(row, COLUMN_TYPE)?;
+        let data_type = SqlUtil::try_get_mysql_string(row, DATA_TYPE)?;
+        let is_nullable = SqlUtil::try_get_mysql_string(row, IS_NULLABLE)?.to_lowercase() == "yes";
 
         let parse_precision = || {
             let precision = if column_type.contains('(') {
@@ -202,9 +204,10 @@ impl MysqlMetaFetcher {
             "varchar" | "char" | "tinytext" | "mediumtext" | "longtext" | "text" => {
                 let length = Self::get_u64_col(row, CHARACTER_MAXIMUM_LENGTH);
                 let mut charset = String::new();
-                let unchecked: Option<Vec<u8>> = row.get_unchecked(CHARACTER_SET_NAME);
-                if unchecked.is_some() {
-                    charset = row.try_get(CHARACTER_SET_NAME)?;
+                if let Some(value) =
+                    SqlUtil::try_get_mysql_optional_string(row, CHARACTER_SET_NAME)?
+                {
+                    charset = value;
                 }
                 match data_type.as_str() {
                     "char" => MysqlColType::Char { length, charset },
@@ -243,7 +246,6 @@ impl MysqlMetaFetcher {
 
             "enum" => {
                 // enum('x-small','small','medium','large','x-large')
-                let column_type: String = row.try_get(COLUMN_TYPE).unwrap();
                 let enum_str = column_type
                     .trim_start_matches("enum(")
                     .trim_end_matches(')');
@@ -262,7 +264,6 @@ impl MysqlMetaFetcher {
 
             "set" => {
                 // set('a','b','c','d','e')
-                let column_type: String = row.try_get(COLUMN_TYPE).unwrap();
                 let set_str = column_type.trim_start_matches("set(").trim_end_matches(')');
                 let set_str_items: Vec<String> = set_str
                     .split(',')
@@ -338,8 +339,8 @@ impl MysqlMetaFetcher {
             // | a     |          0 | PRIMARY      |            2 | value       | A         |           0 |     NULL | NULL   |      | BTREE      |         |               |
             // | a     |          0 | some_uk_name |            1 | value       | A         |           0 |     NULL | NULL   |      | BTREE      |         |               |
             // +-------+------------+--------------+--------------+-------------+-----------+-------------+----------+--------+------+------------+---------+---------------+
-            let key_name: String = row.try_get("Key_name")?;
-            let col_name: String = row.try_get("Column_name")?;
+            let key_name = SqlUtil::try_get_mysql_string(&row, "Key_name")?;
+            let col_name = SqlUtil::try_get_mysql_string(&row, "Column_name")?;
             if let Some(key_cols) = key_map.get_mut(&key_name) {
                 key_cols.push(col_name);
             } else {
@@ -389,12 +390,12 @@ impl MysqlMetaFetcher {
 
         let mut rows = sqlx::query(&sql).fetch(conn_pool);
         while let Some(row) = rows.try_next().await? {
-            let my_schema: String = row.try_get("CONSTRAINT_SCHEMA")?;
-            let my_tb: String = row.try_get("TABLE_NAME")?;
-            let my_col: String = row.try_get("COLUMN_NAME")?;
-            let ref_schema: String = row.try_get("REFERENCED_TABLE_SCHEMA")?;
-            let ref_tb: String = row.try_get("REFERENCED_TABLE_NAME")?;
-            let ref_col: String = row.try_get("REFERENCED_COLUMN_NAME")?;
+            let my_schema = SqlUtil::try_get_mysql_string(&row, "CONSTRAINT_SCHEMA")?;
+            let my_tb = SqlUtil::try_get_mysql_string(&row, "TABLE_NAME")?;
+            let my_col = SqlUtil::try_get_mysql_string(&row, "COLUMN_NAME")?;
+            let ref_schema = SqlUtil::try_get_mysql_string(&row, "REFERENCED_TABLE_SCHEMA")?;
+            let ref_tb = SqlUtil::try_get_mysql_string(&row, "REFERENCED_TABLE_NAME")?;
+            let ref_col = SqlUtil::try_get_mysql_string(&row, "REFERENCED_COLUMN_NAME")?;
             let key = ForeignKey {
                 schema: my_schema,
                 tb: my_tb,

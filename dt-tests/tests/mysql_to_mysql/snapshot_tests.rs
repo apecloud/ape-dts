@@ -129,4 +129,10 @@ mod test {
         // tb_parallel_size=3
         TestBase::run_snapshot_test("mysql_to_mysql/snapshot/tb_parallel_test").await;
     }
+
+    #[tokio::test]
+    #[serial]
+    async fn snapshot_big_packet_test() {
+        TestBase::run_snapshot_test("mysql_to_mysql/snapshot/big_packet_test").await;
+    }
 }
