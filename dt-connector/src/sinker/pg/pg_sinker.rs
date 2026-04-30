@@ -63,7 +63,7 @@ impl Sinker for PgSinker {
     }
 
     async fn sink_ddl(&mut self, data: Vec<DdlData>, _batch: bool) -> anyhow::Result<()> {
-        if data.len() <= 0 {
+        if data.is_empty() {
             return Ok(());
         }
 

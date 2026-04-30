@@ -140,9 +140,8 @@ impl Sinker for MysqlSinker {
             let sql = dcl_data.to_sql();
             data_size += dcl_data.get_data_size();
             log_info!("sink dcl: {}", &sql);
-            let query = sqlx::query(&sql).persistent(false);
             let start_time = Instant::now();
-            query.execute(&self.conn_pool).await?;
+            sqlx::raw_sql(&sql).execute(&self.conn_pool).await?;
             rts.push((start_time.elapsed().as_millis() as u64, 1));
         }
 

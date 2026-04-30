@@ -1,10 +1,10 @@
 drop schema if exists struct_it_pg2pg_rbac CASCADE;
-DROP ROLE IF EXISTS r1;
-DROP ROLE IF EXISTS r2;
-DROP ROLE IF EXISTS r3;
-DROP ROLE IF EXISTS r4;
-DROP ROLE IF EXISTS r5;
-DROP ROLE IF EXISTS r_seq;
+DROP ROLE IF EXISTS test_r1;
+DROP ROLE IF EXISTS test_r2;
+DROP ROLE IF EXISTS test_r3;
+DROP ROLE IF EXISTS test_r4;
+DROP ROLE IF EXISTS test_r5;
+DROP ROLE IF EXISTS test_r_seq;
 
 
 create schema struct_it_pg2pg_rbac;
@@ -41,25 +41,25 @@ CREATE TABLE struct_it_pg2pg_rbac.test_3 (
 );
 ```
 
-create role r1 nologin password '123456';
-create role r2 login password '123456';
-create role r3 login password '123456';
-create role r4 login password '123456';
-create role r5 login noinherit password '123456';
-create role r_seq login password '123456'; 
+create role test_r1 nologin password '123456';
+create role test_r2 login password '123456';
+create role test_r3 login password '123456';
+create role test_r4 login password '123456';
+create role test_r5 login noinherit password '123456';
+create role test_r_seq login password '123456'; 
 
-GRANT USAGE ON SCHEMA struct_it_pg2pg_rbac TO r2;
-GRANT USAGE ON SCHEMA struct_it_pg2pg_rbac TO r3;
-GRANT USAGE ON SCHEMA struct_it_pg2pg_rbac TO r_seq;
+GRANT USAGE ON SCHEMA struct_it_pg2pg_rbac TO test_r2;
+GRANT USAGE ON SCHEMA struct_it_pg2pg_rbac TO test_r3;
+GRANT USAGE ON SCHEMA struct_it_pg2pg_rbac TO test_r_seq;
 
-GRANT SELECT ON struct_it_pg2pg_rbac.test_1 TO r2;
-GRANT SELECT (field1) ON struct_it_pg2pg_rbac.test_2 TO r2;
-GRANT SELECT ON struct_it_pg2pg_rbac.test_2 TO r3;
-GRANT ALL ON struct_it_pg2pg_rbac.test_3 TO r_seq;
-GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA struct_it_pg2pg_rbac TO r_seq;
-GRANT USAGE ON SEQUENCE struct_it_pg2pg_rbac.custom_seq1 TO r_seq;
+GRANT SELECT ON struct_it_pg2pg_rbac.test_1 TO test_r2;
+GRANT SELECT (field1) ON struct_it_pg2pg_rbac.test_2 TO test_r2;
+GRANT SELECT ON struct_it_pg2pg_rbac.test_2 TO test_r3;
+GRANT ALL ON struct_it_pg2pg_rbac.test_3 TO test_r_seq;
+GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA struct_it_pg2pg_rbac TO test_r_seq;
+GRANT USAGE ON SEQUENCE struct_it_pg2pg_rbac.custom_seq1 TO test_r_seq;
 
 -- role member
-GRANT r2 to r4;
-GRANT r2 to r5;
+GRANT test_r2 to test_r4;
+GRANT test_r2 to test_r5;
 
