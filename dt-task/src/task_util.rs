@@ -595,7 +595,7 @@ WHERE
             }
         };
 
-        let sql = "SHOW DATABASES";
+        let sql = "SELECT schema_name FROM information_schema.schemata";
         let mut rows = sqlx::query(sql).fetch(conn_pool);
         while let Some(row) = rows.try_next().await.unwrap() {
             let db: String = row.try_get(0)?;
@@ -617,14 +617,14 @@ WHERE
             }
         };
 
-        let sql = format!("SHOW FULL TABLES IN `{}`", db);
-        let mut rows = sqlx::query(&sql).fetch(conn_pool);
+        let sql = "SELECT table_name
+            FROM information_schema.tables
+            WHERE table_schema = ? 
+            AND table_type = 'BASE TABLE'";
+        let mut rows = sqlx::query(sql).bind(db).fetch(conn_pool);
         while let Some(row) = rows.try_next().await.unwrap() {
             let tb: String = row.try_get(0)?;
-            let tb_type: String = row.try_get(1)?;
-            if tb_type == "BASE TABLE" {
-                tbs.push(tb);
-            }
+            tbs.push(tb);
         }
 
         Ok(tbs)

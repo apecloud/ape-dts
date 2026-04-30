@@ -205,4 +205,10 @@ mod test {
     async fn snapshot_mock_test() {
         TestBase::run_snapshot_test("mysql_to_mysql/snapshot/mock_test").await;
     }
+
+    #[tokio::test]
+    #[serial]
+    async fn snapshot_big_packet_test() {
+        TestBase::run_snapshot_test("mysql_to_mysql/snapshot/big_packet_test").await;
+    }
 }

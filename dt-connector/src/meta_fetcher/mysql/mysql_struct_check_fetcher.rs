@@ -1,5 +1,7 @@
 use futures::TryStreamExt;
-use sqlx::{MySql, Pool, Row};
+use sqlx::{MySql, Pool};
+
+use dt_common::utils::sql_util::SqlUtil;
 
 pub struct MysqlStructCheckFetcher {
     pub conn_pool: Pool<MySql>,
@@ -19,9 +21,8 @@ impl MysqlStructCheckFetcher {
     async fn execute_sql_and_get_one_result(&self, sql: &str) -> String {
         let mut rows = sqlx::raw_sql(sql).fetch(&self.conn_pool);
         if let Some(row) = rows.try_next().await.unwrap() {
-            let value: Option<String> = row.try_get(1).unwrap();
-            if let Some(v) = value {
-                return v;
+            if let Ok(Some(value)) = SqlUtil::try_get_mysql_optional_string(&row, 1) {
+                return value;
             }
         }
         String::new()
