@@ -1,1 +1,1 @@
-{"start_time":"","end_time":"","is_consistent":false,"miss_count":8}
+{"start_time":"","end_time":"","is_consistent":false,"miss_count":8,"tables":[{"schema":"struct_it_pg2pg_1","tb":"foreign_key_child","miss_count":2},{"schema":"struct_it_pg2pg_1","tb":"full_index_type","miss_count":6}]}

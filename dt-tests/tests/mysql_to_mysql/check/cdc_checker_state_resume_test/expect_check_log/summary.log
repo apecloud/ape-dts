@@ -1,1 +1,1 @@
-{"start_time":"","end_time":"","is_consistent":true}
+{"start_time":"","end_time":"","is_consistent":true,"tables":[{"schema":"test_db_1","tb":"check_test","checked_count":2}]}

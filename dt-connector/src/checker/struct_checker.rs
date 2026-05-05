@@ -20,7 +20,7 @@ use dt_common::{
 };
 
 use crate::{
-    checker::check_log::{CheckSummaryLog, StructCheckLog},
+    checker::check_log::{CheckLogJsonExt, CheckSummaryLog, CheckTableSummaryLog, StructCheckLog},
     meta_fetcher::{
         mysql::mysql_struct_fetcher::MysqlStructFetcher, pg::pg_struct_fetcher::PgStructFetcher,
     },
@@ -42,6 +42,20 @@ pub struct StructCheckerHandle {
     src_sql_map: HashMap<String, String>,
     dbs: HashSet<String>,
     start_time: String,
+}
+
+fn struct_table_summary(key: &str, miss: bool, diff: bool) -> Option<CheckTableSummaryLog> {
+    let mut parts = key.split('.');
+    let _object_type = parts.next();
+    let schema = parts.next()?;
+    let tb = parts.next()?;
+    Some(CheckTableSummaryLog {
+        schema: schema.to_string(),
+        tb: tb.to_string(),
+        miss_count: if miss { 1 } else { 0 },
+        diff_count: if diff { 1 } else { 0 },
+        ..Default::default()
+    })
 }
 
 impl StructCheckerHandle {
@@ -170,14 +184,13 @@ impl StructCheckerHandle {
         &self,
         src_sql_map: &HashMap<String, String>,
         dbs: &HashSet<String>,
-        start_time: &str,
         log_enabled: bool,
-    ) -> anyhow::Result<(CheckSummaryLog, usize)> {
+    ) -> anyhow::Result<CheckSummaryLog> {
         let dst_map = self.build_dst_sql_map(dbs).await?;
         Ok(Self::compare_sql_maps(
             src_sql_map,
             dst_map,
-            start_time,
+            &self.start_time,
             log_enabled,
             self.output_revise_sql,
         ))
@@ -189,10 +202,9 @@ impl StructCheckerHandle {
         start_time: &str,
         log_enabled: bool,
         output_revise_sql: bool,
-    ) -> (CheckSummaryLog, usize) {
+    ) -> CheckSummaryLog {
         let mut summary = CheckSummaryLog {
             start_time: start_time.to_string(),
-            end_time: Local::now().to_rfc3339(),
             ..Default::default()
         };
         let mut sql_count = 0usize;
@@ -200,14 +212,15 @@ impl StructCheckerHandle {
         for (key, src_sql) in src_sql_map.iter() {
             match dst_map.remove(key) {
                 None => {
-                    let log = StructCheckLog {
-                        key: key.clone(),
-                        src_sql: Some(src_sql.clone()),
-                        dst_sql: None,
-                    };
+                    let log = StructCheckLog::new(key.clone(), Some(src_sql.clone()), None);
                     summary.miss_count += 1;
+                    if let Some(table) = struct_table_summary(key, true, false) {
+                        summary.merge_table(table);
+                    }
                     if log_enabled {
-                        log_miss!("{}", log);
+                        if let Some(log) = log.to_json_line() {
+                            log_miss!("{}", log);
+                        }
                     }
                     if output_revise_sql && log_enabled {
                         log_sql!("{}", src_sql);
@@ -216,14 +229,16 @@ impl StructCheckerHandle {
                 }
                 Some(dst_sql) => {
                     if src_sql != &dst_sql {
-                        let log = StructCheckLog {
-                            key: key.clone(),
-                            src_sql: Some(src_sql.clone()),
-                            dst_sql: Some(dst_sql),
-                        };
+                        let log =
+                            StructCheckLog::new(key.clone(), Some(src_sql.clone()), Some(dst_sql));
                         summary.diff_count += 1;
+                        if let Some(table) = struct_table_summary(key, false, true) {
+                            summary.merge_table(table);
+                        }
                         if log_enabled {
-                            log_diff!("{}", log);
+                            if let Some(log) = log.to_json_line() {
+                                log_diff!("{}", log);
+                            }
                         }
                         if output_revise_sql && log_enabled {
                             log_sql!("{}", src_sql);
@@ -235,14 +250,15 @@ impl StructCheckerHandle {
         }
 
         for (key, dst_sql) in dst_map {
-            let log = StructCheckLog {
-                key,
-                src_sql: None,
-                dst_sql: Some(dst_sql),
-            };
             summary.diff_count += 1;
+            if let Some(table) = struct_table_summary(&key, false, true) {
+                summary.merge_table(table);
+            }
+            let log = StructCheckLog::new(key, None, Some(dst_sql));
             if log_enabled {
-                log_diff!("{}", log);
+                if let Some(log) = log.to_json_line() {
+                    log_diff!("{}", log);
+                }
             }
         }
 
@@ -251,8 +267,7 @@ impl StructCheckerHandle {
             summary.sql_count = Some(sql_count);
         }
         summary.end_time = Local::now().to_rfc3339();
-
-        (summary, sql_count)
+        summary
     }
 
     pub async fn check_struct(
@@ -268,8 +283,8 @@ impl StructCheckerHandle {
     pub async fn close(&mut self) -> anyhow::Result<()> {
         let mut retries_left = self.max_retries;
         loop {
-            let (summary, _) = self
-                .compare_once(&self.src_sql_map, &self.dbs, &self.start_time, false)
+            let summary = self
+                .compare_once(&self.src_sql_map, &self.dbs, false)
                 .await?;
             if summary.is_consistent {
                 log_info!("Structure check passed - all structures are consistent");
@@ -284,8 +299,8 @@ impl StructCheckerHandle {
             }
         }
 
-        let (summary, _sql_count) = self
-            .compare_once(&self.src_sql_map, &self.dbs, &self.start_time, true)
+        let summary = self
+            .compare_once(&self.src_sql_map, &self.dbs, true)
             .await?;
         if summary.miss_count > 0 {
             self.monitor.add_no_window_metrics(
@@ -317,10 +332,36 @@ impl StructCheckerHandle {
             if let Some(global_summary) = &self.global_summary {
                 let mut global_summary = global_summary.lock().await;
                 global_summary.merge(&summary);
-            } else {
-                log_summary!("{}", summary);
+            } else if let Some(log) = summary.to_json_line() {
+                log_summary!("{}", log);
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::StructCheckerHandle;
+    use std::collections::HashMap;
+
+    #[test]
+    fn compare_sql_maps_sets_time_and_sql_count() {
+        let src_sql_map = HashMap::from([(
+            "table.s1.t1".to_string(),
+            "CREATE TABLE s1.t1(id bigint)".to_string(),
+        )]);
+        let summary = StructCheckerHandle::compare_sql_maps(
+            &src_sql_map,
+            HashMap::new(),
+            "unit-start",
+            true,
+            true,
+        );
+
+        assert_eq!(summary.start_time, "unit-start");
+        assert!(!summary.end_time.is_empty());
+        assert_eq!(summary.sql_count, Some(1));
+        assert_eq!(summary.miss_count, 1);
     }
 }

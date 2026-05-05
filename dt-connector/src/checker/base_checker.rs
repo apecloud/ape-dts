@@ -1,5 +1,6 @@
 use async_mutex::Mutex;
 use async_trait::async_trait;
+use chrono::Local;
 use indexmap::{IndexMap, IndexSet};
 use opendal::Operator;
 use serde::{Deserialize, Serialize};
@@ -15,7 +16,9 @@ use tokio::time::{Duration, Instant};
 
 use super::struct_checker::StructCheckerHandle;
 use crate::{
-    checker::check_log::{CheckLog, CheckSummaryLog, DiffColValue},
+    checker::check_log::{
+        CheckLog, CheckLogJsonExt, CheckSummaryLog, CheckTableSummaryLog, DiffColValue,
+    },
     checker::state_store::CheckerStateStore,
     rdb_query_builder::RdbQueryBuilder,
     rdb_router::RdbRouter,
@@ -192,6 +195,8 @@ pub struct CheckContext {
     pub revise_match_full_row: bool,
     pub global_summary: Option<Arc<Mutex<CheckSummaryLog>>>,
     pub batch_size: usize,
+    pub sample_rate: Option<u8>,
+    pub sample_before_fetch: bool,
     pub retry_interval_secs: u64,
     pub max_retries: u32,
     pub is_cdc: bool,
@@ -232,11 +237,52 @@ impl CheckContext {
     ) {
         self.monitor.add_no_window_metrics(metrics_type, value);
     }
-}
 
-pub struct FetchResult {
-    pub tb_meta: Arc<CheckerTbMeta>,
-    pub dst_rows: Vec<RowData>,
+    fn table_summary_for_row(&self, row: &RowData) -> CheckTableSummaryLog {
+        let (schema, tb) = self.reverse_router.get_tb_map(&row.schema, &row.tb);
+        let schema_changed = row.schema != schema || row.tb != tb;
+        CheckTableSummaryLog {
+            schema: schema.to_string(),
+            tb: tb.to_string(),
+            target_schema: schema_changed.then(|| row.schema.clone()),
+            target_tb: schema_changed.then(|| row.tb.clone()),
+            ..Default::default()
+        }
+    }
+
+    fn record_table_checked(&mut self, row: &RowData, checked_count: usize) {
+        if checked_count == 0 {
+            return;
+        }
+        let mut table = self.table_summary_for_row(row);
+        table.checked_count = checked_count;
+        self.summary.merge_table(table);
+    }
+
+    fn record_table_skipped(&mut self, row: &RowData, skip_count: usize) {
+        if skip_count == 0 {
+            return;
+        }
+        let mut table = self.table_summary_for_row(row);
+        table.skip_count = skip_count;
+        self.summary.merge_table(table);
+    }
+
+    fn record_table_entry(&mut self, entry: &CheckEntry) {
+        let mut table = CheckTableSummaryLog {
+            schema: entry.log.schema.clone(),
+            tb: entry.log.tb.clone(),
+            target_schema: entry.log.target_schema.clone(),
+            target_tb: entry.log.target_tb.clone(),
+            ..Default::default()
+        };
+        if entry.is_miss() {
+            table.miss_count = 1;
+        } else if entry.counts_as_diff() {
+            table.diff_count = 1;
+        }
+        self.summary.merge_table(table);
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -256,20 +302,23 @@ impl CheckerStoreKey {
     }
 }
 
+pub struct FetchResult {
+    pub tb_meta: Arc<CheckerTbMeta>,
+    pub dst_rows: Vec<RowData>,
+}
+
 #[async_trait]
 pub trait Checker: Send + Sync + 'static {
+    async fn fetch_meta(&mut self, src_row: &RowData) -> anyhow::Result<Arc<CheckerTbMeta>>;
     async fn fetch(&mut self, src_rows: &[&RowData]) -> anyhow::Result<FetchResult>;
-    async fn refresh_meta(&mut self, _data: &[DdlData]) -> anyhow::Result<()> {
-        Ok(())
-    }
-    async fn close(&mut self) -> anyhow::Result<()> {
+    async fn invalidate_meta_cache(&mut self, _data: &[DdlData]) -> anyhow::Result<()> {
         Ok(())
     }
 }
 
 enum CheckerControlMsg {
     RecordCheckpoint { position: Position },
-    RefreshMeta { data: Vec<DdlData> },
+    InvalidateMetaCache { data: Vec<DdlData> },
     SnapshotTableFinished { task_id: String },
     Close { position: Option<Position> },
 }
@@ -401,17 +450,19 @@ impl DataCheckerHandle {
         Ok(())
     }
 
-    pub async fn refresh_meta(&self, data: Vec<DdlData>) -> anyhow::Result<()> {
+    pub async fn invalidate_meta_cache(&self, data: Vec<DdlData>) -> anyhow::Result<()> {
         if data.is_empty() {
             return Ok(());
         }
         if self
             .shared
             .control_tx
-            .send(CheckerControlMsg::RefreshMeta { data })
+            .send(CheckerControlMsg::InvalidateMetaCache { data })
             .is_err()
         {
-            log_warn!("checker refresh_meta signal dropped because checker already stopped");
+            log_warn!(
+                "checker invalidate_meta_cache signal dropped because checker already stopped"
+            );
         }
         Ok(())
     }
@@ -436,34 +487,24 @@ impl DataCheckerHandle {
 }
 
 impl CheckerHandle {
-    pub async fn refresh_meta(&self, data: Vec<DdlData>) -> anyhow::Result<()> {
-        match self {
-            CheckerHandle::Data(handle) => handle.refresh_meta(data).await,
-            CheckerHandle::Struct(_) => Ok(()),
-        }
-    }
-
-    pub async fn check_struct(
-        &mut self,
-        data: Vec<dt_common::meta::struct_meta::struct_data::StructData>,
-    ) -> anyhow::Result<()> {
-        match self {
-            CheckerHandle::Data(_) => Ok(()),
-            CheckerHandle::Struct(handle) => handle.check_struct(data).await,
-        }
-    }
-
     pub async fn close_with_position(&mut self, position: Option<&Position>) -> anyhow::Result<()> {
         match self {
-            CheckerHandle::Data(handle) => handle.close_with_position(position).await,
-            CheckerHandle::Struct(handle) => handle.close().await,
+            Self::Data(handle) => handle.close_with_position(position).await,
+            Self::Struct(handle) => handle.close().await,
         }
     }
 
     pub async fn record_checkpoint(&self, position: &Position) -> anyhow::Result<()> {
         match self {
-            CheckerHandle::Data(handle) => handle.record_checkpoint(position).await,
-            CheckerHandle::Struct(_) => Ok(()),
+            Self::Data(handle) => handle.record_checkpoint(position).await,
+            Self::Struct(_) => Ok(()),
+        }
+    }
+
+    pub async fn invalidate_meta_cache(&self, data: Vec<DdlData>) -> anyhow::Result<()> {
+        match self {
+            Self::Data(handle) => handle.invalidate_meta_cache(data).await,
+            Self::Struct(_) => Ok(()),
         }
     }
 
@@ -612,11 +653,19 @@ impl BoundedLineBuffer {
         self.push_bytes(line.as_bytes().to_vec());
     }
 
-    fn push_json<T: Serialize>(&mut self, value: &T) {
-        let Ok(line) = serde_json::to_vec(value) else {
-            return;
+    fn push_json<T: Serialize>(&mut self, value: &T) -> bool {
+        let line = match serde_json::to_vec(value) {
+            Ok(line) => line,
+            Err(e) => {
+                log_warn!(
+                    "Skipping checker JSON output because serialization failed: {}",
+                    e
+                );
+                return false;
+            }
         };
         self.push_bytes(line);
+        true
     }
 
     fn into_bytes(self) -> Vec<u8> {
@@ -663,7 +712,16 @@ struct CheckerIo {
 }
 
 impl<C: Checker> DataChecker<C> {
-    pub fn new(checker: C, task_id: String, ctx: CheckContext, io: CheckerIo, name: &str) -> Self {
+    pub fn new(
+        checker: C,
+        task_id: String,
+        mut ctx: CheckContext,
+        io: CheckerIo,
+        name: &str,
+    ) -> Self {
+        if ctx.summary.start_time.is_empty() {
+            ctx.summary.start_time = Local::now().to_rfc3339();
+        }
         let persisted_identity_keys = ctx.state_store.as_ref().map(|_| BTreeSet::new());
         Self {
             checker,
@@ -765,9 +823,13 @@ impl<C: Checker> DataChecker<C> {
                     log_error!("Checker [{}] checkpoint failed: {}", self.name, err);
                 }
             }
-            CheckerControlMsg::RefreshMeta { data } => {
-                if let Err(err) = self.checker.refresh_meta(&data).await {
-                    log_error!("Checker [{}] refresh_meta failed: {}", self.name, err);
+            CheckerControlMsg::InvalidateMetaCache { data } => {
+                if let Err(err) = self.checker.invalidate_meta_cache(&data).await {
+                    log_error!(
+                        "Checker [{}] invalidate_meta_cache failed: {}",
+                        self.name,
+                        err
+                    );
                 }
             }
             CheckerControlMsg::SnapshotTableFinished { task_id } => {
@@ -832,26 +894,32 @@ impl<C: Checker> DataChecker<C> {
             self.flush_store().await;
         }
         self.finish_summary_and_meta().await?;
-        let _ = self.checker.close().await;
         Ok(())
     }
 
     async fn finish_summary_and_meta(&mut self) -> anyhow::Result<()> {
         self.account_dropped_item_skips();
+        self.finish_local_summary();
         let common = &mut self.ctx;
         let summary = &mut common.summary;
-        summary.end_time = chrono::Local::now().to_rfc3339();
-        summary.is_consistent = is_summary_consistent(summary, self.init_failed);
         if let Some(global_summary) = common.global_summary.clone() {
             global_summary.lock().await.merge(summary);
         } else if !common.is_cdc {
-            log_summary!("{}", summary);
+            if let Some(log) = summary.to_json_line() {
+                log_summary!("{}", log);
+            }
         }
         if let Some(meta_manager) = common.extractor_meta_manager.as_mut() {
             meta_manager.close().await
         } else {
             Ok(())
         }
+    }
+
+    fn finish_local_summary(&mut self) {
+        let summary = &mut self.ctx.summary;
+        summary.end_time = Local::now().to_rfc3339();
+        summary.is_consistent = is_summary_consistent(summary, self.init_failed);
     }
 
     async fn init_cdc_state(&mut self) -> anyhow::Result<()> {
@@ -908,6 +976,10 @@ mod tests {
 
     #[async_trait]
     impl Checker for BlockingFetchChecker {
+        async fn fetch_meta(&mut self, _src_row: &RowData) -> anyhow::Result<Arc<CheckerTbMeta>> {
+            unreachable!("ut should not call fetch_meta")
+        }
+
         async fn fetch(&mut self, _src_rows: &[&RowData]) -> anyhow::Result<FetchResult> {
             let _ = self.fetch_started.send(());
             self.fetch_gate.notified().await;
@@ -935,6 +1007,8 @@ mod tests {
             revise_match_full_row: false,
             global_summary: None,
             batch_size: 1,
+            sample_rate: None,
+            sample_before_fetch: false,
             retry_interval_secs: 0,
             max_retries: 0,
             is_cdc: false,
@@ -1030,19 +1104,39 @@ mod tests {
     }
 
     #[test]
-    fn summary_with_skips_is_not_consistent() {
+    fn data_checker_initializes_summary_start_time() {
+        let (fetch_started, _fetch_started_rx) = mpsc::unbounded_channel();
+        let (_control_tx, control_rx) = mpsc::unbounded_channel();
+        let checker = DataChecker::new(
+            BlockingFetchChecker {
+                fetch_started,
+                fetch_gate: Arc::new(Notify::new()),
+            },
+            "task-1".to_string(),
+            build_ctx(),
+            CheckerIo {
+                batch_queue: Arc::new(StdMutex::new(LimitedQueue::new(1))),
+                batch_notify: Arc::new(Notify::new()),
+                dropped_items: Arc::new(AtomicU64::new(0)),
+                control_rx,
+            },
+            "unit-test",
+        );
+
+        assert!(!checker.ctx.summary.start_time.is_empty());
+    }
+
+    #[test]
+    fn summary_with_skips_or_init_failure_is_not_consistent() {
         let summary = CheckSummaryLog {
             skip_count: 1,
             ..Default::default()
         };
 
         assert!(!super::is_summary_consistent(&summary, false));
-    }
-
-    #[test]
-    fn summary_with_init_failure_is_not_consistent() {
-        let summary = CheckSummaryLog::default();
-
-        assert!(!super::is_summary_consistent(&summary, true));
+        assert!(!super::is_summary_consistent(
+            &CheckSummaryLog::default(),
+            true
+        ));
     }
 }

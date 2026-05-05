@@ -33,7 +33,9 @@ use dt_common::log_filter::{parse_size_limit, SizeLimitFilterDeserializer};
 use dt_common::{
     config::{
         checker_config::CheckerConfig,
-        config_enums::{DbType, ExtractType, PipelineType, SinkType, TaskKind, TaskType},
+        config_enums::{
+            CheckMode, DbType, ExtractType, PipelineType, SinkType, TaskKind, TaskType,
+        },
         config_token_parser::{ConfigTokenParser, TokenEscapePair},
         extractor_config::ExtractorConfig,
         sinker_config::SinkerConfig,
@@ -57,7 +59,7 @@ use dt_common::{
 };
 use dt_connector::{
     checker::base_checker::CheckContext,
-    checker::check_log::CheckSummaryLog,
+    checker::check_log::{CheckLogJsonExt, CheckSummaryLog},
     checker::{
         Checker, CheckerHandle, CheckerStateStore, DataCheckerHandle, MongoChecker, MysqlChecker,
         PgChecker, StructCheckerHandle,
@@ -232,19 +234,21 @@ impl TaskRunner {
         extractor_client.close().await?;
         sinker_client.close().await?;
 
-        if let Some(check_summary) = check_summary {
+        if let Some(check_summary) = check_summary.as_ref() {
             if self.config.checker.is_none()
                 || !self
                     .task_type
                     .as_ref()
                     .is_some_and(|task_type| task_type.is_cdc_inline_check())
             {
-                let mut summary = check_summary.lock().await;
-                summary.end_time = Local::now().to_rfc3339();
-                dt_common::log_summary!("{}", summary);
+                let summary = check_summary.lock().await;
+                if let Some(log) = summary.to_json_line() {
+                    dt_common::log_summary!("{}", log);
+                }
             }
         }
 
+        log::logger().flush();
         log_finished!("task finished");
         log::logger().flush();
         Ok(())
@@ -348,6 +352,7 @@ impl TaskRunner {
             .create_checker(
                 self.config.checker.as_ref(),
                 &task_id,
+                &extractor_config,
                 checker_monitor_handle,
                 check_summary.clone(),
                 recovery.as_ref(),
@@ -661,6 +666,7 @@ impl TaskRunner {
         &self,
         checker_config: Option<&CheckerConfig>,
         task_id: &str,
+        extractor_config: &ExtractorConfig,
         monitor: TaskMonitorHandle,
         check_summary: Option<Arc<AsyncMutex<CheckSummaryLog>>>,
         recovery: Option<&Arc<dyn Recovery + Send + Sync>>,
@@ -735,9 +741,22 @@ impl TaskRunner {
             .config
             .task_type()
             .is_some_and(|task_type| task_type.is_inline_check());
+        let standalone_snapshot_check = self.task_type.is_some_and(|task_type| {
+            matches!(task_type.kind, TaskKind::Snapshot)
+                && matches!(task_type.check, Some(CheckMode::Standalone))
+        });
+        let checker_sample_rate = if standalone_snapshot_check
+            && matches!(
+                extractor_config,
+                ExtractorConfig::MysqlSnapshot { .. } | ExtractorConfig::PgSnapshot { .. }
+            ) {
+            None
+        } else {
+            cfg.sample_rate
+        };
 
         let is_struct_task = matches!(
-            self.config.extractor,
+            extractor_config,
             ExtractorConfig::MysqlStruct { .. } | ExtractorConfig::PgStruct { .. }
         );
 
@@ -800,10 +819,10 @@ impl TaskRunner {
             return Ok(Some(CheckerHandle::Struct(checker)));
         }
 
-        let s3_output = if cfg.cdc_check_log_s3 {
+        let s3_output = if cfg.check_log_s3 && is_cdc_task {
             let s3_cfg = cfg.s3_config.as_ref().ok_or_else(|| {
                 Error::ConfigError(
-                    "cdc_check_log_s3=true but checker s3 config is missing in [checker]".into(),
+                    "check_log_s3=true but checker s3 config is missing in [checker]".into(),
                 )
             })?;
             let s3_client = TaskUtil::create_s3_client(s3_cfg)?;
@@ -861,10 +880,10 @@ impl TaskRunner {
                 retry_interval_secs,
                 max_retries,
                 is_cdc: is_cdc_task,
-                summary: CheckSummaryLog {
-                    start_time: Local::now().to_rfc3339(),
-                    ..Default::default()
-                },
+                sample_rate: checker_sample_rate,
+                sample_before_fetch: checker_sample_rate
+                    .is_some_and(|rate| rate < 100 && !is_cdc_task),
+                summary: CheckSummaryLog::default(),
                 global_summary: check_summary.clone(),
                 check_log_dir: check_log_dir_base.clone(),
                 cdc_check_log_max_file_size,
@@ -1360,7 +1379,7 @@ impl TaskRunner {
             ExtractorConfig::MysqlSnapshot {
                 url,
                 connection_auth,
-                sample_interval,
+                sample_rate,
                 parallel_size,
                 parallel_type,
                 batch_size,
@@ -1371,7 +1390,7 @@ impl TaskRunner {
                 db: String::new(),
                 tb: String::new(),
                 db_tbs: schema_tbs,
-                sample_interval: *sample_interval,
+                sample_rate: *sample_rate,
                 parallel_size: *parallel_size,
                 parallel_type: parallel_type.clone(),
                 batch_size: *batch_size,
@@ -1381,7 +1400,7 @@ impl TaskRunner {
             ExtractorConfig::PgSnapshot {
                 url,
                 connection_auth,
-                sample_interval,
+                sample_rate,
                 parallel_size,
                 parallel_type,
                 batch_size,
@@ -1392,7 +1411,7 @@ impl TaskRunner {
                 schema: String::new(),
                 tb: String::new(),
                 schema_tbs,
-                sample_interval: *sample_interval,
+                sample_rate: *sample_rate,
                 parallel_size: *parallel_size,
                 parallel_type: parallel_type.clone(),
                 batch_size: *batch_size,

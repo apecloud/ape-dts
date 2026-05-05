@@ -57,7 +57,7 @@ pub struct PgSnapshotShared {
     pub partition_cols: Arc<HashMap<(String, String), String>>,
     pub batch_size: usize,
     pub parallel_type: RdbParallelType,
-    pub sample_interval: u64,
+    pub sample_rate: Option<u8>,
     pub recovery: Option<Arc<dyn Recovery + Send + Sync>>,
 }
 
@@ -419,15 +419,18 @@ impl PgSnapshotExtractor {
             .cloned();
         let mut rows = query.fetch(&shared.conn_pool);
         while let Some(row) = rows.try_next().await? {
+            extracted_cnt += 1;
             partition_col_value =
                 PgColValueConvertor::from_query(&row, &partition_col, &partition_col_type)?;
+            if !Self::should_sample_row(shared.sample_rate, extracted_cnt) {
+                continue;
+            }
             let row_data =
                 RowData::from_pg_row(&row, &tb_meta, &ignore_cols.as_ref(), Some(chunk_id));
             shared
                 .base_extractor
                 .push_row(&mut extract_state, row_data, Position::None)
                 .await?;
-            extracted_cnt += 1;
         }
         extract_state.monitor.try_flush(true).await;
         Ok((chunk_id, extracted_cnt, partition_col_value))
@@ -913,9 +916,14 @@ impl PgTableCtx {
             .build()?;
 
         let mut rows = sqlx::query(&sql).fetch(&self.shared.conn_pool);
+        let mut extracted_count = 0u64;
         let mut chunk_id_generator = SnapshotChunkIdGenerator::new(self.shared.batch_size);
         while let Some(row) = rows.try_next().await? {
+            extracted_count += 1;
             let row_chunk_id = chunk_id_generator.next_row_chunk_id();
+            if !Self::should_sample_row(self.shared.sample_rate, extracted_count) {
+                continue;
+            }
             let row_data = RowData::from_pg_row(&row, tb_meta, &ignore_cols, Some(row_chunk_id));
             self.shared
                 .base_extractor
@@ -1011,7 +1019,7 @@ impl PgTableCtx {
                     extracted_count += 1;
                     slice_count += 1;
                     let row_chunk_id = chunk_id_generator.next_row_chunk_id();
-                    if extracted_count % self.shared.sample_interval != 0 {
+                    if !Self::should_sample_row(self.shared.sample_rate, extracted_count) {
                         continue;
                     }
 
@@ -1061,7 +1069,7 @@ impl PgTableCtx {
                     extracted_count += 1;
                     slice_count += 1;
                     let row_chunk_id = chunk_id_generator.next_row_chunk_id();
-                    if extracted_count % self.shared.sample_interval != 0 {
+                    if !Self::should_sample_row(self.shared.sample_rate, extracted_count) {
                         continue;
                     }
 
@@ -1123,6 +1131,9 @@ impl PgTableCtx {
         while let Some(row) = rows.try_next().await? {
             extracted_count += 1;
             let row_chunk_id = chunk_id_generator.next_row_chunk_id();
+            if !Self::should_sample_row(self.shared.sample_rate, extracted_count) {
+                continue;
+            }
             let row_data = RowData::from_pg_row(&row, tb_meta, &ignore_cols, Some(row_chunk_id));
             self.shared
                 .base_extractor
@@ -1130,5 +1141,19 @@ impl PgTableCtx {
                 .await?;
         }
         Ok(extracted_count)
+    }
+
+    // Position-based sampling for standalone snapshot check to drop rows before checker work.
+    fn should_sample_row(sample_rate: Option<u8>, extracted_count: u64) -> bool {
+        let Some(sample_rate) = sample_rate.filter(|rate| *rate < 100) else {
+            return true;
+        };
+        if sample_rate == 0 || extracted_count == 0 {
+            return false;
+        }
+
+        let sample_rate = u128::from(sample_rate);
+        let extracted_count = u128::from(extracted_count);
+        extracted_count * sample_rate / 100 > (extracted_count - 1) * sample_rate / 100
     }
 }

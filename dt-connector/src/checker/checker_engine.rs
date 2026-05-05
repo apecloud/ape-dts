@@ -9,7 +9,7 @@ use super::{
     CheckContext, CheckEntry, CheckInconsistency, Checker, CheckerStoreKey, CheckerTbMeta,
     DataChecker, RecheckKey, RetryItem,
 };
-use crate::checker::check_log::{CheckLog, DiffColValue};
+use crate::checker::check_log::{CheckLog, CheckLogJsonExt, DiffColValue};
 use crate::sinker::mongo::mongo_cmd;
 use dt_common::meta::{
     col_value::ColValue, mongo::mongo_constant::MongoConstants, pg::pg_value_type::PgValueType,
@@ -151,7 +151,8 @@ impl<C: Checker> DataChecker<C> {
         src_data: &[&RowData],
         mut dst_row_data_map: HashMap<u128, RowData>,
         tb_meta: &CheckerTbMeta,
-    ) -> anyhow::Result<(usize, Vec<RowData>)> {
+    ) -> anyhow::Result<(usize, usize, Vec<RowData>)> {
+        let mut checked_count = 0;
         let mut skip_count = 0;
         let mut retry_rows = Vec::new();
 
@@ -159,7 +160,7 @@ impl<C: Checker> DataChecker<C> {
             let key = match Self::lookup_match_key(src_row_data, tb_meta.basic()) {
                 Ok(Some(k)) => k,
                 Ok(None) => {
-                    self.cleanup_stale_update_key(src_row_data, tb_meta.basic(), None);
+                    checked_count += 1;
                     log_warn!(
                         "Skipping row with NULL key component in {}.{}.",
                         src_row_data.schema,
@@ -169,6 +170,7 @@ impl<C: Checker> DataChecker<C> {
                     continue;
                 }
                 Err(e) => {
+                    checked_count += 1;
                     log_warn!(
                         "Skipping unhashable row in {}.{}: {}",
                         src_row_data.schema,
@@ -180,7 +182,18 @@ impl<C: Checker> DataChecker<C> {
                 }
             };
 
-            self.cleanup_stale_update_key(src_row_data, tb_meta.basic(), Some(key));
+            if self.ctx.is_cdc {
+                self.cleanup_stale_update_key(
+                    src_row_data,
+                    tb_meta.basic(),
+                    key,
+                    self.ctx.sample_rate,
+                );
+            }
+            if !Self::should_sample_check_row(self.ctx.sample_rate, key) {
+                continue;
+            }
+            checked_count += 1;
             let dst_row_data = dst_row_data_map.remove(&key);
 
             if self.ctx.is_cdc || self.ctx.max_retries == 0 {
@@ -192,7 +205,7 @@ impl<C: Checker> DataChecker<C> {
             }
         }
 
-        Ok((skip_count, retry_rows))
+        Ok((checked_count, skip_count, retry_rows))
     }
 
     pub fn compare_src_dst(
@@ -331,6 +344,35 @@ impl<C: Checker> DataChecker<C> {
         Ok((key != 0).then_some(key))
     }
 
+    fn should_sample_check_row(sample_rate: Option<u8>, row_key: u128) -> bool {
+        let Some(sample_rate) = sample_rate.filter(|rate| *rate < 100) else {
+            return true;
+        };
+        row_key % 100 < u128::from(sample_rate)
+    }
+
+    fn sample_rows_before_fetch<'a>(
+        rows: &[&'a RowData],
+        sample_rate: Option<u8>,
+        tb_meta: &CheckerTbMeta,
+    ) -> anyhow::Result<Vec<&'a RowData>> {
+        if sample_rate.is_none_or(|rate| rate >= 100) {
+            return Ok(rows.to_vec());
+        }
+
+        let mut sampled_rows = Vec::with_capacity(rows.len());
+        for row in rows {
+            match Self::lookup_match_key(row, tb_meta.basic()) {
+                Ok(Some(key)) if Self::should_sample_check_row(sample_rate, key) => {
+                    sampled_rows.push(*row);
+                }
+                Ok(Some(_)) => {}
+                Ok(None) | Err(_) => sampled_rows.push(*row),
+            }
+        }
+        Ok(sampled_rows)
+    }
+
     /// Computes a PK composite hash with `31 * h + col_hash` and returns 0 when any PK column is NULL.
     fn hash_from_id_values(
         id_values: &HashMap<String, ColValue>,
@@ -373,10 +415,12 @@ impl<C: Checker> DataChecker<C> {
     }
 
     fn log_entry(entry: &CheckEntry) {
-        if entry.is_miss() {
-            log_miss!("{}", entry.log);
-        } else {
-            log_diff!("{}", entry.log);
+        if let Some(log) = entry.log.to_json_line() {
+            if entry.is_miss() {
+                log_miss!("{}", log);
+            } else {
+                log_diff!("{}", log);
+            }
         }
         if let Some(sql) = &entry.revise_sql {
             log_sql!("{}", sql);
@@ -419,16 +463,16 @@ impl<C: Checker> DataChecker<C> {
     async fn update_summary_for_entry(&mut self, entry: &CheckEntry) {
         {
             let summary = &mut self.ctx.summary;
-            summary.end_time = chrono::Local::now().to_rfc3339();
             if entry.is_miss() {
                 summary.miss_count += 1;
             } else if entry.counts_as_diff() {
                 summary.diff_count += 1;
             }
             if entry.revise_sql.is_some() {
-                summary.sql_count = Some(summary.sql_count.unwrap_or(0) + 1);
+                summary.sql_count = Some(summary.sql_count.unwrap_or_default() + 1);
             }
         }
+        self.ctx.record_table_entry(entry);
 
         self.add_entry_metrics(entry).await;
     }
@@ -460,7 +504,8 @@ impl<C: Checker> DataChecker<C> {
         &mut self,
         row_data: &RowData,
         tb_meta: &RdbTbMeta,
-        new_key: Option<u128>,
+        new_key: u128,
+        sample_rate: Option<u8>,
     ) {
         if row_data.row_type != RowType::Update {
             return;
@@ -471,7 +516,9 @@ impl<C: Checker> DataChecker<C> {
         };
 
         match Self::match_key_from_values(before_values, tb_meta) {
-            Ok(Some(old_key)) if Some(old_key) != new_key => {
+            Ok(Some(old_key))
+                if old_key != new_key && Self::should_sample_check_row(sample_rate, old_key) =>
+            {
                 self.remove_store_entry(row_data, old_key);
             }
             Ok(_) => {}
@@ -721,13 +768,13 @@ impl<C: Checker> DataChecker<C> {
         let fetch_result = self.checker.fetch(std::slice::from_ref(&row_ref)).await?;
         let tb_meta = fetch_result.tb_meta;
         let Some(key) = Self::lookup_match_key(&item.row, tb_meta.basic())? else {
-            self.cleanup_stale_update_key(&item.row, tb_meta.basic(), None);
             log_warn!(
                 "Skipping retry row with NULL key component in {}.{}.",
                 item.row.schema,
                 item.row.tb
             );
             self.ctx.summary.skip_count += 1;
+            self.ctx.record_table_skipped(&item.row, 1);
             self.snapshot_dirty = true;
             return Ok(None);
         };
@@ -742,7 +789,7 @@ impl<C: Checker> DataChecker<C> {
             return Ok(Some(item));
         }
 
-        self.cleanup_stale_update_key(&item.row, tb_meta.basic(), Some(key));
+        self.cleanup_stale_update_key(&item.row, tb_meta.basic(), key, None);
         self.reconcile_row_inconsistency(key, &item.row, dst_row.as_ref(), tb_meta.as_ref())
             .await?;
         Ok(None)
@@ -803,15 +850,23 @@ impl<C: Checker> DataChecker<C> {
         let mut retry_rows = Vec::new();
         let mut monitor_task_id = None;
         for rows in grouped.into_values() {
+            let rows_to_fetch = if self.ctx.sample_before_fetch {
+                let first_row = rows.first().context("checker group is empty")?;
+                let tb_meta = self.checker.fetch_meta(first_row).await?;
+                Self::sample_rows_before_fetch(&rows, self.ctx.sample_rate, tb_meta.as_ref())?
+            } else {
+                rows
+            };
+            if rows_to_fetch.is_empty() {
+                continue;
+            }
+            let first_row = rows_to_fetch.first().context("checker group is empty")?;
             if monitor_task_id.is_none() {
-                monitor_task_id = rows
-                    .first()
-                    .map(|row| TaskMonitorHandle::task_id_from_row_data(row))
+                monitor_task_id = Some(TaskMonitorHandle::task_id_from_row_data(first_row))
                     .filter(|id| !id.is_empty());
             }
-            let fetch_result = self.checker.fetch(&rows).await?;
+            let fetch_result = self.checker.fetch(&rows_to_fetch).await?;
             let tb_meta = fetch_result.tb_meta;
-            total_checked += rows.len();
 
             let mut dst_row_data_map = HashMap::with_capacity(fetch_result.dst_rows.len());
             for row in fetch_result.dst_rows {
@@ -820,9 +875,12 @@ impl<C: Checker> DataChecker<C> {
                 }
             }
 
-            let (skip_count, table_retry_rows) = self
-                .check_rows(&rows, dst_row_data_map, tb_meta.as_ref())
+            let (checked_count, skip_count, table_retry_rows) = self
+                .check_rows(&rows_to_fetch, dst_row_data_map, tb_meta.as_ref())
                 .await?;
+            self.ctx.record_table_checked(first_row, checked_count);
+            self.ctx.record_table_skipped(first_row, skip_count);
+            total_checked += checked_count;
             total_skip_count += skip_count;
             retry_rows.extend(table_retry_rows);
         }
@@ -863,18 +921,48 @@ impl<C: Checker> DataChecker<C> {
 
 #[cfg(test)]
 mod tests {
-    use super::super::{CheckContext, FetchResult};
+    use super::super::{CheckContext, CheckerIo, FetchResult};
     use super::*;
-    use crate::{checker::check_log::CheckSummaryLog, rdb_router::RdbRouter};
+    use crate::{
+        checker::check_log::{CheckLog, CheckSummaryLog},
+        rdb_router::RdbRouter,
+    };
     use async_trait::async_trait;
     use dt_common::monitor::task_monitor_handle::TaskMonitorHandle;
+    use std::sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc, Mutex as StdMutex,
+    };
 
     struct DummyChecker;
 
     #[async_trait]
     impl Checker for DummyChecker {
+        async fn fetch_meta(&mut self, _src_row: &RowData) -> anyhow::Result<Arc<CheckerTbMeta>> {
+            unreachable!("ut should not call fetch_meta")
+        }
+
         async fn fetch(&mut self, _src_rows: &[&RowData]) -> anyhow::Result<FetchResult> {
             unreachable!("ut should not call fetch")
+        }
+    }
+
+    struct MetaOnlyChecker {
+        tb_meta: Arc<CheckerTbMeta>,
+        fetch_count: Arc<AtomicU64>,
+    }
+
+    #[async_trait]
+    impl Checker for MetaOnlyChecker {
+        async fn fetch_meta(&mut self, _src_row: &RowData) -> anyhow::Result<Arc<CheckerTbMeta>> {
+            Ok(self.tb_meta.clone())
+        }
+
+        async fn fetch(&mut self, _src_rows: &[&RowData]) -> anyhow::Result<FetchResult> {
+            self.fetch_count.fetch_add(1, Ordering::Relaxed);
+            Err(anyhow::anyhow!(
+                "fetch should not be called for empty sample"
+            ))
         }
     }
 
@@ -901,6 +989,8 @@ mod tests {
             revise_match_full_row: false,
             global_summary: None,
             batch_size: 1,
+            sample_rate: None,
+            sample_before_fetch: false,
             retry_interval_secs: 0,
             max_retries: 0,
             is_cdc,
@@ -940,6 +1030,85 @@ mod tests {
                 ),
             ]),
         })
+    }
+
+    fn build_insert_row(id: i32, name: &str) -> RowData {
+        RowData::new(
+            "s1".to_string(),
+            "t1".to_string(),
+            RowType::Insert,
+            None,
+            Some(HashMap::from([
+                ("id".to_string(), ColValue::Long(id)),
+                ("name".to_string(), ColValue::String(name.to_string())),
+            ])),
+        )
+    }
+
+    fn build_update_row(old_id: i32, new_id: i32) -> RowData {
+        RowData::new(
+            "s1".to_string(),
+            "t1".to_string(),
+            RowType::Update,
+            Some(HashMap::from([
+                ("id".to_string(), ColValue::Long(old_id)),
+                ("name".to_string(), ColValue::String("old".to_string())),
+            ])),
+            Some(HashMap::from([
+                ("id".to_string(), ColValue::Long(new_id)),
+                ("name".to_string(), ColValue::String("new".to_string())),
+            ])),
+        )
+    }
+
+    fn build_checker() -> DataChecker<DummyChecker> {
+        let (_control_tx, control_rx) = tokio::sync::mpsc::unbounded_channel();
+        DataChecker::new(
+            DummyChecker,
+            "unit-test".to_string(),
+            build_ctx(true),
+            CheckerIo {
+                batch_queue: Arc::new(StdMutex::new(LimitedQueue::new(1))),
+                batch_notify: Arc::new(tokio::sync::Notify::new()),
+                dropped_items: Arc::new(AtomicU64::new(0)),
+                control_rx,
+            },
+            "unit-test",
+        )
+    }
+
+    fn build_checker_with<C: Checker>(checker: C, ctx: CheckContext) -> DataChecker<C> {
+        let (_control_tx, control_rx) = tokio::sync::mpsc::unbounded_channel();
+        DataChecker::new(
+            checker,
+            "unit-test".to_string(),
+            ctx,
+            CheckerIo {
+                batch_queue: Arc::new(StdMutex::new(LimitedQueue::new(1))),
+                batch_notify: Arc::new(tokio::sync::Notify::new()),
+                dropped_items: Arc::new(AtomicU64::new(0)),
+                control_rx,
+            },
+            "unit-test",
+        )
+    }
+
+    fn build_entry(row: &RowData, tb_meta: &RdbTbMeta) -> CheckEntry {
+        CheckEntry {
+            key: RecheckKey::from_row_data(row, &tb_meta.id_cols).unwrap(),
+            log: CheckLog {
+                schema: row.schema.clone(),
+                tb: row.tb.clone(),
+                target_schema: None,
+                target_tb: None,
+                id_col_values: HashMap::new(),
+                diff_col_values: HashMap::new(),
+                src_row: None,
+                dst_row: None,
+            },
+            revise_sql: None,
+            diff_cols: None,
+        }
     }
 
     #[tokio::test]
@@ -1000,5 +1169,106 @@ mod tests {
         assert!(entry.log.src_row.is_some());
         assert!(entry.log.dst_row.is_some());
         assert!(entry.revise_sql.is_some());
+    }
+
+    #[test]
+    fn sampling_uses_pk_hash_and_filters_before_fetch() {
+        let tb_meta = build_mysql_tb_meta();
+        let row_a = build_insert_row(7, "alice");
+        let row_b = build_insert_row(7, "bob");
+        let key_a = DataChecker::<DummyChecker>::lookup_match_key(&row_a, tb_meta.basic())
+            .unwrap()
+            .unwrap();
+        let key_b = DataChecker::<DummyChecker>::lookup_match_key(&row_b, tb_meta.basic())
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(key_a, key_b);
+        let bucket = (key_a % 100) as u8;
+        let passing_rate = (bucket + 1).min(100);
+        assert!(DataChecker::<DummyChecker>::should_sample_check_row(
+            Some(passing_rate),
+            key_a,
+        ));
+        if bucket > 0 {
+            assert!(!DataChecker::<DummyChecker>::should_sample_check_row(
+                Some(bucket),
+                key_a,
+            ));
+        }
+
+        let row = build_insert_row(1, "not-sampled");
+        let rows =
+            DataChecker::<DummyChecker>::sample_rows_before_fetch(&[&row], Some(0), &tb_meta)
+                .unwrap();
+        assert!(rows.is_empty());
+    }
+
+    #[tokio::test]
+    async fn pre_fetch_sampling_skips_group_when_sample_is_empty() {
+        let tb_meta = Arc::new(build_mysql_tb_meta());
+        let fetch_count = Arc::new(AtomicU64::new(0));
+        let mut ctx = build_ctx(false);
+        ctx.sample_before_fetch = true;
+        ctx.sample_rate = Some(0);
+        let mut checker = build_checker_with(
+            MetaOnlyChecker {
+                tb_meta,
+                fetch_count: fetch_count.clone(),
+            },
+            ctx,
+        );
+
+        checker
+            .process_batch(&[build_insert_row(1, "not-sampled")], false)
+            .await
+            .unwrap();
+
+        assert_eq!(fetch_count.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn sampled_cdc_pk_update_cleans_only_sampled_old_key() {
+        let tb_meta = build_mysql_tb_meta();
+        let mut selected = None;
+        for old_id in 1..500 {
+            let old_row = build_insert_row(old_id, "old");
+            let old_key = DataChecker::<DummyChecker>::lookup_match_key(&old_row, tb_meta.basic())
+                .unwrap()
+                .unwrap();
+            let old_bucket = (old_key % 100) as u8;
+            if old_bucket == 0 {
+                continue;
+            }
+            let new_row = build_insert_row(old_id + 1000, "new");
+            let new_key = DataChecker::<DummyChecker>::lookup_match_key(&new_row, tb_meta.basic())
+                .unwrap()
+                .unwrap();
+            if old_key != new_key {
+                selected = Some((old_id, old_key, new_key, old_bucket));
+                break;
+            }
+        }
+        let (old_id, old_key, new_key, old_bucket) =
+            selected.expect("test should find an old key with bucket > 0");
+        let old_store_key = CheckerStoreKey::new("s1", "t1", old_key);
+        let old_row = build_insert_row(old_id, "old");
+        let update_row = build_update_row(old_id, old_id + 1000);
+
+        let mut checker = build_checker();
+        checker.store.insert(
+            old_store_key.clone(),
+            build_entry(&old_row, tb_meta.basic()),
+        );
+        checker.cleanup_stale_update_key(&update_row, tb_meta.basic(), new_key, Some(old_bucket));
+        assert!(checker.store.contains_key(&old_store_key));
+
+        checker.cleanup_stale_update_key(
+            &update_row,
+            tb_meta.basic(),
+            new_key,
+            Some(old_bucket + 1),
+        );
+        assert!(!checker.store.contains_key(&old_store_key));
     }
 }

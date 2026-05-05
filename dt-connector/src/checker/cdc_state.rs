@@ -6,7 +6,7 @@ use super::{
     BoundedLineBuffer, CheckEntry, CheckInconsistency, Checker, CheckerStoreKey, DataChecker,
     RecheckKey,
 };
-use crate::checker::check_log::{CheckLog, CheckSummaryLog};
+use crate::checker::check_log::{CheckLog, CheckSummaryLog, CheckTableSummaryLog};
 use crate::checker::state_store::{CheckerCheckpointCommit, CheckerStateRow};
 use dt_common::meta::{position::Position, row_data::RowData, row_type::RowType};
 use dt_common::{log_info, log_warn};
@@ -113,20 +113,57 @@ impl<C: Checker> DataChecker<C> {
         let mut miss_buf_builder = BoundedLineBuffer::new(max_file_size, Some(max_rows));
         let mut diff_buf_builder = BoundedLineBuffer::new(max_file_size, Some(max_rows));
         let mut sql_buf_builder = BoundedLineBuffer::new(max_file_size, None);
-        let mut total_sql_count = 0usize;
         let mut total_miss = 0usize;
         let mut total_diff = 0usize;
+        let mut total_sql = 0usize;
+        let mut tables: HashMap<
+            (String, String, Option<String>, Option<String>),
+            CheckTableSummaryLog,
+        > = HashMap::new();
+        for table in &self.ctx.summary.tables {
+            let mut table = table.clone();
+            table.miss_count = 0;
+            table.diff_count = 0;
+            tables.insert(
+                (
+                    table.schema.clone(),
+                    table.tb.clone(),
+                    table.target_schema.clone(),
+                    table.target_tb.clone(),
+                ),
+                table,
+            );
+        }
 
         for entry in self.store.values() {
+            let table_key = (
+                entry.log.schema.clone(),
+                entry.log.tb.clone(),
+                entry.log.target_schema.clone(),
+                entry.log.target_tb.clone(),
+            );
+            let table = tables
+                .entry(table_key)
+                .or_insert_with(|| CheckTableSummaryLog {
+                    schema: entry.log.schema.clone(),
+                    tb: entry.log.tb.clone(),
+                    target_schema: entry.log.target_schema.clone(),
+                    target_tb: entry.log.target_tb.clone(),
+                    ..Default::default()
+                });
             if entry.is_miss() {
-                total_miss += 1;
-                miss_buf_builder.push_json(&entry.log);
+                if miss_buf_builder.push_json(&entry.log) {
+                    table.miss_count += 1;
+                    total_miss += 1;
+                }
             } else {
-                total_diff += 1;
-                diff_buf_builder.push_json(&entry.log);
+                if diff_buf_builder.push_json(&entry.log) {
+                    table.diff_count += 1;
+                    total_diff += 1;
+                }
             }
             if let Some(sql) = &entry.revise_sql {
-                total_sql_count += 1;
+                total_sql += 1;
                 sql_buf_builder.push_str(sql);
             }
         }
@@ -141,7 +178,8 @@ impl<C: Checker> DataChecker<C> {
             miss_count: total_miss,
             diff_count: total_diff,
             skip_count: self.ctx.summary.skip_count,
-            sql_count: (total_sql_count > 0).then_some(total_sql_count),
+            sql_count: (total_sql > 0).then_some(total_sql),
+            tables: tables.into_values().collect(),
         };
         let mut summary = summary;
         summary.is_consistent = super::is_summary_consistent(&summary, self.init_failed);
@@ -509,13 +547,15 @@ impl<C: Checker> DataChecker<C> {
 mod tests {
     use super::super::{CheckContext, Checker, CheckerIo, CheckerTbMeta, DataChecker, FetchResult};
     use super::*;
-    use crate::checker::check_log::CheckSummaryLog;
+    use crate::checker::check_log::{CheckSummaryLog, CheckTableSummaryLog, DiffColValue};
     use crate::rdb_router::RdbRouter;
     use async_trait::async_trait;
     use dt_common::{
-        monitor::task_monitor_handle::TaskMonitorHandle, utils::limit_queue::LimitedQueue,
+        meta::col_value::ColValue, monitor::task_monitor_handle::TaskMonitorHandle,
+        utils::limit_queue::LimitedQueue,
     };
     use opendal::{services::Memory, Operator};
+    use std::collections::BTreeMap;
     use std::fs;
     use std::path::{Path, PathBuf};
     use std::sync::Arc;
@@ -529,6 +569,10 @@ mod tests {
 
     #[async_trait]
     impl Checker for StaticChecker {
+        async fn fetch_meta(&mut self, _src_row: &RowData) -> anyhow::Result<Arc<CheckerTbMeta>> {
+            Ok(self.tb_meta.clone())
+        }
+
         async fn fetch(&mut self, _src_rows: &[&RowData]) -> anyhow::Result<FetchResult> {
             Ok(FetchResult {
                 tb_meta: self.tb_meta.clone(),
@@ -594,6 +638,8 @@ mod tests {
                 revise_match_full_row: false,
                 global_summary: None,
                 batch_size: 1,
+                sample_rate: None,
+                sample_before_fetch: false,
                 retry_interval_secs: 0,
                 max_retries: 0,
                 is_cdc: true,
@@ -673,6 +719,67 @@ mod tests {
             String::from_utf8(op.read("prefix/sql.log").await.unwrap().to_vec()).unwrap(),
             "old sql;\n"
         );
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn snapshot_and_output_recalculates_unresolved_table_counts() {
+        let dir = unique_temp_dir("checker-table-summary");
+        let mut checker = build_cdc_checker(dir.clone(), None);
+        checker.ctx.summary.tables.push(CheckTableSummaryLog {
+            schema: "s1".to_string(),
+            tb: "t1".to_string(),
+            checked_count: 3,
+            miss_count: 7,
+            diff_count: 9,
+            skip_count: 1,
+            ..Default::default()
+        });
+        checker.store.insert(
+            CheckerStoreKey::new("s1", "t1", 1),
+            CheckEntry {
+                key: RecheckKey {
+                    schema: "s1".to_string(),
+                    tb: "t1".to_string(),
+                    is_delete: false,
+                    pk: BTreeMap::from([("id".to_string(), ColValue::Long(1))]),
+                },
+                log: CheckLog {
+                    schema: "s1".to_string(),
+                    tb: "t1".to_string(),
+                    target_schema: None,
+                    target_tb: None,
+                    id_col_values: HashMap::from([("id".to_string(), Some("1".to_string()))]),
+                    diff_col_values: HashMap::from([(
+                        "name".to_string(),
+                        DiffColValue {
+                            src: Some("src".to_string()),
+                            dst: Some("dst".to_string()),
+                            src_type: None,
+                            dst_type: None,
+                        },
+                    )]),
+                    src_row: None,
+                    dst_row: None,
+                },
+                revise_sql: Some("UPDATE t1 SET name='src' WHERE id = 1;".to_string()),
+                diff_cols: Some(vec!["name".to_string()]),
+            },
+        );
+
+        checker.snapshot_and_output().await.unwrap();
+
+        let summary: CheckSummaryLog =
+            serde_json::from_str(&read_file(&dir.join("summary.log"))).unwrap();
+        assert_eq!(summary.miss_count, 0);
+        assert_eq!(summary.diff_count, 1);
+        assert_eq!(summary.sql_count, Some(1));
+        assert_eq!(summary.tables.len(), 1);
+        assert_eq!(summary.tables[0].checked_count, 3);
+        assert_eq!(summary.tables[0].miss_count, 0);
+        assert_eq!(summary.tables[0].diff_count, 1);
+        assert_eq!(summary.tables[0].skip_count, 1);
+        assert_eq!(read_file(&dir.join("diff.log")).lines().count(), 1);
         fs::remove_dir_all(dir).unwrap();
     }
 }
