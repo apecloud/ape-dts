@@ -113,6 +113,7 @@ const CHECKER_QUEUE_SIZE: &str = "queue_size";
 const CDC_CHECK_LOG_S3: &str = "cdc_check_log_s3";
 const S3_KEY_PREFIX: &str = "s3_key_prefix";
 const CDC_CHECK_LOG_INTERVAL_SECS: &str = "cdc_check_log_interval_secs";
+const SAMPLE_RATE: &str = "sample_rate";
 
 // default values
 const APE_DTS: &str = "APE_DTS";
@@ -138,6 +139,17 @@ impl TaskConfig {
         let parallelizer = Self::load_parallelizer_config(&loader)?;
         let checker = Self::load_checker_config(&loader)?;
         if let Some(checker_cfg) = checker.as_ref() {
+            if checker_cfg.sample_rate.is_some()
+                && !matches!(
+                    extractor_basic.extract_type,
+                    ExtractType::Snapshot | ExtractType::Cdc
+                )
+            {
+                bail!(Error::ConfigError(format!(
+                    "config [checker].{} only supports [extractor] extract_type=snapshot or cdc",
+                    SAMPLE_RATE
+                )));
+            }
             if matches!(extractor_basic.extract_type, ExtractType::Cdc)
                 && !matches!(sinker_basic.sink_type, SinkType::Write)
             {
@@ -1031,6 +1043,24 @@ impl TaskConfig {
         }
 
         let default = CheckerConfig::default();
+        let sample_rate = match loader.ini.get(CHECKER, SAMPLE_RATE) {
+            Some(raw) if !raw.is_empty() => {
+                let sample_rate = raw.parse::<usize>().map_err(|_| {
+                    Error::ConfigError(format!(
+                        "config [checker].{}={}, can not be parsed as usize",
+                        SAMPLE_RATE, raw
+                    ))
+                })?;
+                if !(1..=100).contains(&sample_rate) {
+                    bail!(Error::ConfigError(format!(
+                        "config [checker].sample_rate must be between 1 and 100, got {}",
+                        sample_rate
+                    )));
+                }
+                Some(sample_rate as u8)
+            }
+            _ => None,
+        };
         let config = CheckerConfig {
             queue_size: loader.get_with_default(CHECKER, CHECKER_QUEUE_SIZE, default.queue_size),
             max_connections: loader.get_with_default(
@@ -1039,6 +1069,7 @@ impl TaskConfig {
                 default.max_connections,
             ),
             batch_size: loader.get_with_default(CHECKER, BATCH_SIZE, default.batch_size),
+            sample_rate,
             output_full_row: loader.get_with_default(
                 CHECKER,
                 OUTPUT_FULL_ROW,
@@ -1315,12 +1346,14 @@ mod tests {
     use std::{
         fs,
         path::PathBuf,
-        time::{SystemTime, UNIX_EPOCH},
+        sync::atomic::{AtomicU64, Ordering},
     };
 
     use super::TaskConfig;
 
-    fn cdc_inline_check_config(parallel_type: &str) -> String {
+    static NEXT_CONFIG_ID: AtomicU64 = AtomicU64::new(0);
+
+    fn cdc_inline_check_config(parallel_type: &str, extra_checker: &str) -> String {
         format!(
             r#"[extractor]
 db_type=mysql
@@ -1336,6 +1369,7 @@ url=mysql://127.0.0.1:3307
 [checker]
 enable=true
 batch_size=2
+{extra_checker}
 
 [parallelizer]
 parallel_type={parallel_type}
@@ -1344,18 +1378,38 @@ parallel_type={parallel_type}
     }
 
     fn write_temp_task_config(contents: &str) -> PathBuf {
-        let unique_id = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let path = std::env::temp_dir().join(format!("ape_dts_task_config_{unique_id}.ini"));
+        let unique_id = NEXT_CONFIG_ID.fetch_add(1, Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!(
+            "ape_dts_task_config_{}_{}.ini",
+            std::process::id(),
+            unique_id
+        ));
         fs::write(&path, contents).unwrap();
         path
     }
 
+    fn snapshot_check_config(extra_checker: &str) -> String {
+        format!(
+            r#"[extractor]
+db_type=mysql
+extract_type=snapshot
+url=mysql://127.0.0.1:3306
+
+[checker]
+enable=true
+db_type=mysql
+url=mysql://127.0.0.1:3307
+{extra_checker}
+
+[parallelizer]
+parallel_type=rdb_merge
+"#
+        )
+    }
+
     #[test]
     fn cdc_inline_check_accepts_rdb_merge_parallelizer_when_checker_enabled() {
-        let config_path = write_temp_task_config(&cdc_inline_check_config("rdb_merge"));
+        let config_path = write_temp_task_config(&cdc_inline_check_config("rdb_merge", ""));
         let result = TaskConfig::new(config_path.to_str().unwrap());
         fs::remove_file(config_path).unwrap();
 
@@ -1364,7 +1418,7 @@ parallel_type={parallel_type}
 
     #[test]
     fn cdc_inline_check_rejects_serial_parallelizer_when_checker_enabled() {
-        let config_path = write_temp_task_config(&cdc_inline_check_config("serial"));
+        let config_path = write_temp_task_config(&cdc_inline_check_config("serial", ""));
         let result = TaskConfig::new(config_path.to_str().unwrap());
         fs::remove_file(config_path).unwrap();
 
@@ -1432,5 +1486,99 @@ enable=false
             ),
             Ok(_) => panic!("expected config validation error"),
         }
+    }
+
+    #[test]
+    fn snapshot_checker_accepts_sample_rate() {
+        let config_path = write_temp_task_config(&snapshot_check_config("sample_rate=25"));
+        let result = TaskConfig::new(config_path.to_str().unwrap());
+        fs::remove_file(config_path).unwrap();
+
+        let config = result.expect("snapshot checker config should be valid");
+        let checker = config.checker.expect("checker should exist");
+        assert_eq!(checker.sample_rate, Some(25));
+    }
+
+    #[test]
+    fn snapshot_checker_rejects_invalid_sample_rate() {
+        let config_path = write_temp_task_config(&snapshot_check_config("sample_rate=0"));
+        let result = TaskConfig::new(config_path.to_str().unwrap());
+        fs::remove_file(config_path).unwrap();
+
+        match result {
+            Err(err) => assert_eq!(
+                err.to_string(),
+                "config error: config [checker].sample_rate must be between 1 and 100, got 0"
+            ),
+            Ok(_) => panic!("expected sample_rate validation error"),
+        }
+    }
+
+    #[test]
+    fn cdc_checker_accepts_sample_rate() {
+        let config_path =
+            write_temp_task_config(&cdc_inline_check_config("rdb_merge", "sample_rate=10"));
+        let result = TaskConfig::new(config_path.to_str().unwrap());
+        fs::remove_file(config_path).unwrap();
+
+        let config = result.expect("cdc checker config should be valid");
+        let checker = config.checker.expect("checker should exist");
+        assert_eq!(checker.sample_rate, Some(10));
+    }
+
+    #[test]
+    fn struct_checker_rejects_sample_rate() {
+        let config_path = write_temp_task_config(
+            r#"[extractor]
+db_type=mysql
+extract_type=struct
+url=mysql://127.0.0.1:3306
+
+[sinker]
+sink_type=dummy
+
+[checker]
+enable=true
+db_type=mysql
+url=mysql://127.0.0.1:3307
+sample_rate=10
+"#,
+        );
+        let result = TaskConfig::new(config_path.to_str().unwrap());
+        fs::remove_file(config_path).unwrap();
+
+        match result {
+            Err(err) => assert_eq!(
+                err.to_string(),
+                "config error: config [checker].sample_rate only supports [extractor] extract_type=snapshot or cdc"
+            ),
+            Ok(_) => panic!("expected sample_rate scope validation error"),
+        }
+    }
+
+    #[test]
+    fn struct_checker_allows_empty_sample_rate() {
+        let config_path = write_temp_task_config(
+            r#"[extractor]
+db_type=mysql
+extract_type=struct
+url=mysql://127.0.0.1:3306
+
+[sinker]
+sink_type=dummy
+
+[checker]
+enable=true
+db_type=mysql
+url=mysql://127.0.0.1:3307
+sample_rate=
+"#,
+        );
+        let result = TaskConfig::new(config_path.to_str().unwrap());
+        fs::remove_file(config_path).unwrap();
+
+        let config = result.expect("empty sample_rate should be ignored");
+        let checker = config.checker.expect("checker should exist");
+        assert_eq!(checker.sample_rate, None);
     }
 }

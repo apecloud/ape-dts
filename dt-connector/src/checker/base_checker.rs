@@ -13,7 +13,6 @@ use tokio::sync::{mpsc, Notify};
 use tokio::task::JoinHandle;
 use tokio::time::{Duration, Instant};
 
-use super::struct_checker::StructCheckerHandle;
 use crate::{
     checker::check_log::{CheckLog, CheckSummaryLog, DiffColValue},
     checker::state_store::CheckerStateStore,
@@ -189,6 +188,7 @@ pub struct CheckContext {
     pub revise_match_full_row: bool,
     pub global_summary: Option<Arc<Mutex<CheckSummaryLog>>>,
     pub batch_size: usize,
+    pub sample_rate: Option<u8>,
     pub retry_interval_secs: u64,
     pub max_retries: u32,
     pub is_cdc: bool,
@@ -200,11 +200,6 @@ pub struct CheckContext {
     pub state_store: Option<Arc<CheckerStateStore>>,
     pub source_checker: Option<Arc<Mutex<Box<dyn Checker>>>>,
     pub expected_resume_position: Option<Position>,
-}
-
-pub struct FetchResult {
-    pub tb_meta: Arc<CheckerTbMeta>,
-    pub dst_rows: Vec<RowData>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -226,11 +221,13 @@ impl CheckerStoreKey {
 
 #[async_trait]
 pub trait Checker: Send + Sync + 'static {
-    async fn fetch(&mut self, src_rows: &[&RowData]) -> anyhow::Result<FetchResult>;
+    async fn fetch_tb_meta(&mut self, src_rows: &[&RowData]) -> anyhow::Result<CheckerTbMeta>;
+    async fn fetch(
+        &mut self,
+        src_rows: &[&RowData],
+        tb_meta: &CheckerTbMeta,
+    ) -> anyhow::Result<Vec<RowData>>;
     async fn refresh_meta(&mut self, _data: &[DdlData]) -> anyhow::Result<()> {
-        Ok(())
-    }
-    async fn close(&mut self) -> anyhow::Result<()> {
         Ok(())
     }
 }
@@ -255,11 +252,6 @@ struct DataCheckerShared {
 pub struct DataCheckerHandle {
     shared: DataCheckerShared,
     join_handle: Arc<Mutex<Option<JoinHandle<anyhow::Result<()>>>>>,
-}
-
-pub enum CheckerHandle {
-    Data(DataCheckerHandle),
-    Struct(StructCheckerHandle),
 }
 
 impl DataCheckerHandle {
@@ -381,39 +373,6 @@ impl DataCheckerHandle {
             log_warn!("checker refresh_meta signal dropped because checker already stopped");
         }
         Ok(())
-    }
-}
-
-impl CheckerHandle {
-    pub async fn refresh_meta(&self, data: Vec<DdlData>) -> anyhow::Result<()> {
-        match self {
-            CheckerHandle::Data(handle) => handle.refresh_meta(data).await,
-            CheckerHandle::Struct(_) => Ok(()),
-        }
-    }
-
-    pub async fn check_struct(
-        &mut self,
-        data: Vec<dt_common::meta::struct_meta::struct_data::StructData>,
-    ) -> anyhow::Result<()> {
-        match self {
-            CheckerHandle::Data(_) => Ok(()),
-            CheckerHandle::Struct(handle) => handle.check_struct(data).await,
-        }
-    }
-
-    pub async fn close_with_position(&mut self, position: Option<&Position>) -> anyhow::Result<()> {
-        match self {
-            CheckerHandle::Data(handle) => handle.close_with_position(position).await,
-            CheckerHandle::Struct(handle) => handle.close().await,
-        }
-    }
-
-    pub async fn record_checkpoint(&self, position: &Position) -> anyhow::Result<()> {
-        match self {
-            CheckerHandle::Data(handle) => handle.record_checkpoint(position).await,
-            CheckerHandle::Struct(_) => Ok(()),
-        }
     }
 }
 
@@ -769,7 +728,6 @@ impl<C: Checker> DataChecker<C> {
             self.flush_store().await;
         }
         self.finish_summary_and_meta().await?;
-        let _ = self.checker.close().await;
         Ok(())
     }
 
@@ -845,7 +803,20 @@ mod tests {
 
     #[async_trait]
     impl Checker for BlockingFetchChecker {
-        async fn fetch(&mut self, _src_rows: &[&RowData]) -> anyhow::Result<FetchResult> {
+        async fn fetch_tb_meta(&mut self, _src_rows: &[&RowData]) -> anyhow::Result<CheckerTbMeta> {
+            Ok(CheckerTbMeta::Mongo(RdbTbMeta {
+                schema: "s1".to_string(),
+                tb: "t1".to_string(),
+                id_cols: vec!["id".to_string()],
+                ..Default::default()
+            }))
+        }
+
+        async fn fetch(
+            &mut self,
+            _src_rows: &[&RowData],
+            _tb_meta: &CheckerTbMeta,
+        ) -> anyhow::Result<Vec<RowData>> {
             let _ = self.fetch_started.send(());
             self.fetch_gate.notified().await;
             Err(anyhow::anyhow!("unit-test fetch failure"))
@@ -872,6 +843,7 @@ mod tests {
             revise_match_full_row: false,
             global_summary: None,
             batch_size: 1,
+            sample_rate: None,
             retry_interval_secs: 0,
             max_retries: 0,
             is_cdc: false,

@@ -589,6 +589,7 @@ mod tests {
                 revise_match_full_row: false,
                 global_summary: None,
                 batch_size: 1,
+                sample_rate: None,
                 retry_interval_secs: 0,
                 max_retries: 0,
                 is_cdc: true,

@@ -61,6 +61,7 @@ Struct check follows the same standalone target-selection rules as standalone sn
 | queue_size                  | checker queue capacity, counted in pending batches/messages            | 200         | 200                               |
 | max_connections             | max connections for checker pool                                       | 8           | 8                                 |
 | batch_size                  | checker chunk size; also used for checker chunking in inline cdc check | 200         | 200                               |
+| sample_rate                  | deterministic PK-hash sample rate for snapshot and CDC checks          | 25          | empty (check all rows/changes)    |
 | output_full_row             | output full row in diff log                                            | false       | false                             |
 | output_revise_sql           | write generated revise SQL to `sql.log`                                | false       | false                             |
 | revise_match_full_row       | match full row when building revise SQL                                | false       | false                             |
@@ -86,6 +87,10 @@ Notes:
 
 **General behavior**
 - Checker only supports `[pipeline] pipeline_type=basic`.
+- `sample_rate` only supports snapshot and inline CDC checks. Snapshot/CDC write paths still write
+  all rows/changes. Candidate rows/changes still enter the checker queue. Before target fetch, the
+  checker computes each PK hash bucket as `row_key % 100` and fetches/compares only valid-key rows
+  whose bucket falls in `[0, sample_rate)`.
 - `queue_size` counts queued checker DML batches, not rows. Control signals such as checkpoint and
   `refresh_meta` bypass this queue.
 - In inline write-after-check flows, if the checker DML queue is full, the oldest pending batch is

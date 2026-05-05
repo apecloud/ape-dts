@@ -4,7 +4,9 @@ After data migration, you may want to compare the source and target data row by 
 
 Supports comparison for MySQL, PostgreSQL, and MongoDB.
 
-Sampling via `sample_interval` is currently available only for MySQL/PostgreSQL snapshot checks.
+Snapshot and inline CDC checks support deterministic PK-hash checker-side sampling via `[checker].sample_rate`.
+MySQL/PostgreSQL snapshot checks also support extractor-side sampling via
+`[extractor].sample_interval`.
 
 Data check is documented in three flows:
 
@@ -147,9 +149,24 @@ Operationally:
 Refer to [task templates](../../templates/mysql_to_mysql.md) and [tutorial](../tutorial/mysql_to_mysql.md). The
 templates now separate standalone snapshot check, inline snapshot check, and inline cdc check.
 
-### Sampling Check (MySQL/PostgreSQL snapshot only)
+### Sampling Check
 
-For MySQL/PostgreSQL snapshot check, add `sample_interval` to the `[extractor]` section. For example, setting `sample_interval=3` checks every 3rd record.
+For snapshot and inline CDC checks, add `sample_rate` to the `[checker]` section. For example,
+setting `sample_rate=25` checks rows/changes whose PK hash bucket falls in `[0, 25)`.
+Candidate rows/changes still enter the checker queue. Before target fetch, the checker computes the
+bucket as `row_key % 100` and fetches/compares only valid-key rows whose bucket is sampled in.
+
+```
+[checker]
+enable=true
+sample_rate=25
+```
+
+For MySQL/PostgreSQL snapshot check, you can also add `sample_interval` to the
+`[extractor]` section. For example, setting `sample_interval=3` checks every 3rd extracted record.
+If both sampling settings are configured, only rows passing both extractor-side sampling and
+checker-side PK-hash sampling are checked.
+
 ```
 [extractor]
 sample_interval=3

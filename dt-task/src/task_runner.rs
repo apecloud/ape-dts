@@ -1073,6 +1073,7 @@ impl TaskRunner {
                 retry_interval_secs,
                 max_retries,
                 is_cdc: is_cdc_task,
+                sample_rate: cfg.sample_rate,
                 summary: CheckSummaryLog {
                     start_time: Local::now().to_rfc3339(),
                     ..Default::default()

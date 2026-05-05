@@ -4,7 +4,8 @@
 
 支持对 MySQL、PostgreSQL、MongoDB 进行比对。
 
-目前 `sample_interval` 采样仅支持 MySQL / PostgreSQL 全量校验。
+全量校验和 inline CDC check 支持通过 `[checker].sample_rate` 进行确定性的 PK hash checker 侧抽样。
+MySQL / PostgreSQL 的 snapshot check 还支持通过 `[extractor].sample_interval` 进行抽取侧抽样。
 
 数据校验当前按三种形态进行文档说明：
 
@@ -121,9 +122,23 @@
 
 参考 [任务模版](../../templates/mysql_to_mysql.md) 和 [教程](../../en/tutorial/mysql_to_mysql.md)。模板中已将 standalone snapshot check、inline snapshot check、inline cdc check 分开列出。
 
-### 抽样校验（仅 MySQL / PostgreSQL 全量校验）
+### 抽样校验
 
-对 MySQL / PostgreSQL 的全量校验，可在 `[extractor]` 中添加 `sample_interval` 配置。例如设置 `sample_interval=3` 表示每 3 条记录采样 1 次。
+全量校验和 inline CDC check 可在 `[checker]` 中添加 `sample_rate`。例如设置
+`sample_rate=25` 表示校验 PK hash bucket 落在 `[0, 25)` 范围内的行/变更。
+候选行/变更仍会进入 checker 队列；目标端 fetch 前，checker 使用 `row_key % 100` 计算
+bucket，只 fetch/比较被抽样命中且 key 有效的行。
+
+```
+[checker]
+enable=true
+sample_rate=25
+```
+
+对 MySQL / PostgreSQL 的 snapshot check，也可在 `[extractor]` 中添加
+`sample_interval` 配置。例如设置 `sample_interval=3` 表示每 3 条抽取记录采样 1 次。
+如果同时配置两种抽样规则，只有同时命中抽取侧抽样和 checker 侧 PK hash 抽样的行会进入校验。
+
 ```
 [extractor]
 sample_interval=3

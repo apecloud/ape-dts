@@ -58,6 +58,7 @@ struct check 复用 standalone snapshot check 的目标选择规则。
 | queue_size                  | checker 队列容量，按待处理批次/消息数计数                      | 200         | 200                              |
 | max_connections             | checker 连接池最大连接数                                       | 8           | 8                                |
 | batch_size                  | checker 的分块大小；inline cdc check 下也用于控制 checker 分块 | 200         | 200                              |
+| sample_rate                  | snapshot 与 CDC check 的确定性 PK hash 抽样百分比                | 25          | 空（校验全部行/变更）            |
 | output_full_row             | diff 日志是否输出全量行                                        | false       | false                            |
 | output_revise_sql           | 是否将生成的修复 SQL 写入 `sql.log`                            | false       | false                            |
 | revise_match_full_row       | 生成修复 SQL 时是否按全量行匹配                                | false       | false                            |
@@ -83,6 +84,7 @@ struct check 复用 standalone snapshot check 的目标选择规则。
 
 **通用行为**
 - checker 仅支持 `[pipeline] pipeline_type=basic`。
+- `sample_rate` 仅支持 snapshot check 和 inline CDC check。snapshot / CDC 写入链路仍会写入全部行/变更。候选行/变更仍会进入 checker 队列；目标端 fetch 前，checker 将 PK hash bucket 归一化为 `row_key % 100`，只 fetch/比较 bucket 落在 `[0, sample_rate)` 范围内且 key 有效的行。
 - `queue_size` 统计的是 checker DML 队列中的待处理批次数，不是行数。checkpoint、`refresh_meta`
   这类控制信号会绕过这条队列。
 - 在 inline 写后校验链路里，如果 checker DML 队列已满，会丢弃最旧的待校验批次并记录 warning
