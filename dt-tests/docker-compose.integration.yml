@@ -343,7 +343,7 @@ services:
     healthcheck:
       test:
         - CMD-SHELL
-        - 'mongo admin -u root -p 123456 --quiet --eval "quit(db.isMaster().ismaster ? 0 : 1)"'
+        - 'mongo admin -u $$MONGO_INITDB_ROOT_USERNAME -p $$MONGO_INITDB_ROOT_PASSWORD --quiet --eval "quit(db.isMaster().ismaster ? 0 : 1)"'
       timeout: 5s
       retries: 5
       start_period: 20s
@@ -365,7 +365,7 @@ services:
     healthcheck:
       test:
         - CMD-SHELL
-        - 'mongo admin -u root -p 123456 --quiet --eval "quit(db.adminCommand(''ping'').ok ? 0 : 1)"'
+        - 'mongo admin -u $$MONGO_INITDB_ROOT_USERNAME -p $$MONGO_INITDB_ROOT_PASSWORD --quiet --eval "quit(db.adminCommand(''ping'').ok ? 0 : 1)"'
       timeout: 5s
       retries: 5
       start_period: 20s
