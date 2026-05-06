@@ -1,6 +1,15 @@
 name: Integration Tests
 
 on:
+  pull_request:
+    branches: [main]
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+      - "LICENSE*"
+      - "**/*.png"
+      - "**/*.jpg"
+      - "**/*.svg"
   workflow_dispatch:
 
 concurrency:
