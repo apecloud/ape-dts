@@ -128,11 +128,13 @@ impl RdbKafkaRdbTestRunner {
     }
 
     async fn prepare_kafka(&self) -> anyhow::Result<()> {
-        let mut topics: Vec<&str> = vec![];
-        let re = Regex::new(r"create topic ([\w\W]+)").unwrap();
+        let mut topics: Vec<String> = vec![];
+        let re = Regex::new(r"(?i)^create topic\s+(.+?)\s*$").unwrap();
         for sql in self.src_to_kafka_runner.dst_prepare_sqls.iter() {
-            let cap = re.captures(sql).unwrap();
-            topics.push(cap.get(1).unwrap().as_str());
+            let cap = re
+                .captures(sql.trim())
+                .unwrap_or_else(|| panic!("invalid kafka topic prepare sql: {}", sql));
+            topics.push(cap.get(1).unwrap().as_str().trim().to_string());
         }
 
         let config = TaskConfig::new(&self.src_to_kafka_runner.task_config_file).unwrap();
@@ -150,16 +152,16 @@ impl RdbKafkaRdbTestRunner {
             let consumer: BaseConsumer = Self::create_kafka_base_consumer(&url);
             for topic in topics.iter() {
                 // delete_topic/create_topic may fail
-                let mut meta = consumer.fetch_metadata(Some(topic), Duration::from_secs(10))?;
+                let mut meta = consumer.fetch_metadata(Some(topic.as_str()), Duration::from_secs(10))?;
                 while check_topic_exist(&meta, topic) {
                     Self::delete_topic(&admin_client, topic).await;
-                    meta = consumer.fetch_metadata(Some(topic), Duration::from_secs(10))?;
+                    meta = consumer.fetch_metadata(Some(topic.as_str()), Duration::from_secs(10))?;
                     TimeUtil::sleep_millis(100).await;
                 }
 
                 while !check_topic_exist(&meta, topic) {
                     Self::create_topic(&admin_client, topic).await;
-                    meta = consumer.fetch_metadata(Some(topic), Duration::from_secs(10))?;
+                    meta = consumer.fetch_metadata(Some(topic.as_str()), Duration::from_secs(10))?;
                     TimeUtil::sleep_millis(100).await;
                     println!("kafka topic: [{}] is NOT ready", topic);
                 }
