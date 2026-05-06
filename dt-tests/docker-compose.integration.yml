@@ -560,9 +560,23 @@ services:
       start_period: 10s
       interval: 3s
 
-  redis-2-8:
+  redis-src-2-8:
     image: redis:2.8.23
-    container_name: redis-2-8-it
+    container_name: redis-src-2-8-it
+    profiles: ["redis-2-8"]
+    ports:
+      - "6378:6379"
+    command: redis-server --save 60 1 --loglevel warning
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+      interval: 3s
+
+  redis-dst-2-8:
+    image: redis:2.8.23
+    container_name: redis-dst-2-8-it
     profiles: ["redis-2-8"]
     ports:
       - "6379:6379"

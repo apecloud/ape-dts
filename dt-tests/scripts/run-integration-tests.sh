@@ -90,7 +90,7 @@ declare -a ALL_SUITES=(
   "pg_to_pg_lua"
   # "pg_to_starrocks"       # disabled: temporarily excluded from default local matrix
   "mongo_to_mongo"
-  "redis_to_redis_2_8"    # disabled: Redis 2.8 image replacement not finished
+  "redis_to_redis_2_8"
   "redis_to_redis_4_0"
   "redis_to_redis_5_0"
   "redis_to_redis_6_0"
@@ -342,7 +342,7 @@ suite_services() {
     pg_to_pg_lua) echo "postgres-src postgres-dst" ;;
     pg_to_starrocks) echo "postgres-src starrocks-3-2-11" ;;
     mongo_to_mongo) echo "mongo-src mongo-dst" ;;
-    redis_to_redis_2_8) echo "redis-2-8" ;;
+    redis_to_redis_2_8) echo "redis-src-2-8 redis-dst-2-8" ;;
     redis_to_redis_4_0) echo "redis-src-4-0 redis-dst-4-0" ;;
     redis_to_redis_5_0) echo "redis-src-5-0 redis-dst-5-0" ;;
     redis_to_redis_6_0) echo "redis-src-6-0 redis-dst-6-0" ;;
