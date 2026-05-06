@@ -128,6 +128,39 @@ services:
       start_period: 20s
       interval: 5s
 
+  mysql-src-tidb:
+    image: mysql:8.0
+    container_name: mysql-src-tidb-it
+    environment:
+      MYSQL_ROOT_PASSWORD: 123456
+      MYSQL_DATABASE: test_db
+    ports:
+      - "3307:3306"
+    command:
+      - mysqld
+      - --server-id=13
+      - --log-bin=mysql-bin
+      - --binlog-format=ROW
+      - --gtid-mode=ON
+      - --enforce-gtid-consistency=ON
+      - --log-slave-updates=ON
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+    healthcheck:
+      test:
+        - CMD
+        - mysqladmin
+        - ping
+        - -h
+        - localhost
+        - -u
+        - root
+        - -p123456
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+      interval: 5s
+
   mysql-dst-8-0:
     image: mysql:8.0
     container_name: mysql-dst-8-0-it

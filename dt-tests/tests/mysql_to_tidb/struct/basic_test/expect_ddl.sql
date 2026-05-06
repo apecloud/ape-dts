@@ -1,15 +1,15 @@
 struct_it_mysql2mysql_1
-CREATE DATABASE `struct_it_mysql2mysql_1` /*!40100 DEFAULT CHARACTER SET utf8 COLLATE utf8_general_ci */
+CREATE DATABASE `struct_it_mysql2mysql_1` /*!40100 DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci */
 
 struct_it_mysql2mysql_1.full_column_type
 CREATE TABLE `full_column_type` (
   `id` int(10) unsigned NOT NULL AUTO_INCREMENT,
-  `varchar_col` varchar(255) COLLATE utf8_general_ci NOT NULL COMMENT 'varchar_col_comment',
-  `char_col` char(10) COLLATE utf8_general_ci DEFAULT NULL COMMENT 'char_col_comment',
-  `tinytext_col` tinytext COLLATE utf8_general_ci DEFAULT NULL COMMENT 'tinytext_col_comment',
-  `mediumtext_col` mediumtext COLLATE utf8_general_ci DEFAULT NULL COMMENT 'mediumtext_col_comment',
-  `longtext_col` longtext COLLATE utf8_general_ci DEFAULT NULL COMMENT 'longtext_col_comment',
-  `text_col` text COLLATE utf8_general_ci DEFAULT NULL COMMENT 'text_col_comment',
+  `varchar_col` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL COMMENT 'varchar_col_comment',
+  `char_col` char(10) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT 'char_col_comment',
+  `tinytext_col` tinytext COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT 'tinytext_col_comment',
+  `mediumtext_col` mediumtext COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT 'mediumtext_col_comment',
+  `longtext_col` longtext COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT 'longtext_col_comment',
+  `text_col` text COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT 'text_col_comment',
   `tinyint_col` tinyint(4) DEFAULT '0' COMMENT 'tinyint_col_comment',
   `smallint_col` smallint(6) DEFAULT NULL COMMENT 'smallint_col_comment',
   `mediumint_col` mediumint(9) DEFAULT NULL COMMENT 'mediumint_col_comment',
@@ -22,8 +22,8 @@ CREATE TABLE `full_column_type` (
   `date_col` date DEFAULT NULL COMMENT 'date_col_comment',
   `datetime_col` datetime DEFAULT NULL COMMENT 'datetime_col_comment',
   `datetime_col2` datetime(6) DEFAULT NULL COMMENT 'datetime_col2_comment',
-  `timestamp_col` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT 'timestamp_col_comment',
-  `timestamp_co2` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT 'timestamp_co2_comment',
+  `timestamp_col` timestamp DEFAULT CURRENT_TIMESTAMP COMMENT 'timestamp_col_comment',
+  `timestamp_co2` timestamp DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT 'timestamp_co2_comment',
   `time_col` time DEFAULT NULL COMMENT 'time_col_comment',
   `time_col2` time(2) DEFAULT NULL COMMENT 'time_col2_comment',
   `year_col` year(4) DEFAULT NULL COMMENT 'year_col_comment',
@@ -33,38 +33,38 @@ CREATE TABLE `full_column_type` (
   `tinyblob_col` tinyblob DEFAULT NULL COMMENT 'tinyblob_col_comment',
   `mediumblob_col` mediumblob DEFAULT NULL COMMENT 'mediumblob_col_comment',
   `longblob_col` longblob DEFAULT NULL COMMENT 'longblob_col_comment',
-  `enum_col` enum('value1','value2','value3') COLLATE utf8_general_ci DEFAULT NULL COMMENT 'enum_col_comment',
-  `set_col` set('option1','option2','option3') COLLATE utf8_general_ci DEFAULT NULL COMMENT 'set_col_comment',
+  `enum_col` enum('value1','value2','value3') COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT 'enum_col_comment',
+  `set_col` set('option1','option2','option3') COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT 'set_col_comment',
   `json_col` json DEFAULT NULL COMMENT 'json_col_comment',
   PRIMARY KEY (`id`) /*T![clustered_index] CLUSTERED */
-) ENGINE=InnoDB DEFAULT CHARSET=utf8 COLLATE=utf8_general_ci
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
 
 struct_it_mysql2mysql_1.full_index_type
 CREATE TABLE `full_index_type` (
   `id` int(10) unsigned NOT NULL AUTO_INCREMENT,
   `f_1` int(11) DEFAULT NULL,
-  `f_2` char(128) COLLATE utf8_general_ci DEFAULT NULL,
-  `f_3` varchar(128) COLLATE utf8_general_ci DEFAULT NULL,
-  `f_4` varchar(128) COLLATE utf8_general_ci DEFAULT NULL,
-  `f_5` varchar(128) COLLATE utf8_general_ci DEFAULT NULL,
-  `f_6` text COLLATE utf8_general_ci DEFAULT NULL,
-  `f_7` text COLLATE utf8_general_ci DEFAULT NULL,
-  `f_8` text COLLATE utf8_general_ci DEFAULT NULL,
+  `f_2` char(128) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `f_3` varchar(128) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `f_4` varchar(128) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `f_5` varchar(128) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `f_6` text COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `f_7` text COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `f_8` text COLLATE utf8mb4_unicode_ci DEFAULT NULL,
   PRIMARY KEY (`id`) /*T![clustered_index] CLUSTERED */,
   UNIQUE KEY `idx_unique_1` (`f_1`,`f_2`,`f_3`),
   UNIQUE KEY `idx_unique_2` (`f_3`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8 COLLATE=utf8_general_ci
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
 
 struct_it_mysql2mysql_1.constraint_table
 CREATE TABLE `constraint_table` (
   `id` int(11) NOT NULL AUTO_INCREMENT,
-  `username` varchar(50) COLLATE utf8_general_ci NOT NULL,
-  `password` varchar(50) COLLATE utf8_general_ci NOT NULL,
-  `email` varchar(100) COLLATE utf8_general_ci NOT NULL,
+  `username` varchar(50) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `password` varchar(50) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `email` varchar(100) COLLATE utf8mb4_unicode_ci NOT NULL,
   `age` int(11) DEFAULT NULL,
-  `gender` enum('Male','Female','Other') COLLATE utf8_general_ci NOT NULL,
-  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  `gender` enum('Male','Female','Other') COLLATE utf8mb4_unicode_ci NOT NULL,
+  `created_at` timestamp DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` timestamp DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (`id`) /*T![clustered_index] CLUSTERED */,
   UNIQUE KEY `username` (`username`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8 COLLATE=utf8_general_ci
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci

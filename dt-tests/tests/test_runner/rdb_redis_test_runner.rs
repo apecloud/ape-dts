@@ -1,5 +1,6 @@
 use anyhow::{bail, Context};
 use dt_common::config::config_enums::DbType;
+use dt_common::meta::col_value::ColValue;
 use dt_common::utils::redis_util::RedisUtil;
 use dt_common::{
     config::{sinker_config::SinkerConfig, task_config::TaskConfig},
@@ -152,7 +153,7 @@ impl RdbRedisTestRunner {
         if let Some(conn_pool) = &self.mysql_conn_pool {
             // mysql data
             let tb_meta = RdbUtil::get_tb_meta_mysql(conn_pool, db_tb).await?;
-            if !tb_meta.basic.order_cols.is_empty() {
+            if tb_meta.basic.order_cols.is_empty() {
                 return Ok(true);
             }
             // only support single primary/unique column for redis test
@@ -161,10 +162,9 @@ impl RdbRedisTestRunner {
             let results = RdbUtil::fetch_data_mysql(conn_pool, None, db_tb, "").await?;
             for row_data in results {
                 let after = row_data.require_after()?;
-                let key = after
-                    .get(key_col)
-                    .and_then(|v| v.to_option_string())
-                    .context("missing redis key")?;
+                let Some(key) = after.get(key_col).and_then(Self::redis_expected_value) else {
+                    continue;
+                };
 
                 // redis data
                 let redis_k = format!("{}.{}.{}", db_tb.0, db_tb.1, key);
@@ -178,18 +178,34 @@ impl RdbRedisTestRunner {
                     // check redis value = db value
                     if let Value::BulkString(v) = redis_kvs.get(col).unwrap() {
                         let redis_v_str = String::from_utf8(v.clone()).unwrap();
-                        if let Some(db_v_str) = db_v.to_option_string() {
-                            if redis_v_str != db_v_str {
-                                println!("compare db: {}, tb: {}, col: {}", db_tb.0, db_tb.1, col);
-                            }
-                            assert_eq!(redis_v_str, db_v_str)
-                        } else {
-                            assert_eq!(redis_v_str, "")
+                        let expected = Self::redis_expected_value(db_v).unwrap_or_default();
+                        if redis_v_str != expected {
+                            println!("compare db: {}, tb: {}, col: {}", db_tb.0, db_tb.1, col);
                         }
+                        assert_eq!(redis_v_str, expected)
                     }
                 }
             }
         }
         Ok(true)
+    }
+
+    fn redis_expected_value(col_value: &ColValue) -> Option<String> {
+        match col_value {
+            ColValue::None | ColValue::UnchangedToast => None,
+            ColValue::RawString(v) => String::from_utf8(v.clone())
+                .ok()
+                .or_else(|| col_value.to_option_string()),
+            ColValue::String(v)
+            | ColValue::Time(v)
+            | ColValue::Date(v)
+            | ColValue::DateTime(v)
+            | ColValue::Timestamp(v)
+            | ColValue::Decimal(v)
+            | ColValue::Set2(v)
+            | ColValue::Enum2(v)
+            | ColValue::Json2(v) => Some(v.clone()),
+            _ => col_value.to_option_string(),
+        }
     }
 }

@@ -152,16 +152,19 @@ impl RdbKafkaRdbTestRunner {
             let consumer: BaseConsumer = Self::create_kafka_base_consumer(&url);
             for topic in topics.iter() {
                 // delete_topic/create_topic may fail
-                let mut meta = consumer.fetch_metadata(Some(topic.as_str()), Duration::from_secs(10))?;
+                let mut meta =
+                    consumer.fetch_metadata(Some(topic.as_str()), Duration::from_secs(10))?;
                 while check_topic_exist(&meta, topic) {
                     Self::delete_topic(&admin_client, topic).await;
-                    meta = consumer.fetch_metadata(Some(topic.as_str()), Duration::from_secs(10))?;
+                    meta =
+                        consumer.fetch_metadata(Some(topic.as_str()), Duration::from_secs(10))?;
                     TimeUtil::sleep_millis(100).await;
                 }
 
                 while !check_topic_exist(&meta, topic) {
                     Self::create_topic(&admin_client, topic).await;
-                    meta = consumer.fetch_metadata(Some(topic.as_str()), Duration::from_secs(10))?;
+                    meta =
+                        consumer.fetch_metadata(Some(topic.as_str()), Duration::from_secs(10))?;
                     TimeUtil::sleep_millis(100).await;
                     println!("kafka topic: [{}] is NOT ready", topic);
                 }

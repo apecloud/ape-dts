@@ -387,8 +387,7 @@ impl BasePipeline {
                 DtData::Dml { .. } => match self.sinker_config {
                     SinkerConfig::FoxlakePush { .. }
                     | SinkerConfig::FoxlakeMerge { .. }
-                    | SinkerConfig::Foxlake { .. }
-                    | SinkerConfig::Redis { .. } => return SinkMethod::Raw,
+                    | SinkerConfig::Foxlake { .. } => return SinkMethod::Raw,
                     _ => return SinkMethod::Dml,
                 },
                 DtData::Redis { .. } | DtData::Foxlake { .. } => return SinkMethod::Raw,

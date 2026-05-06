@@ -214,8 +214,10 @@ impl RowData {
     fn convert_raw_string_col_values(col_values: &mut HashMap<String, ColValue>) {
         let mut str_col_values: HashMap<String, ColValue> = HashMap::new();
         for (col, col_value) in col_values.iter() {
-            if let ColValue::RawString(_) = col_value {
-                if let Some(str) = col_value.to_option_string() {
+            if let ColValue::RawString(v) = col_value {
+                if let Ok(str) = String::from_utf8(v.clone()) {
+                    str_col_values.insert(col.into(), ColValue::String(str));
+                } else if let Some(str) = col_value.to_option_string() {
                     str_col_values.insert(col.into(), ColValue::String(str));
                 } else {
                     str_col_values.insert(col.to_owned(), ColValue::None);
@@ -293,5 +295,33 @@ impl RowData {
         }
         // ignore other fields
         size
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use super::*;
+
+    #[test]
+    fn test_convert_raw_string_prefers_utf8() {
+        let mut row_data = RowData::new(
+            "db".to_string(),
+            "tb".to_string(),
+            RowType::Insert,
+            None,
+            Some(HashMap::from([(
+                "c1".to_string(),
+                ColValue::RawString(b"ij".to_vec()),
+            )])),
+        );
+
+        row_data.convert_raw_string();
+
+        assert_eq!(
+            row_data.require_after().unwrap().get("c1"),
+            Some(&ColValue::String("ij".to_string()))
+        );
     }
 }

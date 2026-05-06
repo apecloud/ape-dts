@@ -13,6 +13,7 @@ use dt_common::log_debug;
 use dt_common::meta::dt_data::DtData;
 use dt_common::meta::dt_data::DtItem;
 use dt_common::meta::rdb_meta_manager::RdbMetaManager;
+use dt_common::meta::col_value::ColValue;
 use dt_common::meta::redis::cluster_node::ClusterNode;
 use dt_common::meta::redis::command::cmd_encoder::CmdEncoder;
 use dt_common::meta::redis::command::key_parser::KeyParser;
@@ -216,11 +217,11 @@ impl RedisSinker {
                 RowType::Insert | RowType::Update => row_data
                     .require_after()?
                     .get(col)
-                    .and_then(|v| v.to_option_string()),
+                    .and_then(Self::redis_col_value_string),
                 RowType::Delete => row_data
                     .require_before()?
                     .get(col)
-                    .and_then(|v| v.to_option_string()),
+                    .and_then(Self::redis_col_value_string),
             }
         } else {
             None
@@ -239,7 +240,7 @@ impl RedisSinker {
                 cmd.add_str_arg(&key);
                 for (col, col_value) in row_data.require_after()? {
                     cmd.add_str_arg(col);
-                    if let Some(v) = col_value.to_option_string() {
+                    if let Some(v) = Self::redis_col_value_string(col_value) {
                         cmd.add_str_arg(&v);
                     } else {
                         cmd.add_str_arg("");
@@ -252,6 +253,15 @@ impl RedisSinker {
             }
         }
         Ok(Some(cmd))
+    }
+
+    fn redis_col_value_string(col_value: &ColValue) -> Option<String> {
+        match col_value {
+            ColValue::RawString(v) => String::from_utf8(v.clone())
+                .ok()
+                .or_else(|| col_value.to_option_string()),
+            _ => col_value.to_option_string(),
+        }
     }
 }
 

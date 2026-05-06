@@ -334,7 +334,7 @@ suite_services() {
     mysql_to_mysql_lua) echo "mysql-src mysql-dst mysql-meta" ;;
     mysql_to_redis) echo "mysql-src redis-dst" ;;
     mysql_to_starrocks) echo "mysql-src starrocks-3-2-11 starrocks-2-5-4" ;;
-    mysql_to_tidb) echo "mysql-src tidb" ;;
+    mysql_to_tidb) echo "mysql-src-tidb tidb" ;;
     pg_to_clickhouse) echo "postgres-src clickhouse" ;;
     pg_to_doris) echo "postgres-src doris-2-1-0" ;;
     pg_to_kafka_to_pg) echo "postgres-src postgres-dst kafka" ;;
