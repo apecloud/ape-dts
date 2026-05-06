@@ -16,8 +16,8 @@ services:
       - --gtid-mode=ON
       - --enforce-gtid-consistency=ON
       - --log-slave-updates=ON
-      # - --character-set-server=utf8mb4
-      # - --collation-server=utf8mb4_unicode_ci
+      - --character-set-server=utf8mb3
+      - --collation-server=utf8mb3_general_ci
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p123456"]
       timeout: 5s
@@ -42,8 +42,8 @@ services:
       - --gtid-mode=ON
       - --enforce-gtid-consistency=ON
       - --log-slave-updates=ON
-      # - --character-set-server=utf8mb4
-      # - --collation-server=utf8mb4_unicode_ci
+      - --character-set-server=utf8mb3
+      - --collation-server=utf8mb3_general_ci
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p123456"]
       timeout: 5s
@@ -67,8 +67,8 @@ services:
       - --gtid-mode=ON
       - --enforce-gtid-consistency=ON
       - --log-slave-updates=ON
-      # - --character-set-server=utf8mb4
-      # - --collation-server=utf8mb4_unicode_ci
+      - --character-set-server=utf8mb3
+      - --collation-server=utf8mb3_general_ci
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p123456"]
       timeout: 5s
@@ -89,8 +89,8 @@ services:
       - --server-id=11
       - --log-bin=mysql-bin
       - --binlog-format=ROW
-      # - --character-set-server=utf8mb4
-      # - --collation-server=utf8mb4_unicode_ci
+      - --character-set-server=utf8mb3
+      - --collation-server=utf8mb3_general_ci
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p123456"]
       timeout: 5s
@@ -111,8 +111,8 @@ services:
       - --server-id=12
       - --log-bin=mysql-bin
       - --binlog-format=ROW
-      # - --character-set-server=utf8mb4
-      # - --collation-server=utf8mb4_unicode_ci
+      - --character-set-server=utf8mb3
+      - --collation-server=utf8mb3_general_ci
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p123456"]
       timeout: 5s

@@ -195,7 +195,12 @@ impl BasePipeline {
             return Ok((DataSize::default(), None, None));
         }
 
-        let data_size = self.parallelizer.sink_struct(data, &self.sinkers).await?;
+        let data_size = self.parallelizer.sink_struct(data.clone(), &self.sinkers).await?;
+
+        if let Some(checker) = &mut self.checker {
+            checker.check_struct(data).await?;
+        }
+        
         Ok((data_size, None, None))
     }
 

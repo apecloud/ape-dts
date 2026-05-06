@@ -57,7 +57,7 @@ CREATE TABLE test_db_2.tb_bigint (
 -- 3. Varchar Unique (Scenario: Usernames / Codes)
 CREATE TABLE test_db_2.tb_varchar (
   `row_id` int,
-  `id` varchar(64) DEFAULT NULL,
+  `id` varchar(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin DEFAULT NULL,
   `value` int DEFAULT NULL,
   UNIQUE KEY (`id`)
 );
