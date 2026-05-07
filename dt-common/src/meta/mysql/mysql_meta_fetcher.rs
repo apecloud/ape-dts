@@ -1,5 +1,5 @@
 use futures::TryStreamExt;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use anyhow::{bail, Ok};
 use sqlx::{mysql::MySqlRow, MySql, Pool, Row};

@@ -963,6 +963,7 @@ impl TaskRunner {
                 DbType::Mysql => {
                     let conn_pool = TaskUtil::create_mysql_conn_pool(
                         &checker_url,
+                        &DbType::Mysql,
                         &checker_auth,
                         max_connections,
                         enable_sqlx_log,
@@ -1097,6 +1098,7 @@ impl TaskRunner {
                     .await?;
                 let conn_pool = TaskUtil::create_mysql_conn_pool(
                     &checker_url,
+                    &DbType::Mysql,
                     &checker_auth,
                     max_connections,
                     enable_sqlx_log,
@@ -1196,6 +1198,7 @@ impl TaskRunner {
             DbType::Mysql => {
                 let pool = TaskUtil::create_mysql_conn_pool(
                     &self.config.extractor_basic.url,
+                    &DbType::Mysql,
                     &self.config.extractor_basic.connection_auth,
                     1,
                     enable_sqlx_log,
