@@ -56,6 +56,7 @@ pub struct TaskUtil {}
 impl TaskUtil {
     pub async fn create_mysql_conn_pool(
         url: &str,
+        db_type: &DbType,
         connection_auth: &ConnectionAuthConfig,
         max_connections: u32,
         enable_sqlx_log: bool,
@@ -65,19 +66,27 @@ impl TaskUtil {
 
         let mut conn_options = MySqlConnectOptions::from_str(&final_url)?;
         // The default character set is `utf8mb4`
-        conn_options
+        conn_options = conn_options
             .log_statements(log::LevelFilter::Debug)
             .log_slow_statements(log::LevelFilter::Debug, Duration::from_secs(1));
 
         if !enable_sqlx_log {
-            conn_options.disable_statement_logging();
+            conn_options = conn_options.disable_statement_logging();
         }
 
         if let Some(ssl) = connection_auth.ssl_config() {
             conn_options = ssl.apply_mysql(conn_options);
         }
+        if !matches!(db_type, DbType::Mysql) {
+            conn_options = conn_options
+                .pipes_as_concat(false)
+                .no_engine_substitution(false)
+        }
 
-        let mut conn_pool = MySqlPoolOptions::new().max_connections(max_connections);
+        let mut conn_pool = MySqlPoolOptions::new()
+            .max_connections(max_connections)
+            .acquire_timeout(Duration::from_secs(15))
+            .idle_timeout(Some(Duration::from_secs(5 * 60)));
         if let Some(settings) = after_connect_settings {
             if !settings.is_empty() {
                 conn_pool = conn_pool.after_connect(move |conn, _meta| {
@@ -140,12 +149,12 @@ impl TaskUtil {
         let final_url = ConnectionAuthConfig::merge_url_with_auth(url, connection_auth)?;
 
         let mut conn_options = PgConnectOptions::from_str(&final_url)?;
-        conn_options
+        conn_options = conn_options
             .log_statements(log::LevelFilter::Debug)
             .log_slow_statements(log::LevelFilter::Debug, Duration::from_secs(1));
 
         if !enable_sqlx_log {
-            conn_options.disable_statement_logging();
+            conn_options = conn_options.disable_statement_logging();
         }
 
         if let Some(ssl) = connection_auth.ssl_config() {
@@ -257,7 +266,15 @@ impl TaskUtil {
         let conn_pool = match &conn_pool_opt {
             Some(conn_pool) => conn_pool.clone(),
             None => {
-                Self::create_mysql_conn_pool(url, connection_auth, 1, enable_sqlx_log, None).await?
+                Self::create_mysql_conn_pool(
+                    url,
+                    &db_type,
+                    connection_auth,
+                    1,
+                    enable_sqlx_log,
+                    None,
+                )
+                .await?
             }
         };
         let mut meta_manager = MysqlMetaManager::new_mysql_compatible(conn_pool, db_type).await?;
@@ -272,8 +289,15 @@ impl TaskUtil {
             let meta_center_conn_pool = match &conn_pool_opt {
                 Some(conn_pool) => conn_pool.clone(),
                 None => {
-                    Self::create_mysql_conn_pool(url, connection_auth, 1, enable_sqlx_log, None)
-                        .await?
+                    Self::create_mysql_conn_pool(
+                        url,
+                        &DbType::Mysql,
+                        connection_auth,
+                        1,
+                        enable_sqlx_log,
+                        None,
+                    )
+                    .await?
                 }
             };
             let meta_center = MysqlDbEngineMetaCenter::new(
@@ -571,7 +595,7 @@ WHERE
             }
         };
 
-        let sql = "SHOW DATABASES";
+        let sql = "SELECT schema_name FROM information_schema.schemata";
         let mut rows = sqlx::query(sql).fetch(conn_pool);
         while let Some(row) = rows.try_next().await.unwrap() {
             let db: String = row.try_get(0)?;
@@ -593,14 +617,14 @@ WHERE
             }
         };
 
-        let sql = format!("SHOW FULL TABLES IN `{}`", db);
-        let mut rows = sqlx::query(&sql).fetch(conn_pool);
+        let sql = "SELECT table_name
+            FROM information_schema.tables
+            WHERE table_schema = ? 
+            AND table_type = 'BASE TABLE'";
+        let mut rows = sqlx::query(sql).bind(db).fetch(conn_pool);
         while let Some(row) = rows.try_next().await.unwrap() {
             let tb: String = row.try_get(0)?;
-            let tb_type: String = row.try_get(1)?;
-            if tb_type == "BASE TABLE" {
-                tbs.push(tb);
-            }
+            tbs.push(tb);
         }
 
         Ok(tbs)
@@ -792,6 +816,7 @@ impl ConnClient {
             } => ConnClient::MySQL(
                 TaskUtil::create_mysql_conn_pool(
                     url,
+                    &DbType::Mysql,
                     connection_auth,
                     extractor_max_connections,
                     enable_sqlx_log,
@@ -871,6 +896,7 @@ impl ConnClient {
                 ConnClient::MySQL(
                     TaskUtil::create_mysql_conn_pool(
                         url,
+                        &DbType::Mysql,
                         connection_auth,
                         sinker_max_connections,
                         enable_sqlx_log,
@@ -886,6 +912,7 @@ impl ConnClient {
             } => ConnClient::MySQL(
                 TaskUtil::create_mysql_conn_pool(
                     url,
+                    &DbType::Mysql,
                     connection_auth,
                     sinker_max_connections,
                     enable_sqlx_log,

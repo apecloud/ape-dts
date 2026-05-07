@@ -16,6 +16,12 @@ mod test {
 
     #[tokio::test]
     #[serial]
+    async fn snapshot_big_packet_test() {
+        TestBase::run_snapshot_test("pg_to_pg/snapshot/big_packet_test").await;
+    }
+
+    #[tokio::test]
+    #[serial]
     #[ignore = "requires SSL-enabled PostgreSQL instances and configured ssl_ca_path"]
     async fn snapshot_ssl_test() {
         TestBase::run_snapshot_test("pg_to_pg/snapshot/ssl_test").await;

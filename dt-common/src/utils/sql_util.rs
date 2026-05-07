@@ -1,4 +1,5 @@
 use regex::Regex;
+use sqlx::{mysql::MySqlRow, ColumnIndex, Row};
 
 use crate::config::config_enums::DbType;
 
@@ -93,6 +94,31 @@ impl SqlUtil {
         } else {
             // charsets like: gbk, big5, ujis, euckr
             (hex::encode(v), true)
+        }
+    }
+
+    pub fn try_get_mysql_string<I>(row: &MySqlRow, index: I) -> anyhow::Result<String>
+    where
+        I: ColumnIndex<MySqlRow> + Copy,
+    {
+        match row.try_get::<String, _>(index) {
+            Ok(value) => Ok(value),
+            Err(_) => Ok(String::from_utf8_lossy(&row.try_get::<Vec<u8>, _>(index)?).into_owned()),
+        }
+    }
+
+    pub fn try_get_mysql_optional_string<I>(
+        row: &MySqlRow,
+        index: I,
+    ) -> anyhow::Result<Option<String>>
+    where
+        I: ColumnIndex<MySqlRow> + Copy,
+    {
+        match row.try_get::<Option<String>, _>(index) {
+            Ok(value) => Ok(value),
+            Err(_) => Ok(row
+                .try_get::<Option<Vec<u8>>, _>(index)?
+                .map(|value| String::from_utf8_lossy(&value).into_owned())),
         }
     }
 
