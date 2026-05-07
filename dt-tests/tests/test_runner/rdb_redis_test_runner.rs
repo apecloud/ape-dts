@@ -193,9 +193,7 @@ impl RdbRedisTestRunner {
     fn redis_expected_value(col_value: &ColValue) -> Option<String> {
         match col_value {
             ColValue::None | ColValue::UnchangedToast => None,
-            ColValue::RawString(v) => String::from_utf8(v.clone())
-                .ok()
-                .or_else(|| col_value.to_option_string()),
+            ColValue::RawString(_) => col_value.to_utf8_or_hex_string(),
             ColValue::String(v)
             | ColValue::Time(v)
             | ColValue::Date(v)

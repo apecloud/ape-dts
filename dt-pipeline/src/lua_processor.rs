@@ -126,9 +126,9 @@ impl LuaProcessor {
 
             // MySQL CDC text columns may arrive as RawString. If bytes are valid UTF-8, expose
             // them as normal Lua strings. Otherwise preserve the original bytes and expose NULL.
-            ColValue::RawString(v) => match String::from_utf8(v.clone()) {
-                Ok(s) => Ok((mlua::Value::String(lua.create_string(&s)?), None)),
-                Err(_) => Ok((mlua::Value::NULL, Some(ColValue::RawString(v)))),
+            ColValue::RawString(v) => match ColValue::RawString(v.clone()).to_utf8_string() {
+                Some(s) => Ok((mlua::Value::String(lua.create_string(&s)?), None)),
+                None => Ok((mlua::Value::NULL, Some(ColValue::RawString(v)))),
             },
 
             _ => Ok((self.col_value_to_lua_value(col_value, lua)?, None)),

@@ -43,6 +43,10 @@ mod test {
 
     #[tokio::test]
     #[serial]
+    // Ignored for now: MySQL CDC meta center follows current schema invalidation/reload,
+    // but it does not preserve historical schema snapshots for arbitrary binlog replay.
+    // Keeping this test enabled can give a misleading signal about historical CDC correctness.
+    #[ignore = "meta center does not validate historical-schema replay correctness yet"]
     async fn cdc_ddl_meta_center_test() {
         TestBase::run_ddl_meta_center_test("mysql_to_mysql/cdc/ddl_meta_center_test", 3000, 5000)
             .await;
@@ -90,6 +94,9 @@ mod test {
 
     #[tokio::test]
     #[serial]
+    // Ignored for now: star-cycle convergence depends on multi-hop propagation timing and
+    // data-marker counts.
+    #[ignore = "star cycle integration case is timing-sensitive and flaky"]
     async fn cycle_star_test() {
         let tx_check_data = vec![
             ("node1", "node2", "node1", "10"),

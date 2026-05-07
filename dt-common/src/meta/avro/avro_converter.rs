@@ -309,9 +309,10 @@ impl AvroConverter {
             ColValue::Float(v) => Value::Double(*v as f64),
             ColValue::Double(v) => Value::Double(*v),
             ColValue::Blob(v) | ColValue::Json(v) => Value::Bytes(v.clone()),
-            ColValue::RawString(v) => String::from_utf8(v.clone())
+            ColValue::RawString(v) => ColValue::RawString(v.clone())
+                .to_utf8_string()
                 .map(Value::String)
-                .unwrap_or_else(|_| Value::Bytes(v.clone())),
+                .unwrap_or_else(|| Value::Bytes(v.clone())),
 
             ColValue::Decimal(v)
             | ColValue::Time(v)

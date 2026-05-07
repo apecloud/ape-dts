@@ -10,10 +10,10 @@ use tokio::{sync::RwLock, time::Instant};
 
 use dt_common::error::Error;
 use dt_common::log_debug;
+use dt_common::meta::col_value::ColValue;
 use dt_common::meta::dt_data::DtData;
 use dt_common::meta::dt_data::DtItem;
 use dt_common::meta::rdb_meta_manager::RdbMetaManager;
-use dt_common::meta::col_value::ColValue;
 use dt_common::meta::redis::cluster_node::ClusterNode;
 use dt_common::meta::redis::command::cmd_encoder::CmdEncoder;
 use dt_common::meta::redis::command::key_parser::KeyParser;
@@ -257,9 +257,7 @@ impl RedisSinker {
 
     fn redis_col_value_string(col_value: &ColValue) -> Option<String> {
         match col_value {
-            ColValue::RawString(v) => String::from_utf8(v.clone())
-                .ok()
-                .or_else(|| col_value.to_option_string()),
+            ColValue::RawString(_) => col_value.to_utf8_or_hex_string(),
             _ => col_value.to_option_string(),
         }
     }

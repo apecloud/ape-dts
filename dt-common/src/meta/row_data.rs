@@ -214,10 +214,8 @@ impl RowData {
     fn convert_raw_string_col_values(col_values: &mut HashMap<String, ColValue>) {
         let mut str_col_values: HashMap<String, ColValue> = HashMap::new();
         for (col, col_value) in col_values.iter() {
-            if let ColValue::RawString(v) = col_value {
-                if let Ok(str) = String::from_utf8(v.clone()) {
-                    str_col_values.insert(col.into(), ColValue::String(str));
-                } else if let Some(str) = col_value.to_option_string() {
+            if let ColValue::RawString(_) = col_value {
+                if let Some(str) = col_value.to_utf8_or_hex_string() {
                     str_col_values.insert(col.into(), ColValue::String(str));
                 } else {
                     str_col_values.insert(col.to_owned(), ColValue::None);
