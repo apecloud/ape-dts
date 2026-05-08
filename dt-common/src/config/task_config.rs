@@ -1500,6 +1500,32 @@ enable=false
     }
 
     #[test]
+    fn standalone_checker_accepts_s3_output_config() {
+        let config_path = write_temp_task_config(&snapshot_check_config(
+            r#"
+cdc_check_log_s3=true
+s3_bucket=ape-dts
+s3_access_key_id=ak
+s3_secret_access_key=sk
+s3_region=us-east-1
+s3_endpoint=http://127.0.0.1:9000
+s3_key_prefix=check/10001
+"#,
+        ));
+        let result = TaskConfig::new(config_path.to_str().unwrap());
+        fs::remove_file(config_path).unwrap();
+
+        let config = result.expect("snapshot checker config should be valid");
+        let checker = config.checker.expect("checker should exist");
+        assert!(checker.cdc_check_log_s3);
+        assert_eq!(checker.s3_key_prefix, "check/10001");
+        assert_eq!(
+            checker.s3_config.expect("s3 config should exist").bucket,
+            "ape-dts"
+        );
+    }
+
+    #[test]
     fn snapshot_checker_rejects_invalid_sample_rate() {
         let config_path = write_temp_task_config(&snapshot_check_config("sample_rate=0"));
         let result = TaskConfig::new(config_path.to_str().unwrap());

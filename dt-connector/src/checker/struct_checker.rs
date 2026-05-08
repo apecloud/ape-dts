@@ -4,7 +4,6 @@ use std::time::Duration;
 
 use anyhow::{bail, Context};
 use async_mutex::Mutex;
-use chrono::Local;
 use sqlx::{MySql, Pool, Postgres};
 use tokio::time::sleep;
 
@@ -20,7 +19,7 @@ use dt_common::{
 };
 
 use crate::{
-    checker::check_log::{CheckSummaryLog, StructCheckLog},
+    checker::check_log::{CheckSummaryLog, CheckTableSummaryLog, StructCheckLog},
     meta_fetcher::{
         mysql::mysql_struct_fetcher::MysqlStructFetcher, pg::pg_struct_fetcher::PgStructFetcher,
     },
@@ -41,7 +40,20 @@ pub struct StructCheckerHandle {
     task_monitor: Option<Arc<TaskMonitor>>,
     src_sql_map: HashMap<String, String>,
     dbs: HashSet<String>,
-    start_time: String,
+}
+
+fn struct_table_summary(key: &str, miss: bool, diff: bool) -> Option<CheckTableSummaryLog> {
+    let mut parts = key.split('.');
+    let _object_type = parts.next();
+    let schema = parts.next()?;
+    let tb = parts.next()?;
+    Some(CheckTableSummaryLog {
+        schema: schema.to_string(),
+        tb: tb.to_string(),
+        miss_count: if miss { 1 } else { 0 },
+        diff_count: if diff { 1 } else { 0 },
+        ..Default::default()
+    })
 }
 
 impl StructCheckerHandle {
@@ -73,7 +85,6 @@ impl StructCheckerHandle {
             task_monitor,
             src_sql_map: HashMap::new(),
             dbs: HashSet::new(),
-            start_time: Local::now().to_rfc3339(),
         }
     }
 
@@ -166,14 +177,12 @@ impl StructCheckerHandle {
         &self,
         src_sql_map: &HashMap<String, String>,
         dbs: &HashSet<String>,
-        start_time: &str,
         log_enabled: bool,
-    ) -> anyhow::Result<(CheckSummaryLog, usize)> {
+    ) -> anyhow::Result<CheckSummaryLog> {
         let dst_map = self.build_dst_sql_map(dbs).await?;
         Ok(Self::compare_sql_maps(
             src_sql_map,
             dst_map,
-            start_time,
             log_enabled,
             self.output_revise_sql,
         ))
@@ -182,16 +191,10 @@ impl StructCheckerHandle {
     fn compare_sql_maps(
         src_sql_map: &HashMap<String, String>,
         mut dst_map: HashMap<String, String>,
-        start_time: &str,
         log_enabled: bool,
         output_revise_sql: bool,
-    ) -> (CheckSummaryLog, usize) {
-        let mut summary = CheckSummaryLog {
-            start_time: start_time.to_string(),
-            end_time: Local::now().to_rfc3339(),
-            ..Default::default()
-        };
-        let mut sql_count = 0usize;
+    ) -> CheckSummaryLog {
+        let mut summary = CheckSummaryLog::default();
 
         for (key, src_sql) in src_sql_map.iter() {
             match dst_map.remove(key) {
@@ -202,12 +205,14 @@ impl StructCheckerHandle {
                         dst_sql: None,
                     };
                     summary.miss_count += 1;
+                    if let Some(table) = struct_table_summary(key, true, false) {
+                        summary.merge_table(table);
+                    }
                     if log_enabled {
                         log_miss!("{}", log);
                     }
                     if output_revise_sql && log_enabled {
                         log_sql!("{}", src_sql);
-                        sql_count += 1;
                     }
                 }
                 Some(dst_sql) => {
@@ -218,12 +223,14 @@ impl StructCheckerHandle {
                             dst_sql: Some(dst_sql),
                         };
                         summary.diff_count += 1;
+                        if let Some(table) = struct_table_summary(key, false, true) {
+                            summary.merge_table(table);
+                        }
                         if log_enabled {
                             log_diff!("{}", log);
                         }
                         if output_revise_sql && log_enabled {
                             log_sql!("{}", src_sql);
-                            sql_count += 1;
                         }
                     }
                 }
@@ -237,18 +244,16 @@ impl StructCheckerHandle {
                 dst_sql: Some(dst_sql),
             };
             summary.diff_count += 1;
+            if let Some(table) = struct_table_summary(&log.key, false, true) {
+                summary.merge_table(table);
+            }
             if log_enabled {
                 log_diff!("{}", log);
             }
         }
 
         summary.is_consistent = summary.miss_count == 0 && summary.diff_count == 0;
-        if output_revise_sql && sql_count > 0 {
-            summary.sql_count = Some(sql_count);
-        }
-        summary.end_time = Local::now().to_rfc3339();
-
-        (summary, sql_count)
+        summary
     }
 
     pub async fn check_struct(
@@ -264,8 +269,8 @@ impl StructCheckerHandle {
     pub async fn close(&mut self) -> anyhow::Result<()> {
         let mut retries_left = self.max_retries;
         loop {
-            let (summary, _) = self
-                .compare_once(&self.src_sql_map, &self.dbs, &self.start_time, false)
+            let summary = self
+                .compare_once(&self.src_sql_map, &self.dbs, false)
                 .await?;
             if summary.is_consistent {
                 log_info!("Structure check passed - all structures are consistent");
@@ -280,8 +285,8 @@ impl StructCheckerHandle {
             }
         }
 
-        let (summary, _sql_count) = self
-            .compare_once(&self.src_sql_map, &self.dbs, &self.start_time, true)
+        let summary = self
+            .compare_once(&self.src_sql_map, &self.dbs, true)
             .await?;
         if summary.miss_count > 0 {
             if let Some(task_monitor) = &self.task_monitor {

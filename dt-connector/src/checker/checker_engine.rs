@@ -428,16 +428,13 @@ impl<C: Checker> DataChecker<C> {
     async fn update_summary_for_entry(&mut self, entry: &CheckEntry) {
         {
             let summary = &mut self.ctx.summary;
-            summary.end_time = chrono::Local::now().to_rfc3339();
             if entry.is_miss() {
                 summary.miss_count += 1;
             } else if entry.counts_as_diff() {
                 summary.diff_count += 1;
             }
-            if entry.revise_sql.is_some() {
-                summary.sql_count = Some(summary.sql_count.unwrap_or(0) + 1);
-            }
         }
+        self.ctx.record_table_entry(entry);
 
         self.add_entry_metrics(entry).await;
     }
@@ -740,6 +737,7 @@ impl<C: Checker> DataChecker<C> {
                 item.row.tb
             );
             self.ctx.summary.skip_count += 1;
+            self.ctx.record_table_skipped(&item.row, 1);
             self.snapshot_dirty = true;
             return Ok(None);
         };
@@ -827,6 +825,10 @@ impl<C: Checker> DataChecker<C> {
             let (checked_count, skip_count, table_retry_rows) = self
                 .check_rows(&rows, dst_row_data_map, tb_meta.as_ref())
                 .await?;
+            if let Some(first_row) = rows.first() {
+                self.ctx.record_table_checked(first_row, checked_count);
+                self.ctx.record_table_skipped(first_row, skip_count);
+            }
             total_checked += checked_count;
             total_skip_count += skip_count;
             retry_rows.extend(table_retry_rows);
@@ -879,10 +881,7 @@ mod tests {
         CheckContext {
             monitor: Arc::new(Monitor::new("checker", "unit-test", 1, 1, 1)),
             task_monitor: None,
-            summary: CheckSummaryLog {
-                start_time: "unit-test".to_string(),
-                ..Default::default()
-            },
+            summary: CheckSummaryLog::default(),
             output_revise_sql: false,
             extractor_meta_manager: None,
             reverse_router: RdbRouter {

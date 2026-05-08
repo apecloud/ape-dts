@@ -67,7 +67,7 @@ impl Checker for MysqlChecker {
         })
     }
 
-    async fn refresh_meta(&mut self, data: &[DdlData]) -> anyhow::Result<()> {
+    async fn invalidate_meta_cache(&mut self, data: &[DdlData]) -> anyhow::Result<()> {
         for ddl_data in data {
             self.meta_manager.invalidate_cache_by_ddl_data(ddl_data);
         }

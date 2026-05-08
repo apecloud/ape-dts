@@ -50,8 +50,6 @@ pub struct DiffColValue {
 
 #[derive(Serialize, Deserialize, Clone, Default)]
 pub struct CheckSummaryLog {
-    pub start_time: String,
-    pub end_time: String,
     pub is_consistent: bool,
     #[serde(default, skip_serializing_if = "is_zero")]
     pub miss_count: usize,
@@ -59,8 +57,26 @@ pub struct CheckSummaryLog {
     pub diff_count: usize,
     #[serde(default, skip_serializing_if = "is_zero")]
     pub skip_count: usize,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tables: Vec<CheckTableSummaryLog>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Default)]
+pub struct CheckTableSummaryLog {
+    pub schema: String,
+    pub tb: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub sql_count: Option<usize>,
+    pub target_schema: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_tb: Option<String>,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub checked_count: usize,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub miss_count: usize,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub diff_count: usize,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub skip_count: usize,
 }
 
 fn is_zero(num: &usize) -> bool {
@@ -69,15 +85,28 @@ fn is_zero(num: &usize) -> bool {
 
 impl CheckSummaryLog {
     pub fn merge(&mut self, other: &CheckSummaryLog) {
-        if other.end_time > self.end_time {
-            self.end_time = other.end_time.clone();
-        }
         self.is_consistent = self.is_consistent && other.is_consistent;
         self.miss_count += other.miss_count;
         self.diff_count += other.diff_count;
         self.skip_count += other.skip_count;
-        if let Some(sql_count) = other.sql_count {
-            self.sql_count = Some(self.sql_count.unwrap_or(0) + sql_count);
+        for table in &other.tables {
+            self.merge_table(table.clone());
+        }
+    }
+
+    pub fn merge_table(&mut self, table: CheckTableSummaryLog) {
+        if let Some(existing) = self.tables.iter_mut().find(|existing| {
+            existing.schema == table.schema
+                && existing.tb == table.tb
+                && existing.target_schema == table.target_schema
+                && existing.target_tb == table.target_tb
+        }) {
+            existing.checked_count += table.checked_count;
+            existing.miss_count += table.miss_count;
+            existing.diff_count += table.diff_count;
+            existing.skip_count += table.skip_count;
+        } else {
+            self.tables.push(table);
         }
     }
 }

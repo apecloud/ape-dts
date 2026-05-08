@@ -6,7 +6,7 @@ use super::{
     BoundedLineBuffer, CheckEntry, CheckInconsistency, Checker, CheckerStoreKey, DataChecker,
     RecheckKey,
 };
-use crate::checker::check_log::{CheckLog, CheckSummaryLog};
+use crate::checker::check_log::{CheckLog, CheckSummaryLog, CheckTableSummaryLog};
 use crate::checker::state_store::{CheckerCheckpointCommit, CheckerStateRow};
 use dt_common::meta::{position::Position, row_data::RowData, row_type::RowType};
 use dt_common::{log_info, log_warn};
@@ -113,20 +113,39 @@ impl<C: Checker> DataChecker<C> {
         let mut miss_buf_builder = BoundedLineBuffer::new(max_file_size, Some(max_rows));
         let mut diff_buf_builder = BoundedLineBuffer::new(max_file_size, Some(max_rows));
         let mut sql_buf_builder = BoundedLineBuffer::new(max_file_size, None);
-        let mut total_sql_count = 0usize;
         let mut total_miss = 0usize;
         let mut total_diff = 0usize;
+        let mut tables: HashMap<
+            (String, String, Option<String>, Option<String>),
+            CheckTableSummaryLog,
+        > = HashMap::new();
 
         for entry in self.store.values() {
+            let table_key = (
+                entry.log.schema.clone(),
+                entry.log.tb.clone(),
+                entry.log.target_schema.clone(),
+                entry.log.target_tb.clone(),
+            );
+            let table = tables
+                .entry(table_key)
+                .or_insert_with(|| CheckTableSummaryLog {
+                    schema: entry.log.schema.clone(),
+                    tb: entry.log.tb.clone(),
+                    target_schema: entry.log.target_schema.clone(),
+                    target_tb: entry.log.target_tb.clone(),
+                    ..Default::default()
+                });
             if entry.is_miss() {
                 total_miss += 1;
+                table.miss_count += 1;
                 miss_buf_builder.push_json(&entry.log);
             } else {
                 total_diff += 1;
+                table.diff_count += 1;
                 diff_buf_builder.push_json(&entry.log);
             }
             if let Some(sql) = &entry.revise_sql {
-                total_sql_count += 1;
                 sql_buf_builder.push_str(sql);
             }
         }
@@ -135,13 +154,11 @@ impl<C: Checker> DataChecker<C> {
         let sql_buf = sql_buf_builder.into_bytes();
 
         let summary = CheckSummaryLog {
-            start_time: self.ctx.summary.start_time.clone(),
-            end_time: chrono::Local::now().to_rfc3339(),
             is_consistent: false,
             miss_count: total_miss,
             diff_count: total_diff,
             skip_count: self.ctx.summary.skip_count,
-            sql_count: (total_sql_count > 0).then_some(total_sql_count),
+            tables: tables.into_values().collect(),
         };
         let mut summary = summary;
         summary.is_consistent = super::is_summary_consistent(&summary, self.init_failed);
@@ -573,10 +590,7 @@ mod tests {
             CheckContext {
                 monitor: Arc::new(Monitor::new("checker", "unit-test", 1, 1, 1)),
                 task_monitor: None,
-                summary: CheckSummaryLog {
-                    start_time: "unit-test".to_string(),
-                    ..Default::default()
-                },
+                summary: CheckSummaryLog::default(),
                 output_revise_sql: false,
                 extractor_meta_manager: None,
                 reverse_router: RdbRouter {
