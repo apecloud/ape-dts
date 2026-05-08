@@ -42,6 +42,7 @@ use dt_common::{
     monitor::FlushableMonitor,
     rdb_filter::RdbFilter,
     system_dbs::SystemDb,
+    utils::sql_util::SqlUtil,
 };
 use dt_connector::{
     checker::CheckerStateStore,
@@ -461,8 +462,8 @@ impl TaskUtil {
         let mut total_records = 0;
         let mut rows = sqlx::query(&sql).fetch(conn_pool);
         while let Some(row) = rows.try_next().await.unwrap() {
-            let schema: String = row.try_get(0)?;
-            let tb: String = row.try_get(1)?;
+            let schema = SqlUtil::try_get_mysql_string(&row, 0)?;
+            let tb = SqlUtil::try_get_mysql_string(&row, 1)?;
             let records: u64 = row.try_get(2)?;
             if filter.filter_tb(&schema, &tb) {
                 continue;
@@ -639,7 +640,7 @@ WHERE
         let sql = "SELECT schema_name FROM information_schema.schemata";
         let mut rows = sqlx::query(sql).fetch(conn_pool);
         while let Some(row) = rows.try_next().await.unwrap() {
-            let db: String = row.try_get(0)?;
+            let db = SqlUtil::try_get_mysql_string(&row, 0)?;
             if SystemDb::is_system_db(&db, &DbType::Mysql) {
                 continue;
             }
@@ -664,7 +665,7 @@ WHERE
             AND table_type = 'BASE TABLE'";
         let mut rows = sqlx::query(sql).bind(db).fetch(conn_pool);
         while let Some(row) = rows.try_next().await.unwrap() {
-            let tb: String = row.try_get(0)?;
+            let tb = SqlUtil::try_get_mysql_string(&row, 0)?;
             tbs.push(tb);
         }
 

@@ -160,7 +160,8 @@ impl MysqlMetaFetcher {
             col_origin_type_map.insert(col.clone(), origin_type);
             col_type_map.insert(col.clone(), col_type);
 
-            let is_nullable = row.try_get::<String, _>(IS_NULLABLE)?.to_lowercase() == "yes";
+            let is_nullable =
+                SqlUtil::try_get_mysql_string(&row, IS_NULLABLE)?.to_lowercase() == "yes";
             if is_nullable {
                 nullable_cols.insert(col);
             }
@@ -327,6 +328,7 @@ impl MysqlMetaFetcher {
         tb: &str,
     ) -> anyhow::Result<HashMap<String, Vec<String>>> {
         let mut key_map: HashMap<String, Vec<String>> = HashMap::new();
+        // let mut prefixed_keys = HashSet::new();
         let sql = format!("SHOW INDEXES FROM `{}`.`{}`", schema, tb);
         let mut rows = sqlx::raw_sql(&sql).fetch(conn_pool);
         while let Some(row) = rows.try_next().await? {
@@ -430,7 +432,7 @@ impl MysqlMetaFetcher {
         let sql = "SELECT VERSION()";
         let mut rows = sqlx::raw_sql(sql).fetch(&self.conn_pool);
         if let Some(row) = rows.try_next().await? {
-            let version: String = row.get_unchecked(0);
+            let version = SqlUtil::try_get_mysql_string(&row, 0)?;
             self.version = version.trim().into();
             return Ok(());
         }
