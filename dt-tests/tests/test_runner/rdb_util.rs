@@ -38,7 +38,7 @@ impl RdbUtil {
             cols_str, &db_tb.0, &db_tb.1, where_sql, &tb_meta.basic.cols[0],
         );
 
-        let mut rows = if matches!(db_type, DbType::Mysql) {
+        let mut rows = if matches!(db_type, DbType::Mysql | DbType::Tidb) {
             sqlx::query(&sql).fetch(conn_pool)
         } else {
             sqlx::raw_sql(&sql).fetch(conn_pool)
