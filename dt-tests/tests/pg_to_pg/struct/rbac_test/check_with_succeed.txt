@@ -1,14 +1,14 @@
--- r2/123456
+-- test_r2/123456
 select version()
 
--- r2/123456
+-- test_r2/123456
 select * from struct_it_pg2pg_rbac.test_1
 
--- r3/123456
+-- test_r3/123456
 select * from struct_it_pg2pg_rbac.test_2
 
--- r4/123456
+-- test_r4/123456
 select * from struct_it_pg2pg_rbac.test_1
 
--- r_seq/123456
+-- test_r_seq/123456
 insert into struct_it_pg2pg_rbac.test_3(field3) values('seq_test');

@@ -33,6 +33,7 @@ impl RdbRedisTestRunner {
         let mysql_conn_pool = Some(
             TaskUtil::create_mysql_conn_pool(
                 &config.extractor_basic.url,
+                &DbType::Mysql,
                 &config.extractor_basic.connection_auth,
                 1,
                 false,
