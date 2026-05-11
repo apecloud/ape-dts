@@ -1,5 +1,6 @@
 use async_mutex::Mutex;
 use async_trait::async_trait;
+use chrono::Local;
 use indexmap::{IndexMap, IndexSet};
 use opendal::Operator;
 use serde::{Deserialize, Serialize};
@@ -190,6 +191,7 @@ pub struct CheckContext {
     pub global_summary: Option<Arc<Mutex<CheckSummaryLog>>>,
     pub batch_size: usize,
     pub sample_rate: Option<u8>,
+    pub sample_before_fetch: bool,
     pub retry_interval_secs: u64,
     pub max_retries: u32,
     pub is_cdc: bool,
@@ -275,6 +277,7 @@ pub struct FetchResult {
 
 #[async_trait]
 pub trait Checker: Send + Sync + 'static {
+    async fn fetch_meta(&mut self, src_row: &RowData) -> anyhow::Result<Arc<CheckerTbMeta>>;
     async fn fetch(&mut self, src_rows: &[&RowData]) -> anyhow::Result<FetchResult>;
     async fn invalidate_meta_cache(&mut self, _data: &[DdlData]) -> anyhow::Result<()> {
         Ok(())
@@ -816,9 +819,9 @@ impl<C: Checker> DataChecker<C> {
 
     async fn finish_summary_and_meta(&mut self) -> anyhow::Result<()> {
         self.account_dropped_item_skips();
+        self.finish_local_summary();
         let common = &mut self.ctx;
         let summary = &mut common.summary;
-        summary.is_consistent = is_summary_consistent(summary, self.init_failed);
         if let Some(global_summary) = common.global_summary.clone() {
             global_summary.lock().await.merge(summary);
         } else if !common.is_cdc {
@@ -829,6 +832,12 @@ impl<C: Checker> DataChecker<C> {
         } else {
             Ok(())
         }
+    }
+
+    fn finish_local_summary(&mut self) {
+        let summary = &mut self.ctx.summary;
+        summary.end_time = Local::now().to_rfc3339();
+        summary.is_consistent = is_summary_consistent(summary, self.init_failed);
     }
 
     async fn init_cdc_state(&mut self) -> anyhow::Result<()> {
@@ -885,6 +894,10 @@ mod tests {
 
     #[async_trait]
     impl Checker for BlockingFetchChecker {
+        async fn fetch_meta(&mut self, _src_row: &RowData) -> anyhow::Result<Arc<CheckerTbMeta>> {
+            unreachable!("ut should not call fetch_meta")
+        }
+
         async fn fetch(&mut self, _src_rows: &[&RowData]) -> anyhow::Result<FetchResult> {
             let _ = self.fetch_started.send(());
             self.fetch_gate.notified().await;
@@ -910,6 +923,7 @@ mod tests {
             global_summary: None,
             batch_size: 1,
             sample_rate: None,
+            sample_before_fetch: false,
             retry_interval_secs: 0,
             max_retries: 0,
             is_cdc: false,

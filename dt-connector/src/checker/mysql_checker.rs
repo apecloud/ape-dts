@@ -21,17 +21,21 @@ pub struct MysqlChecker {
 
 #[async_trait]
 impl Checker for MysqlChecker {
+    async fn fetch_meta(&mut self, src_row: &RowData) -> anyhow::Result<Arc<CheckerTbMeta>> {
+        Ok(Arc::new(CheckerTbMeta::Mysql(
+            self.meta_manager
+                .get_tb_meta_by_row_data(src_row)
+                .await?
+                .clone(),
+        )))
+    }
+
     async fn fetch(&mut self, src_rows: &[&RowData]) -> anyhow::Result<FetchResult> {
         let first_row = src_rows
             .first()
             .context("fetch called with empty src rows")?;
 
-        let tb_meta = Arc::new(CheckerTbMeta::Mysql(
-            self.meta_manager
-                .get_tb_meta_by_row_data(first_row)
-                .await?
-                .clone(),
-        ));
+        let tb_meta = self.fetch_meta(first_row).await?;
         let CheckerTbMeta::Mysql(mysql_meta) = tb_meta.as_ref() else {
             unreachable!()
         };

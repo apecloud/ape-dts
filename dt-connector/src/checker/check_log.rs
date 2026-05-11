@@ -48,8 +48,12 @@ pub struct DiffColValue {
     pub dst_type: Option<String>,
 }
 
-#[derive(Serialize, Deserialize, Clone, Default)]
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub struct CheckSummaryLog {
+    #[serde(default)]
+    pub start_time: String,
+    #[serde(default)]
+    pub end_time: String,
     pub is_consistent: bool,
     #[serde(default, skip_serializing_if = "is_zero")]
     pub miss_count: usize,
@@ -57,11 +61,13 @@ pub struct CheckSummaryLog {
     pub diff_count: usize,
     #[serde(default, skip_serializing_if = "is_zero")]
     pub skip_count: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sql_count: Option<usize>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tables: Vec<CheckTableSummaryLog>,
 }
 
-#[derive(Serialize, Deserialize, Clone, Default)]
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
 pub struct CheckTableSummaryLog {
     pub schema: String,
     pub tb: String,
@@ -85,10 +91,23 @@ fn is_zero(num: &usize) -> bool {
 
 impl CheckSummaryLog {
     pub fn merge(&mut self, other: &CheckSummaryLog) {
+        if self.start_time.is_empty()
+            || (!other.start_time.is_empty() && other.start_time < self.start_time)
+        {
+            self.start_time = other.start_time.clone();
+        }
+        if self.end_time.is_empty()
+            || (!other.end_time.is_empty() && other.end_time > self.end_time)
+        {
+            self.end_time = other.end_time.clone();
+        }
         self.is_consistent = self.is_consistent && other.is_consistent;
         self.miss_count += other.miss_count;
         self.diff_count += other.diff_count;
         self.skip_count += other.skip_count;
+        if let Some(sql_count) = other.sql_count {
+            self.sql_count = Some(self.sql_count.unwrap_or_default() + sql_count);
+        }
         for table in &other.tables {
             self.merge_table(table.clone());
         }

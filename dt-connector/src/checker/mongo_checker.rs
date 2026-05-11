@@ -25,13 +25,9 @@ pub struct MongoChecker {
 
 #[async_trait]
 impl Checker for MongoChecker {
-    async fn fetch(&mut self, src_rows: &[&RowData]) -> anyhow::Result<FetchResult> {
-        let first_row = src_rows
-            .first()
-            .context("fetch called with empty src rows")?;
-
-        let mut meta = Self::mock_tb_meta(&first_row.schema, &first_row.tb);
-        let first_row_cols = first_row.after.as_ref().or(first_row.before.as_ref());
+    async fn fetch_meta(&mut self, src_row: &RowData) -> anyhow::Result<Arc<CheckerTbMeta>> {
+        let mut meta = Self::mock_tb_meta(&src_row.schema, &src_row.tb);
+        let first_row_cols = src_row.after.as_ref().or(src_row.before.as_ref());
         if let Some(cols) = first_row_cols {
             meta.cols = cols.keys().cloned().collect();
         }
@@ -41,7 +37,15 @@ impl Checker for MongoChecker {
                 meta.cols.push(col);
             }
         }
-        let tb_meta = Arc::new(CheckerTbMeta::Mongo(meta));
+        Ok(Arc::new(CheckerTbMeta::Mongo(meta)))
+    }
+
+    async fn fetch(&mut self, src_rows: &[&RowData]) -> anyhow::Result<FetchResult> {
+        let first_row = src_rows
+            .first()
+            .context("fetch called with empty src rows")?;
+
+        let tb_meta = self.fetch_meta(first_row).await?;
         let basic_meta = tb_meta.basic();
 
         let mut ids = Vec::with_capacity(src_rows.len());

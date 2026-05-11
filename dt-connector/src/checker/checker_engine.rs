@@ -349,6 +349,28 @@ impl<C: Checker> DataChecker<C> {
         row_key % 100 < u128::from(sample_rate)
     }
 
+    fn sample_rows_before_fetch<'a>(
+        rows: &[&'a RowData],
+        sample_rate: Option<u8>,
+        tb_meta: &CheckerTbMeta,
+    ) -> anyhow::Result<Vec<&'a RowData>> {
+        if sample_rate.is_none_or(|rate| rate >= 100) {
+            return Ok(rows.to_vec());
+        }
+
+        let mut sampled_rows = Vec::with_capacity(rows.len());
+        for row in rows {
+            match Self::lookup_match_key(row, tb_meta.basic()) {
+                Ok(Some(key)) if Self::should_sample_check_row(sample_rate, key) => {
+                    sampled_rows.push(*row);
+                }
+                Ok(Some(_)) => {}
+                Ok(None) | Err(_) => sampled_rows.push(*row),
+            }
+        }
+        Ok(sampled_rows)
+    }
+
     /// Computes a PK composite hash with `31 * h + col_hash` and returns 0 when any PK column is NULL.
     fn hash_from_id_values(
         id_values: &HashMap<String, ColValue>,
@@ -432,6 +454,9 @@ impl<C: Checker> DataChecker<C> {
                 summary.miss_count += 1;
             } else if entry.counts_as_diff() {
                 summary.diff_count += 1;
+            }
+            if entry.revise_sql.is_some() {
+                summary.sql_count = Some(summary.sql_count.unwrap_or_default() + 1);
             }
         }
         self.ctx.record_table_entry(entry);
@@ -812,7 +837,15 @@ impl<C: Checker> DataChecker<C> {
         let mut total_skip_count = 0usize;
         let mut retry_rows = Vec::new();
         for rows in grouped.into_values() {
-            let fetch_result = self.checker.fetch(&rows).await?;
+            let rows_to_fetch = if self.ctx.sample_before_fetch {
+                let first_row = rows.first().context("checker group is empty")?;
+                let tb_meta = self.checker.fetch_meta(first_row).await?;
+                Self::sample_rows_before_fetch(&rows, self.ctx.sample_rate, tb_meta.as_ref())?
+            } else {
+                rows
+            };
+            let first_row = rows_to_fetch.first().context("checker group is empty")?;
+            let fetch_result = self.checker.fetch(&rows_to_fetch).await?;
             let tb_meta = fetch_result.tb_meta;
 
             let mut dst_row_data_map = HashMap::with_capacity(fetch_result.dst_rows.len());
@@ -823,12 +856,10 @@ impl<C: Checker> DataChecker<C> {
             }
 
             let (checked_count, skip_count, table_retry_rows) = self
-                .check_rows(&rows, dst_row_data_map, tb_meta.as_ref())
+                .check_rows(&rows_to_fetch, dst_row_data_map, tb_meta.as_ref())
                 .await?;
-            if let Some(first_row) = rows.first() {
-                self.ctx.record_table_checked(first_row, checked_count);
-                self.ctx.record_table_skipped(first_row, skip_count);
-            }
+            self.ctx.record_table_checked(first_row, checked_count);
+            self.ctx.record_table_skipped(first_row, skip_count);
             total_checked += checked_count;
             total_skip_count += skip_count;
             retry_rows.extend(table_retry_rows);
@@ -872,6 +903,10 @@ mod tests {
 
     #[async_trait]
     impl Checker for DummyChecker {
+        async fn fetch_meta(&mut self, _src_row: &RowData) -> anyhow::Result<Arc<CheckerTbMeta>> {
+            unreachable!("ut should not call fetch_meta")
+        }
+
         async fn fetch(&mut self, _src_rows: &[&RowData]) -> anyhow::Result<FetchResult> {
             unreachable!("ut should not call fetch")
         }
@@ -895,6 +930,7 @@ mod tests {
             global_summary: None,
             batch_size: 1,
             sample_rate: None,
+            sample_before_fetch: false,
             retry_interval_secs: 0,
             max_retries: 0,
             is_cdc,

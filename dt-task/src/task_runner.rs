@@ -1047,7 +1047,7 @@ impl TaskRunner {
             return Ok(Some(CheckerHandle::Struct(checker)));
         }
 
-        let s3_output = if cfg.cdc_check_log_s3 {
+        let s3_output = if cfg.cdc_check_log_s3 && is_cdc_task {
             let s3_cfg = cfg.s3_config.as_ref().ok_or_else(|| {
                 Error::ConfigError(
                     "cdc_check_log_s3=true but checker s3 config is missing in [checker]".into(),
@@ -1078,6 +1078,9 @@ impl TaskRunner {
                 max_retries,
                 is_cdc: is_cdc_task,
                 sample_rate: cfg.sample_rate,
+                sample_before_fetch: cfg
+                    .sample_rate
+                    .is_some_and(|rate| rate < 100 && !is_cdc_task),
                 summary: CheckSummaryLog::default(),
                 global_summary: check_summary.clone(),
                 check_log_dir: check_log_dir_base.clone(),

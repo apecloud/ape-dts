@@ -115,6 +115,7 @@ impl<C: Checker> DataChecker<C> {
         let mut sql_buf_builder = BoundedLineBuffer::new(max_file_size, None);
         let mut total_miss = 0usize;
         let mut total_diff = 0usize;
+        let mut total_sql = 0usize;
         let mut tables: HashMap<
             (String, String, Option<String>, Option<String>),
             CheckTableSummaryLog,
@@ -146,6 +147,7 @@ impl<C: Checker> DataChecker<C> {
                 diff_buf_builder.push_json(&entry.log);
             }
             if let Some(sql) = &entry.revise_sql {
+                total_sql += 1;
                 sql_buf_builder.push_str(sql);
             }
         }
@@ -154,10 +156,13 @@ impl<C: Checker> DataChecker<C> {
         let sql_buf = sql_buf_builder.into_bytes();
 
         let summary = CheckSummaryLog {
+            start_time: self.ctx.summary.start_time.clone(),
+            end_time: chrono::Local::now().to_rfc3339(),
             is_consistent: false,
             miss_count: total_miss,
             diff_count: total_diff,
             skip_count: self.ctx.summary.skip_count,
+            sql_count: (total_sql > 0).then_some(total_sql),
             tables: tables.into_values().collect(),
         };
         let mut summary = summary;
@@ -544,6 +549,10 @@ mod tests {
 
     #[async_trait]
     impl Checker for StaticChecker {
+        async fn fetch_meta(&mut self, _src_row: &RowData) -> anyhow::Result<Arc<CheckerTbMeta>> {
+            Ok(self.tb_meta.clone())
+        }
+
         async fn fetch(&mut self, _src_rows: &[&RowData]) -> anyhow::Result<FetchResult> {
             Ok(FetchResult {
                 tb_meta: self.tb_meta.clone(),
@@ -604,6 +613,7 @@ mod tests {
                 global_summary: None,
                 batch_size: 1,
                 sample_rate: None,
+                sample_before_fetch: false,
                 retry_interval_secs: 0,
                 max_retries: 0,
                 is_cdc: true,
