@@ -26,7 +26,7 @@ use dt_common::{
         meta_center_config::MetaCenterConfig,
         resumer_config::ResumerConfig,
         s3_config::S3Config,
-        sinker_config::SinkerConfig,
+        sinker_config::{BasicSinkerConfig, SinkerConfig},
         task_config::TaskConfig,
     },
     error::Error,
@@ -42,6 +42,7 @@ use dt_common::{
     monitor::FlushableMonitor,
     rdb_filter::RdbFilter,
     system_dbs::SystemDb,
+    utils::sql_util::SqlUtil,
 };
 use dt_connector::{
     checker::CheckerStateStore,
@@ -54,8 +55,39 @@ use tokio::select;
 pub struct TaskUtil {}
 
 impl TaskUtil {
+    pub async fn create_rdb_meta_manager_for_target(
+        target: &BasicSinkerConfig,
+        log_level: &str,
+    ) -> anyhow::Result<Option<RdbMetaManager>> {
+        let meta_manager = match target.db_type {
+            DbType::Mysql | DbType::Tidb => {
+                let mysql_meta_manager = Self::create_mysql_meta_manager(
+                    &target.url,
+                    &target.connection_auth,
+                    log_level,
+                    target.db_type.clone(),
+                    None,
+                    None,
+                )
+                .await?;
+                Some(RdbMetaManager::from_mysql(mysql_meta_manager))
+            }
+
+            DbType::Pg => {
+                let pg_meta_manager =
+                    Self::create_pg_meta_manager(&target.url, &target.connection_auth, log_level)
+                        .await?;
+                Some(RdbMetaManager::from_pg(pg_meta_manager))
+            }
+
+            _ => None,
+        };
+        Ok(meta_manager)
+    }
+
     pub async fn create_mysql_conn_pool(
         url: &str,
+        db_type: &DbType,
         connection_auth: &ConnectionAuthConfig,
         max_connections: u32,
         enable_sqlx_log: bool,
@@ -65,15 +97,27 @@ impl TaskUtil {
 
         let mut conn_options = MySqlConnectOptions::from_str(&final_url)?;
         // The default character set is `utf8mb4`
-        conn_options
+        conn_options = conn_options
             .log_statements(log::LevelFilter::Debug)
             .log_slow_statements(log::LevelFilter::Debug, Duration::from_secs(1));
 
         if !enable_sqlx_log {
-            conn_options.disable_statement_logging();
+            conn_options = conn_options.disable_statement_logging();
         }
 
-        let mut conn_pool = MySqlPoolOptions::new().max_connections(max_connections);
+        if let Some(ssl) = connection_auth.ssl_config() {
+            conn_options = ssl.apply_mysql(conn_options);
+        }
+        if !matches!(db_type, DbType::Mysql) {
+            conn_options = conn_options
+                .pipes_as_concat(false)
+                .no_engine_substitution(false)
+        }
+
+        let mut conn_pool = MySqlPoolOptions::new()
+            .max_connections(max_connections)
+            .acquire_timeout(Duration::from_secs(15))
+            .idle_timeout(Some(Duration::from_secs(5 * 60)));
         if let Some(settings) = after_connect_settings {
             if !settings.is_empty() {
                 conn_pool = conn_pool.after_connect(move |conn, _meta| {
@@ -136,12 +180,16 @@ impl TaskUtil {
         let final_url = ConnectionAuthConfig::merge_url_with_auth(url, connection_auth)?;
 
         let mut conn_options = PgConnectOptions::from_str(&final_url)?;
-        conn_options
+        conn_options = conn_options
             .log_statements(log::LevelFilter::Debug)
             .log_slow_statements(log::LevelFilter::Debug, Duration::from_secs(1));
 
         if !enable_sqlx_log {
-            conn_options.disable_statement_logging();
+            conn_options = conn_options.disable_statement_logging();
+        }
+
+        if let Some(ssl) = connection_auth.ssl_config() {
+            conn_options = ssl.apply_pg(conn_options);
         }
 
         let mut pool_options = PgPoolOptions::new().max_connections(max_connections);
@@ -225,46 +273,27 @@ impl TaskUtil {
                 connection_auth,
                 ..
             } => {
-                let pg_meta_manager =
-                    Self::create_pg_meta_manager(url, connection_auth, log_level).await?;
-                Some(RdbMetaManager::from_pg(pg_meta_manager))
+                let target = BasicSinkerConfig {
+                    db_type: DbType::Pg,
+                    url: url.clone(),
+                    connection_auth: connection_auth.clone(),
+                    ..config.sinker_basic.clone()
+                };
+                Self::create_rdb_meta_manager_for_target(&target, log_level).await?
             }
 
             _ => None,
         };
+
         if meta_manager.is_some() {
             return Ok(meta_manager);
         }
 
-        if let Some(checker_target) = config.checker_target() {
-            let checker_meta_manager = match checker_target.db_type {
-                DbType::Mysql => {
-                    let mysql_meta_manager = Self::create_mysql_meta_manager(
-                        &checker_target.url,
-                        &checker_target.connection_auth,
-                        log_level,
-                        DbType::Mysql,
-                        None,
-                        None,
-                    )
-                    .await?;
-                    Some(RdbMetaManager::from_mysql(mysql_meta_manager))
-                }
-                DbType::Pg => {
-                    let pg_meta_manager = Self::create_pg_meta_manager(
-                        &checker_target.url,
-                        &checker_target.connection_auth,
-                        log_level,
-                    )
-                    .await?;
-                    Some(RdbMetaManager::from_pg(pg_meta_manager))
-                }
-                _ => None,
-            };
-            return Ok(checker_meta_manager);
+        if let Some(target) = config.checker_target() {
+            return Self::create_rdb_meta_manager_for_target(&target, log_level).await;
         }
 
-        Ok(None)
+        Ok(meta_manager)
     }
 
     pub async fn create_mysql_meta_manager(
@@ -279,7 +308,15 @@ impl TaskUtil {
         let conn_pool = match &conn_pool_opt {
             Some(conn_pool) => conn_pool.clone(),
             None => {
-                Self::create_mysql_conn_pool(url, connection_auth, 1, enable_sqlx_log, None).await?
+                Self::create_mysql_conn_pool(
+                    url,
+                    &db_type,
+                    connection_auth,
+                    1,
+                    enable_sqlx_log,
+                    None,
+                )
+                .await?
             }
         };
         let mut meta_manager = MysqlMetaManager::new_mysql_compatible(conn_pool, db_type).await?;
@@ -294,8 +331,15 @@ impl TaskUtil {
             let meta_center_conn_pool = match &conn_pool_opt {
                 Some(conn_pool) => conn_pool.clone(),
                 None => {
-                    Self::create_mysql_conn_pool(url, connection_auth, 1, enable_sqlx_log, None)
-                        .await?
+                    Self::create_mysql_conn_pool(
+                        url,
+                        &DbType::Mysql,
+                        connection_auth,
+                        1,
+                        enable_sqlx_log,
+                        None,
+                    )
+                    .await?
                 }
             };
             let meta_center = MysqlDbEngineMetaCenter::new(
@@ -418,8 +462,8 @@ impl TaskUtil {
         let mut total_records = 0;
         let mut rows = sqlx::query(&sql).fetch(conn_pool);
         while let Some(row) = rows.try_next().await.unwrap() {
-            let schema: String = row.try_get(0)?;
-            let tb: String = row.try_get(1)?;
+            let schema = SqlUtil::try_get_mysql_string(&row, 0)?;
+            let tb = SqlUtil::try_get_mysql_string(&row, 1)?;
             let records: u64 = row.try_get(2)?;
             if filter.filter_tb(&schema, &tb) {
                 continue;
@@ -593,10 +637,10 @@ WHERE
             }
         };
 
-        let sql = "SHOW DATABASES";
+        let sql = "SELECT schema_name FROM information_schema.schemata";
         let mut rows = sqlx::query(sql).fetch(conn_pool);
         while let Some(row) = rows.try_next().await.unwrap() {
-            let db: String = row.try_get(0)?;
+            let db = SqlUtil::try_get_mysql_string(&row, 0)?;
             if SystemDb::is_system_db(&db, &DbType::Mysql) {
                 continue;
             }
@@ -615,14 +659,14 @@ WHERE
             }
         };
 
-        let sql = format!("SHOW FULL TABLES IN `{}`", db);
-        let mut rows = sqlx::query(&sql).fetch(conn_pool);
+        let sql = "SELECT table_name
+            FROM information_schema.tables
+            WHERE table_schema = ? 
+            AND table_type = 'BASE TABLE'";
+        let mut rows = sqlx::query(sql).bind(db).fetch(conn_pool);
         while let Some(row) = rows.try_next().await.unwrap() {
-            let tb: String = row.try_get(0)?;
-            let tb_type: String = row.try_get(1)?;
-            if tb_type == "BASE TABLE" {
-                tbs.push(tb);
-            }
+            let tb = SqlUtil::try_get_mysql_string(&row, 0)?;
+            tbs.push(tb);
         }
 
         Ok(tbs)
@@ -814,6 +858,7 @@ impl ConnClient {
             } => ConnClient::MySQL(
                 TaskUtil::create_mysql_conn_pool(
                     url,
+                    &DbType::Mysql,
                     connection_auth,
                     extractor_max_connections,
                     enable_sqlx_log,
@@ -893,6 +938,7 @@ impl ConnClient {
                 ConnClient::MySQL(
                     TaskUtil::create_mysql_conn_pool(
                         url,
+                        &DbType::Mysql,
                         connection_auth,
                         sinker_max_connections,
                         enable_sqlx_log,
@@ -908,6 +954,7 @@ impl ConnClient {
             } => ConnClient::MySQL(
                 TaskUtil::create_mysql_conn_pool(
                     url,
+                    &DbType::Mysql,
                     connection_auth,
                     sinker_max_connections,
                     enable_sqlx_log,

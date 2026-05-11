@@ -261,6 +261,23 @@ impl ColValue {
         }
     }
 
+    pub fn to_utf8_string(&self) -> Option<String> {
+        match self {
+            ColValue::RawString(v) => String::from_utf8(v.clone()).ok(),
+            ColValue::String(v) => Some(v.clone()),
+            _ => None,
+        }
+    }
+
+    pub fn to_utf8_or_hex_string(&self) -> Option<String> {
+        match self {
+            ColValue::RawString(v) => {
+                Some(String::from_utf8(v.clone()).unwrap_or_else(|_| hex::encode(v)))
+            }
+            _ => self.to_option_string(),
+        }
+    }
+
     pub fn is_unchanged_toast(&self) -> bool {
         matches!(self, ColValue::UnchangedToast)
     }
@@ -481,5 +498,26 @@ mod tests {
     #[test]
     fn test_tagged_col_value_def_is_exposed_from_meta() {
         let _ = std::any::type_name::<MetaTaggedColValueDef>();
+    }
+
+    #[test]
+    fn test_raw_string_string_helpers() {
+        assert_eq!(
+            ColValue::RawString(b"ij".to_vec()).to_option_string(),
+            Some("696a".to_string())
+        );
+        assert_eq!(
+            ColValue::RawString(b"ij".to_vec()).to_utf8_string(),
+            Some("ij".to_string())
+        );
+        assert_eq!(
+            ColValue::RawString(b"ij".to_vec()).to_utf8_or_hex_string(),
+            Some("ij".to_string())
+        );
+        assert_eq!(ColValue::RawString(vec![0xff, 0xfe]).to_utf8_string(), None);
+        assert_eq!(
+            ColValue::RawString(vec![0xff, 0xfe]).to_utf8_or_hex_string(),
+            Some("fffe".to_string())
+        );
     }
 }

@@ -80,6 +80,12 @@ impl RdbTestRunner {
             dst_db_type = target.db_type;
             dst_url = target.url;
             dst_connection_auth = target.connection_auth;
+        } else if let Some(target) = config.checker_target() {
+            // Standalone checker tests have no sinker target, but their dst_prepare.sql /
+            // dst_clean.sql still need to be executed against the checker target database.
+            dst_db_type = target.db_type;
+            dst_url = target.url;
+            dst_connection_auth = target.connection_auth;
         }
 
         // generate mock sqls
@@ -106,6 +112,7 @@ impl RdbTestRunner {
                 src_conn_pool_mysql = Some(
                     TaskUtil::create_mysql_conn_pool(
                         &src_url,
+                        &src_db_type,
                         &src_connection_auth,
                         5,
                         false,
@@ -133,6 +140,7 @@ impl RdbTestRunner {
                     dst_conn_pool_mysql = Some(
                         TaskUtil::create_mysql_conn_pool(
                             &dst_url,
+                            &dst_db_type,
                             &dst_connection_auth,
                             5,
                             false,
@@ -168,6 +176,7 @@ impl RdbTestRunner {
             }) => Some(
                 TaskUtil::create_mysql_conn_pool(
                     url,
+                    &DbType::Mysql,
                     connection_auth,
                     1,
                     false,

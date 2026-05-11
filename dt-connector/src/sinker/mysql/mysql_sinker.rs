@@ -1,4 +1,4 @@
-use std::{cmp, str::FromStr, sync::Arc};
+use std::{cmp, str::FromStr, sync::Arc, time::Duration};
 
 use anyhow::Context;
 use async_trait::async_trait;
@@ -14,6 +14,7 @@ use crate::{
     rdb_router::RdbRouter, sinker::base_sinker::BaseSinker, Sinker,
 };
 use dt_common::{
+    config::connection_auth_config::ConnectionAuthConfig,
     log_error, log_info,
     meta::{
         dcl_meta::dcl_data::DclData,
@@ -28,6 +29,7 @@ use dt_common::{
 #[derive(Clone)]
 pub struct MysqlSinker {
     pub url: String,
+    pub connection_auth: ConnectionAuthConfig,
     pub conn_pool: Pool<MySql>,
     pub meta_manager: MysqlMetaManager,
     pub router: RdbRouter,
@@ -77,7 +79,11 @@ impl Sinker for MysqlSinker {
             log_info!("sink ddl, db: {}, sql: {}", db, sql);
 
             // create a tmp connection with database since sqlx conn pool does NOT support `USE db`
-            let mut conn_options = MySqlConnectOptions::from_str(&self.url)?;
+            let final_url = ConnectionAuthConfig::merge_url_with_auth(
+                self.url.as_str(),
+                &self.connection_auth,
+            )?;
+            let mut conn_options = MySqlConnectOptions::from_str(final_url.as_str())?;
             if !db.is_empty() {
                 match ddl_data.ddl_type {
                     DdlType::CreateDatabase | DdlType::DropDatabase | DdlType::AlterDatabase => {}
@@ -86,11 +92,16 @@ impl Sinker for MysqlSinker {
                     }
                 }
             }
+            if let Some(ssl) = self.connection_auth.ssl_config() {
+                conn_options = ssl.apply_mysql(conn_options);
+            }
 
             let start_time = Instant::now();
 
             let conn_pool = MySqlPoolOptions::new()
                 .max_connections(1)
+                .acquire_timeout(Duration::from_secs(15))
+                .idle_timeout(Some(Duration::from_secs(5 * 60)))
                 .connect_with(conn_options)
                 .await?;
             query.execute(&conn_pool).await?;
@@ -127,9 +138,8 @@ impl Sinker for MysqlSinker {
             let sql = dcl_data.to_sql();
             data_size += dcl_data.get_data_size();
             log_info!("sink dcl: {}", &sql);
-            let query = sqlx::query(&sql).persistent(false).disable_arguments();
             let start_time = Instant::now();
-            query.execute(&self.conn_pool).await?;
+            sqlx::raw_sql(&sql).execute(&self.conn_pool).await?;
             rts.push((start_time.elapsed().as_millis() as u64, 1));
         }
 
@@ -182,7 +192,7 @@ impl MysqlSinker {
         let mut tx = self.conn_pool.begin().await?;
         if let Some(sql) = self.get_data_marker_sql().await {
             sqlx::query(&sql)
-                .execute(&mut tx)
+                .execute(&mut *tx)
                 .await
                 .with_context(|| format!("failed to execute data marker sql: [{}]", sql))?;
         }
@@ -199,7 +209,7 @@ impl MysqlSinker {
             let query = query_builder.create_mysql_query(&query_info)?;
 
             let start_time = Instant::now();
-            query.execute(&mut tx).await.with_context(|| {
+            query.execute(&mut *tx).await.with_context(|| {
                 format!(
                     "serial sink failed, sql: [{}], row_data: [{}]",
                     query_info.sql, row_data
@@ -249,8 +259,8 @@ impl MysqlSinker {
         let mut rts = LimitedQueue::new(1);
         if let Some(sql) = self.get_data_marker_sql().await {
             let mut tx = self.conn_pool.begin().await?;
-            sqlx::query(&sql).execute(&mut tx).await?;
-            query.execute(&mut tx).await?;
+            sqlx::query(&sql).execute(&mut *tx).await?;
+            query.execute(&mut *tx).await?;
             tx.commit().await?;
         } else {
             query.execute(&self.conn_pool).await?;
@@ -284,8 +294,8 @@ impl MysqlSinker {
         let mut rts = LimitedQueue::new(1);
         let exec_error = if let Some(sql) = self.get_data_marker_sql().await {
             let mut tx = self.conn_pool.begin().await?;
-            sqlx::query(&sql).execute(&mut tx).await?;
-            query.execute(&mut tx).await?;
+            sqlx::query(&sql).execute(&mut *tx).await?;
+            query.execute(&mut *tx).await?;
             match tx.commit().await {
                 Err(e) => Some(e),
                 _ => None,

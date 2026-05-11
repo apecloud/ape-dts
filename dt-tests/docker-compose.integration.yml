@@ -1,0 +1,991 @@
+services:
+  mysql-src:
+    image: mysql:8.0
+    container_name: mysql-src-it
+    environment:
+      MYSQL_ROOT_PASSWORD: 123456
+      MYSQL_DATABASE: test_db
+    ports:
+      - "3307:3306"
+    command:
+      - mysqld
+      - --server-id=1
+      - --log-bin=mysql-bin
+      - --binlog-format=ROW
+      - --gtid-mode=ON
+      - --enforce-gtid-consistency=ON
+      - --log-slave-updates=ON
+      - --character-set-server=utf8mb3
+      - --collation-server=utf8mb3_general_ci
+    healthcheck:
+      test:
+        - CMD
+        - mysqladmin
+        - ping
+        - -h
+        - localhost
+        - -u
+        - root
+        - -p123456
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+      interval: 5s
+
+  mysql-dst:
+    image: mysql:8.0
+    container_name: mysql-dst-it
+    environment:
+      MYSQL_ROOT_PASSWORD: 123456
+      MYSQL_DATABASE: test_db
+    ports:
+      - "3308:3306"
+    command:
+      - mysqld
+      - --server-id=2
+      - --log-bin=mysql-bin
+      - --binlog-format=ROW
+      - --gtid-mode=ON
+      - --enforce-gtid-consistency=ON
+      - --log-slave-updates=ON
+      - --character-set-server=utf8mb3
+      - --collation-server=utf8mb3_general_ci
+    healthcheck:
+      test:
+        - CMD
+        - mysqladmin
+        - ping
+        - -h
+        - localhost
+        - -u
+        - root
+        - -p123456
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+      interval: 5s
+
+  mysql-meta:
+    image: mysql:8.0
+    container_name: mysql-meta-it
+    environment:
+      MYSQL_ROOT_PASSWORD: 123456
+      MYSQL_DATABASE: test_db
+    ports:
+      - "3309:3306"
+    command:
+      - mysqld
+      - --server-id=3
+      - --log-bin=mysql-bin
+      - --binlog-format=ROW
+      - --gtid-mode=ON
+      - --enforce-gtid-consistency=ON
+      - --log-slave-updates=ON
+      - --character-set-server=utf8mb3
+      - --collation-server=utf8mb3_general_ci
+    healthcheck:
+      test:
+        - CMD
+        - mysqladmin
+        - ping
+        - -h
+        - localhost
+        - -u
+        - root
+        - -p123456
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+      interval: 5s
+
+  mysql-src-8-0:
+    image: mysql:8.0
+    container_name: mysql-src-8-0-it
+    environment:
+      MYSQL_ROOT_PASSWORD: 123456
+      MYSQL_DATABASE: test_db
+    ports:
+      - "3311:3306"
+    command:
+      - mysqld
+      - --server-id=11
+      - --log-bin=mysql-bin
+      - --binlog-format=ROW
+      - --character-set-server=utf8mb3
+      - --collation-server=utf8mb3_general_ci
+    healthcheck:
+      test:
+        - CMD
+        - mysqladmin
+        - ping
+        - -h
+        - localhost
+        - -u
+        - root
+        - -p123456
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+      interval: 5s
+
+  mysql-src-tidb:
+    image: mysql:8.0
+    container_name: mysql-src-tidb-it
+    environment:
+      MYSQL_ROOT_PASSWORD: 123456
+      MYSQL_DATABASE: test_db
+    ports:
+      - "3307:3306"
+    command:
+      - mysqld
+      - --server-id=13
+      - --log-bin=mysql-bin
+      - --binlog-format=ROW
+      - --gtid-mode=ON
+      - --enforce-gtid-consistency=ON
+      - --log-slave-updates=ON
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+    healthcheck:
+      test:
+        - CMD
+        - mysqladmin
+        - ping
+        - -h
+        - localhost
+        - -u
+        - root
+        - -p123456
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+      interval: 5s
+
+  mysql-dst-8-0:
+    image: mysql:8.0
+    container_name: mysql-dst-8-0-it
+    environment:
+      MYSQL_ROOT_PASSWORD: 123456
+      MYSQL_DATABASE: test_db
+    ports:
+      - "3312:3306"
+    command:
+      - mysqld
+      - --server-id=12
+      - --log-bin=mysql-bin
+      - --binlog-format=ROW
+      - --character-set-server=utf8mb3
+      - --collation-server=utf8mb3_general_ci
+    healthcheck:
+      test:
+        - CMD
+        - mysqladmin
+        - ping
+        - -h
+        - localhost
+        - -u
+        - root
+        - -p123456
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+      interval: 5s
+
+  mysql-src-5-7:
+    image: apecloud/mysql:5.7.44
+    container_name: mysql-src-5-7-it
+    environment:
+      MYSQL_ROOT_PASSWORD: 123456
+      MYSQL_DATABASE: test_db
+    ports:
+      - "3307:3306"
+    command:
+      - mysqld
+      - --server-id=1
+      - --log-bin=mysql-bin
+      - --binlog-format=ROW
+      - --gtid-mode=ON
+      - --enforce-gtid-consistency=ON
+      - --log-slave-updates=ON
+    healthcheck:
+      test:
+        - CMD
+        - mysqladmin
+        - ping
+        - -h
+        - localhost
+        - -u
+        - root
+        - -p123456
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+      interval: 5s
+
+  mysql-dst-5-7:
+    image: apecloud/mysql:5.7.44
+    container_name: mysql-dst-5-7-it
+    environment:
+      MYSQL_ROOT_PASSWORD: 123456
+      MYSQL_DATABASE: test_db
+    ports:
+      - "3308:3306"
+    command:
+      - mysqld
+      - --server-id=2
+      - --log-bin=mysql-bin
+      - --binlog-format=ROW
+      - --gtid-mode=ON
+      - --enforce-gtid-consistency=ON
+      - --log-slave-updates=ON
+    healthcheck:
+      test:
+        - CMD
+        - mysqladmin
+        - ping
+        - -h
+        - localhost
+        - -u
+        - root
+        - -p123456
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+      interval: 5s
+
+  mysql-meta-5-7:
+    image: apecloud/mysql:5.7.44
+    container_name: mysql-meta-5-7-it
+    environment:
+      MYSQL_ROOT_PASSWORD: 123456
+      MYSQL_DATABASE: test_db
+    ports:
+      - "3309:3306"
+    command:
+      - mysqld
+      - --server-id=3
+      - --log-bin=mysql-bin
+      - --binlog-format=ROW
+      - --gtid-mode=ON
+      - --enforce-gtid-consistency=ON
+      - --log-slave-updates=ON
+    healthcheck:
+      test:
+        - CMD
+        - mysqladmin
+        - ping
+        - -h
+        - localhost
+        - -u
+        - root
+        - -p123456
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+      interval: 5s
+
+  postgres-src:
+    image: postgis/postgis:13-3.4
+    container_name: postgres-src-it
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: postgres
+    ports:
+      - "5433:5432"
+    command:
+      - postgres
+      - -c
+      - wal_level=logical
+      - -c
+      - max_wal_senders=10
+      - -c
+      - max_replication_slots=10
+    volumes:
+      - ./docker/postgres-init:/docker-entrypoint-initdb.d
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - psql -U postgres -c 'SELECT 1'
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+      interval: 5s
+
+  postgres-node3:
+    image: postgis/postgis:13-3.4
+    container_name: postgres-node3-it
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: postgres
+    ports:
+      - "5435:5432"
+    command:
+      - postgres
+      - -c
+      - wal_level=logical
+      - -c
+      - max_wal_senders=10
+      - -c
+      - max_replication_slots=10
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - psql -U postgres -c 'SELECT 1'
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+      interval: 5s
+
+  postgres-dst:
+    image: postgis/postgis:13-3.4
+    container_name: postgres-dst-it
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: postgres
+    ports:
+      - "5434:5432"
+    command:
+      - postgres
+      - -c
+      - wal_level=logical
+      - -c
+      - max_wal_senders=10
+      - -c
+      - max_replication_slots=10
+    volumes:
+      - ./docker/postgres-init:/docker-entrypoint-initdb.d
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - psql -U postgres -c 'SELECT 1'
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+      interval: 5s
+
+  mongo-src:
+    image: mongo:4.4
+    container_name: mongo-src-it
+    hostname: mongo-src
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: root
+      MONGO_INITDB_ROOT_PASSWORD: 123456
+      MONGO_RS_HOST: mongo-src
+      MONGO_RS_NAME: rs0
+    ports:
+      - "27017:27017"
+    volumes:
+      - ./docker/mongo-init/mongo-keyfile:/run/secrets/mongo-keyfile:ro
+      - ./docker/mongo-init/start-mongo-rs.sh:/usr/local/bin/start-mongo-rs.sh:ro
+    entrypoint:
+      - bash
+      - /usr/local/bin/start-mongo-rs.sh
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - 'mongo admin -u $$MONGO_INITDB_ROOT_USERNAME -p $$MONGO_INITDB_ROOT_PASSWORD --quiet --eval "quit(db.isMaster().ismaster ? 0 : 1)"'
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+      interval: 5s
+
+  mongo-dst:
+    image: mongo:4.4
+    container_name: mongo-dst-it
+    hostname: mongo-dst
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: root
+      MONGO_INITDB_ROOT_PASSWORD: 123456
+    ports:
+      - "27016:27017"
+      - "27018:27017"
+    volumes:
+      - ./docker/mongo-init/20-create-mongo-dst-user.js:/docker-entrypoint-initdb.d/20-create-mongo-dst-user.js:ro
+    command: mongod --bind_ip_all
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - 'mongo admin -u $$MONGO_INITDB_ROOT_USERNAME -p $$MONGO_INITDB_ROOT_PASSWORD --quiet --eval "quit(db.adminCommand(''ping'').ok ? 0 : 1)"'
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+      interval: 5s
+
+  redis-src:
+    image: redis:7.0
+    container_name: redis-src-it
+    ports:
+      - "6380:6379"
+    command: redis-server --requirepass 123456 --save 60 1 --loglevel warning
+    healthcheck:
+      test:
+        - CMD
+        - redis-cli
+        - -a
+        - "123456"
+        - ping
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+      interval: 3s
+
+  redis-dst:
+    image: redis:7.0
+    container_name: redis-dst-it
+    ports:
+      - "6390:6379"
+    command: redis-server --requirepass 123456 --save 60 1 --loglevel warning
+    healthcheck:
+      test:
+        - CMD
+        - redis-cli
+        - -a
+        - "123456"
+        - ping
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+      interval: 3s
+
+  redis-cycle-node3:
+    image: redis:7.0
+    container_name: redis-cycle-node3-it
+    ports:
+      - "6400:6379"
+    command: redis-server --requirepass 123456 --save 60 1 --loglevel warning
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "123456", "ping"]
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+      interval: 3s
+
+  redis-src-8-0:
+    image: redis:8.0
+    container_name: redis-src-8-0-it
+    profiles: ["redis-8-0"]
+    ports:
+      - "6385:6379"
+    command: redis-server --requirepass 123456 --save 60 1 --loglevel warning
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "123456", "ping"]
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+      interval: 3s
+
+  redis-dst-8-0:
+    image: redis:8.0
+    container_name: redis-dst-8-0-it
+    profiles: ["redis-8-0"]
+    ports:
+      - "6395:6379"
+    command: redis-server --requirepass 123456 --save 60 1 --loglevel warning
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "123456", "ping"]
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+      interval: 3s
+
+  redis-src-6-2:
+    image: redis:6.2
+    container_name: redis-src-6-2-it
+    profiles: ["redis-6-2"]
+    ports:
+      - "6381:6379"
+    command: redis-server --requirepass 123456 --save 60 1 --loglevel warning
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "123456", "ping"]
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+      interval: 3s
+
+  redis-dst-6-2:
+    image: redis:6.2
+    container_name: redis-dst-6-2-it
+    profiles: ["redis-6-2"]
+    ports:
+      - "6391:6379"
+    command: redis-server --requirepass 123456 --save 60 1 --loglevel warning
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "123456", "ping"]
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+      interval: 3s
+
+  redis-src-6-0:
+    image: redis:6.0
+    container_name: redis-src-6-0-it
+    profiles: ["redis-6-0"]
+    ports:
+      - "6382:6379"
+    command: redis-server --requirepass 123456 --save 60 1 --loglevel warning
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "123456", "ping"]
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+      interval: 3s
+
+  redis-dst-6-0:
+    image: redis:6.0
+    container_name: redis-dst-6-0-it
+    profiles: ["redis-6-0"]
+    ports:
+      - "6392:6379"
+    command: redis-server --requirepass 123456 --save 60 1 --loglevel warning
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "123456", "ping"]
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+      interval: 3s
+
+  redis-src-5-0:
+    image: redis:5.0
+    container_name: redis-src-5-0-it
+    profiles: ["redis-5-0"]
+    ports:
+      - "6383:6379"
+    command: redis-server --requirepass 123456 --save 60 1 --loglevel warning
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "123456", "ping"]
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+      interval: 3s
+
+  redis-dst-5-0:
+    image: redis:5.0
+    container_name: redis-dst-5-0-it
+    profiles: ["redis-5-0"]
+    ports:
+      - "6393:6379"
+    command: redis-server --requirepass 123456 --save 60 1 --loglevel warning
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "123456", "ping"]
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+      interval: 3s
+
+  redis-src-4-0:
+    image: redis:4.0
+    container_name: redis-src-4-0-it
+    profiles: ["redis-4-0"]
+    ports:
+      - "6384:6379"
+    command: redis-server --requirepass 123456 --save 60 1 --loglevel warning
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "123456", "ping"]
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+      interval: 3s
+
+  redis-dst-4-0:
+    image: redis:4.0
+    container_name: redis-dst-4-0-it
+    profiles: ["redis-4-0"]
+    ports:
+      - "6394:6379"
+    command: redis-server --requirepass 123456 --save 60 1 --loglevel warning
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "123456", "ping"]
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+      interval: 3s
+
+  redis-src-2-8:
+    image: redis:2.8.23
+    container_name: redis-src-2-8-it
+    profiles: ["redis-2-8"]
+    ports:
+      - "6378:6379"
+    command: redis-server --save 60 1 --loglevel warning
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+      interval: 3s
+
+  redis-dst-2-8:
+    image: redis:2.8.23
+    container_name: redis-dst-2-8-it
+    profiles: ["redis-2-8"]
+    ports:
+      - "6379:6379"
+    command: redis-server --save 60 1 --loglevel warning
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+      interval: 3s
+
+  redis-rebloom:
+    image: redislabs/rebloom:2.6.3
+    container_name: redis-rebloom-it
+    profiles: ["redis-rebloom"]
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+      interval: 3s
+
+  redis-redisearch:
+    image: redislabs/redisearch:2.8.4
+    container_name: redis-redisearch-it
+    profiles: ["redis-redisearch"]
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+      interval: 3s
+
+  redis-rejson-src:
+    image: redislabs/rejson:2.6.4
+    container_name: redis-rejson-src-it
+    profiles: ["redis-rejson"]
+    ports:
+      - "6380:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+      interval: 3s
+
+  redis-rejson-dst:
+    image: redislabs/rejson:2.6.4
+    container_name: redis-rejson-dst-it
+    profiles: ["redis-rejson"]
+    ports:
+      - "6390:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+      interval: 3s
+
+  redis-cluster-node1:
+    image: redis:7.0
+    container_name: redis-cluster-node1-it
+    profiles: ["redis-cluster"]
+    hostname: redis-cluster-node1
+    # DT_IT_HOST_IP is the host machine IPv4 address reachable by both the
+    # local integration test process and containers. The integration test
+    # script `dt-tests/scripts/run-integration-tests.sh` detects and exports
+    # this variable automatically before invoking `docker compose`.
+    environment:
+      DT_IT_HOST_IP: ${DT_IT_HOST_IP:-}
+    ports:
+      - "6371:6379"
+      - "16371:16379"
+    entrypoint:
+      - sh
+      - -c
+      - |
+        set -eu
+        exec redis-server \
+          --cluster-enabled yes \
+          --cluster-config-file nodes.conf \
+          --cluster-node-timeout 5000 \
+          --appendonly yes \
+          --cluster-announce-ip "$${DT_IT_HOST_IP:?DT_IT_HOST_IP is required}" \
+          --cluster-announce-port 6371 \
+          --cluster-announce-bus-port 16371
+
+  redis-cluster-node2:
+    image: redis:7.0
+    container_name: redis-cluster-node2-it
+    profiles: ["redis-cluster"]
+    hostname: redis-cluster-node2
+    environment:
+      DT_IT_HOST_IP: ${DT_IT_HOST_IP:-}
+    ports:
+      - "6372:6379"
+      - "16372:16379"
+    entrypoint:
+      - sh
+      - -c
+      - |
+        set -eu
+        exec redis-server \
+          --cluster-enabled yes \
+          --cluster-config-file nodes.conf \
+          --cluster-node-timeout 5000 \
+          --appendonly yes \
+          --cluster-announce-ip "$${DT_IT_HOST_IP:?DT_IT_HOST_IP is required}" \
+          --cluster-announce-port 6372 \
+          --cluster-announce-bus-port 16372
+
+  redis-cluster-node3:
+    image: redis:7.0
+    container_name: redis-cluster-node3-it
+    profiles: ["redis-cluster"]
+    hostname: redis-cluster-node3
+    environment:
+      DT_IT_HOST_IP: ${DT_IT_HOST_IP:-}
+    ports:
+      - "6373:6379"
+      - "16373:16379"
+    entrypoint:
+      - sh
+      - -c
+      - |
+        set -eu
+        exec redis-server \
+          --cluster-enabled yes \
+          --cluster-config-file nodes.conf \
+          --cluster-node-timeout 5000 \
+          --appendonly yes \
+          --cluster-announce-ip "$${DT_IT_HOST_IP:?DT_IT_HOST_IP is required}" \
+          --cluster-announce-port 6373 \
+          --cluster-announce-bus-port 16373
+
+  redis-cluster-init:
+    image: redis:7.0
+    container_name: redis-cluster-init-it
+    profiles: ["redis-cluster"]
+    depends_on:
+      - redis-cluster-node1
+      - redis-cluster-node2
+      - redis-cluster-node3
+    # DT_IT_HOST_IP is reused here so `redis-cli --cluster create` reaches the
+    # same host-published endpoints that Redis nodes advertise. The value is
+    # provided automatically by `dt-tests/scripts/run-integration-tests.sh`.
+    environment:
+      DT_IT_HOST_IP: ${DT_IT_HOST_IP:-}
+    entrypoint:
+      - sh
+      - -c
+      - |
+        set -eu
+
+        until redis-cli -h "$${DT_IT_HOST_IP:?DT_IT_HOST_IP is required}" -p 6371 ping \
+          && redis-cli -h "$${DT_IT_HOST_IP:?DT_IT_HOST_IP is required}" -p 6372 ping \
+          && redis-cli -h "$${DT_IT_HOST_IP:?DT_IT_HOST_IP is required}" -p 6373 ping; do
+          sleep 1
+        done
+
+        cluster_ok() {
+          redis-cli -h "$${DT_IT_HOST_IP:?DT_IT_HOST_IP is required}" -p 6371 cluster info 2>/dev/null | grep -q 'cluster_state:ok' \
+            && redis-cli -h "$${DT_IT_HOST_IP:?DT_IT_HOST_IP is required}" -p 6371 cluster info 2>/dev/null | grep -q 'cluster_slots_assigned:16384'
+        }
+
+        if ! cluster_ok; then
+          for _ in $(seq 1 10); do
+            if yes yes | redis-cli --cluster create \
+              "$${DT_IT_HOST_IP:?DT_IT_HOST_IP is required}":6371 \
+              "$${DT_IT_HOST_IP:?DT_IT_HOST_IP is required}":6372 \
+              "$${DT_IT_HOST_IP:?DT_IT_HOST_IP is required}":6373 \
+              --cluster-replicas 0; then
+              break
+            fi
+            sleep 2
+            if cluster_ok; then
+              break
+            fi
+          done
+        fi
+
+        for _ in $(seq 1 10); do
+          if cluster_ok; then
+            exit 0
+          fi
+          sleep 2
+        done
+
+        echo "redis cluster failed to become ready" >&2
+        redis-cli -h "$${DT_IT_HOST_IP:?DT_IT_HOST_IP is required}" -p 6371 cluster nodes || true
+        redis-cli -h "$${DT_IT_HOST_IP:?DT_IT_HOST_IP is required}" -p 6371 cluster info || true
+        exit 1
+
+  falkordb-src:
+    image: falkordb/falkordb:v4.12.5
+    container_name: falkordb-src-it
+    ports:
+      - "6381:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+      interval: 3s
+    environment:
+      FALKORDB_ARGS: MAX_INFO_QUERIES 0
+
+  falkordb-dst:
+    image: falkordb/falkordb:v4.12.5
+    container_name: falkordb-dst-it
+    ports:
+      - "6391:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+      interval: 3s
+    environment:
+      FALKORDB_ARGS: MAX_INFO_QUERIES 0
+
+  kafka:
+    image: apecloud/kafka:3.9.0-debian-12-r13
+    container_name: kafka-it
+    hostname: kafka
+    profiles: ["kafka"]
+    ports:
+      - "9093:9094"
+    environment:
+      KAFKA_ENABLE_KRAFT: "yes"
+      KAFKA_CFG_PROCESS_ROLES: "broker,controller"
+      KAFKA_CFG_NODE_ID: "1"
+      KAFKA_KRAFT_CLUSTER_ID: "abcdefghijklmnopqrstuv"
+      KAFKA_CFG_CONTROLLER_LISTENER_NAMES: "CONTROLLER"
+      KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP: "PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT,EXTERNAL:PLAINTEXT"
+      KAFKA_CFG_LISTENERS: "PLAINTEXT://:9092,CONTROLLER://:9093,EXTERNAL://:9094"
+      KAFKA_CFG_ADVERTISED_LISTENERS: "PLAINTEXT://kafka:9092,EXTERNAL://127.0.0.1:9093"
+      KAFKA_CFG_INTER_BROKER_LISTENER_NAME: "PLAINTEXT"
+      KAFKA_CFG_CONTROLLER_QUORUM_VOTERS: "1@kafka:9093"
+      ALLOW_PLAINTEXT_LISTENER: "yes"
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - /opt/bitnami/kafka/bin/kafka-topics.sh --bootstrap-server 127.0.0.1:9092 --list >/dev/null 2>&1
+      timeout: 10s
+      retries: 30
+      start_period: 30s
+      interval: 5s
+
+  starrocks-3-2-11:
+    image: starrocks/allin1-ubuntu:3.2.11
+    container_name: starrocks-3-2-11-it
+    profiles: ["starrocks-3-2-11"]
+    ports:
+      - "9030:9030"
+      - "8030:8030"
+      - "8040:8040"
+
+  starrocks-2-5-4:
+    image: starrocks/allin1-ubuntu:2.5.4
+    container_name: starrocks-2-5-4-it
+    profiles: ["starrocks-2-5-4"]
+    ports:
+      - "9031:9030"
+      - "8031:8030"
+      - "8041:8040"
+
+  doris-2-1-0:
+    image: apache/doris:doris-all-in-one-2.1.0
+    container_name: doris-2-1-0-it
+    profiles: ["doris-2-1-0"]
+    ports:
+      - "9032:9030"
+      - "8032:8030"
+      - "8042:8040"
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - mysql -h 127.0.0.1 -P 9030 -u root -e 'SELECT 1' >/dev/null 2>&1
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+      interval: 5s
+
+  tidb:
+    image: pingcap/tidb:v7.1.6
+    container_name: tidb-it
+    profiles: ["tidb"]
+    ports:
+      - "4000:4000"
+      - "10080:10080"
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - wget --no-verbose --tries=1 --spider http://127.0.0.1:10080/status
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+      interval: 5s
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.10
+    container_name: clickhouse-it
+    environment:
+      CLICKHOUSE_USER: admin
+      CLICKHOUSE_PASSWORD: 123456
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
+    ports:
+      - "8123:8123"
+      - "9100:9000"
+    healthcheck:
+      test:
+        - CMD
+        - wget
+        - --no-verbose
+        - --tries=1
+        - --spider
+        - http://localhost:8123/ping
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+      interval: 5s
+
+  minio:
+    image: minio/minio:latest
+    container_name: minio-it
+    profiles: ["minio"]
+    environment:
+      MINIO_ROOT_USER: root
+      MINIO_ROOT_PASSWORD: Drds123456
+    command: server /data --console-address :9001
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+
+  minio-init:
+    image: minio/mc:latest
+    container_name: minio-init-it
+    profiles: ["minio"]
+    depends_on:
+      - minio
+    entrypoint:
+      - sh
+      - -c
+      - |
+        until /usr/bin/mc alias set local http://minio:9000 root Drds123456; do sleep 2; done
+        /usr/bin/mc mb --ignore-existing local/ln-test
+
+  netshoot:
+    image: nicolaka/netshoot:latest
+    container_name: netshoot-it
+    profiles: ["debug"]
+    command:
+      - sleep
+      - infinity
+    stdin_open: true
+    tty: true
+
+  # Foxlake itself is intentionally not provisioned here yet.
+  # The repository does not define a runnable Foxlake image/startup contract,
+  # so adding a fake service would be more misleading than useful.
+
+networks:
+  default:
+    name: ape-dts-integration-network

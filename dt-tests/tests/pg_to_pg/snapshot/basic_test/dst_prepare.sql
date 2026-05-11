@@ -131,7 +131,7 @@ CREATE TABLE test_db_1.tbl_3 (
     code    varchar(21) NOT NULL,
     name    varchar(30),
     CONSTRAINT tbl_3_code_uk UNIQUE (code)
-)
+);
 ```
 
 -- No PK, no Unique Col by constraint

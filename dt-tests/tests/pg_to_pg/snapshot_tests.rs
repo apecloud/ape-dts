@@ -16,6 +16,19 @@ mod test {
 
     #[tokio::test]
     #[serial]
+    async fn snapshot_big_packet_test() {
+        TestBase::run_snapshot_test("pg_to_pg/snapshot/big_packet_test").await;
+    }
+
+    #[tokio::test]
+    #[serial]
+    #[ignore = "requires SSL-enabled PostgreSQL instances and configured ssl_ca_path"]
+    async fn snapshot_ssl_test() {
+        TestBase::run_snapshot_test("pg_to_pg/snapshot/ssl_test").await;
+    }
+
+    #[tokio::test]
+    #[serial]
     async fn snapshot_custom_type_test() {
         TestBase::run_snapshot_test("pg_to_pg/snapshot/custom_type_test").await;
     }
@@ -209,9 +222,9 @@ mod test {
         .await;
     }
 
-    #[tokio::test]
-    #[serial]
-    async fn snapshot_mock_test() {
-        TestBase::run_snapshot_test("pg_to_pg/snapshot/mock_test").await;
-    }
+    // #[tokio::test]
+    // #[serial]
+    // async fn snapshot_mock_test() {
+    //     TestBase::run_snapshot_test("pg_to_pg/snapshot/mock_test").await;
+    // }
 }

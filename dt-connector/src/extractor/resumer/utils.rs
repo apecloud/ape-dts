@@ -1,4 +1,4 @@
-use std::str::FromStr;
+use std::{str::FromStr, time::Duration};
 
 use anyhow::{bail, Context, Result};
 use sqlx::{
@@ -48,11 +48,17 @@ impl ResumerUtil {
 
         match db_type {
             DbType::Mysql => {
-                let conn_options = MySqlConnectOptions::from_str(&final_url)
+                let mut conn_options = MySqlConnectOptions::from_str(&final_url)
                     .context("failed to parse MySQL connection URL")?;
+
+                if let Some(ssl) = connection_auth.ssl_config() {
+                    conn_options = ssl.apply_mysql(conn_options);
+                }
 
                 let pool = MySqlPoolOptions::new()
                     .max_connections(max_connections)
+                    .acquire_timeout(Duration::from_secs(15))
+                    .idle_timeout(Some(Duration::from_secs(5 * 60)))
                     .connect_with(conn_options)
                     .await
                     .context("failed to create MySQL connection pool")?;
@@ -60,8 +66,12 @@ impl ResumerUtil {
                 Ok(ResumerDbPool::MySql(pool))
             }
             DbType::Pg => {
-                let conn_options = PgConnectOptions::from_str(&final_url)
+                let mut conn_options = PgConnectOptions::from_str(&final_url)
                     .context("failed to parse PostgreSQL connection URL")?;
+
+                if let Some(ssl) = connection_auth.ssl_config() {
+                    conn_options = ssl.apply_pg(conn_options);
+                }
 
                 let pool = PgPoolOptions::new()
                     .max_connections(max_connections)

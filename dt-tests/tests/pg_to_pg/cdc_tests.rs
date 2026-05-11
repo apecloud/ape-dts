@@ -13,6 +13,12 @@ mod test {
 
     #[tokio::test]
     #[serial]
+    async fn cdc_big_packet_test() {
+        TestBase::run_cdc_test("pg_to_pg/cdc/big_packet_test", 3000, 20000).await;
+    }
+
+    #[tokio::test]
+    #[serial]
     async fn cdc_nopk_test() {
         TestBase::run_cdc_test("pg_to_pg/cdc/nopk_test", 3000, 9000).await;
     }

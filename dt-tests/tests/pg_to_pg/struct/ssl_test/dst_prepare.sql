@@ -1,0 +1,1 @@
+DROP SCHEMA IF EXISTS struct_ssl_it_pg2pg CASCADE;

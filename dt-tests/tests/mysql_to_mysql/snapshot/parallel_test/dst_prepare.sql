@@ -57,7 +57,7 @@ CREATE TABLE test_db_2.tb_bigint (
 -- 3. Varchar Unique (Scenario: Usernames / Codes)
 CREATE TABLE test_db_2.tb_varchar (
   `row_id` int,
-  `id` varchar(64) DEFAULT NULL,
+  `id` varchar(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin DEFAULT NULL,
   `value` int DEFAULT NULL,
   UNIQUE KEY (`id`)
 );
@@ -130,7 +130,7 @@ CREATE TABLE test_db_2.tb_varbinary (
 -- 12. Varchar Primary Key (Scenario: Common string PK, UTF8MB4)
 CREATE TABLE test_db_2.tb_varchar_pk (
   `row_id` int,
-  `id` varchar(255) NOT NULL, 
+  `id` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL,
   `value` int DEFAULT NULL,
   PRIMARY KEY (`id`)
 );
@@ -139,7 +139,7 @@ CREATE TABLE test_db_2.tb_varchar_pk (
 -- Must specify prefix length (64) for indexing BLOB/TEXT
 CREATE TABLE test_db_2.tb_text_pk (
   `row_id` int,
-  `id` TEXT, 
+  `id` TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_bin,
   `value` int DEFAULT NULL,
   UNIQUE KEY `idx_text_prefix` (`id`(64)) 
 );

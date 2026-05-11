@@ -14,6 +14,7 @@ use crate::{
     rdb_router::RdbRouter, sinker::base_sinker::BaseSinker, Sinker,
 };
 use dt_common::{
+    config::connection_auth_config::ConnectionAuthConfig,
     log_error, log_info,
     meta::{
         ddl_meta::{ddl_data::DdlData, ddl_type::DdlType},
@@ -27,6 +28,7 @@ use dt_common::{
 #[derive(Clone)]
 pub struct PgSinker {
     pub url: String,
+    pub connection_auth: ConnectionAuthConfig,
     pub conn_pool: Pool<Postgres>,
     pub meta_manager: PgMetaManager,
     pub router: RdbRouter,
@@ -60,6 +62,10 @@ impl Sinker for PgSinker {
     }
 
     async fn sink_ddl(&mut self, data: Vec<DdlData>, _batch: bool) -> anyhow::Result<()> {
+        if data.is_empty() {
+            return Ok(());
+        }
+
         let mut rts = LimitedQueue::new(cmp::min(100, data.len()));
         let monitor_interval = self.base_sinker.monitor_interval_secs();
         let mut data_size = 0;
@@ -70,8 +76,17 @@ impl Sinker for PgSinker {
             let (schema, _tb) = ddl_data.get_schema_tb();
             data_size += ddl_data.get_data_size();
             data_len += 1;
-            let conn_options = PgConnectOptions::from_str(&self.url)?;
+
+            let final_url = ConnectionAuthConfig::merge_url_with_auth(
+                self.url.as_str(),
+                &self.connection_auth,
+            )?;
+            let mut conn_options = PgConnectOptions::from_str(final_url.as_str())?;
             let mut pool_options = PgPoolOptions::new().max_connections(1);
+            if let Some(ssl) = self.connection_auth.ssl_config() {
+                conn_options = ssl.apply_pg(conn_options);
+            }
+
             let sql = format!("SET search_path = '{}';", schema);
 
             if !schema.is_empty() {
@@ -168,7 +183,7 @@ impl PgSinker {
         let mut tx = self.conn_pool.begin().await?;
         if let Some(sql) = self.get_data_marker_sql().await {
             sqlx::query(&sql)
-                .execute(&mut tx)
+                .execute(&mut *tx)
                 .await
                 .with_context(|| format!("failed to execute data marker sql: [{}]", sql))?;
         }
@@ -183,7 +198,7 @@ impl PgSinker {
             let query = query_builder.create_pg_query(&query_info)?;
 
             let start_time = Instant::now();
-            query.execute(&mut tx).await.with_context(|| {
+            query.execute(&mut *tx).await.with_context(|| {
                 format!(
                     "serial sink failed, sql: [{}], row_data: [{}]",
                     query_info.sql, row_data
@@ -230,8 +245,8 @@ impl PgSinker {
         let mut rts = LimitedQueue::new(1);
         if let Some(sql) = self.get_data_marker_sql().await {
             let mut tx = self.conn_pool.begin().await?;
-            sqlx::query(&sql).execute(&mut tx).await?;
-            query.execute(&mut tx).await?;
+            sqlx::query(&sql).execute(&mut *tx).await?;
+            query.execute(&mut *tx).await?;
             tx.commit().await?;
         } else {
             query.execute(&self.conn_pool).await?;
@@ -265,8 +280,8 @@ impl PgSinker {
         let mut rts = LimitedQueue::new(1);
         let exec_error = if let Some(sql) = self.get_data_marker_sql().await {
             let mut tx = self.conn_pool.begin().await?;
-            sqlx::query(&sql).execute(&mut tx).await?;
-            query.execute(&mut tx).await?;
+            sqlx::query(&sql).execute(&mut *tx).await?;
+            query.execute(&mut *tx).await?;
             tx.commit().await
         } else {
             match query.execute(&self.conn_pool).await {

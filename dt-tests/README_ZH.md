@@ -35,7 +35,9 @@ cargo test --package dt-tests --test integration_test -- mysql_to_mysql::cdc_tes
 
 # 配置
 - 完整的本地测试矩阵配置在 `./tests/.env`。
-- CI / 自动化默认应使用 `./.env.ci`；本地覆盖仍放在 `./tests/.env.local`。
+- `./scripts/run-integration-tests.sh` 默认使用 `./tests/.env` 和 `./docker-compose.integration.yml`。
+- `./docker-compose.integration.yml` 使用固定端口，并与现有本地 env 约定对齐。
+- 本地覆盖仍可放在 `./tests/.env.local`。
 - 各测试用例的 task_config.ini 直接引用这些 env key。
 
 ```
@@ -45,6 +47,56 @@ url={mysql_extractor_url}
 [sinker]
 url={mysql_sinker_url}
 ```
+
+## 本地集成测试脚本
+
+```bash
+# 列出所有 suite
+./scripts/run-integration-tests.sh --list-suites
+
+# 跑完整 suite
+./scripts/run-integration-tests.sh --suite mysql_to_mysql --all
+
+# 启动容器并保留，供后续步骤复用
+./scripts/run-integration-tests.sh --suite mysql_to_mysql --up --wait --keep-docker
+
+# 批量检查每个 suite 的容器是否能成功启动
+./scripts/run-integration-tests.sh --suite all --up --wait --down-each-suite --keep-going
+
+# 针对已启动容器执行测试
+./scripts/run-integration-tests.sh --suite mysql_to_mysql --test --runner nextest --keep-docker
+
+# 同时输出成功用例的 stdout/stderr
+./scripts/run-integration-tests.sh --suite mysql_to_mysql --test --show-test-output
+
+# 只跑一个精确测试用例
+./scripts/run-integration-tests.sh --suite mysql_to_mysql --test -- --exact snapshot_tests::test::snapshot_basic_test
+
+# 导出当前 suite 的 docker 日志
+./scripts/run-integration-tests.sh --suite mysql_to_mysql --logs --keep-docker
+
+# 关闭所有集成测试容器
+./scripts/run-integration-tests.sh --suite mysql_to_mysql --down
+
+# 测试失败时自动导出 docker 日志
+./scripts/run-integration-tests.sh --suite mysql_to_mysql --all --logs-on-failure
+
+# 把日志写到自定义目录
+./scripts/run-integration-tests.sh --suite mysql_to_mysql --all --log-dir /tmp/dt-it-logs
+
+# 连跑多个 suite，失败后继续
+./scripts/run-integration-tests.sh --suite mysql_to_mysql --suite pg_to_pg --keep-going --all
+```
+
+- 测试矩阵直接写在 `./scripts/run-integration-tests.sh` 顶部。
+- step flag 和 CI phase 一一对应：`--up`、`--wait`、`--test`、`--logs`、`--down`。
+- 脚本依赖 `cargo nextest`。
+- 同一个 suite 内的测试用例会串行执行。
+- 脚本默认会开启 `RUST_BACKTRACE=1` 和 `RUST_LIB_BACKTRACE=1`，除非你自行覆盖。
+- 脚本流程日志会按 suite 分别落到 `../tmp/integration-logs/<timestamp-pid>/<suite>.log`。
+- 测试进程输出会单独落到 `../tmp/integration-logs/<timestamp-pid>/<suite>/tests.log`。
+- 脚本默认会在退出时清理 `docker compose` 服务；如需保留容器，传 `--keep-docker`。
+- 如果想在一条命令里批量跑多个 suite，又避免服务/端口冲突，可使用 `--down-each-suite`。
 
 # 测试环境搭建
 

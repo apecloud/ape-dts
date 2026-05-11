@@ -1,7 +1,7 @@
-use dt_common::{log_info, utils::time_util::TimeUtil};
+use dt_common::{log_info, utils::sql_util::SqlUtil, utils::time_util::TimeUtil};
 use futures::TryStreamExt;
 use mysql_binlog_connector_rust::{binlog_client::BinlogClient, event::event_data::EventData};
-use sqlx::{MySql, Pool, Row};
+use sqlx::{MySql, Pool};
 
 pub struct BinlogUtil {}
 
@@ -78,9 +78,9 @@ impl BinlogUtil {
         let mut binlogs = Vec::new();
         let sql = "SHOW BINARY LOGS";
 
-        let mut rows = sqlx::query(sql).fetch(conn_pool);
+        let mut rows = sqlx::raw_sql(sql).fetch(conn_pool);
         while let Some(row) = rows.try_next().await.unwrap() {
-            let log_name: String = row.try_get(0)?;
+            let log_name = SqlUtil::try_get_mysql_string(&row, 0)?;
             binlogs.push(log_name)
         }
         Ok(binlogs)

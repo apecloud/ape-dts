@@ -1,0 +1,100 @@
+name: Integration Tests
+
+on:
+  pull_request:
+    branches: [main]
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+      - "LICENSE*"
+      - "**/*.png"
+      - "**/*.jpg"
+      - "**/*.svg"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  discover:
+    name: Discover integration suites
+    runs-on: ubuntu-latest
+    outputs:
+      suites: ${{ steps.suites.outputs.suites }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Get integration suites from script
+        id: suites
+        working-directory: dt-tests
+        run: |
+          suites_json="$(./scripts/run-integration-tests.sh --list-suites-json)"
+          echo "suites=${suites_json}" >> "$GITHUB_OUTPUT"
+          echo "Integration suites JSON: ${suites_json}"
+
+      - name: Print integration suites
+        run: echo '${{ steps.suites.outputs.suites }}'
+
+  integration-test:
+    name: "Integration / ${{ matrix.suite }}"
+    needs: discover
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: ${{ fromJSON(needs.discover.outputs.suites) }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Start required services
+        working-directory: dt-tests
+        run: ./scripts/run-integration-tests.sh --suite "${{ matrix.suite }}" --up --wait --keep-docker
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: integration-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
+
+      - name: Run integration tests
+        working-directory: dt-tests
+        run: ./scripts/run-integration-tests.sh --suite "${{ matrix.suite }}" --test --runner nextest --keep-docker
+
+      - name: Dump container logs on failure
+        if: failure()
+        working-directory: dt-tests
+        run: ./scripts/run-integration-tests.sh --suite "${{ matrix.suite }}" --logs --keep-docker
+
+      - name: Upload integration logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: integration-logs-${{ matrix.suite }}
+          path: tmp/integration-logs
+          if-no-files-found: ignore
+
+      - name: Stop services
+        if: always()
+        working-directory: dt-tests
+        run: ./scripts/run-integration-tests.sh --suite "${{ matrix.suite }}" --down

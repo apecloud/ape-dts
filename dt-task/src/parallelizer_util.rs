@@ -1,5 +1,7 @@
 use std::collections::{HashMap, VecDeque};
 
+use anyhow::anyhow;
+
 use super::task_util::TaskUtil;
 use dt_common::{
     config::{config_enums::ParallelType, sinker_config::SinkerConfig, task_config::TaskConfig},
@@ -102,9 +104,11 @@ impl ParallelizerUtil {
     async fn create_rdb_merger(
         config: &TaskConfig,
     ) -> anyhow::Result<Box<dyn Merger + Send + Sync>> {
-        let rdb_merger = RdbMerger {
-            rdb_meta_manager: TaskUtil::create_rdb_meta_manager(config).await?.unwrap(),
-        };
+        let rdb_meta_manager = TaskUtil::create_rdb_meta_manager(config)
+            .await?
+            .ok_or_else(|| anyhow!("failed to create RDB meta manager for merger target"))?;
+
+        let rdb_merger = RdbMerger { rdb_meta_manager };
         Ok(Box::new(rdb_merger))
     }
 
@@ -114,7 +118,9 @@ impl ParallelizerUtil {
     }
 
     async fn create_rdb_partitioner(config: &TaskConfig) -> anyhow::Result<RdbPartitioner> {
-        let meta_manager = TaskUtil::create_rdb_meta_manager(config).await?.unwrap();
+        let meta_manager = TaskUtil::create_rdb_meta_manager(config)
+            .await?
+            .ok_or_else(|| anyhow!("failed to create RDB meta manager for partitioner target"))?;
         Ok(RdbPartitioner { meta_manager })
     }
 

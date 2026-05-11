@@ -1,18 +1,21 @@
+use futures::{Stream, TryStreamExt};
 use std::collections::HashMap;
 
 use anyhow::bail;
 use async_trait::async_trait;
-use dt_common::{
-    config::connection_auth_config::ConnectionAuthConfig, error::Error, rdb_filter::RdbFilter,
-};
-use dt_task::task_util::TaskUtil;
-use futures::{Stream, TryStreamExt};
-use sqlx::{mysql::MySqlRow, query, MySql, Pool, Row};
+use sqlx::{mysql::MySqlRow, query, MySql, Pool};
 
 use crate::{
     fetcher::traits::Fetcher,
     meta::database_mode::{Constraint, Database, Schema, Table},
 };
+use dt_common::{
+    config::{config_enums::DbType, connection_auth_config::ConnectionAuthConfig},
+    error::Error,
+    rdb_filter::RdbFilter,
+    utils::sql_util::SqlUtil,
+};
+use dt_task::task_util::TaskUtil;
 
 pub struct MysqlFetcher {
     pub pool: Option<Pool<MySql>>,
@@ -26,8 +29,15 @@ pub struct MysqlFetcher {
 impl Fetcher for MysqlFetcher {
     async fn build_connection(&mut self) -> anyhow::Result<()> {
         self.pool = Some(
-            TaskUtil::create_mysql_conn_pool(&self.url, &self.connection_auth, 1, true, None)
-                .await?,
+            TaskUtil::create_mysql_conn_pool(
+                &self.url,
+                &DbType::Mysql,
+                &self.connection_auth,
+                1,
+                true,
+                None,
+            )
+            .await?,
         );
         Ok(())
     }
@@ -40,7 +50,8 @@ impl Fetcher for MysqlFetcher {
         match result {
             Ok(rows) => {
                 if !rows.is_empty() {
-                    let version_str: String = rows.first().unwrap().get("VERSION");
+                    let version_str =
+                        SqlUtil::try_get_mysql_string(rows.first().unwrap(), "VERSION")?;
                     version = version_str;
                 }
             }
@@ -73,8 +84,10 @@ impl Fetcher for MysqlFetcher {
         match result {
             Ok(rows) => {
                 for row in rows {
-                    let (variable_name, value): (String, String) =
-                        (row.get("Variable_name"), row.get("Value"));
+                    let (variable_name, value) = (
+                        SqlUtil::try_get_mysql_string(&row, "Variable_name")?,
+                        SqlUtil::try_get_mysql_string(&row, "Value")?,
+                    );
                     if result_map.contains_key(variable_name.as_str()) {
                         result_map.insert(variable_name, value);
                     }
@@ -94,7 +107,7 @@ impl Fetcher for MysqlFetcher {
         match rows_result {
             Ok(mut rows) => {
                 while let Some(row) = rows.try_next().await.unwrap() {
-                    let schema_name: String = row.get("SCHEMA_NAME");
+                    let schema_name = SqlUtil::try_get_mysql_string(&row, "SCHEMA_NAME")?;
                     if !self.filter.filter_schema(&schema_name) {
                         results.push(Database {
                             database_name: schema_name,
@@ -120,8 +133,10 @@ impl Fetcher for MysqlFetcher {
         match rows_result {
             Ok(mut rows) => {
                 while let Some(row) = rows.try_next().await.unwrap() {
-                    let (db, tb): (String, String) =
-                        (row.get("TABLE_SCHEMA"), row.get("TABLE_NAME"));
+                    let (db, tb) = (
+                        SqlUtil::try_get_mysql_string(&row, "TABLE_SCHEMA")?,
+                        SqlUtil::try_get_mysql_string(&row, "TABLE_NAME")?,
+                    );
                     if !self.filter.filter_tb(&db, &tb) {
                         results.push(Table {
                             database_name: db,
@@ -244,11 +259,6 @@ impl MysqlFetcher {
     }
 
     fn get_str_with_null(row: &MySqlRow, col_name: &str) -> anyhow::Result<String> {
-        let mut str_val = String::new();
-        let str_val_option = row.get(col_name);
-        if let Some(s) = str_val_option {
-            str_val = s;
-        }
-        Ok(str_val)
+        Ok(SqlUtil::try_get_mysql_optional_string(row, col_name)?.unwrap_or_default())
     }
 }

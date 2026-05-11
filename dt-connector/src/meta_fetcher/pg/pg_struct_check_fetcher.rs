@@ -71,10 +71,10 @@ impl PgStructCheckFetcher {
 
     async fn get_table_summary(&self, oid: &str) -> anyhow::Result<Vec<HashMap<String, String>>> {
         let sql = format!(
-            r#"SELECT c.relchecks, c.relkind, c.relhasindex, c.relhasrules, 
+            r#"SELECT c.relchecks, c.relkind::text AS relkind, c.relhasindex, c.relhasrules, 
             c.relhastriggers, c.relrowsecurity, c.relforcerowsecurity, false AS relhasoids, c.relispartition, '', 
             c.reltablespace::int8, 
-            CASE WHEN c.reloftype = 0 THEN '' ELSE c.reloftype::pg_catalog.regtype::pg_catalog.text END, c.relpersistence, c.relreplident, am.amname
+            CASE WHEN c.reloftype = 0 THEN '' ELSE c.reloftype::pg_catalog.regtype::pg_catalog.text END, c.relpersistence::text AS relpersistence, c.relreplident::text AS relreplident, am.amname
             FROM pg_catalog.pg_class c
             LEFT JOIN pg_catalog.pg_class tc ON (c.reltoastrelid = tc.oid)
             LEFT JOIN pg_catalog.pg_am am ON (c.relam = am.oid)
@@ -147,7 +147,7 @@ impl PgStructCheckFetcher {
     async fn get_table_indexes(&self, oid: &str) -> anyhow::Result<Vec<HashMap<String, String>>> {
         let sql = format!(
             r#"SELECT c2.relname, i.indisprimary, i.indisunique, i.indisclustered, i.indisvalid, pg_catalog.pg_get_indexdef(i.indexrelid, 0, true),
-                pg_catalog.pg_get_constraintdef(con.oid, true), contype, condeferrable, condeferred, i.indisreplident, 
+                pg_catalog.pg_get_constraintdef(con.oid, true), contype::text AS contype, condeferrable, condeferred, i.indisreplident, 
                 c2.reltablespace::int8
             FROM pg_catalog.pg_class c, pg_catalog.pg_class c2, pg_catalog.pg_index i
                 LEFT JOIN pg_catalog.pg_constraint con ON (conrelid = i.indrelid AND conindid = i.indexrelid AND contype IN ('p','u','x'))

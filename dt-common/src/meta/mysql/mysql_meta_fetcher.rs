@@ -1,21 +1,19 @@
+use futures::TryStreamExt;
 use std::collections::{HashMap, HashSet};
 
+use anyhow::{bail, Ok};
+use sqlx::{mysql::MySqlRow, MySql, Pool, Row};
+
+use super::{mysql_col_type::MysqlColType, mysql_tb_meta::MysqlTbMeta};
 use crate::{
     config::config_enums::DbType,
     error::Error,
-    meta::{ddl_meta::ddl_data::DdlData, rdb_meta_manager::RDB_PRIMARY_KEY_FLAG},
+    meta::{
+        ddl_meta::ddl_data::DdlData, foreign_key::ForeignKey, rdb_meta_manager::RdbMetaManager,
+        rdb_meta_manager::RDB_PRIMARY_KEY_FLAG, rdb_tb_meta::RdbTbMeta, row_data::RowData,
+    },
+    utils::sql_util::SqlUtil,
 };
-use anyhow::{bail, Ok};
-use futures::TryStreamExt;
-
-use sqlx::{mysql::MySqlRow, MySql, Pool, Row};
-
-use crate::meta::{
-    foreign_key::ForeignKey, rdb_meta_manager::RdbMetaManager, rdb_tb_meta::RdbTbMeta,
-    row_data::RowData,
-};
-
-use super::{mysql_col_type::MysqlColType, mysql_tb_meta::MysqlTbMeta};
 
 #[derive(Clone)]
 pub struct MysqlMetaFetcher {
@@ -151,18 +149,19 @@ impl MysqlMetaFetcher {
             sqlx::query(&sql).bind(schema).bind(tb).fetch(conn_pool)
         } else {
             // for starrocks
-            sqlx::query(&sql).disable_arguments().fetch(conn_pool)
+            sqlx::raw_sql(&sql).fetch(conn_pool)
         };
 
         while let Some(row) = rows.try_next().await? {
-            let col: String = row.try_get(COLUMN_NAME)?;
+            let col = SqlUtil::try_get_mysql_string(&row, COLUMN_NAME)?;
             // Column and index names are not case sensitive on any platform, nor are column aliases.
             cols.push(col.clone());
             let (origin_type, col_type) = Self::get_col_type(&row).await?;
             col_origin_type_map.insert(col.clone(), origin_type);
             col_type_map.insert(col.clone(), col_type);
 
-            let is_nullable = row.try_get::<String, _>(IS_NULLABLE)?.to_lowercase() == "yes";
+            let is_nullable =
+                SqlUtil::try_get_mysql_string(&row, IS_NULLABLE)?.to_lowercase() == "yes";
             if is_nullable {
                 nullable_cols.insert(col);
             }
@@ -170,17 +169,17 @@ impl MysqlMetaFetcher {
 
         if cols.is_empty() {
             bail! {Error::MetadataError(format!(
-                "failed to get table metadata for: `{}`.`{}`",
-                schema, tb
+                    "failed to get table metadata for: `{}`.`{}`",
+                    schema, tb
             )) }
         }
         Ok((cols, col_origin_type_map, col_type_map, nullable_cols))
     }
 
     async fn get_col_type(row: &MySqlRow) -> anyhow::Result<(String, MysqlColType)> {
-        let column_type: String = row.try_get(COLUMN_TYPE)?;
-        let data_type: String = row.try_get(DATA_TYPE)?;
-        let is_nullable = row.try_get::<String, _>(IS_NULLABLE)?.to_lowercase() == "yes";
+        let column_type = SqlUtil::try_get_mysql_string(row, COLUMN_TYPE)?;
+        let data_type = SqlUtil::try_get_mysql_string(row, DATA_TYPE)?;
+        let is_nullable = SqlUtil::try_get_mysql_string(row, IS_NULLABLE)?.to_lowercase() == "yes";
 
         let parse_precision = || {
             let precision = if column_type.contains('(') {
@@ -214,9 +213,10 @@ impl MysqlMetaFetcher {
             "varchar" | "char" | "tinytext" | "mediumtext" | "longtext" | "text" => {
                 let length = Self::get_u64_col(row, CHARACTER_MAXIMUM_LENGTH);
                 let mut charset = String::new();
-                let unchecked: Option<Vec<u8>> = row.get_unchecked(CHARACTER_SET_NAME);
-                if unchecked.is_some() {
-                    charset = row.try_get(CHARACTER_SET_NAME)?;
+                if let Some(value) =
+                    SqlUtil::try_get_mysql_optional_string(row, CHARACTER_SET_NAME)?
+                {
+                    charset = value;
                 }
                 match data_type.as_str() {
                     "char" => MysqlColType::Char { length, charset },
@@ -255,7 +255,6 @@ impl MysqlMetaFetcher {
 
             "enum" => {
                 // enum('x-small','small','medium','large','x-large')
-                let column_type: String = row.try_get(COLUMN_TYPE).unwrap();
                 let enum_str = column_type
                     .trim_start_matches("enum(")
                     .trim_end_matches(')');
@@ -274,7 +273,6 @@ impl MysqlMetaFetcher {
 
             "set" => {
                 // set('a','b','c','d','e')
-                let column_type: String = row.try_get(COLUMN_TYPE).unwrap();
                 let set_str = column_type.trim_start_matches("set(").trim_end_matches(')');
                 let set_str_items: Vec<String> = set_str
                     .split(',')
@@ -330,8 +328,9 @@ impl MysqlMetaFetcher {
         tb: &str,
     ) -> anyhow::Result<HashMap<String, Vec<String>>> {
         let mut key_map: HashMap<String, Vec<String>> = HashMap::new();
+        // let mut prefixed_keys = HashSet::new();
         let sql = format!("SHOW INDEXES FROM `{}`.`{}`", schema, tb);
-        let mut rows = sqlx::query(&sql).disable_arguments().fetch(conn_pool);
+        let mut rows = sqlx::raw_sql(&sql).fetch(conn_pool);
         while let Some(row) = rows.try_next().await? {
             let non_unique: i8 = row.try_get("Non_unique")?;
             if non_unique == 1 {
@@ -350,11 +349,11 @@ impl MysqlMetaFetcher {
             // | a     |          0 | PRIMARY      |            2 | value       | A         |           0 |     NULL | NULL   |      | BTREE      |         |               |
             // | a     |          0 | some_uk_name |            1 | value       | A         |           0 |     NULL | NULL   |      | BTREE      |         |               |
             // +-------+------------+--------------+--------------+-------------+-----------+-------------+----------+--------+------+------------+---------+---------------+
-            let mut key_name: String = row.try_get("Key_name")?;
+            let mut key_name = SqlUtil::try_get_mysql_string(&row, "Key_name")?;
             if key_name == "PRIMARY" {
                 key_name = RDB_PRIMARY_KEY_FLAG.to_string();
             }
-            let col_name: String = row.try_get("Column_name")?;
+            let col_name = SqlUtil::try_get_mysql_string(&row, "Column_name")?;
             if let Some(key_cols) = key_map.get_mut(&key_name) {
                 key_cols.push(col_name);
             } else {
@@ -373,7 +372,7 @@ impl MysqlMetaFetcher {
     ) -> anyhow::Result<(Vec<ForeignKey>, Vec<ForeignKey>)> {
         let mut foreign_keys = Vec::new();
         let mut ref_by_foreign_keys = Vec::new();
-        if matches!(db_type, DbType::StarRocks | DbType::Doris) {
+        if !matches!(db_type, DbType::Mysql) {
             return Ok((foreign_keys, ref_by_foreign_keys));
         }
 
@@ -404,12 +403,12 @@ impl MysqlMetaFetcher {
 
         let mut rows = sqlx::query(&sql).fetch(conn_pool);
         while let Some(row) = rows.try_next().await? {
-            let my_schema: String = row.try_get("CONSTRAINT_SCHEMA")?;
-            let my_tb: String = row.try_get("TABLE_NAME")?;
-            let my_col: String = row.try_get("COLUMN_NAME")?;
-            let ref_schema: String = row.try_get("REFERENCED_TABLE_SCHEMA")?;
-            let ref_tb: String = row.try_get("REFERENCED_TABLE_NAME")?;
-            let ref_col: String = row.try_get("REFERENCED_COLUMN_NAME")?;
+            let my_schema = SqlUtil::try_get_mysql_string(&row, "CONSTRAINT_SCHEMA")?;
+            let my_tb = SqlUtil::try_get_mysql_string(&row, "TABLE_NAME")?;
+            let my_col = SqlUtil::try_get_mysql_string(&row, "COLUMN_NAME")?;
+            let ref_schema = SqlUtil::try_get_mysql_string(&row, "REFERENCED_TABLE_SCHEMA")?;
+            let ref_tb = SqlUtil::try_get_mysql_string(&row, "REFERENCED_TABLE_NAME")?;
+            let ref_col = SqlUtil::try_get_mysql_string(&row, "REFERENCED_COLUMN_NAME")?;
             let key = ForeignKey {
                 schema: my_schema,
                 tb: my_tb,
@@ -431,9 +430,9 @@ impl MysqlMetaFetcher {
 
     async fn init_version(&mut self) -> anyhow::Result<()> {
         let sql = "SELECT VERSION()";
-        let mut rows = sqlx::query(sql).disable_arguments().fetch(&self.conn_pool);
+        let mut rows = sqlx::raw_sql(sql).fetch(&self.conn_pool);
         if let Some(row) = rows.try_next().await? {
-            let version: String = row.get_unchecked(0);
+            let version = SqlUtil::try_get_mysql_string(&row, 0)?;
             self.version = version.trim().into();
             return Ok(());
         }

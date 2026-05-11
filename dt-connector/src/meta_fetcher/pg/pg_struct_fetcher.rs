@@ -42,7 +42,6 @@ pub struct PgStructFetcher {
 
 enum ColType {
     Text,
-    Char,
 }
 
 impl PgStructFetcher {
@@ -611,7 +610,7 @@ impl PgStructFetcher {
             "SELECT nsp.nspname,
                 rel.relname,
                 con.conname AS constraint_name,
-                con.contype AS constraint_type,
+                con.contype::text AS constraint_type,
                 pg_get_constraintdef(con.oid) AS constraint_definition
             FROM pg_catalog.pg_constraint con
             JOIN pg_catalog.pg_class rel
@@ -626,7 +625,7 @@ impl PgStructFetcher {
         let mut rows = sqlx::query(&sql).fetch(&self.conn_pool);
         while let Some(row) = rows.try_next().await? {
             let table_name = Self::get_str_with_null(&row, "relname")?;
-            let constraint_type = Self::get_with_null(&row, "constraint_type", ColType::Char)?;
+            let constraint_type = Self::get_str_with_null(&row, "constraint_type")?;
 
             let constraint = Constraint {
                 database_name: String::new(),
@@ -828,7 +827,7 @@ impl PgStructFetcher {
     async fn get_roles(&mut self) -> anyhow::Result<Vec<PgRole>> {
         let sql = "SELECT a.rolname, a.rolpassword, a.rolsuper, a.rolinherit, a.rolcreaterole, 
                 a.rolcreatedb, a.rolcanlogin, a.rolreplication, a.rolbypassrls, a.rolconnlimit, 
-                a.rolvaliduntil, r.rolconfig 
+                a.rolvaliduntil::text AS rolvaliduntil, r.rolconfig 
             FROM pg_authid a
             JOIN pg_roles r ON a.oid = r.oid
             WHERE a.rolname NOT LIKE 'pg_%' 
@@ -1401,10 +1400,6 @@ impl PgStructFetcher {
                 if let Some(s) = str_val_option {
                     str_val = s
                 }
-            }
-            ColType::Char => {
-                let char_val: i8 = row.get(col_name);
-                str_val = char_val.to_string();
             }
         }
         Ok(str_val)

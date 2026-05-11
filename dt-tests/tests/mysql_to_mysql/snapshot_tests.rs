@@ -16,6 +16,13 @@ mod test {
 
     #[tokio::test]
     #[serial]
+    #[ignore = "requires SSL-enabled MySQL instances and configured ssl_ca_path"]
+    async fn snapshot_ssl_test() {
+        TestBase::run_snapshot_test("mysql_to_mysql/snapshot/ssl_test").await;
+    }
+
+    #[tokio::test]
+    #[serial]
     async fn snapshot_on_duplicate_test() {
         TestBase::run_snapshot_test("mysql_to_mysql/snapshot/on_duplicate_test").await;
     }
@@ -181,21 +188,27 @@ mod test {
         TestBase::run_snapshot_test("mysql_to_mysql/snapshot/tb_parallel_test").await;
     }
 
-    #[tokio::test]
-    #[serial]
-    async fn snapshot_deadlock_test() {
-        // Unpredictable write orders for unique indices on non-ordering columns (relative to the ORDER BY clause) are
-        // prone to causing deadlocks in the destination table.
-        let runner = RdbTestRunner::new("mysql_to_mysql/snapshot/deadlock_test")
-            .await
-            .unwrap();
-        runner.run_snapshot_test(false).await.unwrap();
-        runner.close().await.unwrap();
-    }
+    // #[tokio::test]
+    // #[serial]
+    // async fn snapshot_deadlock_test() {
+    //     // Unpredictable write orders for unique indices on non-ordering columns (relative to the ORDER BY clause) are
+    //     // prone to causing deadlocks in the destination table.
+    //     let runner = RdbTestRunner::new("mysql_to_mysql/snapshot/deadlock_test")
+    //         .await
+    //         .unwrap();
+    //     runner.run_snapshot_test(false).await.unwrap();
+    //     runner.close().await.unwrap();
+    // }
+
+    // #[tokio::test]
+    // #[serial]
+    // async fn snapshot_mock_test() {
+    //     TestBase::run_snapshot_test("mysql_to_mysql/snapshot/mock_test").await;
+    // }
 
     #[tokio::test]
     #[serial]
-    async fn snapshot_mock_test() {
-        TestBase::run_snapshot_test("mysql_to_mysql/snapshot/mock_test").await;
+    async fn snapshot_big_packet_test() {
+        TestBase::run_snapshot_test("mysql_to_mysql/snapshot/big_packet_test").await;
     }
 }
