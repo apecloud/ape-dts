@@ -32,7 +32,7 @@ url=mysql://user1:abc%25%24%23%3F%40@127.0.0.1:3307?ssl-mode=disabled
 | 配置            | 作用                                                                          | 示例                                                           | 默认                          |
 | :-------------- | :---------------------------------------------------------------------------- | :------------------------------------------------------------- | :---------------------------- |
 | db_type         | 目标库类型                                                                    | mysql                                                          | -                             |
-| sink_type       | 写入类型（写入：write，空写入：dummy）                                          | write                                                          | write                         |
+| sink_type       | 写入类型（写入：write，空写入：dummy）                                        | write                                                          | write                         |
 | url             | 数据库 URL。也可以在 URL 中直接指定用户名和密码。                             | mysql://127.0.0.1:3307 或 mysql://root:password@127.0.0.1:3307 |
 | username        | 数据库连接账号                                                                | root                                                           |
 | password        | 数据库连接密码                                                                | password                                                       |
@@ -58,7 +58,7 @@ struct check 复用 standalone snapshot check 的目标选择规则。
 | queue_size                  | checker 队列容量，按待处理批次/消息数计数                      | 200         | 200                              |
 | max_connections             | checker 连接池最大连接数                                       | 8           | 8                                |
 | batch_size                  | checker 的分块大小；inline cdc check 下也用于控制 checker 分块 | 200         | 200                              |
-| sample_rate                  | snapshot 与 CDC check 的确定性 PK hash 抽样百分比                | 25          | 空（校验全部行/变更）            |
+| sample_rate                 | snapshot 与 CDC check 的抽样百分比                             | 25          | 空（校验全部行/变更）            |
 | output_full_row             | diff 日志是否输出全量行                                        | false       | false                            |
 | output_revise_sql           | 是否将生成的修复 SQL 写入 `sql.log`                            | false       | false                            |
 | revise_match_full_row       | 生成修复 SQL 时是否按全量行匹配                                | false       | false                            |
@@ -84,7 +84,10 @@ struct check 复用 standalone snapshot check 的目标选择规则。
 
 **通用行为**
 - checker 仅支持 `[pipeline] pipeline_type=basic`。
-- `sample_rate` 仅支持 snapshot check 和 inline CDC check。snapshot / CDC 写入链路仍会写入全部行/变更。候选行/变更仍会进入 checker 队列；目标端 fetch 前，checker 将 PK hash bucket 归一化为 `row_key % 100`，只 fetch/比较 bucket 落在 `[0, sample_rate)` 范围内且 key 有效的行。
+- `sample_rate` 仅支持 snapshot check 和 inline CDC check。Standalone MySQL/PostgreSQL snapshot
+  check 会在 snapshot 抽取阶段按记录位置应用该比例，减少后续 checker 工作量。Inline snapshot
+  check 和 inline CDC check 在 checker 侧进行确定性 PK hash 抽样：checker 将 PK hash bucket
+  归一化为 `row_key % 100`，只 fetch/比较 bucket 落在 `[0, sample_rate)` 范围内且 key 有效的行。
 - `queue_size` 统计的是 checker DML 队列中的待处理批次数，不是行数。checkpoint、`refresh_meta`
   这类控制信号会绕过这条队列。
 - 在 inline 写后校验链路里，如果 checker DML 队列已满，会丢弃最旧的待校验批次并记录 warning
@@ -223,13 +226,13 @@ struct check 复用 standalone snapshot check 的目标选择规则。
 
 ## parallel_type 类型
 
-| 类型      | 并行策略                                                                                                           | 适用任务                | 优点 | 缺点                                         |
-| :-------- | :----------------------------------------------------------------------------------------------------------------- | :---------------------- | :--- | :------------------------------------------- |
-| snapshot  | 缓存中的数据分成 parallel_size 份，多线程并行，且批量写入目标                                                      | mysql/pg/mongo 全量     | 快   |                                              |
-| serial    | 单线程，依次单条写入目标                                                                                           | 所有                    |      | 慢                                           |
+| 类型      | 并行策略                                                                                                                                                                             | 适用任务                            | 优点 | 缺点                                         |
+| :-------- | :----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :---------------------------------- | :--- | :------------------------------------------- |
+| snapshot  | 缓存中的数据分成 parallel_size 份，多线程并行，且批量写入目标                                                                                                                        | mysql/pg/mongo 全量                 | 快   |                                              |
+| serial    | 单线程，依次单条写入目标                                                                                                                                                             | 所有                                |      | 慢                                           |
 | rdb_merge | 将缓存中的行级变更整合成适合写入的 insert + delete 批次，再按 parallel_size 并行下发。`[checker].enable=true` 时，MySQL/PG 的 checker 相关链路会在内部复用它并切换到 check sink mode | mysql/pg 增量、校验、review、revise | 快   | 最终一致性，破坏源端事务在目标端重放的完整性 |
-| mongo     | merge parallelizer 的 Mongo 版。`[checker].enable=true` 时，Mongo 的 checker 相关链路也会在内部复用它并切换到 check sink mode | mongo 增量、校验、review |      |                                              |
-| redis     | 单线程，批量/串行（由 sinker 的 batch_size 决定）写入                                                              | redis 全量/增量         |      |                                              |
+| mongo     | merge parallelizer 的 Mongo 版。`[checker].enable=true` 时，Mongo 的 checker 相关链路也会在内部复用它并切换到 check sink mode                                                        | mongo 增量、校验、review            |      |                                              |
+| redis     | 单线程，批量/串行（由 sinker 的 batch_size 决定）写入                                                                                                                                | redis 全量/增量                     |      |                                              |
 
 # [runtime]
 | 配置        | 作用                          | 示例                        | 默认          |

@@ -98,7 +98,7 @@ impl ExtractorUtil {
                 connection_auth,
                 db,
                 tb,
-                sample_interval,
+                sample_rate,
                 parallel_size,
                 batch_size,
                 ..
@@ -128,7 +128,7 @@ impl ExtractorUtil {
                     db: db_tb.0,
                     tb: db_tb.1,
                     batch_size,
-                    sample_interval: sample_interval as u64,
+                    sample_rate,
                     parallel_size,
                     base_extractor,
                     filter,
@@ -229,7 +229,7 @@ impl ExtractorUtil {
             ExtractorConfig::PgSnapshot {
                 schema,
                 tb,
-                sample_interval,
+                sample_rate,
                 parallel_size,
                 batch_size,
                 ..
@@ -250,7 +250,7 @@ impl ExtractorUtil {
                     meta_manager,
                     batch_size,
                     parallel_size,
-                    sample_interval: sample_interval as u64,
+                    sample_rate,
                     schema: sch_tb.0,
                     tb: sch_tb.1,
                     base_extractor,

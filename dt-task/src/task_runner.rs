@@ -982,6 +982,19 @@ impl TaskRunner {
             .config
             .task_type()
             .is_some_and(|task_type| task_type.is_inline_check());
+        let standalone_snapshot_check = self.task_type.is_some_and(|task_type| {
+            matches!(task_type.kind, TaskKind::Snapshot)
+                && matches!(task_type.check, Some(CheckMode::Standalone))
+        });
+        let checker_sample_rate = if standalone_snapshot_check
+            && matches!(
+                extractor_config,
+                ExtractorConfig::MysqlSnapshot { .. } | ExtractorConfig::PgSnapshot { .. }
+            ) {
+            None
+        } else {
+            cfg.sample_rate
+        };
 
         let is_struct_task = matches!(
             extractor_config,
@@ -1077,9 +1090,8 @@ impl TaskRunner {
                 retry_interval_secs,
                 max_retries,
                 is_cdc: is_cdc_task,
-                sample_rate: cfg.sample_rate,
-                sample_before_fetch: cfg
-                    .sample_rate
+                sample_rate: checker_sample_rate,
+                sample_before_fetch: checker_sample_rate
                     .is_some_and(|rate| rate < 100 && !is_cdc_task),
                 summary: CheckSummaryLog::default(),
                 global_summary: check_summary.clone(),
@@ -1705,7 +1717,7 @@ impl TaskRunner {
                         ExtractorConfig::MysqlSnapshot {
                             url,
                             connection_auth,
-                            sample_interval,
+                            sample_rate,
                             parallel_size,
                             batch_size,
                             ..
@@ -1714,7 +1726,7 @@ impl TaskRunner {
                             connection_auth: connection_auth.clone(),
                             db: schema.clone(),
                             tb: tb.clone(),
-                            sample_interval: *sample_interval,
+                            sample_rate: *sample_rate,
                             parallel_size: *parallel_size,
                             batch_size: *batch_size,
                             partition_cols: String::new(),
@@ -1723,7 +1735,7 @@ impl TaskRunner {
                         ExtractorConfig::PgSnapshot {
                             url,
                             connection_auth,
-                            sample_interval,
+                            sample_rate,
                             parallel_size,
                             batch_size,
                             ..
@@ -1732,7 +1744,7 @@ impl TaskRunner {
                             connection_auth: connection_auth.clone(),
                             schema: schema.clone(),
                             tb: tb.clone(),
-                            sample_interval: *sample_interval,
+                            sample_rate: *sample_rate,
                             parallel_size: *parallel_size,
                             batch_size: *batch_size,
                             partition_cols: String::new(),

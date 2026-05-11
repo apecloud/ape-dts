@@ -51,7 +51,7 @@ pub struct MysqlSnapshotExtractor {
     pub filter: RdbFilter,
     pub batch_size: usize,
     pub parallel_size: usize,
-    pub sample_interval: u64,
+    pub sample_rate: Option<u8>,
     pub db: String,
     pub tb: String,
     pub user_defined_partition_col: String,
@@ -233,8 +233,7 @@ impl MysqlSnapshotExtractor {
                 }
                 extracted_count += 1;
                 slice_count += 1;
-                // sampling may be used in check scenario
-                if extracted_count % self.sample_interval != 0 {
+                if !Self::should_sample_row(self.sample_rate, extracted_count) {
                     continue;
                 }
 
@@ -580,5 +579,42 @@ impl MysqlSnapshotExtractor {
             SerializeUtil::serialize_hashmap_to_json(&resume_values)?
         );
         Ok(resume_values)
+    }
+
+    // Position-based sampling for standalone snapshot check to drop rows before checker work.
+    fn should_sample_row(sample_rate: Option<u8>, extracted_count: u64) -> bool {
+        let Some(sample_rate) = sample_rate.filter(|rate| *rate < 100) else {
+            return true;
+        };
+        if sample_rate == 0 || extracted_count == 0 {
+            return false;
+        }
+
+        let sample_rate = u128::from(sample_rate);
+        let extracted_count = u128::from(extracted_count);
+        extracted_count * sample_rate / 100 > (extracted_count - 1) * sample_rate / 100
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::MysqlSnapshotExtractor;
+
+    #[test]
+    fn standalone_snapshot_sample_rate_uses_extracted_record_position() {
+        let sampled = (1..=10)
+            .filter(|count| MysqlSnapshotExtractor::should_sample_row(Some(34), *count))
+            .collect::<Vec<_>>();
+
+        assert_eq!(sampled, vec![3, 6, 9]);
+    }
+
+    #[test]
+    fn standalone_snapshot_sample_rate_100_keeps_all_rows() {
+        let sampled = (1..=3)
+            .filter(|count| MysqlSnapshotExtractor::should_sample_row(Some(100), *count))
+            .collect::<Vec<_>>();
+
+        assert_eq!(sampled, vec![1, 2, 3]);
     }
 }

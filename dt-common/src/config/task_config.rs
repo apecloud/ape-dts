@@ -96,7 +96,6 @@ const USERNAME: &str = "username";
 const PASSWORD: &str = "password";
 const BATCH_SIZE: &str = "batch_size";
 const MAX_CONNECTIONS: &str = "max_connections";
-const SAMPLE_INTERVAL: &str = "sample_interval";
 const PARTITION_COLS: &str = "partition_cols";
 const HEARTBEAT_INTERVAL_SECS: &str = "heartbeat_interval_secs";
 const KEEPALIVE_INTERVAL_SECS: &str = "keepalive_interval_secs";
@@ -133,7 +132,7 @@ impl TaskConfig {
         let pipeline = Self::load_pipeline_config(&loader);
         let runtime = Self::load_runtime_config(&loader)?;
         let (sinker_basic, sinker) = Self::load_sinker_config(&loader)?;
-        let (extractor_basic, extractor) = Self::load_extractor_config(&loader, &pipeline)?;
+        let (extractor_basic, mut extractor) = Self::load_extractor_config(&loader, &pipeline)?;
         let filter = Self::load_filter_config(&loader)?;
         let router = Self::load_router_config(&loader)?;
         let parallelizer = Self::load_parallelizer_config(&loader)?;
@@ -225,6 +224,18 @@ impl TaskConfig {
                     Error::ConfigError(message)
                 })?;
                 Self::validate_checker_target_config(&loader, task_type.is_inline_check())?;
+                if matches!(
+                    task_type,
+                    TaskType {
+                        kind: TaskKind::Snapshot,
+                        check: Some(CheckMode::Standalone),
+                    }
+                ) {
+                    Self::apply_standalone_snapshot_sample_rate(
+                        &mut extractor,
+                        checker_cfg.sample_rate,
+                    );
+                }
             }
         }
         let resumer =
@@ -431,6 +442,23 @@ impl TaskConfig {
         Some(TaskType::new(kind, check))
     }
 
+    fn apply_standalone_snapshot_sample_rate(
+        extractor: &mut ExtractorConfig,
+        sample_rate: Option<u8>,
+    ) {
+        match extractor {
+            ExtractorConfig::MysqlSnapshot {
+                sample_rate: rate, ..
+            }
+            | ExtractorConfig::PgSnapshot {
+                sample_rate: rate, ..
+            } => {
+                *rate = sample_rate;
+            }
+            _ => {}
+        }
+    }
+
     fn load_global_config(
         loader: &IniLoader,
         extractor_basic: &BasicExtractorConfig,
@@ -497,7 +525,7 @@ impl TaskConfig {
                     connection_auth,
                     db: String::new(),
                     tb: String::new(),
-                    sample_interval: loader.get_with_default(EXTRACTOR, SAMPLE_INTERVAL, 1),
+                    sample_rate: None,
                     parallel_size: loader.get_with_default(EXTRACTOR, PARALLEL_SIZE, 1),
                     batch_size,
                     partition_cols: loader.get_optional(EXTRACTOR, PARTITION_COLS),
@@ -584,7 +612,7 @@ impl TaskConfig {
                     connection_auth,
                     schema: String::new(),
                     tb: String::new(),
-                    sample_interval: loader.get_with_default(EXTRACTOR, SAMPLE_INTERVAL, 1),
+                    sample_rate: None,
                     parallel_size: loader.get_with_default(EXTRACTOR, PARALLEL_SIZE, 1),
                     batch_size,
                     partition_cols: loader.get_optional(EXTRACTOR, PARTITION_COLS),

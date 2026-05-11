@@ -4,9 +4,10 @@ After data migration, you may want to compare the source and target data row by 
 
 Supports comparison for MySQL, PostgreSQL, and MongoDB.
 
-Snapshot and inline CDC checks support deterministic PK-hash checker-side sampling via `[checker].sample_rate`.
-MySQL/PostgreSQL snapshot checks also support extractor-side sampling via
-`[extractor].sample_interval`.
+Snapshot and inline CDC checks support sampling via `[checker].sample_rate`.
+For standalone MySQL/PostgreSQL snapshot check, `sample_rate` is applied during extraction by
+record position to reduce checker-side work. Inline snapshot check and inline CDC check apply
+deterministic PK-hash sampling on the checker side.
 
 Data check is documented in three flows:
 
@@ -120,14 +121,14 @@ These settings remain effective or are forced in inline cdc check:
 
 ## Inline Snapshot Check vs Inline CDC Check
 
-| Aspect | Inline snapshot check | Inline cdc check |
-| :--- | :--- | :--- |
-| Check timing | Write one batch, then check that batch | Write one event batch, then check that batch |
-| First inconsistency handling | Retry first | Record into persistent inconsistency state/store |
-| When miss/diff is logged | Only after retry budget is exhausted | May be logged from the current reconciliation state |
-| Long-lived inconsistency tracking | No long-lived inconsistency store | Yes; checker state is coupled with checkpoint / state store |
-| How later writes affect old inconsistencies | Retries are short-term waiting only | Later CDC events may cancel or reconcile older miss/diff records |
-| Mental model | Write-after-check with short convergence waiting | Continuous reconciliation |
+| Aspect                                      | Inline snapshot check                            | Inline cdc check                                                 |
+| :------------------------------------------ | :----------------------------------------------- | :--------------------------------------------------------------- |
+| Check timing                                | Write one batch, then check that batch           | Write one event batch, then check that batch                     |
+| First inconsistency handling                | Retry first                                      | Record into persistent inconsistency state/store                 |
+| When miss/diff is logged                    | Only after retry budget is exhausted             | May be logged from the current reconciliation state              |
+| Long-lived inconsistency tracking           | No long-lived inconsistency store                | Yes; checker state is coupled with checkpoint / state store      |
+| How later writes affect old inconsistencies | Retries are short-term waiting only              | Later CDC events may cancel or reconcile older miss/diff records |
+| Mental model                                | Write-after-check with short convergence waiting | Continuous reconciliation                                        |
 
 Operationally:
 
@@ -151,25 +152,16 @@ templates now separate standalone snapshot check, inline snapshot check, and inl
 
 ### Sampling Check
 
-For snapshot and inline CDC checks, add `sample_rate` to the `[checker]` section. For example,
-setting `sample_rate=25` checks rows/changes whose PK hash bucket falls in `[0, 25)`.
-Candidate rows/changes still enter the checker queue. Before target fetch, the checker computes the
-bucket as `row_key % 100` and fetches/compares only valid-key rows whose bucket is sampled in.
+For snapshot and inline CDC checks, add `sample_rate` to the `[checker]` section. For standalone
+MySQL/PostgreSQL snapshot check, `sample_rate=25` checks about 25% of extracted records before they
+enter later checker work. For inline snapshot check and inline CDC check, `sample_rate=25` checks
+rows/changes whose PK hash bucket falls in `[0, 25)`; candidate rows/changes still enter the
+checker queue, and the checker fetches/compares only valid-key rows whose bucket is sampled in.
 
 ```
 [checker]
 enable=true
 sample_rate=25
-```
-
-For MySQL/PostgreSQL snapshot check, you can also add `sample_interval` to the
-`[extractor]` section. For example, setting `sample_interval=3` checks every 3rd extracted record.
-If both sampling settings are configured, only rows passing both extractor-side sampling and
-checker-side PK-hash sampling are checked.
-
-```
-[extractor]
-sample_interval=3
 ```
 
 ## Limitations

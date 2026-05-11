@@ -48,7 +48,7 @@ pub struct PgSnapshotExtractor {
     pub filter: RdbFilter,
     pub batch_size: usize,
     pub parallel_size: usize,
-    pub sample_interval: u64,
+    pub sample_rate: Option<u8>,
     pub schema: String,
     pub tb: String,
     pub user_defined_partition_col: String,
@@ -229,8 +229,7 @@ impl PgSnapshotExtractor {
                 }
                 extracted_count += 1;
                 slice_count += 1;
-                // sampling may be used in check scenario
-                if extracted_count % self.sample_interval != 0 {
+                if !Self::should_sample_row(self.sample_rate, extracted_count) {
                     continue;
                 }
 
@@ -582,5 +581,19 @@ impl PgSnapshotExtractor {
             SerializeUtil::serialize_hashmap_to_json(&resume_values)?
         );
         Ok(resume_values)
+    }
+
+    // Position-based sampling for standalone snapshot check to drop rows before checker work.
+    fn should_sample_row(sample_rate: Option<u8>, extracted_count: u64) -> bool {
+        let Some(sample_rate) = sample_rate.filter(|rate| *rate < 100) else {
+            return true;
+        };
+        if sample_rate == 0 || extracted_count == 0 {
+            return false;
+        }
+
+        let sample_rate = u128::from(sample_rate);
+        let extracted_count = u128::from(extracted_count);
+        extracted_count * sample_rate / 100 > (extracted_count - 1) * sample_rate / 100
     }
 }

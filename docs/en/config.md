@@ -61,7 +61,7 @@ Struct check follows the same standalone target-selection rules as standalone sn
 | queue_size                  | checker queue capacity, counted in pending batches/messages            | 200         | 200                               |
 | max_connections             | max connections for checker pool                                       | 8           | 8                                 |
 | batch_size                  | checker chunk size; also used for checker chunking in inline cdc check | 200         | 200                               |
-| sample_rate                  | deterministic PK-hash sample rate for snapshot and CDC checks          | 25          | empty (check all rows/changes)    |
+| sample_rate                 | sample rate for snapshot and CDC checks                                | 25          | empty (check all rows/changes)    |
 | output_full_row             | output full row in diff log                                            | false       | false                             |
 | output_revise_sql           | write generated revise SQL to `sql.log`                                | false       | false                             |
 | revise_match_full_row       | match full row when building revise SQL                                | false       | false                             |
@@ -87,10 +87,11 @@ Notes:
 
 **General behavior**
 - Checker only supports `[pipeline] pipeline_type=basic`.
-- `sample_rate` only supports snapshot and inline CDC checks. Snapshot/CDC write paths still write
-  all rows/changes. Candidate rows/changes still enter the checker queue. Before target fetch, the
-  checker computes each PK hash bucket as `row_key % 100` and fetches/compares only valid-key rows
-  whose bucket falls in `[0, sample_rate)`.
+- `sample_rate` only supports snapshot and inline CDC checks. Standalone MySQL/PostgreSQL snapshot
+  check applies it during snapshot extraction by record position, so later checker work receives
+  fewer rows. Inline snapshot check and inline CDC check apply deterministic PK-hash sampling on
+  the checker side: the checker computes each PK hash bucket as `row_key % 100` and fetches/compares
+  only valid-key rows whose bucket falls in `[0, sample_rate)`.
 - `queue_size` counts queued checker DML batches, not rows. Control signals such as checkpoint and
   `refresh_meta` bypass this queue.
 - In inline write-after-check flows, if the checker DML queue is full, the oldest pending batch is
@@ -231,13 +232,13 @@ Same with [filter].
 
 ## parallel_type
 
-| Type      | Strategy                                                                                                                                                                                      | Usage                             | Advantages | Disadvantages        |
-| :-------- | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :-------------------------------- | :--------- | :------------------- |
-| snapshot  | Records in cache are divided into [parallel_size] partitions, and each partition will be synced in batches in a separate thread.                                                              | snapshot tasks for mysql/pg/mongo | fast       |                      |
-| serial    | Single thread, one by one.                                                                                                                                                                    | all                               |            | slow                 |
+| Type      | Strategy                                                                                                                                                                                                                                                                      | Usage                               | Advantages | Disadvantages        |
+| :-------- | :---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :---------------------------------- | :--------- | :------------------- |
+| snapshot  | Records in cache are divided into [parallel_size] partitions, and each partition will be synced in batches in a separate thread.                                                                                                                                              | snapshot tasks for mysql/pg/mongo   | fast       |                      |
+| serial    | Single thread, one by one.                                                                                                                                                                                                                                                    | all                                 |            | slow                 |
 | rdb_merge | Merge row changes in cache into write-friendly insert + delete batches, then divide them into [parallel_size] partitions for parallel syncing. When `[checker].enable=true`, checker-enabled MySQL/PG flows reuse this parallelizer and switch to check sink mode internally. | mysql/pg CDC, check, review, revise | fast       | eventual consistency |
-| mongo     | Mongo version of merge parallelization. When `[checker].enable=true`, checker-enabled Mongo flows reuse this parallelizer and switch to check sink mode internally.                            | mongo CDC, check, review          |
-| redis     | Single thread, batch/serial writing(determined by [sinker] batch_size)                                                                                                                        | snapshot/CDC tasks for redis      |
+| mongo     | Mongo version of merge parallelization. When `[checker].enable=true`, checker-enabled Mongo flows reuse this parallelizer and switch to check sink mode internally.                                                                                                           | mongo CDC, check, review            |
+| redis     | Single thread, batch/serial writing(determined by [sinker] batch_size)                                                                                                                                                                                                        | snapshot/CDC tasks for redis        |
 
 # [runtime]
 
