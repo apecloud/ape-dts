@@ -6,6 +6,8 @@ use dt_common::meta::row_data::RowData;
 use dt_common::meta::row_type::RowType;
 use mlua::{IntoLua, Lua};
 
+type PreservedColValues = HashMap<String, ColValue>;
+
 pub struct LuaProcessor {
     pub lua_code: String,
 }
@@ -58,31 +60,28 @@ impl LuaProcessor {
         &'lua self,
         col_values: Option<HashMap<String, ColValue>>,
         lua: &'lua mlua::Lua,
-    ) -> anyhow::Result<(mlua::Table<'lua>, HashMap<String, ColValue>)> {
+    ) -> anyhow::Result<(mlua::Table<'lua>, PreservedColValues)> {
         let lua_table = lua.create_table()?;
-        let mut blob_col_values = HashMap::new();
+        let mut preserved_col_values = HashMap::new();
 
         if let Some(map) = col_values {
             for (key, col_value) in map {
-                let lua_value = match col_value {
-                    // do not support editing Blob columns in lua, pass empty values into lua
-                    ColValue::Blob(_) => {
-                        blob_col_values.insert(key.clone(), col_value);
-                        self.col_value_to_lua_value(ColValue::Blob(Vec::new()), lua)?
-                    }
-                    _ => self.col_value_to_lua_value(col_value, lua)?,
-                };
+                let (lua_value, preserved_col_value) =
+                    self.encode_col_value_for_lua(col_value, lua)?;
+                if let Some(col_value) = preserved_col_value {
+                    preserved_col_values.insert(key.clone(), col_value);
+                }
                 lua_table.set(key, lua_value)?;
             }
         }
 
-        Ok((lua_table, blob_col_values))
+        Ok((lua_table, preserved_col_values))
     }
 
     fn lua_table_to_col_values(
         &self,
         lua_table: mlua::Table,
-        blob_col_values: HashMap<String, ColValue>,
+        preserved_col_values: PreservedColValues,
     ) -> anyhow::Result<Option<HashMap<String, ColValue>>> {
         if lua_table.is_empty() {
             return Ok(None);
@@ -96,20 +95,44 @@ impl LuaProcessor {
             map.insert(pair.0, col_value);
         }
 
-        for (col, blob_col_value) in blob_col_values {
-            // if some col was removed(set to nil) in lua, the col should not exist in map
-            // Some(col_value) = map.get(&col) means: col was NOT removed in lua
-            if let Some(col_value) = map.get(&col) {
-                // since we passed mlua::Value::NULL into lua for blob columns,
-                // *col_value == ColValue::None means: column value was not removed and not changed in lua,
-                // in this case, set the original blob_col_value back
-                if *col_value == ColValue::None {
-                    map.insert(col, blob_col_value);
-                }
-            }
-        }
+        self.restore_preserved_col_values(&mut map, preserved_col_values);
 
         Ok(Some(map))
+    }
+
+    fn restore_preserved_col_values(
+        &self,
+        map: &mut HashMap<String, ColValue>,
+        preserved_col_values: PreservedColValues,
+    ) {
+        for (col, preserved_col_value) in preserved_col_values {
+            // If a column was removed in lua, it should not exist in the table anymore.
+            // If it still exists as NULL/None, lua did not change it, so restore the original value.
+            if matches!(map.get(&col), Some(ColValue::None)) {
+                map.insert(col, preserved_col_value);
+            }
+        }
+    }
+
+    fn encode_col_value_for_lua<'lua>(
+        &'lua self,
+        col_value: ColValue,
+        lua: &'lua mlua::Lua,
+    ) -> anyhow::Result<(mlua::Value<'lua>, Option<ColValue>)> {
+        match col_value {
+            // Blob columns are intentionally read-only in Lua. Preserve the original value and
+            // expose NULL so a no-op script keeps the source bytes untouched.
+            ColValue::Blob(v) => Ok((mlua::Value::NULL, Some(ColValue::Blob(v)))),
+
+            // MySQL CDC text columns may arrive as RawString. If bytes are valid UTF-8, expose
+            // them as normal Lua strings. Otherwise preserve the original bytes and expose NULL.
+            ColValue::RawString(v) => match ColValue::RawString(v.clone()).to_utf8_string() {
+                Some(s) => Ok((mlua::Value::String(lua.create_string(&s)?), None)),
+                None => Ok((mlua::Value::NULL, Some(ColValue::RawString(v)))),
+            },
+
+            _ => Ok((self.col_value_to_lua_value(col_value, lua)?, None)),
+        }
     }
 
     fn col_value_to_lua_value<'lua>(
@@ -145,9 +168,8 @@ impl LuaProcessor {
             | ColValue::Enum2(v)
             | ColValue::Json2(v) => v.into_lua(lua)?,
 
-            ColValue::RawString(_) => col_value.to_string().into_lua(lua)?,
-
             ColValue::Json3(_)
+            | ColValue::RawString(_)
             | ColValue::Blob(_)
             | ColValue::Json(_)
             | ColValue::MongoDoc(_)

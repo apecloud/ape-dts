@@ -1,9 +1,9 @@
 
 create database if not exists struct_it_mysql2mysql_0 CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_520_ci;
-use struct_it_mysql2mysql_0;
 
-DROP PROCEDURE IF EXISTS SetupTestDatabases;
-CREATE PROCEDURE SetupTestDatabases()
+```
+DROP PROCEDURE IF EXISTS struct_it_mysql2mysql_0.SetupTestDatabases;
+CREATE PROCEDURE struct_it_mysql2mysql_0.SetupTestDatabases()
 BEGIN
     -- Declare variables for the loop counter and database name.
     DECLARE i INT DEFAULT 1;
@@ -57,4 +57,5 @@ BEGIN
     END WHILE;
 END;
 
-CALL SetupTestDatabases();
+CALL struct_it_mysql2mysql_0.SetupTestDatabases();
+```

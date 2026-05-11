@@ -753,13 +753,34 @@ impl RdbQueryBuilder<'_> {
             | ColValue::Long(_)
             | ColValue::UnsignedLong(_)
             | ColValue::LongLong(_)
-            | ColValue::UnsignedLongLong(_)
-            | ColValue::Float(_)
-            | ColValue::Double(_)
-            | ColValue::Decimal(_) => col_value
+            | ColValue::UnsignedLongLong(_) => col_value
                 .to_option_string()
                 .unwrap_or_else(|| "NULL".to_string()),
+            ColValue::Decimal(v) => Self::format_pg_decimal_literal(v),
+            ColValue::Float(v) => Self::format_pg_float_literal((*v).into()),
+            ColValue::Double(v) => Self::format_pg_float_literal(*v),
             _ => Self::quote_pg_string_literal(col_value),
+        }
+    }
+
+    fn format_pg_float_literal(value: f64) -> String {
+        if value.is_nan() {
+            "'NaN'".to_string()
+        } else if value.is_infinite() {
+            if value.is_sign_positive() {
+                "'Infinity'".to_string()
+            } else {
+                "'-Infinity'".to_string()
+            }
+        } else {
+            value.to_string()
+        }
+    }
+
+    fn format_pg_decimal_literal(value: &str) -> String {
+        match value {
+            "NaN" | "Infinity" | "-Infinity" => format!("'{}'", value),
+            _ => value.to_string(),
         }
     }
 

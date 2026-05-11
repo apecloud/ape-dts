@@ -11,4 +11,4 @@ CREATE TABLE struct_it_mysql2mysql_1.table_test(
   col1 varchar(10), 
   col2 varchar(10) CHARACTER SET latin1 COLLATE latin1_bin DEFAULT '', 
   col3 varchar(10) CHARACTER SET latin1 COLLATE latin1_bin DEFAULT 'bbb'
-) DEFAULT CHARSET = utf8 COLLATE = utf8_unicode_ci;
+) DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci;

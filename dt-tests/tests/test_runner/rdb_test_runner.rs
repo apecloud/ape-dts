@@ -80,6 +80,12 @@ impl RdbTestRunner {
             dst_db_type = target.db_type;
             dst_url = target.url;
             dst_connection_auth = target.connection_auth;
+        } else if let Some(target) = config.checker_target() {
+            // Standalone checker tests have no sinker target, but their dst_prepare.sql /
+            // dst_clean.sql still need to be executed against the checker target database.
+            dst_db_type = target.db_type;
+            dst_url = target.url;
+            dst_connection_auth = target.connection_auth;
         }
 
         // generate mock sqls

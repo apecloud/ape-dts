@@ -1,6 +1,9 @@
 use std::io::Cursor;
 
-use crate::{config::config_enums::DbType, error::Error, meta::time::dt_utc_time::DtNaiveTime};
+use crate::{
+    config::config_enums::DbType, error::Error, meta::time::dt_utc_time::DtNaiveTime,
+    utils::sql_util::SqlUtil,
+};
 use anyhow::bail;
 use byteorder::{LittleEndian, ReadBytesExt};
 use chrono::{TimeZone, Utc};
@@ -461,7 +464,7 @@ impl MysqlColValueConvertor {
             | MysqlColType::MediumText { .. }
             | MysqlColType::Text { .. }
             | MysqlColType::LongText { .. } => {
-                let value: String = row.try_get(col)?;
+                let value = SqlUtil::try_get_mysql_string(row, col)?;
                 Ok(ColValue::String(value))
             }
 

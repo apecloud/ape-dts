@@ -5,7 +5,7 @@ DECLARE
     schema_name TEXT;
 BEGIN
 
-    FOR i IN 1..100 LOOP
+    FOR i IN 1..50 LOOP
         schema_name := 'struct_it_pg2pg_' || i;
 
         -- Drop and Create the Schema

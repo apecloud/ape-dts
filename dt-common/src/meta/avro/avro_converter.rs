@@ -1,6 +1,5 @@
 use std::{collections::HashMap, str::FromStr};
 
-use anyhow::Ok;
 use apache_avro::{from_avro_datum, to_avro_datum, types::Value, Schema};
 
 use crate::{
@@ -309,9 +308,11 @@ impl AvroConverter {
 
             ColValue::Float(v) => Value::Double(*v as f64),
             ColValue::Double(v) => Value::Double(*v),
-            ColValue::Blob(v) | ColValue::Json(v) | ColValue::RawString(v) => {
-                Value::Bytes(v.clone())
-            }
+            ColValue::Blob(v) | ColValue::Json(v) => Value::Bytes(v.clone()),
+            ColValue::RawString(v) => ColValue::RawString(v.clone())
+                .to_utf8_string()
+                .map(Value::String)
+                .unwrap_or_else(|| Value::Bytes(v.clone())),
 
             ColValue::Decimal(v)
             | ColValue::Time(v)
@@ -433,6 +434,21 @@ mod tests {
             ..Default::default()
         };
         validate_ddl_data(&mut avro_converter, &ddl_data).await;
+    }
+
+    #[test]
+    fn test_avro_raw_string_round_trip() {
+        let utf8_raw = ColValue::RawString(b"mn".to_vec());
+        assert_eq!(
+            ColValue::String("mn".to_string()),
+            AvroConverter::avro_to_col_value(AvroConverter::col_value_to_avro(&utf8_raw))
+        );
+
+        let binary_raw = ColValue::RawString(vec![0xff, 0xfe]);
+        assert_eq!(
+            ColValue::Blob(vec![0xff, 0xfe]),
+            AvroConverter::avro_to_col_value(AvroConverter::col_value_to_avro(&binary_raw))
+        );
     }
 
     async fn validate_row_data(avro_converter: &mut AvroConverter, row_data: &RowData) {
