@@ -201,6 +201,11 @@ impl TaskConfig {
                             "config [checker] is not supported for [checker] db_type={} with [extractor] extract_type=struct; standalone struct check only supports mysql and pg checker targets",
                             checker_cfg.db_type
                         )
+                    } else if matches!(sinker_basic.sink_type, SinkType::Dummy)
+                        && matches!(extractor_basic.extract_type, ExtractType::Snapshot)
+                        && matches!(checker_cfg.db_type, DbType::Mongo)
+                    {
+                        "standalone snapshot check does not support [checker] db_type=mongo; use mysql or pg checker targets".to_string()
                     } else if matches!(extractor_basic.extract_type, ExtractType::Cdc)
                         && matches!(sinker_basic.sink_type, SinkType::Write)
                     {
@@ -422,11 +427,9 @@ impl TaskConfig {
                 (TaskKind::Struct, SinkType::Dummy, DbType::Mysql | DbType::Pg) => {
                     Some(CheckMode::Standalone)
                 }
-                (
-                    TaskKind::Snapshot,
-                    SinkType::Dummy,
-                    DbType::Mysql | DbType::Pg | DbType::Mongo,
-                ) => Some(CheckMode::Standalone),
+                (TaskKind::Snapshot, SinkType::Dummy, DbType::Mysql | DbType::Pg) => {
+                    Some(CheckMode::Standalone)
+                }
                 (TaskKind::Snapshot, SinkType::Write, db_type)
                     if Self::write_sink_supports_inline_checker(db_type) =>
                 {
@@ -1554,7 +1557,7 @@ s3_key_prefix=check/10001
     }
 
     #[test]
-    fn snapshot_checker_rejects_invalid_sample_rate() {
+    fn snapshot_checker_rejects_invalid_configs() {
         let config_path = write_temp_task_config(&snapshot_check_config("sample_rate=0"));
         let result = TaskConfig::new(config_path.to_str().unwrap());
         fs::remove_file(config_path).unwrap();
@@ -1565,6 +1568,32 @@ s3_key_prefix=check/10001
                 "config error: config [checker].sample_rate must be between 1 and 100, got 0"
             ),
             Ok(_) => panic!("expected sample_rate validation error"),
+        }
+
+        let config_path = write_temp_task_config(
+            r#"[extractor]
+db_type=mysql
+extract_type=snapshot
+url=mysql://127.0.0.1:3306
+
+[checker]
+enable=true
+db_type=mongo
+url=mongodb://127.0.0.1:27017
+
+[parallelizer]
+parallel_type=rdb_merge
+"#,
+        );
+        let result = TaskConfig::new(config_path.to_str().unwrap());
+        fs::remove_file(config_path).unwrap();
+
+        match result {
+            Err(err) => assert_eq!(
+                err.to_string(),
+                "config error: standalone snapshot check does not support [checker] db_type=mongo; use mysql or pg checker targets"
+            ),
+            Ok(_) => panic!("expected unsupported mongo checker target validation error"),
         }
     }
 

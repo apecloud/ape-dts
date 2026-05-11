@@ -9,6 +9,7 @@ use std::{
 };
 
 use anyhow::{bail, Context};
+use chrono::Local;
 use log4rs::config::{Config, Deserializers, RawConfig};
 use tokio::{
     fs::{metadata, File},
@@ -40,7 +41,7 @@ use dt_common::{
         config_token_parser::{ConfigTokenParser, TokenEscapePair},
         extractor_config::ExtractorConfig,
         sinker_config::SinkerConfig,
-        task_config::{TaskConfig, DEFAULT_CHECK_LOG_FILE_SIZE, DEFAULT_DB_BATCH_SIZE},
+        task_config::{TaskConfig, DEFAULT_CHECK_LOG_FILE_SIZE},
     },
     error::Error,
     limiter::buffer_limiter::BufferLimiter,
@@ -118,6 +119,7 @@ const DEFAULT_STATISTIC_LOG_DIR_PLACEHOLDER: &str = "LOG_DIR_PLACEHOLDER/statist
 
 fn init_task_check_summary() -> CheckSummaryLog {
     CheckSummaryLog {
+        start_time: Local::now().to_rfc3339(),
         is_consistent: true,
         ..Default::default()
     }
@@ -318,13 +320,6 @@ impl TaskRunner {
 
     async fn start_multi_task(&self, task_context: TaskContext) -> anyhow::Result<()> {
         let mut pending_tasks = self.build_pending_tasks(task_context, true).await?;
-        if self.needs_standalone_snapshot_struct_check() {
-            if let Some(struct_task) = pending_tasks.pop_front() {
-                self.clone()
-                    .start_single_task(struct_task, false, None)
-                    .await?;
-            }
-        }
 
         // start a thread to flush global monitors
         let global_shut_down = Arc::new(AtomicBool::new(false));
@@ -1592,49 +1587,6 @@ impl TaskRunner {
         let extractor_client = original_task_context.extractor_client.clone();
         let sinker_client = original_task_context.sinker_client.clone();
 
-        if self.needs_standalone_snapshot_struct_check() {
-            let struct_extractor_config = match &self.config.extractor {
-                ExtractorConfig::MysqlSnapshot {
-                    url,
-                    connection_auth,
-                    ..
-                } => ExtractorConfig::MysqlStruct {
-                    url: url.clone(),
-                    connection_auth: connection_auth.clone(),
-                    db: String::new(),
-                    dbs: schemas.clone(),
-                    db_batch_size: DEFAULT_DB_BATCH_SIZE,
-                },
-                ExtractorConfig::PgSnapshot {
-                    url,
-                    connection_auth,
-                    ..
-                } => ExtractorConfig::PgStruct {
-                    url: url.clone(),
-                    connection_auth: connection_auth.clone(),
-                    schema: String::new(),
-                    schemas: schemas.clone(),
-                    do_global_structs: true,
-                    db_batch_size: DEFAULT_DB_BATCH_SIZE,
-                },
-                _ => unreachable!("standalone snapshot check only reaches snapshot extractor"),
-            };
-            pending_tasks.push_back(TaskContext {
-                extractor_config: struct_extractor_config,
-                router: router.clone(),
-                id: String::new(),
-                extractor_client: extractor_client.clone(),
-                sinker_client: sinker_client.clone(),
-                recorder: original_task_context.recorder.clone(),
-                recovery: original_task_context.recovery.clone(),
-                checker_state_store: original_task_context.checker_state_store.clone(),
-                check_summary: original_task_context.check_summary.clone(),
-                partition_cols: original_task_context.partition_cols.clone(),
-                enqueue_limiter: original_task_context.enqueue_limiter.clone(),
-                dequeue_limiter: original_task_context.dequeue_limiter.clone(),
-            });
-        }
-
         let is_db_extractor_config = matches!(
             &self.config.extractor,
             ExtractorConfig::MysqlStruct { .. } | ExtractorConfig::PgStruct { .. }
@@ -1812,19 +1764,6 @@ impl TaskRunner {
                 check: Some(CheckMode::Standalone),
                 ..
             })
-        )
-    }
-
-    fn needs_standalone_snapshot_struct_check(&self) -> bool {
-        matches!(
-            self.task_type,
-            Some(TaskType {
-                kind: TaskKind::Snapshot,
-                check: Some(CheckMode::Standalone),
-            })
-        ) && matches!(
-            self.config.extractor_basic.db_type,
-            DbType::Mysql | DbType::Pg
         )
     }
 

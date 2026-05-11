@@ -46,7 +46,8 @@ url=mysql://user1:abc%25%24%23%3F%40@127.0.0.1:3307?ssl-mode=disabled
 The `[checker]` section is used by three documented data check flows:
 - Standalone snapshot check: run a snapshot check task only (no data write). Set
   `sink_type=dummy` or omit `[sinker]`, and configure the checker target explicitly in
-  `[checker]`.
+  `[checker]`. Standalone snapshot checker targets support MySQL and PostgreSQL only; MongoDB
+  checker targets are not supported.
 - Inline snapshot check: for snapshot tasks with `sink_type=write`, the checker runs after sink
   and reuses the parsed `[sinker]` target directly.
 - Inline cdc check: for CDC tasks with `extract_type=cdc` and `sink_type=write`, the checker

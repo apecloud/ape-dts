@@ -44,7 +44,8 @@ url=mysql://user1:abc%25%24%23%3F%40@127.0.0.1:3307?ssl-mode=disabled
 
 `[checker]` 对应三种已文档化的数据校验形态：
 - standalone snapshot check：只运行 snapshot 校验任务，不执行写入。设置 `sink_type=dummy`
-  或直接省略 `[sinker]`，并在 `[checker]` 中显式配置校验目标。
+  或直接省略 `[sinker]`，并在 `[checker]` 中显式配置校验目标。Standalone snapshot checker
+  target 仅支持 MySQL 和 PostgreSQL，不支持 MongoDB checker target。
 - inline snapshot check：用于 `sink_type=write` 的 snapshot 任务，checker 会在写入后执行，
   并直接复用 `[sinker]` 已解析的目标端配置。
 - inline cdc check：用于 `extract_type=cdc` 且 `sink_type=write` 的 CDC 任务，checker 会在

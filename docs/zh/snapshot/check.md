@@ -18,8 +18,9 @@ PK hash 抽样。
 - 使用 `extract_type=snapshot`。
 - 设置 `sink_type=dummy`，或直接省略 `[sinker]`。
 - 在 `[checker]` 中显式配置校验目标，并设置 `[checker].enable=true`。
-- 按目标类型使用底层 merge 并行器：MySQL/PG 使用 `parallel_type=rdb_merge`，MongoDB 使用
-  `parallel_type=mongo`。
+- Standalone snapshot checker target 仅支持 MySQL 和 PostgreSQL，不支持 MongoDB checker
+  target。
+- 使用 `parallel_type=rdb_merge`。
 
 ```text
 源端数据

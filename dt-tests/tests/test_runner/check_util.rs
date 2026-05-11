@@ -110,6 +110,7 @@ impl CheckUtil {
             assert_eq!(expect.miss_count, actual.miss_count, "miss_count mismatch");
             assert_eq!(expect.diff_count, actual.diff_count, "diff_count mismatch");
             assert_eq!(expect.skip_count, actual.skip_count, "skip_count mismatch");
+            assert_eq!(expect.sql_count, actual.sql_count, "sql_count mismatch");
         }
         Ok(())
     }

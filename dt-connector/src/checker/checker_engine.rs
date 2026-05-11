@@ -844,6 +844,9 @@ impl<C: Checker> DataChecker<C> {
             } else {
                 rows
             };
+            if rows_to_fetch.is_empty() {
+                continue;
+            }
             let first_row = rows_to_fetch.first().context("checker group is empty")?;
             let fetch_result = self.checker.fetch(&rows_to_fetch).await?;
             let tb_meta = fetch_result.tb_meta;
@@ -1094,7 +1097,7 @@ mod tests {
     }
 
     #[test]
-    fn sample_uses_pk_key_not_row_contents() {
+    fn sampling_uses_pk_hash_and_filters_before_fetch() {
         let tb_meta = build_mysql_tb_meta();
         let row_a = build_insert_row(7, "alice");
         let row_b = build_insert_row(7, "bob");
@@ -1106,33 +1109,24 @@ mod tests {
             .unwrap();
 
         assert_eq!(key_a, key_b);
-        let sample_rate = ((key_a % 100) as u8 + 1).min(100);
-        assert_eq!(
-            DataChecker::<DummyChecker>::should_sample_check_row(Some(sample_rate), key_a),
-            DataChecker::<DummyChecker>::should_sample_check_row(Some(sample_rate), key_b)
-        );
-    }
-
-    #[test]
-    fn sample_policy_uses_pk_hash_bucket() {
-        let tb_meta = build_mysql_tb_meta();
-        let row = build_insert_row(11, "carol");
-        let key = DataChecker::<DummyChecker>::lookup_match_key(&row, tb_meta.basic())
-            .unwrap()
-            .unwrap();
-        let bucket = (key % 100) as u8;
+        let bucket = (key_a % 100) as u8;
         let passing_rate = (bucket + 1).min(100);
-
         assert!(DataChecker::<DummyChecker>::should_sample_check_row(
             Some(passing_rate),
-            key,
+            key_a,
         ));
         if bucket > 0 {
             assert!(!DataChecker::<DummyChecker>::should_sample_check_row(
                 Some(bucket),
-                key,
+                key_a,
             ));
         }
+
+        let row = build_insert_row(1, "not-sampled");
+        let rows =
+            DataChecker::<DummyChecker>::sample_rows_before_fetch(&[&row], Some(0), &tb_meta)
+                .unwrap();
+        assert!(rows.is_empty());
     }
 
     #[test]

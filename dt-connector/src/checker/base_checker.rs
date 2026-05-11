@@ -1018,19 +1018,16 @@ mod tests {
     }
 
     #[test]
-    fn summary_with_skips_is_not_consistent() {
+    fn summary_with_skips_or_init_failure_is_not_consistent() {
         let summary = CheckSummaryLog {
             skip_count: 1,
             ..Default::default()
         };
 
         assert!(!super::is_summary_consistent(&summary, false));
-    }
-
-    #[test]
-    fn summary_with_init_failure_is_not_consistent() {
-        let summary = CheckSummaryLog::default();
-
-        assert!(!super::is_summary_consistent(&summary, true));
+        assert!(!super::is_summary_consistent(
+            &CheckSummaryLog::default(),
+            true
+        ));
     }
 }

@@ -18,8 +18,9 @@ Data check is documented in three flows:
 - Use `extract_type=snapshot`.
 - Set `sink_type=dummy` or omit `[sinker]`.
 - Configure the checker target explicitly in `[checker]`, and set `[checker].enable=true`.
-- Use the merge-style parallelizer for the target type: `parallel_type=rdb_merge` for MySQL/PG,
-  `parallel_type=mongo` for MongoDB.
+- Standalone snapshot checker targets support MySQL and PostgreSQL only; MongoDB checker targets
+  are not supported.
+- Use `parallel_type=rdb_merge`.
 
 ```text
 source rows

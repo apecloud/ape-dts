@@ -4,6 +4,7 @@ use std::time::Duration;
 
 use anyhow::{bail, Context};
 use async_mutex::Mutex;
+use chrono::Local;
 use sqlx::{MySql, Pool, Postgres};
 use tokio::time::sleep;
 
@@ -40,6 +41,7 @@ pub struct StructCheckerHandle {
     task_monitor: Option<Arc<TaskMonitor>>,
     src_sql_map: HashMap<String, String>,
     dbs: HashSet<String>,
+    start_time: String,
 }
 
 fn struct_table_summary(key: &str, miss: bool, diff: bool) -> Option<CheckTableSummaryLog> {
@@ -85,6 +87,7 @@ impl StructCheckerHandle {
             task_monitor,
             src_sql_map: HashMap::new(),
             dbs: HashSet::new(),
+            start_time: Local::now().to_rfc3339(),
         }
     }
 
@@ -183,6 +186,7 @@ impl StructCheckerHandle {
         Ok(Self::compare_sql_maps(
             src_sql_map,
             dst_map,
+            &self.start_time,
             log_enabled,
             self.output_revise_sql,
         ))
@@ -191,10 +195,15 @@ impl StructCheckerHandle {
     fn compare_sql_maps(
         src_sql_map: &HashMap<String, String>,
         mut dst_map: HashMap<String, String>,
+        start_time: &str,
         log_enabled: bool,
         output_revise_sql: bool,
     ) -> CheckSummaryLog {
-        let mut summary = CheckSummaryLog::default();
+        let mut summary = CheckSummaryLog {
+            start_time: start_time.to_string(),
+            ..Default::default()
+        };
+        let mut sql_count = 0usize;
 
         for (key, src_sql) in src_sql_map.iter() {
             match dst_map.remove(key) {
@@ -213,6 +222,7 @@ impl StructCheckerHandle {
                     }
                     if output_revise_sql && log_enabled {
                         log_sql!("{}", src_sql);
+                        sql_count += 1;
                     }
                 }
                 Some(dst_sql) => {
@@ -231,6 +241,7 @@ impl StructCheckerHandle {
                         }
                         if output_revise_sql && log_enabled {
                             log_sql!("{}", src_sql);
+                            sql_count += 1;
                         }
                     }
                 }
@@ -253,6 +264,10 @@ impl StructCheckerHandle {
         }
 
         summary.is_consistent = summary.miss_count == 0 && summary.diff_count == 0;
+        if output_revise_sql && sql_count > 0 {
+            summary.sql_count = Some(sql_count);
+        }
+        summary.end_time = Local::now().to_rfc3339();
         summary
     }
 
@@ -319,5 +334,31 @@ impl StructCheckerHandle {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::StructCheckerHandle;
+    use std::collections::HashMap;
+
+    #[test]
+    fn compare_sql_maps_sets_time_and_sql_count() {
+        let src_sql_map = HashMap::from([(
+            "table.s1.t1".to_string(),
+            "CREATE TABLE s1.t1(id bigint)".to_string(),
+        )]);
+        let summary = StructCheckerHandle::compare_sql_maps(
+            &src_sql_map,
+            HashMap::new(),
+            "unit-start",
+            true,
+            true,
+        );
+
+        assert_eq!(summary.start_time, "unit-start");
+        assert!(!summary.end_time.is_empty());
+        assert_eq!(summary.sql_count, Some(1));
+        assert_eq!(summary.miss_count, 1);
     }
 }
