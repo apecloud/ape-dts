@@ -46,7 +46,8 @@ url=mysql://user1:abc%25%24%23%3F%40@127.0.0.1:3307?ssl-mode=disabled
 The `[checker]` section is used by three documented data check flows:
 - Standalone snapshot check: run a snapshot check task only (no data write). Set
   `sink_type=dummy` or omit `[sinker]`, and configure the checker target explicitly in
-  `[checker]`. Standalone snapshot checker targets support MySQL, PostgreSQL, and MongoDB.
+  `[checker]`. Standalone snapshot checker targets support MySQL, PostgreSQL, and MongoDB. This
+  flow is data-only and does not run structure check automatically.
 - Inline snapshot check: for snapshot tasks with `sink_type=write`, the checker runs after sink
   and reuses the parsed `[sinker]` target directly.
 - Inline cdc check: for CDC tasks with `extract_type=cdc` and `sink_type=write`, the checker
@@ -87,11 +88,12 @@ Notes:
 
 **General behavior**
 - Checker only supports `[pipeline] pipeline_type=basic`.
-- `sample_rate` only supports snapshot and inline CDC checks. Standalone MySQL/PostgreSQL snapshot
-  check applies it during snapshot extraction by record position, so later checker work receives
-  fewer rows. Inline snapshot check and inline CDC check apply deterministic PK-hash sampling on
-  the checker side: the checker computes each PK hash bucket as `row_key % 100` and fetches/compares
-  only valid-key rows whose bucket falls in `[0, sample_rate)`.
+- `sample_rate` only supports snapshot check and inline CDC check. Standalone MySQL/PostgreSQL
+  snapshot check applies it during extraction by record position, so later checker work receives
+  fewer rows. Standalone MongoDB snapshot check, inline snapshot check, and inline CDC check apply
+  deterministic checker-side key-hash sampling: the checker computes each key bucket as
+  `row_key % 100` and fetches/compares only valid-key rows whose bucket falls in
+  `[0, sample_rate)`.
 - `queue_size` counts queued checker DML batches, not rows. Control signals such as checkpoint and
   `refresh_meta` bypass this queue.
 - In inline write-after-check flows, if the checker DML queue is full, the oldest pending batch is
@@ -105,7 +107,9 @@ Notes:
   smaller and upstream partitioning can also change the actual count.
 - For standalone / dummy-sinker check flows, queued batch size is decided by the upstream
   parallelizer. After dequeue, the checker processes non-CDC rows in chunks of `[checker].batch_size`.
-- Struct tasks only support the standalone target-selection rules above. If `[checker]` is enabled for struct tasks, use `sink_type=dummy` or omit `[sinker]`.
+- Struct tasks only support standalone MySQL/PostgreSQL checker targets. If `[checker]` is enabled
+  for struct tasks, use `sink_type=dummy` or omit `[sinker]`. Run structure check explicitly when
+  structure verification is needed; standalone snapshot check does not start it automatically.
 - Inline snapshot check is supported only when `[extractor] extract_type=snapshot`,
   `[sinker] sink_type=write`, and `[sinker].db_type` is `mysql`, `pg`, or `mongo`.
 - Inline cdc check is currently supported only when `[extractor] extract_type=cdc`,

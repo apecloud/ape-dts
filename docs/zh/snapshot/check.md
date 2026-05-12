@@ -7,7 +7,8 @@
 全量校验和 inline CDC check 支持通过 `[checker].sample_rate` 进行抽样。
 Standalone MySQL/PostgreSQL snapshot check 会在抽取阶段按记录位置应用 `sample_rate`，以减少
 后续 checker 工作量。该抽样是近似策略，并且会在每个抽取 segment/chunk 内独立应用。
-Inline snapshot check 和 inline CDC check 会在 checker 侧进行确定性 PK hash 抽样。
+Standalone MongoDB snapshot check、inline snapshot check 和 inline CDC check 会在 checker
+侧进行确定性 key hash 抽样。
 
 数据校验当前按三种形态进行文档说明：
 
@@ -21,6 +22,8 @@ Inline snapshot check 和 inline CDC check 会在 checker 侧进行确定性 PK 
 - Standalone snapshot checker target 支持 MySQL、PostgreSQL 和 MongoDB。
 - MySQL/PostgreSQL checker target 使用 `parallel_type=rdb_merge`；MongoDB checker target
   使用 `parallel_type=mongo`。
+- 该形态只做数据校验，不会自动执行结构校验；需要结构校验时请显式运行 standalone
+  structure check。
 
 ```text
 源端数据
@@ -130,9 +133,9 @@ Inline snapshot check 和 inline CDC check 会在 checker 侧进行确定性 PK 
 全量校验和 inline CDC check 可在 `[checker]` 中添加 `sample_rate`。对于 standalone
 MySQL/PostgreSQL snapshot check，`sample_rate=25` 表示在抽取阶段抽取约 25% 的记录；这是
 按 segment/chunk 独立执行的近似策略，因此最终表级比例可能浮动，小 chunk 尤其明显。对于
-inline snapshot check 和 inline CDC check，`sample_rate=25` 表示校验 PK hash bucket 落在
-`[0, 25)` 范围内的行/变更；候选行/变更仍会进入 checker 队列，checker 只 fetch/比较被抽样
-命中且 key 有效的行。
+standalone MongoDB snapshot check、inline snapshot check 和 inline CDC check，
+`sample_rate=25` 表示校验 key hash bucket 落在 `[0, 25)` 范围内的行/变更；候选行/变更仍会
+进入 checker 队列，checker 只 fetch/比较被抽样命中且 key 有效的行。
 
 ```
 [checker]
@@ -306,9 +309,9 @@ INSERT INTO `test_db_1`.`test_table`(`id`,`name`,`age`,`email`) VALUES(3,'Charli
 
 `skip_count` 用于记录被 checker 跳过的行，例如行主键/唯一键无法参与哈希计算时。
 
-`summary.log` 始终包含 `tables` 字段，用于记录每张表的 checked/miss/diff/skip 计数。
-表级条目未显式改变目标端对象时不输出 `target_schema`/`target_tb`；只要任一目标名称
-发生变化，两个字段都会同时输出。
+当存在表级计数时，`summary.log` 会包含 `tables` 字段，用于记录每张表的
+checked/miss/diff/skip 计数，且会省略值为 0 的字段。表级条目未显式改变目标端对象时不输出
+`target_schema`/`target_tb`；只要任一目标名称发生变化，两个字段都会同时输出。
 
 ```json
 {"start_time":"2023-09-01T12:00:00+08:00","end_time":"2023-09-01T12:00:01+08:00","is_consistent":false,"miss_count":1,"diff_count":2,"skip_count":1,"sql_count":3,"tables":[{"schema":"test_db_1","tb":"test_table","checked_count":10,"miss_count":1,"diff_count":2,"skip_count":1}]}

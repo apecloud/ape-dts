@@ -7,8 +7,8 @@ Supports comparison for MySQL, PostgreSQL, and MongoDB.
 Snapshot and inline CDC checks support sampling via `[checker].sample_rate`.
 For standalone MySQL/PostgreSQL snapshot check, `sample_rate` is applied during extraction by
 record position to reduce checker-side work. The sampling is approximate and applies independently
-inside each extraction segment/chunk. Inline snapshot check and inline CDC check apply deterministic
-PK-hash sampling on the checker side.
+inside each extraction segment/chunk. Standalone MongoDB snapshot check, inline snapshot check, and
+inline CDC check apply deterministic checker-side key-hash sampling.
 
 Data check is documented in three flows:
 
@@ -22,6 +22,8 @@ Data check is documented in three flows:
 - Standalone snapshot checker targets support MySQL, PostgreSQL, and MongoDB.
 - Use `parallel_type=rdb_merge` for MySQL/PostgreSQL checker targets, and `parallel_type=mongo`
   for MongoDB checker targets.
+- This flow is data-only. It does not run structure check automatically; run standalone structure
+  check explicitly when structure verification is required.
 
 ```text
 source rows
@@ -157,10 +159,10 @@ templates now separate standalone snapshot check, inline snapshot check, and inl
 For snapshot and inline CDC checks, add `sample_rate` to the `[checker]` section. For standalone
 MySQL/PostgreSQL snapshot check, `sample_rate=25` samples about 25% of extracted records before they
 enter later checker work; this is an approximate per-segment policy, so the final table-level ratio
-can vary, especially for small extraction chunks. For inline snapshot check and inline CDC check,
-`sample_rate=25` checks rows/changes whose PK hash bucket falls in `[0, 25)`; candidate rows/changes
-still enter the checker queue, and the checker fetches/compares only valid-key rows whose bucket is
-sampled in.
+can vary, especially for small extraction chunks. For standalone MongoDB snapshot check, inline
+snapshot check, and inline CDC check, `sample_rate=25` checks rows/changes whose key hash bucket
+falls in `[0, 25)`; candidate rows/changes still enter the checker queue, and the checker
+fetches/compares only valid-key rows whose bucket is sampled in.
 
 ```
 [checker]
@@ -337,9 +339,10 @@ The summary log contains the overall results of the check, such as start_time, e
 
 `skip_count` records rows skipped by the checker, for example when the row key cannot be hashed.
 
-`summary.log` always includes `tables`, which stores per-table checked/miss/diff/skip counts.
-Table entries omit `target_schema`/`target_tb` when the destination object is not explicitly
-different. If either target name differs, both fields are included.
+`summary.log` includes `tables` when table-level counters are available. Table entries store
+per-table checked/miss/diff/skip counts and omit zero-valued fields. They omit
+`target_schema`/`target_tb` when the destination object is not explicitly different. If either
+target name differs, both fields are included.
 
 ```json
 {"start_time":"2023-09-01T12:00:00+08:00","end_time":"2023-09-01T12:00:01+08:00","is_consistent":false,"miss_count":1,"diff_count":2,"skip_count":1,"sql_count":3,"tables":[{"schema":"test_db_1","tb":"test_table","checked_count":10,"miss_count":1,"diff_count":2,"skip_count":1}]}

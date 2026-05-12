@@ -15,7 +15,8 @@
 `output_revise_sql=true` 时，还会额外输出 `sql.log`。`sql.log` 是纯 SQL 文件，每行一条
 语句，不包含 JSON 包装，也不携带 schema/table/id metadata。
 
-`miss.log` 和 `diff.log` 均采用相同的 JSON 结构（`StructCheckLog`）：
+`miss.log` 和 `diff.log` 均采用相同的 JSON 结构（`StructCheckLog`）。`src_sql` 与
+`dst_sql` 是可选字段，仅在对应侧存在结构定义时输出：
 
 ```json
 {
@@ -24,8 +25,8 @@
   "id_col_values": {
     "object_key": "type.schema.table"
   },
-  "src_sql": "source definition SQL, when the source definition exists",
-  "dst_sql": "target definition SQL, when the target definition exists"
+  "src_sql": "source definition SQL",
+  "dst_sql": "target definition SQL"
 }
 ```
 

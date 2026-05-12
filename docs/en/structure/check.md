@@ -15,7 +15,8 @@ Structure check writes `miss.log`, `diff.log`, and `summary.log` as JSON Lines. 
 `output_revise_sql=true`, it also writes repair statements to `sql.log`. `sql.log` is plain SQL,
 one statement per line, with no JSON wrapper or schema/table/id metadata.
 
-`miss.log` and `diff.log` use the same JSON structure (`StructCheckLog`):
+`miss.log` and `diff.log` use the same JSON structure (`StructCheckLog`). `src_sql` and
+`dst_sql` are optional and appear only when the corresponding side has a definition:
 
 ```json
 {
@@ -24,16 +25,16 @@ one statement per line, with no JSON wrapper or schema/table/id metadata.
   "id_col_values": {
     "object_key": "type.schema.table"
   },
-  "src_sql": "source definition SQL, when the source definition exists",
-  "dst_sql": "target definition SQL, when the target definition exists"
+  "src_sql": "source definition SQL",
+  "dst_sql": "target definition SQL"
 }
 ```
 
 There is no top-level `key`, `target_schema`, or `target_tb` field. The structure object identity is
 carried by `id_col_values.object_key`. `src_sql` is included when the source-side definition exists;
-`dst_sql` is included when the target-side definition exists. A source-only missing object usually
-has only `src_sql`; a different object has both `src_sql` and `dst_sql`; a target-only extra object
-has only `dst_sql`.
+`dst_sql` is included when the target-side definition exists. Source-only missing objects usually
+have only `src_sql`; objects with different definitions have both `src_sql` and `dst_sql`;
+target-only extra objects have only `dst_sql`.
 
 `object_key` format:
 

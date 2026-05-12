@@ -45,7 +45,7 @@ url=mysql://user1:abc%25%24%23%3F%40@127.0.0.1:3307?ssl-mode=disabled
 `[checker]` 对应三种已文档化的数据校验形态：
 - standalone snapshot check：只运行 snapshot 校验任务，不执行写入。设置 `sink_type=dummy`
   或直接省略 `[sinker]`，并在 `[checker]` 中显式配置校验目标。Standalone snapshot checker
-  target 支持 MySQL、PostgreSQL 和 MongoDB。
+  target 支持 MySQL、PostgreSQL 和 MongoDB。该形态只做数据校验，不会自动执行结构校验。
 - inline snapshot check：用于 `sink_type=write` 的 snapshot 任务，checker 会在写入后执行，
   并直接复用 `[sinker]` 已解析的目标端配置。
 - inline cdc check：用于 `extract_type=cdc` 且 `sink_type=write` 的 CDC 任务，checker 会在
@@ -86,9 +86,10 @@ struct check 仅支持 standalone MySQL/PostgreSQL checker target。
 **通用行为**
 - checker 仅支持 `[pipeline] pipeline_type=basic`。
 - `sample_rate` 仅支持 snapshot check 和 inline CDC check。Standalone MySQL/PostgreSQL snapshot
-  check 会在 snapshot 抽取阶段按记录位置应用该比例，减少后续 checker 工作量。Inline snapshot
-  check 和 inline CDC check 在 checker 侧进行确定性 PK hash 抽样：checker 将 PK hash bucket
-  归一化为 `row_key % 100`，只 fetch/比较 bucket 落在 `[0, sample_rate)` 范围内且 key 有效的行。
+  check 会在 snapshot 抽取阶段按记录位置应用该比例，减少后续 checker 工作量。Standalone
+  MongoDB snapshot check、inline snapshot check 和 inline CDC check 在 checker 侧进行确定性
+  key hash 抽样：checker 将 key bucket 归一化为 `row_key % 100`，只 fetch/比较 bucket 落在
+  `[0, sample_rate)` 范围内且 key 有效的行。
 - `queue_size` 统计的是 checker DML 队列中的待处理批次数，不是行数。checkpoint、`refresh_meta`
   这类控制信号会绕过这条队列。
 - 在 inline 写后校验链路里，如果 checker DML 队列已满，会丢弃最旧的待校验批次并记录 warning
@@ -101,7 +102,9 @@ struct check 仅支持 standalone MySQL/PostgreSQL checker target。
   `[sinker].batch_size` 行，但最后一个批次可能更小，上游分片策略也会影响实际条数。
 - 对 standalone / dummy-sinker 校验链路来说，进入队列的单批大小由上游 parallelizer 决定；
   出队后，checker 会再按 `[checker].batch_size` 对非 CDC 数据做内部切块处理。
-- struct 任务只支持 standalone 目标选择规则。若为 struct 任务启用 `[checker]`，请使用 `sink_type=dummy` 或直接省略 `[sinker]`。
+- struct 任务只支持 standalone MySQL/PostgreSQL checker target。若为 struct 任务启用
+  `[checker]`，请使用 `sink_type=dummy` 或直接省略 `[sinker]`。需要结构校验时请显式运行
+  struct check；standalone snapshot check 不会自动启动结构校验。
 - inline snapshot check 仅支持 `[extractor] extract_type=snapshot`、`[sinker] sink_type=write`，
   且 `[sinker].db_type` 为 `mysql`、`pg`、`mongo` 的写入链路。
 - inline cdc check 当前仅支持 `[extractor] extract_type=cdc`、`[sinker] sink_type=write`，
