@@ -27,6 +27,40 @@ impl Drop for TableMonitorGuard {
 pub struct SnapshotDispatcher;
 
 impl SnapshotDispatcher {
+    pub async fn dispatch_table_work_source<TableId, Run, Fut>(
+        tables: Vec<TableId>,
+        parallel_size: usize,
+        worker_name: &'static str,
+        run: Run,
+    ) -> anyhow::Result<()>
+    where
+        TableId: Send + 'static,
+        Run: Fn(TableId) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = anyhow::Result<()>> + Send + 'static,
+    {
+        let run = Arc::new(run);
+        Self::dispatch_work_source(
+            tables.into_iter().collect::<VecDeque<_>>(),
+            parallel_size,
+            worker_name,
+            |mut tables: VecDeque<TableId>| async move {
+                let work = tables.pop_front();
+                Ok((tables, work))
+            },
+            {
+                let run = Arc::clone(&run);
+                move |table_id| {
+                    let run = Arc::clone(&run);
+                    async move { run(table_id).await }
+                }
+            },
+            |tables, _| async move { Ok(tables) },
+        )
+        .await?;
+
+        Ok(())
+    }
+
     pub async fn dispatch_work_source<
         State,
         Work,
@@ -87,55 +121,6 @@ impl SnapshotDispatcher {
         }
 
         Ok(state)
-    }
-
-    pub async fn dispatch_tables<TableId, Run, Fut>(
-        tables: Vec<TableId>,
-        parallel_type: RdbParallelType,
-        parallel_size: usize,
-        worker_name: &'static str,
-        run: Run,
-    ) -> anyhow::Result<()>
-    where
-        TableId: Send + 'static,
-        Run: Fn(TableId) -> Fut + Send + Sync + 'static,
-        Fut: Future<Output = anyhow::Result<()>> + Send + 'static,
-    {
-        if parallel_size < 1 {
-            bail!("parallel_size must be greater than 0");
-        }
-        let run = Arc::new(run);
-
-        match parallel_type {
-            RdbParallelType::Table => {
-                Self::dispatch_work_source(
-                    tables.into_iter().collect::<VecDeque<_>>(),
-                    parallel_size,
-                    worker_name,
-                    |mut tables: VecDeque<TableId>| async move {
-                        let work = tables.pop_front();
-                        Ok((tables, work))
-                    },
-                    {
-                        let run = Arc::clone(&run);
-                        move |table_id| {
-                            let run = Arc::clone(&run);
-                            async move { run(table_id).await }
-                        }
-                    },
-                    |tables, _| async move { Ok(tables) },
-                )
-                .await?;
-            }
-
-            RdbParallelType::Chunk => {
-                for table_id in tables {
-                    Arc::clone(&run)(table_id).await?;
-                }
-            }
-        }
-
-        Ok(())
     }
 
     pub fn clone_extract_state(extract_state: &ExtractState) -> ExtractState {

@@ -48,9 +48,8 @@ impl Extractor for FoxlakeS3Extractor {
 
         let tables = self.collect_tables();
         let this = self.clone_for_dispatch();
-        SnapshotDispatcher::dispatch_tables(
+        SnapshotDispatcher::dispatch_table_work_source(
             tables,
-            self.parallel_type.clone(),
             self.parallel_size,
             "foxlake table worker",
             move |(schema, tb)| {
