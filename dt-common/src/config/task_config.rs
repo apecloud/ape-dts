@@ -109,7 +109,7 @@ const REPLACE: &str = "replace";
 const DISABLE_FOREIGN_KEY_CHECKS: &str = "disable_foreign_key_checks";
 const RESUME_TYPE: &str = "resume_type";
 const CHECKER_QUEUE_SIZE: &str = "queue_size";
-const CDC_CHECK_LOG_S3: &str = "cdc_check_log_s3";
+const CHECK_LOG_S3: &str = "check_log_s3";
 const S3_KEY_PREFIX: &str = "s3_key_prefix";
 const CDC_CHECK_LOG_INTERVAL_SECS: &str = "cdc_check_log_interval_secs";
 const SAMPLE_RATE: &str = "sample_rate";
@@ -201,11 +201,6 @@ impl TaskConfig {
                             "config [checker] is not supported for [checker] db_type={} with [extractor] extract_type=struct; standalone struct check only supports mysql and pg checker targets",
                             checker_cfg.db_type
                         )
-                    } else if matches!(sinker_basic.sink_type, SinkType::Dummy)
-                        && matches!(extractor_basic.extract_type, ExtractType::Snapshot)
-                        && matches!(checker_cfg.db_type, DbType::Mongo)
-                    {
-                        "standalone snapshot check does not support [checker] db_type=mongo; use mysql or pg checker targets".to_string()
                     } else if matches!(extractor_basic.extract_type, ExtractType::Cdc)
                         && matches!(sinker_basic.sink_type, SinkType::Write)
                     {
@@ -229,6 +224,12 @@ impl TaskConfig {
                     Error::ConfigError(message)
                 })?;
                 Self::validate_checker_target_config(&loader, task_type.is_inline_check())?;
+                if checker_cfg.check_log_s3 && !task_type.is_cdc_inline_check() {
+                    bail!(Error::ConfigError(format!(
+                        "config [checker].{} only supports inline cdc check",
+                        CHECK_LOG_S3
+                    )));
+                }
                 if matches!(
                     task_type,
                     TaskType {
@@ -427,9 +428,11 @@ impl TaskConfig {
                 (TaskKind::Struct, SinkType::Dummy, DbType::Mysql | DbType::Pg) => {
                     Some(CheckMode::Standalone)
                 }
-                (TaskKind::Snapshot, SinkType::Dummy, DbType::Mysql | DbType::Pg) => {
-                    Some(CheckMode::Standalone)
-                }
+                (
+                    TaskKind::Snapshot,
+                    SinkType::Dummy,
+                    DbType::Mysql | DbType::Pg | DbType::Mongo,
+                ) => Some(CheckMode::Standalone),
                 (TaskKind::Snapshot, SinkType::Write, db_type)
                     if Self::write_sink_supports_inline_checker(db_type) =>
                 {
@@ -1133,11 +1136,7 @@ impl TaskConfig {
                 CHECK_LOG_MAX_ROWS,
                 default.check_log_max_rows,
             ),
-            cdc_check_log_s3: loader.get_with_default(
-                CHECKER,
-                CDC_CHECK_LOG_S3,
-                default.cdc_check_log_s3,
-            ),
+            check_log_s3: loader.get_with_default(CHECKER, CHECK_LOG_S3, default.check_log_s3),
             s3_config: {
                 let bucket: String = loader.get_optional(CHECKER, "s3_bucket");
                 if bucket.is_empty() {
@@ -1380,7 +1379,7 @@ mod tests {
         sync::atomic::{AtomicU64, Ordering},
     };
 
-    use super::TaskConfig;
+    use super::{CheckMode, TaskConfig, TaskKind, TaskType};
 
     static NEXT_CONFIG_ID: AtomicU64 = AtomicU64::new(0);
 
@@ -1531,10 +1530,41 @@ enable=false
     }
 
     #[test]
-    fn standalone_checker_accepts_s3_output_config() {
-        let config_path = write_temp_task_config(&snapshot_check_config(
+    fn snapshot_checker_accepts_mongo_standalone_target() {
+        let config_path = write_temp_task_config(
+            r#"[extractor]
+db_type=mongo
+extract_type=snapshot
+url=mongodb://127.0.0.1:27017
+
+[checker]
+enable=true
+db_type=mongo
+url=mongodb://127.0.0.1:27018
+
+[parallelizer]
+parallel_type=mongo
+"#,
+        );
+        let result = TaskConfig::new(config_path.to_str().unwrap());
+        fs::remove_file(config_path).unwrap();
+
+        let config = result.expect("mongo standalone snapshot checker config should be valid");
+        assert_eq!(
+            config.task_type(),
+            Some(TaskType::new(
+                TaskKind::Snapshot,
+                Some(CheckMode::Standalone)
+            ))
+        );
+    }
+
+    #[test]
+    fn cdc_checker_accepts_s3_output_config() {
+        let config_path = write_temp_task_config(&cdc_inline_check_config(
+            "rdb_merge",
             r#"
-cdc_check_log_s3=true
+check_log_s3=true
 s3_bucket=ape-dts
 s3_access_key_id=ak
 s3_secret_access_key=sk
@@ -1548,12 +1578,32 @@ s3_key_prefix=check/10001
 
         let config = result.expect("snapshot checker config should be valid");
         let checker = config.checker.expect("checker should exist");
-        assert!(checker.cdc_check_log_s3);
+        assert!(checker.check_log_s3);
         assert_eq!(checker.s3_key_prefix, "check/10001");
         assert_eq!(
             checker.s3_config.expect("s3 config should exist").bucket,
             "ape-dts"
         );
+    }
+
+    #[test]
+    fn standalone_checker_rejects_s3_output_config() {
+        let config_path = write_temp_task_config(&snapshot_check_config(
+            r#"
+check_log_s3=true
+s3_bucket=ape-dts
+"#,
+        ));
+        let result = TaskConfig::new(config_path.to_str().unwrap());
+        fs::remove_file(config_path).unwrap();
+
+        match result {
+            Err(err) => assert_eq!(
+                err.to_string(),
+                "config error: config [checker].check_log_s3 only supports inline cdc check"
+            ),
+            Ok(_) => panic!("expected check_log_s3 validation error"),
+        }
     }
 
     #[test]
@@ -1568,32 +1618,6 @@ s3_key_prefix=check/10001
                 "config error: config [checker].sample_rate must be between 1 and 100, got 0"
             ),
             Ok(_) => panic!("expected sample_rate validation error"),
-        }
-
-        let config_path = write_temp_task_config(
-            r#"[extractor]
-db_type=mysql
-extract_type=snapshot
-url=mysql://127.0.0.1:3306
-
-[checker]
-enable=true
-db_type=mongo
-url=mongodb://127.0.0.1:27017
-
-[parallelizer]
-parallel_type=rdb_merge
-"#,
-        );
-        let result = TaskConfig::new(config_path.to_str().unwrap());
-        fs::remove_file(config_path).unwrap();
-
-        match result {
-            Err(err) => assert_eq!(
-                err.to_string(),
-                "config error: standalone snapshot check does not support [checker] db_type=mongo; use mysql or pg checker targets"
-            ),
-            Ok(_) => panic!("expected unsupported mongo checker target validation error"),
         }
     }
 

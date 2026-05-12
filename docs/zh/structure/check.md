@@ -11,39 +11,62 @@
 
 # 校验结果
 
-结构校验会输出 JSON 格式的 `miss.log`、`diff.log`、`summary.log`；当 `output_revise_sql=true` 时，还会额外输出 `sql.log`。
+结构校验会以 JSON Lines 输出 `miss.log`、`diff.log`、`summary.log`；当
+`output_revise_sql=true` 时，还会额外输出 `sql.log`。`sql.log` 是纯 SQL 文件，每行一条
+语句，不包含 JSON 包装，也不携带 schema/table/id metadata。
 
 `miss.log` 和 `diff.log` 均采用相同的 JSON 结构（`StructCheckLog`）：
 
 ```json
 {
-  "key": "type.schema.table", // 例如: table.db_name.tb_name 或 index.db.tb.idx
-  "src_sql": "CREATE TABLE `table_name` (id INT PRIMARY KEY)",  // 出现在 miss，以及包含源端定义的 diff 条目中
-  "dst_sql": "CREATE TABLE `table_name` (id INT PRIMARY KEY)"   // 出现在 diff 中；仅目标端存在的对象可能只有 dst_sql
+  "schema": "db_name",
+  "tb": "tb_name",
+  "id_col_values": {
+    "object_key": "type.schema.table"
+  },
+  "src_sql": "source definition SQL, when the source definition exists",
+  "dst_sql": "target definition SQL, when the target definition exists"
 }
 ```
 
+结构日志没有顶层 `key`、`target_schema`、`target_tb` 字段。结构对象身份放在
+`id_col_values.object_key`。源端定义存在时输出 `src_sql`，目标端定义存在时输出 `dst_sql`。
+源端独有的缺失对象通常只有 `src_sql`；定义不一致的对象同时包含 `src_sql` 和 `dst_sql`；
+目标端独有的额外对象只有 `dst_sql`。
+
+`object_key` 格式：
+
+```text
+<object_type>.<schema>.<table_or_object>[.<sub_object>]
+```
+
+常见例子包括 `table.struct_check_test_1.not_match_column`、
+`index.struct_check_test_1.not_match_index.i6_miss`、
+`constraint.struct_check_test_1.not_match_missing.not_match_missing_pkey`、
+`table_comment.struct_check_test_1.not_match_comment`、
+`column_comment.struct_check_test_1.not_match_comment.id`。
+
 - `miss.log`（源端存在但目标端缺失）
 ```json
-{"key":"table.struct_check_test_1.not_match_miss","src_sql":"CREATE TABLE IF NOT EXISTS `not_match_miss` (`id` int NOT NULL PRIMARY KEY)"}
-{"key":"index.struct_check_test_1.not_match_index.i6_miss","src_sql":"CREATE INDEX `i6_miss` ON `not_match_index` (`col6`)"}
+{"schema":"struct_check_test_1","tb":"not_match_miss","id_col_values":{"object_key":"table.struct_check_test_1.not_match_miss"},"src_sql":"CREATE TABLE `not_match_miss` (`id` int NOT NULL, PRIMARY KEY (`id`))"}
+{"schema":"struct_check_test_1","tb":"not_match_index","id_col_values":{"object_key":"index.struct_check_test_1.not_match_index.i6_miss"},"src_sql":"CREATE INDEX `i6_miss` ON `not_match_index` (`c6`)"}
 ```
 
 - `diff.log`（对象定义不一致，或对象仅存在于目标端）
 ```json
-{"key":"index.struct_check_test_1.not_match_index","src_sql":"ALTER TABLE `not_match_index` ADD INDEX `idx_v1` (`col1`)","dst_sql":"ALTER TABLE `not_match_index` ADD INDEX `idx_v2` (`col1`)"}
-{"key":"table.struct_check_test_1.not_match_column","src_sql":"CREATE TABLE `not_match_column` (`id` int)","dst_sql":"CREATE TABLE `not_match_column` (`id` bigint)"}
-{"key":"index.struct_check_test_1.full_index_type.index_not_match_name_dst","dst_sql":"CREATE UNIQUE INDEX IF NOT EXISTS \"index_not_match_name_dst\" ON \"struct_check_test_1\".\"full_index_type\" USING btree (unique_col)"}
+{"schema":"struct_check_test_1","tb":"not_match_index","id_col_values":{"object_key":"index.struct_check_test_1.not_match_index"},"src_sql":"CREATE INDEX `i1` ON `not_match_index` (`c1`)","dst_sql":"CREATE INDEX `i1` ON `not_match_index` (`c2`)"}
+{"schema":"struct_check_test_1","tb":"not_match_column","id_col_values":{"object_key":"table.struct_check_test_1.not_match_column"},"src_sql":"CREATE TABLE `not_match_column` (`id` int NOT NULL, PRIMARY KEY (`id`))","dst_sql":"CREATE TABLE `not_match_column` (`id` bigint NOT NULL, PRIMARY KEY (`id`))"}
+{"schema":"struct_check_test_1","tb":"full_index_type","id_col_values":{"object_key":"index.struct_check_test_1.full_index_type.index_not_match_name_dst"},"dst_sql":"CREATE INDEX `index_not_match_name_dst` ON `full_index_type` (`c1`)"}
 ```
 
 - `summary.log`（校验结果概览）
 ```json
-{"start_time": "2023-10-01T10:00:00+08:00", "end_time": "2023-10-01T10:00:05+08:00", "is_consistent": false, "miss_count": 8, "diff_count": 5, "sql_count": 14}
+{"start_time":"2023-10-01T10:00:00+08:00","end_time":"2023-10-01T10:00:05+08:00","is_consistent":false,"miss_count":8,"diff_count":5,"skip_count":0,"sql_count":14,"tables":[{"schema":"struct_check_test_1","tb":"not_match_column","checked_count":0,"miss_count":0,"diff_count":1,"skip_count":0},{"schema":"struct_check_test_1","tb":"not_match_miss","checked_count":0,"miss_count":1,"diff_count":0,"skip_count":0}]}
 ```
 
 - `sql.log`（当配置 `output_revise_sql=true` 时生成）
 ```sql
-CREATE TABLE IF NOT EXISTS `not_match_miss` (`id` int NOT NULL PRIMARY KEY);
+CREATE TABLE IF NOT EXISTS `struct_check_test_1`.`not_match_miss` (`id` int NOT NULL, PRIMARY KEY (`id`));
 ```
 
 # 适用范围

@@ -9,7 +9,7 @@ use super::{
     CheckContext, CheckEntry, CheckInconsistency, Checker, CheckerStoreKey, CheckerTbMeta,
     DataChecker, RecheckKey, RetryItem,
 };
-use crate::checker::check_log::{CheckLog, DiffColValue};
+use crate::checker::check_log::{CheckLog, CheckLogJsonExt, DiffColValue};
 use crate::sinker::base_sinker::BaseSinker;
 use crate::sinker::mongo::mongo_cmd;
 use dt_common::meta::{
@@ -413,10 +413,12 @@ impl<C: Checker> DataChecker<C> {
     }
 
     fn log_entry(entry: &CheckEntry) {
-        if entry.is_miss() {
-            log_miss!("{}", entry.log);
-        } else {
-            log_diff!("{}", entry.log);
+        if let Some(log) = entry.log.to_json_line() {
+            if entry.is_miss() {
+                log_miss!("{}", log);
+            } else {
+                log_diff!("{}", log);
+            }
         }
         if let Some(sql) = &entry.revise_sql {
             log_sql!("{}", sql);
@@ -900,7 +902,10 @@ mod tests {
     };
     use async_trait::async_trait;
     use dt_common::monitor::monitor::Monitor;
-    use std::sync::{atomic::AtomicU64, Arc, Mutex as StdMutex};
+    use std::sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc, Mutex as StdMutex,
+    };
 
     struct DummyChecker;
 
@@ -912,6 +917,25 @@ mod tests {
 
         async fn fetch(&mut self, _src_rows: &[&RowData]) -> anyhow::Result<FetchResult> {
             unreachable!("ut should not call fetch")
+        }
+    }
+
+    struct MetaOnlyChecker {
+        tb_meta: Arc<CheckerTbMeta>,
+        fetch_count: Arc<AtomicU64>,
+    }
+
+    #[async_trait]
+    impl Checker for MetaOnlyChecker {
+        async fn fetch_meta(&mut self, _src_row: &RowData) -> anyhow::Result<Arc<CheckerTbMeta>> {
+            Ok(self.tb_meta.clone())
+        }
+
+        async fn fetch(&mut self, _src_rows: &[&RowData]) -> anyhow::Result<FetchResult> {
+            self.fetch_count.fetch_add(1, Ordering::Relaxed);
+            Err(anyhow::anyhow!(
+                "fetch should not be called for empty sample"
+            ))
         }
     }
 
@@ -1010,6 +1034,22 @@ mod tests {
             DummyChecker,
             "unit-test".to_string(),
             build_ctx(true),
+            CheckerIo {
+                batch_queue: Arc::new(StdMutex::new(LimitedQueue::new(1))),
+                batch_notify: Arc::new(tokio::sync::Notify::new()),
+                dropped_items: Arc::new(AtomicU64::new(0)),
+                control_rx,
+            },
+            "unit-test",
+        )
+    }
+
+    fn build_checker_with<C: Checker>(checker: C, ctx: CheckContext) -> DataChecker<C> {
+        let (_control_tx, control_rx) = tokio::sync::mpsc::unbounded_channel();
+        DataChecker::new(
+            checker,
+            "unit-test".to_string(),
+            ctx,
             CheckerIo {
                 batch_queue: Arc::new(StdMutex::new(LimitedQueue::new(1))),
                 batch_notify: Arc::new(tokio::sync::Notify::new()),
@@ -1127,6 +1167,29 @@ mod tests {
             DataChecker::<DummyChecker>::sample_rows_before_fetch(&[&row], Some(0), &tb_meta)
                 .unwrap();
         assert!(rows.is_empty());
+    }
+
+    #[tokio::test]
+    async fn pre_fetch_sampling_skips_group_when_sample_is_empty() {
+        let tb_meta = Arc::new(build_mysql_tb_meta());
+        let fetch_count = Arc::new(AtomicU64::new(0));
+        let mut ctx = build_ctx(false);
+        ctx.sample_before_fetch = true;
+        ctx.sample_rate = Some(0);
+        let mut checker = build_checker_with(
+            MetaOnlyChecker {
+                tb_meta,
+                fetch_count: fetch_count.clone(),
+            },
+            ctx,
+        );
+
+        checker
+            .process_batch(&[build_insert_row(1, "not-sampled")], false)
+            .await
+            .unwrap();
+
+        assert_eq!(fetch_count.load(Ordering::Relaxed), 0);
     }
 
     #[test]

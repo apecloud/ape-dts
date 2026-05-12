@@ -16,7 +16,9 @@ use tokio::time::{Duration, Instant};
 
 use super::struct_checker::StructCheckerHandle;
 use crate::{
-    checker::check_log::{CheckLog, CheckSummaryLog, CheckTableSummaryLog, DiffColValue},
+    checker::check_log::{
+        CheckLog, CheckLogJsonExt, CheckSummaryLog, CheckTableSummaryLog, DiffColValue,
+    },
     checker::state_store::CheckerStateStore,
     rdb_query_builder::RdbQueryBuilder,
     rdb_router::RdbRouter,
@@ -593,11 +595,19 @@ impl BoundedLineBuffer {
         self.push_bytes(line.as_bytes().to_vec());
     }
 
-    fn push_json<T: Serialize>(&mut self, value: &T) {
-        let Ok(line) = serde_json::to_vec(value) else {
-            return;
+    fn push_json<T: Serialize>(&mut self, value: &T) -> bool {
+        let line = match serde_json::to_vec(value) {
+            Ok(line) => line,
+            Err(e) => {
+                log_warn!(
+                    "Skipping checker JSON output because serialization failed: {}",
+                    e
+                );
+                return false;
+            }
         };
         self.push_bytes(line);
+        true
     }
 
     fn into_bytes(self) -> Vec<u8> {
@@ -644,7 +654,16 @@ struct CheckerIo {
 }
 
 impl<C: Checker> DataChecker<C> {
-    pub fn new(checker: C, task_id: String, ctx: CheckContext, io: CheckerIo, name: &str) -> Self {
+    pub fn new(
+        checker: C,
+        task_id: String,
+        mut ctx: CheckContext,
+        io: CheckerIo,
+        name: &str,
+    ) -> Self {
+        if ctx.summary.start_time.is_empty() {
+            ctx.summary.start_time = Local::now().to_rfc3339();
+        }
         let persisted_identity_keys = ctx.state_store.as_ref().map(|_| BTreeSet::new());
         Self {
             checker,
@@ -825,7 +844,9 @@ impl<C: Checker> DataChecker<C> {
         if let Some(global_summary) = common.global_summary.clone() {
             global_summary.lock().await.merge(summary);
         } else if !common.is_cdc {
-            log_summary!("{}", summary);
+            if let Some(log) = summary.to_json_line() {
+                log_summary!("{}", log);
+            }
         }
         if let Some(meta_manager) = common.extractor_meta_manager.as_mut() {
             meta_manager.close().await
@@ -1015,6 +1036,29 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
+    }
+
+    #[test]
+    fn data_checker_initializes_summary_start_time() {
+        let (fetch_started, _fetch_started_rx) = mpsc::unbounded_channel();
+        let (_control_tx, control_rx) = mpsc::unbounded_channel();
+        let checker = DataChecker::new(
+            BlockingFetchChecker {
+                fetch_started,
+                fetch_gate: Arc::new(Notify::new()),
+            },
+            "task-1".to_string(),
+            build_ctx(),
+            CheckerIo {
+                batch_queue: Arc::new(StdMutex::new(LimitedQueue::new(1))),
+                batch_notify: Arc::new(Notify::new()),
+                dropped_items: Arc::new(AtomicU64::new(0)),
+                control_rx,
+            },
+            "unit-test",
+        );
+
+        assert!(!checker.ctx.summary.start_time.is_empty());
     }
 
     #[test]

@@ -46,15 +46,14 @@ url=mysql://user1:abc%25%24%23%3F%40@127.0.0.1:3307?ssl-mode=disabled
 The `[checker]` section is used by three documented data check flows:
 - Standalone snapshot check: run a snapshot check task only (no data write). Set
   `sink_type=dummy` or omit `[sinker]`, and configure the checker target explicitly in
-  `[checker]`. Standalone snapshot checker targets support MySQL and PostgreSQL only; MongoDB
-  checker targets are not supported.
+  `[checker]`. Standalone snapshot checker targets support MySQL, PostgreSQL, and MongoDB.
 - Inline snapshot check: for snapshot tasks with `sink_type=write`, the checker runs after sink
   and reuses the parsed `[sinker]` target directly.
 - Inline cdc check: for CDC tasks with `extract_type=cdc` and `sink_type=write`, the checker
   validates applied changes after write, reuses the parsed `[sinker]` target, and requires
   resumer state persistence.
 
-Struct check follows the same standalone target-selection rules as standalone snapshot check.
+Struct check is supported only for standalone MySQL/PostgreSQL checker targets.
 
 | Config                      | Description                                                            | Example     | Default                           |
 | :-------------------------- | :--------------------------------------------------------------------- | :---------- | :-------------------------------- |
@@ -75,7 +74,7 @@ Struct check follows the same standalone target-selection rules as standalone sn
 | url                         | checker target URL (standalone target only)                            | mysql://... | -                                 |
 | username                    | checker target username (standalone target only)                       | root        | empty                             |
 | password                    | checker target password (standalone target only)                       | password    | empty                             |
-| cdc_check_log_s3            | upload periodic CDC check snapshot to S3                               | false       | false                             |
+| check_log_s3                | upload periodic inline CDC check snapshot to S3                        | false       | false                             |
 | cdc_check_log_interval_secs | interval (seconds) for periodic CDC check snapshot output              | 10          | 10                                |
 | s3_bucket                   | S3 bucket for check log upload                                         | my-bucket   | -                                 |
 | s3_access_key_id            | S3 access key id                                                       | AKIA...     | -                                 |
@@ -128,8 +127,10 @@ Notes:
 - In inline cdc check, `[checker].batch_size` remains effective and controls checker chunking.
   `[checker].max_retries` / `[checker].retry_interval_secs` are still forced to `0`.
 - When `check_log_dir` is empty, `runtime.log_dir/check` is used consistently for checker logs (including CDC check outputs).
+- Standalone snapshot check writes check results through the local check loggers only; it does not
+  upload check logs to S3.
 - In inline cdc check, periodic check snapshots are always written locally under `check_log_dir`;
-  `cdc_check_log_s3` controls only S3 upload.
+  `check_log_s3` controls only S3 upload and is valid only for inline cdc check.
 - `check_log_file_size` limits local `diff.log` / `miss.log` / `sql.log`. `summary.log` is not size-limited.
 - `check_log_max_rows` only applies to CDC check snapshots for `diff.log` / `miss.log`; when either threshold is hit, only the latest records are kept.
 

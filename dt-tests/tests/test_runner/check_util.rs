@@ -86,11 +86,14 @@ impl CheckUtil {
 
         let mut expect_summaries = Vec::new();
         for log in expect_summary_logs {
+            let value: Value = serde_json::from_str(&log).map_err(|e| {
+                anyhow::anyhow!("Failed to parse expect summary log: {}, error: {}", log, e)
+            })?;
             let summary: dt_connector::checker::check_log::CheckSummaryLog =
-                serde_json::from_str(&log).map_err(|e| {
+                serde_json::from_value(value.clone()).map_err(|e| {
                     anyhow::anyhow!("Failed to parse expect summary log: {}, error: {}", log, e)
                 })?;
-            expect_summaries.push(summary);
+            expect_summaries.push((summary, value));
         }
 
         let mut actual_summaries = Vec::new();
@@ -102,7 +105,8 @@ impl CheckUtil {
             actual_summaries.push(summary);
         }
 
-        for (expect, actual) in expect_summaries.iter().zip(actual_summaries.iter()) {
+        for ((expect, expect_value), actual) in expect_summaries.iter().zip(actual_summaries.iter())
+        {
             assert_eq!(
                 expect.is_consistent, actual.is_consistent,
                 "is_consistent mismatch"
@@ -111,8 +115,74 @@ impl CheckUtil {
             assert_eq!(expect.diff_count, actual.diff_count, "diff_count mismatch");
             assert_eq!(expect.skip_count, actual.skip_count, "skip_count mismatch");
             assert_eq!(expect.sql_count, actual.sql_count, "sql_count mismatch");
+            assert!(!actual.tables.is_empty(), "actual summary tables is empty");
+            Self::validate_summary_tables(expect_value, actual);
         }
         Ok(())
+    }
+
+    fn validate_summary_tables(
+        expect_value: &Value,
+        actual: &dt_connector::checker::check_log::CheckSummaryLog,
+    ) {
+        let Some(expect_tables) = expect_value.get("tables").and_then(Value::as_array) else {
+            panic!("expect summary tables is missing");
+        };
+        assert!(!expect_tables.is_empty(), "expect summary tables is empty");
+        for expect_table in expect_tables {
+            let schema = expect_table
+                .get("schema")
+                .and_then(Value::as_str)
+                .expect("expect summary table schema is missing");
+            let tb = expect_table
+                .get("tb")
+                .and_then(Value::as_str)
+                .expect("expect summary table tb is missing");
+            let target_schema = expect_table.get("target_schema").and_then(Value::as_str);
+            let target_tb = expect_table.get("target_tb").and_then(Value::as_str);
+            let actual_table = actual
+                .tables
+                .iter()
+                .find(|actual_table| {
+                    actual_table.schema == schema
+                        && actual_table.tb == tb
+                        && actual_table.target_schema.as_deref() == target_schema
+                        && actual_table.target_tb.as_deref() == target_tb
+                })
+                .unwrap_or_else(|| panic!("summary table not found: {}.{}", schema, tb));
+
+            Self::validate_optional_summary_table_count(
+                expect_table,
+                "checked_count",
+                actual_table.checked_count,
+            );
+            Self::validate_optional_summary_table_count(
+                expect_table,
+                "miss_count",
+                actual_table.miss_count,
+            );
+            Self::validate_optional_summary_table_count(
+                expect_table,
+                "diff_count",
+                actual_table.diff_count,
+            );
+            Self::validate_optional_summary_table_count(
+                expect_table,
+                "skip_count",
+                actual_table.skip_count,
+            );
+        }
+    }
+
+    fn validate_optional_summary_table_count(expect_table: &Value, field: &str, actual: usize) {
+        if let Some(expect) = expect_table.get(field) {
+            assert_eq!(
+                expect.as_u64(),
+                Some(actual as u64),
+                "summary table {} mismatch",
+                field
+            );
+        }
     }
 
     pub fn clear_check_log(dst_check_log_dir: &str) {
@@ -181,18 +251,10 @@ impl CheckUtil {
         let mut sql_logs = HashSet::new();
 
         for log in BaseTestRunner::load_file(&miss_log_file) {
-            if let Ok(normalized) = Self::normalize_log(&log) {
-                miss_logs.insert(normalized);
-            } else {
-                miss_logs.insert(log);
-            }
+            miss_logs.insert(Self::normalize_log(&miss_log_file, &log));
         }
         for log in BaseTestRunner::load_file(&diff_log_file) {
-            if let Ok(normalized) = Self::normalize_log(&log) {
-                diff_logs.insert(normalized);
-            } else {
-                diff_logs.insert(log);
-            }
+            diff_logs.insert(Self::normalize_log(&diff_log_file, &log));
         }
         for log in BaseTestRunner::load_file(&summary_log_file) {
             summary_logs.insert(log);
@@ -203,8 +265,19 @@ impl CheckUtil {
         (miss_logs, diff_logs, summary_logs, sql_logs)
     }
 
-    fn normalize_log(log: &str) -> anyhow::Result<String> {
-        let map: std::collections::BTreeMap<String, Value> = serde_json::from_str(log)?;
-        Ok(serde_json::to_string(&map)?)
+    fn normalize_log(file: &str, log: &str) -> String {
+        let map: std::collections::BTreeMap<String, Value> = serde_json::from_str(log)
+            .unwrap_or_else(|e| {
+                panic!(
+                    "failed to parse check log [{}]: {}, error: {}",
+                    file, log, e
+                )
+            });
+        serde_json::to_string(&map).unwrap_or_else(|e| {
+            panic!(
+                "failed to normalize check log [{}]: {}, error: {}",
+                file, log, e
+            )
+        })
     }
 }

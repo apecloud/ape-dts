@@ -220,7 +220,7 @@ docker run --rm --network host \
 - cat /tmp/ape_dts/check_data_task_log/check/miss.log
 
 ```
-{"schema":"test_db","tb":"tb_1","id_col_values":{"id":"1"},"diff_col_values":{}}
+{"schema":"test_db","tb":"tb_1","id_col_values":{"id":"1"}}
 ```
 
 - cat /tmp/ape_dts/check_data_task_log/check/diff.log

@@ -1,1 +1,1 @@
-{"start_time":"2023-01-01T00:00:00+00:00","end_time":"2023-01-01T00:00:00+00:00","is_consistent":true}
+{"start_time":"2023-01-01T00:00:00+00:00","end_time":"2023-01-01T00:00:00+00:00","is_consistent":true,"tables":[{"schema":"public","tb":"recheck_table"}]}

@@ -6,8 +6,8 @@
 
 全量校验和 inline CDC check 支持通过 `[checker].sample_rate` 进行抽样。
 Standalone MySQL/PostgreSQL snapshot check 会在抽取阶段按记录位置应用 `sample_rate`，以减少
-后续 checker 工作量。Inline snapshot check 和 inline CDC check 会在 checker 侧进行确定性
-PK hash 抽样。
+后续 checker 工作量。该抽样是近似策略，并且会在每个抽取 segment/chunk 内独立应用。
+Inline snapshot check 和 inline CDC check 会在 checker 侧进行确定性 PK hash 抽样。
 
 数据校验当前按三种形态进行文档说明：
 
@@ -18,9 +18,9 @@ PK hash 抽样。
 - 使用 `extract_type=snapshot`。
 - 设置 `sink_type=dummy`，或直接省略 `[sinker]`。
 - 在 `[checker]` 中显式配置校验目标，并设置 `[checker].enable=true`。
-- Standalone snapshot checker target 仅支持 MySQL 和 PostgreSQL，不支持 MongoDB checker
-  target。
-- 使用 `parallel_type=rdb_merge`。
+- Standalone snapshot checker target 支持 MySQL、PostgreSQL 和 MongoDB。
+- MySQL/PostgreSQL checker target 使用 `parallel_type=rdb_merge`；MongoDB checker target
+  使用 `parallel_type=mongo`。
 
 ```text
 源端数据
@@ -128,7 +128,8 @@ PK hash 抽样。
 ### 抽样校验
 
 全量校验和 inline CDC check 可在 `[checker]` 中添加 `sample_rate`。对于 standalone
-MySQL/PostgreSQL snapshot check，`sample_rate=25` 表示在抽取阶段校验约 25% 的记录。对于
+MySQL/PostgreSQL snapshot check，`sample_rate=25` 表示在抽取阶段抽取约 25% 的记录；这是
+按 segment/chunk 独立执行的近似策略，因此最终表级比例可能浮动，小 chunk 尤其明显。对于
 inline snapshot check 和 inline CDC check，`sample_rate=25` 表示校验 PK hash bucket 落在
 `[0, 25)` 范围内的行/变更；候选行/变更仍会进入 checker 队列，checker 只 fetch/比较被抽样
 命中且 key 有效的行。
@@ -148,16 +149,22 @@ sample_rate=25
 ## DELETE 事件校验（inline cdc check）
 
 在 inline cdc check 中，checker 会校验 DELETE 事件：通过主键在目标端查询，若目标端仍
-存在该行则判定为不一致，记录到 `diff.log`（`diff_col_values` 为空）。开启
+存在该行则判定为不一致，记录到 `diff.log`，只输出行标识，不输出 `diff_col_values`。开启
 `output_revise_sql=true` 时，会自动生成对应的 `DELETE` 修复语句写入 `sql.log`。
 
 # 校验结果
 
-`diff.log`、`miss.log`、`summary.log` 以 JSON 格式写入；`sql.log` 保存生成的修复 SQL。默认写入 `runtime.log_dir/check`；若配置了 `[checker].check_log_dir`，则写入该目录。
+`diff.log`、`miss.log`、`summary.log` 均为 JSON Lines：每个非空行是一个 JSON 对象。
+`sql.log` 是纯 SQL 文件，每行一条生成的修复语句，不包含 JSON 包装，也不携带
+schema/table/id metadata。`sql.log` 仅在 `output_revise_sql=true` 时生成或写入。默认写入
+`runtime.log_dir/check`；若配置了 `[checker].check_log_dir`，则写入该目录。
 
 ## 差异日志（diff.log）
 
-差异日志包括库（schema）、表（tb）、主键/唯一键（id_col_values）、差异列的源值和目标值（diff_col_values）。
+差异日志包括源端库表（`schema`/`tb`）、主键/唯一键（`id_col_values`）、
+差异列的源值和目标值（`diff_col_values`）。当路由改变目标端对象时，
+还会输出 `target_schema`/`target_tb`。
+`diff.log` 中不会内嵌 SQL；若启用修复 SQL，SQL 只写入 `sql.log`。
 
 ```json
 {"schema":"test_db_1","tb":"one_pk_multi_uk","id_col_values":{"f_0":"5"},"diff_col_values":{"f_1":{"src":"5","dst":"5000"},"f_2":{"src":"ok","dst":"after manual update"}}}
@@ -167,16 +174,29 @@ sample_rate=25
 
 当源端与目标端的类型不同（如 Int32 对 Int64，或 None 对 Short）时，`src_type`/`dst_type` 会出现在对应列下，明确标出类型不一致。MongoDB 也适用这一规则，差异日志会输出 BSON 类型名称。
 
-只有在路由对 schema 或 table 进行重命名时，日志才会补充 `target_schema`/`target_tb` 来标识目的端真实库表。`schema`、`tb` 依旧表示源端，方便排查。
+未显式改变目标端对象时，不输出 `target_schema`/`target_tb`。只要任一目标名称发生变化，
+两个字段都会同时输出。
+
+```json
+{"schema":"test_db_1","tb":"orders","target_schema":"dst_db","target_tb":"orders","id_col_values":{"id":"8"},"diff_col_values":{"status":{"src":"paid","dst":"pending"}}}
+```
 
 ## 缺失日志（miss.log）
 
-缺失日志包括库（schema）、表（tb）和主键/唯一键（id_col_values）。由于缺失记录不存在差异列，因此不会输出 `diff_col_values`。
+缺失日志包括库（schema）、表（tb）和主键/唯一键（id_col_values）。由于缺失记录不存在
+差异列，因此不会输出 `diff_col_values`。`miss.log` 中不会内嵌 SQL；若启用修复 SQL，SQL
+只写入 `sql.log`。
 
 ```json
 {"schema":"test_db_1","tb":"no_pk_one_uk","id_col_values":{"f_1":"8","f_2":"1"}}
 {"schema":"test_db_1","tb":"no_pk_one_uk","id_col_values":{"f_1":null,"f_2":null}}
 {"schema":"test_db_1","tb":"one_pk_multi_uk","id_col_values":{"f_0":"7"}}
+```
+
+路由改名示例：
+
+```json
+{"schema":"test_db_1","tb":"orders","target_schema":"test_db_1","target_tb":"dst_orders","id_col_values":{"id":"9"}}
 ```
 
 ## 输出完整行
@@ -237,11 +257,11 @@ output_revise_sql=true
 revise_match_full_row=true
 ```
 
-开启后，缺失记录的 `INSERT` 语句与差异记录的 `UPDATE` 语句会被写入 `sql.log`。
+开启后，缺失记录的 `INSERT` 语句、差异记录的 `UPDATE` 语句，以及 inline CDC delete
+事件未生效时的 `DELETE` 语句会被写入 `sql.log`。`diff.log` 和 `miss.log` 仍保持 JSON
+Lines，不输出 SQL 字段。
 
 当 `revise_match_full_row=true` 时，即使表存在主键也会使用整行数据生成 WHERE 条件，以便通过完整行值定位目标数据。
-
-若路由没有对 schema 或 table 改名，则不会输出 `target_schema`/`target_tb`。这两个字段仅在路由改名时用于确定 SQL 应执行的目标表。
 
 生成的 SQL 直接使用真正的目的端 schema/table，可以直接在目标端执行。路由改名时可参考 `target_schema`/`target_tb` 判断最终目标对象。
 
@@ -284,19 +304,20 @@ INSERT INTO `test_db_1`.`test_table`(`id`,`name`,`age`,`email`) VALUES(3,'Charli
 
 概览日志包含校验的总体结果，如 start_time、end_time、is_consistent，以及 miss、diff、跳过行数（`skip_count`）和生成修复 SQL 数量（`sql_count`）。
 
-`skip_count` 用于记录被 checker 跳过的行，例如行主键/唯一键无法参与哈希计算时。若没有跳过任何行，则该字段不会出现在日志中。
+`skip_count` 用于记录被 checker 跳过的行，例如行主键/唯一键无法参与哈希计算时。
 
-在 inline cdc check 中，`summary.log` 还会包含 `tables` 字段，用于记录每张表的
-miss/diff 计数；非 CDC 任务不会输出该字段。
+`summary.log` 始终包含 `tables` 字段，用于记录每张表的 checked/miss/diff/skip 计数。
+表级条目未显式改变目标端对象时不输出 `target_schema`/`target_tb`；只要任一目标名称
+发生变化，两个字段都会同时输出。
 
 ```json
-{"start_time": "2023-09-01T12:00:00+08:00", "end_time": "2023-09-01T12:00:01+08:00", "is_consistent": false, "miss_count": 1, "diff_count": 2, "skip_count": 1, "sql_count": 3}
+{"start_time":"2023-09-01T12:00:00+08:00","end_time":"2023-09-01T12:00:01+08:00","is_consistent":false,"miss_count":1,"diff_count":2,"skip_count":1,"sql_count":3,"tables":[{"schema":"test_db_1","tb":"test_table","checked_count":10,"miss_count":1,"diff_count":2,"skip_count":1}]}
 ```
 
-Inline cdc check 示例：
+路由改名示例：
 
 ```json
-{"start_time":"2023-09-01T12:00:00+08:00","end_time":"2023-09-01T12:05:00+08:00","is_consistent":false,"miss_count":1,"diff_count":2,"skip_count":1,"tables":{"test_db_1.test_tb":{"miss_count":1,"diff_count":2}}}
+{"start_time":"2023-09-01T12:00:00+08:00","end_time":"2023-09-01T12:05:00+08:00","is_consistent":false,"miss_count":1,"diff_count":2,"skip_count":0,"tables":[{"schema":"test_db_1","tb":"orders","target_schema":"dst_db","target_tb":"dst_orders","checked_count":8,"miss_count":1,"diff_count":2,"skip_count":0}]}
 ```
 
 # 反向校验

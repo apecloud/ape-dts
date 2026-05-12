@@ -20,7 +20,7 @@ use dt_common::{
 };
 
 use crate::{
-    checker::check_log::{CheckSummaryLog, CheckTableSummaryLog, StructCheckLog},
+    checker::check_log::{CheckLogJsonExt, CheckSummaryLog, CheckTableSummaryLog, StructCheckLog},
     meta_fetcher::{
         mysql::mysql_struct_fetcher::MysqlStructFetcher, pg::pg_struct_fetcher::PgStructFetcher,
     },
@@ -208,17 +208,15 @@ impl StructCheckerHandle {
         for (key, src_sql) in src_sql_map.iter() {
             match dst_map.remove(key) {
                 None => {
-                    let log = StructCheckLog {
-                        key: key.clone(),
-                        src_sql: Some(src_sql.clone()),
-                        dst_sql: None,
-                    };
+                    let log = StructCheckLog::new(key.clone(), Some(src_sql.clone()), None);
                     summary.miss_count += 1;
                     if let Some(table) = struct_table_summary(key, true, false) {
                         summary.merge_table(table);
                     }
                     if log_enabled {
-                        log_miss!("{}", log);
+                        if let Some(log) = log.to_json_line() {
+                            log_miss!("{}", log);
+                        }
                     }
                     if output_revise_sql && log_enabled {
                         log_sql!("{}", src_sql);
@@ -227,17 +225,16 @@ impl StructCheckerHandle {
                 }
                 Some(dst_sql) => {
                     if src_sql != &dst_sql {
-                        let log = StructCheckLog {
-                            key: key.clone(),
-                            src_sql: Some(src_sql.clone()),
-                            dst_sql: Some(dst_sql),
-                        };
+                        let log =
+                            StructCheckLog::new(key.clone(), Some(src_sql.clone()), Some(dst_sql));
                         summary.diff_count += 1;
                         if let Some(table) = struct_table_summary(key, false, true) {
                             summary.merge_table(table);
                         }
                         if log_enabled {
-                            log_diff!("{}", log);
+                            if let Some(log) = log.to_json_line() {
+                                log_diff!("{}", log);
+                            }
                         }
                         if output_revise_sql && log_enabled {
                             log_sql!("{}", src_sql);
@@ -249,17 +246,15 @@ impl StructCheckerHandle {
         }
 
         for (key, dst_sql) in dst_map {
-            let log = StructCheckLog {
-                key,
-                src_sql: None,
-                dst_sql: Some(dst_sql),
-            };
             summary.diff_count += 1;
-            if let Some(table) = struct_table_summary(&log.key, false, true) {
+            if let Some(table) = struct_table_summary(&key, false, true) {
                 summary.merge_table(table);
             }
+            let log = StructCheckLog::new(key, None, Some(dst_sql));
             if log_enabled {
-                log_diff!("{}", log);
+                if let Some(log) = log.to_json_line() {
+                    log_diff!("{}", log);
+                }
             }
         }
 
@@ -329,8 +324,8 @@ impl StructCheckerHandle {
             if let Some(global_summary) = &self.global_summary {
                 let mut global_summary = global_summary.lock().await;
                 global_summary.merge(&summary);
-            } else {
-                log_summary!("{}", summary);
+            } else if let Some(log) = summary.to_json_line() {
+                log_summary!("{}", log);
             }
         }
         Ok(())

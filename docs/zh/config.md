@@ -45,13 +45,13 @@ url=mysql://user1:abc%25%24%23%3F%40@127.0.0.1:3307?ssl-mode=disabled
 `[checker]` 对应三种已文档化的数据校验形态：
 - standalone snapshot check：只运行 snapshot 校验任务，不执行写入。设置 `sink_type=dummy`
   或直接省略 `[sinker]`，并在 `[checker]` 中显式配置校验目标。Standalone snapshot checker
-  target 仅支持 MySQL 和 PostgreSQL，不支持 MongoDB checker target。
+  target 支持 MySQL、PostgreSQL 和 MongoDB。
 - inline snapshot check：用于 `sink_type=write` 的 snapshot 任务，checker 会在写入后执行，
   并直接复用 `[sinker]` 已解析的目标端配置。
 - inline cdc check：用于 `extract_type=cdc` 且 `sink_type=write` 的 CDC 任务，checker 会在
   写入后校验已落库变更，直接复用 `[sinker]` 目标，并要求持久化 checker 状态。
 
-struct check 复用 standalone snapshot check 的目标选择规则。
+struct check 仅支持 standalone MySQL/PostgreSQL checker target。
 
 | 配置                        | 作用                                                           | 示例        | 默认                             |
 | :-------------------------- | :------------------------------------------------------------- | :---------- | :------------------------------- |
@@ -72,7 +72,7 @@ struct check 复用 standalone snapshot check 的目标选择规则。
 | url                         | 校验目标 URL（仅 standalone 目标配置）                         | mysql://... | -                                |
 | username                    | 校验目标用户名（仅 standalone 目标配置）                       | root        | 空                               |
 | password                    | 校验目标密码（仅 standalone 目标配置）                         | password    | 空                               |
-| cdc_check_log_s3            | 定期将 CDC 校验快照上传至 S3                                   | false       | false                            |
+| check_log_s3                | 定期将 inline CDC 校验快照上传至 S3                            | false       | false                            |
 | cdc_check_log_interval_secs | CDC 校验快照输出间隔（秒）                                     | 10          | 10                               |
 | s3_bucket                   | 校验日志上传的 S3 存储桶                                       | my-bucket   | -                                |
 | s3_access_key_id            | S3 访问密钥 ID                                                 | AKIA...     | -                                |
@@ -122,8 +122,9 @@ struct check 复用 standalone snapshot check 的目标选择规则。
 - 对 inline cdc check，`[checker].batch_size` 会继续生效并控制 checker 分块；
   `max_retries` 与 `retry_interval_secs` 会强制按 0 处理。
 - 当 `check_log_dir` 为空时，统一使用 `runtime.log_dir/check` 作为 checker 日志目录（包含 CDC 校验输出）。
+- standalone snapshot check 只通过本地 check logger 输出校验结果，不再上传校验日志到 S3。
 - 在 inline cdc check 下，会始终先在 `check_log_dir` 本地落盘周期性校验快照；
-  `cdc_check_log_s3` 仅控制是否上传 S3。
+  `check_log_s3` 仅控制是否上传 S3，且只支持 inline cdc check。
 - `check_log_file_size` 限制本地 `diff.log` / `miss.log` / `sql.log` 的大小，`summary.log` 不受该限制。
 - `check_log_max_rows` 仅对 CDC 校验快照的 `diff.log` / `miss.log` 生效；命中任一阈值时仅保留最新记录。
 

@@ -6,8 +6,9 @@ Supports comparison for MySQL, PostgreSQL, and MongoDB.
 
 Snapshot and inline CDC checks support sampling via `[checker].sample_rate`.
 For standalone MySQL/PostgreSQL snapshot check, `sample_rate` is applied during extraction by
-record position to reduce checker-side work. Inline snapshot check and inline CDC check apply
-deterministic PK-hash sampling on the checker side.
+record position to reduce checker-side work. The sampling is approximate and applies independently
+inside each extraction segment/chunk. Inline snapshot check and inline CDC check apply deterministic
+PK-hash sampling on the checker side.
 
 Data check is documented in three flows:
 
@@ -18,9 +19,9 @@ Data check is documented in three flows:
 - Use `extract_type=snapshot`.
 - Set `sink_type=dummy` or omit `[sinker]`.
 - Configure the checker target explicitly in `[checker]`, and set `[checker].enable=true`.
-- Standalone snapshot checker targets support MySQL and PostgreSQL only; MongoDB checker targets
-  are not supported.
-- Use `parallel_type=rdb_merge`.
+- Standalone snapshot checker targets support MySQL, PostgreSQL, and MongoDB.
+- Use `parallel_type=rdb_merge` for MySQL/PostgreSQL checker targets, and `parallel_type=mongo`
+  for MongoDB checker targets.
 
 ```text
 source rows
@@ -154,10 +155,12 @@ templates now separate standalone snapshot check, inline snapshot check, and inl
 ### Sampling Check
 
 For snapshot and inline CDC checks, add `sample_rate` to the `[checker]` section. For standalone
-MySQL/PostgreSQL snapshot check, `sample_rate=25` checks about 25% of extracted records before they
-enter later checker work. For inline snapshot check and inline CDC check, `sample_rate=25` checks
-rows/changes whose PK hash bucket falls in `[0, 25)`; candidate rows/changes still enter the
-checker queue, and the checker fetches/compares only valid-key rows whose bucket is sampled in.
+MySQL/PostgreSQL snapshot check, `sample_rate=25` samples about 25% of extracted records before they
+enter later checker work; this is an approximate per-segment policy, so the final table-level ratio
+can vary, especially for small extraction chunks. For inline snapshot check and inline CDC check,
+`sample_rate=25` checks rows/changes whose PK hash bucket falls in `[0, 25)`; candidate rows/changes
+still enter the checker queue, and the checker fetches/compares only valid-key rows whose bucket is
+sampled in.
 
 ```
 [checker]
@@ -175,17 +178,24 @@ sample_rate=25
 ## DELETE Event Check (inline cdc check)
 
 In inline cdc check, the checker validates DELETE events: it queries the target by primary key,
-and if the row still exists in the target, it is reported as an inconsistency in `diff.log` (with
-empty `diff_col_values`). When `output_revise_sql=true`, a corresponding `DELETE` repair statement
-is automatically generated in `sql.log`.
+and if the row still exists in the target, it is reported as an identity-only inconsistency in
+`diff.log` without `diff_col_values`. When `output_revise_sql=true`, a corresponding `DELETE`
+repair statement is automatically generated in `sql.log`.
 
 # Check Results
 
-`diff.log`, `miss.log`, and `summary.log` are written in JSON format. `sql.log` contains generated repair SQL. By default, these logs are stored in `runtime.log_dir/check`; if `[checker].check_log_dir` is set, that directory is used instead.
+`diff.log`, `miss.log`, and `summary.log` are JSON Lines files: each non-empty line is one JSON
+object. `sql.log` is a plain SQL file, one generated repair statement per line, and contains no
+JSON wrapper or schema/table/id metadata. `sql.log` is generated or written only when
+`output_revise_sql=true`. By default, these logs are stored in `runtime.log_dir/check`; if
+`[checker].check_log_dir` is set, that directory is used instead.
 
 ## Difference Log (diff.log)
 
-Difference logs include database (schema), table (tb), primary key/unique key (id_col_values), source and target values of difference columns (diff_col_values).
+Difference logs include source database/table (`schema`/`tb`), primary key/unique key
+(`id_col_values`), and source and target values of difference columns (`diff_col_values`).
+When routing changes the destination object, `target_schema`/`target_tb` are also included.
+SQL is never embedded in `diff.log`; repair SQL, if enabled, is written only to `sql.log`.
 
 ```json
 {"schema":"test_db_1","tb":"one_pk_multi_uk","id_col_values":{"f_0":"5"},"diff_col_values":{"f_1":{"src":"5","dst":"5000"},"f_2":{"src":"ok","dst":"after manual update"}}}
@@ -195,16 +205,29 @@ Difference logs include database (schema), table (tb), primary key/unique key (i
 
 When the source and target types are different (such as Int32 vs Int64, or None vs Short), `src_type`/`dst_type` will appear under the corresponding column, clearly marking the type inconsistency. MongoDB also applies this rule, and the difference log will output the BSON type name.
 
-Only when the router renames the schema or table will the log include `target_schema`/`target_tb` to identify the real destination table. `schema` and `tb` still represent the source, facilitating troubleshooting.
+`target_schema`/`target_tb` are omitted when the destination object is not explicitly different.
+If either target name differs, both fields are included.
+
+```json
+{"schema":"test_db_1","tb":"orders","target_schema":"dst_db","target_tb":"orders","id_col_values":{"id":"8"},"diff_col_values":{"status":{"src":"paid","dst":"pending"}}}
+```
 
 ## Missing Log (miss.log)
 
-Missing logs include database (schema), table (tb), and primary/unique key (id_col_values). Since missing records do not have difference columns, `diff_col_values` will not be output.
+Missing logs include database (schema), table (tb), and primary/unique key (id_col_values). Since
+missing records do not have difference columns, `diff_col_values` will not be output. SQL is never
+embedded in `miss.log`; repair SQL, if enabled, is written only to `sql.log`.
 
 ```json
 {"schema":"test_db_1","tb":"no_pk_one_uk","id_col_values":{"f_1":"8","f_2":"1"}}
 {"schema":"test_db_1","tb":"no_pk_one_uk","id_col_values":{"f_1":null,"f_2":null}}
 {"schema":"test_db_1","tb":"one_pk_multi_uk","id_col_values":{"f_0":"7"}}
+```
+
+Route rename example:
+
+```json
+{"schema":"test_db_1","tb":"orders","target_schema":"test_db_1","target_tb":"dst_orders","id_col_values":{"id":"9"}}
 ```
 
 ## Output Full Row
@@ -265,11 +288,11 @@ output_revise_sql=true
 revise_match_full_row=true
 ```
 
-After enabling, `INSERT` statements for missing records and `UPDATE` statements for differing records will be written to `sql.log`.
+After enabling, `INSERT` statements for missing records, `UPDATE` statements for differing records,
+and `DELETE` statements for unresolved inline CDC delete events will be written to `sql.log`.
+`diff.log` and `miss.log` remain JSON Lines and do not include SQL fields.
 
 When `revise_match_full_row=true`, the entire row data is used to generate the WHERE condition even if the table has a primary key, so that the target row is located by matching all column values.
-
-If the router does not rename the schema or table, `target_schema`/`target_tb` will not appear in the log. These two fields are only needed to determine the destination table when routing renames are configured.
 
 The generated SQL uses the real destination schema/table and can be executed directly at the target. When routing renames are configured, refer to `target_schema`/`target_tb` to determine the final target object.
 
@@ -312,19 +335,20 @@ INSERT INTO `test_db_1`.`test_table`(`id`,`name`,`age`,`email`) VALUES(3,'Charli
 
 The summary log contains the overall results of the check, such as start_time, end_time, is_consistent, and the number of miss, diff, skipped rows (`skip_count`), and generated repair SQLs (`sql_count`).
 
-`skip_count` records rows skipped by the checker, for example when the row key cannot be hashed. When no rows are skipped, this field is omitted.
+`skip_count` records rows skipped by the checker, for example when the row key cannot be hashed.
 
-In inline cdc check, `summary.log` also includes `tables`, which stores per-table miss/diff
-counts. This field is omitted for non-CDC tasks.
+`summary.log` always includes `tables`, which stores per-table checked/miss/diff/skip counts.
+Table entries omit `target_schema`/`target_tb` when the destination object is not explicitly
+different. If either target name differs, both fields are included.
 
 ```json
-{"start_time": "2023-09-01T12:00:00+08:00", "end_time": "2023-09-01T12:00:01+08:00", "is_consistent": false, "miss_count": 1, "diff_count": 2, "skip_count": 1, "sql_count": 3}
+{"start_time":"2023-09-01T12:00:00+08:00","end_time":"2023-09-01T12:00:01+08:00","is_consistent":false,"miss_count":1,"diff_count":2,"skip_count":1,"sql_count":3,"tables":[{"schema":"test_db_1","tb":"test_table","checked_count":10,"miss_count":1,"diff_count":2,"skip_count":1}]}
 ```
 
-Inline cdc check example:
+Route rename example:
 
 ```json
-{"start_time":"2023-09-01T12:00:00+08:00","end_time":"2023-09-01T12:05:00+08:00","is_consistent":false,"miss_count":1,"diff_count":2,"skip_count":1,"tables":{"test_db_1.test_tb":{"miss_count":1,"diff_count":2}}}
+{"start_time":"2023-09-01T12:00:00+08:00","end_time":"2023-09-01T12:05:00+08:00","is_consistent":false,"miss_count":1,"diff_count":2,"skip_count":0,"tables":[{"schema":"test_db_1","tb":"orders","target_schema":"dst_db","target_tb":"dst_orders","checked_count":8,"miss_count":1,"diff_count":2,"skip_count":0}]}
 ```
 
 # Reverse Check

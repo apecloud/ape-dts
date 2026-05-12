@@ -1,7 +1,6 @@
 use std::{
     collections::VecDeque,
     panic,
-    path::Path,
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
@@ -62,7 +61,7 @@ use dt_common::{
 };
 use dt_connector::{
     checker::base_checker::CheckContext,
-    checker::check_log::CheckSummaryLog,
+    checker::check_log::{CheckLogJsonExt, CheckSummaryLog},
     checker::{
         Checker, CheckerHandle, CheckerStateStore, DataCheckerHandle, MongoChecker, MysqlChecker,
         PgChecker, StructCheckerHandle,
@@ -122,24 +121,6 @@ fn init_task_check_summary() -> CheckSummaryLog {
         start_time: Local::now().to_rfc3339(),
         is_consistent: true,
         ..Default::default()
-    }
-}
-
-#[derive(Debug, PartialEq, Eq)]
-struct CheckLogS3ObjectKeys {
-    miss: String,
-    diff: String,
-    sql: String,
-    summary: String,
-}
-
-fn check_log_s3_object_keys(key_prefix: &str) -> CheckLogS3ObjectKeys {
-    let key_prefix = key_prefix.trim_end_matches('/');
-    CheckLogS3ObjectKeys {
-        miss: format!("{key_prefix}/miss.log"),
-        diff: format!("{key_prefix}/diff.log"),
-        sql: format!("{key_prefix}/sql.log"),
-        summary: format!("{key_prefix}/summary.log"),
     }
 }
 
@@ -296,7 +277,6 @@ impl TaskRunner {
         extractor_client.close().await?;
         sinker_client.close().await?;
 
-        let mut summary_buf = None;
         if let Some(check_summary) = check_summary.as_ref() {
             if self.config.checker.is_none()
                 || !self
@@ -305,14 +285,13 @@ impl TaskRunner {
                     .is_some_and(|task_type| task_type.is_cdc_inline_check())
             {
                 let summary = check_summary.lock().await;
-                dt_common::log_summary!("{}", summary);
-                summary_buf = Some(serde_json::to_vec(&*summary)?);
+                if let Some(log) = summary.to_json_line() {
+                    dt_common::log_summary!("{}", log);
+                }
             }
         }
 
         log::logger().flush();
-        self.upload_local_check_logs_to_s3(summary_buf).await?;
-
         log_finished!("task finished");
         log::logger().flush();
         Ok(())
@@ -1055,10 +1034,10 @@ impl TaskRunner {
             return Ok(Some(CheckerHandle::Struct(checker)));
         }
 
-        let s3_output = if cfg.cdc_check_log_s3 && is_cdc_task {
+        let s3_output = if cfg.check_log_s3 && is_cdc_task {
             let s3_cfg = cfg.s3_config.as_ref().ok_or_else(|| {
                 Error::ConfigError(
-                    "cdc_check_log_s3=true but checker s3 config is missing in [checker]".into(),
+                    "check_log_s3=true but checker s3 config is missing in [checker]".into(),
                 )
             })?;
             let s3_client = TaskUtil::create_s3_client(s3_cfg)?;
@@ -1249,61 +1228,6 @@ impl TaskRunner {
         };
 
         Ok(Some(Arc::new(AsyncMutex::new(checker))))
-    }
-
-    async fn upload_local_check_logs_to_s3(
-        &self,
-        summary_buf: Option<Vec<u8>>,
-    ) -> anyhow::Result<()> {
-        let Some(checker) = self.config.checker.as_ref() else {
-            return Ok(());
-        };
-        if !checker.cdc_check_log_s3 || !self.is_standalone_check() {
-            return Ok(());
-        }
-
-        let s3_cfg = checker.s3_config.as_ref().ok_or_else(|| {
-            Error::ConfigError(
-                "cdc_check_log_s3=true but checker s3 config is missing in [checker]".into(),
-            )
-        })?;
-        let s3_client = TaskUtil::create_s3_client(s3_cfg)?;
-        let key_prefix = self.check_log_s3_key_prefix(checker, "");
-        let check_log_dir = if checker.check_log_dir.is_empty() {
-            format!("{}/check", self.config.runtime.log_dir)
-        } else {
-            checker.check_log_dir.clone()
-        };
-        let check_log_dir = Path::new(&check_log_dir);
-
-        let read_log = |name: &'static str| -> anyhow::Result<Vec<u8>> {
-            let path = check_log_dir.join(name);
-            match std::fs::read(&path) {
-                Ok(content) => Ok(content),
-                Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
-                Err(err) => Err(err.into()),
-            }
-        };
-
-        let miss_buf = read_log("miss.log")?;
-        let diff_buf = read_log("diff.log")?;
-        let sql_buf = read_log("sql.log")?;
-        let Some(summary_buf) = summary_buf else {
-            return Err(Error::ConfigError(format!(
-                "check summary for standalone S3 upload is missing; local summary log: {}",
-                check_log_dir.join("summary.log").display()
-            ))
-            .into());
-        };
-
-        let keys = check_log_s3_object_keys(&key_prefix);
-        tokio::try_join!(
-            s3_client.write(&keys.miss, miss_buf),
-            s3_client.write(&keys.diff, diff_buf),
-            s3_client.write(&keys.sql, sql_buf),
-            s3_client.write(&keys.summary, summary_buf),
-        )?;
-        Ok(())
     }
 
     fn check_log_s3_key_prefix(&self, checker: &CheckerConfig, single_task_id: &str) -> String {
@@ -1757,16 +1681,6 @@ impl TaskRunner {
         Ok(pending_tasks)
     }
 
-    fn is_standalone_check(&self) -> bool {
-        matches!(
-            self.task_type,
-            Some(TaskType {
-                check: Some(CheckMode::Standalone),
-                ..
-            })
-        )
-    }
-
     fn get_task_parallel_size(&self) -> usize {
         match &self.config.extractor {
             ExtractorConfig::MysqlSnapshot { .. }
@@ -1788,33 +1702,5 @@ impl TaskRunner {
             ExtractorConfig::MongoSnapshot { db, tb, .. } => format!("{}.{}", db, tb),
             _ => String::new(),
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{check_log_s3_object_keys, CheckLogS3ObjectKeys};
-
-    #[test]
-    fn standalone_check_log_s3_keys_use_channel_prefix() {
-        assert_eq!(
-            check_log_s3_object_keys("check/10001"),
-            CheckLogS3ObjectKeys {
-                summary: "check/10001/summary.log".to_string(),
-                diff: "check/10001/diff.log".to_string(),
-                miss: "check/10001/miss.log".to_string(),
-                sql: "check/10001/sql.log".to_string(),
-            }
-        );
-    }
-
-    #[test]
-    fn standalone_check_log_s3_keys_trim_trailing_slash() {
-        let keys = check_log_s3_object_keys("check/10001/");
-
-        assert_eq!(keys.summary, "check/10001/summary.log");
-        assert_eq!(keys.diff, "check/10001/diff.log");
-        assert_eq!(keys.miss, "check/10001/miss.log");
-        assert_eq!(keys.sql, "check/10001/sql.log");
     }
 }

@@ -11,39 +11,63 @@ Refer to [task templates](../../templates/mysql_to_mysql.md)
 
 # Results
 
-Structure check writes `miss.log`, `diff.log`, and `summary.log` in JSON format. When `output_revise_sql=true`, it also writes `sql.log`.
+Structure check writes `miss.log`, `diff.log`, and `summary.log` as JSON Lines. When
+`output_revise_sql=true`, it also writes repair statements to `sql.log`. `sql.log` is plain SQL,
+one statement per line, with no JSON wrapper or schema/table/id metadata.
 
 `miss.log` and `diff.log` use the same JSON structure (`StructCheckLog`):
 
 ```json
 {
-  "key": "type.schema.table", // e.g., table.db_name.tb_name or index.db.tb.idx
-  "src_sql": "CREATE TABLE `table_name` (id INT PRIMARY KEY)",  // appears in miss and in diff entries with a source-side definition
-  "dst_sql": "CREATE TABLE `table_name` (id INT PRIMARY KEY)"   // appears in diff; target-only extras may contain only dst_sql
+  "schema": "db_name",
+  "tb": "tb_name",
+  "id_col_values": {
+    "object_key": "type.schema.table"
+  },
+  "src_sql": "source definition SQL, when the source definition exists",
+  "dst_sql": "target definition SQL, when the target definition exists"
 }
 ```
 
+There is no top-level `key`, `target_schema`, or `target_tb` field. The structure object identity is
+carried by `id_col_values.object_key`. `src_sql` is included when the source-side definition exists;
+`dst_sql` is included when the target-side definition exists. A source-only missing object usually
+has only `src_sql`; a different object has both `src_sql` and `dst_sql`; a target-only extra object
+has only `dst_sql`.
+
+`object_key` format:
+
+```text
+<object_type>.<schema>.<table_or_object>[.<sub_object>]
+```
+
+Common examples include `table.struct_check_test_1.not_match_column`,
+`index.struct_check_test_1.not_match_index.i6_miss`,
+`constraint.struct_check_test_1.not_match_missing.not_match_missing_pkey`,
+`table_comment.struct_check_test_1.not_match_comment`, and
+`column_comment.struct_check_test_1.not_match_comment.id`.
+
 - `miss.log` (present in source but missing in target)
 ```json
-{"key":"table.struct_check_test_1.not_match_miss","src_sql":"CREATE TABLE IF NOT EXISTS `not_match_miss` (`id` int NOT NULL PRIMARY KEY)"}
-{"key":"index.struct_check_test_1.not_match_index.i6_miss","src_sql":"CREATE INDEX `i6_miss` ON `not_match_index` (`col6`)"}
+{"schema":"struct_check_test_1","tb":"not_match_miss","id_col_values":{"object_key":"table.struct_check_test_1.not_match_miss"},"src_sql":"CREATE TABLE `not_match_miss` (`id` int NOT NULL, PRIMARY KEY (`id`))"}
+{"schema":"struct_check_test_1","tb":"not_match_index","id_col_values":{"object_key":"index.struct_check_test_1.not_match_index.i6_miss"},"src_sql":"CREATE INDEX `i6_miss` ON `not_match_index` (`c6`)"}
 ```
 
 - `diff.log` (object definition differs, or the object exists only in the target)
 ```json
-{"key":"index.struct_check_test_1.not_match_index","src_sql":"ALTER TABLE `not_match_index` ADD INDEX `idx_v1` (`col1`)","dst_sql":"ALTER TABLE `not_match_index` ADD INDEX `idx_v2` (`col1`)"}
-{"key":"table.struct_check_test_1.not_match_column","src_sql":"CREATE TABLE `not_match_column` (`id` int)","dst_sql":"CREATE TABLE `not_match_column` (`id` bigint)"}
-{"key":"index.struct_check_test_1.full_index_type.index_not_match_name_dst","dst_sql":"CREATE UNIQUE INDEX IF NOT EXISTS \"index_not_match_name_dst\" ON \"struct_check_test_1\".\"full_index_type\" USING btree (unique_col)"}
+{"schema":"struct_check_test_1","tb":"not_match_index","id_col_values":{"object_key":"index.struct_check_test_1.not_match_index"},"src_sql":"CREATE INDEX `i1` ON `not_match_index` (`c1`)","dst_sql":"CREATE INDEX `i1` ON `not_match_index` (`c2`)"}
+{"schema":"struct_check_test_1","tb":"not_match_column","id_col_values":{"object_key":"table.struct_check_test_1.not_match_column"},"src_sql":"CREATE TABLE `not_match_column` (`id` int NOT NULL, PRIMARY KEY (`id`))","dst_sql":"CREATE TABLE `not_match_column` (`id` bigint NOT NULL, PRIMARY KEY (`id`))"}
+{"schema":"struct_check_test_1","tb":"full_index_type","id_col_values":{"object_key":"index.struct_check_test_1.full_index_type.index_not_match_name_dst"},"dst_sql":"CREATE INDEX `index_not_match_name_dst` ON `full_index_type` (`c1`)"}
 ```
 
 - `summary.log` (overview of the check results)
 ```json
-{"start_time": "2023-10-01T10:00:00+08:00", "end_time": "2023-10-01T10:00:05+08:00", "is_consistent": false, "miss_count": 8, "diff_count": 5, "sql_count": 14}
+{"start_time":"2023-10-01T10:00:00+08:00","end_time":"2023-10-01T10:00:05+08:00","is_consistent":false,"miss_count":8,"diff_count":5,"skip_count":0,"sql_count":14,"tables":[{"schema":"struct_check_test_1","tb":"not_match_column","checked_count":0,"miss_count":0,"diff_count":1,"skip_count":0},{"schema":"struct_check_test_1","tb":"not_match_miss","checked_count":0,"miss_count":1,"diff_count":0,"skip_count":0}]}
 ```
 
 - `sql.log` (generated when `output_revise_sql=true`)
 ```sql
-CREATE TABLE IF NOT EXISTS `not_match_miss` (`id` int NOT NULL PRIMARY KEY);
+CREATE TABLE IF NOT EXISTS `struct_check_test_1`.`not_match_miss` (`id` int NOT NULL, PRIMARY KEY (`id`));
 ```
 
 # Scope

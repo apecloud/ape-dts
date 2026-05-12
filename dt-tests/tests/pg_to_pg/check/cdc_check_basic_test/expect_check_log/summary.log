@@ -1,1 +1,1 @@
-{"start_time":"","end_time":"","is_consistent":true}
+{"start_time":"","end_time":"","is_consistent":true,"tables":[{"schema":"public","tb":"col_has_special_character_table"},{"schema":"public","tb":"default_table"},{"schema":"public","tb":"ignore_cols_1"}]}
