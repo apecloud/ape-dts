@@ -24,7 +24,7 @@ pub struct SnapshotChunk {
     pub chunk_range: ChunkRange,
 }
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct BaseSplitter {
     chunk_id_generator: u64,
     split_state: u8,

@@ -1,4 +1,4 @@
-use std::{future::Future, sync::Arc};
+use std::{collections::VecDeque, future::Future, sync::Arc};
 
 use anyhow::{anyhow, bail};
 use tokio::task::JoinSet;
@@ -27,6 +27,68 @@ impl Drop for TableMonitorGuard {
 pub struct SnapshotDispatcher;
 
 impl SnapshotDispatcher {
+    pub async fn dispatch_work_source<
+        State,
+        Work,
+        WorkResult,
+        NextWork,
+        NextWorkFut,
+        Run,
+        RunFut,
+        OnDone,
+        OnDoneFut,
+    >(
+        mut state: State,
+        parallel_size: usize,
+        worker_name: &'static str,
+        mut next_work: NextWork,
+        run: Run,
+        mut on_done: OnDone,
+    ) -> anyhow::Result<State>
+    where
+        Work: Send + 'static,
+        WorkResult: Send + 'static,
+        NextWork: FnMut(State) -> NextWorkFut,
+        NextWorkFut: Future<Output = anyhow::Result<(State, Option<Work>)>>,
+        Run: Fn(Work) -> RunFut + Send + Sync + 'static,
+        RunFut: Future<Output = anyhow::Result<WorkResult>> + Send + 'static,
+        OnDone: FnMut(State, WorkResult) -> OnDoneFut,
+        OnDoneFut: Future<Output = anyhow::Result<State>>,
+    {
+        if parallel_size < 1 {
+            bail!("parallel_size must be greater than 0");
+        }
+        let run = Arc::new(run);
+        let mut join_set = JoinSet::new();
+
+        while join_set.len() < parallel_size {
+            let (next_state, work) = next_work(state).await?;
+            state = next_state;
+            let Some(work) = work else {
+                break;
+            };
+            let run_worker = Arc::clone(&run);
+            join_set.spawn(async move { run_worker(work).await });
+        }
+
+        while let Some(result) = join_set.join_next().await {
+            let result = result.map_err(|e| anyhow!("{} join error: {}", worker_name, e))??;
+            state = on_done(state, result).await?;
+
+            while join_set.len() < parallel_size {
+                let (next_state, work) = next_work(state).await?;
+                state = next_state;
+                let Some(work) = work else {
+                    break;
+                };
+                let run_worker = Arc::clone(&run);
+                join_set.spawn(async move { run_worker(work).await });
+            }
+        }
+
+        Ok(state)
+    }
+
     pub async fn dispatch_tables<TableId, Run, Fut>(
         tables: Vec<TableId>,
         parallel_type: RdbParallelType,
@@ -46,25 +108,24 @@ impl SnapshotDispatcher {
 
         match parallel_type {
             RdbParallelType::Table => {
-                let mut join_set = JoinSet::new();
-                let mut iter = tables.into_iter();
-
-                while join_set.len() < parallel_size {
-                    let Some(table_id) = iter.next() else {
-                        break;
-                    };
-                    let run_worker = Arc::clone(&run);
-                    join_set.spawn(async move { run_worker(table_id).await });
-                }
-
-                while let Some(result) = join_set.join_next().await {
-                    result.map_err(|e| anyhow!("{} join error: {}", worker_name, e))??;
-
-                    if let Some(table_id) = iter.next() {
-                        let run_worker = Arc::clone(&run);
-                        join_set.spawn(async move { run_worker(table_id).await });
-                    }
-                }
+                Self::dispatch_work_source(
+                    tables.into_iter().collect::<VecDeque<_>>(),
+                    parallel_size,
+                    worker_name,
+                    |mut tables: VecDeque<TableId>| async move {
+                        let work = tables.pop_front();
+                        Ok((tables, work))
+                    },
+                    {
+                        let run = Arc::clone(&run);
+                        move |table_id| {
+                            let run = Arc::clone(&run);
+                            async move { run(table_id).await }
+                        }
+                    },
+                    |tables, _| async move { Ok(tables) },
+                )
+                .await?;
             }
 
             RdbParallelType::Chunk => {

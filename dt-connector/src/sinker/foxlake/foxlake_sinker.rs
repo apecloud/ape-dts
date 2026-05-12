@@ -1,4 +1,4 @@
-use std::{str::FromStr, sync::Arc, time::Duration};
+use std::{str::FromStr, time::Duration};
 
 use anyhow::Ok;
 use async_trait::async_trait;

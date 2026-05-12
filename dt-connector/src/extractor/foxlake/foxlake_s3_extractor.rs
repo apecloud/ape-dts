@@ -92,12 +92,8 @@ impl FoxlakeS3Extractor {
     }
 
     async fn run_table_worker(&self, schema: String, tb: String) -> anyhow::Result<()> {
-        let (mut extract_state, _guard) = SnapshotDispatcher::derive_table_extract_state(
-            &self.extract_state,
-            &schema,
-            &tb,
-        )
-        .await;
+        let (mut extract_state, _guard) =
+            SnapshotDispatcher::derive_table_extract_state(&self.extract_state, &schema, &tb).await;
         let base_extractor = self.base_extractor.clone();
 
         log_info!(
