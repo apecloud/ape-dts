@@ -164,7 +164,7 @@ pub enum SinkerConfig {
     },
 }
 
-#[derive(Clone, Debug, Default, Hash)]
+#[derive(Clone, Debug, Hash)]
 pub struct BasicSinkerConfig {
     pub sink_type: SinkType,
     pub db_type: DbType,
@@ -172,4 +172,17 @@ pub struct BasicSinkerConfig {
     pub connection_auth: ConnectionAuthConfig,
     pub batch_size: usize,
     pub max_connections: u32,
+}
+
+impl Default for BasicSinkerConfig {
+    fn default() -> Self {
+        Self {
+            sink_type: SinkType::default(),
+            db_type: DbType::default(),
+            url: String::new(),
+            connection_auth: ConnectionAuthConfig::default(),
+            batch_size: 0,
+            max_connections: 10,
+        }
+    }
 }
