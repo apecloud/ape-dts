@@ -1,1 +1,1 @@
-{"start_time":"","end_time":"","is_consistent":true,"tables":[{"schema":"test_db_1","tb":"inline_check_table","checked_count":1}]}
+{"start_time":"2026-05-13T23:47:21.789392+08:00","end_time":"2026-05-13T23:47:21.870334+08:00","is_consistent":true,"checked_count":3,"miss_count":0,"diff_count":0,"skip_count":0,"tables":[{"schema":"test_db_1","tb":"inline_check_table","checked_count":3,"miss_count":0,"diff_count":0,"skip_count":0}]}

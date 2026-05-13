@@ -1,1 +1,1 @@
-{"start_time":"2023-01-01T00:00:00+00:00","end_time":"2023-01-01T00:00:00+00:00","is_consistent":false,"diff_count":1,"tables":[{"schema":"test_db_1","tb":"recheck_table","checked_count":2,"diff_count":1}]}
+{"start_time":"2026-05-13T23:46:43.868008+08:00","end_time":"2026-05-13T23:47:03.985148+08:00","is_consistent":false,"checked_count":2,"miss_count":0,"diff_count":1,"skip_count":0,"tables":[{"schema":"test_db_1","tb":"recheck_table","checked_count":2,"miss_count":0,"diff_count":1,"skip_count":0}]}

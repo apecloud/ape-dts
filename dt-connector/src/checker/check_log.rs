@@ -1,90 +1,38 @@
-use std::{
-    collections::{BTreeMap, HashMap},
-    str::FromStr,
-};
+use std::{collections::HashMap, str::FromStr};
 
 use anyhow::Context;
 use dt_common::{error::Error, meta::col_value::ColValue, utils::serialize_util::SerializeUtil};
-use serde::{ser::SerializeStruct, Deserialize, Serialize, Serializer};
+use serde::{Deserialize, Serialize};
 
-#[derive(Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct CheckLog {
     pub schema: String,
     pub tb: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target_schema: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target_tb: Option<String>,
+    #[serde(serialize_with = "SerializeUtil::ordered_map")]
     pub id_col_values: HashMap<String, Option<String>>,
-    #[serde(default)]
     // diff_col_values is empty means no diff, is miss
+    #[serde(
+        default,
+        skip_serializing_if = "HashMap::is_empty",
+        serialize_with = "SerializeUtil::ordered_map"
+    )]
     pub diff_col_values: HashMap<String, DiffColValue>,
-    #[serde(default)]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "SerializeUtil::ordered_option_map"
+    )]
     pub src_row: Option<HashMap<String, ColValue>>,
-    #[serde(default)]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "SerializeUtil::ordered_option_map"
+    )]
     pub dst_row: Option<HashMap<String, ColValue>>,
-}
-
-fn ordered_map<V>(map: &HashMap<String, V>) -> BTreeMap<&String, &V> {
-    map.iter().collect()
-}
-
-fn has_target_identity(
-    schema: &str,
-    tb: &str,
-    target_schema: Option<&String>,
-    target_tb: Option<&String>,
-) -> bool {
-    target_schema.is_some_and(|target_schema| target_schema != schema)
-        || target_tb.is_some_and(|target_tb| target_tb != tb)
-}
-
-impl Serialize for CheckLog {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        let mut len = 3;
-        let has_target = has_target_identity(
-            &self.schema,
-            &self.tb,
-            self.target_schema.as_ref(),
-            self.target_tb.as_ref(),
-        );
-        if has_target {
-            len += 2;
-        }
-        if !self.diff_col_values.is_empty() {
-            len += 1;
-        }
-        if self.src_row.is_some() {
-            len += 1;
-        }
-        if self.dst_row.is_some() {
-            len += 1;
-        }
-
-        let mut state = serializer.serialize_struct("CheckLog", len)?;
-        state.serialize_field("schema", &self.schema)?;
-        state.serialize_field("tb", &self.tb)?;
-        if has_target {
-            let target_schema = self.target_schema.as_ref().unwrap_or(&self.schema);
-            let target_tb = self.target_tb.as_ref().unwrap_or(&self.tb);
-            state.serialize_field("target_schema", target_schema)?;
-            state.serialize_field("target_tb", target_tb)?;
-        }
-        state.serialize_field("id_col_values", &ordered_map(&self.id_col_values))?;
-        if !self.diff_col_values.is_empty() {
-            state.serialize_field("diff_col_values", &ordered_map(&self.diff_col_values))?;
-        }
-        if let Some(src_row) = &self.src_row {
-            state.serialize_field("src_row", &ordered_map(src_row))?;
-        }
-        if let Some(dst_row) = &self.dst_row {
-            state.serialize_field("dst_row", &ordered_map(dst_row))?;
-        }
-        state.end()
-    }
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -107,6 +55,8 @@ pub struct CheckSummaryLog {
     pub end_time: String,
     pub is_consistent: bool,
     #[serde(default)]
+    pub checked_count: usize,
+    #[serde(default)]
     pub miss_count: usize,
     #[serde(default)]
     pub diff_count: usize,
@@ -118,13 +68,13 @@ pub struct CheckSummaryLog {
     pub tables: Vec<CheckTableSummaryLog>,
 }
 
-#[derive(Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
 pub struct CheckTableSummaryLog {
     pub schema: String,
     pub tb: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target_schema: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target_tb: Option<String>,
     #[serde(default)]
     pub checked_count: usize,
@@ -134,39 +84,6 @@ pub struct CheckTableSummaryLog {
     pub diff_count: usize,
     #[serde(default)]
     pub skip_count: usize,
-}
-
-impl Serialize for CheckTableSummaryLog {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        let mut len = 6;
-        let has_target = has_target_identity(
-            &self.schema,
-            &self.tb,
-            self.target_schema.as_ref(),
-            self.target_tb.as_ref(),
-        );
-        if has_target {
-            len += 2;
-        }
-
-        let mut state = serializer.serialize_struct("CheckTableSummaryLog", len)?;
-        state.serialize_field("schema", &self.schema)?;
-        state.serialize_field("tb", &self.tb)?;
-        if has_target {
-            let target_schema = self.target_schema.as_ref().unwrap_or(&self.schema);
-            let target_tb = self.target_tb.as_ref().unwrap_or(&self.tb);
-            state.serialize_field("target_schema", target_schema)?;
-            state.serialize_field("target_tb", target_tb)?;
-        }
-        state.serialize_field("checked_count", &self.checked_count)?;
-        state.serialize_field("miss_count", &self.miss_count)?;
-        state.serialize_field("diff_count", &self.diff_count)?;
-        state.serialize_field("skip_count", &self.skip_count)?;
-        state.end()
-    }
 }
 
 impl CheckSummaryLog {
@@ -182,6 +99,7 @@ impl CheckSummaryLog {
             self.end_time = other.end_time.clone();
         }
         self.is_consistent = self.is_consistent && other.is_consistent;
+        self.checked_count += other.checked_count;
         self.miss_count += other.miss_count;
         self.diff_count += other.diff_count;
         self.skip_count += other.skip_count;
@@ -208,36 +126,34 @@ impl CheckSummaryLog {
             self.tables.push(table);
         }
     }
+
+    pub fn sort_tables(&mut self) {
+        self.tables.sort_by(|a, b| {
+            (
+                a.schema.as_str(),
+                a.tb.as_str(),
+                a.target_schema.as_deref(),
+                a.target_tb.as_deref(),
+            )
+                .cmp(&(
+                    b.schema.as_str(),
+                    b.tb.as_str(),
+                    b.target_schema.as_deref(),
+                    b.target_tb.as_deref(),
+                ))
+        });
+    }
 }
 
-pub trait CheckLogJsonExt {
-    fn to_json_line(&self) -> Option<String>;
-}
-
-fn to_json_line_or_warn<T: Serialize>(value: &T, log_type: &str) -> Option<String> {
-    match serde_json::to_string(value) {
-        Ok(s) => Some(s),
-        Err(e) => {
+pub fn to_json_line<T: Serialize>(value: &T) -> Option<String> {
+    serde_json::to_string(value)
+        .map_err(|e| {
             log::warn!(
-                "Skipping {} output because serialization failed: {}",
-                log_type,
+                "Skipping checker log output because serialization failed: {}",
                 e
-            );
-            None
-        }
-    }
-}
-
-impl CheckLogJsonExt for CheckSummaryLog {
-    fn to_json_line(&self) -> Option<String> {
-        to_json_line_or_warn(self, "CheckSummaryLog")
-    }
-}
-
-impl CheckLogJsonExt for CheckLog {
-    fn to_json_line(&self) -> Option<String> {
-        to_json_line_or_warn(self, "CheckLog")
-    }
+            )
+        })
+        .ok()
 }
 
 #[derive(Serialize, Deserialize)]
@@ -266,21 +182,11 @@ impl StructCheckLog {
 }
 
 fn struct_key_scope(key: &str) -> (String, String) {
-    let parts = key.split('.').collect::<Vec<_>>();
-    let schema = parts.get(1).copied().unwrap_or_default().to_string();
-    let tb = parts
-        .get(2)
-        .copied()
-        .or_else(|| parts.get(1).copied())
-        .unwrap_or_default()
-        .to_string();
-    (schema, tb)
-}
-
-impl CheckLogJsonExt for StructCheckLog {
-    fn to_json_line(&self) -> Option<String> {
-        to_json_line_or_warn(self, "StructCheckLog")
-    }
+    let mut parts = key.split('.');
+    let _ = parts.next();
+    let schema = parts.next().unwrap_or_default();
+    let tb = parts.next().unwrap_or(schema);
+    (schema.to_string(), tb.to_string())
 }
 
 impl FromStr for CheckLog {
@@ -297,13 +203,17 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    fn json_line<T: Serialize>(value: &T) -> serde_json::Value {
+        serde_json::from_str(&to_json_line(value).unwrap()).unwrap()
+    }
+
     #[test]
-    fn check_log_serializes_null_diff_endpoints() {
+    fn check_log_outputs_stable_json_fields() {
         let log = CheckLog {
-            schema: "s1".to_string(),
-            tb: "t1".to_string(),
-            target_schema: None,
-            target_tb: None,
+            schema: "src_s".to_string(),
+            tb: "src_t".to_string(),
+            target_schema: Some("dst_s".to_string()),
+            target_tb: Some("src_t".to_string()),
             id_col_values: HashMap::from([("id".to_string(), Some("1".to_string()))]),
             diff_col_values: HashMap::from([(
                 "name".to_string(),
@@ -318,136 +228,86 @@ mod tests {
             dst_row: None,
         };
 
-        let actual: serde_json::Value = serde_json::from_str(&log.to_json_line().unwrap()).unwrap();
-        let expected = json!({
-            "schema": "s1",
-            "tb": "t1",
-            "id_col_values": { "id": "1" },
-            "diff_col_values": {
-                "name": {
-                    "src": null,
-                    "dst": "dst",
-                    "src_type": "None",
-                    "dst_type": "String"
+        let line = to_json_line(&log).unwrap();
+        let parsed = CheckLog::from_str(&line).unwrap();
+        assert_eq!(to_json_line(&parsed).unwrap(), line);
+
+        let actual: serde_json::Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(
+            actual,
+            json!({
+                "schema": "src_s",
+                "tb": "src_t",
+                "target_schema": "dst_s",
+                "target_tb": "src_t",
+                "id_col_values": { "id": "1" },
+                "diff_col_values": {
+                    "name": {
+                        "src": null,
+                        "dst": "dst",
+                        "src_type": "None",
+                        "dst_type": "String"
+                    }
                 }
-            }
-        });
-
-        assert_eq!(actual, expected);
+            })
+        );
     }
 
     #[test]
-    fn check_log_serializes_explicit_target_identity() {
-        let log = CheckLog {
-            schema: "src_s".to_string(),
-            tb: "src_t".to_string(),
-            target_schema: Some("dst_s".to_string()),
-            target_tb: Some("dst_t".to_string()),
-            id_col_values: HashMap::from([("id".to_string(), Some("1".to_string()))]),
-            diff_col_values: HashMap::new(),
-            src_row: None,
-            dst_row: None,
-        };
-
-        let actual: serde_json::Value = serde_json::from_str(&log.to_json_line().unwrap()).unwrap();
-        assert_eq!(actual["target_schema"], "dst_s");
-        assert_eq!(actual["target_tb"], "dst_t");
-    }
-
-    #[test]
-    fn check_log_outputs_target_identity_as_pair() {
-        let log = CheckLog {
-            schema: "src_s".to_string(),
-            tb: "src_t".to_string(),
-            target_schema: Some("dst_s".to_string()),
-            target_tb: Some("src_t".to_string()),
-            id_col_values: HashMap::from([("id".to_string(), Some("1".to_string()))]),
-            diff_col_values: HashMap::new(),
-            src_row: None,
-            dst_row: None,
-        };
-
-        let actual: serde_json::Value = serde_json::from_str(&log.to_json_line().unwrap()).unwrap();
-        assert_eq!(actual["target_schema"], "dst_s");
-        assert_eq!(actual["target_tb"], "src_t");
-    }
-
-    #[test]
-    fn check_log_omits_unchanged_target_identity_pair() {
-        let log = CheckLog {
-            schema: "src_s".to_string(),
-            tb: "src_t".to_string(),
-            target_schema: Some("src_s".to_string()),
-            target_tb: Some("src_t".to_string()),
-            id_col_values: HashMap::from([("id".to_string(), Some("1".to_string()))]),
-            diff_col_values: HashMap::new(),
-            src_row: None,
-            dst_row: None,
-        };
-
-        let actual: serde_json::Value = serde_json::from_str(&log.to_json_line().unwrap()).unwrap();
-        assert!(actual.get("target_schema").is_none());
-        assert!(actual.get("target_tb").is_none());
-    }
-
-    #[test]
-    fn struct_check_log_uses_top_level_identity_fields() {
-        let log = StructCheckLog::new(
+    fn summary_and_struct_logs_keep_expected_shape() {
+        let struct_log = StructCheckLog::new(
             "index.s1.t1.idx_1".to_string(),
             Some("CREATE INDEX idx_1 ON t1(c1)".to_string()),
             None,
         );
+        assert_eq!(
+            json_line(&struct_log),
+            json!({
+                "schema": "s1",
+                "tb": "t1",
+                "id_col_values": { "object_key": "index.s1.t1.idx_1" },
+                "src_sql": "CREATE INDEX idx_1 ON t1(c1)"
+            })
+        );
 
-        let actual: serde_json::Value = serde_json::from_str(&log.to_json_line().unwrap()).unwrap();
-        let expected = json!({
-            "schema": "s1",
-            "tb": "t1",
-            "id_col_values": { "object_key": "index.s1.t1.idx_1" },
-            "src_sql": "CREATE INDEX idx_1 ON t1(c1)"
-        });
-
-        assert_eq!(actual, expected);
-    }
-
-    #[test]
-    fn summary_log_always_serializes_tables() {
         let summary = CheckSummaryLog {
             start_time: "start".to_string(),
             end_time: "end".to_string(),
             is_consistent: true,
-            ..Default::default()
-        };
-
-        let actual: serde_json::Value =
-            serde_json::from_str(&summary.to_json_line().unwrap()).unwrap();
-        assert_eq!(actual["tables"], json!([]));
-    }
-
-    #[test]
-    fn table_summary_outputs_target_identity_as_pair() {
-        let table = CheckTableSummaryLog {
-            schema: "s1".to_string(),
-            tb: "t1".to_string(),
-            target_schema: Some("dst_s".to_string()),
-            target_tb: Some("t1".to_string()),
             checked_count: 2,
-            miss_count: 1,
-            diff_count: 1,
+            tables: vec![CheckTableSummaryLog {
+                schema: "s1".to_string(),
+                tb: "t1".to_string(),
+                target_schema: Some("dst_s".to_string()),
+                target_tb: Some("t1".to_string()),
+                checked_count: 2,
+                diff_count: 1,
+                ..Default::default()
+            }],
             ..Default::default()
         };
 
-        let actual = serde_json::to_value(table).unwrap();
-        let expected = json!({
-            "schema": "s1",
-            "tb": "t1",
-            "target_schema": "dst_s",
-            "target_tb": "t1",
-            "checked_count": 2,
-            "miss_count": 1,
-            "diff_count": 1,
-            "skip_count": 0
-        });
-
-        assert_eq!(actual, expected);
+        assert_eq!(
+            json_line(&summary),
+            json!({
+                "start_time": "start",
+                "end_time": "end",
+                "is_consistent": true,
+                "checked_count": 2,
+                "miss_count": 0,
+                "diff_count": 0,
+                "skip_count": 0,
+                "tables": [{
+                    "schema": "s1",
+                    "tb": "t1",
+                    "target_schema": "dst_s",
+                    "target_tb": "t1",
+                    "checked_count": 2,
+                    "miss_count": 0,
+                    "diff_count": 1,
+                    "skip_count": 0
+                }]
+            })
+        );
     }
 }
