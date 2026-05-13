@@ -11,9 +11,10 @@ Refer to [task templates](../../templates/mysql_to_mysql.md)
 
 # Results
 
-Structure check writes `miss.log`, `diff.log`, and `summary.log` as JSON Lines. When
-`output_revise_sql=true`, it also writes repair statements to `sql.log`. `sql.log` is plain SQL,
-one statement per line, with no JSON wrapper or schema/table/id metadata.
+Structure check writes `miss.log` and `diff.log` as JSON Lines. `summary.log` contains exactly one
+JSON line for the overall summary. When `output_revise_sql=true`, it also writes repair statements
+to `sql.log`. `sql.log` is plain SQL, one statement per line, with no JSON wrapper or
+schema/table/id metadata.
 
 `miss.log` and `diff.log` use the same JSON structure (`StructCheckLog`). `src_sql` and
 `dst_sql` are optional and appear only when the corresponding side has a definition:

@@ -745,11 +745,7 @@ impl TaskRunner {
             matches!(task_type.kind, TaskKind::Snapshot)
                 && matches!(task_type.check, Some(CheckMode::Standalone))
         });
-        let checker_sample_rate = if standalone_snapshot_check
-            && matches!(
-                extractor_config,
-                ExtractorConfig::MysqlSnapshot { .. } | ExtractorConfig::PgSnapshot { .. }
-            ) {
+        let checker_sample_rate = if standalone_snapshot_check {
             None
         } else {
             cfg.sample_rate
@@ -881,8 +877,6 @@ impl TaskRunner {
                 max_retries,
                 is_cdc: is_cdc_task,
                 sample_rate: checker_sample_rate,
-                sample_before_fetch: checker_sample_rate
-                    .is_some_and(|rate| rate < 100 && !is_cdc_task),
                 summary: CheckSummaryLog::default(),
                 global_summary: check_summary.clone(),
                 check_log_dir: check_log_dir_base.clone(),

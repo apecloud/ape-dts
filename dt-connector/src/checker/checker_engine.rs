@@ -148,51 +148,16 @@ impl<C: Checker> DataChecker<C> {
 
     async fn check_rows(
         &mut self,
-        src_data: &[&RowData],
+        src_data: &[(&RowData, u128)],
         mut dst_row_data_map: HashMap<u128, RowData>,
         tb_meta: &CheckerTbMeta,
-    ) -> anyhow::Result<(usize, usize, Vec<RowData>)> {
+    ) -> anyhow::Result<(usize, Vec<RowData>)> {
         let mut checked_count = 0;
-        let mut skip_count = 0;
         let mut retry_rows = Vec::new();
 
-        for src_row_data in src_data {
-            let key = match Self::lookup_match_key(src_row_data, tb_meta.basic()) {
-                Ok(Some(k)) => k,
-                Ok(None) => {
-                    checked_count += 1;
-                    log_warn!(
-                        "Skipping row with NULL key component in {}.{}.",
-                        src_row_data.schema,
-                        src_row_data.tb
-                    );
-                    skip_count += 1;
-                    continue;
-                }
-                Err(e) => {
-                    checked_count += 1;
-                    log_warn!(
-                        "Skipping unhashable row in {}.{}: {}",
-                        src_row_data.schema,
-                        src_row_data.tb,
-                        e
-                    );
-                    skip_count += 1;
-                    continue;
-                }
-            };
-
-            if self.ctx.is_cdc {
-                self.cleanup_stale_update_key(
-                    src_row_data,
-                    tb_meta.basic(),
-                    key,
-                    self.ctx.sample_rate,
-                );
-            }
-            if !Self::should_sample_check_row(self.ctx.sample_rate, key) {
-                continue;
-            }
+        for (src_row_data, key) in src_data {
+            let src_row_data = *src_row_data;
+            let key = *key;
             checked_count += 1;
             let dst_row_data = dst_row_data_map.remove(&key);
 
@@ -205,7 +170,7 @@ impl<C: Checker> DataChecker<C> {
             }
         }
 
-        Ok((checked_count, skip_count, retry_rows))
+        Ok((checked_count, retry_rows))
     }
 
     pub fn compare_src_dst(
@@ -344,33 +309,60 @@ impl<C: Checker> DataChecker<C> {
         Ok((key != 0).then_some(key))
     }
 
-    fn should_sample_check_row(sample_rate: Option<u8>, row_key: u128) -> bool {
+    fn should_sample_key(sample_rate: Option<u8>, row_key: u128) -> bool {
         let Some(sample_rate) = sample_rate.filter(|rate| *rate < 100) else {
             return true;
         };
         row_key % 100 < u128::from(sample_rate)
     }
 
-    fn sample_rows_before_fetch<'a>(
+    fn prepare_rows_for_fetch<'a>(
+        &mut self,
         rows: &[&'a RowData],
-        sample_rate: Option<u8>,
         tb_meta: &CheckerTbMeta,
-    ) -> anyhow::Result<Vec<&'a RowData>> {
-        if sample_rate.is_none_or(|rate| rate >= 100) {
-            return Ok(rows.to_vec());
-        }
-
-        let mut sampled_rows = Vec::with_capacity(rows.len());
+    ) -> Vec<(&'a RowData, u128)> {
+        let mut prepared_rows = Vec::with_capacity(rows.len());
         for row in rows {
+            let row = *row;
             match Self::lookup_match_key(row, tb_meta.basic()) {
-                Ok(Some(key)) if Self::should_sample_check_row(sample_rate, key) => {
-                    sampled_rows.push(*row);
+                Ok(Some(key)) => {
+                    if self.ctx.is_cdc {
+                        self.cleanup_stale_update_key(row, tb_meta.basic(), Some(key));
+                    }
+                    if Self::should_sample_key(self.ctx.sample_rate, key) {
+                        prepared_rows.push((row, key));
+                    }
                 }
-                Ok(Some(_)) => {}
-                Ok(None) | Err(_) => sampled_rows.push(*row),
+                Ok(None) => {
+                    if self.ctx.is_cdc {
+                        self.cleanup_stale_update_key(row, tb_meta.basic(), None);
+                    }
+                    log_warn!(
+                        "Skipping row with NULL key component in {}.{}.",
+                        row.schema,
+                        row.tb
+                    );
+                    self.ctx.record_row_table_counts(row, 0, 1);
+                    self.ctx.summary.skip_count += 1;
+                    self.snapshot_dirty = true;
+                }
+                Err(e) => {
+                    if self.ctx.is_cdc {
+                        self.cleanup_stale_update_key(row, tb_meta.basic(), None);
+                    }
+                    log_warn!(
+                        "Skipping unhashable row in {}.{}: {}",
+                        row.schema,
+                        row.tb,
+                        e
+                    );
+                    self.ctx.record_row_table_counts(row, 0, 1);
+                    self.ctx.summary.skip_count += 1;
+                    self.snapshot_dirty = true;
+                }
             }
         }
-        Ok(sampled_rows)
+        prepared_rows
     }
 
     /// Computes a PK composite hash with `31 * h + col_hash` and returns 0 when any PK column is NULL.
@@ -472,7 +464,7 @@ impl<C: Checker> DataChecker<C> {
                 summary.sql_count = Some(summary.sql_count.unwrap_or_default() + 1);
             }
         }
-        self.ctx.record_table_entry(entry);
+        self.ctx.record_entry_table_counts(entry);
 
         self.add_entry_metrics(entry).await;
     }
@@ -504,8 +496,7 @@ impl<C: Checker> DataChecker<C> {
         &mut self,
         row_data: &RowData,
         tb_meta: &RdbTbMeta,
-        new_key: u128,
-        sample_rate: Option<u8>,
+        new_key: Option<u128>,
     ) {
         if row_data.row_type != RowType::Update {
             return;
@@ -516,9 +507,7 @@ impl<C: Checker> DataChecker<C> {
         };
 
         match Self::match_key_from_values(before_values, tb_meta) {
-            Ok(Some(old_key))
-                if old_key != new_key && Self::should_sample_check_row(sample_rate, old_key) =>
-            {
+            Ok(Some(old_key)) if Some(old_key) != new_key => {
                 self.remove_store_entry(row_data, old_key);
             }
             Ok(_) => {}
@@ -765,8 +754,7 @@ impl<C: Checker> DataChecker<C> {
 
     async fn retry_check_item(&mut self, mut item: RetryItem) -> anyhow::Result<Option<RetryItem>> {
         let row_ref = &item.row;
-        let fetch_result = self.checker.fetch(std::slice::from_ref(&row_ref)).await?;
-        let tb_meta = fetch_result.tb_meta;
+        let tb_meta = self.checker.load_table_meta(row_ref).await?;
         let Some(key) = Self::lookup_match_key(&item.row, tb_meta.basic())? else {
             log_warn!(
                 "Skipping retry row with NULL key component in {}.{}.",
@@ -774,11 +762,15 @@ impl<C: Checker> DataChecker<C> {
                 item.row.tb
             );
             self.ctx.summary.skip_count += 1;
-            self.ctx.record_table_skipped(&item.row, 1);
+            self.ctx.record_row_table_counts(&item.row, 0, 1);
             self.snapshot_dirty = true;
             return Ok(None);
         };
-        let dst_row = Self::select_dst_row(&item.row, tb_meta.as_ref(), fetch_result.dst_rows)?;
+        let dst_rows = self
+            .checker
+            .fetch_rows_by_keys(tb_meta.clone(), std::slice::from_ref(&row_ref))
+            .await?;
+        let dst_row = Self::select_dst_row(&item.row, tb_meta.as_ref(), dst_rows)?;
 
         if item.retries_left > 1 {
             if Self::compare_src_dst(&item.row, dst_row.as_ref(), tb_meta.as_ref())?.is_none() {
@@ -789,7 +781,7 @@ impl<C: Checker> DataChecker<C> {
             return Ok(Some(item));
         }
 
-        self.cleanup_stale_update_key(&item.row, tb_meta.basic(), key, None);
+        self.cleanup_stale_update_key(&item.row, tb_meta.basic(), Some(key));
         self.reconcile_row_inconsistency(key, &item.row, dst_row.as_ref(), tb_meta.as_ref())
             .await?;
         Ok(None)
@@ -846,42 +838,42 @@ impl<C: Checker> DataChecker<C> {
         }
 
         let mut total_checked = 0usize;
-        let mut total_skip_count = 0usize;
         let mut retry_rows = Vec::new();
         let mut monitor_task_id = None;
         for rows in grouped.into_values() {
-            let rows_to_fetch = if self.ctx.sample_before_fetch {
-                let first_row = rows.first().context("checker group is empty")?;
-                let tb_meta = self.checker.fetch_meta(first_row).await?;
-                Self::sample_rows_before_fetch(&rows, self.ctx.sample_rate, tb_meta.as_ref())?
-            } else {
-                rows
-            };
-            if rows_to_fetch.is_empty() {
+            let first_row = rows.first().context("checker group is empty")?;
+            let tb_meta = self.checker.load_table_meta(first_row).await?;
+            let prepared_rows = self.prepare_rows_for_fetch(&rows, tb_meta.as_ref());
+            if prepared_rows.is_empty() {
                 continue;
             }
+            let rows_to_fetch = prepared_rows
+                .iter()
+                .map(|(row, _)| *row)
+                .collect::<Vec<_>>();
             let first_row = rows_to_fetch.first().context("checker group is empty")?;
             if monitor_task_id.is_none() {
                 monitor_task_id = Some(TaskMonitorHandle::task_id_from_row_data(first_row))
                     .filter(|id| !id.is_empty());
             }
-            let fetch_result = self.checker.fetch(&rows_to_fetch).await?;
-            let tb_meta = fetch_result.tb_meta;
+            let dst_rows = self
+                .checker
+                .fetch_rows_by_keys(tb_meta.clone(), &rows_to_fetch)
+                .await?;
 
-            let mut dst_row_data_map = HashMap::with_capacity(fetch_result.dst_rows.len());
-            for row in fetch_result.dst_rows {
+            let mut dst_row_data_map = HashMap::with_capacity(dst_rows.len());
+            for row in dst_rows {
                 if let Some(key) = Self::lookup_match_key(&row, tb_meta.basic())? {
                     dst_row_data_map.insert(key, row);
                 }
             }
 
-            let (checked_count, skip_count, table_retry_rows) = self
-                .check_rows(&rows_to_fetch, dst_row_data_map, tb_meta.as_ref())
+            let (checked_count, table_retry_rows) = self
+                .check_rows(&prepared_rows, dst_row_data_map, tb_meta.as_ref())
                 .await?;
-            self.ctx.record_table_checked(first_row, checked_count);
-            self.ctx.record_table_skipped(first_row, skip_count);
+            self.ctx
+                .record_row_table_counts(first_row, checked_count, 0);
             total_checked += checked_count;
-            total_skip_count += skip_count;
             retry_rows.extend(table_retry_rows);
         }
         if total_checked == 0 {
@@ -891,10 +883,6 @@ impl<C: Checker> DataChecker<C> {
         let mut rts = LimitedQueue::new(1);
         let elapsed_millis = u64::try_from(start_time.elapsed().as_millis()).unwrap_or(u64::MAX);
         rts.push((elapsed_millis, 1));
-        self.ctx.summary.skip_count += total_skip_count;
-        if total_skip_count > 0 {
-            self.snapshot_dirty = true;
-        }
         self.enqueue_retry_rows(retry_rows);
 
         let task_id =
@@ -921,7 +909,7 @@ impl<C: Checker> DataChecker<C> {
 
 #[cfg(test)]
 mod tests {
-    use super::super::{CheckContext, CheckerIo, FetchResult};
+    use super::super::{CheckContext, CheckerIo};
     use super::*;
     use crate::{
         checker::check_log::{CheckLog, CheckSummaryLog},
@@ -938,12 +926,19 @@ mod tests {
 
     #[async_trait]
     impl Checker for DummyChecker {
-        async fn fetch_meta(&mut self, _src_row: &RowData) -> anyhow::Result<Arc<CheckerTbMeta>> {
-            unreachable!("ut should not call fetch_meta")
+        async fn load_table_meta(
+            &mut self,
+            _lookup_row: &RowData,
+        ) -> anyhow::Result<Arc<CheckerTbMeta>> {
+            unreachable!("ut should not call load_table_meta")
         }
 
-        async fn fetch(&mut self, _src_rows: &[&RowData]) -> anyhow::Result<FetchResult> {
-            unreachable!("ut should not call fetch")
+        async fn fetch_rows_by_keys(
+            &mut self,
+            _table_meta: Arc<CheckerTbMeta>,
+            _lookup_rows: &[&RowData],
+        ) -> anyhow::Result<Vec<RowData>> {
+            unreachable!("ut should not call fetch_rows_by_keys")
         }
     }
 
@@ -954,14 +949,21 @@ mod tests {
 
     #[async_trait]
     impl Checker for MetaOnlyChecker {
-        async fn fetch_meta(&mut self, _src_row: &RowData) -> anyhow::Result<Arc<CheckerTbMeta>> {
+        async fn load_table_meta(
+            &mut self,
+            _lookup_row: &RowData,
+        ) -> anyhow::Result<Arc<CheckerTbMeta>> {
             Ok(self.tb_meta.clone())
         }
 
-        async fn fetch(&mut self, _src_rows: &[&RowData]) -> anyhow::Result<FetchResult> {
+        async fn fetch_rows_by_keys(
+            &mut self,
+            _table_meta: Arc<CheckerTbMeta>,
+            _lookup_rows: &[&RowData],
+        ) -> anyhow::Result<Vec<RowData>> {
             self.fetch_count.fetch_add(1, Ordering::Relaxed);
             Err(anyhow::anyhow!(
-                "fetch should not be called for empty sample"
+                "fetch_rows_by_keys should not be called for empty sample"
             ))
         }
     }
@@ -990,7 +992,6 @@ mod tests {
             global_summary: None,
             batch_size: 1,
             sample_rate: None,
-            sample_before_fetch: false,
             retry_interval_secs: 0,
             max_retries: 0,
             is_cdc,
@@ -1041,6 +1042,19 @@ mod tests {
             Some(HashMap::from([
                 ("id".to_string(), ColValue::Long(id)),
                 ("name".to_string(), ColValue::String(name.to_string())),
+            ])),
+        )
+    }
+
+    fn build_null_key_row() -> RowData {
+        RowData::new(
+            "s1".to_string(),
+            "t1".to_string(),
+            RowType::Insert,
+            None,
+            Some(HashMap::from([
+                ("id".to_string(), ColValue::None),
+                ("name".to_string(), ColValue::String("null-key".to_string())),
             ])),
         )
     }
@@ -1172,7 +1186,7 @@ mod tests {
     }
 
     #[test]
-    fn sampling_uses_pk_hash_and_filters_before_fetch() {
+    fn sampling_uses_key_and_filters_before_fetch() {
         let tb_meta = build_mysql_tb_meta();
         let row_a = build_insert_row(7, "alice");
         let row_b = build_insert_row(7, "bob");
@@ -1186,21 +1200,25 @@ mod tests {
         assert_eq!(key_a, key_b);
         let bucket = (key_a % 100) as u8;
         let passing_rate = (bucket + 1).min(100);
-        assert!(DataChecker::<DummyChecker>::should_sample_check_row(
+        assert!(DataChecker::<DummyChecker>::should_sample_key(
             Some(passing_rate),
             key_a,
         ));
         if bucket > 0 {
-            assert!(!DataChecker::<DummyChecker>::should_sample_check_row(
+            assert!(!DataChecker::<DummyChecker>::should_sample_key(
                 Some(bucket),
                 key_a,
             ));
         }
 
+        let mut checker = build_checker();
+        checker.ctx.sample_rate = Some(passing_rate);
+        let prepared_rows = checker.prepare_rows_for_fetch(&[&row_a, &row_b], &tb_meta);
+        assert_eq!(prepared_rows.len(), 2);
+
         let row = build_insert_row(1, "not-sampled");
-        let rows =
-            DataChecker::<DummyChecker>::sample_rows_before_fetch(&[&row], Some(0), &tb_meta)
-                .unwrap();
+        checker.ctx.sample_rate = Some(0);
+        let rows = checker.prepare_rows_for_fetch(&[&row], &tb_meta);
         assert!(rows.is_empty());
     }
 
@@ -1209,7 +1227,6 @@ mod tests {
         let tb_meta = Arc::new(build_mysql_tb_meta());
         let fetch_count = Arc::new(AtomicU64::new(0));
         let mut ctx = build_ctx(false);
-        ctx.sample_before_fetch = true;
         ctx.sample_rate = Some(0);
         let mut checker = build_checker_with(
             MetaOnlyChecker {
@@ -1227,8 +1244,32 @@ mod tests {
         assert_eq!(fetch_count.load(Ordering::Relaxed), 0);
     }
 
+    #[tokio::test]
+    async fn pre_fetch_filter_skips_null_key_without_target_fetch() {
+        let tb_meta = Arc::new(build_mysql_tb_meta());
+        let fetch_count = Arc::new(AtomicU64::new(0));
+        let ctx = build_ctx(false);
+        let mut checker = build_checker_with(
+            MetaOnlyChecker {
+                tb_meta,
+                fetch_count: fetch_count.clone(),
+            },
+            ctx,
+        );
+
+        checker
+            .process_batch(&[build_null_key_row()], false)
+            .await
+            .unwrap();
+
+        assert_eq!(fetch_count.load(Ordering::Relaxed), 0);
+        assert_eq!(checker.ctx.summary.skip_count, 1);
+        assert_eq!(checker.ctx.summary.tables[0].skip_count, 1);
+        assert_eq!(checker.ctx.summary.tables[0].checked_count, 0);
+    }
+
     #[test]
-    fn sampled_cdc_pk_update_cleans_only_sampled_old_key() {
+    fn sampled_cdc_pk_update_cleans_old_key() {
         let tb_meta = build_mysql_tb_meta();
         let mut selected = None;
         for old_id in 1..500 {
@@ -1236,21 +1277,16 @@ mod tests {
             let old_key = DataChecker::<DummyChecker>::lookup_match_key(&old_row, tb_meta.basic())
                 .unwrap()
                 .unwrap();
-            let old_bucket = (old_key % 100) as u8;
-            if old_bucket == 0 {
-                continue;
-            }
             let new_row = build_insert_row(old_id + 1000, "new");
             let new_key = DataChecker::<DummyChecker>::lookup_match_key(&new_row, tb_meta.basic())
                 .unwrap()
                 .unwrap();
             if old_key != new_key {
-                selected = Some((old_id, old_key, new_key, old_bucket));
+                selected = Some((old_id, old_key, new_key));
                 break;
             }
         }
-        let (old_id, old_key, new_key, old_bucket) =
-            selected.expect("test should find an old key with bucket > 0");
+        let (old_id, old_key, new_key) = selected.expect("test should find a changed key");
         let old_store_key = CheckerStoreKey::new("s1", "t1", old_key);
         let old_row = build_insert_row(old_id, "old");
         let update_row = build_update_row(old_id, old_id + 1000);
@@ -1260,15 +1296,7 @@ mod tests {
             old_store_key.clone(),
             build_entry(&old_row, tb_meta.basic()),
         );
-        checker.cleanup_stale_update_key(&update_row, tb_meta.basic(), new_key, Some(old_bucket));
-        assert!(checker.store.contains_key(&old_store_key));
-
-        checker.cleanup_stale_update_key(
-            &update_row,
-            tb_meta.basic(),
-            new_key,
-            Some(old_bucket + 1),
-        );
+        checker.cleanup_stale_update_key(&update_row, tb_meta.basic(), Some(new_key));
         assert!(!checker.store.contains_key(&old_store_key));
     }
 }
