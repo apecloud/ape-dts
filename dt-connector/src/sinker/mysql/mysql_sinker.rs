@@ -187,6 +187,8 @@ impl CheckableSink for MysqlSinker {
 
 impl MysqlSinker {
     async fn serial_sink(&mut self, data: &[RowData]) -> anyhow::Result<()> {
+        let task_id = self.base_sinker.task_id_for_rows(data);
+        self.base_sinker.ensure_monitor_for(&task_id);
         let monitor_interval = self.base_sinker.monitor_interval_secs();
         let mut last_monitor_time = Instant::now();
         let mut tx = self.conn_pool.begin().await?;
@@ -219,9 +221,9 @@ impl MysqlSinker {
             rts.push((start_time.elapsed().as_millis() as u64, 1));
             if last_monitor_time.elapsed().as_secs() >= monitor_interval {
                 self.base_sinker
-                    .update_serial_monitor(data_len as u64, data_size as u64)
+                    .update_serial_monitor_for(&task_id, data_len as u64, data_size as u64)
                     .await?;
-                self.base_sinker.update_monitor_rt(&rts).await?;
+                self.base_sinker.update_monitor_rt_for(&task_id, &rts).await?;
                 rts.clear();
                 data_size = 0;
                 data_len = 0;
@@ -232,9 +234,9 @@ impl MysqlSinker {
 
         if data_len > 0 || data_size > 0 {
             self.base_sinker
-                .update_serial_monitor(data_len as u64, data_size as u64)
+                .update_serial_monitor_for(&task_id, data_len as u64, data_size as u64)
                 .await?;
-            self.base_sinker.update_monitor_rt(&rts).await?;
+            self.base_sinker.update_monitor_rt_for(&task_id, &rts).await?;
         }
         Ok(())
     }
@@ -245,6 +247,10 @@ impl MysqlSinker {
         start_index: usize,
         batch_size: usize,
     ) -> anyhow::Result<()> {
+        let task_id = self
+            .base_sinker
+            .task_id_for_rows(&data[start_index..start_index + batch_size]);
+        self.base_sinker.ensure_monitor_for(&task_id);
         let tb_meta = self
             .meta_manager
             .get_tb_meta_by_row_data(&data[0])
@@ -268,9 +274,9 @@ impl MysqlSinker {
         rts.push((start_time.elapsed().as_millis() as u64, 1));
 
         self.base_sinker
-            .update_batch_monitor(batch_size as u64, data_size as u64)
+            .update_batch_monitor_for(&task_id, batch_size as u64, data_size as u64)
             .await?;
-        self.base_sinker.update_monitor_rt(&rts).await
+        self.base_sinker.update_monitor_rt_for(&task_id, &rts).await
     }
 
     async fn batch_insert(
@@ -279,6 +285,10 @@ impl MysqlSinker {
         start_index: usize,
         batch_size: usize,
     ) -> anyhow::Result<()> {
+        let task_id = self
+            .base_sinker
+            .task_id_for_rows(&data[start_index..start_index + batch_size]);
+        self.base_sinker.ensure_monitor_for(&task_id);
         let tb_meta = self
             .meta_manager
             .get_tb_meta_by_row_data(&data[0])
@@ -319,11 +329,11 @@ impl MysqlSinker {
             let sub_data = &data[start_index..start_index + batch_size];
             self.serial_sink(sub_data).await?;
         } else {
-            self.base_sinker.update_monitor_rt(&rts).await?;
+            self.base_sinker.update_monitor_rt_for(&task_id, &rts).await?;
         }
 
         self.base_sinker
-            .update_batch_monitor(batch_size as u64, data_size as u64)
+            .update_batch_monitor_for(&task_id, batch_size as u64, data_size as u64)
             .await
     }
 

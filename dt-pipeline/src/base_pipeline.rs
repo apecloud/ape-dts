@@ -26,7 +26,9 @@ use dt_common::{
         syncer::Syncer,
     },
     monitor::{
-        counter_type::CounterType, task_metrics::TaskMetricsType, task_monitor::TaskMonitorHandle,
+        counter_type::CounterType,
+        task_metrics::TaskMetricsType,
+        task_monitor::{MonitorType, TaskMonitorHandle},
     },
 };
 use dt_connector::{
@@ -463,8 +465,21 @@ impl BasePipeline {
 
             match ctl {
                 DtCtl::SnapshotExtractFinished {
+                    task_id,
                     finish_position, ..
                 } => {
+                    self.monitor
+                        .with_type(MonitorType::Sinker)
+                        .unregister_monitor(&task_id);
+                    if let Some(checker) = &self.checker {
+                        if let Err(err) = checker.snapshot_table_finished(&task_id).await {
+                            log_warn!(
+                                "checker snapshot_table_finished failed for {}: {}",
+                                task_id,
+                                err
+                            );
+                        }
+                    }
                     log_position!("checkpoint_position | {}", finish_position.to_string());
                     self.monitor
                         .add_no_window_metrics(TaskMetricsType::FinishedProgressCount, 1);

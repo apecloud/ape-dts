@@ -28,6 +28,7 @@ use dt_common::meta::{
     rdb_tb_meta::RdbTbMeta, row_data::RowData, row_type::RowType,
 };
 use dt_common::{
+    config::config_enums::TaskKind,
     log_error, log_info, log_summary, log_warn, monitor::task_monitor::TaskMonitorHandle,
     utils::limit_queue::LimitedQueue,
 };
@@ -271,6 +272,7 @@ pub trait Checker: Send + Sync + 'static {
 enum CheckerControlMsg {
     RecordCheckpoint { position: Position },
     RefreshMeta { data: Vec<DdlData> },
+    SnapshotTableFinished { task_id: String },
     Close { position: Option<Position> },
 }
 
@@ -415,6 +417,24 @@ impl DataCheckerHandle {
         }
         Ok(())
     }
+
+    pub async fn snapshot_table_finished(&self, task_id: &str) -> anyhow::Result<()> {
+        if task_id.is_empty() || self.shared.is_cdc {
+            return Ok(());
+        }
+        if self
+            .shared
+            .control_tx
+            .send(CheckerControlMsg::SnapshotTableFinished {
+                task_id: task_id.to_string(),
+            })
+            .is_err()
+        {
+            log_warn!("checker snapshot-finished signal dropped because checker already stopped");
+        }
+        self.shared.batch_notify.notify_one();
+        Ok(())
+    }
 }
 
 impl CheckerHandle {
@@ -445,6 +465,13 @@ impl CheckerHandle {
     pub async fn record_checkpoint(&self, position: &Position) -> anyhow::Result<()> {
         match self {
             CheckerHandle::Data(handle) => handle.record_checkpoint(position).await,
+            CheckerHandle::Struct(_) => Ok(()),
+        }
+    }
+
+    pub async fn snapshot_table_finished(&self, task_id: &str) -> anyhow::Result<()> {
+        match self {
+            CheckerHandle::Data(handle) => handle.snapshot_table_finished(task_id).await,
             CheckerHandle::Struct(_) => Ok(()),
         }
     }
@@ -681,6 +708,14 @@ impl<C: Checker> DataChecker<C> {
 
     pub async fn run(mut self) -> anyhow::Result<()> {
         log_info!("Checker [{}] started.", self.name);
+        let is_snapshot_task = self
+            .ctx
+            .monitor
+            .task_type()
+            .is_some_and(|task_type| task_type.kind == TaskKind::Snapshot);
+        if is_snapshot_task {
+            self.ctx.monitor.ensure_monitor(&self.ctx.monitor_task_id);
+        }
         let mut interval = tokio::time::interval(Duration::from_secs(1));
         if let Err(err) = self.init_cdc_state().await {
             log_error!(
@@ -729,6 +764,9 @@ impl<C: Checker> DataChecker<C> {
         if let Err(err) = self.shutdown().await {
             log_error!("Checker [{}] shutdown failed: {}", self.name, err);
         }
+        if is_snapshot_task {
+            self.ctx.monitor.unregister_monitor(&self.ctx.monitor_task_id);
+        }
         log_info!("Checker [{}] stopped.", self.name);
         Ok(())
     }
@@ -744,6 +782,9 @@ impl<C: Checker> DataChecker<C> {
                 if let Err(err) = self.checker.refresh_meta(&data).await {
                     log_error!("Checker [{}] refresh_meta failed: {}", self.name, err);
                 }
+            }
+            CheckerControlMsg::SnapshotTableFinished { task_id } => {
+                self.ctx.monitor.unregister_monitor(&task_id);
             }
             CheckerControlMsg::Close { position } => {
                 if let Some(position) = position.filter(|p| !matches!(p, Position::None)) {

@@ -35,6 +35,8 @@ impl Sinker for RdkafkaSinker {
 
 impl RdkafkaSinker {
     async fn send_avro(&mut self, data: &mut [RowData]) -> anyhow::Result<()> {
+        let task_id = self.base_sinker.task_id_for_rows(data);
+        self.base_sinker.ensure_monitor_for(&task_id);
         let batch_size = data.len();
         let mut data_size = 0;
 
@@ -75,8 +77,8 @@ impl RdkafkaSinker {
         }
 
         self.base_sinker
-            .update_batch_monitor(batch_size as u64, data_size as u64)
+            .update_batch_monitor_for(&task_id, batch_size as u64, data_size as u64)
             .await?;
-        self.base_sinker.update_monitor_rt(&rts).await
+        self.base_sinker.update_monitor_rt_for(&task_id, &rts).await
     }
 }

@@ -163,6 +163,28 @@ impl TaskMonitor {
         }
     }
 
+    pub fn ensure_monitor(
+        &self,
+        task_id: &str,
+        monitor_type: MonitorType,
+        time_window_secs: u64,
+        max_sub_count: u64,
+        count_window: u64,
+    ) {
+        if self.task_type.is_none() || task_id.is_empty() {
+            return;
+        }
+
+        let monitor = Arc::new(Monitor::new(
+            monitor_type.as_str(),
+            task_id,
+            time_window_secs,
+            max_sub_count,
+            count_window,
+        ));
+        self.register(task_id, vec![(monitor_type, monitor)]);
+    }
+
     pub fn unregister(&self, task_id: &str, monitors: Vec<MonitorType>) {
         if self.task_type.is_none() {
             return;
@@ -731,6 +753,22 @@ impl TaskMonitorHandle {
         }
     }
 
+    pub fn with_type(&self, monitor_type: MonitorType) -> Self {
+        Self {
+            task_monitor: self.task_monitor.clone(),
+            monitor_type,
+            time_window_secs: self.time_window_secs,
+            max_sub_count: self.max_sub_count,
+            count_window: self.count_window,
+        }
+    }
+
+    pub fn task_type(&self) -> Option<crate::config::config_enums::TaskType> {
+        self.task_monitor
+            .as_ref()
+            .and_then(|task_monitor| task_monitor.get_task_type().copied())
+    }
+
     pub async fn add_counter(&self, task_id: &str, counter_type: CounterType, value: u64) -> &Self {
         if let Some(task_monitor) = &self.task_monitor {
             task_monitor
@@ -798,6 +836,18 @@ impl TaskMonitorHandle {
         ))
     }
 
+    pub fn ensure_monitor(&self, task_id: &str) {
+        if let Some(task_monitor) = &self.task_monitor {
+            task_monitor.ensure_monitor(
+                task_id,
+                self.monitor_type.clone(),
+                self.time_window_secs,
+                self.max_sub_count,
+                self.count_window,
+            );
+        }
+    }
+
     pub fn register_monitor(&self, task_id: &str, monitor: Arc<Monitor>) {
         if let Some(task_monitor) = &self.task_monitor {
             task_monitor.register(task_id, vec![(self.monitor_type.clone(), monitor)]);
@@ -822,6 +872,17 @@ impl TaskMonitorHandle {
 impl Default for TaskMonitorHandle {
     fn default() -> Self {
         Self::noop(MonitorType::Pipeline)
+    }
+}
+
+impl MonitorType {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            MonitorType::Extractor => "extractor",
+            MonitorType::Pipeline => "pipeline",
+            MonitorType::Sinker => "sinker",
+            MonitorType::Checker => "checker",
+        }
     }
 }
 

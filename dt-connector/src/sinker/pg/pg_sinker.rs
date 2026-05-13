@@ -175,6 +175,8 @@ impl CheckableSink for PgSinker {
 
 impl PgSinker {
     async fn serial_sink(&mut self, data: &[RowData]) -> anyhow::Result<()> {
+        let task_id = self.base_sinker.task_id_for_rows(data);
+        self.base_sinker.ensure_monitor_for(&task_id);
         let monitor_interval = self.base_sinker.monitor_interval_secs();
         let mut data_size = 0;
         let mut data_len = 0;
@@ -190,6 +192,7 @@ impl PgSinker {
         let mut rts = LimitedQueue::new(cmp::min(100, data.len()));
         for row_data in data.iter() {
             data_size += row_data.get_data_size() as usize;
+            data_len += 1;
 
             let tb_meta = self.meta_manager.get_tb_meta_by_row_data(row_data).await?;
             let query_builder = RdbQueryBuilder::new_for_pg(tb_meta, None);
@@ -208,9 +211,9 @@ impl PgSinker {
             rts.push((start_time.elapsed().as_millis() as u64, 1));
             if last_monitor_time.elapsed().as_secs() >= monitor_interval {
                 self.base_sinker
-                    .update_serial_monitor(data_len as u64, data_size as u64)
+                    .update_serial_monitor_for(&task_id, data_len as u64, data_size as u64)
                     .await?;
-                self.base_sinker.update_monitor_rt(&rts).await?;
+                self.base_sinker.update_monitor_rt_for(&task_id, &rts).await?;
                 rts.clear();
                 data_size = 0;
                 data_len = 0;
@@ -221,9 +224,9 @@ impl PgSinker {
 
         if data_len > 0 || data_size > 0 {
             self.base_sinker
-                .update_serial_monitor(data_len as u64, data_size as u64)
+                .update_serial_monitor_for(&task_id, data_len as u64, data_size as u64)
                 .await?;
-            self.base_sinker.update_monitor_rt(&rts).await?;
+            self.base_sinker.update_monitor_rt_for(&task_id, &rts).await?;
         }
         Ok(())
     }
@@ -234,6 +237,10 @@ impl PgSinker {
         start_index: usize,
         batch_size: usize,
     ) -> anyhow::Result<()> {
+        let task_id = self
+            .base_sinker
+            .task_id_for_rows(&data[start_index..start_index + batch_size]);
+        self.base_sinker.ensure_monitor_for(&task_id);
         let tb_meta = self.meta_manager.get_tb_meta_by_row_data(&data[0]).await?;
         let query_builder = RdbQueryBuilder::new_for_pg(tb_meta, None);
 
@@ -254,9 +261,9 @@ impl PgSinker {
         rts.push((start_time.elapsed().as_millis() as u64, 1));
 
         self.base_sinker
-            .update_batch_monitor(batch_size as u64, data_size as u64)
+            .update_batch_monitor_for(&task_id, batch_size as u64, data_size as u64)
             .await?;
-        self.base_sinker.update_monitor_rt(&rts).await
+        self.base_sinker.update_monitor_rt_for(&task_id, &rts).await
     }
 
     async fn batch_insert(
@@ -265,6 +272,10 @@ impl PgSinker {
         start_index: usize,
         batch_size: usize,
     ) -> anyhow::Result<()> {
+        let task_id = self
+            .base_sinker
+            .task_id_for_rows(&data[start_index..start_index + batch_size]);
+        self.base_sinker.ensure_monitor_for(&task_id);
         let tb_meta = self
             .meta_manager
             .get_tb_meta_by_row_data(&data[0])
@@ -304,9 +315,9 @@ impl PgSinker {
         }
 
         self.base_sinker
-            .update_batch_monitor(batch_size as u64, data_size as u64)
+            .update_batch_monitor_for(&task_id, batch_size as u64, data_size as u64)
             .await?;
-        self.base_sinker.update_monitor_rt(&rts).await
+        self.base_sinker.update_monitor_rt_for(&task_id, &rts).await
     }
 
     async fn get_data_marker_sql(&self) -> Option<String> {

@@ -1,4 +1,6 @@
 use dt_common::{
+    config::config_enums::TaskKind,
+    meta::row_data::RowData,
     monitor::{counter_type::CounterType, task_monitor::TaskMonitorHandle},
     utils::limit_queue::LimitedQueue,
 };
@@ -24,6 +26,38 @@ impl BaseSinker {
             self.monitor_interval
         } else {
             10
+        }
+    }
+
+    pub fn is_snapshot_task(&self) -> bool {
+        self.monitor
+            .task_type()
+            .is_some_and(|task_type| task_type.kind == TaskKind::Snapshot)
+    }
+
+    pub fn task_id_for_schema_tb(&self, schema: &str, tb: &str) -> String {
+        if self.is_snapshot_task() && !schema.is_empty() && !tb.is_empty() {
+            return format!("{}.{}", schema, tb);
+        }
+        self.default_task_id.clone()
+    }
+
+    pub fn task_id_for_rows(&self, rows: &[RowData]) -> String {
+        if !self.is_snapshot_task() {
+            return self.default_task_id.clone();
+        }
+
+        let Some(first) = rows.first() else {
+            return self.default_task_id.clone();
+        };
+
+        // FIXME: pipline promise that rows are from the same table for now.
+        self.task_id_for_schema_tb(&first.schema, &first.tb)
+    }
+
+    pub fn ensure_monitor_for(&self, task_id: &str) {
+        if self.is_snapshot_task() && !task_id.is_empty() && task_id != self.default_task_id {
+            self.monitor.ensure_monitor(task_id);
         }
     }
 

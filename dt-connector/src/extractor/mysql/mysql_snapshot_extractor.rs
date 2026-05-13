@@ -599,6 +599,9 @@ impl MysqlSnapshotExtractor {
     }
 
     fn is_no_split_chunks(chunks: &VecDeque<SnapshotChunk>) -> bool {
+        if chunks.is_empty() {
+            return true;
+        }
         if chunks.len() != 1 {
             return false;
         }

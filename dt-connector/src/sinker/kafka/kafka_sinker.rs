@@ -57,6 +57,10 @@ impl KafkaSinker {
         sinked_count: usize,
         batch_size: usize,
     ) -> anyhow::Result<()> {
+        let task_id = self
+            .base_sinker
+            .task_id_for_rows(&data[sinked_count..sinked_count + batch_size]);
+        self.base_sinker.ensure_monitor_for(&task_id);
         let mut data_size = 0;
 
         let mut messages = Vec::new();
@@ -86,8 +90,8 @@ impl KafkaSinker {
         ));
 
         self.base_sinker
-            .update_batch_monitor(batch_size as u64, data_size as u64)
+            .update_batch_monitor_for(&task_id, batch_size as u64, data_size as u64)
             .await?;
-        self.base_sinker.update_monitor_rt(&rts).await
+        self.base_sinker.update_monitor_rt_for(&task_id, &rts).await
     }
 }

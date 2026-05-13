@@ -171,6 +171,10 @@ impl RedisSinker {
         start_index: usize,
         batch_size: usize,
     ) -> anyhow::Result<()> {
+        let task_id = self
+            .base_sinker
+            .task_id_for_rows(&data[start_index..start_index + batch_size]);
+        self.base_sinker.ensure_monitor_for(&task_id);
         let mut data_size = 0;
 
         let mut cmds = Vec::new();
@@ -183,11 +187,13 @@ impl RedisSinker {
         self.batch_sink(&cmds).await?;
 
         self.base_sinker
-            .update_batch_monitor(cmds.len() as u64, data_size as u64)
+            .update_batch_monitor_for(&task_id, cmds.len() as u64, data_size as u64)
             .await
     }
 
     async fn serial_sink_dml(&mut self, data: &mut [RowData]) -> anyhow::Result<()> {
+        let task_id = self.base_sinker.task_id_for_rows(data);
+        self.base_sinker.ensure_monitor_for(&task_id);
         let mut data_size = 0;
 
         for row_data in data.iter() {
@@ -198,7 +204,7 @@ impl RedisSinker {
         }
 
         self.base_sinker
-            .update_serial_monitor(data.len() as u64, data_size as u64)
+            .update_serial_monitor_for(&task_id, data.len() as u64, data_size as u64)
             .await
     }
 

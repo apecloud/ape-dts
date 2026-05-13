@@ -35,7 +35,7 @@ use dt_common::log_filter::{parse_size_limit, SizeLimitFilterDeserializer};
 use dt_common::{
     config::{
         checker_config::CheckerConfig,
-        config_enums::{DbType, ExtractType, PipelineType, SinkType, TaskType},
+        config_enums::{DbType, ExtractType, PipelineType, SinkType, TaskKind, TaskType},
         config_token_parser::{ConfigTokenParser, TokenEscapePair},
         extractor_config::ExtractorConfig,
         sinker_config::SinkerConfig,
@@ -50,7 +50,6 @@ use dt_common::{
     },
     monitor::{
         monitor::Monitor,
-        monitor_task_id,
         task_metrics::TaskMetricsType,
         task_monitor::{MonitorType, TaskMonitor, TaskMonitorHandle},
         FlushableMonitor,
@@ -318,7 +317,11 @@ impl TaskRunner {
         let rw_sinker_data_marker = sinker_data_marker
             .clone()
             .map(|data_marker| Arc::new(RwLock::new(data_marker)));
-        let single_task_id = monitor_task_id::from_task_context_or_extractor("", &extractor_config);
+        let single_task_id = self.config.global.task_id.clone();
+        let is_snapshot_task = self
+            .task_type
+            .as_ref()
+            .is_some_and(|task_type| task_type.kind == TaskKind::Snapshot);
 
         let monitor_time_window_secs = self.config.pipeline.counter_time_window_secs;
         let monitor_max_sub_count = self.config.pipeline.counter_max_sub_count;
@@ -397,7 +400,6 @@ impl TaskRunner {
         )
         .await?;
 
-        let pipeline_monitor = build_monitor("pipeline");
         let pipeline_monitor_handle = self.task_monitor.handle(
             MonitorType::Pipeline,
             monitor_time_window_secs,
@@ -410,7 +412,7 @@ impl TaskRunner {
                 shut_down.clone(),
                 syncer,
                 sinkers,
-                pipeline_monitor_handle,
+                pipeline_monitor_handle.clone(),
                 self.config.global.task_id.clone(), // pipline metrics are shared
                 ctl_buffer.clone(),
                 rw_sinker_data_marker.clone(),
@@ -420,15 +422,16 @@ impl TaskRunner {
             .await?;
         let pipeline = Arc::new(Mutex::new(pipeline));
 
-        self.task_monitor.register(
-            &single_task_id,
-            vec![
-                (MonitorType::Extractor, extractor_monitor.clone()),
-                (MonitorType::Pipeline, pipeline_monitor.clone()),
-                (MonitorType::Sinker, sinker_monitor.clone()),
-                (MonitorType::Checker, checker_monitor.clone()),
-            ],
-        );
+        let mut monitors = vec![(
+            MonitorType::Pipeline,
+            pipeline_monitor_handle.build_monitor("pipeline", &self.config.global.task_id),
+        )];
+        if !is_snapshot_task {
+            monitors.push((MonitorType::Extractor, extractor_monitor.clone()));
+            monitors.push((MonitorType::Sinker, sinker_monitor.clone()));
+            monitors.push((MonitorType::Checker, checker_monitor.clone()));
+        }
+        self.task_monitor.register(&single_task_id, monitors);
 
         // do pre operations before task starts
         self.create_task_tables(
@@ -488,15 +491,13 @@ impl TaskRunner {
         )
         .await;
 
-        self.task_monitor.unregister(
-            &single_task_id,
-            vec![
-                MonitorType::Extractor,
-                MonitorType::Pipeline,
-                MonitorType::Sinker,
-                MonitorType::Checker,
-            ],
-        );
+        let mut monitor_types = vec![MonitorType::Pipeline];
+        if !is_snapshot_task {
+            monitor_types.push(MonitorType::Extractor);
+            monitor_types.push(MonitorType::Sinker);
+            monitor_types.push(MonitorType::Checker);
+        }
+        self.task_monitor.unregister(&single_task_id, monitor_types);
         worker_result
     }
 

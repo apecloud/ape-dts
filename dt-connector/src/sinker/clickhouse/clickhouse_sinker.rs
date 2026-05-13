@@ -49,9 +49,13 @@ impl ClickhouseSinker {
         start_index: usize,
         batch_size: usize,
     ) -> anyhow::Result<()> {
+        let task_id = self
+            .base_sinker
+            .task_id_for_rows(&data[start_index..start_index + batch_size]);
+        self.base_sinker.ensure_monitor_for(&task_id);
         let data_size = self.send_data(data, start_index, batch_size).await?;
         self.base_sinker
-            .update_batch_monitor(batch_size as u64, data_size as u64)
+            .update_batch_monitor_for(&task_id, batch_size as u64, data_size as u64)
             .await
     }
 
@@ -97,7 +101,10 @@ impl ClickhouseSinker {
         let mut rts = LimitedQueue::new(1);
         let response = self.http_client.execute(request).await?;
         rts.push((start_time.elapsed().as_millis() as u64, 1));
-        self.base_sinker.update_monitor_rt(&rts).await?;
+        let task_id = self
+            .base_sinker
+            .task_id_for_rows(&data[start_index..start_index + batch_size]);
+        self.base_sinker.update_monitor_rt_for(&task_id, &rts).await?;
 
         Self::check_response(response).await?;
 

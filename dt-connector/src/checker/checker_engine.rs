@@ -394,11 +394,19 @@ impl<C: Checker> DataChecker<C> {
         }
     }
 
+    fn task_id_for_snapshot_entry(&self, entry: &CheckEntry) -> String {
+        self.ctx
+            .base_sinker
+            .task_id_for_schema_tb(&entry.key.schema, &entry.key.tb)
+    }
+
     async fn add_entry_metrics(&self, entry: &CheckEntry) {
         let (task_metric, counter_type) = Self::checker_metric_types(entry);
         // Update both cumulative task metrics and checker window counters.
         self.ctx.add_checker_metric(task_metric, 1);
-        self.ctx.add_checker_counter(counter_type, 1).await;
+        let task_id = self.task_id_for_snapshot_entry(entry);
+        self.ctx.monitor.ensure_monitor(&task_id);
+        self.ctx.monitor.add_counter(&task_id, counter_type, 1).await;
     }
 
     /// Updates cumulative Prometheus summary counters, which differ from point-in-time unresolved snapshot counts.
@@ -826,6 +834,7 @@ impl<C: Checker> DataChecker<C> {
         self.enqueue_retry_rows(retry_rows);
 
         let task_id = monitor_task_id.unwrap_or_else(|| self.ctx.monitor_task_id.clone());
+        self.ctx.monitor.ensure_monitor(&task_id);
         if is_serial_mode {
             self.ctx
                 .base_sinker
