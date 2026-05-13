@@ -201,6 +201,7 @@ impl StructCheckerHandle {
     ) -> CheckSummaryLog {
         let mut summary = CheckSummaryLog {
             start_time: start_time.to_string(),
+            checked_count: src_sql_map.len(),
             ..Default::default()
         };
         let mut sql_count = 0usize;

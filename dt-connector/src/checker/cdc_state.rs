@@ -173,6 +173,7 @@ impl<C: Checker> DataChecker<C> {
             start_time: self.ctx.summary.start_time.clone(),
             end_time: chrono::Local::now().to_rfc3339(),
             is_consistent: false,
+            checked_count: self.ctx.summary.checked_count,
             miss_count: total_miss,
             diff_count: total_diff,
             skip_count: self.ctx.summary.skip_count,

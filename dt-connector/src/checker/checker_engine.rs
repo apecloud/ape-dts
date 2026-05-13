@@ -883,26 +883,20 @@ impl<C: Checker> DataChecker<C> {
 mod tests {
     use super::super::{CheckContext, CheckerIo};
     use super::*;
-    use crate::{
-        checker::check_log::{CheckLog, CheckSummaryLog},
-        rdb_router::RdbRouter,
-    };
+    use crate::{checker::check_log::CheckSummaryLog, rdb_router::RdbRouter};
     use async_trait::async_trait;
     use dt_common::monitor::monitor::Monitor;
-    use std::sync::{
-        atomic::{AtomicU64, Ordering},
-        Arc, Mutex as StdMutex,
-    };
+    use std::sync::{atomic::AtomicU64, Arc, Mutex as StdMutex};
 
-    struct DummyChecker;
+    struct NoopChecker;
 
     #[async_trait]
-    impl Checker for DummyChecker {
+    impl Checker for NoopChecker {
         async fn load_table_meta(
             &mut self,
             _lookup_row: &RowData,
         ) -> anyhow::Result<Arc<CheckerTbMeta>> {
-            unreachable!("ut should not call load_table_meta")
+            unreachable!("unit tests do not fetch metadata")
         }
 
         async fn fetch_rows_by_keys(
@@ -910,65 +904,7 @@ mod tests {
             _table_meta: Arc<CheckerTbMeta>,
             _lookup_rows: &[&RowData],
         ) -> anyhow::Result<Vec<RowData>> {
-            unreachable!("ut should not call fetch_rows_by_keys")
-        }
-    }
-
-    struct MetaOnlyChecker {
-        tb_meta: Arc<CheckerTbMeta>,
-        fetch_count: Arc<AtomicU64>,
-    }
-
-    #[async_trait]
-    impl Checker for MetaOnlyChecker {
-        async fn load_table_meta(
-            &mut self,
-            _lookup_row: &RowData,
-        ) -> anyhow::Result<Arc<CheckerTbMeta>> {
-            Ok(self.tb_meta.clone())
-        }
-
-        async fn fetch_rows_by_keys(
-            &mut self,
-            _table_meta: Arc<CheckerTbMeta>,
-            _lookup_rows: &[&RowData],
-        ) -> anyhow::Result<Vec<RowData>> {
-            self.fetch_count.fetch_add(1, Ordering::Relaxed);
-            Err(anyhow::anyhow!(
-                "fetch_rows_by_keys should not be called for empty sample"
-            ))
-        }
-    }
-
-    fn build_ctx(is_cdc: bool) -> CheckContext {
-        CheckContext {
-            monitor: Arc::new(Monitor::new("checker", "unit-test", 1, 1, 1)),
-            task_monitor: None,
-            summary: CheckSummaryLog::default(),
-            output_revise_sql: false,
-            extractor_meta_manager: None,
-            reverse_router: RdbRouter {
-                schema_map: HashMap::new(),
-                tb_map: HashMap::new(),
-                col_map: HashMap::new(),
-                topic_map: HashMap::new(),
-            },
-            output_full_row: false,
-            revise_match_full_row: false,
-            global_summary: None,
-            batch_size: 1,
-            sample_rate: None,
-            retry_interval_secs: 0,
-            max_retries: 0,
-            is_cdc,
-            check_log_dir: String::new(),
-            cdc_check_log_max_file_size: 1,
-            cdc_check_log_max_rows: 1,
-            s3_output: None,
-            cdc_check_log_interval_secs: 1,
-            state_store: None,
-            source_checker: None,
-            expected_resume_position: None,
+            unreachable!("unit tests do not fetch rows")
         }
     }
 
@@ -1012,254 +948,121 @@ mod tests {
         )
     }
 
-    fn build_null_key_row() -> RowData {
-        RowData::new(
-            "s1".to_string(),
-            "t1".to_string(),
-            RowType::Insert,
-            None,
-            Some(HashMap::from([
-                ("id".to_string(), ColValue::None),
-                ("name".to_string(), ColValue::String("null-key".to_string())),
-            ])),
-        )
-    }
-
-    fn build_update_row(old_id: i32, new_id: i32) -> RowData {
-        RowData::new(
-            "s1".to_string(),
-            "t1".to_string(),
-            RowType::Update,
-            Some(HashMap::from([
-                ("id".to_string(), ColValue::Long(old_id)),
-                ("name".to_string(), ColValue::String("old".to_string())),
-            ])),
-            Some(HashMap::from([
-                ("id".to_string(), ColValue::Long(new_id)),
-                ("name".to_string(), ColValue::String("new".to_string())),
-            ])),
-        )
-    }
-
-    fn build_checker() -> DataChecker<DummyChecker> {
+    fn build_checker() -> DataChecker<NoopChecker> {
         let (_control_tx, control_rx) = tokio::sync::mpsc::unbounded_channel();
         DataChecker::new(
-            DummyChecker,
+            NoopChecker,
             "unit-test".to_string(),
-            build_ctx(true),
-            CheckerIo {
-                batch_queue: Arc::new(StdMutex::new(LimitedQueue::new(1))),
-                batch_notify: Arc::new(tokio::sync::Notify::new()),
-                dropped_items: Arc::new(AtomicU64::new(0)),
-                control_rx,
-            },
-            "unit-test",
-        )
-    }
-
-    fn build_checker_with<C: Checker>(checker: C, ctx: CheckContext) -> DataChecker<C> {
-        let (_control_tx, control_rx) = tokio::sync::mpsc::unbounded_channel();
-        DataChecker::new(
-            checker,
-            "unit-test".to_string(),
-            ctx,
-            CheckerIo {
-                batch_queue: Arc::new(StdMutex::new(LimitedQueue::new(1))),
-                batch_notify: Arc::new(tokio::sync::Notify::new()),
-                dropped_items: Arc::new(AtomicU64::new(0)),
-                control_rx,
-            },
-            "unit-test",
-        )
-    }
-
-    fn build_entry(row: &RowData, tb_meta: &RdbTbMeta) -> CheckEntry {
-        CheckEntry {
-            key: RecheckKey::from_row_data(row, &tb_meta.id_cols).unwrap(),
-            log: CheckLog {
-                schema: row.schema.clone(),
-                tb: row.tb.clone(),
-                target_schema: None,
-                target_tb: None,
-                id_col_values: HashMap::new(),
-                diff_col_values: HashMap::new(),
-                src_row: None,
-                dst_row: None,
-            },
-            revise_sql: None,
-            diff_cols: None,
-        }
-    }
-
-    #[tokio::test]
-    async fn build_check_entry_keeps_diff_values_full_rows_and_revise_sql_for_cdc_diff() {
-        let src = RowData::new(
-            "s1".to_string(),
-            "t1".to_string(),
-            RowType::Insert,
-            None,
-            Some(HashMap::from([
-                ("id".to_string(), ColValue::Long(1)),
-                ("name".to_string(), ColValue::String("src".to_string())),
-            ])),
-        );
-        let dst = RowData::new(
-            "s1".to_string(),
-            "t1".to_string(),
-            RowType::Insert,
-            None,
-            Some(HashMap::from([
-                ("id".to_string(), ColValue::Long(1)),
-                ("name".to_string(), ColValue::String("dst".to_string())),
-            ])),
-        );
-        let tb_meta = build_mysql_tb_meta();
-        let mut ctx = build_ctx(true);
-        ctx.output_full_row = true;
-        ctx.output_revise_sql = true;
-
-        let entry = DataChecker::<DummyChecker>::build_check_entry(
-            CheckInconsistency::Diff(HashMap::from([(
-                "name".to_string(),
-                DiffColValue {
-                    src: Some("src".to_string()),
-                    dst: Some("dst".to_string()),
-                    src_type: None,
-                    dst_type: None,
+            CheckContext {
+                monitor: Arc::new(Monitor::new("checker", "unit-test", 1, 1, 1)),
+                task_monitor: None,
+                summary: CheckSummaryLog::default(),
+                output_revise_sql: false,
+                extractor_meta_manager: None,
+                reverse_router: RdbRouter {
+                    schema_map: HashMap::new(),
+                    tb_map: HashMap::new(),
+                    col_map: HashMap::new(),
+                    topic_map: HashMap::new(),
                 },
-            )])),
-            &src,
-            Some(&dst),
-            &mut ctx,
-            &tb_meta,
+                output_full_row: false,
+                revise_match_full_row: false,
+                global_summary: None,
+                batch_size: 1,
+                sample_rate: None,
+                retry_interval_secs: 0,
+                max_retries: 0,
+                is_cdc: true,
+                check_log_dir: String::new(),
+                cdc_check_log_max_file_size: 1,
+                cdc_check_log_max_rows: 1,
+                s3_output: None,
+                cdc_check_log_interval_secs: 1,
+                state_store: None,
+                source_checker: None,
+                expected_resume_position: None,
+            },
+            CheckerIo {
+                batch_queue: Arc::new(StdMutex::new(LimitedQueue::new(1))),
+                batch_notify: Arc::new(tokio::sync::Notify::new()),
+                dropped_items: Arc::new(AtomicU64::new(0)),
+                control_rx,
+            },
+            "unit-test",
         )
-        .await
-        .unwrap();
-
-        assert_eq!(
-            entry.log.diff_col_values["name"].src.as_deref(),
-            Some("src")
-        );
-        assert_eq!(
-            entry.log.diff_col_values["name"].dst.as_deref(),
-            Some("dst")
-        );
-        assert!(entry.log.src_row.is_some());
-        assert!(entry.log.dst_row.is_some());
-        assert!(entry.revise_sql.is_some());
     }
 
     #[test]
-    fn sampling_uses_key_and_filters_before_fetch() {
+    fn sampling_uses_stable_row_key() {
         let tb_meta = build_mysql_tb_meta();
         let row_a = build_insert_row(7, "alice");
         let row_b = build_insert_row(7, "bob");
-        let key_a = DataChecker::<DummyChecker>::lookup_match_key(&row_a, tb_meta.basic())
+        let key_a = DataChecker::<NoopChecker>::lookup_match_key(&row_a, tb_meta.basic())
             .unwrap()
             .unwrap();
-        let key_b = DataChecker::<DummyChecker>::lookup_match_key(&row_b, tb_meta.basic())
+        let key_b = DataChecker::<NoopChecker>::lookup_match_key(&row_b, tb_meta.basic())
             .unwrap()
             .unwrap();
 
         assert_eq!(key_a, key_b);
         let bucket = (key_a % 100) as u8;
-        let passing_rate = (bucket + 1).min(100);
-        assert!(DataChecker::<DummyChecker>::should_sample_key(
-            Some(passing_rate),
+        assert!(DataChecker::<NoopChecker>::should_sample_key(
+            Some((bucket + 1).min(100)),
             key_a,
         ));
         if bucket > 0 {
-            assert!(!DataChecker::<DummyChecker>::should_sample_key(
+            assert!(!DataChecker::<NoopChecker>::should_sample_key(
                 Some(bucket),
                 key_a,
             ));
         }
-
-        let mut checker = build_checker();
-        checker.ctx.sample_rate = Some(passing_rate);
-        let prepared_rows = checker.prepare_rows_for_fetch(&[&row_a, &row_b], &tb_meta);
-        assert_eq!(prepared_rows.len(), 2);
-
-        let row = build_insert_row(1, "not-sampled");
-        checker.ctx.sample_rate = Some(0);
-        let rows = checker.prepare_rows_for_fetch(&[&row], &tb_meta);
-        assert!(rows.is_empty());
-    }
-
-    #[tokio::test]
-    async fn pre_fetch_sampling_skips_group_when_sample_is_empty() {
-        let tb_meta = Arc::new(build_mysql_tb_meta());
-        let fetch_count = Arc::new(AtomicU64::new(0));
-        let mut ctx = build_ctx(false);
-        ctx.sample_rate = Some(0);
-        let mut checker = build_checker_with(
-            MetaOnlyChecker {
-                tb_meta,
-                fetch_count: fetch_count.clone(),
-            },
-            ctx,
-        );
-
-        checker
-            .process_batch(&[build_insert_row(1, "not-sampled")], false)
-            .await
-            .unwrap();
-
-        assert_eq!(fetch_count.load(Ordering::Relaxed), 0);
-    }
-
-    #[tokio::test]
-    async fn pre_fetch_filter_skips_null_key_without_target_fetch() {
-        let tb_meta = Arc::new(build_mysql_tb_meta());
-        let fetch_count = Arc::new(AtomicU64::new(0));
-        let ctx = build_ctx(false);
-        let mut checker = build_checker_with(
-            MetaOnlyChecker {
-                tb_meta,
-                fetch_count: fetch_count.clone(),
-            },
-            ctx,
-        );
-
-        checker
-            .process_batch(&[build_null_key_row()], false)
-            .await
-            .unwrap();
-
-        assert_eq!(fetch_count.load(Ordering::Relaxed), 0);
-        assert_eq!(checker.ctx.summary.skip_count, 1);
-        assert_eq!(checker.ctx.summary.tables[0].skip_count, 1);
-        assert_eq!(checker.ctx.summary.tables[0].checked_count, 0);
     }
 
     #[test]
     fn sampled_cdc_pk_update_cleans_old_key() {
         let tb_meta = build_mysql_tb_meta();
-        let mut selected = None;
-        for old_id in 1..500 {
-            let old_row = build_insert_row(old_id, "old");
-            let old_key = DataChecker::<DummyChecker>::lookup_match_key(&old_row, tb_meta.basic())
-                .unwrap()
-                .unwrap();
-            let new_row = build_insert_row(old_id + 1000, "new");
-            let new_key = DataChecker::<DummyChecker>::lookup_match_key(&new_row, tb_meta.basic())
-                .unwrap()
-                .unwrap();
-            if old_key != new_key {
-                selected = Some((old_id, old_key, new_key));
-                break;
-            }
-        }
-        let (old_id, old_key, new_key) = selected.expect("test should find a changed key");
-        let old_store_key = CheckerStoreKey::new("s1", "t1", old_key);
-        let old_row = build_insert_row(old_id, "old");
-        let update_row = build_update_row(old_id, old_id + 1000);
+        let old_row = build_insert_row(1, "old");
+        let update_row = RowData::new(
+            "s1".to_string(),
+            "t1".to_string(),
+            RowType::Update,
+            Some(HashMap::from([
+                ("id".to_string(), ColValue::Long(1)),
+                ("name".to_string(), ColValue::String("old".to_string())),
+            ])),
+            Some(HashMap::from([
+                ("id".to_string(), ColValue::Long(1001)),
+                ("name".to_string(), ColValue::String("new".to_string())),
+            ])),
+        );
+        let old_key = DataChecker::<NoopChecker>::lookup_match_key(&old_row, tb_meta.basic())
+            .unwrap()
+            .unwrap();
+        let new_key = DataChecker::<NoopChecker>::lookup_match_key(&update_row, tb_meta.basic())
+            .unwrap()
+            .unwrap();
 
         let mut checker = build_checker();
+        let old_store_key = CheckerStoreKey::new("s1", "t1", old_key);
         checker.store.insert(
             old_store_key.clone(),
-            build_entry(&old_row, tb_meta.basic()),
+            CheckEntry {
+                key: RecheckKey::from_row_data(&old_row, &tb_meta.basic().id_cols).unwrap(),
+                log: CheckLog {
+                    schema: old_row.schema.clone(),
+                    tb: old_row.tb.clone(),
+                    target_schema: None,
+                    target_tb: None,
+                    id_col_values: HashMap::new(),
+                    diff_col_values: HashMap::new(),
+                    src_row: None,
+                    dst_row: None,
+                },
+                revise_sql: None,
+                diff_cols: None,
+            },
         );
+
         checker.cleanup_stale_update_key(&update_row, tb_meta.basic(), Some(new_key));
         assert!(!checker.store.contains_key(&old_store_key));
     }

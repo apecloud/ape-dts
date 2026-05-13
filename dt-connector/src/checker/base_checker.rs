@@ -212,6 +212,7 @@ impl CheckContext {
         if checked_count == 0 && skip_count == 0 {
             return;
         }
+        self.summary.checked_count += checked_count;
         let (schema, tb) = self.reverse_router.get_tb_map(&row.schema, &row.tb);
         let has_target = row.schema != schema || row.tb != tb;
         self.summary.merge_table(CheckTableSummaryLog {

@@ -107,6 +107,8 @@ pub struct CheckSummaryLog {
     pub end_time: String,
     pub is_consistent: bool,
     #[serde(default)]
+    pub checked_count: usize,
+    #[serde(default)]
     pub miss_count: usize,
     #[serde(default)]
     pub diff_count: usize,
@@ -182,6 +184,7 @@ impl CheckSummaryLog {
             self.end_time = other.end_time.clone();
         }
         self.is_consistent = self.is_consistent && other.is_consistent;
+        self.checked_count += other.checked_count;
         self.miss_count += other.miss_count;
         self.diff_count += other.diff_count;
         self.skip_count += other.skip_count;
@@ -274,17 +277,17 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    fn json_line<T: serde::Serialize>(value: &T) -> serde_json::Value {
+    fn json_line<T: Serialize>(value: &T) -> serde_json::Value {
         serde_json::from_str(&to_json_line(value).unwrap()).unwrap()
     }
 
     #[test]
-    fn check_log_serializes_null_diff_endpoints() {
+    fn check_log_outputs_stable_json_fields() {
         let log = CheckLog {
-            schema: "s1".to_string(),
-            tb: "t1".to_string(),
-            target_schema: None,
-            target_tb: None,
+            schema: "src_s".to_string(),
+            tb: "src_t".to_string(),
+            target_schema: Some("dst_s".to_string()),
+            target_tb: Some("src_t".to_string()),
             id_col_values: HashMap::from([("id".to_string(), Some("1".to_string()))]),
             diff_col_values: HashMap::from([(
                 "name".to_string(),
@@ -300,40 +303,26 @@ mod tests {
         };
 
         let actual = json_line(&log);
-        let expected = json!({
-            "schema": "s1",
-            "tb": "t1",
-            "id_col_values": { "id": "1" },
-            "diff_col_values": {
-                "name": {
-                    "src": null,
-                    "dst": "dst",
-                    "src_type": "None",
-                    "dst_type": "String"
+        assert_eq!(
+            actual,
+            json!({
+                "schema": "src_s",
+                "tb": "src_t",
+                "target_schema": "dst_s",
+                "target_tb": "src_t",
+                "id_col_values": { "id": "1" },
+                "diff_col_values": {
+                    "name": {
+                        "src": null,
+                        "dst": "dst",
+                        "src_type": "None",
+                        "dst_type": "String"
+                    }
                 }
-            }
-        });
+            })
+        );
 
-        assert_eq!(actual, expected);
-    }
-
-    #[test]
-    fn check_log_target_identity_is_serialized_only_when_changed() {
-        let changed = CheckLog {
-            schema: "src_s".to_string(),
-            tb: "src_t".to_string(),
-            target_schema: Some("dst_s".to_string()),
-            target_tb: Some("src_t".to_string()),
-            id_col_values: HashMap::from([("id".to_string(), Some("1".to_string()))]),
-            diff_col_values: HashMap::new(),
-            src_row: None,
-            dst_row: None,
-        };
-        let actual = json_line(&changed);
-        assert_eq!(actual["target_schema"], "dst_s");
-        assert_eq!(actual["target_tb"], "src_t");
-
-        let unchanged = CheckLog {
+        let unchanged_target = CheckLog {
             schema: "src_s".to_string(),
             tb: "src_t".to_string(),
             target_schema: Some("src_s".to_string()),
@@ -343,68 +332,66 @@ mod tests {
             src_row: None,
             dst_row: None,
         };
-        let actual = json_line(&unchanged);
+        let actual = json_line(&unchanged_target);
         assert!(actual.get("target_schema").is_none());
         assert!(actual.get("target_tb").is_none());
     }
 
     #[test]
-    fn struct_check_log_uses_top_level_identity_fields() {
-        let log = StructCheckLog::new(
+    fn summary_and_struct_logs_keep_expected_shape() {
+        let struct_log = StructCheckLog::new(
             "index.s1.t1.idx_1".to_string(),
             Some("CREATE INDEX idx_1 ON t1(c1)".to_string()),
             None,
         );
+        assert_eq!(
+            json_line(&struct_log),
+            json!({
+                "schema": "s1",
+                "tb": "t1",
+                "id_col_values": { "object_key": "index.s1.t1.idx_1" },
+                "src_sql": "CREATE INDEX idx_1 ON t1(c1)"
+            })
+        );
 
-        let actual = json_line(&log);
-        let expected = json!({
-            "schema": "s1",
-            "tb": "t1",
-            "id_col_values": { "object_key": "index.s1.t1.idx_1" },
-            "src_sql": "CREATE INDEX idx_1 ON t1(c1)"
-        });
-
-        assert_eq!(actual, expected);
-    }
-
-    #[test]
-    fn summary_log_always_serializes_tables() {
         let summary = CheckSummaryLog {
             start_time: "start".to_string(),
             end_time: "end".to_string(),
             is_consistent: true,
-            ..Default::default()
-        };
-
-        let actual = json_line(&summary);
-        assert_eq!(actual["tables"], json!([]));
-    }
-
-    #[test]
-    fn table_summary_outputs_target_identity_as_pair() {
-        let table = CheckTableSummaryLog {
-            schema: "s1".to_string(),
-            tb: "t1".to_string(),
-            target_schema: Some("dst_s".to_string()),
-            target_tb: Some("t1".to_string()),
             checked_count: 2,
-            miss_count: 1,
-            diff_count: 1,
+            tables: vec![CheckTableSummaryLog {
+                schema: "s1".to_string(),
+                tb: "t1".to_string(),
+                target_schema: Some("dst_s".to_string()),
+                target_tb: Some("t1".to_string()),
+                checked_count: 2,
+                diff_count: 1,
+                ..Default::default()
+            }],
             ..Default::default()
         };
 
-        let actual = serde_json::to_value(table).unwrap();
-        let expected = json!({
-            "schema": "s1",
-            "tb": "t1",
-            "target_schema": "dst_s",
-            "target_tb": "t1",
-            "checked_count": 2,
-            "miss_count": 1,
-            "diff_count": 1,
-            "skip_count": 0
-        });
-
-        assert_eq!(actual, expected);
+        assert_eq!(
+            json_line(&summary),
+            json!({
+                "start_time": "start",
+                "end_time": "end",
+                "is_consistent": true,
+                "checked_count": 2,
+                "miss_count": 0,
+                "diff_count": 0,
+                "skip_count": 0,
+                "tables": [{
+                    "schema": "s1",
+                    "tb": "t1",
+                    "target_schema": "dst_s",
+                    "target_tb": "t1",
+                    "checked_count": 2,
+                    "miss_count": 0,
+                    "diff_count": 1,
+                    "skip_count": 0
+                }]
+            })
+        );
     }
 }
