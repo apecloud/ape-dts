@@ -960,11 +960,7 @@ impl TaskRunner {
             matches!(task_type.kind, TaskKind::Snapshot)
                 && matches!(task_type.check, Some(CheckMode::Standalone))
         });
-        let checker_sample_rate = if standalone_snapshot_check
-            && matches!(
-                extractor_config,
-                ExtractorConfig::MysqlSnapshot { .. } | ExtractorConfig::PgSnapshot { .. }
-            ) {
+        let checker_sample_rate = if standalone_snapshot_check {
             None
         } else {
             cfg.sample_rate

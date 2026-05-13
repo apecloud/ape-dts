@@ -312,10 +312,10 @@ impl<C: Checker> DataChecker<C> {
         let mut rows = Vec::new();
         for group in grouped.into_values() {
             let first_row = group.first().context("checker group is empty")?;
-            let tb_meta = checker.fetch_meta(first_row).await?;
+            let tb_meta = checker.load_table_meta(first_row).await?;
             rows.extend(
                 checker
-                    .fetch(tb_meta, &group)
+                    .fetch_rows_by_keys(tb_meta, &group)
                     .await?
                     .into_iter()
                     .map(|row| forward_router.route_row(row)),
@@ -375,8 +375,11 @@ impl<C: Checker> DataChecker<C> {
                     .collect::<Vec<_>>();
                 let lookup_refs = lookup_rows.iter().collect::<Vec<_>>();
                 let first_row = lookup_refs.first().context("checker group is empty")?;
-                let tb_meta = self.checker.fetch_meta(first_row).await?;
-                let target_rows = self.checker.fetch(tb_meta.clone(), &lookup_refs).await?;
+                let tb_meta = self.checker.load_table_meta(first_row).await?;
+                let target_rows = self
+                    .checker
+                    .fetch_rows_by_keys(tb_meta.clone(), &lookup_refs)
+                    .await?;
                 let source_rows = self.refetch_source_rows(&keys).await?;
                 let mut source_map = HashMap::new();
                 for row in source_rows {
@@ -561,23 +564,23 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
     use tokio::sync::mpsc;
 
-    struct StaticChecker {
-        tb_meta: Arc<CheckerTbMeta>,
-        rows: Vec<RowData>,
-    }
+    struct NoopChecker;
 
     #[async_trait]
-    impl Checker for StaticChecker {
-        async fn fetch_meta(&mut self, _src_row: &RowData) -> anyhow::Result<Arc<CheckerTbMeta>> {
-            Ok(self.tb_meta.clone())
+    impl Checker for NoopChecker {
+        async fn load_table_meta(
+            &mut self,
+            _lookup_row: &RowData,
+        ) -> anyhow::Result<Arc<CheckerTbMeta>> {
+            unreachable!("snapshot_and_output tests should not load table meta")
         }
 
-        async fn fetch(
+        async fn fetch_rows_by_keys(
             &mut self,
-            _tb_meta: Arc<CheckerTbMeta>,
-            _src_rows: &[&RowData],
+            _table_meta: Arc<CheckerTbMeta>,
+            _lookup_rows: &[&RowData],
         ) -> anyhow::Result<Vec<RowData>> {
-            Ok(self.rows.clone())
+            unreachable!("snapshot_and_output tests should not fetch rows")
         }
     }
 
@@ -597,24 +600,43 @@ mod tests {
         Operator::new(Memory::default()).unwrap().finish()
     }
 
+    async fn write_log_set(dir: &Path, op: &Operator, prefix: &str) {
+        for (file, content) in [
+            ("miss.log", "old miss\n"),
+            ("diff.log", "old diff\n"),
+            ("summary.log", "old summary\n"),
+            ("sql.log", "old sql;\n"),
+        ] {
+            fs::write(dir.join(file), content).unwrap();
+            op.write(&format!("{prefix}/{file}"), content)
+                .await
+                .unwrap();
+        }
+    }
+
+    async fn assert_log_set_unchanged(dir: &Path, op: &Operator, prefix: &str) {
+        for (file, content) in [
+            ("miss.log", "old miss\n"),
+            ("diff.log", "old diff\n"),
+            ("summary.log", "old summary\n"),
+            ("sql.log", "old sql;\n"),
+        ] {
+            assert_eq!(read_file(&dir.join(file)), content);
+            assert_eq!(
+                String::from_utf8(op.read(&format!("{prefix}/{file}")).await.unwrap().to_vec())
+                    .unwrap(),
+                content
+            );
+        }
+    }
+
     fn build_cdc_checker(
         check_log_dir: PathBuf,
         s3_output: Option<(Operator, String)>,
-    ) -> DataChecker<StaticChecker> {
-        let tb_meta = Arc::new(CheckerTbMeta::Mongo(
-            dt_common::meta::rdb_tb_meta::RdbTbMeta {
-                schema: "target_db".to_string(),
-                tb: "target_tb".to_string(),
-                id_cols: vec!["id".to_string()],
-                ..Default::default()
-            },
-        ));
+    ) -> DataChecker<NoopChecker> {
         let (_control_tx, control_rx) = mpsc::unbounded_channel();
         DataChecker::new(
-            StaticChecker {
-                tb_meta,
-                rows: Vec::new(),
-            },
+            NoopChecker,
             "task-1".to_string(),
             CheckContext {
                 monitor: Arc::new(Monitor::new("checker", "unit-test", 1, 1, 1)),
@@ -675,43 +697,15 @@ mod tests {
     async fn snapshot_and_output_skips_local_and_s3_publish_when_init_failed() {
         let dir = unique_temp_dir("checker-init-failed");
         fs::create_dir_all(&dir).unwrap();
-        fs::write(dir.join("miss.log"), "old miss\n").unwrap();
-        fs::write(dir.join("diff.log"), "old diff\n").unwrap();
-        fs::write(dir.join("summary.log"), "old summary\n").unwrap();
-        fs::write(dir.join("sql.log"), "old sql;\n").unwrap();
         let op = build_memory_operator();
-        op.write("prefix/miss.log", "old miss\n").await.unwrap();
-        op.write("prefix/diff.log", "old diff\n").await.unwrap();
-        op.write("prefix/summary.log", "old summary\n")
-            .await
-            .unwrap();
-        op.write("prefix/sql.log", "old sql;\n").await.unwrap();
+        write_log_set(&dir, &op, "prefix").await;
 
         let mut checker = build_cdc_checker(dir.clone(), Some((op.clone(), "prefix".to_string())));
         checker.init_failed = true;
 
         checker.snapshot_and_output().await.unwrap();
 
-        assert_eq!(read_file(&dir.join("miss.log")), "old miss\n");
-        assert_eq!(read_file(&dir.join("diff.log")), "old diff\n");
-        assert_eq!(read_file(&dir.join("summary.log")), "old summary\n");
-        assert_eq!(read_file(&dir.join("sql.log")), "old sql;\n");
-        assert_eq!(
-            String::from_utf8(op.read("prefix/miss.log").await.unwrap().to_vec()).unwrap(),
-            "old miss\n"
-        );
-        assert_eq!(
-            String::from_utf8(op.read("prefix/diff.log").await.unwrap().to_vec()).unwrap(),
-            "old diff\n"
-        );
-        assert_eq!(
-            String::from_utf8(op.read("prefix/summary.log").await.unwrap().to_vec()).unwrap(),
-            "old summary\n"
-        );
-        assert_eq!(
-            String::from_utf8(op.read("prefix/sql.log").await.unwrap().to_vec()).unwrap(),
-            "old sql;\n"
-        );
+        assert_log_set_unchanged(&dir, &op, "prefix").await;
         fs::remove_dir_all(dir).unwrap();
     }
 

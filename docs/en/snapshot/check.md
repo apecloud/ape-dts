@@ -5,10 +5,12 @@ After data migration, you may want to compare the source and target data row by 
 Supports comparison for MySQL, PostgreSQL, and MongoDB.
 
 Snapshot and inline CDC checks support sampling via `[checker].sample_rate`.
-For standalone MySQL/PostgreSQL snapshot check, `sample_rate` is applied during extraction by
-record position to reduce checker-side work. The sampling is approximate and applies independently
-inside each extraction segment/chunk. Standalone MongoDB snapshot check, inline snapshot check, and
-inline CDC check apply deterministic checker-side key-hash sampling.
+For standalone MySQL/PostgreSQL/MongoDB snapshot check, `sample_rate` is applied during extraction
+by record position to reduce checker-side work. The extractor converts the rate to a simple interval
+and keeps one record per interval, independently inside each extraction segment/chunk. Inline
+snapshot check and inline CDC check write all rows/changes first, then apply deterministic
+checker-side key sampling before target fetch. Rows/changes with the same key are sampled
+consistently.
 
 Data check is documented in three flows:
 
@@ -157,12 +159,11 @@ templates now separate standalone snapshot check, inline snapshot check, and inl
 ### Sampling Check
 
 For snapshot and inline CDC checks, add `sample_rate` to the `[checker]` section. For standalone
-MySQL/PostgreSQL snapshot check, `sample_rate=25` samples about 25% of extracted records before they
-enter later checker work; this is an approximate per-segment policy, so the final table-level ratio
-can vary, especially for small extraction chunks. For standalone MongoDB snapshot check, inline
-snapshot check, and inline CDC check, `sample_rate=25` checks rows/changes whose key hash bucket
-falls in `[0, 25)`; candidate rows/changes still enter the checker queue, and the checker
-fetches/compares only valid-key rows whose bucket is sampled in.
+MySQL/PostgreSQL/MongoDB snapshot check, `sample_rate=25` keeps one out of every 4 extracted records
+before they enter later checker work. This is an approximate per-segment policy, so the final
+table-level ratio can vary, especially for small extraction chunks. For inline snapshot check and
+inline CDC check, `sample_rate=25` still writes all rows/changes, then checks rows/changes whose key
+falls into the sampled key set before target fetch/compare.
 
 ```
 [checker]

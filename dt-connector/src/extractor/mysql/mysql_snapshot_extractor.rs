@@ -605,9 +605,9 @@ impl MysqlSnapshotExtractor {
             return false;
         }
 
-        let sample_rate = u128::from(sample_rate);
-        let extracted_count = u128::from(extracted_count);
-        extracted_count * sample_rate / 100 > (extracted_count - 1) * sample_rate / 100
+        let sample_rate = u64::from(sample_rate);
+        let interval = (100 + sample_rate - 1) / sample_rate;
+        extracted_count % interval == 0
     }
 }
 
@@ -622,6 +622,15 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(sampled, vec![3, 6, 9]);
+    }
+
+    #[test]
+    fn standalone_snapshot_sample_rate_uses_simple_interval() {
+        let sampled = (1..=6)
+            .filter(|count| MysqlSnapshotExtractor::should_sample_row(Some(67), *count))
+            .collect::<Vec<_>>();
+
+        assert_eq!(sampled, vec![2, 4, 6]);
     }
 
     #[test]

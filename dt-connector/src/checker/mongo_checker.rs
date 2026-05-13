@@ -25,9 +25,12 @@ pub struct MongoChecker {
 
 #[async_trait]
 impl Checker for MongoChecker {
-    async fn fetch_meta(&mut self, src_row: &RowData) -> anyhow::Result<Arc<CheckerTbMeta>> {
-        let mut meta = Self::mock_tb_meta(&src_row.schema, &src_row.tb);
-        let first_row_cols = src_row.after.as_ref().or(src_row.before.as_ref());
+    async fn load_table_meta(
+        &mut self,
+        lookup_row: &RowData,
+    ) -> anyhow::Result<Arc<CheckerTbMeta>> {
+        let mut meta = Self::mock_tb_meta(&lookup_row.schema, &lookup_row.tb);
+        let first_row_cols = lookup_row.after.as_ref().or(lookup_row.before.as_ref());
         if let Some(cols) = first_row_cols {
             meta.cols = cols.keys().cloned().collect();
         }
@@ -40,15 +43,15 @@ impl Checker for MongoChecker {
         Ok(Arc::new(CheckerTbMeta::Mongo(meta)))
     }
 
-    async fn fetch(
+    async fn fetch_rows_by_keys(
         &mut self,
-        tb_meta: Arc<CheckerTbMeta>,
-        src_rows: &[&RowData],
+        table_meta: Arc<CheckerTbMeta>,
+        lookup_rows: &[&RowData],
     ) -> anyhow::Result<Vec<RowData>> {
-        let basic_meta = tb_meta.basic();
+        let basic_meta = table_meta.basic();
 
-        let mut ids = Vec::with_capacity(src_rows.len());
-        for &row_data in src_rows {
+        let mut ids = Vec::with_capacity(lookup_rows.len());
+        for &row_data in lookup_rows {
             let id = Self::get_id_from_row(row_data).with_context(|| {
                 format!(
                     "row_data missing `_id`, schema: {}, tb: {}",

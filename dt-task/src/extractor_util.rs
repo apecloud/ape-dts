@@ -76,7 +76,9 @@ impl ExtractorUtil {
         if standalone_snapshot_check
             && matches!(
                 extractor_config,
-                ExtractorConfig::MysqlSnapshot { .. } | ExtractorConfig::PgSnapshot { .. }
+                ExtractorConfig::MysqlSnapshot { .. }
+                    | ExtractorConfig::PgSnapshot { .. }
+                    | ExtractorConfig::MongoSnapshot { .. }
             )
         {
             config
@@ -353,6 +355,7 @@ impl ExtractorUtil {
                     db,
                     tb,
                     mongo_client,
+                    source_sample_rate: Self::source_sample_rate(config, extractor_config),
                     base_extractor,
                     recovery,
                 };

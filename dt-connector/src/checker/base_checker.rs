@@ -274,11 +274,12 @@ impl CheckerStoreKey {
 
 #[async_trait]
 pub trait Checker: Send + Sync + 'static {
-    async fn fetch_meta(&mut self, src_row: &RowData) -> anyhow::Result<Arc<CheckerTbMeta>>;
-    async fn fetch(
+    async fn load_table_meta(&mut self, lookup_row: &RowData)
+        -> anyhow::Result<Arc<CheckerTbMeta>>;
+    async fn fetch_rows_by_keys(
         &mut self,
-        tb_meta: Arc<CheckerTbMeta>,
-        src_rows: &[&RowData],
+        table_meta: Arc<CheckerTbMeta>,
+        lookup_rows: &[&RowData],
     ) -> anyhow::Result<Vec<RowData>>;
     async fn invalidate_meta_cache(&mut self, _data: &[DdlData]) -> anyhow::Result<()> {
         Ok(())
@@ -909,7 +910,10 @@ mod tests {
 
     #[async_trait]
     impl Checker for BlockingFetchChecker {
-        async fn fetch_meta(&mut self, _src_row: &RowData) -> anyhow::Result<Arc<CheckerTbMeta>> {
+        async fn load_table_meta(
+            &mut self,
+            _lookup_row: &RowData,
+        ) -> anyhow::Result<Arc<CheckerTbMeta>> {
             Ok(Arc::new(CheckerTbMeta::Mongo(RdbTbMeta {
                 schema: "s1".to_string(),
                 tb: "t1".to_string(),
@@ -918,10 +922,10 @@ mod tests {
             })))
         }
 
-        async fn fetch(
+        async fn fetch_rows_by_keys(
             &mut self,
-            _tb_meta: Arc<CheckerTbMeta>,
-            _src_rows: &[&RowData],
+            _table_meta: Arc<CheckerTbMeta>,
+            _lookup_rows: &[&RowData],
         ) -> anyhow::Result<Vec<RowData>> {
             let _ = self.fetch_started.send(());
             self.fetch_gate.notified().await;

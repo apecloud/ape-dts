@@ -307,7 +307,7 @@ impl<C: Checker> DataChecker<C> {
         Ok((key != 0).then_some(key))
     }
 
-    fn should_sample_check_row(sample_rate: Option<u8>, row_key: u128) -> bool {
+    fn should_sample_key(sample_rate: Option<u8>, row_key: u128) -> bool {
         let Some(sample_rate) = sample_rate.filter(|rate| *rate < 100) else {
             return true;
         };
@@ -325,25 +325,15 @@ impl<C: Checker> DataChecker<C> {
             match Self::lookup_match_key(row, tb_meta.basic()) {
                 Ok(Some(key)) => {
                     if self.ctx.is_cdc {
-                        self.cleanup_stale_update_key(
-                            row,
-                            tb_meta.basic(),
-                            Some(key),
-                            self.ctx.sample_rate,
-                        );
+                        self.cleanup_stale_update_key(row, tb_meta.basic(), Some(key));
                     }
-                    if Self::should_sample_check_row(self.ctx.sample_rate, key) {
+                    if Self::should_sample_key(self.ctx.sample_rate, key) {
                         prepared_rows.push((row, key));
                     }
                 }
                 Ok(None) => {
                     if self.ctx.is_cdc {
-                        self.cleanup_stale_update_key(
-                            row,
-                            tb_meta.basic(),
-                            None,
-                            self.ctx.sample_rate,
-                        );
+                        self.cleanup_stale_update_key(row, tb_meta.basic(), None);
                     }
                     log_warn!(
                         "Skipping row with NULL key component in {}.{}.",
@@ -356,12 +346,7 @@ impl<C: Checker> DataChecker<C> {
                 }
                 Err(e) => {
                     if self.ctx.is_cdc {
-                        self.cleanup_stale_update_key(
-                            row,
-                            tb_meta.basic(),
-                            None,
-                            self.ctx.sample_rate,
-                        );
+                        self.cleanup_stale_update_key(row, tb_meta.basic(), None);
                     }
                     log_warn!(
                         "Skipping unhashable row in {}.{}: {}",
@@ -502,7 +487,6 @@ impl<C: Checker> DataChecker<C> {
         row_data: &RowData,
         tb_meta: &RdbTbMeta,
         new_key: Option<u128>,
-        sample_rate: Option<u8>,
     ) {
         if row_data.row_type != RowType::Update {
             return;
@@ -513,10 +497,7 @@ impl<C: Checker> DataChecker<C> {
         };
 
         match Self::match_key_from_values(before_values, tb_meta) {
-            Ok(Some(old_key))
-                if Some(old_key) != new_key
-                    && Self::should_sample_check_row(sample_rate, old_key) =>
-            {
+            Ok(Some(old_key)) if Some(old_key) != new_key => {
                 self.remove_store_entry(row_data, old_key);
             }
             Ok(_) => {}
@@ -763,7 +744,7 @@ impl<C: Checker> DataChecker<C> {
 
     async fn retry_check_item(&mut self, mut item: RetryItem) -> anyhow::Result<Option<RetryItem>> {
         let row_ref = &item.row;
-        let tb_meta = self.checker.fetch_meta(row_ref).await?;
+        let tb_meta = self.checker.load_table_meta(row_ref).await?;
         let Some(key) = Self::lookup_match_key(&item.row, tb_meta.basic())? else {
             log_warn!(
                 "Skipping retry row with NULL key component in {}.{}.",
@@ -777,7 +758,7 @@ impl<C: Checker> DataChecker<C> {
         };
         let dst_rows = self
             .checker
-            .fetch(tb_meta.clone(), std::slice::from_ref(&row_ref))
+            .fetch_rows_by_keys(tb_meta.clone(), std::slice::from_ref(&row_ref))
             .await?;
         let dst_row = Self::select_dst_row(&item.row, tb_meta.as_ref(), dst_rows)?;
 
@@ -790,7 +771,7 @@ impl<C: Checker> DataChecker<C> {
             return Ok(Some(item));
         }
 
-        self.cleanup_stale_update_key(&item.row, tb_meta.basic(), Some(key), None);
+        self.cleanup_stale_update_key(&item.row, tb_meta.basic(), Some(key));
         self.reconcile_row_inconsistency(key, &item.row, dst_row.as_ref(), tb_meta.as_ref())
             .await?;
         Ok(None)
@@ -850,7 +831,7 @@ impl<C: Checker> DataChecker<C> {
         let mut retry_rows = Vec::new();
         for rows in grouped.into_values() {
             let first_row = rows.first().context("checker group is empty")?;
-            let tb_meta = self.checker.fetch_meta(first_row).await?;
+            let tb_meta = self.checker.load_table_meta(first_row).await?;
             let prepared_rows = self.prepare_rows_for_fetch(&rows, tb_meta.as_ref());
             if prepared_rows.is_empty() {
                 continue;
@@ -859,7 +840,10 @@ impl<C: Checker> DataChecker<C> {
                 .iter()
                 .map(|(row, _)| *row)
                 .collect::<Vec<_>>();
-            let dst_rows = self.checker.fetch(tb_meta.clone(), &rows_to_fetch).await?;
+            let dst_rows = self
+                .checker
+                .fetch_rows_by_keys(tb_meta.clone(), &rows_to_fetch)
+                .await?;
 
             let mut dst_row_data_map = HashMap::with_capacity(dst_rows.len());
             for row in dst_rows {
@@ -913,16 +897,19 @@ mod tests {
 
     #[async_trait]
     impl Checker for DummyChecker {
-        async fn fetch_meta(&mut self, _src_row: &RowData) -> anyhow::Result<Arc<CheckerTbMeta>> {
-            unreachable!("ut should not call fetch_meta")
+        async fn load_table_meta(
+            &mut self,
+            _lookup_row: &RowData,
+        ) -> anyhow::Result<Arc<CheckerTbMeta>> {
+            unreachable!("ut should not call load_table_meta")
         }
 
-        async fn fetch(
+        async fn fetch_rows_by_keys(
             &mut self,
-            _tb_meta: Arc<CheckerTbMeta>,
-            _src_rows: &[&RowData],
+            _table_meta: Arc<CheckerTbMeta>,
+            _lookup_rows: &[&RowData],
         ) -> anyhow::Result<Vec<RowData>> {
-            unreachable!("ut should not call fetch")
+            unreachable!("ut should not call fetch_rows_by_keys")
         }
     }
 
@@ -933,18 +920,21 @@ mod tests {
 
     #[async_trait]
     impl Checker for MetaOnlyChecker {
-        async fn fetch_meta(&mut self, _src_row: &RowData) -> anyhow::Result<Arc<CheckerTbMeta>> {
+        async fn load_table_meta(
+            &mut self,
+            _lookup_row: &RowData,
+        ) -> anyhow::Result<Arc<CheckerTbMeta>> {
             Ok(self.tb_meta.clone())
         }
 
-        async fn fetch(
+        async fn fetch_rows_by_keys(
             &mut self,
-            _tb_meta: Arc<CheckerTbMeta>,
-            _src_rows: &[&RowData],
+            _table_meta: Arc<CheckerTbMeta>,
+            _lookup_rows: &[&RowData],
         ) -> anyhow::Result<Vec<RowData>> {
             self.fetch_count.fetch_add(1, Ordering::Relaxed);
             Err(anyhow::anyhow!(
-                "fetch should not be called for empty sample"
+                "fetch_rows_by_keys should not be called for empty sample"
             ))
         }
     }
@@ -1159,7 +1149,7 @@ mod tests {
     }
 
     #[test]
-    fn sampling_uses_pk_hash_and_filters_before_fetch() {
+    fn sampling_uses_key_and_filters_before_fetch() {
         let tb_meta = build_mysql_tb_meta();
         let row_a = build_insert_row(7, "alice");
         let row_b = build_insert_row(7, "bob");
@@ -1173,19 +1163,23 @@ mod tests {
         assert_eq!(key_a, key_b);
         let bucket = (key_a % 100) as u8;
         let passing_rate = (bucket + 1).min(100);
-        assert!(DataChecker::<DummyChecker>::should_sample_check_row(
+        assert!(DataChecker::<DummyChecker>::should_sample_key(
             Some(passing_rate),
             key_a,
         ));
         if bucket > 0 {
-            assert!(!DataChecker::<DummyChecker>::should_sample_check_row(
+            assert!(!DataChecker::<DummyChecker>::should_sample_key(
                 Some(bucket),
                 key_a,
             ));
         }
 
-        let row = build_insert_row(1, "not-sampled");
         let mut checker = build_checker();
+        checker.ctx.sample_rate = Some(passing_rate);
+        let prepared_rows = checker.prepare_rows_for_fetch(&[&row_a, &row_b], &tb_meta);
+        assert_eq!(prepared_rows.len(), 2);
+
+        let row = build_insert_row(1, "not-sampled");
         checker.ctx.sample_rate = Some(0);
         let rows = checker.prepare_rows_for_fetch(&[&row], &tb_meta);
         assert!(rows.is_empty());
@@ -1238,7 +1232,7 @@ mod tests {
     }
 
     #[test]
-    fn sampled_cdc_pk_update_cleans_only_sampled_old_key() {
+    fn sampled_cdc_pk_update_cleans_old_key() {
         let tb_meta = build_mysql_tb_meta();
         let mut selected = None;
         for old_id in 1..500 {
@@ -1246,21 +1240,16 @@ mod tests {
             let old_key = DataChecker::<DummyChecker>::lookup_match_key(&old_row, tb_meta.basic())
                 .unwrap()
                 .unwrap();
-            let old_bucket = (old_key % 100) as u8;
-            if old_bucket == 0 {
-                continue;
-            }
             let new_row = build_insert_row(old_id + 1000, "new");
             let new_key = DataChecker::<DummyChecker>::lookup_match_key(&new_row, tb_meta.basic())
                 .unwrap()
                 .unwrap();
             if old_key != new_key {
-                selected = Some((old_id, old_key, new_key, old_bucket));
+                selected = Some((old_id, old_key, new_key));
                 break;
             }
         }
-        let (old_id, old_key, new_key, old_bucket) =
-            selected.expect("test should find an old key with bucket > 0");
+        let (old_id, old_key, new_key) = selected.expect("test should find a changed key");
         let old_store_key = CheckerStoreKey::new("s1", "t1", old_key);
         let old_row = build_insert_row(old_id, "old");
         let update_row = build_update_row(old_id, old_id + 1000);
@@ -1270,20 +1259,7 @@ mod tests {
             old_store_key.clone(),
             build_entry(&old_row, tb_meta.basic()),
         );
-        checker.cleanup_stale_update_key(
-            &update_row,
-            tb_meta.basic(),
-            Some(new_key),
-            Some(old_bucket),
-        );
-        assert!(checker.store.contains_key(&old_store_key));
-
-        checker.cleanup_stale_update_key(
-            &update_row,
-            tb_meta.basic(),
-            Some(new_key),
-            Some(old_bucket + 1),
-        );
+        checker.cleanup_stale_update_key(&update_row, tb_meta.basic(), Some(new_key));
         assert!(!checker.store.contains_key(&old_store_key));
     }
 }

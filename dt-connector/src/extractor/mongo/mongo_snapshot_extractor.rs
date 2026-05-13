@@ -29,6 +29,7 @@ pub struct MongoSnapshotExtractor {
     pub db: String,
     pub tb: String,
     pub mongo_client: Client,
+    pub source_sample_rate: Option<u8>,
     pub recovery: Option<Arc<dyn Recovery + Send + Sync>>,
 }
 
@@ -87,6 +88,7 @@ impl MongoSnapshotExtractor {
             .database(&self.db)
             .collection::<Document>(&self.tb);
         let mut cursor = collection.find(filter, find_options).await?;
+        let mut extracted_count = 0u64;
         while cursor.advance().await? {
             let doc = cursor.deserialize_current().map_err(|e| {
                 log_error!(
@@ -97,6 +99,11 @@ impl MongoSnapshotExtractor {
                 );
                 e
             })?;
+            extracted_count += 1;
+            if !Self::should_sample_row(self.source_sample_rate, extracted_count) {
+                continue;
+            }
+
             let object_id = Self::get_object_id(&doc);
 
             let after = Self::build_after_cols(&doc);
@@ -150,5 +157,41 @@ impl MongoSnapshotExtractor {
             }
         }
         String::new()
+    }
+
+    fn should_sample_row(sample_rate: Option<u8>, extracted_count: u64) -> bool {
+        let Some(sample_rate) = sample_rate.filter(|rate| *rate < 100) else {
+            return true;
+        };
+        if sample_rate == 0 || extracted_count == 0 {
+            return false;
+        }
+
+        let sample_rate = u64::from(sample_rate);
+        let interval = (100 + sample_rate - 1) / sample_rate;
+        extracted_count % interval == 0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::MongoSnapshotExtractor;
+
+    #[test]
+    fn standalone_snapshot_sample_rate_uses_simple_interval() {
+        let sampled = (1..=10)
+            .filter(|count| MongoSnapshotExtractor::should_sample_row(Some(34), *count))
+            .collect::<Vec<_>>();
+
+        assert_eq!(sampled, vec![3, 6, 9]);
+    }
+
+    #[test]
+    fn standalone_snapshot_sample_rate_100_keeps_all_rows() {
+        let sampled = (1..=3)
+            .filter(|count| MongoSnapshotExtractor::should_sample_row(Some(100), *count))
+            .collect::<Vec<_>>();
+
+        assert_eq!(sampled, vec![1, 2, 3]);
     }
 }

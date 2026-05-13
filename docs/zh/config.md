@@ -85,11 +85,10 @@ struct check 仅支持 standalone MySQL/PostgreSQL checker target。
 
 **通用行为**
 - checker 仅支持 `[pipeline] pipeline_type=basic`。
-- `sample_rate` 仅支持 snapshot check 和 inline CDC check。Standalone MySQL/PostgreSQL snapshot
-  check 会在 snapshot 抽取阶段按记录位置应用该比例，减少后续 checker 工作量。Standalone
-  MongoDB snapshot check、inline snapshot check 和 inline CDC check 在 checker 侧进行确定性
-  key hash 抽样：checker 将 key bucket 归一化为 `row_key % 100`，只 fetch/比较 bucket 落在
-  `[0, sample_rate)` 范围内且 key 有效的行。
+- `sample_rate` 仅支持 snapshot check 和 inline CDC check。Standalone MySQL/PostgreSQL/MongoDB
+  snapshot check 会在 snapshot 抽取阶段按记录位置应用该比例，减少后续 checker 工作量。extractor
+  会把比例换算成简单的抽样间隔，每个间隔保留一条记录。Inline snapshot check 和 inline CDC
+  check 会先完整写入所有行/变更，然后在 checker 目标端 fetch 前使用相同的间隔抽样。
 - `queue_size` 统计的是 checker DML 队列中的待处理批次数，不是行数。checkpoint、`refresh_meta`
   这类控制信号会绕过这条队列。
 - 在 inline 写后校验链路里，如果 checker DML 队列已满，会丢弃最旧的待校验批次并记录 warning
