@@ -104,6 +104,7 @@ const APP_NAME: &str = "app_name";
 const REVERSE: &str = "reverse";
 const REPL_PORT: &str = "repl_port";
 const PARALLEL_SIZE: &str = "parallel_size";
+const LEGACY_TB_PARALLEL_SIZE: &str = "tb_parallel_size";
 const DDL_CONFLICT_POLICY: &str = "ddl_conflict_policy";
 const REPLACE: &str = "replace";
 const DISABLE_FOREIGN_KEY_CHECKS: &str = "disable_foreign_key_checks";
@@ -486,7 +487,7 @@ impl TaskConfig {
                     tb: String::new(),
                     db_tbs: HashMap::new(),
                     sample_interval: loader.get_with_default(EXTRACTOR, SAMPLE_INTERVAL, 1),
-                    parallel_size: loader.get_with_default(EXTRACTOR, PARALLEL_SIZE, 1),
+                    parallel_size: Self::load_snapshot_parallel_size(loader),
                     parallel_type: loader.get_with_default(
                         EXTRACTOR,
                         "parallel_type",
@@ -564,7 +565,7 @@ impl TaskConfig {
                         schema: String::new(),
                         tb: String::new(),
                         schema_tbs: HashMap::new(),
-                        parallel_size: loader.get_with_default(EXTRACTOR, PARALLEL_SIZE, 1),
+                        parallel_size: Self::load_snapshot_parallel_size(loader),
                         parallel_type: loader.get_with_default(
                             EXTRACTOR,
                             "parallel_type",
@@ -586,7 +587,7 @@ impl TaskConfig {
                     tb: String::new(),
                     schema_tbs: HashMap::new(),
                     sample_interval: loader.get_with_default(EXTRACTOR, SAMPLE_INTERVAL, 1),
-                    parallel_size: loader.get_with_default(EXTRACTOR, PARALLEL_SIZE, 1),
+                    parallel_size: Self::load_snapshot_parallel_size(loader),
                     parallel_type: loader.get_with_default(
                         EXTRACTOR,
                         "parallel_type",
@@ -646,7 +647,7 @@ impl TaskConfig {
                         db: String::new(),
                         tb: String::new(),
                         db_tbs: HashMap::new(),
-                        parallel_size: loader.get_with_default(EXTRACTOR, PARALLEL_SIZE, 1),
+                        parallel_size: Self::load_snapshot_parallel_size(loader),
                         parallel_type: loader.get_with_default(
                             EXTRACTOR,
                             "parallel_type",
@@ -1151,8 +1152,15 @@ impl TaskConfig {
                 "log4rs_file",
                 "./log4rs.yaml".to_string(),
             ),
-            tb_parallel_size: loader.get_with_default(RUNTIME, "tb_parallel_size", 1),
         })
+    }
+
+    fn load_snapshot_parallel_size(loader: &IniLoader) -> usize {
+        if loader.contains(EXTRACTOR, PARALLEL_SIZE) {
+            loader.get_with_default(EXTRACTOR, PARALLEL_SIZE, 1)
+        } else {
+            loader.get_with_default(RUNTIME, LEGACY_TB_PARALLEL_SIZE, 1)
+        }
     }
 
     fn load_filter_config(loader: &IniLoader) -> anyhow::Result<FilterConfig> {

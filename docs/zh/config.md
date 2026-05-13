@@ -15,6 +15,7 @@
 | password        | 数据库连接密码                                    | password                                                                                             | -                              |
 | max_connections | 最大连接数                                        | 10                                                                                                   | 目前是 10，未来可能会动态适配  |
 | batch_size      | 批量拉取数据条数                                  | 10000                                                                                                | 和 [pipeline] buffer_size 一致 |
+| parallel_type   | 全量拉取并发策略                                  | table                                                                                                | table                          |
 | parallel_size   | 全量同步时，单表并行拉取任务数                    | 4                                                                                                    | 1                              |
 | partition_cols  | 全量同步时，指定分区列，用于数据切分，仅支持单列  | json:[{"db":"db_1","tb":"tb_1","partition_col":"id"},{"db":"db_2","tb":"tb_2","partition_col":"id"}] | -                              |
 ## url 转义
@@ -26,6 +27,15 @@ create user user1@'%' identified by 'abc%$#?@';
 对应的 url 为：
 url=mysql://user1:abc%25%24%23%3F%40@127.0.0.1:3307?ssl-mode=disabled
 ```
+
+## extractor.parallel_type
+
+- `table`：把全量并发度分配给多张表。若 `parallel_size=4`，则最多可同时拉取 4 张表。
+- `chunk`：把全量并发度分配给单表内部的 chunk 切分。若 `parallel_size=4`，则单张表最多可同时运行 4 个 chunk worker。
+- 这两种模式下，真正控制并发上限的都是 `parallel_size`。
+- MySQL 和 PostgreSQL 的 snapshot extractor 同时支持 `table` 与 `chunk`。
+- MongoDB 和 Foxlake 的 snapshot extractor 当前只支持 `table`，不支持 `chunk`。
+- 废弃兼容说明：`[runtime] tb_parallel_size` 仅作为旧配置兼容 fallback 保留，只有在未设置 `[extractor] parallel_size` 时才会生效。
 
 # [sinker]
 

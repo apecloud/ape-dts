@@ -5,16 +5,28 @@
 如果你的资源（内存，CPU）充足，可以开启多表并行以加快全局速度。
 
 ## 配置
-- 添加以下配置，ape-dts 会每次迁移 4 张表，如果有某张表迁移完成，ape-dts 会从剩余表中依序选择一张加入迁移任务，确保同时有 4 张表处于迁移中。
+- 添加以下配置后，ape-dts 会最多同时运行 4 个表级 worker；当某张表完成后，会从剩余表中继续补上一张，维持最多 4 张表并行。
 
 ```
+[extractor]
+parallel_type=table
+parallel_size=4
+```
+
+`parallel_type=table` 表示把全量并发度分配给多张表；`parallel_type=chunk` 表示把并发度分配给单表内的 chunk 切分。这两种模式下，真正控制全量并发度的都是 `[extractor].parallel_size`。
+
+废弃配置说明：`[runtime] tb_parallel_size` 已废弃，不应再用于新配置。当前仅为兼容旧版本配置而保留，且只会在未设置 `[extractor] parallel_size` 时作为 fallback 生效。
+
+旧配置示例：
+
+```ini
 [runtime]
 tb_parallel_size=4
 ```
 
 ## 和 [parallelizer] parallel_size 的区别
-- 全量任务中，[parallelizer] 中的配置是针对单张表而言。如以下配置代表每张正在迁移的表会使用 8 个线程并行写入目标端。
-- 而 [runtime] 中的 tb_parallel_size 代表的是任务中同时有 4 张表在做迁移。
+- 全量任务中，`[extractor].parallel_size` 控制源端全量拉取并发度。
+- `[parallelizer].parallel_size` 控制数据拉取完成后的目标端下游并发写入。
 
 ```
 [parallelizer]

@@ -31,14 +31,14 @@ pub struct CheckTestRunner {
 }
 
 impl CheckTestRunner {
-    fn set_tb_parallel_size(&self, tb_parallel_size: usize) {
+    fn set_snapshot_parallel_size(&self, parallel_size: usize) {
         TestConfigUtil::update_task_config(
             &self.base.base.task_config_file,
             &self.base.base.task_config_file,
             &[(
-                "runtime".to_string(),
-                "tb_parallel_size".to_string(),
-                tb_parallel_size.to_string(),
+                "extractor".to_string(),
+                "parallel_size".to_string(),
+                parallel_size.to_string(),
             )],
         );
     }
@@ -344,9 +344,9 @@ impl CheckTestRunner {
 
     pub async fn run_check_test_and_validate_task_metrics(
         &self,
-        tb_parallel_size: usize,
+        parallel_size: usize,
     ) -> anyhow::Result<()> {
-        self.set_tb_parallel_size(tb_parallel_size);
+        self.set_snapshot_parallel_size(parallel_size);
         self.clear_task_log()?;
         self.run_check_test().await?;
         self.assert_task_metrics_match_summary()
