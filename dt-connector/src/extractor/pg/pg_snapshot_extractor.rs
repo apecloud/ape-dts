@@ -419,7 +419,8 @@ impl PgSnapshotExtractor {
         while let Some(row) = rows.try_next().await? {
             partition_col_value =
                 PgColValueConvertor::from_query(&row, &partition_col, &partition_col_type)?;
-            let row_data = RowData::from_pg_row(&row, &tb_meta, &ignore_cols.as_ref());
+            let row_data =
+                RowData::from_pg_row(&row, &tb_meta, &ignore_cols.as_ref(), Some(chunk_id));
             shared
                 .base_extractor
                 .push_row(&mut extract_state, row_data, Position::None)
@@ -865,7 +866,7 @@ impl PgTableCtx {
 
         let mut rows = sqlx::query(&sql).fetch(&self.shared.conn_pool);
         while let Some(row) = rows.try_next().await? {
-            let row_data = RowData::from_pg_row(&row, tb_meta, &ignore_cols);
+            let row_data = RowData::from_pg_row(&row, tb_meta, &ignore_cols, None);
             self.shared
                 .base_extractor
                 .push_row(extract_state, row_data, Position::None)
@@ -925,54 +926,102 @@ impl PgTableCtx {
             .with_predicate_type(OrderKeyPredicateType::GreaterThan)
             .with_limit(self.shared.batch_size)
             .build()?;
+        let missing_order_col = |order_col: &str| {
+            anyhow!(
+                "{}.{} order col {} not found",
+                quote!(&self.table_id.schema),
+                quote!(&self.table_id.tb),
+                quote!(order_col),
+            )
+        };
 
-        loop {
-            let bind_values = start_values.clone();
-            let query = if start_from_beginning {
-                start_from_beginning = false;
-                sqlx::query(&sql_from_beginning)
-            } else {
-                let mut query = sqlx::query(&sql_from_value);
-                for order_col in &tb_meta.basic.order_cols {
-                    let order_col_type = tb_meta.get_col_type(order_col)?;
-                    query = query.bind_col_value(bind_values.get(order_col), order_col_type)
-                }
-                query
-            };
+        // Keep two loop bodies here on purpose: the single-order-col path duplicates a bit of
+        // logic so the hot row-processing loop avoids per-row multi-column iteration overhead.
+        if tb_meta.basic.order_cols.len() == 1 {
+            let order_col = &tb_meta.basic.order_cols[0];
+            let order_col_type = tb_meta.get_col_type(order_col)?;
+            loop {
+                let bind_values = start_values.clone();
+                let query = if start_from_beginning {
+                    start_from_beginning = false;
+                    sqlx::query(&sql_from_beginning)
+                } else {
+                    sqlx::query(&sql_from_value)
+                        .bind_col_value(bind_values.get(order_col), order_col_type)
+                };
 
-            let mut rows = query.fetch(&self.shared.conn_pool);
-            let mut slice_count = 0usize;
-
-            while let Some(row) = rows.try_next().await? {
-                for order_col in &tb_meta.basic.order_cols {
-                    let order_col_type = tb_meta.get_col_type(order_col)?;
-                    if let Some(value) = start_values.get_mut(order_col) {
-                        *value = PgColValueConvertor::from_query(&row, order_col, order_col_type)?;
-                    } else {
-                        bail!(
-                            "{}.{} order col {} not found",
-                            quote!(&self.table_id.schema),
-                            quote!(&self.table_id.tb),
-                            quote!(order_col),
-                        );
+                let mut rows = query.fetch(&self.shared.conn_pool);
+                let mut slice_count = 0usize;
+                while let Some(row) = rows.try_next().await? {
+                    let value = start_values
+                        .get_mut(order_col)
+                        .ok_or_else(|| missing_order_col(order_col))?;
+                    *value = PgColValueConvertor::from_query(&row, order_col, order_col_type)?;
+                    extracted_count += 1;
+                    slice_count += 1;
+                    if extracted_count % self.shared.sample_interval != 0 {
+                        continue;
                     }
-                }
-                extracted_count += 1;
-                slice_count += 1;
-                if extracted_count % self.shared.sample_interval != 0 {
-                    continue;
+
+                    let row_data = RowData::from_pg_row(&row, tb_meta, &ignore_cols, None);
+                    let position = tb_meta.basic.build_position_for_single_col(
+                        &DbType::Pg,
+                        order_col,
+                        value,
+                        false,
+                    );
+                    self.shared
+                        .base_extractor
+                        .push_row(extract_state, row_data, position)
+                        .await?;
                 }
 
-                let row_data = RowData::from_pg_row(&row, tb_meta, &ignore_cols);
-                let position = tb_meta.basic.build_position(&DbType::Pg, &start_values);
-                self.shared
-                    .base_extractor
-                    .push_row(extract_state, row_data, position)
-                    .await?;
+                if slice_count < self.shared.batch_size {
+                    break;
+                }
             }
+        } else {
+            loop {
+                let bind_values = start_values.clone();
+                let query = if start_from_beginning {
+                    start_from_beginning = false;
+                    sqlx::query(&sql_from_beginning)
+                } else {
+                    let mut query = sqlx::query(&sql_from_value);
+                    for order_col in &tb_meta.basic.order_cols {
+                        let order_col_type = tb_meta.get_col_type(order_col)?;
+                        query = query.bind_col_value(bind_values.get(order_col), order_col_type)
+                    }
+                    query
+                };
 
-            if slice_count < self.shared.batch_size {
-                break;
+                let mut rows = query.fetch(&self.shared.conn_pool);
+                let mut slice_count = 0usize;
+                while let Some(row) = rows.try_next().await? {
+                    for order_col in &tb_meta.basic.order_cols {
+                        let order_col_type = tb_meta.get_col_type(order_col)?;
+                        let value = start_values
+                            .get_mut(order_col)
+                            .ok_or_else(|| missing_order_col(order_col))?;
+                        *value = PgColValueConvertor::from_query(&row, order_col, order_col_type)?;
+                    }
+                    extracted_count += 1;
+                    slice_count += 1;
+                    if extracted_count % self.shared.sample_interval != 0 {
+                        continue;
+                    }
+
+                    let row_data = RowData::from_pg_row(&row, tb_meta, &ignore_cols, None);
+                    let position = tb_meta.basic.build_position(&DbType::Pg, &start_values);
+                    self.shared
+                        .base_extractor
+                        .push_row(extract_state, row_data, position)
+                        .await?;
+                }
+
+                if slice_count < self.shared.batch_size {
+                    break;
+                }
             }
         }
 
@@ -1017,7 +1066,7 @@ impl PgTableCtx {
         let mut rows = sqlx::query(&sql_for_null).fetch(&self.shared.conn_pool);
         while let Some(row) = rows.try_next().await? {
             extracted_count += 1;
-            let row_data = RowData::from_pg_row(&row, tb_meta, &ignore_cols);
+            let row_data = RowData::from_pg_row(&row, tb_meta, &ignore_cols, None);
             self.shared
                 .base_extractor
                 .push_row(extract_state, row_data, Position::None)

@@ -116,8 +116,9 @@ impl RowData {
         row: &MySqlRow,
         tb_meta: &MysqlTbMeta,
         ignore_cols: &Option<&HashSet<String>>,
+        chunk_id: Option<u64>,
     ) -> Self {
-        Self::from_mysql_compatible_row(row, tb_meta, ignore_cols, &DbType::Mysql)
+        Self::from_mysql_compatible_row(row, tb_meta, ignore_cols, &DbType::Mysql, chunk_id)
     }
 
     pub fn from_mysql_compatible_row(
@@ -125,6 +126,7 @@ impl RowData {
         tb_meta: &MysqlTbMeta,
         ignore_cols: &Option<&HashSet<String>>,
         db_type: &DbType,
+        chunk_id: Option<u64>,
     ) -> Self {
         let mut after = HashMap::new();
         for (col, col_type) in &tb_meta.col_type_map {
@@ -142,13 +144,14 @@ impl RowData {
                     .unwrap();
             after.insert(col.to_string(), col_val);
         }
-        Self::build_insert_row_data(after, &tb_meta.basic)
+        Self::build_insert_row_data(after, &tb_meta.basic, chunk_id)
     }
 
     pub fn from_pg_row(
         row: &PgRow,
         tb_meta: &PgTbMeta,
         ignore_cols: &Option<&HashSet<String>>,
+        chunk_id: Option<u64>,
     ) -> Self {
         let mut after = HashMap::new();
         for (col, col_type) in &tb_meta.col_type_map {
@@ -166,14 +169,18 @@ impl RowData {
                 .unwrap();
             after.insert(col.to_string(), col_value);
         }
-        Self::build_insert_row_data(after, &tb_meta.basic)
+        Self::build_insert_row_data(after, &tb_meta.basic, chunk_id)
     }
 
-    pub fn build_insert_row_data(after: HashMap<String, ColValue>, tb_meta: &RdbTbMeta) -> Self {
+    pub fn build_insert_row_data(
+        after: HashMap<String, ColValue>,
+        tb_meta: &RdbTbMeta,
+        chunk_id: Option<u64>,
+    ) -> Self {
         Self::new(
             tb_meta.schema.clone(),
             tb_meta.tb.clone(),
-            0,
+            chunk_id.unwrap_or(0),
             RowType::Insert,
             None,
             Some(after),

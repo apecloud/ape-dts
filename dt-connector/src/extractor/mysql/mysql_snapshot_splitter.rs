@@ -133,10 +133,11 @@ impl MySqlSnapshotSplitter {
         let partition_col = &self.partition_col;
         let mut position = if chunk_id == self.checkpoint_id + 1 {
             self.checkpoint_id = chunk_id;
-            self.mysql_tb_meta.basic.build_position_for_partition(
+            self.mysql_tb_meta.basic.build_position_for_single_col(
                 &DbType::Mysql,
                 partition_col,
                 &partition_col_value,
+                true,
             )
         } else {
             self.checkpoint_map
@@ -146,10 +147,11 @@ impl MySqlSnapshotSplitter {
         while let Some(partition_col_values) = self.checkpoint_map.remove(&(self.checkpoint_id + 1))
         {
             self.checkpoint_id += 1;
-            position = self.mysql_tb_meta.basic.build_position_for_partition(
+            position = self.mysql_tb_meta.basic.build_position_for_single_col(
                 &DbType::Mysql,
                 partition_col,
                 &partition_col_values,
+                true,
             );
         }
         Some(position)

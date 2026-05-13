@@ -124,8 +124,14 @@ mod test {
 
     #[tokio::test]
     #[serial]
-    async fn snapshot_parallel_test() {
+    async fn snapshot_chunk_parallel_test() {
         TestBase::run_snapshot_test("mysql_to_mysql/snapshot/parallel_test").await;
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn snapshot_table_parallel_test() {
+        TestBase::run_snapshot_test("mysql_to_mysql/snapshot/table_parallel_test").await;
     }
 
     #[tokio::test]

@@ -79,7 +79,7 @@ use dt_common::monitor::prometheus_metrics::PrometheusMetrics;
 #[derive(Clone)]
 pub struct TaskInfo {
     pub extractor_config: ExtractorConfig,
-    pub no_data: bool,
+    pub no_snapshot_data: bool,
 }
 
 #[derive(Clone)]
@@ -210,7 +210,12 @@ impl TaskRunner {
         let task_info = self
             .get_task_info(extractor_client.clone(), recovery.clone())
             .await?;
-        if !task_info.no_data {
+        let should_skip_task = self
+            .task_type
+            .as_ref()
+            .is_some_and(|task_type| matches!(task_type.kind, TaskKind::Snapshot))
+            && task_info.no_snapshot_data;
+        if !should_skip_task {
             self.clone()
                 .create_task(
                     task_info.extractor_config,
@@ -1279,6 +1284,13 @@ impl TaskRunner {
     ) -> anyhow::Result<TaskInfo> {
         let db_type = &self.config.extractor_basic.db_type;
         let filter = &self.filter;
+        let is_snapshot_task = matches!(
+            self.config.extractor,
+            ExtractorConfig::MysqlSnapshot { .. }
+                | ExtractorConfig::PgSnapshot { .. }
+                | ExtractorConfig::MongoSnapshot { .. }
+                | ExtractorConfig::FoxlakeS3 { .. }
+        );
 
         let mut schema_tbs = HashMap::new();
         let schemas = TaskUtil::list_schemas(&extractor_client, db_type)
@@ -1287,21 +1299,15 @@ impl TaskRunner {
             .filter(|schema| !filter.filter_schema(schema))
             .map(|s| s.to_owned())
             .collect::<Vec<_>>();
-        if schemas.is_empty() {
+        if schemas.is_empty() && is_snapshot_task {
             log_warn!("no schemas to extract");
             return Ok(TaskInfo {
                 extractor_config: self.config.extractor.clone(),
-                no_data: true,
+                no_snapshot_data: true,
             });
         }
 
-        if matches!(
-            self.config.extractor,
-            ExtractorConfig::MysqlSnapshot { .. }
-                | ExtractorConfig::PgSnapshot { .. }
-                | ExtractorConfig::MongoSnapshot { .. }
-                | ExtractorConfig::FoxlakeS3 { .. }
-        ) {
+        if is_snapshot_task {
             if let Some(task_type) = &self.task_type {
                 log_info!("begin to estimate record count");
                 let record_count = TaskUtil::estimate_record_count(
@@ -1335,7 +1341,7 @@ impl TaskRunner {
                         dbs: schemas,
                         db_batch_size: *db_batch_size,
                     },
-                    no_data: false,
+                    no_snapshot_data: false,
                 });
             }
             ExtractorConfig::PgStruct {
@@ -1354,7 +1360,7 @@ impl TaskRunner {
                         do_global_structs: true,
                         db_batch_size: *db_batch_size,
                     },
-                    no_data: false,
+                    no_snapshot_data: false,
                 })
             }
             _ => {}
@@ -1471,7 +1477,7 @@ impl TaskRunner {
         };
         Ok(TaskInfo {
             extractor_config,
-            no_data: false,
+            no_snapshot_data: false,
         })
     }
 }
