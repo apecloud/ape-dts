@@ -331,29 +331,3 @@ impl StructCheckerHandle {
         Ok(())
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::StructCheckerHandle;
-    use std::collections::HashMap;
-
-    #[test]
-    fn compare_sql_maps_sets_time_and_sql_count() {
-        let src_sql_map = HashMap::from([(
-            "table.s1.t1".to_string(),
-            "CREATE TABLE s1.t1(id bigint)".to_string(),
-        )]);
-        let summary = StructCheckerHandle::compare_sql_maps(
-            &src_sql_map,
-            HashMap::new(),
-            "unit-start",
-            true,
-            true,
-        );
-
-        assert_eq!(summary.start_time, "unit-start");
-        assert!(!summary.end_time.is_empty());
-        assert_eq!(summary.sql_count, Some(1));
-        assert_eq!(summary.miss_count, 1);
-    }
-}

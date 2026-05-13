@@ -605,8 +605,6 @@ impl MysqlSnapshotExtractor {
             return false;
         }
 
-        let sample_rate = u64::from(sample_rate);
-        let interval = (100 + sample_rate - 1) / sample_rate;
-        extracted_count % interval == 0
+        (extracted_count - 1) % 100 < u64::from(sample_rate)
     }
 }

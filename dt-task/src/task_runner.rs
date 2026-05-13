@@ -61,7 +61,7 @@ use dt_common::{
 };
 use dt_connector::{
     checker::base_checker::CheckContext,
-    checker::check_log::{CheckLogJsonExt, CheckSummaryLog},
+    checker::check_log::{to_json_line, CheckSummaryLog},
     checker::{
         Checker, CheckerHandle, CheckerStateStore, DataCheckerHandle, MongoChecker, MysqlChecker,
         PgChecker, StructCheckerHandle,
@@ -284,8 +284,11 @@ impl TaskRunner {
                     .as_ref()
                     .is_some_and(|task_type| task_type.is_cdc_inline_check())
             {
-                let summary = check_summary.lock().await;
-                if let Some(log) = summary.to_json_line() {
+                let mut summary = check_summary.lock().await;
+                if summary.end_time.is_empty() {
+                    summary.end_time = Local::now().to_rfc3339();
+                }
+                if let Some(log) = to_json_line(&*summary) {
                     dt_common::log_summary!("{}", log);
                 }
             }
