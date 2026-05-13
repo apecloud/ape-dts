@@ -17,7 +17,7 @@ use tokio::time::{Duration, Instant};
 use super::struct_checker::StructCheckerHandle;
 use crate::{
     checker::check_log::{
-        CheckLog, CheckLogJsonExt, CheckSummaryLog, CheckTableSummaryLog, DiffColValue,
+        to_json_line, CheckLog, CheckSummaryLog, CheckTableSummaryLog, DiffColValue,
     },
     checker::state_store::CheckerStateStore,
     rdb_query_builder::RdbQueryBuilder,
@@ -835,7 +835,7 @@ impl<C: Checker> DataChecker<C> {
         if let Some(global_summary) = common.global_summary.clone() {
             global_summary.lock().await.merge(summary);
         } else if !common.is_cdc {
-            if let Some(log) = summary.to_json_line() {
+            if let Some(log) = to_json_line(summary) {
                 log_summary!("{}", log);
             }
         }

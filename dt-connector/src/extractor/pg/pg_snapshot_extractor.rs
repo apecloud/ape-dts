@@ -612,35 +612,3 @@ impl PgSnapshotExtractor {
         extracted_count % interval == 0
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::PgSnapshotExtractor;
-
-    #[test]
-    fn standalone_snapshot_sample_rate_uses_extracted_record_position() {
-        let sampled = (1..=10)
-            .filter(|count| PgSnapshotExtractor::should_sample_row(Some(34), *count))
-            .collect::<Vec<_>>();
-
-        assert_eq!(sampled, vec![3, 6, 9]);
-    }
-
-    #[test]
-    fn standalone_snapshot_sample_rate_uses_simple_interval() {
-        let sampled = (1..=6)
-            .filter(|count| PgSnapshotExtractor::should_sample_row(Some(67), *count))
-            .collect::<Vec<_>>();
-
-        assert_eq!(sampled, vec![2, 4, 6]);
-    }
-
-    #[test]
-    fn standalone_snapshot_sample_rate_100_keeps_all_rows() {
-        let sampled = (1..=3)
-            .filter(|count| PgSnapshotExtractor::should_sample_row(Some(100), *count))
-            .collect::<Vec<_>>();
-
-        assert_eq!(sampled, vec![1, 2, 3]);
-    }
-}

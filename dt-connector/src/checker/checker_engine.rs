@@ -9,7 +9,7 @@ use super::{
     CheckContext, CheckEntry, CheckInconsistency, Checker, CheckerStoreKey, CheckerTbMeta,
     DataChecker, RecheckKey, RetryItem,
 };
-use crate::checker::check_log::{CheckLog, CheckLogJsonExt, DiffColValue};
+use crate::checker::check_log::{to_json_line, CheckLog, DiffColValue};
 use crate::sinker::base_sinker::BaseSinker;
 use crate::sinker::mongo::mongo_cmd;
 use dt_common::meta::{
@@ -405,7 +405,7 @@ impl<C: Checker> DataChecker<C> {
     }
 
     fn log_entry(entry: &CheckEntry) {
-        if let Some(log) = entry.log.to_json_line() {
+        if let Some(log) = to_json_line(&entry.log) {
             if entry.is_miss() {
                 log_miss!("{}", log);
             } else {

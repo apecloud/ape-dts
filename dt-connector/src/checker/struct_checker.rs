@@ -20,7 +20,7 @@ use dt_common::{
 };
 
 use crate::{
-    checker::check_log::{CheckLogJsonExt, CheckSummaryLog, CheckTableSummaryLog, StructCheckLog},
+    checker::check_log::{to_json_line, CheckSummaryLog, CheckTableSummaryLog, StructCheckLog},
     meta_fetcher::{
         mysql::mysql_struct_fetcher::MysqlStructFetcher, pg::pg_struct_fetcher::PgStructFetcher,
     },
@@ -214,7 +214,7 @@ impl StructCheckerHandle {
                         summary.merge_table(table);
                     }
                     if log_enabled {
-                        if let Some(log) = log.to_json_line() {
+                        if let Some(log) = to_json_line(&log) {
                             log_miss!("{}", log);
                         }
                     }
@@ -232,7 +232,7 @@ impl StructCheckerHandle {
                             summary.merge_table(table);
                         }
                         if log_enabled {
-                            if let Some(log) = log.to_json_line() {
+                            if let Some(log) = to_json_line(&log) {
                                 log_diff!("{}", log);
                             }
                         }
@@ -252,7 +252,7 @@ impl StructCheckerHandle {
             }
             let log = StructCheckLog::new(key, None, Some(dst_sql));
             if log_enabled {
-                if let Some(log) = log.to_json_line() {
+                if let Some(log) = to_json_line(&log) {
                     log_diff!("{}", log);
                 }
             }
@@ -324,7 +324,7 @@ impl StructCheckerHandle {
             if let Some(global_summary) = &self.global_summary {
                 let mut global_summary = global_summary.lock().await;
                 global_summary.merge(&summary);
-            } else if let Some(log) = summary.to_json_line() {
+            } else if let Some(log) = to_json_line(&summary) {
                 log_summary!("{}", log);
             }
         }

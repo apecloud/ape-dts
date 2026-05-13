@@ -1489,17 +1489,6 @@ enable=false
     }
 
     #[test]
-    fn snapshot_checker_accepts_sample_rate() {
-        let config_path = write_temp_task_config(&snapshot_check_config("sample_rate=25"));
-        let result = TaskConfig::new(config_path.to_str().unwrap());
-        fs::remove_file(config_path).unwrap();
-
-        let config = result.expect("snapshot checker config should be valid");
-        let checker = config.checker.expect("checker should exist");
-        assert_eq!(checker.sample_rate, Some(25));
-    }
-
-    #[test]
     fn snapshot_checker_accepts_mongo_standalone_target() {
         let config_path = write_temp_task_config(
             r#"[extractor]
@@ -1609,36 +1598,30 @@ parallel_type=rdb_merge
     }
 
     #[test]
-    fn snapshot_checker_rejects_invalid_configs() {
-        let config_path = write_temp_task_config(&snapshot_check_config("sample_rate=0"));
-        let result = TaskConfig::new(config_path.to_str().unwrap());
-        fs::remove_file(config_path).unwrap();
+    fn checker_accepts_sample_rate_for_snapshot_and_cdc() {
+        for (config, sample_rate) in [
+            (snapshot_check_config("sample_rate=25"), 25),
+            (cdc_inline_check_config("rdb_merge", "sample_rate=10"), 10),
+        ] {
+            let config_path = write_temp_task_config(&config);
+            let result = TaskConfig::new(config_path.to_str().unwrap());
+            fs::remove_file(config_path).unwrap();
 
-        match result {
-            Err(err) => assert_eq!(
-                err.to_string(),
-                "config error: config [checker].sample_rate must be between 1 and 100, got 0"
-            ),
-            Ok(_) => panic!("expected sample_rate validation error"),
+            let config = result.expect("checker config should be valid");
+            let checker = config.checker.expect("checker should exist");
+            assert_eq!(checker.sample_rate, Some(sample_rate));
         }
     }
 
     #[test]
-    fn cdc_checker_accepts_sample_rate() {
-        let config_path =
-            write_temp_task_config(&cdc_inline_check_config("rdb_merge", "sample_rate=10"));
-        let result = TaskConfig::new(config_path.to_str().unwrap());
-        fs::remove_file(config_path).unwrap();
-
-        let config = result.expect("cdc checker config should be valid");
-        let checker = config.checker.expect("checker should exist");
-        assert_eq!(checker.sample_rate, Some(10));
-    }
-
-    #[test]
-    fn struct_checker_rejects_sample_rate() {
-        let config_path = write_temp_task_config(
-            r#"[extractor]
+    fn checker_rejects_invalid_sample_rate_configs() {
+        for (config, expected_err) in [
+            (
+                snapshot_check_config("sample_rate=0"),
+                "config error: config [checker].sample_rate must be between 1 and 100, got 0",
+            ),
+            (
+                r#"[extractor]
 db_type=mysql
 extract_type=struct
 url=mysql://127.0.0.1:3306
@@ -1651,17 +1634,19 @@ enable=true
 db_type=mysql
 url=mysql://127.0.0.1:3307
 sample_rate=10
-"#,
-        );
-        let result = TaskConfig::new(config_path.to_str().unwrap());
-        fs::remove_file(config_path).unwrap();
-
-        match result {
-            Err(err) => assert_eq!(
-                err.to_string(),
-                "config error: config [checker].sample_rate only supports [extractor] extract_type=snapshot or cdc"
+"#
+                .to_string(),
+                "config error: config [checker].sample_rate only supports [extractor] extract_type=snapshot or cdc",
             ),
-            Ok(_) => panic!("expected sample_rate scope validation error"),
+        ] {
+            let config_path = write_temp_task_config(&config);
+            let result = TaskConfig::new(config_path.to_str().unwrap());
+            fs::remove_file(config_path).unwrap();
+
+            match result {
+                Err(err) => assert_eq!(err.to_string(), expected_err),
+                Ok(_) => panic!("expected sample_rate validation error"),
+            }
         }
     }
 

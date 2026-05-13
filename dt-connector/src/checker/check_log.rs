@@ -210,33 +210,16 @@ impl CheckSummaryLog {
     }
 }
 
-pub trait CheckLogJsonExt {
-    fn to_json_line(&self) -> Option<String>;
-}
-
-fn to_json_line_or_warn<T: Serialize>(value: &T, log_type: &str) -> Option<String> {
+pub fn to_json_line<T: Serialize>(value: &T) -> Option<String> {
     match serde_json::to_string(value) {
         Ok(s) => Some(s),
         Err(e) => {
             log::warn!(
-                "Skipping {} output because serialization failed: {}",
-                log_type,
+                "Skipping checker log output because serialization failed: {}",
                 e
             );
             None
         }
-    }
-}
-
-impl CheckLogJsonExt for CheckSummaryLog {
-    fn to_json_line(&self) -> Option<String> {
-        to_json_line_or_warn(self, "CheckSummaryLog")
-    }
-}
-
-impl CheckLogJsonExt for CheckLog {
-    fn to_json_line(&self) -> Option<String> {
-        to_json_line_or_warn(self, "CheckLog")
     }
 }
 
@@ -277,12 +260,6 @@ fn struct_key_scope(key: &str) -> (String, String) {
     (schema, tb)
 }
 
-impl CheckLogJsonExt for StructCheckLog {
-    fn to_json_line(&self) -> Option<String> {
-        to_json_line_or_warn(self, "StructCheckLog")
-    }
-}
-
 impl FromStr for CheckLog {
     type Err = Error;
     fn from_str(str: &str) -> Result<Self, Self::Err> {
@@ -296,6 +273,10 @@ impl FromStr for CheckLog {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    fn json_line<T: serde::Serialize>(value: &T) -> serde_json::Value {
+        serde_json::from_str(&to_json_line(value).unwrap()).unwrap()
+    }
 
     #[test]
     fn check_log_serializes_null_diff_endpoints() {
@@ -318,7 +299,7 @@ mod tests {
             dst_row: None,
         };
 
-        let actual: serde_json::Value = serde_json::from_str(&log.to_json_line().unwrap()).unwrap();
+        let actual = json_line(&log);
         let expected = json!({
             "schema": "s1",
             "tb": "t1",
@@ -337,26 +318,8 @@ mod tests {
     }
 
     #[test]
-    fn check_log_serializes_explicit_target_identity() {
-        let log = CheckLog {
-            schema: "src_s".to_string(),
-            tb: "src_t".to_string(),
-            target_schema: Some("dst_s".to_string()),
-            target_tb: Some("dst_t".to_string()),
-            id_col_values: HashMap::from([("id".to_string(), Some("1".to_string()))]),
-            diff_col_values: HashMap::new(),
-            src_row: None,
-            dst_row: None,
-        };
-
-        let actual: serde_json::Value = serde_json::from_str(&log.to_json_line().unwrap()).unwrap();
-        assert_eq!(actual["target_schema"], "dst_s");
-        assert_eq!(actual["target_tb"], "dst_t");
-    }
-
-    #[test]
-    fn check_log_outputs_target_identity_as_pair() {
-        let log = CheckLog {
+    fn check_log_target_identity_is_serialized_only_when_changed() {
+        let changed = CheckLog {
             schema: "src_s".to_string(),
             tb: "src_t".to_string(),
             target_schema: Some("dst_s".to_string()),
@@ -366,15 +329,11 @@ mod tests {
             src_row: None,
             dst_row: None,
         };
-
-        let actual: serde_json::Value = serde_json::from_str(&log.to_json_line().unwrap()).unwrap();
+        let actual = json_line(&changed);
         assert_eq!(actual["target_schema"], "dst_s");
         assert_eq!(actual["target_tb"], "src_t");
-    }
 
-    #[test]
-    fn check_log_omits_unchanged_target_identity_pair() {
-        let log = CheckLog {
+        let unchanged = CheckLog {
             schema: "src_s".to_string(),
             tb: "src_t".to_string(),
             target_schema: Some("src_s".to_string()),
@@ -384,8 +343,7 @@ mod tests {
             src_row: None,
             dst_row: None,
         };
-
-        let actual: serde_json::Value = serde_json::from_str(&log.to_json_line().unwrap()).unwrap();
+        let actual = json_line(&unchanged);
         assert!(actual.get("target_schema").is_none());
         assert!(actual.get("target_tb").is_none());
     }
@@ -398,7 +356,7 @@ mod tests {
             None,
         );
 
-        let actual: serde_json::Value = serde_json::from_str(&log.to_json_line().unwrap()).unwrap();
+        let actual = json_line(&log);
         let expected = json!({
             "schema": "s1",
             "tb": "t1",
@@ -418,8 +376,7 @@ mod tests {
             ..Default::default()
         };
 
-        let actual: serde_json::Value =
-            serde_json::from_str(&summary.to_json_line().unwrap()).unwrap();
+        let actual = json_line(&summary);
         assert_eq!(actual["tables"], json!([]));
     }
 

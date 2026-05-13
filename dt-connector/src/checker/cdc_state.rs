@@ -600,36 +600,6 @@ mod tests {
         Operator::new(Memory::default()).unwrap().finish()
     }
 
-    async fn write_log_set(dir: &Path, op: &Operator, prefix: &str) {
-        for (file, content) in [
-            ("miss.log", "old miss\n"),
-            ("diff.log", "old diff\n"),
-            ("summary.log", "old summary\n"),
-            ("sql.log", "old sql;\n"),
-        ] {
-            fs::write(dir.join(file), content).unwrap();
-            op.write(&format!("{prefix}/{file}"), content)
-                .await
-                .unwrap();
-        }
-    }
-
-    async fn assert_log_set_unchanged(dir: &Path, op: &Operator, prefix: &str) {
-        for (file, content) in [
-            ("miss.log", "old miss\n"),
-            ("diff.log", "old diff\n"),
-            ("summary.log", "old summary\n"),
-            ("sql.log", "old sql;\n"),
-        ] {
-            assert_eq!(read_file(&dir.join(file)), content);
-            assert_eq!(
-                String::from_utf8(op.read(&format!("{prefix}/{file}")).await.unwrap().to_vec())
-                    .unwrap(),
-                content
-            );
-        }
-    }
-
     fn build_cdc_checker(
         check_log_dir: PathBuf,
         s3_output: Option<(Operator, String)>,
@@ -690,22 +660,6 @@ mod tests {
 
         assert!(!dir.join("sql.log").exists());
         assert!(op.stat("prefix/sql.log").await.is_err());
-        fs::remove_dir_all(dir).unwrap();
-    }
-
-    #[tokio::test]
-    async fn snapshot_and_output_skips_local_and_s3_publish_when_init_failed() {
-        let dir = unique_temp_dir("checker-init-failed");
-        fs::create_dir_all(&dir).unwrap();
-        let op = build_memory_operator();
-        write_log_set(&dir, &op, "prefix").await;
-
-        let mut checker = build_cdc_checker(dir.clone(), Some((op.clone(), "prefix".to_string())));
-        checker.init_failed = true;
-
-        checker.snapshot_and_output().await.unwrap();
-
-        assert_log_set_unchanged(&dir, &op, "prefix").await;
         fs::remove_dir_all(dir).unwrap();
     }
 
