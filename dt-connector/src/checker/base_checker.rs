@@ -28,6 +28,7 @@ use dt_common::meta::{
     col_value::ColValue, ddl_meta::ddl_data::DdlData, mysql::mysql_tb_meta::MysqlTbMeta,
     pg::pg_tb_meta::PgTbMeta, position::Position, rdb_meta_manager::RdbMetaManager,
     rdb_tb_meta::RdbTbMeta, row_data::RowData, row_type::RowType,
+    struct_meta::struct_data::StructData,
 };
 use dt_common::{
     log_error, log_info, log_summary, log_warn,
@@ -454,6 +455,13 @@ impl CheckerHandle {
         match self {
             Self::Data(handle) => handle.invalidate_meta_cache(data).await,
             Self::Struct(_) => Ok(()),
+        }
+    }
+
+    pub async fn check_struct(&mut self, data: Vec<StructData>) -> anyhow::Result<()> {
+        match self {
+            Self::Data(_) => Ok(()),
+            Self::Struct(handle) => handle.check_struct(data).await,
         }
     }
 }

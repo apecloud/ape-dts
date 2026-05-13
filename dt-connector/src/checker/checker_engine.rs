@@ -22,11 +22,6 @@ use dt_common::{
     utils::limit_queue::LimitedQueue,
 };
 
-struct PreparedCheckRow<'a> {
-    row: &'a RowData,
-    key: u128,
-}
-
 impl<C: Checker> DataChecker<C> {
     const MAX_DIFF_COLS: usize = 8;
 
@@ -151,16 +146,16 @@ impl<C: Checker> DataChecker<C> {
 
     async fn check_rows(
         &mut self,
-        src_data: &[PreparedCheckRow<'_>],
+        src_data: &[(&RowData, u128)],
         mut dst_row_data_map: HashMap<u128, RowData>,
         tb_meta: &CheckerTbMeta,
     ) -> anyhow::Result<(usize, Vec<RowData>)> {
         let mut checked_count = 0;
         let mut retry_rows = Vec::new();
 
-        for item in src_data {
-            let src_row_data = item.row;
-            let key = item.key;
+        for (src_row_data, key) in src_data {
+            let src_row_data = *src_row_data;
+            let key = *key;
             checked_count += 1;
             let dst_row_data = dst_row_data_map.remove(&key);
 
@@ -323,7 +318,7 @@ impl<C: Checker> DataChecker<C> {
         &mut self,
         rows: &[&'a RowData],
         tb_meta: &CheckerTbMeta,
-    ) -> Vec<PreparedCheckRow<'a>> {
+    ) -> Vec<(&'a RowData, u128)> {
         let mut prepared_rows = Vec::with_capacity(rows.len());
         for row in rows {
             let row = *row;
@@ -338,7 +333,7 @@ impl<C: Checker> DataChecker<C> {
                         );
                     }
                     if Self::should_sample_check_row(self.ctx.sample_rate, key) {
-                        prepared_rows.push(PreparedCheckRow { row, key });
+                        prepared_rows.push((row, key));
                     }
                 }
                 Ok(None) => {
@@ -862,7 +857,7 @@ impl<C: Checker> DataChecker<C> {
             }
             let rows_to_fetch = prepared_rows
                 .iter()
-                .map(|item| item.row)
+                .map(|(row, _)| *row)
                 .collect::<Vec<_>>();
             let dst_rows = self.checker.fetch(tb_meta.clone(), &rows_to_fetch).await?;
 

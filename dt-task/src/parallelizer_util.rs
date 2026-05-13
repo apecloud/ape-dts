@@ -6,11 +6,7 @@ use std::{
 use super::task_util::TaskUtil;
 use anyhow::anyhow;
 use dt_common::{
-    config::{
-        config_enums::{DbType, ParallelType},
-        sinker_config::SinkerConfig,
-        task_config::TaskConfig,
-    },
+    config::{config_enums::ParallelType, sinker_config::SinkerConfig, task_config::TaskConfig},
     meta::redis::command::key_parser::KeyParser,
     monitor::monitor::Monitor,
     utils::redis_util::RedisUtil,
