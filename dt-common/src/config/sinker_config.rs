@@ -163,6 +163,7 @@ impl Default for BasicSinkerConfig {
             connection_auth: ConnectionAuthConfig::default(),
             batch_size: 0,
             max_connections: 10,
+            rate_limiter: RateLimiterConfig::default(),
         }
     }
 }
