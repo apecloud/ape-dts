@@ -1,82 +1,54 @@
-use std::{
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc,
+use crate::{
+    config::extractor_config::ExtractorConfig,
+    meta::{
+        ddl_meta::ddl_data::DdlData, dt_data::DtData, row_data::RowData,
+        struct_meta::struct_data::StructData,
     },
-    time::Duration,
 };
 
-use tokio::select;
+pub fn from_schema_tb(schema: &str, tb: &str) -> String {
+    if schema.is_empty() || tb.is_empty() {
+        String::new()
+    } else {
+        format!("{}.{}", schema, tb)
+    }
+}
 
-use crate::{log_info, monitor::FlushableMonitor, utils::time_util::TimeUtil};
+pub fn from_row_data(row_data: &RowData) -> String {
+    from_schema_tb(&row_data.schema, &row_data.tb)
+}
 
-pub struct MonitorUtil {}
+pub fn from_ddl_data(ddl_data: &DdlData) -> String {
+    let (schema, tb) = ddl_data.get_schema_tb();
+    from_schema_tb(&schema, &tb)
+}
 
-impl MonitorUtil {
-    pub async fn flush_monitors_generic<T1, T2>(
-        interval_secs: u64,
-        shut_down: Arc<AtomicBool>,
-        t1_monitors: &[Arc<T1>],
-        t2_monitors: &[Arc<T2>],
-    ) where
-        T1: FlushableMonitor + Send + Sync + 'static,
-        T2: FlushableMonitor + Send + Sync + 'static,
-    {
-        let mut interval = tokio::time::interval(Duration::from_secs(interval_secs));
-        interval.tick().await;
+pub fn from_struct_data(struct_data: &StructData) -> String {
+    struct_data.schema.clone()
+}
 
-        loop {
-            if shut_down.load(Ordering::Acquire) {
-                Self::do_flush_monitors(t1_monitors, t2_monitors).await;
-                break;
-            }
+pub fn from_dt_data(dt_data: &DtData) -> String {
+    match dt_data {
+        DtData::Dml { row_data } => from_row_data(row_data),
+        DtData::Ddl { ddl_data } => from_ddl_data(ddl_data),
+        DtData::Struct { struct_data } => from_struct_data(struct_data),
+        _ => String::new(),
+    }
+}
 
-            select! {
-                _ = interval.tick() => {
-                    Self::do_flush_monitors(t1_monitors, t2_monitors).await;
-                }
-                _ = Self::wait_for_shutdown(shut_down.clone()) => {
-                    log_info!("task shutdown detected, do final flush");
-                    Self::do_flush_monitors(t1_monitors, t2_monitors).await;
-                    break;
-                }
-            }
-        }
+pub fn from_task_context_or_extractor(
+    task_context_id: &str,
+    extractor_config: &ExtractorConfig,
+) -> String {
+    if !task_context_id.is_empty() {
+        return task_context_id.to_string();
     }
 
-    async fn wait_for_shutdown(shut_down: Arc<AtomicBool>) {
-        loop {
-            if shut_down.load(Ordering::Acquire) {
-                break;
-            }
-            TimeUtil::sleep_millis(100).await;
-        }
-    }
-
-    async fn do_flush_monitors<T1, T2>(t1_monitors: &[Arc<T1>], t2_monitors: &[Arc<T2>])
-    where
-        T1: FlushableMonitor + Send + Sync + 'static,
-        T2: FlushableMonitor + Send + Sync + 'static,
-    {
-        let t1_futures = t1_monitors
-            .iter()
-            .map(|monitor| {
-                let monitor = monitor.clone();
-                async move { monitor.flush().await }
-            })
-            .collect::<Vec<_>>();
-
-        let t2_futures = t2_monitors
-            .iter()
-            .map(|monitor| {
-                let monitor = monitor.clone();
-                async move { monitor.flush().await }
-            })
-            .collect::<Vec<_>>();
-
-        tokio::join!(
-            futures::future::join_all(t1_futures),
-            futures::future::join_all(t2_futures)
-        );
+    match extractor_config {
+        ExtractorConfig::MysqlSnapshot { db, tb, .. }
+        | ExtractorConfig::MongoSnapshot { db, tb, .. } => from_schema_tb(db, tb),
+        ExtractorConfig::PgSnapshot { schema, tb, .. }
+        | ExtractorConfig::FoxlakeS3 { schema, tb, .. } => from_schema_tb(schema, tb),
+        _ => String::new(),
     }
 }

@@ -452,11 +452,7 @@ impl BasePipeline {
             return Ok(());
         }
 
-        let finished_task_ids: Vec<String> = self
-            .pending_dtctls
-            .iter()
-            .map(|(task_id, _)| task_id.clone())
-            .collect();
+        let finished_task_ids: Vec<String> = self.pending_dtctls.keys().cloned().collect();
 
         for task_id in finished_task_ids {
             let Some(ctl) = self.pending_dtctls.remove(&task_id) else {
@@ -466,7 +462,8 @@ impl BasePipeline {
             match ctl {
                 DtCtl::SnapshotExtractFinished {
                     task_id,
-                    finish_position, ..
+                    finish_position,
+                    ..
                 } => {
                     self.monitor
                         .with_type(MonitorType::Sinker)

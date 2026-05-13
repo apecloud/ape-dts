@@ -21,7 +21,7 @@ use dt_common::{
         dt_queue::DtQueue,
         struct_meta::struct_data::StructData,
     },
-    monitor::monitor_task_id,
+    monitor::monitor_util,
     utils::sql_util::SqlUtil,
 };
 use dt_common::{
@@ -45,7 +45,7 @@ pub struct ExtractState {
 }
 
 impl ExtractState {
-    pub async fn derive_for_table(
+    pub fn derive_for_table(
         &self,
         monitor: ExtractorMonitor,
         data_marker: Option<DataMarker>,
@@ -161,7 +161,7 @@ impl BaseExtractor {
         state.monitor.counters.pushed_data_size += dt_data.get_data_size();
         state.monitor.try_flush(false).await;
 
-        let task_id = monitor_task_id::from_dt_data(&dt_data);
+        let task_id = monitor_util::from_dt_data(&dt_data);
         let item = DtItem {
             dt_data,
             position,
@@ -342,7 +342,7 @@ impl BaseExtractor {
         finish_position: Position,
     ) -> anyhow::Result<()> {
         self.ctl_buffer.push(DtCtl::SnapshotExtractFinished {
-            task_id: monitor_task_id::from_schema_tb(schema, tb),
+            task_id: monitor_util::from_schema_tb(schema, tb),
             schema: schema.to_string(),
             tb: tb.to_string(),
             finish_position,

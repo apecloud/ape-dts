@@ -165,7 +165,9 @@ impl MongoSinker {
                 self.base_sinker
                     .update_serial_monitor_for(&task_id, data_len as u64, data_size as u64)
                     .await?;
-                self.base_sinker.update_monitor_rt_for(&task_id, &rts).await?;
+                self.base_sinker
+                    .update_monitor_rt_for(&task_id, &rts)
+                    .await?;
                 rts.clear();
                 data_size = 0;
                 data_len = 0;
@@ -177,7 +179,9 @@ impl MongoSinker {
             self.base_sinker
                 .update_serial_monitor_for(&task_id, data_len as u64, data_size as u64)
                 .await?;
-            self.base_sinker.update_monitor_rt_for(&task_id, &rts).await?;
+            self.base_sinker
+                .update_monitor_rt_for(&task_id, &rts)
+                .await?;
         }
         Ok(())
     }

@@ -28,9 +28,8 @@ use dt_common::meta::{
     rdb_tb_meta::RdbTbMeta, row_data::RowData, row_type::RowType,
 };
 use dt_common::{
-    config::config_enums::TaskKind,
-    log_error, log_info, log_summary, log_warn, monitor::task_monitor::TaskMonitorHandle,
-    utils::limit_queue::LimitedQueue,
+    config::config_enums::TaskKind, log_error, log_info, log_summary, log_warn,
+    monitor::task_monitor::TaskMonitorHandle, utils::limit_queue::LimitedQueue,
 };
 
 #[path = "cdc_state.rs"]
@@ -765,7 +764,9 @@ impl<C: Checker> DataChecker<C> {
             log_error!("Checker [{}] shutdown failed: {}", self.name, err);
         }
         if is_snapshot_task {
-            self.ctx.monitor.unregister_monitor(&self.ctx.monitor_task_id);
+            self.ctx
+                .monitor
+                .unregister_monitor(&self.ctx.monitor_task_id);
         }
         log_info!("Checker [{}] stopped.", self.name);
         Ok(())

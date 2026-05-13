@@ -41,105 +41,44 @@ use dt_common::{
 use quote_pg as quote;
 
 pub struct PgSnapshotExtractor {
-    pub base_extractor: BaseExtractor,
+    pub shared: PgSnapshotShared,
     pub extract_state: ExtractState,
+    pub parallel_size: usize,
+    pub schema_tbs: HashMap<String, Vec<String>>,
+}
+
+#[derive(Clone)]
+pub struct PgSnapshotShared {
+    pub base_extractor: BaseExtractor,
     pub conn_pool: Pool<Postgres>,
     pub meta_manager: PgMetaManager,
-    pub filter: RdbFilter,
+    pub filter: Arc<RdbFilter>,
+    pub partition_cols: Arc<HashMap<(String, String), String>>,
     pub batch_size: usize,
-    pub parallel_size: usize,
-    pub sample_interval: u64,
-    pub schema_tbs: HashMap<String, Vec<String>>,
     pub parallel_type: RdbParallelType,
-    pub partition_cols: HashMap<(String, String), String>,
+    pub sample_interval: u64,
     pub recovery: Option<Arc<dyn Recovery + Send + Sync>>,
 }
 
-#[derive(Clone)]
-struct PgSnapshotShared {
-    base_extractor: BaseExtractor,
-    conn_pool: Pool<Postgres>,
-    meta_manager: PgMetaManager,
-    filter: RdbFilter,
-    batch_size: usize,
-    parallel_type: RdbParallelType,
-    sample_interval: u64,
-    recovery: Option<Arc<dyn Recovery + Send + Sync>>,
-}
-
-#[derive(Clone)]
-struct PgTableCtx {
-    shared: PgSnapshotShared,
-    table_id: SnapshotTableId,
-    user_defined_partition_col: String,
-}
-
-struct PgTableWorker {
-    ctx: PgTableCtx,
-    extract_state: ExtractState,
-}
-
-struct PgSnapshotDispatchState {
-    shared: PgSnapshotShared,
-    root_extract_state: ExtractState,
-    pending_tables: VecDeque<SnapshotTableId>,
-    pending_works: VecDeque<PgSnapshotWork>,
-    active_tables: HashMap<SnapshotTableId, PgActiveTable>,
-    partition_cols: HashMap<(String, String), String>,
-}
-
-struct PgActiveTable {
-    ctx: PgTableCtx,
-    extract_state: ExtractState,
-    _monitor_guard: TableMonitorGuard,
-    tb_meta: PgTbMeta,
-    extracted_count: u64,
-    mode: PgActiveTableMode,
-}
-
-enum PgActiveTableMode {
-    ScanAll,
-    OrderedBatch,
-    SplitChunk {
-        splitter: PgSnapshotSplitter,
-        initial_chunks: VecDeque<SnapshotChunk>,
-        queued_chunks: usize,
-        running_chunks: usize,
-        partition_col: String,
-        partition_col_type: PgColType,
-        sql_le: String,
-        sql_range: String,
-        ignore_cols: Option<HashSet<String>>,
-    },
-}
-
 enum PgSnapshotWork {
-    ScanAll {
+    Table {
         table_id: SnapshotTableId,
         ctx: PgTableCtx,
         extract_state: ExtractState,
         tb_meta: PgTbMeta,
     },
-    OrderedBatch {
-        table_id: SnapshotTableId,
-        ctx: PgTableCtx,
-        extract_state: ExtractState,
-        tb_meta: PgTbMeta,
-    },
-    SplitChunk {
+    Chunk {
         table_id: SnapshotTableId,
         shared: PgSnapshotShared,
-        conn_pool: Pool<Postgres>,
         tb_meta: PgTbMeta,
         partition_col: String,
         partition_col_type: PgColType,
         sql_le: String,
         sql_range: String,
         chunk: SnapshotChunk,
-        ignore_cols: Option<HashSet<String>>,
         extract_state: ExtractState,
     },
-    ExtractNulls {
+    NullChunk {
         table_id: SnapshotTableId,
         ctx: PgTableCtx,
         extract_state: ExtractState,
@@ -159,7 +98,7 @@ enum PgSnapshotWorkResult {
         count: u64,
         partition_col_value: ColValue,
     },
-    NullsFinished {
+    NullChunkFinished {
         table_id: SnapshotTableId,
         count: u64,
     },
@@ -176,17 +115,16 @@ impl Extractor for PgSnapshotExtractor {
         log_info!(
             "PgSnapshotExtractor starts, tables: {}, parallel_type: {:?}, parallel_size: {}",
             tables.len(),
-            self.parallel_type,
+            self.shared.parallel_type,
             self.parallel_size
         );
 
         let state = PgSnapshotDispatchState {
-            shared: self.shared(),
-            root_extract_state: SnapshotDispatcher::clone_extract_state(&self.extract_state),
+            shared: self.shared.clone(),
+            root_extract_state: SnapshotDispatcher::fork_extract_state(&self.extract_state),
             pending_tables: tables.into_iter().collect(),
             pending_works: VecDeque::new(),
             active_tables: HashMap::new(),
-            partition_cols: self.partition_cols.clone(),
         };
 
         SnapshotDispatcher::dispatch_work_source(
@@ -199,7 +137,8 @@ impl Extractor for PgSnapshotExtractor {
         )
         .await?;
 
-        self.base_extractor
+        self.shared
+            .base_extractor
             .wait_task_finish(&mut self.extract_state)
             .await
     }
@@ -210,19 +149,6 @@ impl Extractor for PgSnapshotExtractor {
 }
 
 impl PgSnapshotExtractor {
-    fn shared(&self) -> PgSnapshotShared {
-        PgSnapshotShared {
-            base_extractor: self.base_extractor.clone(),
-            conn_pool: self.conn_pool.clone(),
-            meta_manager: self.meta_manager.clone(),
-            filter: self.filter.clone(),
-            batch_size: self.batch_size,
-            parallel_type: self.parallel_type.clone(),
-            sample_interval: self.sample_interval,
-            recovery: self.recovery.clone(),
-        }
-    }
-
     fn collect_tables(&self) -> Vec<SnapshotTableId> {
         let mut tables = Vec::new();
         for (schema, tbs) in &self.schema_tbs {
@@ -254,53 +180,36 @@ impl PgSnapshotExtractor {
 
     async fn run_work(work: PgSnapshotWork) -> anyhow::Result<PgSnapshotWorkResult> {
         match work {
-            PgSnapshotWork::ScanAll {
+            PgSnapshotWork::Table {
                 table_id,
                 ctx,
-                extract_state,
+                mut extract_state,
                 tb_meta,
             } => {
-                let mut worker = PgTableWorker { ctx, extract_state };
-                let count = worker.extract_all(&tb_meta).await?;
-                worker.extract_state.monitor.try_flush(true).await;
+                let count = ctx.extract_table(&mut extract_state, &tb_meta).await?;
+                extract_state.monitor.try_flush(true).await;
                 Ok(PgSnapshotWorkResult::TableFinished { table_id, count })
             }
 
-            PgSnapshotWork::OrderedBatch {
-                table_id,
-                ctx,
-                extract_state,
-                tb_meta,
-            } => {
-                let mut worker = PgTableWorker { ctx, extract_state };
-                let count = worker.extract_by_batch(&tb_meta).await?;
-                worker.extract_state.monitor.try_flush(true).await;
-                Ok(PgSnapshotWorkResult::TableFinished { table_id, count })
-            }
-
-            PgSnapshotWork::SplitChunk {
+            PgSnapshotWork::Chunk {
                 table_id,
                 shared,
-                conn_pool,
                 tb_meta,
                 partition_col,
                 partition_col_type,
                 sql_le,
                 sql_range,
                 chunk,
-                ignore_cols,
                 extract_state,
             } => {
                 let (chunk_id, count, partition_col_value) = Self::extract_chunk(
                     shared,
-                    conn_pool,
                     tb_meta,
                     partition_col,
                     partition_col_type,
                     sql_le,
                     sql_range,
                     chunk,
-                    ignore_cols,
                     extract_state,
                 )
                 .await?;
@@ -312,19 +221,18 @@ impl PgSnapshotExtractor {
                 })
             }
 
-            PgSnapshotWork::ExtractNulls {
+            PgSnapshotWork::NullChunk {
                 table_id,
                 ctx,
-                extract_state,
+                mut extract_state,
                 tb_meta,
                 order_cols,
             } => {
-                let mut worker = PgTableWorker { ctx, extract_state };
-                let count =
-                    PgTableWorker::extract_nulls_with(&worker.ctx, &mut worker.extract_state, &tb_meta, &order_cols)
-                        .await?;
-                worker.extract_state.monitor.try_flush(true).await;
-                Ok(PgSnapshotWorkResult::NullsFinished { table_id, count })
+                let count = ctx
+                    .extract_nulls(&mut extract_state, &tb_meta, &order_cols)
+                    .await?;
+                extract_state.monitor.try_flush(true).await;
+                Ok(PgSnapshotWorkResult::NullChunkFinished { table_id, count })
             }
         }
     }
@@ -335,28 +243,7 @@ impl PgSnapshotExtractor {
     ) -> anyhow::Result<PgSnapshotDispatchState> {
         match result {
             PgSnapshotWorkResult::TableFinished { table_id, count } => {
-                let mut active_table = state
-                    .active_tables
-                    .remove(&table_id)
-                    .ok_or_else(|| anyhow!("missing active pg table: {}.{}", table_id.schema, table_id.tb))?;
-                active_table.extracted_count += count;
-                let schema = table_id.schema.clone();
-                let tb = table_id.tb.clone();
-                log_info!(
-                    "end extracting data from {}.{}, all count: {}",
-                    quote!(&table_id.schema),
-                    quote!(&table_id.tb),
-                    active_table.extracted_count
-                );
-                state.shared.base_extractor.push_snapshot_finished(
-                    &schema,
-                    &tb,
-                    Position::RdbSnapshotFinished {
-                        db_type: DbType::Pg.to_string(),
-                        schema: schema.clone(),
-                        tb: tb.clone(),
-                    },
-                )?;
+                state.finish_table(&table_id, count, false).await?;
             }
 
             PgSnapshotWorkResult::ChunkFinished {
@@ -370,10 +257,13 @@ impl PgSnapshotExtractor {
                 let should_finish;
 
                 {
-                    let active_table = state
-                        .active_tables
-                        .get_mut(&table_id)
-                        .ok_or_else(|| anyhow!("missing active pg table: {}.{}", table_id.schema, table_id.tb))?;
+                    let active_table = state.active_tables.get_mut(&table_id).ok_or_else(|| {
+                        anyhow!(
+                            "missing active pg table: {}.{}",
+                            table_id.schema,
+                            table_id.tb
+                        )
+                    })?;
                     active_table.extracted_count += count;
 
                     let (
@@ -384,9 +274,8 @@ impl PgSnapshotExtractor {
                         partition_col_type,
                         sql_le,
                         sql_range,
-                        ignore_cols,
                     ) = match &mut active_table.mode {
-                        PgActiveTableMode::SplitChunk {
+                        PgActiveTableMode::Chunk {
                             splitter,
                             queued_chunks,
                             running_chunks,
@@ -394,7 +283,6 @@ impl PgSnapshotExtractor {
                             partition_col_type,
                             sql_le,
                             sql_range,
-                            ignore_cols,
                             ..
                         } => (
                             splitter,
@@ -404,7 +292,6 @@ impl PgSnapshotExtractor {
                             partition_col_type,
                             sql_le,
                             sql_range,
-                            ignore_cols,
                         ),
                         _ => bail!(
                             "chunk result returned for non-split pg table {}.{}",
@@ -431,18 +318,16 @@ impl PgSnapshotExtractor {
                     let next_chunks = splitter.get_next_chunks().await?;
                     for chunk in next_chunks {
                         *queued_chunks += 1;
-                        new_works.push_back(PgSnapshotWork::SplitChunk {
+                        new_works.push_back(PgSnapshotWork::Chunk {
                             table_id: table_id.clone(),
                             shared: state.shared.clone(),
-                            conn_pool: state.shared.conn_pool.clone(),
                             tb_meta: active_table.tb_meta.clone(),
                             partition_col: partition_col.clone(),
                             partition_col_type: partition_col_type.clone(),
                             sql_le: sql_le.clone(),
                             sql_range: sql_range.clone(),
                             chunk,
-                            ignore_cols: ignore_cols.clone(),
-                            extract_state: SnapshotDispatcher::clone_extract_state(
+                            extract_state: SnapshotDispatcher::fork_extract_state(
                                 &active_table.extract_state,
                             ),
                         });
@@ -457,70 +342,32 @@ impl PgSnapshotExtractor {
                 state.pending_works.extend(new_works);
 
                 if should_finish {
-                    let active_table = state
-                        .active_tables
-                        .get(&table_id)
-                        .ok_or_else(|| anyhow!("missing finished pg split table: {}.{}", table_id.schema, table_id.tb))?;
+                    let active_table = state.active_tables.get(&table_id).ok_or_else(|| {
+                        anyhow!(
+                            "missing finished pg split table: {}.{}",
+                            table_id.schema,
+                            table_id.tb
+                        )
+                    })?;
                     let partition_col = finish_partition_col.clone().unwrap();
                     if active_table.tb_meta.basic.is_col_nullable(&partition_col) {
-                        state.pending_works.push_back(PgSnapshotWork::ExtractNulls {
+                        state.pending_works.push_back(PgSnapshotWork::NullChunk {
                             table_id: table_id.clone(),
                             ctx: active_table.ctx.clone(),
-                            extract_state: SnapshotDispatcher::clone_extract_state(
+                            extract_state: SnapshotDispatcher::fork_extract_state(
                                 &active_table.extract_state,
                             ),
                             tb_meta: active_table.tb_meta.clone(),
                             order_cols: vec![partition_col],
                         });
                     } else {
-                        let mut active_table = state.active_tables.remove(&table_id).ok_or_else(|| {
-                            anyhow!("missing finished pg split table: {}.{}", table_id.schema, table_id.tb)
-                        })?;
-                        active_table.extract_state.monitor.try_flush(true).await;
-                        let schema = table_id.schema.clone();
-                        let tb = table_id.tb.clone();
-                        log_info!(
-                            "end extracting data from {}.{}, all count: {}",
-                            quote!(&table_id.schema),
-                            quote!(&table_id.tb),
-                            active_table.extracted_count
-                        );
-                        state.shared.base_extractor.push_snapshot_finished(
-                            &schema,
-                            &tb,
-                            Position::RdbSnapshotFinished {
-                                db_type: DbType::Pg.to_string(),
-                                schema: schema.clone(),
-                                tb: tb.clone(),
-                            },
-                        )?;
+                        state.finish_table(&table_id, 0, true).await?;
                     }
                 }
             }
 
-            PgSnapshotWorkResult::NullsFinished { table_id, count } => {
-                let mut active_table = state.active_tables.remove(&table_id).ok_or_else(|| {
-                    anyhow!("missing pg table after null extraction: {}.{}", table_id.schema, table_id.tb)
-                })?;
-                active_table.extracted_count += count;
-                active_table.extract_state.monitor.try_flush(true).await;
-                let schema = table_id.schema.clone();
-                let tb = table_id.tb.clone();
-                log_info!(
-                    "end extracting data from {}.{}, all count: {}",
-                    quote!(&table_id.schema),
-                    quote!(&table_id.tb),
-                    active_table.extracted_count
-                );
-                state.shared.base_extractor.push_snapshot_finished(
-                    &schema,
-                    &tb,
-                    Position::RdbSnapshotFinished {
-                        db_type: DbType::Pg.to_string(),
-                        schema: schema.clone(),
-                        tb: tb.clone(),
-                    },
-                )?;
+            PgSnapshotWorkResult::NullChunkFinished { table_id, count } => {
+                state.finish_table(&table_id, count, true).await?;
             }
         }
 
@@ -530,14 +377,12 @@ impl PgSnapshotExtractor {
     #[allow(clippy::too_many_arguments)]
     async fn extract_chunk(
         shared: PgSnapshotShared,
-        conn_pool: Pool<Postgres>,
         tb_meta: PgTbMeta,
         partition_col: String,
         partition_col_type: PgColType,
         sql_le: String,
         sql_range: String,
         chunk: SnapshotChunk,
-        ignore_cols: Option<HashSet<String>>,
         mut extract_state: ExtractState,
     ) -> anyhow::Result<(u64, u64, ColValue)> {
         log_debug!(
@@ -566,7 +411,11 @@ impl PgSnapshotExtractor {
 
         let mut extracted_cnt = 0u64;
         let mut partition_col_value = ColValue::None;
-        let mut rows = query.fetch(&conn_pool);
+        let ignore_cols = shared
+            .filter
+            .get_ignore_cols(&tb_meta.basic.schema, &tb_meta.basic.tb)
+            .cloned();
+        let mut rows = query.fetch(&shared.conn_pool);
         while let Some(row) = rows.try_next().await? {
             partition_col_value =
                 PgColValueConvertor::from_query(&row, &partition_col, &partition_col_type)?;
@@ -595,12 +444,81 @@ impl PgSnapshotExtractor {
     }
 }
 
+struct PgSnapshotDispatchState {
+    shared: PgSnapshotShared,
+    root_extract_state: ExtractState,
+    pending_tables: VecDeque<SnapshotTableId>,
+    pending_works: VecDeque<PgSnapshotWork>,
+    active_tables: HashMap<SnapshotTableId, PgActiveTable>,
+}
+
+struct PgActiveTable {
+    ctx: PgTableCtx,
+    extract_state: ExtractState,
+    _monitor_guard: TableMonitorGuard,
+    tb_meta: PgTbMeta,
+    extracted_count: u64,
+    mode: PgActiveTableMode,
+}
+
+enum PgActiveTableMode {
+    Table,
+    Chunk {
+        splitter: PgSnapshotSplitter,
+        initial_chunks: VecDeque<SnapshotChunk>,
+        queued_chunks: usize,
+        running_chunks: usize,
+        partition_col: String,
+        partition_col_type: PgColType,
+        sql_le: String,
+        sql_range: String,
+    },
+}
+
 impl PgSnapshotDispatchState {
+    async fn finish_table(
+        &mut self,
+        table_id: &SnapshotTableId,
+        count: u64,
+        flush_monitor: bool,
+    ) -> anyhow::Result<()> {
+        let mut active_table = self.active_tables.remove(table_id).ok_or_else(|| {
+            anyhow!(
+                "missing active pg table when finishing: {}.{}",
+                table_id.schema,
+                table_id.tb
+            )
+        })?;
+        active_table.extracted_count += count;
+        if flush_monitor {
+            active_table.extract_state.monitor.try_flush(true).await;
+        }
+        let schema = table_id.schema.clone();
+        let tb = table_id.tb.clone();
+        log_info!(
+            "end extracting data from {}.{}, all count: {}",
+            quote!(&table_id.schema),
+            quote!(&table_id.tb),
+            active_table.extracted_count
+        );
+        self.shared.base_extractor.push_snapshot_finished(
+            &schema,
+            &tb,
+            Position::RdbSnapshotFinished {
+                db_type: DbType::Pg.to_string(),
+                schema: schema.clone(),
+                tb: tb.clone(),
+            },
+        )?;
+        Ok(())
+    }
+
     async fn prepare_table_work(
         &mut self,
         table_id: SnapshotTableId,
     ) -> anyhow::Result<Option<PgSnapshotWork>> {
         let user_defined_partition_col = self
+            .shared
             .partition_cols
             .get(&(table_id.schema.clone(), table_id.tb.clone()))
             .cloned()
@@ -610,7 +528,7 @@ impl PgSnapshotDispatchState {
             table_id: table_id.clone(),
             user_defined_partition_col,
         };
-        let (extract_state, monitor_guard) = SnapshotDispatcher::derive_table_extract_state(
+        let (extract_state, monitor_guard) = SnapshotDispatcher::fork_table_extract_state(
             &self.root_extract_state,
             &table_id.schema,
             &table_id.tb,
@@ -637,54 +555,46 @@ impl PgSnapshotDispatchState {
             },
         );
 
-        let active_table = self
-            .active_tables
-            .get_mut(&table_id)
-            .ok_or_else(|| anyhow!("failed to activate pg table: {}.{}", table_id.schema, table_id.tb))?;
+        let active_table = self.active_tables.get_mut(&table_id).ok_or_else(|| {
+            anyhow!(
+                "failed to activate pg table: {}.{}",
+                table_id.schema,
+                table_id.tb
+            )
+        })?;
         let task_tb_meta = active_table.tb_meta.clone();
         let work_extract_state =
-            SnapshotDispatcher::clone_extract_state(&active_table.extract_state);
+            SnapshotDispatcher::fork_extract_state(&active_table.extract_state);
 
         let work = match &mut active_table.mode {
-            PgActiveTableMode::ScanAll => Some(PgSnapshotWork::ScanAll {
+            PgActiveTableMode::Table => Some(PgSnapshotWork::Table {
                 table_id: table_id.clone(),
                 ctx: table_ctx,
                 extract_state: work_extract_state,
                 tb_meta: task_tb_meta,
             }),
-            PgActiveTableMode::OrderedBatch => Some(PgSnapshotWork::OrderedBatch {
-                table_id: table_id.clone(),
-                ctx: table_ctx,
-                extract_state: work_extract_state,
-                tb_meta: task_tb_meta,
-            }),
-            PgActiveTableMode::SplitChunk {
+            PgActiveTableMode::Chunk {
                 initial_chunks,
                 queued_chunks,
                 partition_col,
                 partition_col_type,
                 sql_le,
                 sql_range,
-                ignore_cols,
                 ..
             } => {
                 let initial_chunks = std::mem::take(initial_chunks);
                 for chunk in initial_chunks {
                     *queued_chunks += 1;
-                    self.pending_works.push_back(PgSnapshotWork::SplitChunk {
+                    self.pending_works.push_back(PgSnapshotWork::Chunk {
                         table_id: table_id.clone(),
                         shared: self.shared.clone(),
-                        conn_pool: self.shared.conn_pool.clone(),
                         tb_meta: task_tb_meta.clone(),
                         partition_col: partition_col.clone(),
                         partition_col_type: partition_col_type.clone(),
                         sql_le: sql_le.clone(),
                         sql_range: sql_range.clone(),
                         chunk,
-                        ignore_cols: ignore_cols.clone(),
-                        extract_state: SnapshotDispatcher::clone_extract_state(
-                            &work_extract_state,
-                        ),
+                        extract_state: SnapshotDispatcher::fork_extract_state(&work_extract_state),
                     });
                 }
                 let next_work = self.pending_works.pop_front();
@@ -699,15 +609,18 @@ impl PgSnapshotDispatchState {
     }
 
     fn mark_work_started(&mut self, work: &PgSnapshotWork) -> anyhow::Result<()> {
-        let PgSnapshotWork::SplitChunk { table_id, .. } = work else {
+        let PgSnapshotWork::Chunk { table_id, .. } = work else {
             return Ok(());
         };
-        let active_table = self
-            .active_tables
-            .get_mut(table_id)
-            .ok_or_else(|| anyhow!("missing active pg table: {}.{}", table_id.schema, table_id.tb))?;
+        let active_table = self.active_tables.get_mut(table_id).ok_or_else(|| {
+            anyhow!(
+                "missing active pg table: {}.{}",
+                table_id.schema,
+                table_id.tb
+            )
+        })?;
         let (queued_chunks, running_chunks) = match &mut active_table.mode {
-            PgActiveTableMode::SplitChunk {
+            PgActiveTableMode::Chunk {
                 queued_chunks,
                 running_chunks,
                 ..
@@ -728,6 +641,13 @@ impl PgSnapshotDispatchState {
     }
 }
 
+#[derive(Clone)]
+struct PgTableCtx {
+    shared: PgSnapshotShared,
+    table_id: SnapshotTableId,
+    user_defined_partition_col: String,
+}
+
 impl PgTableCtx {
     async fn prepare_active_mode(&self, tb_meta: &PgTbMeta) -> anyhow::Result<PgActiveTableMode> {
         if matches!(self.shared.parallel_type, RdbParallelType::Chunk) {
@@ -736,11 +656,7 @@ impl PgTableCtx {
         if self.should_use_splitter_for_table_extract(tb_meta) {
             return self.prepare_splitter_active_mode(tb_meta).await;
         }
-        if tb_meta.basic.order_cols.is_empty() {
-            Ok(PgActiveTableMode::ScanAll)
-        } else {
-            Ok(PgActiveTableMode::OrderedBatch)
-        }
+        Ok(PgActiveTableMode::Table)
     }
 
     async fn prepare_splitter_active_mode(
@@ -761,7 +677,8 @@ impl PgTableCtx {
                 quote!(&self.table_id.schema),
                 quote!(&self.table_id.tb)
             );
-            return Ok(self.fallback_active_mode(tb_meta));
+            let _ = tb_meta;
+            return Ok(PgActiveTableMode::Table);
         }
 
         let order_cols = vec![partition_col.clone()];
@@ -790,7 +707,7 @@ impl PgTableCtx {
             .with_predicate_type(OrderKeyPredicateType::Range)
             .build()?;
 
-        Ok(PgActiveTableMode::SplitChunk {
+        Ok(PgActiveTableMode::Chunk {
             splitter,
             initial_chunks,
             queued_chunks: 0,
@@ -799,16 +716,7 @@ impl PgTableCtx {
             partition_col_type,
             sql_le,
             sql_range,
-            ignore_cols,
         })
-    }
-
-    fn fallback_active_mode(&self, tb_meta: &PgTbMeta) -> PgActiveTableMode {
-        if tb_meta.basic.order_cols.is_empty() {
-            PgActiveTableMode::ScanAll
-        } else {
-            PgActiveTableMode::OrderedBatch
-        }
     }
 
     fn build_splitter(&self, tb_meta: &PgTbMeta) -> anyhow::Result<PgSnapshotSplitter> {
@@ -901,13 +809,11 @@ impl PgTableCtx {
                         return Ok(HashMap::new());
                     }
                     let col_value = match value {
-                        Some(v) => {
-                            PgColValueConvertor::from_str(
-                                tb_meta.get_col_type(order_col)?,
-                                &v,
-                                &mut meta_manager,
-                            )?
-                        }
+                        Some(v) => PgColValueConvertor::from_str(
+                            tb_meta.get_col_type(order_col)?,
+                            &v,
+                            &mut meta_manager,
+                        )?,
                         None => ColValue::None,
                     };
                     resume_values.insert(position_order_col, col_value);
@@ -929,27 +835,27 @@ impl PgTableCtx {
         );
         Ok(resume_values)
     }
-}
 
-impl PgTableWorker {
-    async fn extract_all(&mut self, tb_meta: &PgTbMeta) -> anyhow::Result<u64> {
+    async fn extract_all(
+        &self,
+        extract_state: &mut ExtractState,
+        tb_meta: &PgTbMeta,
+    ) -> anyhow::Result<u64> {
         log_info!(
             "start extracting data from {}.{} without batch",
-            quote!(&self.ctx.table_id.schema),
-            quote!(&self.ctx.table_id.tb)
+            quote!(&self.table_id.schema),
+            quote!(&self.table_id.tb)
         );
 
-        let base_count = self.extract_state.monitor.counters.pushed_record_count;
+        let base_count = extract_state.monitor.counters.pushed_record_count;
         let ignore_cols = self
-            .ctx
             .shared
             .filter
-            .get_ignore_cols(&self.ctx.table_id.schema, &self.ctx.table_id.tb);
+            .get_ignore_cols(&self.table_id.schema, &self.table_id.tb);
         let where_condition = self
-            .ctx
             .shared
             .filter
-            .get_where_condition(&self.ctx.table_id.schema, &self.ctx.table_id.tb)
+            .get_where_condition(&self.table_id.schema, &self.table_id.tb)
             .cloned()
             .unwrap_or_default();
         let sql = RdbSnapshotExtractStatement::from(tb_meta)
@@ -957,21 +863,35 @@ impl PgTableWorker {
             .with_where_condition(&where_condition)
             .build()?;
 
-        let mut rows = sqlx::query(&sql).fetch(&self.ctx.shared.conn_pool);
+        let mut rows = sqlx::query(&sql).fetch(&self.shared.conn_pool);
         while let Some(row) = rows.try_next().await? {
             let row_data = RowData::from_pg_row(&row, tb_meta, &ignore_cols);
-            self.ctx
-                .shared
+            self.shared
                 .base_extractor
-                .push_row(&mut self.extract_state, row_data, Position::None)
+                .push_row(extract_state, row_data, Position::None)
                 .await?;
         }
-        Ok(self.extract_state.monitor.counters.pushed_record_count - base_count)
+        Ok(extract_state.monitor.counters.pushed_record_count - base_count)
     }
 
-    async fn extract_by_batch(&mut self, tb_meta: &PgTbMeta) -> anyhow::Result<u64> {
+    async fn extract_table(
+        &self,
+        extract_state: &mut ExtractState,
+        tb_meta: &PgTbMeta,
+    ) -> anyhow::Result<u64> {
+        if tb_meta.basic.order_cols.is_empty() {
+            self.extract_all(extract_state, tb_meta).await
+        } else {
+            self.extract_by_batch(extract_state, tb_meta).await
+        }
+    }
+
+    async fn extract_by_batch(
+        &self,
+        extract_state: &mut ExtractState,
+        tb_meta: &PgTbMeta,
+    ) -> anyhow::Result<u64> {
         let mut resume_values = self
-            .ctx
             .get_resume_values(tb_meta, &tb_meta.basic.order_cols, false)
             .await?;
         let mut start_from_beginning = false;
@@ -982,15 +902,13 @@ impl PgTableWorker {
         let mut extracted_count = 0u64;
         let mut start_values = resume_values;
         let ignore_cols = self
-            .ctx
             .shared
             .filter
-            .get_ignore_cols(&self.ctx.table_id.schema, &self.ctx.table_id.tb);
+            .get_ignore_cols(&self.table_id.schema, &self.table_id.tb);
         let where_condition = self
-            .ctx
             .shared
             .filter
-            .get_where_condition(&self.ctx.table_id.schema, &self.ctx.table_id.tb)
+            .get_where_condition(&self.table_id.schema, &self.table_id.tb)
             .cloned()
             .unwrap_or_default();
         let sql_from_beginning = RdbSnapshotExtractStatement::from(tb_meta)
@@ -998,14 +916,14 @@ impl PgTableWorker {
             .with_order_cols(&tb_meta.basic.order_cols)
             .with_where_condition(&where_condition)
             .with_predicate_type(OrderKeyPredicateType::None)
-            .with_limit(self.ctx.shared.batch_size)
+            .with_limit(self.shared.batch_size)
             .build()?;
         let sql_from_value = RdbSnapshotExtractStatement::from(tb_meta)
             .with_ignore_cols(ignore_cols.unwrap_or(&HashSet::new()))
             .with_order_cols(&tb_meta.basic.order_cols)
             .with_where_condition(&where_condition)
             .with_predicate_type(OrderKeyPredicateType::GreaterThan)
-            .with_limit(self.ctx.shared.batch_size)
+            .with_limit(self.shared.batch_size)
             .build()?;
 
         loop {
@@ -1022,7 +940,7 @@ impl PgTableWorker {
                 query
             };
 
-            let mut rows = query.fetch(&self.ctx.shared.conn_pool);
+            let mut rows = query.fetch(&self.shared.conn_pool);
             let mut slice_count = 0usize;
 
             while let Some(row) = rows.try_next().await? {
@@ -1033,28 +951,27 @@ impl PgTableWorker {
                     } else {
                         bail!(
                             "{}.{} order col {} not found",
-                            quote!(&self.ctx.table_id.schema),
-                            quote!(&self.ctx.table_id.tb),
+                            quote!(&self.table_id.schema),
+                            quote!(&self.table_id.tb),
                             quote!(order_col),
                         );
                     }
                 }
                 extracted_count += 1;
                 slice_count += 1;
-                if extracted_count % self.ctx.shared.sample_interval != 0 {
+                if extracted_count % self.shared.sample_interval != 0 {
                     continue;
                 }
 
                 let row_data = RowData::from_pg_row(&row, tb_meta, &ignore_cols);
                 let position = tb_meta.basic.build_position(&DbType::Pg, &start_values);
-                self.ctx
-                    .shared
+                self.shared
                     .base_extractor
-                    .push_row(&mut self.extract_state, row_data, position)
+                    .push_row(extract_state, row_data, position)
                     .await?;
             }
 
-            if slice_count < self.ctx.shared.batch_size {
+            if slice_count < self.shared.batch_size {
                 break;
             }
         }
@@ -1065,29 +982,29 @@ impl PgTableWorker {
             .iter()
             .any(|col| tb_meta.basic.is_col_nullable(col))
         {
-            extracted_count +=
-                Self::extract_nulls_with(&self.ctx, &mut self.extract_state, tb_meta, &tb_meta.basic.order_cols)
-                    .await?;
+            extracted_count += self
+                .extract_nulls(extract_state, tb_meta, &tb_meta.basic.order_cols)
+                .await?;
         }
 
         Ok(extracted_count)
     }
 
-    async fn extract_nulls_with(
-        ctx: &PgTableCtx,
+    async fn extract_nulls(
+        &self,
         extract_state: &mut ExtractState,
         tb_meta: &PgTbMeta,
         order_cols: &Vec<String>,
     ) -> anyhow::Result<u64> {
         let mut extracted_count = 0u64;
-        let ignore_cols = ctx
+        let ignore_cols = self
             .shared
             .filter
-            .get_ignore_cols(&ctx.table_id.schema, &ctx.table_id.tb);
-        let where_condition = ctx
+            .get_ignore_cols(&self.table_id.schema, &self.table_id.tb);
+        let where_condition = self
             .shared
             .filter
-            .get_where_condition(&ctx.table_id.schema, &ctx.table_id.tb)
+            .get_where_condition(&self.table_id.schema, &self.table_id.tb)
             .cloned()
             .unwrap_or_default();
         let sql_for_null = RdbSnapshotExtractStatement::from(tb_meta)
@@ -1097,11 +1014,11 @@ impl PgTableWorker {
             .with_predicate_type(OrderKeyPredicateType::IsNull)
             .build()?;
 
-        let mut rows = sqlx::query(&sql_for_null).fetch(&ctx.shared.conn_pool);
+        let mut rows = sqlx::query(&sql_for_null).fetch(&self.shared.conn_pool);
         while let Some(row) = rows.try_next().await? {
             extracted_count += 1;
             let row_data = RowData::from_pg_row(&row, tb_meta, &ignore_cols);
-            ctx.shared
+            self.shared
                 .base_extractor
                 .push_row(extract_state, row_data, Position::None)
                 .await?;

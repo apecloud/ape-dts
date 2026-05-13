@@ -37,13 +37,16 @@ use dt_connector::{
             mongo_snapshot_extractor::MongoSnapshotExtractor,
         },
         mysql::{
-            mysql_cdc_extractor::MysqlCdcExtractor, mysql_check_extractor::MysqlCheckExtractor,
-            mysql_snapshot_extractor::MysqlSnapshotExtractor,
+            mysql_cdc_extractor::MysqlCdcExtractor,
+            mysql_check_extractor::MysqlCheckExtractor,
+            mysql_snapshot_extractor::{MysqlSnapshotExtractor, MysqlSnapshotShared},
             mysql_struct_extractor::MysqlStructExtractor,
         },
         pg::{
-            pg_cdc_extractor::PgCdcExtractor, pg_check_extractor::PgCheckExtractor,
-            pg_snapshot_extractor::PgSnapshotExtractor, pg_struct_extractor::PgStructExtractor,
+            pg_cdc_extractor::PgCdcExtractor,
+            pg_check_extractor::PgCheckExtractor,
+            pg_snapshot_extractor::{PgSnapshotExtractor, PgSnapshotShared},
+            pg_struct_extractor::PgStructExtractor,
         },
         redis::{
             redis_client::RedisClient, redis_psync_extractor::RedisPsyncExtractor,
@@ -72,7 +75,6 @@ impl ExtractorUtil {
         config: &TaskConfig,
         extractor_config: &ExtractorConfig,
         extractor_client: ConnClient,
-        partition_cols: Option<Arc<PartitionCols>>,
         buffer: Arc<DtQueue>,
         ctl_buffer: Arc<DtCtlQueue>,
         shut_down: Arc<AtomicBool>,
@@ -102,6 +104,7 @@ impl ExtractorUtil {
                 url,
                 connection_auth,
                 db_tbs,
+                partition_cols,
                 sample_interval,
                 parallel_size,
                 parallel_type,
@@ -124,21 +127,20 @@ impl ExtractorUtil {
                 )
                 .await?;
                 let extractor = MysqlSnapshotExtractor {
-                    conn_pool,
-                    meta_manager,
+                    shared: MysqlSnapshotShared {
+                        base_extractor,
+                        conn_pool,
+                        meta_manager,
+                        filter: Arc::new(filter),
+                        partition_cols: Arc::new(Self::parse_partition_cols(&partition_cols)?),
+                        batch_size,
+                        parallel_type,
+                        sample_interval: sample_interval as u64,
+                        recovery,
+                    },
                     db_tbs,
-                    batch_size,
-                    sample_interval: sample_interval as u64,
                     parallel_size,
-                    parallel_type,
-                    base_extractor,
                     extract_state,
-                    filter,
-                    recovery,
-                    partition_cols: partition_cols
-                        .as_ref()
-                        .map(|m| m.as_ref().clone())
-                        .unwrap_or_default(),
                 };
                 Box::new(extractor)
             }
@@ -235,6 +237,7 @@ impl ExtractorUtil {
 
             ExtractorConfig::PgSnapshot {
                 schema_tbs,
+                partition_cols,
                 sample_interval,
                 parallel_size,
                 parallel_type,
@@ -249,21 +252,20 @@ impl ExtractorUtil {
                 };
                 let meta_manager = PgMetaManager::new(conn_pool.clone()).await?;
                 let extractor = PgSnapshotExtractor {
-                    conn_pool,
-                    meta_manager,
-                    batch_size,
+                    shared: PgSnapshotShared {
+                        base_extractor,
+                        conn_pool,
+                        meta_manager,
+                        filter: Arc::new(filter),
+                        partition_cols: Arc::new(Self::parse_partition_cols(&partition_cols)?),
+                        batch_size,
+                        parallel_type,
+                        sample_interval: sample_interval as u64,
+                        recovery,
+                    },
                     parallel_size,
-                    sample_interval: sample_interval as u64,
                     schema_tbs,
-                    parallel_type,
-                    base_extractor,
                     extract_state,
-                    filter,
-                    recovery,
-                    partition_cols: partition_cols
-                        .as_ref()
-                        .map(|m| m.as_ref().clone())
-                        .unwrap_or_default(),
                 };
                 Box::new(extractor)
             }

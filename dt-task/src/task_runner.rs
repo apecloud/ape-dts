@@ -19,9 +19,7 @@ use tokio::{
 };
 
 use super::{
-    extractor_util::{ExtractorUtil, PartitionCols},
-    parallelizer_util::ParallelizerUtil,
-    sinker_util::SinkerUtil,
+    extractor_util::ExtractorUtil, parallelizer_util::ParallelizerUtil, sinker_util::SinkerUtil,
 };
 use crate::{
     create_router,
@@ -196,28 +194,12 @@ impl TaskRunner {
             ));
         }
         let (extractor_client, sinker_client) = ConnClient::from_config(&self.config).await?;
-        let enqueue_limiter = BufferLimiter::from_config(
-            Some(&self.config.extractor_basic.rate_limiter),
-            Some(&self.config.pipeline.capacity_limiter),
-        )
-        .map(Arc::new);
-        let dequeue_limiter =
-            BufferLimiter::from_config(Some(&self.config.sinker_basic.rate_limiter), None)
-                .map(Arc::new);
 
         let check_summary = self
             .config
             .checker
             .as_ref()
             .map(|_| Arc::new(AsyncMutex::new(init_task_check_summary())));
-
-        let partition_cols = match &self.config.extractor {
-            ExtractorConfig::MysqlSnapshot { partition_cols, .. }
-            | ExtractorConfig::PgSnapshot { partition_cols, .. } => Some(Arc::new(
-                ExtractorUtil::parse_partition_cols(partition_cols)?,
-            )),
-            _ => None,
-        };
 
         #[cfg(feature = "metrics")]
         self.prometheus_metrics
@@ -231,18 +213,14 @@ impl TaskRunner {
         if !task_info.no_data {
             self.clone()
                 .create_task(
-                    false,
                     task_info.extractor_config,
                     extractor_client.clone(),
-                    partition_cols,
                     sinker_client.clone(),
                     router,
                     recorder,
                     recovery,
                     check_summary.clone(),
                     checker_state_store.clone(),
-                    enqueue_limiter,
-                    dequeue_limiter,
                 )
                 .await?;
         }
@@ -271,19 +249,23 @@ impl TaskRunner {
 
     async fn create_task(
         self,
-        is_multi_task: bool,
         extractor_config: ExtractorConfig,
         extractor_client: ConnClient,
-        partition_cols: Option<Arc<PartitionCols>>,
         sinker_client: ConnClient,
         router: Arc<RdbRouter>,
         recorder: Option<Arc<dyn Recorder + Send + Sync>>,
         recovery: Option<Arc<dyn Recovery + Send + Sync>>,
         check_summary: Option<Arc<AsyncMutex<CheckSummaryLog>>>,
         checker_state_store: Option<Arc<CheckerStateStore>>,
-        enqueue_limiter: Option<Arc<BufferLimiter>>,
-        dequeue_limiter: Option<Arc<BufferLimiter>>,
     ) -> anyhow::Result<()> {
+        let enqueue_limiter = BufferLimiter::from_config(
+            Some(&self.config.extractor_basic.rate_limiter),
+            Some(&self.config.pipeline.capacity_limiter),
+        )
+        .map(Arc::new);
+        let dequeue_limiter =
+            BufferLimiter::from_config(Some(&self.config.sinker_basic.rate_limiter), None)
+                .map(Arc::new);
         let max_bytes = self.config.pipeline.capacity_limiter.buffer_memory_mb * 1024 * 1024;
         let buffer = Arc::new(DtQueue::new(
             self.config.pipeline.capacity_limiter.buffer_size,
@@ -347,7 +329,6 @@ impl TaskRunner {
             &self.config,
             &extractor_config,
             extractor_client.clone(),
-            partition_cols,
             buffer.clone(),
             ctl_buffer.clone(),
             shut_down.clone(),
@@ -443,11 +424,7 @@ impl TaskRunner {
 
         let interval_secs = self.config.pipeline.checkpoint_interval_secs;
         let single_task_flush_monitors: Vec<Arc<dyn FlushableMonitor + Send + Sync>> =
-            if is_multi_task {
-                Vec::new()
-            } else {
-                vec![self.task_monitor.clone()]
-            };
+            vec![self.task_monitor.clone()];
         let monitor_shut_down = shut_down.clone();
         let monitor_task = tokio::spawn(async move {
             TaskUtil::flush_monitors(
@@ -459,30 +436,6 @@ impl TaskRunner {
             Ok(())
         });
 
-        // finished log
-        // let (schema, tb) = match &extractor_config {
-        //     ExtractorConfig::MysqlSnapshot { db, tb, .. }
-        //     | ExtractorConfig::MongoSnapshot { db, tb, .. } => (db.to_owned(), tb.to_owned()),
-        //     ExtractorConfig::PgSnapshot { schema, tb, .. }
-        //     | ExtractorConfig::FoxlakeS3 { schema, tb, .. } => (schema.to_owned(), tb.to_owned()),
-        //     _ => (String::new(), String::new()),
-        // };
-        // if !tb.is_empty() {
-        //     let finish_position = Position::RdbSnapshotFinished {
-        //         db_type: self.config.extractor_basic.db_type.to_string(),
-        //         schema,
-        //         tb,
-        //     };
-        //     log_finished!("{}", finish_position.to_string());
-        //     self.task_monitor
-        //         .add_no_window_metrics(TaskMetricsType::FinishedProgressCount, 1);
-
-        //     if let Some(handler) = &recorder {
-        //         if let Err(e) = handler.record_position(&finish_position).await {
-        //             log_error!("failed to record position: {}, err: {}", finish_position, e);
-        //         }
-        //     }
-        // }
         let worker_result = Self::run_single_task_workers(
             extractor.clone(),
             pipeline.clone(),

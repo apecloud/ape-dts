@@ -3,10 +3,7 @@ use std::{collections::VecDeque, future::Future, sync::Arc};
 use anyhow::{anyhow, bail};
 use tokio::task::JoinSet;
 
-use dt_common::{
-    config::config_enums::RdbParallelType,
-    monitor::{monitor_task_id, task_monitor::TaskMonitorHandle},
-};
+use dt_common::monitor::{monitor_util, task_monitor::TaskMonitorHandle};
 
 use super::{
     base_extractor::ExtractState,
@@ -27,40 +24,6 @@ impl Drop for TableMonitorGuard {
 pub struct SnapshotDispatcher;
 
 impl SnapshotDispatcher {
-    pub async fn dispatch_table_work_source<TableId, Run, Fut>(
-        tables: Vec<TableId>,
-        parallel_size: usize,
-        worker_name: &'static str,
-        run: Run,
-    ) -> anyhow::Result<()>
-    where
-        TableId: Send + 'static,
-        Run: Fn(TableId) -> Fut + Send + Sync + 'static,
-        Fut: Future<Output = anyhow::Result<()>> + Send + 'static,
-    {
-        let run = Arc::new(run);
-        Self::dispatch_work_source(
-            tables.into_iter().collect::<VecDeque<_>>(),
-            parallel_size,
-            worker_name,
-            |mut tables: VecDeque<TableId>| async move {
-                let work = tables.pop_front();
-                Ok((tables, work))
-            },
-            {
-                let run = Arc::clone(&run);
-                move |table_id| {
-                    let run = Arc::clone(&run);
-                    async move { run(table_id).await }
-                }
-            },
-            |tables, _| async move { Ok(tables) },
-        )
-        .await?;
-
-        Ok(())
-    }
-
     pub async fn dispatch_work_source<
         State,
         Work,
@@ -123,28 +86,59 @@ impl SnapshotDispatcher {
         Ok(state)
     }
 
-    pub fn clone_extract_state(extract_state: &ExtractState) -> ExtractState {
-        ExtractState {
-            monitor: ExtractorMonitor {
-                monitor: extract_state.monitor.monitor.clone(),
-                default_task_id: extract_state.monitor.default_task_id.clone(),
-                count_window: extract_state.monitor.count_window,
-                time_window_secs: extract_state.monitor.time_window_secs,
-                last_flush_time: tokio::time::Instant::now(),
-                flushed_counters: ExtractorCounters::default(),
-                counters: ExtractorCounters::default(),
+    pub async fn dispatch_table_work_source<TableId, Run, Fut>(
+        tables: Vec<TableId>,
+        parallel_size: usize,
+        worker_name: &'static str,
+        run: Run,
+    ) -> anyhow::Result<()>
+    where
+        TableId: Send + 'static,
+        Run: Fn(TableId) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = anyhow::Result<()>> + Send + 'static,
+    {
+        let run = Arc::new(run);
+        Self::dispatch_work_source(
+            tables.into_iter().collect::<VecDeque<_>>(),
+            parallel_size,
+            worker_name,
+            |mut tables: VecDeque<TableId>| async move {
+                let work = tables.pop_front();
+                Ok((tables, work))
             },
-            data_marker: extract_state.data_marker.clone(),
-            time_filter: extract_state.time_filter.clone(),
-        }
+            {
+                let run = Arc::clone(&run);
+                move |table_id| {
+                    let run = Arc::clone(&run);
+                    async move { run(table_id).await }
+                }
+            },
+            |tables, _| async move { Ok(tables) },
+        )
+        .await?;
+
+        Ok(())
     }
 
-    pub async fn derive_table_extract_state(
+    pub fn fork_extract_state(extract_state: &ExtractState) -> ExtractState {
+        let monitor = ExtractorMonitor {
+            monitor: extract_state.monitor.monitor.clone(),
+            default_task_id: extract_state.monitor.default_task_id.clone(),
+            count_window: extract_state.monitor.count_window,
+            time_window_secs: extract_state.monitor.time_window_secs,
+            last_flush_time: tokio::time::Instant::now(),
+            flushed_counters: ExtractorCounters::default(),
+            counters: ExtractorCounters::default(),
+        };
+        extract_state.derive_for_table(monitor, extract_state.data_marker.clone())
+    }
+
+    pub async fn fork_table_extract_state(
         extract_state: &ExtractState,
         schema: &str,
         tb: &str,
     ) -> (ExtractState, TableMonitorGuard) {
-        let task_id = monitor_task_id::from_schema_tb(schema, tb);
+        let task_id = monitor_util::from_schema_tb(schema, tb);
         let monitor_handle = extract_state.monitor.monitor.clone();
         let monitor = monitor_handle.build_monitor("extractor", &task_id);
         monitor_handle.register_monitor(&task_id, monitor);
@@ -153,10 +147,8 @@ impl SnapshotDispatcher {
             task_id: task_id.clone(),
         };
         let extractor_monitor = ExtractorMonitor::new(monitor_handle, task_id).await;
-        let data_marker = extract_state.data_marker.clone();
-        let table_state = extract_state
-            .derive_for_table(extractor_monitor, data_marker)
-            .await;
+        let table_state =
+            extract_state.derive_for_table(extractor_monitor, extract_state.data_marker.clone());
 
         (table_state, guard)
     }

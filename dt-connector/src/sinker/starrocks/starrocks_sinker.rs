@@ -157,11 +157,11 @@ impl StarRocksSinker {
         let start_time = Instant::now();
         let response = self.http_client.execute(request).await?;
         rts.push((start_time.elapsed().as_millis() as u64, 1));
-        let task_id = self
-            .base_sinker
-            .task_id_for_schema_tb(&db, &tb);
+        let task_id = self.base_sinker.task_id_for_schema_tb(&db, &tb);
         self.base_sinker.ensure_monitor_for(&task_id);
-        self.base_sinker.update_monitor_rt_for(&task_id, &rts).await?;
+        self.base_sinker
+            .update_monitor_rt_for(&task_id, &rts)
+            .await?;
 
         Self::check_response(response).await?;
 

@@ -321,6 +321,7 @@ mod tests {
         let mut row_data = RowData::new(
             "db".to_string(),
             "tb".to_string(),
+            0,
             RowType::Insert,
             None,
             Some(HashMap::from([(

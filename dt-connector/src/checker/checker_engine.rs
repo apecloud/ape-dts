@@ -17,7 +17,7 @@ use dt_common::meta::{
 };
 use dt_common::{
     log_diff, log_miss, log_sql, log_warn,
-    monitor::{counter_type::CounterType, monitor_task_id, task_metrics::TaskMetricsType},
+    monitor::{counter_type::CounterType, monitor_util, task_metrics::TaskMetricsType},
     utils::limit_queue::LimitedQueue,
 };
 
@@ -406,7 +406,10 @@ impl<C: Checker> DataChecker<C> {
         self.ctx.add_checker_metric(task_metric, 1);
         let task_id = self.task_id_for_snapshot_entry(entry);
         self.ctx.monitor.ensure_monitor(&task_id);
-        self.ctx.monitor.add_counter(&task_id, counter_type, 1).await;
+        self.ctx
+            .monitor
+            .add_counter(&task_id, counter_type, 1)
+            .await;
     }
 
     /// Updates cumulative Prometheus summary counters, which differ from point-in-time unresolved snapshot counts.
@@ -800,7 +803,7 @@ impl<C: Checker> DataChecker<C> {
             if monitor_task_id.is_none() {
                 monitor_task_id = rows
                     .first()
-                    .map(|row| monitor_task_id::from_row_data(row))
+                    .map(|row| monitor_util::from_row_data(row))
                     .filter(|id| !id.is_empty());
             }
             let fetch_result = self.checker.fetch(&rows).await?;

@@ -104,7 +104,9 @@ impl ClickhouseSinker {
         let task_id = self
             .base_sinker
             .task_id_for_rows(&data[start_index..start_index + batch_size]);
-        self.base_sinker.update_monitor_rt_for(&task_id, &rts).await?;
+        self.base_sinker
+            .update_monitor_rt_for(&task_id, &rts)
+            .await?;
 
         Self::check_response(response).await?;
 

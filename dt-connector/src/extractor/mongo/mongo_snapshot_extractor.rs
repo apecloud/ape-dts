@@ -86,7 +86,7 @@ impl MongoSnapshotExtractor {
     fn clone_for_dispatch(&self) -> Self {
         Self {
             base_extractor: self.base_extractor.clone(),
-            extract_state: SnapshotDispatcher::clone_extract_state(&self.extract_state),
+            extract_state: SnapshotDispatcher::fork_extract_state(&self.extract_state),
             db_tbs: self.db_tbs.clone(),
             parallel_type: self.parallel_type.clone(),
             parallel_size: self.parallel_size,
@@ -97,7 +97,7 @@ impl MongoSnapshotExtractor {
 
     async fn run_table_worker(&self, db: String, tb: String) -> anyhow::Result<()> {
         let (mut extract_state, _guard) =
-            SnapshotDispatcher::derive_table_extract_state(&self.extract_state, &db, &tb).await;
+            SnapshotDispatcher::fork_table_extract_state(&self.extract_state, &db, &tb).await;
         let base_extractor = self.base_extractor.clone();
 
         log_info!("MongoSnapshotExtractor starts, schema: {}, tb: {}", db, tb);
