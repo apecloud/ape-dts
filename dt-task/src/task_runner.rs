@@ -1065,8 +1065,6 @@ impl TaskRunner {
                 max_retries,
                 is_cdc: is_cdc_task,
                 sample_rate: checker_sample_rate,
-                sample_before_fetch: checker_sample_rate
-                    .is_some_and(|rate| rate < 100 && !is_cdc_task),
                 summary: CheckSummaryLog::default(),
                 global_summary: check_summary.clone(),
                 check_log_dir: check_log_dir_base.clone(),
@@ -1593,7 +1591,6 @@ impl TaskRunner {
                         ExtractorConfig::MysqlSnapshot {
                             url,
                             connection_auth,
-                            sample_rate,
                             parallel_size,
                             batch_size,
                             ..
@@ -1602,7 +1599,6 @@ impl TaskRunner {
                             connection_auth: connection_auth.clone(),
                             db: schema.clone(),
                             tb: tb.clone(),
-                            sample_rate: *sample_rate,
                             parallel_size: *parallel_size,
                             batch_size: *batch_size,
                             partition_cols: String::new(),
@@ -1611,7 +1607,6 @@ impl TaskRunner {
                         ExtractorConfig::PgSnapshot {
                             url,
                             connection_auth,
-                            sample_rate,
                             parallel_size,
                             batch_size,
                             ..
@@ -1620,7 +1615,6 @@ impl TaskRunner {
                             connection_auth: connection_auth.clone(),
                             schema: schema.clone(),
                             tb: tb.clone(),
-                            sample_rate: *sample_rate,
                             parallel_size: *parallel_size,
                             batch_size: *batch_size,
                             partition_cols: String::new(),

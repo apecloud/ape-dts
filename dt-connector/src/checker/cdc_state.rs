@@ -156,11 +156,9 @@ impl<C: Checker> DataChecker<C> {
                     table.miss_count += 1;
                     total_miss += 1;
                 }
-            } else {
-                if diff_buf_builder.push_json(&entry.log) {
-                    table.diff_count += 1;
-                    total_diff += 1;
-                }
+            } else if diff_buf_builder.push_json(&entry.log) {
+                table.diff_count += 1;
+                total_diff += 1;
             }
             if let Some(sql) = &entry.revise_sql {
                 total_sql += 1;
@@ -313,11 +311,12 @@ impl<C: Checker> DataChecker<C> {
         let mut checker = source_checker.lock().await;
         let mut rows = Vec::new();
         for group in grouped.into_values() {
+            let first_row = group.first().context("checker group is empty")?;
+            let tb_meta = checker.fetch_meta(first_row).await?;
             rows.extend(
                 checker
-                    .fetch(&group)
+                    .fetch(tb_meta, &group)
                     .await?
-                    .dst_rows
                     .into_iter()
                     .map(|row| forward_router.route_row(row)),
             );
@@ -375,8 +374,9 @@ impl<C: Checker> DataChecker<C> {
                     .map(RecheckKey::to_lookup_row)
                     .collect::<Vec<_>>();
                 let lookup_refs = lookup_rows.iter().collect::<Vec<_>>();
-                let fetch_result = self.checker.fetch(&lookup_refs).await?;
-                let tb_meta = fetch_result.tb_meta;
+                let first_row = lookup_refs.first().context("checker group is empty")?;
+                let tb_meta = self.checker.fetch_meta(first_row).await?;
+                let target_rows = self.checker.fetch(tb_meta.clone(), &lookup_refs).await?;
                 let source_rows = self.refetch_source_rows(&keys).await?;
                 let mut source_map = HashMap::new();
                 for row in source_rows {
@@ -385,7 +385,7 @@ impl<C: Checker> DataChecker<C> {
                     }
                 }
                 let mut target_map = HashMap::new();
-                for row in fetch_result.dst_rows {
+                for row in target_rows {
                     if let Some(row_key) = Self::lookup_match_key(&row, tb_meta.basic())? {
                         target_map.insert(row_key, row);
                     }
@@ -545,7 +545,7 @@ impl<C: Checker> DataChecker<C> {
 
 #[cfg(test)]
 mod tests {
-    use super::super::{CheckContext, Checker, CheckerIo, CheckerTbMeta, DataChecker, FetchResult};
+    use super::super::{CheckContext, Checker, CheckerIo, CheckerTbMeta, DataChecker};
     use super::*;
     use crate::checker::check_log::{CheckSummaryLog, CheckTableSummaryLog, DiffColValue};
     use crate::rdb_router::RdbRouter;
@@ -572,11 +572,12 @@ mod tests {
             Ok(self.tb_meta.clone())
         }
 
-        async fn fetch(&mut self, _src_rows: &[&RowData]) -> anyhow::Result<FetchResult> {
-            Ok(FetchResult {
-                tb_meta: self.tb_meta.clone(),
-                dst_rows: self.rows.clone(),
-            })
+        async fn fetch(
+            &mut self,
+            _tb_meta: Arc<CheckerTbMeta>,
+            _src_rows: &[&RowData],
+        ) -> anyhow::Result<Vec<RowData>> {
+            Ok(self.rows.clone())
         }
     }
 
@@ -632,7 +633,6 @@ mod tests {
                 global_summary: None,
                 batch_size: 1,
                 sample_rate: None,
-                sample_before_fetch: false,
                 retry_interval_secs: 0,
                 max_retries: 0,
                 is_cdc: true,

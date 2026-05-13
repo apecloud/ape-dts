@@ -193,7 +193,6 @@ pub struct CheckContext {
     pub global_summary: Option<Arc<Mutex<CheckSummaryLog>>>,
     pub batch_size: usize,
     pub sample_rate: Option<u8>,
-    pub sample_before_fetch: bool,
     pub retry_interval_secs: u64,
     pub max_retries: u32,
     pub is_cdc: bool,
@@ -272,15 +271,14 @@ impl CheckerStoreKey {
     }
 }
 
-pub struct FetchResult {
-    pub tb_meta: Arc<CheckerTbMeta>,
-    pub dst_rows: Vec<RowData>,
-}
-
 #[async_trait]
 pub trait Checker: Send + Sync + 'static {
     async fn fetch_meta(&mut self, src_row: &RowData) -> anyhow::Result<Arc<CheckerTbMeta>>;
-    async fn fetch(&mut self, src_rows: &[&RowData]) -> anyhow::Result<FetchResult>;
+    async fn fetch(
+        &mut self,
+        tb_meta: Arc<CheckerTbMeta>,
+        src_rows: &[&RowData],
+    ) -> anyhow::Result<Vec<RowData>>;
     async fn invalidate_meta_cache(&mut self, _data: &[DdlData]) -> anyhow::Result<()> {
         Ok(())
     }
@@ -882,18 +880,6 @@ impl<C: Checker> DataChecker<C> {
     }
 }
 
-pub fn has_null_key(row_data: &RowData, id_cols: &[String]) -> bool {
-    let col_values = match row_data.row_type {
-        RowType::Delete => row_data.require_before().ok(),
-        _ => row_data.require_after().ok(),
-    };
-    col_values.is_some_and(|vals| {
-        id_cols
-            .iter()
-            .any(|col| matches!(vals.get(col), Some(ColValue::None) | None))
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -916,10 +902,19 @@ mod tests {
     #[async_trait]
     impl Checker for BlockingFetchChecker {
         async fn fetch_meta(&mut self, _src_row: &RowData) -> anyhow::Result<Arc<CheckerTbMeta>> {
-            unreachable!("ut should not call fetch_meta")
+            Ok(Arc::new(CheckerTbMeta::Mongo(RdbTbMeta {
+                schema: "s1".to_string(),
+                tb: "t1".to_string(),
+                id_cols: vec!["id".to_string()],
+                ..Default::default()
+            })))
         }
 
-        async fn fetch(&mut self, _src_rows: &[&RowData]) -> anyhow::Result<FetchResult> {
+        async fn fetch(
+            &mut self,
+            _tb_meta: Arc<CheckerTbMeta>,
+            _src_rows: &[&RowData],
+        ) -> anyhow::Result<Vec<RowData>> {
             let _ = self.fetch_started.send(());
             self.fetch_gate.notified().await;
             Err(anyhow::anyhow!("unit-test fetch failure"))
@@ -944,7 +939,6 @@ mod tests {
             global_summary: None,
             batch_size: 1,
             sample_rate: None,
-            sample_before_fetch: false,
             retry_interval_secs: 0,
             max_retries: 0,
             is_cdc: false,

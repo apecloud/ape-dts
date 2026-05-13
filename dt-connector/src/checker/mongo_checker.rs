@@ -9,7 +9,7 @@ use mongodb::{
 };
 use serde_json::Value as JsonValue;
 
-use crate::checker::base_checker::{Checker, CheckerTbMeta, FetchResult, CHECKER_MAX_QUERY_BATCH};
+use crate::checker::base_checker::{Checker, CheckerTbMeta, CHECKER_MAX_QUERY_BATCH};
 use dt_common::meta::{
     col_value::ColValue,
     mongo::{mongo_constant::MongoConstants, mongo_key::MongoKey},
@@ -40,12 +40,11 @@ impl Checker for MongoChecker {
         Ok(Arc::new(CheckerTbMeta::Mongo(meta)))
     }
 
-    async fn fetch(&mut self, src_rows: &[&RowData]) -> anyhow::Result<FetchResult> {
-        let first_row = src_rows
-            .first()
-            .context("fetch called with empty src rows")?;
-
-        let tb_meta = self.fetch_meta(first_row).await?;
+    async fn fetch(
+        &mut self,
+        tb_meta: Arc<CheckerTbMeta>,
+        src_rows: &[&RowData],
+    ) -> anyhow::Result<Vec<RowData>> {
         let basic_meta = tb_meta.basic();
 
         let mut ids = Vec::with_capacity(src_rows.len());
@@ -70,10 +69,7 @@ impl Checker for MongoChecker {
         }
 
         if ids.is_empty() {
-            return Ok(FetchResult {
-                tb_meta,
-                dst_rows: Vec::new(),
-            });
+            return Ok(Vec::new());
         }
 
         let mut dst_row_data_vec = Vec::new();
@@ -102,10 +98,7 @@ impl Checker for MongoChecker {
             }
         }
 
-        Ok(FetchResult {
-            tb_meta,
-            dst_rows: dst_row_data_vec,
-        })
+        Ok(dst_row_data_vec)
     }
 }
 

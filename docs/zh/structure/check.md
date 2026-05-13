@@ -11,9 +11,9 @@
 
 # 校验结果
 
-结构校验会以 JSON Lines 输出 `miss.log`、`diff.log`、`summary.log`；当
-`output_revise_sql=true` 时，还会额外输出 `sql.log`。`sql.log` 是纯 SQL 文件，每行一条
-语句，不包含 JSON 包装，也不携带 schema/table/id metadata。
+结构校验会以 JSON Lines 输出 `miss.log`、`diff.log`；`summary.log` 只包含一行总体 summary
+JSON。当 `output_revise_sql=true` 时，还会额外输出 `sql.log`。`sql.log` 是纯 SQL 文件，
+每行一条语句，不包含 JSON 包装，也不携带 schema/table/id metadata。
 
 `miss.log` 和 `diff.log` 均采用相同的 JSON 结构（`StructCheckLog`）。`src_sql` 与
 `dst_sql` 是可选字段，仅在对应侧存在结构定义时输出：

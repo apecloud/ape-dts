@@ -132,7 +132,7 @@ impl TaskConfig {
         let pipeline = Self::load_pipeline_config(&loader);
         let runtime = Self::load_runtime_config(&loader)?;
         let (sinker_basic, sinker) = Self::load_sinker_config(&loader)?;
-        let (extractor_basic, mut extractor) = Self::load_extractor_config(&loader, &pipeline)?;
+        let (extractor_basic, extractor) = Self::load_extractor_config(&loader, &pipeline)?;
         let filter = Self::load_filter_config(&loader)?;
         let router = Self::load_router_config(&loader)?;
         let parallelizer = Self::load_parallelizer_config(&loader)?;
@@ -170,6 +170,13 @@ impl TaskConfig {
                 bail!(Error::ConfigError(
                     "config [checker] only supports [pipeline] pipeline_type=basic".into()
                 ));
+            }
+            if checker_cfg.check_log_s3 && !matches!(extractor_basic.extract_type, ExtractType::Cdc)
+            {
+                bail!(Error::ConfigError(format!(
+                    "config [checker].{} only supports inline cdc check",
+                    CHECK_LOG_S3
+                )));
             }
             if matches!(
                 Self::check_log_mode(&extractor_basic.extract_type, &sinker_basic.sink_type, true),
@@ -224,24 +231,6 @@ impl TaskConfig {
                     Error::ConfigError(message)
                 })?;
                 Self::validate_checker_target_config(&loader, task_type.is_inline_check())?;
-                if checker_cfg.check_log_s3 && !task_type.is_cdc_inline_check() {
-                    bail!(Error::ConfigError(format!(
-                        "config [checker].{} only supports inline cdc check",
-                        CHECK_LOG_S3
-                    )));
-                }
-                if matches!(
-                    task_type,
-                    TaskType {
-                        kind: TaskKind::Snapshot,
-                        check: Some(CheckMode::Standalone),
-                    }
-                ) {
-                    Self::apply_standalone_snapshot_sample_rate(
-                        &mut extractor,
-                        checker_cfg.sample_rate,
-                    );
-                }
             }
         }
         let resumer =
@@ -448,23 +437,6 @@ impl TaskConfig {
         Some(TaskType::new(kind, check))
     }
 
-    fn apply_standalone_snapshot_sample_rate(
-        extractor: &mut ExtractorConfig,
-        sample_rate: Option<u8>,
-    ) {
-        match extractor {
-            ExtractorConfig::MysqlSnapshot {
-                sample_rate: rate, ..
-            }
-            | ExtractorConfig::PgSnapshot {
-                sample_rate: rate, ..
-            } => {
-                *rate = sample_rate;
-            }
-            _ => {}
-        }
-    }
-
     fn load_global_config(
         loader: &IniLoader,
         extractor_basic: &BasicExtractorConfig,
@@ -531,7 +503,6 @@ impl TaskConfig {
                     connection_auth,
                     db: String::new(),
                     tb: String::new(),
-                    sample_rate: None,
                     parallel_size: loader.get_with_default(EXTRACTOR, PARALLEL_SIZE, 1),
                     batch_size,
                     partition_cols: loader.get_optional(EXTRACTOR, PARTITION_COLS),
@@ -618,7 +589,6 @@ impl TaskConfig {
                     connection_auth,
                     schema: String::new(),
                     tb: String::new(),
-                    sample_rate: None,
                     parallel_size: loader.get_with_default(EXTRACTOR, PARALLEL_SIZE, 1),
                     batch_size,
                     partition_cols: loader.get_optional(EXTRACTOR, PARTITION_COLS),
@@ -1594,6 +1564,38 @@ check_log_s3=true
 s3_bucket=ape-dts
 "#,
         ));
+        let result = TaskConfig::new(config_path.to_str().unwrap());
+        fs::remove_file(config_path).unwrap();
+
+        match result {
+            Err(err) => assert_eq!(
+                err.to_string(),
+                "config error: config [checker].check_log_s3 only supports inline cdc check"
+            ),
+            Ok(_) => panic!("expected check_log_s3 validation error"),
+        }
+    }
+
+    #[test]
+    fn check_log_review_rejects_s3_output_config() {
+        let config_path = write_temp_task_config(
+            r#"[extractor]
+db_type=mysql
+extract_type=check_log
+url=mysql://127.0.0.1:3306
+check_log_dir=/tmp/ape-dts-check-log
+
+[checker]
+enable=true
+db_type=mysql
+url=mysql://127.0.0.1:3307
+check_log_s3=true
+s3_bucket=ape-dts
+
+[parallelizer]
+parallel_type=rdb_merge
+"#,
+        );
         let result = TaskConfig::new(config_path.to_str().unwrap());
         fs::remove_file(config_path).unwrap();
 

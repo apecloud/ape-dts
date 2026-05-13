@@ -73,51 +73,59 @@ impl CheckUtil {
     }
 
     fn validate_summary_logs(
-        expect_summary_logs: HashSet<String>,
-        actual_summary_logs: HashSet<String>,
+        expect_summary_logs: Vec<String>,
+        actual_summary_logs: Vec<String>,
     ) -> anyhow::Result<()> {
         // summary log contains time, so we can't compare it directly
         // but we can compare the count and summary fields
-        assert_eq!(expect_summary_logs.len(), actual_summary_logs.len());
+        assert_eq!(
+            expect_summary_logs.len(),
+            1,
+            "expect summary.log must contain exactly one JSON line"
+        );
+        assert_eq!(
+            actual_summary_logs.len(),
+            1,
+            "actual summary.log must contain exactly one JSON line"
+        );
 
-        if actual_summary_logs.is_empty() {
-            return Ok(());
-        }
-
-        let mut expect_summaries = Vec::new();
-        for log in expect_summary_logs {
-            let value: Value = serde_json::from_str(&log).map_err(|e| {
-                anyhow::anyhow!("Failed to parse expect summary log: {}, error: {}", log, e)
+        let expect_log = &expect_summary_logs[0];
+        let expect_value: Value = serde_json::from_str(expect_log).map_err(|e| {
+            anyhow::anyhow!(
+                "Failed to parse expect summary log: {}, error: {}",
+                expect_log,
+                e
+            )
+        })?;
+        let expect: dt_connector::checker::check_log::CheckSummaryLog =
+            serde_json::from_value(expect_value.clone()).map_err(|e| {
+                anyhow::anyhow!(
+                    "Failed to parse expect summary log: {}, error: {}",
+                    expect_log,
+                    e
+                )
             })?;
-            let summary: dt_connector::checker::check_log::CheckSummaryLog =
-                serde_json::from_value(value.clone()).map_err(|e| {
-                    anyhow::anyhow!("Failed to parse expect summary log: {}, error: {}", log, e)
-                })?;
-            expect_summaries.push((summary, value));
-        }
 
-        let mut actual_summaries = Vec::new();
-        for log in actual_summary_logs {
-            let summary: dt_connector::checker::check_log::CheckSummaryLog =
-                serde_json::from_str(&log).map_err(|e| {
-                    anyhow::anyhow!("Failed to parse actual summary log: {}, error: {}", log, e)
-                })?;
-            actual_summaries.push(summary);
-        }
+        let actual_log = &actual_summary_logs[0];
+        let actual: dt_connector::checker::check_log::CheckSummaryLog =
+            serde_json::from_str(actual_log).map_err(|e| {
+                anyhow::anyhow!(
+                    "Failed to parse actual summary log: {}, error: {}",
+                    actual_log,
+                    e
+                )
+            })?;
 
-        for ((expect, expect_value), actual) in expect_summaries.iter().zip(actual_summaries.iter())
-        {
-            assert_eq!(
-                expect.is_consistent, actual.is_consistent,
-                "is_consistent mismatch"
-            );
-            assert_eq!(expect.miss_count, actual.miss_count, "miss_count mismatch");
-            assert_eq!(expect.diff_count, actual.diff_count, "diff_count mismatch");
-            assert_eq!(expect.skip_count, actual.skip_count, "skip_count mismatch");
-            assert_eq!(expect.sql_count, actual.sql_count, "sql_count mismatch");
-            assert!(!actual.tables.is_empty(), "actual summary tables is empty");
-            Self::validate_summary_tables(expect_value, actual);
-        }
+        assert_eq!(
+            expect.is_consistent, actual.is_consistent,
+            "is_consistent mismatch"
+        );
+        assert_eq!(expect.miss_count, actual.miss_count, "miss_count mismatch");
+        assert_eq!(expect.diff_count, actual.diff_count, "diff_count mismatch");
+        assert_eq!(expect.skip_count, actual.skip_count, "skip_count mismatch");
+        assert_eq!(expect.sql_count, actual.sql_count, "sql_count mismatch");
+        assert!(!actual.tables.is_empty(), "actual summary tables is empty");
+        Self::validate_summary_tables(&expect_value, &actual);
         Ok(())
     }
 
@@ -129,6 +137,13 @@ impl CheckUtil {
             panic!("expect summary tables is missing");
         };
         assert!(!expect_tables.is_empty(), "expect summary tables is empty");
+        assert_eq!(
+            expect_tables.len(),
+            actual.tables.len(),
+            "summary table count mismatch"
+        );
+
+        let mut matched_actual = vec![false; actual.tables.len()];
         for expect_table in expect_tables {
             let schema = expect_table
                 .get("schema")
@@ -140,49 +155,50 @@ impl CheckUtil {
                 .expect("expect summary table tb is missing");
             let target_schema = expect_table.get("target_schema").and_then(Value::as_str);
             let target_tb = expect_table.get("target_tb").and_then(Value::as_str);
-            let actual_table = actual
+            let (actual_index, actual_table) = actual
                 .tables
                 .iter()
-                .find(|actual_table| {
-                    actual_table.schema == schema
+                .enumerate()
+                .find(|(index, actual_table)| {
+                    !matched_actual[*index]
+                        && actual_table.schema == schema
                         && actual_table.tb == tb
                         && actual_table.target_schema.as_deref() == target_schema
                         && actual_table.target_tb.as_deref() == target_tb
                 })
                 .unwrap_or_else(|| panic!("summary table not found: {}.{}", schema, tb));
+            matched_actual[actual_index] = true;
 
-            Self::validate_optional_summary_table_count(
+            Self::validate_summary_table_count(
                 expect_table,
                 "checked_count",
                 actual_table.checked_count,
             );
-            Self::validate_optional_summary_table_count(
-                expect_table,
-                "miss_count",
-                actual_table.miss_count,
-            );
-            Self::validate_optional_summary_table_count(
-                expect_table,
-                "diff_count",
-                actual_table.diff_count,
-            );
-            Self::validate_optional_summary_table_count(
-                expect_table,
-                "skip_count",
-                actual_table.skip_count,
-            );
+            Self::validate_summary_table_count(expect_table, "miss_count", actual_table.miss_count);
+            Self::validate_summary_table_count(expect_table, "diff_count", actual_table.diff_count);
+            Self::validate_summary_table_count(expect_table, "skip_count", actual_table.skip_count);
         }
+        assert!(
+            matched_actual.iter().all(|matched| *matched),
+            "actual summary contains unexpected table entries"
+        );
     }
 
-    fn validate_optional_summary_table_count(expect_table: &Value, field: &str, actual: usize) {
-        if let Some(expect) = expect_table.get(field) {
-            assert_eq!(
-                expect.as_u64(),
-                Some(actual as u64),
-                "summary table {} mismatch",
-                field
-            );
-        }
+    fn validate_summary_table_count(expect_table: &Value, field: &str, actual: usize) {
+        let expect = expect_table
+            .get(field)
+            .map(|value| {
+                value
+                    .as_u64()
+                    .unwrap_or_else(|| panic!("summary table {} is not a number", field))
+            })
+            .unwrap_or(0);
+        assert_eq!(expect, actual as u64, "summary table {} mismatch", field);
+    }
+
+    #[cfg(test)]
+    fn parse_summary(log: &str) -> dt_connector::checker::check_log::CheckSummaryLog {
+        serde_json::from_str(log).expect("summary log should parse")
     }
 
     pub fn clear_check_log(dst_check_log_dir: &str) {
@@ -237,7 +253,7 @@ impl CheckUtil {
     ) -> (
         HashSet<String>,
         HashSet<String>,
-        HashSet<String>,
+        Vec<String>,
         HashSet<String>,
     ) {
         let miss_log_file = format!("{}/miss.log", log_dir);
@@ -247,7 +263,7 @@ impl CheckUtil {
 
         let mut miss_logs = HashSet::new();
         let mut diff_logs = HashSet::new();
-        let mut summary_logs = HashSet::new();
+        let mut summary_logs = Vec::new();
         let mut sql_logs = HashSet::new();
 
         for log in BaseTestRunner::load_file(&miss_log_file) {
@@ -257,7 +273,7 @@ impl CheckUtil {
             diff_logs.insert(Self::normalize_log(&diff_log_file, &log));
         }
         for log in BaseTestRunner::load_file(&summary_log_file) {
-            summary_logs.insert(log);
+            summary_logs.push(log);
         }
         for log in BaseTestRunner::load_file(&sql_log_file) {
             sql_logs.insert(log);
@@ -279,5 +295,111 @@ impl CheckUtil {
                 file, log, e
             )
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::CheckUtil;
+    use serde_json::json;
+
+    fn summary_log(diff_count: usize) -> String {
+        format!(
+            r#"{{"is_consistent":false,"diff_count":{},"tables":[{{"schema":"s1","tb":"t1","diff_count":{}}}]}}"#,
+            diff_count, diff_count
+        )
+    }
+
+    #[test]
+    fn summary_log_validation_accepts_single_summary_line() {
+        CheckUtil::validate_summary_logs(vec![summary_log(1)], vec![summary_log(1)]).unwrap();
+    }
+
+    #[test]
+    #[should_panic(expected = "expect summary.log must contain exactly one JSON line")]
+    fn summary_log_validation_rejects_missing_expected_summary() {
+        CheckUtil::validate_summary_logs(Vec::new(), vec![summary_log(1)]).unwrap();
+    }
+
+    #[test]
+    #[should_panic(expected = "actual summary.log must contain exactly one JSON line")]
+    fn summary_log_validation_rejects_missing_actual_summary() {
+        CheckUtil::validate_summary_logs(vec![summary_log(1)], Vec::new()).unwrap();
+    }
+
+    #[test]
+    #[should_panic(expected = "expect summary.log must contain exactly one JSON line")]
+    fn summary_log_validation_rejects_multiple_expected_summaries() {
+        CheckUtil::validate_summary_logs(
+            vec![summary_log(1), summary_log(2)],
+            vec![summary_log(1)],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    #[should_panic(expected = "actual summary.log must contain exactly one JSON line")]
+    fn summary_log_validation_rejects_multiple_actual_summaries() {
+        CheckUtil::validate_summary_logs(
+            vec![summary_log(1)],
+            vec![summary_log(1), summary_log(2)],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn summary_table_missing_expected_counts_are_zero() {
+        let expect = json!({
+            "tables": [
+                {
+                    "schema": "s1",
+                    "tb": "t1",
+                    "diff_count": 1
+                }
+            ]
+        });
+        let actual = CheckUtil::parse_summary(
+            r#"{"is_consistent":false,"diff_count":1,"tables":[{"schema":"s1","tb":"t1","diff_count":1}]}"#,
+        );
+
+        CheckUtil::validate_summary_tables(&expect, &actual);
+    }
+
+    #[test]
+    #[should_panic(expected = "summary table count mismatch")]
+    fn summary_table_validation_rejects_extra_actual_tables() {
+        let expect = json!({
+            "tables": [
+                {
+                    "schema": "s1",
+                    "tb": "t1",
+                    "diff_count": 1
+                }
+            ]
+        });
+        let actual = CheckUtil::parse_summary(
+            r#"{"is_consistent":false,"diff_count":1,"tables":[{"schema":"s1","tb":"t1","diff_count":1},{"schema":"s2","tb":"t2","miss_count":1}]}"#,
+        );
+
+        CheckUtil::validate_summary_tables(&expect, &actual);
+    }
+
+    #[test]
+    #[should_panic(expected = "summary table miss_count mismatch")]
+    fn summary_table_validation_treats_omitted_expected_count_as_zero() {
+        let expect = json!({
+            "tables": [
+                {
+                    "schema": "s1",
+                    "tb": "t1",
+                    "diff_count": 1
+                }
+            ]
+        });
+        let actual = CheckUtil::parse_summary(
+            r#"{"is_consistent":false,"diff_count":1,"tables":[{"schema":"s1","tb":"t1","miss_count":1,"diff_count":1}]}"#,
+        );
+
+        CheckUtil::validate_summary_tables(&expect, &actual);
     }
 }
