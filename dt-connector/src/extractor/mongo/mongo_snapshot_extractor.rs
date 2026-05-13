@@ -29,7 +29,7 @@ pub struct MongoSnapshotExtractor {
     pub db: String,
     pub tb: String,
     pub mongo_client: Client,
-    pub source_sample_rate: Option<u8>,
+    pub sample_rate: Option<u8>,
     pub recovery: Option<Arc<dyn Recovery + Send + Sync>>,
 }
 
@@ -100,7 +100,7 @@ impl MongoSnapshotExtractor {
                 e
             })?;
             extracted_count += 1;
-            if !Self::should_sample_row(self.source_sample_rate, extracted_count) {
+            if !Self::should_sample_row(self.sample_rate, extracted_count) {
                 continue;
             }
 

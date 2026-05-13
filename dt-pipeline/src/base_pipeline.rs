@@ -245,8 +245,8 @@ impl BasePipeline {
             }
             // cdc+check also needs refreshed table metadata after sink ddl changes the target schema
             if let Some(checker) = &self.checker {
-                if let Err(err) = checker.invalidate_meta_cache(data.clone()).await {
-                    log_warn!("checker invalidate_meta_cache failed: {}", err);
+                if let Err(err) = checker.refresh_meta(data.clone()).await {
+                    log_warn!("checker refresh_meta failed: {}", err);
                 }
             }
             self.monitor

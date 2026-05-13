@@ -340,7 +340,7 @@ impl<C: Checker> DataChecker<C> {
                         row.schema,
                         row.tb
                     );
-                    self.ctx.record_table_skipped(row, 1);
+                    self.ctx.record_row_table_counts(row, 0, 1);
                     self.ctx.summary.skip_count += 1;
                     self.snapshot_dirty = true;
                 }
@@ -354,7 +354,7 @@ impl<C: Checker> DataChecker<C> {
                         row.tb,
                         e
                     );
-                    self.ctx.record_table_skipped(row, 1);
+                    self.ctx.record_row_table_counts(row, 0, 1);
                     self.ctx.summary.skip_count += 1;
                     self.snapshot_dirty = true;
                 }
@@ -453,7 +453,7 @@ impl<C: Checker> DataChecker<C> {
                 summary.sql_count = Some(summary.sql_count.unwrap_or_default() + 1);
             }
         }
-        self.ctx.record_table_entry(entry);
+        self.ctx.record_entry_table_counts(entry);
 
         self.add_entry_metrics(entry).await;
     }
@@ -752,7 +752,7 @@ impl<C: Checker> DataChecker<C> {
                 item.row.tb
             );
             self.ctx.summary.skip_count += 1;
-            self.ctx.record_table_skipped(&item.row, 1);
+            self.ctx.record_row_table_counts(&item.row, 0, 1);
             self.snapshot_dirty = true;
             return Ok(None);
         };
@@ -855,7 +855,8 @@ impl<C: Checker> DataChecker<C> {
             let (checked_count, table_retry_rows) = self
                 .check_rows(&prepared_rows, dst_row_data_map, tb_meta.as_ref())
                 .await?;
-            self.ctx.record_table_checked(first_row, checked_count);
+            self.ctx
+                .record_row_table_counts(first_row, checked_count, 0);
             total_checked += checked_count;
             retry_rows.extend(table_retry_rows);
         }

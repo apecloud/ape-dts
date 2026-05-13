@@ -68,7 +68,7 @@ const JSON_PREFIX: &str = "json:";
 pub struct ExtractorUtil {}
 
 impl ExtractorUtil {
-    fn source_sample_rate(config: &TaskConfig, extractor_config: &ExtractorConfig) -> Option<u8> {
+    fn sample_rate(config: &TaskConfig, extractor_config: &ExtractorConfig) -> Option<u8> {
         let standalone_snapshot_check = config.task_type().is_some_and(|task_type| {
             matches!(task_type.kind, TaskKind::Snapshot)
                 && matches!(task_type.check, Some(CheckMode::Standalone))
@@ -149,7 +149,7 @@ impl ExtractorUtil {
                     db: db_tb.0,
                     tb: db_tb.1,
                     batch_size,
-                    source_sample_rate: Self::source_sample_rate(config, extractor_config),
+                    sample_rate: Self::sample_rate(config, extractor_config),
                     parallel_size,
                     base_extractor,
                     filter,
@@ -270,7 +270,7 @@ impl ExtractorUtil {
                     meta_manager,
                     batch_size,
                     parallel_size,
-                    source_sample_rate: Self::source_sample_rate(config, extractor_config),
+                    sample_rate: Self::sample_rate(config, extractor_config),
                     schema: sch_tb.0,
                     tb: sch_tb.1,
                     base_extractor,
@@ -355,7 +355,7 @@ impl ExtractorUtil {
                     db,
                     tb,
                     mongo_client,
-                    source_sample_rate: Self::source_sample_rate(config, extractor_config),
+                    sample_rate: Self::sample_rate(config, extractor_config),
                     base_extractor,
                     recovery,
                 };
