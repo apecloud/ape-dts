@@ -160,6 +160,10 @@ impl TaskType {
     pub const fn is_cdc_inline_check(&self) -> bool {
         matches!(self.kind, TaskKind::Cdc) && self.is_inline_check()
     }
+
+    pub const fn is_standalone_snapshot_check(&self) -> bool {
+        matches!(self.kind, TaskKind::Snapshot) && matches!(self.check, Some(CheckMode::Standalone))
+    }
 }
 
 #[derive(Display, EnumString, IntoStaticStr, PartialEq, Default)]

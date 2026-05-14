@@ -153,7 +153,11 @@ impl CheckUtil {
         actual: &dt_connector::checker::check_log::CheckSummaryLog,
     ) {
         let Some(expect_tables) = expect_value.get("tables").and_then(Value::as_array) else {
-            panic!("expect summary tables is missing");
+            assert!(
+                actual.tables.is_empty(),
+                "expect summary tables is missing but actual contains table entries"
+            );
+            return;
         };
         assert_eq!(
             expect_tables.len(),

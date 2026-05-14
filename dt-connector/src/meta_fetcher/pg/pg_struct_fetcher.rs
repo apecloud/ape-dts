@@ -105,6 +105,7 @@ impl PgStructFetcher {
         let sql = "SELECT 
                 n.nspname AS schema_name,
                 p.proname AS function_name,
+                pg_catalog.pg_get_function_identity_arguments(p.oid) AS identity_arguments,
                 l.lanname,
                 pg_catalog.pg_get_functiondef(p.oid) AS create_statement
             FROM pg_catalog.pg_proc p
@@ -127,6 +128,7 @@ impl PgStructFetcher {
         while let Some(row) = rows.try_next().await? {
             let schema_name = Self::get_str_with_null(&row, "schema_name")?;
             let function_name = Self::get_str_with_null(&row, "function_name")?;
+            let identity_arguments = Self::get_str_with_null(&row, "identity_arguments")?;
             let lanname = Self::get_str_with_null(&row, "lanname")?;
             let create_statement = Self::get_str_with_null(&row, "create_statement")?;
 
@@ -138,6 +140,7 @@ impl PgStructFetcher {
                 udf: PgUdf {
                     schema_name,
                     function_name,
+                    identity_arguments,
                     lanname,
                     create_statement,
                 },
@@ -919,6 +922,7 @@ impl PgStructFetcher {
     async fn get_schema_privilege(&mut self) -> anyhow::Result<Vec<PgPrivilege>> {
         let sql = "SELECT
               n.nspname AS schema_name,
+              acl.grantee::regrole::text AS grantee,
               'GRANT ' || 
               string_agg(acl.privilege_type, ',') || 
               ' ON SCHEMA ' || quote_ident(n.nspname) || 
@@ -939,12 +943,14 @@ impl PgStructFetcher {
         while let Some(row) = rows.try_next().await? {
             let grant_command = row.get::<String, _>("grant_command");
             let schema_name = Self::get_str_with_null(&row, "schema_name")?;
+            let grantee = Self::get_str_with_null(&row, "grantee")?;
 
-            if self.filter_schema(schema_name.as_str()) {
+            if !self.schemas.contains(&schema_name) || self.filter_schema(schema_name.as_str()) {
                 continue;
             }
 
             results.push(PgPrivilege {
+                key: format!("rbac.privilege.schema.{}.{}", schema_name, grantee),
                 origin: grant_command,
             });
         }
@@ -956,6 +962,8 @@ impl PgStructFetcher {
         let sql = "SELECT 
                 table_schema,
                 table_name,
+                grantee,
+                is_grantable,
                 'GRANT ' || 
                 array_to_string(array_agg(privilege_type), ',') || 
                 ' ON ' || quote_ident(table_schema) || '.' || quote_ident(table_name) || 
@@ -977,13 +985,19 @@ impl PgStructFetcher {
         while let Some(row) = rows.try_next().await? {
             let schema_name = Self::get_str_with_null(&row, "table_schema")?;
             let table_name = Self::get_str_with_null(&row, "table_name")?;
+            let grantee = Self::get_str_with_null(&row, "grantee")?;
+            let is_grantable = Self::get_str_with_null(&row, "is_grantable")?;
             let grant_command = Self::get_str_with_null(&row, "grant_command")?;
 
-            if self.filter_tb(&schema_name, &table_name) {
+            if !self.schemas.contains(&schema_name) || self.filter_tb(&schema_name, &table_name) {
                 continue;
             }
 
             results.push(PgPrivilege {
+                key: format!(
+                    "rbac.privilege.table.{}.{}.{}.{}",
+                    schema_name, table_name, grantee, is_grantable
+                ),
                 origin: grant_command,
             });
         }
@@ -1030,7 +1044,7 @@ impl PgStructFetcher {
             let schema_name = Self::get_str_with_null(&row, "table_schema")?;
             let table_name = Self::get_str_with_null(&row, "table_name")?;
 
-            if self.filter_tb(&schema_name, &table_name) {
+            if !self.schemas.contains(&schema_name) || self.filter_tb(&schema_name, &table_name) {
                 continue;
             }
 
@@ -1072,6 +1086,10 @@ impl PgStructFetcher {
                 );
 
                 results.push(PgPrivilege {
+                    key: format!(
+                        "rbac.privilege.column.{}.{}.{}.{}.{}",
+                        schema, table, privilege_type, grantee, is_grantable
+                    ),
                     origin: grant_command,
                 });
             }
@@ -1153,6 +1171,10 @@ impl PgStructFetcher {
             );
 
             results.push(PgPrivilege {
+                key: format!(
+                    "rbac.privilege.sequence.{}.{}.{}.{}",
+                    schema, sequence, grantee, is_grantable
+                ),
                 origin: grant_command,
             });
         }

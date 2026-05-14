@@ -71,7 +71,7 @@ impl PgCreateRbacStatement {
                 sql = format!("{} WITH {}", sql, options.join(" "));
             }
 
-            sqls.push((String::new(), sql));
+            sqls.push((format!("rbac.role.{}", role.name), sql));
 
             if !role.rol_configs.is_empty() {
                 for config in &role.rol_configs {
@@ -83,7 +83,10 @@ impl PgCreateRbacStatement {
                         }
                         let alter_sql =
                             format!("ALTER ROLE \"{}\" SET {} TO '{}'", role.name, param, value);
-                        sqls.push((String::new(), alter_sql));
+                        sqls.push((
+                            format!("rbac.role_config.{}.{}", role.name, param),
+                            alter_sql,
+                        ));
                     }
                 }
             }
@@ -95,13 +98,19 @@ impl PgCreateRbacStatement {
                 if member.admin_option {
                     sql = format!("{} WITH ADMIN OPTION", sql);
                 }
-                sqls.push((String::new(), sql));
+                sqls.push((
+                    format!(
+                        "rbac.member.{}.{}.{}",
+                        member.role, member.member, member.admin_option
+                    ),
+                    sql,
+                ));
             }
         }
 
         for privilege in &self.privileges {
             if !privilege.origin.is_empty() {
-                sqls.push((String::new(), privilege.origin.clone()));
+                sqls.push((privilege.key.clone(), privilege.origin.clone()));
             }
         }
         Ok(sqls)
@@ -385,6 +394,7 @@ mod tests {
         };
 
         let privilege = PgPrivilege {
+            key: "rbac.privilege.table.public.test_table.test_role.NO".to_string(),
             origin: "GRANT SELECT ON TABLE public.test_table TO \"test_role\"".to_string(),
         };
 

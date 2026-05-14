@@ -86,7 +86,7 @@ Struct check is supported only for standalone MySQL/PostgreSQL checker targets.
 | url                         | checker target URL (standalone target only)                            | mysql://... | -                                 |
 | username                    | checker target username (standalone target only)                       | root        | empty                             |
 | password                    | checker target password (standalone target only)                       | password    | empty                             |
-| check_log_s3                | upload periodic inline CDC check snapshot to S3                        | false       | false                             |
+| check_log_s3                | upload check logs to S3 for standalone snapshot or inline CDC check    | false       | false                             |
 | cdc_check_log_interval_secs | interval (seconds) for periodic CDC check snapshot output              | 10          | 10                                |
 | s3_bucket                   | S3 bucket for check log upload                                         | my-bucket   | -                                 |
 | s3_access_key_id            | S3 access key id                                                       | AKIA...     | -                                 |
@@ -101,8 +101,10 @@ Notes:
 - Checker only supports `[pipeline] pipeline_type=basic`.
 - `sample_rate` only supports snapshot check and inline CDC check. Valid values are `1..=100`; an
   empty value means all rows/changes are checked. Standalone MySQL/PostgreSQL/MongoDB snapshot check
-  applies it during extraction by record position, so later checker work receives fewer rows. For
-  example, `sample_rate=25` keeps the first 25 positions in every 100-position window. Inline
+  applies it during extraction by row position inside each extractor stream, so later checker work
+  receives fewer rows. MySQL/PostgreSQL parallel chunks are sampled independently, and the nullable
+  order-column NULL pass has its own counter; MongoDB uses the collection cursor position. For
+  example, `sample_rate=25` keeps positions 1-25 in every 100-position window of each stream. Inline
   snapshot check and inline CDC check write all rows/changes first, then apply deterministic
   checker-side key-hash sampling before target fetch, so rows/changes with the same key are sampled
   consistently.
@@ -142,10 +144,12 @@ Notes:
 **Inline cdc check log / retry behavior**
 - In inline cdc check, `[checker].max_retries` / `[checker].retry_interval_secs` are forced to `0`.
 - When `check_log_dir` is empty, `runtime.log_dir/check` is used consistently for checker logs (including CDC check outputs).
-- Standalone snapshot check writes check results through the local check loggers only; it does not
-  upload check logs to S3.
+- Standalone snapshot check writes check results locally first. If `check_log_s3=true`, the final
+  local `miss.log`, `diff.log`, `summary.log`, and optional `sql.log` are uploaded to S3 after the
+  check task finishes.
 - In inline cdc check, periodic check snapshots are always written locally under `check_log_dir`;
-  `check_log_s3` controls only S3 upload and is valid only for inline cdc check.
+  `check_log_s3` controls only S3 upload. Outside inline cdc check, S3 upload is supported only by
+  standalone snapshot check.
 - `check_log_file_size` limits local `diff.log` / `miss.log` / `sql.log`. `summary.log` is not
   size-limited.
 - `check_log_max_rows` only applies to CDC check snapshots for `diff.log` / `miss.log`; when either

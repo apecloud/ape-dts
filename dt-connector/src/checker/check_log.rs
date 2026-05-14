@@ -64,7 +64,7 @@ pub struct CheckSummaryLog {
     pub skip_count: usize,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sql_count: Option<usize>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tables: Vec<CheckTableSummaryLog>,
 }
 
@@ -158,10 +158,7 @@ pub fn to_json_line<T: Serialize>(value: &T) -> Option<String> {
 
 #[derive(Serialize, Deserialize)]
 pub struct StructCheckLog {
-    pub schema: String,
-    pub tb: String,
-    #[serde(serialize_with = "SerializeUtil::ordered_map")]
-    pub id_col_values: HashMap<String, Option<String>>,
+    pub key: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub src_sql: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -169,24 +166,13 @@ pub struct StructCheckLog {
 }
 
 impl StructCheckLog {
-    pub fn new(key: String, src_sql: Option<String>, dst_sql: Option<String>) -> Self {
-        let (schema, tb) = struct_key_scope(&key);
+    pub fn new(key: &str, src_sql: Option<String>, dst_sql: Option<String>) -> Self {
         Self {
-            schema: schema.clone(),
-            tb,
-            id_col_values: HashMap::from([("object_key".to_string(), Some(key))]),
+            key: key.to_string(),
             src_sql,
             dst_sql,
         }
     }
-}
-
-fn struct_key_scope(key: &str) -> (String, String) {
-    let mut parts = key.split('.');
-    let _ = parts.next();
-    let schema = parts.next().unwrap_or_default();
-    let tb = parts.next().unwrap_or(schema);
-    (schema.to_string(), tb.to_string())
 }
 
 impl FromStr for CheckLog {
@@ -208,7 +194,7 @@ mod tests {
     }
 
     #[test]
-    fn check_log_outputs_stable_json_fields() {
+    fn checker_logs_keep_expected_json_shape() {
         let log = CheckLog {
             schema: "src_s".to_string(),
             tb: "src_t".to_string(),
@@ -251,26 +237,24 @@ mod tests {
                 }
             })
         );
-    }
 
-    #[test]
-    fn summary_and_struct_logs_keep_expected_shape() {
         let struct_log = StructCheckLog::new(
-            "index.s1.t1.idx_1".to_string(),
+            "index.s1.t1.idx_1",
             Some("CREATE INDEX idx_1 ON t1(c1)".to_string()),
             None,
         );
         assert_eq!(
             json_line(&struct_log),
             json!({
-                "schema": "s1",
-                "tb": "t1",
-                "id_col_values": { "object_key": "index.s1.t1.idx_1" },
+                "key": "index.s1.t1.idx_1",
                 "src_sql": "CREATE INDEX idx_1 ON t1(c1)"
             })
         );
+        assert!(json_line(&struct_log).get("schema").is_none());
+        assert!(json_line(&struct_log).get("tb").is_none());
+        assert!(json_line(&struct_log).get("id_col_values").is_none());
 
-        let summary = CheckSummaryLog {
+        let consistent_summary = CheckSummaryLog {
             start_time: "start".to_string(),
             end_time: "end".to_string(),
             is_consistent: true,
@@ -278,17 +262,13 @@ mod tests {
             tables: vec![CheckTableSummaryLog {
                 schema: "s1".to_string(),
                 tb: "t1".to_string(),
-                target_schema: Some("dst_s".to_string()),
-                target_tb: Some("t1".to_string()),
                 checked_count: 2,
-                diff_count: 1,
                 ..Default::default()
             }],
             ..Default::default()
         };
-
         assert_eq!(
-            json_line(&summary),
+            json_line(&consistent_summary),
             json!({
                 "start_time": "start",
                 "end_time": "end",
@@ -300,13 +280,68 @@ mod tests {
                 "tables": [{
                     "schema": "s1",
                     "tb": "t1",
-                    "target_schema": "dst_s",
-                    "target_tb": "t1",
                     "checked_count": 2,
                     "miss_count": 0,
-                    "diff_count": 1,
+                    "diff_count": 0,
                     "skip_count": 0
                 }]
+            })
+        );
+
+        let problem_summary = CheckSummaryLog {
+            start_time: "start".to_string(),
+            end_time: "end".to_string(),
+            is_consistent: false,
+            checked_count: 5,
+            miss_count: 1,
+            diff_count: 1,
+            tables: vec![
+                CheckTableSummaryLog {
+                    schema: "s1".to_string(),
+                    tb: "clean".to_string(),
+                    checked_count: 3,
+                    ..Default::default()
+                },
+                CheckTableSummaryLog {
+                    schema: "s1".to_string(),
+                    tb: "bad".to_string(),
+                    checked_count: 2,
+                    miss_count: 1,
+                    diff_count: 1,
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+
+        assert_eq!(
+            json_line(&problem_summary),
+            json!({
+                "start_time": "start",
+                "end_time": "end",
+                "is_consistent": false,
+                "checked_count": 5,
+                "miss_count": 1,
+                "diff_count": 1,
+                "skip_count": 0,
+                "tables": [
+                    {
+                        "schema": "s1",
+                        "tb": "clean",
+                        "checked_count": 3,
+                        "miss_count": 0,
+                        "diff_count": 0,
+                        "skip_count": 0
+                    },
+                    {
+                        "schema": "s1",
+                        "tb": "bad",
+                        "checked_count": 2,
+                        "miss_count": 1,
+                        "diff_count": 1,
+                        "skip_count": 0
+                    }
+                ]
             })
         );
     }
