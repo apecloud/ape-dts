@@ -39,7 +39,6 @@ pub struct HttpServerPipeline {
     pub buffer: Arc<DtQueue>,
     pub syncer: Arc<Mutex<Syncer>>,
     pub monitor: TaskMonitorHandle,
-    pub monitor_task_id: String,
     pub avro_converter: AvroConverter,
     pub checkpoint_interval_secs: u64,
     pub batch_sink_interval_secs: u64,
@@ -91,7 +90,6 @@ impl HttpServerPipeline {
         buffer: Arc<DtQueue>,
         syncer: Arc<Mutex<Syncer>>,
         monitor: TaskMonitorHandle,
-        monitor_task_id: String,
         avro_converter: AvroConverter,
         checkpoint_interval_secs: u64,
         batch_sink_interval_secs: u64,
@@ -102,7 +100,6 @@ impl HttpServerPipeline {
             buffer,
             syncer,
             monitor,
-            monitor_task_id,
             avro_converter,
             checkpoint_interval_secs,
             batch_sink_interval_secs,
@@ -166,7 +163,6 @@ async fn fetch_new(
     // get data from buffer
     let mut parallelizer = BaseParallelizer {
         monitor: pipeline.monitor.clone(),
-        monitor_task_id: pipeline.monitor_task_id.clone(),
         ..Default::default()
     };
     let data = parallelizer
@@ -211,13 +207,13 @@ async fn fetch_new(
     pipeline
         .monitor
         .add_counter(
-            &pipeline.monitor_task_id,
+            pipeline.monitor.default_task_id(),
             CounterType::BufferSize,
             pipeline.buffer.len() as u64,
         )
         .await
         .add_counter(
-            &pipeline.monitor_task_id,
+            pipeline.monitor.default_task_id(),
             CounterType::SinkedRecordTotal,
             response.data.len() as u64,
         )

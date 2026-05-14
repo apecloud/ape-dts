@@ -17,7 +17,7 @@ mod test {
     #[tokio::test]
     #[serial]
     async fn snapshot_big_packet_test() {
-        TestBase::run_snapshot_test("pg_to _pg/snapshot/big_packet_test").await;
+        TestBase::run_snapshot_test("pg_to_pg/snapshot/big_packet_test").await;
     }
 
     #[tokio::test]

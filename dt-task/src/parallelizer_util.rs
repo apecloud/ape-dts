@@ -24,14 +24,12 @@ impl ParallelizerUtil {
     pub async fn create_parallelizer(
         config: &TaskConfig,
         monitor: TaskMonitorHandle,
-        monitor_task_id: String,
     ) -> anyhow::Result<Box<dyn Parallelizer + Send + Sync>> {
         let parallel_size = config.parallelizer.parallel_size;
         let parallel_type = &config.parallelizer.parallel_type;
         let base_parallelizer = BaseParallelizer {
             popped_data: VecDeque::new(),
             monitor,
-            monitor_task_id,
         };
 
         let parallelizer: Box<dyn Parallelizer + Send + Sync> = match parallel_type {

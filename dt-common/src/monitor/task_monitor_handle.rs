@@ -125,6 +125,7 @@ impl TaskMonitorHandle {
         }
     }
 
+    #[inline(always)]
     pub fn default_task_id(&self) -> &str {
         &self.default_task_id
     }

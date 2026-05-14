@@ -43,7 +43,6 @@ pub struct BasePipeline {
     pub batch_sink_interval_secs: u64,
     pub syncer: Arc<Mutex<Syncer>>,
     pub monitor: TaskMonitorHandle,
-    pub monitor_task_id: String,
     pub pending_snapshot_finished: HashMap<String, Position>,
     pub data_marker: Option<Arc<RwLock<DataMarker>>>,
     pub lua_processor: Option<LuaProcessor>,
@@ -99,7 +98,7 @@ impl Pipeline for BasePipeline {
             if !self.buffer.is_empty() {
                 self.monitor
                     .add_counter(
-                        &self.monitor_task_id,
+                        self.monitor.default_task_id(),
                         CounterType::BufferSize,
                         self.buffer.len() as u64,
                     )
@@ -109,12 +108,12 @@ impl Pipeline for BasePipeline {
                 let len = self.buffer.len() as u64;
                 let size = self.buffer.get_curr_size();
                 self.monitor.set_counter(
-                    &self.monitor_task_id,
+                    self.monitor.default_task_id(),
                     CounterType::QueuedRecordCurrent,
                     len,
                 );
                 self.monitor.set_counter(
-                    &self.monitor_task_id,
+                    self.monitor.default_task_id(),
                     CounterType::QueuedByteCurrent,
                     size,
                 );
@@ -164,13 +163,13 @@ impl Pipeline for BasePipeline {
 
             self.monitor
                 .add_counter(
-                    &self.monitor_task_id,
+                    self.monitor.default_task_id(),
                     CounterType::SinkedRecordTotal,
                     data_size.count,
                 )
                 .await
                 .add_counter(
-                    &self.monitor_task_id,
+                    self.monitor.default_task_id(),
                     CounterType::SinkedByteTotal,
                     data_size.bytes,
                 )
@@ -284,7 +283,7 @@ impl BasePipeline {
             }
             self.monitor
                 .add_counter(
-                    &self.monitor_task_id,
+                    self.monitor.default_task_id(),
                     CounterType::DDLRecordTotal,
                     data_size.count,
                 )
@@ -576,7 +575,7 @@ impl BasePipeline {
         }
 
         self.monitor.set_counter(
-            &self.monitor_task_id,
+            self.monitor.default_task_id(),
             CounterType::Timestamp,
             last_received_position.to_timestamp(),
         );

@@ -19,7 +19,6 @@ use dt_connector::Sinker;
 pub struct BaseParallelizer {
     pub popped_data: VecDeque<DtItem>,
     pub monitor: TaskMonitorHandle,
-    pub monitor_task_id: String,
 }
 
 impl BaseParallelizer {
@@ -86,7 +85,7 @@ impl BaseParallelizer {
         if record_size_counter.value > 0 {
             self.monitor
                 .add_batch_counter(
-                    &self.monitor_task_id,
+                    self.monitor.default_task_id(),
                     CounterType::RecordSize,
                     record_size_counter.value,
                     record_size_counter.count,

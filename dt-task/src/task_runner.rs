@@ -112,7 +112,6 @@ fn init_task_check_summary() -> CheckSummaryLog {
 enum SingleTaskWorker {
     Extractor,
     Pipeline,
-    Monitor,
 }
 
 impl SingleTaskWorker {
@@ -120,7 +119,6 @@ impl SingleTaskWorker {
         match self {
             Self::Extractor => "extractor",
             Self::Pipeline => "pipeline",
-            Self::Monitor => "monitor",
         }
     }
 }
@@ -303,7 +301,7 @@ impl TaskRunner {
         let rw_sinker_data_marker = sinker_data_marker
             .clone()
             .map(|data_marker| Arc::new(RwLock::new(data_marker)));
-        let single_task_id = self.config.global.task_id.clone();
+        let task_id = self.config.global.task_id.clone();
         let is_snapshot_task = self
             .task_type
             .as_ref()
@@ -315,13 +313,12 @@ impl TaskRunner {
         let extractor_monitor_handle = TaskMonitorHandle::new(
             self.task_monitor.clone(),
             MonitorType::Extractor,
-            single_task_id.clone(),
+            task_id.clone(),
             monitor_time_window_secs,
             monitor_max_sub_count,
             monitor_count_window,
         );
-        let extractor_monitor =
-            extractor_monitor_handle.build_monitor("extractor", &single_task_id);
+        let extractor_monitor = extractor_monitor_handle.build_monitor("extractor", &task_id);
         let extractor = ExtractorUtil::create_extractor(
             &self.config,
             &extractor_config,
@@ -330,7 +327,7 @@ impl TaskRunner {
             shut_down.clone(),
             syncer.clone(),
             extractor_monitor_handle,
-            single_task_id.clone(),
+            task_id.clone(),
             extractor_data_marker,
             (*router).clone(),
             recovery.clone(),
@@ -341,16 +338,16 @@ impl TaskRunner {
         let checker_monitor_handle = TaskMonitorHandle::new(
             self.task_monitor.clone(),
             MonitorType::Checker,
-            single_task_id.clone(),
+            task_id.clone(),
             monitor_time_window_secs,
             monitor_max_sub_count,
             monitor_count_window,
         );
-        let checker_monitor = checker_monitor_handle.build_monitor("checker", &single_task_id);
+        let checker_monitor = checker_monitor_handle.build_monitor("checker", &task_id);
         let checker = self
             .create_checker(
                 self.config.checker.as_ref(),
-                &single_task_id,
+                &task_id,
                 checker_monitor_handle,
                 check_summary.clone(),
                 recovery.as_ref(),
@@ -361,18 +358,18 @@ impl TaskRunner {
         let sinker_monitor_handle = TaskMonitorHandle::new(
             self.task_monitor.clone(),
             MonitorType::Sinker,
-            single_task_id.clone(),
+            task_id.clone(),
             monitor_time_window_secs,
             monitor_max_sub_count,
             monitor_count_window,
         );
-        let sinker_monitor = sinker_monitor_handle.build_monitor("sinker", &single_task_id);
+        let sinker_monitor = sinker_monitor_handle.build_monitor("sinker", &task_id);
         let sinkers = SinkerUtil::create_sinkers(
             &self.config,
             &extractor_config,
             sinker_client.clone(),
             sinker_monitor_handle,
-            single_task_id.clone(),
+            task_id.clone(),
             rw_sinker_data_marker.clone(),
             checker.as_ref().and_then(|handle| match handle {
                 CheckerHandle::Data(handle) => Some(handle.clone()),
@@ -384,7 +381,7 @@ impl TaskRunner {
         let pipeline_monitor_handle = TaskMonitorHandle::new(
             self.task_monitor.clone(),
             MonitorType::Pipeline,
-            self.config.global.task_id.clone(),
+            task_id.clone(),
             monitor_time_window_secs,
             monitor_max_sub_count,
             monitor_count_window,
@@ -396,7 +393,6 @@ impl TaskRunner {
                 syncer,
                 sinkers,
                 pipeline_monitor_handle.clone(),
-                self.config.global.task_id.clone(), // pipline metrics are shared
                 rw_sinker_data_marker.clone(),
                 recorder.clone(),
                 checker,
@@ -406,14 +402,14 @@ impl TaskRunner {
 
         let mut monitors = vec![(
             MonitorType::Pipeline,
-            pipeline_monitor_handle.build_monitor("pipeline", &self.config.global.task_id),
+            pipeline_monitor_handle.build_monitor("pipeline", &task_id),
         )];
         if !is_snapshot_task {
             monitors.push((MonitorType::Extractor, extractor_monitor.clone()));
             monitors.push((MonitorType::Sinker, sinker_monitor.clone()));
             monitors.push((MonitorType::Checker, checker_monitor.clone()));
         }
-        self.task_monitor.register(&single_task_id, monitors);
+        self.task_monitor.register(&task_id, monitors);
 
         // do pre operations before task starts
         self.create_task_tables(
@@ -424,26 +420,24 @@ impl TaskRunner {
         .await?;
 
         let interval_secs = self.config.pipeline.checkpoint_interval_secs;
-        let single_task_flush_monitors: Vec<Arc<dyn FlushableMonitor + Send + Sync>> =
+        let task_flush_monitors: Vec<Arc<dyn FlushableMonitor + Send + Sync>> =
             vec![self.task_monitor.clone()];
-        let monitor_shut_down = shut_down.clone();
+        let monitor_shut_down = Arc::new(AtomicBool::new(false));
+        let monitor_task_shutdown = monitor_shut_down.clone();
         let monitor_task = tokio::spawn(async move {
-            TaskUtil::flush_monitors(
-                interval_secs,
-                monitor_shut_down,
-                &single_task_flush_monitors,
-            )
-            .await;
+            TaskUtil::flush_monitors(interval_secs, monitor_task_shutdown, &task_flush_monitors)
+                .await;
             Ok(())
         });
 
-        let worker_result = Self::run_single_task_workers(
-            extractor.clone(),
-            pipeline.clone(),
-            monitor_task,
-            shut_down.clone(),
-        )
-        .await;
+        let worker_result =
+            Self::run_task_workers(extractor.clone(), pipeline.clone(), shut_down.clone()).await;
+
+        monitor_shut_down.store(true, Ordering::Release);
+        let monitor_result = monitor_task
+            .await
+            .context("monitor task exit error")
+            .and_then(|result| result);
 
         let mut monitor_types = vec![MonitorType::Pipeline];
         if !is_snapshot_task {
@@ -451,14 +445,14 @@ impl TaskRunner {
             monitor_types.push(MonitorType::Sinker);
             monitor_types.push(MonitorType::Checker);
         }
-        self.task_monitor.unregister(&single_task_id, monitor_types);
-        worker_result
+        self.task_monitor.unregister(&task_id, monitor_types);
+
+        worker_result.and(monitor_result)
     }
 
-    async fn run_single_task_workers(
+    async fn run_task_workers(
         extractor: Arc<Mutex<Box<dyn Extractor + Send>>>,
         pipeline: Arc<Mutex<Box<dyn Pipeline + Send>>>,
-        monitor_task: tokio::task::JoinHandle<anyhow::Result<()>>,
         shut_down: Arc<AtomicBool>,
     ) -> anyhow::Result<()> {
         let mut join_set = JoinSet::new();
@@ -478,24 +472,12 @@ impl TaskRunner {
                 Self::run_pipeline_worker(pipeline_worker).await,
             )
         });
-
-        join_set.spawn(async move {
-            (
-                SingleTaskWorker::Monitor,
-                monitor_task
-                    .await
-                    .context("monitor task join error")
-                    .and_then(|result| result),
-            )
-        });
-
         let mut extractor_done = false;
         let mut pipeline_done = false;
         let mut failure = None;
         let mut mark_done = |kind| match kind {
             SingleTaskWorker::Extractor => extractor_done = true,
             SingleTaskWorker::Pipeline => pipeline_done = true,
-            SingleTaskWorker::Monitor => {}
         };
 
         while let Some(result) = join_set.join_next().await {
@@ -620,7 +602,6 @@ impl TaskRunner {
         syncer: Arc<Mutex<Syncer>>,
         sinkers: Vec<Arc<AsyncMutex<Box<dyn Sinker + Send>>>>,
         monitor: TaskMonitorHandle,
-        monitor_task_id: String,
         data_marker: Option<Arc<RwLock<DataMarker>>>,
         recorder: Option<Arc<dyn Recorder + Send + Sync>>,
         checker: Option<CheckerHandle>,
@@ -635,12 +616,8 @@ impl TaskRunner {
                             lua_code: processor_config.lua_code.clone(),
                         });
 
-                let parallelizer = ParallelizerUtil::create_parallelizer(
-                    &self.config,
-                    monitor.clone(),
-                    monitor_task_id.clone(),
-                )
-                .await?;
+                let parallelizer =
+                    ParallelizerUtil::create_parallelizer(&self.config, monitor.clone()).await?;
 
                 let pipeline = BasePipeline {
                     buffer,
@@ -652,7 +629,6 @@ impl TaskRunner {
                     batch_sink_interval_secs: self.config.pipeline.batch_sink_interval_secs,
                     syncer,
                     monitor,
-                    monitor_task_id,
                     pending_snapshot_finished: HashMap::new(),
                     data_marker,
                     lua_processor,
@@ -670,7 +646,6 @@ impl TaskRunner {
                     buffer,
                     syncer,
                     monitor,
-                    monitor_task_id,
                     avro_converter,
                     self.config.pipeline.checkpoint_interval_secs,
                     self.config.pipeline.batch_sink_interval_secs,
@@ -685,7 +660,7 @@ impl TaskRunner {
     async fn create_checker(
         &self,
         checker_config: Option<&CheckerConfig>,
-        single_task_id: &str,
+        task_id: &str,
         monitor: TaskMonitorHandle,
         check_summary: Option<Arc<AsyncMutex<CheckSummaryLog>>>,
         recovery: Option<&Arc<dyn Recovery + Send + Sync>>,
@@ -723,7 +698,7 @@ impl TaskRunner {
         } else {
             cfg.check_log_dir.clone()
         };
-        let checker_task_id = single_task_id.to_string();
+        let checker_task_id = task_id.to_string();
         let cdc_check_log_max_file_size =
             parse_size_limit(&cfg.check_log_file_size).map_err(|e| {
                 Error::ConfigError(format!(
@@ -791,7 +766,7 @@ impl TaskRunner {
                         max_retries,
                         check_summary,
                         monitor.clone(),
-                        single_task_id.to_string(),
+                        task_id.to_string(),
                     )
                 }
                 DbType::Pg => {
@@ -814,7 +789,7 @@ impl TaskRunner {
                         max_retries,
                         check_summary,
                         monitor.clone(),
-                        single_task_id.to_string(),
+                        task_id.to_string(),
                     )
                 }
                 _ => bail!(
@@ -832,7 +807,7 @@ impl TaskRunner {
                 )
             })?;
             let s3_client = TaskUtil::create_s3_client(s3_cfg)?;
-            let key_prefix = if single_task_id.is_empty() {
+            let key_prefix = if task_id.is_empty() {
                 if cfg.s3_key_prefix.is_empty() {
                     format!("{}/check", self.config.global.task_id)
                 } else {
@@ -844,7 +819,7 @@ impl TaskRunner {
                 } else {
                     cfg.s3_key_prefix.clone()
                 };
-                let scope = single_task_id
+                let scope = task_id
                     .chars()
                     .map(|ch| {
                         if ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-') {
