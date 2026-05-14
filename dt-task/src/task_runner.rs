@@ -314,57 +314,44 @@ impl TaskRunner {
         let Some((s3_client, key_prefix)) = self.check_log_s3_output(cfg, "")? else {
             return Ok(());
         };
-        self.upload_local_check_logs_to_s3(&s3_client, &key_prefix, &self.check_log_dir(cfg))
-            .await
+        Self::upload_local_check_logs_to_s3(&s3_client, &key_prefix, &self.check_log_dir(cfg)).await
     }
 
     async fn upload_local_check_logs_to_s3(
-        &self,
         s3_client: &Operator,
         key_prefix: &str,
         check_log_dir: &str,
     ) -> anyhow::Result<()> {
-        let miss_buf = Self::read_optional_check_log(check_log_dir, "miss.log").await?;
-        let diff_buf = Self::read_optional_check_log(check_log_dir, "diff.log").await?;
-        let summary_buf = tokio_fs::read(format!("{check_log_dir}/summary.log")).await?;
-        let miss_key = format!("{key_prefix}/miss.log");
-        let diff_key = format!("{key_prefix}/diff.log");
+        for file_name in ["miss.log", "diff.log"] {
+            let buf = match tokio_fs::read(format!("{check_log_dir}/{file_name}")).await {
+                Ok(buf) => buf,
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+                Err(err) => return Err(err.into()),
+            };
+            let key = format!("{key_prefix}/{file_name}");
+            s3_client.write(&key, buf).await?;
+        }
         let summary_key = format!("{key_prefix}/summary.log");
-        tokio::try_join!(
-            s3_client.write(&miss_key, miss_buf),
-            s3_client.write(&diff_key, diff_buf),
-            s3_client.write(&summary_key, summary_buf),
-        )?;
-
-        self.upload_or_delete_optional_check_log(s3_client, key_prefix, check_log_dir, "sql.log")
-            .await
-    }
-
-    async fn upload_or_delete_optional_check_log(
-        &self,
-        s3_client: &Operator,
-        key_prefix: &str,
-        check_log_dir: &str,
-        file_name: &str,
-    ) -> anyhow::Result<()> {
-        let key = format!("{key_prefix}/{file_name}");
-        match Self::read_optional_check_log(check_log_dir, file_name).await? {
-            buf if buf.is_empty() => {
-                s3_client.delete(&key).await?;
+        s3_client
+            .write(
+                &summary_key,
+                tokio_fs::read(format!("{check_log_dir}/summary.log")).await?,
+            )
+            .await?;
+        let sql_key = format!("{key_prefix}/sql.log");
+        match tokio_fs::read(format!("{check_log_dir}/sql.log")).await {
+            Ok(buf) if !buf.is_empty() => {
+                s3_client.write(&sql_key, buf).await?;
             }
-            buf => {
-                s3_client.write(&key, buf).await?;
+            Ok(_) => {
+                s3_client.delete(&sql_key).await?;
             }
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                s3_client.delete(&sql_key).await?;
+            }
+            Err(err) => return Err(err.into()),
         }
         Ok(())
-    }
-
-    async fn read_optional_check_log(dir: &str, file_name: &str) -> std::io::Result<Vec<u8>> {
-        match tokio_fs::read(format!("{dir}/{file_name}")).await {
-            Ok(buf) => Ok(buf),
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
-            Err(err) => Err(err),
-        }
     }
 
     fn check_log_s3_output(

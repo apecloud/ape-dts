@@ -296,8 +296,8 @@ INSERT INTO `test_db_1`.`test_table`(`id`,`name`,`age`,`email`) VALUES(3,'Charli
 
 `skip_count` 用于记录被 checker 跳过的行，例如行主键/唯一键无法参与哈希计算时。
 
-当存在表级计数时，`summary.log` 会包含 `tables` 字段，用于记录每张表的
-checked/miss/diff/skip 计数，且会省略值为 0 的字段。表级条目未显式改变目标端对象时不输出
+仅当存在表级 miss/diff/skip 问题条目时，`summary.log` 才会包含 `tables` 字段，用于记录
+问题表的 checked/miss/diff/skip 计数。表级条目未显式改变目标端对象时不输出
 `target_schema`/`target_tb`；只要任一目标名称发生变化，两个字段都会同时输出。
 
 ```json

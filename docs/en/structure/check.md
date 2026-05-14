@@ -23,21 +23,20 @@ schema/table/id metadata.
 {
   "schema": "db_name",
   "tb": "tb_name",
-  "id_col_values": {
-    "object_key": "type.schema.table"
-  },
+  "object_type": "index",
+  "object_name": "idx_name",
   "src_sql": "source definition SQL",
   "dst_sql": "target definition SQL"
 }
 ```
 
-There is no top-level `key`, `target_schema`, or `target_tb` field. The structure object identity is
-carried by `id_col_values.object_key`. `src_sql` is included when the source-side definition exists;
+There is no `key`, `id_col_values`, `target_schema`, or `target_tb` field. `object_type` and
+`object_name` identify the structure object. `src_sql` is included when the source-side definition exists;
 `dst_sql` is included when the target-side definition exists. Source-only missing objects usually
 have only `src_sql`; objects with different definitions have both `src_sql` and `dst_sql`;
 target-only extra objects have only `dst_sql`.
 
-`object_key` format:
+The internal structure key has this format:
 
 ```text
 <object_type>.<schema>.<table_or_object>[.<sub_object>]
@@ -51,15 +50,15 @@ Common examples include `table.struct_check_test_1.not_match_column`,
 
 - `miss.log` (present in source but missing in target)
 ```json
-{"schema":"struct_check_test_1","tb":"not_match_miss","id_col_values":{"object_key":"table.struct_check_test_1.not_match_miss"},"src_sql":"CREATE TABLE `not_match_miss` (`id` int NOT NULL, PRIMARY KEY (`id`))"}
-{"schema":"struct_check_test_1","tb":"not_match_index","id_col_values":{"object_key":"index.struct_check_test_1.not_match_index.i6_miss"},"src_sql":"CREATE INDEX `i6_miss` ON `not_match_index` (`c6`)"}
+{"schema":"struct_check_test_1","tb":"not_match_miss","object_type":"table","object_name":"not_match_miss","src_sql":"CREATE TABLE `not_match_miss` (`id` int NOT NULL, PRIMARY KEY (`id`))"}
+{"schema":"struct_check_test_1","tb":"not_match_index","object_type":"index","object_name":"i6_miss","src_sql":"CREATE INDEX `i6_miss` ON `not_match_index` (`c6`)"}
 ```
 
 - `diff.log` (object definition differs, or the object exists only in the target)
 ```json
-{"schema":"struct_check_test_1","tb":"not_match_index","id_col_values":{"object_key":"index.struct_check_test_1.not_match_index"},"src_sql":"CREATE INDEX `i1` ON `not_match_index` (`c1`)","dst_sql":"CREATE INDEX `i1` ON `not_match_index` (`c2`)"}
-{"schema":"struct_check_test_1","tb":"not_match_column","id_col_values":{"object_key":"table.struct_check_test_1.not_match_column"},"src_sql":"CREATE TABLE `not_match_column` (`id` int NOT NULL, PRIMARY KEY (`id`))","dst_sql":"CREATE TABLE `not_match_column` (`id` bigint NOT NULL, PRIMARY KEY (`id`))"}
-{"schema":"struct_check_test_1","tb":"full_index_type","id_col_values":{"object_key":"index.struct_check_test_1.full_index_type.index_not_match_name_dst"},"dst_sql":"CREATE INDEX `index_not_match_name_dst` ON `full_index_type` (`c1`)"}
+{"schema":"struct_check_test_1","tb":"not_match_index","object_type":"index","object_name":"not_match_index","src_sql":"CREATE INDEX `i1` ON `not_match_index` (`c1`)","dst_sql":"CREATE INDEX `i1` ON `not_match_index` (`c2`)"}
+{"schema":"struct_check_test_1","tb":"not_match_column","object_type":"table","object_name":"not_match_column","src_sql":"CREATE TABLE `not_match_column` (`id` int NOT NULL, PRIMARY KEY (`id`))","dst_sql":"CREATE TABLE `not_match_column` (`id` bigint NOT NULL, PRIMARY KEY (`id`))"}
+{"schema":"struct_check_test_1","tb":"full_index_type","object_type":"index","object_name":"index_not_match_name_dst","dst_sql":"CREATE INDEX `index_not_match_name_dst` ON `full_index_type` (`c1`)"}
 ```
 
 - `summary.log` (overview of the check results)

@@ -300,8 +300,8 @@ The summary log contains the overall results of the check, such as start_time, e
 
 `skip_count` records rows skipped by the checker, for example when the row key cannot be hashed.
 
-`summary.log` includes `tables` when table-level counters are available. Table entries store
-per-table checked/miss/diff/skip counts and omit zero-valued fields. They omit
+`summary.log` includes `tables` only when there are table-level miss/diff/skip entries. Table
+entries store per-table checked/miss/diff/skip counts for problem tables. They omit
 `target_schema`/`target_tb` when the destination object is not explicitly different. If either
 target name differs, both fields are included.
 
