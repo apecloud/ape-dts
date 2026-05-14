@@ -6,10 +6,10 @@ Supports comparison for MySQL, PostgreSQL, and MongoDB.
 
 Snapshot and inline CDC checks support sampling via `[checker].sample_rate`.
 For standalone MySQL/PostgreSQL/MongoDB snapshot check, `sample_rate` is applied during extraction
-by record position to reduce checker-side work. The extractor converts the rate to a simple interval
-and keeps one record per interval, independently inside each extraction segment/chunk. Inline
+by record position to reduce checker-side work. For example, `sample_rate=25` keeps the first 25
+positions in every 100-position window, independently inside each extraction segment/chunk. Inline
 snapshot check and inline CDC check write all rows/changes first, then apply deterministic
-checker-side key sampling before target fetch. Rows/changes with the same key are sampled
+checker-side key-hash sampling before target fetch. Rows/changes with the same key are sampled
 consistently.
 
 Data check is documented in three flows:
@@ -107,49 +107,8 @@ source CDC events
 
 #### Inline cdc check configuration constraints
 
-These combinations fail fast with `ConfigError`:
-
-- `[checker]` section is present but `enable` is missing.
-- `[pipeline] pipeline_type` is not `basic`.
-- `[extractor] extract_type=cdc` but `[sinker] sink_type` is not `write`.
-- `[parallelizer] parallel_type` is not `rdb_merge`.
-- `[sinker].db_type` is not `mysql` or `pg`.
-- Any of `db_type`, `url`, `username`, or `password` is set in `[checker]`.
-- `[resumer] resume_type` is missing or not `from_target` / `from_db`, so checker state cannot be persisted.
-
-These settings remain effective or are forced in inline cdc check:
-
-- `[checker].batch_size`: stays effective and does not fall back to `[sinker].batch_size`.
-- `[checker].queue_size`: counts pending checker DML batches. If the queue is full, the oldest
-  pending checker batch is dropped instead of blocking the write path. Control signals such as
-  checkpoint and `refresh_meta` bypass this queue.
-- `[checker].max_retries` and `[checker].retry_interval_secs`: always forced to `0`.
-
-## Inline Snapshot Check vs Inline CDC Check
-
-| Aspect                                      | Inline snapshot check                            | Inline cdc check                                                 |
-| :------------------------------------------ | :----------------------------------------------- | :--------------------------------------------------------------- |
-| Check timing                                | Write one batch, then check that batch           | Write one event batch, then check that batch                     |
-| First inconsistency handling                | Retry first                                      | Record into persistent inconsistency state/store                 |
-| When miss/diff is logged                    | Only after retry budget is exhausted             | May be logged from the current reconciliation state              |
-| Long-lived inconsistency tracking           | No long-lived inconsistency store                | Yes; checker state is coupled with checkpoint / state store      |
-| How later writes affect old inconsistencies | Retries are short-term waiting only              | Later CDC events may cancel or reconcile older miss/diff records |
-| Mental model                                | Write-after-check with short convergence waiting | Continuous reconciliation                                        |
-
-Operationally:
-
-- **Inline snapshot check** is optimized for “write first, then wait briefly for convergence”.
-  After a sink batch is written, the checker validates the same batch. If target visibility is
-  slightly delayed, it retries first. Only after the retry budget is exhausted are `miss.log` and
-  `diff.log` written. It does **not** maintain a long-lived inconsistency store.
-- **Inline cdc check** is optimized for long-running reconciliation. After an event batch is
-  applied, the checker validates the resulting target state. If an inconsistency is observed, it
-  becomes part of persistent checker state/store instead of being treated as a short retry-only
-  problem. Later CDC events may naturally offset or reconcile earlier miss/diff entries, so
-  checkpoint/state persistence is more deeply coupled with the checker lifecycle.
-  Runtime errors are handled per operation: the checker logs the error, keeps the main write path
-  running, and continues processing subsequent checker messages. Checkpoint/meta-refresh delivery is
-  also decoupled from checker batch backlog so the write path does not wait behind queued DML.
+See [config.md](../config.md) for the complete inline CDC checker constraints, queue behavior,
+retry rules, and S3 upload rules.
 
 ## Example: MySQL -> MySQL
 
@@ -159,11 +118,11 @@ templates now separate standalone snapshot check, inline snapshot check, and inl
 ### Sampling Check
 
 For snapshot and inline CDC checks, add `sample_rate` to the `[checker]` section. For standalone
-MySQL/PostgreSQL/MongoDB snapshot check, `sample_rate=25` keeps one out of every 4 extracted records
-before they enter later checker work. This is an approximate per-segment policy, so the final
-table-level ratio can vary, especially for small extraction chunks. For inline snapshot check and
-inline CDC check, `sample_rate=25` still writes all rows/changes, then checks rows/changes whose key
-falls into the sampled key set before target fetch/compare.
+MySQL/PostgreSQL/MongoDB snapshot check, `sample_rate=25` keeps the first 25 extracted positions in
+each 100-position window before they enter later checker work. This is a per-segment policy, so the
+final table-level ratio can vary, especially for small extraction chunks. For inline snapshot check
+and inline CDC check, `sample_rate=25` still writes all rows/changes, then checks rows/changes whose
+key hash falls into the sampled percentage before target fetch/compare.
 
 ```
 [checker]

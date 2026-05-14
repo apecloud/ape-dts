@@ -62,15 +62,15 @@ Struct check is supported only for standalone MySQL/PostgreSQL checker targets.
 | queue_size                  | checker queue capacity, counted in pending batches/messages            | 200         | 200                               |
 | max_connections             | max connections for checker pool                                       | 8           | 8                                 |
 | batch_size                  | checker chunk size; also used for checker chunking in inline cdc check | 200         | 200                               |
-| sample_rate                 | sample rate for snapshot and CDC checks                                | 25          | empty (check all rows/changes)    |
+| sample_rate                 | percentage sample rate for snapshot and CDC checks                     | 25          | empty (check all rows/changes)    |
 | output_full_row             | output full row in diff log                                            | false       | false                             |
 | output_revise_sql           | write generated revise SQL to `sql.log`                                | false       | false                             |
 | revise_match_full_row       | match full row when building revise SQL                                | false       | false                             |
 | retry_interval_secs         | retry interval in seconds (forced to 0 in inline cdc check)            | 0           | 0                                 |
 | max_retries                 | retry count (forced to 0 in inline cdc check)                          | 0           | 0                                 |
 | check_log_dir               | check log dir                                                          | /tmp/check  | empty (use runtime.log_dir/check) |
-| check_log_file_size         | per-log file size limit (`diff.log` / `miss.log` / `sql.log`)          | 100mb       | 100mb                             |
-| check_log_max_rows          | per-log max rows (`diff.log` / `miss.log`)                             | 1000        | 1000                              |
+| check_log_file_size         | local per-log file size limit (`diff.log` / `miss.log` / `sql.log`)    | 100mb       | 100mb                             |
+| check_log_max_rows          | CDC check snapshot max rows (`diff.log` / `miss.log`)                  | 1000        | 1000                              |
 | db_type                     | checker target db type (standalone target only)                        | mysql       | -                                 |
 | url                         | checker target URL (standalone target only)                            | mysql://... | -                                 |
 | username                    | checker target username (standalone target only)                       | root        | empty                             |
@@ -88,12 +88,13 @@ Notes:
 
 **General behavior**
 - Checker only supports `[pipeline] pipeline_type=basic`.
-- `sample_rate` only supports snapshot check and inline CDC check. Standalone
-  MySQL/PostgreSQL/MongoDB snapshot check applies it during extraction by record position, so later
-  checker work receives fewer rows. The extractor converts the rate to a simple interval and keeps
-  one record per interval. Inline snapshot check and inline CDC check write all rows/changes first,
-  then apply deterministic checker-side key sampling before target fetch, so rows/changes with the
-  same key are sampled consistently.
+- `sample_rate` only supports snapshot check and inline CDC check. Valid values are `1..=100`; an
+  empty value means all rows/changes are checked. Standalone MySQL/PostgreSQL/MongoDB snapshot check
+  applies it during extraction by record position, so later checker work receives fewer rows. For
+  example, `sample_rate=25` keeps the first 25 positions in every 100-position window. Inline
+  snapshot check and inline CDC check write all rows/changes first, then apply deterministic
+  checker-side key-hash sampling before target fetch, so rows/changes with the same key are sampled
+  consistently.
 - `queue_size` counts queued checker DML batches, not rows. Control signals such as checkpoint and
   `refresh_meta` bypass this queue.
 - In inline write-after-check flows, if the checker DML queue is full, the oldest pending batch is
@@ -128,15 +129,16 @@ Notes:
   target field (`db_type` / `url` / `username` / `password`) set under `[checker]`.
 
 **Inline cdc check log / retry behavior**
-- In inline cdc check, `[checker].batch_size` remains effective and controls checker chunking.
-  `[checker].max_retries` / `[checker].retry_interval_secs` are still forced to `0`.
+- In inline cdc check, `[checker].max_retries` / `[checker].retry_interval_secs` are forced to `0`.
 - When `check_log_dir` is empty, `runtime.log_dir/check` is used consistently for checker logs (including CDC check outputs).
 - Standalone snapshot check writes check results through the local check loggers only; it does not
   upload check logs to S3.
 - In inline cdc check, periodic check snapshots are always written locally under `check_log_dir`;
   `check_log_s3` controls only S3 upload and is valid only for inline cdc check.
-- `check_log_file_size` limits local `diff.log` / `miss.log` / `sql.log`. `summary.log` is not size-limited.
-- `check_log_max_rows` only applies to CDC check snapshots for `diff.log` / `miss.log`; when either threshold is hit, only the latest records are kept.
+- `check_log_file_size` limits local `diff.log` / `miss.log` / `sql.log`. `summary.log` is not
+  size-limited.
+- `check_log_max_rows` only applies to CDC check snapshots for `diff.log` / `miss.log`; when either
+  threshold is hit, only the latest records are kept.
 
 # [filter]
 

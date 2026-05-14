@@ -59,15 +59,15 @@ struct check 仅支持 standalone MySQL/PostgreSQL checker target。
 | queue_size                  | checker 队列容量，按待处理批次/消息数计数                      | 200         | 200                              |
 | max_connections             | checker 连接池最大连接数                                       | 8           | 8                                |
 | batch_size                  | checker 的分块大小；inline cdc check 下也用于控制 checker 分块 | 200         | 200                              |
-| sample_rate                 | snapshot 与 CDC check 的抽样百分比                             | 25          | 空（校验全部行/变更）            |
+| sample_rate                 | snapshot 与 CDC check 的百分比抽样率                            | 25          | 空（校验全部行/变更）            |
 | output_full_row             | diff 日志是否输出全量行                                        | false       | false                            |
 | output_revise_sql           | 是否将生成的修复 SQL 写入 `sql.log`                            | false       | false                            |
 | revise_match_full_row       | 生成修复 SQL 时是否按全量行匹配                                | false       | false                            |
 | retry_interval_secs         | 重试间隔（秒），inline cdc check 下强制为 0                    | 0           | 0                                |
 | max_retries                 | 重试次数，inline cdc check 下强制为 0                          | 0           | 0                                |
 | check_log_dir               | 校验日志目录                                                   | /tmp/check  | 空（默认 runtime.log_dir/check） |
-| check_log_file_size         | 单类日志文件大小上限（`diff.log` / `miss.log` / `sql.log`）    | 100mb       | 100mb                            |
-| check_log_max_rows          | 单类日志最大行数（`diff.log` / `miss.log`）                    | 1000        | 1000                             |
+| check_log_file_size         | 本地单类日志文件大小上限（`diff.log` / `miss.log` / `sql.log`） | 100mb       | 100mb                            |
+| check_log_max_rows          | CDC 校验快照最大行数（`diff.log` / `miss.log`）                 | 1000        | 1000                             |
 | db_type                     | 校验目标库类型（仅 standalone 目标配置）                       | mysql       | -                                |
 | url                         | 校验目标 URL（仅 standalone 目标配置）                         | mysql://... | -                                |
 | username                    | 校验目标用户名（仅 standalone 目标配置）                       | root        | 空                               |
@@ -85,10 +85,11 @@ struct check 仅支持 standalone MySQL/PostgreSQL checker target。
 
 **通用行为**
 - checker 仅支持 `[pipeline] pipeline_type=basic`。
-- `sample_rate` 仅支持 snapshot check 和 inline CDC check。Standalone MySQL/PostgreSQL/MongoDB
-  snapshot check 会在 snapshot 抽取阶段按记录位置应用该比例，减少后续 checker 工作量。extractor
-  会把比例换算成简单的抽样间隔，每个间隔保留一条记录。Inline snapshot check 和 inline CDC
-  check 会先完整写入所有行/变更，然后在 checker 目标端 fetch 前使用相同的间隔抽样。
+- `sample_rate` 仅支持 snapshot check 和 inline CDC check。有效范围是 `1..=100`；空值表示
+  校验全部行/变更。Standalone MySQL/PostgreSQL/MongoDB snapshot check 会在 snapshot 抽取阶段
+  按记录位置应用该比例，减少后续 checker 工作量。例如 `sample_rate=25` 表示每 100 条位置窗口
+  保留前 25 条。Inline snapshot check 和 inline CDC check 会先完整写入所有行/变更，然后在
+  checker 目标端 fetch 前进行确定性的 key hash 抽样；相同 key 的行/变更会保持一致的抽样结果。
 - `queue_size` 统计的是 checker DML 队列中的待处理批次数，不是行数。checkpoint、`refresh_meta`
   这类控制信号会绕过这条队列。
 - 在 inline 写后校验链路里，如果 checker DML 队列已满，会丢弃最旧的待校验批次并记录 warning
@@ -121,13 +122,13 @@ struct check 仅支持 standalone MySQL/PostgreSQL checker target。
   以及在 `[checker]` 中显式填写目标端字段 `db_type` / `url` / `username` / `password`。
 
 **inline cdc check 的日志 / 重试行为**
-- 对 inline cdc check，`[checker].batch_size` 会继续生效并控制 checker 分块；
-  `max_retries` 与 `retry_interval_secs` 会强制按 0 处理。
+- 对 inline cdc check，`max_retries` 与 `retry_interval_secs` 会强制按 0 处理。
 - 当 `check_log_dir` 为空时，统一使用 `runtime.log_dir/check` 作为 checker 日志目录（包含 CDC 校验输出）。
 - standalone snapshot check 只通过本地 check logger 输出校验结果，不再上传校验日志到 S3。
 - 在 inline cdc check 下，会始终先在 `check_log_dir` 本地落盘周期性校验快照；
   `check_log_s3` 仅控制是否上传 S3，且只支持 inline cdc check。
-- `check_log_file_size` 限制本地 `diff.log` / `miss.log` / `sql.log` 的大小，`summary.log` 不受该限制。
+- `check_log_file_size` 限制本地 `diff.log` / `miss.log` / `sql.log` 的大小，`summary.log`
+  不受该限制。
 - `check_log_max_rows` 仅对 CDC 校验快照的 `diff.log` / `miss.log` 生效；命中任一阈值时仅保留最新记录。
 
 # [filter]
