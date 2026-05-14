@@ -38,18 +38,18 @@ impl SnapshotDispatcher {
         mut state: State,
         parallel_size: usize,
         worker_name: &'static str,
-        mut next_work: NextWork,
+        next_work: NextWork,
         run: Run,
-        mut on_done: OnDone,
+        on_done: OnDone,
     ) -> anyhow::Result<State>
     where
         Work: Send + 'static,
         WorkResult: Send + 'static,
-        NextWork: FnMut(State) -> NextWorkFut,
+        NextWork: Fn(State) -> NextWorkFut,
         NextWorkFut: Future<Output = anyhow::Result<(State, Option<Work>)>>,
         Run: Fn(Work) -> RunFut + Send + Sync + 'static,
         RunFut: Future<Output = anyhow::Result<WorkResult>> + Send + 'static,
-        OnDone: FnMut(State, WorkResult) -> OnDoneFut,
+        OnDone: Fn(State, WorkResult) -> OnDoneFut,
         OnDoneFut: Future<Output = anyhow::Result<State>>,
     {
         if parallel_size < 1 {
