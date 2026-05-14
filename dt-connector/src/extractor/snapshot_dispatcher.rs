@@ -3,7 +3,7 @@ use std::{collections::VecDeque, future::Future, sync::Arc};
 use anyhow::{anyhow, bail};
 use tokio::task::JoinSet;
 
-use dt_common::monitor::{monitor_util, task_monitor::TaskMonitorHandle};
+use dt_common::monitor::task_monitor_handle::TaskMonitorHandle;
 
 use super::{
     base_extractor::ExtractState,
@@ -138,7 +138,7 @@ impl SnapshotDispatcher {
         schema: &str,
         tb: &str,
     ) -> (ExtractState, TableMonitorGuard) {
-        let task_id = monitor_util::from_schema_tb(schema, tb);
+        let task_id = TaskMonitorHandle::task_id_from_schema_tb(schema, tb);
         let monitor_handle = extract_state.monitor.monitor.clone();
         let monitor = monitor_handle.build_monitor("extractor", &task_id);
         monitor_handle.register_monitor(&task_id, monitor);

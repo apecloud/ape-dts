@@ -20,7 +20,7 @@ use dt_common::{
         pg::pg_meta_manager::PgMetaManager, rdb_meta_manager::RdbMetaManager,
         redis::redis_statistic_type::RedisStatisticType, syncer::Syncer,
     },
-    monitor::task_monitor::TaskMonitorHandle,
+    monitor::task_monitor_handle::TaskMonitorHandle,
     rdb_filter::RdbFilter,
     time_filter::TimeFilter,
     utils::redis_util::RedisUtil,

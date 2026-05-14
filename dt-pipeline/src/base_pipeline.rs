@@ -26,9 +26,8 @@ use dt_common::{
         syncer::Syncer,
     },
     monitor::{
-        counter_type::CounterType,
-        task_metrics::TaskMetricsType,
-        task_monitor::{MonitorType, TaskMonitorHandle},
+        counter_type::CounterType, task_metrics::TaskMetricsType, task_monitor::MonitorType,
+        task_monitor_handle::TaskMonitorHandle,
     },
 };
 use dt_connector::{

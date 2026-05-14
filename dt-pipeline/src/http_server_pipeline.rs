@@ -20,7 +20,7 @@ use dt_common::{
         avro::avro_converter::AvroConverter, dt_ctl_queue::DtCtlQueue, dt_data::DtData,
         dt_queue::DtQueue, position::Position, syncer::Syncer,
     },
-    monitor::{counter_type::CounterType, task_monitor::TaskMonitorHandle},
+    monitor::{counter_type::CounterType, task_monitor_handle::TaskMonitorHandle},
 };
 use dt_parallelizer::base_parallelizer::BaseParallelizer;
 

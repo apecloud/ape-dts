@@ -13,7 +13,8 @@ use dt_common::{
     log_diff, log_info, log_miss, log_sql, log_summary,
     meta::struct_meta::struct_data::StructData,
     monitor::{
-        counter_type::CounterType, task_metrics::TaskMetricsType, task_monitor::TaskMonitorHandle,
+        counter_type::CounterType, task_metrics::TaskMetricsType,
+        task_monitor_handle::TaskMonitorHandle,
     },
     rdb_filter::RdbFilter,
 };

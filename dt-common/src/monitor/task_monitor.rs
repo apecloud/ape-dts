@@ -1,8 +1,5 @@
 use std::{cmp, collections::BTreeMap, sync::Arc};
 
-use async_trait::async_trait;
-use dashmap::DashMap;
-
 use super::{group_monitor::GroupMonitor, monitor::Monitor};
 #[cfg(feature = "metrics")]
 use crate::monitor::prometheus_metrics::PrometheusMetrics;
@@ -12,6 +9,8 @@ use crate::{
     monitor::{counter_type::CounterType, task_metrics::TaskMetricsType, FlushableMonitor},
     utils::limit_queue::LimitedQueue,
 };
+use async_trait::async_trait;
+use dashmap::DashMap;
 
 #[derive(Clone)]
 pub struct TaskMonitor {
@@ -37,15 +36,6 @@ pub enum MonitorType {
     Pipeline,
     Sinker,
     Checker,
-}
-
-#[derive(Clone)]
-pub struct TaskMonitorHandle {
-    task_monitor: Option<Arc<TaskMonitor>>,
-    monitor_type: MonitorType,
-    time_window_secs: u64,
-    max_sub_count: u64,
-    count_window: u64,
 }
 
 enum CalcType {
@@ -246,22 +236,6 @@ impl TaskMonitor {
             }
         }
         calc_nowindow_metrics(&self.no_window_metrics_map, calc_monitors);
-    }
-
-    pub fn handle(
-        self: &Arc<Self>,
-        monitor_type: MonitorType,
-        time_window_secs: u64,
-        max_sub_count: u64,
-        count_window: u64,
-    ) -> TaskMonitorHandle {
-        TaskMonitorHandle {
-            task_monitor: Some(self.clone()),
-            monitor_type,
-            time_window_secs,
-            max_sub_count,
-            count_window,
-        }
     }
 
     pub async fn flush_monitors(&self, task_id: &str, monitor_types: &[MonitorType]) {
@@ -739,139 +713,6 @@ impl TaskMonitor {
         monitors.extend(self.sinkers.iter().map(|item| item.value().clone()));
         monitors.extend(self.checkers.iter().map(|item| item.value().clone()));
         monitors
-    }
-}
-
-impl TaskMonitorHandle {
-    pub fn noop(monitor_type: MonitorType) -> Self {
-        Self {
-            task_monitor: None,
-            monitor_type,
-            time_window_secs: 0,
-            max_sub_count: 0,
-            count_window: 0,
-        }
-    }
-
-    pub fn with_type(&self, monitor_type: MonitorType) -> Self {
-        Self {
-            task_monitor: self.task_monitor.clone(),
-            monitor_type,
-            time_window_secs: self.time_window_secs,
-            max_sub_count: self.max_sub_count,
-            count_window: self.count_window,
-        }
-    }
-
-    pub fn task_type(&self) -> Option<crate::config::config_enums::TaskType> {
-        self.task_monitor
-            .as_ref()
-            .and_then(|task_monitor| task_monitor.get_task_type().copied())
-    }
-
-    pub async fn add_counter(&self, task_id: &str, counter_type: CounterType, value: u64) -> &Self {
-        if let Some(task_monitor) = &self.task_monitor {
-            task_monitor
-                .add_counter(task_id, self.monitor_type.clone(), counter_type, value)
-                .await;
-        }
-        self
-    }
-
-    pub fn set_counter(&self, task_id: &str, counter_type: CounterType, value: u64) -> &Self {
-        if let Some(task_monitor) = &self.task_monitor {
-            task_monitor.set_counter(task_id, self.monitor_type.clone(), counter_type, value);
-        }
-        self
-    }
-
-    pub async fn add_batch_counter(
-        &self,
-        task_id: &str,
-        counter_type: CounterType,
-        value: u64,
-        count: u64,
-    ) -> &Self {
-        if let Some(task_monitor) = &self.task_monitor {
-            task_monitor
-                .add_batch_counter(
-                    task_id,
-                    self.monitor_type.clone(),
-                    counter_type,
-                    value,
-                    count,
-                )
-                .await;
-        }
-        self
-    }
-
-    pub async fn add_multi_counter(
-        &self,
-        task_id: &str,
-        counter_type: CounterType,
-        entry: &LimitedQueue<(u64, u64)>,
-    ) -> &Self {
-        if let Some(task_monitor) = &self.task_monitor {
-            task_monitor
-                .add_multi_counter(task_id, self.monitor_type.clone(), counter_type, entry)
-                .await;
-        }
-        self
-    }
-
-    pub fn add_no_window_metrics(&self, metrics_type: TaskMetricsType, value: u64) {
-        if let Some(task_monitor) = &self.task_monitor {
-            task_monitor.add_no_window_metrics(metrics_type, value);
-        }
-    }
-
-    pub fn build_monitor(&self, name: &str, task_id: &str) -> Arc<Monitor> {
-        Arc::new(Monitor::new(
-            name,
-            task_id,
-            self.time_window_secs,
-            self.max_sub_count,
-            self.count_window,
-        ))
-    }
-
-    pub fn ensure_monitor(&self, task_id: &str) {
-        if let Some(task_monitor) = &self.task_monitor {
-            task_monitor.ensure_monitor(
-                task_id,
-                self.monitor_type.clone(),
-                self.time_window_secs,
-                self.max_sub_count,
-                self.count_window,
-            );
-        }
-    }
-
-    pub fn register_monitor(&self, task_id: &str, monitor: Arc<Monitor>) {
-        if let Some(task_monitor) = &self.task_monitor {
-            task_monitor.register(task_id, vec![(self.monitor_type.clone(), monitor)]);
-        }
-    }
-
-    pub fn unregister_monitor(&self, task_id: &str) {
-        if let Some(task_monitor) = &self.task_monitor {
-            task_monitor.unregister(task_id, vec![self.monitor_type.clone()]);
-        }
-    }
-
-    pub fn time_window_secs(&self) -> u64 {
-        self.time_window_secs
-    }
-
-    pub fn count_window(&self) -> u64 {
-        self.count_window
-    }
-}
-
-impl Default for TaskMonitorHandle {
-    fn default() -> Self {
-        Self::noop(MonitorType::Pipeline)
     }
 }
 

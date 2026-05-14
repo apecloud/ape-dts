@@ -9,7 +9,9 @@ use dt_common::{
         dcl_meta::dcl_data::DclData, ddl_meta::ddl_data::DdlData, dt_data::DtItem,
         dt_queue::DtQueue, row_data::RowData,
     },
-    monitor::{counter::Counter, counter_type::CounterType, task_monitor::TaskMonitorHandle},
+    monitor::{
+        counter::Counter, counter_type::CounterType, task_monitor_handle::TaskMonitorHandle,
+    },
 };
 use dt_connector::Sinker;
 

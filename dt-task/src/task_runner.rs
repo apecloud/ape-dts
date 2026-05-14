@@ -47,9 +47,9 @@ use dt_common::{
         position::Position, row_type::RowType, syncer::Syncer,
     },
     monitor::{
-        monitor::Monitor,
         task_metrics::TaskMetricsType,
-        task_monitor::{MonitorType, TaskMonitor, TaskMonitorHandle},
+        task_monitor::{MonitorType, TaskMonitor},
+        task_monitor_handle::TaskMonitorHandle,
         FlushableMonitor,
     },
     rdb_filter::RdbFilter,
@@ -313,23 +313,16 @@ impl TaskRunner {
         let monitor_time_window_secs = self.config.pipeline.counter_time_window_secs;
         let monitor_max_sub_count = self.config.pipeline.counter_max_sub_count;
         let monitor_count_window = self.config.pipeline.capacity_limiter.buffer_size as u64;
-        let build_monitor = |name| {
-            Arc::new(Monitor::new(
-                name,
-                &single_task_id,
-                monitor_time_window_secs,
-                monitor_max_sub_count,
-                monitor_count_window,
-            ))
-        };
-
-        let extractor_monitor = build_monitor("extractor");
-        let extractor_monitor_handle = self.task_monitor.handle(
+        let extractor_monitor_handle = TaskMonitorHandle::new(
+            self.task_monitor.clone(),
             MonitorType::Extractor,
+            single_task_id.clone(),
             monitor_time_window_secs,
             monitor_max_sub_count,
             monitor_count_window,
         );
+        let extractor_monitor =
+            extractor_monitor_handle.build_monitor("extractor", &single_task_id);
         let extractor = ExtractorUtil::create_extractor(
             &self.config,
             &extractor_config,
@@ -347,13 +340,15 @@ impl TaskRunner {
         .await?;
         let extractor = Arc::new(Mutex::new(extractor));
 
-        let checker_monitor = build_monitor("checker");
-        let checker_monitor_handle = self.task_monitor.handle(
+        let checker_monitor_handle = TaskMonitorHandle::new(
+            self.task_monitor.clone(),
             MonitorType::Checker,
+            single_task_id.clone(),
             monitor_time_window_secs,
             monitor_max_sub_count,
             monitor_count_window,
         );
+        let checker_monitor = checker_monitor_handle.build_monitor("checker", &single_task_id);
         let checker = self
             .create_checker(
                 self.config.checker.as_ref(),
@@ -365,13 +360,15 @@ impl TaskRunner {
             )
             .await?;
 
-        let sinker_monitor = build_monitor("sinker");
-        let sinker_monitor_handle = self.task_monitor.handle(
+        let sinker_monitor_handle = TaskMonitorHandle::new(
+            self.task_monitor.clone(),
             MonitorType::Sinker,
+            single_task_id.clone(),
             monitor_time_window_secs,
             monitor_max_sub_count,
             monitor_count_window,
         );
+        let sinker_monitor = sinker_monitor_handle.build_monitor("sinker", &single_task_id);
         let sinkers = SinkerUtil::create_sinkers(
             &self.config,
             &extractor_config,
@@ -386,8 +383,10 @@ impl TaskRunner {
         )
         .await?;
 
-        let pipeline_monitor_handle = self.task_monitor.handle(
+        let pipeline_monitor_handle = TaskMonitorHandle::new(
+            self.task_monitor.clone(),
             MonitorType::Pipeline,
+            self.config.global.task_id.clone(),
             monitor_time_window_secs,
             monitor_max_sub_count,
             monitor_count_window,
@@ -890,7 +889,6 @@ impl TaskRunner {
                 monitor_task_id: single_task_id.to_string(),
                 base_sinker: BaseSinker::new(
                     monitor.clone(),
-                    single_task_id.to_string(),
                     self.config.pipeline.checkpoint_interval_secs,
                 ),
                 output_full_row: cfg.output_full_row,

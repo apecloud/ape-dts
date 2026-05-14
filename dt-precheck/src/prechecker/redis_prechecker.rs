@@ -16,7 +16,7 @@ use dt_common::{
         task_config::TaskConfig,
     },
     meta::{dt_ctl_queue::DtCtlQueue, dt_queue::DtQueue, syncer::Syncer},
-    monitor::task_monitor::{MonitorType, TaskMonitorHandle},
+    monitor::{task_monitor::MonitorType, task_monitor_handle::TaskMonitorHandle},
     rdb_filter::RdbFilter,
     time_filter::TimeFilter,
 };

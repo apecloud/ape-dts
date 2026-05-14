@@ -1,22 +1,19 @@
 use dt_common::{
-    config::config_enums::TaskKind,
     meta::row_data::RowData,
-    monitor::{counter_type::CounterType, task_monitor::TaskMonitorHandle},
+    monitor::{counter_type::CounterType, task_monitor_handle::TaskMonitorHandle},
     utils::limit_queue::LimitedQueue,
 };
 
 #[derive(Clone, Default)]
 pub struct BaseSinker {
     pub monitor: TaskMonitorHandle,
-    pub default_task_id: String,
     pub monitor_interval: u64,
 }
 
 impl BaseSinker {
-    pub fn new(monitor: TaskMonitorHandle, default_task_id: String, monitor_interval: u64) -> Self {
+    pub fn new(monitor: TaskMonitorHandle, monitor_interval: u64) -> Self {
         Self {
             monitor,
-            default_task_id,
             monitor_interval,
         }
     }
@@ -29,36 +26,16 @@ impl BaseSinker {
         }
     }
 
-    pub fn is_snapshot_task(&self) -> bool {
-        self.monitor
-            .task_type()
-            .is_some_and(|task_type| task_type.kind == TaskKind::Snapshot)
-    }
-
     pub fn task_id_for_schema_tb(&self, schema: &str, tb: &str) -> String {
-        if self.is_snapshot_task() && !schema.is_empty() && !tb.is_empty() {
-            return format!("{}.{}", schema, tb);
-        }
-        self.default_task_id.clone()
+        self.monitor.task_id_for_schema_tb(schema, tb)
     }
 
     pub fn task_id_for_rows(&self, rows: &[RowData]) -> String {
-        if !self.is_snapshot_task() {
-            return self.default_task_id.clone();
-        }
-
-        let Some(first) = rows.first() else {
-            return self.default_task_id.clone();
-        };
-
-        // FIXME: pipline promise that rows are from the same table for now.
-        self.task_id_for_schema_tb(&first.schema, &first.tb)
+        self.monitor.task_id_for_rows(rows)
     }
 
     pub fn ensure_monitor_for(&self, task_id: &str) {
-        if self.is_snapshot_task() && !task_id.is_empty() && task_id != self.default_task_id {
-            self.monitor.ensure_monitor(task_id);
-        }
+        self.monitor.ensure_snapshot_monitor(task_id);
     }
 
     pub async fn update_batch_monitor(
@@ -66,7 +43,7 @@ impl BaseSinker {
         batch_size: u64,
         data_size: u64,
     ) -> anyhow::Result<()> {
-        self.update_batch_monitor_for(&self.default_task_id, batch_size, data_size)
+        self.update_batch_monitor_for(self.monitor.default_task_id(), batch_size, data_size)
             .await
     }
 
@@ -91,7 +68,7 @@ impl BaseSinker {
         record_count: u64,
         data_size: u64,
     ) -> anyhow::Result<()> {
-        self.update_serial_monitor_for(&self.default_task_id, record_count, data_size)
+        self.update_serial_monitor_for(self.monitor.default_task_id(), record_count, data_size)
             .await
     }
 
@@ -119,7 +96,8 @@ impl BaseSinker {
     }
 
     pub async fn update_monitor_rt(&self, rts: &LimitedQueue<(u64, u64)>) -> anyhow::Result<()> {
-        self.update_monitor_rt_for(&self.default_task_id, rts).await
+        self.update_monitor_rt_for(self.monitor.default_task_id(), rts)
+            .await
     }
 
     pub async fn update_monitor_rt_for(

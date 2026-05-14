@@ -17,7 +17,10 @@ use dt_common::meta::{
 };
 use dt_common::{
     log_diff, log_miss, log_sql, log_warn,
-    monitor::{counter_type::CounterType, monitor_util, task_metrics::TaskMetricsType},
+    monitor::{
+        counter_type::CounterType, task_metrics::TaskMetricsType,
+        task_monitor_handle::TaskMonitorHandle,
+    },
     utils::limit_queue::LimitedQueue,
 };
 
@@ -803,7 +806,7 @@ impl<C: Checker> DataChecker<C> {
             if monitor_task_id.is_none() {
                 monitor_task_id = rows
                     .first()
-                    .map(|row| monitor_util::from_row_data(row))
+                    .map(|row| TaskMonitorHandle::task_id_from_row_data(row))
                     .filter(|id| !id.is_empty());
             }
             let fetch_result = self.checker.fetch(&rows).await?;
@@ -863,7 +866,7 @@ mod tests {
     use super::*;
     use crate::{checker::check_log::CheckSummaryLog, rdb_router::RdbRouter};
     use async_trait::async_trait;
-    use dt_common::monitor::task_monitor::TaskMonitorHandle;
+    use dt_common::monitor::task_monitor_handle::TaskMonitorHandle;
 
     struct DummyChecker;
 
@@ -880,7 +883,6 @@ mod tests {
             monitor_task_id: "unit-test".to_string(),
             base_sinker: crate::sinker::base_sinker::BaseSinker::new(
                 TaskMonitorHandle::default(),
-                "unit-test".to_string(),
                 1,
             ),
             summary: CheckSummaryLog {

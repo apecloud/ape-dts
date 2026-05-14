@@ -29,7 +29,7 @@ use dt_common::meta::{
 };
 use dt_common::{
     config::config_enums::TaskKind, log_error, log_info, log_summary, log_warn,
-    monitor::task_monitor::TaskMonitorHandle, utils::limit_queue::LimitedQueue,
+    monitor::task_monitor_handle::TaskMonitorHandle, utils::limit_queue::LimitedQueue,
 };
 
 #[path = "cdc_state.rs"]
@@ -906,7 +906,7 @@ mod tests {
     use super::*;
     use crate::{checker::check_log::CheckSummaryLog, rdb_router::RdbRouter};
     use async_trait::async_trait;
-    use dt_common::{meta::row_type::RowType, monitor::monitor::Monitor};
+    use dt_common::meta::row_type::RowType;
     use std::collections::HashMap;
     use std::sync::Arc;
     use tokio::{
@@ -933,7 +933,7 @@ mod tests {
         CheckContext {
             monitor: TaskMonitorHandle::default(),
             monitor_task_id: "unit-test".to_string(),
-            base_sinker: BaseSinker::new(TaskMonitorHandle::default(), "unit-test".to_string(), 1),
+            base_sinker: BaseSinker::new(TaskMonitorHandle::default(), 1),
             summary: CheckSummaryLog {
                 start_time: "unit-test".to_string(),
                 ..Default::default()
