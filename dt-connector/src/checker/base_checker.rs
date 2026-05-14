@@ -28,8 +28,8 @@ use dt_common::meta::{
     rdb_tb_meta::RdbTbMeta, row_data::RowData, row_type::RowType,
 };
 use dt_common::{
-    config::config_enums::TaskKind, log_error, log_info, log_summary, log_warn,
-    monitor::task_monitor_handle::TaskMonitorHandle, utils::limit_queue::LimitedQueue,
+    log_error, log_info, log_summary, log_warn, monitor::task_monitor_handle::TaskMonitorHandle,
+    utils::limit_queue::LimitedQueue,
 };
 
 #[path = "cdc_state.rs"]
@@ -183,7 +183,6 @@ impl CheckerTbMeta {
 #[derive(Clone)]
 pub struct CheckContext {
     pub monitor: TaskMonitorHandle,
-    pub monitor_task_id: String,
     pub base_sinker: BaseSinker,
     pub summary: CheckSummaryLog,
     pub output_revise_sql: bool,
@@ -213,7 +212,7 @@ impl CheckContext {
         value: u64,
     ) {
         self.monitor
-            .add_counter(&self.monitor_task_id, counter_type, value)
+            .add_counter(self.monitor.default_task_id(), counter_type, value)
             .await;
     }
 
@@ -223,7 +222,7 @@ impl CheckContext {
         value: u64,
     ) {
         self.monitor
-            .set_counter(&self.monitor_task_id, counter_type, value);
+            .set_counter(self.monitor.default_task_id(), counter_type, value);
     }
 
     pub fn add_checker_metric(
@@ -707,14 +706,6 @@ impl<C: Checker> DataChecker<C> {
 
     pub async fn run(mut self) -> anyhow::Result<()> {
         log_info!("Checker [{}] started.", self.name);
-        let is_snapshot_task = self
-            .ctx
-            .monitor
-            .task_type()
-            .is_some_and(|task_type| task_type.kind == TaskKind::Snapshot);
-        if is_snapshot_task {
-            self.ctx.monitor.ensure_monitor(&self.ctx.monitor_task_id);
-        }
         let mut interval = tokio::time::interval(Duration::from_secs(1));
         if let Err(err) = self.init_cdc_state().await {
             log_error!(
@@ -762,11 +753,6 @@ impl<C: Checker> DataChecker<C> {
         }
         if let Err(err) = self.shutdown().await {
             log_error!("Checker [{}] shutdown failed: {}", self.name, err);
-        }
-        if is_snapshot_task {
-            self.ctx
-                .monitor
-                .unregister_monitor(&self.ctx.monitor_task_id);
         }
         log_info!("Checker [{}] stopped.", self.name);
         Ok(())
@@ -932,7 +918,6 @@ mod tests {
     fn build_ctx() -> CheckContext {
         CheckContext {
             monitor: TaskMonitorHandle::default(),
-            monitor_task_id: "unit-test".to_string(),
             base_sinker: BaseSinker::new(TaskMonitorHandle::default(), 1),
             summary: CheckSummaryLog {
                 start_time: "unit-test".to_string(),

@@ -723,11 +723,7 @@ impl TaskRunner {
         } else {
             cfg.check_log_dir.clone()
         };
-        let checker_task_id = if single_task_id.is_empty() {
-            self.config.global.task_id.clone()
-        } else {
-            format!("{}::{}", self.config.global.task_id, single_task_id)
-        };
+        let checker_task_id = single_task_id.to_string();
         let cdc_check_log_max_file_size =
             parse_size_limit(&cfg.check_log_file_size).map_err(|e| {
                 Error::ConfigError(format!(
@@ -880,7 +876,6 @@ impl TaskRunner {
                 reverse_router,
                 batch_size: checker_batch_size,
                 monitor: monitor.clone(),
-                monitor_task_id: single_task_id.to_string(),
                 base_sinker: BaseSinker::new(
                     monitor.clone(),
                     self.config.pipeline.checkpoint_interval_secs,

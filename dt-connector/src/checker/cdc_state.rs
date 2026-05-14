@@ -574,7 +574,6 @@ mod tests {
             "task-1".to_string(),
             CheckContext {
                 monitor: TaskMonitorHandle::default(),
-                monitor_task_id: "unit-test".to_string(),
                 base_sinker: crate::sinker::base_sinker::BaseSinker::new(
                     TaskMonitorHandle::default(),
                     1,

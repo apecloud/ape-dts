@@ -31,6 +31,10 @@ pub struct CheckTestRunner {
 }
 
 impl CheckTestRunner {
+    fn checker_task_id(&self) -> String {
+        self.base.config.global.task_id.clone()
+    }
+
     fn set_snapshot_parallel_size(&self, parallel_size: usize) {
         TestConfigUtil::update_task_config(
             &self.base.base.task_config_file,
@@ -126,13 +130,13 @@ impl CheckTestRunner {
 
     async fn get_resumer_unresolved_row_count(&self) -> anyhow::Result<i64> {
         let (schema, _) = self.get_resumer_tables()?;
-        let task_id = &self.base.config.global.task_id;
+        let task_id = self.checker_task_id();
         if let Some(pool) = &self.base.dst_conn_pool_mysql {
             let sql = format!(
                 "SELECT COUNT(*) AS cnt FROM `{}`.`apedts_unconsistent_rows` WHERE task_id = ?",
                 schema
             );
-            let row = sqlx::query(&sql).bind(task_id).fetch_one(pool).await?;
+            let row = sqlx::query(&sql).bind(&task_id).fetch_one(pool).await?;
             return Ok(row.get::<i64, _>("cnt"));
         }
         if let Some(pool) = &self.base.dst_conn_pool_pg {
@@ -140,7 +144,7 @@ impl CheckTestRunner {
                 "SELECT COUNT(*) AS cnt FROM {}.apedts_unconsistent_rows WHERE task_id = $1",
                 schema
             );
-            let row = sqlx::query(&sql).bind(task_id).fetch_one(pool).await?;
+            let row = sqlx::query(&sql).bind(&task_id).fetch_one(pool).await?;
             return Ok(row.get::<i64, _>("cnt"));
         }
         anyhow::bail!("no sinker pool available for querying resumer unresolved rows")
@@ -283,7 +287,7 @@ impl CheckTestRunner {
         let position = self.fetch_current_mysql_cdc_position().await?;
         let row = Self::build_seed_unresolved_row()?;
         let commit = CheckerCheckpointCommit {
-            task_id: self.base.config.global.task_id.clone(),
+            task_id: self.checker_task_id(),
             position,
             upserts: vec![row],
             deletes: Vec::new(),
@@ -423,7 +427,7 @@ impl CheckTestRunner {
             .execute_src_sqls(&self.base.base.src_test_sqls)
             .await?;
         self.base
-            .execute_dst_sqls(&self.base.base.src_test_sqls)
+            .execute_dst_sqls(&self.base.base.dst_test_sqls)
             .await?;
         self.seed_checker_state_resume_metadata().await?;
 

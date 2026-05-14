@@ -839,7 +839,8 @@ impl<C: Checker> DataChecker<C> {
         }
         self.enqueue_retry_rows(retry_rows);
 
-        let task_id = monitor_task_id.unwrap_or_else(|| self.ctx.monitor_task_id.clone());
+        let task_id =
+            monitor_task_id.unwrap_or_else(|| self.ctx.monitor.default_task_id().to_string());
         self.ctx.monitor.ensure_monitor(&task_id);
         if is_serial_mode {
             self.ctx
@@ -880,7 +881,6 @@ mod tests {
     fn build_ctx(is_cdc: bool) -> CheckContext {
         CheckContext {
             monitor: TaskMonitorHandle::default(),
-            monitor_task_id: "unit-test".to_string(),
             base_sinker: crate::sinker::base_sinker::BaseSinker::new(
                 TaskMonitorHandle::default(),
                 1,
