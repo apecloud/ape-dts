@@ -183,13 +183,19 @@ impl TaskConfig {
                 )
             };
 
-            if checker_cfg.check_log_s3
-                && !task_type.is_some_and(|task_type| task_type.is_cdc_inline_check())
-            {
+            let check_log_s3_supported = task_type.is_some_and(|task_type| {
+                task_type.is_cdc_inline_check() || task_type.is_standalone_snapshot_check()
+            });
+            if checker_cfg.check_log_s3 && !check_log_s3_supported {
                 bail!(Error::ConfigError(format!(
-                    "config [checker].{} only supports inline cdc check",
+                    "config [checker].{} only supports standalone snapshot check or inline cdc check",
                     CHECK_LOG_S3
                 )));
+            }
+            if checker_cfg.check_log_s3 && checker_cfg.s3_config.is_none() {
+                bail!(Error::ConfigError(
+                    "check_log_s3=true but checker s3 config is missing in [checker]".into(),
+                ));
             }
 
             if checker_cfg.sample_rate.is_some()
@@ -1434,6 +1440,22 @@ s3_key_prefix=check/10001
             "ape-dts"
         );
 
+        let checker = load_temp_task_config(&snapshot_check_config(
+            r#"
+check_log_s3=true
+s3_bucket=ape-dts
+s3_access_key_id=ak
+s3_secret_access_key=sk
+s3_region=us-east-1
+s3_endpoint=http://127.0.0.1:9000
+s3_key_prefix=check/10001
+"#,
+        ))
+        .expect("standalone snapshot checker s3 config should be valid")
+        .checker
+        .expect("checker should exist");
+        assert!(checker.check_log_s3);
+
         let checker = load_temp_task_config(
             r#"[extractor]
 db_type=mysql
@@ -1497,15 +1519,6 @@ enable=false
                 "config error: config [sinker] is required unless [checker].enable=true",
             ),
             (
-                snapshot_check_config(
-                    r#"
-check_log_s3=true
-s3_bucket=ape-dts
-"#,
-                ),
-                "config error: config [checker].check_log_s3 only supports inline cdc check",
-            ),
-            (
                 r#"[extractor]
 db_type=mysql
 extract_type=check_log
@@ -1523,7 +1536,33 @@ s3_bucket=ape-dts
 parallel_type=rdb_merge
 "#
                 .to_string(),
-                "config error: config [checker].check_log_s3 only supports inline cdc check",
+                "config error: config [checker].check_log_s3 only supports standalone snapshot check or inline cdc check",
+            ),
+            (
+                r#"[extractor]
+db_type=mysql
+extract_type=snapshot
+url=mysql://127.0.0.1:3306
+
+[sinker]
+db_type=mysql
+sink_type=write
+url=mysql://127.0.0.1:3307
+
+[checker]
+enable=true
+check_log_s3=true
+s3_bucket=ape-dts
+
+[parallelizer]
+parallel_type=rdb_merge
+"#
+                .to_string(),
+                "config error: config [checker].check_log_s3 only supports standalone snapshot check or inline cdc check",
+            ),
+            (
+                snapshot_check_config("check_log_s3=true"),
+                "config error: check_log_s3=true but checker s3 config is missing in [checker]",
             ),
             (
                 snapshot_check_config("sample_rate=0"),

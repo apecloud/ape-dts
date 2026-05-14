@@ -75,7 +75,7 @@ Struct check is supported only for standalone MySQL/PostgreSQL checker targets.
 | url                         | checker target URL (standalone target only)                            | mysql://... | -                                 |
 | username                    | checker target username (standalone target only)                       | root        | empty                             |
 | password                    | checker target password (standalone target only)                       | password    | empty                             |
-| check_log_s3                | upload periodic inline CDC check snapshot to S3                        | false       | false                             |
+| check_log_s3                | upload check logs to S3 for standalone snapshot or inline CDC check    | false       | false                             |
 | cdc_check_log_interval_secs | interval (seconds) for periodic CDC check snapshot output              | 10          | 10                                |
 | s3_bucket                   | S3 bucket for check log upload                                         | my-bucket   | -                                 |
 | s3_access_key_id            | S3 access key id                                                       | AKIA...     | -                                 |
@@ -131,10 +131,12 @@ Notes:
 **Inline cdc check log / retry behavior**
 - In inline cdc check, `[checker].max_retries` / `[checker].retry_interval_secs` are forced to `0`.
 - When `check_log_dir` is empty, `runtime.log_dir/check` is used consistently for checker logs (including CDC check outputs).
-- Standalone snapshot check writes check results through the local check loggers only; it does not
-  upload check logs to S3.
+- Standalone snapshot check writes check results locally first. If `check_log_s3=true`, the final
+  local `miss.log`, `diff.log`, `summary.log`, and optional `sql.log` are uploaded to S3 after the
+  check task finishes.
 - In inline cdc check, periodic check snapshots are always written locally under `check_log_dir`;
-  `check_log_s3` controls only S3 upload and is valid only for inline cdc check.
+  `check_log_s3` controls only S3 upload. Outside inline cdc check, S3 upload is supported only by
+  standalone snapshot check.
 - `check_log_file_size` limits local `diff.log` / `miss.log` / `sql.log`. `summary.log` is not
   size-limited.
 - `check_log_max_rows` only applies to CDC check snapshots for `diff.log` / `miss.log`; when either

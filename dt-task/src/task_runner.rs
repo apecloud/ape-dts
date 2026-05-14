@@ -10,8 +10,9 @@ use std::{
 use anyhow::{bail, Context};
 use chrono::Local;
 use log4rs::config::{Config, Deserializers, RawConfig};
+use opendal::Operator;
 use tokio::{
-    fs::{metadata, File},
+    fs::{self as tokio_fs, metadata, File},
     io::AsyncReadExt,
     sync::{Mutex, RwLock},
     task::JoinSet,
@@ -34,9 +35,7 @@ use dt_common::log_filter::{parse_size_limit, SizeLimitFilterDeserializer};
 use dt_common::{
     config::{
         checker_config::CheckerConfig,
-        config_enums::{
-            CheckMode, DbType, ExtractType, PipelineType, SinkType, TaskKind, TaskType,
-        },
+        config_enums::{DbType, ExtractType, PipelineType, SinkType, TaskType},
         config_token_parser::{ConfigTokenParser, TokenEscapePair},
         extractor_config::ExtractorConfig,
         sinker_config::SinkerConfig,
@@ -296,9 +295,103 @@ impl TaskRunner {
         }
 
         log::logger().flush();
+        self.upload_standalone_snapshot_check_logs_to_s3().await?;
         log_finished!("task finished");
         log::logger().flush();
         Ok(())
+    }
+
+    async fn upload_standalone_snapshot_check_logs_to_s3(&self) -> anyhow::Result<()> {
+        let Some(cfg) = self.config.checker.as_ref() else {
+            return Ok(());
+        };
+        if !self
+            .task_type
+            .is_some_and(|task_type| task_type.is_standalone_snapshot_check())
+        {
+            return Ok(());
+        }
+        let Some((s3_client, key_prefix)) = self.check_log_s3_output(cfg, "")? else {
+            return Ok(());
+        };
+        self.upload_local_check_logs_to_s3(&s3_client, &key_prefix, &self.check_log_dir(cfg))
+            .await
+    }
+
+    async fn upload_local_check_logs_to_s3(
+        &self,
+        s3_client: &Operator,
+        key_prefix: &str,
+        check_log_dir: &str,
+    ) -> anyhow::Result<()> {
+        let miss_buf = Self::read_optional_check_log(check_log_dir, "miss.log").await?;
+        let diff_buf = Self::read_optional_check_log(check_log_dir, "diff.log").await?;
+        let summary_buf = tokio_fs::read(format!("{check_log_dir}/summary.log")).await?;
+        let miss_key = format!("{key_prefix}/miss.log");
+        let diff_key = format!("{key_prefix}/diff.log");
+        let summary_key = format!("{key_prefix}/summary.log");
+        tokio::try_join!(
+            s3_client.write(&miss_key, miss_buf),
+            s3_client.write(&diff_key, diff_buf),
+            s3_client.write(&summary_key, summary_buf),
+        )?;
+
+        self.upload_or_delete_optional_check_log(s3_client, key_prefix, check_log_dir, "sql.log")
+            .await
+    }
+
+    async fn upload_or_delete_optional_check_log(
+        &self,
+        s3_client: &Operator,
+        key_prefix: &str,
+        check_log_dir: &str,
+        file_name: &str,
+    ) -> anyhow::Result<()> {
+        let key = format!("{key_prefix}/{file_name}");
+        match Self::read_optional_check_log(check_log_dir, file_name).await? {
+            buf if buf.is_empty() => {
+                s3_client.delete(&key).await?;
+            }
+            buf => {
+                s3_client.write(&key, buf).await?;
+            }
+        }
+        Ok(())
+    }
+
+    async fn read_optional_check_log(dir: &str, file_name: &str) -> std::io::Result<Vec<u8>> {
+        match tokio_fs::read(format!("{dir}/{file_name}")).await {
+            Ok(buf) => Ok(buf),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+            Err(err) => Err(err),
+        }
+    }
+
+    fn check_log_s3_output(
+        &self,
+        cfg: &CheckerConfig,
+        single_task_id: &str,
+    ) -> anyhow::Result<Option<(Operator, String)>> {
+        if !cfg.check_log_s3 {
+            return Ok(None);
+        }
+        let s3_cfg = cfg.s3_config.as_ref().ok_or_else(|| {
+            Error::ConfigError(
+                "check_log_s3=true but checker s3 config is missing in [checker]".into(),
+            )
+        })?;
+        Ok(Some((
+            TaskUtil::create_s3_client(s3_cfg)?,
+            self.check_log_s3_key_prefix(cfg, single_task_id),
+        )))
+    }
+
+    fn check_log_dir(&self, cfg: &CheckerConfig) -> String {
+        if cfg.check_log_dir.is_empty() {
+            format!("{}/check", self.config.runtime.log_dir)
+        } else {
+            cfg.check_log_dir.clone()
+        }
     }
 
     async fn start_multi_task(&self, task_context: TaskContext) -> anyhow::Result<()> {
@@ -914,11 +1007,7 @@ impl TaskRunner {
         if cfg.batch_size == 0 {
             log_warn!("checker.batch_size=0 is invalid. Using 1.");
         }
-        let check_log_dir_base = if cfg.check_log_dir.is_empty() {
-            format!("{}/check", self.config.runtime.log_dir)
-        } else {
-            cfg.check_log_dir.clone()
-        };
+        let check_log_dir_base = self.check_log_dir(cfg);
         let checker_task_id = if single_task_id.is_empty() {
             self.config.global.task_id.clone()
         } else {
@@ -960,10 +1049,9 @@ impl TaskRunner {
             .config
             .task_type()
             .is_some_and(|task_type| task_type.is_inline_check());
-        let standalone_snapshot_check = self.task_type.is_some_and(|task_type| {
-            matches!(task_type.kind, TaskKind::Snapshot)
-                && matches!(task_type.check, Some(CheckMode::Standalone))
-        });
+        let standalone_snapshot_check = self
+            .task_type
+            .is_some_and(|task_type| task_type.is_standalone_snapshot_check());
         let checker_sample_rate = if standalone_snapshot_check {
             None
         } else {
@@ -1034,15 +1122,8 @@ impl TaskRunner {
             return Ok(Some(CheckerHandle::Struct(checker)));
         }
 
-        let s3_output = if cfg.check_log_s3 && is_cdc_task {
-            let s3_cfg = cfg.s3_config.as_ref().ok_or_else(|| {
-                Error::ConfigError(
-                    "check_log_s3=true but checker s3 config is missing in [checker]".into(),
-                )
-            })?;
-            let s3_client = TaskUtil::create_s3_client(s3_cfg)?;
-            let key_prefix = self.check_log_s3_key_prefix(cfg, single_task_id);
-            Some((s3_client, key_prefix))
+        let s3_output = if is_cdc_task {
+            self.check_log_s3_output(cfg, single_task_id)?
         } else {
             None
         };

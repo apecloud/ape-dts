@@ -72,7 +72,7 @@ struct check 仅支持 standalone MySQL/PostgreSQL checker target。
 | url                         | 校验目标 URL（仅 standalone 目标配置）                         | mysql://... | -                                |
 | username                    | 校验目标用户名（仅 standalone 目标配置）                       | root        | 空                               |
 | password                    | 校验目标密码（仅 standalone 目标配置）                         | password    | 空                               |
-| check_log_s3                | 定期将 inline CDC 校验快照上传至 S3                            | false       | false                            |
+| check_log_s3                | standalone snapshot 或 inline CDC check 上传校验日志到 S3       | false       | false                            |
 | cdc_check_log_interval_secs | CDC 校验快照输出间隔（秒）                                     | 10          | 10                               |
 | s3_bucket                   | 校验日志上传的 S3 存储桶                                       | my-bucket   | -                                |
 | s3_access_key_id            | S3 访问密钥 ID                                                 | AKIA...     | -                                |
@@ -124,9 +124,11 @@ struct check 仅支持 standalone MySQL/PostgreSQL checker target。
 **inline cdc check 的日志 / 重试行为**
 - 对 inline cdc check，`max_retries` 与 `retry_interval_secs` 会强制按 0 处理。
 - 当 `check_log_dir` 为空时，统一使用 `runtime.log_dir/check` 作为 checker 日志目录（包含 CDC 校验输出）。
-- standalone snapshot check 只通过本地 check logger 输出校验结果，不再上传校验日志到 S3。
+- standalone snapshot check 先输出本地校验日志；如果 `check_log_s3=true`，任务结束后会将最终的
+  `miss.log`、`diff.log`、`summary.log` 和可选的 `sql.log` 上传到 S3。
 - 在 inline cdc check 下，会始终先在 `check_log_dir` 本地落盘周期性校验快照；
-  `check_log_s3` 仅控制是否上传 S3，且只支持 inline cdc check。
+  `check_log_s3` 仅控制是否上传 S3。除 inline cdc check 外，S3 上传只支持 standalone
+  snapshot check。
 - `check_log_file_size` 限制本地 `diff.log` / `miss.log` / `sql.log` 的大小，`summary.log`
   不受该限制。
 - `check_log_max_rows` 仅对 CDC 校验快照的 `diff.log` / `miss.log` 生效；命中任一阈值时仅保留最新记录。
