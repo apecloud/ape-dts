@@ -1,90 +1,38 @@
-use std::{
-    collections::{BTreeMap, HashMap},
-    str::FromStr,
-};
+use std::{collections::HashMap, str::FromStr};
 
 use anyhow::Context;
 use dt_common::{error::Error, meta::col_value::ColValue, utils::serialize_util::SerializeUtil};
-use serde::{ser::SerializeStruct, Deserialize, Serialize, Serializer};
+use serde::{Deserialize, Serialize};
 
-#[derive(Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct CheckLog {
     pub schema: String,
     pub tb: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target_schema: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target_tb: Option<String>,
+    #[serde(serialize_with = "SerializeUtil::ordered_map")]
     pub id_col_values: HashMap<String, Option<String>>,
-    #[serde(default)]
     // diff_col_values is empty means no diff, is miss
+    #[serde(
+        default,
+        skip_serializing_if = "HashMap::is_empty",
+        serialize_with = "SerializeUtil::ordered_map"
+    )]
     pub diff_col_values: HashMap<String, DiffColValue>,
-    #[serde(default)]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "SerializeUtil::ordered_option_map"
+    )]
     pub src_row: Option<HashMap<String, ColValue>>,
-    #[serde(default)]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "SerializeUtil::ordered_option_map"
+    )]
     pub dst_row: Option<HashMap<String, ColValue>>,
-}
-
-fn ordered_map<V>(map: &HashMap<String, V>) -> BTreeMap<&String, &V> {
-    map.iter().collect()
-}
-
-fn has_target_identity(
-    schema: &str,
-    tb: &str,
-    target_schema: Option<&String>,
-    target_tb: Option<&String>,
-) -> bool {
-    target_schema.is_some_and(|target_schema| target_schema != schema)
-        || target_tb.is_some_and(|target_tb| target_tb != tb)
-}
-
-impl Serialize for CheckLog {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        let mut len = 3;
-        let has_target = has_target_identity(
-            &self.schema,
-            &self.tb,
-            self.target_schema.as_ref(),
-            self.target_tb.as_ref(),
-        );
-        if has_target {
-            len += 2;
-        }
-        if !self.diff_col_values.is_empty() {
-            len += 1;
-        }
-        if self.src_row.is_some() {
-            len += 1;
-        }
-        if self.dst_row.is_some() {
-            len += 1;
-        }
-
-        let mut state = serializer.serialize_struct("CheckLog", len)?;
-        state.serialize_field("schema", &self.schema)?;
-        state.serialize_field("tb", &self.tb)?;
-        if has_target {
-            let target_schema = self.target_schema.as_ref().unwrap_or(&self.schema);
-            let target_tb = self.target_tb.as_ref().unwrap_or(&self.tb);
-            state.serialize_field("target_schema", target_schema)?;
-            state.serialize_field("target_tb", target_tb)?;
-        }
-        state.serialize_field("id_col_values", &ordered_map(&self.id_col_values))?;
-        if !self.diff_col_values.is_empty() {
-            state.serialize_field("diff_col_values", &ordered_map(&self.diff_col_values))?;
-        }
-        if let Some(src_row) = &self.src_row {
-            state.serialize_field("src_row", &ordered_map(src_row))?;
-        }
-        if let Some(dst_row) = &self.dst_row {
-            state.serialize_field("dst_row", &ordered_map(dst_row))?;
-        }
-        state.end()
-    }
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -120,13 +68,13 @@ pub struct CheckSummaryLog {
     pub tables: Vec<CheckTableSummaryLog>,
 }
 
-#[derive(Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
 pub struct CheckTableSummaryLog {
     pub schema: String,
     pub tb: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target_schema: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target_tb: Option<String>,
     #[serde(default)]
     pub checked_count: usize,
@@ -136,39 +84,6 @@ pub struct CheckTableSummaryLog {
     pub diff_count: usize,
     #[serde(default)]
     pub skip_count: usize,
-}
-
-impl Serialize for CheckTableSummaryLog {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        let mut len = 6;
-        let has_target = has_target_identity(
-            &self.schema,
-            &self.tb,
-            self.target_schema.as_ref(),
-            self.target_tb.as_ref(),
-        );
-        if has_target {
-            len += 2;
-        }
-
-        let mut state = serializer.serialize_struct("CheckTableSummaryLog", len)?;
-        state.serialize_field("schema", &self.schema)?;
-        state.serialize_field("tb", &self.tb)?;
-        if has_target {
-            let target_schema = self.target_schema.as_ref().unwrap_or(&self.schema);
-            let target_tb = self.target_tb.as_ref().unwrap_or(&self.tb);
-            state.serialize_field("target_schema", target_schema)?;
-            state.serialize_field("target_tb", target_tb)?;
-        }
-        state.serialize_field("checked_count", &self.checked_count)?;
-        state.serialize_field("miss_count", &self.miss_count)?;
-        state.serialize_field("diff_count", &self.diff_count)?;
-        state.serialize_field("skip_count", &self.skip_count)?;
-        state.end()
-    }
 }
 
 impl CheckSummaryLog {
@@ -211,19 +126,34 @@ impl CheckSummaryLog {
             self.tables.push(table);
         }
     }
+
+    pub fn sort_tables(&mut self) {
+        self.tables.sort_by(|a, b| {
+            (
+                a.schema.as_str(),
+                a.tb.as_str(),
+                a.target_schema.as_deref(),
+                a.target_tb.as_deref(),
+            )
+                .cmp(&(
+                    b.schema.as_str(),
+                    b.tb.as_str(),
+                    b.target_schema.as_deref(),
+                    b.target_tb.as_deref(),
+                ))
+        });
+    }
 }
 
 pub fn to_json_line<T: Serialize>(value: &T) -> Option<String> {
-    match serde_json::to_string(value) {
-        Ok(s) => Some(s),
-        Err(e) => {
+    serde_json::to_string(value)
+        .map_err(|e| {
             log::warn!(
                 "Skipping checker log output because serialization failed: {}",
                 e
-            );
-            None
-        }
-    }
+            )
+        })
+        .ok()
 }
 
 #[derive(Serialize, Deserialize)]
@@ -252,15 +182,11 @@ impl StructCheckLog {
 }
 
 fn struct_key_scope(key: &str) -> (String, String) {
-    let parts = key.split('.').collect::<Vec<_>>();
-    let schema = parts.get(1).copied().unwrap_or_default().to_string();
-    let tb = parts
-        .get(2)
-        .copied()
-        .or_else(|| parts.get(1).copied())
-        .unwrap_or_default()
-        .to_string();
-    (schema, tb)
+    let mut parts = key.split('.');
+    let _ = parts.next();
+    let schema = parts.next().unwrap_or_default();
+    let tb = parts.next().unwrap_or(schema);
+    (schema.to_string(), tb.to_string())
 }
 
 impl FromStr for CheckLog {
@@ -302,7 +228,11 @@ mod tests {
             dst_row: None,
         };
 
-        let actual = json_line(&log);
+        let line = to_json_line(&log).unwrap();
+        let parsed = CheckLog::from_str(&line).unwrap();
+        assert_eq!(to_json_line(&parsed).unwrap(), line);
+
+        let actual: serde_json::Value = serde_json::from_str(&line).unwrap();
         assert_eq!(
             actual,
             json!({
@@ -321,20 +251,6 @@ mod tests {
                 }
             })
         );
-
-        let unchanged_target = CheckLog {
-            schema: "src_s".to_string(),
-            tb: "src_t".to_string(),
-            target_schema: Some("src_s".to_string()),
-            target_tb: Some("src_t".to_string()),
-            id_col_values: HashMap::from([("id".to_string(), Some("1".to_string()))]),
-            diff_col_values: HashMap::new(),
-            src_row: None,
-            dst_row: None,
-        };
-        let actual = json_line(&unchanged_target);
-        assert!(actual.get("target_schema").is_none());
-        assert!(actual.get("target_tb").is_none());
     }
 
     #[test]

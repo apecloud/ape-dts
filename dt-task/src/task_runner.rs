@@ -288,6 +288,7 @@ impl TaskRunner {
                 if summary.end_time.is_empty() {
                     summary.end_time = Local::now().to_rfc3339();
                 }
+                summary.sort_tables();
                 if let Some(log) = to_json_line(&*summary) {
                     dt_common::log_summary!("{}", log);
                 }

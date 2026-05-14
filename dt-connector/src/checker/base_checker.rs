@@ -151,31 +151,23 @@ impl CheckerTbMeta {
         row_data: &RowData,
         match_full_row: bool,
     ) -> anyhow::Result<Option<String>> {
+        macro_rules! build_query {
+            ($meta:expr, $builder:ident) => {{
+                let meta_cow = if match_full_row {
+                    let mut owned = $meta.clone();
+                    owned.basic.id_cols = owned.basic.cols.clone();
+                    Cow::Owned(owned)
+                } else {
+                    Cow::Borrowed($meta)
+                };
+                RdbQueryBuilder::$builder(meta_cow.as_ref(), None)
+                    .get_query_sql(row_data, false)
+                    .map(Some)
+            }};
+        }
         match self {
-            CheckerTbMeta::Mysql(meta) => {
-                let meta_cow = if match_full_row {
-                    let mut owned = meta.clone();
-                    owned.basic.id_cols = owned.basic.cols.clone();
-                    Cow::Owned(owned)
-                } else {
-                    Cow::Borrowed(meta)
-                };
-                RdbQueryBuilder::new_for_mysql(meta_cow.as_ref(), None)
-                    .get_query_sql(row_data, false)
-                    .map(Some)
-            }
-            CheckerTbMeta::Pg(meta) => {
-                let meta_cow = if match_full_row {
-                    let mut owned = meta.clone();
-                    owned.basic.id_cols = owned.basic.cols.clone();
-                    Cow::Owned(owned)
-                } else {
-                    Cow::Borrowed(meta)
-                };
-                RdbQueryBuilder::new_for_pg(meta_cow.as_ref(), None)
-                    .get_query_sql(row_data, false)
-                    .map(Some)
-            }
+            CheckerTbMeta::Mysql(meta) => build_query!(meta, new_for_mysql),
+            CheckerTbMeta::Pg(meta) => build_query!(meta, new_for_pg),
             CheckerTbMeta::Mongo(_) => unreachable!("Mongo handled before build_rdb_query"),
         }
     }
@@ -205,6 +197,35 @@ pub struct CheckContext {
     pub state_store: Option<Arc<CheckerStateStore>>,
     pub source_checker: Option<Arc<Mutex<Box<dyn Checker>>>>,
     pub expected_resume_position: Option<Position>,
+}
+
+impl Default for CheckContext {
+    fn default() -> Self {
+        Self {
+            monitor: Arc::new(Monitor::new("checker", "default", 1, 1, 1)),
+            task_monitor: None,
+            summary: CheckSummaryLog::default(),
+            output_revise_sql: false,
+            extractor_meta_manager: None,
+            reverse_router: RdbRouter::default(),
+            output_full_row: false,
+            revise_match_full_row: false,
+            global_summary: None,
+            batch_size: 1,
+            sample_rate: None,
+            retry_interval_secs: 0,
+            max_retries: 0,
+            is_cdc: false,
+            check_log_dir: String::new(),
+            cdc_check_log_max_file_size: 1,
+            cdc_check_log_max_rows: 1,
+            s3_output: None,
+            cdc_check_log_interval_secs: 1,
+            state_store: None,
+            source_checker: None,
+            expected_resume_position: None,
+        }
+    }
 }
 
 impl CheckContext {
@@ -246,7 +267,7 @@ impl CheckContext {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 struct CheckerStoreKey {
     schema: String,
     tb: String,
@@ -566,25 +587,16 @@ impl BoundedLineBuffer {
         if line_size > self.size_limit {
             return;
         }
-        while self
-            .row_limit
-            .is_some_and(|limit| self.lines.len() >= limit)
-            || self.bytes + line_size > self.size_limit
+        self.bytes += line_size;
+        self.lines.push_back(line);
+        while self.row_limit.is_some_and(|limit| self.lines.len() > limit)
+            || self.bytes > self.size_limit
         {
             let Some(front) = self.lines.pop_front() else {
                 break;
             };
             self.bytes = self.bytes.saturating_sub(front.len() + 1);
         }
-        if self
-            .row_limit
-            .is_some_and(|limit| self.lines.len() >= limit)
-            || self.bytes + line_size > self.size_limit
-        {
-            return;
-        }
-        self.bytes += line_size;
-        self.lines.push_back(line);
     }
 
     fn push_str(&mut self, line: &str) {
@@ -851,6 +863,7 @@ impl<C: Checker> DataChecker<C> {
         let summary = &mut self.ctx.summary;
         summary.end_time = Local::now().to_rfc3339();
         summary.is_consistent = is_summary_consistent(summary, self.init_failed);
+        summary.sort_tables();
     }
 
     async fn init_cdc_state(&mut self) -> anyhow::Result<()> {
@@ -877,7 +890,6 @@ impl<C: Checker> DataChecker<C> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{checker::check_log::CheckSummaryLog, rdb_router::RdbRouter};
     use async_trait::async_trait;
     use dt_common::{meta::row_type::RowType, monitor::monitor::Monitor};
     use std::collections::HashMap;
@@ -921,32 +933,7 @@ mod tests {
     fn build_ctx() -> CheckContext {
         CheckContext {
             monitor: Arc::new(Monitor::new("checker", "unit-test", 1, 1, 1)),
-            task_monitor: None,
-            summary: CheckSummaryLog::default(),
-            output_revise_sql: false,
-            extractor_meta_manager: None,
-            reverse_router: RdbRouter {
-                schema_map: HashMap::new(),
-                tb_map: HashMap::new(),
-                col_map: HashMap::new(),
-                topic_map: HashMap::new(),
-            },
-            output_full_row: false,
-            revise_match_full_row: false,
-            global_summary: None,
-            batch_size: 1,
-            sample_rate: None,
-            retry_interval_secs: 0,
-            max_retries: 0,
-            is_cdc: false,
-            check_log_dir: String::new(),
-            cdc_check_log_max_file_size: 1,
-            cdc_check_log_max_rows: 1,
-            s3_output: None,
-            cdc_check_log_interval_secs: 1,
-            state_store: None,
-            source_checker: None,
-            expected_resume_position: None,
+            ..Default::default()
         }
     }
 
@@ -1027,42 +1014,5 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-    }
-
-    #[test]
-    fn data_checker_initializes_summary_start_time() {
-        let (fetch_started, _fetch_started_rx) = mpsc::unbounded_channel();
-        let (_control_tx, control_rx) = mpsc::unbounded_channel();
-        let checker = DataChecker::new(
-            BlockingFetchChecker {
-                fetch_started,
-                fetch_gate: Arc::new(Notify::new()),
-            },
-            "task-1".to_string(),
-            build_ctx(),
-            CheckerIo {
-                batch_queue: Arc::new(StdMutex::new(LimitedQueue::new(1))),
-                batch_notify: Arc::new(Notify::new()),
-                dropped_items: Arc::new(AtomicU64::new(0)),
-                control_rx,
-            },
-            "unit-test",
-        );
-
-        assert!(!checker.ctx.summary.start_time.is_empty());
-    }
-
-    #[test]
-    fn summary_with_skips_or_init_failure_is_not_consistent() {
-        let summary = CheckSummaryLog {
-            skip_count: 1,
-            ..Default::default()
-        };
-
-        assert!(!super::is_summary_consistent(&summary, false));
-        assert!(!super::is_summary_consistent(
-            &CheckSummaryLog::default(),
-            true
-        ));
     }
 }

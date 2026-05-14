@@ -553,7 +553,10 @@ impl<C: Checker> DataChecker<C> {
     }
 
     pub async fn flush_store(&mut self) {
-        let entries = std::mem::take(&mut self.store);
+        let mut entries = std::mem::take(&mut self.store)
+            .into_iter()
+            .collect::<Vec<_>>();
+        entries.sort_by(|(a, _), (b, _)| a.cmp(b));
         for (_key, entry) in entries {
             Self::log_entry(&entry);
             self.update_summary_for_entry(&entry).await;
@@ -829,7 +832,9 @@ impl<C: Checker> DataChecker<C> {
 
         let mut total_checked = 0usize;
         let mut retry_rows = Vec::new();
-        for rows in grouped.into_values() {
+        let mut groups = grouped.into_iter().collect::<Vec<_>>();
+        groups.sort_by(|(a, _), (b, _)| a.cmp(b));
+        for (_, rows) in groups {
             let first_row = rows.first().context("checker group is empty")?;
             let tb_meta = self.checker.load_table_meta(first_row).await?;
             let prepared_rows = self.prepare_rows_for_fetch(&rows, tb_meta.as_ref());
@@ -883,7 +888,6 @@ impl<C: Checker> DataChecker<C> {
 mod tests {
     use super::super::{CheckContext, CheckerIo};
     use super::*;
-    use crate::{checker::check_log::CheckSummaryLog, rdb_router::RdbRouter};
     use async_trait::async_trait;
     use dt_common::monitor::monitor::Monitor;
     use std::sync::{atomic::AtomicU64, Arc, Mutex as StdMutex};
@@ -955,32 +959,8 @@ mod tests {
             "unit-test".to_string(),
             CheckContext {
                 monitor: Arc::new(Monitor::new("checker", "unit-test", 1, 1, 1)),
-                task_monitor: None,
-                summary: CheckSummaryLog::default(),
-                output_revise_sql: false,
-                extractor_meta_manager: None,
-                reverse_router: RdbRouter {
-                    schema_map: HashMap::new(),
-                    tb_map: HashMap::new(),
-                    col_map: HashMap::new(),
-                    topic_map: HashMap::new(),
-                },
-                output_full_row: false,
-                revise_match_full_row: false,
-                global_summary: None,
-                batch_size: 1,
-                sample_rate: None,
-                retry_interval_secs: 0,
-                max_retries: 0,
                 is_cdc: true,
-                check_log_dir: String::new(),
-                cdc_check_log_max_file_size: 1,
-                cdc_check_log_max_rows: 1,
-                s3_output: None,
-                cdc_check_log_interval_secs: 1,
-                state_store: None,
-                source_checker: None,
-                expected_resume_position: None,
+                ..Default::default()
             },
             CheckerIo {
                 batch_queue: Arc::new(StdMutex::new(LimitedQueue::new(1))),

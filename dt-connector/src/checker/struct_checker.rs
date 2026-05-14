@@ -206,7 +206,9 @@ impl StructCheckerHandle {
         };
         let mut sql_count = 0usize;
 
-        for (key, src_sql) in src_sql_map.iter() {
+        let mut src_sqls = src_sql_map.iter().collect::<Vec<_>>();
+        src_sqls.sort_by(|(a, _), (b, _)| a.cmp(b));
+        for (key, src_sql) in src_sqls {
             match dst_map.remove(key) {
                 None => {
                     let log = StructCheckLog::new(key.clone(), Some(src_sql.clone()), None);
@@ -246,7 +248,9 @@ impl StructCheckerHandle {
             }
         }
 
-        for (key, dst_sql) in dst_map {
+        let mut dst_sqls = dst_map.into_iter().collect::<Vec<_>>();
+        dst_sqls.sort_by(|(a, _), (b, _)| a.cmp(b));
+        for (key, dst_sql) in dst_sqls {
             summary.diff_count += 1;
             if let Some(table) = struct_table_summary(&key, false, true) {
                 summary.merge_table(table);
@@ -264,6 +268,7 @@ impl StructCheckerHandle {
             summary.sql_count = Some(sql_count);
         }
         summary.end_time = Local::now().to_rfc3339();
+        summary.sort_tables();
         summary
     }
 

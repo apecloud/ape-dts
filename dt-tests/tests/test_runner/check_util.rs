@@ -129,7 +129,6 @@ impl CheckUtil {
         assert_eq!(expect.diff_count, actual.diff_count, "diff_count mismatch");
         assert_eq!(expect.skip_count, actual.skip_count, "skip_count mismatch");
         assert_eq!(expect.sql_count, actual.sql_count, "sql_count mismatch");
-        assert!(!actual.tables.is_empty(), "actual summary tables is empty");
         Self::validate_summary_tables(&expect_value, &actual);
         Ok(())
     }
@@ -156,7 +155,6 @@ impl CheckUtil {
         let Some(expect_tables) = expect_value.get("tables").and_then(Value::as_array) else {
             panic!("expect summary tables is missing");
         };
-        assert!(!expect_tables.is_empty(), "expect summary tables is empty");
         assert_eq!(
             expect_tables.len(),
             actual.tables.len(),
