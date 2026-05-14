@@ -1,1 +1,1 @@
-{"start_time":"2026-05-13T23:54:14.927394+08:00","end_time":"2026-05-13T23:54:18.028142+08:00","is_consistent":true,"checked_count":0,"miss_count":0,"diff_count":0,"skip_count":0,"tables":[]}
+{"start_time":"2026-05-14T18:46:11.185822+08:00","end_time":"2026-05-14T18:46:14.260645+08:00","is_consistent":true,"checked_count":2,"miss_count":0,"diff_count":0,"skip_count":0,"tables":[{"schema":"test_db_ddl_recheck","tb":"recheck_struct","checked_count":1,"miss_count":0,"diff_count":0,"skip_count":0}]}

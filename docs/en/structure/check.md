@@ -21,44 +21,43 @@ schema/table/id metadata.
 
 ```json
 {
-  "schema": "db_name",
-  "tb": "tb_name",
-  "object_type": "index",
-  "object_name": "idx_name",
+  "key": "index.db_name.tb_name.idx_name",
   "src_sql": "source definition SQL",
   "dst_sql": "target definition SQL"
 }
 ```
 
-There is no `key`, `id_col_values`, `target_schema`, or `target_tb` field. `object_type` and
-`object_name` identify the structure object. `src_sql` is included when the source-side definition exists;
-`dst_sql` is included when the target-side definition exists. Source-only missing objects usually
-have only `src_sql`; objects with different definitions have both `src_sql` and `dst_sql`;
-target-only extra objects have only `dst_sql`.
+`key` identifies the structure object and is always present. Structure logs do not contain
+`schema`, `tb`, `id_col_values`, `target_schema`, or `target_tb`. `src_sql` is included when the
+source-side definition exists; `dst_sql` is included when the target-side definition exists.
+Source-only missing objects usually have only `src_sql`; objects with different definitions have
+both `src_sql` and `dst_sql`; target-only extra objects have only `dst_sql`.
 
-The internal structure key has this format:
+The structure key has this format:
 
 ```text
 <object_type>.<schema>.<table_or_object>[.<sub_object>]
 ```
 
-Common examples include `table.struct_check_test_1.not_match_column`,
+Common table-scoped examples include `table.struct_check_test_1.not_match_column`,
 `index.struct_check_test_1.not_match_index.i6_miss`,
 `constraint.struct_check_test_1.not_match_missing.not_match_missing_pkey`,
 `table_comment.struct_check_test_1.not_match_comment`, and
-`column_comment.struct_check_test_1.not_match_comment.id`.
+`column_comment.struct_check_test_1.not_match_comment.id`. PostgreSQL global objects use
+object-specific keys such as `udt.schema.type_name`, `udf.schema.function_name(arguments)`, and
+`rbac.role.role_name`.
 
 - `miss.log` (present in source but missing in target)
 ```json
-{"schema":"struct_check_test_1","tb":"not_match_miss","object_type":"table","object_name":"not_match_miss","src_sql":"CREATE TABLE `not_match_miss` (`id` int NOT NULL, PRIMARY KEY (`id`))"}
-{"schema":"struct_check_test_1","tb":"not_match_index","object_type":"index","object_name":"i6_miss","src_sql":"CREATE INDEX `i6_miss` ON `not_match_index` (`c6`)"}
+{"key":"table.struct_check_test_1.not_match_miss","src_sql":"CREATE TABLE `not_match_miss` (`id` int NOT NULL, PRIMARY KEY (`id`))"}
+{"key":"index.struct_check_test_1.not_match_index.i6_miss","src_sql":"CREATE INDEX `i6_miss` ON `not_match_index` (`c6`)"}
 ```
 
 - `diff.log` (object definition differs, or the object exists only in the target)
 ```json
-{"schema":"struct_check_test_1","tb":"not_match_index","object_type":"index","object_name":"not_match_index","src_sql":"CREATE INDEX `i1` ON `not_match_index` (`c1`)","dst_sql":"CREATE INDEX `i1` ON `not_match_index` (`c2`)"}
-{"schema":"struct_check_test_1","tb":"not_match_column","object_type":"table","object_name":"not_match_column","src_sql":"CREATE TABLE `not_match_column` (`id` int NOT NULL, PRIMARY KEY (`id`))","dst_sql":"CREATE TABLE `not_match_column` (`id` bigint NOT NULL, PRIMARY KEY (`id`))"}
-{"schema":"struct_check_test_1","tb":"full_index_type","object_type":"index","object_name":"index_not_match_name_dst","dst_sql":"CREATE INDEX `index_not_match_name_dst` ON `full_index_type` (`c1`)"}
+{"key":"index.struct_check_test_1.not_match_index.i1","src_sql":"CREATE INDEX `i1` ON `not_match_index` (`c1`)","dst_sql":"CREATE INDEX `i1` ON `not_match_index` (`c2`)"}
+{"key":"table.struct_check_test_1.not_match_column","src_sql":"CREATE TABLE `not_match_column` (`id` int NOT NULL, PRIMARY KEY (`id`))","dst_sql":"CREATE TABLE `not_match_column` (`id` bigint NOT NULL, PRIMARY KEY (`id`))"}
+{"key":"index.struct_check_test_1.full_index_type.index_not_match_name_dst","dst_sql":"CREATE INDEX `index_not_match_name_dst` ON `full_index_type` (`c1`)"}
 ```
 
 - `summary.log` (overview of the check results)

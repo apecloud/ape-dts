@@ -2,7 +2,7 @@ use std::{collections::HashMap, str::FromStr};
 
 use anyhow::Context;
 use dt_common::{error::Error, meta::col_value::ColValue, utils::serialize_util::SerializeUtil};
-use serde::{Deserialize, Serialize, Serializer};
+use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct CheckLog {
@@ -64,11 +64,7 @@ pub struct CheckSummaryLog {
     pub skip_count: usize,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sql_count: Option<usize>,
-    #[serde(
-        default,
-        skip_serializing_if = "check_tables_have_no_issues",
-        serialize_with = "serialize_problem_check_tables"
-    )]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tables: Vec<CheckTableSummaryLog>,
 }
 
@@ -88,26 +84,6 @@ pub struct CheckTableSummaryLog {
     pub diff_count: usize,
     #[serde(default)]
     pub skip_count: usize,
-}
-
-fn check_tables_have_no_issues(tables: &[CheckTableSummaryLog]) -> bool {
-    !tables
-        .iter()
-        .any(|table| table.miss_count > 0 || table.diff_count > 0 || table.skip_count > 0)
-}
-
-fn serialize_problem_check_tables<S>(
-    tables: &[CheckTableSummaryLog],
-    serializer: S,
-) -> Result<S::Ok, S::Error>
-where
-    S: Serializer,
-{
-    serializer.collect_seq(
-        tables
-            .iter()
-            .filter(|table| table.miss_count > 0 || table.diff_count > 0 || table.skip_count > 0),
-    )
 }
 
 impl CheckSummaryLog {
@@ -182,10 +158,7 @@ pub fn to_json_line<T: Serialize>(value: &T) -> Option<String> {
 
 #[derive(Serialize, Deserialize)]
 pub struct StructCheckLog {
-    pub schema: String,
-    pub tb: String,
-    pub object_type: String,
-    pub object_name: String,
+    pub key: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub src_sql: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -194,23 +167,8 @@ pub struct StructCheckLog {
 
 impl StructCheckLog {
     pub fn new(key: &str, src_sql: Option<String>, dst_sql: Option<String>) -> Self {
-        let mut parts = key.splitn(4, '.');
-        let object_type = parts.next().unwrap_or_default().to_string();
-        let schema = parts.next().unwrap_or_default().to_string();
-        let tb = parts.next().unwrap_or_default().to_string();
-        let sub_object = parts.next().unwrap_or_default();
-        let object_name = if !sub_object.is_empty() {
-            sub_object.to_string()
-        } else if !tb.is_empty() {
-            tb.clone()
-        } else {
-            schema.clone()
-        };
         Self {
-            schema,
-            tb,
-            object_type,
-            object_name,
+            key: key.to_string(),
             src_sql,
             dst_sql,
         }
@@ -288,14 +246,12 @@ mod tests {
         assert_eq!(
             json_line(&struct_log),
             json!({
-                "schema": "s1",
-                "tb": "t1",
-                "object_type": "index",
-                "object_name": "idx_1",
+                "key": "index.s1.t1.idx_1",
                 "src_sql": "CREATE INDEX idx_1 ON t1(c1)"
             })
         );
-        assert!(json_line(&struct_log).get("key").is_none());
+        assert!(json_line(&struct_log).get("schema").is_none());
+        assert!(json_line(&struct_log).get("tb").is_none());
         assert!(json_line(&struct_log).get("id_col_values").is_none());
 
         let consistent_summary = CheckSummaryLog {
@@ -320,7 +276,15 @@ mod tests {
                 "checked_count": 2,
                 "miss_count": 0,
                 "diff_count": 0,
-                "skip_count": 0
+                "skip_count": 0,
+                "tables": [{
+                    "schema": "s1",
+                    "tb": "t1",
+                    "checked_count": 2,
+                    "miss_count": 0,
+                    "diff_count": 0,
+                    "skip_count": 0
+                }]
             })
         );
 
@@ -360,14 +324,24 @@ mod tests {
                 "miss_count": 1,
                 "diff_count": 1,
                 "skip_count": 0,
-                "tables": [{
-                    "schema": "s1",
-                    "tb": "bad",
-                    "checked_count": 2,
-                    "miss_count": 1,
-                    "diff_count": 1,
-                    "skip_count": 0
-                }]
+                "tables": [
+                    {
+                        "schema": "s1",
+                        "tb": "clean",
+                        "checked_count": 3,
+                        "miss_count": 0,
+                        "diff_count": 0,
+                        "skip_count": 0
+                    },
+                    {
+                        "schema": "s1",
+                        "tb": "bad",
+                        "checked_count": 2,
+                        "miss_count": 1,
+                        "diff_count": 1,
+                        "skip_count": 0
+                    }
+                ]
             })
         );
     }

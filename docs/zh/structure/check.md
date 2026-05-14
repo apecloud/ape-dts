@@ -20,43 +20,42 @@ JSON。当 `output_revise_sql=true` 时，还会额外输出 `sql.log`。`sql.lo
 
 ```json
 {
-  "schema": "db_name",
-  "tb": "tb_name",
-  "object_type": "index",
-  "object_name": "idx_name",
+  "key": "index.db_name.tb_name.idx_name",
   "src_sql": "source definition SQL",
   "dst_sql": "target definition SQL"
 }
 ```
 
-结构日志没有 `key`、`id_col_values`、`target_schema`、`target_tb` 字段。`object_type` 和
-`object_name` 用于定位结构对象。源端定义存在时输出 `src_sql`，目标端定义存在时输出 `dst_sql`。
-源端独有的缺失对象通常只有 `src_sql`；定义不一致的对象同时包含 `src_sql` 和 `dst_sql`；
-目标端独有的额外对象只有 `dst_sql`。
+`key` 用于定位结构对象，并且始终存在。结构日志没有 `schema`、`tb`、`id_col_values`、
+`target_schema`、`target_tb` 字段。源端定义存在时输出 `src_sql`，目标端定义存在时输出
+`dst_sql`。源端独有的缺失对象通常只有 `src_sql`；定义不一致的对象同时包含 `src_sql`
+和 `dst_sql`；目标端独有的额外对象只有 `dst_sql`。
 
-内部结构 key 格式：
+结构 key 格式：
 
 ```text
 <object_type>.<schema>.<table_or_object>[.<sub_object>]
 ```
 
-常见例子包括 `table.struct_check_test_1.not_match_column`、
+常见表级对象例子包括 `table.struct_check_test_1.not_match_column`、
 `index.struct_check_test_1.not_match_index.i6_miss`、
 `constraint.struct_check_test_1.not_match_missing.not_match_missing_pkey`、
 `table_comment.struct_check_test_1.not_match_comment`、
-`column_comment.struct_check_test_1.not_match_comment.id`。
+`column_comment.struct_check_test_1.not_match_comment.id`。PostgreSQL 全局对象使用对象自己的
+key，例如 `udt.schema.type_name`、`udf.schema.function_name(arguments)` 和
+`rbac.role.role_name`。
 
 - `miss.log`（源端存在但目标端缺失）
 ```json
-{"schema":"struct_check_test_1","tb":"not_match_miss","object_type":"table","object_name":"not_match_miss","src_sql":"CREATE TABLE `not_match_miss` (`id` int NOT NULL, PRIMARY KEY (`id`))"}
-{"schema":"struct_check_test_1","tb":"not_match_index","object_type":"index","object_name":"i6_miss","src_sql":"CREATE INDEX `i6_miss` ON `not_match_index` (`c6`)"}
+{"key":"table.struct_check_test_1.not_match_miss","src_sql":"CREATE TABLE `not_match_miss` (`id` int NOT NULL, PRIMARY KEY (`id`))"}
+{"key":"index.struct_check_test_1.not_match_index.i6_miss","src_sql":"CREATE INDEX `i6_miss` ON `not_match_index` (`c6`)"}
 ```
 
 - `diff.log`（对象定义不一致，或对象仅存在于目标端）
 ```json
-{"schema":"struct_check_test_1","tb":"not_match_index","object_type":"index","object_name":"not_match_index","src_sql":"CREATE INDEX `i1` ON `not_match_index` (`c1`)","dst_sql":"CREATE INDEX `i1` ON `not_match_index` (`c2`)"}
-{"schema":"struct_check_test_1","tb":"not_match_column","object_type":"table","object_name":"not_match_column","src_sql":"CREATE TABLE `not_match_column` (`id` int NOT NULL, PRIMARY KEY (`id`))","dst_sql":"CREATE TABLE `not_match_column` (`id` bigint NOT NULL, PRIMARY KEY (`id`))"}
-{"schema":"struct_check_test_1","tb":"full_index_type","object_type":"index","object_name":"index_not_match_name_dst","dst_sql":"CREATE INDEX `index_not_match_name_dst` ON `full_index_type` (`c1`)"}
+{"key":"index.struct_check_test_1.not_match_index.i1","src_sql":"CREATE INDEX `i1` ON `not_match_index` (`c1`)","dst_sql":"CREATE INDEX `i1` ON `not_match_index` (`c2`)"}
+{"key":"table.struct_check_test_1.not_match_column","src_sql":"CREATE TABLE `not_match_column` (`id` int NOT NULL, PRIMARY KEY (`id`))","dst_sql":"CREATE TABLE `not_match_column` (`id` bigint NOT NULL, PRIMARY KEY (`id`))"}
+{"key":"index.struct_check_test_1.full_index_type.index_not_match_name_dst","dst_sql":"CREATE INDEX `index_not_match_name_dst` ON `full_index_type` (`c1`)"}
 ```
 
 - `summary.log`（校验结果概览）

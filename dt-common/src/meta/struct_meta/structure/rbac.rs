@@ -26,5 +26,6 @@ pub struct PgRoleMember {
 
 #[derive(Debug, Clone)]
 pub struct PgPrivilege {
+    pub key: String,
     pub origin: String,
 }

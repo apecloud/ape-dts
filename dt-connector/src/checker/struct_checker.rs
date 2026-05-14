@@ -11,7 +11,7 @@ use tokio::time::sleep;
 use dt_common::{
     config::config_enums::DbType,
     log_diff, log_info, log_miss, log_sql, log_summary,
-    meta::struct_meta::struct_data::StructData,
+    meta::struct_meta::{struct_data::StructData, structure::structure_type::StructureType},
     monitor::{
         counter_type::CounterType, monitor::Monitor, task_metrics::TaskMetricsType,
         task_monitor::TaskMonitor,
@@ -44,21 +44,34 @@ pub struct StructCheckerHandle {
     start_time: String,
 }
 
-fn struct_table_summary(key: &str, miss: bool, diff: bool) -> Option<CheckTableSummaryLog> {
-    let mut parts = key.split('.');
+fn struct_table_summary(
+    key: &str,
+    checked_count: usize,
+    miss: bool,
+    diff: bool,
+) -> Option<CheckTableSummaryLog> {
+    let mut parts = key.splitn(4, '.');
     let object_type = parts.next()?;
-    match object_type {
-        "table" | "index" | "constraint" | "column_comment" | "table_comment"
-        | "sequence_owner" => {}
-        _ => return None,
+
+    if !matches!(
+        object_type,
+        "table"
+            | "index"
+            | "constraint"
+            | "column_comment"
+            | "table_comment"
+            | "sequence_owner"
+            | "sequence"
+    ) {
+        return None;
     }
-    let schema = parts.next()?;
-    let tb = parts.next()?;
+
     Some(CheckTableSummaryLog {
-        schema: schema.to_string(),
-        tb: tb.to_string(),
-        miss_count: if miss { 1 } else { 0 },
-        diff_count: if diff { 1 } else { 0 },
+        schema: parts.next()?.to_string(),
+        tb: parts.next()?.to_string(),
+        checked_count,
+        miss_count: usize::from(miss),
+        diff_count: usize::from(diff),
         ..Default::default()
     })
 }
@@ -96,8 +109,16 @@ impl StructCheckerHandle {
         }
     }
 
-    /// Extracts database/schema name from a key in format "type.db.table"
-    ///
+    fn schema_from_key(key: &str) -> Option<&str> {
+        let mut parts = key.splitn(5, '.');
+        match parts.next()? {
+            "rbac" => (parts.next() == Some("privilege"))
+                .then(|| parts.nth(1))
+                .flatten(),
+            _ => parts.next(),
+        }
+    }
+
     async fn add_src_sqls(&mut self, struct_data: StructData) -> anyhow::Result<()> {
         let routed = self.router.route_struct(struct_data);
         let mut statement = routed.statement;
@@ -109,20 +130,12 @@ impl StructCheckerHandle {
         }
 
         for (key, sql) in sqls {
-            let mut parts = key.split('.');
-            parts.next();
-            if let Some(db) = parts.next() {
+            if let Some(db) = Self::schema_from_key(&key).filter(|db| !db.is_empty()) {
                 self.dbs.insert(db.to_string());
             }
             self.src_sql_map.insert(key, sql);
         }
         Ok(())
-    }
-
-    fn collect_sqls(sqls: Vec<(String, String)>, dst_map: &mut BTreeMap<String, String>) {
-        for (key, sql) in sqls {
-            dst_map.insert(key, sql);
-        }
     }
 
     async fn build_dst_sql_map(
@@ -149,10 +162,10 @@ impl StructCheckerHandle {
                     meta_manager,
                 };
                 for stmt in fetcher.get_create_database_statements("").await? {
-                    Self::collect_sqls(stmt.to_sqls(&self.filter)?, &mut dst_map);
+                    dst_map.extend(stmt.to_sqls(&self.filter)?);
                 }
                 for mut stmt in fetcher.get_create_table_statements("", "").await? {
-                    Self::collect_sqls(stmt.to_sqls(&self.filter)?, &mut dst_map);
+                    dst_map.extend(stmt.to_sqls(&self.filter)?);
                 }
             }
             DbType::Pg => {
@@ -166,14 +179,26 @@ impl StructCheckerHandle {
                     schemas: dbs.clone(),
                     filter: Some(self.filter.clone()),
                 };
+                if !self.filter.filter_structure(&StructureType::Udt) {
+                    for stmt in fetcher.get_udt_statements().await? {
+                        dst_map.extend(stmt.to_sqls(&self.filter)?);
+                    }
+                }
+                if !self.filter.filter_structure(&StructureType::Udf) {
+                    for stmt in fetcher.get_udf_statements().await? {
+                        dst_map.extend(stmt.to_sqls(&self.filter)?);
+                    }
+                }
                 for stmt in fetcher.get_create_schema_statements("").await? {
-                    Self::collect_sqls(stmt.to_sqls(&self.filter)?, &mut dst_map);
+                    dst_map.extend(stmt.to_sqls(&self.filter)?);
                 }
                 for mut stmt in fetcher.get_create_table_statements("", "").await? {
-                    Self::collect_sqls(stmt.to_sqls(&self.filter)?, &mut dst_map);
+                    dst_map.extend(stmt.to_sqls(&self.filter)?);
                 }
-                for stmt in fetcher.get_create_rbac_statements().await? {
-                    Self::collect_sqls(stmt.to_sqls(&self.filter)?, &mut dst_map);
+                if !self.filter.filter_structure(&StructureType::Rbac) {
+                    for stmt in fetcher.get_create_rbac_statements().await? {
+                        dst_map.extend(stmt.to_sqls(&self.filter)?);
+                    }
                 }
             }
             _ => bail!("struct check not supported for db_type: {}", self.db_type),
@@ -212,51 +237,45 @@ impl StructCheckerHandle {
         let mut sql_count = 0usize;
 
         for (key, src_sql) in src_sql_map {
-            match dst_map.remove(key) {
-                None => {
-                    let log = StructCheckLog::new(key, Some(src_sql.clone()), None);
-                    summary.miss_count += 1;
-                    if let Some(table) = struct_table_summary(key, true, false) {
-                        summary.merge_table(table);
-                    }
-                    if log_enabled {
-                        if let Some(log) = to_json_line(&log) {
-                            log_miss!("{}", log);
-                        }
-                    }
-                    if output_revise_sql && log_enabled {
-                        log_sql!("{}", src_sql);
-                        sql_count += 1;
+            let dst_sql = dst_map.remove(key);
+            let is_miss = dst_sql.is_none();
+            let is_diff = dst_sql.as_ref().is_some_and(|dst_sql| dst_sql != src_sql);
+            if let Some(table) = struct_table_summary(key, 1, is_miss, is_diff) {
+                summary.merge_table(table);
+            }
+            if !is_miss && !is_diff {
+                continue;
+            }
+
+            if is_miss {
+                summary.miss_count += 1;
+            } else {
+                summary.diff_count += 1;
+            }
+
+            if log_enabled {
+                let log = StructCheckLog::new(key, Some(src_sql.clone()), dst_sql);
+                if let Some(log) = to_json_line(&log) {
+                    if is_miss {
+                        log_miss!("{}", log);
+                    } else {
+                        log_diff!("{}", log);
                     }
                 }
-                Some(dst_sql) => {
-                    if src_sql != &dst_sql {
-                        let log = StructCheckLog::new(key, Some(src_sql.clone()), Some(dst_sql));
-                        summary.diff_count += 1;
-                        if let Some(table) = struct_table_summary(key, false, true) {
-                            summary.merge_table(table);
-                        }
-                        if log_enabled {
-                            if let Some(log) = to_json_line(&log) {
-                                log_diff!("{}", log);
-                            }
-                        }
-                        if output_revise_sql && log_enabled {
-                            log_sql!("{}", src_sql);
-                            sql_count += 1;
-                        }
-                    }
+                if output_revise_sql {
+                    log_sql!("{}", src_sql);
+                    sql_count += 1;
                 }
             }
         }
 
         for (key, dst_sql) in dst_map {
             summary.diff_count += 1;
-            if let Some(table) = struct_table_summary(&key, false, true) {
+            if let Some(table) = struct_table_summary(&key, 0, false, true) {
                 summary.merge_table(table);
             }
-            let log = StructCheckLog::new(&key, None, Some(dst_sql));
             if log_enabled {
+                let log = StructCheckLog::new(&key, None, Some(dst_sql));
                 if let Some(log) = to_json_line(&log) {
                     log_diff!("{}", log);
                 }

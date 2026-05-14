@@ -6,11 +6,13 @@ Supports comparison for MySQL, PostgreSQL, and MongoDB.
 
 Snapshot and inline CDC checks support sampling via `[checker].sample_rate`.
 For standalone MySQL/PostgreSQL/MongoDB snapshot check, `sample_rate` is applied during extraction
-by record position to reduce checker-side work. For example, `sample_rate=25` keeps the first 25
-positions in every 100-position window, independently inside each extraction segment/chunk. Inline
-snapshot check and inline CDC check write all rows/changes first, then apply deterministic
-checker-side key-hash sampling before target fetch. Rows/changes with the same key are sampled
-consistently.
+before rows enter later checker work. It is position-based inside each extractor stream rather than
+key-hash based: MySQL/PostgreSQL parallel extraction counts positions independently inside each
+chunk, nullable order-column rows are counted in their own NULL pass, and MongoDB counts positions
+inside the collection cursor. For example, `sample_rate=25` keeps positions 1-25 in every
+100-position window of each such stream. Inline snapshot check and inline CDC check write all
+rows/changes first, then apply deterministic checker-side key-hash sampling before target fetch.
+Rows/changes with the same key are sampled consistently.
 
 Data check is documented in three flows:
 
@@ -118,11 +120,13 @@ templates now separate standalone snapshot check, inline snapshot check, and inl
 ### Sampling Check
 
 For snapshot and inline CDC checks, add `sample_rate` to the `[checker]` section. For standalone
-MySQL/PostgreSQL/MongoDB snapshot check, `sample_rate=25` keeps the first 25 extracted positions in
-each 100-position window before they enter later checker work. This is a per-segment policy, so the
-final table-level ratio can vary, especially for small extraction chunks. For inline snapshot check
-and inline CDC check, `sample_rate=25` still writes all rows/changes, then checks rows/changes whose
-key hash falls into the sampled percentage before target fetch/compare.
+MySQL/PostgreSQL/MongoDB snapshot check, sampling is applied during extraction and uses row position
+within the current extractor stream. In parallel MySQL/PostgreSQL extraction, each chunk has its own
+position counter; rows extracted by the nullable order-column pass also have their own counter.
+Therefore `sample_rate=25` keeps positions 1-25 in each 100-position window for each stream, and the
+final table-level ratio can vary, especially for small chunks. For inline snapshot check and inline
+CDC check, `sample_rate=25` still writes all rows/changes, then checks rows/changes whose key hash
+falls into the sampled percentage before target fetch/compare.
 
 ```
 [checker]
@@ -300,13 +304,15 @@ The summary log contains the overall results of the check, such as start_time, e
 
 `skip_count` records rows skipped by the checker, for example when the row key cannot be hashed.
 
-`summary.log` includes `tables` only when there are table-level miss/diff/skip entries. Table
-entries store per-table checked/miss/diff/skip counts for problem tables. They omit
-`target_schema`/`target_tb` when the destination object is not explicitly different. If either
-target name differs, both fields are included.
+`summary.log` includes `tables` when table-level counts were recorded. Table entries store
+per-table checked/miss/diff/skip counts for all tables that contributed table-level counts, so clean
+tables can appear with `miss_count=0`, `diff_count=0`, and `skip_count=0`. `tables` is omitted only
+when no table-level counts were recorded. Table entries omit `target_schema`/`target_tb` when the
+destination object is not explicitly different. If either target name differs, both fields are
+included.
 
 ```json
-{"start_time":"2023-09-01T12:00:00+08:00","end_time":"2023-09-01T12:00:01+08:00","is_consistent":false,"miss_count":1,"diff_count":2,"skip_count":1,"sql_count":3,"tables":[{"schema":"test_db_1","tb":"test_table","checked_count":10,"miss_count":1,"diff_count":2,"skip_count":1}]}
+{"start_time":"2023-09-01T12:00:00+08:00","end_time":"2023-09-01T12:00:01+08:00","is_consistent":false,"checked_count":30,"miss_count":1,"diff_count":2,"skip_count":1,"sql_count":3,"tables":[{"schema":"test_db_1","tb":"clean_table","checked_count":20,"miss_count":0,"diff_count":0,"skip_count":0},{"schema":"test_db_1","tb":"test_table","checked_count":10,"miss_count":1,"diff_count":2,"skip_count":1}]}
 ```
 
 Route rename example:

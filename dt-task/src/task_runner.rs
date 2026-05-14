@@ -169,6 +169,7 @@ impl TaskRunner {
     }
 
     pub async fn start_task(&self) -> anyhow::Result<()> {
+        self.clear_check_logs().await?;
         self.init_log4rs().await?;
 
         panic::set_hook(Box::new(|panic_info| {
@@ -295,13 +296,32 @@ impl TaskRunner {
         }
 
         log::logger().flush();
-        self.upload_standalone_snapshot_check_logs_to_s3().await?;
+        self.upload_check_logs_to_s3().await?;
         log_finished!("task finished");
         log::logger().flush();
         Ok(())
     }
 
-    async fn upload_standalone_snapshot_check_logs_to_s3(&self) -> anyhow::Result<()> {
+    async fn clear_check_logs(&self) -> anyhow::Result<()> {
+        let Some(cfg) = self.config.checker.as_ref() else {
+            return Ok(());
+        };
+        if !self
+            .task_type
+            .is_some_and(|task_type| task_type.is_standalone_snapshot_check())
+        {
+            return Ok(());
+        }
+
+        let check_log_dir = self.check_log_dir(cfg);
+        tokio_fs::create_dir_all(&check_log_dir).await?;
+        for file_name in ["miss.log", "diff.log", "summary.log", "sql.log"] {
+            tokio_fs::write(format!("{check_log_dir}/{file_name}"), b"").await?;
+        }
+        Ok(())
+    }
+
+    async fn upload_check_logs_to_s3(&self) -> anyhow::Result<()> {
         let Some(cfg) = self.config.checker.as_ref() else {
             return Ok(());
         };

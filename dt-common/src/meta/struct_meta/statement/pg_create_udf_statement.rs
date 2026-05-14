@@ -20,7 +20,11 @@ impl PgCreateUdfStatement {
         }
 
         let sql = self.udf.create_statement.to_string();
-        sqls.push((String::new(), sql));
+        let key = format!(
+            "udf.{}.{}({})",
+            self.udf.schema_name, self.udf.function_name, self.udf.identity_arguments
+        );
+        sqls.push((key, sql));
         Ok(sqls)
     }
 }
