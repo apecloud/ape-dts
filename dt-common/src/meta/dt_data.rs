@@ -14,7 +14,6 @@ pub struct DtItem {
     pub dt_data: DtData,
     pub position: Position,
     pub data_origin_node: String,
-    pub task_id: String,
 }
 
 impl DtItem {
@@ -99,6 +98,7 @@ impl DtData {
     pub fn get_data_count(&self) -> usize {
         match &self {
             DtData::Foxlake { file_meta } => file_meta.row_count,
+            DtData::Begin {} | DtData::Commit { .. } | DtData::Heartbeat {} => 0,
             _ => 1,
         }
     }

@@ -43,8 +43,8 @@ use dt_common::{
     limiter::buffer_limiter::BufferLimiter,
     log_error, log_finished, log_info, log_warn,
     meta::{
-        avro::avro_converter::AvroConverter, dt_ctl_queue::DtCtlQueue, dt_queue::DtQueue,
-        position::Position, row_type::RowType, syncer::Syncer,
+        avro::avro_converter::AvroConverter, dt_queue::DtQueue, position::Position,
+        row_type::RowType, syncer::Syncer,
     },
     monitor::{
         task_metrics::TaskMetricsType,
@@ -278,7 +278,6 @@ impl TaskRunner {
             enqueue_limiter,
             dequeue_limiter,
         ));
-        let ctl_buffer = Arc::new(DtCtlQueue::new());
 
         let shut_down = Arc::new(AtomicBool::new(false));
         let syncer = Arc::new(Mutex::new(Syncer {
@@ -328,7 +327,6 @@ impl TaskRunner {
             &extractor_config,
             extractor_client.clone(),
             buffer.clone(),
-            ctl_buffer.clone(),
             shut_down.clone(),
             syncer.clone(),
             extractor_monitor_handle,
@@ -399,7 +397,6 @@ impl TaskRunner {
                 sinkers,
                 pipeline_monitor_handle.clone(),
                 self.config.global.task_id.clone(), // pipline metrics are shared
-                ctl_buffer.clone(),
                 rw_sinker_data_marker.clone(),
                 recorder.clone(),
                 checker,
@@ -624,7 +621,6 @@ impl TaskRunner {
         sinkers: Vec<Arc<AsyncMutex<Box<dyn Sinker + Send>>>>,
         monitor: TaskMonitorHandle,
         monitor_task_id: String,
-        ctl_buffer: Arc<DtCtlQueue>,
         data_marker: Option<Arc<RwLock<DataMarker>>>,
         recorder: Option<Arc<dyn Recorder + Send + Sync>>,
         checker: Option<CheckerHandle>,
@@ -657,8 +653,7 @@ impl TaskRunner {
                     syncer,
                     monitor,
                     monitor_task_id,
-                    ctl_buffer,
-                    pending_dtctls: HashMap::new(),
+                    pending_snapshot_finished: HashMap::new(),
                     data_marker,
                     lua_processor,
                     recorder,
@@ -676,7 +671,6 @@ impl TaskRunner {
                     syncer,
                     monitor,
                     monitor_task_id,
-                    ctl_buffer,
                     avro_converter,
                     self.config.pipeline.checkpoint_interval_secs,
                     self.config.pipeline.batch_sink_interval_secs,

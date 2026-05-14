@@ -144,7 +144,6 @@ mod tests {
             dt_data: DtData::Begin {},
             position: Position::None,
             data_origin_node: "test".to_string(),
-            task_id: String::new(),
         }
     }
 
@@ -160,7 +159,6 @@ mod tests {
             },
             position: Position::None,
             data_origin_node: "test".to_string(),
-            task_id: String::new(),
         }
     }
 

@@ -15,7 +15,7 @@ use dt_common::{
         extractor_config::ExtractorConfig,
         task_config::TaskConfig,
     },
-    meta::{dt_ctl_queue::DtCtlQueue, dt_queue::DtQueue, syncer::Syncer},
+    meta::{dt_queue::DtQueue, syncer::Syncer},
     monitor::{task_monitor::MonitorType, task_monitor_handle::TaskMonitorHandle},
     rdb_filter::RdbFilter,
     time_filter::TimeFilter,
@@ -80,14 +80,12 @@ impl Prechecker for RedisPrechecker {
             _ => 0,
         };
         let buffer = Arc::new(DtQueue::new(1, 0, None, None));
-        let ctl_buffer = Arc::new(DtCtlQueue::new());
 
         let filter = RdbFilter::from_config(&self.task_config.filter, &DbType::Redis)?;
         let monitor = TaskMonitorHandle::noop(MonitorType::Extractor);
 
         let base_extractor = BaseExtractor {
             buffer,
-            ctl_buffer,
             router: RdbRouter::from_config(&self.task_config.router, &DbType::Redis)?,
             shut_down: Arc::new(AtomicBool::new(false)),
         };

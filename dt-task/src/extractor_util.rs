@@ -15,7 +15,7 @@ use dt_common::{
         task_config::TaskConfig,
     },
     meta::{
-        avro::avro_converter::AvroConverter, dt_ctl_queue::DtCtlQueue, dt_queue::DtQueue,
+        avro::avro_converter::AvroConverter, dt_queue::DtQueue,
         mongo::mongo_cdc_source::MongoCdcSource, mysql::mysql_meta_manager::MysqlMetaManager,
         pg::pg_meta_manager::PgMetaManager, rdb_meta_manager::RdbMetaManager,
         redis::redis_statistic_type::RedisStatisticType, syncer::Syncer,
@@ -76,7 +76,6 @@ impl ExtractorUtil {
         extractor_config: &ExtractorConfig,
         extractor_client: ConnClient,
         buffer: Arc<DtQueue>,
-        ctl_buffer: Arc<DtCtlQueue>,
         shut_down: Arc<AtomicBool>,
         syncer: Arc<Mutex<Syncer>>,
         monitor: TaskMonitorHandle,
@@ -87,7 +86,6 @@ impl ExtractorUtil {
     ) -> anyhow::Result<Box<dyn Extractor + Send>> {
         let base_extractor = BaseExtractor {
             buffer,
-            ctl_buffer,
             router,
             shut_down,
         };

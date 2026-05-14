@@ -505,15 +505,17 @@ impl MysqlSnapshotDispatchState {
             quote!(&table_id.tb),
             active_table.extracted_count
         );
-        self.shared.base_extractor.push_snapshot_finished(
-            &schema,
-            &tb,
-            Position::RdbSnapshotFinished {
-                db_type: DbType::Mysql.to_string(),
-                schema: schema.clone(),
-                tb: tb.clone(),
-            },
-        )?;
+        self.shared
+            .base_extractor
+            .push_snapshot_finished(
+                &mut active_table.extract_state,
+                Position::RdbSnapshotFinished {
+                    db_type: DbType::Mysql.to_string(),
+                    schema: schema.clone(),
+                    tb: tb.clone(),
+                },
+            )
+            .await?;
         Ok(())
     }
 

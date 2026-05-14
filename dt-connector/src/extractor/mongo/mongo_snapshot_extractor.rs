@@ -167,15 +167,16 @@ impl MongoSnapshotExtractor {
             tb,
             extract_state.monitor.counters.pushed_record_count
         );
-        base_extractor.push_snapshot_finished(
-            &db,
-            &tb,
-            Position::RdbSnapshotFinished {
-                db_type: DbType::Mongo.to_string(),
-                schema: db.clone(),
-                tb: tb.clone(),
-            },
-        )?;
+        base_extractor
+            .push_snapshot_finished(
+                &mut extract_state,
+                Position::RdbSnapshotFinished {
+                    db_type: DbType::Mongo.to_string(),
+                    schema: db.clone(),
+                    tb: tb.clone(),
+                },
+            )
+            .await?;
         extract_state.monitor.try_flush(true).await;
         Ok(())
     }

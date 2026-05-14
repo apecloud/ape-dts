@@ -16,12 +16,9 @@ use dt_common::{
     meta::{
         dcl_meta::{dcl_data::DclData, dcl_parser::DclParser},
         ddl_meta::ddl_data::DdlData,
-        dt_ctl::DtCtl,
-        dt_ctl_queue::DtCtlQueue,
         dt_queue::DtQueue,
         struct_meta::struct_data::StructData,
     },
-    monitor::task_monitor_handle::TaskMonitorHandle,
     utils::sql_util::SqlUtil,
 };
 use dt_common::{
@@ -144,7 +141,6 @@ impl ExtractState {
 #[derive(Clone)]
 pub struct BaseExtractor {
     pub buffer: Arc<DtQueue>,
-    pub ctl_buffer: Arc<DtCtlQueue>,
     pub router: RdbRouter,
     pub shut_down: Arc<AtomicBool>,
 }
@@ -161,12 +157,10 @@ impl BaseExtractor {
         state.monitor.counters.pushed_data_size += dt_data.get_data_size();
         state.monitor.try_flush(false).await;
 
-        let task_id = TaskMonitorHandle::task_id_from_dt_data(&dt_data);
         let item = DtItem {
             dt_data,
             position,
             data_origin_node,
-            task_id,
         };
         log_debug!("extracted item: {:?}", item);
         self.buffer.push(item).await
@@ -335,17 +329,16 @@ impl BaseExtractor {
         Ok(())
     }
 
-    pub fn push_snapshot_finished(
+    pub async fn push_snapshot_finished(
         &self,
-        schema: &str,
-        tb: &str,
+        state: &mut ExtractState,
         finish_position: Position,
     ) -> anyhow::Result<()> {
-        self.ctl_buffer.push(DtCtl::SnapshotExtractFinished {
-            task_id: TaskMonitorHandle::task_id_from_schema_tb(schema, tb),
-            schema: schema.to_string(),
-            tb: tb.to_string(),
+        self.push_dt_data(
+            state,
+            DtData::Commit { xid: String::new() },
             finish_position,
-        })
+        )
+        .await
     }
 }

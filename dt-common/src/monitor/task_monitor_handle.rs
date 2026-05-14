@@ -2,10 +2,7 @@ use std::sync::Arc;
 
 use crate::{
     config::config_enums::{TaskKind, TaskType},
-    meta::{
-        ddl_meta::ddl_data::DdlData, dt_data::DtData, row_data::RowData,
-        struct_meta::struct_data::StructData,
-    },
+    meta::{ddl_meta::ddl_data::DdlData, row_data::RowData, struct_meta::struct_data::StructData},
     monitor::{
         counter_type::CounterType,
         monitor::Monitor,
@@ -97,15 +94,6 @@ impl TaskMonitorHandle {
 
     pub fn task_id_from_struct_data(struct_data: &StructData) -> String {
         struct_data.schema.clone()
-    }
-
-    pub fn task_id_from_dt_data(dt_data: &DtData) -> String {
-        match dt_data {
-            DtData::Dml { row_data } => Self::task_id_from_row_data(row_data),
-            DtData::Ddl { ddl_data } => Self::task_id_from_ddl_data(ddl_data),
-            DtData::Struct { struct_data } => Self::task_id_from_struct_data(struct_data),
-            _ => String::new(),
-        }
     }
 
     pub fn task_id_for_schema_tb(&self, schema: &str, tb: &str) -> String {

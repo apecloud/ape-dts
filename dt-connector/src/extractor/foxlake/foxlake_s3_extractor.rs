@@ -172,15 +172,16 @@ impl FoxlakeS3Extractor {
             start_after = continuous_meta_files.last().map(|s: &String| s.to_string());
         }
 
-        base_extractor.push_snapshot_finished(
-            &schema,
-            &tb,
-            Position::RdbSnapshotFinished {
-                db_type: DbType::Foxlake.to_string(),
-                schema: schema.clone(),
-                tb: tb.clone(),
-            },
-        )?;
+        base_extractor
+            .push_snapshot_finished(
+                &mut extract_state,
+                Position::RdbSnapshotFinished {
+                    db_type: DbType::Foxlake.to_string(),
+                    schema: schema.clone(),
+                    tb: tb.clone(),
+                },
+            )
+            .await?;
         extract_state.monitor.try_flush(true).await;
         Ok(())
     }
