@@ -18,6 +18,21 @@ impl CheckUtil {
         let (actual_miss_logs, actual_diff_logs, actual_summary_logs, actual_sql_logs) =
             Self::load_check_log(dst_check_log_dir);
 
+        for (file_name, expect_logs) in [
+            ("miss.log", &expect_miss_logs),
+            ("diff.log", &expect_diff_logs),
+            ("sql.log", &expect_sql_logs),
+        ] {
+            if expect_logs.is_empty() {
+                let actual_file = format!("{}/{}", dst_check_log_dir, file_name);
+                assert!(
+                    !BaseTestRunner::check_path_exists(&actual_file),
+                    "{} should not be generated when there are no entries",
+                    actual_file
+                );
+            }
+        }
+
         assert_eq!(expect_diff_logs.len(), actual_diff_logs.len());
         assert_eq!(expect_miss_logs.len(), actual_miss_logs.len());
         assert_eq!(expect_sql_logs.len(), actual_sql_logs.len());
@@ -222,8 +237,13 @@ impl CheckUtil {
         if dst_check_log_dir.is_empty() {
             return;
         }
-        let files = ["miss.log", "diff.log", "summary.log", "sql.log"];
-        for file in files {
+        for file in ["miss.log", "diff.log", "sql.log"] {
+            let log_file = format!("{}/{}", dst_check_log_dir, file);
+            if BaseTestRunner::check_path_exists(&log_file) {
+                fs::remove_file(&log_file).unwrap();
+            }
+        }
+        for file in ["summary.log"] {
             let log_file = format!("{}/{}", dst_check_log_dir, file);
             if BaseTestRunner::check_path_exists(&log_file) {
                 File::create(&log_file).unwrap().set_len(0).unwrap();

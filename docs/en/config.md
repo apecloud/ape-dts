@@ -104,7 +104,10 @@ Notes:
   applies it during extraction by row position inside each extractor stream, so later checker work
   receives fewer rows. MySQL/PostgreSQL parallel chunks are sampled independently, and the nullable
   order-column NULL pass has its own counter; MongoDB uses the collection cursor position. For
-  example, `sample_rate=25` keeps positions 1-25 in every 100-position window of each stream. Inline
+  example, `sample_rate=25` keeps positions 1-25 in every 100-position window of each stream. After
+  resume, standalone snapshot check restarts those position counters from the resumed stream, so the
+  sampled row set can differ from an uninterrupted run if the previous run stopped between sampled
+  rows. Inline
   snapshot check and inline CDC check write all rows/changes first, then apply deterministic
   checker-side key-hash sampling before target fetch, so rows/changes with the same key are sampled
   consistently.
@@ -145,8 +148,8 @@ Notes:
 - In inline cdc check, `[checker].max_retries` / `[checker].retry_interval_secs` are forced to `0`.
 - When `check_log_dir` is empty, `runtime.log_dir/check` is used consistently for checker logs (including CDC check outputs).
 - Standalone snapshot check writes check results locally first. If `check_log_s3=true`, the final
-  local `miss.log`, `diff.log`, `summary.log`, and optional `sql.log` are uploaded to S3 after the
-  check task finishes.
+  local `summary.log` plus non-empty `miss.log`, `diff.log`, and `sql.log` are uploaded to S3
+  after the check task finishes.
 - In inline cdc check, periodic check snapshots are always written locally under `check_log_dir`;
   `check_log_s3` controls only S3 upload. Outside inline cdc check, S3 upload is supported only by
   standalone snapshot check.
@@ -270,6 +273,7 @@ Same with [filter].
 | log_level   | level              | info/warn/error/debug/trace | info          |
 | log4rs_file | log4rs config file | ./log4rs.yaml               | ./log4rs.yaml |
 | log_dir     | output dir         | ./logs                      | ./logs        |
+| check_result_stdout_only | output only check result logs to stdout | true/false | false |
 
 Note that the log files contain progress information for the task, which can be used for task [resuming at breakpoint](/docs/en/snapshot/resume.md). Therefore, if you have multiple tasks, **please set up separate log directories for each task**.
 

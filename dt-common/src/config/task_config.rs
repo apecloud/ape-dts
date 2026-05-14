@@ -1149,6 +1149,11 @@ impl TaskConfig {
                 "log4rs_file",
                 "./log4rs.yaml".to_string(),
             ),
+            check_result_stdout_only: loader.get_with_default(
+                RUNTIME,
+                "check_result_stdout_only",
+                false,
+            ),
         })
     }
 

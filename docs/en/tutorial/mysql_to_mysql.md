@@ -317,7 +317,7 @@ docker run --rm --network host \
 ```
 
 ## Check results
-- /tmp/ape_dts/review_data_task_log/check/miss.log and /tmp/ape_dts/review_data_task_log/check/diff.log should be empty
+- /tmp/ape_dts/review_data_task_log/check/miss.log and /tmp/ape_dts/review_data_task_log/check/diff.log should not be generated
 
 # Cdc task
 

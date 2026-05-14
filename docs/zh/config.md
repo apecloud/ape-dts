@@ -101,7 +101,9 @@ struct check 仅支持 standalone MySQL/PostgreSQL checker target。
   按每个 extractor 数据流内的行位置应用该比例，减少后续 checker 工作量。MySQL/PostgreSQL
   并行 chunk 会独立抽样，可空排序列的 NULL pass 也有独立计数器；MongoDB 使用 collection
   cursor 内的位置。例如 `sample_rate=25` 表示每个数据流的 100 条位置窗口中保留第 1-25 条。
-  Inline snapshot check 和 inline CDC check 会先完整写入所有行/变更，然后在 checker 目标端
+  恢复运行后，standalone snapshot check 会从恢复后的数据流重新开始这些位置计数；如果上一次
+  任务停在两次抽样命中之间，最终抽样行集合可能不同于一次不中断运行。Inline snapshot check
+  和 inline CDC check 会先完整写入所有行/变更，然后在 checker 目标端
   fetch 前进行确定性的 key hash 抽样；相同 key 的行/变更会保持一致的抽样结果。
 - `queue_size` 统计的是 checker DML 队列中的待处理批次数，不是行数。checkpoint、`refresh_meta`
   这类控制信号会绕过这条队列。
@@ -138,7 +140,7 @@ struct check 仅支持 standalone MySQL/PostgreSQL checker target。
 - 对 inline cdc check，`max_retries` 与 `retry_interval_secs` 会强制按 0 处理。
 - 当 `check_log_dir` 为空时，统一使用 `runtime.log_dir/check` 作为 checker 日志目录（包含 CDC 校验输出）。
 - standalone snapshot check 先输出本地校验日志；如果 `check_log_s3=true`，任务结束后会将最终的
-  `miss.log`、`diff.log`、`summary.log` 和可选的 `sql.log` 上传到 S3。
+  `summary.log` 以及非空的 `miss.log`、`diff.log`、`sql.log` 上传到 S3。
 - 在 inline cdc check 下，会始终先在 `check_log_dir` 本地落盘周期性校验快照；
   `check_log_s3` 仅控制是否上传 S3。除 inline cdc check 外，S3 上传只支持 standalone
   snapshot check。
@@ -260,6 +262,7 @@ struct check 仅支持 standalone MySQL/PostgreSQL checker target。
 | log_level   | 日志级别                      | info/warn/error/debug/trace | info          |
 | log4rs_file | log4rs 配置地点，通常不需要改 | ./log4rs.yaml               | ./log4rs.yaml |
 | log_dir     | 日志输出目录                  | ./logs                      | ./logs        |
+| check_result_stdout_only | stdout 仅输出校验结果日志 | true/false | false |
 
 通常不需要修改。
 
