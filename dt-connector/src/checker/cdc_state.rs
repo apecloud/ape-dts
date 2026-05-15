@@ -180,14 +180,19 @@ impl<C: Checker> DataChecker<C> {
         tokio::fs::create_dir_all(path).await?;
         let mut summary_with_newline = summary_buf.to_vec();
         summary_with_newline.push(b'\n');
-        tokio::try_join!(
-            tokio::fs::write(path.join("miss.log"), miss_buf),
-            tokio::fs::write(path.join("diff.log"), diff_buf),
-            tokio::fs::write(path.join("summary.log"), summary_with_newline),
-        )?;
-        if !sql_buf.is_empty() {
-            tokio::fs::write(path.join("sql.log"), sql_buf).await?;
-        } else if let Err(err) = tokio::fs::remove_file(path.join("sql.log")).await {
+        Self::write_optional_log(&path.join("miss.log"), miss_buf).await?;
+        Self::write_optional_log(&path.join("diff.log"), diff_buf).await?;
+        tokio::fs::write(path.join("summary.log"), summary_with_newline).await?;
+        Self::write_optional_log(&path.join("sql.log"), sql_buf).await?;
+        Ok(())
+    }
+
+    async fn write_optional_log(path: &std::path::Path, buf: &[u8]) -> anyhow::Result<()> {
+        if !buf.is_empty() {
+            tokio::fs::write(path, buf).await?;
+            return Ok(());
+        }
+        if let Err(err) = tokio::fs::remove_file(path).await {
             if err.kind() != std::io::ErrorKind::NotFound {
                 return Err(err.into());
             }
@@ -502,21 +507,23 @@ impl<C: Checker> DataChecker<C> {
         let miss_key = format!("{p}/miss.log");
         let diff_key = format!("{p}/diff.log");
         let summary_key = format!("{p}/summary.log");
-        if sql_buf.is_empty() {
-            tokio::try_join!(
-                s3_client.write(&miss_key, miss_buf),
-                s3_client.write(&diff_key, diff_buf),
-                s3_client.write(&summary_key, summary_buf),
-            )?;
-            s3_client.delete(&format!("{p}/sql.log")).await?;
+        let sql_key = format!("{p}/sql.log");
+        Self::upload_optional_log(s3_client, &miss_key, miss_buf).await?;
+        Self::upload_optional_log(s3_client, &diff_key, diff_buf).await?;
+        Self::upload_optional_log(s3_client, &sql_key, sql_buf).await?;
+        s3_client.write(&summary_key, summary_buf).await?;
+        Ok(())
+    }
+
+    async fn upload_optional_log(
+        s3_client: &opendal::Operator,
+        key: &str,
+        buf: Vec<u8>,
+    ) -> anyhow::Result<()> {
+        if buf.is_empty() {
+            s3_client.delete(key).await?;
         } else {
-            let sql_key = format!("{p}/sql.log");
-            tokio::try_join!(
-                s3_client.write(&miss_key, miss_buf),
-                s3_client.write(&diff_key, diff_buf),
-                s3_client.write(&sql_key, sql_buf),
-                s3_client.write(&summary_key, summary_buf),
-            )?;
+            s3_client.write(key, buf).await?;
         }
         Ok(())
     }
@@ -603,17 +610,25 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn snapshot_and_output_removes_stale_sql_log_locally_and_on_s3_when_empty() {
+    async fn snapshot_and_output_removes_stale_optional_logs_locally_and_on_s3_when_empty() {
         let dir = unique_temp_dir("checker-empty-sql-local");
         fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("miss.log"), "").unwrap();
+        fs::write(dir.join("diff.log"), "").unwrap();
         fs::write(dir.join("sql.log"), "stale sql;\n").unwrap();
         let op = build_memory_operator();
+        op.write("prefix/miss.log", "stale miss\n").await.unwrap();
+        op.write("prefix/diff.log", "stale diff\n").await.unwrap();
         op.write("prefix/sql.log", "stale sql;\n").await.unwrap();
         let mut checker = build_cdc_checker(dir.clone(), Some((op.clone(), "prefix".to_string())));
 
         checker.snapshot_and_output().await.unwrap();
 
+        assert!(!dir.join("miss.log").exists());
+        assert!(!dir.join("diff.log").exists());
         assert!(!dir.join("sql.log").exists());
+        assert!(op.stat("prefix/miss.log").await.is_err());
+        assert!(op.stat("prefix/diff.log").await.is_err());
         assert!(op.stat("prefix/sql.log").await.is_err());
         fs::remove_dir_all(dir).unwrap();
     }
@@ -675,7 +690,9 @@ mod tests {
         assert_eq!(summary.tables[0].miss_count, 0);
         assert_eq!(summary.tables[0].diff_count, 1);
         assert_eq!(summary.tables[0].skip_count, 1);
+        assert!(!dir.join("miss.log").exists());
         assert_eq!(read_file(&dir.join("diff.log")).lines().count(), 1);
+        assert_eq!(read_file(&dir.join("sql.log")).lines().count(), 1);
         fs::remove_dir_all(dir).unwrap();
     }
 }

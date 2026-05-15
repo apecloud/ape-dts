@@ -150,12 +150,12 @@ repair statement is automatically generated in `sql.log`.
 
 # Check Results
 
-`diff.log` and `miss.log` are JSON Lines files: each non-empty line is one JSON object.
-`summary.log` contains exactly one JSON line for the overall summary. `sql.log` is a plain SQL
-file, one generated repair statement per line, and contains no JSON wrapper or schema/table/id
-metadata. `sql.log` is generated or written only when
-`output_revise_sql=true`. By default, these logs are stored in `runtime.log_dir/check`; if
-`[checker].check_log_dir` is set, that directory is used instead.
+`diff.log` and `miss.log` are JSON Lines files and are generated only when there are diff or miss
+entries; each non-empty line is one JSON object. `summary.log` contains exactly one JSON line for the
+overall summary. `sql.log` is a plain SQL file, one generated repair statement per line, and contains
+no JSON wrapper or schema/table/id metadata. `sql.log` is generated or written only when
+`output_revise_sql=true` and repair SQL exists. By default, these logs are stored in
+`runtime.log_dir/check`; if `[checker].check_log_dir` is set, that directory is used instead.
 
 ## Difference Log (diff.log)
 

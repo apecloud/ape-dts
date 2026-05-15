@@ -35,7 +35,7 @@ use dt_common::log_filter::{parse_size_limit, SizeLimitFilterDeserializer};
 use dt_common::{
     config::{
         checker_config::CheckerConfig,
-        config_enums::{DbType, ExtractType, PipelineType, SinkType, TaskType},
+        config_enums::{CheckMode, DbType, ExtractType, PipelineType, SinkType, TaskType},
         config_token_parser::{ConfigTokenParser, TokenEscapePair},
         extractor_config::ExtractorConfig,
         sinker_config::SinkerConfig,
@@ -296,6 +296,7 @@ impl TaskRunner {
         }
 
         log::logger().flush();
+        self.remove_empty_check_logs().await?;
         self.upload_check_logs_to_s3().await?;
         log_finished!("task finished");
         log::logger().flush();
@@ -308,7 +309,7 @@ impl TaskRunner {
         };
         if !self
             .task_type
-            .is_some_and(|task_type| task_type.is_standalone_snapshot_check())
+            .is_some_and(|task_type| matches!(task_type.check, Some(CheckMode::Standalone)))
         {
             return Ok(());
         }
@@ -316,7 +317,19 @@ impl TaskRunner {
         let check_log_dir = self.check_log_dir(cfg);
         tokio_fs::create_dir_all(&check_log_dir).await?;
         for file_name in ["miss.log", "diff.log", "summary.log", "sql.log"] {
-            tokio_fs::write(format!("{check_log_dir}/{file_name}"), b"").await?;
+            Self::remove_file_if_exists(&format!("{check_log_dir}/{file_name}")).await?;
+        }
+        Ok(())
+    }
+
+    async fn remove_empty_check_logs(&self) -> anyhow::Result<()> {
+        let Some(cfg) = self.config.checker.as_ref() else {
+            return Ok(());
+        };
+
+        let check_log_dir = self.check_log_dir(cfg);
+        for file_name in ["miss.log", "diff.log", "sql.log"] {
+            Self::remove_file_if_empty(&format!("{check_log_dir}/{file_name}")).await?;
         }
         Ok(())
     }
@@ -343,13 +356,9 @@ impl TaskRunner {
         check_log_dir: &str,
     ) -> anyhow::Result<()> {
         for file_name in ["miss.log", "diff.log"] {
-            let buf = match tokio_fs::read(format!("{check_log_dir}/{file_name}")).await {
-                Ok(buf) => buf,
-                Err(err) if err.kind() == std::io::ErrorKind::NotFound => Vec::new(),
-                Err(err) => return Err(err.into()),
-            };
             let key = format!("{key_prefix}/{file_name}");
-            s3_client.write(&key, buf).await?;
+            let path = format!("{check_log_dir}/{file_name}");
+            Self::upload_optional_check_log(s3_client, &key, &path).await?;
         }
         let summary_key = format!("{key_prefix}/summary.log");
         s3_client
@@ -359,19 +368,46 @@ impl TaskRunner {
             )
             .await?;
         let sql_key = format!("{key_prefix}/sql.log");
-        match tokio_fs::read(format!("{check_log_dir}/sql.log")).await {
+        Self::upload_optional_check_log(s3_client, &sql_key, &format!("{check_log_dir}/sql.log"))
+            .await?;
+        Ok(())
+    }
+
+    async fn upload_optional_check_log(
+        s3_client: &Operator,
+        key: &str,
+        path: &str,
+    ) -> anyhow::Result<()> {
+        match tokio_fs::read(path).await {
             Ok(buf) if !buf.is_empty() => {
-                s3_client.write(&sql_key, buf).await?;
+                s3_client.write(key, buf).await?;
             }
             Ok(_) => {
-                s3_client.delete(&sql_key).await?;
+                s3_client.delete(key).await?;
             }
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-                s3_client.delete(&sql_key).await?;
+                s3_client.delete(key).await?;
             }
             Err(err) => return Err(err.into()),
         }
         Ok(())
+    }
+
+    async fn remove_file_if_exists(path: &str) -> anyhow::Result<()> {
+        match tokio_fs::remove_file(path).await {
+            Ok(_) => Ok(()),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(err) => Err(err.into()),
+        }
+    }
+
+    async fn remove_file_if_empty(path: &str) -> anyhow::Result<()> {
+        match metadata(path).await {
+            Ok(metadata) if metadata.len() == 0 => Self::remove_file_if_exists(path).await,
+            Ok(_) => Ok(()),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(err) => Err(err.into()),
+        }
     }
 
     fn check_log_s3_output(
@@ -1784,5 +1820,48 @@ impl TaskRunner {
             ExtractorConfig::MongoSnapshot { db, tb, .. } => format!("{}.{}", db, tb),
             _ => String::new(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::TaskRunner;
+    use opendal::{services::Memory, Operator};
+    use std::{fs, time::SystemTime};
+
+    #[tokio::test]
+    async fn upload_local_check_logs_to_s3_deletes_empty_optional_logs() {
+        let dir = std::env::temp_dir().join(format!(
+            "ape-dts-task-runner-{}",
+            SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("miss.log"), "").unwrap();
+        fs::write(dir.join("diff.log"), "diff\n").unwrap();
+        fs::write(dir.join("summary.log"), "{\"is_consistent\":false}\n").unwrap();
+
+        let op = Operator::new(Memory::default()).unwrap().finish();
+        op.write("prefix/miss.log", "stale miss\n").await.unwrap();
+        op.write("prefix/diff.log", "stale diff\n").await.unwrap();
+        op.write("prefix/sql.log", "stale sql\n").await.unwrap();
+
+        TaskRunner::upload_local_check_logs_to_s3(&op, "prefix", dir.to_str().unwrap())
+            .await
+            .unwrap();
+
+        assert!(op.stat("prefix/miss.log").await.is_err());
+        assert_eq!(
+            op.read("prefix/diff.log").await.unwrap().to_vec(),
+            b"diff\n"
+        );
+        assert!(op.stat("prefix/sql.log").await.is_err());
+        assert_eq!(
+            op.read("prefix/summary.log").await.unwrap().to_vec(),
+            b"{\"is_consistent\":false}\n"
+        );
+        fs::remove_dir_all(dir).unwrap();
     }
 }

@@ -134,8 +134,8 @@ Notes:
 - In inline cdc check, `[checker].max_retries` / `[checker].retry_interval_secs` are forced to `0`.
 - When `check_log_dir` is empty, `runtime.log_dir/check` is used consistently for checker logs (including CDC check outputs).
 - Standalone snapshot check writes check results locally first. If `check_log_s3=true`, the final
-  local `miss.log`, `diff.log`, `summary.log`, and optional `sql.log` are uploaded to S3 after the
-  check task finishes.
+  local `summary.log` plus non-empty `miss.log`, `diff.log`, and `sql.log` are uploaded to S3
+  after the check task finishes.
 - In inline cdc check, periodic check snapshots are always written locally under `check_log_dir`;
   `check_log_s3` controls only S3 upload. Outside inline cdc check, S3 upload is supported only by
   standalone snapshot check.

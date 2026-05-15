@@ -147,11 +147,11 @@ sample_rate=25
 
 # 校验结果
 
-`diff.log`、`miss.log` 为 JSON Lines：每个非空行是一个 JSON 对象。
-`summary.log` 只包含一行总体 summary JSON。`sql.log` 是纯 SQL 文件，每行一条生成的修复语句，
-不包含 JSON 包装，也不携带 schema/table/id metadata。`sql.log` 仅在
-`output_revise_sql=true` 时生成或写入。默认写入
-`runtime.log_dir/check`；若配置了 `[checker].check_log_dir`，则写入该目录。
+`diff.log`、`miss.log` 为 JSON Lines，且仅在存在 diff 或 miss 条目时生成；每个非空行是一个
+JSON 对象。`summary.log` 只包含一行总体 summary JSON。`sql.log` 是纯 SQL 文件，每行一条生成的
+修复语句，不包含 JSON 包装，也不携带 schema/table/id metadata。`sql.log` 仅在
+`output_revise_sql=true` 且存在修复 SQL 时生成或写入。默认写入 `runtime.log_dir/check`；若配置了
+`[checker].check_log_dir`，则写入该目录。
 
 ## 差异日志（diff.log）
 

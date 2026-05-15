@@ -127,7 +127,7 @@ struct check 仅支持 standalone MySQL/PostgreSQL checker target。
 - 对 inline cdc check，`max_retries` 与 `retry_interval_secs` 会强制按 0 处理。
 - 当 `check_log_dir` 为空时，统一使用 `runtime.log_dir/check` 作为 checker 日志目录（包含 CDC 校验输出）。
 - standalone snapshot check 先输出本地校验日志；如果 `check_log_s3=true`，任务结束后会将最终的
-  `miss.log`、`diff.log`、`summary.log` 和可选的 `sql.log` 上传到 S3。
+  `summary.log` 以及非空的 `miss.log`、`diff.log`、`sql.log` 上传到 S3。
 - 在 inline cdc check 下，会始终先在 `check_log_dir` 本地落盘周期性校验快照；
   `check_log_s3` 仅控制是否上传 S3。除 inline cdc check 外，S3 上传只支持 standalone
   snapshot check。
