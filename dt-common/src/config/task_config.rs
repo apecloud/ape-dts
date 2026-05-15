@@ -1117,6 +1117,11 @@ impl TaskConfig {
                 "log4rs_file",
                 "./log4rs.yaml".to_string(),
             ),
+            check_result_stdout_only: loader.get_with_default(
+                RUNTIME,
+                "check_result_stdout_only",
+                false,
+            ),
             tb_parallel_size: loader.get_with_default(RUNTIME, "tb_parallel_size", 1),
         })
     }

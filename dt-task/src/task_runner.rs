@@ -35,7 +35,7 @@ use dt_common::log_filter::{parse_size_limit, SizeLimitFilterDeserializer};
 use dt_common::{
     config::{
         checker_config::CheckerConfig,
-        config_enums::{CheckMode, DbType, ExtractType, PipelineType, SinkType, TaskType},
+        config_enums::{DbType, ExtractType, PipelineType, SinkType, TaskType},
         config_token_parser::{ConfigTokenParser, TokenEscapePair},
         extractor_config::ExtractorConfig,
         sinker_config::SinkerConfig,
@@ -112,6 +112,8 @@ const STATISTIC_LOG_DIR_PLACEHOLDER: &str = "STATISTIC_LOG_DIR_PLACEHOLDER";
 const LOG_LEVEL_PLACEHOLDER: &str = "LOG_LEVEL_PLACEHOLDER";
 const LOG_DIR_PLACEHOLDER: &str = "LOG_DIR_PLACEHOLDER";
 const CHECK_LOG_FILE_SIZE_PLACEHOLDER: &str = "CHECK_LOG_FILE_SIZE_PLACEHOLDER";
+const RUNTIME_STDOUT_APPENDER_PLACEHOLDER: &str = "RUNTIME_STDOUT_APPENDER_PLACEHOLDER";
+const CHECK_RESULT_STDOUT_APPENDER_PLACEHOLDER: &str = "CHECK_RESULT_STDOUT_APPENDER_PLACEHOLDER";
 const DEFAULT_CHECK_LOG_DIR_PLACEHOLDER: &str = "LOG_DIR_PLACEHOLDER/check";
 const DEFAULT_STATISTIC_LOG_DIR_PLACEHOLDER: &str = "LOG_DIR_PLACEHOLDER/statistic";
 
@@ -307,10 +309,7 @@ impl TaskRunner {
         let Some(cfg) = self.config.checker.as_ref() else {
             return Ok(());
         };
-        if !self
-            .task_type
-            .is_some_and(|task_type| matches!(task_type.check, Some(CheckMode::Standalone)))
-        {
+        if !Self::should_clear_check_logs_before_log4rs(self.task_type) {
             return Ok(());
         }
 
@@ -320,6 +319,13 @@ impl TaskRunner {
             Self::remove_file_if_exists(&format!("{check_log_dir}/{file_name}")).await?;
         }
         Ok(())
+    }
+
+    fn should_clear_check_logs_before_log4rs(task_type: Option<TaskType>) -> bool {
+        match task_type {
+            Some(task_type) => task_type.has_check() && !task_type.is_cdc_inline_check(),
+            None => true,
+        }
     }
 
     async fn remove_empty_check_logs(&self) -> anyhow::Result<()> {
@@ -1419,6 +1425,25 @@ impl TaskRunner {
             .replace(CHECK_LOG_FILE_SIZE_PLACEHOLDER, DEFAULT_CHECK_LOG_FILE_SIZE)
             .replace(LOG_DIR_PLACEHOLDER, &self.config.runtime.log_dir)
             .replace(LOG_LEVEL_PLACEHOLDER, &self.config.runtime.log_level);
+
+        if self.config.runtime.check_result_stdout_only {
+            config_str = config_str
+                .replace(
+                    RUNTIME_STDOUT_APPENDER_PLACEHOLDER,
+                    "silent_stdout_appender",
+                )
+                .replace(
+                    CHECK_RESULT_STDOUT_APPENDER_PLACEHOLDER,
+                    "check_stdout_appender",
+                );
+        } else {
+            config_str = config_str
+                .replace(RUNTIME_STDOUT_APPENDER_PLACEHOLDER, "stdout")
+                .replace(
+                    CHECK_RESULT_STDOUT_APPENDER_PLACEHOLDER,
+                    "silent_stdout_appender",
+                );
+        }
 
         let raw: RawConfig = serde_yaml::from_str(&config_str)?;
         let mut deserializers = Deserializers::default();

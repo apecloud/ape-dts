@@ -128,6 +128,12 @@ final table-level ratio can vary, especially for small chunks. For inline snapsh
 CDC check, `sample_rate=25` still writes all rows/changes, then checks rows/changes whose key hash
 falls into the sampled percentage before target fetch/compare.
 
+When standalone snapshot check resumes from a checkpoint, position counters restart from the resumed
+extractor stream. If the previous run stopped after a sampled row but before the next sampled row, the
+resumed run may re-window the following rows, so the sampled row set may differ from a single
+uninterrupted run. Inline snapshot check and inline CDC check use key-hash sampling and keep the same
+key sampling decision across resumes.
+
 ```
 [checker]
 enable=true
@@ -156,6 +162,14 @@ overall summary. `sql.log` is a plain SQL file, one generated repair statement p
 no JSON wrapper or schema/table/id metadata. `sql.log` is generated or written only when
 `output_revise_sql=true` and repair SQL exists. By default, these logs are stored in
 `runtime.log_dir/check`; if `[checker].check_log_dir` is set, that directory is used instead.
+
+By default, stdout follows the normal runtime logging configuration. For orchestration paths that
+need stdout to contain only check results, set `[runtime].check_result_stdout_only=true` for that
+specific check task. In this mode, the files above remain the check artifacts, normal runtime stdout
+is silenced, and miss, diff, summary, and SQL records are emitted to stdout as one line in the form
+`<logger> - <payload>`. Only `summary_logger`, `miss_logger`, `diff_logger`, and `sql_logger` are
+part of this stdout result stream. The JSON payloads are the same objects as the file logs; SQL
+payloads are the same plain statements as `sql.log`.
 
 ## Difference Log (diff.log)
 

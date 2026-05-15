@@ -90,7 +90,9 @@ struct check 仅支持 standalone MySQL/PostgreSQL checker target。
   按每个 extractor 数据流内的行位置应用该比例，减少后续 checker 工作量。MySQL/PostgreSQL
   并行 chunk 会独立抽样，可空排序列的 NULL pass 也有独立计数器；MongoDB 使用 collection
   cursor 内的位置。例如 `sample_rate=25` 表示每个数据流的 100 条位置窗口中保留第 1-25 条。
-  Inline snapshot check 和 inline CDC check 会先完整写入所有行/变更，然后在 checker 目标端
+  恢复运行后，standalone snapshot check 会从恢复后的数据流重新开始这些位置计数；如果上一次
+  任务停在两次抽样命中之间，最终抽样行集合可能不同于一次不中断运行。Inline snapshot check
+  和 inline CDC check 会先完整写入所有行/变更，然后在 checker 目标端
   fetch 前进行确定性的 key hash 抽样；相同 key 的行/变更会保持一致的抽样结果。
 - `queue_size` 统计的是 checker DML 队列中的待处理批次数，不是行数。checkpoint、`refresh_meta`
   这类控制信号会绕过这条队列。
@@ -249,6 +251,7 @@ struct check 仅支持 standalone MySQL/PostgreSQL checker target。
 | log_level   | 日志级别                      | info/warn/error/debug/trace | info          |
 | log4rs_file | log4rs 配置地点，通常不需要改 | ./log4rs.yaml               | ./log4rs.yaml |
 | log_dir     | 日志输出目录                  | ./logs                      | ./logs        |
+| check_result_stdout_only | stdout 仅输出校验结果日志 | true/false | false |
 
 通常不需要修改。
 

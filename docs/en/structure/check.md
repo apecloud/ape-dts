@@ -16,6 +16,14 @@ different objects. `summary.log` contains exactly one JSON line for the overall 
 `output_revise_sql=true` and repair SQL exists, it also writes repair statements to `sql.log`.
 `sql.log` is plain SQL, one statement per line, with no JSON wrapper or schema/table/id metadata.
 
+By default, stdout follows the normal runtime logging configuration. For orchestration paths that
+need stdout to contain only check results, set `[runtime].check_result_stdout_only=true` for that
+specific check task. In this mode, the files above remain the check artifacts, normal runtime stdout
+is silenced, and miss, diff, summary, and SQL records are emitted to stdout as one line in the form
+`<logger> - <payload>`. Only `summary_logger`, `miss_logger`, `diff_logger`, and `sql_logger` are
+part of this stdout result stream. The JSON payloads are the same objects as the file logs; SQL
+payloads are the same plain statements as `sql.log`.
+
 `miss.log` and `diff.log` use the same JSON structure (`StructCheckLog`). `src_sql` and
 `dst_sql` are optional and appear only when the corresponding side has a definition:
 

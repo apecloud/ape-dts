@@ -16,6 +16,13 @@
 `sql.log`。`sql.log` 是纯 SQL 文件，每行一条语句，不包含 JSON 包装，也不携带 schema/table/id
 metadata。
 
+默认情况下，stdout 仍遵循普通运行日志配置。若编排系统需要 stdout 只包含校验结果，请只给该
+check 任务设置 `[runtime].check_result_stdout_only=true`。在该模式下，上述文件仍是校验
+artifact，普通运行日志不会输出到 stdout，miss、diff、summary、SQL 记录会输出到 stdout，
+单行格式固定为 `<logger> - <payload>`。只有 `summary_logger`、`miss_logger`、
+`diff_logger`、`sql_logger` 属于 stdout 结果流；JSON payload 与文件日志中的对象一致，SQL
+payload 与 `sql.log` 中的纯 SQL 语句一致。
+
 `miss.log` 和 `diff.log` 均采用相同的 JSON 结构（`StructCheckLog`）。`src_sql` 与
 `dst_sql` 是可选字段，仅在对应侧存在结构定义时输出：
 
