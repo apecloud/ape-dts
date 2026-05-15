@@ -111,6 +111,7 @@ pub enum ExtractorConfig {
         db_tbs: HashMap<String, Vec<String>>,
         parallel_size: usize,
         parallel_type: RdbParallelType,
+        batch_size: usize,
     },
 
     MongoCdc {

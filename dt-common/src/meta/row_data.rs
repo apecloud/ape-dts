@@ -22,7 +22,9 @@ pub struct RowData {
     pub schema: String,
     pub tb: String,
     #[serde(skip)]
-    pub chunk_id: u64, // used for snapshot data
+    // Used by snapshot table partitioning to spread table data across sinkers by logical chunk (splitter generated)
+    // or batch (from serial extracting)
+    pub chunk_id: u64,
     pub row_type: RowType,
     pub before: Option<HashMap<String, ColValue>>,
     pub after: Option<HashMap<String, ColValue>>,

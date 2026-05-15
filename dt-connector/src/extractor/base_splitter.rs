@@ -24,9 +24,50 @@ pub struct SnapshotChunk {
     pub chunk_range: ChunkRange,
 }
 
+#[derive(Debug)]
+pub struct SnapshotChunkIdGenerator {
+    chunk_id: u64,
+    rows_in_chunk: usize,
+    row_chunk_size: usize,
+}
+
+impl Default for SnapshotChunkIdGenerator {
+    fn default() -> Self {
+        Self::new(1)
+    }
+}
+
+impl SnapshotChunkIdGenerator {
+    pub fn new(row_chunk_size: usize) -> Self {
+        Self {
+            chunk_id: 0,
+            rows_in_chunk: 0,
+            row_chunk_size: row_chunk_size.max(1),
+        }
+    }
+
+    #[inline(always)]
+    pub fn next_chunk_id(&mut self) -> u64 {
+        self.chunk_id += 1;
+        self.chunk_id
+    }
+
+    #[inline(always)]
+    pub fn next_row_chunk_id(&mut self) -> u64 {
+        if self.chunk_id == 0 {
+            self.chunk_id = 1;
+        } else if self.rows_in_chunk >= self.row_chunk_size {
+            self.chunk_id += 1;
+            self.rows_in_chunk = 0;
+        }
+        self.rows_in_chunk += 1;
+        self.chunk_id
+    }
+}
+
 #[derive(Default, Debug)]
 pub struct BaseSplitter {
-    chunk_id_generator: u64,
+    chunk_id_generator: SnapshotChunkIdGenerator,
     split_state: u8,
 }
 
@@ -134,8 +175,7 @@ impl BaseSplitter {
 
     #[inline(always)]
     fn gen_next_chunk_id(&mut self) -> u64 {
-        self.chunk_id_generator += 1;
-        self.chunk_id_generator
+        self.chunk_id_generator.next_chunk_id()
     }
 
     #[inline(always)]

@@ -90,7 +90,7 @@ impl KafkaSinker {
         ));
 
         self.base_sinker
-            .update_batch_monitor_for(&task_id, batch_size as u64, data_size as u64)
+            .update_batch_monitor_for(&task_id, batch_size as u64, data_size)
             .await?;
         self.base_sinker.update_monitor_rt_for(&task_id, &rts).await
     }

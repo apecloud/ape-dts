@@ -339,6 +339,7 @@ impl ExtractorUtil {
                 db_tbs,
                 parallel_size,
                 parallel_type,
+                batch_size,
                 ..
             } => {
                 let mongo_client = match extractor_client {
@@ -349,6 +350,7 @@ impl ExtractorUtil {
                     db_tbs,
                     parallel_type,
                     parallel_size,
+                    batch_size,
                     mongo_client,
                     base_extractor,
                     extract_state,

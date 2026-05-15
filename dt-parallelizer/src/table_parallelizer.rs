@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::{table_partitioner::TablePartitioner, DataSize, Parallelizer};
+use crate::{chunk_partitioner::ChunkPartitioner, DataSize, Parallelizer};
 use async_trait::async_trait;
 use dt_common::meta::{
     ddl_meta::ddl_data::DdlData, dt_data::DtItem, dt_queue::DtQueue, row_data::RowData,
@@ -34,7 +34,7 @@ impl Parallelizer for TableParallelizer {
             bytes: data.iter().map(|v| v.get_data_size()).sum(),
         };
 
-        let sub_data = TablePartitioner::partition_dml(data)?;
+        let sub_data = ChunkPartitioner::partition_dml(data, self.parallel_size)?;
         self.base_parallelizer
             .sink_dml(sub_data, sinkers, self.parallel_size, false)
             .await?;
@@ -52,7 +52,7 @@ impl Parallelizer for TableParallelizer {
             bytes: data.iter().map(|v| v.get_data_size()).sum(),
         };
 
-        let sub_data = TablePartitioner::partition_raw(data)?;
+        let sub_data = ChunkPartitioner::partition_raw(data)?;
         self.base_parallelizer
             .sink_raw(sub_data, sinkers, self.parallel_size, false)
             .await?;

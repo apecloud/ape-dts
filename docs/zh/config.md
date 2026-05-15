@@ -14,7 +14,7 @@
 | username        | 数据库连接账号                                    | root                                                                                                 |
 | password        | 数据库连接密码                                    | password                                                                                             | -                              |
 | max_connections | 最大连接数                                        | 10                                                                                                   | 目前是 10，未来可能会动态适配  |
-| batch_size      | 批量拉取数据条数                                  | 10000                                                                                                | 和 [pipeline] buffer_size 一致 |
+| batch_size      | 批量拉取数据条数；使用 chunk 切分时，也作为目标 chunk 大小，extractor 会尽量让每个 chunk 接近该行数 | 10000                                                                                                | 和 [pipeline] buffer_size 一致 |
 | parallel_type   | 全量拉取并发策略                                  | table                                                                                                | table                          |
 | parallel_size   | 全量同步时，单表并行拉取任务数                    | 4                                                                                                    | 1                              |
 | partition_cols  | 全量同步时，指定分区列，用于数据切分，仅支持单列  | json:[{"db":"db_1","tb":"tb_1","partition_col":"id"},{"db":"db_2","tb":"tb_2","partition_col":"id"}] | -                              |
@@ -32,6 +32,7 @@ url=mysql://user1:abc%25%24%23%3F%40@127.0.0.1:3307?ssl-mode=disabled
 
 - `table`：把全量并发度分配给多张表。若 `parallel_size=4`，则最多可同时拉取 4 张表。
 - `chunk`：把全量并发度分配给单表内部的 chunk 切分。若 `parallel_size=4`，则单张表最多可同时运行 4 个 chunk worker。
+- 当 `parallel_type=chunk` 时，`[extractor].batch_size` 也作为目标 chunk 大小。chunk 边界会受实际数据分布影响，因此实际行数可能有偏差，但 extractor 会尽量让每个 chunk 接近 `batch_size`。
 - 这两种模式下，真正控制并发上限的都是 `parallel_size`。
 - MySQL 和 PostgreSQL 的 snapshot extractor 同时支持 `table` 与 `chunk`。
 - MongoDB 和 Foxlake 的 snapshot extractor 当前只支持 `table`，不支持 `chunk`。

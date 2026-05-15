@@ -13,7 +13,7 @@ parallel_type=table
 parallel_size=4
 ```
 
-`parallel_type=table` 表示把全量并发度分配给多张表；`parallel_type=chunk` 表示把并发度分配给单表内的 chunk 切分。这两种模式下，真正控制全量并发度的都是 `[extractor].parallel_size`。
+`parallel_type=table` 表示把全量并发度分配给多张表；`parallel_type=chunk` 表示把并发度分配给单表内的 chunk 切分。在 chunk 模式下，`[extractor].batch_size` 也作为目标 chunk 大小，extractor 会尽量让每个 chunk 接近该行数。这两种模式下，真正控制全量并发度的都是 `[extractor].parallel_size`。
 
 废弃配置说明：`[runtime] tb_parallel_size` 已废弃，不应再用于新配置。当前仅为兼容旧版本配置而保留，且只会在未设置 `[extractor] parallel_size` 时作为 fallback 生效。
 

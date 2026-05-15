@@ -13,7 +13,7 @@ parallel_type=table
 parallel_size=4
 ```
 
-`parallel_type=table` means snapshot concurrency is allocated across tables. `parallel_type=chunk` means concurrency is allocated within a single table by chunk splitting. In both modes, `parallel_size` is the effective snapshot concurrency knob.
+`parallel_type=table` means snapshot concurrency is allocated across tables. `parallel_type=chunk` means concurrency is allocated within a single table by chunk splitting. In chunk mode, `[extractor].batch_size` is also the target chunk size, and the extractor tries to keep each chunk close to that row count. In both modes, `parallel_size` is the effective snapshot concurrency knob.
 
 Deprecated config: `[runtime] tb_parallel_size` is deprecated and should not be used in new configs. It is kept only for backward compatibility, and only as a fallback when `[extractor] parallel_size` is not set.
 

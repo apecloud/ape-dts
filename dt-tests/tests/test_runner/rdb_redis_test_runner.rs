@@ -1,4 +1,4 @@
-use anyhow::{bail, Context};
+use anyhow::bail;
 use dt_common::config::config_enums::DbType;
 use dt_common::meta::col_value::ColValue;
 use dt_common::utils::redis_util::RedisUtil;

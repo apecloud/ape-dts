@@ -1405,6 +1405,7 @@ impl TaskRunner {
                 app_name,
                 parallel_size,
                 parallel_type,
+                batch_size,
                 ..
             } => ExtractorConfig::MongoSnapshot {
                 url: url.clone(),
@@ -1415,6 +1416,7 @@ impl TaskRunner {
                 db_tbs: schema_tbs,
                 parallel_size: *parallel_size,
                 parallel_type: parallel_type.clone(),
+                batch_size: *batch_size,
             },
 
             ExtractorConfig::FoxlakeS3 {

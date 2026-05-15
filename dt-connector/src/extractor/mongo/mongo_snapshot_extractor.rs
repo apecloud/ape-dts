@@ -11,6 +11,7 @@ use mongodb::{
 use crate::{
     extractor::{
         base_extractor::{BaseExtractor, ExtractState},
+        base_splitter::SnapshotChunkIdGenerator,
         resumer::recovery::Recovery,
         snapshot_dispatcher::SnapshotDispatcher,
     },
@@ -35,6 +36,7 @@ pub struct MongoSnapshotExtractor {
     pub db_tbs: HashMap<String, Vec<String>>,
     pub parallel_type: RdbParallelType,
     pub parallel_size: usize,
+    pub batch_size: usize,
     pub mongo_client: Client,
     pub recovery: Option<Arc<dyn Recovery + Send + Sync>>,
 }
@@ -90,6 +92,7 @@ impl MongoSnapshotExtractor {
             db_tbs: self.db_tbs.clone(),
             parallel_type: self.parallel_type.clone(),
             parallel_size: self.parallel_size,
+            batch_size: self.batch_size,
             mongo_client: self.mongo_client.clone(),
             recovery: self.recovery.clone(),
         }
@@ -100,7 +103,12 @@ impl MongoSnapshotExtractor {
             SnapshotDispatcher::fork_table_extract_state(&self.extract_state, &db, &tb).await;
         let base_extractor = self.base_extractor.clone();
 
-        log_info!("MongoSnapshotExtractor starts, schema: {}, tb: {}", db, tb);
+        log_info!(
+            "MongoSnapshotExtractor starts, schema: {}, tb: {}, batch_size: {}",
+            db,
+            tb,
+            self.batch_size
+        );
 
         let filter = if let Some(handler) = &self.recovery {
             if let Some(Position::RdbSnapshot {
@@ -130,6 +138,7 @@ impl MongoSnapshotExtractor {
 
         let collection = self.mongo_client.database(&db).collection::<Document>(&tb);
         let mut cursor = collection.find(filter, find_options).await?;
+        let mut chunk_id_generator = SnapshotChunkIdGenerator::new(self.batch_size);
         while cursor.advance().await? {
             let doc = cursor.deserialize_current().map_err(|e| {
                 log_error!("error deserializing {}.{} document: {}", db, tb, e);
@@ -141,7 +150,7 @@ impl MongoSnapshotExtractor {
             let row_data = RowData::new(
                 db.clone(),
                 tb.clone(),
-                0,
+                chunk_id_generator.next_row_chunk_id(),
                 RowType::Insert,
                 None,
                 Some(after),

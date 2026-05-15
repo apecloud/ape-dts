@@ -187,7 +187,7 @@ impl RedisSinker {
         self.batch_sink(&cmds).await?;
 
         self.base_sinker
-            .update_batch_monitor_for(&task_id, cmds.len() as u64, data_size as u64)
+            .update_batch_monitor_for(&task_id, cmds.len() as u64, data_size)
             .await
     }
 
@@ -204,7 +204,7 @@ impl RedisSinker {
         }
 
         self.base_sinker
-            .update_serial_monitor_for(&task_id, data.len() as u64, data_size as u64)
+            .update_serial_monitor_for(&task_id, data.len() as u64, data_size)
             .await
     }
 

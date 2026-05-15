@@ -74,7 +74,7 @@ impl StarRocksSinker {
         }
 
         self.base_sinker
-            .update_serial_monitor_for(&task_id, data.len() as u64, data_size as u64)
+            .update_serial_monitor_for(&task_id, data.len() as u64, data_size)
             .await
     }
 

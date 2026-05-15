@@ -653,6 +653,7 @@ impl TaskConfig {
                             "parallel_type",
                             RdbParallelType::Table,
                         ),
+                        batch_size,
                     },
 
                     ExtractType::Cdc => ExtractorConfig::MongoCdc {

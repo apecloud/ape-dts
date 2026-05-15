@@ -23,6 +23,7 @@ impl<'q> SqlxPgExt<'q> for Query<'q, Postgres, PgArguments> {
             }
 
             match col_type.value_type {
+                // used for sinking data from kafka and etc source, where the value type is determined by the column type in pg.
                 PgValueType::Boolean => return self.bind(as_bool(value)),
                 PgValueType::Int16 => return self.bind(as_i16(value)),
                 PgValueType::Int32 => return self.bind(as_i32(value)),
