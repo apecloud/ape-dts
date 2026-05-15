@@ -224,7 +224,7 @@ loggers:
       - CHECK_RESULT_STDOUT_APPENDER_PLACEHOLDER
 
   diff_logger:
-    level: LOG_LEVEL_PLACEHOLDER
+    level: info
     appenders:
       - diff_appender
       - CHECK_RESULT_STDOUT_APPENDER_PLACEHOLDER
