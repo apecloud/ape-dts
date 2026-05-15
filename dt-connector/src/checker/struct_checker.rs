@@ -13,8 +13,8 @@ use dt_common::{
     log_diff, log_info, log_miss, log_sql, log_summary,
     meta::struct_meta::struct_data::StructData,
     monitor::{
-        counter_type::CounterType, monitor::Monitor, task_metrics::TaskMetricsType,
-        task_monitor::TaskMonitor,
+        counter_type::CounterType, task_metrics::TaskMetricsType,
+        task_monitor_handle::TaskMonitorHandle,
     },
     rdb_filter::RdbFilter,
 };
@@ -37,8 +37,8 @@ pub struct StructCheckerHandle {
     retry_interval_secs: u64,
     max_retries: u32,
     global_summary: Option<Arc<Mutex<CheckSummaryLog>>>,
-    monitor: Arc<Monitor>,
-    task_monitor: Option<Arc<TaskMonitor>>,
+    monitor: TaskMonitorHandle,
+    monitor_task_id: String,
     src_sql_map: HashMap<String, String>,
     dbs: HashSet<String>,
     start_time: String,
@@ -56,8 +56,8 @@ impl StructCheckerHandle {
         retry_interval_secs: u64,
         max_retries: u32,
         global_summary: Option<Arc<Mutex<CheckSummaryLog>>>,
-        monitor: Arc<Monitor>,
-        task_monitor: Option<Arc<TaskMonitor>>,
+        monitor: TaskMonitorHandle,
+        monitor_task_id: String,
     ) -> Self {
         Self {
             db_type,
@@ -70,7 +70,7 @@ impl StructCheckerHandle {
             max_retries,
             global_summary,
             monitor,
-            task_monitor,
+            monitor_task_id,
             src_sql_map: HashMap::new(),
             dbs: HashSet::new(),
             start_time: Local::now().to_rfc3339(),
@@ -85,7 +85,11 @@ impl StructCheckerHandle {
         let sqls = statement.to_sqls(&self.filter)?;
         if !sqls.is_empty() {
             self.monitor
-                .add_counter(CounterType::RecordCount, sqls.len() as u64)
+                .add_counter(
+                    &self.monitor_task_id,
+                    CounterType::RecordCount,
+                    sqls.len() as u64,
+                )
                 .await;
         }
 
@@ -284,25 +288,29 @@ impl StructCheckerHandle {
             .compare_once(&self.src_sql_map, &self.dbs, &self.start_time, true)
             .await?;
         if summary.miss_count > 0 {
-            if let Some(task_monitor) = &self.task_monitor {
-                task_monitor.add_no_window_metrics(
-                    TaskMetricsType::CheckerMissCount,
-                    summary.miss_count as u64,
-                );
-            }
+            self.monitor.add_no_window_metrics(
+                TaskMetricsType::CheckerMissCount,
+                summary.miss_count as u64,
+            );
             self.monitor
-                .add_counter(CounterType::CheckerMissCount, summary.miss_count as u64)
+                .add_counter(
+                    &self.monitor_task_id,
+                    CounterType::CheckerMissCount,
+                    summary.miss_count as u64,
+                )
                 .await;
         }
         if summary.diff_count > 0 {
-            if let Some(task_monitor) = &self.task_monitor {
-                task_monitor.add_no_window_metrics(
-                    TaskMetricsType::CheckerDiffCount,
-                    summary.diff_count as u64,
-                );
-            }
+            self.monitor.add_no_window_metrics(
+                TaskMetricsType::CheckerDiffCount,
+                summary.diff_count as u64,
+            );
             self.monitor
-                .add_counter(CounterType::CheckerDiffCount, summary.diff_count as u64)
+                .add_counter(
+                    &self.monitor_task_id,
+                    CounterType::CheckerDiffCount,
+                    summary.diff_count as u64,
+                )
                 .await;
         }
         if summary.miss_count > 0 || summary.diff_count > 0 {

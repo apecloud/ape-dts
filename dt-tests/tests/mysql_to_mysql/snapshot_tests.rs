@@ -6,7 +6,7 @@ mod test {
     use dt_common::config::config_enums::DbType;
     use serial_test::serial;
 
-    use crate::test_runner::{rdb_test_runner::RdbTestRunner, test_base::TestBase};
+    use crate::test_runner::test_base::TestBase;
 
     #[tokio::test]
     #[serial]
@@ -124,8 +124,14 @@ mod test {
 
     #[tokio::test]
     #[serial]
-    async fn snapshot_parallel_test() {
+    async fn snapshot_chunk_parallel_test() {
         TestBase::run_snapshot_test("mysql_to_mysql/snapshot/parallel_test").await;
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn snapshot_table_parallel_test() {
+        TestBase::run_snapshot_test("mysql_to_mysql/snapshot/table_parallel_test").await;
     }
 
     #[tokio::test]
@@ -183,6 +189,7 @@ mod test {
     #[tokio::test]
     #[serial]
     async fn snapshot_tb_parallel_test() {
+        // legacy parallel test.
         // [runtime]
         // tb_parallel_size=3
         TestBase::run_snapshot_test("mysql_to_mysql/snapshot/tb_parallel_test").await;

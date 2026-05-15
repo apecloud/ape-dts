@@ -45,7 +45,7 @@ impl RdbUtil {
         };
         let mut result = Vec::new();
         while let Some(row) = rows.try_next().await.unwrap() {
-            let row_data = RowData::from_mysql_compatible_row(&row, &tb_meta, &None, db_type);
+            let row_data = RowData::from_mysql_compatible_row(&row, &tb_meta, &None, db_type, None);
             result.push(row_data);
         }
 
@@ -72,7 +72,7 @@ impl RdbUtil {
 
         let mut result = Vec::new();
         while let Some(row) = rows.try_next().await.unwrap() {
-            let row_data = RowData::from_pg_row(&row, &tb_meta, &None);
+            let row_data = RowData::from_pg_row(&row, &tb_meta, &None, None);
             result.push(row_data);
         }
 

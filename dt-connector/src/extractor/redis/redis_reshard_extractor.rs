@@ -3,7 +3,10 @@ use redis::{Connection, ConnectionLike};
 use std::{cmp, collections::HashMap};
 use url::Url;
 
-use crate::{extractor::base_extractor::BaseExtractor, Extractor};
+use crate::{
+    extractor::base_extractor::{BaseExtractor, ExtractState},
+    Extractor,
+};
 use dt_common::{
     config::connection_auth_config::ConnectionAuthConfig,
     log_debug, log_info,
@@ -17,6 +20,7 @@ const SLOTS_COUNT: usize = 16384;
 
 pub struct RedisReshardExtractor {
     pub base_extractor: BaseExtractor,
+    pub extract_state: ExtractState,
     pub url: String,
     pub connection_auth: ConnectionAuthConfig,
 }
@@ -26,7 +30,9 @@ impl Extractor for RedisReshardExtractor {
     async fn extract(&mut self) -> anyhow::Result<()> {
         log_info!("RedisReshardExtractor starts");
         self.reshard().await.unwrap();
-        self.base_extractor.wait_task_finish().await
+        self.base_extractor
+            .wait_task_finish(&mut self.extract_state)
+            .await
     }
 }
 

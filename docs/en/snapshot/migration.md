@@ -1,6 +1,6 @@
 # Migrate snapshot data
 
-If the snapshot task contains multiple databases/tables, tables will be sorted **first by database name and then table name**, and they will be migrated to the target **one by one**. Only one table will be in the sync process at a time.
+If the snapshot task contains multiple databases/tables, tables will be sorted **first by database name and then table name**, and by default they will be migrated to the target **one by one**. To run multiple tables concurrently, use `[extractor] parallel_type=table` with `[extractor] parallel_size > 1`.
 
 If the table has a single primary/unique key, the extractor will use this key as the sorting column and pull data in batches of size [pipeline] `buffer_size`, starting from the smallest value and moving upwards.
 
@@ -40,4 +40,3 @@ batch_size=200
 [parallelizer]
 parallel_size=8
 ```
-

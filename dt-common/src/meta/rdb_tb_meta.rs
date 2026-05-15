@@ -68,25 +68,25 @@ impl RdbTbMeta {
         }
     }
 
-    pub fn build_position_for_partition(
+    pub fn build_position_for_single_col(
         &self,
         db_type: &DbType,
-        partition_col: &String,
-        partition_col_value: &ColValue,
+        col: &str,
+        col_value: &ColValue,
+        is_partition: bool,
     ) -> Position {
-        // partion_col can be defined by user, not necessary in order_cols
-        if !self.has_col(partition_col) {
+        // partion_col can be defined by user, and it may not exist in cols.
+        if is_partition && !self.has_col(&col.to_string()) {
             return Position::None;
         }
-        let order_key = Some(OrderKey::Single((
-            partition_col.to_string(),
-            partition_col_value.to_option_string(),
-        )));
         Position::RdbSnapshot {
             db_type: db_type.to_string(),
             schema: self.schema.clone(),
             tb: self.tb.clone(),
-            order_key,
+            order_key: Some(OrderKey::Single((
+                col.to_string(),
+                col_value.to_option_string(),
+            ))),
         }
     }
 }

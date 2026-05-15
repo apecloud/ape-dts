@@ -14,6 +14,12 @@ mod test {
 
     #[tokio::test]
     #[serial]
+    async fn snapshot_table_parallel_test() {
+        TestBase::run_mongo_snapshot_test("mongo_to_mongo/snapshot/table_parallel_test").await;
+    }
+
+    #[tokio::test]
+    #[serial]
     async fn snapshot_route_test() {
         TestBase::run_mongo_snapshot_test("mongo_to_mongo/snapshot/route_test").await;
     }

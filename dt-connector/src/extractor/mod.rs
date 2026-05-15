@@ -10,3 +10,5 @@ pub mod pg;
 pub mod rdb_snapshot_extract_statement;
 pub mod redis;
 pub mod resumer;
+pub mod snapshot_dispatcher;
+pub mod snapshot_types;

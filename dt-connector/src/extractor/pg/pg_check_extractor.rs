@@ -21,13 +21,17 @@ use dt_common::{
 
 use crate::{
     checker::check_log::CheckLog,
-    extractor::{base_check_extractor::BaseCheckExtractor, base_extractor::BaseExtractor},
+    extractor::{
+        base_check_extractor::BaseCheckExtractor,
+        base_extractor::{BaseExtractor, ExtractState},
+    },
     rdb_query_builder::RdbQueryBuilder,
     BatchCheckExtractor, Extractor,
 };
 
 pub struct PgCheckExtractor {
     pub base_extractor: BaseExtractor,
+    pub extract_state: ExtractState,
     pub conn_pool: Pool<Postgres>,
     pub meta_manager: PgMetaManager,
     pub filter: RdbFilter,
@@ -45,7 +49,9 @@ impl Extractor for PgCheckExtractor {
             batch_size: self.batch_size,
         };
         base_check_extractor.extract(self).await?;
-        self.base_extractor.wait_task_finish().await
+        self.base_extractor
+            .wait_task_finish(&mut self.extract_state)
+            .await
     }
 
     async fn close(&mut self) -> anyhow::Result<()> {
@@ -74,7 +80,7 @@ impl BatchCheckExtractor for PgCheckExtractor {
 
         let mut rows = query.fetch(&self.conn_pool);
         while let Some(row) = rows.try_next().await.unwrap() {
-            let mut row_data = RowData::from_pg_row(&row, &tb_meta, &ignore_cols);
+            let mut row_data = RowData::from_pg_row(&row, &tb_meta, &ignore_cols, None);
 
             if is_diff && self.replay_diff_as_update {
                 row_data.row_type = RowType::Update;
@@ -82,7 +88,7 @@ impl BatchCheckExtractor for PgCheckExtractor {
             }
 
             self.base_extractor
-                .push_row(row_data, Position::None)
+                .push_row(&mut self.extract_state, row_data, Position::None)
                 .await?;
         }
 
@@ -106,7 +112,7 @@ impl PgCheckExtractor {
                 })?;
                 after.insert(col.to_string(), col_value);
             }
-            let check_row_data = RowData::build_insert_row_data(after, &tb_meta.basic);
+            let check_row_data = RowData::build_insert_row_data(after, &tb_meta.basic, None);
             result.push(check_row_data);
         }
         Ok(result)

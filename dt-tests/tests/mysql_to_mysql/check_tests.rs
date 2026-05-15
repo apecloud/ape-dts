@@ -19,7 +19,7 @@ mod test {
             .expect("Failed to create CheckTestRunner");
         let result = runner.run_check_test_and_validate_task_metrics(3).await;
         runner.close().await.expect("Failed to close runner");
-        result.expect("Failed to validate tb_parallel task metrics");
+        result.expect("Failed to validate snapshot parallel task metrics");
     }
 
     #[tokio::test]

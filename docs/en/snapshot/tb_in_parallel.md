@@ -5,16 +5,28 @@ By default, when a snapshot task includes multiple tables, ape-dts migrates tabl
 If you have sufficient resources (memory, CPU), you can enable parallel table migration to accelerate.
 
 ## Configuration
-- with following configuration, ape-dts will migrate 4 tables at a time. When any table completes, it will sequentially select another table from the remaining ones to migrate, ensuring that 4 tables are being migrated simultaneously.
+- With the following configuration, ape-dts will run up to 4 table workers at a time. When any table completes, it will pick the next remaining table, keeping up to 4 tables in progress.
 
 ```
+[extractor]
+parallel_type=table
+parallel_size=4
+```
+
+`parallel_type=table` means snapshot concurrency is allocated across tables. `parallel_type=chunk` means concurrency is allocated within a single table by chunk splitting. In chunk mode, `[extractor].batch_size` is also the target chunk size, and the extractor tries to keep each chunk close to that row count. In both modes, `parallel_size` is the effective snapshot concurrency knob.
+
+Deprecated config: `[runtime] tb_parallel_size` is deprecated and should not be used in new configs. It is kept only for backward compatibility, and only as a fallback when `[extractor] parallel_size` is not set.
+
+Legacy example:
+
+```ini
 [runtime]
 tb_parallel_size=4
 ```
 
 ## Difference from [parallelizer] parallel_size
-- In snapshot tasks, the configuration in [parallelizer] applies to each individual table. For example, the following configuration means each table being migrated will use 8 threads to write to the target in parallel.
-- While [runtime] tb_parallel_size means that 4 tables are being migrated simultaneously in the task.
+- In snapshot tasks, `[extractor].parallel_size` controls source-side snapshot extraction concurrency.
+- `[parallelizer].parallel_size` controls downstream sink parallelism after data has been extracted.
 
 ```
 [parallelizer]

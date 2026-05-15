@@ -189,3 +189,12 @@ pub enum RdbTransactionIsolation {
     #[strum(serialize = "default")]
     Default,
 }
+
+#[derive(Display, EnumString, IntoStaticStr, PartialEq, Default, Clone, Debug)]
+pub enum RdbParallelType {
+    #[default]
+    #[strum(serialize = "table")]
+    Table,
+    #[strum(serialize = "chunk")]
+    Chunk,
+}

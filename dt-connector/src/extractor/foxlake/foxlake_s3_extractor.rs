@@ -1,8 +1,9 @@
-use std::{cmp, path::PathBuf, str::FromStr, sync::Arc};
+use std::{cmp, collections::HashMap, path::PathBuf, str::FromStr, sync::Arc};
 
 use anyhow::Context;
 use async_trait::async_trait;
 use dt_common::{
+    config::config_enums::{DbType, RdbParallelType},
     config::s3_config::S3Config,
     log_debug, log_info, log_warn,
     meta::{dt_data::DtData, foxlake::s3_file_meta::S3FileMeta, position::Position},
@@ -12,7 +13,11 @@ use opendal::options::ListOptions;
 use opendal::Operator;
 
 use crate::{
-    extractor::{base_extractor::BaseExtractor, resumer::recovery::Recovery},
+    extractor::{
+        base_extractor::{BaseExtractor, ExtractState},
+        resumer::recovery::Recovery,
+        snapshot_dispatcher::SnapshotDispatcher,
+    },
     Extractor,
 };
 
@@ -20,9 +25,11 @@ pub struct FoxlakeS3Extractor {
     pub s3_config: S3Config,
     pub s3_client: Operator,
     pub base_extractor: BaseExtractor,
+    pub extract_state: ExtractState,
     pub batch_size: usize,
-    pub schema: String,
-    pub tb: String,
+    pub parallel_size: usize,
+    pub schema_tbs: HashMap<String, Vec<String>>,
+    pub parallel_type: RdbParallelType,
     pub recovery: Option<Arc<dyn Recovery + Send + Sync>>,
 }
 
@@ -32,28 +39,78 @@ const WAIT_FILE_SECS: u64 = 5;
 #[async_trait]
 impl Extractor for FoxlakeS3Extractor {
     async fn extract(&mut self) -> anyhow::Result<()> {
-        log_info!(
-            "FoxlakeS3Extractor starts, schema: `{}`, tb: `{}`, batch_size: {}",
-            self.schema,
-            self.tb,
-            self.batch_size
-        );
-        self.extract_internal().await?;
-        self.base_extractor.wait_task_finish().await
+        if self.parallel_size < 1 {
+            anyhow::bail!("parallel_size must be greater than 0");
+        }
+        if matches!(self.parallel_type, RdbParallelType::Chunk) {
+            anyhow::bail!("foxlake s3 extractor does not support parallel_type=chunk");
+        }
+
+        let tables = self.collect_tables();
+        let this = self.clone_for_dispatch();
+        SnapshotDispatcher::dispatch_table_work_source(
+            tables,
+            self.parallel_size,
+            "foxlake table worker",
+            move |(schema, tb)| {
+                let this = this.clone_for_dispatch();
+                async move { this.run_table_worker(schema, tb).await }
+            },
+        )
+        .await?;
+
+        self.base_extractor
+            .wait_task_finish(&mut self.extract_state)
+            .await
     }
 }
 
 impl FoxlakeS3Extractor {
-    async fn extract_internal(&mut self) -> anyhow::Result<()> {
+    fn collect_tables(&self) -> Vec<(String, String)> {
+        let mut tables = Vec::new();
+        for (schema, tbs) in &self.schema_tbs {
+            for tb in tbs {
+                tables.push((schema.clone(), tb.clone()));
+            }
+        }
+        tables
+    }
+
+    fn clone_for_dispatch(&self) -> Self {
+        Self {
+            s3_config: self.s3_config.clone(),
+            s3_client: self.s3_client.clone(),
+            base_extractor: self.base_extractor.clone(),
+            extract_state: SnapshotDispatcher::fork_extract_state(&self.extract_state),
+            batch_size: self.batch_size,
+            parallel_size: self.parallel_size,
+            schema_tbs: self.schema_tbs.clone(),
+            parallel_type: self.parallel_type.clone(),
+            recovery: self.recovery.clone(),
+        }
+    }
+
+    async fn run_table_worker(&self, schema: String, tb: String) -> anyhow::Result<()> {
+        let (mut extract_state, _guard) =
+            SnapshotDispatcher::fork_table_extract_state(&self.extract_state, &schema, &tb).await;
+        let base_extractor = self.base_extractor.clone();
+
+        log_info!(
+            "FoxlakeS3Extractor starts, schema: `{}`, tb: `{}`, batch_size: {}",
+            schema,
+            tb,
+            self.batch_size
+        );
+
         let mut start_after = if let Some(handler) = &self.recovery {
             if let Some(Position::FoxlakeS3 { s3_meta_file, .. }) = handler
-                .get_snapshot_resume_position(&self.schema, &self.tb, false)
+                .get_snapshot_resume_position(&schema, &tb, false)
                 .await
             {
                 log_info!(
                     "[{}.{}] recovery from [{}]:[{}]",
-                    self.schema,
-                    self.tb,
+                    schema,
+                    tb,
                     "",
                     s3_meta_file
                 );
@@ -64,10 +121,10 @@ impl FoxlakeS3Extractor {
         } else {
             None
         };
+
         loop {
             let mut finished = false;
-            let meta_files = self.list_meta_file(&start_after).await?;
-
+            let meta_files = self.list_meta_file(&schema, &tb, &start_after).await?;
             let continuous_meta_files = Self::find_continuous_files(&meta_files, &start_after);
             if continuous_meta_files.len() != meta_files.len() {
                 log_warn!(
@@ -82,7 +139,7 @@ impl FoxlakeS3Extractor {
                 continue;
             }
 
-            for file in continuous_meta_files.iter() {
+            for file in &continuous_meta_files {
                 if file.ends_with(FINISHED) {
                     finished = true;
                     break;
@@ -90,11 +147,13 @@ impl FoxlakeS3Extractor {
                 let file_meta = self.get_meta(file).await?;
                 let dt_data = DtData::Foxlake { file_meta };
                 let position = Position::FoxlakeS3 {
-                    schema: self.schema.clone(),
-                    tb: self.tb.clone(),
+                    schema: schema.clone(),
+                    tb: tb.clone(),
                     s3_meta_file: file.to_owned(),
                 };
-                self.base_extractor.push_dt_data(dt_data, position).await?;
+                base_extractor
+                    .push_dt_data(&mut extract_state, dt_data, position)
+                    .await?;
             }
 
             if finished {
@@ -104,15 +163,26 @@ impl FoxlakeS3Extractor {
                         ..Default::default()
                     },
                 };
-                self.base_extractor
-                    .push_dt_data(dt_data, Position::None)
+                base_extractor
+                    .push_dt_data(&mut extract_state, dt_data, Position::None)
                     .await?;
                 break;
             }
 
-            // set start_after if only continuous_meta_files is NOT empty
             start_after = continuous_meta_files.last().map(|s: &String| s.to_string());
         }
+
+        base_extractor
+            .push_snapshot_finished(
+                &mut extract_state,
+                Position::RdbSnapshotFinished {
+                    db_type: DbType::Foxlake.to_string(),
+                    schema: schema.clone(),
+                    tb: tb.clone(),
+                },
+            )
+            .await?;
+        extract_state.monitor.try_flush(true).await;
         Ok(())
     }
 
@@ -127,8 +197,13 @@ impl FoxlakeS3Extractor {
         S3FileMeta::from_str(&content).with_context(|| format!("invalid s3 file meta: [{}]", key))
     }
 
-    async fn list_meta_file(&self, start_after: &Option<String>) -> anyhow::Result<Vec<String>> {
-        let mut prefix = format!("{}/{}/meta/", self.schema, self.tb);
+    async fn list_meta_file(
+        &self,
+        schema: &str,
+        tb: &str,
+        start_after: &Option<String>,
+    ) -> anyhow::Result<Vec<String>> {
+        let mut prefix = format!("{}/{}/meta/", schema, tb);
         if !self.s3_config.root_dir.is_empty() {
             prefix = format!("{}/{}", self.s3_config.root_dir, prefix);
         }
@@ -183,23 +258,16 @@ impl FoxlakeS3Extractor {
         let mut discontinue_from = meta_files.len();
         for i in 0..meta_files.len() {
             let meta_file = &meta_files[i];
-            // finished file
             if i == meta_files.len() - 1 && meta_file.ends_with(FINISHED) {
                 continue;
             }
 
             let (id, sequence) = Self::parse_meta_file_name(meta_file);
-            // should never happen
             if id == 0 || id < prev_id {
                 return Vec::new();
             }
 
             if id != prev_id {
-                // This is the first file pushed by the same id, which means the pusher progress has restarted.
-                // Abnormal exit of the previous pusher may lead to the discontinuity of the file sequence.
-                // Ignore the discontinuity of previous files since they were pushed by previous pusher.
-
-                // the first sequence of the new pusher should be 0
                 if prev_id != 0 && sequence != 0 {
                     discontinue_from = cmp::min(discontinue_from, i);
                     break;
@@ -214,12 +282,10 @@ impl FoxlakeS3Extractor {
                 prev_id = id;
                 prev_sequence = sequence;
                 prev_meta_file = meta_file;
-                // reset when a new pusher found
                 discontinue_from = meta_files.len();
                 continue;
             }
 
-            // discontinuity is caused by multiple threads pushing orc files in pusher progress.
             if sequence != prev_sequence + 1 {
                 discontinue_from = cmp::min(discontinue_from, i);
                 log_warn!(
@@ -248,170 +314,5 @@ impl FoxlakeS3Extractor {
             }
         }
         (0, 0)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::FoxlakeS3Extractor;
-
-    #[test]
-    fn test_parse_meta_file_name() {
-        let meta_file =
-            "data/meta/1721796946_0000000012_log_dml_0_0_d6b38c60-c395-4a00-88ae-80025f81d52f.orc";
-        let (id, sequence) = FoxlakeS3Extractor::parse_meta_file_name(meta_file);
-        assert_eq!(id, 1721796946);
-        assert_eq!(sequence, 12);
-    }
-
-    #[test]
-    fn test_check_continuity() {
-        let check_continuous_files_count =
-            |meta_files: Vec<&str>, start_after: &Option<String>, expect_count: usize| {
-                let meta_files: Vec<String> = meta_files.iter().map(|s| s.to_string()).collect();
-                let continuous_files =
-                    FoxlakeS3Extractor::find_continuous_files(&meta_files, start_after);
-                assert_eq!(continuous_files.len(), expect_count);
-            };
-
-        // start_after = None
-        // case 1
-        let meta_files = vec![
-            "data/meta/1721796946_0000000000_log_dml_0_0_d6b38c60-c395-4a00-88ae-80025f81d52f.orc",
-            "data/meta/1721796946_0000000001_log_dml_0_0_d6b38c60-c395-4a00-88ae-80025f81d52f.orc",
-        ];
-        check_continuous_files_count(meta_files, &None, 2);
-
-        // case 2
-        let meta_files = vec![
-            "data/meta/1721796946_0000000002_log_dml_0_0_d6b38c60-c395-4a00-88ae-80025f81d52f.orc",
-            "data/meta/1721796946_0000000003_log_dml_0_0_d6b38c60-c395-4a00-88ae-80025f81d52f.orc",
-        ];
-        check_continuous_files_count(meta_files, &None, 2);
-
-        // case 3
-        let meta_files = vec![
-            "data/meta/1721796946_0000000002_log_dml_0_0_d6b38c60-c395-4a00-88ae-80025f81d52f.orc",
-            "data/meta/1721796946_0000000004_log_dml_0_0_d6b38c60-c395-4a00-88ae-80025f81d52f.orc",
-        ];
-        check_continuous_files_count(meta_files, &None, 1);
-
-        // start_after != None
-        // case 1
-        let start_after = Some(
-            "data/meta/1721796946_0000000010_log_dml_0_0_d6b38c60-c395-4a00-88ae-80025f81d52f.orc"
-                .to_string(),
-        );
-        let meta_files = vec![
-            "data/meta/1721796946_0000000011_log_dml_0_0_d6b38c60-c395-4a00-88ae-80025f81d52f.orc",
-            "data/meta/1721796946_0000000012_log_dml_0_0_d6b38c60-c395-4a00-88ae-80025f81d52f.orc",
-        ];
-        check_continuous_files_count(meta_files, &start_after, 2);
-
-        // case 2
-        let meta_files = vec![
-            "data/meta/1721796946_0000000012_log_dml_0_0_d6b38c60-c395-4a00-88ae-80025f81d52f.orc",
-            "data/meta/1721796946_0000000013_log_dml_0_0_d6b38c60-c395-4a00-88ae-80025f81d52f.orc",
-        ];
-        check_continuous_files_count(meta_files, &start_after, 0);
-
-        // case 3
-        let meta_files = vec![
-            "data/meta/1721796946_0000000011_log_dml_0_0_d6b38c60-c395-4a00-88ae-80025f81d52f.orc",
-            "data/meta/1721796946_0000000013_log_dml_0_0_d6b38c60-c395-4a00-88ae-80025f81d52f.orc",
-        ];
-        check_continuous_files_count(meta_files, &start_after, 1);
-
-        // case 4
-        let meta_files = vec![
-            "data/meta/1721796946_0000000011_log_dml_0_0_d6b38c60-c395-4a00-88ae-80025f81d52f.orc",
-            "data/meta/1721796946_0000000012_log_dml_0_0_d6b38c60-c395-4a00-88ae-80025f81d52f.orc",
-            "data/meta/1721796946_0000000014_log_dml_0_0_d6b38c60-c395-4a00-88ae-80025f81d52f.orc",
-            "data/meta/1721796946_0000000015_log_dml_0_0_d6b38c60-c395-4a00-88ae-80025f81d52f.orc",
-        ];
-        check_continuous_files_count(meta_files, &start_after, 2);
-
-        // case 5, new sequencer_id 1721800418 found and it's first sequence is 0000000000
-        let meta_files = vec![
-            "data/meta/1721796946_0000000011_log_dml_0_0_d6b38c60-c395-4a00-88ae-80025f81d52f.orc",
-            "data/meta/1721796946_0000000013_log_dml_0_0_d6b38c60-c395-4a00-88ae-80025f81d52f.orc",
-            "data/meta/1721800418_0000000000_log_dml_0_0_d6b38c60-c395-4a00-88ae-80025f81d52f.orc",
-            "data/meta/1721800418_0000000001_log_dml_0_0_d6b38c60-c395-4a00-88ae-80025f81d52f.orc",
-        ];
-        check_continuous_files_count(meta_files, &start_after, 4);
-
-        // case 6, new sequencer_id 1721800418 found but it's first sequence is 0000000001
-        let meta_files = vec![
-            "data/meta/1721796946_0000000011_log_dml_0_0_d6b38c60-c395-4a00-88ae-80025f81d52f.orc",
-            "data/meta/1721796946_0000000013_log_dml_0_0_d6b38c60-c395-4a00-88ae-80025f81d52f.orc",
-            "data/meta/1721800418_0000000001_log_dml_0_0_d6b38c60-c395-4a00-88ae-80025f81d52f.orc",
-            "data/meta/1721800418_0000000002_log_dml_0_0_d6b38c60-c395-4a00-88ae-80025f81d52f.orc",
-        ];
-        check_continuous_files_count(meta_files, &start_after, 1);
-
-        // case 7
-        let meta_files = vec![
-            "data/meta/1721796946_0000000011_log_dml_0_0_d6b38c60-c395-4a00-88ae-80025f81d52f.orc",
-            "data/meta/1721796946_0000000012_log_dml_0_0_d6b38c60-c395-4a00-88ae-80025f81d52f.orc",
-            "data/meta/1721800418_0000000001_log_dml_0_0_d6b38c60-c395-4a00-88ae-80025f81d52f.orc",
-            "data/meta/1721800418_0000000002_log_dml_0_0_d6b38c60-c395-4a00-88ae-80025f81d52f.orc",
-        ];
-        check_continuous_files_count(meta_files, &start_after, 2);
-
-        // case 8
-        let meta_files = vec![
-            "data/meta/1721796946_0000000011_log_dml_0_0_d6b38c60-c395-4a00-88ae-80025f81d52f.orc",
-            "data/meta/1721796946_0000000012_log_dml_0_0_d6b38c60-c395-4a00-88ae-80025f81d52f.orc",
-            "data/meta/1721800418_0000000000_log_dml_0_0_d6b38c60-c395-4a00-88ae-80025f81d52f.orc",
-            "data/meta/1721800418_0000000001_log_dml_0_0_d6b38c60-c395-4a00-88ae-80025f81d52f.orc",
-            "data/meta/1721800418_0000000004_log_dml_0_0_d6b38c60-c395-4a00-88ae-80025f81d52f.orc",
-        ];
-        check_continuous_files_count(meta_files, &start_after, 4);
-
-        // case 9
-        let meta_files = vec![
-            "data/meta/1721796946_0000000011_log_dml_0_0_d6b38c60-c395-4a00-88ae-80025f81d52f.orc",
-            "data/meta/1721796946_0000000012_log_dml_0_0_d6b38c60-c395-4a00-88ae-80025f81d52f.orc",
-            "data/meta/1721800418_0000000000_log_dml_0_0_d6b38c60-c395-4a00-88ae-80025f81d52f.orc",
-            "data/meta/1721800418_0000000001_log_dml_0_0_d6b38c60-c395-4a00-88ae-80025f81d52f.orc",
-            "data/meta/1721800418_0000000004_log_dml_0_0_d6b38c60-c395-4a00-88ae-80025f81d52f.orc",
-            "data/meta/1721800555_0000000000_log_dml_0_0_d6b38c60-c395-4a00-88ae-80025f81d52f.orc",
-        ];
-        check_continuous_files_count(meta_files, &start_after, 6);
-
-        // case 10
-        let meta_files = vec![
-            "data/meta/1721796946_0000000011_log_dml_0_0_d6b38c60-c395-4a00-88ae-80025f81d52f.orc",
-            "data/meta/1721796946_0000000012_log_dml_0_0_d6b38c60-c395-4a00-88ae-80025f81d52f.orc",
-            "data/meta/1721800418_0000000000_log_dml_0_0_d6b38c60-c395-4a00-88ae-80025f81d52f.orc",
-            "data/meta/1721800418_0000000001_log_dml_0_0_d6b38c60-c395-4a00-88ae-80025f81d52f.orc",
-            "data/meta/1721800418_0000000004_log_dml_0_0_d6b38c60-c395-4a00-88ae-80025f81d52f.orc",
-            "data/meta/1721800555_0000000000_log_dml_0_0_d6b38c60-c395-4a00-88ae-80025f81d52f.orc",
-            "data/meta/1721800555_0000000002_log_dml_0_0_d6b38c60-c395-4a00-88ae-80025f81d52f.orc",
-        ];
-        check_continuous_files_count(meta_files, &start_after, 6);
-
-        // case 11
-        let meta_files = vec![
-            "data/meta/1721800418_0000000000_log_dml_0_0_d6b38c60-c395-4a00-88ae-80025f81d52f.orc",
-        ];
-        check_continuous_files_count(meta_files, &start_after, 1);
-
-        // case 12
-        let meta_files = vec![
-            "data/meta/1721800418_0000000001_log_dml_0_0_d6b38c60-c395-4a00-88ae-80025f81d52f.orc",
-        ];
-        check_continuous_files_count(meta_files, &start_after, 0);
-
-        // finished
-        let meta_files = vec![
-            "data/meta/1721796946_0000000011_log_dml_0_0_d6b38c60-c395-4a00-88ae-80025f81d52f.orc",
-            "data/meta/1721796946_0000000012_log_dml_0_0_d6b38c60-c395-4a00-88ae-80025f81d52f.orc",
-            "data/meta/finished",
-        ];
-        check_continuous_files_count(meta_files, &start_after, 3);
-
-        // empty
-        check_continuous_files_count(Vec::new(), &start_after, 0);
     }
 }

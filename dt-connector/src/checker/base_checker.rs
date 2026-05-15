@@ -19,6 +19,7 @@ use crate::{
     checker::state_store::CheckerStateStore,
     rdb_query_builder::RdbQueryBuilder,
     rdb_router::RdbRouter,
+    sinker::base_sinker::BaseSinker,
     sinker::mongo::mongo_cmd,
 };
 use dt_common::meta::{
@@ -27,8 +28,7 @@ use dt_common::meta::{
     rdb_tb_meta::RdbTbMeta, row_data::RowData, row_type::RowType,
 };
 use dt_common::{
-    log_error, log_info, log_summary, log_warn,
-    monitor::{monitor::Monitor, task_monitor::TaskMonitor},
+    log_error, log_info, log_summary, log_warn, monitor::task_monitor_handle::TaskMonitorHandle,
     utils::limit_queue::LimitedQueue,
 };
 
@@ -70,6 +70,7 @@ impl CheckerTbMeta {
         let mut insert_row = RowData::new(
             src_row_data.schema.clone(),
             src_row_data.tb.clone(),
+            0,
             RowType::Insert,
             None,
             Some(after),
@@ -89,6 +90,7 @@ impl CheckerTbMeta {
         let mut delete_row = RowData::new(
             dst_row_data.schema.clone(),
             dst_row_data.tb.clone(),
+            0,
             RowType::Delete,
             Some(dst_after),
             None,
@@ -134,6 +136,7 @@ impl CheckerTbMeta {
         let mut update_row = RowData::new(
             src_row_data.schema.clone(),
             src_row_data.tb.clone(),
+            0,
             RowType::Update,
             Some(update_before),
             Some(update_after),
@@ -179,8 +182,8 @@ impl CheckerTbMeta {
 
 #[derive(Clone)]
 pub struct CheckContext {
-    pub monitor: Arc<Monitor>,
-    pub task_monitor: Option<Arc<TaskMonitor>>,
+    pub monitor: TaskMonitorHandle,
+    pub base_sinker: BaseSinker,
     pub summary: CheckSummaryLog,
     pub output_revise_sql: bool,
     pub extractor_meta_manager: Option<RdbMetaManager>,
@@ -200,6 +203,35 @@ pub struct CheckContext {
     pub state_store: Option<Arc<CheckerStateStore>>,
     pub source_checker: Option<Arc<Mutex<Box<dyn Checker>>>>,
     pub expected_resume_position: Option<Position>,
+}
+
+impl CheckContext {
+    pub async fn add_checker_counter(
+        &self,
+        counter_type: dt_common::monitor::counter_type::CounterType,
+        value: u64,
+    ) {
+        self.monitor
+            .add_counter(self.monitor.default_task_id(), counter_type, value)
+            .await;
+    }
+
+    pub fn set_checker_counter(
+        &self,
+        counter_type: dt_common::monitor::counter_type::CounterType,
+        value: u64,
+    ) {
+        self.monitor
+            .set_counter(self.monitor.default_task_id(), counter_type, value);
+    }
+
+    pub fn add_checker_metric(
+        &self,
+        metrics_type: dt_common::monitor::task_metrics::TaskMetricsType,
+        value: u64,
+    ) {
+        self.monitor.add_no_window_metrics(metrics_type, value);
+    }
 }
 
 pub struct FetchResult {
@@ -238,6 +270,7 @@ pub trait Checker: Send + Sync + 'static {
 enum CheckerControlMsg {
     RecordCheckpoint { position: Position },
     RefreshMeta { data: Vec<DdlData> },
+    SnapshotTableFinished { task_id: String },
     Close { position: Option<Position> },
 }
 
@@ -382,6 +415,24 @@ impl DataCheckerHandle {
         }
         Ok(())
     }
+
+    pub async fn snapshot_table_finished(&self, task_id: &str) -> anyhow::Result<()> {
+        if task_id.is_empty() || self.shared.is_cdc {
+            return Ok(());
+        }
+        if self
+            .shared
+            .control_tx
+            .send(CheckerControlMsg::SnapshotTableFinished {
+                task_id: task_id.to_string(),
+            })
+            .is_err()
+        {
+            log_warn!("checker snapshot-finished signal dropped because checker already stopped");
+        }
+        self.shared.batch_notify.notify_one();
+        Ok(())
+    }
 }
 
 impl CheckerHandle {
@@ -412,6 +463,13 @@ impl CheckerHandle {
     pub async fn record_checkpoint(&self, position: &Position) -> anyhow::Result<()> {
         match self {
             CheckerHandle::Data(handle) => handle.record_checkpoint(position).await,
+            CheckerHandle::Struct(_) => Ok(()),
+        }
+    }
+
+    pub async fn snapshot_table_finished(&self, task_id: &str) -> anyhow::Result<()> {
+        match self {
+            CheckerHandle::Data(handle) => handle.snapshot_table_finished(task_id).await,
             CheckerHandle::Struct(_) => Ok(()),
         }
     }
@@ -473,6 +531,7 @@ impl RecheckKey {
             RowData::new(
                 self.schema.clone(),
                 self.tb.clone(),
+                0,
                 RowType::Delete,
                 Some(values),
                 None,
@@ -481,6 +540,7 @@ impl RecheckKey {
             RowData::new(
                 self.schema.clone(),
                 self.tb.clone(),
+                0,
                 RowType::Insert,
                 None,
                 Some(values),
@@ -710,6 +770,9 @@ impl<C: Checker> DataChecker<C> {
                     log_error!("Checker [{}] refresh_meta failed: {}", self.name, err);
                 }
             }
+            CheckerControlMsg::SnapshotTableFinished { task_id } => {
+                self.ctx.monitor.unregister_monitor(&task_id);
+            }
             CheckerControlMsg::Close { position } => {
                 if let Some(position) = position.filter(|p| !matches!(p, Position::None)) {
                     self.last_checkpoint_position = Some(position);
@@ -829,7 +892,7 @@ mod tests {
     use super::*;
     use crate::{checker::check_log::CheckSummaryLog, rdb_router::RdbRouter};
     use async_trait::async_trait;
-    use dt_common::{meta::row_type::RowType, monitor::monitor::Monitor};
+    use dt_common::meta::row_type::RowType;
     use std::collections::HashMap;
     use std::sync::Arc;
     use tokio::{
@@ -854,8 +917,8 @@ mod tests {
 
     fn build_ctx() -> CheckContext {
         CheckContext {
-            monitor: Arc::new(Monitor::new("checker", "unit-test", 1, 1, 1)),
-            task_monitor: None,
+            monitor: TaskMonitorHandle::default(),
+            base_sinker: BaseSinker::new(TaskMonitorHandle::default(), 1),
             summary: CheckSummaryLog {
                 start_time: "unit-test".to_string(),
                 ..Default::default()
@@ -890,6 +953,7 @@ mod tests {
         RowData::new(
             "s1".to_string(),
             "t1".to_string(),
+            0,
             RowType::Insert,
             None,
             Some(HashMap::from([("id".to_string(), ColValue::Long(id))])),

@@ -21,6 +21,10 @@ use crate::{
 pub struct RowData {
     pub schema: String,
     pub tb: String,
+    #[serde(skip)]
+    // Used by snapshot table partitioning to spread table data across sinkers by logical chunk (splitter generated)
+    // or batch (from serial extracting)
+    pub chunk_id: u64,
     pub row_type: RowType,
     pub before: Option<HashMap<String, ColValue>>,
     pub after: Option<HashMap<String, ColValue>>,
@@ -38,6 +42,7 @@ impl RowData {
     pub fn new(
         schema: String,
         tb: String,
+        chunk_id: u64,
         row_type: RowType,
         before: Option<HashMap<String, ColValue>>,
         after: Option<HashMap<String, ColValue>>,
@@ -45,6 +50,7 @@ impl RowData {
         let mut me = Self {
             schema,
             tb,
+            chunk_id,
             row_type,
             before,
             after,
@@ -58,11 +64,12 @@ impl RowData {
     pub fn new_no_origin(
         schema: String,
         tb: String,
+        chunk_id: u64,
         row_type: RowType,
         before: Option<HashMap<String, ColValue>>,
         after: Option<HashMap<String, ColValue>>,
     ) -> Self {
-        let mut data = Self::new(schema, tb, row_type, before, after);
+        let mut data = Self::new(schema, tb, chunk_id, row_type, before, after);
         data.is_not_origin = true;
         data
     }
@@ -77,6 +84,7 @@ impl RowData {
         Self {
             schema: self.schema.clone(),
             tb: self.tb.clone(),
+            chunk_id: self.chunk_id,
             row_type,
             before: self.after.clone(),
             after: self.before.clone(),
@@ -89,13 +97,20 @@ impl RowData {
         let delete = RowData::new_no_origin(
             self.schema.clone(),
             self.tb.clone(),
+            self.chunk_id,
             RowType::Delete,
             self.before,
             None,
         );
 
-        let insert =
-            RowData::new_no_origin(self.schema, self.tb, RowType::Insert, None, self.after);
+        let insert = RowData::new_no_origin(
+            self.schema,
+            self.tb,
+            self.chunk_id,
+            RowType::Insert,
+            None,
+            self.after,
+        );
         (delete, insert)
     }
 
@@ -103,8 +118,9 @@ impl RowData {
         row: &MySqlRow,
         tb_meta: &MysqlTbMeta,
         ignore_cols: &Option<&HashSet<String>>,
+        chunk_id: Option<u64>,
     ) -> Self {
-        Self::from_mysql_compatible_row(row, tb_meta, ignore_cols, &DbType::Mysql)
+        Self::from_mysql_compatible_row(row, tb_meta, ignore_cols, &DbType::Mysql, chunk_id)
     }
 
     pub fn from_mysql_compatible_row(
@@ -112,6 +128,7 @@ impl RowData {
         tb_meta: &MysqlTbMeta,
         ignore_cols: &Option<&HashSet<String>>,
         db_type: &DbType,
+        chunk_id: Option<u64>,
     ) -> Self {
         let mut after = HashMap::new();
         for (col, col_type) in &tb_meta.col_type_map {
@@ -129,13 +146,14 @@ impl RowData {
                     .unwrap();
             after.insert(col.to_string(), col_val);
         }
-        Self::build_insert_row_data(after, &tb_meta.basic)
+        Self::build_insert_row_data(after, &tb_meta.basic, chunk_id)
     }
 
     pub fn from_pg_row(
         row: &PgRow,
         tb_meta: &PgTbMeta,
         ignore_cols: &Option<&HashSet<String>>,
+        chunk_id: Option<u64>,
     ) -> Self {
         let mut after = HashMap::new();
         for (col, col_type) in &tb_meta.col_type_map {
@@ -153,13 +171,18 @@ impl RowData {
                 .unwrap();
             after.insert(col.to_string(), col_value);
         }
-        Self::build_insert_row_data(after, &tb_meta.basic)
+        Self::build_insert_row_data(after, &tb_meta.basic, chunk_id)
     }
 
-    pub fn build_insert_row_data(after: HashMap<String, ColValue>, tb_meta: &RdbTbMeta) -> Self {
+    pub fn build_insert_row_data(
+        after: HashMap<String, ColValue>,
+        tb_meta: &RdbTbMeta,
+        chunk_id: Option<u64>,
+    ) -> Self {
         Self::new(
             tb_meta.schema.clone(),
             tb_meta.tb.clone(),
+            chunk_id.unwrap_or(0),
             RowType::Insert,
             None,
             Some(after),
@@ -307,6 +330,7 @@ mod tests {
         let mut row_data = RowData::new(
             "db".to_string(),
             "tb".to_string(),
+            0,
             RowType::Insert,
             None,
             Some(HashMap::from([(

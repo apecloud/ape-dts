@@ -19,12 +19,16 @@ use mongodb::{
 
 use crate::{
     checker::check_log::CheckLog,
-    extractor::{base_check_extractor::BaseCheckExtractor, base_extractor::BaseExtractor},
+    extractor::{
+        base_check_extractor::BaseCheckExtractor,
+        base_extractor::{BaseExtractor, ExtractState},
+    },
     BatchCheckExtractor, Extractor,
 };
 
 pub struct MongoCheckExtractor {
     pub base_extractor: BaseExtractor,
+    pub extract_state: ExtractState,
     pub mongo_client: Client,
     pub check_log_dir: String,
     pub batch_size: usize,
@@ -39,7 +43,9 @@ impl Extractor for MongoCheckExtractor {
             batch_size: self.batch_size,
         };
         base_check_extractor.extract(self).await.unwrap();
-        self.base_extractor.wait_task_finish().await
+        self.base_extractor
+            .wait_task_finish(&mut self.extract_state)
+            .await
     }
 
     async fn close(&mut self) -> anyhow::Result<()> {
@@ -85,6 +91,7 @@ impl BatchCheckExtractor for MongoCheckExtractor {
             let mut row_data = RowData::new(
                 schema.clone(),
                 tb.clone(),
+                0,
                 RowType::Insert,
                 None,
                 Some(after),
@@ -96,7 +103,7 @@ impl BatchCheckExtractor for MongoCheckExtractor {
             }
 
             self.base_extractor
-                .push_row(row_data, Position::None)
+                .push_row(&mut self.extract_state, row_data, Position::None)
                 .await
                 .unwrap();
         }

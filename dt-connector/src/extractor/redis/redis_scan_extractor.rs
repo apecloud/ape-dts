@@ -15,10 +15,14 @@ use dt_common::{
 };
 use redis::{Connection, Value};
 
-use crate::{extractor::base_extractor::BaseExtractor, Extractor};
+use crate::{
+    extractor::base_extractor::{BaseExtractor, ExtractState},
+    Extractor,
+};
 
 pub struct RedisScanExtractor {
     pub base_extractor: BaseExtractor,
+    pub extract_state: ExtractState,
     pub statistic_type: RedisStatisticType,
     pub scan_count: u64,
     pub conn: Connection,
@@ -73,7 +77,9 @@ impl Extractor for RedisScanExtractor {
             }
         }
 
-        self.base_extractor.wait_task_finish().await
+        self.base_extractor
+            .wait_task_finish(&mut self.extract_state)
+            .await
     }
 }
 
@@ -108,7 +114,11 @@ impl RedisScanExtractor {
             entry.key = RedisString::from(key.to_owned());
             entry.freq = freq;
             self.base_extractor
-                .push_dt_data(DtData::Redis { entry }, Position::None)
+                .push_dt_data(
+                    &mut self.extract_state,
+                    DtData::Redis { entry },
+                    Position::None,
+                )
                 .await?;
         }
         Ok(())
@@ -130,7 +140,11 @@ impl RedisScanExtractor {
         entry.value = RedisObject::new(&key_type);
 
         self.base_extractor
-            .push_dt_data(DtData::Redis { entry }, Position::None)
+            .push_dt_data(
+                &mut self.extract_state,
+                DtData::Redis { entry },
+                Position::None,
+            )
             .await
     }
 

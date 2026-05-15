@@ -1,12 +1,9 @@
-use std::sync::Arc;
-
 use async_trait::async_trait;
 use kafka::producer::{Producer, Record};
 use tokio::time::Instant;
 
 use dt_common::{
     meta::{avro::avro_converter::AvroConverter, ddl_meta::ddl_data::DdlData, row_data::RowData},
-    monitor::monitor::Monitor,
     utils::limit_queue::LimitedQueue,
 };
 
@@ -17,7 +14,7 @@ pub struct KafkaSinker {
     pub router: RdbRouter,
     pub producer: Producer,
     pub avro_converter: AvroConverter,
-    pub monitor: Arc<Monitor>,
+    pub base_sinker: BaseSinker,
 }
 
 #[async_trait]
@@ -60,6 +57,10 @@ impl KafkaSinker {
         sinked_count: usize,
         batch_size: usize,
     ) -> anyhow::Result<()> {
+        let task_id = self
+            .base_sinker
+            .task_id_for_rows(&data[sinked_count..sinked_count + batch_size]);
+        self.base_sinker.ensure_monitor_for(&task_id);
         let mut data_size = 0;
 
         let mut messages = Vec::new();
@@ -88,7 +89,9 @@ impl KafkaSinker {
             messages.len() as u64,
         ));
 
-        BaseSinker::update_batch_monitor(&self.monitor, batch_size as u64, data_size).await?;
-        BaseSinker::update_monitor_rt(&self.monitor, &rts).await
+        self.base_sinker
+            .update_batch_monitor_for(&task_id, batch_size as u64, data_size)
+            .await?;
+        self.base_sinker.update_monitor_rt_for(&task_id, &rts).await
     }
 }

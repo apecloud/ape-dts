@@ -101,7 +101,6 @@ impl Parallelizer for MergeParallelizer {
 
         Ok(data_size)
     }
-
     async fn sink_struct(
         &mut self,
         data: Vec<StructData>,

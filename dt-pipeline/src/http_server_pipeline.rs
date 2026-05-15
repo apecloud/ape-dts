@@ -15,22 +15,30 @@ use tokio::sync::Mutex;
 
 use crate::{base_pipeline::BasePipeline, Pipeline};
 use dt_common::{
-    log_position,
+    log_finished, log_position,
     meta::{
         avro::avro_converter::AvroConverter, dt_data::DtData, dt_queue::DtQueue,
         position::Position, syncer::Syncer,
     },
-    monitor::{counter_type::CounterType, monitor::Monitor},
+    monitor::{
+        counter_type::CounterType, task_metrics::TaskMetricsType,
+        task_monitor_handle::TaskMonitorHandle,
+    },
 };
 use dt_parallelizer::base_parallelizer::BaseParallelizer;
 
-type PositionInfo = (Option<Position>, Option<Position>);
+#[derive(Default)]
+struct PositionInfo {
+    last_received_position: Option<Position>,
+    last_commit_position: Option<Position>,
+    finished_positions: Vec<Position>,
+}
 
 #[derive(Clone)]
 pub struct HttpServerPipeline {
     pub buffer: Arc<DtQueue>,
     pub syncer: Arc<Mutex<Syncer>>,
-    pub monitor: Arc<Monitor>,
+    pub monitor: TaskMonitorHandle,
     pub avro_converter: AvroConverter,
     pub checkpoint_interval_secs: u64,
     pub batch_sink_interval_secs: u64,
@@ -81,7 +89,7 @@ impl HttpServerPipeline {
     pub fn new(
         buffer: Arc<DtQueue>,
         syncer: Arc<Mutex<Syncer>>,
-        monitor: Arc<Monitor>,
+        monitor: TaskMonitorHandle,
         avro_converter: AvroConverter,
         checkpoint_interval_secs: u64,
         batch_sink_interval_secs: u64,
@@ -161,7 +169,10 @@ async fn fetch_new(
         .drain_by_count(&pipeline.buffer, query.batch_size)
         .await
         .unwrap();
-    let (_, last_received_position, last_commit_position) = BasePipeline::fetch_raw(&data);
+    let mut pending_snapshot_finished = HashMap::new();
+    let (_, last_received_position, last_commit_position) =
+        BasePipeline::fetch_raw(&data, &mut pending_snapshot_finished);
+    let finished_positions: Vec<Position> = pending_snapshot_finished.into_values().collect();
 
     // data -> avro response
     let mut response = FetchResp {
@@ -195,17 +206,36 @@ async fn fetch_new(
     // update monitor
     pipeline
         .monitor
-        .add_counter(CounterType::BufferSize, pipeline.buffer.len() as u64)
+        .add_counter(
+            pipeline.monitor.default_task_id(),
+            CounterType::BufferSize,
+            pipeline.buffer.len() as u64,
+        )
         .await
-        .add_counter(CounterType::SinkedRecordTotal, response.data.len() as u64)
+        .add_counter(
+            pipeline.monitor.default_task_id(),
+            CounterType::SinkedRecordTotal,
+            response.data.len() as u64,
+        )
         .await;
 
     // update pending_ack_data & pending_ack_positions
     let batch_id = response.batch_id;
     pipeline.sent_batch_id.store(batch_id, Ordering::Release);
-    if !response.data.is_empty() {
+    if !response.data.is_empty()
+        || last_received_position.is_some()
+        || last_commit_position.is_some()
+        || !finished_positions.is_empty()
+    {
         pending_ack_data.insert(batch_id, response);
-        pending_ack_positions.insert(batch_id, (last_received_position, last_commit_position));
+        pending_ack_positions.insert(
+            batch_id,
+            PositionInfo {
+                last_received_position,
+                last_commit_position,
+                finished_positions,
+            },
+        );
         send_response(pending_ack_data.get(&batch_id).unwrap())
     } else {
         send_response(&response)
@@ -285,7 +315,8 @@ async fn do_ack(ack_batch_id: u64, pipeline: &web::Data<HttpServerPipeline>) -> 
     let max_acked_position_info =
         refresh_appending_ack_positions(&mut pending_ack_positions, ack_batch_id);
 
-    record_checkpoint(max_acked_position_info);
+    record_checkpoint(&max_acked_position_info);
+    record_finished(&max_acked_position_info, pipeline);
     pipeline
         .acked_batch_id
         .store(ack_batch_id, Ordering::Release);
@@ -303,28 +334,51 @@ fn refresh_appending_ack_positions(
     pending_ack_positions: &mut async_std::sync::MutexGuard<'_, HashMap<u64, PositionInfo>>,
     ack_batch_id: u64,
 ) -> PositionInfo {
-    let mut max_acked_batch_id = 0;
-    let mut max_acked_position_info = (None, None);
-    for (batch_id, position_info) in pending_ack_positions.iter() {
-        if *batch_id <= ack_batch_id && *batch_id >= max_acked_batch_id {
-            max_acked_batch_id = *batch_id;
-            if let Some(last_received_position) = &position_info.0 {
-                max_acked_position_info.0 = Some(last_received_position.to_owned());
+    let mut acked_batch_ids = pending_ack_positions
+        .keys()
+        .filter(|batch_id| **batch_id <= ack_batch_id)
+        .copied()
+        .collect::<Vec<_>>();
+    acked_batch_ids.sort_unstable();
+
+    let mut acked_position_info = PositionInfo::default();
+    for batch_id in acked_batch_ids {
+        if let Some(position_info) = pending_ack_positions.get(&batch_id) {
+            if let Some(last_received_position) = &position_info.last_received_position {
+                acked_position_info.last_received_position =
+                    Some(last_received_position.to_owned());
             }
-            if let Some(last_commit_position) = &position_info.1 {
-                max_acked_position_info.1 = Some(last_commit_position.to_owned());
+            if let Some(last_commit_position) = &position_info.last_commit_position {
+                acked_position_info.last_commit_position = Some(last_commit_position.to_owned());
             }
+            acked_position_info
+                .finished_positions
+                .extend(position_info.finished_positions.iter().cloned());
         }
     }
     pending_ack_positions.retain(|&batch_id, _| batch_id > ack_batch_id);
-    max_acked_position_info
+    acked_position_info
 }
 
-fn record_checkpoint(position_info: PositionInfo) {
-    if let Some(current_position) = position_info.0 {
+fn record_checkpoint(position_info: &PositionInfo) {
+    if let Some(current_position) = &position_info.last_received_position {
         log_position!("current_position | {}", current_position.to_string());
     }
-    if let Some(checkpoint_position) = position_info.1 {
+    if let Some(checkpoint_position) = &position_info.last_commit_position {
         log_position!("checkpoint_position | {}", checkpoint_position.to_string());
+    }
+}
+
+fn record_finished(position_info: &PositionInfo, pipeline: &web::Data<HttpServerPipeline>) {
+    let finished_count = position_info.finished_positions.len() as u64;
+    if finished_count == 0 {
+        return;
+    }
+
+    pipeline
+        .monitor
+        .add_no_window_metrics(TaskMetricsType::FinishedProgressCount, finished_count);
+    for finished_position in &position_info.finished_positions {
+        log_finished!("{}", finished_position.to_string());
     }
 }

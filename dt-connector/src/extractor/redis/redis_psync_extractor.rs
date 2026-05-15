@@ -12,7 +12,7 @@ use tokio::{sync::Mutex, time::Instant};
 
 use super::redis_client::RedisClient;
 use crate::extractor::{
-    base_extractor::BaseExtractor,
+    base_extractor::{BaseExtractor, ExtractState},
     redis::{
         rdb::{rdb_parser::RdbParser, reader::rdb_reader::RdbReader},
         redis_resp_types::Value,
@@ -40,6 +40,7 @@ use dt_common::{
 
 pub struct RedisPsyncExtractor {
     pub base_extractor: BaseExtractor,
+    pub extract_state: ExtractState,
     pub conn: RedisClient,
     pub repl_id: String,
     pub repl_offset: u64,
@@ -104,7 +105,9 @@ impl Extractor for RedisPsyncExtractor {
             self.receive_aof().await?;
         }
 
-        self.base_extractor.wait_task_finish().await
+        self.base_extractor
+            .wait_task_finish(&mut self.extract_state)
+            .await
     }
 
     async fn close(&mut self) -> anyhow::Result<()> {
@@ -214,14 +217,15 @@ impl RedisPsyncExtractor {
                     self.extract_type,
                     ExtractType::Snapshot | ExtractType::SnapshotAndCdc
                 ) {
-                    if let Some(data_marker) = &self.base_extractor.data_marker {
+                    if let Some(data_marker) = &self.extract_state.data_marker {
                         if data_marker.is_redis_marker_info(&entry) {
                             continue;
                         }
                     }
 
                     Self::push_to_buf(
-                        &mut self.base_extractor,
+                        &self.base_extractor,
+                        &mut self.extract_state,
                         &mut self.filter,
                         entry,
                         Position::None,
@@ -233,7 +237,7 @@ impl RedisPsyncExtractor {
             if parser.is_end {
                 log_info!(
                     "end extracting data from rdb, all count: {}",
-                    self.base_extractor.monitor.counters.pushed_record_count
+                    self.extract_state.monitor.counters.pushed_record_count
                 );
                 break;
             }
@@ -331,7 +335,7 @@ impl RedisPsyncExtractor {
                     // to buf to make sure:
                     // 1, only the first command following MULTI be considered as data marker info.
                     // 2, data_marker will be reset following EXEC.
-                    self.base_extractor
+                    self.extract_state
                         .refresh_and_check_data_marker(&DtData::Begin {});
                     // ignore MULTI & EXEC
                     continue;
@@ -339,7 +343,7 @@ impl RedisPsyncExtractor {
 
                 // transaction end
                 if cmd_name == "exec" {
-                    self.base_extractor
+                    self.extract_state
                         .refresh_and_check_data_marker(&DtData::Commit { xid: String::new() });
                     continue;
                 }
@@ -347,7 +351,7 @@ impl RedisPsyncExtractor {
                 // a single ping(should NOT be in a transaction)
                 if cmd_name == "ping" {
                     self.base_extractor
-                        .push_dt_data(DtData::Heartbeat {}, position)
+                        .push_dt_data(&mut self.extract_state, DtData::Heartbeat {}, position)
                         .await?;
                     continue;
                 }
@@ -362,8 +366,14 @@ impl RedisPsyncExtractor {
                 entry.cmd = cmd;
                 entry.db_id = self.now_db_id;
 
-                Self::push_to_buf(&mut self.base_extractor, &mut self.filter, entry, position)
-                    .await?;
+                Self::push_to_buf(
+                    &self.base_extractor,
+                    &mut self.extract_state,
+                    &mut self.filter,
+                    entry,
+                    position,
+                )
+                .await?;
             }
         }
     }
@@ -473,7 +483,8 @@ impl RedisPsyncExtractor {
     }
 
     pub async fn push_to_buf(
-        base_extractor: &mut BaseExtractor,
+        base_extractor: &BaseExtractor,
+        extract_state: &mut ExtractState,
         filter: &mut RdbFilter,
         mut entry: RedisEntry,
         position: Position,
@@ -481,13 +492,13 @@ impl RedisPsyncExtractor {
         // currently only support db filter
         entry.data_size = entry.get_data_malloc_size();
         if filter.filter_schema(&entry.db_id.to_string()) {
-            base_extractor.record_extracted_metrics(1, entry.data_size as u64);
+            extract_state.record_extracted_metrics(1, entry.data_size as u64);
             base_extractor
-                .push_dt_data(DtData::Heartbeat {}, position)
+                .push_dt_data(extract_state, DtData::Heartbeat {}, position)
                 .await
         } else {
             base_extractor
-                .push_dt_data(DtData::Redis { entry }, position)
+                .push_dt_data(extract_state, DtData::Redis { entry }, position)
                 .await
         }
     }

@@ -98,6 +98,7 @@ impl DtData {
     pub fn get_data_count(&self) -> usize {
         match &self {
             DtData::Foxlake { file_meta } => file_meta.row_count,
+            DtData::Begin {} | DtData::Commit { .. } | DtData::Heartbeat {} => 0,
             _ => 1,
         }
     }

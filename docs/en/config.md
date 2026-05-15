@@ -14,7 +14,8 @@ Different tasks may require extra configs, refer to [task templates](/docs/templ
 | username        | database connection username                                                                | root                                                                                                 |
 | password        | database connection password                                                                | password                                                                                             | -                                                       |
 | max_connections | max connections for source database                                                         | 10                                                                                                   | currently 10, may be dynamically adjusted in the future |
-| batch_size      | number of extracted records in a batch                                                      | 10000                                                                                                | same as [pipeline] buffer_size                          |
+| batch_size      | number of extracted records in a batch; when chunk splitting is used, the extractor also uses it as the target chunk size and tries to keep each chunk close to this row count | 10000                                                                                                | same as [pipeline] buffer_size                          |
+| parallel_type   | snapshot extraction parallel strategy                                                       | table                                                                                                | table                                                   |
 | parallel_size   | number of workers for extracting a table                                                    | 4                                                                                                    | 1                                                       |
 | partition_cols  | partition column for data splitting during snapshot migration, only single column supported | json:[{"db":"db_1","tb":"tb_1","partition_col":"id"},{"db":"db_2","tb":"tb_2","partition_col":"id"}] | -                                                       |
 
@@ -27,6 +28,16 @@ create user user1@'%' identified by 'abc%$#?@';
 The url should be:
 url=mysql://user1:abc%25%24%23%3F%40@127.0.0.1:3307?ssl-mode=disabled
 ```
+
+## extractor.parallel_type
+
+- `table`: allocate snapshot concurrency across tables. With `parallel_size=4`, up to 4 tables can be extracted at the same time.
+- `chunk`: allocate snapshot concurrency within a single table by chunk splitting. With `parallel_size=4`, one table can run up to 4 chunk workers in parallel.
+- When `parallel_type=chunk`, `[extractor].batch_size` is also the target chunk size. Chunk boundaries are data-dependent, so the actual row count may differ, but the extractor tries to make each chunk close to `batch_size`.
+- `parallel_size` is the effective concurrency limit in both modes.
+- MySQL and PostgreSQL snapshot extractors support both `table` and `chunk`.
+- MongoDB and Foxlake snapshot extractors currently support only `table`; `chunk` is not supported.
+- Deprecated compatibility: `[runtime] tb_parallel_size` is kept only as a legacy fallback when `[extractor] parallel_size` is not set.
 
 # [sinker]
 

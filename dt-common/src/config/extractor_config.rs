@@ -1,5 +1,8 @@
+use std::collections::HashMap;
+
 use crate::config::{
-    connection_auth_config::ConnectionAuthConfig, limiter_config::RateLimiterConfig,
+    config_enums::RdbParallelType, connection_auth_config::ConnectionAuthConfig,
+    limiter_config::RateLimiterConfig,
 };
 
 use super::{
@@ -31,8 +34,10 @@ pub enum ExtractorConfig {
         connection_auth: ConnectionAuthConfig,
         db: String,
         tb: String,
+        db_tbs: HashMap<String, Vec<String>>,
         sample_interval: usize,
         parallel_size: usize,
+        parallel_type: RdbParallelType,
         batch_size: usize,
         partition_cols: String,
     },
@@ -67,8 +72,10 @@ pub enum ExtractorConfig {
         connection_auth: ConnectionAuthConfig,
         schema: String,
         tb: String,
+        schema_tbs: HashMap<String, Vec<String>>,
         sample_interval: usize,
         parallel_size: usize,
+        parallel_type: RdbParallelType,
         batch_size: usize,
         partition_cols: String,
     },
@@ -101,6 +108,10 @@ pub enum ExtractorConfig {
         app_name: String,
         db: String,
         tb: String,
+        db_tbs: HashMap<String, Vec<String>>,
+        parallel_size: usize,
+        parallel_type: RdbParallelType,
+        batch_size: usize,
     },
 
     MongoCdc {
@@ -180,6 +191,9 @@ pub enum ExtractorConfig {
         url: String,
         schema: String,
         tb: String,
+        schema_tbs: HashMap<String, Vec<String>>,
+        parallel_size: usize,
+        parallel_type: RdbParallelType,
         s3_config: S3Config,
         batch_size: usize,
     },

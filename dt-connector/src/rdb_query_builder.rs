@@ -1018,6 +1018,7 @@ mod tests {
             RowData::new_no_origin(
                 "public".to_string(),
                 "t1".to_string(),
+                0,
                 RowType::Insert,
                 None,
                 Some(after),
@@ -1026,6 +1027,7 @@ mod tests {
             RowData::new(
                 "public".to_string(),
                 "t1".to_string(),
+                0,
                 RowType::Insert,
                 None,
                 Some(after),
@@ -1047,6 +1049,7 @@ mod tests {
         RowData::new(
             "public".to_string(),
             "t1".to_string(),
+            0,
             RowType::Update,
             Some(before),
             Some(after),
@@ -1070,6 +1073,7 @@ mod tests {
         RowData::new(
             "public".to_string(),
             "t1".to_string(),
+            0,
             RowType::Update,
             Some(before),
             Some(after),
@@ -1090,6 +1094,7 @@ mod tests {
         RowData::new(
             "public".to_string(),
             "t1".to_string(),
+            0,
             RowType::Update,
             Some(before),
             Some(after),
@@ -1110,6 +1115,7 @@ mod tests {
         RowData::new(
             "public".to_string(),
             "t1".to_string(),
+            0,
             RowType::Update,
             Some(before),
             Some(after),
@@ -1125,6 +1131,7 @@ mod tests {
         RowData::new(
             "public".to_string(),
             "t1".to_string(),
+            0,
             RowType::Delete,
             Some(before),
             None,

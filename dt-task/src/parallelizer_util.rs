@@ -1,7 +1,4 @@
-use std::{
-    collections::{HashMap, VecDeque},
-    sync::Arc,
-};
+use std::collections::{HashMap, VecDeque};
 
 use anyhow::anyhow;
 
@@ -9,7 +6,7 @@ use super::task_util::TaskUtil;
 use dt_common::{
     config::{config_enums::ParallelType, sinker_config::SinkerConfig, task_config::TaskConfig},
     meta::redis::command::key_parser::KeyParser,
-    monitor::monitor::Monitor,
+    monitor::task_monitor_handle::TaskMonitorHandle,
     utils::redis_util::RedisUtil,
 };
 use dt_parallelizer::{
@@ -26,7 +23,7 @@ pub struct ParallelizerUtil {}
 impl ParallelizerUtil {
     pub async fn create_parallelizer(
         config: &TaskConfig,
-        monitor: Arc<Monitor>,
+        monitor: TaskMonitorHandle,
     ) -> anyhow::Result<Box<dyn Parallelizer + Send + Sync>> {
         let parallel_size = config.parallelizer.parallel_size;
         let parallel_type = &config.parallelizer.parallel_type;

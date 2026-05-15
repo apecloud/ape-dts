@@ -1,6 +1,6 @@
 # 全量数据迁移
 
-如果全量任务包含多个库/多张表，则会按照 **先库后表** 排序，**依次同步** 各张表，每次有且只有一张表处于同步中。
+如果全量任务包含多个库/多张表，则会按照 **先库后表** 排序，默认 **依次同步** 各张表，每次有且只有一张表处于同步中。若需要多表并发，可配置 `[extractor] parallel_type=table` 且 `[extractor] parallel_size > 1`。
 
 如果表具有单一主键/唯一键，则 extractor 会以此键作为排序列，并从小到大分片拉取每批大小为 [pipeline] 的 `buffer_size`。
 
@@ -37,4 +37,3 @@ batch_size=200
 [parallelizer]
 parallel_size=8
 ```
-

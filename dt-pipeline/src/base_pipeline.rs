@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use std::collections::HashMap;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
@@ -12,7 +13,7 @@ use tokio::{
 use crate::{lua_processor::LuaProcessor, Pipeline};
 use dt_common::{
     config::sinker_config::SinkerConfig,
-    log_error, log_info, log_position, log_warn,
+    log_error, log_finished, log_info, log_position, log_warn,
     meta::{
         dcl_meta::dcl_data::DclData,
         ddl_meta::ddl_data::DdlData,
@@ -22,7 +23,10 @@ use dt_common::{
         row_data::RowData,
         syncer::Syncer,
     },
-    monitor::{counter_type::CounterType, monitor::Monitor},
+    monitor::{
+        counter_type::CounterType, task_metrics::TaskMetricsType, task_monitor::MonitorType,
+        task_monitor_handle::TaskMonitorHandle,
+    },
 };
 use dt_connector::{
     checker::CheckerHandle, data_marker::DataMarker, extractor::resumer::recorder::Recorder, Sinker,
@@ -38,7 +42,8 @@ pub struct BasePipeline {
     pub checkpoint_interval_secs: u64,
     pub batch_sink_interval_secs: u64,
     pub syncer: Arc<Mutex<Syncer>>,
-    pub monitor: Arc<Monitor>,
+    pub monitor: TaskMonitorHandle,
+    pub pending_snapshot_finished: HashMap<String, Position>,
     pub data_marker: Option<Arc<RwLock<DataMarker>>>,
     pub lua_processor: Option<LuaProcessor>,
     pub recorder: Option<Arc<dyn Recorder + Send + Sync>>,
@@ -85,20 +90,33 @@ impl Pipeline for BasePipeline {
         let mut last_commit_position = Position::None;
         let mut record_time = Instant::now();
 
-        while !self.shut_down.load(Ordering::Acquire) || !self.buffer.is_empty() {
+        while !self.shut_down.load(Ordering::Acquire)
+            || !self.buffer.is_empty()
+            || !self.pending_snapshot_finished.is_empty()
+        {
             // to avoid too many sub counters, only add counter when buffer is not empty
             if !self.buffer.is_empty() {
                 self.monitor
-                    .add_counter(CounterType::BufferSize, self.buffer.len() as u64)
+                    .add_counter(
+                        self.monitor.default_task_id(),
+                        CounterType::BufferSize,
+                        self.buffer.len() as u64,
+                    )
                     .await;
             }
             if record_time.elapsed().as_secs() > 1 {
                 let len = self.buffer.len() as u64;
                 let size = self.buffer.get_curr_size();
-                self.monitor
-                    .set_counter(CounterType::QueuedRecordCurrent, len);
-                self.monitor
-                    .set_counter(CounterType::QueuedByteCurrent, size);
+                self.monitor.set_counter(
+                    self.monitor.default_task_id(),
+                    CounterType::QueuedRecordCurrent,
+                    len,
+                );
+                self.monitor.set_counter(
+                    self.monitor.default_task_id(),
+                    CounterType::QueuedByteCurrent,
+                    size,
+                );
                 record_time = Instant::now();
             }
 
@@ -144,16 +162,27 @@ impl Pipeline for BasePipeline {
                 .await?;
 
             self.monitor
-                .add_counter(CounterType::SinkedRecordTotal, data_size.count)
+                .add_counter(
+                    self.monitor.default_task_id(),
+                    CounterType::SinkedRecordTotal,
+                    data_size.count,
+                )
                 .await
-                .add_counter(CounterType::SinkedByteTotal, data_size.bytes)
+                .add_counter(
+                    self.monitor.default_task_id(),
+                    CounterType::SinkedByteTotal,
+                    data_size.bytes,
+                )
                 .await;
+
+            self.try_finish_snapshot_tasks().await?;
 
             yield_now().await;
         }
 
         self.record_checkpoint(None, &last_received_position, &last_commit_position)
             .await?;
+        self.try_finish_snapshot_tasks().await?;
         Ok(())
     }
 }
@@ -168,7 +197,8 @@ impl BasePipeline {
         &mut self,
         all_data: Vec<DtItem>,
     ) -> anyhow::Result<(DataSize, Option<Position>, Option<Position>)> {
-        let (data_count, last_received_position, last_commit_position) = Self::fetch_raw(&all_data);
+        let (data_count, last_received_position, last_commit_position) =
+            Self::fetch_raw(&all_data, &mut self.pending_snapshot_finished);
         if data_count > 0 {
             let data_size = self.parallelizer.sink_raw(all_data, &self.sinkers).await?;
             Ok((data_size, last_received_position, last_commit_position))
@@ -211,7 +241,8 @@ impl BasePipeline {
         &mut self,
         all_data: Vec<DtItem>,
     ) -> anyhow::Result<(DataSize, Option<Position>, Option<Position>)> {
-        let (mut data, last_received_position, last_commit_position) = Self::fetch_dml(all_data);
+        let (mut data, last_received_position, last_commit_position) =
+            Self::fetch_dml(all_data, &mut self.pending_snapshot_finished);
         if data.is_empty() {
             return Ok((
                 DataSize::default(),
@@ -233,7 +264,8 @@ impl BasePipeline {
         &mut self,
         all_data: Vec<DtItem>,
     ) -> anyhow::Result<(DataSize, Option<Position>, Option<Position>)> {
-        let (data, last_received_position, last_commit_position) = Self::fetch_ddl(all_data);
+        let (data, last_received_position, last_commit_position) =
+            Self::fetch_ddl(all_data, &mut self.pending_snapshot_finished);
         if !data.is_empty() {
             let data_size = self
                 .parallelizer
@@ -250,7 +282,11 @@ impl BasePipeline {
                 }
             }
             self.monitor
-                .add_counter(CounterType::DDLRecordTotal, data_size.count)
+                .add_counter(
+                    self.monitor.default_task_id(),
+                    CounterType::DDLRecordTotal,
+                    data_size.count,
+                )
                 .await;
             Ok((data_size, last_received_position, last_commit_position))
         } else {
@@ -266,7 +302,8 @@ impl BasePipeline {
         &mut self,
         all_data: Vec<DtItem>,
     ) -> anyhow::Result<(DataSize, Option<Position>, Option<Position>)> {
-        let (data, last_received_position, last_commit_position) = Self::fetch_dcl(all_data);
+        let (data, last_received_position, last_commit_position) =
+            Self::fetch_dcl(all_data, &mut self.pending_snapshot_finished);
         let data_size = DataSize {
             count: data.len() as u64,
             bytes: 0,
@@ -277,13 +314,24 @@ impl BasePipeline {
         Ok((data_size, last_received_position, last_commit_position))
     }
 
-    pub fn fetch_raw(data: &[DtItem]) -> (u64, Option<Position>, Option<Position>) {
+    pub fn fetch_raw(
+        data: &[DtItem],
+        pending_snapshot_finished: &mut HashMap<String, Position>,
+    ) -> (u64, Option<Position>, Option<Position>) {
         let mut data_count = 0;
         let mut last_received_position = Option::None;
         let mut last_commit_position = Option::None;
         for i in data.iter() {
             match &i.dt_data {
-                DtData::Commit { .. } | DtData::Heartbeat {} | DtData::Ddl { .. } => {
+                DtData::Commit { .. } => {
+                    if Self::collect_snapshot_finished(&i.position, pending_snapshot_finished) {
+                        continue;
+                    }
+                    last_commit_position = Some(i.position.clone());
+                    last_received_position = last_commit_position.clone();
+                    continue;
+                }
+                DtData::Heartbeat {} | DtData::Ddl { .. } => {
                     last_commit_position = Some(i.position.clone());
                     last_received_position = last_commit_position.clone();
                     continue;
@@ -308,13 +356,24 @@ impl BasePipeline {
         (data_count, last_received_position, last_commit_position)
     }
 
-    fn fetch_dml(mut data: Vec<DtItem>) -> (Vec<RowData>, Option<Position>, Option<Position>) {
+    fn fetch_dml(
+        mut data: Vec<DtItem>,
+        pending_snapshot_finished: &mut HashMap<String, Position>,
+    ) -> (Vec<RowData>, Option<Position>, Option<Position>) {
         let mut dml_data = Vec::new();
         let mut last_received_position = Option::None;
         let mut last_commit_position = Option::None;
         for i in data.drain(..) {
             match i.dt_data {
-                DtData::Commit { .. } | DtData::Heartbeat {} => {
+                DtData::Commit { .. } => {
+                    if Self::collect_snapshot_finished(&i.position, pending_snapshot_finished) {
+                        continue;
+                    }
+                    last_commit_position = Some(i.position);
+                    last_received_position = last_commit_position.clone();
+                    continue;
+                }
+                DtData::Heartbeat {} => {
                     last_commit_position = Some(i.position);
                     last_received_position = last_commit_position.clone();
                     continue;
@@ -332,13 +391,24 @@ impl BasePipeline {
         (dml_data, last_received_position, last_commit_position)
     }
 
-    fn fetch_ddl(mut data: Vec<DtItem>) -> (Vec<DdlData>, Option<Position>, Option<Position>) {
+    fn fetch_ddl(
+        mut data: Vec<DtItem>,
+        pending_snapshot_finished: &mut HashMap<String, Position>,
+    ) -> (Vec<DdlData>, Option<Position>, Option<Position>) {
         let mut result = Vec::new();
         let mut last_received_position = Option::None;
         let mut last_commit_position = Option::None;
         for i in data.drain(..) {
             match i.dt_data {
-                DtData::Commit { .. } | DtData::Heartbeat {} => {
+                DtData::Commit { .. } => {
+                    if Self::collect_snapshot_finished(&i.position, pending_snapshot_finished) {
+                        continue;
+                    }
+                    last_commit_position = Some(i.position);
+                    last_received_position = last_commit_position.clone();
+                    continue;
+                }
+                DtData::Heartbeat {} => {
                     last_commit_position = Some(i.position);
                     last_received_position = last_commit_position.clone();
                     continue;
@@ -357,13 +427,23 @@ impl BasePipeline {
         (result, last_received_position, last_commit_position)
     }
 
-    fn fetch_dcl(mut data: Vec<DtItem>) -> (Vec<DclData>, Option<Position>, Option<Position>) {
+    fn fetch_dcl(
+        mut data: Vec<DtItem>,
+        pending_snapshot_finished: &mut HashMap<String, Position>,
+    ) -> (Vec<DclData>, Option<Position>, Option<Position>) {
         let mut result = Vec::new();
         let mut last_received_position = Option::None;
         let mut last_commit_position = Option::None;
         for i in data.drain(..) {
             match i.dt_data {
-                DtData::Commit { .. } | DtData::Heartbeat {} => {
+                DtData::Commit { .. } => {
+                    if Self::collect_snapshot_finished(&i.position, pending_snapshot_finished) {
+                        continue;
+                    }
+                    last_commit_position = Some(i.position);
+                    last_received_position = last_commit_position.clone();
+                }
+                DtData::Heartbeat {} => {
                     last_commit_position = Some(i.position);
                     last_received_position = last_commit_position.clone();
                 }
@@ -394,12 +474,63 @@ impl BasePipeline {
                     _ => return SinkMethod::Dml,
                 },
                 DtData::Redis { .. } | DtData::Foxlake { .. } => return SinkMethod::Raw,
-                DtData::Begin {} | DtData::Commit { .. } | DtData::Heartbeat {} => {
-                    continue;
-                }
+                DtData::Begin {} | DtData::Commit { .. } | DtData::Heartbeat {} => continue,
             }
         }
         SinkMethod::Raw
+    }
+
+    async fn try_finish_snapshot_tasks(&mut self) -> anyhow::Result<()> {
+        let finished_task_ids: Vec<String> =
+            self.pending_snapshot_finished.keys().cloned().collect();
+
+        for task_id in finished_task_ids {
+            let Some(finish_position) = self.pending_snapshot_finished.remove(&task_id) else {
+                continue;
+            };
+
+            self.monitor
+                .with_type(MonitorType::Sinker)
+                .unregister_monitor(&task_id);
+            if let Some(checker) = &self.checker {
+                if let Err(err) = checker.snapshot_table_finished(&task_id).await {
+                    log_warn!(
+                        "checker snapshot_table_finished failed for {}: {}",
+                        task_id,
+                        err
+                    );
+                }
+            }
+            self.monitor
+                .add_no_window_metrics(TaskMetricsType::FinishedProgressCount, 1);
+            log_finished!("{}", finish_position.to_string());
+            if let Some(handler) = &self.recorder {
+                if let Err(err) = handler.record_position(&finish_position).await {
+                    log_error!(
+                        "failed to record finish position: {}, err: {}",
+                        finish_position,
+                        err
+                    );
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    fn collect_snapshot_finished(
+        position: &Position,
+        pending_snapshot_finished: &mut HashMap<String, Position>,
+    ) -> bool {
+        if let Position::RdbSnapshotFinished { schema, tb, .. } = position {
+            pending_snapshot_finished.insert(
+                TaskMonitorHandle::task_id_from_schema_tb(schema, tb),
+                position.clone(),
+            );
+            true
+        } else {
+            false
+        }
     }
 
     async fn record_checkpoint(
@@ -414,7 +545,10 @@ impl BasePipeline {
             }
         }
 
-        log_position!("current_position | {}", last_received_position.to_string());
+        if !matches!(last_received_position, Position::None) {
+            // extracting chunks will sink None position.
+            log_position!("current_position | {}", last_received_position.to_string());
+        }
         log_position!("checkpoint_position | {}", last_commit_position.to_string());
 
         let record_position = if matches!(last_commit_position, Position::None) {
@@ -441,6 +575,7 @@ impl BasePipeline {
         }
 
         self.monitor.set_counter(
+            self.monitor.default_task_id(),
             CounterType::Timestamp,
             last_received_position.to_timestamp(),
         );

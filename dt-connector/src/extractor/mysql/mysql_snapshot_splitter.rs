@@ -1,5 +1,5 @@
-use std::collections::HashMap;
 use std::vec;
+use std::{collections::HashMap, sync::Arc};
 
 use anyhow::Context;
 use dt_common::meta::position::Position;
@@ -19,10 +19,11 @@ use crate::extractor::base_splitter::{self, BaseSplitter, ChunkRange, Error::*, 
 
 use quote_mysql as quote;
 
-pub struct MySqlSnapshotSplitter<'a> {
+#[derive(Debug)]
+pub struct MySqlSnapshotSplitter {
     basic: BaseSplitter,
     snapshot_range: Option<ChunkRange>,
-    mysql_tb_meta: &'a MysqlTbMeta,
+    mysql_tb_meta: Arc<MysqlTbMeta>,
     conn_pool: Pool<MySql>,
     batch_size: u64,
     estimated_row_count: u64,
@@ -32,13 +33,13 @@ pub struct MySqlSnapshotSplitter<'a> {
     checkpoint_map: HashMap<u64, ColValue>,
 }
 
-impl MySqlSnapshotSplitter<'_> {
+impl MySqlSnapshotSplitter {
     pub fn new(
-        mysql_tb_meta: &MysqlTbMeta,
+        mysql_tb_meta: Arc<MysqlTbMeta>,
         conn_pool: Pool<MySql>,
         batch_size: usize,
         partition_col: String,
-    ) -> MySqlSnapshotSplitter<'_> {
+    ) -> MySqlSnapshotSplitter {
         MySqlSnapshotSplitter {
             basic: BaseSplitter::new(),
             snapshot_range: None,
@@ -67,7 +68,7 @@ impl MySqlSnapshotSplitter<'_> {
         if self.basic.has_no_next_chunks() {
             return Ok(Vec::new());
         }
-        let mysql_tb_meta = self.mysql_tb_meta;
+        let mysql_tb_meta = Arc::clone(&self.mysql_tb_meta);
         let partition_col = &self.partition_col;
         let partition_col_type = mysql_tb_meta.get_col_type(partition_col)?;
         if !partition_col_type.can_be_splitted() {
@@ -101,7 +102,7 @@ impl MySqlSnapshotSplitter<'_> {
                 .gen_next_chunk((ColValue::None, ColValue::None))]);
         }
         if !self.basic.has_no_even_chunks() && partition_col_type.is_integer() {
-            let chunks = self.get_evenly_sized_chunks(mysql_tb_meta).await;
+            let chunks = self.get_evenly_sized_chunks(&mysql_tb_meta).await;
             if let Err(e) = chunks {
                 match e.downcast_ref::<base_splitter::Error>() {
                     Some(BadSplitColumnError { .. }) => {
@@ -118,7 +119,7 @@ impl MySqlSnapshotSplitter<'_> {
                 return chunks;
             }
         }
-        if let Some(chunk) = self.get_next_unevenly_sized_chunk(mysql_tb_meta).await? {
+        if let Some(chunk) = self.get_next_unevenly_sized_chunk(&mysql_tb_meta).await? {
             return Ok(vec![chunk]);
         }
         Ok(Vec::new())
@@ -132,10 +133,11 @@ impl MySqlSnapshotSplitter<'_> {
         let partition_col = &self.partition_col;
         let mut position = if chunk_id == self.checkpoint_id + 1 {
             self.checkpoint_id = chunk_id;
-            self.mysql_tb_meta.basic.build_position_for_partition(
+            self.mysql_tb_meta.basic.build_position_for_single_col(
                 &DbType::Mysql,
                 partition_col,
                 &partition_col_value,
+                true,
             )
         } else {
             self.checkpoint_map
@@ -145,10 +147,11 @@ impl MySqlSnapshotSplitter<'_> {
         while let Some(partition_col_values) = self.checkpoint_map.remove(&(self.checkpoint_id + 1))
         {
             self.checkpoint_id += 1;
-            position = self.mysql_tb_meta.basic.build_position_for_partition(
+            position = self.mysql_tb_meta.basic.build_position_for_single_col(
                 &DbType::Mysql,
                 partition_col,
                 &partition_col_values,
+                true,
             );
         }
         Some(position)

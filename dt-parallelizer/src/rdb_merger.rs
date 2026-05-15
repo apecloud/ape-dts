@@ -97,6 +97,7 @@ impl RdbMerger {
                 let delete = RowData::new(
                     row_data.schema.clone(),
                     row_data.tb.clone(),
+                    0,
                     RowType::Delete,
                     row_data.before,
                     None,
@@ -104,6 +105,7 @@ impl RdbMerger {
                 let insert = RowData::new(
                     row_data.schema,
                     row_data.tb,
+                    0,
                     RowType::Insert,
                     None,
                     row_data.after,
@@ -117,6 +119,7 @@ impl RdbMerger {
                     let row_data = RowData::new(
                         delete.schema,
                         delete.tb,
+                        0,
                         RowType::Update,
                         delete.before,
                         insert.after,

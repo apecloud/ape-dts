@@ -10,7 +10,6 @@ use super::{
     DataChecker, RecheckKey, RetryItem,
 };
 use crate::checker::check_log::{CheckLog, DiffColValue};
-use crate::sinker::base_sinker::BaseSinker;
 use crate::sinker::mongo::mongo_cmd;
 use dt_common::meta::{
     col_value::ColValue, mongo::mongo_constant::MongoConstants, pg::pg_value_type::PgValueType,
@@ -18,7 +17,10 @@ use dt_common::meta::{
 };
 use dt_common::{
     log_diff, log_miss, log_sql, log_warn,
-    monitor::{counter_type::CounterType, task_metrics::TaskMetricsType},
+    monitor::{
+        counter_type::CounterType, task_metrics::TaskMetricsType,
+        task_monitor_handle::TaskMonitorHandle,
+    },
     utils::limit_queue::LimitedQueue,
 };
 
@@ -395,13 +397,22 @@ impl<C: Checker> DataChecker<C> {
         }
     }
 
+    fn task_id_for_snapshot_entry(&self, entry: &CheckEntry) -> String {
+        self.ctx
+            .base_sinker
+            .task_id_for_schema_tb(&entry.key.schema, &entry.key.tb)
+    }
+
     async fn add_entry_metrics(&self, entry: &CheckEntry) {
         let (task_metric, counter_type) = Self::checker_metric_types(entry);
         // Update both cumulative task metrics and checker window counters.
-        if let Some(task_monitor) = &self.ctx.task_monitor {
-            task_monitor.add_no_window_metrics(task_metric, 1);
-        }
-        self.ctx.monitor.add_counter(counter_type, 1).await;
+        self.ctx.add_checker_metric(task_metric, 1);
+        let task_id = self.task_id_for_snapshot_entry(entry);
+        self.ctx.monitor.ensure_monitor(&task_id);
+        self.ctx
+            .monitor
+            .add_counter(&task_id, counter_type, 1)
+            .await;
     }
 
     /// Updates cumulative Prometheus summary counters, which differ from point-in-time unresolved snapshot counts.
@@ -424,8 +435,7 @@ impl<C: Checker> DataChecker<C> {
 
     pub fn update_pending_counter(&self) {
         self.ctx
-            .monitor
-            .set_counter(CounterType::CheckerPending, self.store.len() as u64);
+            .set_checker_counter(CounterType::CheckerPending, self.store.len() as u64);
     }
 
     pub fn remove_store_entry(&mut self, row_data: &RowData, row_key: u128) {
@@ -791,7 +801,14 @@ impl<C: Checker> DataChecker<C> {
         let mut total_checked = 0usize;
         let mut total_skip_count = 0usize;
         let mut retry_rows = Vec::new();
+        let mut monitor_task_id = None;
         for rows in grouped.into_values() {
+            if monitor_task_id.is_none() {
+                monitor_task_id = rows
+                    .first()
+                    .map(|row| TaskMonitorHandle::task_id_from_row_data(row))
+                    .filter(|id| !id.is_empty());
+            }
             let fetch_result = self.checker.fetch(&rows).await?;
             let tb_meta = fetch_result.tb_meta;
             total_checked += rows.len();
@@ -822,13 +839,25 @@ impl<C: Checker> DataChecker<C> {
         }
         self.enqueue_retry_rows(retry_rows);
 
-        let monitor = self.ctx.monitor.clone();
+        let task_id =
+            monitor_task_id.unwrap_or_else(|| self.ctx.monitor.default_task_id().to_string());
+        self.ctx.monitor.ensure_monitor(&task_id);
         if is_serial_mode {
-            BaseSinker::update_serial_monitor(&monitor, total_checked as u64, 0).await?;
+            self.ctx
+                .base_sinker
+                .update_serial_monitor_for(&task_id, total_checked as u64, 0)
+                .await?;
         } else {
-            BaseSinker::update_batch_monitor(&monitor, total_checked as u64, 0).await?;
+            self.ctx
+                .base_sinker
+                .update_batch_monitor_for(&task_id, total_checked as u64, 0)
+                .await?;
         }
-        BaseSinker::update_monitor_rt(&monitor, &rts).await
+        self.ctx
+            .base_sinker
+            .update_monitor_rt_for(&task_id, &rts)
+            .await?;
+        Ok(())
     }
 }
 
@@ -838,8 +867,7 @@ mod tests {
     use super::*;
     use crate::{checker::check_log::CheckSummaryLog, rdb_router::RdbRouter};
     use async_trait::async_trait;
-    use dt_common::monitor::monitor::Monitor;
-    use std::sync::Arc;
+    use dt_common::monitor::task_monitor_handle::TaskMonitorHandle;
 
     struct DummyChecker;
 
@@ -852,8 +880,11 @@ mod tests {
 
     fn build_ctx(is_cdc: bool) -> CheckContext {
         CheckContext {
-            monitor: Arc::new(Monitor::new("checker", "unit-test", 1, 1, 1)),
-            task_monitor: None,
+            monitor: TaskMonitorHandle::default(),
+            base_sinker: crate::sinker::base_sinker::BaseSinker::new(
+                TaskMonitorHandle::default(),
+                1,
+            ),
             summary: CheckSummaryLog {
                 start_time: "unit-test".to_string(),
                 ..Default::default()
@@ -916,6 +947,7 @@ mod tests {
         let src = RowData::new(
             "s1".to_string(),
             "t1".to_string(),
+            0,
             RowType::Insert,
             None,
             Some(HashMap::from([
@@ -926,6 +958,7 @@ mod tests {
         let dst = RowData::new(
             "s1".to_string(),
             "t1".to_string(),
+            0,
             RowType::Insert,
             None,
             Some(HashMap::from([

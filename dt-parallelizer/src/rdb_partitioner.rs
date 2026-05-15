@@ -106,6 +106,13 @@ impl RdbPartitioner {
         }
     }
 
+    pub fn partition_for_row_data(
+        &mut self,
+        _data: Vec<RowData>,
+    ) -> anyhow::Result<Vec<Vec<RowData>>> {
+        todo!()
+    }
+
     pub async fn close(&mut self) -> anyhow::Result<()> {
         self.meta_manager.close().await
     }

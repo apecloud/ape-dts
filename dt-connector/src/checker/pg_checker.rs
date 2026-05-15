@@ -48,7 +48,7 @@ impl Checker for PgChecker {
             let query = qb.create_pg_query(&query_info)?;
             let mut rows = query.fetch(&self.conn_pool);
             while let Some(row) = rows.try_next().await? {
-                res.push(RowData::from_pg_row(&row, pg_meta, &None));
+                res.push(RowData::from_pg_row(&row, pg_meta, &None, None));
             }
         }
 
@@ -57,7 +57,7 @@ impl Checker for PgChecker {
             let query = qb.create_pg_query(&query_info)?;
             let mut rows = query.fetch(&self.conn_pool);
             while let Some(row) = rows.try_next().await? {
-                res.push(RowData::from_pg_row(&row, pg_meta, &None));
+                res.push(RowData::from_pg_row(&row, pg_meta, &None, None));
             }
         }
 

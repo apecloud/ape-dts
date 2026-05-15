@@ -22,7 +22,6 @@ use dt_common::meta::redis::redis_object::RedisObject;
 use dt_common::meta::redis::redis_write_method::RedisWriteMethod;
 use dt_common::meta::row_data::RowData;
 use dt_common::meta::row_type::RowType;
-use dt_common::monitor::monitor::Monitor;
 
 use super::entry_rewriter::EntryRewriter;
 use crate::{call_batch_fn, data_marker::DataMarker, sinker::base_sinker::BaseSinker, Sinker};
@@ -35,7 +34,7 @@ pub struct RedisSinker {
     pub version: f32,
     pub method: RedisWriteMethod,
     pub meta_manager: Option<RdbMetaManager>,
-    pub monitor: Arc<Monitor>,
+    pub base_sinker: BaseSinker,
     pub data_marker: Option<Arc<RwLock<DataMarker>>>,
     pub key_parser: KeyParser,
 }
@@ -96,7 +95,9 @@ impl RedisSinker {
 
         self.batch_sink(&cmds).await?;
 
-        BaseSinker::update_batch_monitor(&self.monitor, cmds.len() as u64, data_size).await
+        self.base_sinker
+            .update_batch_monitor(cmds.len() as u64, data_size)
+            .await
     }
 
     async fn serial_sink_raw(&mut self, data: &mut [DtItem]) -> anyhow::Result<()> {
@@ -110,7 +111,9 @@ impl RedisSinker {
             }
         }
 
-        BaseSinker::update_serial_monitor(&self.monitor, data.len() as u64, data_size).await
+        self.base_sinker
+            .update_serial_monitor(data.len() as u64, data_size)
+            .await
     }
 
     fn rewrite_entry(&mut self, dt_data: &mut DtData) -> anyhow::Result<Vec<RedisCmd>> {
@@ -168,6 +171,10 @@ impl RedisSinker {
         start_index: usize,
         batch_size: usize,
     ) -> anyhow::Result<()> {
+        let task_id = self
+            .base_sinker
+            .task_id_for_rows(&data[start_index..start_index + batch_size]);
+        self.base_sinker.ensure_monitor_for(&task_id);
         let mut data_size = 0;
 
         let mut cmds = Vec::new();
@@ -179,10 +186,14 @@ impl RedisSinker {
         }
         self.batch_sink(&cmds).await?;
 
-        BaseSinker::update_batch_monitor(&self.monitor, cmds.len() as u64, data_size).await
+        self.base_sinker
+            .update_batch_monitor_for(&task_id, cmds.len() as u64, data_size)
+            .await
     }
 
     async fn serial_sink_dml(&mut self, data: &mut [RowData]) -> anyhow::Result<()> {
+        let task_id = self.base_sinker.task_id_for_rows(data);
+        self.base_sinker.ensure_monitor_for(&task_id);
         let mut data_size = 0;
 
         for row_data in data.iter() {
@@ -192,7 +203,9 @@ impl RedisSinker {
             }
         }
 
-        BaseSinker::update_serial_monitor(&self.monitor, data.len() as u64, data_size).await
+        self.base_sinker
+            .update_serial_monitor_for(&task_id, data.len() as u64, data_size)
+            .await
     }
 
     async fn dml_to_redis_cmd(&mut self, row_data: &RowData) -> anyhow::Result<Option<RedisCmd>> {
@@ -296,7 +309,7 @@ impl RedisSinker {
         let start_time = Instant::now();
         let result = self.conn.req_packed_commands(&packed_cmds, 0, count);
         rts.push((start_time.elapsed().as_millis() as u64, 1));
-        BaseSinker::update_monitor_rt(&self.monitor, &rts).await?;
+        self.base_sinker.update_monitor_rt(&rts).await?;
 
         match result {
             Err(error) => {

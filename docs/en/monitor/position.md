@@ -63,7 +63,7 @@ Use repl_offset as position.
 
 If the snapshot task contains multiple databases/tables, tables will be sorted **first by database name and then table name**, and they will be migrated to the target **one by one**.
 
-If a table has a **single column** **primary key/unique key**, extractor will use it as sorting column and pull data in batches(configuration: [extractor] batch_size) from small to large, otherwise the table will be pulled in a stream.
+If a table has a **single column** **primary key/unique key**, extractor will use it as sorting column and pull data in batches (configuration: `[extractor].batch_size`) from small to large. When chunk splitting is enabled, this value is also the target chunk size. Otherwise the table will be pulled in a stream.
 
 ## default.log
 
