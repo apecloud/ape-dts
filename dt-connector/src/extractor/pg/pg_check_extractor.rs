@@ -73,7 +73,7 @@ impl BatchCheckExtractor for PgCheckExtractor {
         let query = query_builder.create_pg_query(&query_info)?;
 
         let mut rows = query.fetch(&self.conn_pool);
-        while let Some(row) = rows.try_next().await.unwrap() {
+        while let Some(row) = rows.try_next().await? {
             let mut row_data = RowData::from_pg_row(&row, &tb_meta, &ignore_cols);
 
             if is_diff && self.replay_diff_as_update {

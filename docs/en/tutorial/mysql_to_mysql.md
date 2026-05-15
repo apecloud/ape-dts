@@ -216,7 +216,7 @@ docker run --rm --network host \
 ## Check results
 - cat /tmp/ape_dts/check_data_task_log/check/miss.log
 ```
-{"schema":"test_db","tb":"tb_1","id_col_values":{"id":"1"},"diff_col_values":{}}
+{"schema":"test_db","tb":"tb_1","id_col_values":{"id":"1"}}
 ```
 - cat /tmp/ape_dts/check_data_task_log/check/diff.log
 ```
@@ -317,7 +317,7 @@ docker run --rm --network host \
 ```
 
 ## Check results
-- /tmp/ape_dts/review_data_task_log/check/miss.log and /tmp/ape_dts/review_data_task_log/check/diff.log should be empty
+- /tmp/ape_dts/review_data_task_log/check/miss.log and /tmp/ape_dts/review_data_task_log/check/diff.log should not be generated
 
 # Cdc task
 

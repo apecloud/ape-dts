@@ -1,1 +1,1 @@
-{"start_time":"2023-01-01T00:00:00+00:00","end_time":"2023-01-01T00:00:00+00:00","is_consistent":true}
+{"start_time":"2026-05-14T18:46:21.112499+08:00","end_time":"2026-05-14T18:46:24.534172+08:00","is_consistent":true,"checked_count":3,"miss_count":0,"diff_count":0,"skip_count":0,"tables":[{"schema":"public","tb":"recheck_struct","checked_count":3,"miss_count":0,"diff_count":0,"skip_count":0}]}

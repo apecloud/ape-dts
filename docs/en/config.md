@@ -46,14 +46,15 @@ url=mysql://user1:abc%25%24%23%3F%40@127.0.0.1:3307?ssl-mode=disabled
 The `[checker]` section is used by three documented data check flows:
 - Standalone snapshot check: run a snapshot check task only (no data write). Set
   `sink_type=dummy` or omit `[sinker]`, and configure the checker target explicitly in
-  `[checker]`.
+  `[checker]`. Standalone snapshot checker targets support MySQL, PostgreSQL, and MongoDB. This
+  flow is data-only and does not run structure check automatically.
 - Inline snapshot check: for snapshot tasks with `sink_type=write`, the checker runs after sink
   and reuses the parsed `[sinker]` target directly.
 - Inline cdc check: for CDC tasks with `extract_type=cdc` and `sink_type=write`, the checker
   validates applied changes after write, reuses the parsed `[sinker]` target, and requires
   resumer state persistence.
 
-Struct check follows the same standalone target-selection rules as standalone snapshot check.
+Struct check is supported only for standalone MySQL/PostgreSQL checker targets.
 
 | Config                      | Description                                                            | Example     | Default                           |
 | :-------------------------- | :--------------------------------------------------------------------- | :---------- | :-------------------------------- |
@@ -61,19 +62,20 @@ Struct check follows the same standalone target-selection rules as standalone sn
 | queue_size                  | checker queue capacity, counted in pending batches/messages            | 200         | 200                               |
 | max_connections             | max connections for checker pool                                       | 8           | 8                                 |
 | batch_size                  | checker chunk size; also used for checker chunking in inline cdc check | 200         | 200                               |
+| sample_rate                 | percentage sample rate for snapshot and CDC checks                     | 25          | empty (check all rows/changes)    |
 | output_full_row             | output full row in diff log                                            | false       | false                             |
 | output_revise_sql           | write generated revise SQL to `sql.log`                                | false       | false                             |
 | revise_match_full_row       | match full row when building revise SQL                                | false       | false                             |
 | retry_interval_secs         | retry interval in seconds (forced to 0 in inline cdc check)            | 0           | 0                                 |
 | max_retries                 | retry count (forced to 0 in inline cdc check)                          | 0           | 0                                 |
 | check_log_dir               | check log dir                                                          | /tmp/check  | empty (use runtime.log_dir/check) |
-| check_log_file_size         | per-log file size limit (`diff.log` / `miss.log` / `sql.log`)          | 100mb       | 100mb                             |
-| check_log_max_rows          | per-log max rows (`diff.log` / `miss.log`)                             | 1000        | 1000                              |
+| check_log_file_size         | local per-log file size limit (`diff.log` / `miss.log` / `sql.log`)    | 100mb       | 100mb                             |
+| check_log_max_rows          | CDC check snapshot max rows (`diff.log` / `miss.log`)                  | 1000        | 1000                              |
 | db_type                     | checker target db type (standalone target only)                        | mysql       | -                                 |
 | url                         | checker target URL (standalone target only)                            | mysql://... | -                                 |
 | username                    | checker target username (standalone target only)                       | root        | empty                             |
 | password                    | checker target password (standalone target only)                       | password    | empty                             |
-| cdc_check_log_s3            | upload periodic CDC check snapshot to S3                               | false       | false                             |
+| check_log_s3                | upload check logs to S3 for standalone snapshot or inline CDC check    | false       | false                             |
 | cdc_check_log_interval_secs | interval (seconds) for periodic CDC check snapshot output              | 10          | 10                                |
 | s3_bucket                   | S3 bucket for check log upload                                         | my-bucket   | -                                 |
 | s3_access_key_id            | S3 access key id                                                       | AKIA...     | -                                 |
@@ -86,6 +88,18 @@ Notes:
 
 **General behavior**
 - Checker only supports `[pipeline] pipeline_type=basic`.
+- `sample_rate` only supports snapshot check and inline CDC check. Valid values are `1..=100`; an
+  empty value means all rows/changes are checked. Standalone MySQL/PostgreSQL/MongoDB snapshot check
+  applies it during extraction by row position inside each extractor stream, so later checker work
+  receives fewer rows. MySQL/PostgreSQL parallel chunks are sampled independently, and the nullable
+  order-column NULL pass has its own counter; MongoDB uses the collection cursor position. For
+  example, `sample_rate=25` keeps positions 1-25 in every 100-position window of each stream. After
+  resume, standalone snapshot check restarts those position counters from the resumed stream, so the
+  sampled row set can differ from an uninterrupted run if the previous run stopped between sampled
+  rows. Inline
+  snapshot check and inline CDC check write all rows/changes first, then apply deterministic
+  checker-side key-hash sampling before target fetch, so rows/changes with the same key are sampled
+  consistently.
 - `queue_size` counts queued checker DML batches, not rows. Control signals such as checkpoint and
   `refresh_meta` bypass this queue.
 - In inline write-after-check flows, if the checker DML queue is full, the oldest pending batch is
@@ -99,7 +113,9 @@ Notes:
   smaller and upstream partitioning can also change the actual count.
 - For standalone / dummy-sinker check flows, queued batch size is decided by the upstream
   parallelizer. After dequeue, the checker processes non-CDC rows in chunks of `[checker].batch_size`.
-- Struct tasks only support the standalone target-selection rules above. If `[checker]` is enabled for struct tasks, use `sink_type=dummy` or omit `[sinker]`.
+- Struct tasks only support standalone MySQL/PostgreSQL checker targets. If `[checker]` is enabled
+  for struct tasks, use `sink_type=dummy` or omit `[sinker]`. Run structure check explicitly when
+  structure verification is needed; standalone snapshot check does not start it automatically.
 - Inline snapshot check is supported only when `[extractor] extract_type=snapshot`,
   `[sinker] sink_type=write`, and `[sinker].db_type` is `mysql`, `pg`, or `mongo`.
 - Inline cdc check is currently supported only when `[extractor] extract_type=cdc`,
@@ -118,13 +134,18 @@ Notes:
   target field (`db_type` / `url` / `username` / `password`) set under `[checker]`.
 
 **Inline cdc check log / retry behavior**
-- In inline cdc check, `[checker].batch_size` remains effective and controls checker chunking.
-  `[checker].max_retries` / `[checker].retry_interval_secs` are still forced to `0`.
+- In inline cdc check, `[checker].max_retries` / `[checker].retry_interval_secs` are forced to `0`.
 - When `check_log_dir` is empty, `runtime.log_dir/check` is used consistently for checker logs (including CDC check outputs).
+- Standalone snapshot check writes check results locally first. If `check_log_s3=true`, the final
+  local `summary.log` plus non-empty `miss.log`, `diff.log`, and `sql.log` are uploaded to S3
+  after the check task finishes.
 - In inline cdc check, periodic check snapshots are always written locally under `check_log_dir`;
-  `cdc_check_log_s3` controls only S3 upload.
-- `check_log_file_size` limits local `diff.log` / `miss.log` / `sql.log`. `summary.log` is not size-limited.
-- `check_log_max_rows` only applies to CDC check snapshots for `diff.log` / `miss.log`; when either threshold is hit, only the latest records are kept.
+  `check_log_s3` controls only S3 upload. Outside inline cdc check, S3 upload is supported only by
+  standalone snapshot check.
+- `check_log_file_size` limits local `diff.log` / `miss.log` / `sql.log`. `summary.log` is not
+  size-limited.
+- `check_log_max_rows` only applies to CDC check snapshots for `diff.log` / `miss.log`; when either
+  threshold is hit, only the latest records are kept.
 
 # [filter]
 
@@ -226,13 +247,13 @@ Same with [filter].
 
 ## parallel_type
 
-| Type      | Strategy                                                                                                                                                                                      | Usage                             | Advantages | Disadvantages        |
-| :-------- | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :-------------------------------- | :--------- | :------------------- |
-| snapshot  | Records in cache are divided into [parallel_size] partitions, and each partition will be synced in batches in a separate thread.                                                              | snapshot tasks for mysql/pg/mongo | fast       |                      |
-| serial    | Single thread, one by one.                                                                                                                                                                    | all                               |            | slow                 |
+| Type      | Strategy                                                                                                                                                                                                                                                                      | Usage                               | Advantages | Disadvantages        |
+| :-------- | :---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :---------------------------------- | :--------- | :------------------- |
+| snapshot  | Records in cache are divided into [parallel_size] partitions, and each partition will be synced in batches in a separate thread.                                                                                                                                              | snapshot tasks for mysql/pg/mongo   | fast       |                      |
+| serial    | Single thread, one by one.                                                                                                                                                                                                                                                    | all                                 |            | slow                 |
 | rdb_merge | Merge row changes in cache into write-friendly insert + delete batches, then divide them into [parallel_size] partitions for parallel syncing. When `[checker].enable=true`, checker-enabled MySQL/PG flows reuse this parallelizer and switch to check sink mode internally. | mysql/pg CDC, check, review, revise | fast       | eventual consistency |
-| mongo     | Mongo version of merge parallelization. When `[checker].enable=true`, checker-enabled Mongo flows reuse this parallelizer and switch to check sink mode internally.                            | mongo CDC, check, review          |
-| redis     | Single thread, batch/serial writing(determined by [sinker] batch_size)                                                                                                                        | snapshot/CDC tasks for redis      |
+| mongo     | Mongo version of merge parallelization. When `[checker].enable=true`, checker-enabled Mongo flows reuse this parallelizer and switch to check sink mode internally.                                                                                                           | mongo CDC, check, review            |
+| redis     | Single thread, batch/serial writing(determined by [sinker] batch_size)                                                                                                                                                                                                        | snapshot/CDC tasks for redis        |
 
 # [runtime]
 
@@ -241,6 +262,7 @@ Same with [filter].
 | log_level   | level              | info/warn/error/debug/trace | info          |
 | log4rs_file | log4rs config file | ./log4rs.yaml               | ./log4rs.yaml |
 | log_dir     | output dir         | ./logs                      | ./logs        |
+| check_result_stdout_only | output only check result logs to stdout | true/false | false |
 
 Note that the log files contain progress information for the task, which can be used for task [resuming at breakpoint](/docs/en/snapshot/resume.md). Therefore, if you have multiple tasks, **please set up separate log directories for each task**.
 

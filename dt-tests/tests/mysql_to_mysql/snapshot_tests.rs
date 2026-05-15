@@ -6,7 +6,7 @@ mod test {
     use dt_common::config::config_enums::DbType;
     use serial_test::serial;
 
-    use crate::test_runner::{rdb_test_runner::RdbTestRunner, test_base::TestBase};
+    use crate::test_runner::test_base::TestBase;
 
     #[tokio::test]
     #[serial]

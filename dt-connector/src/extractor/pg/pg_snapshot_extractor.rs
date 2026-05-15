@@ -48,7 +48,7 @@ pub struct PgSnapshotExtractor {
     pub filter: RdbFilter,
     pub batch_size: usize,
     pub parallel_size: usize,
-    pub sample_interval: u64,
+    pub sample_rate: Option<u8>,
     pub schema: String,
     pub tb: String,
     pub user_defined_partition_col: String,
@@ -66,6 +66,7 @@ struct ParallelExtractCtx<'a> {
     pub ignore_cols: &'a Option<HashSet<String>>,
     pub buffer: &'a Arc<DtQueue>,
     pub router: &'a Arc<RdbRouter>,
+    pub sample_rate: Option<u8>,
 }
 
 #[async_trait]
@@ -155,7 +156,12 @@ impl PgSnapshotExtractor {
             .build()?;
 
         let mut rows = sqlx::query(&sql).fetch(&self.conn_pool);
+        let mut extracted_count = 0u64;
         while let Some(row) = rows.try_next().await? {
+            extracted_count += 1;
+            if !Self::should_sample_row(self.sample_rate, extracted_count) {
+                continue;
+            }
             let row_data = RowData::from_pg_row(&row, tb_meta, &ignore_cols);
             self.base_extractor
                 .push_row(row_data, Position::None)
@@ -229,8 +235,7 @@ impl PgSnapshotExtractor {
                 }
                 extracted_count += 1;
                 slice_count += 1;
-                // sampling may be used in check scenario
-                if extracted_count % self.sample_interval != 0 {
+                if !Self::should_sample_row(self.sample_rate, extracted_count) {
                     continue;
                 }
 
@@ -282,6 +287,9 @@ impl PgSnapshotExtractor {
         let mut rows = sqlx::query(&sql_for_null).fetch(&self.conn_pool);
         while let Some(row) = rows.try_next().await? {
             extracted_count += 1;
+            if !Self::should_sample_row(self.sample_rate, extracted_count) {
+                continue;
+            }
             let row_data = RowData::from_pg_row(&row, tb_meta, &ignore_cols);
             self.base_extractor
                 .push_row(row_data, Position::None)
@@ -358,6 +366,7 @@ impl PgSnapshotExtractor {
                         ignore_cols: &ignore_cols,
                         buffer: &self.base_extractor.buffer,
                         router: &router,
+                        sample_rate: self.sample_rate,
                     },
                     &mut join_set,
                 )
@@ -395,6 +404,7 @@ impl PgSnapshotExtractor {
                         ignore_cols: &ignore_cols,
                         buffer: &self.base_extractor.buffer,
                         router: &router,
+                        sample_rate: self.sample_rate,
                     },
                     &mut join_set,
                 )
@@ -422,6 +432,7 @@ impl PgSnapshotExtractor {
         let ignore_cols = extract_ctx.ignore_cols.clone();
         let router = extract_ctx.router.clone();
         let buffer = extract_ctx.buffer.clone();
+        let sample_rate = extract_ctx.sample_rate;
 
         log_debug!(
             "extract by partition_col: {}, chunk range: {:?}",
@@ -452,11 +463,14 @@ impl PgSnapshotExtractor {
             let mut partition_col_value = ColValue::None;
             let mut rows = query.fetch(&conn_pool);
             while let Some(row) = rows.try_next().await? {
+                extracted_cnt += 1;
                 partition_col_value =
                     PgColValueConvertor::from_query(&row, &partition_col, &partition_col_type)?;
+                if !Self::should_sample_row(sample_rate, extracted_cnt) {
+                    continue;
+                }
                 let row_data = RowData::from_pg_row(&row, &tb_meta, &ignore_cols.as_ref());
                 Self::push_row(&buffer, &router, row_data, Position::None).await?;
-                extracted_cnt += 1;
             }
             Ok((chunk_id, extracted_cnt, partition_col_value))
         });
@@ -582,5 +596,17 @@ impl PgSnapshotExtractor {
             SerializeUtil::serialize_hashmap_to_json(&resume_values)?
         );
         Ok(resume_values)
+    }
+
+    // Position-based sampling for standalone snapshot check to drop rows before checker work.
+    fn should_sample_row(sample_rate: Option<u8>, extracted_count: u64) -> bool {
+        let Some(sample_rate) = sample_rate.filter(|rate| *rate < 100) else {
+            return true;
+        };
+        if sample_rate == 0 || extracted_count == 0 {
+            return false;
+        }
+
+        (extracted_count - 1) % 100 < u64::from(sample_rate)
     }
 }

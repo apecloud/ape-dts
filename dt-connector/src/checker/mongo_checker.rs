@@ -9,7 +9,7 @@ use mongodb::{
 };
 use serde_json::Value as JsonValue;
 
-use crate::checker::base_checker::{Checker, CheckerTbMeta, FetchResult, CHECKER_MAX_QUERY_BATCH};
+use crate::checker::base_checker::{Checker, CheckerTbMeta, CHECKER_MAX_QUERY_BATCH};
 use dt_common::meta::{
     col_value::ColValue,
     mongo::{mongo_constant::MongoConstants, mongo_key::MongoKey},
@@ -25,13 +25,12 @@ pub struct MongoChecker {
 
 #[async_trait]
 impl Checker for MongoChecker {
-    async fn fetch(&mut self, src_rows: &[&RowData]) -> anyhow::Result<FetchResult> {
-        let first_row = src_rows
-            .first()
-            .context("fetch called with empty src rows")?;
-
-        let mut meta = Self::mock_tb_meta(&first_row.schema, &first_row.tb);
-        let first_row_cols = first_row.after.as_ref().or(first_row.before.as_ref());
+    async fn load_table_meta(
+        &mut self,
+        lookup_row: &RowData,
+    ) -> anyhow::Result<Arc<CheckerTbMeta>> {
+        let mut meta = Self::mock_tb_meta(&lookup_row.schema, &lookup_row.tb);
+        let first_row_cols = lookup_row.after.as_ref().or(lookup_row.before.as_ref());
         if let Some(cols) = first_row_cols {
             meta.cols = cols.keys().cloned().collect();
         }
@@ -41,11 +40,18 @@ impl Checker for MongoChecker {
                 meta.cols.push(col);
             }
         }
-        let tb_meta = Arc::new(CheckerTbMeta::Mongo(meta));
-        let basic_meta = tb_meta.basic();
+        Ok(Arc::new(CheckerTbMeta::Mongo(meta)))
+    }
 
-        let mut ids = Vec::with_capacity(src_rows.len());
-        for &row_data in src_rows {
+    async fn fetch_rows_by_keys(
+        &mut self,
+        table_meta: Arc<CheckerTbMeta>,
+        lookup_rows: &[&RowData],
+    ) -> anyhow::Result<Vec<RowData>> {
+        let basic_meta = table_meta.basic();
+
+        let mut ids = Vec::with_capacity(lookup_rows.len());
+        for &row_data in lookup_rows {
             let id = Self::get_id_from_row(row_data).with_context(|| {
                 format!(
                     "row_data missing `_id`, schema: {}, tb: {}",
@@ -66,10 +72,7 @@ impl Checker for MongoChecker {
         }
 
         if ids.is_empty() {
-            return Ok(FetchResult {
-                tb_meta,
-                dst_rows: Vec::new(),
-            });
+            return Ok(Vec::new());
         }
 
         let mut dst_row_data_vec = Vec::new();
@@ -98,10 +101,7 @@ impl Checker for MongoChecker {
             }
         }
 
-        Ok(FetchResult {
-            tb_meta,
-            dst_rows: dst_row_data_vec,
-        })
+        Ok(dst_row_data_vec)
     }
 }
 

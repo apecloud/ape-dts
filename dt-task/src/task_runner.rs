@@ -10,8 +10,9 @@ use std::{
 use anyhow::{bail, Context};
 use chrono::Local;
 use log4rs::config::{Config, Deserializers, RawConfig};
+use opendal::Operator;
 use tokio::{
-    fs::{metadata, File},
+    fs::{self as tokio_fs, metadata, File},
     io::AsyncReadExt,
     sync::{Mutex, RwLock},
     task::JoinSet,
@@ -59,7 +60,7 @@ use dt_common::{
 };
 use dt_connector::{
     checker::base_checker::CheckContext,
-    checker::check_log::CheckSummaryLog,
+    checker::check_log::{to_json_line, CheckSummaryLog},
     checker::{
         Checker, CheckerHandle, CheckerStateStore, DataCheckerHandle, MongoChecker, MysqlChecker,
         PgChecker, StructCheckerHandle,
@@ -111,6 +112,8 @@ const STATISTIC_LOG_DIR_PLACEHOLDER: &str = "STATISTIC_LOG_DIR_PLACEHOLDER";
 const LOG_LEVEL_PLACEHOLDER: &str = "LOG_LEVEL_PLACEHOLDER";
 const LOG_DIR_PLACEHOLDER: &str = "LOG_DIR_PLACEHOLDER";
 const CHECK_LOG_FILE_SIZE_PLACEHOLDER: &str = "CHECK_LOG_FILE_SIZE_PLACEHOLDER";
+const RUNTIME_STDOUT_APPENDER_PLACEHOLDER: &str = "RUNTIME_STDOUT_APPENDER_PLACEHOLDER";
+const CHECK_RESULT_STDOUT_APPENDER_PLACEHOLDER: &str = "CHECK_RESULT_STDOUT_APPENDER_PLACEHOLDER";
 const DEFAULT_CHECK_LOG_DIR_PLACEHOLDER: &str = "LOG_DIR_PLACEHOLDER/check";
 const DEFAULT_STATISTIC_LOG_DIR_PLACEHOLDER: &str = "LOG_DIR_PLACEHOLDER/statistic";
 
@@ -168,6 +171,7 @@ impl TaskRunner {
     }
 
     pub async fn start_task(&self) -> anyhow::Result<()> {
+        self.clear_check_logs().await?;
         self.init_log4rs().await?;
 
         panic::set_hook(Box::new(|panic_info| {
@@ -275,7 +279,7 @@ impl TaskRunner {
         extractor_client.close().await?;
         sinker_client.close().await?;
 
-        if let Some(check_summary) = check_summary {
+        if let Some(check_summary) = check_summary.as_ref() {
             if self.config.checker.is_none()
                 || !self
                     .task_type
@@ -283,14 +287,160 @@ impl TaskRunner {
                     .is_some_and(|task_type| task_type.is_cdc_inline_check())
             {
                 let mut summary = check_summary.lock().await;
-                summary.end_time = Local::now().to_rfc3339();
-                dt_common::log_summary!("{}", summary);
+                if summary.end_time.is_empty() {
+                    summary.end_time = Local::now().to_rfc3339();
+                }
+                summary.sort_tables();
+                if let Some(log) = to_json_line(&*summary) {
+                    dt_common::log_summary!("{}", log);
+                }
             }
         }
 
+        log::logger().flush();
+        self.remove_empty_check_logs().await?;
+        self.upload_check_logs_to_s3().await?;
         log_finished!("task finished");
         log::logger().flush();
         Ok(())
+    }
+
+    async fn clear_check_logs(&self) -> anyhow::Result<()> {
+        let Some(cfg) = self.config.checker.as_ref() else {
+            return Ok(());
+        };
+        if !Self::should_clear_check_logs_before_log4rs(self.task_type) {
+            return Ok(());
+        }
+
+        let check_log_dir = self.check_log_dir(cfg);
+        tokio_fs::create_dir_all(&check_log_dir).await?;
+        for file_name in ["miss.log", "diff.log", "summary.log", "sql.log"] {
+            Self::remove_file_if_exists(&format!("{check_log_dir}/{file_name}")).await?;
+        }
+        Ok(())
+    }
+
+    fn should_clear_check_logs_before_log4rs(task_type: Option<TaskType>) -> bool {
+        match task_type {
+            Some(task_type) => task_type.has_check() && !task_type.is_cdc_inline_check(),
+            None => true,
+        }
+    }
+
+    async fn remove_empty_check_logs(&self) -> anyhow::Result<()> {
+        let Some(cfg) = self.config.checker.as_ref() else {
+            return Ok(());
+        };
+
+        let check_log_dir = self.check_log_dir(cfg);
+        for file_name in ["miss.log", "diff.log", "sql.log"] {
+            Self::remove_file_if_empty(&format!("{check_log_dir}/{file_name}")).await?;
+        }
+        Ok(())
+    }
+
+    async fn upload_check_logs_to_s3(&self) -> anyhow::Result<()> {
+        let Some(cfg) = self.config.checker.as_ref() else {
+            return Ok(());
+        };
+        if !self
+            .task_type
+            .is_some_and(|task_type| task_type.is_standalone_snapshot_check())
+        {
+            return Ok(());
+        }
+        let Some((s3_client, key_prefix)) = self.check_log_s3_output(cfg, "")? else {
+            return Ok(());
+        };
+        Self::upload_local_check_logs_to_s3(&s3_client, &key_prefix, &self.check_log_dir(cfg)).await
+    }
+
+    async fn upload_local_check_logs_to_s3(
+        s3_client: &Operator,
+        key_prefix: &str,
+        check_log_dir: &str,
+    ) -> anyhow::Result<()> {
+        for file_name in ["miss.log", "diff.log"] {
+            let key = format!("{key_prefix}/{file_name}");
+            let path = format!("{check_log_dir}/{file_name}");
+            Self::upload_optional_check_log(s3_client, &key, &path).await?;
+        }
+        let summary_key = format!("{key_prefix}/summary.log");
+        s3_client
+            .write(
+                &summary_key,
+                tokio_fs::read(format!("{check_log_dir}/summary.log")).await?,
+            )
+            .await?;
+        let sql_key = format!("{key_prefix}/sql.log");
+        Self::upload_optional_check_log(s3_client, &sql_key, &format!("{check_log_dir}/sql.log"))
+            .await?;
+        Ok(())
+    }
+
+    async fn upload_optional_check_log(
+        s3_client: &Operator,
+        key: &str,
+        path: &str,
+    ) -> anyhow::Result<()> {
+        match tokio_fs::read(path).await {
+            Ok(buf) if !buf.is_empty() => {
+                s3_client.write(key, buf).await?;
+            }
+            Ok(_) => {
+                s3_client.delete(key).await?;
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                s3_client.delete(key).await?;
+            }
+            Err(err) => return Err(err.into()),
+        }
+        Ok(())
+    }
+
+    async fn remove_file_if_exists(path: &str) -> anyhow::Result<()> {
+        match tokio_fs::remove_file(path).await {
+            Ok(_) => Ok(()),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(err) => Err(err.into()),
+        }
+    }
+
+    async fn remove_file_if_empty(path: &str) -> anyhow::Result<()> {
+        match metadata(path).await {
+            Ok(metadata) if metadata.len() == 0 => Self::remove_file_if_exists(path).await,
+            Ok(_) => Ok(()),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(err) => Err(err.into()),
+        }
+    }
+
+    fn check_log_s3_output(
+        &self,
+        cfg: &CheckerConfig,
+        single_task_id: &str,
+    ) -> anyhow::Result<Option<(Operator, String)>> {
+        if !cfg.check_log_s3 {
+            return Ok(None);
+        }
+        let s3_cfg = cfg.s3_config.as_ref().ok_or_else(|| {
+            Error::ConfigError(
+                "check_log_s3=true but checker s3 config is missing in [checker]".into(),
+            )
+        })?;
+        Ok(Some((
+            TaskUtil::create_s3_client(s3_cfg)?,
+            self.check_log_s3_key_prefix(cfg, single_task_id),
+        )))
+    }
+
+    fn check_log_dir(&self, cfg: &CheckerConfig) -> String {
+        if cfg.check_log_dir.is_empty() {
+            format!("{}/check", self.config.runtime.log_dir)
+        } else {
+            cfg.check_log_dir.clone()
+        }
     }
 
     async fn start_multi_task(&self, task_context: TaskContext) -> anyhow::Result<()> {
@@ -510,6 +660,7 @@ impl TaskRunner {
             .create_checker(
                 self.config.checker.as_ref(),
                 &single_task_id,
+                &extractor_config,
                 checker_monitor.clone(),
                 task_context.check_summary.clone(),
                 task_context.recovery.as_ref(),
@@ -872,6 +1023,7 @@ impl TaskRunner {
         &self,
         checker_config: Option<&CheckerConfig>,
         single_task_id: &str,
+        extractor_config: &ExtractorConfig,
         monitor: Arc<Monitor>,
         check_summary: Option<Arc<AsyncMutex<CheckSummaryLog>>>,
         recovery: Option<&Arc<dyn Recovery + Send + Sync>>,
@@ -904,11 +1056,7 @@ impl TaskRunner {
         if cfg.batch_size == 0 {
             log_warn!("checker.batch_size=0 is invalid. Using 1.");
         }
-        let check_log_dir_base = if cfg.check_log_dir.is_empty() {
-            format!("{}/check", self.config.runtime.log_dir)
-        } else {
-            cfg.check_log_dir.clone()
-        };
+        let check_log_dir_base = self.check_log_dir(cfg);
         let checker_task_id = if single_task_id.is_empty() {
             self.config.global.task_id.clone()
         } else {
@@ -950,9 +1098,17 @@ impl TaskRunner {
             .config
             .task_type()
             .is_some_and(|task_type| task_type.is_inline_check());
+        let standalone_snapshot_check = self
+            .task_type
+            .is_some_and(|task_type| task_type.is_standalone_snapshot_check());
+        let checker_sample_rate = if standalone_snapshot_check {
+            None
+        } else {
+            cfg.sample_rate
+        };
 
         let is_struct_task = matches!(
-            self.config.extractor,
+            extractor_config,
             ExtractorConfig::MysqlStruct { .. } | ExtractorConfig::PgStruct { .. }
         );
 
@@ -1015,43 +1171,8 @@ impl TaskRunner {
             return Ok(Some(CheckerHandle::Struct(checker)));
         }
 
-        let s3_output = if cfg.cdc_check_log_s3 {
-            let s3_cfg = cfg.s3_config.as_ref().ok_or_else(|| {
-                Error::ConfigError(
-                    "cdc_check_log_s3=true but checker s3 config is missing in [checker]".into(),
-                )
-            })?;
-            let s3_client = TaskUtil::create_s3_client(s3_cfg)?;
-            let key_prefix = if single_task_id.is_empty() {
-                if cfg.s3_key_prefix.is_empty() {
-                    format!("{}/check", self.config.global.task_id)
-                } else {
-                    cfg.s3_key_prefix.clone()
-                }
-            } else {
-                let base = if cfg.s3_key_prefix.is_empty() {
-                    format!("{}/check", self.config.global.task_id)
-                } else {
-                    cfg.s3_key_prefix.clone()
-                };
-                let scope = single_task_id
-                    .chars()
-                    .map(|ch| {
-                        if ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-') {
-                            ch
-                        } else {
-                            '_'
-                        }
-                    })
-                    .collect::<String>();
-                let scope = if scope.is_empty() {
-                    "default".to_string()
-                } else {
-                    scope
-                };
-                format!("{}/{}", base.trim_end_matches('/'), scope)
-            };
-            Some((s3_client, key_prefix))
+        let s3_output = if is_cdc_task {
+            self.check_log_s3_output(cfg, single_task_id)?
         } else {
             None
         };
@@ -1073,10 +1194,8 @@ impl TaskRunner {
                 retry_interval_secs,
                 max_retries,
                 is_cdc: is_cdc_task,
-                summary: CheckSummaryLog {
-                    start_time: Local::now().to_rfc3339(),
-                    ..Default::default()
-                },
+                sample_rate: checker_sample_rate,
+                summary: CheckSummaryLog::default(),
                 global_summary: check_summary.clone(),
                 check_log_dir: check_log_dir_base.clone(),
                 cdc_check_log_max_file_size,
@@ -1239,6 +1358,31 @@ impl TaskRunner {
         Ok(Some(Arc::new(AsyncMutex::new(checker))))
     }
 
+    fn check_log_s3_key_prefix(&self, checker: &CheckerConfig, single_task_id: &str) -> String {
+        let base = if checker.s3_key_prefix.is_empty() {
+            format!("{}/check", self.config.global.task_id)
+        } else {
+            checker.s3_key_prefix.clone()
+        };
+        let base = base.trim_end_matches('/');
+        if single_task_id.is_empty() {
+            return base.to_string();
+        }
+
+        let scope = single_task_id
+            .chars()
+            .map(|ch| {
+                if ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-') {
+                    ch
+                } else {
+                    '_'
+                }
+            })
+            .collect::<String>();
+        let scope = if scope.is_empty() { "default" } else { &scope };
+        format!("{base}/{scope}")
+    }
+
     async fn init_log4rs(&self) -> anyhow::Result<()> {
         let log4rs_file = &self.config.runtime.log4rs_file;
         if metadata(log4rs_file).await.is_err() {
@@ -1281,6 +1425,25 @@ impl TaskRunner {
             .replace(CHECK_LOG_FILE_SIZE_PLACEHOLDER, DEFAULT_CHECK_LOG_FILE_SIZE)
             .replace(LOG_DIR_PLACEHOLDER, &self.config.runtime.log_dir)
             .replace(LOG_LEVEL_PLACEHOLDER, &self.config.runtime.log_level);
+
+        if self.config.runtime.check_result_stdout_only {
+            config_str = config_str
+                .replace(
+                    RUNTIME_STDOUT_APPENDER_PLACEHOLDER,
+                    "silent_stdout_appender",
+                )
+                .replace(
+                    CHECK_RESULT_STDOUT_APPENDER_PLACEHOLDER,
+                    "check_stdout_appender",
+                );
+        } else {
+            config_str = config_str
+                .replace(RUNTIME_STDOUT_APPENDER_PLACEHOLDER, "stdout")
+                .replace(
+                    CHECK_RESULT_STDOUT_APPENDER_PLACEHOLDER,
+                    "silent_stdout_appender",
+                );
+        }
 
         let raw: RawConfig = serde_yaml::from_str(&config_str)?;
         let mut deserializers = Deserializers::default();
@@ -1577,7 +1740,6 @@ impl TaskRunner {
                         ExtractorConfig::MysqlSnapshot {
                             url,
                             connection_auth,
-                            sample_interval,
                             parallel_size,
                             batch_size,
                             ..
@@ -1586,7 +1748,6 @@ impl TaskRunner {
                             connection_auth: connection_auth.clone(),
                             db: schema.clone(),
                             tb: tb.clone(),
-                            sample_interval: *sample_interval,
                             parallel_size: *parallel_size,
                             batch_size: *batch_size,
                             partition_cols: String::new(),
@@ -1595,7 +1756,6 @@ impl TaskRunner {
                         ExtractorConfig::PgSnapshot {
                             url,
                             connection_auth,
-                            sample_interval,
                             parallel_size,
                             batch_size,
                             ..
@@ -1604,7 +1764,6 @@ impl TaskRunner {
                             connection_auth: connection_auth.clone(),
                             schema: schema.clone(),
                             tb: tb.clone(),
-                            sample_interval: *sample_interval,
                             parallel_size: *parallel_size,
                             batch_size: *batch_size,
                             partition_cols: String::new(),
@@ -1686,5 +1845,48 @@ impl TaskRunner {
             ExtractorConfig::MongoSnapshot { db, tb, .. } => format!("{}.{}", db, tb),
             _ => String::new(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::TaskRunner;
+    use opendal::{services::Memory, Operator};
+    use std::{fs, time::SystemTime};
+
+    #[tokio::test]
+    async fn upload_local_check_logs_to_s3_deletes_empty_optional_logs() {
+        let dir = std::env::temp_dir().join(format!(
+            "ape-dts-task-runner-{}",
+            SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("miss.log"), "").unwrap();
+        fs::write(dir.join("diff.log"), "diff\n").unwrap();
+        fs::write(dir.join("summary.log"), "{\"is_consistent\":false}\n").unwrap();
+
+        let op = Operator::new(Memory::default()).unwrap().finish();
+        op.write("prefix/miss.log", "stale miss\n").await.unwrap();
+        op.write("prefix/diff.log", "stale diff\n").await.unwrap();
+        op.write("prefix/sql.log", "stale sql\n").await.unwrap();
+
+        TaskRunner::upload_local_check_logs_to_s3(&op, "prefix", dir.to_str().unwrap())
+            .await
+            .unwrap();
+
+        assert!(op.stat("prefix/miss.log").await.is_err());
+        assert_eq!(
+            op.read("prefix/diff.log").await.unwrap().to_vec(),
+            b"diff\n"
+        );
+        assert!(op.stat("prefix/sql.log").await.is_err());
+        assert_eq!(
+            op.read("prefix/summary.log").await.unwrap().to_vec(),
+            b"{\"is_consistent\":false}\n"
+        );
+        fs::remove_dir_all(dir).unwrap();
     }
 }

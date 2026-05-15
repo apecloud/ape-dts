@@ -96,7 +96,6 @@ const USERNAME: &str = "username";
 const PASSWORD: &str = "password";
 const BATCH_SIZE: &str = "batch_size";
 const MAX_CONNECTIONS: &str = "max_connections";
-const SAMPLE_INTERVAL: &str = "sample_interval";
 const PARTITION_COLS: &str = "partition_cols";
 const HEARTBEAT_INTERVAL_SECS: &str = "heartbeat_interval_secs";
 const KEEPALIVE_INTERVAL_SECS: &str = "keepalive_interval_secs";
@@ -110,20 +109,15 @@ const REPLACE: &str = "replace";
 const DISABLE_FOREIGN_KEY_CHECKS: &str = "disable_foreign_key_checks";
 const RESUME_TYPE: &str = "resume_type";
 const CHECKER_QUEUE_SIZE: &str = "queue_size";
-const CDC_CHECK_LOG_S3: &str = "cdc_check_log_s3";
+const CHECK_LOG_S3: &str = "check_log_s3";
 const S3_KEY_PREFIX: &str = "s3_key_prefix";
 const CDC_CHECK_LOG_INTERVAL_SECS: &str = "cdc_check_log_interval_secs";
+const SAMPLE_RATE: &str = "sample_rate";
 
 // default values
 const APE_DTS: &str = "APE_DTS";
 const ASTRISK: &str = "*";
 const RESUMER_CONNECTION_LIMIT_DEFAULT: usize = 5;
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum CheckLogMode {
-    Review,
-    Revise,
-}
 
 impl TaskConfig {
     pub fn new(task_config_file: &str) -> anyhow::Result<Self> {
@@ -147,7 +141,6 @@ impl TaskConfig {
                 ));
             }
             if matches!(extractor_basic.extract_type, ExtractType::Cdc)
-                && matches!(sinker_basic.sink_type, SinkType::Write)
                 && !matches!(parallelizer.parallel_type, ParallelType::RdbMerge)
             {
                 bail!(Error::ConfigError(
@@ -155,65 +148,78 @@ impl TaskConfig {
                         .into(),
                 ));
             }
+
             if !matches!(pipeline.pipeline_type, PipelineType::Basic) {
                 bail!(Error::ConfigError(
-                    "config [checker] only supports [pipeline] pipeline_type=basic".into()
+                    "config [checker] only supports [pipeline] pipeline_type=basic".into(),
                 ));
             }
-            if matches!(
-                Self::check_log_mode(&extractor_basic.extract_type, &sinker_basic.sink_type, true),
-                Some(CheckLogMode::Review)
-            ) && Self::check_log_target_supported(&checker_cfg.db_type)
-            {
-                Self::validate_checker_target_config(&loader, false)?;
+
+            let task_type = if matches!(extractor_basic.extract_type, ExtractType::CheckLog)
+                && matches!(sinker_basic.sink_type, SinkType::Dummy)
+                && matches!(
+                    checker_cfg.db_type,
+                    DbType::Mysql | DbType::Pg | DbType::Mongo
+                ) {
+                None
             } else {
-                let task_type = Self::build_task_type(
-                    &extractor_basic.extract_type,
-                    &sinker_basic.sink_type,
-                    Self::checker_target_db_type(
+                Some(
+                    Self::build_task_type(
                         &extractor_basic.extract_type,
-                        &sinker_basic,
-                        checker_cfg,
-                    ),
-                    true,
-                )
-                .ok_or_else(|| {
-                    let message = if matches!(sinker_basic.sink_type, SinkType::Struct) {
-                        format!(
-                            "config [checker] only supports standalone check for [extractor] extract_type={}; use sink_type=dummy or omit [sinker]",
-                            extractor_basic.extract_type
-                        )
-                    } else if matches!(sinker_basic.sink_type, SinkType::Dummy)
-                        && matches!(extractor_basic.extract_type, ExtractType::Struct)
-                    {
-                        format!(
-                            "config [checker] is not supported for [checker] db_type={} with [extractor] extract_type=struct; standalone struct check only supports mysql and pg checker targets",
-                            checker_cfg.db_type
-                        )
-                    } else if matches!(extractor_basic.extract_type, ExtractType::Cdc)
-                        && matches!(sinker_basic.sink_type, SinkType::Write)
-                    {
-                        format!(
-                            "config [checker] is not supported for [sinker] db_type={} with [extractor] extract_type=cdc and sink_type=write; only mysql and pg write sinkers support CDC+check",
-                            sinker_basic.db_type
-                        )
-                    } else if matches!(sinker_basic.sink_type, SinkType::Write)
-                        && !Self::write_sink_supports_inline_checker(&sinker_basic.db_type)
-                    {
-                        format!(
-                            "config [checker] is not supported for [sinker] db_type={} with sink_type=write; snapshot inline check only supports mysql, pg, and mongo write sinkers",
-                            sinker_basic.db_type
-                        )
-                    } else {
-                        format!(
+                        &sinker_basic.sink_type,
+                        Self::checker_target_db_type(
+                            &extractor_basic.extract_type,
+                            &sinker_basic,
+                            checker_cfg,
+                        ),
+                        true,
+                    )
+                    .ok_or_else(|| {
+                        Error::ConfigError(format!(
                             "config [checker] is not supported for [checker] db_type={} with [extractor] extract_type={} and [sinker] sink_type={}",
                             checker_cfg.db_type, extractor_basic.extract_type, sinker_basic.sink_type
-                        )
-                    };
-                    Error::ConfigError(message)
-                })?;
-                Self::validate_checker_target_config(&loader, task_type.is_inline_check())?;
+                        ))
+                    })?,
+                )
+            };
+
+            let check_log_s3_supported = task_type.is_some_and(|task_type| {
+                task_type.is_cdc_inline_check() || task_type.is_standalone_snapshot_check()
+            });
+            if checker_cfg.check_log_s3 && !check_log_s3_supported {
+                bail!(Error::ConfigError(format!(
+                    "config [checker].{} only supports standalone snapshot check or inline cdc check",
+                    CHECK_LOG_S3
+                )));
             }
+            if checker_cfg.check_log_s3 && checker_cfg.s3_config.is_none() {
+                bail!(Error::ConfigError(
+                    "check_log_s3=true but checker s3 config is missing in [checker]".into(),
+                ));
+            }
+
+            if checker_cfg.sample_rate.is_some()
+                && !matches!(
+                    task_type,
+                    Some(TaskType {
+                        kind: TaskKind::Snapshot,
+                        check: Some(_),
+                    }) | Some(TaskType {
+                        kind: TaskKind::Cdc,
+                        check: Some(CheckMode::Inline),
+                    })
+                )
+            {
+                bail!(Error::ConfigError(format!(
+                    "config [checker].{} only supports snapshot check or inline cdc check",
+                    SAMPLE_RATE
+                )));
+            }
+
+            Self::validate_checker_target_config(
+                &loader,
+                task_type.is_some_and(|task_type| task_type.is_inline_check()),
+            )?;
         }
         let resumer =
             Self::load_resumer_config(&loader, &runtime, &sinker_basic, checker.as_ref())?;
@@ -310,59 +316,31 @@ impl TaskConfig {
         }
     }
 
-    fn check_log_mode(
-        extract_type: &ExtractType,
-        sink_type: &SinkType,
-        checker_enabled: bool,
-    ) -> Option<CheckLogMode> {
-        if !matches!(extract_type, ExtractType::CheckLog) {
-            return None;
-        }
-
-        match (sink_type, checker_enabled) {
-            (SinkType::Dummy, true) => Some(CheckLogMode::Review),
-            (SinkType::Write, false) => Some(CheckLogMode::Revise),
-            _ => None,
-        }
-    }
-
-    fn check_log_target_supported(db_type: &DbType) -> bool {
-        matches!(db_type, DbType::Mysql | DbType::Pg | DbType::Mongo)
-    }
-
     fn validate_checker_target_config(
         loader: &IniLoader,
         inline_check: bool,
     ) -> anyhow::Result<()> {
-        if inline_check {
-            let forbidden_keys = [DB_TYPE, URL, USERNAME, PASSWORD]
-                .into_iter()
-                .filter(|key| loader.contains(CHECKER, key))
-                .collect::<Vec<_>>();
-            if !forbidden_keys.is_empty() {
-                bail!(Error::ConfigError(format!(
-                    "inline check does not accept [checker].{}; configure the inline check target via [sinker].{}",
-                    forbidden_keys.join(", "),
-                    forbidden_keys.join(", ")
-                )));
-            }
-            return Ok(());
+        if inline_check
+            && [DB_TYPE, URL, USERNAME, PASSWORD]
+                .iter()
+                .any(|key| loader.contains(CHECKER, key))
+        {
+            bail!(Error::ConfigError(
+                "inline check does not accept [checker] target fields; configure them via [sinker]"
+                    .into(),
+            ));
         }
-
-        let missing_keys = [DB_TYPE, URL]
-            .into_iter()
-            .filter(|key| {
+        if !inline_check
+            && [DB_TYPE, URL].iter().any(|key| {
                 loader
                     .ini
                     .get(CHECKER, key)
                     .is_none_or(|value| value.is_empty())
             })
-            .collect::<Vec<_>>();
-        if !missing_keys.is_empty() {
-            bail!(Error::ConfigError(format!(
-                "config [checker] standalone target requires non-empty [{}]",
-                missing_keys.join(", ")
-            )));
+        {
+            bail!(Error::ConfigError(
+                "config [checker] standalone target requires non-empty db_type and url".into(),
+            ));
         }
         Ok(())
     }
@@ -485,7 +463,6 @@ impl TaskConfig {
                     connection_auth,
                     db: String::new(),
                     tb: String::new(),
-                    sample_interval: loader.get_with_default(EXTRACTOR, SAMPLE_INTERVAL, 1),
                     parallel_size: loader.get_with_default(EXTRACTOR, PARALLEL_SIZE, 1),
                     batch_size,
                     partition_cols: loader.get_optional(EXTRACTOR, PARTITION_COLS),
@@ -572,7 +549,6 @@ impl TaskConfig {
                     connection_auth,
                     schema: String::new(),
                     tb: String::new(),
-                    sample_interval: loader.get_with_default(EXTRACTOR, SAMPLE_INTERVAL, 1),
                     parallel_size: loader.get_with_default(EXTRACTOR, PARALLEL_SIZE, 1),
                     batch_size,
                     partition_cols: loader.get_optional(EXTRACTOR, PARTITION_COLS),
@@ -1031,6 +1007,24 @@ impl TaskConfig {
         }
 
         let default = CheckerConfig::default();
+        let sample_rate = match loader.ini.get(CHECKER, SAMPLE_RATE) {
+            Some(raw) if !raw.is_empty() => {
+                let sample_rate = raw.parse::<usize>().map_err(|_| {
+                    Error::ConfigError(format!(
+                        "config [checker].{}={}, can not be parsed as usize",
+                        SAMPLE_RATE, raw
+                    ))
+                })?;
+                if !(1..=100).contains(&sample_rate) {
+                    bail!(Error::ConfigError(format!(
+                        "config [checker].sample_rate must be between 1 and 100, got {}",
+                        sample_rate
+                    )));
+                }
+                Some(sample_rate as u8)
+            }
+            _ => None,
+        };
         let config = CheckerConfig {
             queue_size: loader.get_with_default(CHECKER, CHECKER_QUEUE_SIZE, default.queue_size),
             max_connections: loader.get_with_default(
@@ -1039,6 +1033,7 @@ impl TaskConfig {
                 default.max_connections,
             ),
             batch_size: loader.get_with_default(CHECKER, BATCH_SIZE, default.batch_size),
+            sample_rate,
             output_full_row: loader.get_with_default(
                 CHECKER,
                 OUTPUT_FULL_ROW,
@@ -1071,11 +1066,7 @@ impl TaskConfig {
                 CHECK_LOG_MAX_ROWS,
                 default.check_log_max_rows,
             ),
-            cdc_check_log_s3: loader.get_with_default(
-                CHECKER,
-                CDC_CHECK_LOG_S3,
-                default.cdc_check_log_s3,
-            ),
+            check_log_s3: loader.get_with_default(CHECKER, CHECK_LOG_S3, default.check_log_s3),
             s3_config: {
                 let bucket: String = loader.get_optional(CHECKER, "s3_bucket");
                 if bucket.is_empty() {
@@ -1125,6 +1116,11 @@ impl TaskConfig {
                 RUNTIME,
                 "log4rs_file",
                 "./log4rs.yaml".to_string(),
+            ),
+            check_result_stdout_only: loader.get_with_default(
+                RUNTIME,
+                "check_result_stdout_only",
+                false,
             ),
             tb_parallel_size: loader.get_with_default(RUNTIME, "tb_parallel_size", 1),
         })
@@ -1315,12 +1311,14 @@ mod tests {
     use std::{
         fs,
         path::PathBuf,
-        time::{SystemTime, UNIX_EPOCH},
+        sync::atomic::{AtomicU64, Ordering},
     };
 
-    use super::TaskConfig;
+    use super::{CheckMode, TaskConfig, TaskKind, TaskType};
 
-    fn cdc_inline_check_config(parallel_type: &str) -> String {
+    static NEXT_CONFIG_ID: AtomicU64 = AtomicU64::new(0);
+
+    fn cdc_inline_check_config(parallel_type: &str, extra_checker: &str) -> String {
         format!(
             r#"[extractor]
 db_type=mysql
@@ -1336,6 +1334,7 @@ url=mysql://127.0.0.1:3307
 [checker]
 enable=true
 batch_size=2
+{extra_checker}
 
 [parallelizer]
 parallel_type={parallel_type}
@@ -1344,43 +1343,155 @@ parallel_type={parallel_type}
     }
 
     fn write_temp_task_config(contents: &str) -> PathBuf {
-        let unique_id = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let path = std::env::temp_dir().join(format!("ape_dts_task_config_{unique_id}.ini"));
+        let unique_id = NEXT_CONFIG_ID.fetch_add(1, Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!(
+            "ape_dts_task_config_{}_{}.ini",
+            std::process::id(),
+            unique_id
+        ));
         fs::write(&path, contents).unwrap();
         path
     }
 
-    #[test]
-    fn cdc_inline_check_accepts_rdb_merge_parallelizer_when_checker_enabled() {
-        let config_path = write_temp_task_config(&cdc_inline_check_config("rdb_merge"));
+    fn load_temp_task_config(contents: &str) -> anyhow::Result<TaskConfig> {
+        let config_path = write_temp_task_config(contents);
         let result = TaskConfig::new(config_path.to_str().unwrap());
         fs::remove_file(config_path).unwrap();
-
-        assert!(result.is_ok());
+        result
     }
 
-    #[test]
-    fn cdc_inline_check_rejects_serial_parallelizer_when_checker_enabled() {
-        let config_path = write_temp_task_config(&cdc_inline_check_config("serial"));
-        let result = TaskConfig::new(config_path.to_str().unwrap());
-        fs::remove_file(config_path).unwrap();
-
-        match result {
-            Err(err) => assert_eq!(
-                err.to_string(),
-                "config error: config [checker].enable=true with [extractor] extract_type=cdc and [sinker] sink_type=write currently supports only [parallelizer] parallel_type=rdb_merge"
-            ),
-            Ok(_) => panic!("expected config validation error"),
-        }
-    }
-
-    #[test]
-    fn cdc_inline_check_requires_explicit_checker_enable_field() {
-        let config_path = write_temp_task_config(
+    fn snapshot_check_config(extra_checker: &str) -> String {
+        format!(
             r#"[extractor]
+db_type=mysql
+extract_type=snapshot
+url=mysql://127.0.0.1:3306
+
+[checker]
+enable=true
+db_type=mysql
+url=mysql://127.0.0.1:3307
+{extra_checker}
+
+[parallelizer]
+parallel_type=rdb_merge
+"#
+        )
+    }
+
+    #[test]
+    fn checker_accepts_supported_configs() {
+        let config = load_temp_task_config(&cdc_inline_check_config("rdb_merge", ""))
+            .expect("cdc inline checker config should be valid");
+        assert_eq!(
+            config.task_type(),
+            Some(TaskType::new(TaskKind::Cdc, Some(CheckMode::Inline)))
+        );
+
+        let config = load_temp_task_config(
+            r#"[extractor]
+db_type=mongo
+extract_type=snapshot
+url=mongodb://127.0.0.1:27017
+
+[checker]
+enable=true
+db_type=mongo
+url=mongodb://127.0.0.1:27018
+
+[parallelizer]
+parallel_type=mongo
+"#,
+        )
+        .expect("mongo standalone snapshot checker config should be valid");
+        assert_eq!(
+            config.task_type(),
+            Some(TaskType::new(
+                TaskKind::Snapshot,
+                Some(CheckMode::Standalone)
+            ))
+        );
+
+        for (config, sample_rate) in [
+            (snapshot_check_config("sample_rate=25"), 25),
+            (cdc_inline_check_config("rdb_merge", "sample_rate=10"), 10),
+        ] {
+            let checker = load_temp_task_config(&config)
+                .expect("sampled checker config should be valid")
+                .checker
+                .expect("checker should exist");
+            assert_eq!(checker.sample_rate, Some(sample_rate));
+        }
+
+        let checker = load_temp_task_config(&cdc_inline_check_config(
+            "rdb_merge",
+            r#"
+check_log_s3=true
+s3_bucket=ape-dts
+s3_access_key_id=ak
+s3_secret_access_key=sk
+s3_region=us-east-1
+s3_endpoint=http://127.0.0.1:9000
+s3_key_prefix=check/10001
+"#,
+        ))
+        .expect("cdc checker s3 config should be valid")
+        .checker
+        .expect("checker should exist");
+        assert!(checker.check_log_s3);
+        assert_eq!(checker.s3_key_prefix, "check/10001");
+        assert_eq!(
+            checker.s3_config.expect("s3 config should exist").bucket,
+            "ape-dts"
+        );
+
+        let checker = load_temp_task_config(&snapshot_check_config(
+            r#"
+check_log_s3=true
+s3_bucket=ape-dts
+s3_access_key_id=ak
+s3_secret_access_key=sk
+s3_region=us-east-1
+s3_endpoint=http://127.0.0.1:9000
+s3_key_prefix=check/10001
+"#,
+        ))
+        .expect("standalone snapshot checker s3 config should be valid")
+        .checker
+        .expect("checker should exist");
+        assert!(checker.check_log_s3);
+
+        let checker = load_temp_task_config(
+            r#"[extractor]
+db_type=mysql
+extract_type=struct
+url=mysql://127.0.0.1:3306
+
+[sinker]
+sink_type=dummy
+
+[checker]
+enable=true
+db_type=mysql
+url=mysql://127.0.0.1:3307
+sample_rate=
+"#,
+        )
+        .expect("empty sample_rate should be ignored")
+        .checker
+        .expect("checker should exist");
+        assert_eq!(checker.sample_rate, None);
+    }
+
+    #[test]
+    fn checker_rejects_invalid_configs() {
+        for (config, expected_err) in [
+            (
+                cdc_inline_check_config("serial", ""),
+                "config error: config [checker].enable=true with [extractor] extract_type=cdc and [sinker] sink_type=write currently supports only [parallelizer] parallel_type=rdb_merge",
+            ),
+            (
+                r#"[extractor]
 db_type=mysql
 extract_type=cdc
 url=mysql://127.0.0.1:3306
@@ -1396,41 +1507,95 @@ batch_size=2
 
 [parallelizer]
 parallel_type=rdb_merge
-"#,
-        );
-        let result = TaskConfig::new(config_path.to_str().unwrap());
-        fs::remove_file(config_path).unwrap();
-
-        match result {
-            Err(err) => assert_eq!(
-                err.to_string(),
-                "config error: config [checker].enable is required when [checker] section is present"
+"#
+                .to_string(),
+                "config error: config [checker].enable is required when [checker] section is present",
             ),
-            Ok(_) => panic!("expected config validation error"),
-        }
-    }
-
-    #[test]
-    fn disabled_checker_still_requires_sinker_section() {
-        let config_path = write_temp_task_config(
-            r#"[extractor]
+            (
+                r#"[extractor]
 db_type=mysql
 extract_type=snapshot
 url=mysql://127.0.0.1:3306
 
 [checker]
 enable=false
-"#,
-        );
-        let result = TaskConfig::new(config_path.to_str().unwrap());
-        fs::remove_file(config_path).unwrap();
-
-        match result {
-            Err(err) => assert_eq!(
-                err.to_string(),
-                "config error: config [sinker] is required unless [checker].enable=true"
+"#
+                .to_string(),
+                "config error: config [sinker] is required unless [checker].enable=true",
             ),
-            Ok(_) => panic!("expected config validation error"),
+            (
+                r#"[extractor]
+db_type=mysql
+extract_type=check_log
+url=mysql://127.0.0.1:3306
+check_log_dir=/tmp/ape-dts-check-log
+
+[checker]
+enable=true
+db_type=mysql
+url=mysql://127.0.0.1:3307
+check_log_s3=true
+s3_bucket=ape-dts
+
+[parallelizer]
+parallel_type=rdb_merge
+"#
+                .to_string(),
+                "config error: config [checker].check_log_s3 only supports standalone snapshot check or inline cdc check",
+            ),
+            (
+                r#"[extractor]
+db_type=mysql
+extract_type=snapshot
+url=mysql://127.0.0.1:3306
+
+[sinker]
+db_type=mysql
+sink_type=write
+url=mysql://127.0.0.1:3307
+
+[checker]
+enable=true
+check_log_s3=true
+s3_bucket=ape-dts
+
+[parallelizer]
+parallel_type=rdb_merge
+"#
+                .to_string(),
+                "config error: config [checker].check_log_s3 only supports standalone snapshot check or inline cdc check",
+            ),
+            (
+                snapshot_check_config("check_log_s3=true"),
+                "config error: check_log_s3=true but checker s3 config is missing in [checker]",
+            ),
+            (
+                snapshot_check_config("sample_rate=0"),
+                "config error: config [checker].sample_rate must be between 1 and 100, got 0",
+            ),
+            (
+                r#"[extractor]
+db_type=mysql
+extract_type=struct
+url=mysql://127.0.0.1:3306
+
+[sinker]
+sink_type=dummy
+
+[checker]
+enable=true
+db_type=mysql
+url=mysql://127.0.0.1:3307
+sample_rate=10
+"#
+                .to_string(),
+                "config error: config [checker].sample_rate only supports snapshot check or inline cdc check",
+            ),
+        ] {
+            assert_eq!(
+                load_temp_task_config(&config).err().unwrap().to_string(),
+                expected_err
+            );
         }
     }
 }

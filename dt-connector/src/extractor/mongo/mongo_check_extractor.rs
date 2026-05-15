@@ -38,7 +38,7 @@ impl Extractor for MongoCheckExtractor {
             check_log_dir: self.check_log_dir.clone(),
             batch_size: self.batch_size,
         };
-        base_check_extractor.extract(self).await.unwrap();
+        base_check_extractor.extract(self).await?;
         self.base_extractor.wait_task_finish().await
     }
 
@@ -75,11 +75,18 @@ impl BatchCheckExtractor for MongoCheckExtractor {
             }
         };
 
-        let mut cursor = collection.find(filter, None).await.unwrap();
-        while cursor.advance().await.unwrap() {
-            let doc = cursor.deserialize_current().unwrap();
+        let mut cursor = collection.find(filter, None).await?;
+        while cursor.advance().await? {
+            let doc = cursor.deserialize_current()?;
             let mut after = HashMap::new();
-            let id: String = MongoKey::from_doc(&doc).unwrap().to_string();
+            let id = MongoKey::from_doc(&doc)
+                .with_context(|| {
+                    format!(
+                        "dst doc _id type not supported, schema: {}, tb: {}",
+                        schema, tb
+                    )
+                })?
+                .to_string();
             after.insert(MongoConstants::ID.to_string(), ColValue::String(id));
             after.insert(MongoConstants::DOC.to_string(), ColValue::MongoDoc(doc));
             let mut row_data = RowData::new(
@@ -97,8 +104,7 @@ impl BatchCheckExtractor for MongoCheckExtractor {
 
             self.base_extractor
                 .push_row(row_data, Position::None)
-                .await
-                .unwrap();
+                .await?;
         }
         Ok(())
     }

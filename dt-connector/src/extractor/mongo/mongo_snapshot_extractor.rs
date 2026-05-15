@@ -29,6 +29,7 @@ pub struct MongoSnapshotExtractor {
     pub db: String,
     pub tb: String,
     pub mongo_client: Client,
+    pub sample_rate: Option<u8>,
     pub recovery: Option<Arc<dyn Recovery + Send + Sync>>,
 }
 
@@ -87,6 +88,7 @@ impl MongoSnapshotExtractor {
             .database(&self.db)
             .collection::<Document>(&self.tb);
         let mut cursor = collection.find(filter, find_options).await?;
+        let mut extracted_count = 0u64;
         while cursor.advance().await? {
             let doc = cursor.deserialize_current().map_err(|e| {
                 log_error!(
@@ -97,6 +99,11 @@ impl MongoSnapshotExtractor {
                 );
                 e
             })?;
+            extracted_count += 1;
+            if !Self::should_sample_row(self.sample_rate, extracted_count) {
+                continue;
+            }
+
             let object_id = Self::get_object_id(&doc);
 
             let after = Self::build_after_cols(&doc);
@@ -150,5 +157,16 @@ impl MongoSnapshotExtractor {
             }
         }
         String::new()
+    }
+
+    fn should_sample_row(sample_rate: Option<u8>, extracted_count: u64) -> bool {
+        let Some(sample_rate) = sample_rate.filter(|rate| *rate < 100) else {
+            return true;
+        };
+        if sample_rate == 0 || extracted_count == 0 {
+            return false;
+        }
+
+        (extracted_count - 1) % 100 < u64::from(sample_rate)
     }
 }

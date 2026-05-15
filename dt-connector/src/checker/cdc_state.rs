@@ -1,70 +1,35 @@
 use anyhow::Context;
-use std::collections::{BTreeSet, HashMap};
-use std::fmt::Write;
+use serde::Serialize;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use super::{
     BoundedLineBuffer, CheckEntry, CheckInconsistency, Checker, CheckerStoreKey, DataChecker,
     RecheckKey,
 };
-use crate::checker::check_log::{CheckLog, CheckSummaryLog};
+use crate::checker::check_log::{CheckLog, CheckSummaryLog, CheckTableSummaryLog};
 use crate::checker::state_store::{CheckerCheckpointCommit, CheckerStateRow};
 use dt_common::meta::{position::Position, row_data::RowData, row_type::RowType};
 use dt_common::{log_info, log_warn};
 
-fn push_json_string(buf: &mut String, value: &str) {
-    buf.push('"');
-    for ch in value.chars() {
-        match ch {
-            '"' => buf.push_str("\\\""),
-            '\\' => buf.push_str("\\\\"),
-            '\u{08}' => buf.push_str("\\b"),
-            '\u{0C}' => buf.push_str("\\f"),
-            '\n' => buf.push_str("\\n"),
-            '\r' => buf.push_str("\\r"),
-            '\t' => buf.push_str("\\t"),
-            c if c <= '\u{1F}' => write!(buf, "\\u{:04x}", c as u32).unwrap(),
-            c => buf.push(c),
-        }
-    }
-    buf.push('"');
-}
-
-fn build_identity_json_from_parts(
-    schema: &str,
-    tb: &str,
-    id_col_values: &[(&str, &Option<String>)],
-) -> String {
-    let mut id_col_values = id_col_values.to_vec();
-    id_col_values.sort_unstable_by(|(left, _), (right, _)| left.cmp(right));
-    let mut buf = String::with_capacity(schema.len() + tb.len() + id_col_values.len() * 32 + 40);
-    buf.push_str(r#"{"schema":"#);
-    push_json_string(&mut buf, schema);
-    buf.push_str(r#","tb":"#);
-    push_json_string(&mut buf, tb);
-    buf.push_str(r#","id_col_values":{"#);
-    for (idx, (key, value)) in id_col_values.iter().enumerate() {
-        if idx > 0 {
-            buf.push(',');
-        }
-        push_json_string(&mut buf, key);
-        buf.push(':');
-        match value {
-            Some(value) => push_json_string(&mut buf, value),
-            None => buf.push_str("null"),
-        }
-    }
-    buf.push_str("}}");
-    buf
+#[derive(Serialize)]
+struct IdentityJsonPayload<'a> {
+    schema: &'a str,
+    tb: &'a str,
+    id_col_values: BTreeMap<&'a str, Option<&'a str>>,
 }
 
 pub(super) fn build_identity_json(entry: &CheckEntry) -> String {
-    let id_col_values = entry
-        .log
-        .id_col_values
-        .iter()
-        .map(|(key, value)| (key.as_str(), value))
-        .collect::<Vec<_>>();
-    build_identity_json_from_parts(&entry.log.schema, &entry.log.tb, &id_col_values)
+    serde_json::to_string(&IdentityJsonPayload {
+        schema: &entry.log.schema,
+        tb: &entry.log.tb,
+        id_col_values: entry
+            .log
+            .id_col_values
+            .iter()
+            .map(|(key, value)| (key.as_str(), value.as_deref()))
+            .collect(),
+    })
+    .expect("identity json serialization should not fail")
 }
 
 pub(super) fn build_identity_key(entry: &CheckEntry) -> String {
@@ -113,20 +78,57 @@ impl<C: Checker> DataChecker<C> {
         let mut miss_buf_builder = BoundedLineBuffer::new(max_file_size, Some(max_rows));
         let mut diff_buf_builder = BoundedLineBuffer::new(max_file_size, Some(max_rows));
         let mut sql_buf_builder = BoundedLineBuffer::new(max_file_size, None);
-        let mut total_sql_count = 0usize;
         let mut total_miss = 0usize;
         let mut total_diff = 0usize;
+        let mut total_sql = 0usize;
+        let mut tables: HashMap<
+            (String, String, Option<String>, Option<String>),
+            CheckTableSummaryLog,
+        > = HashMap::new();
+        for table in &self.ctx.summary.tables {
+            let mut table = table.clone();
+            table.miss_count = 0;
+            table.diff_count = 0;
+            tables.insert(
+                (
+                    table.schema.clone(),
+                    table.tb.clone(),
+                    table.target_schema.clone(),
+                    table.target_tb.clone(),
+                ),
+                table,
+            );
+        }
 
-        for entry in self.store.values() {
+        let mut entries = self.store.iter().collect::<Vec<_>>();
+        entries.sort_by(|(a, _), (b, _)| a.cmp(b));
+        for (_, entry) in entries {
+            let table_key = (
+                entry.log.schema.clone(),
+                entry.log.tb.clone(),
+                entry.log.target_schema.clone(),
+                entry.log.target_tb.clone(),
+            );
+            let table = tables
+                .entry(table_key)
+                .or_insert_with(|| CheckTableSummaryLog {
+                    schema: entry.log.schema.clone(),
+                    tb: entry.log.tb.clone(),
+                    target_schema: entry.log.target_schema.clone(),
+                    target_tb: entry.log.target_tb.clone(),
+                    ..Default::default()
+                });
             if entry.is_miss() {
-                total_miss += 1;
-                miss_buf_builder.push_json(&entry.log);
-            } else {
+                if miss_buf_builder.push_json(&entry.log) {
+                    table.miss_count += 1;
+                    total_miss += 1;
+                }
+            } else if diff_buf_builder.push_json(&entry.log) {
+                table.diff_count += 1;
                 total_diff += 1;
-                diff_buf_builder.push_json(&entry.log);
             }
             if let Some(sql) = &entry.revise_sql {
-                total_sql_count += 1;
+                total_sql += 1;
                 sql_buf_builder.push_str(sql);
             }
         }
@@ -138,13 +140,16 @@ impl<C: Checker> DataChecker<C> {
             start_time: self.ctx.summary.start_time.clone(),
             end_time: chrono::Local::now().to_rfc3339(),
             is_consistent: false,
+            checked_count: self.ctx.summary.checked_count,
             miss_count: total_miss,
             diff_count: total_diff,
             skip_count: self.ctx.summary.skip_count,
-            sql_count: (total_sql_count > 0).then_some(total_sql_count),
+            sql_count: (total_sql > 0).then_some(total_sql),
+            tables: tables.into_values().collect(),
         };
         let mut summary = summary;
         summary.is_consistent = super::is_summary_consistent(&summary, self.init_failed);
+        summary.sort_tables();
         self.ctx.summary = summary.clone();
         let summary_buf = serde_json::to_vec(&summary)?;
 
@@ -154,16 +159,17 @@ impl<C: Checker> DataChecker<C> {
             &diff_buf,
             &sql_buf,
             &summary_buf,
-        )?;
+        )
+        .await?;
         if self.ctx.s3_output.is_some() {
-            self.upload_to_s3(&miss_buf, &diff_buf, &sql_buf, &summary_buf)
+            self.upload_to_s3(miss_buf, diff_buf, sql_buf, summary_buf)
                 .await?;
         }
 
         Ok(())
     }
 
-    fn write_to_disk(
+    async fn write_to_disk(
         dir: &str,
         miss_buf: &[u8],
         diff_buf: &[u8],
@@ -171,15 +177,22 @@ impl<C: Checker> DataChecker<C> {
         summary_buf: &[u8],
     ) -> anyhow::Result<()> {
         let path = std::path::Path::new(dir);
-        std::fs::create_dir_all(path)?;
-        std::fs::write(path.join("miss.log"), miss_buf)?;
-        std::fs::write(path.join("diff.log"), diff_buf)?;
+        tokio::fs::create_dir_all(path).await?;
         let mut summary_with_newline = summary_buf.to_vec();
         summary_with_newline.push(b'\n');
-        std::fs::write(path.join("summary.log"), &summary_with_newline)?;
-        if !sql_buf.is_empty() {
-            std::fs::write(path.join("sql.log"), sql_buf)?;
-        } else if let Err(err) = std::fs::remove_file(path.join("sql.log")) {
+        Self::write_optional_log(&path.join("miss.log"), miss_buf).await?;
+        Self::write_optional_log(&path.join("diff.log"), diff_buf).await?;
+        tokio::fs::write(path.join("summary.log"), summary_with_newline).await?;
+        Self::write_optional_log(&path.join("sql.log"), sql_buf).await?;
+        Ok(())
+    }
+
+    async fn write_optional_log(path: &std::path::Path, buf: &[u8]) -> anyhow::Result<()> {
+        if !buf.is_empty() {
+            tokio::fs::write(path, buf).await?;
+            return Ok(());
+        }
+        if let Err(err) = tokio::fs::remove_file(path).await {
             if err.kind() != std::io::ErrorKind::NotFound {
                 return Err(err.into());
             }
@@ -274,12 +287,15 @@ impl<C: Checker> DataChecker<C> {
 
         let mut checker = source_checker.lock().await;
         let mut rows = Vec::new();
-        for group in grouped.into_values() {
+        let mut groups = grouped.into_iter().collect::<Vec<_>>();
+        groups.sort_by(|(a, _), (b, _)| a.cmp(b));
+        for (_, group) in groups {
+            let first_row = group.first().context("checker group is empty")?;
+            let tb_meta = checker.load_table_meta(first_row).await?;
             rows.extend(
                 checker
-                    .fetch(&group)
+                    .fetch_rows_by_keys(tb_meta, &group)
                     .await?
-                    .dst_rows
                     .into_iter()
                     .map(|row| forward_router.route_row(row)),
             );
@@ -331,14 +347,20 @@ impl<C: Checker> DataChecker<C> {
                     .or_default()
                     .push(key.clone());
             }
-            for keys in grouped.into_values() {
+            let mut groups = grouped.into_iter().collect::<Vec<_>>();
+            groups.sort_by(|(a, _), (b, _)| a.cmp(b));
+            for (_, keys) in groups {
                 let lookup_rows = keys
                     .iter()
                     .map(RecheckKey::to_lookup_row)
                     .collect::<Vec<_>>();
                 let lookup_refs = lookup_rows.iter().collect::<Vec<_>>();
-                let fetch_result = self.checker.fetch(&lookup_refs).await?;
-                let tb_meta = fetch_result.tb_meta;
+                let first_row = lookup_refs.first().context("checker group is empty")?;
+                let tb_meta = self.checker.load_table_meta(first_row).await?;
+                let target_rows = self
+                    .checker
+                    .fetch_rows_by_keys(tb_meta.clone(), &lookup_refs)
+                    .await?;
                 let source_rows = self.refetch_source_rows(&keys).await?;
                 let mut source_map = HashMap::new();
                 for row in source_rows {
@@ -347,7 +369,7 @@ impl<C: Checker> DataChecker<C> {
                     }
                 }
                 let mut target_map = HashMap::new();
-                for row in fetch_result.dst_rows {
+                for row in target_rows {
                     if let Some(row_key) = Self::lookup_match_key(&row, tb_meta.basic())? {
                         target_map.insert(row_key, row);
                     }
@@ -473,10 +495,10 @@ impl<C: Checker> DataChecker<C> {
 
     async fn upload_to_s3(
         &self,
-        miss_buf: &[u8],
-        diff_buf: &[u8],
-        sql_buf: &[u8],
-        summary_buf: &[u8],
+        miss_buf: Vec<u8>,
+        diff_buf: Vec<u8>,
+        sql_buf: Vec<u8>,
+        summary_buf: Vec<u8>,
     ) -> anyhow::Result<()> {
         let Some((s3_client, key_prefix)) = &self.ctx.s3_output else {
             return Ok(());
@@ -485,21 +507,23 @@ impl<C: Checker> DataChecker<C> {
         let miss_key = format!("{p}/miss.log");
         let diff_key = format!("{p}/diff.log");
         let summary_key = format!("{p}/summary.log");
-        if sql_buf.is_empty() {
-            tokio::try_join!(
-                s3_client.write(&miss_key, miss_buf.to_vec()),
-                s3_client.write(&diff_key, diff_buf.to_vec()),
-                s3_client.write(&summary_key, summary_buf.to_vec()),
-            )?;
-            s3_client.delete(&format!("{p}/sql.log")).await?;
+        let sql_key = format!("{p}/sql.log");
+        Self::upload_optional_log(s3_client, &miss_key, miss_buf).await?;
+        Self::upload_optional_log(s3_client, &diff_key, diff_buf).await?;
+        Self::upload_optional_log(s3_client, &sql_key, sql_buf).await?;
+        s3_client.write(&summary_key, summary_buf).await?;
+        Ok(())
+    }
+
+    async fn upload_optional_log(
+        s3_client: &opendal::Operator,
+        key: &str,
+        buf: Vec<u8>,
+    ) -> anyhow::Result<()> {
+        if buf.is_empty() {
+            s3_client.delete(key).await?;
         } else {
-            let sql_key = format!("{p}/sql.log");
-            tokio::try_join!(
-                s3_client.write(&miss_key, miss_buf.to_vec()),
-                s3_client.write(&diff_key, diff_buf.to_vec()),
-                s3_client.write(&sql_key, sql_buf.to_vec()),
-                s3_client.write(&summary_key, summary_buf.to_vec()),
-            )?;
+            s3_client.write(key, buf).await?;
         }
         Ok(())
     }
@@ -507,31 +531,38 @@ impl<C: Checker> DataChecker<C> {
 
 #[cfg(test)]
 mod tests {
-    use super::super::{CheckContext, Checker, CheckerIo, CheckerTbMeta, DataChecker, FetchResult};
+    use super::super::{CheckContext, Checker, CheckerIo, CheckerTbMeta, DataChecker};
     use super::*;
-    use crate::checker::check_log::CheckSummaryLog;
-    use crate::rdb_router::RdbRouter;
+    use crate::checker::check_log::{CheckTableSummaryLog, DiffColValue};
     use async_trait::async_trait;
-    use dt_common::{monitor::monitor::Monitor, utils::limit_queue::LimitedQueue};
+    use dt_common::{
+        meta::col_value::ColValue, monitor::monitor::Monitor, utils::limit_queue::LimitedQueue,
+    };
     use opendal::{services::Memory, Operator};
+    use std::collections::BTreeMap;
     use std::fs;
     use std::path::{Path, PathBuf};
     use std::sync::Arc;
     use std::time::{SystemTime, UNIX_EPOCH};
     use tokio::sync::mpsc;
 
-    struct StaticChecker {
-        tb_meta: Arc<CheckerTbMeta>,
-        rows: Vec<RowData>,
-    }
+    struct NoopChecker;
 
     #[async_trait]
-    impl Checker for StaticChecker {
-        async fn fetch(&mut self, _src_rows: &[&RowData]) -> anyhow::Result<FetchResult> {
-            Ok(FetchResult {
-                tb_meta: self.tb_meta.clone(),
-                dst_rows: self.rows.clone(),
-            })
+    impl Checker for NoopChecker {
+        async fn load_table_meta(
+            &mut self,
+            _lookup_row: &RowData,
+        ) -> anyhow::Result<Arc<CheckerTbMeta>> {
+            unreachable!("snapshot_and_output tests should not load table meta")
+        }
+
+        async fn fetch_rows_by_keys(
+            &mut self,
+            _table_meta: Arc<CheckerTbMeta>,
+            _lookup_rows: &[&RowData],
+        ) -> anyhow::Result<Vec<RowData>> {
+            unreachable!("snapshot_and_output tests should not fetch rows")
         }
     }
 
@@ -554,52 +585,19 @@ mod tests {
     fn build_cdc_checker(
         check_log_dir: PathBuf,
         s3_output: Option<(Operator, String)>,
-    ) -> DataChecker<StaticChecker> {
-        let tb_meta = Arc::new(CheckerTbMeta::Mongo(
-            dt_common::meta::rdb_tb_meta::RdbTbMeta {
-                schema: "target_db".to_string(),
-                tb: "target_tb".to_string(),
-                id_cols: vec!["id".to_string()],
-                ..Default::default()
-            },
-        ));
+    ) -> DataChecker<NoopChecker> {
         let (_control_tx, control_rx) = mpsc::unbounded_channel();
         DataChecker::new(
-            StaticChecker {
-                tb_meta,
-                rows: Vec::new(),
-            },
+            NoopChecker,
             "task-1".to_string(),
             CheckContext {
                 monitor: Arc::new(Monitor::new("checker", "unit-test", 1, 1, 1)),
-                task_monitor: None,
-                summary: CheckSummaryLog {
-                    start_time: "unit-test".to_string(),
-                    ..Default::default()
-                },
-                output_revise_sql: false,
-                extractor_meta_manager: None,
-                reverse_router: RdbRouter {
-                    schema_map: HashMap::new(),
-                    tb_map: HashMap::new(),
-                    col_map: HashMap::new(),
-                    topic_map: HashMap::new(),
-                },
-                output_full_row: false,
-                revise_match_full_row: false,
-                global_summary: None,
-                batch_size: 1,
-                retry_interval_secs: 0,
-                max_retries: 0,
                 is_cdc: true,
                 check_log_dir: check_log_dir.display().to_string(),
                 cdc_check_log_max_file_size: 1024,
                 cdc_check_log_max_rows: 100,
                 s3_output,
-                cdc_check_log_interval_secs: 1,
-                state_store: None,
-                source_checker: None,
-                expected_resume_position: None,
+                ..Default::default()
             },
             CheckerIo {
                 batch_queue: Arc::new(std::sync::Mutex::new(LimitedQueue::new(1))),
@@ -612,62 +610,89 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn snapshot_and_output_removes_stale_sql_log_locally_and_on_s3_when_empty() {
+    async fn snapshot_and_output_removes_stale_optional_logs_locally_and_on_s3_when_empty() {
         let dir = unique_temp_dir("checker-empty-sql-local");
         fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("miss.log"), "").unwrap();
+        fs::write(dir.join("diff.log"), "").unwrap();
         fs::write(dir.join("sql.log"), "stale sql;\n").unwrap();
         let op = build_memory_operator();
+        op.write("prefix/miss.log", "stale miss\n").await.unwrap();
+        op.write("prefix/diff.log", "stale diff\n").await.unwrap();
         op.write("prefix/sql.log", "stale sql;\n").await.unwrap();
         let mut checker = build_cdc_checker(dir.clone(), Some((op.clone(), "prefix".to_string())));
 
         checker.snapshot_and_output().await.unwrap();
 
+        assert!(!dir.join("miss.log").exists());
+        assert!(!dir.join("diff.log").exists());
         assert!(!dir.join("sql.log").exists());
+        assert!(op.stat("prefix/miss.log").await.is_err());
+        assert!(op.stat("prefix/diff.log").await.is_err());
         assert!(op.stat("prefix/sql.log").await.is_err());
         fs::remove_dir_all(dir).unwrap();
     }
 
     #[tokio::test]
-    async fn snapshot_and_output_skips_local_and_s3_publish_when_init_failed() {
-        let dir = unique_temp_dir("checker-init-failed");
-        fs::create_dir_all(&dir).unwrap();
-        fs::write(dir.join("miss.log"), "old miss\n").unwrap();
-        fs::write(dir.join("diff.log"), "old diff\n").unwrap();
-        fs::write(dir.join("summary.log"), "old summary\n").unwrap();
-        fs::write(dir.join("sql.log"), "old sql;\n").unwrap();
-        let op = build_memory_operator();
-        op.write("prefix/miss.log", "old miss\n").await.unwrap();
-        op.write("prefix/diff.log", "old diff\n").await.unwrap();
-        op.write("prefix/summary.log", "old summary\n")
-            .await
-            .unwrap();
-        op.write("prefix/sql.log", "old sql;\n").await.unwrap();
-
-        let mut checker = build_cdc_checker(dir.clone(), Some((op.clone(), "prefix".to_string())));
-        checker.init_failed = true;
+    async fn snapshot_and_output_recalculates_unresolved_table_counts() {
+        let dir = unique_temp_dir("checker-table-summary");
+        let mut checker = build_cdc_checker(dir.clone(), None);
+        checker.ctx.summary.tables.push(CheckTableSummaryLog {
+            schema: "s1".to_string(),
+            tb: "t1".to_string(),
+            checked_count: 3,
+            miss_count: 7,
+            diff_count: 9,
+            skip_count: 1,
+            ..Default::default()
+        });
+        checker.store.insert(
+            CheckerStoreKey::new("s1", "t1", 1),
+            CheckEntry {
+                key: RecheckKey {
+                    schema: "s1".to_string(),
+                    tb: "t1".to_string(),
+                    is_delete: false,
+                    pk: BTreeMap::from([("id".to_string(), ColValue::Long(1))]),
+                },
+                log: CheckLog {
+                    schema: "s1".to_string(),
+                    tb: "t1".to_string(),
+                    target_schema: None,
+                    target_tb: None,
+                    id_col_values: HashMap::from([("id".to_string(), Some("1".to_string()))]),
+                    diff_col_values: HashMap::from([(
+                        "name".to_string(),
+                        DiffColValue {
+                            src: Some("src".to_string()),
+                            dst: Some("dst".to_string()),
+                            src_type: None,
+                            dst_type: None,
+                        },
+                    )]),
+                    src_row: None,
+                    dst_row: None,
+                },
+                revise_sql: Some("UPDATE t1 SET name='src' WHERE id = 1;".to_string()),
+                diff_cols: Some(vec!["name".to_string()]),
+            },
+        );
 
         checker.snapshot_and_output().await.unwrap();
 
-        assert_eq!(read_file(&dir.join("miss.log")), "old miss\n");
-        assert_eq!(read_file(&dir.join("diff.log")), "old diff\n");
-        assert_eq!(read_file(&dir.join("summary.log")), "old summary\n");
-        assert_eq!(read_file(&dir.join("sql.log")), "old sql;\n");
-        assert_eq!(
-            String::from_utf8(op.read("prefix/miss.log").await.unwrap().to_vec()).unwrap(),
-            "old miss\n"
-        );
-        assert_eq!(
-            String::from_utf8(op.read("prefix/diff.log").await.unwrap().to_vec()).unwrap(),
-            "old diff\n"
-        );
-        assert_eq!(
-            String::from_utf8(op.read("prefix/summary.log").await.unwrap().to_vec()).unwrap(),
-            "old summary\n"
-        );
-        assert_eq!(
-            String::from_utf8(op.read("prefix/sql.log").await.unwrap().to_vec()).unwrap(),
-            "old sql;\n"
-        );
+        let summary: CheckSummaryLog =
+            serde_json::from_str(&read_file(&dir.join("summary.log"))).unwrap();
+        assert_eq!(summary.miss_count, 0);
+        assert_eq!(summary.diff_count, 1);
+        assert_eq!(summary.sql_count, Some(1));
+        assert_eq!(summary.tables.len(), 1);
+        assert_eq!(summary.tables[0].checked_count, 3);
+        assert_eq!(summary.tables[0].miss_count, 0);
+        assert_eq!(summary.tables[0].diff_count, 1);
+        assert_eq!(summary.tables[0].skip_count, 1);
+        assert!(!dir.join("miss.log").exists());
+        assert_eq!(read_file(&dir.join("diff.log")).lines().count(), 1);
+        assert_eq!(read_file(&dir.join("sql.log")).lines().count(), 1);
         fs::remove_dir_all(dir).unwrap();
     }
 }

@@ -10,7 +10,7 @@ use tokio::sync::Mutex;
 
 use dt_common::{
     config::{
-        config_enums::{DbType, ExtractType},
+        config_enums::{CheckMode, DbType, ExtractType, TaskKind},
         extractor_config::ExtractorConfig,
         task_config::TaskConfig,
     },
@@ -68,6 +68,28 @@ const JSON_PREFIX: &str = "json:";
 pub struct ExtractorUtil {}
 
 impl ExtractorUtil {
+    fn sample_rate(config: &TaskConfig, extractor_config: &ExtractorConfig) -> Option<u8> {
+        let standalone_snapshot_check = config.task_type().is_some_and(|task_type| {
+            matches!(task_type.kind, TaskKind::Snapshot)
+                && matches!(task_type.check, Some(CheckMode::Standalone))
+        });
+        if standalone_snapshot_check
+            && matches!(
+                extractor_config,
+                ExtractorConfig::MysqlSnapshot { .. }
+                    | ExtractorConfig::PgSnapshot { .. }
+                    | ExtractorConfig::MongoSnapshot { .. }
+            )
+        {
+            config
+                .checker
+                .as_ref()
+                .and_then(|checker| checker.sample_rate)
+        } else {
+            None
+        }
+    }
+
     pub async fn create_extractor(
         config: &TaskConfig,
         extractor_config: &ExtractorConfig,
@@ -98,7 +120,6 @@ impl ExtractorUtil {
                 connection_auth,
                 db,
                 tb,
-                sample_interval,
                 parallel_size,
                 batch_size,
                 ..
@@ -128,7 +149,7 @@ impl ExtractorUtil {
                     db: db_tb.0,
                     tb: db_tb.1,
                     batch_size,
-                    sample_interval: sample_interval as u64,
+                    sample_rate: Self::sample_rate(config, extractor_config),
                     parallel_size,
                     base_extractor,
                     filter,
@@ -229,7 +250,6 @@ impl ExtractorUtil {
             ExtractorConfig::PgSnapshot {
                 schema,
                 tb,
-                sample_interval,
                 parallel_size,
                 batch_size,
                 ..
@@ -250,7 +270,7 @@ impl ExtractorUtil {
                     meta_manager,
                     batch_size,
                     parallel_size,
-                    sample_interval: sample_interval as u64,
+                    sample_rate: Self::sample_rate(config, extractor_config),
                     schema: sch_tb.0,
                     tb: sch_tb.1,
                     base_extractor,
@@ -335,6 +355,7 @@ impl ExtractorUtil {
                     db,
                     tb,
                     mongo_client,
+                    sample_rate: Self::sample_rate(config, extractor_config),
                     base_extractor,
                     recovery,
                 };

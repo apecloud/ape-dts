@@ -1,1 +1,1 @@
-{"start_time":"","end_time":"","is_consistent":true}
+{"start_time":"2026-05-13T23:47:31.230475+08:00","end_time":"2026-05-13T23:48:33.401031+08:00","is_consistent":true,"checked_count":22,"miss_count":0,"diff_count":0,"skip_count":0,"tables":[{"schema":"public","tb":"col_has_special_character_table","checked_count":6,"miss_count":0,"diff_count":0,"skip_count":0},{"schema":"public","tb":"default_table","checked_count":14,"miss_count":0,"diff_count":0,"skip_count":0},{"schema":"public","tb":"ignore_cols_1","checked_count":2,"miss_count":0,"diff_count":0,"skip_count":0}]}
