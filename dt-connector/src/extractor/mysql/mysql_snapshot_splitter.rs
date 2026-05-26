@@ -2,6 +2,7 @@ use std::vec;
 use std::{collections::HashMap, sync::Arc};
 
 use anyhow::Context;
+use dt_common::config::config_enums::DbType;
 use dt_common::meta::position::Position;
 use dt_common::meta::{
     adaptor::{mysql_col_value_convertor::MysqlColValueConvertor, sqlx_ext::SqlxMysqlExt},
@@ -9,8 +10,8 @@ use dt_common::meta::{
     mysql::mysql_tb_meta::MysqlTbMeta,
     rdb_tb_meta::RdbTbMeta,
 };
+use dt_common::quote_mysql;
 use dt_common::utils::sql_util::*;
-use dt_common::{config::config_enums::DbType, quote_mysql};
 use dt_common::{log_debug, log_info};
 use futures::TryStreamExt;
 use sqlx::{MySql, Pool, Row};
@@ -29,8 +30,6 @@ pub struct MySqlSnapshotSplitter {
     estimated_row_count: u64,
     partition_col: String,
     current_col_value: Option<ColValue>,
-    checkpoint_id: u64,
-    checkpoint_map: HashMap<u64, ColValue>,
 }
 
 impl MySqlSnapshotSplitter {
@@ -49,8 +48,6 @@ impl MySqlSnapshotSplitter {
             estimated_row_count: 0,
             partition_col,
             current_col_value: None,
-            checkpoint_id: 0,
-            checkpoint_map: HashMap::new(),
         }
     }
 
@@ -130,31 +127,13 @@ impl MySqlSnapshotSplitter {
         chunk_id: u64,
         partition_col_value: ColValue,
     ) -> Option<Position> {
-        let partition_col = &self.partition_col;
-        let mut position = if chunk_id == self.checkpoint_id + 1 {
-            self.checkpoint_id = chunk_id;
-            self.mysql_tb_meta.basic.build_position_for_single_col(
-                &DbType::Mysql,
-                partition_col,
-                &partition_col_value,
-                true,
-            )
-        } else {
-            self.checkpoint_map
-                .insert(chunk_id, partition_col_value.clone());
-            return None;
-        };
-        while let Some(partition_col_values) = self.checkpoint_map.remove(&(self.checkpoint_id + 1))
-        {
-            self.checkpoint_id += 1;
-            position = self.mysql_tb_meta.basic.build_position_for_single_col(
-                &DbType::Mysql,
-                partition_col,
-                &partition_col_values,
-                true,
-            );
-        }
-        Some(position)
+        self.basic.get_next_checkpoint_position(
+            chunk_id,
+            partition_col_value,
+            &DbType::Mysql,
+            &self.partition_col,
+            &self.mysql_tb_meta.basic,
+        )
     }
 
     async fn estimate_row_count(&mut self, tb_meta: &RdbTbMeta) -> anyhow::Result<u64> {

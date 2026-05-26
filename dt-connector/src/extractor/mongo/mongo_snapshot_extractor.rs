@@ -11,8 +11,8 @@ use mongodb::{
 use crate::{
     extractor::{
         base_extractor::{BaseExtractor, ExtractState},
-        base_splitter::SnapshotChunkIdGenerator,
         resumer::recovery::Recovery,
+        snapshot_chunk_id_generator::SnapshotChunkIdGenerator,
         snapshot_dispatcher::SnapshotDispatcher,
     },
     Extractor,

@@ -11,10 +11,11 @@ use sqlx::{Pool, Postgres};
 use crate::{
     extractor::{
         base_extractor::{BaseExtractor, ExtractState},
-        base_splitter::{SnapshotChunk, SnapshotChunkIdGenerator},
+        base_splitter::SnapshotChunk,
         pg::pg_snapshot_splitter::PgSnapshotSplitter,
         rdb_snapshot_extract_statement::{OrderKeyPredicateType, RdbSnapshotExtractStatement},
         resumer::recovery::Recovery,
+        snapshot_chunk_id_generator::SnapshotChunkIdGenerator,
         snapshot_dispatcher::{SnapshotDispatcher, TableMonitorGuard},
         snapshot_types::SnapshotTableId,
     },
