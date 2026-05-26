@@ -21,7 +21,6 @@ pub struct TimeWindowCounter {
     pub time_window_secs: u64,
     pub max_sub_count: u64,
     pub counters: RwLock<LinkedList<Counter>>,
-    pub description: String,
 }
 
 impl TimeWindowCounter {
@@ -30,12 +29,11 @@ impl TimeWindowCounter {
             time_window_secs,
             max_sub_count,
             counters: RwLock::new(LinkedList::new()),
-            description: String::new(),
         }
     }
 
     #[inline(always)]
-    pub async fn adds(&mut self, values: &LimitedQueue<(u64, u64)>) -> &Self {
+    pub async fn adds(&self, values: &LimitedQueue<(u64, u64)>) -> &Self {
         if values.is_empty() {
             return self;
         }
@@ -63,7 +61,7 @@ impl TimeWindowCounter {
     }
 
     #[inline(always)]
-    pub async fn add(&mut self, value: u64, count: u64) -> &Self {
+    pub async fn add(&self, value: u64, count: u64) -> &Self {
         let mut counters = self.counters.write().await;
 
         while let Some(front) = counters.front() {

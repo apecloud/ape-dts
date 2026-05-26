@@ -1,5 +1,6 @@
 use async_trait::async_trait;
 use dashmap::DashMap;
+use std::sync::Arc;
 
 use super::counter::Counter;
 use super::counter_type::{CounterType, WindowType};
@@ -14,7 +15,7 @@ pub struct Monitor {
     pub name: String,
     pub description: String,
     pub no_window_counters: DashMap<CounterType, Counter>,
-    pub time_window_counters: DashMap<CounterType, TimeWindowCounter>,
+    pub time_window_counters: DashMap<CounterType, Arc<TimeWindowCounter>>,
     pub time_window_secs: u64,
     pub max_sub_count: u64,
     pub count_window: u64,
@@ -53,7 +54,11 @@ impl Monitor {
             .map(|entry| entry.key().clone())
             .collect::<Vec<_>>();
         for counter_type in window_counter_types {
-            if let Some(counter) = self.time_window_counters.get(&counter_type) {
+            let counter = self
+                .time_window_counters
+                .get(&counter_type)
+                .map(|r| r.value().clone());
+            if let Some(counter) = counter {
                 let statistics = counter.statistics().await;
                 let mut log = format!("{} | {} | {}", self.name, self.description, counter_type);
                 for aggregate_type in counter_type.get_aggregate_types() {
@@ -142,15 +147,17 @@ impl Monitor {
             }
 
             WindowType::TimeWindow => {
-                self.time_window_counters
-                    .entry(counter_type.clone())
+                let counter = self
+                    .time_window_counters
+                    .entry(counter_type)
                     .or_insert_with(|| {
-                        TimeWindowCounter::new(self.time_window_secs, self.max_sub_count)
-                    });
-
-                if let Some(mut counter) = self.time_window_counters.get_mut(&counter_type) {
-                    counter.add(value, count).await;
-                }
+                        Arc::new(TimeWindowCounter::new(
+                            self.time_window_secs,
+                            self.max_sub_count,
+                        ))
+                    })
+                    .clone();
+                counter.add(value, count).await;
             }
         }
         self
@@ -170,15 +177,17 @@ impl Monitor {
             }
 
             WindowType::TimeWindow => {
-                self.time_window_counters
-                    .entry(counter_type.clone())
+                let counter = self
+                    .time_window_counters
+                    .entry(counter_type)
                     .or_insert_with(|| {
-                        TimeWindowCounter::new(self.time_window_secs, self.max_sub_count)
-                    });
-
-                if let Some(mut counter) = self.time_window_counters.get_mut(&counter_type) {
-                    counter.adds(entry).await;
-                }
+                        Arc::new(TimeWindowCounter::new(
+                            self.time_window_secs,
+                            self.max_sub_count,
+                        ))
+                    })
+                    .clone();
+                counter.adds(entry).await;
             }
         }
         self

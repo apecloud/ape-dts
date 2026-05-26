@@ -69,7 +69,11 @@ impl GroupMonitor {
                 .collect();
 
             for counter_type in counter_types {
-                if let Some(counter) = monitor.time_window_counters.get(&counter_type) {
+                let counter = monitor
+                    .time_window_counters
+                    .get(&counter_type)
+                    .map(|r| r.value().clone());
+                if let Some(counter) = counter {
                     let statistics = counter.statistics().await;
                     window_counter_statistics_map
                         .entry(counter_type)
