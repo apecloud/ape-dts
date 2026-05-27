@@ -455,8 +455,11 @@ impl TaskConfig {
         let keepalive_interval_secs: u64 =
             loader.get_with_default(EXTRACTOR, KEEPALIVE_INTERVAL_SECS, 10);
         let heartbeat_tb = loader.get_optional(EXTRACTOR, HEARTBEAT_TB);
-        let batch_size =
-            loader.get_with_default(EXTRACTOR, BATCH_SIZE, pipeline.capacity_limiter.buffer_size);
+        let batch_size = loader.get_with_default(
+            EXTRACTOR,
+            BATCH_SIZE,
+            pipeline.capacity_limiter.buffer_size / Self::load_snapshot_parallel_size(loader),
+        );
         let max_connections =
             loader.get_with_default(EXTRACTOR, MAX_CONNECTIONS, DEFAULT_MAX_CONNECTIONS);
 
