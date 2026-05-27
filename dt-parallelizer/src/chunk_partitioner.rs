@@ -36,25 +36,25 @@ impl ChunkPartitioner {
         mut sub_data: Vec<Vec<RowData>>,
         target_partitions: usize,
     ) -> Vec<Vec<RowData>> {
-        if target_partitions <= 1 || sub_data.len() >= target_partitions {
-            return sub_data;
-        }
+        // if target_partitions <= 1 || sub_data.len() >= target_partitions {
+        //     return sub_data;
+        // }
 
-        while sub_data.len() < target_partitions {
-            let Some(index) = sub_data
-                .iter()
-                .enumerate()
-                .filter(|(_, rows)| rows.len() > 1)
-                .max_by_key(|(_, rows)| rows.len())
-                .map(|(index, _)| index)
-            else {
-                break;
-            };
+        // while sub_data.len() < target_partitions {
+        //     let Some(index) = sub_data
+        //         .iter()
+        //         .enumerate()
+        //         .filter(|(_, rows)| rows.len() > 1)
+        //         .max_by_key(|(_, rows)| rows.len())
+        //         .map(|(index, _)| index)
+        //     else {
+        //         break;
+        //     };
 
-            let split_at = (sub_data[index].len() + 1) / 2;
-            let tail = sub_data[index].split_off(split_at);
-            sub_data.push(tail);
-        }
+        //     let split_at = (sub_data[index].len() + 1) / 2;
+        //     let tail = sub_data[index].split_off(split_at);
+        //     sub_data.push(tail);
+        // }
 
         sub_data
     }
