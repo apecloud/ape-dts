@@ -350,10 +350,11 @@ impl TaskMonitor {
             }
             calc_monitors.push((MonitorType::Extractor, monitor.clone()));
             // extractor rps
-            if let Some(counter) = monitor
+            let counter = monitor
                 .time_window_counters
                 .get(&CounterType::ExtractedRecords)
-            {
+                .map(|r| r.value().clone());
+            if let Some(counter) = counter {
                 let statics = counter.statistics().await;
                 calc_handler(
                     CalcType::Min,
@@ -372,10 +373,11 @@ impl TaskMonitor {
                 );
             }
             // extractor bps
-            if let Some(counter) = monitor
+            let counter = monitor
                 .time_window_counters
                 .get(&CounterType::ExtractedBytes)
-            {
+                .map(|r| r.value().clone());
+            if let Some(counter) = counter {
                 let statics = counter.statistics().await;
                 calc_handler(
                     CalcType::Min,
@@ -394,7 +396,11 @@ impl TaskMonitor {
                 );
             }
             // extractor pushed records
-            if let Some(counter) = monitor.time_window_counters.get(&CounterType::RecordCount) {
+            let counter = monitor
+                .time_window_counters
+                .get(&CounterType::RecordCount)
+                .map(|r| r.value().clone());
+            if let Some(counter) = counter {
                 let statics = counter.statistics().await;
                 calc_handler(
                     CalcType::Min,
@@ -413,7 +419,11 @@ impl TaskMonitor {
                 );
             }
             // extractor pushed bytes
-            if let Some(counter) = monitor.time_window_counters.get(&CounterType::DataBytes) {
+            let counter = monitor
+                .time_window_counters
+                .get(&CounterType::DataBytes)
+                .map(|r| r.value().clone());
+            if let Some(counter) = counter {
                 let statics = counter.statistics().await;
                 calc_handler(
                     CalcType::Min,
@@ -458,7 +468,11 @@ impl TaskMonitor {
             }
             calc_monitors.push((MonitorType::Sinker, monitor.clone()));
             // sinker rt
-            if let Some(counter) = monitor.time_window_counters.get(&CounterType::RtPerQuery) {
+            let counter = monitor
+                .time_window_counters
+                .get(&CounterType::RtPerQuery)
+                .map(|r| r.value().clone());
+            if let Some(counter) = counter {
                 let statics = counter.statistics().await;
                 calc_handler(
                     CalcType::Min,
@@ -477,10 +491,11 @@ impl TaskMonitor {
                 );
             }
             // sinker rps
-            if let Some(counter) = monitor
+            let counter = monitor
                 .time_window_counters
                 .get(&CounterType::RecordsPerQuery)
-            {
+                .map(|r| r.value().clone());
+            if let Some(counter) = counter {
                 let statics = counter.statistics().await;
                 calc_handler(
                     CalcType::Min,
@@ -499,7 +514,11 @@ impl TaskMonitor {
                 );
             }
             // sinker bps
-            if let Some(counter) = monitor.time_window_counters.get(&CounterType::DataBytes) {
+            let counter = monitor
+                .time_window_counters
+                .get(&CounterType::DataBytes)
+                .map(|r| r.value().clone());
+            if let Some(counter) = counter {
                 let statics = counter.statistics().await;
                 calc_handler(
                     CalcType::Min,
@@ -531,7 +550,11 @@ impl TaskMonitor {
             }
             calc_monitors.push((MonitorType::Checker, monitor.clone()));
             // checker checked records
-            if let Some(counter) = monitor.time_window_counters.get(&CounterType::RecordCount) {
+            let counter = monitor
+                .time_window_counters
+                .get(&CounterType::RecordCount)
+                .map(|r| r.value().clone());
+            if let Some(counter) = counter {
                 let statics = counter.statistics().await;
                 calc_handler(
                     CalcType::Min,
@@ -550,10 +573,11 @@ impl TaskMonitor {
                 );
             }
             // checker miss
-            if let Some(counter) = monitor
+            let counter = monitor
                 .time_window_counters
                 .get(&CounterType::CheckerMissCount)
-            {
+                .map(|r| r.value().clone());
+            if let Some(counter) = counter {
                 let statics = counter.statistics().await;
                 calc_handler(
                     CalcType::Min,
@@ -572,10 +596,11 @@ impl TaskMonitor {
                 );
             }
             // checker diff
-            if let Some(counter) = monitor
+            let counter = monitor
                 .time_window_counters
                 .get(&CounterType::CheckerDiffCount)
-            {
+                .map(|r| r.value().clone());
+            if let Some(counter) = counter {
                 let statics = counter.statistics().await;
                 calc_handler(
                     CalcType::Min,

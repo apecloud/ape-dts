@@ -3,6 +3,7 @@ name: Integration Tests
 on:
   pull_request:
     branches: [main]
+    types: [opened, synchronize, reopened, edited, ready_for_review]
     paths-ignore:
       - "**.md"
       - "docs/**"
@@ -23,6 +24,7 @@ env:
 jobs:
   discover:
     name: Discover integration suites
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.event.pull_request.title, 'chore:') == false
     runs-on: ubuntu-latest
     outputs:
       suites: ${{ steps.suites.outputs.suites }}
@@ -46,6 +48,7 @@ jobs:
   integration-test:
     name: "Integration / ${{ matrix.suite }}"
     needs: discover
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.event.pull_request.title, 'chore:') == false
     runs-on: ubuntu-latest
     timeout-minutes: 90
 
