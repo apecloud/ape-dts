@@ -8,7 +8,6 @@ use dt_common::{
     meta::{
         dt_data::{DtData, DtItem},
         row_data::RowData,
-        row_type::RowType,
     },
 };
 
@@ -26,8 +25,8 @@ struct Partition {
 }
 
 impl Partition {
-    fn new(rows: Vec<RowData>) -> Self {
-        let cost = PartitionCost::from_rows(&rows);
+    fn new(rows: Vec<RowData>, cost_type: &ChunkPartitionerRebalanceCost) -> Self {
+        let cost = PartitionCost::from_rows(&rows, cost_type);
         Self { rows, cost }
     }
 
@@ -140,9 +139,14 @@ impl Partition {
 }
 
 impl PartitionCost {
-    fn from_rows(rows: &[RowData]) -> Self {
+    fn from_rows(rows: &[RowData], cost: &ChunkPartitionerRebalanceCost) -> Self {
+        let bytes = match cost {
+            ChunkPartitionerRebalanceCost::Bytes => rows.iter().map(RowData::get_data_size).sum(),
+            ChunkPartitionerRebalanceCost::Rows => 0,
+        };
+
         Self {
-            bytes: rows.iter().map(RowData::get_data_size).sum(),
+            bytes,
             rows: rows.len(),
         }
     }
@@ -199,7 +203,10 @@ impl ChunkPartitioner {
         target_partitions: usize,
         config: &ChunkPartitionerRebalanceConfig,
     ) -> Vec<Vec<RowData>> {
-        let partitions: Vec<Partition> = sub_data.into_iter().map(Partition::new).collect();
+        let partitions: Vec<Partition> = sub_data
+            .into_iter()
+            .map(|rows| Partition::new(rows, &config.cost))
+            .collect();
         match config.strategy {
             ChunkPartitionerRebalanceStrategy::None => {
                 partitions.into_iter().map(Partition::into_rows).collect()
@@ -332,6 +339,7 @@ impl ChunkPartitioner {
 mod tests {
     use super::*;
     use dt_common::config::parallelizer_config::ChunkPartitionerRebalanceStrategy;
+    use dt_common::meta::row_type::RowType;
 
     fn config(strategy: ChunkPartitionerRebalanceStrategy) -> ChunkPartitionerRebalanceConfig {
         ChunkPartitionerRebalanceConfig {
