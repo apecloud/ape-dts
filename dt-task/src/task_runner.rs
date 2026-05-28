@@ -34,7 +34,7 @@ use dt_common::log_filter::{parse_size_limit, SizeLimitFilterDeserializer};
 use dt_common::{
     config::{
         checker_config::CheckerConfig,
-        config_enums::{DbType, ExtractType, PipelineType, SinkType, TaskType},
+        config_enums::{DbType, ExtractType, PipelineType, SinkType, TaskKind, TaskType},
         config_token_parser::{ConfigTokenParser, TokenEscapePair},
         extractor_config::ExtractorConfig,
         sinker_config::SinkerConfig,

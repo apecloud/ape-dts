@@ -105,6 +105,18 @@ enum PgSnapshotWorkResult {
     },
 }
 
+// Position-based sampling for standalone snapshot check to drop rows before checker work.
+fn should_sample_row(sample_rate: Option<u8>, extracted_count: u64) -> bool {
+    let Some(sample_rate) = sample_rate.filter(|rate| *rate < 100) else {
+        return true;
+    };
+    if sample_rate == 0 || extracted_count == 0 {
+        return false;
+    }
+
+    (extracted_count - 1) % 100 < u64::from(sample_rate)
+}
+
 #[async_trait]
 impl Extractor for PgSnapshotExtractor {
     async fn extract(&mut self) -> anyhow::Result<()> {
@@ -422,7 +434,7 @@ impl PgSnapshotExtractor {
             extracted_cnt += 1;
             partition_col_value =
                 PgColValueConvertor::from_query(&row, &partition_col, &partition_col_type)?;
-            if !Self::should_sample_row(shared.sample_rate, extracted_cnt) {
+            if !should_sample_row(shared.sample_rate, extracted_cnt) {
                 continue;
             }
             let row_data =
@@ -921,7 +933,7 @@ impl PgTableCtx {
         while let Some(row) = rows.try_next().await? {
             extracted_count += 1;
             let row_chunk_id = chunk_id_generator.next_row_chunk_id();
-            if !Self::should_sample_row(self.shared.sample_rate, extracted_count) {
+            if !should_sample_row(self.shared.sample_rate, extracted_count) {
                 continue;
             }
             let row_data = RowData::from_pg_row(&row, tb_meta, &ignore_cols, Some(row_chunk_id));
@@ -1019,7 +1031,7 @@ impl PgTableCtx {
                     extracted_count += 1;
                     slice_count += 1;
                     let row_chunk_id = chunk_id_generator.next_row_chunk_id();
-                    if !Self::should_sample_row(self.shared.sample_rate, extracted_count) {
+                    if !should_sample_row(self.shared.sample_rate, extracted_count) {
                         continue;
                     }
 
@@ -1069,7 +1081,7 @@ impl PgTableCtx {
                     extracted_count += 1;
                     slice_count += 1;
                     let row_chunk_id = chunk_id_generator.next_row_chunk_id();
-                    if !Self::should_sample_row(self.shared.sample_rate, extracted_count) {
+                    if !should_sample_row(self.shared.sample_rate, extracted_count) {
                         continue;
                     }
 
@@ -1131,7 +1143,7 @@ impl PgTableCtx {
         while let Some(row) = rows.try_next().await? {
             extracted_count += 1;
             let row_chunk_id = chunk_id_generator.next_row_chunk_id();
-            if !Self::should_sample_row(self.shared.sample_rate, extracted_count) {
+            if !should_sample_row(self.shared.sample_rate, extracted_count) {
                 continue;
             }
             let row_data = RowData::from_pg_row(&row, tb_meta, &ignore_cols, Some(row_chunk_id));
@@ -1141,17 +1153,5 @@ impl PgTableCtx {
                 .await?;
         }
         Ok(extracted_count)
-    }
-
-    // Position-based sampling for standalone snapshot check to drop rows before checker work.
-    fn should_sample_row(sample_rate: Option<u8>, extracted_count: u64) -> bool {
-        let Some(sample_rate) = sample_rate.filter(|rate| *rate < 100) else {
-            return true;
-        };
-        if sample_rate == 0 || extracted_count == 0 {
-            return false;
-        }
-
-        (extracted_count - 1) % 100 < u64::from(sample_rate)
     }
 }
