@@ -266,11 +266,14 @@ impl TaskRunner {
         let Some(cfg) = self.config.checker.as_ref() else {
             return Ok(());
         };
+        let check_log_dir = self.check_log_dir(cfg);
+        if Self::check_log_replay_reads_from_dir(&self.config.extractor, &check_log_dir) {
+            return Ok(());
+        }
         if !Self::should_clear_check_logs_before_log4rs(self.task_type) {
             return Ok(());
         }
 
-        let check_log_dir = self.check_log_dir(cfg);
         tokio_fs::create_dir_all(&check_log_dir).await?;
         for file_name in ["miss.log", "diff.log", "summary.log", "sql.log"] {
             Self::remove_file_if_exists(&format!("{check_log_dir}/{file_name}")).await?;
@@ -283,6 +286,20 @@ impl TaskRunner {
             Some(task_type) => task_type.has_check() && !task_type.is_cdc_inline_check(),
             None => true,
         }
+    }
+
+    fn check_log_replay_reads_from_dir(extractor: &ExtractorConfig, check_log_dir: &str) -> bool {
+        let replay_dir = match extractor {
+            ExtractorConfig::MysqlCheck { check_log_dir, .. }
+            | ExtractorConfig::PgCheck { check_log_dir, .. }
+            | ExtractorConfig::MongoCheck { check_log_dir, .. } => check_log_dir,
+            _ => return false,
+        };
+        Self::same_check_log_dir(replay_dir, check_log_dir)
+    }
+
+    fn same_check_log_dir(left: &str, right: &str) -> bool {
+        left.trim_end_matches('/') == right.trim_end_matches('/')
     }
 
     async fn remove_empty_check_logs(&self) -> anyhow::Result<()> {
@@ -1612,8 +1629,45 @@ impl TaskRunner {
 #[cfg(test)]
 mod tests {
     use super::TaskRunner;
+    use dt_common::config::{
+        config_enums::{CheckMode, TaskKind, TaskType},
+        connection_auth_config::ConnectionAuthConfig,
+        extractor_config::ExtractorConfig,
+    };
     use opendal::{services::Memory, Operator};
     use std::{fs, time::SystemTime};
+
+    #[test]
+    fn should_clear_task_type_none_by_default() {
+        assert!(TaskRunner::should_clear_check_logs_before_log4rs(None));
+    }
+
+    #[test]
+    fn should_clear_standalone_snapshot_check_logs() {
+        let task_type = TaskType::new(TaskKind::Snapshot, Some(CheckMode::Standalone));
+        assert!(TaskRunner::should_clear_check_logs_before_log4rs(Some(
+            task_type
+        )));
+    }
+
+    #[test]
+    fn check_log_replay_input_output_same_dir_is_detected() {
+        let extractor = ExtractorConfig::MysqlCheck {
+            url: String::new(),
+            connection_auth: ConnectionAuthConfig::NoAuth,
+            check_log_dir: "/tmp/ape-dts/check/".to_string(),
+            batch_size: 1,
+        };
+
+        assert!(TaskRunner::check_log_replay_reads_from_dir(
+            &extractor,
+            "/tmp/ape-dts/check"
+        ));
+        assert!(!TaskRunner::check_log_replay_reads_from_dir(
+            &extractor,
+            "/tmp/ape-dts/other"
+        ));
+    }
 
     #[tokio::test]
     async fn upload_local_check_logs_to_s3_deletes_empty_optional_logs() {

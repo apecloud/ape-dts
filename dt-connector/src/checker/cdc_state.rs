@@ -164,12 +164,10 @@ impl<C: Checker> DataChecker<C> {
         )
         .await?;
         self.upload_to_s3(
+            write_optional_logs,
             &miss_buf,
-            total_miss,
             &diff_buf,
-            total_diff,
             &sql_buf,
-            total_sql,
             &summary_buf,
         )
         .await?;
@@ -509,12 +507,10 @@ impl<C: Checker> DataChecker<C> {
 
     async fn upload_to_s3(
         &mut self,
+        write_optional_logs: bool,
         miss_buf: &[u8],
-        miss_count: usize,
         diff_buf: &[u8],
-        diff_count: usize,
         sql_buf: &[u8],
-        sql_count: usize,
         summary_buf: &[u8],
     ) -> anyhow::Result<()> {
         let Some((s3_client, key_prefix)) = &self.ctx.s3_output else {
@@ -525,50 +521,24 @@ impl<C: Checker> DataChecker<C> {
         let summary_key = format!("{key_prefix}/summary.log");
         let sql_key = format!("{key_prefix}/sql.log");
         s3_client.write(&summary_key, summary_buf.to_vec()).await?;
-        Self::upload_optional_log_if_count_changed(
-            s3_client,
-            &miss_key,
-            miss_buf,
-            miss_count,
-            &mut self.s3_miss_count,
-        )
-        .await?;
-        Self::upload_optional_log_if_count_changed(
-            s3_client,
-            &diff_key,
-            diff_buf,
-            diff_count,
-            &mut self.s3_diff_count,
-        )
-        .await?;
-        Self::upload_optional_log_if_count_changed(
-            s3_client,
-            &sql_key,
-            sql_buf,
-            sql_count,
-            &mut self.s3_sql_count,
-        )
-        .await?;
+        if write_optional_logs {
+            Self::upload_optional_log(s3_client, &miss_key, miss_buf).await?;
+            Self::upload_optional_log(s3_client, &diff_key, diff_buf).await?;
+            Self::upload_optional_log(s3_client, &sql_key, sql_buf).await?;
+        }
         Ok(())
     }
 
-    async fn upload_optional_log_if_count_changed(
+    async fn upload_optional_log(
         s3_client: &opendal::Operator,
         key: &str,
         buf: &[u8],
-        count: usize,
-        last_count: &mut Option<usize>,
     ) -> anyhow::Result<()> {
-        if last_count.is_some_and(|last| last == count) {
-            return Ok(());
-        }
-
         if buf.is_empty() {
             s3_client.delete(key).await?;
         } else {
             s3_client.write(key, buf.to_vec()).await?;
         }
-        *last_count = Some(count);
         Ok(())
     }
 }
@@ -679,7 +649,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn snapshot_and_output_uploads_only_changed_s3_objects() {
+    async fn snapshot_and_output_uploads_summary_only_when_optional_logs_are_clean() {
         let dir = unique_temp_dir("checker-summary-only");
         fs::create_dir_all(&dir).unwrap();
         fs::write(dir.join("miss.log"), "old miss\n").unwrap();
@@ -694,9 +664,9 @@ mod tests {
         checker.ctx.summary.checked_count = 7;
 
         checker.snapshot_and_output().await.unwrap();
-        assert!(op.stat("prefix/miss.log").await.is_err());
-        assert!(op.stat("prefix/diff.log").await.is_err());
-        assert!(op.stat("prefix/sql.log").await.is_err());
+        assert_eq!(read_s3(&op, "prefix/miss.log").await, "old miss\n");
+        assert_eq!(read_s3(&op, "prefix/diff.log").await, "old diff\n");
+        assert_eq!(read_s3(&op, "prefix/sql.log").await, "old sql;\n");
 
         op.write("prefix/miss.log", "remote miss\n").await.unwrap();
         op.write("prefix/diff.log", "remote diff\n").await.unwrap();
@@ -716,6 +686,74 @@ mod tests {
         let s3_summary: CheckSummaryLog =
             serde_json::from_str(&read_s3(&op, "prefix/summary.log").await).unwrap();
         assert_eq!(s3_summary.checked_count, 8);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn snapshot_and_output_uploads_dirty_s3_logs_when_counts_are_unchanged() {
+        let dir = unique_temp_dir("checker-same-count-s3");
+        let op = build_memory_operator();
+        let mut checker = build_cdc_checker(dir.clone(), Some((op.clone(), "prefix".to_string())));
+
+        let first_key = CheckerStoreKey::new("s1", "t1", 1);
+        checker.store.insert(
+            first_key,
+            CheckEntry {
+                key: RecheckKey {
+                    schema: "s1".to_string(),
+                    tb: "t1".to_string(),
+                    is_delete: false,
+                    pk: BTreeMap::from([("id".to_string(), ColValue::Long(1))]),
+                },
+                log: CheckLog {
+                    schema: "s1".to_string(),
+                    tb: "t1".to_string(),
+                    target_schema: None,
+                    target_tb: None,
+                    id_col_values: HashMap::from([("id".to_string(), Some("1".to_string()))]),
+                    diff_col_values: HashMap::new(),
+                    src_row: None,
+                    dst_row: None,
+                },
+                revise_sql: None,
+                diff_cols: None,
+            },
+        );
+
+        checker.snapshot_and_output().await.unwrap();
+        assert!(read_s3(&op, "prefix/miss.log").await.contains("\"1\""));
+
+        checker.store.clear();
+        checker.store.insert(
+            CheckerStoreKey::new("s1", "t1", 2),
+            CheckEntry {
+                key: RecheckKey {
+                    schema: "s1".to_string(),
+                    tb: "t1".to_string(),
+                    is_delete: false,
+                    pk: BTreeMap::from([("id".to_string(), ColValue::Long(2))]),
+                },
+                log: CheckLog {
+                    schema: "s1".to_string(),
+                    tb: "t1".to_string(),
+                    target_schema: None,
+                    target_tb: None,
+                    id_col_values: HashMap::from([("id".to_string(), Some("2".to_string()))]),
+                    diff_col_values: HashMap::new(),
+                    src_row: None,
+                    dst_row: None,
+                },
+                revise_sql: None,
+                diff_cols: None,
+            },
+        );
+        checker.optional_logs_dirty = true;
+
+        checker.snapshot_and_output().await.unwrap();
+
+        let miss_log = read_s3(&op, "prefix/miss.log").await;
+        assert!(miss_log.contains("\"2\""));
+        assert!(!miss_log.contains("\"1\""));
         fs::remove_dir_all(dir).unwrap();
     }
 

@@ -199,12 +199,6 @@ payload 与 `sql.log` 中的纯 SQL 语句一致。
 {"schema":"test_db_1","tb":"one_pk_multi_uk","id_col_values":{"f_0":"7"}}
 ```
 
-路由改名示例：
-
-```json
-{"schema":"test_db_1","tb":"orders","target_schema":"test_db_1","target_tb":"dst_orders","id_col_values":{"id":"9"}}
-```
-
 ## 输出完整行
 
 当需要完整行内容用于排查问题时，可在 `[checker]` 中开启全行日志。对于 standalone
@@ -321,12 +315,6 @@ INSERT INTO `test_db_1`.`test_table`(`id`,`name`,`age`,`email`) VALUES(3,'Charli
 {"start_time":"2023-09-01T12:00:00+08:00","end_time":"2023-09-01T12:00:01+08:00","is_consistent":false,"checked_count":30,"miss_count":1,"diff_count":2,"skip_count":1,"sql_count":3,"tables":[{"schema":"test_db_1","tb":"clean_table","checked_count":20,"miss_count":0,"diff_count":0,"skip_count":0},{"schema":"test_db_1","tb":"test_table","checked_count":10,"miss_count":1,"diff_count":2,"skip_count":1}]}
 ```
 
-路由改名示例：
-
-```json
-{"start_time":"2023-09-01T12:00:00+08:00","end_time":"2023-09-01T12:05:00+08:00","is_consistent":false,"miss_count":1,"diff_count":2,"skip_count":0,"tables":[{"schema":"test_db_1","tb":"orders","target_schema":"dst_db","target_tb":"dst_orders","checked_count":8,"miss_count":1,"diff_count":2,"skip_count":0}]}
-```
-
 # 反向校验
 
 数据校验为源端驱动，只验证源端数据是否存在于目标端。若需检测目标端中多余的数据
@@ -360,9 +348,6 @@ url=<原 extractor 的 url>
 > 事件可能会移除已正确写入的数据，导致重试队列中出现误报。即使配置了 `max_retries`
 > 和 `retry_interval_secs`，CDC 模式下也会被强制忽略（设为 0），并输出警告日志。
 
-## 路由
-
-数据校验支持 `[router]` 配置，详情请参考 [config.md](../config.md)。
 
 ## 集成测试参考
 

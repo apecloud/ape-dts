@@ -708,9 +708,6 @@ struct DataChecker<C: Checker> {
     persisted_identity_keys: Option<BTreeSet<String>>,
     // Tracks CDC miss/diff/sql changes since the last optional log output.
     optional_logs_dirty: bool,
-    s3_miss_count: Option<usize>,
-    s3_diff_count: Option<usize>,
-    s3_sql_count: Option<usize>,
     // Set when `init_cdc_state` fails to avoid overwriting historical inconsistency records.
     init_failed: bool,
     close_requested: bool,
@@ -754,9 +751,6 @@ impl<C: Checker> DataChecker<C> {
             last_checkpoint_position: None,
             persisted_identity_keys,
             optional_logs_dirty: true,
-            s3_miss_count: None,
-            s3_diff_count: None,
-            s3_sql_count: None,
             init_failed: false,
             close_requested: false,
         }
