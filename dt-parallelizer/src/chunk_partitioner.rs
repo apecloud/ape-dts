@@ -66,26 +66,37 @@ impl Partition {
             return ((self.cost.rows + 1) / 2, Some(0));
         }
 
+        // A byte-balanced split is closest to half of the partition cost. Once the
+        // running sum crosses that target, only the previous and current boundaries can win.
+        let target_bytes = self.cost.bytes / 2;
         let mut best_split_at = 1;
         let mut best_left_bytes = 0;
-        let mut best_diff = self.cost.bytes;
         let mut current_bytes = 0;
-        for (index, row) in self.rows.iter().enumerate() {
+        let mut reached_target = false;
+        for (index, row) in self.rows.iter().take(self.cost.rows - 1).enumerate() {
+            let previous_bytes = current_bytes;
             current_bytes += row.get_data_size();
             let split_at = index + 1;
-            if split_at >= self.cost.rows {
+
+            if current_bytes >= target_bytes {
+                reached_target = true;
+                let previous_diff = target_bytes.abs_diff(previous_bytes);
+                let current_diff = target_bytes.abs_diff(current_bytes);
+                if split_at > 1 && previous_diff <= current_diff {
+                    best_split_at = split_at - 1;
+                    best_left_bytes = previous_bytes;
+                } else {
+                    best_split_at = split_at;
+                    best_left_bytes = current_bytes;
+                }
                 break;
             }
-
-            let left_bytes = current_bytes;
-            let right_bytes = self.cost.bytes - current_bytes;
-            // Pick the boundary closest to half the configured byte cost.
-            let diff = left_bytes.abs_diff(right_bytes);
-            if diff < best_diff {
-                best_diff = diff;
-                best_split_at = split_at;
-                best_left_bytes = left_bytes;
-            }
+        }
+        if !reached_target {
+            // This happens when the last row dominates the byte cost. Use the last legal
+            // boundary because split_at cannot be equal to rows.len().
+            best_split_at = self.cost.rows - 1;
+            best_left_bytes = current_bytes;
         }
         (best_split_at, Some(best_left_bytes))
     }
@@ -247,6 +258,9 @@ impl ChunkPartitioner {
 
         let max_partitions =
             Self::max_partitions(&partitions, target_partitions, config).max(target_partitions);
+        // Total work does not change when a partition is split; keep one cached value for all
+        // adaptive skew checks in this drain batch.
+        let total_cost = Self::total_safe_primary_cost(&partitions, config);
         while partitions.len() < max_partitions {
             // Always split the currently largest eligible partition; sinkers consume the
             // resulting queue dynamically, so static round-robin assignment is unnecessary.
@@ -265,7 +279,12 @@ impl ChunkPartitioner {
             // skewed. split_large_insert passes force_split=true and keeps splitting up to cap.
             if !force_split
                 && partitions.len() >= target_partitions
-                && !Self::is_partition_skewed(&partitions, index, target_partitions, config)
+                && !Self::is_partition_skewed(
+                    &partitions[index],
+                    total_cost,
+                    target_partitions,
+                    config,
+                )
             {
                 break;
             }
@@ -292,21 +311,26 @@ impl ChunkPartitioner {
         max_by_rows.min(max_by_config)
     }
 
-    fn is_partition_skewed(
+    fn total_safe_primary_cost(
         partitions: &[Partition],
-        largest_index: usize,
+        config: &ChunkPartitionerRebalanceConfig,
+    ) -> u64 {
+        partitions
+            .iter()
+            .map(|partition| partition.safe_primary_cost(&config.cost))
+            .sum()
+    }
+
+    fn is_partition_skewed(
+        largest: &Partition,
+        total_cost: u64,
         target_partitions: usize,
         config: &ChunkPartitionerRebalanceConfig,
     ) -> bool {
-        // Use the configured cost metric, but never let zero-byte rows make cost disappear.
-        let total_cost: u64 = partitions
-            .iter()
-            .map(|partition| partition.safe_primary_cost(&config.cost))
-            .sum();
         // Compare the largest partition with ideal per-sinker work, not average partition size.
         let avg_cost_per_sinker =
             (total_cost / target_partitions.max(1) as u64).max(config.min_partition_rows as u64);
-        let largest_cost = partitions[largest_index].safe_primary_cost(&config.cost);
+        let largest_cost = largest.safe_primary_cost(&config.cost);
 
         // Example: ratio=2.0 means "split if the largest partition is > 2x ideal work".
         (largest_cost as f64) > (avg_cost_per_sinker as f64 * config.split_skew_ratio)
