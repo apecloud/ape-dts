@@ -87,7 +87,7 @@ Struct check is supported only for standalone MySQL/PostgreSQL checker targets.
 | username                    | checker target username (standalone target only)                       | root        | empty                             |
 | password                    | checker target password (standalone target only)                       | password    | empty                             |
 | check_log_s3                | upload check logs to S3 for standalone snapshot or inline CDC check    | false       | false                             |
-| cdc_check_log_interval_secs | interval (seconds) for periodic CDC check snapshot output              | 10          | 10                                |
+| cdc_check_log_interval_secs | interval (seconds) for periodic CDC check snapshot output              | 30          | 30                                |
 | s3_bucket                   | S3 bucket for check log upload                                         | my-bucket   | -                                 |
 | s3_access_key_id            | S3 access key id                                                       | AKIA...     | -                                 |
 | s3_secret_access_key        | S3 secret access key                                                   | ****        | -                                 |

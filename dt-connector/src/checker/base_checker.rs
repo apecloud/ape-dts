@@ -224,7 +224,7 @@ impl Default for CheckContext {
             cdc_check_log_max_file_size: 1,
             cdc_check_log_max_rows: 1,
             s3_output: None,
-            cdc_check_log_interval_secs: 1,
+            cdc_check_log_interval_secs: 30,
             state_store: None,
             source_checker: None,
             expected_resume_position: None,
@@ -706,8 +706,11 @@ struct DataChecker<C: Checker> {
     store_dirty: bool,
     last_checkpoint_position: Option<Position>,
     persisted_identity_keys: Option<BTreeSet<String>>,
-    // Tracks store or summary changes since the last log or S3 output and is cleared by `snapshot_and_output`.
-    snapshot_dirty: bool,
+    // Tracks CDC miss/diff/sql changes since the last optional log output.
+    optional_logs_dirty: bool,
+    s3_miss_count: Option<usize>,
+    s3_diff_count: Option<usize>,
+    s3_sql_count: Option<usize>,
     // Set when `init_cdc_state` fails to avoid overwriting historical inconsistency records.
     init_failed: bool,
     close_requested: bool,
@@ -750,7 +753,10 @@ impl<C: Checker> DataChecker<C> {
             store_dirty: false,
             last_checkpoint_position: None,
             persisted_identity_keys,
-            snapshot_dirty: true,
+            optional_logs_dirty: true,
+            s3_miss_count: None,
+            s3_diff_count: None,
+            s3_sql_count: None,
             init_failed: false,
             close_requested: false,
         }
@@ -766,9 +772,6 @@ impl<C: Checker> DataChecker<C> {
             .summary
             .skip_count
             .saturating_add(usize::try_from(delta).unwrap_or(usize::MAX));
-        if self.ctx.is_cdc {
-            self.snapshot_dirty = true;
-        }
     }
 
     pub async fn run(mut self) -> anyhow::Result<()> {
@@ -812,7 +815,7 @@ impl<C: Checker> DataChecker<C> {
                     }
                 }
                 _ = output_interval.tick(), if self.ctx.is_cdc => {
-                    if let Err(err) = self.maybe_snapshot_and_output().await {
+                    if let Err(err) = self.snapshot_and_output().await {
                         log_error!("Checker [{}] cdc output failed: {}", self.name, err);
                     }
                 }
@@ -937,15 +940,6 @@ impl<C: Checker> DataChecker<C> {
             return Ok(());
         }
         self.run_recheck().await
-    }
-
-    async fn maybe_snapshot_and_output(&mut self) -> anyhow::Result<()> {
-        if !self.snapshot_dirty {
-            return Ok(());
-        }
-        self.snapshot_and_output().await?;
-        self.snapshot_dirty = false;
-        Ok(())
     }
 }
 

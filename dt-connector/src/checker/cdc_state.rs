@@ -152,18 +152,29 @@ impl<C: Checker> DataChecker<C> {
         summary.sort_tables();
         self.ctx.summary = summary.clone();
         let summary_buf = serde_json::to_vec(&summary)?;
+        let write_optional_logs = self.optional_logs_dirty;
 
         Self::write_to_disk(
             &self.ctx.check_log_dir,
+            write_optional_logs,
             &miss_buf,
             &diff_buf,
             &sql_buf,
             &summary_buf,
         )
         .await?;
-        if self.ctx.s3_output.is_some() {
-            self.upload_to_s3(miss_buf, diff_buf, sql_buf, summary_buf)
-                .await?;
+        self.upload_to_s3(
+            &miss_buf,
+            total_miss,
+            &diff_buf,
+            total_diff,
+            &sql_buf,
+            total_sql,
+            &summary_buf,
+        )
+        .await?;
+        if write_optional_logs {
+            self.optional_logs_dirty = false;
         }
 
         Ok(())
@@ -171,6 +182,7 @@ impl<C: Checker> DataChecker<C> {
 
     async fn write_to_disk(
         dir: &str,
+        write_optional_logs: bool,
         miss_buf: &[u8],
         diff_buf: &[u8],
         sql_buf: &[u8],
@@ -180,10 +192,12 @@ impl<C: Checker> DataChecker<C> {
         tokio::fs::create_dir_all(path).await?;
         let mut summary_with_newline = summary_buf.to_vec();
         summary_with_newline.push(b'\n');
-        Self::write_optional_log(&path.join("miss.log"), miss_buf).await?;
-        Self::write_optional_log(&path.join("diff.log"), diff_buf).await?;
+        if write_optional_logs {
+            Self::write_optional_log(&path.join("miss.log"), miss_buf).await?;
+            Self::write_optional_log(&path.join("diff.log"), diff_buf).await?;
+            Self::write_optional_log(&path.join("sql.log"), sql_buf).await?;
+        }
         tokio::fs::write(path.join("summary.log"), summary_with_newline).await?;
-        Self::write_optional_log(&path.join("sql.log"), sql_buf).await?;
         Ok(())
     }
 
@@ -201,14 +215,14 @@ impl<C: Checker> DataChecker<C> {
     }
 
     fn build_dirty_state_rows(&self) -> anyhow::Result<Vec<CheckerStateRow>> {
-        let mut rows = Vec::with_capacity(self.dirty_upserts.len());
-        for store_key in &self.dirty_upserts {
-            let Some(entry) = self.store.get(store_key) else {
-                continue;
-            };
-            rows.push(build_state_row(store_key, entry)?);
-        }
-        Ok(rows)
+        self.dirty_upserts
+            .iter()
+            .filter_map(|store_key| {
+                self.store
+                    .get(store_key)
+                    .map(|entry| build_state_row(store_key, entry))
+            })
+            .collect()
     }
 
     pub fn restore_store_from_rows(&mut self, rows: Vec<CheckerStateRow>) -> anyhow::Result<()> {
@@ -494,37 +508,67 @@ impl<C: Checker> DataChecker<C> {
     }
 
     async fn upload_to_s3(
-        &self,
-        miss_buf: Vec<u8>,
-        diff_buf: Vec<u8>,
-        sql_buf: Vec<u8>,
-        summary_buf: Vec<u8>,
+        &mut self,
+        miss_buf: &[u8],
+        miss_count: usize,
+        diff_buf: &[u8],
+        diff_count: usize,
+        sql_buf: &[u8],
+        sql_count: usize,
+        summary_buf: &[u8],
     ) -> anyhow::Result<()> {
         let Some((s3_client, key_prefix)) = &self.ctx.s3_output else {
             return Ok(());
         };
-        let p = key_prefix;
-        let miss_key = format!("{p}/miss.log");
-        let diff_key = format!("{p}/diff.log");
-        let summary_key = format!("{p}/summary.log");
-        let sql_key = format!("{p}/sql.log");
-        Self::upload_optional_log(s3_client, &miss_key, miss_buf).await?;
-        Self::upload_optional_log(s3_client, &diff_key, diff_buf).await?;
-        Self::upload_optional_log(s3_client, &sql_key, sql_buf).await?;
-        s3_client.write(&summary_key, summary_buf).await?;
+        let miss_key = format!("{key_prefix}/miss.log");
+        let diff_key = format!("{key_prefix}/diff.log");
+        let summary_key = format!("{key_prefix}/summary.log");
+        let sql_key = format!("{key_prefix}/sql.log");
+        s3_client.write(&summary_key, summary_buf.to_vec()).await?;
+        Self::upload_optional_log_if_count_changed(
+            s3_client,
+            &miss_key,
+            miss_buf,
+            miss_count,
+            &mut self.s3_miss_count,
+        )
+        .await?;
+        Self::upload_optional_log_if_count_changed(
+            s3_client,
+            &diff_key,
+            diff_buf,
+            diff_count,
+            &mut self.s3_diff_count,
+        )
+        .await?;
+        Self::upload_optional_log_if_count_changed(
+            s3_client,
+            &sql_key,
+            sql_buf,
+            sql_count,
+            &mut self.s3_sql_count,
+        )
+        .await?;
         Ok(())
     }
 
-    async fn upload_optional_log(
+    async fn upload_optional_log_if_count_changed(
         s3_client: &opendal::Operator,
         key: &str,
-        buf: Vec<u8>,
+        buf: &[u8],
+        count: usize,
+        last_count: &mut Option<usize>,
     ) -> anyhow::Result<()> {
+        if last_count.is_some_and(|last| last == count) {
+            return Ok(());
+        }
+
         if buf.is_empty() {
             s3_client.delete(key).await?;
         } else {
-            s3_client.write(key, buf).await?;
+            s3_client.write(key, buf.to_vec()).await?;
         }
+        *last_count = Some(count);
         Ok(())
     }
 }
@@ -574,6 +618,10 @@ mod tests {
 
     fn read_file(path: &Path) -> String {
         fs::read_to_string(path).unwrap()
+    }
+
+    async fn read_s3(op: &Operator, key: &str) -> String {
+        String::from_utf8(op.read(key).await.unwrap().to_vec()).unwrap()
     }
 
     fn build_memory_operator() -> Operator {
@@ -627,6 +675,47 @@ mod tests {
         assert!(op.stat("prefix/miss.log").await.is_err());
         assert!(op.stat("prefix/diff.log").await.is_err());
         assert!(op.stat("prefix/sql.log").await.is_err());
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn snapshot_and_output_uploads_only_changed_s3_objects() {
+        let dir = unique_temp_dir("checker-summary-only");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("miss.log"), "old miss\n").unwrap();
+        fs::write(dir.join("diff.log"), "old diff\n").unwrap();
+        fs::write(dir.join("sql.log"), "old sql;\n").unwrap();
+        let op = build_memory_operator();
+        op.write("prefix/miss.log", "old miss\n").await.unwrap();
+        op.write("prefix/diff.log", "old diff\n").await.unwrap();
+        op.write("prefix/sql.log", "old sql;\n").await.unwrap();
+        let mut checker = build_cdc_checker(dir.clone(), Some((op.clone(), "prefix".to_string())));
+        checker.optional_logs_dirty = false;
+        checker.ctx.summary.checked_count = 7;
+
+        checker.snapshot_and_output().await.unwrap();
+        assert!(op.stat("prefix/miss.log").await.is_err());
+        assert!(op.stat("prefix/diff.log").await.is_err());
+        assert!(op.stat("prefix/sql.log").await.is_err());
+
+        op.write("prefix/miss.log", "remote miss\n").await.unwrap();
+        op.write("prefix/diff.log", "remote diff\n").await.unwrap();
+        op.write("prefix/sql.log", "remote sql;\n").await.unwrap();
+        checker.ctx.summary.checked_count = 8;
+        checker.snapshot_and_output().await.unwrap();
+
+        let summary: CheckSummaryLog =
+            serde_json::from_str(&read_file(&dir.join("summary.log"))).unwrap();
+        assert_eq!(summary.checked_count, 8);
+        assert_eq!(read_file(&dir.join("miss.log")), "old miss\n");
+        assert_eq!(read_file(&dir.join("diff.log")), "old diff\n");
+        assert_eq!(read_file(&dir.join("sql.log")), "old sql;\n");
+        assert_eq!(read_s3(&op, "prefix/miss.log").await, "remote miss\n");
+        assert_eq!(read_s3(&op, "prefix/diff.log").await, "remote diff\n");
+        assert_eq!(read_s3(&op, "prefix/sql.log").await, "remote sql;\n");
+        let s3_summary: CheckSummaryLog =
+            serde_json::from_str(&read_s3(&op, "prefix/summary.log").await).unwrap();
+        assert_eq!(s3_summary.checked_count, 8);
         fs::remove_dir_all(dir).unwrap();
     }
 

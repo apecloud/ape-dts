@@ -469,7 +469,7 @@ impl MysqlCdcExtractor {
         let db_tb = self.base_extractor.precheck_heartbeat(
             self.heartbeat_interval_secs,
             &self.heartbeat_tb,
-            DbType::Pg,
+            DbType::Mysql,
         );
         if db_tb.len() != 2 {
             return Ok(());

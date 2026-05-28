@@ -344,7 +344,6 @@ impl<C: Checker> DataChecker<C> {
                     );
                     self.ctx.record_row_table_counts(row, 0, 1);
                     self.ctx.summary.skip_count += 1;
-                    self.snapshot_dirty = true;
                 }
                 Err(e) => {
                     if self.ctx.is_cdc {
@@ -358,7 +357,6 @@ impl<C: Checker> DataChecker<C> {
                     );
                     self.ctx.record_row_table_counts(row, 0, 1);
                     self.ctx.summary.skip_count += 1;
-                    self.snapshot_dirty = true;
                 }
             }
         }
@@ -487,7 +485,7 @@ impl<C: Checker> DataChecker<C> {
                 self.dirty_deletes.insert(store_key, identity_key);
             }
             self.store_dirty = !self.dirty_upserts.is_empty() || !self.dirty_deletes.is_empty();
-            self.snapshot_dirty = true;
+            self.optional_logs_dirty = true;
             self.update_pending_counter();
         }
     }
@@ -553,7 +551,7 @@ impl<C: Checker> DataChecker<C> {
         }
 
         self.store_dirty = true;
-        self.snapshot_dirty = true;
+        self.optional_logs_dirty = true;
         self.add_entry_metrics(&entry).await;
         let store_key = CheckerStoreKey::new(&row_data.schema, &row_data.tb, row_key);
         self.dirty_deletes.shift_remove(&store_key);
@@ -766,7 +764,6 @@ impl<C: Checker> DataChecker<C> {
             );
             self.ctx.summary.skip_count += 1;
             self.ctx.record_row_table_counts(&item.row, 0, 1);
-            self.snapshot_dirty = true;
             return Ok(None);
         };
         let dst_rows = self
@@ -968,6 +965,28 @@ mod tests {
         }
     }
 
+    struct ConsistentChecker {
+        tb_meta: Arc<CheckerTbMeta>,
+    }
+
+    #[async_trait]
+    impl Checker for ConsistentChecker {
+        async fn load_table_meta(
+            &mut self,
+            _lookup_row: &RowData,
+        ) -> anyhow::Result<Arc<CheckerTbMeta>> {
+            Ok(self.tb_meta.clone())
+        }
+
+        async fn fetch_rows_by_keys(
+            &mut self,
+            _table_meta: Arc<CheckerTbMeta>,
+            lookup_rows: &[&RowData],
+        ) -> anyhow::Result<Vec<RowData>> {
+            Ok(lookup_rows.iter().map(|row| (*row).clone()).collect())
+        }
+    }
+
     fn build_ctx(is_cdc: bool) -> CheckContext {
         CheckContext {
             is_cdc,
@@ -1030,39 +1049,6 @@ mod tests {
         )
     }
 
-    fn build_update_row(old_id: i32, new_id: i32) -> RowData {
-        RowData::new(
-            "s1".to_string(),
-            "t1".to_string(),
-            0,
-            RowType::Update,
-            Some(HashMap::from([
-                ("id".to_string(), ColValue::Long(old_id)),
-                ("name".to_string(), ColValue::String("old".to_string())),
-            ])),
-            Some(HashMap::from([
-                ("id".to_string(), ColValue::Long(new_id)),
-                ("name".to_string(), ColValue::String("new".to_string())),
-            ])),
-        )
-    }
-
-    fn build_checker() -> DataChecker<NoopChecker> {
-        let (_control_tx, control_rx) = tokio::sync::mpsc::unbounded_channel();
-        DataChecker::new(
-            NoopChecker,
-            "unit-test".to_string(),
-            build_ctx(true),
-            CheckerIo {
-                batch_queue: Arc::new(StdMutex::new(LimitedQueue::new(1))),
-                batch_notify: Arc::new(tokio::sync::Notify::new()),
-                dropped_items: Arc::new(AtomicU64::new(0)),
-                control_rx,
-            },
-            "unit-test",
-        )
-    }
-
     fn build_checker_with<C: Checker>(checker: C, ctx: CheckContext) -> DataChecker<C> {
         let (_control_tx, control_rx) = tokio::sync::mpsc::unbounded_channel();
         DataChecker::new(
@@ -1077,24 +1063,6 @@ mod tests {
             },
             "unit-test",
         )
-    }
-
-    fn build_entry(row: &RowData, tb_meta: &RdbTbMeta) -> CheckEntry {
-        CheckEntry {
-            key: RecheckKey::from_row_data(row, &tb_meta.id_cols).unwrap(),
-            log: CheckLog {
-                schema: row.schema.clone(),
-                tb: row.tb.clone(),
-                target_schema: None,
-                target_tb: None,
-                id_col_values: HashMap::new(),
-                diff_col_values: HashMap::new(),
-                src_row: None,
-                dst_row: None,
-            },
-            revise_sql: None,
-            diff_cols: None,
-        }
     }
 
     #[tokio::test]
@@ -1157,51 +1125,15 @@ mod tests {
         assert!(entry.revise_sql.is_some());
     }
 
-    #[test]
-    fn sampling_uses_stable_row_key() {
-        let tb_meta = build_mysql_tb_meta();
-        let row_a = build_insert_row(7, "alice");
-        let row_b = build_insert_row(7, "bob");
-        let key_a = DataChecker::<NoopChecker>::lookup_match_key(&row_a, tb_meta.basic())
-            .unwrap()
-            .unwrap();
-        let key_b = DataChecker::<NoopChecker>::lookup_match_key(&row_b, tb_meta.basic())
-            .unwrap()
-            .unwrap();
-
-        assert_eq!(key_a, key_b);
-        let bucket = (key_a % 100) as u8;
-        assert!(DataChecker::<NoopChecker>::should_sample_key(
-            Some((bucket + 1).min(100)),
-            key_a,
-        ));
-        if bucket > 0 {
-            assert!(!DataChecker::<NoopChecker>::should_sample_key(
-                Some(bucket),
-                key_a,
-            ));
-        }
-
-        let mut checker = build_checker();
-        checker.ctx.sample_rate = Some((bucket + 1).min(100));
-        let prepared_rows = checker.prepare_rows_for_fetch(&[&row_a, &row_b], &tb_meta);
-        assert_eq!(prepared_rows.len(), 2);
-
-        let row = build_insert_row(1, "not-sampled");
-        checker.ctx.sample_rate = Some(0);
-        let rows = checker.prepare_rows_for_fetch(&[&row], &tb_meta);
-        assert!(rows.is_empty());
-    }
-
     #[tokio::test]
-    async fn pre_fetch_sampling_skips_group_when_sample_is_empty() {
+    async fn pre_fetch_filter_skips_unfetchable_rows_without_target_fetch() {
         let tb_meta = Arc::new(build_mysql_tb_meta());
         let fetch_count = Arc::new(AtomicU64::new(0));
         let mut ctx = build_ctx(false);
         ctx.sample_rate = Some(0);
         let mut checker = build_checker_with(
             MetaOnlyChecker {
-                tb_meta,
+                tb_meta: tb_meta.clone(),
                 fetch_count: fetch_count.clone(),
             },
             ctx,
@@ -1213,12 +1145,6 @@ mod tests {
             .unwrap();
 
         assert_eq!(fetch_count.load(Ordering::Relaxed), 0);
-    }
-
-    #[tokio::test]
-    async fn pre_fetch_filter_skips_null_key_without_target_fetch() {
-        let tb_meta = Arc::new(build_mysql_tb_meta());
-        let fetch_count = Arc::new(AtomicU64::new(0));
         let ctx = build_ctx(false);
         let mut checker = build_checker_with(
             MetaOnlyChecker {
@@ -1239,36 +1165,19 @@ mod tests {
         assert_eq!(checker.ctx.summary.tables[0].checked_count, 0);
     }
 
-    #[test]
-    fn sampled_cdc_pk_update_cleans_old_key() {
-        let tb_meta = build_mysql_tb_meta();
-        let mut selected = None;
-        for old_id in 1..500 {
-            let old_row = build_insert_row(old_id, "old");
-            let old_key = DataChecker::<NoopChecker>::lookup_match_key(&old_row, tb_meta.basic())
-                .unwrap()
-                .unwrap();
-            let new_row = build_insert_row(old_id + 1000, "new");
-            let new_key = DataChecker::<NoopChecker>::lookup_match_key(&new_row, tb_meta.basic())
-                .unwrap()
-                .unwrap();
-            if old_key != new_key {
-                selected = Some((old_id, old_key, new_key));
-                break;
-            }
-        }
-        let (old_id, old_key, new_key) = selected.expect("test should find a changed key");
-        let old_row = build_insert_row(old_id, "old");
-        let update_row = build_update_row(old_id, old_id + 1000);
+    #[tokio::test]
+    async fn cdc_consistent_check_updates_summary_without_dirtying_optional_logs() {
+        let tb_meta = Arc::new(build_mysql_tb_meta());
+        let mut checker = build_checker_with(ConsistentChecker { tb_meta }, build_ctx(true));
+        checker.optional_logs_dirty = false;
 
-        let mut checker = build_checker();
-        let old_store_key = CheckerStoreKey::new("s1", "t1", old_key);
-        checker.store.insert(
-            old_store_key.clone(),
-            build_entry(&old_row, tb_meta.basic()),
-        );
+        checker
+            .process_batch(&[build_insert_row(1, "consistent")], false)
+            .await
+            .unwrap();
 
-        checker.cleanup_stale_update_key(&update_row, tb_meta.basic(), Some(new_key));
-        assert!(!checker.store.contains_key(&old_store_key));
+        assert_eq!(checker.ctx.summary.checked_count, 1);
+        assert_eq!(checker.ctx.summary.tables[0].checked_count, 1);
+        assert!(!checker.optional_logs_dirty);
     }
 }

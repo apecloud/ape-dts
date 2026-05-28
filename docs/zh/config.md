@@ -84,7 +84,7 @@ struct check 仅支持 standalone MySQL/PostgreSQL checker target。
 | username                    | 校验目标用户名（仅 standalone 目标配置）                       | root        | 空                               |
 | password                    | 校验目标密码（仅 standalone 目标配置）                         | password    | 空                               |
 | check_log_s3                | standalone snapshot 或 inline CDC check 上传校验日志到 S3       | false       | false                            |
-| cdc_check_log_interval_secs | CDC 校验快照输出间隔（秒）                                     | 10          | 10                               |
+| cdc_check_log_interval_secs | CDC 校验快照输出间隔（秒）                                     | 30          | 30                               |
 | s3_bucket                   | 校验日志上传的 S3 存储桶                                       | my-bucket   | -                                |
 | s3_access_key_id            | S3 访问密钥 ID                                                 | AKIA...     | -                                |
 | s3_secret_access_key        | S3 秘密访问密钥                                                | ****        | -                                |

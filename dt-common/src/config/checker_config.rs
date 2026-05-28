@@ -46,7 +46,7 @@ impl Default for CheckerConfig {
             check_log_s3: false,
             s3_config: None,
             s3_key_prefix: String::new(),
-            cdc_check_log_interval_secs: 10,
+            cdc_check_log_interval_secs: 30,
         }
     }
 }
