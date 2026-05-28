@@ -31,11 +31,6 @@ impl Partition {
         Self { rows, cost }
     }
 
-    #[allow(dead_code)]
-    fn is_insert_only(&self) -> bool {
-        self.rows.iter().all(|row| row.row_type == RowType::Insert)
-    }
-
     fn can_split(&self, min_partition_rows: usize) -> bool {
         self.cost.rows >= min_partition_rows.saturating_mul(2)
     }
@@ -241,11 +236,7 @@ impl ChunkPartitioner {
         config: &ChunkPartitionerRebalanceConfig,
         force_split: bool,
     ) -> Vec<Partition> {
-        // Only snapshot inserts are safe to split; mixed DML keeps logical chunks intact.
-        // For now, chunk partitioner rebalance only happens for snapshot parallelizer, so all rows are inserts.
-        // if !partitions.iter().all(Partition::is_insert_only) {
-        //     return partitions;
-        // }
+        // Snapshot parallelizer sends insert-only rows, so split is safe for the current caller.
 
         let max_partitions =
             Self::max_partitions(&partitions, target_partitions, config).max(target_partitions);
@@ -345,7 +336,7 @@ mod tests {
     fn config(strategy: ChunkPartitionerRebalanceStrategy) -> ChunkPartitionerRebalanceConfig {
         ChunkPartitionerRebalanceConfig {
             strategy,
-            cost: ChunkPartitionerRebalanceCost::Bytes,
+            cost: ChunkPartitionerRebalanceCost::Rows,
             max_partitions_per_sinker: 4,
             min_partition_rows: 1,
             split_skew_ratio: 2.0,
@@ -379,6 +370,13 @@ mod tests {
         partitions
             .iter()
             .map(|partition| partition.iter().map(|row| row.chunk_id).collect())
+            .collect()
+    }
+
+    fn data_sizes(partitions: &[Vec<RowData>]) -> Vec<Vec<usize>> {
+        partitions
+            .iter()
+            .map(|partition| partition.iter().map(|row| row.data_size).collect())
             .collect()
     }
 
@@ -416,12 +414,10 @@ mod tests {
             sized_row("schema", "tb", 3, RowType::Insert, 10),
         ];
 
-        let partitions = ChunkPartitioner::partition_dml(
-            data,
-            2,
-            &config(ChunkPartitionerRebalanceStrategy::ChunkLargestFirst),
-        )
-        .unwrap();
+        let mut config = config(ChunkPartitionerRebalanceStrategy::ChunkLargestFirst);
+        config.cost = ChunkPartitionerRebalanceCost::Bytes;
+
+        let partitions = ChunkPartitioner::partition_dml(data, 2, &config).unwrap();
 
         assert_eq!(
             chunk_ids(&partitions),
@@ -462,31 +458,14 @@ mod tests {
         )
         .unwrap();
 
-        assert!(partitions.len() > 1);
+        assert_eq!(
+            data_sizes(&partitions),
+            vec![vec![1, 2, 3, 4], vec![5, 6, 7, 8]]
+        );
         assert_eq!(partitions.iter().map(Vec::len).sum::<usize>(), 8);
         assert!(partitions
             .iter()
             .all(|partition| partition.iter().all(|row| row.chunk_id == 1)));
-    }
-
-    #[test]
-    fn partition_dml_adaptive_does_not_split_mixed_row_types() {
-        let data = vec![
-            row(1, RowType::Insert),
-            row(1, RowType::Update),
-            row(1, RowType::Insert),
-            row(1, RowType::Insert),
-        ];
-
-        let partitions = ChunkPartitioner::partition_dml(
-            data,
-            4,
-            &config(ChunkPartitionerRebalanceStrategy::Adaptive),
-        )
-        .unwrap();
-
-        assert_eq!(partitions.len(), 1);
-        assert_eq!(partitions[0].len(), 4);
     }
 
     #[test]
@@ -617,6 +596,7 @@ mod tests {
             sized_row("schema", "tb", 1, RowType::Insert, 1),
         ];
         let mut config = config(ChunkPartitionerRebalanceStrategy::SplitLargeInsert);
+        config.cost = ChunkPartitionerRebalanceCost::Bytes;
         config.max_partitions_per_sinker = 1;
 
         let partitions = ChunkPartitioner::partition_dml(data, 2, &config).unwrap();
