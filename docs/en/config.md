@@ -230,10 +230,14 @@ Same with [filter].
 
 # [parallelizer]
 
-| Config        | Description                  | Example  | Default |
-| :------------ | :--------------------------- | :------- | :------ |
-| parallel_type | parallel type                | snapshot | serial  |
-| parallel_size | threads for parallel syncing | 8        | 1       |
+| Config                       | Description                                                 | Example  | Default             |
+| :--------------------------- | :---------------------------------------------------------- | :------- | :------------------ |
+| parallel_type                | parallel type                                               | snapshot | serial              |
+| parallel_size                | threads for parallel syncing                                | 8        | 1                   |
+| rebalance_strategy           | snapshot chunk rebalance strategy used during sink writes    | adaptive | adaptive            |
+| rebalance_cost               | cost metric used to measure partition size                  | rows     | rows                |
+| rebalance_min_partition_rows | minimum rows kept in each split snapshot insert partition   | 200      | [sinker].batch_size |
+| rebalance_split_skew_ratio   | skew threshold used by the adaptive strategy                | 2.0      | 2.0                 |
 
 ## parallel_type
 
@@ -244,6 +248,24 @@ Same with [filter].
 | rdb_merge | Merge row changes in cache into write-friendly insert + delete batches, then divide them into [parallel_size] partitions for parallel syncing. When `[checker].enable=true`, checker-enabled MySQL/PG flows reuse this parallelizer and switch to check sink mode internally. | mysql/pg CDC, check, review, revise | fast       | eventual consistency |
 | mongo     | Mongo version of merge parallelization. When `[checker].enable=true`, checker-enabled Mongo flows reuse this parallelizer and switch to check sink mode internally.                            | mongo CDC, check, review          |
 | redis     | Single thread, batch/serial writing(determined by [sinker] batch_size)                                                                                                                        | snapshot/CDC tasks for redis      |
+
+## snapshot chunk rebalance
+
+When `[parallelizer].parallel_type=snapshot`, snapshot parallelizer uses chunk partitioner to rebalance the downstream write queue. It is mainly for snapshot write tasks and reduces sink-side long tails. It does not change source-side extractor concurrency and does not rewrite checkpoint chunk ids.
+
+Recommended default:
+
+```ini
+[parallelizer]
+parallel_type=snapshot
+parallel_size=8
+rebalance_strategy=adaptive
+rebalance_cost=rows
+```
+
+Use the default `rebalance_cost=rows` when row width is similar. If rows contain large JSON, LOB, or wide strings, use `rebalance_cost=bytes`. If the target has high request overhead, or you do not want to split logical chunks, use `rebalance_strategy=chunk_largest_first`.
+
+For scenario-based tuning, see [Snapshot Chunk Partitioner Rebalance](/docs/en/snapshot/chunk_partitioner_rebalance.md).
 
 # [runtime]
 

@@ -225,10 +225,14 @@ struct check 复用 standalone snapshot check 的目标选择规则。
 
 # [parallelizer]
 
-| 配置          | 作用       | 示例     | 默认   |
-| :------------ | :--------- | :------- | :----- |
-| parallel_type | 并发类型   | snapshot | serial |
-| parallel_size | 并发线程数 | 8        | 1      |
+| 配置                         | 作用                                               | 示例     | 默认                  |
+| :--------------------------- | :------------------------------------------------- | :------- | :-------------------- |
+| parallel_type                | 并发类型                                           | snapshot | serial                |
+| parallel_size                | 并发线程数                                         | 8        | 1                     |
+| rebalance_strategy           | snapshot chunk 写入阶段 rebalance 策略             | adaptive | adaptive              |
+| rebalance_cost               | rebalance 判断 partition 大小的成本口径             | rows     | rows                  |
+| rebalance_min_partition_rows | snapshot insert chunk 拆分后单个 partition 最小行数 | 200      | [sinker].batch_size   |
+| rebalance_split_skew_ratio   | adaptive 策略下判定最大 partition 明显倾斜的阈值   | 2.0      | 2.0                   |
 
 ## parallel_type 类型
 
@@ -239,6 +243,24 @@ struct check 复用 standalone snapshot check 的目标选择规则。
 | rdb_merge | 将缓存中的行级变更整合成适合写入的 insert + delete 批次，再按 parallel_size 并行下发。`[checker].enable=true` 时，MySQL/PG 的 checker 相关链路会在内部复用它并切换到 check sink mode | mysql/pg 增量、校验、review、revise | 快   | 最终一致性，破坏源端事务在目标端重放的完整性 |
 | mongo     | merge parallelizer 的 Mongo 版。`[checker].enable=true` 时，Mongo 的 checker 相关链路也会在内部复用它并切换到 check sink mode | mongo 增量、校验、review |      |                                              |
 | redis     | 单线程，批量/串行（由 sinker 的 batch_size 决定）写入                                                              | redis 全量/增量         |      |                                              |
+
+## snapshot chunk rebalance
+
+当 `[parallelizer].parallel_type=snapshot` 时，snapshot parallelizer 会使用 chunk partitioner 对下游写入队列做 rebalance。它主要用于 snapshot 写入阶段，缓解目标端 sinker 的长尾问题；不会改变源端 extractor 并发，也不会修改 checkpoint 中的 chunk id。
+
+推荐默认配置：
+
+```ini
+[parallelizer]
+parallel_type=snapshot
+parallel_size=8
+rebalance_strategy=adaptive
+rebalance_cost=rows
+```
+
+行宽接近时使用默认 `rebalance_cost=rows`；如果存在大 JSON、LOB、宽字符串等行宽差异明显的场景，可以使用 `rebalance_cost=bytes`。如果目标端请求成本高，或不希望拆分 logical chunk，可以使用 `rebalance_strategy=chunk_largest_first`。
+
+更多场景化配置建议见 [Snapshot Chunk Partitioner Rebalance](/docs/zh/snapshot/chunk_partitioner_rebalance.md)。
 
 # [runtime]
 | 配置        | 作用                          | 示例                        | 默认          |

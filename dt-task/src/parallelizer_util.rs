@@ -36,6 +36,10 @@ impl ParallelizerUtil {
             ParallelType::Snapshot => Box::new(SnapshotParallelizer {
                 base_parallelizer,
                 parallel_size,
+                chunk_partitioner_rebalance: config
+                    .parallelizer
+                    .chunk_partitioner_rebalance
+                    .clone(),
             }),
 
             ParallelType::RdbPartition => {
@@ -89,6 +93,10 @@ impl ParallelizerUtil {
                 let snapshot_parallelizer = SnapshotParallelizer {
                     base_parallelizer,
                     parallel_size,
+                    chunk_partitioner_rebalance: config
+                        .parallelizer
+                        .chunk_partitioner_rebalance
+                        .clone(),
                 };
                 Box::new(FoxlakeParallelizer {
                     task_config: config.clone(),
