@@ -119,10 +119,11 @@ templates now separate standalone snapshot check, inline snapshot check, and inl
 ### Sampling Check
 
 For snapshot and inline CDC checks, add `sample_rate` to the `[checker]` section. For standalone
-MySQL/PostgreSQL/MongoDB snapshot check, sampling is applied during extraction. With metadata row
-estimates, the extractor limits source reads to the estimated sampled row count, so `sample_rate=25`
-queries roughly 25% of the estimated rows. If the estimate is missing or zero, extraction reads the
-full source stream. For inline snapshot check and inline CDC check, `sample_rate=25` still writes all
+MySQL/PostgreSQL/MongoDB snapshot check, sampling is applied during extraction. With row estimates,
+the extractor limits source reads to roughly `row_count * sample_rate / 100`; `row_count` is
+estimated from the table, or from the table's configured `where_conditions` when present. If the
+estimate is missing or zero, extraction reads the full source stream. For inline
+snapshot check and inline CDC check, `sample_rate=25` still writes all
 rows/changes, then checks rows/changes whose key hash falls into the sampled percentage before target
 fetch/compare.
 

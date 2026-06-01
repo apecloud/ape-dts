@@ -532,10 +532,11 @@ impl MysqlSnapshotDispatchState {
             .get(&(table_id.schema.clone(), table_id.tb.clone()))
             .cloned()
             .unwrap_or_default();
-        let table_ctx = MysqlTableCtx {
+        let mut table_ctx = MysqlTableCtx {
             shared: self.shared.clone(),
             table_id: table_id.clone(),
             user_defined_partition_col,
+            sample_limit: None,
         };
         let (extract_state, monitor_guard) = SnapshotDispatcher::fork_table_extract_state(
             &self.root_extract_state,
@@ -549,6 +550,7 @@ impl MysqlSnapshotDispatchState {
             .get_tb_meta(&table_id.schema, &table_id.tb)
             .await?
             .to_owned();
+        table_ctx.sample_limit = table_ctx.estimate_sample_limit(&tb_meta).await?;
         let active_mode = table_ctx.prepare_active_mode(&tb_meta).await?;
         log_debug!(
             "prepared extract mode for {}.{}",
@@ -703,6 +705,7 @@ struct MysqlTableCtx {
     shared: MysqlSnapshotShared,
     table_id: SnapshotTableId,
     user_defined_partition_col: String,
+    sample_limit: Option<usize>,
 }
 
 impl MysqlTableCtx {
@@ -710,7 +713,7 @@ impl MysqlTableCtx {
         &self,
         tb_meta: &MysqlTbMeta,
     ) -> anyhow::Result<MysqlActiveTableMode> {
-        if self.shared.sample_rate.is_some_and(|rate| rate < 100) {
+        if self.sample_limit.is_some() {
             return Ok(MysqlActiveTableMode::Table);
         }
         if matches!(self.shared.parallel_type, RdbParallelType::Chunk) {
@@ -917,13 +920,12 @@ impl MysqlTableCtx {
             .get_where_condition(&self.table_id.schema, &self.table_id.tb)
             .cloned()
             .unwrap_or_default();
-        let sample_limit = self.estimate_sample_limit(tb_meta).await?;
         let empty_ignore_cols = HashSet::new();
         let stmt_ignore_cols = ignore_cols.unwrap_or(&empty_ignore_cols);
         let mut stmt = RdbSnapshotExtractStatement::from(tb_meta)
             .with_ignore_cols(stmt_ignore_cols)
             .with_where_condition(&where_condition);
-        if let Some(limit) = sample_limit {
+        if let Some(limit) = self.sample_limit {
             stmt = stmt.with_limit(limit);
         }
         let sql = stmt.build()?;
@@ -969,10 +971,7 @@ impl MysqlTableCtx {
         let mut extracted_count = 0u64;
         let mut start_values = resume_values;
         let mut chunk_id_generator = SnapshotChunkIdGenerator::new(self.shared.batch_size);
-        let sample_limit = self.estimate_sample_limit(tb_meta).await?;
-        let page_limit = sample_limit
-            .map(|limit| limit.min(self.shared.batch_size))
-            .unwrap_or(self.shared.batch_size);
+        let page_limit = self.sample_limit.unwrap_or(self.shared.batch_size);
         let ignore_cols = self
             .shared
             .filter
@@ -1024,7 +1023,10 @@ impl MysqlTableCtx {
                 let mut rows = query.fetch(&self.shared.conn_pool);
                 let mut slice_count = 0usize;
                 while let Some(row) = rows.try_next().await? {
-                    if sample_limit.is_some_and(|limit| extracted_count >= limit as u64) {
+                    if self
+                        .sample_limit
+                        .is_some_and(|limit| extracted_count >= limit as u64)
+                    {
                         break;
                     }
                     let value = start_values
@@ -1049,7 +1051,9 @@ impl MysqlTableCtx {
                         .await?;
                 }
 
-                if sample_limit.is_some_and(|limit| extracted_count >= limit as u64)
+                if self
+                    .sample_limit
+                    .is_some_and(|limit| extracted_count >= limit as u64)
                     || slice_count < page_limit
                 {
                     break;
@@ -1073,7 +1077,10 @@ impl MysqlTableCtx {
                 let mut rows = query.fetch(&self.shared.conn_pool);
                 let mut slice_count = 0usize;
                 while let Some(row) = rows.try_next().await? {
-                    if sample_limit.is_some_and(|limit| extracted_count >= limit as u64) {
+                    if self
+                        .sample_limit
+                        .is_some_and(|limit| extracted_count >= limit as u64)
+                    {
                         break;
                     }
                     for order_col in &tb_meta.basic.order_cols {
@@ -1097,7 +1104,9 @@ impl MysqlTableCtx {
                         .await?;
                 }
 
-                if sample_limit.is_some_and(|limit| extracted_count >= limit as u64)
+                if self
+                    .sample_limit
+                    .is_some_and(|limit| extracted_count >= limit as u64)
                     || slice_count < page_limit
                 {
                     break;
@@ -1110,10 +1119,13 @@ impl MysqlTableCtx {
             .order_cols
             .iter()
             .any(|col| tb_meta.basic.is_col_nullable(col))
-            && !sample_limit.is_some_and(|limit| extracted_count >= limit as u64)
+            && !self
+                .sample_limit
+                .is_some_and(|limit| extracted_count >= limit as u64)
         {
-            let remaining_limit =
-                sample_limit.map(|limit| limit.saturating_sub(extracted_count as usize));
+            let remaining_limit = self
+                .sample_limit
+                .map(|limit| limit.saturating_sub(extracted_count as usize));
             extracted_count += self
                 .extract_nulls(
                     extract_state,
@@ -1181,6 +1193,28 @@ impl MysqlTableCtx {
             return Ok(None);
         }
 
+        let Some(row_count) = self.estimate_sample_row_count(tb_meta).await? else {
+            return Ok(None);
+        };
+        Ok(estimated_sample_limit(self.shared.sample_rate, row_count))
+    }
+
+    async fn estimate_sample_row_count(
+        &self,
+        tb_meta: &MysqlTbMeta,
+    ) -> anyhow::Result<Option<u64>> {
+        let where_condition = self
+            .shared
+            .filter
+            .get_where_condition(&self.table_id.schema, &self.table_id.tb)
+            .cloned()
+            .unwrap_or_default();
+        if !where_condition.is_empty() {
+            return self
+                .estimate_filtered_sample_row_count(tb_meta, &where_condition)
+                .await;
+        }
+
         let sql = "SELECT TABLE_ROWS
 FROM information_schema.TABLES
 WHERE table_type = 'BASE TABLE' AND table_schema = ? AND table_name = ?
@@ -1194,7 +1228,58 @@ LIMIT 1";
             return Ok(None);
         };
 
-        let row_count: u64 = row.try_get(0)?;
-        Ok(estimated_sample_limit(self.shared.sample_rate, row_count))
+        row.try_get(0).map_err(Into::into)
+    }
+
+    async fn estimate_filtered_sample_row_count(
+        &self,
+        tb_meta: &MysqlTbMeta,
+        where_condition: &str,
+    ) -> anyhow::Result<Option<u64>> {
+        let sql = format!(
+            "EXPLAIN FORMAT=JSON SELECT 1 FROM {}.{} WHERE {}",
+            quote!(&tb_meta.basic.schema),
+            quote!(&tb_meta.basic.tb),
+            where_condition
+        );
+        let Some(row) = sqlx::query(&sql)
+            .fetch_optional(&self.shared.conn_pool)
+            .await?
+        else {
+            return Ok(None);
+        };
+
+        let plan: String = row.try_get(0)?;
+        let plan: serde_json::Value = serde_json::from_str(&plan)?;
+        let table = plan.get("query_block").and_then(|node| node.get("table"));
+        let Some(table) = table else {
+            return Ok(None);
+        };
+
+        if let Some(rows) = Self::mysql_explain_u64(table, "rows_produced_per_join") {
+            return Ok((rows > 0).then_some(rows));
+        }
+
+        let Some(rows) = Self::mysql_explain_u64(table, "rows_examined_per_scan") else {
+            return Ok(None);
+        };
+        let filtered = Self::mysql_explain_f64(table, "filtered")
+            .unwrap_or(100.0)
+            .clamp(0.0, 100.0);
+        let estimate = (rows as f64 * filtered / 100.0).ceil();
+        Ok(
+            (estimate.is_finite() && estimate > 0.0)
+                .then_some(estimate.min(u64::MAX as f64) as u64),
+        )
+    }
+
+    fn mysql_explain_u64(plan: &serde_json::Value, key: &str) -> Option<u64> {
+        plan.get(key)
+            .and_then(|value| value.as_u64().or_else(|| value.as_str()?.parse().ok()))
+    }
+
+    fn mysql_explain_f64(plan: &serde_json::Value, key: &str) -> Option<f64> {
+        plan.get(key)
+            .and_then(|value| value.as_f64().or_else(|| value.as_str()?.parse().ok()))
     }
 }

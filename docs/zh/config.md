@@ -98,8 +98,9 @@ struct check 仅支持 standalone MySQL/PostgreSQL checker target。
 - checker 仅支持 `[pipeline] pipeline_type=basic`。
 - `sample_rate` 仅支持 snapshot check 和 inline CDC check。有效范围是 `1..=100`；空值表示
   校验全部行/变更。Standalone MySQL/PostgreSQL/MongoDB snapshot check 会在 snapshot 抽取阶段
-  应用该比例，减少后续 checker 工作量。存在元数据行数估算时，extractor 会把源端读取限制到
-  大约 `estimated_rows * sample_rate / 100`。如果没有有效估算，则读取完整源端 stream。该抽样
+  应用该比例，减少后续 checker 工作量。存在行数估算时，extractor 会把源端读取限制到
+  大约 `row_count * sample_rate / 100`。`row_count` 基于表估算；表配置了 `where_conditions`
+  时基于该过滤条件估算。如果没有有效估算，则读取完整源端 stream。该抽样
   是源端 Top-N limit，不是 key hash 抽样，也不是随机抽样。Inline snapshot check 和 inline CDC
   check 会先完整写入所有行/变更，然后在 checker 目标端 fetch 前进行确定性的 key hash 抽样；
   相同 key 的行/变更会保持一致的抽样结果。
