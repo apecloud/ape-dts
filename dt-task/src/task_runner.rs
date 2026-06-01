@@ -1,6 +1,7 @@
 use std::{
     collections::HashMap,
     panic,
+    path::{Component, Path},
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
@@ -299,7 +300,24 @@ impl TaskRunner {
     }
 
     fn same_check_log_dir(left: &str, right: &str) -> bool {
-        left.trim_end_matches('/') == right.trim_end_matches('/')
+        let normalize = |path: &str| {
+            std::fs::canonicalize(path).unwrap_or_else(|_| {
+                let path = std::env::current_dir()
+                    .unwrap_or_default()
+                    .join(Path::new(path));
+                path.components().fold(Path::new("").into(), |mut acc, c| {
+                    match c {
+                        Component::CurDir => {}
+                        Component::ParentDir => {
+                            acc.pop();
+                        }
+                        _ => acc.push(c.as_os_str()),
+                    }
+                    acc
+                })
+            })
+        };
+        normalize(left) == normalize(right)
     }
 
     async fn remove_empty_check_logs(&self) -> anyhow::Result<()> {
@@ -1662,6 +1680,17 @@ mod tests {
         assert!(TaskRunner::check_log_replay_reads_from_dir(
             &extractor,
             "/tmp/ape-dts/check"
+        ));
+        assert!(TaskRunner::check_log_replay_reads_from_dir(
+            &extractor,
+            "/tmp/ape-dts/./check"
+        ));
+        assert!(TaskRunner::same_check_log_dir(
+            "logs/check",
+            &std::env::current_dir()
+                .unwrap()
+                .join("logs/check")
+                .to_string_lossy()
         ));
         assert!(!TaskRunner::check_log_replay_reads_from_dir(
             &extractor,

@@ -243,11 +243,9 @@ impl CheckUtil {
                 fs::remove_file(&log_file).unwrap();
             }
         }
-        for file in ["summary.log"] {
-            let log_file = format!("{}/{}", dst_check_log_dir, file);
-            if BaseTestRunner::check_path_exists(&log_file) {
-                File::create(&log_file).unwrap().set_len(0).unwrap();
-            }
+        let summary_file = format!("{}/summary.log", dst_check_log_dir);
+        if BaseTestRunner::check_path_exists(&summary_file) {
+            File::create(&summary_file).unwrap().set_len(0).unwrap();
         }
     }
 

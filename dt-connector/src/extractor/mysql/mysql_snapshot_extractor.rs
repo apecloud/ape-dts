@@ -6,12 +6,13 @@ use std::{
 use anyhow::{anyhow, bail};
 use async_trait::async_trait;
 use futures::TryStreamExt;
-use sqlx::{MySql, Pool};
+use sqlx::{MySql, Pool, Row};
 
 use crate::{
     extractor::{
         base_extractor::{BaseExtractor, ExtractState},
         base_splitter::SnapshotChunk,
+        estimated_sample_limit,
         mysql::mysql_snapshot_splitter::MySqlSnapshotSplitter,
         rdb_snapshot_extract_statement::{OrderKeyPredicateType, RdbSnapshotExtractStatement},
         resumer::recovery::Recovery,
@@ -106,18 +107,6 @@ enum MysqlSnapshotWorkResult {
         table_id: SnapshotTableId,
         count: u64,
     },
-}
-
-// Position-based sampling for standalone snapshot check to drop rows before checker work.
-fn should_sample_row(sample_rate: Option<u8>, extracted_count: u64) -> bool {
-    let Some(sample_rate) = sample_rate.filter(|rate| *rate < 100) else {
-        return true;
-    };
-    if sample_rate == 0 || extracted_count == 0 {
-        return false;
-    }
-
-    (extracted_count - 1) % 100 < u64::from(sample_rate)
 }
 
 #[async_trait]
@@ -246,7 +235,7 @@ impl MysqlSnapshotExtractor {
                 order_cols,
             } => {
                 let count = ctx
-                    .extract_nulls(&mut extract_state, tb_meta.as_ref(), &order_cols)
+                    .extract_nulls(&mut extract_state, tb_meta.as_ref(), &order_cols, None)
                     .await?;
                 extract_state.monitor.try_flush(true).await;
                 Ok(MysqlSnapshotWorkResult::NullChunk { table_id, count })
@@ -437,9 +426,6 @@ impl MysqlSnapshotExtractor {
             extracted_cnt += 1;
             partition_col_value =
                 MysqlColValueConvertor::from_query(&row, &partition_col, &partition_col_type)?;
-            if !should_sample_row(shared.sample_rate, extracted_cnt) {
-                continue;
-            }
             let row_data =
                 RowData::from_mysql_row(&row, &tb_meta, &ignore_cols.as_ref(), Some(chunk_id));
             shared
@@ -724,6 +710,9 @@ impl MysqlTableCtx {
         &self,
         tb_meta: &MysqlTbMeta,
     ) -> anyhow::Result<MysqlActiveTableMode> {
+        if self.shared.sample_rate.is_some_and(|rate| rate < 100) {
+            return Ok(MysqlActiveTableMode::Table);
+        }
         if matches!(self.shared.parallel_type, RdbParallelType::Chunk) {
             return self.prepare_splitter_active_mode(tb_meta).await;
         }
@@ -928,20 +917,21 @@ impl MysqlTableCtx {
             .get_where_condition(&self.table_id.schema, &self.table_id.tb)
             .cloned()
             .unwrap_or_default();
-        let sql = RdbSnapshotExtractStatement::from(tb_meta)
-            .with_ignore_cols(ignore_cols.unwrap_or(&HashSet::new()))
-            .with_where_condition(&where_condition)
-            .build()?;
+        let sample_limit = self.estimate_sample_limit(tb_meta).await?;
+        let empty_ignore_cols = HashSet::new();
+        let stmt_ignore_cols = ignore_cols.unwrap_or(&empty_ignore_cols);
+        let mut stmt = RdbSnapshotExtractStatement::from(tb_meta)
+            .with_ignore_cols(stmt_ignore_cols)
+            .with_where_condition(&where_condition);
+        if let Some(limit) = sample_limit {
+            stmt = stmt.with_limit(limit);
+        }
+        let sql = stmt.build()?;
 
         let mut rows = sqlx::query(&sql).fetch(&self.shared.conn_pool);
-        let mut extracted_count = 0u64;
         let mut chunk_id_generator = SnapshotChunkIdGenerator::new(self.shared.batch_size);
         while let Some(row) = rows.try_next().await? {
-            extracted_count += 1;
             let row_chunk_id = chunk_id_generator.next_row_chunk_id();
-            if !should_sample_row(self.shared.sample_rate, extracted_count) {
-                continue;
-            }
             let row_data = RowData::from_mysql_row(&row, tb_meta, &ignore_cols, Some(row_chunk_id));
             self.shared
                 .base_extractor
@@ -979,6 +969,10 @@ impl MysqlTableCtx {
         let mut extracted_count = 0u64;
         let mut start_values = resume_values;
         let mut chunk_id_generator = SnapshotChunkIdGenerator::new(self.shared.batch_size);
+        let sample_limit = self.estimate_sample_limit(tb_meta).await?;
+        let page_limit = sample_limit
+            .map(|limit| limit.min(self.shared.batch_size))
+            .unwrap_or(self.shared.batch_size);
         let ignore_cols = self
             .shared
             .filter
@@ -994,14 +988,14 @@ impl MysqlTableCtx {
             .with_order_cols(&tb_meta.basic.order_cols)
             .with_where_condition(&where_condition)
             .with_predicate_type(OrderKeyPredicateType::None)
-            .with_limit(self.shared.batch_size)
+            .with_limit(page_limit)
             .build()?;
         let sql_from_value = RdbSnapshotExtractStatement::from(tb_meta)
             .with_ignore_cols(ignore_cols.unwrap_or(&HashSet::new()))
             .with_order_cols(&tb_meta.basic.order_cols)
             .with_where_condition(&where_condition)
             .with_predicate_type(OrderKeyPredicateType::GreaterThan)
-            .with_limit(self.shared.batch_size)
+            .with_limit(page_limit)
             .build()?;
         let missing_order_col = |order_col: &str| {
             anyhow!(
@@ -1030,6 +1024,9 @@ impl MysqlTableCtx {
                 let mut rows = query.fetch(&self.shared.conn_pool);
                 let mut slice_count = 0usize;
                 while let Some(row) = rows.try_next().await? {
+                    if sample_limit.is_some_and(|limit| extracted_count >= limit as u64) {
+                        break;
+                    }
                     let value = start_values
                         .get_mut(order_col)
                         .ok_or_else(|| missing_order_col(order_col))?;
@@ -1037,9 +1034,6 @@ impl MysqlTableCtx {
                     extracted_count += 1;
                     slice_count += 1;
                     let row_chunk_id = chunk_id_generator.next_row_chunk_id();
-                    if !should_sample_row(self.shared.sample_rate, extracted_count) {
-                        continue;
-                    }
 
                     let row_data =
                         RowData::from_mysql_row(&row, tb_meta, &ignore_cols, Some(row_chunk_id));
@@ -1055,7 +1049,9 @@ impl MysqlTableCtx {
                         .await?;
                 }
 
-                if slice_count < self.shared.batch_size {
+                if sample_limit.is_some_and(|limit| extracted_count >= limit as u64)
+                    || slice_count < page_limit
+                {
                     break;
                 }
             }
@@ -1077,6 +1073,9 @@ impl MysqlTableCtx {
                 let mut rows = query.fetch(&self.shared.conn_pool);
                 let mut slice_count = 0usize;
                 while let Some(row) = rows.try_next().await? {
+                    if sample_limit.is_some_and(|limit| extracted_count >= limit as u64) {
+                        break;
+                    }
                     for order_col in &tb_meta.basic.order_cols {
                         let order_col_type = tb_meta.get_col_type(order_col)?;
                         let value = start_values
@@ -1088,9 +1087,6 @@ impl MysqlTableCtx {
                     extracted_count += 1;
                     slice_count += 1;
                     let row_chunk_id = chunk_id_generator.next_row_chunk_id();
-                    if !should_sample_row(self.shared.sample_rate, extracted_count) {
-                        continue;
-                    }
 
                     let row_data =
                         RowData::from_mysql_row(&row, tb_meta, &ignore_cols, Some(row_chunk_id));
@@ -1101,7 +1097,9 @@ impl MysqlTableCtx {
                         .await?;
                 }
 
-                if slice_count < self.shared.batch_size {
+                if sample_limit.is_some_and(|limit| extracted_count >= limit as u64)
+                    || slice_count < page_limit
+                {
                     break;
                 }
             }
@@ -1112,9 +1110,17 @@ impl MysqlTableCtx {
             .order_cols
             .iter()
             .any(|col| tb_meta.basic.is_col_nullable(col))
+            && !sample_limit.is_some_and(|limit| extracted_count >= limit as u64)
         {
+            let remaining_limit =
+                sample_limit.map(|limit| limit.saturating_sub(extracted_count as usize));
             extracted_count += self
-                .extract_nulls(extract_state, tb_meta, &tb_meta.basic.order_cols)
+                .extract_nulls(
+                    extract_state,
+                    tb_meta,
+                    &tb_meta.basic.order_cols,
+                    remaining_limit,
+                )
                 .await?;
         }
 
@@ -1126,6 +1132,7 @@ impl MysqlTableCtx {
         extract_state: &mut ExtractState,
         tb_meta: &MysqlTbMeta,
         order_cols: &Vec<String>,
+        limit: Option<usize>,
     ) -> anyhow::Result<u64> {
         let mut extracted_count = 0u64;
         let mut chunk_id_generator = SnapshotChunkIdGenerator::new(self.shared.batch_size);
@@ -1139,20 +1146,22 @@ impl MysqlTableCtx {
             .get_where_condition(&self.table_id.schema, &self.table_id.tb)
             .cloned()
             .unwrap_or_default();
-        let sql_for_null = RdbSnapshotExtractStatement::from(tb_meta)
-            .with_ignore_cols(ignore_cols.unwrap_or(&HashSet::new()))
+        let empty_ignore_cols = HashSet::new();
+        let stmt_ignore_cols = ignore_cols.unwrap_or(&empty_ignore_cols);
+        let mut stmt = RdbSnapshotExtractStatement::from(tb_meta)
+            .with_ignore_cols(stmt_ignore_cols)
             .with_order_cols(order_cols)
             .with_where_condition(&where_condition)
-            .with_predicate_type(OrderKeyPredicateType::IsNull)
-            .build()?;
+            .with_predicate_type(OrderKeyPredicateType::IsNull);
+        if let Some(limit) = limit {
+            stmt = stmt.with_limit(limit);
+        }
+        let sql_for_null = stmt.build()?;
 
         let mut rows = sqlx::query(&sql_for_null).fetch(&self.shared.conn_pool);
         while let Some(row) = rows.try_next().await? {
             extracted_count += 1;
             let row_chunk_id = chunk_id_generator.next_row_chunk_id();
-            if !should_sample_row(self.shared.sample_rate, extracted_count) {
-                continue;
-            }
             let row_data = RowData::from_mysql_row(&row, tb_meta, &ignore_cols, Some(row_chunk_id));
             self.shared
                 .base_extractor
@@ -1160,5 +1169,32 @@ impl MysqlTableCtx {
                 .await?;
         }
         Ok(extracted_count)
+    }
+
+    async fn estimate_sample_limit(&self, tb_meta: &MysqlTbMeta) -> anyhow::Result<Option<usize>> {
+        if self
+            .shared
+            .sample_rate
+            .filter(|rate| (1..100).contains(rate))
+            .is_none()
+        {
+            return Ok(None);
+        }
+
+        let sql = "SELECT TABLE_ROWS
+FROM information_schema.TABLES
+WHERE table_type = 'BASE TABLE' AND table_schema = ? AND table_name = ?
+LIMIT 1";
+        let Some(row) = sqlx::query(sql)
+            .bind(&tb_meta.basic.schema)
+            .bind(&tb_meta.basic.tb)
+            .fetch_optional(&self.shared.conn_pool)
+            .await?
+        else {
+            return Ok(None);
+        };
+
+        let row_count: u64 = row.try_get(0)?;
+        Ok(estimated_sample_limit(self.shared.sample_rate, row_count))
     }
 }

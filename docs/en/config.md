@@ -101,14 +101,11 @@ Notes:
 - Checker only supports `[pipeline] pipeline_type=basic`.
 - `sample_rate` only supports snapshot check and inline CDC check. Valid values are `1..=100`; an
   empty value means all rows/changes are checked. Standalone MySQL/PostgreSQL/MongoDB snapshot check
-  applies it during extraction by row position inside each extractor stream, so later checker work
-  receives fewer rows. MySQL/PostgreSQL parallel chunks are sampled independently, and the nullable
-  order-column NULL pass has its own counter; MongoDB uses the collection cursor position. For
-  example, `sample_rate=25` keeps positions 1-25 in every 100-position window of each stream. After
-  resume, standalone snapshot check restarts those position counters from the resumed stream, so the
-  sampled row set can differ from an uninterrupted run if the previous run stopped between sampled
-  rows. Inline
-  snapshot check and inline CDC check write all rows/changes first, then apply deterministic
+  applies it during extraction, so later checker work receives fewer rows. When metadata row
+  estimates are available, the extractor limits source reads to roughly
+  `estimated_rows * sample_rate / 100`. If no useful estimate is available, extraction reads the
+  full source stream. This sampling is source-side Top-N limiting, not key-hash or random sampling.
+  Inline snapshot check and inline CDC check write all rows/changes first, then apply deterministic
   checker-side key-hash sampling before target fetch, so rows/changes with the same key are sampled
   consistently.
 - `queue_size` counts queued checker DML batches, not rows. Control signals such as checkpoint and

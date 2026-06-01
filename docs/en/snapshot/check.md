@@ -6,13 +6,12 @@ Supports comparison for MySQL, PostgreSQL, and MongoDB.
 
 Snapshot and inline CDC checks support sampling via `[checker].sample_rate`.
 For standalone MySQL/PostgreSQL/MongoDB snapshot check, `sample_rate` is applied during extraction
-before rows enter later checker work. It is position-based inside each extractor stream rather than
-key-hash based: MySQL/PostgreSQL parallel extraction counts positions independently inside each
-chunk, nullable order-column rows are counted in their own NULL pass, and MongoDB counts positions
-inside the collection cursor. For example, `sample_rate=25` keeps positions 1-25 in every
-100-position window of each such stream. Inline snapshot check and inline CDC check write all
-rows/changes first, then apply deterministic checker-side key-hash sampling before target fetch.
-Rows/changes with the same key are sampled consistently.
+before rows enter later checker work. When table/collection row estimates are available, the source
+query is capped with `LIMIT ceil(estimated_rows * sample_rate / 100)`. If no useful estimate is
+available, extraction reads the full source stream. This sampling is source-side Top-N limiting, not
+key-hash based or random. Inline snapshot check and inline CDC check write all rows/changes first,
+then apply deterministic checker-side key-hash sampling before target fetch. Rows/changes with the
+same key are sampled consistently.
 
 Data check is documented in three flows:
 
@@ -120,19 +119,16 @@ templates now separate standalone snapshot check, inline snapshot check, and inl
 ### Sampling Check
 
 For snapshot and inline CDC checks, add `sample_rate` to the `[checker]` section. For standalone
-MySQL/PostgreSQL/MongoDB snapshot check, sampling is applied during extraction and uses row position
-within the current extractor stream. In parallel MySQL/PostgreSQL extraction, each chunk has its own
-position counter; rows extracted by the nullable order-column pass also have their own counter.
-Therefore `sample_rate=25` keeps positions 1-25 in each 100-position window for each stream, and the
-final table-level ratio can vary, especially for small chunks. For inline snapshot check and inline
-CDC check, `sample_rate=25` still writes all rows/changes, then checks rows/changes whose key hash
-falls into the sampled percentage before target fetch/compare.
+MySQL/PostgreSQL/MongoDB snapshot check, sampling is applied during extraction. With metadata row
+estimates, the extractor limits source reads to the estimated sampled row count, so `sample_rate=25`
+queries roughly 25% of the estimated rows. If the estimate is missing or zero, extraction reads the
+full source stream. For inline snapshot check and inline CDC check, `sample_rate=25` still writes all
+rows/changes, then checks rows/changes whose key hash falls into the sampled percentage before target
+fetch/compare.
 
-When standalone snapshot check resumes from a checkpoint, position counters restart from the resumed
-extractor stream. If the previous run stopped after a sampled row but before the next sampled row, the
-resumed run may re-window the following rows, so the sampled row set may differ from a single
-uninterrupted run. Inline snapshot check and inline CDC check use key-hash sampling and keep the same
-key sampling decision across resumes.
+Standalone snapshot check uses source-side limits, so the sampled row set may differ after a resumed
+run. Inline snapshot check and inline CDC check use key-hash sampling and keep the same key sampling
+decision across resumes.
 
 ```
 [checker]
