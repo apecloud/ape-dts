@@ -545,7 +545,8 @@ impl PgSnapshotDispatchState {
             .clone()
             .get_tb_meta(&table_id.schema, &table_id.tb)
             .await?
-            .to_owned();
+            .as_ref()
+            .clone();
         let active_mode = table_ctx.prepare_active_mode(&tb_meta).await?;
 
         self.active_tables.insert(
@@ -843,7 +844,7 @@ impl PgTableCtx {
                     );
                     return Ok(HashMap::new());
                 }
-                let mut meta_manager = self.shared.meta_manager.clone();
+                let meta_manager = self.shared.meta_manager.clone();
                 for ((position_order_col, value), order_col) in
                     order_col_values.into_iter().zip(order_cols.iter())
                 {
@@ -861,7 +862,7 @@ impl PgTableCtx {
                         Some(v) => PgColValueConvertor::from_str(
                             tb_meta.get_col_type(order_col)?,
                             &v,
-                            &mut meta_manager,
+                            &meta_manager,
                         )?,
                         None => ColValue::None,
                     };

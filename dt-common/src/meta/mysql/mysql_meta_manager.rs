@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use sqlx::{MySql, Pool};
 
@@ -37,31 +38,27 @@ impl MysqlMetaManager {
         })
     }
 
-    pub fn invalidate_cache(&mut self, schema: &str, tb: &str) {
-        if let Some(meta_center) = &mut self.meta_center {
+    pub fn invalidate_cache(&self, schema: &str, tb: &str) {
+        if let Some(meta_center) = &self.meta_center {
             meta_center.meta_fetcher.invalidate_cache(schema, tb);
         }
         self.meta_fetcher.invalidate_cache(schema, tb)
     }
 
-    pub fn invalidate_cache_by_ddl_data(&mut self, ddl_data: &DdlData) {
+    pub fn invalidate_cache_by_ddl_data(&self, ddl_data: &DdlData) {
         let (schema, tb) = ddl_data.get_schema_tb();
         self.invalidate_cache(&schema, &tb);
     }
 
-    pub async fn get_tb_meta_by_row_data<'a>(
-        &'a mut self,
+    pub async fn get_tb_meta_by_row_data(
+        &self,
         row_data: &RowData,
-    ) -> anyhow::Result<&'a MysqlTbMeta> {
+    ) -> anyhow::Result<Arc<MysqlTbMeta>> {
         self.get_tb_meta(&row_data.schema, &row_data.tb).await
     }
 
-    pub async fn get_tb_meta<'a>(
-        &'a mut self,
-        schema: &str,
-        tb: &str,
-    ) -> anyhow::Result<&'a MysqlTbMeta> {
-        if let Some(meta_center) = &mut self.meta_center {
+    pub async fn get_tb_meta(&self, schema: &str, tb: &str) -> anyhow::Result<Arc<MysqlTbMeta>> {
+        if let Some(meta_center) = &self.meta_center {
             if let Ok(tb_meta) = meta_center.meta_fetcher.get_tb_meta(schema, tb).await {
                 return Ok(tb_meta);
             }

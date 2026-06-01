@@ -114,7 +114,7 @@ impl StarRocksSinker {
         for row_data in data.iter_mut().skip(start_index).take(batch_size) {
             data_size += row_data.get_data_size() as usize;
             let is_delete = row_data.row_type == RowType::Delete;
-            Self::convert_row_data(row_data, tb_meta)?;
+            Self::convert_row_data(row_data, &tb_meta)?;
             let col_values = Self::active_col_values_mut(row_data)?;
 
             if is_delete && self.db_type == DbType::StarRocks {

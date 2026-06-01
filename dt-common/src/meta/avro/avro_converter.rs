@@ -8,8 +8,7 @@ use crate::{
         col_value::ColValue,
         ddl_meta::{ddl_data::DdlData, ddl_type::DdlType},
         dt_data::DtData,
-        rdb_meta_manager::RdbMetaManager,
-        rdb_tb_meta::RdbTbMeta,
+        rdb_meta_manager::{RdbMetaManager, RdbTbMetaGuard},
         row_data::RowData,
         row_type::RowType,
     },
@@ -46,7 +45,7 @@ impl AvroConverter {
     }
 
     pub fn refresh_meta(&mut self, data: &[DdlData]) {
-        if let Some(meta_manager) = &mut self.meta_manager {
+        if let Some(meta_manager) = &self.meta_manager {
             for ddl_data in data.iter() {
                 meta_manager.invalidate_cache_by_ddl_data(ddl_data);
             }
@@ -55,6 +54,7 @@ impl AvroConverter {
 
     pub async fn row_data_to_avro_key(&mut self, row_data: &RowData) -> anyhow::Result<String> {
         if let Some(tb_meta) = self.get_tb_meta(row_data).await? {
+            let tb_meta = tb_meta.as_ref();
             let convert = |col_values: &HashMap<String, ColValue>| {
                 if let Some(col) = tb_meta.order_cols.first() {
                     if let Some(value) = col_values.get(col) {
@@ -113,8 +113,8 @@ impl AvroConverter {
             let tb_meta = self.get_tb_meta(row_data).await?;
             for col in cols.iter() {
                 let mut column_type = String::new();
-                if let Some(tb_meta) = tb_meta {
-                    if let Some(col_origin_type) = tb_meta.col_origin_type_map.get(col) {
+                if let Some(tb_meta) = &tb_meta {
+                    if let Some(col_origin_type) = tb_meta.as_ref().col_origin_type_map.get(col) {
                         column_type = col_origin_type.to_owned();
                     }
                 }
@@ -364,11 +364,8 @@ impl AvroConverter {
         avro_map
     }
 
-    async fn get_tb_meta<'a>(
-        &'a mut self,
-        row_data: &RowData,
-    ) -> anyhow::Result<Option<&'a RdbTbMeta>> {
-        if let Some(meta_manager) = self.meta_manager.as_mut() {
+    async fn get_tb_meta(&mut self, row_data: &RowData) -> anyhow::Result<Option<RdbTbMetaGuard>> {
+        if let Some(meta_manager) = self.meta_manager.as_ref() {
             let tb_meta = meta_manager
                 .get_tb_meta(&row_data.schema, &row_data.tb)
                 .await?;

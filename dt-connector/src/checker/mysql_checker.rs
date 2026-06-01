@@ -30,6 +30,7 @@ impl Checker for MysqlChecker {
             self.meta_manager
                 .get_tb_meta_by_row_data(first_row)
                 .await?
+                .as_ref()
                 .clone(),
         ));
         let CheckerTbMeta::Mysql(mysql_meta) = tb_meta.as_ref() else {

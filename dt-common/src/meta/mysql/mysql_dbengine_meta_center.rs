@@ -37,7 +37,7 @@ impl MysqlDbEngineMetaCenter {
         })
     }
 
-    pub async fn sync_from_ddl(&mut self, ddl_data: &DdlData) -> anyhow::Result<()> {
+    pub async fn sync_from_ddl(&self, ddl_data: &DdlData) -> anyhow::Result<()> {
         let (db, tb) = ddl_data.get_schema_tb();
         self.meta_fetcher.invalidate_cache(&db, &tb);
         log_info!(

@@ -30,6 +30,7 @@ impl Checker for PgChecker {
             self.meta_manager
                 .get_tb_meta_by_row_data(first_row)
                 .await?
+                .as_ref()
                 .clone(),
         ));
         let CheckerTbMeta::Pg(pg_meta) = tb_meta.as_ref() else {

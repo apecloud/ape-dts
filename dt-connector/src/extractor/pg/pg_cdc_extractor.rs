@@ -285,32 +285,33 @@ impl PgCdcExtractor {
         if self.filter.filter_tb(schema, tb) && !self.extract_state.is_data_marker_info(schema, tb)
         {
             let tb_meta = Self::mock_pg_tb_meta(schema, tb, event.rel_id() as i32);
+            // Keep mock metadata local to the CDC OID map. Writing it to the
+            // shared table-name cache would poison normal metadata readers.
             self.meta_manager
                 .update_tb_meta_by_oid(event.rel_id() as i32, tb_meta)?;
             return Ok(());
         }
 
         // todo, use event.rel_id()
-        let mut tb_meta = self.meta_manager.get_tb_meta(schema, tb).await?.to_owned();
+        let mut tb_meta = self
+            .meta_manager
+            .get_tb_meta(schema, tb)
+            .await?
+            .as_ref()
+            .clone();
         let mut col_names = Vec::new();
         for column in event.columns() {
             // todo: check type_id in oid_to_type
-            let col_type = self
-                .meta_manager
-                .type_registry
-                .oid_to_type
-                .get(&column.type_id())
-                .unwrap();
+            let col_type = self.meta_manager.get_col_type_by_oid(column.type_id())?;
             let col_name = column.name()?;
             // update meta
-            tb_meta
-                .col_type_map
-                .insert(col_name.to_string(), col_type.clone());
+            tb_meta.col_type_map.insert(col_name.to_string(), col_type);
 
             col_names.push(col_name.to_string());
         }
 
-        // align the column order of tb_meta to that of the wal log
+        // Keep WAL column order only in the CDC OID map; normal table-name
+        // cache remains database schema metadata.
         tb_meta.basic.cols = col_names;
         self.meta_manager
             .update_tb_meta_by_oid(event.rel_id() as i32, tb_meta)?;
@@ -332,10 +333,12 @@ impl PgCdcExtractor {
             return Ok(());
         }
 
-        let col_values = self.parse_row_data(&tb_meta, event.tuple().tuple_data())?;
+        let col_values = self
+            .parse_row_data(&tb_meta, event.tuple().tuple_data())
+            .await?;
         let row_data = RowData::new(
-            tb_meta.basic.schema,
-            tb_meta.basic.tb,
+            tb_meta.basic.schema.clone(),
+            tb_meta.basic.tb.clone(),
             0,
             RowType::Insert,
             None,
@@ -366,11 +369,15 @@ impl PgCdcExtractor {
         }
 
         let basic = &tb_meta.basic;
-        let col_values_after = self.parse_row_data(&tb_meta, event.new_tuple().tuple_data())?;
+        let col_values_after = self
+            .parse_row_data(&tb_meta, event.new_tuple().tuple_data())
+            .await?;
         let col_values_before = if let Some(old_tuple) = event.old_tuple() {
-            self.parse_row_data(&tb_meta, old_tuple.tuple_data())?
+            self.parse_row_data(&tb_meta, old_tuple.tuple_data())
+                .await?
         } else if let Some(key_tuple) = event.key_tuple() {
-            self.parse_row_data(&tb_meta, key_tuple.tuple_data())?
+            self.parse_row_data(&tb_meta, key_tuple.tuple_data())
+                .await?
         } else if !basic.id_cols.is_empty() {
             let mut col_values_tmp = HashMap::new();
             for col in basic.id_cols.iter() {
@@ -407,16 +414,18 @@ impl PgCdcExtractor {
         }
 
         let col_values = if let Some(old_tuple) = event.old_tuple() {
-            self.parse_row_data(&tb_meta, old_tuple.tuple_data())?
+            self.parse_row_data(&tb_meta, old_tuple.tuple_data())
+                .await?
         } else if let Some(key_tuple) = event.key_tuple() {
-            self.parse_row_data(&tb_meta, key_tuple.tuple_data())?
+            self.parse_row_data(&tb_meta, key_tuple.tuple_data())
+                .await?
         } else {
             HashMap::new()
         };
 
         let row_data = RowData::new(
-            tb_meta.basic.schema,
-            tb_meta.basic.tb,
+            tb_meta.basic.schema.clone(),
+            tb_meta.basic.tb.clone(),
             0,
             RowType::Delete,
             Some(col_values),
@@ -480,7 +489,7 @@ impl PgCdcExtractor {
         Ok(())
     }
 
-    fn parse_row_data(
+    async fn parse_row_data(
         &mut self,
         tb_meta: &PgTbMeta,
         tuple_data: &[TupleData],
@@ -504,7 +513,7 @@ impl PgCdcExtractor {
 
                 TupleData::Text(value) => {
                     let col_value =
-                        PgColValueConvertor::from_wal(col_type, value, &mut self.meta_manager)?;
+                        PgColValueConvertor::from_wal(col_type, value, &self.meta_manager)?;
                     col_values.insert(col.to_string(), col_value);
                 }
 

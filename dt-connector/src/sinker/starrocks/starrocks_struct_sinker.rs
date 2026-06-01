@@ -64,7 +64,7 @@ impl Sinker for StarrocksStructSinker {
                     if let Some(meta_manager) =
                         self.extractor_meta_manager.mysql_meta_manager.as_mut()
                     {
-                        let tb_meta = meta_manager.get_tb_meta(schema, tb).await?.to_owned();
+                        let tb_meta = meta_manager.get_tb_meta(schema, tb).await?;
                         let sql =
                             self.get_create_table_sql(&statement.table, Some(&tb_meta), None)?;
                         self.execute_sql(&sql).await?;
@@ -81,7 +81,7 @@ impl Sinker for StarrocksStructSinker {
                         .get_tb_map(&statement.table.schema_name, &statement.table.table_name);
                     if let Some(meta_manager) = self.extractor_meta_manager.pg_meta_manager.as_mut()
                     {
-                        let tb_meta = meta_manager.get_tb_meta(schema, tb).await?.to_owned();
+                        let tb_meta = meta_manager.get_tb_meta(schema, tb).await?;
                         let sql =
                             self.get_create_table_sql(&statement.table, None, Some(&tb_meta))?;
                         self.execute_sql(&sql).await?;

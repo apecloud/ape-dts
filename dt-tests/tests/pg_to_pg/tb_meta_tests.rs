@@ -12,7 +12,7 @@ mod test {
             .unwrap();
         runner.execute_prepare_sqls().await.unwrap();
 
-        let mut meta_manager = PgMetaManager::new(runner.src_conn_pool_pg.unwrap())
+        let meta_manager = PgMetaManager::new(runner.src_conn_pool_pg.unwrap())
             .await
             .unwrap();
         let tb_meta = meta_manager

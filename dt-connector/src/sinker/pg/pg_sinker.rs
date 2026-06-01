@@ -195,7 +195,7 @@ impl PgSinker {
             data_len += 1;
 
             let tb_meta = self.meta_manager.get_tb_meta_by_row_data(row_data).await?;
-            let query_builder = RdbQueryBuilder::new_for_pg(tb_meta, None);
+            let query_builder = RdbQueryBuilder::new_for_pg(&tb_meta, None);
 
             let query_info = query_builder.get_query_info(row_data, self.replace)?;
             let query = query_builder.create_pg_query(&query_info)?;
@@ -246,7 +246,7 @@ impl PgSinker {
             .task_id_for_rows(&data[start_index..start_index + batch_size]);
         self.base_sinker.ensure_monitor_for(&task_id);
         let tb_meta = self.meta_manager.get_tb_meta_by_row_data(&data[0]).await?;
-        let query_builder = RdbQueryBuilder::new_for_pg(tb_meta, None);
+        let query_builder = RdbQueryBuilder::new_for_pg(&tb_meta, None);
 
         let (query_info, data_size) =
             query_builder.get_batch_delete_query(data, start_index, batch_size)?;

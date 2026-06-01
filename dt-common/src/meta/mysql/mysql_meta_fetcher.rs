@@ -1,8 +1,11 @@
 use futures::TryStreamExt;
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 use anyhow::{bail, Ok};
+use dashmap::DashMap;
 use sqlx::{mysql::MySqlRow, MySql, Pool, Row};
+use tokio::sync::Mutex;
 
 use super::{mysql_col_type::MysqlColType, mysql_tb_meta::MysqlTbMeta};
 use crate::{
@@ -17,8 +20,17 @@ use crate::{
 
 #[derive(Clone)]
 pub struct MysqlMetaFetcher {
+    inner: Arc<MysqlMetaFetcherInner>,
+}
+
+pub struct MysqlMetaFetcherInner {
     pub conn_pool: Pool<MySql>,
-    pub cache: HashMap<String, MysqlTbMeta>,
+    // Shared by all cloned fetchers. Values are Arc so callers can keep table
+    // metadata without holding DashMap guards.
+    pub cache: DashMap<String, Arc<MysqlTbMeta>>,
+    // Per-table singleflight locks. Keep lock entries instead of removing them;
+    // removing them can reintroduce races around concurrent first fetches.
+    pub locks: DashMap<String, Arc<Mutex<()>>>,
     pub version: String,
     pub db_type: DbType,
 }
@@ -45,78 +57,119 @@ impl MysqlMetaFetcher {
         conn_pool: Pool<MySql>,
         db_type: DbType,
     ) -> anyhow::Result<Self> {
-        let mut me = Self {
+        let mut inner = MysqlMetaFetcherInner {
             conn_pool,
-            cache: HashMap::new(),
+            cache: DashMap::new(),
+            locks: DashMap::new(),
             version: String::new(),
             db_type,
         };
-        me.init_version().await?;
-        Ok(me)
+        inner.init_version().await?;
+        Ok(Self {
+            inner: Arc::new(inner),
+        })
     }
 
-    pub fn invalidate_cache(&mut self, schema: &str, tb: &str) {
+    pub fn version(&self) -> &str {
+        &self.inner.version
+    }
+
+    pub fn invalidate_cache(&self, schema: &str, tb: &str) {
+        // FIXME: This does not prevent an already-running fetch from inserting
+        // stale metadata after invalidate. Add per-table epochs before allowing
+        // concurrent DDL refresh and metadata fetch paths that affect CDC.
         if !schema.is_empty() && !tb.is_empty() {
-            let full_name = format!("{}.{}", schema, tb);
-            self.cache.remove(&full_name);
+            let full_name = Self::table_key(schema, tb);
+            self.inner.cache.remove(&full_name);
         } else {
             // clear all cache is always safe
-            self.cache.clear();
+            self.inner.cache.clear();
         }
     }
 
-    pub fn invalidate_cache_by_ddl_data(&mut self, ddl_data: &DdlData) {
+    pub fn invalidate_cache_by_ddl_data(&self, ddl_data: &DdlData) {
         let (schema, tb) = ddl_data.get_schema_tb();
         self.invalidate_cache(&schema, &tb);
     }
 
-    pub async fn get_tb_meta_by_row_data<'a>(
-        &'a mut self,
+    pub async fn get_tb_meta_by_row_data(
+        &self,
         row_data: &RowData,
-    ) -> anyhow::Result<&'a MysqlTbMeta> {
+    ) -> anyhow::Result<Arc<MysqlTbMeta>> {
         self.get_tb_meta(&row_data.schema, &row_data.tb).await
     }
 
-    pub async fn get_tb_meta<'a>(
-        &'a mut self,
-        schema: &str,
-        tb: &str,
-    ) -> anyhow::Result<&'a MysqlTbMeta> {
-        let full_name = format!("{}.{}", schema, tb);
-        if !self.cache.contains_key(&full_name) {
-            let (cols, col_origin_type_map, col_type_map, nullable_cols) =
-                Self::parse_cols(&self.conn_pool, &self.db_type, schema, tb).await?;
-            let key_map = Self::parse_keys(&self.conn_pool, schema, tb).await?;
-            let (order_cols, partition_col, id_cols) =
-                RdbMetaManager::parse_rdb_cols(&key_map, &cols, &nullable_cols)?;
-            // disable get_foreign_keys since we don't support foreign key check,
-            // also querying them is very slow, which may cause terrible performance issue if there were many tables in a CDC task.
-            let (foreign_keys, ref_by_foreign_keys) = (vec![], vec![]);
-            // let (foreign_keys, ref_by_foreign_keys) =
-            //     Self::get_foreign_keys(&self.conn_pool, &self.db_type, schema, tb).await?;
-
-            let basic = RdbTbMeta {
-                schema: schema.to_string(),
-                tb: tb.to_string(),
-                cols,
-                nullable_cols,
-                col_origin_type_map,
-                key_map,
-                order_cols,
-                partition_col,
-                id_cols,
-                foreign_keys,
-                ref_by_foreign_keys,
-            };
-            let tb_meta = MysqlTbMeta {
-                basic,
-                col_type_map,
-            };
-            self.cache.insert(full_name.clone(), tb_meta);
+    pub async fn get_tb_meta(&self, schema: &str, tb: &str) -> anyhow::Result<Arc<MysqlTbMeta>> {
+        let full_name = Self::table_key(schema, tb);
+        if let Some(tb_meta) = self.inner.cache.get(&full_name) {
+            return Ok(tb_meta.clone());
         }
-        Ok(self.cache.get(&full_name).unwrap())
+
+        // Use DashMap::entry so all concurrent cache misses for this table get
+        // the same mutex. A get-then-insert pattern would not be atomic here.
+        let lock = {
+            let entry = self
+                .inner
+                .locks
+                .entry(full_name.clone())
+                .or_insert_with(|| Arc::new(Mutex::new(())));
+            entry.value().clone()
+        };
+        let _guard = lock.lock().await;
+
+        // Another worker may have populated the shared cache while we waited.
+        if let Some(tb_meta) = self.inner.cache.get(&full_name) {
+            return Ok(tb_meta.clone());
+        }
+
+        let tb_meta = Arc::new(self.fetch_tb_meta(schema, tb).await?);
+        self.inner.cache.insert(full_name, tb_meta.clone());
+        Ok(tb_meta)
     }
 
+    fn table_key(schema: &str, tb: &str) -> String {
+        format!("{}.{}", schema, tb)
+    }
+
+    async fn fetch_tb_meta(&self, schema: &str, tb: &str) -> anyhow::Result<MysqlTbMeta> {
+        let (cols, col_origin_type_map, col_type_map, nullable_cols) =
+            MysqlMetaFetcherInner::parse_cols(
+                &self.inner.conn_pool,
+                &self.inner.db_type,
+                schema,
+                tb,
+            )
+            .await?;
+        let key_map = MysqlMetaFetcherInner::parse_keys(&self.inner.conn_pool, schema, tb).await?;
+        let (order_cols, partition_col, id_cols) =
+            RdbMetaManager::parse_rdb_cols(&key_map, &cols, &nullable_cols)?;
+        // disable get_foreign_keys since we don't support foreign key check,
+        // also querying them is very slow, which may cause terrible performance issue if there were many tables in a CDC task.
+        let (foreign_keys, ref_by_foreign_keys) = (vec![], vec![]);
+        // let (foreign_keys, ref_by_foreign_keys) =
+        //     Self::get_foreign_keys(&self.inner.conn_pool, &self.inner.db_type, schema, tb).await?;
+
+        let basic = RdbTbMeta {
+            schema: schema.to_string(),
+            tb: tb.to_string(),
+            cols,
+            nullable_cols,
+            col_origin_type_map,
+            key_map,
+            order_cols,
+            partition_col,
+            id_cols,
+            foreign_keys,
+            ref_by_foreign_keys,
+        };
+        Ok(MysqlTbMeta {
+            basic,
+            col_type_map,
+        })
+    }
+}
+
+impl MysqlMetaFetcherInner {
     async fn parse_cols(
         conn_pool: &Pool<MySql>,
         db_type: &DbType,

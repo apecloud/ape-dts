@@ -65,8 +65,10 @@ impl BatchCheckExtractor for PgCheckExtractor {
         let schema = &check_logs[0].schema;
         let tb = &check_logs[0].tb;
         let is_diff = !check_logs[0].diff_col_values.is_empty();
-        let tb_meta = self.meta_manager.get_tb_meta(schema, tb).await?.to_owned();
-        let check_row_data_items = self.build_check_row_data_items(check_logs, &tb_meta)?;
+        let tb_meta = self.meta_manager.get_tb_meta(schema, tb).await?;
+        let check_row_data_items = self
+            .build_check_row_data_items(check_logs, &tb_meta)
+            .await?;
 
         let ignore_cols = self.filter.get_ignore_cols(schema, tb);
         let query_builder = RdbQueryBuilder::new_for_pg(&tb_meta, ignore_cols);
@@ -97,7 +99,7 @@ impl BatchCheckExtractor for PgCheckExtractor {
 }
 
 impl PgCheckExtractor {
-    fn build_check_row_data_items(
+    async fn build_check_row_data_items(
         &mut self,
         check_logs: &[CheckLog],
         tb_meta: &PgTbMeta,
@@ -107,9 +109,11 @@ impl PgCheckExtractor {
             let mut after = HashMap::new();
             for (col, value) in check_log.id_col_values.iter() {
                 let col_type = tb_meta.get_col_type(col)?;
-                let col_value = value.as_deref().map_or(Ok(ColValue::None), |v| {
-                    PgColValueConvertor::from_str(col_type, v, &mut self.meta_manager)
-                })?;
+                let col_value = if let Some(v) = value.as_deref() {
+                    PgColValueConvertor::from_str(col_type, v, &self.meta_manager)?
+                } else {
+                    ColValue::None
+                };
                 after.insert(col.to_string(), col_value);
             }
             let check_row_data = RowData::build_insert_row_data(after, &tb_meta.basic, None);

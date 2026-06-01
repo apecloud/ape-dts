@@ -1,12 +1,17 @@
-use std::collections::{HashMap, HashSet};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 
 use crate::{
     error::Error,
     meta::{ddl_meta::ddl_data::DdlData, rdb_meta_manager::RDB_PRIMARY_KEY_FLAG},
 };
 use anyhow::{bail, Context};
+use dashmap::DashMap;
 use futures::TryStreamExt;
 use sqlx::{Pool, Postgres, Row};
+use tokio::sync::Mutex;
 
 use crate::meta::{
     foreign_key::ForeignKey, rdb_meta_manager::RdbMetaManager, rdb_tb_meta::RdbTbMeta,
@@ -17,31 +22,53 @@ use super::{pg_col_type::PgColType, pg_tb_meta::PgTbMeta, type_registry::TypeReg
 
 #[derive(Clone)]
 pub struct PgMetaManager {
+    shared: Arc<PgMetaShared>,
+    // FIXME: Only CDC managers initialize this map. Relation ids are scoped to one
+    // logical replication stream and must not be mixed into the table-name cache.
+    pub oid_to_tb_meta: Option<HashMap<i32, Arc<PgTbMeta>>>,
+}
+
+pub struct PgMetaShared {
     pub conn_pool: Pool<Postgres>,
-    pub type_registry: TypeRegistry,
-    pub name_to_tb_meta: HashMap<String, PgTbMeta>,
-    pub oid_to_tb_meta: HashMap<i32, PgTbMeta>,
+    // FIXME: Initialized once and then shared read-only. If runtime type reload is
+    // needed later, replace this with a snapshot lock and reload singleflight.
+    pub type_registry: Arc<TypeRegistry>,
+    // Shared table-name cache for normal schema metadata.
+    pub name_to_tb_meta: DashMap<String, Arc<PgTbMeta>>,
+    // Per-table singleflight locks for cold-cache fetches.
+    pub locks: DashMap<String, Arc<Mutex<()>>>,
 }
 
 impl PgMetaManager {
     pub async fn new(conn_pool: Pool<Postgres>) -> anyhow::Result<Self> {
+        Self::new_inner(conn_pool, false).await
+    }
+
+    pub async fn new_for_cdc(conn_pool: Pool<Postgres>) -> anyhow::Result<Self> {
+        Self::new_inner(conn_pool, true).await
+    }
+
+    async fn new_inner(conn_pool: Pool<Postgres>, with_oid_cache: bool) -> anyhow::Result<Self> {
         let type_registry = TypeRegistry::new(conn_pool.clone());
-        let mut me = PgMetaManager {
-            conn_pool,
-            type_registry,
-            name_to_tb_meta: HashMap::new(),
-            oid_to_tb_meta: HashMap::new(),
-        };
-        me.type_registry = me.type_registry.init().await?;
-        Ok(me)
+        let type_registry = Arc::new(type_registry.init().await?);
+        Ok(Self {
+            shared: Arc::new(PgMetaShared {
+                conn_pool,
+                type_registry,
+                name_to_tb_meta: DashMap::new(),
+                locks: DashMap::new(),
+            }),
+            oid_to_tb_meta: with_oid_cache.then(HashMap::new),
+        })
     }
 
     pub async fn close(&self) -> anyhow::Result<()> {
         Ok(())
     }
 
-    pub fn get_col_type_by_oid(&mut self, oid: i32) -> anyhow::Result<PgColType> {
+    pub fn get_col_type_by_oid(&self, oid: i32) -> anyhow::Result<PgColType> {
         Ok(self
+            .shared
             .type_registry
             .oid_to_type
             .get(&oid)
@@ -50,93 +77,131 @@ impl PgMetaManager {
     }
 
     pub fn update_tb_meta_by_oid(&mut self, oid: i32, tb_meta: PgTbMeta) -> anyhow::Result<()> {
-        self.oid_to_tb_meta.insert(oid, tb_meta.clone());
-        let full_name = format!(r#""{}"."{}""#, &tb_meta.basic.schema, &tb_meta.basic.tb);
-        self.name_to_tb_meta.insert(full_name, tb_meta);
+        let oid_to_tb_meta = self
+            .oid_to_tb_meta
+            .as_mut()
+            .with_context(|| "pg oid metadata is only available for cdc meta manager")?;
+        // Do not update name_to_tb_meta here. CDC relation metadata may be
+        // mocked for filtered tables or reordered to match WAL column order.
+        oid_to_tb_meta.insert(oid, Arc::new(tb_meta));
         Ok(())
     }
 
-    pub fn get_tb_meta_by_oid(&mut self, oid: i32) -> anyhow::Result<PgTbMeta> {
+    pub fn get_tb_meta_by_oid(&self, oid: i32) -> anyhow::Result<Arc<PgTbMeta>> {
         Ok(self
             .oid_to_tb_meta
+            .as_ref()
+            .with_context(|| "pg oid metadata is only available for cdc meta manager")?
             .get(&oid)
             .with_context(|| format!("no tb_meta found for oid: [{}]", oid))?
             .clone())
     }
 
-    pub async fn get_tb_meta_by_row_data<'a>(
-        &'a mut self,
+    pub async fn get_tb_meta_by_row_data(
+        &self,
         row_data: &RowData,
-    ) -> anyhow::Result<&'a PgTbMeta> {
+    ) -> anyhow::Result<Arc<PgTbMeta>> {
         self.get_tb_meta(&row_data.schema, &row_data.tb).await
     }
 
-    pub async fn get_tb_meta<'a>(
-        &'a mut self,
-        schema: &str,
-        tb: &str,
-    ) -> anyhow::Result<&'a PgTbMeta> {
-        let full_name = format!(r#""{}"."{}""#, schema, tb);
-        if !self.name_to_tb_meta.contains_key(&full_name) {
-            let oid = Self::get_oid(&self.conn_pool, schema, tb).await?;
-            let (cols, col_origin_type_map, col_type_map, nullable_cols) =
-                Self::parse_cols(&self.conn_pool, &mut self.type_registry, schema, tb).await?;
-            let mut key_map = Self::parse_keys(&self.conn_pool, schema, tb).await?;
-            // unique indexes (e.g. CREATE UNIQUE INDEX) are not in table_constraints;
-            let unique_index_keys =
-                Self::parse_unique_index_keys(&self.conn_pool, schema, tb).await?;
-            for (k, v) in unique_index_keys {
-                key_map.entry(k).or_insert(v);
-            }
-            let (order_cols, partition_col, id_cols) =
-                RdbMetaManager::parse_rdb_cols(&key_map, &cols, &nullable_cols)?;
-            // disable get_foreign_keys since we don't support foreign key check
-            let (foreign_keys, ref_by_foreign_keys) = (vec![], vec![]);
-            // let (foreign_keys, ref_by_foreign_keys) =
-            //     Self::get_foreign_keys(&self.conn_pool, schema, tb).await?;
-
-            let basic = RdbTbMeta {
-                schema: schema.to_string(),
-                tb: tb.to_string(),
-                cols,
-                nullable_cols,
-                col_origin_type_map,
-                key_map,
-                order_cols,
-                partition_col,
-                id_cols,
-                foreign_keys,
-                ref_by_foreign_keys,
-            };
-            let tb_meta = PgTbMeta {
-                oid,
-                col_type_map,
-                basic,
-            };
-            self.oid_to_tb_meta.insert(oid, tb_meta.clone());
-            self.name_to_tb_meta.insert(full_name.clone(), tb_meta);
+    pub async fn get_tb_meta(&self, schema: &str, tb: &str) -> anyhow::Result<Arc<PgTbMeta>> {
+        let full_name = Self::table_key(schema, tb);
+        if let Some(tb_meta) = self.shared.name_to_tb_meta.get(&full_name) {
+            return Ok(tb_meta.clone());
         }
-        Ok(self.name_to_tb_meta.get(&full_name).unwrap())
+
+        // Use a per-table lock so concurrent misses for the same table perform
+        // one metadata fetch, while different tables can still fetch in parallel.
+        let lock = {
+            let entry = self
+                .shared
+                .locks
+                .entry(full_name.clone())
+                .or_insert_with(|| Arc::new(Mutex::new(())));
+            entry.value().clone()
+        };
+        let _guard = lock.lock().await;
+
+        // Double-check after waiting; another worker may have filled the cache.
+        if let Some(tb_meta) = self.shared.name_to_tb_meta.get(&full_name) {
+            return Ok(tb_meta.clone());
+        }
+
+        let tb_meta = Arc::new(self.fetch_tb_meta(schema, tb).await?);
+        self.shared
+            .name_to_tb_meta
+            .insert(full_name, tb_meta.clone());
+        Ok(tb_meta)
     }
 
-    pub fn invalidate_cache(&mut self, schema: &str, tb: &str) {
+    fn table_key(schema: &str, tb: &str) -> String {
+        format!(r#""{}"."{}""#, schema, tb)
+    }
+
+    async fn fetch_tb_meta(&self, schema: &str, tb: &str) -> anyhow::Result<PgTbMeta> {
+        let oid = Self::get_oid(&self.shared.conn_pool, schema, tb).await?;
+        let (cols, col_origin_type_map, col_type_map, nullable_cols) = Self::parse_cols(
+            &self.shared.conn_pool,
+            &self.shared.type_registry,
+            schema,
+            tb,
+        )
+        .await?;
+        let mut key_map = Self::parse_keys(&self.shared.conn_pool, schema, tb).await?;
+        // unique indexes (e.g. CREATE UNIQUE INDEX) are not in table_constraints;
+        let unique_index_keys =
+            Self::parse_unique_index_keys(&self.shared.conn_pool, schema, tb).await?;
+        for (k, v) in unique_index_keys {
+            key_map.entry(k).or_insert(v);
+        }
+        let (order_cols, partition_col, id_cols) =
+            RdbMetaManager::parse_rdb_cols(&key_map, &cols, &nullable_cols)?;
+        // disable get_foreign_keys since we don't support foreign key check
+        let (foreign_keys, ref_by_foreign_keys) = (vec![], vec![]);
+        // let (foreign_keys, ref_by_foreign_keys) =
+        //     Self::get_foreign_keys(&self.shared.conn_pool, schema, tb).await?;
+
+        let basic = RdbTbMeta {
+            schema: schema.to_string(),
+            tb: tb.to_string(),
+            cols,
+            nullable_cols,
+            col_origin_type_map,
+            key_map,
+            order_cols,
+            partition_col,
+            id_cols,
+            foreign_keys,
+            ref_by_foreign_keys,
+        };
+        Ok(PgTbMeta {
+            oid,
+            col_type_map,
+            basic,
+        })
+    }
+
+    pub fn invalidate_cache(&self, schema: &str, tb: &str) {
+        // FIXME: This does not prevent an in-flight fetch from inserting stale
+        // metadata after invalidate. Add per-table epochs before concurrent CDC
+        // metadata refresh/decode is introduced.
         // TODO, if schema is not empty but tb is empty, only clear cache for the schema
         if !schema.is_empty() && !tb.is_empty() {
-            let full_name = format!(r#""{}"."{}""#, schema, tb);
-            self.name_to_tb_meta.remove(&full_name);
+            let full_name = Self::table_key(schema, tb);
+            self.shared.name_to_tb_meta.remove(&full_name);
         } else {
-            self.name_to_tb_meta.clear();
+            self.shared.name_to_tb_meta.clear();
         }
     }
 
-    pub fn invalidate_cache_by_ddl_data(&mut self, ddl_data: &DdlData) {
+    pub fn invalidate_cache_by_ddl_data(&self, ddl_data: &DdlData) {
         let (schema, tb) = ddl_data.get_schema_tb();
         self.invalidate_cache(&schema, &tb);
     }
 
     async fn parse_cols(
         conn_pool: &Pool<Postgres>,
-        type_registry: &mut TypeRegistry,
+        type_registry: &TypeRegistry,
         schema: &str,
         tb: &str,
     ) -> anyhow::Result<(

@@ -206,7 +206,7 @@ impl MysqlSinker {
             data_size += row_data.get_data_size() as usize;
             data_len += 1;
             let tb_meta = self.meta_manager.get_tb_meta_by_row_data(row_data).await?;
-            let query_builder = RdbQueryBuilder::new_for_mysql(tb_meta, None);
+            let query_builder = RdbQueryBuilder::new_for_mysql(&tb_meta, None);
             let query_info = query_builder.get_query_info(row_data, self.replace)?;
             let query = query_builder.create_mysql_query(&query_info)?;
 

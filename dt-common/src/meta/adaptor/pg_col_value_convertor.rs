@@ -29,17 +29,22 @@ impl PgColValueConvertor {
     pub fn from_str(
         col_type: &PgColType,
         value_str: &str,
-        meta_manager: &mut PgMetaManager,
+        meta_manager: &PgMetaManager,
     ) -> anyhow::Result<ColValue> {
         if value_str.is_empty() {
             return Ok(ColValue::None);
         }
 
         if col_type.parent_oid != 0 {
+            // FIXME: wheather once is enough or not.
             let parent_col_type = meta_manager.get_col_type_by_oid(col_type.parent_oid)?;
-            return Self::from_str(&parent_col_type, value_str, meta_manager);
+            return Self::from_str_inner(&parent_col_type, value_str);
         }
 
+        Self::from_str_inner(col_type, value_str)
+    }
+
+    fn from_str_inner(col_type: &PgColType, value_str: &str) -> anyhow::Result<ColValue> {
         let mut value_str = value_str.to_string();
         if col_type.is_array() {
             return Ok(ColValue::String(value_str));
@@ -113,7 +118,7 @@ impl PgColValueConvertor {
     pub fn from_wal(
         col_type: &PgColType,
         value: &Bytes,
-        meta_manager: &mut PgMetaManager,
+        meta_manager: &PgMetaManager,
     ) -> anyhow::Result<ColValue> {
         // include all types from https://www.postgresql.org/docs/current/static/datatype.html#DATATYPE-TABLE
         // plus aliases from the shorter names produced by older wal2json

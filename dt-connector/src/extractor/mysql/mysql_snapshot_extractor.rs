@@ -547,7 +547,8 @@ impl MysqlSnapshotDispatchState {
             .meta_manager
             .get_tb_meta(&table_id.schema, &table_id.tb)
             .await?
-            .to_owned();
+            .as_ref()
+            .clone();
         let active_mode = table_ctx.prepare_active_mode(&tb_meta).await?;
         log_debug!(
             "prepared extract mode for {}.{}",

@@ -61,6 +61,7 @@ impl RdbMerger {
             .rdb_meta_manager
             .get_tb_meta(&row_data.schema, &row_data.tb)
             .await?;
+        let tb_meta = tb_meta.as_ref();
 
         if row_data.contains_unchanged_toast() {
             merged.unmerged_rows.push(row_data);

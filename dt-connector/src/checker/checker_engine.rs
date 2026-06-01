@@ -561,7 +561,7 @@ impl<C: Checker> DataChecker<C> {
 
         let id_col_values = if let Some(meta_manager) = ctx.extractor_meta_manager.as_mut() {
             let src_tb_meta = meta_manager.get_tb_meta(&schema, &tb).await?;
-            Self::build_id_col_values(&routed_row, src_tb_meta)
+            Self::build_id_col_values(&routed_row, src_tb_meta.as_ref())
                 .context("Failed to build ID col values")?
         } else {
             Self::build_id_col_values(&routed_row, tb_meta.basic()).unwrap_or_default()

@@ -219,6 +219,7 @@ impl RedisSinker {
             .unwrap()
             .get_tb_meta(&row_data.schema, &row_data.tb)
             .await?;
+        let tb_meta = tb_meta.as_ref();
 
         // no single primary / unique key exists, do not sink to redis
         if tb_meta.order_cols.is_empty() {

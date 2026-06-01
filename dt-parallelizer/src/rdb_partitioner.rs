@@ -38,6 +38,7 @@ impl RdbPartitioner {
             .meta_manager
             .get_tb_meta(&row_data.schema, &row_data.tb)
             .await?;
+        let tb_meta = tb_meta.as_ref();
         let before = row_data.require_before()?;
         let after = row_data.require_after()?;
         // if any col of pk & uk has changed, partition should not happen
@@ -99,6 +100,7 @@ impl RdbPartitioner {
             .meta_manager
             .get_tb_meta(&row_data.schema, &row_data.tb)
             .await?;
+        let tb_meta = tb_meta.as_ref();
         if let Some(partition_col_value) = col_values.get(&tb_meta.partition_col) {
             Ok(partition_col_value.hash_code()? as usize % partition_count)
         } else {

@@ -91,12 +91,13 @@ impl RdbUtil {
         db_tb: &(String, String),
         db_type: &DbType,
     ) -> anyhow::Result<MysqlTbMeta> {
-        let mut meta_manager =
+        let meta_manager =
             MysqlMetaManager::new_mysql_compatible(conn_pool.to_owned(), db_type.to_owned())
                 .await?;
         Ok(meta_manager
             .get_tb_meta(&db_tb.0, &db_tb.1)
             .await?
+            .as_ref()
             .to_owned())
     }
 
@@ -104,10 +105,11 @@ impl RdbUtil {
         conn_pool: &Pool<Postgres>,
         db_tb: &(String, String),
     ) -> anyhow::Result<PgTbMeta> {
-        let mut meta_manager = PgMetaManager::new(conn_pool.clone()).await?;
+        let meta_manager = PgMetaManager::new(conn_pool.clone()).await?;
         Ok(meta_manager
             .get_tb_meta(&db_tb.0, &db_tb.1)
             .await?
+            .as_ref()
             .to_owned())
     }
 

@@ -221,7 +221,7 @@ impl RdbTestRunner {
     pub async fn get_dst_mysql_version(&self) -> String {
         if let Some(conn_pool) = &self.dst_conn_pool_mysql {
             let meta_manager = MysqlMetaManager::new(conn_pool.clone()).await.unwrap();
-            return meta_manager.meta_fetcher.version;
+            return meta_manager.meta_fetcher.version().to_string();
         }
         String::new()
     }

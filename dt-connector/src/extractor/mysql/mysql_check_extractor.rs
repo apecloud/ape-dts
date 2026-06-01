@@ -60,10 +60,10 @@ impl BatchCheckExtractor for MysqlCheckExtractor {
         let tb = &check_logs[0].tb;
         let is_diff = !check_logs[0].diff_col_values.is_empty();
         let tb_meta = self.meta_manager.get_tb_meta(db, tb).await?;
-        let check_row_data_items = Self::build_check_row_data_items(check_logs, tb_meta)?;
+        let check_row_data_items = Self::build_check_row_data_items(check_logs, &tb_meta)?;
 
         let ignore_cols = self.filter.get_ignore_cols(db, tb);
-        let query_builder = RdbQueryBuilder::new_for_mysql(tb_meta, ignore_cols);
+        let query_builder = RdbQueryBuilder::new_for_mysql(&tb_meta, ignore_cols);
         let batch_refs: Vec<&RowData> = check_row_data_items.iter().collect();
         let query_info = if check_logs.len() == 1 {
             query_builder.get_select_query(&check_row_data_items[0])?
@@ -74,7 +74,7 @@ impl BatchCheckExtractor for MysqlCheckExtractor {
 
         let mut rows = query.fetch(&self.conn_pool);
         while let Some(row) = rows.try_next().await.unwrap() {
-            let mut row_data = RowData::from_mysql_row(&row, tb_meta, &ignore_cols, None);
+            let mut row_data = RowData::from_mysql_row(&row, &tb_meta, &ignore_cols, None);
 
             if is_diff && self.replay_diff_as_update {
                 row_data.row_type = RowType::Update;

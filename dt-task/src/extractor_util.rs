@@ -248,7 +248,7 @@ impl ExtractorUtil {
                         bail!("connection pool not found");
                     }
                 };
-                let meta_manager = PgMetaManager::new(conn_pool.clone()).await?;
+                let meta_manager = PgMetaManager::new_for_cdc(conn_pool.clone()).await?;
                 let extractor = PgSnapshotExtractor {
                     shared: PgSnapshotShared {
                         base_extractor,

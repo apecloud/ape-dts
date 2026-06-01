@@ -136,6 +136,12 @@ mod test {
 
     #[tokio::test]
     #[serial]
+    async fn snapshot_shared_meta_cache_test() {
+        TestBase::run_snapshot_test("mysql_to_mysql/snapshot/shared_meta_cache_test").await;
+    }
+
+    #[tokio::test]
+    #[serial]
     async fn snapshot_parallel_resume_from_log_test() {
         let mut dst_expected_counts = HashMap::new();
         dst_expected_counts.insert("test_db_1.no_pk_one_uk", 4);
