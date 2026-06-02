@@ -11,6 +11,7 @@ use mongodb::{
 use crate::{
     extractor::{
         base_extractor::{BaseExtractor, ExtractState},
+        estimated_sample_limit,
         resumer::recovery::Recovery,
         snapshot_chunk_id_generator::SnapshotChunkIdGenerator,
         snapshot_dispatcher::SnapshotDispatcher,
@@ -38,6 +39,7 @@ pub struct MongoSnapshotExtractor {
     pub parallel_size: usize,
     pub batch_size: usize,
     pub mongo_client: Client,
+    pub sample_rate: Option<u8>,
     pub recovery: Option<Arc<dyn Recovery + Send + Sync>>,
 }
 
@@ -94,6 +96,7 @@ impl MongoSnapshotExtractor {
             parallel_size: self.parallel_size,
             batch_size: self.batch_size,
             mongo_client: self.mongo_client.clone(),
+            sample_rate: self.sample_rate,
             recovery: self.recovery.clone(),
         }
     }
@@ -132,11 +135,23 @@ impl MongoSnapshotExtractor {
             None
         };
 
-        let find_options = FindOptions::builder()
+        let collection = self.mongo_client.database(&db).collection::<Document>(&tb);
+        let estimated_count = if self
+            .sample_rate
+            .filter(|rate| (1..100).contains(rate))
+            .is_some()
+        {
+            collection.estimated_document_count(None).await?
+        } else {
+            0
+        };
+        let sample_limit = estimated_sample_limit(self.sample_rate, estimated_count);
+        let mut find_options = FindOptions::builder()
             .sort(doc! {MongoConstants::ID: 1})
             .build();
-
-        let collection = self.mongo_client.database(&db).collection::<Document>(&tb);
+        if let Some(limit) = sample_limit.and_then(|limit| i64::try_from(limit).ok()) {
+            find_options.limit = Some(limit);
+        }
         let mut cursor = collection.find(filter, find_options).await?;
         let mut chunk_id_generator = SnapshotChunkIdGenerator::new(self.batch_size);
         while cursor.advance().await? {
@@ -144,6 +159,7 @@ impl MongoSnapshotExtractor {
                 log_error!("error deserializing {}.{} document: {}", db, tb, e);
                 e
             })?;
+
             let object_id = Self::get_object_id(&doc);
 
             let after = Self::build_after_cols(&doc);

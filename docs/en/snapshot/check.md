@@ -4,7 +4,14 @@ After data migration, you may want to compare the source and target data row by 
 
 Supports comparison for MySQL, PostgreSQL, and MongoDB.
 
-Sampling via `sample_interval` is currently available only for MySQL/PostgreSQL snapshot checks.
+Snapshot and inline CDC checks support sampling via `[checker].sample_rate`.
+For standalone MySQL/PostgreSQL/MongoDB snapshot check, `sample_rate` is applied during extraction
+before rows enter later checker work. When table/collection row estimates are available, the source
+query is capped with `LIMIT ceil(estimated_rows * sample_rate / 100)`. If no useful estimate is
+available, extraction reads the full source stream. This sampling is source-side Top-N limiting, not
+key-hash based or random. Inline snapshot check and inline CDC check write all rows/changes first,
+then apply deterministic checker-side key-hash sampling before target fetch. Rows/changes with the
+same key are sampled consistently.
 
 Data check is documented in three flows:
 
@@ -15,8 +22,11 @@ Data check is documented in three flows:
 - Use `extract_type=snapshot`.
 - Set `sink_type=dummy` or omit `[sinker]`.
 - Configure the checker target explicitly in `[checker]`, and set `[checker].enable=true`.
-- Use the merge-style parallelizer for the target type: `parallel_type=rdb_merge` for MySQL/PG,
-  `parallel_type=mongo` for MongoDB.
+- Standalone snapshot checker targets support MySQL, PostgreSQL, and MongoDB.
+- Use `parallel_type=rdb_merge` for MySQL/PostgreSQL checker targets, and `parallel_type=mongo`
+  for MongoDB checker targets.
+- This flow is data-only. It does not run structure check automatically; run standalone structure
+  check explicitly when structure verification is required.
 
 ```text
 source rows
@@ -98,61 +108,33 @@ source CDC events
 
 #### Inline cdc check configuration constraints
 
-These combinations fail fast with `ConfigError`:
-
-- `[checker]` section is present but `enable` is missing.
-- `[pipeline] pipeline_type` is not `basic`.
-- `[extractor] extract_type=cdc` but `[sinker] sink_type` is not `write`.
-- `[parallelizer] parallel_type` is not `rdb_merge`.
-- `[sinker].db_type` is not `mysql` or `pg`.
-- Any of `db_type`, `url`, `username`, or `password` is set in `[checker]`.
-- `[resumer] resume_type` is missing or not `from_target` / `from_db`, so checker state cannot be persisted.
-
-These settings remain effective or are forced in inline cdc check:
-
-- `[checker].batch_size`: stays effective and does not fall back to `[sinker].batch_size`.
-- `[checker].queue_size`: counts pending checker DML batches. If the queue is full, the oldest
-  pending checker batch is dropped instead of blocking the write path. Control signals such as
-  checkpoint and `refresh_meta` bypass this queue.
-- `[checker].max_retries` and `[checker].retry_interval_secs`: always forced to `0`.
-
-## Inline Snapshot Check vs Inline CDC Check
-
-| Aspect | Inline snapshot check | Inline cdc check |
-| :--- | :--- | :--- |
-| Check timing | Write one batch, then check that batch | Write one event batch, then check that batch |
-| First inconsistency handling | Retry first | Record into persistent inconsistency state/store |
-| When miss/diff is logged | Only after retry budget is exhausted | May be logged from the current reconciliation state |
-| Long-lived inconsistency tracking | No long-lived inconsistency store | Yes; checker state is coupled with checkpoint / state store |
-| How later writes affect old inconsistencies | Retries are short-term waiting only | Later CDC events may cancel or reconcile older miss/diff records |
-| Mental model | Write-after-check with short convergence waiting | Continuous reconciliation |
-
-Operationally:
-
-- **Inline snapshot check** is optimized for “write first, then wait briefly for convergence”.
-  After a sink batch is written, the checker validates the same batch. If target visibility is
-  slightly delayed, it retries first. Only after the retry budget is exhausted are `miss.log` and
-  `diff.log` written. It does **not** maintain a long-lived inconsistency store.
-- **Inline cdc check** is optimized for long-running reconciliation. After an event batch is
-  applied, the checker validates the resulting target state. If an inconsistency is observed, it
-  becomes part of persistent checker state/store instead of being treated as a short retry-only
-  problem. Later CDC events may naturally offset or reconcile earlier miss/diff entries, so
-  checkpoint/state persistence is more deeply coupled with the checker lifecycle.
-  Runtime errors are handled per operation: the checker logs the error, keeps the main write path
-  running, and continues processing subsequent checker messages. Checkpoint/meta-refresh delivery is
-  also decoupled from checker batch backlog so the write path does not wait behind queued DML.
+See [config.md](../config.md) for the complete inline CDC checker constraints, queue behavior,
+retry rules, and S3 upload rules.
 
 ## Example: MySQL -> MySQL
 
 Refer to [task templates](../../templates/mysql_to_mysql.md) and [tutorial](../tutorial/mysql_to_mysql.md). The
 templates now separate standalone snapshot check, inline snapshot check, and inline cdc check.
 
-### Sampling Check (MySQL/PostgreSQL snapshot only)
+### Sampling Check
 
-For MySQL/PostgreSQL snapshot check, add `sample_interval` to the `[extractor]` section. For example, setting `sample_interval=3` checks every 3rd record.
+For snapshot and inline CDC checks, add `sample_rate` to the `[checker]` section. For standalone
+MySQL/PostgreSQL/MongoDB snapshot check, sampling is applied during extraction. With row estimates,
+the extractor limits source reads to roughly `row_count * sample_rate / 100`; `row_count` is
+estimated from the table, or from the table's configured `where_conditions` when present. If the
+estimate is missing or zero, extraction reads the full source stream. For inline
+snapshot check and inline CDC check, `sample_rate=25` still writes all
+rows/changes, then checks rows/changes whose key hash falls into the sampled percentage before target
+fetch/compare.
+
+Standalone snapshot check uses source-side limits, so the sampled row set may differ after a resumed
+run. Inline snapshot check and inline CDC check use key-hash sampling and keep the same key sampling
+decision across resumes.
+
 ```
-[extractor]
-sample_interval=3
+[checker]
+enable=true
+sample_rate=25
 ```
 
 ## Limitations
@@ -165,17 +147,33 @@ sample_interval=3
 ## DELETE Event Check (inline cdc check)
 
 In inline cdc check, the checker validates DELETE events: it queries the target by primary key,
-and if the row still exists in the target, it is reported as an inconsistency in `diff.log` (with
-empty `diff_col_values`). When `output_revise_sql=true`, a corresponding `DELETE` repair statement
-is automatically generated in `sql.log`.
+and if the row still exists in the target, it is reported as an identity-only inconsistency in
+`diff.log` without `diff_col_values`. When `output_revise_sql=true`, a corresponding `DELETE`
+repair statement is automatically generated in `sql.log`.
 
 # Check Results
 
-`diff.log`, `miss.log`, and `summary.log` are written in JSON format. `sql.log` contains generated repair SQL. By default, these logs are stored in `runtime.log_dir/check`; if `[checker].check_log_dir` is set, that directory is used instead.
+`diff.log` and `miss.log` are JSON Lines files and are generated only when there are diff or miss
+entries; each non-empty line is one JSON object. `summary.log` contains exactly one JSON line for the
+overall summary. `sql.log` is a plain SQL file, one generated repair statement per line, and contains
+no JSON wrapper or schema/table/id metadata. `sql.log` is generated or written only when
+`output_revise_sql=true` and repair SQL exists. By default, these logs are stored in
+`runtime.log_dir/check`; if `[checker].check_log_dir` is set, that directory is used instead.
+
+By default, stdout follows the normal runtime logging configuration. For orchestration paths that
+need stdout to contain only check results, set `[runtime].check_result_stdout_only=true` for that
+specific check task. In this mode, the files above remain the check artifacts, normal runtime stdout
+is silenced, and miss, diff, summary, and SQL records are emitted to stdout as one line in the form
+`<logger> - <payload>`. Only `summary_logger`, `miss_logger`, `diff_logger`, and `sql_logger` are
+part of this stdout result stream. The JSON payloads are the same objects as the file logs; SQL
+payloads are the same plain statements as `sql.log`.
 
 ## Difference Log (diff.log)
 
-Difference logs include database (schema), table (tb), primary key/unique key (id_col_values), source and target values of difference columns (diff_col_values).
+Difference logs include source database/table (`schema`/`tb`), primary key/unique key
+(`id_col_values`), and source and target values of difference columns (`diff_col_values`).
+When routing changes the destination object, `target_schema`/`target_tb` are also included.
+SQL is never embedded in `diff.log`; repair SQL, if enabled, is written only to `sql.log`.
 
 ```json
 {"schema":"test_db_1","tb":"one_pk_multi_uk","id_col_values":{"f_0":"5"},"diff_col_values":{"f_1":{"src":"5","dst":"5000"},"f_2":{"src":"ok","dst":"after manual update"}}}
@@ -185,11 +183,18 @@ Difference logs include database (schema), table (tb), primary key/unique key (i
 
 When the source and target types are different (such as Int32 vs Int64, or None vs Short), `src_type`/`dst_type` will appear under the corresponding column, clearly marking the type inconsistency. MongoDB also applies this rule, and the difference log will output the BSON type name.
 
-Only when the router renames the schema or table will the log include `target_schema`/`target_tb` to identify the real destination table. `schema` and `tb` still represent the source, facilitating troubleshooting.
+`target_schema`/`target_tb` are omitted when the destination object is not explicitly different.
+If either target name differs, both fields are included.
+
+```json
+{"schema":"test_db_1","tb":"orders","target_schema":"dst_db","target_tb":"orders","id_col_values":{"id":"8"},"diff_col_values":{"status":{"src":"paid","dst":"pending"}}}
+```
 
 ## Missing Log (miss.log)
 
-Missing logs include database (schema), table (tb), and primary/unique key (id_col_values). Since missing records do not have difference columns, `diff_col_values` will not be output.
+Missing logs include database (schema), table (tb), and primary/unique key (id_col_values). Since
+missing records do not have difference columns, `diff_col_values` will not be output. SQL is never
+embedded in `miss.log`; repair SQL, if enabled, is written only to `sql.log`.
 
 ```json
 {"schema":"test_db_1","tb":"no_pk_one_uk","id_col_values":{"f_1":"8","f_2":"1"}}
@@ -255,11 +260,11 @@ output_revise_sql=true
 revise_match_full_row=true
 ```
 
-After enabling, `INSERT` statements for missing records and `UPDATE` statements for differing records will be written to `sql.log`.
+After enabling, `INSERT` statements for missing records, `UPDATE` statements for differing records,
+and `DELETE` statements for unresolved inline CDC delete events will be written to `sql.log`.
+`diff.log` and `miss.log` remain JSON Lines and do not include SQL fields.
 
 When `revise_match_full_row=true`, the entire row data is used to generate the WHERE condition even if the table has a primary key, so that the target row is located by matching all column values.
-
-If the router does not rename the schema or table, `target_schema`/`target_tb` will not appear in the log. These two fields are only needed to determine the destination table when routing renames are configured.
 
 The generated SQL uses the real destination schema/table and can be executed directly at the target. When routing renames are configured, refer to `target_schema`/`target_tb` to determine the final target object.
 
@@ -302,19 +307,17 @@ INSERT INTO `test_db_1`.`test_table`(`id`,`name`,`age`,`email`) VALUES(3,'Charli
 
 The summary log contains the overall results of the check, such as start_time, end_time, is_consistent, and the number of miss, diff, skipped rows (`skip_count`), and generated repair SQLs (`sql_count`).
 
-`skip_count` records rows skipped by the checker, for example when the row key cannot be hashed. When no rows are skipped, this field is omitted.
+`skip_count` records rows skipped by the checker, for example when the row key cannot be hashed.
 
-In inline cdc check, `summary.log` also includes `tables`, which stores per-table miss/diff
-counts. This field is omitted for non-CDC tasks.
-
-```json
-{"start_time": "2023-09-01T12:00:00+08:00", "end_time": "2023-09-01T12:00:01+08:00", "is_consistent": false, "miss_count": 1, "diff_count": 2, "skip_count": 1, "sql_count": 3}
-```
-
-Inline cdc check example:
+`summary.log` includes `tables` when table-level counts were recorded. Table entries store
+per-table checked/miss/diff/skip counts for all tables that contributed table-level counts, so clean
+tables can appear with `miss_count=0`, `diff_count=0`, and `skip_count=0`. `tables` is omitted only
+when no table-level counts were recorded. Table entries omit `target_schema`/`target_tb` when the
+destination object is not explicitly different. If either target name differs, both fields are
+included.
 
 ```json
-{"start_time":"2023-09-01T12:00:00+08:00","end_time":"2023-09-01T12:05:00+08:00","is_consistent":false,"miss_count":1,"diff_count":2,"skip_count":1,"tables":{"test_db_1.test_tb":{"miss_count":1,"diff_count":2}}}
+{"start_time":"2023-09-01T12:00:00+08:00","end_time":"2023-09-01T12:00:01+08:00","is_consistent":false,"checked_count":30,"miss_count":1,"diff_count":2,"skip_count":1,"sql_count":3,"tables":[{"schema":"test_db_1","tb":"clean_table","checked_count":20,"miss_count":0,"diff_count":0,"skip_count":0},{"schema":"test_db_1","tb":"test_table","checked_count":10,"miss_count":1,"diff_count":2,"skip_count":1}]}
 ```
 
 # Reverse Check
@@ -355,9 +358,6 @@ designed for short-term convergence waiting after write, not for long-running re
 > retry queue. Even if `max_retries` and `retry_interval_secs` are configured, they are forcibly
 > ignored (set to 0) in CDC mode, and a warning is logged.
 
-## Router
-
-Data check supports `[router]`. See [config.md](../config.md) for details.
 
 ## Integration Test References
 

@@ -338,7 +338,7 @@ impl ChunkPartitioner {
 
     pub fn partition_raw(data: Vec<DtItem>) -> anyhow::Result<Vec<Vec<DtItem>>> {
         let mut sub_data_map: HashMap<String, Vec<DtItem>> = HashMap::new();
-        let defualt_key = "default".to_string();
+        let default_key = "default".to_string();
         for item in data {
             if let DtData::Dml { row_data } = &item.dt_data {
                 let sch_tb_chunk =
@@ -348,10 +348,10 @@ impl ChunkPartitioner {
                 } else {
                     sub_data_map.insert(sch_tb_chunk, vec![item]);
                 }
-            } else if let Some(sub_data) = sub_data_map.get_mut(&defualt_key) {
+            } else if let Some(sub_data) = sub_data_map.get_mut(&default_key) {
                 sub_data.push(item);
             } else {
-                sub_data_map.insert(defualt_key.clone(), vec![item]);
+                sub_data_map.insert(default_key.clone(), vec![item]);
             }
         }
 

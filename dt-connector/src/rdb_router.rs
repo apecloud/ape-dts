@@ -20,7 +20,7 @@ type TbColMap = HashMap<(String, String), HashMap<String, String>>;
 
 const JSON_PREFIX: &str = "json:";
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct RdbRouter {
     // HashMap<src_schema, dst_schema>
     pub schema_map: SchemaMap,

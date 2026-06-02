@@ -50,6 +50,12 @@ mod test {
 
     #[tokio::test]
     #[serial]
+    async fn check_sample_filter_test() {
+        TestBase::run_check_test("pg_to_pg/check/sample_filter_test").await;
+    }
+
+    #[tokio::test]
+    #[serial]
     async fn check_output_full_row_test() {
         TestBase::run_check_test("pg_to_pg/check/output_full_row_test").await;
     }

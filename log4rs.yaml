@@ -2,6 +2,17 @@ appenders:
   stdout:
     kind: console
 
+  silent_stdout_appender:
+    kind: console
+    filters:
+      - kind: threshold
+        level: off
+
+  check_stdout_appender:
+    kind: console
+    encoder:
+      pattern: "{t} - {m}{n}"
+
   default_appender:
     kind: rolling_file
     append: true
@@ -207,19 +218,22 @@ loggers:
       - monitor_appender
 
   miss_logger:
-    level: LOG_LEVEL_PLACEHOLDER
+    level: info
     appenders:
       - miss_appender
+      - CHECK_RESULT_STDOUT_APPENDER_PLACEHOLDER
 
   diff_logger:
-    level: LOG_LEVEL_PLACEHOLDER
+    level: info
     appenders:
       - diff_appender
+      - CHECK_RESULT_STDOUT_APPENDER_PLACEHOLDER
 
   summary_logger:
-    level: LOG_LEVEL_PLACEHOLDER
+    level: info
     appenders:
       - summary_appender
+      - CHECK_RESULT_STDOUT_APPENDER_PLACEHOLDER
 
   statistic_logger:
     level: LOG_LEVEL_PLACEHOLDER
@@ -232,9 +246,10 @@ loggers:
       - finished_appender
 
   sql_logger:
-    level: LOG_LEVEL_PLACEHOLDER
+    level: info
     appenders:
       - sql_appender
+      - CHECK_RESULT_STDOUT_APPENDER_PLACEHOLDER
 
   task_logger:
     level: LOG_LEVEL_PLACEHOLDER
@@ -252,17 +267,17 @@ loggers:
     level: info
     appenders:
       - http_appender
-      - stdout
+      - RUNTIME_STDOUT_APPENDER_PLACEHOLDER
     additive: false
 
   actix_server:
     level: info
     appenders:
       - http_appender
-      - stdout
+      - RUNTIME_STDOUT_APPENDER_PLACEHOLDER
     additive: false
 
 root:
   level: LOG_LEVEL_PLACEHOLDER
   appenders:
-    - stdout
+    - RUNTIME_STDOUT_APPENDER_PLACEHOLDER
