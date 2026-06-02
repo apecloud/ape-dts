@@ -6,7 +6,7 @@ Set FontSize 14
 Set Width 1200
 Set Height 600
 Set Theme "Dracula"
-Set TypingSpeed 50ms   # 打字速度，越小越快
+Set TypingSpeed 50ms
 
 # Opening: show prompt, wait a moment
 Sleep 500ms
