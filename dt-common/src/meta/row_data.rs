@@ -295,6 +295,7 @@ impl RowData {
         self.data_size = self.get_data_malloc_size();
     }
 
+    #[inline(always)]
     pub fn get_data_size(&self) -> u64 {
         self.data_size as u64
     }

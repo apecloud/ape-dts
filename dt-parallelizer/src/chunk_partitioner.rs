@@ -13,92 +13,190 @@ use dt_common::{
 
 pub struct ChunkPartitioner {}
 
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+struct ChunkKey<'a> {
+    schema: &'a str,
+    tb: &'a str,
+    chunk_id: u64,
+}
+
+struct GroupPlan {
+    // Row indexes are stored in logical chunk order. Rows for the same chunk may be non-contiguous
+    // in the original data Vec, so a prefix over the original Vec cannot answer group-local splits.
+    row_indexes: Vec<usize>,
+    // Only Bytes cost needs prefix bytes. Rows cost keeps this empty to avoid per-row u64 storage.
+    prefix_bytes: Option<Vec<u64>>,
+}
+
 #[derive(Clone, Copy, Debug)]
-struct PartitionCost {
+struct PartitionPlan {
+    group_index: usize,
+    // start/end are indexes into GroupPlan.row_indexes, not original RowData indexes.
+    // RowData is moved only once in materialize_partitions after rebalance is finalized.
+    start: usize,
+    end: usize,
     bytes: u64,
-    rows: usize,
 }
 
-struct Partition {
-    rows: Vec<RowData>,
-    cost: PartitionCost,
+impl GroupPlan {
+    fn new(use_bytes: bool) -> Self {
+        Self {
+            row_indexes: Vec::new(),
+            prefix_bytes: use_bytes.then_some(vec![0]),
+        }
+    }
+
+    fn push(&mut self, row_index: usize, bytes: u64) {
+        self.row_indexes.push(row_index);
+        if let Some(prefix_bytes) = &mut self.prefix_bytes {
+            let next_bytes = prefix_bytes.last().copied().unwrap_or(0) + bytes;
+            prefix_bytes.push(next_bytes);
+        }
+    }
+
+    fn rows(&self) -> usize {
+        self.row_indexes.len()
+    }
+
+    fn bytes(&self, start: usize, end: usize) -> u64 {
+        self.prefix_bytes
+            .as_ref()
+            .map(|prefix_bytes| prefix_bytes[end].saturating_sub(prefix_bytes[start]))
+            .unwrap_or(0)
+    }
 }
 
-impl Partition {
-    fn new(rows: Vec<RowData>, cost_type: &ChunkPartitionerRebalanceCost) -> Self {
-        let cost = PartitionCost::from_rows(&rows, cost_type);
-        Self { rows, cost }
+impl PartitionPlan {
+    fn new(group_index: usize, group: &GroupPlan, cost: &ChunkPartitionerRebalanceCost) -> Self {
+        let rows = group.rows();
+        let bytes = match cost {
+            ChunkPartitionerRebalanceCost::Bytes => group.bytes(0, rows),
+            ChunkPartitionerRebalanceCost::Rows => 0,
+        };
+        Self {
+            group_index,
+            start: 0,
+            end: rows,
+            bytes,
+        }
+    }
+
+    fn rows(&self) -> usize {
+        self.end - self.start
     }
 
     fn can_split(&self, min_partition_rows: usize) -> bool {
-        self.cost.rows >= min_partition_rows.saturating_mul(2)
+        self.rows() >= min_partition_rows.saturating_mul(2)
     }
 
     fn cost_key(&self, cost: &ChunkPartitionerRebalanceCost) -> (u64, u64) {
-        (self.cost.primary(cost), self.cost.secondary(cost))
+        match cost {
+            ChunkPartitionerRebalanceCost::Bytes => (self.bytes, self.rows() as u64),
+            ChunkPartitionerRebalanceCost::Rows => (self.rows() as u64, self.rows() as u64),
+        }
     }
 
     fn safe_primary_cost(&self, cost: &ChunkPartitionerRebalanceCost) -> u64 {
-        self.cost.primary(cost).max(self.cost.rows as u64)
+        match cost {
+            ChunkPartitionerRebalanceCost::Bytes => self.bytes.max(self.rows() as u64),
+            ChunkPartitionerRebalanceCost::Rows => self.rows() as u64,
+        }
     }
 
     fn split(
         &mut self,
+        groups: &[GroupPlan],
         cost: &ChunkPartitionerRebalanceCost,
         min_partition_rows: usize,
-    ) -> Option<Partition> {
-        let (split_at, left_bytes) = self.split_at(cost);
-        if split_at < min_partition_rows || self.cost.rows - split_at < min_partition_rows {
+    ) -> Option<PartitionPlan> {
+        let original_split_at = self.split_at(groups, cost);
+        // Align the left side to full sinker batches when min_partition_rows is used as
+        // the sinker batch size. The right side is still checked against the same minimum.
+        let split_at = self.align_split_at(original_split_at, min_partition_rows);
+        let left_rows = split_at - self.start;
+        let right_rows = self.end - split_at;
+        if left_rows < min_partition_rows || right_rows < min_partition_rows {
             return None;
         }
+        let left_bytes = match cost {
+            ChunkPartitionerRebalanceCost::Bytes => {
+                Some(groups[self.group_index].bytes(self.start, split_at))
+            }
+            ChunkPartitionerRebalanceCost::Rows => None,
+        };
         Some(self.split_off(split_at, left_bytes, cost))
     }
 
-    fn split_at(&self, cost: &ChunkPartitionerRebalanceCost) -> (usize, Option<u64>) {
+    fn split_at(&self, groups: &[GroupPlan], cost: &ChunkPartitionerRebalanceCost) -> usize {
         match cost {
-            ChunkPartitionerRebalanceCost::Bytes => self.split_at_by_bytes(),
-            ChunkPartitionerRebalanceCost::Rows => ((self.cost.rows + 1) / 2, None),
+            ChunkPartitionerRebalanceCost::Bytes => self.split_at_by_bytes(groups),
+            ChunkPartitionerRebalanceCost::Rows => self.start + (self.rows() + 1) / 2,
         }
     }
 
-    fn split_at_by_bytes(&self) -> (usize, Option<u64>) {
-        if self.cost.bytes == 0 {
-            return ((self.cost.rows + 1) / 2, Some(0));
+    fn align_split_at(&self, split_at: usize, min_partition_rows: usize) -> usize {
+        if min_partition_rows <= 1 {
+            return split_at;
         }
 
-        // A byte-balanced split is closest to half of the partition cost. Once the
-        // running sum crosses that target, only the previous and current boundaries can win.
-        let target_bytes = self.cost.bytes / 2;
-        let mut best_split_at = 1;
-        let mut best_left_bytes = 0;
-        let mut current_bytes = 0;
-        let mut reached_target = false;
-        for (index, row) in self.rows.iter().take(self.cost.rows - 1).enumerate() {
-            let previous_bytes = current_bytes;
-            current_bytes += row.get_data_size();
-            let split_at = index + 1;
+        let min_left_rows = min_partition_rows;
+        let max_left_rows = self.rows().saturating_sub(min_partition_rows);
+        if min_left_rows > max_left_rows {
+            return split_at;
+        }
 
-            if current_bytes >= target_bytes {
-                reached_target = true;
-                let previous_diff = target_bytes.abs_diff(previous_bytes);
-                let current_diff = target_bytes.abs_diff(current_bytes);
-                if split_at > 1 && previous_diff <= current_diff {
-                    best_split_at = split_at - 1;
-                    best_left_bytes = previous_bytes;
+        let left_rows = split_at - self.start;
+        let lower = left_rows / min_partition_rows * min_partition_rows;
+        let upper = lower.saturating_add(min_partition_rows);
+        match (
+            (min_left_rows..=max_left_rows).contains(&lower),
+            (min_left_rows..=max_left_rows).contains(&upper),
+        ) {
+            (true, true) => {
+                if left_rows - lower <= upper - left_rows {
+                    self.start + lower
                 } else {
-                    best_split_at = split_at;
-                    best_left_bytes = current_bytes;
+                    self.start + upper
                 }
-                break;
             }
+            (true, false) => self.start + lower,
+            (false, true) => self.start + upper,
+            (false, false) => self.start + left_rows.clamp(min_left_rows, max_left_rows),
         }
-        if !reached_target {
-            // This happens when the last row dominates the byte cost. Use the last legal
-            // boundary because split_at cannot be equal to rows.len().
-            best_split_at = self.cost.rows - 1;
-            best_left_bytes = current_bytes;
+    }
+
+    fn split_at_by_bytes(&self, groups: &[GroupPlan]) -> usize {
+        if self.bytes == 0 {
+            return self.start + (self.rows() + 1) / 2;
         }
-        (best_split_at, Some(best_left_bytes))
+
+        let group = &groups[self.group_index];
+        let prefix_bytes = group.prefix_bytes.as_ref().unwrap();
+        let start_bytes = prefix_bytes[self.start];
+        let target_bytes = start_bytes + self.bytes / 2;
+        let search_start = self.start + 1;
+        let search_end = self.end;
+        let search_range = &prefix_bytes[search_start..search_end];
+        let current_split_at =
+            search_start + search_range.partition_point(|bytes| *bytes < target_bytes);
+        let current_split_at = current_split_at.min(self.end - 1);
+        let previous_split_at = if current_split_at > self.start + 1 {
+            current_split_at - 1
+        } else {
+            current_split_at
+        };
+
+        let previous_left_bytes = group.bytes(self.start, previous_split_at);
+        let current_left_bytes = group.bytes(self.start, current_split_at);
+        let target_left_bytes = target_bytes - start_bytes;
+        if previous_split_at != current_split_at
+            && target_left_bytes.abs_diff(previous_left_bytes)
+                <= target_left_bytes.abs_diff(current_left_bytes)
+        {
+            previous_split_at
+        } else {
+            current_split_at
+        }
     }
 
     fn split_off(
@@ -106,75 +204,34 @@ impl Partition {
         split_at: usize,
         left_bytes: Option<u64>,
         cost: &ChunkPartitionerRebalanceCost,
-    ) -> Partition {
-        let original_cost = self.cost;
-        let tail_rows = self.rows.split_off(split_at);
-        let tail_row_count = tail_rows.len();
+    ) -> PartitionPlan {
+        let original_bytes = self.bytes;
+        let original_end = self.end;
 
         match cost {
             ChunkPartitionerRebalanceCost::Bytes => {
                 let left_bytes = left_bytes.unwrap_or(0);
-                let tail_bytes = original_cost.bytes.saturating_sub(left_bytes);
-                self.cost = PartitionCost {
-                    bytes: left_bytes,
-                    rows: split_at,
-                };
-                Partition {
-                    rows: tail_rows,
-                    cost: PartitionCost {
-                        bytes: tail_bytes,
-                        rows: tail_row_count,
-                    },
+                let tail_bytes = original_bytes.saturating_sub(left_bytes);
+                self.end = split_at;
+                self.bytes = left_bytes;
+                PartitionPlan {
+                    group_index: self.group_index,
+                    start: split_at,
+                    end: original_end,
+                    bytes: tail_bytes,
                 }
             }
 
             ChunkPartitionerRebalanceCost::Rows => {
-                self.cost = PartitionCost {
+                self.end = split_at;
+                self.bytes = 0;
+                PartitionPlan {
+                    group_index: self.group_index,
+                    start: split_at,
+                    end: original_end,
                     bytes: 0,
-                    rows: split_at,
-                };
-                Partition {
-                    rows: tail_rows,
-                    cost: PartitionCost {
-                        bytes: 0,
-                        rows: tail_row_count,
-                    },
                 }
             }
-        }
-    }
-
-    fn into_rows(self) -> Vec<RowData> {
-        self.rows
-    }
-}
-
-impl PartitionCost {
-    fn from_rows(rows: &[RowData], cost: &ChunkPartitionerRebalanceCost) -> Self {
-        let bytes = match cost {
-            ChunkPartitionerRebalanceCost::Bytes => rows.iter().map(RowData::get_data_size).sum(),
-            ChunkPartitionerRebalanceCost::Rows => 0,
-        };
-
-        Self {
-            bytes,
-            rows: rows.len(),
-        }
-    }
-
-    fn primary(&self, cost: &ChunkPartitionerRebalanceCost) -> u64 {
-        // User-selected primary metric controls sort order, skew detection, and split point.
-        match cost {
-            ChunkPartitionerRebalanceCost::Bytes => self.bytes,
-            ChunkPartitionerRebalanceCost::Rows => self.rows as u64,
-        }
-    }
-
-    fn secondary(&self, cost: &ChunkPartitionerRebalanceCost) -> u64 {
-        match cost {
-            // Only use row count as the secondary metric for now
-            ChunkPartitionerRebalanceCost::Bytes => self.rows as u64,
-            ChunkPartitionerRebalanceCost::Rows => self.rows as u64,
         }
     }
 }
@@ -189,71 +246,114 @@ impl ChunkPartitioner {
             return Ok(vec![data]);
         }
 
-        let mut group_indexes: HashMap<String, usize> = HashMap::new();
-        let mut sub_data: Vec<Vec<RowData>> = Vec::new();
-        for row_data in data {
-            // Keep each logical snapshot chunk together before any strategy-specific rebalance.
-            let sch_tb_chunk = format!("{}.{}.{}", row_data.schema, row_data.tb, row_data.chunk_id);
-            if let Some(index) = group_indexes.get(&sch_tb_chunk) {
-                sub_data[*index].push(row_data);
-            } else {
-                group_indexes.insert(sch_tb_chunk, sub_data.len());
-                sub_data.push(vec![row_data]);
-            }
-        }
+        let index_capacity = target_partitions.max(1);
+        let mut group_indexes: HashMap<ChunkKey<'_>, usize> =
+            HashMap::with_capacity(index_capacity);
+        let mut groups: Vec<GroupPlan> = Vec::with_capacity(index_capacity);
+        let use_bytes = matches!(config.cost, ChunkPartitionerRebalanceCost::Bytes);
+        // Snapshot rows are usually chunk-contiguous. Reuse the previous group index to avoid
+        // hashing schema/table for every row in a long run from the same logical chunk.
+        let mut last_group: Option<(ChunkKey<'_>, usize)> = None;
 
-        Ok(Self::rebalance_partitions(
-            sub_data,
-            target_partitions,
-            config,
-        ))
+        for (row_index, row_data) in data.iter().enumerate() {
+            // Keep each logical snapshot chunk together before any strategy-specific rebalance.
+            let key = ChunkKey {
+                schema: row_data.schema.as_str(),
+                tb: row_data.tb.as_str(),
+                chunk_id: row_data.chunk_id,
+            };
+
+            let index = match last_group {
+                Some((last_key, last_index)) if last_key == key => last_index,
+                _ => {
+                    let index = match group_indexes.get(&key).copied() {
+                        Some(index) => index,
+                        None => {
+                            let index = groups.len();
+                            group_indexes.insert(key, index);
+                            groups.push(GroupPlan::new(use_bytes));
+                            index
+                        }
+                    };
+                    last_group = Some((key, index));
+                    index
+                }
+            };
+
+            let bytes = if use_bytes {
+                row_data.get_data_size()
+            } else {
+                0
+            };
+            groups[index].push(row_index, bytes);
+        }
+        // group_indexes holds borrowed keys into data. Drop it before moving RowData out of data.
+        drop(group_indexes);
+
+        let partitions = groups
+            .iter()
+            .enumerate()
+            .map(|(group_index, group)| PartitionPlan::new(group_index, group, &config.cost))
+            .collect();
+
+        let partitions =
+            Self::rebalance_partition_items(partitions, &groups, target_partitions, config);
+        Ok(Self::materialize_partitions(data, &groups, partitions))
     }
 
-    fn rebalance_partitions(
-        sub_data: Vec<Vec<RowData>>,
+    fn rebalance_partition_items(
+        partitions: Vec<PartitionPlan>,
+        groups: &[GroupPlan],
         target_partitions: usize,
         config: &ChunkPartitionerRebalanceConfig,
-    ) -> Vec<Vec<RowData>> {
-        let partitions: Vec<Partition> = sub_data
-            .into_iter()
-            .map(|rows| Partition::new(rows, &config.cost))
-            .collect();
+    ) -> Vec<PartitionPlan> {
         match config.strategy {
-            ChunkPartitionerRebalanceStrategy::None => {
-                partitions.into_iter().map(Partition::into_rows).collect()
-            }
+            ChunkPartitionerRebalanceStrategy::None => partitions,
             ChunkPartitionerRebalanceStrategy::ChunkLargestFirst => {
                 Self::sort_by_largest_first(partitions, config)
             }
             ChunkPartitionerRebalanceStrategy::SplitLargeInsert => Self::sort_by_largest_first(
-                Self::split_large_insert_partitions(partitions, target_partitions, config, true),
+                Self::split_large_insert_partitions(
+                    partitions,
+                    groups,
+                    target_partitions,
+                    config,
+                    true,
+                ),
                 config,
             ),
             ChunkPartitionerRebalanceStrategy::Adaptive => Self::sort_by_largest_first(
-                Self::split_large_insert_partitions(partitions, target_partitions, config, false),
+                Self::split_large_insert_partitions(
+                    partitions,
+                    groups,
+                    target_partitions,
+                    config,
+                    false,
+                ),
                 config,
             ),
         }
     }
 
     fn sort_by_largest_first(
-        mut partitions: Vec<Partition>,
+        mut partitions: Vec<PartitionPlan>,
         config: &ChunkPartitionerRebalanceConfig,
-    ) -> Vec<Vec<RowData>> {
+    ) -> Vec<PartitionPlan> {
         partitions.sort_by(|left, right| {
             right
                 .cost_key(&config.cost)
                 .cmp(&left.cost_key(&config.cost))
         });
-        partitions.into_iter().map(Partition::into_rows).collect()
+        partitions
     }
 
     fn split_large_insert_partitions(
-        mut partitions: Vec<Partition>,
+        mut partitions: Vec<PartitionPlan>,
+        groups: &[GroupPlan],
         target_partitions: usize,
         config: &ChunkPartitionerRebalanceConfig,
         force_split: bool,
-    ) -> Vec<Partition> {
+    ) -> Vec<PartitionPlan> {
         // Snapshot parallelizer sends insert-only rows, so split is safe for the current caller.
 
         let max_partitions =
@@ -289,7 +389,8 @@ impl ChunkPartitioner {
                 break;
             }
 
-            let Some(tail) = partitions[index].split(&config.cost, config.min_partition_rows)
+            let Some(tail) =
+                partitions[index].split(groups, &config.cost, config.min_partition_rows)
             else {
                 break;
             };
@@ -300,11 +401,11 @@ impl ChunkPartitioner {
     }
 
     fn max_partitions(
-        partitions: &[Partition],
+        partitions: &[PartitionPlan],
         target_partitions: usize,
         config: &ChunkPartitionerRebalanceConfig,
     ) -> usize {
-        let total_rows: usize = partitions.iter().map(|partition| partition.cost.rows).sum();
+        let total_rows: usize = partitions.iter().map(PartitionPlan::rows).sum();
         // Derive the effective cap from the current drain batch to avoid over-splitting.
         let max_by_rows = (total_rows / config.min_partition_rows.max(1)).max(1);
         let max_by_config = target_partitions.saturating_mul(config.max_partitions_per_sinker);
@@ -312,7 +413,7 @@ impl ChunkPartitioner {
     }
 
     fn total_safe_primary_cost(
-        partitions: &[Partition],
+        partitions: &[PartitionPlan],
         config: &ChunkPartitionerRebalanceConfig,
     ) -> u64 {
         partitions
@@ -322,7 +423,7 @@ impl ChunkPartitioner {
     }
 
     fn is_partition_skewed(
-        largest: &Partition,
+        largest: &PartitionPlan,
         total_cost: u64,
         target_partitions: usize,
         config: &ChunkPartitionerRebalanceConfig,
@@ -334,6 +435,31 @@ impl ChunkPartitioner {
 
         // Example: ratio=2.0 means "split if the largest partition is > 2x ideal work".
         (largest_cost as f64) > (avg_cost_per_sinker as f64 * config.split_skew_ratio)
+    }
+
+    fn materialize_partitions(
+        data: Vec<RowData>,
+        groups: &[GroupPlan],
+        partitions: Vec<PartitionPlan>,
+    ) -> Vec<Vec<RowData>> {
+        let mut row_to_partition = vec![0; data.len()];
+        for (partition_index, partition) in partitions.iter().enumerate() {
+            let group = &groups[partition.group_index];
+            for row_index in &group.row_indexes[partition.start..partition.end] {
+                row_to_partition[*row_index] = partition_index;
+            }
+        }
+
+        // Plans are built from row indexes in data, and split only subdivides existing ranges.
+        // Therefore every row has exactly one final partition by construction.
+        let mut sub_data: Vec<Vec<RowData>> = partitions
+            .iter()
+            .map(|partition| Vec::with_capacity(partition.rows()))
+            .collect();
+        for (row_index, row_data) in data.into_iter().enumerate() {
+            sub_data[row_to_partition[row_index]].push(row_data);
+        }
+        sub_data
     }
 
     pub fn partition_raw(data: Vec<DtItem>) -> anyhow::Result<Vec<Vec<DtItem>>> {
@@ -410,6 +536,45 @@ mod tests {
             .iter()
             .map(|partition| partition.iter().map(|row| row.data_size).collect())
             .collect()
+    }
+
+    fn group_plan(data_sizes: &[usize], use_bytes: bool) -> GroupPlan {
+        let mut group = GroupPlan::new(use_bytes);
+        for (row_index, data_size) in data_sizes.iter().enumerate() {
+            group.push(row_index, *data_size as u64);
+        }
+        group
+    }
+
+    #[test]
+    fn partition_split_aligns_left_rows_to_min_partition_rows() {
+        let groups = vec![group_plan(&[1, 1, 1, 1, 1], false)];
+        let mut partition = PartitionPlan::new(0, &groups[0], &ChunkPartitionerRebalanceCost::Rows);
+
+        let tail = partition
+            .split(&groups, &ChunkPartitionerRebalanceCost::Rows, 2)
+            .unwrap();
+
+        assert_eq!(partition.rows(), 2);
+        assert_eq!(tail.rows(), 3);
+        assert_eq!(partition.rows() % 2, 0);
+    }
+
+    #[test]
+    fn partition_split_recalculates_left_bytes_after_alignment() {
+        let groups = vec![group_plan(&[5, 5, 90, 10, 10], true)];
+        let mut partition =
+            PartitionPlan::new(0, &groups[0], &ChunkPartitionerRebalanceCost::Bytes);
+
+        let tail = partition
+            .split(&groups, &ChunkPartitionerRebalanceCost::Bytes, 2)
+            .unwrap();
+
+        assert_eq!(partition.rows(), 2);
+        assert_eq!(tail.rows(), 3);
+        assert_eq!(partition.bytes, 10);
+        assert_eq!(tail.bytes, 110);
+        assert_eq!(partition.rows() % 2, 0);
     }
 
     #[test]
@@ -533,6 +698,44 @@ mod tests {
 
         let lengths: Vec<usize> = partitions.iter().map(Vec::len).collect();
         assert_eq!(lengths, vec![2, 1, 1]);
+    }
+
+    #[test]
+    fn partition_dml_keeps_same_schema_table_chunk_in_one_partition() {
+        let data = vec![
+            sized_row("schema_1", "tb_1", 7, RowType::Insert, 1),
+            sized_row("schema_2", "tb_1", 7, RowType::Insert, 1),
+            sized_row("schema_1", "tb_1", 7, RowType::Insert, 1),
+            sized_row("schema_1", "tb_2", 7, RowType::Insert, 1),
+            sized_row("schema_1", "tb_1", 8, RowType::Insert, 1),
+            sized_row("schema_1", "tb_2", 7, RowType::Insert, 1),
+        ];
+
+        let partitions = ChunkPartitioner::partition_dml(
+            data,
+            8,
+            &config(ChunkPartitionerRebalanceStrategy::None),
+        )
+        .unwrap();
+
+        let partition_keys: Vec<Vec<(&str, &str, u64)>> = partitions
+            .iter()
+            .map(|partition| {
+                partition
+                    .iter()
+                    .map(|row| (row.schema.as_str(), row.tb.as_str(), row.chunk_id))
+                    .collect()
+            })
+            .collect();
+        assert_eq!(
+            partition_keys,
+            vec![
+                vec![("schema_1", "tb_1", 7), ("schema_1", "tb_1", 7)],
+                vec![("schema_2", "tb_1", 7)],
+                vec![("schema_1", "tb_2", 7), ("schema_1", "tb_2", 7)],
+                vec![("schema_1", "tb_1", 8)],
+            ]
+        );
     }
 
     #[test]
