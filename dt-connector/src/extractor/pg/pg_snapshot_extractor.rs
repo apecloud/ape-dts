@@ -6,12 +6,13 @@ use std::{
 use anyhow::{anyhow, bail};
 use async_trait::async_trait;
 use futures::TryStreamExt;
-use sqlx::{Pool, Postgres};
+use sqlx::{Pool, Postgres, Row};
 
 use crate::{
     extractor::{
         base_extractor::{BaseExtractor, ExtractState},
         base_splitter::SnapshotChunk,
+        estimated_sample_limit,
         pg::pg_snapshot_splitter::PgSnapshotSplitter,
         rdb_snapshot_extract_statement::{OrderKeyPredicateType, RdbSnapshotExtractStatement},
         resumer::recovery::Recovery,
@@ -57,7 +58,7 @@ pub struct PgSnapshotShared {
     pub partition_cols: Arc<HashMap<(String, String), String>>,
     pub batch_size: usize,
     pub parallel_type: RdbParallelType,
-    pub sample_interval: u64,
+    pub sample_rate: Option<u8>,
     pub recovery: Option<Arc<dyn Recovery + Send + Sync>>,
 }
 
@@ -231,7 +232,7 @@ impl PgSnapshotExtractor {
                 order_cols,
             } => {
                 let count = ctx
-                    .extract_nulls(&mut extract_state, tb_meta.as_ref(), &order_cols)
+                    .extract_nulls(&mut extract_state, tb_meta.as_ref(), &order_cols, None)
                     .await?;
                 extract_state.monitor.try_flush(true).await;
                 Ok(PgSnapshotWorkResult::NullChunk { table_id, count })
@@ -419,6 +420,7 @@ impl PgSnapshotExtractor {
             .cloned();
         let mut rows = query.fetch(&shared.conn_pool);
         while let Some(row) = rows.try_next().await? {
+            extracted_cnt += 1;
             partition_col_value =
                 PgColValueConvertor::from_query(&row, &partition_col, &partition_col_type)?;
             let row_data =
@@ -427,7 +429,6 @@ impl PgSnapshotExtractor {
                 .base_extractor
                 .push_row(&mut extract_state, row_data, Position::None)
                 .await?;
-            extracted_cnt += 1;
         }
         extract_state.monitor.try_flush(true).await;
         Ok((chunk_id, extracted_cnt, partition_col_value))
@@ -528,10 +529,11 @@ impl PgSnapshotDispatchState {
             .get(&(table_id.schema.clone(), table_id.tb.clone()))
             .cloned()
             .unwrap_or_default();
-        let table_ctx = PgTableCtx {
+        let mut table_ctx = PgTableCtx {
             shared: self.shared.clone(),
             table_id: table_id.clone(),
             user_defined_partition_col,
+            sample_limit: None,
         };
         let (extract_state, monitor_guard) = SnapshotDispatcher::fork_table_extract_state(
             &self.root_extract_state,
@@ -547,6 +549,7 @@ impl PgSnapshotDispatchState {
             .await?
             .as_ref()
             .clone();
+        table_ctx.sample_limit = table_ctx.estimate_sample_limit(&tb_meta).await?;
         let active_mode = table_ctx.prepare_active_mode(&tb_meta).await?;
 
         self.active_tables.insert(
@@ -696,10 +699,14 @@ struct PgTableCtx {
     shared: PgSnapshotShared,
     table_id: SnapshotTableId,
     user_defined_partition_col: String,
+    sample_limit: Option<usize>,
 }
 
 impl PgTableCtx {
     async fn prepare_active_mode(&self, tb_meta: &PgTbMeta) -> anyhow::Result<PgActiveTableMode> {
+        if self.sample_limit.is_some() {
+            return Ok(PgActiveTableMode::Table);
+        }
         if matches!(self.shared.parallel_type, RdbParallelType::Chunk) {
             return self.prepare_splitter_active_mode(tb_meta).await;
         }
@@ -908,10 +915,15 @@ impl PgTableCtx {
             .get_where_condition(&self.table_id.schema, &self.table_id.tb)
             .cloned()
             .unwrap_or_default();
-        let sql = RdbSnapshotExtractStatement::from(tb_meta)
-            .with_ignore_cols(ignore_cols.unwrap_or(&HashSet::new()))
-            .with_where_condition(&where_condition)
-            .build()?;
+        let empty_ignore_cols = HashSet::new();
+        let stmt_ignore_cols = ignore_cols.unwrap_or(&empty_ignore_cols);
+        let mut stmt = RdbSnapshotExtractStatement::from(tb_meta)
+            .with_ignore_cols(stmt_ignore_cols)
+            .with_where_condition(&where_condition);
+        if let Some(limit) = self.sample_limit {
+            stmt = stmt.with_limit(limit);
+        }
+        let sql = stmt.build()?;
 
         let mut rows = sqlx::query(&sql).fetch(&self.shared.conn_pool);
         let mut chunk_id_generator = SnapshotChunkIdGenerator::new(self.shared.batch_size);
@@ -954,6 +966,7 @@ impl PgTableCtx {
         let mut extracted_count = 0u64;
         let mut start_values = resume_values;
         let mut chunk_id_generator = SnapshotChunkIdGenerator::new(self.shared.batch_size);
+        let page_limit = self.sample_limit.unwrap_or(self.shared.batch_size);
         let ignore_cols = self
             .shared
             .filter
@@ -969,14 +982,14 @@ impl PgTableCtx {
             .with_order_cols(&tb_meta.basic.order_cols)
             .with_where_condition(&where_condition)
             .with_predicate_type(OrderKeyPredicateType::None)
-            .with_limit(self.shared.batch_size)
+            .with_limit(page_limit)
             .build()?;
         let sql_from_value = RdbSnapshotExtractStatement::from(tb_meta)
             .with_ignore_cols(ignore_cols.unwrap_or(&HashSet::new()))
             .with_order_cols(&tb_meta.basic.order_cols)
             .with_where_condition(&where_condition)
             .with_predicate_type(OrderKeyPredicateType::GreaterThan)
-            .with_limit(self.shared.batch_size)
+            .with_limit(page_limit)
             .build()?;
         let missing_order_col = |order_col: &str| {
             anyhow!(
@@ -1005,6 +1018,12 @@ impl PgTableCtx {
                 let mut rows = query.fetch(&self.shared.conn_pool);
                 let mut slice_count = 0usize;
                 while let Some(row) = rows.try_next().await? {
+                    if self
+                        .sample_limit
+                        .is_some_and(|limit| extracted_count >= limit as u64)
+                    {
+                        break;
+                    }
                     let value = start_values
                         .get_mut(order_col)
                         .ok_or_else(|| missing_order_col(order_col))?;
@@ -1012,9 +1031,6 @@ impl PgTableCtx {
                     extracted_count += 1;
                     slice_count += 1;
                     let row_chunk_id = chunk_id_generator.next_row_chunk_id();
-                    if extracted_count % self.shared.sample_interval != 0 {
-                        continue;
-                    }
 
                     let row_data =
                         RowData::from_pg_row(&row, tb_meta, &ignore_cols, Some(row_chunk_id));
@@ -1030,7 +1046,11 @@ impl PgTableCtx {
                         .await?;
                 }
 
-                if slice_count < self.shared.batch_size {
+                if self
+                    .sample_limit
+                    .is_some_and(|limit| extracted_count >= limit as u64)
+                    || slice_count < page_limit
+                {
                     break;
                 }
             }
@@ -1052,6 +1072,12 @@ impl PgTableCtx {
                 let mut rows = query.fetch(&self.shared.conn_pool);
                 let mut slice_count = 0usize;
                 while let Some(row) = rows.try_next().await? {
+                    if self
+                        .sample_limit
+                        .is_some_and(|limit| extracted_count >= limit as u64)
+                    {
+                        break;
+                    }
                     for order_col in &tb_meta.basic.order_cols {
                         let order_col_type = tb_meta.get_col_type(order_col)?;
                         let value = start_values
@@ -1062,9 +1088,6 @@ impl PgTableCtx {
                     extracted_count += 1;
                     slice_count += 1;
                     let row_chunk_id = chunk_id_generator.next_row_chunk_id();
-                    if extracted_count % self.shared.sample_interval != 0 {
-                        continue;
-                    }
 
                     let row_data =
                         RowData::from_pg_row(&row, tb_meta, &ignore_cols, Some(row_chunk_id));
@@ -1075,7 +1098,11 @@ impl PgTableCtx {
                         .await?;
                 }
 
-                if slice_count < self.shared.batch_size {
+                if self
+                    .sample_limit
+                    .is_some_and(|limit| extracted_count >= limit as u64)
+                    || slice_count < page_limit
+                {
                     break;
                 }
             }
@@ -1086,9 +1113,20 @@ impl PgTableCtx {
             .order_cols
             .iter()
             .any(|col| tb_meta.basic.is_col_nullable(col))
+            && !self
+                .sample_limit
+                .is_some_and(|limit| extracted_count >= limit as u64)
         {
+            let remaining_limit = self
+                .sample_limit
+                .map(|limit| limit.saturating_sub(extracted_count as usize));
             extracted_count += self
-                .extract_nulls(extract_state, tb_meta, &tb_meta.basic.order_cols)
+                .extract_nulls(
+                    extract_state,
+                    tb_meta,
+                    &tb_meta.basic.order_cols,
+                    remaining_limit,
+                )
                 .await?;
         }
 
@@ -1100,6 +1138,7 @@ impl PgTableCtx {
         extract_state: &mut ExtractState,
         tb_meta: &PgTbMeta,
         order_cols: &Vec<String>,
+        limit: Option<usize>,
     ) -> anyhow::Result<u64> {
         let mut extracted_count = 0u64;
         let mut chunk_id_generator = SnapshotChunkIdGenerator::new(self.shared.batch_size);
@@ -1113,12 +1152,17 @@ impl PgTableCtx {
             .get_where_condition(&self.table_id.schema, &self.table_id.tb)
             .cloned()
             .unwrap_or_default();
-        let sql_for_null = RdbSnapshotExtractStatement::from(tb_meta)
-            .with_ignore_cols(ignore_cols.unwrap_or(&HashSet::new()))
+        let empty_ignore_cols = HashSet::new();
+        let stmt_ignore_cols = ignore_cols.unwrap_or(&empty_ignore_cols);
+        let mut stmt = RdbSnapshotExtractStatement::from(tb_meta)
+            .with_ignore_cols(stmt_ignore_cols)
             .with_order_cols(order_cols)
             .with_where_condition(&where_condition)
-            .with_predicate_type(OrderKeyPredicateType::IsNull)
-            .build()?;
+            .with_predicate_type(OrderKeyPredicateType::IsNull);
+        if let Some(limit) = limit {
+            stmt = stmt.with_limit(limit);
+        }
+        let sql_for_null = stmt.build()?;
 
         let mut rows = sqlx::query(&sql_for_null).fetch(&self.shared.conn_pool);
         while let Some(row) = rows.try_next().await? {
@@ -1131,5 +1175,79 @@ impl PgTableCtx {
                 .await?;
         }
         Ok(extracted_count)
+    }
+
+    async fn estimate_sample_limit(&self, tb_meta: &PgTbMeta) -> anyhow::Result<Option<usize>> {
+        if self
+            .shared
+            .sample_rate
+            .filter(|rate| (1..100).contains(rate))
+            .is_none()
+        {
+            return Ok(None);
+        }
+
+        let Some(row_count) = self.estimate_sample_row_count(tb_meta).await? else {
+            return Ok(None);
+        };
+        Ok(estimated_sample_limit(self.shared.sample_rate, row_count))
+    }
+
+    async fn estimate_sample_row_count(&self, tb_meta: &PgTbMeta) -> anyhow::Result<Option<u64>> {
+        let where_condition = self
+            .shared
+            .filter
+            .get_where_condition(&self.table_id.schema, &self.table_id.tb)
+            .cloned()
+            .unwrap_or_default();
+        if !where_condition.is_empty() {
+            return self
+                .estimate_filtered_sample_row_count(tb_meta, &where_condition)
+                .await;
+        }
+
+        let sql = "SELECT c.reltuples::bigint AS row_count
+FROM pg_class c
+JOIN pg_namespace n ON n.oid = c.relnamespace
+WHERE c.relkind = 'r' AND n.nspname = $1 AND c.relname = $2";
+        let Some(row) = sqlx::query(sql)
+            .bind(&tb_meta.basic.schema)
+            .bind(&tb_meta.basic.tb)
+            .fetch_optional(&self.shared.conn_pool)
+            .await?
+        else {
+            return Ok(None);
+        };
+
+        let row_count: i64 = row.try_get(0)?;
+        let row_count = if row_count < 0 { 0 } else { row_count as u64 };
+        Ok(Some(row_count))
+    }
+
+    async fn estimate_filtered_sample_row_count(
+        &self,
+        tb_meta: &PgTbMeta,
+        where_condition: &str,
+    ) -> anyhow::Result<Option<u64>> {
+        let sql = format!(
+            "EXPLAIN (FORMAT JSON) SELECT 1 FROM {}.{} WHERE {}",
+            quote!(&tb_meta.basic.schema),
+            quote!(&tb_meta.basic.tb),
+            where_condition
+        );
+        let Some(row) = sqlx::query(&sql)
+            .fetch_optional(&self.shared.conn_pool)
+            .await?
+        else {
+            return Ok(None);
+        };
+
+        let plan: serde_json::Value = row.try_get(0)?;
+        Ok(plan
+            .get(0)
+            .and_then(|root| root.get("Plan"))
+            .and_then(|node| node.get("Plan Rows"))
+            .and_then(|rows| rows.as_u64())
+            .filter(|rows| *rows > 0))
     }
 }

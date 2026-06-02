@@ -1,8 +1,7 @@
 use std::collections::{HashMap, VecDeque};
 
-use anyhow::anyhow;
-
 use super::task_util::TaskUtil;
+use anyhow::anyhow;
 use dt_common::{
     config::{config_enums::ParallelType, sinker_config::SinkerConfig, task_config::TaskConfig},
     meta::redis::command::key_parser::KeyParser,
@@ -110,11 +109,6 @@ impl ParallelizerUtil {
         Ok(Box::new(rdb_merger))
     }
 
-    async fn create_mongo_merger() -> anyhow::Result<Box<dyn Merger + Send + Sync>> {
-        let mongo_merger = MongoMerger {};
-        Ok(Box::new(mongo_merger))
-    }
-
     async fn create_rdb_partitioner(config: &TaskConfig) -> anyhow::Result<RdbPartitioner> {
         let meta_manager = TaskUtil::create_rdb_meta_manager(config)
             .await?
@@ -154,7 +148,7 @@ impl ParallelizerUtil {
         if config.checker.is_some() {
             Ok(Box::new(MergeParallelizer::for_check(
                 base_parallelizer,
-                Self::create_mongo_merger().await?,
+                Box::new(MongoMerger {}),
                 parallel_size,
                 config.sinker_basic.clone(),
             )))

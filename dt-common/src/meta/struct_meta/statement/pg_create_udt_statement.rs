@@ -20,7 +20,8 @@ impl PgCreateUdtStatement {
         }
 
         let sql = self.udt.create_statement.to_string();
-        sqls.push((String::new(), sql));
+        let key = format!("udt.{}.{}", self.udt.schema_name, self.udt.typ_name);
+        sqls.push((key, sql));
         Ok(sqls)
     }
 }

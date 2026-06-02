@@ -2,6 +2,7 @@
 pub struct PgUdf {
     pub schema_name: String,
     pub function_name: String,
+    pub identity_arguments: String,
     pub lanname: String,
     pub create_statement: String,
 }

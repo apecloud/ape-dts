@@ -1,1 +1,1 @@
-{"start_time":"","end_time":"","is_consistent":true}
+{"start_time":"2026-05-13T23:41:16.505055+08:00","end_time":"2026-05-13T23:41:16.522973+08:00","is_consistent":true,"checked_count":3,"miss_count":0,"diff_count":0,"skip_count":0,"tables":[{"schema":"test_db_1","tb":"tb_1","checked_count":3,"miss_count":0,"diff_count":0,"skip_count":0}]}

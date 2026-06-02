@@ -1,0 +1,2 @@
+{"schema":"test_db_1","tb":"one_pk_no_uk_1","id_col_values":{"f_0":"6"}}
+{"schema":"test_db_2","tb":"one_pk_no_uk_1","id_col_values":{"f_0":"6"}}
