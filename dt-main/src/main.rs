@@ -7,7 +7,20 @@ const ENV_SHUTDOWN_TIMEOUT_SECS: &str = "SHUTDOWN_TIMEOUT_SECS";
 
 #[tokio::main]
 async fn main() {
-    env::set_var("RUST_BACKTRACE", "1");
+    unsafe {
+        env::set_var("RUST_BACKTRACE", "1");
+    }
+
+    let mut args = env::args();
+    let _ = args.next();
+    let Some(task_config) = args.next() else {
+        panic!("no task_config provided in args");
+    };
+
+    if matches!(task_config.as_str(), "-V" | "--version" | "version") {
+        println!("dt-main {}", env!("CARGO_PKG_VERSION"));
+        return;
+    }
 
     tokio::spawn(async {
         tokio::signal::ctrl_c().await.unwrap();
@@ -21,7 +34,6 @@ async fn main() {
         std::process::exit(0);
     });
 
-    let task_config = env::args().nth(1).expect("no task_config provided in args");
     if PrecheckTaskConfig::new(&task_config).is_ok() {
         do_precheck(&task_config).await;
     } else {

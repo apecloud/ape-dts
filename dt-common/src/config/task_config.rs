@@ -1172,7 +1172,7 @@ impl TaskConfig {
             do_tbs: loader.get_optional(FILTER, "do_tbs"),
             ignore_tbs: loader.get_optional(FILTER, "ignore_tbs"),
             ignore_cols: loader.get_optional(FILTER, "ignore_cols"),
-            do_events: loader.get_optional(FILTER, "do_events"),
+            do_events: loader.get_with_default(FILTER, "do_events", ASTRISK.to_string()),
             do_ddls: loader.get_optional(FILTER, "do_ddls"),
             do_dcls: loader.get_optional(FILTER, "do_dcls"),
             do_structures: loader.get_with_default(FILTER, "do_structures", ASTRISK.to_string()),
