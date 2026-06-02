@@ -268,7 +268,7 @@ impl ExtractorUtil {
                         bail!("connection pool not found");
                     }
                 };
-                let meta_manager = PgMetaManager::new_for_cdc(conn_pool.clone()).await?;
+                let meta_manager = PgMetaManager::new(conn_pool.clone()).await?;
                 let extractor = PgSnapshotExtractor {
                     shared: PgSnapshotShared {
                         base_extractor,
@@ -331,7 +331,7 @@ impl ExtractorUtil {
                     ConnClient::PostgreSQL(conn_pool) => conn_pool,
                     _ => bail!("connection pool not found"),
                 };
-                let meta_manager = PgMetaManager::new(conn_pool.clone()).await?;
+                let meta_manager = PgMetaManager::new_for_cdc(conn_pool.clone()).await?;
                 extract_state.time_filter = TimeFilter::new(&start_time_utc, &end_time_utc)?;
                 let extractor = PgCdcExtractor {
                     meta_manager,
