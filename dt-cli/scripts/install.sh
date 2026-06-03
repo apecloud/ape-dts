@@ -28,46 +28,6 @@ chmod +x "$INSTALL_DIR/dtscli"
 echo "installed dtscli:"
 echo "  $INSTALL_DIR/dtscli"
 
-BASH_COMPLETION_DIR="$HOME/.local/share/bash-completion/completions"
-FISH_COMPLETION_DIR="$HOME/.config/fish/completions"
-if [ -d "${ZSH_CUSTOM:-"$HOME/.oh-my-zsh/custom"}" ]; then
-  ZSH_COMPLETION_DIR="${ZSH_CUSTOM:-"$HOME/.oh-my-zsh/custom"}/completions"
-elif command -v brew >/dev/null 2>&1; then
-  ZSH_COMPLETION_DIR="$(brew --prefix)/share/zsh/site-functions"
-else
-  ZSH_COMPLETION_DIR="$HOME/.zfunc"
-fi
-
-if "$INSTALL_DIR/dtscli" completion bash >/dev/null 2>&1; then
-  mkdir -p "$BASH_COMPLETION_DIR"
-  "$INSTALL_DIR/dtscli" completion bash > "$BASH_COMPLETION_DIR/dtscli"
-  echo "installed bash completion:"
-  echo "  $BASH_COMPLETION_DIR/dtscli"
-else
-  echo "warning: failed to generate bash completion" >&2
-fi
-
-if "$INSTALL_DIR/dtscli" completion fish >/dev/null 2>&1; then
-  mkdir -p "$FISH_COMPLETION_DIR"
-  "$INSTALL_DIR/dtscli" completion fish > "$FISH_COMPLETION_DIR/dtscli.fish"
-  echo "installed fish completion:"
-  echo "  $FISH_COMPLETION_DIR/dtscli.fish"
-else
-  echo "warning: failed to generate fish completion" >&2
-fi
-
-if "$INSTALL_DIR/dtscli" completion zsh >/dev/null 2>&1; then
-  mkdir -p "$ZSH_COMPLETION_DIR"
-  "$INSTALL_DIR/dtscli" completion zsh > "$ZSH_COMPLETION_DIR/_dtscli"
-  echo "installed zsh completion:"
-  echo "  $ZSH_COMPLETION_DIR/_dtscli"
-  if [ "$ZSH_COMPLETION_DIR" = "$HOME/.zfunc" ]; then
-    echo "ensure $ZSH_COMPLETION_DIR is present in fpath before compinit"
-  fi
-else
-  echo "warning: failed to generate zsh completion" >&2
-fi
-
 case ":$PATH:" in
   *":$INSTALL_DIR:"*) ;;
   *)
@@ -104,3 +64,6 @@ esac
 echo
 echo "configure dt-main before starting DTS tasks:"
 echo "  dtscli config set --workspace /path/to/ape-dts-release"
+echo
+echo "shell completions are not installed automatically; run this when needed:"
+echo "  dtscli completion --help"

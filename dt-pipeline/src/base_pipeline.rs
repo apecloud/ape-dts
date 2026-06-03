@@ -507,7 +507,7 @@ impl BasePipeline {
             if let Some(handler) = &self.recorder {
                 if let Err(err) = handler.record_position(&finish_position).await {
                     log_error!(
-                        "failed to record finish position: {}, err: {}",
+                        "failed to record finish position: {}, err: {:#}",
                         finish_position,
                         err
                     );
@@ -566,7 +566,11 @@ impl BasePipeline {
         }
         if let Some(handler) = &self.recorder {
             if let Err(e) = handler.record_position(record_position).await {
-                log_error!("failed to record position: {}, err: {}", record_position, e);
+                log_error!(
+                    "failed to record position: {}, err: {:#}",
+                    record_position,
+                    e
+                );
             }
         }
 

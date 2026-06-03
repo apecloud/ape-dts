@@ -51,6 +51,16 @@ The dt-main crate provides several optional components which can be enabled via 
 
 # Quick starts
 
+## CLI
+
+`dtscli` is a lightweight local CLI for creating and managing ApeCloud DTS tasks.
+It can generate task configs, start `dt-main`, list tasks, stream logs, and stop,
+restart, or delete local task records.
+
+![dtscli demo](./docs/img/demo.gif)
+
+For installation and detailed usage, see [dt-cli/README.md](./dt-cli/README.md).
+
 ## Tutorial
 
 - [prerequisites](./docs/en/tutorial/prerequisites.md)

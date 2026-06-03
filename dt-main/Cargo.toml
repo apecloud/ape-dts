@@ -12,5 +12,5 @@ metrics = ["dt-task/metrics"]
 [dependencies]
 dt-task = {path = "../dt-task", version = "0.1.0"}
 dt-precheck = {path = "../dt-precheck", version = "0.1.0"}
-
+clap = { workspace = true }
 tokio = { workspace = true }

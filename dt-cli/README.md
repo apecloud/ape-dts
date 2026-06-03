@@ -15,18 +15,7 @@ sh scripts/install.sh /path/to/dtscli
 
 After installation, make sure the install directory is in `PATH`.
 
-The installer also writes shell completion files for Bash and Fish:
-
-```text
-$HOME/.local/share/bash-completion/completions/dtscli
-$HOME/.config/fish/completions/dtscli.fish
-```
-
-For Zsh, the installer prefers `$ZSH_CUSTOM/completions/_dtscli` when Oh My Zsh is
-installed, then the Homebrew `share/zsh/site-functions` directory on macOS, and
-falls back to `$HOME/.zfunc/_dtscli`.
-
-You can also print completions manually:
+The installer does not install shell completions automatically. Generate them on demand:
 
 ```sh
 dtscli completion bash

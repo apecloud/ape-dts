@@ -610,7 +610,7 @@ impl RdbTestRunner {
         // migrate database/table structures to target if needed
         if !self.base.struct_task_config_file.is_empty() {
             TaskRunner::new(&self.base.struct_task_config_file)?
-                .start_task()
+                .start_task(false)
                 .await?;
         }
         Ok(())

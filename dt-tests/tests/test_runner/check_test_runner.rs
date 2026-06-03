@@ -213,6 +213,7 @@ impl CheckTestRunner {
             &self.base.config.global.task_id,
             &self.base.config.resumer,
             pool,
+            false,
         )
         .await?;
         Ok(())

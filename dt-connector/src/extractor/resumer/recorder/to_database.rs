@@ -19,6 +19,7 @@ impl DatabaseRecorder {
         task_id: &str,
         resumer_config: &ResumerConfig,
         pool: ResumerDbPool,
+        is_init: bool,
     ) -> anyhow::Result<Self> {
         let recorder = match resumer_config {
             ResumerConfig::FromDB {
@@ -36,11 +37,11 @@ impl DatabaseRecorder {
                 bail!("databaseRecorder only supports ResumerConfig::FromDB")
             }
         };
-        recorder.initialization().await?;
+        recorder.initialization(is_init, task_id).await?;
         Ok(recorder)
     }
 
-    async fn initialization(&self) -> Result<()> {
+    async fn initialization(&self, is_init: bool, task_id: &str) -> Result<()> {
         log_info!(
             "DatabaseRecorderInner initialized, task_id: {}, schema: {}, table: {}",
             self.task_id,
@@ -72,6 +73,20 @@ impl DatabaseRecorder {
                     .execute(pool)
                     .await
                     .context(format!("failed to create table: {}", tb_sql))?;
+                if is_init {
+                    let delete_sql = format!(
+                        "DELETE FROM `{}`.`{}` WHERE task_id = ?",
+                        self.schema, self.table
+                    );
+                    query(&delete_sql)
+                        .bind(task_id)
+                        .execute(pool)
+                        .await
+                        .context(format!(
+                            "failed to delete resumer records for task_id={} with sql: {}",
+                            task_id, delete_sql
+                        ))?;
+                }
                 Ok(())
             }
             ResumerDbPool::Postgres(pool) => {
@@ -99,9 +114,41 @@ impl DatabaseRecorder {
                     .execute(pool)
                     .await
                     .context(format!("failed to create table: {}", tb_sql))?;
+                let sequence_sql = self.pg_sync_id_sequence_sql();
+                query(&sequence_sql).execute(pool).await.context(format!(
+                    "failed to sync resumer id sequence with sql: {}",
+                    sequence_sql
+                ))?;
+                if is_init {
+                    let delete_sql = format!(
+                        "DELETE FROM {}.{} WHERE task_id = $1",
+                        self.schema, self.table
+                    );
+                    query(&delete_sql)
+                        .bind(task_id)
+                        .execute(pool)
+                        .await
+                        .context(format!(
+                            "failed to delete resumer records for task_id={} with sql: {}",
+                            task_id, delete_sql
+                        ))?;
+                }
                 Ok(())
             }
         }
+    }
+
+    fn pg_sync_id_sequence_sql(&self) -> String {
+        let table_full_name = format!("{}.{}", self.schema, self.table);
+        let escaped_table_full_name = table_full_name.replace('\'', "''");
+        format!(
+            "SELECT setval(
+                pg_get_serial_sequence('{}', 'id'),
+                COALESCE((SELECT MAX(id) FROM {}), 1),
+                COALESCE((SELECT MAX(id) FROM {}), 0) > 0
+            )",
+            escaped_table_full_name, table_full_name, table_full_name
+        )
     }
 }
 
@@ -132,7 +179,7 @@ impl Recorder for DatabaseRecorder {
                     .bind(position.to_string())
                     .execute(pool)
                     .await
-                    .context("failed to upsert position record")?;
+                    .with_context(|| format!("failed to upsert position record with sql: {sql}"))?;
                 Ok(())
             }
             ResumerDbPool::Postgres(pool) => {
@@ -153,7 +200,7 @@ impl Recorder for DatabaseRecorder {
                     .bind(position.to_string())
                     .execute(pool)
                     .await
-                    .context("failed to upsert position record")?;
+                    .with_context(|| format!("failed to upsert position record with sql: {sql}"))?;
                 Ok(())
             }
         }

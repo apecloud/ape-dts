@@ -152,7 +152,7 @@ impl TaskRunner {
         })
     }
 
-    pub async fn start_task(&self) -> anyhow::Result<()> {
+    pub async fn start_task(&self, is_init: bool) -> anyhow::Result<()> {
         self.clear_check_logs().await?;
         self.init_log4rs().await?;
 
@@ -181,6 +181,7 @@ impl TaskRunner {
                     task_type.to_owned(),
                     &self.config.global,
                     &self.config.resumer,
+                    is_init,
                 )
                 .await?
             }

@@ -180,7 +180,7 @@ fn print_root_help() {
 
 Available Commands:
   config      Manage dtscli defaults.
-  create      Create and start a DTS task.
+  create      Create a new DTS task.
   start       Start a stopped DTS task.
   list        List local DTS tasks.
   logs        Print or follow task logs.
@@ -272,6 +272,7 @@ struct Cli {
 }
 
 #[derive(Debug, Subcommand)]
+#[allow(clippy::large_enum_variant)]
 enum Commands {
     /// Manage dtscli defaults.
     Config(ConfigCommand),
@@ -791,7 +792,7 @@ fn start_persistent_task(
         pid: None,
         created_at_unix_secs: unix_secs(),
     };
-    launch_persistent_task(&task_dir, workspace, dt_main, &mut metadata)
+    launch_persistent_task(&task_dir, workspace, dt_main, &mut metadata, true)
 }
 
 fn restart_persistent_task(
@@ -801,7 +802,7 @@ fn restart_persistent_task(
     metadata: &mut TaskMetadata,
 ) -> Result<()> {
     reject_if_task_running(task_dir, metadata)?;
-    launch_persistent_task(task_dir, workspace, dt_main, metadata)
+    launch_persistent_task(task_dir, workspace, dt_main, metadata, false)
 }
 
 fn reject_if_task_running(task_dir: &Path, metadata: &TaskMetadata) -> Result<()> {
@@ -829,6 +830,7 @@ fn launch_persistent_task(
     workspace: &Path,
     dt_main: &Path,
     metadata: &mut TaskMetadata,
+    init: bool,
 ) -> Result<()> {
     let config_file = PathBuf::from(&metadata.config_file);
     let runtime_log_dir = PathBuf::from(&metadata.log_dir);
@@ -845,8 +847,12 @@ fn launch_persistent_task(
         .create(true)
         .append(true)
         .open(task_dir.join("stderr.log"))?;
-    let mut child = Command::new(dt_main)
-        .arg(&config_file)
+    let mut command = Command::new(dt_main);
+    command.arg("--config").arg(&config_file);
+    if init {
+        command.arg("--init");
+    }
+    let mut child = command
         .current_dir(workspace)
         .stdin(Stdio::null())
         .stdout(Stdio::from(stdout))
@@ -976,8 +982,8 @@ fn preflight_temp_dir(task_name: &str) -> PathBuf {
 fn handle_list() -> Result<()> {
     let root = task_root()?;
     println!(
-        "{:<24} {:<10} {:<8} {:<10} {}",
-        "TASK", "STATUS", "PID", "MODE", "LOG_DIR"
+        "{:<24} {:<10} {:<8} {:<10} LOG_DIR",
+        "TASK", "STATUS", "PID", "MODE"
     );
     if !root.exists() {
         return Ok(());
@@ -1071,14 +1077,12 @@ fn handle_delete(delete: DeleteArgs) -> Result<()> {
     let task_dir = existing_task_dir(&delete.task_name)?;
 
     if let Some(pid) = read_pid(&task_dir) {
-        if process_exists(pid) {
-            if !delete.force {
-                bail!(
-                    "task '{}' is still running with pid {}; stop it first or use --force",
-                    delete.task_name,
-                    pid
-                );
-            }
+        if process_exists(pid) && !delete.force {
+            bail!(
+                "task '{}' is still running with pid {}; stop it first or use --force",
+                delete.task_name,
+                pid
+            );
         }
     }
 
@@ -1636,6 +1640,34 @@ mod tests {
         }
     }
 
+    fn write_fake_dt_main(path: &Path, marker: &Path) {
+        fs::write(
+            path,
+            format!(
+                "#!/bin/sh\nprintf '%s\\n' \"$@\" > '{}'\n",
+                marker.display()
+            ),
+        )
+        .unwrap();
+        let mut permissions = fs::metadata(path).unwrap().permissions();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            permissions.set_mode(0o755);
+        }
+        fs::set_permissions(path, permissions).unwrap();
+    }
+
+    fn read_marker(marker: &Path) -> String {
+        for _ in 0..20 {
+            if let Ok(content) = fs::read_to_string(marker) {
+                return content;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        panic!("marker was not written: {}", marker.display());
+    }
+
     #[test]
     fn validates_task_name() {
         validate_task_name("order_sync-1.2").unwrap();
@@ -1678,12 +1710,10 @@ mod tests {
         let config_file = task_dir.join("task_config.ini");
         let log_dir = root.join("logs/order_sync");
         let marker = root.join("restarted");
+        let dt_main = root.join("dt-main");
         fs::create_dir_all(&task_dir).unwrap();
-        fs::write(
-            &config_file,
-            format!("echo restarted > '{}'\n", marker.display()),
-        )
-        .unwrap();
+        fs::write(&config_file, "[global]\ntask_id=order_sync\n").unwrap();
+        write_fake_dt_main(&dt_main, &marker);
         let mut metadata = test_metadata(&task_dir, &config_file, &log_dir);
         fs::write(
             task_dir.join("metadata.json"),
@@ -1691,16 +1721,41 @@ mod tests {
         )
         .unwrap();
 
-        restart_persistent_task(&task_dir, &root, Path::new("/bin/sh"), &mut metadata).unwrap();
+        restart_persistent_task(&task_dir, &root, &dt_main, &mut metadata).unwrap();
 
         let pid = read_pid(&task_dir).unwrap();
         let saved = read_metadata(&task_dir).unwrap();
-        assert!(marker.is_file());
+        assert_eq!(
+            read_marker(&marker),
+            format!("--config\n{}\n", config_file.display())
+        );
         assert_eq!(saved.config_file, config_file.display().to_string());
         assert_eq!(saved.pid, Some(pid));
-        assert_eq!(saved.dt_main, "/bin/sh");
+        assert_eq!(saved.dt_main, dt_main.display().to_string());
         assert_eq!(saved.created_at_unix_secs, 1);
 
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn create_launches_dt_main_with_config_and_init() {
+        let root = env::temp_dir().join(format!("dtscli-create-launch-test-{}", unix_nanos()));
+        let task_dir = root.join("tasks/order_sync");
+        let config_file = task_dir.join("task_config.ini");
+        let log_dir = root.join("logs/order_sync");
+        let marker = root.join("created");
+        let dt_main = root.join("dt-main");
+        fs::create_dir_all(&task_dir).unwrap();
+        fs::write(&config_file, "[global]\ntask_id=order_sync\n").unwrap();
+        write_fake_dt_main(&dt_main, &marker);
+        let mut metadata = test_metadata(&task_dir, &config_file, &log_dir);
+
+        launch_persistent_task(&task_dir, &root, &dt_main, &mut metadata, true).unwrap();
+
+        assert_eq!(
+            read_marker(&marker),
+            format!("--config\n{}\n--init\n", config_file.display())
+        );
         fs::remove_dir_all(root).unwrap();
     }
 

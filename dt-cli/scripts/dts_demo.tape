@@ -4,7 +4,7 @@
 Output demo.gif
 Set FontSize 14
 Set Width 1200
-Set Height 600
+Set Height 650
 Set Theme "Dracula"
 Set TypingSpeed 50ms
 
@@ -17,7 +17,14 @@ Sleep 200ms
 Enter
 Sleep 1s
 
-# Switch to create command demo
+# Preflight
+Enter
+Type "dtscli create --mode cdc --name test1 --source mysql://root:123456@127.0.0.1:3306 --target mysql://root:123456@127.0.0.1:3307 --do test_db1 --preflight"
+Sleep 200ms
+Enter
+Sleep 3s
+
+# Create demo
 Enter
 Type "dtscli create --mode cdc --name test1 --source mysql://root:123456@127.0.0.1:3306 --target mysql://root:123456@127.0.0.1:3307 --do test_db1"
 Sleep 200ms
@@ -33,9 +40,5 @@ Sleep 1.5s
 # Show logs result
 Enter
 Type "dtscli logs test1"
-Enter
-Sleep 1.5s
-Enter
-Type "dtscli logs test1 --file monitor"
 Enter
 Sleep 1.5s

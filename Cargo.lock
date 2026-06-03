@@ -1570,6 +1570,7 @@ dependencies = [
 name = "dt-main"
 version = "2.0.26"
 dependencies = [
+ "clap",
  "dt-precheck",
  "dt-task",
  "tokio",

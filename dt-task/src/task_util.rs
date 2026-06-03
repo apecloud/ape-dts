@@ -721,6 +721,7 @@ WHERE
         task_type: TaskType,
         global_config: &GlobalConfig,
         resumer_config: &ResumerConfig,
+        is_init: bool,
     ) -> anyhow::Result<(
         Option<Arc<dyn Recorder + Send + Sync>>,
         Option<Arc<dyn Recovery + Send + Sync>>,
@@ -757,8 +758,13 @@ WHERE
         } else {
             None
         };
-        let recorder =
-            build_recorder(&global_config.task_id, resumer_config, recorder_pool).await?;
+        let recorder = build_recorder(
+            &global_config.task_id,
+            resumer_config,
+            recorder_pool,
+            is_init,
+        )
+        .await?;
         let recovery = build_recovery(
             &global_config.task_id,
             task_type,
