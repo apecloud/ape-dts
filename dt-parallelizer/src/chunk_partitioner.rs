@@ -14,10 +14,10 @@ use dt_common::{
 pub struct ChunkPartitioner {}
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-struct ChunkKey<'a> {
-    schema: &'a str,
-    tb: &'a str,
-    chunk_id: u64,
+pub struct ChunkKey<'a> {
+    pub schema: &'a str,
+    pub tb: &'a str,
+    pub chunk_id: u64,
 }
 
 struct GroupPlan {

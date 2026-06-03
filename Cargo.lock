@@ -1578,6 +1578,7 @@ dependencies = [
  "dotenv",
  "dt-common",
  "dt-connector",
+ "dt-parallelizer",
  "dt-precheck",
  "dt-task",
  "fake",

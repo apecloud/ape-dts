@@ -31,9 +31,9 @@ impl Default for ChunkPartitionerRebalanceConfig {
             strategy: ChunkPartitionerRebalanceStrategy::Adaptive,
             cost: ChunkPartitionerRebalanceCost::Rows,
             // The partitioner derives the effective cap from the current batch size.
-            max_partitions_per_sinker: usize::MAX,
+            max_partitions_per_sinker: 2,
             min_partition_rows: 200,
-            split_skew_ratio: 2.0,
+            split_skew_ratio: 1.0,
         }
     }
 }

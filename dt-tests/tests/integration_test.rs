@@ -10,6 +10,7 @@ mod mysql_to_mysql_lua;
 mod mysql_to_redis;
 mod mysql_to_starrocks;
 mod mysql_to_tidb;
+mod parallelizer;
 mod pg_to_clickhouse;
 mod pg_to_doris;
 mod pg_to_kafka_to_pg;
