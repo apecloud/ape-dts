@@ -108,6 +108,7 @@ const REPL_PORT: &str = "repl_port";
 const PARALLEL_SIZE: &str = "parallel_size";
 const REBALANCE_STRATEGY: &str = "rebalance_strategy";
 const REBALANCE_COST: &str = "rebalance_cost";
+const REBALANCE_MAX_PARTITIONS_PER_SINKER: &str = "rebalance_max_partitions_per_sinker";
 const REBALANCE_MIN_PARTITION_ROWS: &str = "rebalance_min_partition_rows";
 const REBALANCE_SPLIT_SKEW_RATIO: &str = "rebalance_split_skew_ratio";
 const LEGACY_TB_PARALLEL_SIZE: &str = "tb_parallel_size";
@@ -1031,6 +1032,18 @@ impl TaskConfig {
             )));
         }
 
+        let max_partitions_per_sinker = loader.get_with_default(
+            PARALLELIZER,
+            REBALANCE_MAX_PARTITIONS_PER_SINKER,
+            default_rebalance.max_partitions_per_sinker,
+        );
+        if max_partitions_per_sinker == 0 {
+            bail!(Error::ConfigError(format!(
+                "config [parallelizer].{} must be greater than 0",
+                REBALANCE_MAX_PARTITIONS_PER_SINKER
+            )));
+        }
+
         let split_skew_ratio = loader.get_with_default(
             PARALLELIZER,
             REBALANCE_SPLIT_SKEW_RATIO,
@@ -1061,7 +1074,7 @@ impl TaskConfig {
                     REBALANCE_COST,
                     ChunkPartitionerRebalanceCost::Rows,
                 ),
-                max_partitions_per_sinker: default_rebalance.max_partitions_per_sinker,
+                max_partitions_per_sinker,
                 min_partition_rows,
                 split_skew_ratio,
             },
@@ -1755,6 +1768,7 @@ parallel_type=snapshot
 parallel_size=8
 rebalance_strategy=split_large_insert
 rebalance_cost=rows
+rebalance_max_partitions_per_sinker=3
 rebalance_min_partition_rows=64
 rebalance_split_skew_ratio=1.5
 "#,
@@ -1768,9 +1782,39 @@ rebalance_split_skew_ratio=1.5
             ChunkPartitionerRebalanceStrategy::SplitLargeInsert
         );
         assert_eq!(rebalance.cost, ChunkPartitionerRebalanceCost::Rows);
-        assert_eq!(rebalance.max_partitions_per_sinker, usize::MAX);
+        assert_eq!(rebalance.max_partitions_per_sinker, 3);
         assert_eq!(rebalance.min_partition_rows, 64);
         assert_eq!(rebalance.split_skew_ratio, 1.5);
+    }
+
+    #[test]
+    fn parallelizer_rebalance_max_partitions_per_sinker_must_be_greater_than_zero() {
+        let config_path = write_temp_task_config(
+            r#"[extractor]
+db_type=mysql
+extract_type=snapshot
+url=mysql://127.0.0.1:3306
+
+[sinker]
+db_type=mysql
+sink_type=write
+url=mysql://127.0.0.1:3307
+
+[parallelizer]
+parallel_type=snapshot
+rebalance_max_partitions_per_sinker=0
+"#,
+        );
+        let err = TaskConfig::new(config_path.to_str().unwrap())
+            .err()
+            .unwrap()
+            .to_string();
+        fs::remove_file(config_path).unwrap();
+
+        assert_eq!(
+            err,
+            "config error: config [parallelizer].rebalance_max_partitions_per_sinker must be greater than 0"
+        );
     }
 
     #[test]

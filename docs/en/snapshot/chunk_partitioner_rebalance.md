@@ -30,6 +30,7 @@ parallel_type=snapshot
 parallel_size=8
 rebalance_strategy=adaptive
 rebalance_cost=rows
+rebalance_max_partitions_per_sinker=4
 rebalance_min_partition_rows=200
 rebalance_split_skew_ratio=2.0
 ```
@@ -38,8 +39,11 @@ rebalance_split_skew_ratio=2.0
 | :--- | :--- | :--- |
 | `rebalance_strategy` | snapshot chunk rebalance strategy | `adaptive` |
 | `rebalance_cost` | cost metric used to measure partition size | `rows` |
+| `rebalance_max_partitions_per_sinker` | max split partitions per effective sinker | derived by batch |
 | `rebalance_min_partition_rows` | minimum rows kept in each split partition | `[sinker].batch_size` |
 | `rebalance_split_skew_ratio` | skew threshold used by the adaptive strategy | `2.0` |
+
+By default, `rebalance_max_partitions_per_sinker` is derived from the current batch rows and `rebalance_min_partition_rows`. Configure it when you need a fixed upper bound. Setting it to `0` is invalid.
 
 `rebalance_min_partition_rows` defaults to `[sinker].batch_size` so that split partitions do not become much smaller than the sinker's own write batch. Setting it to `0` is invalid.
 
@@ -60,6 +64,22 @@ rebalance_split_skew_ratio=2.0
 | `bytes` | Uses estimated row bytes as primary cost and row count as tie-breaker | Tasks with large JSON, LOB, wide strings, or highly uneven row width |
 
 `rows` is cheaper and matches row-count based batch writing well. `bytes` can better detect wide-row cost, but it requires scanning row data size and has higher CPU overhead in the partitioner.
+
+### rebalance_max_partitions_per_sinker
+
+This controls the hard cap for split partitions:
+
+```text
+max partitions = effective sinkers * rebalance_max_partitions_per_sinker
+```
+
+The partitioner also applies the `rebalance_min_partition_rows` batch-derived cap, and uses the smaller value.
+
+Recommendations:
+
+- Keep the default for most tasks.
+- Use `2` to `4` when target-side request count or scheduling overhead needs a tighter bound.
+- Increase it when a few very large chunks still cause long tails after tuning `rebalance_min_partition_rows`.
 
 ### rebalance_min_partition_rows
 

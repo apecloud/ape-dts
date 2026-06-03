@@ -255,6 +255,7 @@ Same with [filter].
 | parallel_size                | threads for parallel syncing                                | 8        | 1                   |
 | rebalance_strategy           | snapshot chunk rebalance strategy used during sink writes    | adaptive | adaptive            |
 | rebalance_cost               | cost metric used to measure partition size                  | rows     | rows                |
+| rebalance_max_partitions_per_sinker | max split partitions per effective sinker             | 4        | derived by batch    |
 | rebalance_min_partition_rows | minimum rows kept in each split snapshot insert partition   | 200      | [sinker].batch_size |
 | rebalance_split_skew_ratio   | skew threshold used by the adaptive strategy                | 2.0      | 2.0                 |
 

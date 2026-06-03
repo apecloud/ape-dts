@@ -30,6 +30,7 @@ parallel_type=snapshot
 parallel_size=8
 rebalance_strategy=adaptive
 rebalance_cost=rows
+rebalance_max_partitions_per_sinker=4
 rebalance_min_partition_rows=200
 rebalance_split_skew_ratio=2.0
 ```
@@ -38,8 +39,11 @@ rebalance_split_skew_ratio=2.0
 | :--- | :--- | :--- |
 | `rebalance_strategy` | snapshot chunk rebalance 策略 | `adaptive` |
 | `rebalance_cost` | 判断 partition 大小的成本口径 | `rows` |
+| `rebalance_max_partitions_per_sinker` | 每个有效 sinker 最多拆出的 partition 数 | 按批次自动推导 |
 | `rebalance_min_partition_rows` | 拆分后单个 partition 的最小行数 | `[sinker].batch_size` |
 | `rebalance_split_skew_ratio` | adaptive 策略下判定大 chunk 明显倾斜的阈值 | `2.0` |
+
+`rebalance_max_partitions_per_sinker` 默认根据当前批次行数和 `rebalance_min_partition_rows` 自动推导。需要固定上限时可以显式配置。配置为 `0` 会报错。
 
 `rebalance_min_partition_rows` 默认跟随 `[sinker].batch_size`，目的是避免拆出比 sinker 批量写入还小很多的 partition。配置为 `0` 会报错。
 
@@ -60,6 +64,22 @@ rebalance_split_skew_ratio=2.0
 | `bytes` | 以估算字节数作为主要成本，行数作为 tie-breaker | 行宽差异明显、包含大 JSON/LOB/宽字段的任务 |
 
 `rows` 的开销更低，也更贴近批量写入的行数粒度。`bytes` 更能识别宽行带来的写入成本，但 partitioner 需要扫描行的 data size，CPU 开销更高。
+
+### rebalance_max_partitions_per_sinker
+
+这个参数控制拆分后的 partition 硬上限：
+
+```text
+最大 partition 数 = 有效 sinker 数 * rebalance_max_partitions_per_sinker
+```
+
+partitioner 还会同时应用由 `rebalance_min_partition_rows` 推导出的批次上限，并取两者中的较小值。
+
+建议：
+
+- 一般保持默认。
+- 当目标端请求数或调度开销需要更严格控制时，可以设置为 `2` 到 `4`。
+- 如果调过 `rebalance_min_partition_rows` 后，少数超大 chunk 仍造成长尾，可以适当调大。
 
 ### rebalance_min_partition_rows
 
