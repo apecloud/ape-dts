@@ -1745,9 +1745,9 @@ parallel_size=2
             ChunkPartitionerRebalanceStrategy::Adaptive
         );
         assert_eq!(rebalance.cost, ChunkPartitionerRebalanceCost::Rows);
-        assert_eq!(rebalance.max_partitions_per_sinker, usize::MAX);
+        assert_eq!(rebalance.max_partitions_per_sinker, 2);
         assert_eq!(rebalance.min_partition_rows, 128);
-        assert_eq!(rebalance.split_skew_ratio, 2.0);
+        assert_eq!(rebalance.split_skew_ratio, 1.0);
     }
 
     #[test]

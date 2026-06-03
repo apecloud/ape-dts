@@ -30,20 +30,20 @@ parallel_type=snapshot
 parallel_size=8
 rebalance_strategy=adaptive
 rebalance_cost=rows
-rebalance_max_partitions_per_sinker=4
+rebalance_max_partitions_per_sinker=2
 rebalance_min_partition_rows=200
-rebalance_split_skew_ratio=2.0
+rebalance_split_skew_ratio=1.0
 ```
 
 | Config | Description | Default |
 | :--- | :--- | :--- |
 | `rebalance_strategy` | snapshot chunk rebalance strategy | `adaptive` |
 | `rebalance_cost` | cost metric used to measure partition size | `rows` |
-| `rebalance_max_partitions_per_sinker` | max split partitions per effective sinker | derived by batch |
+| `rebalance_max_partitions_per_sinker` | max split partitions per effective sinker | `2` |
 | `rebalance_min_partition_rows` | minimum rows kept in each split partition | `[sinker].batch_size` |
-| `rebalance_split_skew_ratio` | skew threshold used by the adaptive strategy | `2.0` |
+| `rebalance_split_skew_ratio` | skew threshold used by the adaptive strategy | `1.0` |
 
-By default, `rebalance_max_partitions_per_sinker` is derived from the current batch rows and `rebalance_min_partition_rows`. Configure it when you need a fixed upper bound. Setting it to `0` is invalid.
+`rebalance_max_partitions_per_sinker` defaults to `2`. Setting it to `0` is invalid.
 
 `rebalance_min_partition_rows` defaults to `[sinker].batch_size` so that split partitions do not become much smaller than the sinker's own write batch. Setting it to `0` is invalid.
 
@@ -77,8 +77,8 @@ The partitioner also applies the `rebalance_min_partition_rows` batch-derived ca
 
 Recommendations:
 
-- Keep the default for most tasks.
-- Use `2` to `4` when target-side request count or scheduling overhead needs a tighter bound.
+- Keep the default `2` for most tasks.
+- Use `1` when target-side request count or scheduling overhead needs a tighter bound.
 - Increase it when a few very large chunks still cause long tails after tuning `rebalance_min_partition_rows`.
 
 ### rebalance_min_partition_rows
@@ -104,8 +104,8 @@ When the condition is met, `adaptive` continues splitting the largest insert par
 
 Recommendations:
 
-- `2.0`: default, conservative enough for most tasks.
-- `1.5`: more aggressive, useful when long tails are clear and the target can handle more small tasks.
+- `1.0`: default, aggressive enough to split clear sink-side long tails.
+- `1.5`: more conservative, useful when the target has higher request overhead.
 - `3.0` or higher: more conservative, useful for request-heavy sinks or targets under connection/lock pressure.
 
 ## Recommended Configurations

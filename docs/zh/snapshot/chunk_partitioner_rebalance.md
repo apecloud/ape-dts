@@ -30,20 +30,20 @@ parallel_type=snapshot
 parallel_size=8
 rebalance_strategy=adaptive
 rebalance_cost=rows
-rebalance_max_partitions_per_sinker=4
+rebalance_max_partitions_per_sinker=2
 rebalance_min_partition_rows=200
-rebalance_split_skew_ratio=2.0
+rebalance_split_skew_ratio=1.0
 ```
 
 | 配置 | 作用 | 默认 |
 | :--- | :--- | :--- |
 | `rebalance_strategy` | snapshot chunk rebalance 策略 | `adaptive` |
 | `rebalance_cost` | 判断 partition 大小的成本口径 | `rows` |
-| `rebalance_max_partitions_per_sinker` | 每个有效 sinker 最多拆出的 partition 数 | 按批次自动推导 |
+| `rebalance_max_partitions_per_sinker` | 每个有效 sinker 最多拆出的 partition 数 | `2` |
 | `rebalance_min_partition_rows` | 拆分后单个 partition 的最小行数 | `[sinker].batch_size` |
-| `rebalance_split_skew_ratio` | adaptive 策略下判定大 chunk 明显倾斜的阈值 | `2.0` |
+| `rebalance_split_skew_ratio` | adaptive 策略下判定大 chunk 明显倾斜的阈值 | `1.0` |
 
-`rebalance_max_partitions_per_sinker` 默认根据当前批次行数和 `rebalance_min_partition_rows` 自动推导。需要固定上限时可以显式配置。配置为 `0` 会报错。
+`rebalance_max_partitions_per_sinker` 默认值为 `2`。配置为 `0` 会报错。
 
 `rebalance_min_partition_rows` 默认跟随 `[sinker].batch_size`，目的是避免拆出比 sinker 批量写入还小很多的 partition。配置为 `0` 会报错。
 
@@ -77,8 +77,8 @@ partitioner 还会同时应用由 `rebalance_min_partition_rows` 推导出的批
 
 建议：
 
-- 一般保持默认。
-- 当目标端请求数或调度开销需要更严格控制时，可以设置为 `2` 到 `4`。
+- 一般保持默认 `2`。
+- 当目标端请求数或调度开销需要更严格控制时，可以设置为 `1`。
 - 如果调过 `rebalance_min_partition_rows` 后，少数超大 chunk 仍造成长尾，可以适当调大。
 
 ### rebalance_min_partition_rows
@@ -104,8 +104,8 @@ partitioner 还会同时应用由 `rebalance_min_partition_rows` 推导出的批
 
 建议：
 
-- 默认 `2.0`：偏保守，适合多数任务。
-- `1.5`：更积极，适合长尾明显、目标端能承受更多小任务的场景。
+- 默认 `1.0`：较积极，适合拆分明显的 sink 侧长尾。
+- `1.5`：更保守，适合目标端请求开销较高的场景。
 - `3.0` 或更高：更保守，适合请求型 sinker 或目标端连接/锁等待压力较大的场景。
 
 ## 推荐配置

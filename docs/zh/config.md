@@ -246,9 +246,9 @@ struct check 仅支持 standalone MySQL/PostgreSQL checker target。
 | parallel_size                | 并发线程数                                         | 8        | 1                     |
 | rebalance_strategy           | snapshot chunk 写入阶段 rebalance 策略             | adaptive | adaptive              |
 | rebalance_cost               | rebalance 判断 partition 大小的成本口径             | rows     | rows                  |
-| rebalance_max_partitions_per_sinker | 每个有效 sinker 最多拆出的 partition 数      | 4        | 按批次自动推导        |
+| rebalance_max_partitions_per_sinker | 每个有效 sinker 最多拆出的 partition 数      | 2        | 2                     |
 | rebalance_min_partition_rows | snapshot insert chunk 拆分后单个 partition 最小行数 | 200      | [sinker].batch_size   |
-| rebalance_split_skew_ratio   | adaptive 策略下判定最大 partition 明显倾斜的阈值   | 2.0      | 2.0                   |
+| rebalance_split_skew_ratio   | adaptive 策略下判定最大 partition 明显倾斜的阈值   | 1.0      | 1.0                   |
 
 ## parallel_type 类型
 
