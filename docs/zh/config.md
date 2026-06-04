@@ -248,7 +248,7 @@ struct check 仅支持 standalone MySQL/PostgreSQL checker target。
 | rebalance_cost               | rebalance 判断 partition 大小的成本口径             | rows     | rows                  |
 | rebalance_max_partitions_per_sinker | 每个有效 sinker 最多拆出的 partition 数      | 2        | 2                     |
 | rebalance_min_partition_rows | snapshot insert chunk 拆分后单个 partition 最小行数 | 200      | [sinker].batch_size   |
-| rebalance_split_skew_ratio   | adaptive 策略下判定最大 partition 明显倾斜的阈值   | 1.0      | 1.0                   |
+| rebalance_split_skew_ratio   | auto_split 策略下判定最大 partition 明显倾斜的阈值   | 1.0      | 1.0                   |
 
 ## parallel_type 类型
 
@@ -274,7 +274,7 @@ rebalance_strategy=none
 rebalance_cost=rows
 ```
 
-默认 `rebalance_strategy=none` 会在 logical chunk 分组后保持顺序，不额外做目标端排序或拆分。如果写入阶段长尾明显，可以使用 `rebalance_strategy=adaptive`。如果希望按表做 rows-only 分片，可以使用 `min_rows` 或 `group_even`。行宽接近时使用默认 `rebalance_cost=rows`；如果存在大 JSON、LOB、宽字符串等行宽差异明显的场景，可以使用 `rebalance_cost=bytes`。如果目标端请求成本高，或不希望拆分 logical chunk，可以使用 `rebalance_strategy=chunk_largest_first`。
+默认 `rebalance_strategy=none` 会在 logical chunk 分组后保持顺序，不额外做目标端排序或拆分。如果写入阶段长尾明显，可以使用 `rebalance_strategy=auto_split`。如果希望按表做 rows-only 分片，可以使用 `table_min_rows` 或 `table_even`。行宽接近时使用默认 `rebalance_cost=rows`；如果存在大 JSON、LOB、宽字符串等行宽差异明显的场景，可以使用 `rebalance_cost=bytes`。如果目标端请求成本高，或不希望拆分 logical chunk，可以使用 `rebalance_strategy=chunk_largest_first`。
 
 更多场景化配置建议见 [Snapshot Chunk Partitioner Rebalance](/docs/zh/snapshot/chunk_partitioner_rebalance.md)。
 

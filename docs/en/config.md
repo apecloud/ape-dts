@@ -257,7 +257,7 @@ Same with [filter].
 | rebalance_cost               | cost metric used to measure partition size                  | rows     | rows                |
 | rebalance_max_partitions_per_sinker | max split partitions per effective sinker             | 2        | 2                   |
 | rebalance_min_partition_rows | minimum rows kept in each split snapshot insert partition   | 200      | [sinker].batch_size |
-| rebalance_split_skew_ratio   | skew threshold used by the adaptive strategy                | 1.0      | 1.0                 |
+| rebalance_split_skew_ratio   | skew threshold used by the auto_split strategy                | 1.0      | 1.0                 |
 
 ## parallel_type
 
@@ -283,7 +283,7 @@ rebalance_strategy=none
 rebalance_cost=rows
 ```
 
-The default `rebalance_strategy=none` keeps logical chunk order after grouping and does not add sink-side sorting or splitting. If sink-side long tails are obvious, use `rebalance_strategy=adaptive`. Use `min_rows` or `group_even` for rows-only table-level partitioning. Use the default `rebalance_cost=rows` when row width is similar. If rows contain large JSON, LOB, or wide strings, use `rebalance_cost=bytes`. If the target has high request overhead, or you do not want to split logical chunks, use `rebalance_strategy=chunk_largest_first`.
+The default `rebalance_strategy=none` keeps logical chunk order after grouping and does not add sink-side sorting or splitting. If sink-side long tails are obvious, use `rebalance_strategy=auto_split`. Use `table_min_rows` or `table_even` for rows-only table-level partitioning. Use the default `rebalance_cost=rows` when row width is similar. If rows contain large JSON, LOB, or wide strings, use `rebalance_cost=bytes`. If the target has high request overhead, or you do not want to split logical chunks, use `rebalance_strategy=chunk_largest_first`.
 
 For scenario-based tuning, see [Snapshot Chunk Partitioner Rebalance](/docs/en/snapshot/chunk_partitioner_rebalance.md).
 

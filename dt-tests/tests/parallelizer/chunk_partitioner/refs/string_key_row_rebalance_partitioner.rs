@@ -214,16 +214,12 @@ impl StringKeyRowRebalancePartitioner {
             ChunkPartitionerRebalanceStrategy::ChunkLargestFirst => {
                 Self::sort_by_largest_first(partitions, config)
             }
-            ChunkPartitionerRebalanceStrategy::SplitLargeInsert => Self::sort_by_largest_first(
-                Self::split_large_insert_partitions(partitions, target_partitions, config, true),
+            ChunkPartitionerRebalanceStrategy::AutoSplit => Self::sort_by_largest_first(
+                Self::auto_split_partitions(partitions, target_partitions, config),
                 config,
             ),
-            ChunkPartitionerRebalanceStrategy::Adaptive => Self::sort_by_largest_first(
-                Self::split_large_insert_partitions(partitions, target_partitions, config, false),
-                config,
-            ),
-            ChunkPartitionerRebalanceStrategy::MinRows
-            | ChunkPartitionerRebalanceStrategy::GroupEven => {
+            ChunkPartitionerRebalanceStrategy::TableMinRows
+            | ChunkPartitionerRebalanceStrategy::TableEven => {
                 partitions.into_iter().map(Partition::into_rows).collect()
             }
         }
@@ -241,11 +237,10 @@ impl StringKeyRowRebalancePartitioner {
         partitions.into_iter().map(Partition::into_rows).collect()
     }
 
-    fn split_large_insert_partitions(
+    fn auto_split_partitions(
         mut partitions: Vec<Partition>,
         target_partitions: usize,
         config: &ChunkPartitionerRebalanceConfig,
-        force_split: bool,
     ) -> Vec<Partition> {
         let max_partitions =
             Self::max_partitions(&partitions, target_partitions, config).max(target_partitions);
@@ -261,8 +256,7 @@ impl StringKeyRowRebalancePartitioner {
                 break;
             };
 
-            if !force_split
-                && partitions.len() >= target_partitions
+            if partitions.len() >= target_partitions
                 && !Self::is_partition_skewed(
                     &partitions[index],
                     total_cost,

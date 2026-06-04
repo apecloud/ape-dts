@@ -42,7 +42,7 @@ rebalance_split_skew_ratio=1.0
 | `rebalance_cost` | cost metric used to measure partition size | `rows` |
 | `rebalance_max_partitions_per_sinker` | max split partitions per effective sinker | `2` |
 | `rebalance_min_partition_rows` | minimum rows kept in each split partition | `[sinker].batch_size` |
-| `rebalance_split_skew_ratio` | skew threshold used by the adaptive strategy | `1.0` |
+| `rebalance_split_skew_ratio` | skew threshold used by the auto_split strategy | `1.0` |
 
 `rebalance_max_partitions_per_sinker` defaults to `2`. Setting it to `0` is invalid.
 
@@ -53,11 +53,10 @@ rebalance_split_skew_ratio=1.0
 | Value | Behavior | Best For |
 | :--- | :--- | :--- |
 | `none` | Default. Keeps first-seen logical chunk order after grouping; no sorting or splitting | Debugging, conservative behavior, or tasks without obvious sink-side long tails |
-| `adaptive` | Sorts by cost; splits pure insert chunks only when there are too few partitions or the largest partition is clearly skewed | Snapshot write tasks with obvious sink-side long tails |
+| `auto_split` | Sorts by cost; splits pure insert chunks only when there are too few partitions or the largest partition is clearly skewed | Snapshot write tasks with obvious sink-side long tails |
 | `chunk_largest_first` | Sorts logical chunks by cost, largest first; does not split logical chunks | Keeping chunk integrity while scheduling large chunks first |
-| `split_large_insert` | Splits large insert chunks whenever it is safe and the partition cap is not reached | Severe sink-side long tails caused by one or a few very large chunks |
-| `min_rows` | Sorts chunks by `schema.table.chunk_id`, merges chunks from the same table, then cuts each merged group by `rebalance_min_partition_rows` | Table-level row-count partitioning with predictable partition size |
-| `group_even` | Sorts and merges chunks from the same table, then splits each merged group into up to `[parallelizer].parallel_size` nearly even partitions aligned to `rebalance_min_partition_rows` | More even sink work within each table while avoiding tiny partitions |
+| `table_min_rows` | Sorts chunks by `schema.table.chunk_id`, merges chunks from the same table, then cuts each merged group by `rebalance_min_partition_rows` | Table-level row-count partitioning with predictable partition size |
+| `table_even` | Sorts and merges chunks from the same table, processes larger merged groups first, and splits a merged group into up to `[parallelizer].parallel_size` nearly even partitions only when it has at least `[parallelizer].parallel_size * rebalance_min_partition_rows` rows | More even sink work within large tables while keeping small table groups intact |
 
 ### rebalance_cost
 
@@ -68,7 +67,7 @@ rebalance_split_skew_ratio=1.0
 
 `rows` is cheaper and matches row-count based batch writing well. `bytes` can better detect wide-row cost, but it requires scanning row data size and has higher CPU overhead in the partitioner.
 
-`min_rows` and `group_even` ignore `rebalance_cost`; they use row counts only.
+`table_min_rows` and `table_even` ignore `rebalance_cost`; they use row counts only.
 
 ### rebalance_max_partitions_per_sinker
 
@@ -90,7 +89,7 @@ Recommendations:
 
 This controls the lower bound of split granularity. It is not the sinker batch size, but it defaults to `[sinker].batch_size`.
 
-For `min_rows`, this is the target size of each partition, except the last partition of a merged table group may be smaller. For `group_even`, partition sizes are aligned near multiples of this value when possible.
+For `table_min_rows`, this is the target size of each partition, except the last partition of a merged table group may be smaller. For `table_even`, a merged group with fewer than `[parallelizer].parallel_size * rebalance_min_partition_rows` rows is kept as one partition; larger groups are split into nearly even partitions aligned near multiples of this value when possible.
 
 Recommendations:
 
@@ -101,13 +100,13 @@ Recommendations:
 
 ### rebalance_split_skew_ratio
 
-This only affects `adaptive`. It means:
+This only affects `auto_split`. It means:
 
 ```text
 largest partition cost > average cost per sinker * rebalance_split_skew_ratio
 ```
 
-When the condition is met, `adaptive` continues splitting the largest insert partition.
+When the condition is met, `auto_split` continues splitting the largest insert partition.
 
 Recommendations:
 
@@ -129,7 +128,7 @@ rebalance_cost=rows
 
 This is the default behavior. It keeps logical chunk order after grouping and does not add sink-side sorting or splitting.
 
-If sink-side long tails are obvious, enable `adaptive` and tune from there.
+If sink-side long tails are obvious, enable `auto_split` and tune from there.
 
 ### Large Single Table with Uneven Chunks
 
@@ -142,7 +141,7 @@ batch_size=10000
 [parallelizer]
 parallel_type=snapshot
 parallel_size=8
-rebalance_strategy=adaptive
+rebalance_strategy=auto_split
 rebalance_cost=rows
 rebalance_split_skew_ratio=1.5
 ```
@@ -155,7 +154,7 @@ Use this when source-side chunk extraction is already enabled but some chunks ar
 [parallelizer]
 parallel_type=snapshot
 parallel_size=8
-rebalance_strategy=adaptive
+rebalance_strategy=auto_split
 rebalance_cost=bytes
 ```
 
@@ -182,7 +181,7 @@ Use this for StarRocks, Doris, ClickHouse, or other HTTP/stream-load style sinks
 [parallelizer]
 parallel_type=snapshot
 parallel_size=8
-rebalance_strategy=min_rows
+rebalance_strategy=table_min_rows
 rebalance_min_partition_rows=2000
 ```
 
@@ -194,13 +193,13 @@ Use this when chunks from the same table should be merged and emitted as predict
 [parallelizer]
 parallel_type=snapshot
 parallel_size=8
-rebalance_strategy=group_even
+rebalance_strategy=table_even
 rebalance_min_partition_rows=2000
 ```
 
-Use this when each table should be split into a small number of similarly sized partitions. Each merged table group can produce up to `[parallelizer].parallel_size` partitions, so the total partition count can exceed `[parallelizer].parallel_size` when one batch contains multiple tables.
+Use this when large tables should be split into a small number of similarly sized partitions while small table groups stay intact. Larger merged groups are planned first. Each large merged table group can produce up to `[parallelizer].parallel_size` partitions, so the total partition count can exceed `[parallelizer].parallel_size` when one batch contains multiple large tables.
 
-### Severe Long Tail and Target Can Handle More Tasks
+### Severe Long Tail with Automatic Split
 
 ```ini
 [sinker]
@@ -209,12 +208,12 @@ batch_size=200
 [parallelizer]
 parallel_type=snapshot
 parallel_size=8
-rebalance_strategy=split_large_insert
+rebalance_strategy=auto_split
 rebalance_cost=rows
 rebalance_min_partition_rows=200
 ```
 
-Use this when one logical chunk is very large and keeps one sinker busy for much longer than others. This strategy is more aggressive and may increase scheduling and write-request overhead, so it is not recommended as the general default.
+Use this when one logical chunk is very large and keeps one sinker busy for much longer than others. `auto_split` fills sinker concurrency first, then continues splitting only while the largest partition is clearly skewed.
 
 ### Debugging or Most Conservative Behavior
 
@@ -233,7 +232,7 @@ If a snapshot task is slow, check in this order:
 
 1. Source extraction is slow: tune `[extractor].parallel_type`, `[extractor].parallel_size`, `[extractor].batch_size`, and partition columns first.
 2. Sink concurrency is too low: tune `[parallelizer].parallel_size`, and make sure `[sinker].max_connections` is not below active sinker demand.
-3. Sink-side long tail is obvious: tune chunk partitioner rebalance, for example use `adaptive`, lower `rebalance_split_skew_ratio`, or switch to `rebalance_cost=bytes`.
+3. Sink-side long tail is obvious: tune chunk partitioner rebalance, for example use `auto_split`, lower `rebalance_split_skew_ratio`, or switch to `rebalance_cost=bytes`.
 4. Target request count or RT becomes worse: increase `[sinker].batch_size` / `rebalance_min_partition_rows`, or switch to `chunk_largest_first`.
 
 ## Notes

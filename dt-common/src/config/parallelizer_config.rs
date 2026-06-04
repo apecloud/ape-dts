@@ -52,7 +52,7 @@ pub struct ChunkPartitionerRebalanceConfig {
     pub max_partitions_per_sinker: usize,
     /// Minimum rows kept in each split partition; defaults to sinker.batch_size at load time.
     pub min_partition_rows: usize,
-    /// Adaptive split threshold: split when largest partition cost is greater than
+    /// Auto split threshold: split when largest partition cost is greater than
     /// average cost per sinker times this ratio.
     pub split_skew_ratio: f64,
 }
@@ -78,18 +78,15 @@ pub enum ChunkPartitionerRebalanceStrategy {
     /// Sort logical chunks by configured cost, largest first; no splitting.
     #[strum(serialize = "chunk_largest_first")]
     ChunkLargestFirst,
-    /// Split large insert-only chunks whenever safe, up to the partition cap.
-    #[strum(serialize = "split_large_insert")]
-    SplitLargeInsert,
-    /// Sort by cost and split only when there are too few or clearly skewed partitions.
-    #[strum(serialize = "adaptive")]
-    Adaptive,
-    /// Merge contiguous chunks by table, then cut output partitions by min rows.
-    #[strum(serialize = "min_rows")]
-    MinRows,
-    /// Merge contiguous chunks by table, then split each merged group evenly.
-    #[strum(serialize = "group_even")]
-    GroupEven,
+    /// Sort by cost and split when there are too few or clearly skewed partitions.
+    #[strum(serialize = "auto_split")]
+    AutoSplit,
+    /// Merge chunks by table, then cut output partitions by min rows.
+    #[strum(serialize = "table_min_rows")]
+    TableMinRows,
+    /// Merge chunks by table, then split large merged groups evenly.
+    #[strum(serialize = "table_even")]
+    TableEven,
 }
 
 #[derive(Clone, Debug, Display, EnumString, IntoStaticStr, PartialEq, Eq)]

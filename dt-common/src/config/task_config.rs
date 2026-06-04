@@ -1770,7 +1770,7 @@ url=mysql://127.0.0.1:3307
 [parallelizer]
 parallel_type=snapshot
 parallel_size=8
-rebalance_strategy=split_large_insert
+rebalance_strategy=auto_split
 rebalance_cost=rows
 rebalance_max_partitions_per_sinker=3
 rebalance_min_partition_rows=64
@@ -1786,7 +1786,7 @@ rebalance_split_skew_ratio=1.5
             .expect("snapshot parallelizer should have rebalance config");
         assert_eq!(
             rebalance.strategy,
-            ChunkPartitionerRebalanceStrategy::SplitLargeInsert
+            ChunkPartitionerRebalanceStrategy::AutoSplit
         );
         assert_eq!(rebalance.cost, ChunkPartitionerRebalanceCost::Rows);
         assert_eq!(rebalance.max_partitions_per_sinker, 3);
@@ -1808,7 +1808,7 @@ sink_type=dummy
 [parallelizer]
 parallel_type=rdb_merge
 parallel_size=4
-rebalance_strategy=split_large_insert
+rebalance_strategy=auto_split
 "#,
         );
         let config = TaskConfig::new(config_path.to_str().unwrap()).unwrap();

@@ -42,7 +42,7 @@ rebalance_split_skew_ratio=1.0
 | `rebalance_cost` | 判断 partition 大小的成本口径 | `rows` |
 | `rebalance_max_partitions_per_sinker` | 每个有效 sinker 最多拆出的 partition 数 | `2` |
 | `rebalance_min_partition_rows` | 拆分后单个 partition 的最小行数 | `[sinker].batch_size` |
-| `rebalance_split_skew_ratio` | adaptive 策略下判定大 chunk 明显倾斜的阈值 | `1.0` |
+| `rebalance_split_skew_ratio` | auto_split 策略下判定大 chunk 明显倾斜的阈值 | `1.0` |
 
 `rebalance_max_partitions_per_sinker` 默认值为 `2`。配置为 `0` 会报错。
 
@@ -53,11 +53,10 @@ rebalance_split_skew_ratio=1.0
 | 取值 | 行为 | 适合场景 |
 | :--- | :--- | :--- |
 | `none` | 默认策略。按 logical chunk 分组后保持首次出现顺序，不排序、不拆分 | 排查问题、保守行为，或没有明显目标端写入长尾的任务 |
-| `adaptive` | 按成本排序；partition 太少或最大 partition 明显倾斜时，拆分纯 insert 大 chunk | 目标端写入长尾明显的 snapshot 任务 |
+| `auto_split` | 按成本排序；partition 太少或最大 partition 明显倾斜时，拆分纯 insert 大 chunk | 目标端写入长尾明显的 snapshot 任务 |
 | `chunk_largest_first` | 只按成本从大到小排序，不拆分 logical chunk | 希望保持 chunk 完整、但想让大 chunk 先写的任务 |
-| `split_large_insert` | 只要安全且未达到上限，就持续拆分大 insert chunk | 单个或少数 chunk 特别大、目标端写入长尾明显的任务 |
-| `min_rows` | 按 `schema.table.chunk_id` 排序，合并同一张表的 chunk，再按 `rebalance_min_partition_rows` 切分每个合并后的 group | 希望按表生成行数可预期的 partition |
-| `group_even` | 排序并合并同一张表的 chunk，再把每个合并后的 group 拆成最多 `[parallelizer].parallel_size` 个接近均匀、且尽量对齐 `rebalance_min_partition_rows` 的 partition | 希望同一张表内的 sinker 工作量更均匀，同时避免过小 partition |
+| `table_min_rows` | 按 `schema.table.chunk_id` 排序，合并同一张表的 chunk，再按 `rebalance_min_partition_rows` 切分每个合并后的 group | 希望按表生成行数可预期的 partition |
+| `table_even` | 排序并合并同一张表的 chunk，优先处理行数更大的 merged group；只有当 merged group 至少有 `[parallelizer].parallel_size * rebalance_min_partition_rows` 行时，才拆成最多 `[parallelizer].parallel_size` 个接近均匀的 partition | 希望大表内的 sinker 工作量更均匀，同时保持小表 group 不被拆散 |
 
 ### rebalance_cost
 
@@ -68,7 +67,7 @@ rebalance_split_skew_ratio=1.0
 
 `rows` 的开销更低，也更贴近批量写入的行数粒度。`bytes` 更能识别宽行带来的写入成本，但 partitioner 需要扫描行的 data size，CPU 开销更高。
 
-`min_rows` 和 `group_even` 会忽略 `rebalance_cost`，只按行数切分。
+`table_min_rows` 和 `table_even` 会忽略 `rebalance_cost`，只按行数切分。
 
 ### rebalance_max_partitions_per_sinker
 
@@ -90,7 +89,7 @@ partitioner 还会同时应用由 `rebalance_min_partition_rows` 推导出的批
 
 这个参数控制拆分粒度下限。它不是 sinker 的 batch size，但默认等于 `[sinker].batch_size`。
 
-对于 `min_rows`，它是每个 partition 的目标行数，合并后表级 group 的最后一个 partition 可能更小。对于 `group_even`，partition 大小会在可能时尽量对齐到这个值的倍数附近。
+对于 `table_min_rows`，它是每个 partition 的目标行数，合并后表级 group 的最后一个 partition 可能更小。对于 `table_even`，如果 merged group 行数小于 `[parallelizer].parallel_size * rebalance_min_partition_rows`，会保留为一个 partition；更大的 group 会在可能时尽量拆成接近均匀、且对齐到这个值倍数附近的 partition。
 
 建议：
 
@@ -101,13 +100,13 @@ partitioner 还会同时应用由 `rebalance_min_partition_rows` 推导出的批
 
 ### rebalance_split_skew_ratio
 
-仅影响 `adaptive` 策略。含义是：
+仅影响 `auto_split` 策略。含义是：
 
 ```text
 最大 partition 成本 > 平均每个 sinker 成本 * rebalance_split_skew_ratio
 ```
 
-满足条件时，adaptive 会继续拆分最大 insert partition。
+满足条件时，auto_split 会继续拆分最大 insert partition。
 
 建议：
 
@@ -129,7 +128,7 @@ rebalance_cost=rows
 
 这是默认行为。它会在 logical chunk 分组后保持顺序，不额外做目标端排序或拆分。
 
-如果写入阶段长尾明显，再启用 `adaptive` 并继续调优。
+如果写入阶段长尾明显，再启用 `auto_split` 并继续调优。
 
 ### 单表大数据，chunk 分布不均
 
@@ -142,7 +141,7 @@ batch_size=10000
 [parallelizer]
 parallel_type=snapshot
 parallel_size=8
-rebalance_strategy=adaptive
+rebalance_strategy=auto_split
 rebalance_cost=rows
 rebalance_split_skew_ratio=1.5
 ```
@@ -155,7 +154,7 @@ rebalance_split_skew_ratio=1.5
 [parallelizer]
 parallel_type=snapshot
 parallel_size=8
-rebalance_strategy=adaptive
+rebalance_strategy=auto_split
 rebalance_cost=bytes
 ```
 
@@ -182,7 +181,7 @@ rebalance_cost=rows
 [parallelizer]
 parallel_type=snapshot
 parallel_size=8
-rebalance_strategy=min_rows
+rebalance_strategy=table_min_rows
 rebalance_min_partition_rows=2000
 ```
 
@@ -194,13 +193,13 @@ rebalance_min_partition_rows=2000
 [parallelizer]
 parallel_type=snapshot
 parallel_size=8
-rebalance_strategy=group_even
+rebalance_strategy=table_even
 rebalance_min_partition_rows=2000
 ```
 
-适合希望每张表拆出少量、大小接近的 partition 的任务。每个合并后的表级 group 最多可以产生 `[parallelizer].parallel_size` 个 partition，因此一个 batch 包含多张表时，最终 partition 总数可能超过 `[parallelizer].parallel_size`。
+适合希望大表拆出少量、大小接近的 partition，同时小表 group 保持完整的任务。行数更大的 merged group 会优先生成 partition plan。每个足够大的表级 group 最多可以产生 `[parallelizer].parallel_size` 个 partition，因此一个 batch 包含多张大表时，最终 partition 总数可能超过 `[parallelizer].parallel_size`。
 
-### 长尾非常明显，且目标端可承受更多并发任务
+### 长尾明显，自动拆分
 
 ```ini
 [sinker]
@@ -209,12 +208,12 @@ batch_size=200
 [parallelizer]
 parallel_type=snapshot
 parallel_size=8
-rebalance_strategy=split_large_insert
+rebalance_strategy=auto_split
 rebalance_cost=rows
 rebalance_min_partition_rows=200
 ```
 
-适合单个 logical chunk 特别大，导致某个 sinker 长时间独占的任务。这个策略更激进，可能增加调度和写入请求开销，不建议作为普通默认。
+适合单个 logical chunk 特别大，导致某个 sinker 长时间独占的任务。`auto_split` 会先补足 sinker 并发，之后只在最大 partition 明显倾斜时继续拆分。
 
 ### 排查问题或需要最保守行为
 
@@ -233,7 +232,7 @@ rebalance_strategy=none
 
 1. 源端拉取慢：优先调 `[extractor].parallel_type`、`[extractor].parallel_size`、`[extractor].batch_size` 和 partition column。
 2. 目标端并发不足：调 `[parallelizer].parallel_size`，同时确认 `[sinker].max_connections` 不低于活跃 sinker 需求。
-3. 写入阶段长尾明显：调 chunk partitioner rebalance，例如使用 `adaptive`、降低 `rebalance_split_skew_ratio` 或切换 `rebalance_cost=bytes`。
+3. 写入阶段长尾明显：调 chunk partitioner rebalance，例如使用 `auto_split`、降低 `rebalance_split_skew_ratio` 或切换 `rebalance_cost=bytes`。
 4. 目标端请求数过多或 RT 变差：增大 `[sinker].batch_size` / `rebalance_min_partition_rows`，或改用 `chunk_largest_first`。
 
 ## 注意事项

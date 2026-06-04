@@ -290,8 +290,8 @@ impl ChunkPartitioner {
         let use_bytes = matches!(config.cost, ChunkPartitionerRebalanceCost::Bytes)
             && !matches!(
                 config.strategy,
-                ChunkPartitionerRebalanceStrategy::MinRows
-                    | ChunkPartitionerRebalanceStrategy::GroupEven
+                ChunkPartitionerRebalanceStrategy::TableMinRows
+                    | ChunkPartitionerRebalanceStrategy::TableEven
             );
         // Snapshot rows are usually chunk-contiguous. Reuse the previous group index to avoid
         // hashing schema/table for every row in a long run from the same logical chunk.
@@ -335,15 +335,18 @@ impl ChunkPartitioner {
 
         if matches!(
             config.strategy,
-            ChunkPartitionerRebalanceStrategy::MinRows
-                | ChunkPartitionerRebalanceStrategy::GroupEven
+            ChunkPartitionerRebalanceStrategy::TableMinRows
+                | ChunkPartitionerRebalanceStrategy::TableEven
         ) {
             let merged_groups = Self::merge_contiguous_groups(&groups, &group_keys);
             let partitions = match config.strategy {
-                ChunkPartitionerRebalanceStrategy::MinRows => {
-                    Self::partition_merged_by_min_rows(&merged_groups, config.min_partition_rows)
+                ChunkPartitionerRebalanceStrategy::TableMinRows => {
+                    Self::partition_merged_by_table_min_rows(
+                        &merged_groups,
+                        config.min_partition_rows,
+                    )
                 }
-                _ => Self::partition_merged_group_even(
+                _ => Self::partition_merged_table_even(
                     &merged_groups,
                     target_partitions,
                     config.min_partition_rows,
@@ -381,28 +384,12 @@ impl ChunkPartitioner {
             ChunkPartitionerRebalanceStrategy::ChunkLargestFirst => {
                 Self::sort_by_largest_first(partitions, config)
             }
-            ChunkPartitionerRebalanceStrategy::SplitLargeInsert => Self::sort_by_largest_first(
-                Self::split_large_insert_partitions(
-                    partitions,
-                    groups,
-                    target_partitions,
-                    config,
-                    true,
-                ),
+            ChunkPartitionerRebalanceStrategy::AutoSplit => Self::sort_by_largest_first(
+                Self::auto_split_partitions(partitions, groups, target_partitions, config),
                 config,
             ),
-            ChunkPartitionerRebalanceStrategy::Adaptive => Self::sort_by_largest_first(
-                Self::split_large_insert_partitions(
-                    partitions,
-                    groups,
-                    target_partitions,
-                    config,
-                    false,
-                ),
-                config,
-            ),
-            ChunkPartitionerRebalanceStrategy::MinRows
-            | ChunkPartitionerRebalanceStrategy::GroupEven => partitions,
+            ChunkPartitionerRebalanceStrategy::TableMinRows
+            | ChunkPartitionerRebalanceStrategy::TableEven => partitions,
         }
     }
 
@@ -439,7 +426,7 @@ impl ChunkPartitioner {
         merged_groups
     }
 
-    fn partition_merged_by_min_rows(
+    fn partition_merged_by_table_min_rows(
         merged_groups: &[MergedGroupPlan],
         min_partition_rows: usize,
     ) -> Vec<MergedPartitionPlan> {
@@ -460,14 +447,34 @@ impl ChunkPartitioner {
         partitions
     }
 
-    fn partition_merged_group_even(
+    fn partition_merged_table_even(
         merged_groups: &[MergedGroupPlan],
         target_partitions: usize,
         min_partition_rows: usize,
     ) -> Vec<MergedPartitionPlan> {
         let mut partitions = Vec::new();
         let target_partitions = target_partitions.max(1);
-        for (merged_group_index, merged_group) in merged_groups.iter().enumerate() {
+        let min_partition_rows = min_partition_rows.max(1);
+        let min_rows_for_even_split = target_partitions.saturating_mul(min_partition_rows);
+        let mut merged_group_indexes: Vec<usize> = (0..merged_groups.len()).collect();
+        merged_group_indexes.sort_by(|left, right| {
+            merged_groups[*right]
+                .rows
+                .cmp(&merged_groups[*left].rows)
+                .then_with(|| left.cmp(right))
+        });
+
+        for merged_group_index in merged_group_indexes {
+            let merged_group = &merged_groups[merged_group_index];
+            if merged_group.rows < min_rows_for_even_split {
+                partitions.push(MergedPartitionPlan {
+                    merged_group_index,
+                    start: 0,
+                    end: merged_group.rows,
+                });
+                continue;
+            }
+
             let mut remaining_rows = merged_group.rows;
             let mut remaining_parts = target_partitions.min(merged_group.rows).max(1);
             let mut start = 0;
@@ -539,19 +546,18 @@ impl ChunkPartitioner {
         partitions
     }
 
-    fn split_large_insert_partitions(
+    fn auto_split_partitions(
         mut partitions: Vec<PartitionPlan>,
         groups: &[GroupPlan],
         target_partitions: usize,
         config: &ChunkPartitionerRebalanceConfig,
-        force_split: bool,
     ) -> Vec<PartitionPlan> {
         // Snapshot parallelizer sends insert-only rows, so split is safe for the current caller.
 
         let max_partitions =
             Self::max_partitions(&partitions, target_partitions, config).max(target_partitions);
         // Total work does not change when a partition is split; keep one cached value for all
-        // adaptive skew checks in this drain batch.
+        // auto split skew checks in this drain batch.
         let total_cost = Self::total_safe_primary_cost(&partitions, config);
         while partitions.len() < max_partitions {
             // Always split the currently largest eligible partition; sinkers consume the
@@ -567,10 +573,9 @@ impl ChunkPartitioner {
                 break;
             };
 
-            // adaptive stops once concurrency is filled and the largest partition is no longer
-            // skewed. split_large_insert passes force_split=true and keeps splitting up to cap.
-            if !force_split
-                && partitions.len() >= target_partitions
+            // Auto split stops once concurrency is filled and the largest partition is no longer
+            // skewed.
+            if partitions.len() >= target_partitions
                 && !Self::is_partition_skewed(
                     &partitions[index],
                     total_cost,
@@ -881,7 +886,7 @@ mod tests {
     }
 
     #[test]
-    fn partition_dml_adaptive_splits_large_insert_group_when_too_few_partitions() {
+    fn partition_dml_auto_split_splits_large_insert_group_when_too_few_partitions() {
         let data = vec![
             row(1, RowType::Insert),
             row(1, RowType::Insert),
@@ -892,7 +897,7 @@ mod tests {
         let partitions = ChunkPartitioner::partition_dml(
             data,
             4,
-            &config(ChunkPartitionerRebalanceStrategy::Adaptive),
+            &config(ChunkPartitionerRebalanceStrategy::AutoSplit),
         )
         .unwrap();
 
@@ -901,7 +906,7 @@ mod tests {
     }
 
     #[test]
-    fn partition_dml_adaptive_splits_large_insert_group_into_contiguous_segments() {
+    fn partition_dml_auto_split_splits_large_insert_group_into_contiguous_segments() {
         let data = (0..8)
             .map(|index| sized_row("schema", "tb", 1, RowType::Insert, index + 1))
             .collect();
@@ -909,7 +914,7 @@ mod tests {
         let partitions = ChunkPartitioner::partition_dml(
             data,
             2,
-            &config(ChunkPartitionerRebalanceStrategy::Adaptive),
+            &config(ChunkPartitionerRebalanceStrategy::AutoSplit),
         )
         .unwrap();
 
@@ -930,7 +935,7 @@ mod tests {
         let partitions = ChunkPartitioner::partition_dml(
             data,
             8,
-            &config(ChunkPartitionerRebalanceStrategy::SplitLargeInsert),
+            &config(ChunkPartitionerRebalanceStrategy::AutoSplit),
         )
         .unwrap();
 
@@ -1007,7 +1012,7 @@ mod tests {
         let partitions = ChunkPartitioner::partition_dml(
             data,
             1,
-            &config(ChunkPartitionerRebalanceStrategy::Adaptive),
+            &config(ChunkPartitionerRebalanceStrategy::AutoSplit),
         )
         .unwrap();
 
@@ -1044,7 +1049,7 @@ mod tests {
     }
 
     #[test]
-    fn partition_dml_adaptive_sorts_partitions_by_size_after_split() {
+    fn partition_dml_auto_split_sorts_partitions_by_size_after_split() {
         let data = vec![
             row(1, RowType::Insert),
             row(1, RowType::Insert),
@@ -1056,7 +1061,7 @@ mod tests {
         let partitions = ChunkPartitioner::partition_dml(
             data,
             3,
-            &config(ChunkPartitionerRebalanceStrategy::Adaptive),
+            &config(ChunkPartitionerRebalanceStrategy::AutoSplit),
         )
         .unwrap();
 
@@ -1071,7 +1076,7 @@ mod tests {
             row(1, RowType::Insert),
             row(1, RowType::Insert),
         ];
-        let mut config = config(ChunkPartitionerRebalanceStrategy::SplitLargeInsert);
+        let mut config = config(ChunkPartitionerRebalanceStrategy::AutoSplit);
         config.min_partition_rows = 2;
 
         let partitions = ChunkPartitioner::partition_dml(data, 4, &config).unwrap();
@@ -1088,7 +1093,7 @@ mod tests {
             sized_row("schema", "tb", 1, RowType::Insert, 100),
             sized_row("schema", "tb", 1, RowType::Insert, 1),
         ];
-        let mut config = config(ChunkPartitionerRebalanceStrategy::SplitLargeInsert);
+        let mut config = config(ChunkPartitionerRebalanceStrategy::AutoSplit);
         config.cost = ChunkPartitionerRebalanceCost::Bytes;
         config.max_partitions_per_sinker = 1;
 
@@ -1131,7 +1136,7 @@ mod tests {
     }
 
     #[test]
-    fn partition_dml_adaptive_splits_skewed_group_after_target_is_reached() {
+    fn partition_dml_auto_split_splits_skewed_group_after_target_is_reached() {
         let data = vec![
             row(1, RowType::Insert),
             row(1, RowType::Insert),
@@ -1141,7 +1146,7 @@ mod tests {
             row(2, RowType::Insert),
         ];
 
-        let mut config = config(ChunkPartitionerRebalanceStrategy::Adaptive);
+        let mut config = config(ChunkPartitionerRebalanceStrategy::AutoSplit);
         config.split_skew_ratio = 1.5;
 
         let partitions = ChunkPartitioner::partition_dml(data, 2, &config).unwrap();
@@ -1151,7 +1156,7 @@ mod tests {
     }
 
     #[test]
-    fn partition_dml_min_rows_merges_ordered_chunks_then_splits_by_min_rows() {
+    fn partition_dml_table_min_rows_merges_ordered_chunks_then_splits_by_min_rows() {
         let data = vec![
             row(1, RowType::Insert),
             row(1, RowType::Insert),
@@ -1162,7 +1167,7 @@ mod tests {
             row(4, RowType::Insert),
             row(4, RowType::Insert),
         ];
-        let mut config = config(ChunkPartitionerRebalanceStrategy::MinRows);
+        let mut config = config(ChunkPartitionerRebalanceStrategy::TableMinRows);
         config.min_partition_rows = 3;
 
         let partitions = ChunkPartitioner::partition_dml(data, 2, &config).unwrap();
@@ -1175,11 +1180,11 @@ mod tests {
     }
 
     #[test]
-    fn partition_dml_group_even_splits_each_merged_group_by_target_partitions() {
+    fn partition_dml_table_even_splits_each_merged_group_by_target_partitions() {
         let data = (0..10)
             .map(|index| row(index / 2 + 1, RowType::Insert))
             .collect();
-        let mut config = config(ChunkPartitionerRebalanceStrategy::GroupEven);
+        let mut config = config(ChunkPartitionerRebalanceStrategy::TableEven);
         config.min_partition_rows = 3;
 
         let partitions = ChunkPartitioner::partition_dml(data, 3, &config).unwrap();
@@ -1192,7 +1197,7 @@ mod tests {
     }
 
     #[test]
-    fn partition_dml_group_even_merges_ordered_chunks_without_crossing_tables() {
+    fn partition_dml_table_even_merges_ordered_chunks_without_crossing_tables() {
         let data = vec![
             sized_row("schema", "tb", 1, RowType::Insert, 1),
             sized_row("schema", "tb", 2, RowType::Insert, 1),
@@ -1201,12 +1206,12 @@ mod tests {
             sized_row("schema", "tb_2", 5, RowType::Insert, 1),
             sized_row("schema", "tb_2", 6, RowType::Insert, 1),
         ];
-        let mut config = config(ChunkPartitionerRebalanceStrategy::GroupEven);
+        let mut config = config(ChunkPartitionerRebalanceStrategy::TableEven);
         config.min_partition_rows = 2;
 
         let partitions = ChunkPartitioner::partition_dml(data, 2, &config).unwrap();
 
-        assert_eq!(partition_lengths(&partitions), vec![2, 2, 1, 1]);
+        assert_eq!(partition_lengths(&partitions), vec![2, 2, 2]);
         let partition_keys: Vec<Vec<(&str, &str, u64)>> = partitions
             .iter()
             .map(|partition| {
@@ -1221,8 +1226,52 @@ mod tests {
             vec![
                 vec![("schema", "tb", 1), ("schema", "tb", 2)],
                 vec![("schema", "tb", 4), ("schema", "tb", 4)],
-                vec![("schema", "tb_2", 5)],
-                vec![("schema", "tb_2", 6)],
+                vec![("schema", "tb_2", 5), ("schema", "tb_2", 6)],
+            ]
+        );
+    }
+
+    #[test]
+    fn partition_dml_table_even_emits_larger_merged_groups_first() {
+        let data = vec![
+            sized_row("schema", "tb_small", 1, RowType::Insert, 1),
+            sized_row("schema", "tb_small", 2, RowType::Insert, 1),
+            sized_row("schema", "tb_big", 1, RowType::Insert, 1),
+            sized_row("schema", "tb_big", 1, RowType::Insert, 1),
+            sized_row("schema", "tb_big", 2, RowType::Insert, 1),
+            sized_row("schema", "tb_big", 2, RowType::Insert, 1),
+            sized_row("schema", "tb_big", 3, RowType::Insert, 1),
+            sized_row("schema", "tb_big", 3, RowType::Insert, 1),
+        ];
+        let mut config = config(ChunkPartitionerRebalanceStrategy::TableEven);
+        config.min_partition_rows = 3;
+
+        let partitions = ChunkPartitioner::partition_dml(data, 2, &config).unwrap();
+
+        assert_eq!(partition_lengths(&partitions), vec![3, 3, 2]);
+        let partition_keys: Vec<Vec<(&str, &str, u64)>> = partitions
+            .iter()
+            .map(|partition| {
+                partition
+                    .iter()
+                    .map(|row| (row.schema.as_str(), row.tb.as_str(), row.chunk_id))
+                    .collect()
+            })
+            .collect();
+        assert_eq!(
+            partition_keys,
+            vec![
+                vec![
+                    ("schema", "tb_big", 1),
+                    ("schema", "tb_big", 1),
+                    ("schema", "tb_big", 2),
+                ],
+                vec![
+                    ("schema", "tb_big", 2),
+                    ("schema", "tb_big", 3),
+                    ("schema", "tb_big", 3),
+                ],
+                vec![("schema", "tb_small", 1), ("schema", "tb_small", 2)],
             ]
         );
     }

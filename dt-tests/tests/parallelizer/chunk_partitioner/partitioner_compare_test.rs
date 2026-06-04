@@ -123,13 +123,12 @@ fn strategies() -> Vec<(&'static str, ChunkPartitionerRebalanceStrategy)> {
             "chunk_largest_first",
             ChunkPartitionerRebalanceStrategy::ChunkLargestFirst,
         ),
+        ("auto_split", ChunkPartitionerRebalanceStrategy::AutoSplit),
         (
-            "split_large_insert",
-            ChunkPartitionerRebalanceStrategy::SplitLargeInsert,
+            "table_min_rows",
+            ChunkPartitionerRebalanceStrategy::TableMinRows,
         ),
-        ("adaptive", ChunkPartitionerRebalanceStrategy::Adaptive),
-        ("min_rows", ChunkPartitionerRebalanceStrategy::MinRows),
-        ("group_even", ChunkPartitionerRebalanceStrategy::GroupEven),
+        ("table_even", ChunkPartitionerRebalanceStrategy::TableEven),
     ]
 }
 
