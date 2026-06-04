@@ -244,7 +244,7 @@ struct check 仅支持 standalone MySQL/PostgreSQL checker target。
 | :--------------------------- | :------------------------------------------------- | :------- | :-------------------- |
 | parallel_type                | 并发类型                                           | snapshot | serial                |
 | parallel_size                | 并发线程数                                         | 8        | 1                     |
-| rebalance_strategy           | snapshot chunk 写入阶段 rebalance 策略             | adaptive | adaptive              |
+| rebalance_strategy           | snapshot chunk 写入阶段 rebalance 策略             | none     | none                  |
 | rebalance_cost               | rebalance 判断 partition 大小的成本口径             | rows     | rows                  |
 | rebalance_max_partitions_per_sinker | 每个有效 sinker 最多拆出的 partition 数      | 2        | 2                     |
 | rebalance_min_partition_rows | snapshot insert chunk 拆分后单个 partition 最小行数 | 200      | [sinker].batch_size   |
@@ -264,17 +264,17 @@ struct check 仅支持 standalone MySQL/PostgreSQL checker target。
 
 当 `[parallelizer].parallel_type=snapshot` 时，snapshot parallelizer 会使用 chunk partitioner 对下游写入队列做 rebalance。它主要用于 snapshot 写入阶段，缓解目标端 sinker 的长尾问题；不会改变源端 extractor 并发，也不会修改 checkpoint 中的 chunk id。
 
-推荐默认配置：
+默认行为：
 
 ```ini
 [parallelizer]
 parallel_type=snapshot
 parallel_size=8
-rebalance_strategy=adaptive
+rebalance_strategy=none
 rebalance_cost=rows
 ```
 
-行宽接近时使用默认 `rebalance_cost=rows`；如果存在大 JSON、LOB、宽字符串等行宽差异明显的场景，可以使用 `rebalance_cost=bytes`。如果目标端请求成本高，或不希望拆分 logical chunk，可以使用 `rebalance_strategy=chunk_largest_first`。
+默认 `rebalance_strategy=none` 会在 logical chunk 分组后保持顺序，不额外做目标端排序或拆分。如果写入阶段长尾明显，可以使用 `rebalance_strategy=adaptive`。行宽接近时使用默认 `rebalance_cost=rows`；如果存在大 JSON、LOB、宽字符串等行宽差异明显的场景，可以使用 `rebalance_cost=bytes`。如果目标端请求成本高，或不希望拆分 logical chunk，可以使用 `rebalance_strategy=chunk_largest_first`。
 
 更多场景化配置建议见 [Snapshot Chunk Partitioner Rebalance](/docs/zh/snapshot/chunk_partitioner_rebalance.md)。
 

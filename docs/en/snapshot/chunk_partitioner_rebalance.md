@@ -28,7 +28,7 @@ Configure it under `[parallelizer]`:
 [parallelizer]
 parallel_type=snapshot
 parallel_size=8
-rebalance_strategy=adaptive
+rebalance_strategy=none
 rebalance_cost=rows
 rebalance_max_partitions_per_sinker=2
 rebalance_min_partition_rows=200
@@ -37,7 +37,7 @@ rebalance_split_skew_ratio=1.0
 
 | Config | Description | Default |
 | :--- | :--- | :--- |
-| `rebalance_strategy` | snapshot chunk rebalance strategy | `adaptive` |
+| `rebalance_strategy` | snapshot chunk rebalance strategy | `none` |
 | `rebalance_cost` | cost metric used to measure partition size | `rows` |
 | `rebalance_max_partitions_per_sinker` | max split partitions per effective sinker | `2` |
 | `rebalance_min_partition_rows` | minimum rows kept in each split partition | `[sinker].batch_size` |
@@ -51,10 +51,10 @@ rebalance_split_skew_ratio=1.0
 
 | Value | Behavior | Best For |
 | :--- | :--- | :--- |
-| `adaptive` | Default. Sorts by cost; splits pure insert chunks only when there are too few partitions or the largest partition is clearly skewed | Most snapshot write tasks |
+| `none` | Default. Keeps first-seen logical chunk order after grouping; no sorting or splitting | Debugging, conservative behavior, or tasks without obvious sink-side long tails |
+| `adaptive` | Sorts by cost; splits pure insert chunks only when there are too few partitions or the largest partition is clearly skewed | Snapshot write tasks with obvious sink-side long tails |
 | `chunk_largest_first` | Sorts logical chunks by cost, largest first; does not split logical chunks | Keeping chunk integrity while scheduling large chunks first |
 | `split_large_insert` | Splits large insert chunks whenever it is safe and the partition cap is not reached | Severe sink-side long tails caused by one or a few very large chunks |
-| `none` | Keeps first-seen logical chunk order after grouping; no sorting or splitting | Debugging or very conservative behavior |
 
 ### rebalance_cost
 
@@ -116,11 +116,13 @@ Recommendations:
 [parallelizer]
 parallel_type=snapshot
 parallel_size=8
-rebalance_strategy=adaptive
+rebalance_strategy=none
 rebalance_cost=rows
 ```
 
-This is the recommended default. It keeps task count moderate and splits only when partition count is too low or cost is clearly skewed.
+This is the default behavior. It keeps logical chunk order after grouping and does not add sink-side sorting or splitting.
+
+If sink-side long tails are obvious, enable `adaptive` and tune from there.
 
 ### Large Single Table with Uneven Chunks
 

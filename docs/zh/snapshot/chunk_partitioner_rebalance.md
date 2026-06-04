@@ -28,7 +28,7 @@ snapshot parallelizer 收到一批 `RowData` 后，`ChunkPartitioner` 会先按 
 [parallelizer]
 parallel_type=snapshot
 parallel_size=8
-rebalance_strategy=adaptive
+rebalance_strategy=none
 rebalance_cost=rows
 rebalance_max_partitions_per_sinker=2
 rebalance_min_partition_rows=200
@@ -37,7 +37,7 @@ rebalance_split_skew_ratio=1.0
 
 | 配置 | 作用 | 默认 |
 | :--- | :--- | :--- |
-| `rebalance_strategy` | snapshot chunk rebalance 策略 | `adaptive` |
+| `rebalance_strategy` | snapshot chunk rebalance 策略 | `none` |
 | `rebalance_cost` | 判断 partition 大小的成本口径 | `rows` |
 | `rebalance_max_partitions_per_sinker` | 每个有效 sinker 最多拆出的 partition 数 | `2` |
 | `rebalance_min_partition_rows` | 拆分后单个 partition 的最小行数 | `[sinker].batch_size` |
@@ -51,10 +51,10 @@ rebalance_split_skew_ratio=1.0
 
 | 取值 | 行为 | 适合场景 |
 | :--- | :--- | :--- |
-| `adaptive` | 默认策略。按成本排序；partition 太少或最大 partition 明显倾斜时，拆分纯 insert 大 chunk | 推荐大多数 snapshot 写入任务使用 |
+| `none` | 默认策略。按 logical chunk 分组后保持首次出现顺序，不排序、不拆分 | 排查问题、保守行为，或没有明显目标端写入长尾的任务 |
+| `adaptive` | 按成本排序；partition 太少或最大 partition 明显倾斜时，拆分纯 insert 大 chunk | 目标端写入长尾明显的 snapshot 任务 |
 | `chunk_largest_first` | 只按成本从大到小排序，不拆分 logical chunk | 希望保持 chunk 完整、但想让大 chunk 先写的任务 |
 | `split_large_insert` | 只要安全且未达到上限，就持续拆分大 insert chunk | 单个或少数 chunk 特别大、目标端写入长尾明显的任务 |
-| `none` | 按 logical chunk 分组后保持首次出现顺序，不排序、不拆分 | 排查问题、极端保守场景 |
 
 ### rebalance_cost
 
@@ -116,11 +116,13 @@ partitioner 还会同时应用由 `rebalance_min_partition_rows` 推导出的批
 [parallelizer]
 parallel_type=snapshot
 parallel_size=8
-rebalance_strategy=adaptive
+rebalance_strategy=none
 rebalance_cost=rows
 ```
 
-这是推荐默认组合。它会优先保持较少任务数，只在 chunk 数量不足或明显倾斜时拆分。
+这是默认行为。它会在 logical chunk 分组后保持顺序，不额外做目标端排序或拆分。
+
+如果写入阶段长尾明显，再启用 `adaptive` 并继续调优。
 
 ### 单表大数据，chunk 分布不均
 
