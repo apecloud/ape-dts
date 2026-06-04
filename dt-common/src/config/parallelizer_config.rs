@@ -3,10 +3,42 @@ use strum::{Display, EnumString, IntoStaticStr};
 use super::config_enums::ParallelType;
 
 #[derive(Clone)]
-pub struct ParallelizerConfig {
-    pub parallel_type: ParallelType,
-    pub parallel_size: usize,
-    pub chunk_partitioner_rebalance: ChunkPartitionerRebalanceConfig,
+pub enum ParallelizerConfig {
+    Basic {
+        parallel_type: ParallelType,
+        parallel_size: usize,
+    },
+    Snapshot {
+        parallel_size: usize,
+        chunk_partitioner_rebalance: ChunkPartitionerRebalanceConfig,
+    },
+}
+
+impl ParallelizerConfig {
+    pub fn parallel_type(&self) -> ParallelType {
+        match self {
+            Self::Basic { parallel_type, .. } => parallel_type.clone(),
+            Self::Snapshot { .. } => ParallelType::Snapshot,
+        }
+    }
+
+    pub fn parallel_size(&self) -> usize {
+        match self {
+            Self::Basic { parallel_size, .. } | Self::Snapshot { parallel_size, .. } => {
+                *parallel_size
+            }
+        }
+    }
+
+    pub fn chunk_partitioner_rebalance(&self) -> Option<&ChunkPartitionerRebalanceConfig> {
+        match self {
+            Self::Basic { .. } => None,
+            Self::Snapshot {
+                chunk_partitioner_rebalance,
+                ..
+            } => Some(chunk_partitioner_rebalance),
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -28,7 +60,7 @@ pub struct ChunkPartitionerRebalanceConfig {
 impl Default for ChunkPartitionerRebalanceConfig {
     fn default() -> Self {
         Self {
-            strategy: ChunkPartitionerRebalanceStrategy::Adaptive,
+            strategy: ChunkPartitionerRebalanceStrategy::None,
             cost: ChunkPartitionerRebalanceCost::Rows,
             // The partitioner derives the effective cap from the current batch size.
             max_partitions_per_sinker: 2,

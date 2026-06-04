@@ -24,8 +24,8 @@ impl ParallelizerUtil {
         config: &TaskConfig,
         monitor: TaskMonitorHandle,
     ) -> anyhow::Result<Box<dyn Parallelizer + Send + Sync>> {
-        let parallel_size = config.parallelizer.parallel_size;
-        let parallel_type = &config.parallelizer.parallel_type;
+        let parallel_size = config.parallelizer.parallel_size();
+        let parallel_type = config.parallelizer.parallel_type();
         let base_parallelizer = BaseParallelizer {
             popped_data: VecDeque::new(),
             monitor,
@@ -37,7 +37,8 @@ impl ParallelizerUtil {
                 parallel_size,
                 chunk_partitioner_rebalance: config
                     .parallelizer
-                    .chunk_partitioner_rebalance
+                    .chunk_partitioner_rebalance()
+                    .expect("snapshot parallelizer should have rebalance config")
                     .clone(),
             }),
 
@@ -92,10 +93,7 @@ impl ParallelizerUtil {
                 let snapshot_parallelizer = SnapshotParallelizer {
                     base_parallelizer,
                     parallel_size,
-                    chunk_partitioner_rebalance: config
-                        .parallelizer
-                        .chunk_partitioner_rebalance
-                        .clone(),
+                    chunk_partitioner_rebalance: Default::default(),
                 };
                 Box::new(FoxlakeParallelizer {
                     task_config: config.clone(),

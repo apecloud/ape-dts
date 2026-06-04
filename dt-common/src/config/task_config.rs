@@ -149,7 +149,7 @@ impl TaskConfig {
                 ));
             }
             if matches!(extractor_basic.extract_type, ExtractType::Cdc)
-                && !matches!(parallelizer.parallel_type, ParallelType::RdbMerge)
+                && !matches!(parallelizer.parallel_type(), ParallelType::RdbMerge)
             {
                 bail!(Error::ConfigError(
                     "config [checker].enable=true with [extractor] extract_type=cdc and [sinker] sink_type=write currently supports only [parallelizer] parallel_type=rdb_merge"
@@ -1013,8 +1013,17 @@ impl TaskConfig {
         sinker_basic: &BasicSinkerConfig,
         _pipeline: &PipelineConfig,
     ) -> anyhow::Result<ParallelizerConfig> {
-        let default_rebalance = ChunkPartitionerRebalanceConfig::default();
         let parallel_size = loader.get_with_default(PARALLELIZER, PARALLEL_SIZE, 1);
+        let parallel_type =
+            loader.get_with_default(PARALLELIZER, "parallel_type", ParallelType::Serial);
+        if !matches!(parallel_type, ParallelType::Snapshot) {
+            return Ok(ParallelizerConfig::Basic {
+                parallel_size,
+                parallel_type,
+            });
+        }
+
+        let default_rebalance = ChunkPartitionerRebalanceConfig::default();
         // Keep sink-side partitions large enough to preserve sinker batch efficiency by default.
         let min_partition_rows = loader.get_with_default(
             PARALLELIZER,
@@ -1056,18 +1065,13 @@ impl TaskConfig {
             )));
         }
 
-        Ok(ParallelizerConfig {
+        Ok(ParallelizerConfig::Snapshot {
             parallel_size,
-            parallel_type: loader.get_with_default(
-                PARALLELIZER,
-                "parallel_type",
-                ParallelType::Serial,
-            ),
             chunk_partitioner_rebalance: ChunkPartitionerRebalanceConfig {
                 strategy: loader.get_with_default(
                     PARALLELIZER,
                     REBALANCE_STRATEGY,
-                    ChunkPartitionerRebalanceStrategy::Adaptive,
+                    ChunkPartitionerRebalanceStrategy::None,
                 ),
                 cost: loader.get_with_default(
                     PARALLELIZER,
@@ -1432,7 +1436,7 @@ mod tests {
         ChunkPartitionerRebalanceCost, ChunkPartitionerRebalanceStrategy,
     };
 
-    use super::{CheckMode, TaskConfig, TaskKind, TaskType};
+    use super::{CheckMode, ParallelType, TaskConfig, TaskKind, TaskType};
 
     static NEXT_CONFIG_ID: AtomicU64 = AtomicU64::new(0);
 
@@ -1718,7 +1722,7 @@ sample_rate=10
     }
 
     #[test]
-    fn parallelizer_rebalance_config_uses_adaptive_defaults() {
+    fn parallelizer_rebalance_config_uses_none_defaults() {
         let config_path = write_temp_task_config(
             r#"[extractor]
 db_type=mysql
@@ -1739,11 +1743,11 @@ parallel_size=2
         let config = TaskConfig::new(config_path.to_str().unwrap()).unwrap();
         fs::remove_file(config_path).unwrap();
 
-        let rebalance = config.parallelizer.chunk_partitioner_rebalance;
-        assert_eq!(
-            rebalance.strategy,
-            ChunkPartitionerRebalanceStrategy::Adaptive
-        );
+        let rebalance = config
+            .parallelizer
+            .chunk_partitioner_rebalance()
+            .expect("snapshot parallelizer should have rebalance config");
+        assert_eq!(rebalance.strategy, ChunkPartitionerRebalanceStrategy::None);
         assert_eq!(rebalance.cost, ChunkPartitionerRebalanceCost::Rows);
         assert_eq!(rebalance.max_partitions_per_sinker, 2);
         assert_eq!(rebalance.min_partition_rows, 128);
@@ -1776,7 +1780,10 @@ rebalance_split_skew_ratio=1.5
         let config = TaskConfig::new(config_path.to_str().unwrap()).unwrap();
         fs::remove_file(config_path).unwrap();
 
-        let rebalance = config.parallelizer.chunk_partitioner_rebalance;
+        let rebalance = config
+            .parallelizer
+            .chunk_partitioner_rebalance()
+            .expect("snapshot parallelizer should have rebalance config");
         assert_eq!(
             rebalance.strategy,
             ChunkPartitionerRebalanceStrategy::SplitLargeInsert
@@ -1785,6 +1792,34 @@ rebalance_split_skew_ratio=1.5
         assert_eq!(rebalance.max_partitions_per_sinker, 3);
         assert_eq!(rebalance.min_partition_rows, 64);
         assert_eq!(rebalance.split_skew_ratio, 1.5);
+    }
+
+    #[test]
+    fn parallelizer_basic_config_has_no_rebalance_config() {
+        let config_path = write_temp_task_config(
+            r#"[extractor]
+db_type=mysql
+extract_type=struct
+url=mysql://127.0.0.1:3306
+
+[sinker]
+sink_type=dummy
+
+[parallelizer]
+parallel_type=rdb_merge
+parallel_size=4
+rebalance_strategy=split_large_insert
+"#,
+        );
+        let config = TaskConfig::new(config_path.to_str().unwrap()).unwrap();
+        fs::remove_file(config_path).unwrap();
+
+        assert!(matches!(
+            config.parallelizer.parallel_type(),
+            ParallelType::RdbMerge
+        ));
+        assert_eq!(config.parallelizer.parallel_size(), 4);
+        assert!(config.parallelizer.chunk_partitioner_rebalance().is_none());
     }
 
     #[test]
