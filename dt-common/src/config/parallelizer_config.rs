@@ -84,6 +84,12 @@ pub enum ChunkPartitionerRebalanceStrategy {
     /// Sort by cost and split only when there are too few or clearly skewed partitions.
     #[strum(serialize = "adaptive")]
     Adaptive,
+    /// Merge contiguous chunks by table, then cut output partitions by min rows.
+    #[strum(serialize = "min_rows")]
+    MinRows,
+    /// Merge contiguous chunks by table, then split each merged group evenly.
+    #[strum(serialize = "group_even")]
+    GroupEven,
 }
 
 #[derive(Clone, Debug, Display, EnumString, IntoStaticStr, PartialEq, Eq)]

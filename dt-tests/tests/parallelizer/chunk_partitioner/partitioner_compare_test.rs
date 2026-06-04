@@ -15,7 +15,7 @@ use super::{
         string_key_basic_partitioner::StringKeyBasicPartitioner,
         string_key_row_rebalance_partitioner::StringKeyRowRebalancePartitioner,
     },
-    test_data::{default_data_cases, random_uniform_fully_contiguous_chunks},
+    test_data::{default_data_cases, grouping_many_keys_contiguous},
 };
 
 struct PartitionerBenchRow {
@@ -105,7 +105,7 @@ fn config_for_case(
 ) -> ChunkPartitionerRebalanceConfig {
     ChunkPartitionerRebalanceConfig {
         strategy,
-        cost: if case_name.contains("bytes") {
+        cost: if case_name.starts_with("bytes_") {
             ChunkPartitionerRebalanceCost::Bytes
         } else {
             ChunkPartitionerRebalanceCost::Rows
@@ -128,6 +128,8 @@ fn strategies() -> Vec<(&'static str, ChunkPartitionerRebalanceStrategy)> {
             ChunkPartitionerRebalanceStrategy::SplitLargeInsert,
         ),
         ("adaptive", ChunkPartitionerRebalanceStrategy::Adaptive),
+        ("min_rows", ChunkPartitionerRebalanceStrategy::MinRows),
+        ("group_even", ChunkPartitionerRebalanceStrategy::GroupEven),
     ]
 }
 
@@ -188,8 +190,8 @@ fn bench_chunk_partitioner_versions() -> anyhow::Result<()> {
 
 #[test]
 #[ignore = "manual terminal output comparison"]
-fn compare_random_uniform_fully_contiguous_chunks() -> anyhow::Result<()> {
-    let data = random_uniform_fully_contiguous_chunks(160_000);
+fn compare_grouping_many_keys_contiguous_chunks() -> anyhow::Result<()> {
+    let data = grouping_many_keys_contiguous(160_000);
     let target_partitions = 16;
     let iterations = 1;
     let partitioners: [(&str, PartitionFn); 3] = [
@@ -202,7 +204,7 @@ fn compare_random_uniform_fully_contiguous_chunks() -> anyhow::Result<()> {
     ];
 
     println!();
-    println!("case: random_uniform_fully_contiguous_chunks");
+    println!("case: grouping_many_keys_contiguous_chunks");
     println!(
         "{:<20} {:<28} {:>10} {:>10} {:>12} {:>10} {:>10} {:>10} {:>12}",
         "strategy",
@@ -218,7 +220,7 @@ fn compare_random_uniform_fully_contiguous_chunks() -> anyhow::Result<()> {
     println!("{}", "-".repeat(128));
 
     for (strategy_name, strategy) in strategies() {
-        let config = config_for_case("random_uniform_fully_contiguous_chunks", strategy);
+        let config = config_for_case("grouping_many_keys_contiguous_chunks", strategy);
         for (name, partition) in partitioners {
             let (elapsed, summary) =
                 bench_partition(&data, target_partitions, &config, partition, iterations)?;

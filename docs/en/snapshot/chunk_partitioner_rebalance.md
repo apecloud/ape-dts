@@ -16,6 +16,7 @@ After snapshot parallelizer receives a batch of `RowData`, `ChunkPartitioner` fi
 
 - They can sort partitions by cost, largest first, so large partitions are scheduled earlier.
 - They can split an oversized snapshot insert chunk into multiple contiguous sub-partitions when it is safe.
+- Rows-only strategies can sort chunks by `schema.table.chunk_id`, merge chunks from the same table, then cut the merged table group into row-count based partitions.
 - Splitting does not modify the original `chunk_id` on each row and does not create new checkpoint chunks.
 
 Splitting is enabled only for pure snapshot `Insert` DML. Mixed DML containing `Update` or `Delete` automatically falls back to keeping logical chunks intact.
@@ -55,6 +56,8 @@ rebalance_split_skew_ratio=1.0
 | `adaptive` | Sorts by cost; splits pure insert chunks only when there are too few partitions or the largest partition is clearly skewed | Snapshot write tasks with obvious sink-side long tails |
 | `chunk_largest_first` | Sorts logical chunks by cost, largest first; does not split logical chunks | Keeping chunk integrity while scheduling large chunks first |
 | `split_large_insert` | Splits large insert chunks whenever it is safe and the partition cap is not reached | Severe sink-side long tails caused by one or a few very large chunks |
+| `min_rows` | Sorts chunks by `schema.table.chunk_id`, merges chunks from the same table, then cuts each merged group by `rebalance_min_partition_rows` | Table-level row-count partitioning with predictable partition size |
+| `group_even` | Sorts and merges chunks from the same table, then splits each merged group into up to `[parallelizer].parallel_size` nearly even partitions aligned to `rebalance_min_partition_rows` | More even sink work within each table while avoiding tiny partitions |
 
 ### rebalance_cost
 
@@ -64,6 +67,8 @@ rebalance_split_skew_ratio=1.0
 | `bytes` | Uses estimated row bytes as primary cost and row count as tie-breaker | Tasks with large JSON, LOB, wide strings, or highly uneven row width |
 
 `rows` is cheaper and matches row-count based batch writing well. `bytes` can better detect wide-row cost, but it requires scanning row data size and has higher CPU overhead in the partitioner.
+
+`min_rows` and `group_even` ignore `rebalance_cost`; they use row counts only.
 
 ### rebalance_max_partitions_per_sinker
 
@@ -84,6 +89,8 @@ Recommendations:
 ### rebalance_min_partition_rows
 
 This controls the lower bound of split granularity. It is not the sinker batch size, but it defaults to `[sinker].batch_size`.
+
+For `min_rows`, this is the target size of each partition, except the last partition of a merged table group may be smaller. For `group_even`, partition sizes are aligned near multiples of this value when possible.
 
 Recommendations:
 
@@ -168,6 +175,30 @@ rebalance_cost=rows
 ```
 
 Use this for StarRocks, Doris, ClickHouse, or other HTTP/stream-load style sinks, or when the target is sensitive to small requests. Sorting without splitting reduces extra request count.
+
+### Row-Count Partitions per Table
+
+```ini
+[parallelizer]
+parallel_type=snapshot
+parallel_size=8
+rebalance_strategy=min_rows
+rebalance_min_partition_rows=2000
+```
+
+Use this when chunks from the same table should be merged and emitted as predictable row-count partitions. Chunks are sorted by `schema.table.chunk_id` first, so non-contiguous chunk ids from the same table can still be merged into one table group.
+
+### Even Partitions per Table
+
+```ini
+[parallelizer]
+parallel_type=snapshot
+parallel_size=8
+rebalance_strategy=group_even
+rebalance_min_partition_rows=2000
+```
+
+Use this when each table should be split into a small number of similarly sized partitions. Each merged table group can produce up to `[parallelizer].parallel_size` partitions, so the total partition count can exceed `[parallelizer].parallel_size` when one batch contains multiple tables.
 
 ### Severe Long Tail and Target Can Handle More Tasks
 

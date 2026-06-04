@@ -28,6 +28,13 @@ struct GroupPlan {
     prefix_bytes: Option<Vec<u64>>,
 }
 
+struct MergedGroupPlan {
+    last_chunk_id: u64,
+    group_indexes: Vec<usize>,
+    prefix_rows: Vec<usize>,
+    rows: usize,
+}
+
 #[derive(Clone, Copy, Debug)]
 struct PartitionPlan {
     group_index: usize,
@@ -36,6 +43,13 @@ struct PartitionPlan {
     start: usize,
     end: usize,
     bytes: u64,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct MergedPartitionPlan {
+    merged_group_index: usize,
+    start: usize,
+    end: usize,
 }
 
 impl GroupPlan {
@@ -63,6 +77,28 @@ impl GroupPlan {
             .as_ref()
             .map(|prefix_bytes| prefix_bytes[end].saturating_sub(prefix_bytes[start]))
             .unwrap_or(0)
+    }
+}
+
+impl MergedGroupPlan {
+    fn new(group_index: usize, key: ChunkKey<'_>, group_rows: usize) -> Self {
+        Self {
+            last_chunk_id: key.chunk_id,
+            group_indexes: vec![group_index],
+            prefix_rows: vec![0, group_rows],
+            rows: group_rows,
+        }
+    }
+
+    fn can_append(&self, last_key: ChunkKey<'_>, key: ChunkKey<'_>) -> bool {
+        last_key.schema == key.schema && last_key.tb == key.tb && self.last_chunk_id < key.chunk_id
+    }
+
+    fn append(&mut self, group_index: usize, key: ChunkKey<'_>, group_rows: usize) {
+        self.last_chunk_id = key.chunk_id;
+        self.group_indexes.push(group_index);
+        self.rows += group_rows;
+        self.prefix_rows.push(self.rows);
     }
 }
 
@@ -250,7 +286,13 @@ impl ChunkPartitioner {
         let mut group_indexes: HashMap<ChunkKey<'_>, usize> =
             HashMap::with_capacity(index_capacity);
         let mut groups: Vec<GroupPlan> = Vec::with_capacity(index_capacity);
-        let use_bytes = matches!(config.cost, ChunkPartitionerRebalanceCost::Bytes);
+        let mut group_keys: Vec<ChunkKey<'_>> = Vec::with_capacity(index_capacity);
+        let use_bytes = matches!(config.cost, ChunkPartitionerRebalanceCost::Bytes)
+            && !matches!(
+                config.strategy,
+                ChunkPartitionerRebalanceStrategy::MinRows
+                    | ChunkPartitionerRebalanceStrategy::GroupEven
+            );
         // Snapshot rows are usually chunk-contiguous. Reuse the previous group index to avoid
         // hashing schema/table for every row in a long run from the same logical chunk.
         let mut last_group: Option<(ChunkKey<'_>, usize)> = None;
@@ -272,6 +314,7 @@ impl ChunkPartitioner {
                             let index = groups.len();
                             group_indexes.insert(key, index);
                             groups.push(GroupPlan::new(use_bytes));
+                            group_keys.push(key);
                             index
                         }
                     };
@@ -290,11 +333,37 @@ impl ChunkPartitioner {
         // group_indexes holds borrowed keys into data. Drop it before moving RowData out of data.
         drop(group_indexes);
 
+        if matches!(
+            config.strategy,
+            ChunkPartitionerRebalanceStrategy::MinRows
+                | ChunkPartitionerRebalanceStrategy::GroupEven
+        ) {
+            let merged_groups = Self::merge_contiguous_groups(&groups, &group_keys);
+            let partitions = match config.strategy {
+                ChunkPartitionerRebalanceStrategy::MinRows => {
+                    Self::partition_merged_by_min_rows(&merged_groups, config.min_partition_rows)
+                }
+                _ => Self::partition_merged_group_even(
+                    &merged_groups,
+                    target_partitions,
+                    config.min_partition_rows,
+                ),
+            };
+            drop(group_keys);
+            return Ok(Self::materialize_merged_partitions(
+                data,
+                &groups,
+                &merged_groups,
+                partitions,
+            ));
+        }
+
         let partitions = groups
             .iter()
             .enumerate()
             .map(|(group_index, group)| PartitionPlan::new(group_index, group, &config.cost))
             .collect();
+        drop(group_keys);
 
         let partitions =
             Self::rebalance_partition_items(partitions, &groups, target_partitions, config);
@@ -332,6 +401,129 @@ impl ChunkPartitioner {
                 ),
                 config,
             ),
+            ChunkPartitionerRebalanceStrategy::MinRows
+            | ChunkPartitionerRebalanceStrategy::GroupEven => partitions,
+        }
+    }
+
+    fn merge_contiguous_groups(
+        groups: &[GroupPlan],
+        group_keys: &[ChunkKey<'_>],
+    ) -> Vec<MergedGroupPlan> {
+        let mut merged_groups: Vec<MergedGroupPlan> = Vec::new();
+        let mut last_merged_key: Option<ChunkKey<'_>> = None;
+        let mut sorted_group_indexes: Vec<usize> = (0..group_keys.len()).collect();
+        sorted_group_indexes.sort_by(|left, right| {
+            let left_key = group_keys[*left];
+            let right_key = group_keys[*right];
+            (left_key.schema, left_key.tb, left_key.chunk_id).cmp(&(
+                right_key.schema,
+                right_key.tb,
+                right_key.chunk_id,
+            ))
+        });
+
+        for group_index in sorted_group_indexes {
+            let key = group_keys[group_index];
+            let group_rows = groups[group_index].rows();
+            if let Some(last) = merged_groups.last_mut() {
+                if last_merged_key.is_some_and(|last_key| last.can_append(last_key, key)) {
+                    last.append(group_index, key, group_rows);
+                    last_merged_key = Some(key);
+                    continue;
+                }
+            }
+            merged_groups.push(MergedGroupPlan::new(group_index, key, group_rows));
+            last_merged_key = Some(key);
+        }
+        merged_groups
+    }
+
+    fn partition_merged_by_min_rows(
+        merged_groups: &[MergedGroupPlan],
+        min_partition_rows: usize,
+    ) -> Vec<MergedPartitionPlan> {
+        let target_rows = min_partition_rows.max(1);
+        let mut partitions = Vec::new();
+        for (merged_group_index, merged_group) in merged_groups.iter().enumerate() {
+            let mut start = 0;
+            while start < merged_group.rows {
+                let end = start.saturating_add(target_rows).min(merged_group.rows);
+                partitions.push(MergedPartitionPlan {
+                    merged_group_index,
+                    start,
+                    end,
+                });
+                start = end;
+            }
+        }
+        partitions
+    }
+
+    fn partition_merged_group_even(
+        merged_groups: &[MergedGroupPlan],
+        target_partitions: usize,
+        min_partition_rows: usize,
+    ) -> Vec<MergedPartitionPlan> {
+        let mut partitions = Vec::new();
+        let target_partitions = target_partitions.max(1);
+        for (merged_group_index, merged_group) in merged_groups.iter().enumerate() {
+            let mut remaining_rows = merged_group.rows;
+            let mut remaining_parts = target_partitions.min(merged_group.rows).max(1);
+            let mut start = 0;
+
+            while remaining_parts > 0 {
+                let len = Self::aligned_partition_len(
+                    remaining_rows,
+                    remaining_parts,
+                    min_partition_rows,
+                );
+                let end = start + len;
+                partitions.push(MergedPartitionPlan {
+                    merged_group_index,
+                    start,
+                    end,
+                });
+                start = end;
+                remaining_rows -= len;
+                remaining_parts -= 1;
+            }
+        }
+        partitions
+    }
+
+    fn aligned_partition_len(
+        remaining_rows: usize,
+        remaining_parts: usize,
+        min_partition_rows: usize,
+    ) -> usize {
+        if remaining_parts <= 1 {
+            return remaining_rows;
+        }
+
+        let ideal = remaining_rows.div_ceil(remaining_parts);
+        if min_partition_rows <= 1 {
+            return ideal;
+        }
+
+        let min_len = 1;
+        let max_len = remaining_rows - (remaining_parts - 1);
+        let lower = ideal / min_partition_rows * min_partition_rows;
+        let upper = lower.saturating_add(min_partition_rows);
+        match (
+            (min_len..=max_len).contains(&lower),
+            (min_len..=max_len).contains(&upper),
+        ) {
+            (true, true) => {
+                if ideal - lower <= upper - ideal {
+                    lower
+                } else {
+                    upper
+                }
+            }
+            (true, false) => lower,
+            (false, true) => upper,
+            (false, false) => ideal.clamp(min_len, max_len),
         }
     }
 
@@ -462,6 +654,68 @@ impl ChunkPartitioner {
         sub_data
     }
 
+    fn materialize_merged_partitions(
+        data: Vec<RowData>,
+        groups: &[GroupPlan],
+        merged_groups: &[MergedGroupPlan],
+        partitions: Vec<MergedPartitionPlan>,
+    ) -> Vec<Vec<RowData>> {
+        let mut row_to_partition = vec![0; data.len()];
+        for (partition_index, partition) in partitions.iter().enumerate() {
+            let merged_group = &merged_groups[partition.merged_group_index];
+            Self::mark_merged_partition_rows(
+                &mut row_to_partition,
+                groups,
+                merged_group,
+                partition.start,
+                partition.end,
+                partition_index,
+            );
+        }
+
+        let mut sub_data: Vec<Vec<RowData>> = partitions
+            .iter()
+            .map(|partition| Vec::with_capacity(partition.end - partition.start))
+            .collect();
+        for (row_index, row_data) in data.into_iter().enumerate() {
+            sub_data[row_to_partition[row_index]].push(row_data);
+        }
+        sub_data
+    }
+
+    fn mark_merged_partition_rows(
+        row_to_partition: &mut [usize],
+        groups: &[GroupPlan],
+        merged_group: &MergedGroupPlan,
+        start: usize,
+        end: usize,
+        partition_index: usize,
+    ) {
+        if start >= end {
+            return;
+        }
+
+        let start_group = merged_group
+            .prefix_rows
+            .partition_point(|rows| *rows <= start)
+            .saturating_sub(1);
+        let end_group = merged_group
+            .prefix_rows
+            .partition_point(|rows| *rows < end)
+            .saturating_sub(1);
+
+        for merged_group_offset in start_group..=end_group {
+            let group_start = merged_group.prefix_rows[merged_group_offset];
+            let group_end = merged_group.prefix_rows[merged_group_offset + 1];
+            let slice_start = start.max(group_start) - group_start;
+            let slice_end = end.min(group_end) - group_start;
+            let group_index = merged_group.group_indexes[merged_group_offset];
+            for row_index in &groups[group_index].row_indexes[slice_start..slice_end] {
+                row_to_partition[*row_index] = partition_index;
+            }
+        }
+    }
+
     pub fn partition_raw(data: Vec<DtItem>) -> anyhow::Result<Vec<Vec<DtItem>>> {
         let mut sub_data_map: HashMap<String, Vec<DtItem>> = HashMap::new();
         let default_key = "default".to_string();
@@ -536,6 +790,10 @@ mod tests {
             .iter()
             .map(|partition| partition.iter().map(|row| row.data_size).collect())
             .collect()
+    }
+
+    fn partition_lengths(partitions: &[Vec<RowData>]) -> Vec<usize> {
+        partitions.iter().map(Vec::len).collect()
     }
 
     fn group_plan(data_sizes: &[usize], use_bytes: bool) -> GroupPlan {
@@ -890,5 +1148,82 @@ mod tests {
 
         let lengths: Vec<usize> = partitions.iter().map(Vec::len).collect();
         assert_eq!(lengths, vec![3, 2, 1]);
+    }
+
+    #[test]
+    fn partition_dml_min_rows_merges_ordered_chunks_then_splits_by_min_rows() {
+        let data = vec![
+            row(1, RowType::Insert),
+            row(1, RowType::Insert),
+            row(3, RowType::Insert),
+            row(3, RowType::Insert),
+            row(5, RowType::Insert),
+            row(5, RowType::Insert),
+            row(4, RowType::Insert),
+            row(4, RowType::Insert),
+        ];
+        let mut config = config(ChunkPartitionerRebalanceStrategy::MinRows);
+        config.min_partition_rows = 3;
+
+        let partitions = ChunkPartitioner::partition_dml(data, 2, &config).unwrap();
+
+        assert_eq!(partition_lengths(&partitions), vec![3, 3, 2]);
+        assert_eq!(
+            chunk_ids(&partitions),
+            vec![vec![1, 1, 3], vec![3, 4, 4], vec![5, 5]]
+        );
+    }
+
+    #[test]
+    fn partition_dml_group_even_splits_each_merged_group_by_target_partitions() {
+        let data = (0..10)
+            .map(|index| row(index / 2 + 1, RowType::Insert))
+            .collect();
+        let mut config = config(ChunkPartitionerRebalanceStrategy::GroupEven);
+        config.min_partition_rows = 3;
+
+        let partitions = ChunkPartitioner::partition_dml(data, 3, &config).unwrap();
+
+        assert_eq!(partition_lengths(&partitions), vec![3, 3, 4]);
+        assert_eq!(
+            chunk_ids(&partitions),
+            vec![vec![1, 1, 2], vec![2, 3, 3], vec![4, 4, 5, 5]]
+        );
+    }
+
+    #[test]
+    fn partition_dml_group_even_merges_ordered_chunks_without_crossing_tables() {
+        let data = vec![
+            sized_row("schema", "tb", 1, RowType::Insert, 1),
+            sized_row("schema", "tb", 2, RowType::Insert, 1),
+            sized_row("schema", "tb", 4, RowType::Insert, 1),
+            sized_row("schema", "tb", 4, RowType::Insert, 1),
+            sized_row("schema", "tb_2", 5, RowType::Insert, 1),
+            sized_row("schema", "tb_2", 6, RowType::Insert, 1),
+        ];
+        let mut config = config(ChunkPartitionerRebalanceStrategy::GroupEven);
+        config.min_partition_rows = 2;
+
+        let partitions = ChunkPartitioner::partition_dml(data, 2, &config).unwrap();
+
+        assert_eq!(partition_lengths(&partitions), vec![2, 2, 1, 1]);
+        let partition_keys: Vec<Vec<(&str, &str, u64)>> = partitions
+            .iter()
+            .map(|partition| {
+                partition
+                    .iter()
+                    .map(|row| (row.schema.as_str(), row.tb.as_str(), row.chunk_id))
+                    .collect()
+            })
+            .collect();
+        assert_eq!(
+            partition_keys,
+            vec![
+                vec![("schema", "tb", 1), ("schema", "tb", 2)],
+                vec![("schema", "tb", 4), ("schema", "tb", 4)],
+                vec![("schema", "tb_2", 5)],
+                vec![("schema", "tb_2", 6)],
+            ]
+        );
     }
 }

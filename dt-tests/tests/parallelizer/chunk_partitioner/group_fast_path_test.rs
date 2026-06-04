@@ -5,7 +5,7 @@ use dt_parallelizer::chunk_partitioner::*;
 
 use super::{
     bench_util::{bench_grouping, duration_ms, write_report, GroupPlan},
-    test_data::default_data_cases,
+    test_data::grouping_data_cases,
 };
 
 struct GroupBenchRow {
@@ -132,7 +132,7 @@ fn bench_partition_dml_grouping_fast_path() -> anyhow::Result<()> {
     let mut report = String::new();
     writeln!(report, "# Chunk Partitioner Group Fast Path Benchmark\n")?;
 
-    for bench_case in default_data_cases() {
+    for bench_case in grouping_data_cases() {
         let with_format_key = bench_grouping(
             &bench_case.data,
             group_for_bench_with_format_key,

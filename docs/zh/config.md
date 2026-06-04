@@ -274,7 +274,7 @@ rebalance_strategy=none
 rebalance_cost=rows
 ```
 
-默认 `rebalance_strategy=none` 会在 logical chunk 分组后保持顺序，不额外做目标端排序或拆分。如果写入阶段长尾明显，可以使用 `rebalance_strategy=adaptive`。行宽接近时使用默认 `rebalance_cost=rows`；如果存在大 JSON、LOB、宽字符串等行宽差异明显的场景，可以使用 `rebalance_cost=bytes`。如果目标端请求成本高，或不希望拆分 logical chunk，可以使用 `rebalance_strategy=chunk_largest_first`。
+默认 `rebalance_strategy=none` 会在 logical chunk 分组后保持顺序，不额外做目标端排序或拆分。如果写入阶段长尾明显，可以使用 `rebalance_strategy=adaptive`。如果希望按表做 rows-only 分片，可以使用 `min_rows` 或 `group_even`。行宽接近时使用默认 `rebalance_cost=rows`；如果存在大 JSON、LOB、宽字符串等行宽差异明显的场景，可以使用 `rebalance_cost=bytes`。如果目标端请求成本高，或不希望拆分 logical chunk，可以使用 `rebalance_strategy=chunk_largest_first`。
 
 更多场景化配置建议见 [Snapshot Chunk Partitioner Rebalance](/docs/zh/snapshot/chunk_partitioner_rebalance.md)。
 

@@ -10,17 +10,12 @@ pub(crate) struct DataCase {
 #[derive(Clone, Copy)]
 pub(crate) enum RowOrder {
     Random,
-    MostlyContiguous,
     FullyContiguous,
 }
 
 #[derive(Clone, Copy)]
 pub(crate) enum ChunkSkew {
     Uniform,
-    Hotspot {
-        hot_chunk_count: usize,
-        hot_ratio_percent: u8,
-    },
 }
 
 pub(crate) fn sized_row(
@@ -128,6 +123,75 @@ pub(crate) fn skewed_contiguous_chunks(
     data
 }
 
+pub(crate) fn variable_contiguous_chunks(rows_per_chunk: &[usize]) -> Vec<RowData> {
+    let total_rows = rows_per_chunk.iter().sum::<usize>();
+    let mut data = Vec::with_capacity(total_rows);
+    for (chunk_id, rows) in rows_per_chunk.iter().enumerate() {
+        for _ in 0..*rows {
+            data.push(sized_row(
+                "schema",
+                "apecloud_dts_table_test",
+                chunk_id as u64,
+                RowType::Insert,
+                1,
+            ));
+        }
+    }
+    data
+}
+
+pub(crate) fn multi_table_variable_contiguous_chunks(
+    table_rows_per_chunk: &[&[usize]],
+) -> Vec<RowData> {
+    let total_rows = table_rows_per_chunk
+        .iter()
+        .flat_map(|rows_per_chunk| rows_per_chunk.iter())
+        .sum::<usize>();
+    let mut data = Vec::with_capacity(total_rows);
+    for (table_index, rows_per_chunk) in table_rows_per_chunk.iter().enumerate() {
+        for (chunk_id, rows) in rows_per_chunk.iter().enumerate() {
+            for _ in 0..*rows {
+                data.push(sized_row(
+                    "schema",
+                    &format!("table_{table_index}"),
+                    chunk_id as u64,
+                    RowType::Insert,
+                    1,
+                ));
+            }
+        }
+    }
+    data
+}
+
+pub(crate) fn many_table_mixed_contiguous_chunks(
+    table_count: usize,
+    chunk_count: usize,
+) -> Vec<RowData> {
+    let mut data = Vec::new();
+    for table_index in 0..table_count {
+        for chunk_id in 0..chunk_count {
+            let rows = match (table_index + chunk_id) % 5 {
+                0 => 8_000,
+                1 => 3_000,
+                2 => 1_200,
+                3 => 500,
+                _ => 200,
+            };
+            for _ in 0..rows {
+                data.push(sized_row(
+                    "schema",
+                    &format!("table_{table_index}"),
+                    chunk_id as u64,
+                    RowType::Insert,
+                    1,
+                ));
+            }
+        }
+    }
+    data
+}
+
 pub(crate) fn wide_row_bytes_skew(row_count: usize, seed: u64) -> Vec<RowData> {
     let mut rng = StdRng::seed_from_u64(seed);
     let mut data = Vec::with_capacity(row_count);
@@ -183,16 +247,12 @@ pub(crate) fn random_chunk_mix(
     match row_order {
         RowOrder::Random => {}
         RowOrder::FullyContiguous => sort_by_group_key(&mut data),
-        RowOrder::MostlyContiguous => {
-            sort_by_group_key(&mut data);
-            add_deterministic_jitter(&mut data, seed ^ 0x5eed_f00d);
-        }
     }
 
     data
 }
 
-pub(crate) fn random_uniform_fully_contiguous_chunks(row_count: usize) -> Vec<RowData> {
+pub(crate) fn grouping_many_keys_contiguous(row_count: usize) -> Vec<RowData> {
     random_chunk_mix(
         0x2468_ace0,
         row_count,
@@ -204,45 +264,30 @@ pub(crate) fn random_uniform_fully_contiguous_chunks(row_count: usize) -> Vec<Ro
     )
 }
 
-pub(crate) fn default_data_cases() -> Vec<DataCase> {
+pub(crate) fn grouping_data_cases() -> Vec<DataCase> {
     vec![
         DataCase {
-            name: "contiguous_16_chunks",
+            name: "baseline_16_contiguous_chunks",
             data: contiguous_chunks(10_000, 16),
             iterations: 50,
         },
         DataCase {
-            name: "interleaved_16_chunks",
+            name: "baseline_16_interleaved_chunks",
             data: interleaved_chunks(10_000, 16),
             iterations: 30,
         },
         DataCase {
-            name: "many_small_contiguous_chunks",
+            name: "grouping_many_small_contiguous_chunks",
             data: contiguous_chunks(20, 2_000),
             iterations: 50,
         },
         DataCase {
-            name: "multi_schema_table_contiguous_chunks",
+            name: "grouping_many_tables_contiguous_chunks",
             data: multi_schema_table_chunks(500, 4, 8, 8),
             iterations: 30,
         },
         DataCase {
-            name: "skewed_contiguous_chunks",
-            data: skewed_contiguous_chunks(100_000, 2_000),
-            iterations: 30,
-        },
-        DataCase {
-            name: "single_large_chunk",
-            data: contiguous_chunks(160_000, 1),
-            iterations: 50,
-        },
-        DataCase {
-            name: "wide_row_bytes_skew",
-            data: wide_row_bytes_skew(160_000, 0x2026_0603),
-            iterations: 20,
-        },
-        DataCase {
-            name: "random_uniform_chunks",
+            name: "grouping_many_keys_random_chunks",
             data: random_chunk_mix(
                 0x1234_abcd,
                 160_000,
@@ -255,25 +300,90 @@ pub(crate) fn default_data_cases() -> Vec<DataCase> {
             iterations: 20,
         },
         DataCase {
-            name: "random_uniform_fully_contiguous_chunks",
-            data: random_uniform_fully_contiguous_chunks(160_000),
+            name: "grouping_many_keys_contiguous_chunks",
+            data: grouping_many_keys_contiguous(160_000),
             iterations: 20,
         },
+    ]
+}
+
+pub(crate) fn default_data_cases() -> Vec<DataCase> {
+    vec![
         DataCase {
-            name: "random_hotspot_mostly_contiguous_chunks",
+            name: "baseline_16_contiguous_chunks",
+            data: contiguous_chunks(10_000, 16),
+            iterations: 5,
+        },
+        DataCase {
+            name: "grouping_many_small_contiguous_chunks",
+            data: contiguous_chunks(20, 2_000),
+            iterations: 5,
+        },
+        DataCase {
+            name: "grouping_many_keys_random_chunks",
             data: random_chunk_mix(
-                0x5678_dcba,
+                0x1234_abcd,
                 160_000,
                 4,
                 8,
                 128,
-                RowOrder::MostlyContiguous,
-                ChunkSkew::Hotspot {
-                    hot_chunk_count: 8,
-                    hot_ratio_percent: 80,
-                },
+                RowOrder::Random,
+                ChunkSkew::Uniform,
             ),
-            iterations: 20,
+            iterations: 2,
+        },
+        DataCase {
+            name: "partition_few_large_chunks",
+            data: contiguous_chunks(20_000, 8),
+            iterations: 3,
+        },
+        DataCase {
+            name: "partition_mergeable_medium_chunks",
+            data: contiguous_chunks(1_000, 128),
+            iterations: 3,
+        },
+        DataCase {
+            name: "partition_uneven_contiguous_chunks",
+            data: variable_contiguous_chunks(&[
+                50_000, 2_000, 2_000, 30_000, 1_000, 20_000, 800, 10_000,
+            ]),
+            iterations: 3,
+        },
+        DataCase {
+            name: "partition_multi_table_large_chunks",
+            data: multi_table_variable_contiguous_chunks(&[
+                &[25_000, 25_000, 10_000, 5_000],
+                &[40_000, 5_000, 5_000],
+                &[12_000, 12_000, 12_000, 12_000],
+            ]),
+            iterations: 3,
+        },
+        DataCase {
+            name: "partition_many_tables_mixed_chunks",
+            data: many_table_mixed_contiguous_chunks(16, 8),
+            iterations: 2,
+        },
+        DataCase {
+            name: "skew_single_hot_chunk",
+            data: skewed_contiguous_chunks(100_000, 2_000),
+            iterations: 3,
+        },
+        DataCase {
+            name: "skew_multiple_hot_chunks",
+            data: variable_contiguous_chunks(&[
+                60_000, 50_000, 40_000, 2_000, 2_000, 1_000, 1_000, 1_000,
+            ]),
+            iterations: 3,
+        },
+        DataCase {
+            name: "skew_single_large_chunk",
+            data: contiguous_chunks(160_000, 1),
+            iterations: 5,
+        },
+        DataCase {
+            name: "bytes_wide_row_skew",
+            data: wide_row_bytes_skew(160_000, 0x2026_0603),
+            iterations: 2,
         },
     ]
 }
@@ -281,17 +391,6 @@ pub(crate) fn default_data_cases() -> Vec<DataCase> {
 fn choose_chunk_id(rng: &mut StdRng, chunk_count: usize, chunk_skew: ChunkSkew) -> u64 {
     match chunk_skew {
         ChunkSkew::Uniform => rng.random_range(0..chunk_count) as u64,
-        ChunkSkew::Hotspot {
-            hot_chunk_count,
-            hot_ratio_percent,
-        } => {
-            let hot_chunk_count = hot_chunk_count.min(chunk_count).max(1);
-            if rng.random_range(0..100) < hot_ratio_percent {
-                rng.random_range(0..hot_chunk_count) as u64
-            } else {
-                rng.random_range(0..chunk_count) as u64
-            }
-        }
     }
 }
 
@@ -303,18 +402,4 @@ fn sort_by_group_key(data: &mut [RowData]) {
             right.chunk_id,
         ))
     });
-}
-
-fn add_deterministic_jitter(data: &mut [RowData], seed: u64) {
-    if data.len() < 2 {
-        return;
-    }
-
-    let mut rng = StdRng::seed_from_u64(seed);
-    let swap_count = (data.len() / 100).max(1);
-    for _ in 0..swap_count {
-        let left = rng.random_range(0..data.len());
-        let right = rng.random_range(0..data.len());
-        data.swap(left, right);
-    }
 }

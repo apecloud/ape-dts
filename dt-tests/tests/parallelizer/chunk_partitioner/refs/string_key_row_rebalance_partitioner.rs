@@ -222,6 +222,10 @@ impl StringKeyRowRebalancePartitioner {
                 Self::split_large_insert_partitions(partitions, target_partitions, config, false),
                 config,
             ),
+            ChunkPartitionerRebalanceStrategy::MinRows
+            | ChunkPartitionerRebalanceStrategy::GroupEven => {
+                partitions.into_iter().map(Partition::into_rows).collect()
+            }
         }
     }
 

@@ -16,6 +16,7 @@ snapshot parallelizer 收到一批 `RowData` 后，`ChunkPartitioner` 会先按 
 
 - 可以按成本从大到小排序，让大 partition 先进入 sinker。
 - 可以在安全条件满足时，把过大的 snapshot insert chunk 拆成多个连续子 partition。
+- rows-only 策略可以先按 `schema.table.chunk_id` 排序并合并同一张表的 chunk，再按行数切分合并后的表级 group。
 - 拆分时不会修改每行原始 `chunk_id`，也不会生成新的 checkpoint chunk。
 
 拆分只对纯 `Insert` 的 snapshot DML 启用。包含 `Update` / `Delete` 的混合 DML 会自动降级为不拆分 logical chunk，避免破坏顺序语义。
@@ -55,6 +56,8 @@ rebalance_split_skew_ratio=1.0
 | `adaptive` | 按成本排序；partition 太少或最大 partition 明显倾斜时，拆分纯 insert 大 chunk | 目标端写入长尾明显的 snapshot 任务 |
 | `chunk_largest_first` | 只按成本从大到小排序，不拆分 logical chunk | 希望保持 chunk 完整、但想让大 chunk 先写的任务 |
 | `split_large_insert` | 只要安全且未达到上限，就持续拆分大 insert chunk | 单个或少数 chunk 特别大、目标端写入长尾明显的任务 |
+| `min_rows` | 按 `schema.table.chunk_id` 排序，合并同一张表的 chunk，再按 `rebalance_min_partition_rows` 切分每个合并后的 group | 希望按表生成行数可预期的 partition |
+| `group_even` | 排序并合并同一张表的 chunk，再把每个合并后的 group 拆成最多 `[parallelizer].parallel_size` 个接近均匀、且尽量对齐 `rebalance_min_partition_rows` 的 partition | 希望同一张表内的 sinker 工作量更均匀，同时避免过小 partition |
 
 ### rebalance_cost
 
@@ -64,6 +67,8 @@ rebalance_split_skew_ratio=1.0
 | `bytes` | 以估算字节数作为主要成本，行数作为 tie-breaker | 行宽差异明显、包含大 JSON/LOB/宽字段的任务 |
 
 `rows` 的开销更低，也更贴近批量写入的行数粒度。`bytes` 更能识别宽行带来的写入成本，但 partitioner 需要扫描行的 data size，CPU 开销更高。
+
+`min_rows` 和 `group_even` 会忽略 `rebalance_cost`，只按行数切分。
 
 ### rebalance_max_partitions_per_sinker
 
@@ -84,6 +89,8 @@ partitioner 还会同时应用由 `rebalance_min_partition_rows` 推导出的批
 ### rebalance_min_partition_rows
 
 这个参数控制拆分粒度下限。它不是 sinker 的 batch size，但默认等于 `[sinker].batch_size`。
+
+对于 `min_rows`，它是每个 partition 的目标行数，合并后表级 group 的最后一个 partition 可能更小。对于 `group_even`，partition 大小会在可能时尽量对齐到这个值的倍数附近。
 
 建议：
 
@@ -168,6 +175,30 @@ rebalance_cost=rows
 ```
 
 适合 StarRocks、Doris、ClickHouse 等 HTTP/stream load 类写入，或目标端对小请求敏感的场景。只排序不拆分，可以减少额外请求数。
+
+### 按表生成固定行数 partition
+
+```ini
+[parallelizer]
+parallel_type=snapshot
+parallel_size=8
+rebalance_strategy=min_rows
+rebalance_min_partition_rows=2000
+```
+
+适合希望把同一张表的 chunk 先合并，再输出行数可预期 partition 的任务。chunk 会先按 `schema.table.chunk_id` 排序，因此同一张表内 chunk id 不连续时，也可以合并成一个表级 group。
+
+### 按表均匀切分 partition
+
+```ini
+[parallelizer]
+parallel_type=snapshot
+parallel_size=8
+rebalance_strategy=group_even
+rebalance_min_partition_rows=2000
+```
+
+适合希望每张表拆出少量、大小接近的 partition 的任务。每个合并后的表级 group 最多可以产生 `[parallelizer].parallel_size` 个 partition，因此一个 batch 包含多张表时，最终 partition 总数可能超过 `[parallelizer].parallel_size`。
 
 ### 长尾非常明显，且目标端可承受更多并发任务
 
