@@ -72,6 +72,7 @@ opendal = { version = "0.54.1", features = ["services-s3"] }
 governor = "0.10.4"
 indexmap = "2"
 libc = "0.2"
+zookeeper-client = "0.8"
 
 [profile.release]
 panic = 'unwind'

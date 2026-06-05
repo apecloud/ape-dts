@@ -723,6 +723,8 @@ impl SinkerUtil {
                         conflict_policy: conflict_policy.clone(),
                         router: zk_router.clone(),
                         base_sinker: BaseSinker::new(monitor.clone(), monitor_interval),
+                        data_marker: data_marker.clone(),
+                        client: None,
                     };
                     Self::push_sinker(&mut sub_sinkers, sinker);
                 }
