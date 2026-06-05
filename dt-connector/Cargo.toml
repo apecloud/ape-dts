@@ -50,3 +50,4 @@ opendal = { workspace = true }
 dashmap = {workspace = true}
 indexmap = {workspace = true}
 openssl = { workspace = true }
+zookeeper-client = { workspace = true }
