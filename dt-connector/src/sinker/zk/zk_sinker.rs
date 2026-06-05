@@ -7,6 +7,7 @@ use zookeeper_client as zk;
 
 use dt_common::config::config_enums::ConflictPolicyEnum;
 use dt_common::log_info;
+use dt_common::log_warn;
 use dt_common::meta::dt_data::{DtData, DtItem};
 use dt_common::meta::zk::zk_entry::ZkEntry;
 use dt_common::meta::zk::zk_event_type::ZkEventType;
@@ -66,13 +67,22 @@ impl ZkSinker {
         let mut data_size = 0u64;
         let mut record_count = 0u64;
 
+        let target_source_id = if self.conflict_policy == ConflictPolicyEnum::LastWriteWins {
+            self.read_target_source_id(client).await
+        } else {
+            None
+        };
+
         for dt_item in data.iter() {
             if let DtData::Zk { entry } = &dt_item.dt_data {
                 data_size += entry.get_data_size();
                 let routed_path = self.router.route_path(&entry.path);
 
                 if self.conflict_policy == ConflictPolicyEnum::LastWriteWins {
-                    if self.should_skip_by_lww(client, &routed_path, entry).await? {
+                    if self
+                        .should_skip_by_lww(client, &routed_path, entry, &target_source_id)
+                        .await?
+                    {
                         continue;
                     }
                 }
@@ -89,14 +99,42 @@ impl ZkSinker {
             .await
     }
 
+    async fn read_target_source_id(&self, client: &zk::Client) -> Option<String> {
+        if let Some(data_marker) = &self.data_marker {
+            let data_marker = data_marker.read().await;
+            if let Ok((data, _)) = client.get_data(&data_marker.marker).await {
+                if let Ok(val) = serde_json::from_slice::<serde_json::Value>(&data) {
+                    return val
+                        .get("source_id")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string());
+                }
+            }
+        }
+        None
+    }
+
     async fn should_skip_by_lww(
         &self,
         client: &zk::Client,
         path: &str,
         entry: &ZkEntry,
+        target_source_id: &Option<String>,
     ) -> anyhow::Result<bool> {
         match client.check_stat(path).await {
-            Ok(Some(stat)) => Ok(stat.mtime > entry.stat.mtime),
+            Ok(Some(stat)) => {
+                if stat.mtime > entry.stat.mtime {
+                    return Ok(true);
+                }
+                if stat.mtime == entry.stat.mtime {
+                    if let Some(existing_id) = target_source_id {
+                        if *existing_id > entry.source_id {
+                            return Ok(true);
+                        }
+                    }
+                }
+                Ok(false)
+            }
             Ok(None) => Ok(false),
             Err(_) => Ok(false),
         }
@@ -149,6 +187,13 @@ impl ZkSinker {
             ZkEventType::Deleted => match client.delete(path, None).await {
                 Ok(()) => Ok(()),
                 Err(ref e) if is_no_node(e) => Ok(()),
+                Err(ref e) if is_not_empty(e) => {
+                    log_warn!(
+                        "ZK delete {} skipped: node has children (may have new data from peer)",
+                        path
+                    );
+                    Ok(())
+                }
                 Err(e) => bail!("ZK delete {} failed: {}", path, e),
             },
 
@@ -192,7 +237,7 @@ impl ZkSinker {
         if let Some(data_marker) = &self.data_marker {
             let data_marker = data_marker.read().await;
             let marker_data = serde_json::to_vec(&serde_json::json!({
-                "source_id": data_marker.data_origin_node
+                "source_id": data_marker.src_node
             }))?;
 
             match client
@@ -228,4 +273,8 @@ fn is_node_exists(e: &zk::Error) -> bool {
 
 fn is_no_node(e: &zk::Error) -> bool {
     matches!(e, zk::Error::NoNode)
+}
+
+fn is_not_empty(e: &zk::Error) -> bool {
+    matches!(e, zk::Error::NotEmpty)
 }
