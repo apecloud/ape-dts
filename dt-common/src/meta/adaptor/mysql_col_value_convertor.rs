@@ -1,18 +1,22 @@
 use std::io::Cursor;
 
-use crate::{
-    config::config_enums::DbType, error::Error, meta::time::dt_utc_time::DtNaiveTime,
-    utils::sql_util::SqlUtil,
-};
 use anyhow::bail;
 use byteorder::{LittleEndian, ReadBytesExt};
 use chrono::{TimeZone, Utc};
+use sqlx::{mysql::MySqlRow, types::BigDecimal, Row};
+
 use mysql_binlog_connector_rust::column::{
     column_value::ColumnValue, json::json_binary::JsonBinary,
 };
-use sqlx::{mysql::MySqlRow, types::BigDecimal, Row};
 
-use crate::meta::{col_value::ColValue, mysql::mysql_col_type::MysqlColType};
+use crate::{
+    config::config_enums::DbType,
+    error::Error,
+    meta::{
+        col_value::ColValue, mysql::mysql_col_type::MysqlColType, time::dt_utc_time::DtNaiveTime,
+    },
+    utils::sql_util::SqlUtil,
+};
 
 pub struct MysqlColValueConvertor {}
 
@@ -483,11 +487,11 @@ impl MysqlColValueConvertor {
                 Ok(ColValue::Bit(value))
             }
             MysqlColType::Set { .. } => {
-                let value: String = row.try_get(col)?;
+                let value: String = SqlUtil::try_get_mysql_string(row, col)?;
                 Ok(ColValue::Set2(value))
             }
             MysqlColType::Enum { .. } => {
-                let value: String = row.try_get(col)?;
+                let value: String = SqlUtil::try_get_mysql_string(row, col)?;
                 Ok(ColValue::Enum2(value))
             }
             MysqlColType::Json => {
