@@ -25,11 +25,8 @@ pub struct MysqlMetaFetcher {
 
 pub struct MysqlMetaFetcherInner {
     pub conn_pool: Pool<MySql>,
-    // Shared by all cloned fetchers. Values are Arc so callers can keep table
-    // metadata without holding DashMap guards.
     pub cache: DashMap<String, Arc<MysqlTbMeta>>,
-    // Per-table singleflight locks. Keep lock entries instead of removing them;
-    // removing them can reintroduce races around concurrent first fetches.
+    // Per-table exclusive locks.
     pub locks: DashMap<String, Arc<Mutex<()>>>,
     pub version: String,
     pub db_type: DbType,
@@ -76,8 +73,7 @@ impl MysqlMetaFetcher {
 
     pub fn invalidate_cache(&self, schema: &str, tb: &str) {
         // FIXME: This does not prevent an already-running fetch from inserting
-        // stale metadata after invalidate. Add per-table epochs before allowing
-        // concurrent DDL refresh and metadata fetch paths that affect CDC.
+        // stale metadata after invalidate.
         if !schema.is_empty() && !tb.is_empty() {
             let full_name = Self::table_key(schema, tb);
             self.inner.cache.remove(&full_name);

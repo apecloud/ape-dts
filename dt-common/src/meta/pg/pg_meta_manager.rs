@@ -23,19 +23,18 @@ use super::{pg_col_type::PgColType, pg_tb_meta::PgTbMeta, type_registry::TypeReg
 #[derive(Clone)]
 pub struct PgMetaManager {
     shared: Arc<PgMetaShared>,
-    // FIXME: Only CDC managers initialize this map. Relation ids are scoped to one
-    // logical replication stream and must not be mixed into the table-name cache.
+    // FIXME: Only CDC task initialize this map with signle thread,
+    // so no need concurrent map for now.
     pub oid_to_tb_meta: Option<HashMap<i32, Arc<PgTbMeta>>>,
 }
 
 pub struct PgMetaShared {
     pub conn_pool: Pool<Postgres>,
-    // FIXME: Initialized once and then shared read-only. If runtime type reload is
-    // needed later, replace this with a snapshot lock and reload singleflight.
+    // FIXME: Initialized once and then shared read-only for now.
     pub type_registry: Arc<TypeRegistry>,
     // Shared table-name cache for normal schema metadata.
     pub name_to_tb_meta: DashMap<String, Arc<PgTbMeta>>,
-    // Per-table singleflight locks for cold-cache fetches.
+    // Per-table exclusive locks.
     pub locks: DashMap<String, Arc<Mutex<()>>>,
 }
 
@@ -182,9 +181,8 @@ impl PgMetaManager {
     }
 
     pub fn invalidate_cache(&self, schema: &str, tb: &str) {
-        // FIXME: This does not prevent an in-flight fetch from inserting stale
-        // metadata after invalidate. Add per-table epochs before concurrent CDC
-        // metadata refresh/decode is introduced.
+        // FIXME: This does not prevent an already-running fetch from inserting
+        // stale metadata after invalidate.
         // TODO, if schema is not empty but tb is empty, only clear cache for the schema
         if !schema.is_empty() && !tb.is_empty() {
             let full_name = Self::table_key(schema, tb);
