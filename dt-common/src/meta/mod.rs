@@ -24,3 +24,4 @@ pub mod struct_meta;
 pub mod syncer;
 pub mod tagged_col_value_map;
 pub mod time;
+pub mod zk;

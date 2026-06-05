@@ -52,6 +52,7 @@ impl RdbRouter {
                     topic_map,
                 })
             }
+            _ => Ok(Self::default()),
         }
     }
 

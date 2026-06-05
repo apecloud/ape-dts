@@ -141,6 +141,14 @@ pub enum SinkerConfig {
     Sql {
         reverse: bool,
     },
+
+    Zk {
+        url: String,
+        batch_size: usize,
+        create_if_not_exists: bool,
+        sync_ephemeral_as_persistent: bool,
+        conflict_policy: ConflictPolicyEnum,
+    },
 }
 
 #[derive(Clone, Debug, Hash)]

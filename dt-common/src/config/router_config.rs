@@ -6,4 +6,7 @@ pub enum RouterConfig {
         col_map: String,
         topic_map: String,
     },
+    Zk {
+        path_prefix_map: String,
+    },
 }

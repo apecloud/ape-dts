@@ -52,6 +52,7 @@ use dt_connector::{
         starrocks::{
             starrocks_sinker::StarRocksSinker, starrocks_struct_sinker::StarrocksStructSinker,
         },
+        zk::zk_sinker::ZkSinker,
     },
     Sinker,
 };
@@ -702,6 +703,26 @@ impl SinkerUtil {
                     base_sinker: BaseSinker::new(monitor.clone(), monitor_interval),
                 };
                 Self::push_sinker(&mut sub_sinkers, sinker);
+            }
+
+            SinkerConfig::Zk {
+                url,
+                batch_size,
+                create_if_not_exists,
+                sync_ephemeral_as_persistent,
+                conflict_policy,
+            } => {
+                for _ in 0..parallel_size {
+                    let sinker = ZkSinker {
+                        url: url.clone(),
+                        batch_size,
+                        create_if_not_exists,
+                        sync_ephemeral_as_persistent,
+                        conflict_policy: conflict_policy.clone(),
+                        base_sinker: BaseSinker::new(monitor.clone(), monitor_interval),
+                    };
+                    Self::push_sinker(&mut sub_sinkers, sinker);
+                }
             }
         };
         Ok(sub_sinkers)
