@@ -88,8 +88,8 @@ impl RdbMerger {
             }
 
             RowType::Update => {
-                // if uk change found in any row_data, for safety, all following row_data won't be merged
-                if Self::check_uk_changed(tb_meta, &row_data)? {
+                // if pk/uk change found in any row_data, for safety, all following row_data won't be merged
+                if Self::check_key_changed(tb_meta, &row_data) {
                     merged.unmerged_rows.push(row_data);
                     return Ok(());
                 }
@@ -142,16 +142,18 @@ impl RdbMerger {
         Ok(())
     }
 
-    fn check_uk_changed(tb_meta: &RdbTbMeta, row_data: &RowData) -> anyhow::Result<bool> {
-        let before = row_data.require_before()?;
-        let after = row_data.require_after()?;
-        for col in tb_meta.id_cols.iter() {
-            if before.get(col) != after.get(col) {
-                log_debug!("rdb_merger, uk change found, row_data: {:?}", row_data);
-                return Ok(true);
+    fn check_key_changed(tb_meta: &RdbTbMeta, row_data: &RowData) -> bool {
+        let before = row_data.before.as_ref().unwrap();
+        let after = row_data.after.as_ref().unwrap();
+        for key_cols in tb_meta.key_map.values() {
+            for col in key_cols {
+                if before.get(col) != after.get(col) {
+                    log_debug!("rdb_merger, key change found, row_data: {:?}", row_data);
+                    return true;
+                }
             }
         }
-        Ok(false)
+        false
     }
 
     fn check_collision(
@@ -214,5 +216,84 @@ impl RdbTbMergedData {
 
     pub fn get_unmerged_rows(&mut self) -> Vec<RowData> {
         self.unmerged_rows.drain(..).collect::<Vec<_>>()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use dt_common::meta::{col_value::ColValue, row_type::RowType};
+
+    use super::*;
+
+    fn build_tb_meta() -> RdbTbMeta {
+        RdbTbMeta {
+            schema: "test_db".to_string(),
+            tb: "test_tb".to_string(),
+            cols: vec![
+                "id".to_string(),
+                "uk_1".to_string(),
+                "uk_2".to_string(),
+                "value".to_string(),
+            ],
+            key_map: HashMap::from([
+                ("primary".to_string(), vec!["id".to_string()]),
+                (
+                    "uk_test".to_string(),
+                    vec!["uk_1".to_string(), "uk_2".to_string()],
+                ),
+            ]),
+            partition_col: "id".to_string(),
+            id_cols: vec!["id".to_string()],
+            ..Default::default()
+        }
+    }
+
+    fn build_update_row(changed_col: &str) -> RowData {
+        let before = HashMap::from([
+            ("id".to_string(), ColValue::Long(1)),
+            ("uk_1".to_string(), ColValue::Long(10)),
+            ("uk_2".to_string(), ColValue::Long(20)),
+            ("value".to_string(), ColValue::String("before".to_string())),
+        ]);
+        let mut after = before.clone();
+        after.insert(
+            changed_col.to_string(),
+            ColValue::String("after".to_string()),
+        );
+
+        RowData::new(
+            "test_db".to_string(),
+            "test_tb".to_string(),
+            0,
+            RowType::Update,
+            Some(before),
+            Some(after),
+        )
+    }
+
+    #[test]
+    fn check_key_changed_detects_primary_key_change() {
+        let tb_meta = build_tb_meta();
+        let row_data = build_update_row("id");
+
+        assert!(RdbMerger::check_key_changed(&tb_meta, &row_data));
+    }
+
+    #[test]
+    fn check_key_changed_detects_unique_key_change() {
+        let tb_meta = build_tb_meta();
+        let row_data = build_update_row("uk_1");
+
+        assert!(RdbMerger::check_key_changed(&tb_meta, &row_data));
+    }
+
+    #[test]
+    fn check_key_changed_ignores_non_key_change() {
+        let tb_meta = build_tb_meta();
+        let row_data = build_update_row("value");
+
+        assert!(!RdbMerger::check_key_changed(&tb_meta, &row_data));
     }
 }
