@@ -50,7 +50,8 @@ impl Fetcher for MysqlFetcher {
         match result {
             Ok(rows) => {
                 if !rows.is_empty() {
-                    let version_str = SqlUtil::try_get_mysql_string(rows.first().unwrap(), "VERSION")?;
+                    let version_str =
+                        SqlUtil::try_get_mysql_string(rows.first().unwrap(), "VERSION")?;
                     version = version_str;
                 }
             }

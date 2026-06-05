@@ -200,10 +200,9 @@ impl MysqlStructFetcher {
             let extra = Self::get_str_with_null(&row, "EXTRA")?;
             let column_name = Self::get_str_with_null(&row, "COLUMN_NAME")?;
             let column_type = Self::get_str_with_null(&row, "COLUMN_TYPE")?;
-            let column_default =
-                if let Some(column_default_str) =
-                    SqlUtil::try_get_mysql_optional_string(&row, "COLUMN_DEFAULT")?
-                {
+            let column_default = if let Some(column_default_str) =
+                SqlUtil::try_get_mysql_optional_string(&row, "COLUMN_DEFAULT")?
+            {
                 Some(
                     self.parse_column_default(&column_type, &column_default_str, &extra)
                         .await?,
