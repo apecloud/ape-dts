@@ -51,6 +51,12 @@ INSERT INTO test_db_1.one_pk_multi_uk VALUES (9, NULL, NULL, NULL, NULL, NULL, N
 INSERT INTO test_db_1.col_has_special_character_table VALUES(1, 'col:1:value', 'col&2:value', 'col\3:value');
 INSERT INTO test_db_1.col_has_special_character_table VALUES(2, NULL, NULL, NULL);
 
+INSERT INTO test_db_1.longtext_bin_collation_table VALUES(1, 'abc');
+INSERT INTO test_db_1.longtext_bin_collation_table VALUES(2, 'CaseSensitiveContent');
+
+INSERT INTO test_db_1.enum_set_bin_collation_table VALUES(1, 'small', 'a,b');
+INSERT INTO test_db_1.enum_set_bin_collation_table VALUES(2, 'large', '');
+
 -- min for each col
 INSERT INTO test_db_1.numeric_table VALUES(-128, 0, -32768, 0, -8388608, 0, -2147483648, 0, -9223372036854775808, 0);
 -- max for each col
