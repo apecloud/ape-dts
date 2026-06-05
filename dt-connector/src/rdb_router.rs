@@ -187,6 +187,7 @@ impl RdbRouterInner {
                     col_map,
                 })
             }
+            _ => Ok(Self::default()),
         }
     }
 

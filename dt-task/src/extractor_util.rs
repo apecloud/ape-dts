@@ -57,6 +57,7 @@ use dt_connector::{
             redis_snapshot_file_extractor::RedisSnapshotFileExtractor,
         },
         resumer::recovery::Recovery,
+        zk::zk_extractor::ZkExtractor,
     },
     rdb_router::RdbRouter,
     Extractor,
@@ -741,6 +742,32 @@ impl ExtractorUtil {
                     parallel_size,
                     parallel_type,
                     recovery,
+                };
+                Box::new(extractor)
+            }
+
+            ExtractorConfig::Zk {
+                url,
+                watch_paths,
+                scan_interval_secs,
+                include_ephemeral,
+                heartbeat_interval_secs,
+            } => {
+                let zk_filter_config = dt_common::config::zk_filter_config::ZkFilterConfig {
+                    do_paths: watch_paths.join(","),
+                    ignore_paths: "/zookeeper".to_string(),
+                    include_ephemeral,
+                };
+                let zk_filter = dt_common::zk_filter::ZkFilter::from_config(&zk_filter_config)?;
+                let extractor = ZkExtractor {
+                    url,
+                    watch_paths,
+                    scan_interval_secs,
+                    include_ephemeral,
+                    heartbeat_interval_secs,
+                    filter: zk_filter,
+                    base_extractor,
+                    monitor: extract_state.monitor,
                 };
                 Box::new(extractor)
             }

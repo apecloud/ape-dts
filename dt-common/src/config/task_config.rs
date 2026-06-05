@@ -772,6 +772,22 @@ impl TaskConfig {
                 ack_interval_secs: loader.get_optional(EXTRACTOR, "ack_interval_secs"),
             },
 
+            DbType::Zk => {
+                let watch_paths_str: String = loader.get_optional(EXTRACTOR, "watch_paths");
+                let watch_paths = if watch_paths_str.is_empty() {
+                    vec!["/".to_string()]
+                } else {
+                    watch_paths_str.split(',').map(|s| s.trim().to_string()).collect()
+                };
+                ExtractorConfig::Zk {
+                    url,
+                    watch_paths,
+                    scan_interval_secs: loader.get_with_default(EXTRACTOR, "scan_interval_secs", 60),
+                    include_ephemeral: loader.get_with_default(EXTRACTOR, "include_ephemeral", false),
+                    heartbeat_interval_secs,
+                }
+            }
+
             db_type => {
                 bail! {Error::ConfigError(format!(
                     "extractor db type: {} not supported",
@@ -1014,6 +1030,17 @@ impl TaskConfig {
                     ),
                 },
 
+                _ => bail! { not_supported_err },
+            },
+
+            DbType::Zk => match sink_type {
+                SinkType::Write => SinkerConfig::Zk {
+                    url,
+                    batch_size,
+                    create_if_not_exists: loader.get_with_default(SINKER, "create_if_not_exists", true),
+                    sync_ephemeral_as_persistent: loader.get_with_default(SINKER, "sync_ephemeral_as_persistent", false),
+                    conflict_policy,
+                },
                 _ => bail! { not_supported_err },
             },
 

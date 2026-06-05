@@ -3,7 +3,7 @@ use serde_json::json;
 
 use super::{
     ddl_meta::ddl_data::DdlData, foxlake::s3_file_meta::S3FileMeta, row_data::RowData,
-    struct_meta::struct_data::StructData,
+    struct_meta::struct_data::StructData, zk::zk_entry::ZkEntry,
 };
 use crate::meta::dcl_meta::dcl_data::DclData;
 use crate::meta::row_type::RowSqlType;
@@ -64,6 +64,9 @@ pub enum DtData {
     Foxlake {
         file_meta: S3FileMeta,
     },
+    Zk {
+        entry: ZkEntry,
+    },
 }
 
 impl DtData {
@@ -90,6 +93,7 @@ impl DtData {
             DtData::Ddl { ddl_data } => ddl_data.get_malloc_size(),
             DtData::Redis { entry } => entry.get_data_malloc_size() as u64,
             DtData::Foxlake { file_meta } => file_meta.data_size as u64,
+            DtData::Zk { entry } => entry.get_data_size(),
             // ignore other item types
             _ => 0,
         }
