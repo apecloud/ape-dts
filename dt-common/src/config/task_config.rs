@@ -41,6 +41,7 @@ use super::{
     runtime_config::RuntimeConfig,
     s3_config::S3Config,
     sinker_config::{BasicSinkerConfig, SinkerConfig},
+    zk_filter_config::ZkFilterConfig,
 };
 
 #[derive(Clone)]
@@ -60,6 +61,7 @@ pub struct TaskConfig {
     pub meta_center: Option<MetaCenterConfig>,
     pub data_marker: Option<DataMarkerConfig>,
     pub processor: Option<ProcessorConfig>,
+    pub zk_filter: ZkFilterConfig,
     #[cfg(feature = "metrics")]
     pub metrics: MetricsConfig,
 }
@@ -79,6 +81,7 @@ const FILTER: &str = "filter";
 const ROUTER: &str = "router";
 const RESUMER: &str = "resumer";
 const DATA_MARKER: &str = "data_marker";
+const ZK_FILTER: &str = "zk_filter";
 const PROCESSOR: &str = "processor";
 const CHECKER: &str = "checker";
 const META_CENTER: &str = "metacenter";
@@ -253,6 +256,7 @@ impl TaskConfig {
             checker,
             data_marker: Self::load_data_marker_config(&loader)?,
             processor: Self::load_processor_config(&loader)?,
+            zk_filter: Self::load_zk_filter_config(&loader),
             meta_center: Self::load_meta_center_config(&loader)?,
             #[cfg(feature = "metrics")]
             metrics: Self::load_metrics_config(&loader)?,
@@ -1354,6 +1358,18 @@ impl TaskConfig {
                 ),
             }),
             _ => Ok(ResumerConfig::Dummy),
+        }
+    }
+
+    fn load_zk_filter_config(loader: &IniLoader) -> ZkFilterConfig {
+        ZkFilterConfig {
+            do_paths: loader.get_optional(ZK_FILTER, "do_paths"),
+            ignore_paths: loader.get_with_default(
+                ZK_FILTER,
+                "ignore_paths",
+                "/zookeeper".to_string(),
+            ),
+            include_ephemeral: loader.get_with_default(ZK_FILTER, "include_ephemeral", false),
         }
     }
 

@@ -658,12 +658,9 @@ impl ExtractorUtil {
                 include_ephemeral,
                 heartbeat_interval_secs,
             } => {
-                let zk_filter_config = dt_common::config::zk_filter_config::ZkFilterConfig {
-                    do_paths: watch_paths.join(","),
-                    ignore_paths: "/zookeeper".to_string(),
-                    include_ephemeral,
-                };
-                let zk_filter = dt_common::zk_filter::ZkFilter::from_config(&zk_filter_config)?;
+                let zk_filter = dt_common::zk_filter::ZkFilter::from_config(
+                    &config.zk_filter,
+                )?;
                 let extractor = ZkExtractor {
                     url,
                     watch_paths,
@@ -672,7 +669,9 @@ impl ExtractorUtil {
                     heartbeat_interval_secs,
                     filter: zk_filter,
                     base_extractor,
-                    monitor: extract_state.monitor,
+                    extract_state,
+                    syncer,
+                    recovery,
                 };
                 Box::new(extractor)
             }

@@ -58,9 +58,6 @@ impl DataMarker {
                 me.marker_schema = marker_info[0].to_string();
                 me.marker_tb = marker_info[1].to_string();
             }
-            DbType::Zk => {
-                me.marker = config.marker.clone();
-            }
             _ => me.marker = config.marker.clone(),
         }
 
