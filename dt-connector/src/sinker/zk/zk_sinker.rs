@@ -4,6 +4,7 @@ use dt_common::config::config_enums::ConflictPolicyEnum;
 use dt_common::meta::dt_data::DtItem;
 
 use crate::sinker::base_sinker::BaseSinker;
+use crate::zk_router::ZkRouter;
 use crate::Sinker;
 
 pub struct ZkSinker {
@@ -12,6 +13,7 @@ pub struct ZkSinker {
     pub create_if_not_exists: bool,
     pub sync_ephemeral_as_persistent: bool,
     pub conflict_policy: ConflictPolicyEnum,
+    pub router: ZkRouter,
     pub base_sinker: BaseSinker,
 }
 

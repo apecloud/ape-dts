@@ -55,6 +55,7 @@ use dt_connector::{
         },
         zk::zk_sinker::ZkSinker,
     },
+    zk_router::ZkRouter,
     Sinker,
 };
 
@@ -744,6 +745,7 @@ impl SinkerUtil {
                 sync_ephemeral_as_persistent,
                 conflict_policy,
             } => {
+                let zk_router = ZkRouter::from_config(&config.router)?;
                 for _ in 0..parallel_size {
                     let sinker = ZkSinker {
                         url: url.clone(),
@@ -751,6 +753,7 @@ impl SinkerUtil {
                         create_if_not_exists,
                         sync_ephemeral_as_persistent,
                         conflict_policy: conflict_policy.clone(),
+                        router: zk_router.clone(),
                         base_sinker: BaseSinker::new(monitor.clone(), monitor_interval),
                     };
                     Self::push_sinker(&mut sub_sinkers, sinker);

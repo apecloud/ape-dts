@@ -14,6 +14,6 @@ pub struct ZkEntry {
 
 impl ZkEntry {
     pub fn get_data_size(&self) -> u64 {
-        self.data.as_ref().map_or(0, |d| d.len() as u64)
+        self.path.len() as u64 + self.data.as_ref().map_or(0, |d| d.len() as u64)
     }
 }

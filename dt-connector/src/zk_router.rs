@@ -1,12 +1,9 @@
-use std::collections::HashMap;
-
 use dt_common::config::router_config::RouterConfig;
-
-type PathPrefixMap = HashMap<String, String>;
 
 #[derive(Debug, Clone, Default)]
 pub struct ZkRouter {
-    pub path_prefix_map: PathPrefixMap,
+    // sorted by src prefix length descending for longest-prefix-match
+    pub path_prefix_map: Vec<(String, String)>,
 }
 
 impl ZkRouter {
@@ -31,17 +28,18 @@ impl ZkRouter {
         path.to_string()
     }
 
-    fn parse_path_prefix_map(config_str: &str) -> anyhow::Result<PathPrefixMap> {
-        let mut map = PathPrefixMap::new();
+    fn parse_path_prefix_map(config_str: &str) -> anyhow::Result<Vec<(String, String)>> {
+        let mut map = Vec::new();
         if config_str.trim().is_empty() {
             return Ok(map);
         }
         for pair in config_str.split(',') {
             let parts: Vec<&str> = pair.split(':').collect();
             if parts.len() == 2 {
-                map.insert(parts[0].trim().to_string(), parts[1].trim().to_string());
+                map.push((parts[0].trim().to_string(), parts[1].trim().to_string()));
             }
         }
+        map.sort_by(|a, b| b.0.len().cmp(&a.0.len()));
         Ok(map)
     }
 }

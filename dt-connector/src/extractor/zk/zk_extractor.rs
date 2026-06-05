@@ -1,9 +1,13 @@
-use async_trait::async_trait;
+use std::sync::Arc;
 
+use async_trait::async_trait;
+use tokio::sync::Mutex;
+
+use dt_common::meta::syncer::Syncer;
 use dt_common::zk_filter::ZkFilter;
 
-use crate::extractor::base_extractor::BaseExtractor;
-use crate::extractor::extractor_monitor::ExtractorMonitor;
+use crate::extractor::base_extractor::{BaseExtractor, ExtractState};
+use crate::extractor::resumer::recovery::Recovery;
 use crate::Extractor;
 
 pub struct ZkExtractor {
@@ -14,7 +18,9 @@ pub struct ZkExtractor {
     pub heartbeat_interval_secs: u64,
     pub filter: ZkFilter,
     pub base_extractor: BaseExtractor,
-    pub monitor: ExtractorMonitor,
+    pub extract_state: ExtractState,
+    pub syncer: Arc<Mutex<Syncer>>,
+    pub recovery: Option<Arc<dyn Recovery + Send + Sync>>,
 }
 
 #[async_trait]
