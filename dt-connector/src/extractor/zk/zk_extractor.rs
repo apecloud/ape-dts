@@ -71,7 +71,7 @@ impl ZkExtractor {
                         total_paths, high_water_zxid, last_scan_timestamp
                     );
                     self.base_extractor
-                        .push_dt_data(&mut self.extract_state, DtData::Heartbeat {}, position)
+                        .push_dt_data(&mut self.extract_state, DtData::Heartbeat {}, position.clone())
                         .await?;
                     return Ok((path_versions.clone(), *high_water_zxid));
                 }
