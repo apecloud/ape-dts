@@ -135,7 +135,8 @@ impl Position {
                 0
             }
             Position::Zk {
-                last_scan_timestamp, ..
+                last_scan_timestamp,
+                ..
             } => *last_scan_timestamp as u64,
             _ => 0,
         }

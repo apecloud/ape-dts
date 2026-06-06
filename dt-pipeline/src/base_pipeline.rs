@@ -503,7 +503,9 @@ impl BasePipeline {
                     | SinkerConfig::Foxlake { .. } => return SinkMethod::Raw,
                     _ => return SinkMethod::Dml,
                 },
-                DtData::Redis { .. } | DtData::Foxlake { .. } | DtData::Zk { .. } => return SinkMethod::Raw,
+                DtData::Redis { .. } | DtData::Foxlake { .. } | DtData::Zk { .. } => {
+                    return SinkMethod::Raw
+                }
                 DtData::Begin {} | DtData::Commit { .. } | DtData::Heartbeat {} => continue,
             }
         }

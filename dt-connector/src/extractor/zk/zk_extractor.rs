@@ -8,7 +8,7 @@ use std::{
 
 use async_trait::async_trait;
 use tokio::sync::Mutex;
-use zookeeper_client::{Client as ZkClient, CreateMode, Acls, Stat};
+use zookeeper_client::{Acls, Client as ZkClient, CreateMode, Stat};
 
 use dt_common::{
     log_error, log_info, log_warn,
@@ -68,10 +68,16 @@ impl ZkExtractor {
                 {
                     log_info!(
                         "ZkExtractor recovery: {} paths, high_water_zxid={}, last_scan={}",
-                        total_paths, high_water_zxid, last_scan_timestamp
+                        total_paths,
+                        high_water_zxid,
+                        last_scan_timestamp
                     );
                     self.base_extractor
-                        .push_dt_data(&mut self.extract_state, DtData::Heartbeat {}, position.clone())
+                        .push_dt_data(
+                            &mut self.extract_state,
+                            DtData::Heartbeat {},
+                            position.clone(),
+                        )
                         .await?;
                     return Ok((path_versions.clone(), *high_water_zxid));
                 }
@@ -94,13 +100,19 @@ impl ZkExtractor {
                 break;
             }
             self.scan_node_recursive(
-                client, watch_path, &old_versions, path_versions, high_water_zxid, source_id,
+                client,
+                watch_path,
+                &old_versions,
+                path_versions,
+                high_water_zxid,
+                source_id,
             )
             .await?;
         }
         log_info!(
             "ZkExtractor full scan complete: {} paths, high_water_zxid={}",
-            path_versions.len(), high_water_zxid
+            path_versions.len(),
+            high_water_zxid
         );
         Ok(())
     }
@@ -136,7 +148,7 @@ impl ZkExtractor {
         }
 
         let (already_synced, is_update) = match old_versions.get(path) {
-            Some((v, _)) => (*v >= stat.version, true),
+            Some((v, old_mzxid)) => (*v >= stat.version && *old_mzxid >= stat.mzxid, true),
             None => (false, false),
         };
 
@@ -180,7 +192,12 @@ impl ZkExtractor {
                 format!("{}/{}", path, child)
             };
             Box::pin(self.scan_node_recursive(
-                client, &child_path, old_versions, current_versions, high_water_zxid, source_id,
+                client,
+                &child_path,
+                old_versions,
+                current_versions,
+                high_water_zxid,
+                source_id,
             ))
             .await?;
         }
@@ -206,7 +223,11 @@ impl ZkExtractor {
                 break;
             }
             self.scan_node_recursive(
-                client, watch_path, &old_versions, &mut current_versions, &mut current_zxid,
+                client,
+                watch_path,
+                &old_versions,
+                &mut current_versions,
+                &mut current_zxid,
                 source_id,
             )
             .await?;
@@ -279,7 +300,11 @@ impl ZkExtractor {
 
             let marker_path = "/__ape_dts_heartbeat";
             let _ = hb_client
-                .create(marker_path, b"", &CreateMode::Persistent.with_acls(Acls::anyone_all()))
+                .create(
+                    marker_path,
+                    b"",
+                    &CreateMode::Persistent.with_acls(Acls::anyone_all()),
+                )
                 .await;
 
             loop {
@@ -300,7 +325,10 @@ impl ZkExtractor {
                 });
                 drop(syncer_guard);
 
-                if let Err(e) = hb_client.set_data(marker_path, hb_data.to_string().as_bytes(), None).await {
+                if let Err(e) = hb_client
+                    .set_data(marker_path, hb_data.to_string().as_bytes(), None)
+                    .await
+                {
                     log_warn!("ZkExtractor heartbeat write failed: {}", e);
                 }
             }
@@ -331,19 +359,31 @@ impl Extractor for ZkExtractor {
             source_id.clone(),
         );
 
-        self.full_scan(&client, &mut path_versions, &mut high_water_zxid, &source_id)
-            .await?;
+        self.full_scan(
+            &client,
+            &mut path_versions,
+            &mut high_water_zxid,
+            &source_id,
+        )
+        .await?;
 
         while !self.base_extractor.shut_down.load(Ordering::Relaxed) {
             tokio::time::sleep(tokio::time::Duration::from_secs(self.scan_interval_secs)).await;
             if self.base_extractor.shut_down.load(Ordering::Relaxed) {
                 break;
             }
-            self.incremental_rescan(&client, &mut path_versions, &mut high_water_zxid, &source_id)
-                .await?;
+            self.incremental_rescan(
+                &client,
+                &mut path_versions,
+                &mut high_water_zxid,
+                &source_id,
+            )
+            .await?;
         }
 
-        self.base_extractor.wait_task_finish(&mut self.extract_state).await
+        self.base_extractor
+            .wait_task_finish(&mut self.extract_state)
+            .await
     }
 
     async fn close(&mut self) -> anyhow::Result<()> {
