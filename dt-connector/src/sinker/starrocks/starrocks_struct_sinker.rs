@@ -363,6 +363,7 @@ impl StarrocksStructSinker {
                 match self.conflict_policy {
                     ConflictPolicyEnum::Interrupt => bail! {error},
                     ConflictPolicyEnum::Ignore => {}
+                    _ => {}
                 }
             }
         }

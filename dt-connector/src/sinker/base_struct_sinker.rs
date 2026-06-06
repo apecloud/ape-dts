@@ -46,6 +46,7 @@ impl BaseStructSinker {
                         match conflict_policy {
                             ConflictPolicyEnum::Interrupt => bail! {error},
                             ConflictPolicyEnum::Ignore => {}
+                            _ => {}
                         }
                     }
                 }
