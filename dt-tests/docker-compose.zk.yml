@@ -1,0 +1,30 @@
+services:
+  zk-src:
+    image: zookeeper:3.9
+    container_name: zk-src-it
+    ports:
+      - "2181:2181"
+    environment:
+      ZOO_MY_ID: 1
+      ZOO_STANDALONE_ENABLED: "true"
+    healthcheck:
+      test: ["CMD-SHELL", "echo srvr | nc localhost 2181 | grep standalone"]
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+      interval: 5s
+
+  zk-dst:
+    image: zookeeper:3.9
+    container_name: zk-dst-it
+    ports:
+      - "2182:2181"
+    environment:
+      ZOO_MY_ID: 2
+      ZOO_STANDALONE_ENABLED: "true"
+    healthcheck:
+      test: ["CMD-SHELL", "echo srvr | nc localhost 2181 | grep standalone"]
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+      interval: 5s
