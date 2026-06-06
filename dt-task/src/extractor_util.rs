@@ -658,9 +658,7 @@ impl ExtractorUtil {
                 include_ephemeral,
                 heartbeat_interval_secs,
             } => {
-                let zk_filter = dt_common::zk_filter::ZkFilter::from_config(
-                    &config.zk_filter,
-                )?;
+                let zk_filter = dt_common::zk_filter::ZkFilter::from_config(&config.zk_filter)?;
                 let extractor = ZkExtractor {
                     url,
                     watch_paths,

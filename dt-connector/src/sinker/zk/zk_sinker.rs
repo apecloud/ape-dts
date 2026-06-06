@@ -73,9 +73,7 @@ impl ZkSinker {
                 let routed_path = self.router.route_path(&entry.path);
 
                 if self.conflict_policy == ConflictPolicyEnum::LastWriteWins
-                    && self
-                        .should_skip_by_lww(client, &routed_path, entry)
-                        .await?
+                    && self.should_skip_by_lww(client, &routed_path, entry).await?
                 {
                     continue;
                 }
@@ -105,10 +103,7 @@ impl ZkSinker {
                     .get("source_mtime")
                     .and_then(|v| v.as_i64())
                     .unwrap_or(0);
-                let source_id = val
-                    .get("source_id")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("");
+                let source_id = val.get("source_id").and_then(|v| v.as_str()).unwrap_or("");
                 if source_mtime > entry.stat.mtime {
                     return Ok(true);
                 }
@@ -128,7 +123,10 @@ impl ZkSinker {
     ) -> anyhow::Result<()> {
         let data = entry.data.as_deref().unwrap_or(&[]);
 
-        if matches!(entry.event_type, ZkEventType::Created | ZkEventType::Updated) {
+        if matches!(
+            entry.event_type,
+            ZkEventType::Created | ZkEventType::Updated
+        ) {
             if let Ok((existing_data, _)) = client.get_data(path).await {
                 if existing_data == data {
                     return Ok(());
@@ -286,11 +284,7 @@ impl ZkSinker {
                         .create(&data_marker.marker, &marker_data, &options)
                         .await
                         .map_err(|e| {
-                            anyhow::anyhow!(
-                                "ZK create marker {} failed: {}",
-                                data_marker.marker,
-                                e
-                            )
+                            anyhow::anyhow!("ZK create marker {} failed: {}", data_marker.marker, e)
                         })?;
                 }
                 Err(e) => bail!("ZK write marker {} failed: {}", data_marker.marker, e),

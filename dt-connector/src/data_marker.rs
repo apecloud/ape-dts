@@ -121,7 +121,9 @@ impl DataMarker {
             DtData::Zk { entry } => {
                 if let Some(data) = &entry.data {
                     if let Ok(marker_value) = serde_json::from_slice::<serde_json::Value>(data) {
-                        if let Some(source_id) = marker_value.get("source_id").and_then(|v| v.as_str()) {
+                        if let Some(source_id) =
+                            marker_value.get("source_id").and_then(|v| v.as_str())
+                        {
                             self.data_origin_node = source_id.to_string();
                         }
                     }

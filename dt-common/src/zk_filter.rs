@@ -38,6 +38,9 @@ impl ZkFilter {
         if config_str.trim().is_empty() {
             return HashSet::new();
         }
-        config_str.split(',').map(|s| s.trim().to_string()).collect()
+        config_str
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .collect()
     }
 }
