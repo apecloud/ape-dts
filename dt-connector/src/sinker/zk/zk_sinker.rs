@@ -148,6 +148,14 @@ impl ZkSinker {
     ) -> anyhow::Result<()> {
         let data = entry.data.as_deref().unwrap_or(&[]);
 
+        if matches!(entry.event_type, ZkEventType::Created | ZkEventType::Updated) {
+            if let Ok((existing_data, _)) = client.get_data(path).await {
+                if existing_data == data {
+                    return Ok(());
+                }
+            }
+        }
+
         match entry.event_type {
             ZkEventType::Created => {
                 let options = self.create_options(entry);
