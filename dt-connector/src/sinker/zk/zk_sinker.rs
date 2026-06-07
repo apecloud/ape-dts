@@ -129,6 +129,7 @@ impl ZkSinker {
         ) {
             if let Ok((existing_data, _)) = client.get_data(path).await {
                 if existing_data == data {
+                    self.write_shadow(client, path, entry).await?;
                     return Ok(());
                 }
             }
