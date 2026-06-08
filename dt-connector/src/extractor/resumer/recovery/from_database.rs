@@ -4,6 +4,7 @@ use anyhow::{bail, Result};
 use async_trait::async_trait;
 use dashmap::DashMap;
 use futures::TryStreamExt;
+use mongodb::bson::doc;
 use sqlx::{query, Error, Row};
 
 use crate::extractor::resumer::{
@@ -49,6 +50,37 @@ impl DatabaseRecovery {
         };
         recovery.initialization().await?;
         Ok(recovery)
+    }
+
+    fn cache_position_row(
+        &self,
+        resumer_type_str: &str,
+        position_key: String,
+        position_value_str: String,
+    ) {
+        if let Ok(resumer_type) = ResumerType::from_str(resumer_type_str) {
+            match resumer_type {
+                ResumerType::SnapshotDoing | ResumerType::CdcDoing => {
+                    self.resumer_doing.insert(position_key, position_value_str);
+                }
+                ResumerType::SnapshotFinished => {
+                    self.resumer_finished.insert(position_key, true);
+                }
+                _ => {
+                    log_info!(
+                        "resumer type: {} with task_id: {} not supported yet, skip this position",
+                        resumer_type_str,
+                        self.task_id
+                    );
+                }
+            }
+        } else {
+            log_warn!(
+                "invalid resumer type: {} with task_id: {}, skip this position",
+                resumer_type_str,
+                self.task_id
+            );
+        }
     }
 
     async fn initialization(&self) -> Result<()> {
@@ -199,6 +231,42 @@ impl DatabaseRecovery {
                             }
                         }
                     }
+                }
+            }
+            ResumerDbPool::Mongo(client) => {
+                let collection = client
+                    .database(&self.schema)
+                    .collection::<mongodb::bson::Document>(&self.table);
+                let mut position_rows = collection
+                    .find(doc! { "task_id": &self.task_id }, None)
+                    .await?;
+                while let Some(row) = position_rows.try_next().await? {
+                    let resumer_type_str = match row.get_str("resumer_type") {
+                        Ok(value) => value.to_string(),
+                        Err(e) => {
+                            log_warn!(
+                                "invalid MongoDB resumer row without resumer_type for task_id: {}, error: {}",
+                                self.task_id,
+                                e
+                            );
+                            continue;
+                        }
+                    };
+                    let position_key = match row.get_str("position_key") {
+                        Ok(value) => value.to_string(),
+                        Err(e) => {
+                            log_warn!(
+                                "invalid MongoDB resumer row without position_key for task_id: {}, resumer_type: {}, error: {}",
+                                self.task_id,
+                                resumer_type_str,
+                                e
+                            );
+                            continue;
+                        }
+                    };
+                    let position_value_str =
+                        row.get_str("position_data").unwrap_or_default().to_string();
+                    self.cache_position_row(&resumer_type_str, position_key, position_value_str);
                 }
             }
         }

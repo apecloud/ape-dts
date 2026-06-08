@@ -3,7 +3,7 @@ use std::{collections::HashMap, sync::Arc};
 use anyhow::bail;
 use async_trait::async_trait;
 use mongodb::{
-    bson::{doc, oid::ObjectId, Bson, Document},
+    bson::{doc, Document},
     options::FindOptions,
     Client,
 };
@@ -113,21 +113,21 @@ impl MongoSnapshotExtractor {
             self.batch_size
         );
 
-        let filter = if let Some(handler) = &self.recovery {
+        let resume_key = if let Some(handler) = &self.recovery {
             if let Some(Position::RdbSnapshot {
                 order_key: Some(OrderKey::Single((_, Some(value)))),
                 ..
             }) = handler.get_snapshot_resume_position(&db, &tb, false).await
             {
-                let value = ObjectId::parse_str(&value)?;
+                let key = Self::parse_resume_key(&value)?;
                 log_info!(
                     "[{}.{}] recovery from [{}]:[{}]",
                     db,
                     tb,
                     MongoConstants::ID,
-                    value
+                    key
                 );
-                Some(doc! {MongoConstants::ID: {"$gt": value}})
+                Some(key)
             } else {
                 None
             }
@@ -152,6 +152,7 @@ impl MongoSnapshotExtractor {
         if let Some(limit) = sample_limit.and_then(|limit| i64::try_from(limit).ok()) {
             find_options.limit = Some(limit);
         }
+        let filter = resume_key.as_ref().map(Self::build_resume_filter);
         let mut cursor = collection.find(filter, find_options).await?;
         let mut chunk_id_generator = SnapshotChunkIdGenerator::new(self.batch_size);
         while cursor.advance().await? {
@@ -160,7 +161,10 @@ impl MongoSnapshotExtractor {
                 e
             })?;
 
-            let object_id = Self::get_object_id(&doc);
+            let Some(key) = MongoKey::from_doc(&doc) else {
+                log_error!("skip {}.{} document without `_id`: {:?}", db, tb, doc);
+                continue;
+            };
 
             let after = Self::build_after_cols(&doc);
             let row_data = RowData::new(
@@ -177,7 +181,7 @@ impl MongoSnapshotExtractor {
                 tb: tb.clone(),
                 order_key: Some(OrderKey::Single((
                     MongoConstants::ID.into(),
-                    Some(object_id),
+                    Some(key.to_string()),
                 ))),
             };
 
@@ -206,6 +210,17 @@ impl MongoSnapshotExtractor {
         Ok(())
     }
 
+    fn build_resume_filter(key: &MongoKey) -> Document {
+        doc! {
+            "$expr": {
+                "$gt": [
+                    format!("${}", MongoConstants::ID),
+                    key.to_mongo_id(),
+                ],
+            },
+        }
+    }
+
     fn build_after_cols(doc: &Document) -> HashMap<String, ColValue> {
         let mut after = HashMap::new();
         let id = MongoKey::from_doc(doc)
@@ -219,13 +234,11 @@ impl MongoSnapshotExtractor {
         after
     }
 
-    fn get_object_id(doc: &Document) -> String {
-        if let Some(id) = doc.get(MongoConstants::ID) {
-            match id {
-                Bson::ObjectId(v) => return v.to_string(),
-                _ => return String::new(),
-            }
-        }
-        String::new()
+    fn parse_resume_key(value: &str) -> anyhow::Result<MongoKey> {
+        serde_json::from_str::<MongoKey>(value).or_else(|_| {
+            mongodb::bson::oid::ObjectId::parse_str(value)
+                .map(MongoKey::ObjectId)
+                .map_err(Into::into)
+        })
     }
 }

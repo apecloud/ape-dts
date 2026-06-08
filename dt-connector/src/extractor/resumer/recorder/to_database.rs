@@ -1,5 +1,10 @@
 use anyhow::{bail, Context, Result};
 use async_trait::async_trait;
+use mongodb::{
+    bson::{doc, DateTime},
+    options::{IndexOptions, UpdateOptions},
+    IndexModel,
+};
 use sqlx::query;
 
 use crate::extractor::resumer::{
@@ -135,6 +140,61 @@ impl DatabaseRecorder {
                 }
                 Ok(())
             }
+            ResumerDbPool::Mongo(client) => {
+                let database = client.database(&self.schema);
+                let collection_names =
+                    database
+                        .list_collection_names(None)
+                        .await
+                        .with_context(|| {
+                            format!("failed to list MongoDB collections in {}", self.schema)
+                        })?;
+                if !collection_names.iter().any(|name| name == &self.table) {
+                    database
+                        .create_collection(&self.table, None)
+                        .await
+                        .with_context(|| {
+                            format!("failed to create MongoDB collection {}", self.table)
+                        })?;
+                }
+
+                let collection = database.collection::<mongodb::bson::Document>(&self.table);
+                let index = IndexModel::builder()
+                    .keys(doc! {
+                        "task_id": 1,
+                        "resumer_type": 1,
+                        "position_key": 1,
+                    })
+                    .options(
+                        IndexOptions::builder()
+                            .name("uk_task_id_task_type_position_key".to_string())
+                            .unique(true)
+                            .build(),
+                    )
+                    .build();
+                collection
+                    .create_index(index, None)
+                    .await
+                    .with_context(|| {
+                        format!(
+                            "failed to create MongoDB resumer index on {}.{}",
+                            self.schema, self.table
+                        )
+                    })?;
+
+                if is_init {
+                    collection
+                        .delete_many(doc! { "task_id": task_id }, None)
+                        .await
+                        .with_context(|| {
+                            format!(
+                                "failed to delete MongoDB resumer records for task_id={}",
+                                task_id
+                            )
+                        })?;
+                }
+                Ok(())
+            }
         }
     }
 
@@ -201,6 +261,44 @@ impl Recorder for DatabaseRecorder {
                     .execute(pool)
                     .await
                     .with_context(|| format!("failed to upsert position record with sql: {sql}"))?;
+                Ok(())
+            }
+            ResumerDbPool::Mongo(client) => {
+                let collection = client
+                    .database(&self.schema)
+                    .collection::<mongodb::bson::Document>(&self.table);
+                let position_key = ResumerUtil::get_key_from_position(position);
+                let now = DateTime::now();
+                let update_options = UpdateOptions::builder().upsert(true).build();
+
+                collection
+                    .update_one(
+                        doc! {
+                            "task_id": &self.task_id,
+                            "resumer_type": resumer_type.to_string(),
+                            "position_key": &position_key,
+                        },
+                        doc! {
+                            "$set": {
+                                "position_data": position.to_string(),
+                                "updated_at": now,
+                            },
+                            "$setOnInsert": {
+                                "task_id": &self.task_id,
+                                "resumer_type": resumer_type.to_string(),
+                                "position_key": position_key,
+                                "created_at": now,
+                            },
+                        },
+                        update_options,
+                    )
+                    .await
+                    .with_context(|| {
+                        format!(
+                            "failed to upsert MongoDB resumer position in {}.{}",
+                            self.schema, self.table
+                        )
+                    })?;
                 Ok(())
             }
         }

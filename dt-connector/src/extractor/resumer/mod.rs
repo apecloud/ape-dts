@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use anyhow::{bail, Result};
+use mongodb::Client;
 use sqlx::{MySql, Pool, Postgres};
 use strum::{Display, EnumString, IntoStaticStr};
 use tokio::time::Instant;
@@ -28,7 +29,7 @@ const DEFAULT_POSITION_KEY: &str = "default_key";
 pub enum ResumerDbPool {
     MySql(Pool<MySql>),
     Postgres(Pool<Postgres>),
-    // TODO: add more database types here in the future
+    Mongo(Client),
 }
 
 #[derive(Clone, Display, EnumString, IntoStaticStr, Debug, PartialEq, Eq)]

@@ -1,6 +1,7 @@
 use std::{str::FromStr, time::Duration};
 
 use anyhow::{bail, Context, Result};
+use mongodb::options::ClientOptions;
 use sqlx::{
     mysql::{MySqlConnectOptions, MySqlPoolOptions},
     postgres::{PgConnectOptions, PgPoolOptions},
@@ -80,6 +81,18 @@ impl ResumerUtil {
                     .context("failed to create PostgreSQL connection pool")?;
 
                 Ok(ResumerDbPool::Postgres(pool))
+            }
+            DbType::Mongo => {
+                let mut client_options = ClientOptions::parse_async(&final_url)
+                    .await
+                    .context("failed to parse MongoDB connection URL")?;
+                client_options.app_name = Some("ape-dts-resumer".to_string());
+                client_options.direct_connection = Some(true);
+                client_options.max_pool_size = Some(max_connections);
+
+                let client = mongodb::Client::with_options(client_options)
+                    .context("failed to create MongoDB client")?;
+                Ok(ResumerDbPool::Mongo(client))
             }
             _ => {
                 bail!(
