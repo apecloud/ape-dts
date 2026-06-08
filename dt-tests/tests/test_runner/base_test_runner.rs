@@ -89,12 +89,14 @@ impl BaseTestRunner {
     }
 
     pub async fn start_task(&self) -> anyhow::Result<()> {
-        TaskRunner::new(&self.task_config_file)?.start_task().await
+        TaskRunner::new(&self.task_config_file)?
+            .start_task(false)
+            .await
     }
 
     pub async fn spawn_task(&self) -> anyhow::Result<JoinHandle<()>> {
         let task_runner = TaskRunner::new(&self.task_config_file)?;
-        let task = tokio::spawn(async move { task_runner.start_task().await.unwrap() });
+        let task = tokio::spawn(async move { task_runner.start_task(false).await.unwrap() });
         Ok(task)
     }
 

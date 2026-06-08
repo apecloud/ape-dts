@@ -1,0 +1,21 @@
+[package]
+name = "dts-cli"
+version = "0.1.0-alpha.1"
+edition = "2021"
+
+[[bin]]
+name = "dtscli"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+clap = { workspace = true }
+clap_complete = { workspace = true }
+configparser = { workspace = true }
+libc = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+url = { workspace = true }

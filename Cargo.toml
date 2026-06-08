@@ -9,6 +9,7 @@ members = [
     "dt-pipeline",
     "dt-task",
     "dt-main",
+    "dt-cli",
     "dt-tests"
 ]
 
@@ -55,6 +56,8 @@ async-std = "1.12.0"
 apache-avro =  { version = "0.16.0", features = ["derive"]}
 mlua = { version = "0.9.7", features = ["lua54", "vendored"] }
 anyhow = {version = "1.0.83", features = ["backtrace"]}
+clap = { version = "4.5.40", features = ["derive"] }
+clap_complete = "4.5.40"
 rust_decimal = "1.35.0"
 orc-format = {git = "https://github.com/apecloud/orc-format"}
 openssl = { version = "0.10", features = ["vendored"] }
@@ -68,6 +71,7 @@ urlencoding = "2.1.3"
 opendal = { version = "0.54.1", features = ["services-s3"] }
 governor = "0.10.4"
 indexmap = "2"
+libc = "0.2"
 
 [profile.release]
 panic = 'unwind'

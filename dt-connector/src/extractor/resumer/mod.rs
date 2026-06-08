@@ -58,6 +58,7 @@ pub async fn build_recorder(
     task_id: &str,
     resumer_config: &ResumerConfig,
     pool: Option<ResumerDbPool>,
+    is_init: bool,
 ) -> Result<Option<Arc<dyn Recorder + Send + Sync>>> {
     match resumer_config {
         ResumerConfig::FromDB { .. } => {
@@ -65,7 +66,8 @@ pub async fn build_recorder(
                 Some(p) => p,
                 None => bail!("pool is required for FromDB resumer config"),
             };
-            let recorder = DatabaseRecorder::new(task_id, resumer_config, pool_inner).await?;
+            let recorder =
+                DatabaseRecorder::new(task_id, resumer_config, pool_inner, is_init).await?;
             Ok(Some(Arc::new(recorder)))
         }
         _ => {

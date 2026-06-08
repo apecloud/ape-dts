@@ -101,7 +101,7 @@ impl SinkerUtil {
     ) -> anyhow::Result<Sinkers> {
         let log_level = &config.runtime.log_level;
         let enable_sqlx_log = TaskUtil::check_enable_sqlx_log(log_level);
-        let parallel_size = config.parallelizer.parallel_size as u32;
+        let parallel_size = config.parallelizer.parallel_size() as u32;
         let monitor_interval = config.pipeline.checkpoint_interval_secs;
 
         let mut sub_sinkers: Sinkers = Vec::new();

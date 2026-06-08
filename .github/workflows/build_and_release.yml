@@ -67,18 +67,52 @@ jobs:
       - name: Create release artifact
         run: |
           mkdir -p artifacts
-          cp target/${{ matrix.target }}/release/dt-main artifacts/ape-dts
+          cp target/${{ matrix.target }}/release/dt-main artifacts/dt-main
+          cp target/${{ matrix.target }}/release/dtscli artifacts/dtscli
           cp log4rs.yaml artifacts/log4rs.yaml
           tar -czvf ape-dts-${{ github.run_id }}-${{ matrix.target }}.tar.gz -C artifacts .
+          cp target/${{ matrix.target }}/release/dtscli dtscli-${{ matrix.target }}
 
       - name: Upload Release Asset
         id: upload_release_asset
         uses: actions/upload-release-asset@v1
         with:
           upload_url: ${{ env.UPLOAD_URL }}
-          asset_path: ape-dts-${{ github.run_id }}-${{ matrix.target }}.tar.gz
-          asset_name: ape-dts-${{ github.run_id }}-${{ matrix.target }}.tar.gz
+          asset_path: ape-dts-${{ inputs.tag_name }}-${{ matrix.target }}.tar.gz
+          asset_name: ape-dts-${{ inputs.tag_name }}-${{ matrix.target }}.tar.gz
           asset_content_type: application/gzip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload dtscli Asset
+        uses: actions/upload-release-asset@v1
+        with:
+          upload_url: ${{ env.UPLOAD_URL }}
+          asset_path: dtscli-${{ matrix.target }}
+          asset_name: dtscli-${{ matrix.target }}
+          asset_content_type: application/octet-stream
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload install_cli.sh
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        uses: actions/upload-release-asset@v1
+        with:
+          upload_url: ${{ env.UPLOAD_URL }}
+          asset_path: dt-cli/scripts/install.sh
+          asset_name: install_cli.sh
+          asset_content_type: text/x-shellscript
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload install_cli.sh
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        uses: actions/upload-release-asset@v1
+        with:
+          upload_url: ${{ env.UPLOAD_URL }}
+          asset_path: dt-cli/scripts/uninstall.sh
+          asset_name: uninstall_cli.sh
+          asset_content_type: text/x-shellscript
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

@@ -13,8 +13,8 @@ mod test {
 
     #[tokio::test]
     #[serial]
-    async fn cdc_uk_changed_test() {
-        TestBase::run_cdc_test("mysql_to_mysql/cdc/uk_changed_test", 3000, 2000).await;
+    async fn cdc_key_changed_test() {
+        TestBase::run_cdc_test("mysql_to_mysql/cdc/key_changed_test", 3000, 2000).await;
     }
 
     #[tokio::test]

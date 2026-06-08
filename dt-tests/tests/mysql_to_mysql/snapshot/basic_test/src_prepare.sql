@@ -16,6 +16,10 @@ CREATE TABLE test_db_1.one_pk_multi_uk ( f_0 tinyint, f_1 smallint, f_2 mediumin
 
 CREATE TABLE test_db_1.col_has_special_character_table (`p:k` tinyint, `col"1` text, `col,2` text, `col\3` text, PRIMARY KEY(`p:k`));
 
+CREATE TABLE test_db_1.longtext_bin_collation_table (pk int, content longtext CHARACTER SET utf8 COLLATE utf8_bin NOT NULL, PRIMARY KEY(pk)) ENGINE=InnoDB;
+
+CREATE TABLE test_db_1.enum_set_bin_collation_table (pk int, enum_col enum('small','medium','large') CHARACTER SET utf8 COLLATE utf8_bin NOT NULL, set_col set('a','b','c') CHARACTER SET utf8 COLLATE utf8_bin NOT NULL, PRIMARY KEY(pk)) ENGINE=InnoDB;
+
 CREATE TABLE test_db_1.numeric_table ( f_0 tinyint, f_1 tinyint unsigned, f_2 smallint, f_3 smallint unsigned, f_4 mediumint, f_5 mediumint unsigned, f_6 int, f_7 int unsigned, f_8 bigint, f_9 bigint unsigned, PRIMARY KEY(f_0));
 
 CREATE TABLE test_db_1.date_time_table( f_0 tinyint, 
@@ -62,10 +66,10 @@ CREATE TABLE test_db_1.where_condition_3 ( f_0 int, f_1 int );
 -- ```
 
 -- test foreign key
--- CREATE TABLE test_db_1.fk_tb_2 (f_0 int, f_1 int UNIQUE, f_2 int UNIQUE, f_3 int, PRIMARY KEY(f_0));
--- CREATE TABLE test_db_1.fk_tb_1 (f_0 int, f_1 int UNIQUE, f_2 int UNIQUE, f_3 int, PRIMARY KEY(f_0));
--- ALTER TABLE test_db_1.fk_tb_1 ADD CONSTRAINT fk_tb_1_1 FOREIGN KEY (f_1) REFERENCES test_db_1.fk_tb_2 (f_1);
--- ALTER TABLE test_db_1.fk_tb_1 ADD CONSTRAINT fk_tb_1_2 FOREIGN KEY (f_2) REFERENCES test_db_1.fk_tb_2 (f_2);
+CREATE TABLE test_db_1.fk_tb_2 (f_0 int, f_1 int UNIQUE, f_2 int UNIQUE, f_3 int, PRIMARY KEY(f_0));
+CREATE TABLE test_db_1.fk_tb_1 (f_0 int, f_1 int UNIQUE, f_2 int UNIQUE, f_3 int, PRIMARY KEY(f_0));
+ALTER TABLE test_db_1.fk_tb_1 ADD CONSTRAINT fk_tb_1_1 FOREIGN KEY (f_1) REFERENCES test_db_1.fk_tb_2 (f_1);
+ALTER TABLE test_db_1.fk_tb_1 ADD CONSTRAINT fk_tb_1_2 FOREIGN KEY (f_2) REFERENCES test_db_1.fk_tb_2 (f_2);
 
 -- test view filtered
 CREATE OR REPLACE VIEW test_db_1.one_pk_no_uk_view AS SELECT * FROM test_db_1.one_pk_no_uk;

@@ -10,6 +10,7 @@ workspace = true
 dt-common = { path = "../dt-common", version = "0.1.0" }
 dt-connector = { path = "../dt-connector", version = "0.1.0" }
 dt-precheck = { path = "../dt-precheck", version = "0.1.0" }
+dt-parallelizer = { path = "../dt-parallelizer", version = "0.1.0" }
 dt-task = { path = "../dt-task", version = "0.1.0" }
 
 anyhow = { workspace = true }
