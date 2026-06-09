@@ -1026,10 +1026,12 @@ impl TaskRunner {
 
         let build_check_context =
             |extractor_meta_manager,
+             router,
              reverse_router,
              source_checker: Option<Arc<AsyncMutex<Box<dyn Checker>>>>,
              revise_match_full_row| CheckContext {
                 extractor_meta_manager,
+                router,
                 reverse_router,
                 batch_size: checker_batch_size,
                 monitor: monitor.clone(),
@@ -1058,7 +1060,8 @@ impl TaskRunner {
 
         match checker_db_type {
             DbType::Mysql => {
-                let reverse_router = create_router!(self.config, Mysql).reverse();
+                let router = create_router!(self.config, Mysql);
+                let reverse_router = router.reverse();
                 let extractor_meta_manager =
                     ExtractorUtil::get_extractor_meta_manager(&self.config).await?;
                 let source_checker = self
@@ -1083,6 +1086,7 @@ impl TaskRunner {
                     checker_task_id.clone(),
                     build_check_context(
                         extractor_meta_manager,
+                        router,
                         reverse_router,
                         source_checker,
                         cfg.revise_match_full_row,
@@ -1093,7 +1097,8 @@ impl TaskRunner {
                 Ok(Some(CheckerHandle::Data(checker)))
             }
             DbType::Pg => {
-                let reverse_router = create_router!(self.config, Pg).reverse();
+                let router = create_router!(self.config, Pg);
+                let reverse_router = router.reverse();
                 let extractor_meta_manager =
                     ExtractorUtil::get_extractor_meta_manager(&self.config).await?;
                 let source_checker = self
@@ -1115,6 +1120,7 @@ impl TaskRunner {
                     checker_task_id.clone(),
                     build_check_context(
                         extractor_meta_manager,
+                        router,
                         reverse_router,
                         source_checker,
                         cfg.revise_match_full_row,
@@ -1125,7 +1131,8 @@ impl TaskRunner {
                 Ok(Some(CheckerHandle::Data(checker)))
             }
             DbType::Mongo => {
-                let reverse_router = create_router!(self.config, Mongo).reverse();
+                let router = create_router!(self.config, Mongo);
+                let reverse_router = router.reverse();
                 let source_checker = self
                     .create_source_checker(is_cdc_task, enable_sqlx_log)
                     .await?;
@@ -1143,7 +1150,7 @@ impl TaskRunner {
                 let checker = DataCheckerHandle::spawn(
                     MongoChecker::new(mongo_client),
                     checker_task_id.clone(),
-                    build_check_context(None, reverse_router, source_checker, false),
+                    build_check_context(None, router, reverse_router, source_checker, false),
                     queue_size,
                     "MongoChecker",
                 );

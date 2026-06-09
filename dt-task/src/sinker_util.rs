@@ -137,6 +137,7 @@ impl SinkerUtil {
                         connection_auth: connection_auth.clone(),
                         conn_pool: conn_pool.clone(),
                         meta_manager: meta_manager.clone(),
+                        router: router.clone(),
                         reverse_router: reverse_router.clone(),
                         batch_size,
                         base_sinker: BaseSinker::new(monitor.clone(), monitor_interval),
@@ -170,6 +171,7 @@ impl SinkerUtil {
                         connection_auth: connection_auth.clone(),
                         conn_pool: conn_pool.clone(),
                         meta_manager: meta_manager.clone(),
+                        router: router.clone(),
                         reverse_router: reverse_router.clone(),
                         batch_size,
                         base_sinker: BaseSinker::new(monitor.clone(), monitor_interval),
@@ -192,6 +194,7 @@ impl SinkerUtil {
                 for _ in 0..parallel_size {
                     let sinker = MongoSinker {
                         batch_size,
+                        router: router.clone(),
                         reverse_router: reverse_router.clone(),
                         mongo_client: mongo_client.clone(),
                         base_sinker: BaseSinker::new(monitor.clone(), monitor_interval),

@@ -44,6 +44,12 @@ impl MysqlMetaManager {
         self.meta_fetcher.invalidate_cache(schema, tb)
     }
 
+    pub fn invalidate_cache_for_table(&mut self, schema: &str, tb: &str) {
+        if !schema.is_empty() && !tb.is_empty() {
+            self.invalidate_cache(schema, tb);
+        }
+    }
+
     pub fn invalidate_cache_by_ddl_data(&mut self, ddl_data: &DdlData) {
         let (schema, tb) = ddl_data.get_schema_tb();
         self.invalidate_cache(&schema, &tb);

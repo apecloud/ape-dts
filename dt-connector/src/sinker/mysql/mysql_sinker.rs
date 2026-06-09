@@ -34,6 +34,7 @@ pub struct MysqlSinker {
     pub connection_auth: ConnectionAuthConfig,
     pub conn_pool: Pool<MySql>,
     pub meta_manager: MysqlMetaManager,
+    pub router: RdbRouter,
     pub reverse_router: RdbRouter,
     pub batch_size: usize,
     pub base_sinker: BaseSinker,
@@ -166,10 +167,10 @@ impl Sinker for MysqlSinker {
         if let (DtData::Commit { .. }, Position::RdbSnapshotFinished { schema, tb, .. }) =
             (&item.dt_data, &item.position)
         {
-            // reduce memory usage by invalidating large cache after snapshot finished
-            let forward_router = self.reverse_router.reverse();
-            let (schema, tb) = forward_router.get_tb_map(schema, tb);
-            self.meta_manager.invalidate_cache(schema, tb);
+            // Snapshot finished positions keep source table names, so route them before
+            // invalidating target-side metadata cache.
+            let (schema, tb) = self.router.get_tb_map(schema, tb);
+            self.meta_manager.invalidate_cache_for_table(schema, tb);
         }
         Ok(())
     }

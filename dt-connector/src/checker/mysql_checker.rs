@@ -61,7 +61,7 @@ impl Checker for MysqlChecker {
     }
 
     async fn invalidate_meta_cache(&mut self, schema: &str, tb: &str) -> anyhow::Result<()> {
-        self.meta_manager.invalidate_cache(schema, tb);
+        self.meta_manager.invalidate_cache_for_table(schema, tb);
         Ok(())
     }
 }

@@ -22,6 +22,7 @@ use dt_common::{
 
 #[derive(Clone)]
 pub struct MongoSinker {
+    pub router: RdbRouter,
     pub reverse_router: RdbRouter,
     pub batch_size: usize,
     pub mongo_client: Client,

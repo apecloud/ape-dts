@@ -184,6 +184,7 @@ pub struct CheckContext {
     pub summary: CheckSummaryLog,
     pub output_revise_sql: bool,
     pub extractor_meta_manager: Option<RdbMetaManager>,
+    pub router: RdbRouter,
     pub reverse_router: RdbRouter,
     pub output_full_row: bool,
     pub revise_match_full_row: bool,
@@ -212,6 +213,7 @@ impl Default for CheckContext {
             summary: CheckSummaryLog::default(),
             output_revise_sql: false,
             extractor_meta_manager: None,
+            router: RdbRouter::default(),
             reverse_router: RdbRouter::default(),
             output_full_row: false,
             revise_match_full_row: false,
@@ -864,11 +866,10 @@ impl<C: Checker> DataChecker<C> {
             self.ctx.monitor.unregister_monitor(&task_id);
 
             if let Some(meta_manager) = self.ctx.extractor_meta_manager.as_mut() {
-                meta_manager.invalidate_cache(schema, tb);
+                meta_manager.invalidate_cache_for_table(schema, tb);
             }
 
-            let forward_router = self.ctx.reverse_router.reverse();
-            let (target_schema, target_tb) = forward_router.get_tb_map(schema, tb);
+            let (target_schema, target_tb) = self.ctx.router.get_tb_map(schema, tb);
             let (target_schema, target_tb) = (target_schema.to_string(), target_tb.to_string());
             self.checker
                 .invalidate_meta_cache(&target_schema, &target_tb)
@@ -986,6 +987,10 @@ mod tests {
         fetch_gate: Arc<Notify>,
     }
 
+    struct CaptureInvalidateChecker {
+        invalidated: Arc<StdMutex<Vec<(String, String)>>>,
+    }
+
     #[async_trait]
     impl Checker for BlockingFetchChecker {
         async fn load_table_meta(
@@ -1008,6 +1013,32 @@ mod tests {
             let _ = self.fetch_started.send(());
             self.fetch_gate.notified().await;
             Err(anyhow::anyhow!("unit-test fetch failure"))
+        }
+    }
+
+    #[async_trait]
+    impl Checker for CaptureInvalidateChecker {
+        async fn load_table_meta(
+            &mut self,
+            _lookup_row: &RowData,
+        ) -> anyhow::Result<Arc<CheckerTbMeta>> {
+            unreachable!("control item test should not load table meta")
+        }
+
+        async fn fetch_rows_by_keys(
+            &mut self,
+            _table_meta: Arc<CheckerTbMeta>,
+            _lookup_rows: &[&RowData],
+        ) -> anyhow::Result<Vec<RowData>> {
+            unreachable!("control item test should not fetch rows")
+        }
+
+        async fn invalidate_meta_cache(&mut self, schema: &str, tb: &str) -> anyhow::Result<()> {
+            self.invalidated
+                .lock()
+                .unwrap()
+                .push((schema.to_string(), tb.to_string()));
+            Ok(())
         }
     }
 
@@ -1095,5 +1126,50 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
+    }
+
+    #[tokio::test]
+    async fn handle_control_item_routes_snapshot_finished_before_invalidate() {
+        let (_control_tx, control_rx) = mpsc::unbounded_channel();
+        let invalidated = Arc::new(StdMutex::new(Vec::new()));
+        let mut router = RdbRouter::default();
+        router.tb_map.insert(
+            ("src_schema".to_string(), "src_tb".to_string()),
+            ("dst_schema".to_string(), "dst_tb".to_string()),
+        );
+        let mut checker = DataChecker::new(
+            CaptureInvalidateChecker {
+                invalidated: invalidated.clone(),
+            },
+            "task-1".to_string(),
+            CheckContext {
+                router,
+                ..Default::default()
+            },
+            CheckerIo {
+                batch_queue: Arc::new(StdMutex::new(LimitedQueue::new(1))),
+                batch_notify: Arc::new(Notify::new()),
+                dropped_items: Arc::new(AtomicU64::new(0)),
+                control_rx,
+            },
+            "unit-test",
+        );
+
+        let item = DtItem {
+            dt_data: DtData::Commit { xid: String::new() },
+            position: Position::RdbSnapshotFinished {
+                db_type: "mysql".to_string(),
+                schema: "src_schema".to_string(),
+                tb: "src_tb".to_string(),
+            },
+            data_origin_node: String::new(),
+        };
+
+        checker.handle_control_item(&item).await.unwrap();
+
+        assert_eq!(
+            invalidated.lock().unwrap().as_slice(),
+            &[("dst_schema".to_string(), "dst_tb".to_string())]
+        );
     }
 }
