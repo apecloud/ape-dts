@@ -49,6 +49,7 @@ impl ResumerType {
             | Position::PgCdc { .. }
             | Position::MongoCdc { .. }
             | Position::Redis { .. }
+            | Position::RedisCluster { .. }
             | Position::Kafka { .. } => Self::CdcDoing,
             _ => Self::NotSupported,
         }
@@ -109,4 +110,29 @@ pub async fn build_recovery(
         begin.elapsed().as_millis()
     );
     Ok(result)
+}
+
+#[cfg(test)]
+mod tests {
+    use dt_common::meta::position::{Position, RedisNodePosition};
+
+    use super::ResumerType;
+
+    #[test]
+    fn redis_cluster_position_is_cdc_doing() {
+        let position = Position::RedisCluster {
+            nodes: vec![RedisNodePosition {
+                node_id: "node-1".to_string(),
+                address: "127.0.0.1:6371".to_string(),
+                repl_id: "repl-1".to_string(),
+                repl_port: 10008,
+                repl_offset: 10,
+                now_db_id: 0,
+                timestamp: String::new(),
+            }],
+            timestamp: String::new(),
+        };
+
+        assert_eq!(ResumerType::from_position(&position), ResumerType::CdcDoing);
+    }
 }

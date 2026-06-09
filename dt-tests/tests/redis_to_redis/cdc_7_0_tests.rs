@@ -42,6 +42,12 @@ mod test {
 
     #[tokio::test]
     #[serial]
+    async fn cdc_from_cluster_test() {
+        TestBase::run_redis_cdc_test("redis_to_redis/cdc/7_0/from_cluster_test", 2000, 3000).await;
+    }
+
+    #[tokio::test]
+    #[serial]
     async fn cdc_heartbeat_test() {
         TestBase::run_redis_heartbeat_test("redis_to_redis/cdc/7_0/heartbeat_test", 2000, 2000)
             .await;

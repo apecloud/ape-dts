@@ -9,6 +9,17 @@ use crate::log_error;
 use crate::meta::order_key::OrderKey;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct RedisNodePosition {
+    pub node_id: String,
+    pub address: String,
+    pub repl_id: String,
+    pub repl_port: u64,
+    pub repl_offset: u64,
+    pub now_db_id: i64,
+    pub timestamp: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(tag = "type")]
 pub enum Position {
     #[default]
@@ -50,6 +61,10 @@ pub enum Position {
         repl_port: u64,
         repl_offset: u64,
         now_db_id: i64,
+        timestamp: String,
+    },
+    RedisCluster {
+        nodes: Vec<RedisNodePosition>,
         timestamp: String,
     },
     FoxlakeS3 {
@@ -111,7 +126,8 @@ impl Position {
             Position::MysqlCdc { timestamp, .. }
             | Position::PgCdc { timestamp, .. }
             | Position::MongoCdc { timestamp, .. }
-            | Position::Redis { timestamp, .. } => {
+            | Position::Redis { timestamp, .. }
+            | Position::RedisCluster { timestamp, .. } => {
                 if timestamp.is_empty() {
                     return 0;
                 }
@@ -153,6 +169,7 @@ mod test {
             r#"{"type":"RdbSnapshot","db_type":"mysql","schema":"test_db_1","tb":"numeric_table","order_key":null}"#,
             r#"{"type":"RdbSnapshot","db_type":"mysql","schema":"test_db_1","tb":"numeric_table","order_key":{"single":["f_0","127"]}}"#,
             r#"{"type":"RdbSnapshot","db_type":"mysql","schema":"test_db_1","tb":"numeric_table","order_key":{"composite":[["f_0","127"],["f_1","128"]]}}"#,
+            r#"{"type":"RedisCluster","nodes":[{"node_id":"node-1","address":"127.0.0.1:6371","repl_id":"repl-1","repl_port":10008,"repl_offset":123,"now_db_id":0,"timestamp":"2026-06-09 12:00:00.000"}],"timestamp":"2026-06-09 12:00:00.000"}"#,
         ];
 
         let expected = [
@@ -160,6 +177,7 @@ mod test {
             r#"{"type":"RdbSnapshot","db_type":"mysql","schema":"test_db_1","tb":"numeric_table","order_key":null}"#,
             r#"{"type":"RdbSnapshot","db_type":"mysql","schema":"test_db_1","tb":"numeric_table","order_key":{"single":["f_0","127"]}}"#,
             r#"{"type":"RdbSnapshot","db_type":"mysql","schema":"test_db_1","tb":"numeric_table","order_key":{"composite":[["f_0","127"],["f_1","128"]]}}"#,
+            r#"{"type":"RedisCluster","nodes":[{"node_id":"node-1","address":"127.0.0.1:6371","repl_id":"repl-1","repl_port":10008,"repl_offset":123,"now_db_id":0,"timestamp":"2026-06-09 12:00:00.000"}],"timestamp":"2026-06-09 12:00:00.000"}"#,
         ];
 
         for (str, expected) in strs.iter().zip(expected.iter()) {

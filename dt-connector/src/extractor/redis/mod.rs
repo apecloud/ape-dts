@@ -3,6 +3,7 @@ use std::io::{Cursor, Read};
 
 pub mod rdb;
 pub mod redis_client;
+pub mod redis_cluster_psync_extractor;
 pub mod redis_psync_extractor;
 pub mod redis_reshard_extractor;
 pub mod redis_resp_reader;

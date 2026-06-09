@@ -685,6 +685,7 @@ impl TaskConfig {
                         url,
                         connection_auth,
                         repl_port,
+                        is_cluster: loader.get_optional(EXTRACTOR, "is_cluster"),
                     }
                 }
 
@@ -711,6 +712,7 @@ impl TaskConfig {
                         heartbeat_interval_secs,
                         heartbeat_key: loader.get_optional(EXTRACTOR, "heartbeat_key"),
                         now_db_id: loader.get_optional(EXTRACTOR, "now_db_id"),
+                        is_cluster: loader.get_optional(EXTRACTOR, "is_cluster"),
                     }
                 }
 
@@ -724,6 +726,7 @@ impl TaskConfig {
                         keepalive_interval_secs,
                         heartbeat_interval_secs,
                         heartbeat_key: loader.get_optional(EXTRACTOR, "heartbeat_key"),
+                        is_cluster: loader.get_optional(EXTRACTOR, "is_cluster"),
                     }
                 }
 
