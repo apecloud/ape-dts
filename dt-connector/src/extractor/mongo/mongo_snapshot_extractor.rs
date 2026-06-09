@@ -37,7 +37,7 @@ pub struct MongoSnapshotExtractor {
     pub db_tbs: HashMap<String, Vec<String>>,
     pub parallel_type: RdbParallelType,
     pub parallel_size: usize,
-    pub batch_size: usize,
+    pub batch_size: u32,
     pub mongo_client: Client,
     pub sample_rate: Option<u8>,
     pub recovery: Option<Arc<dyn Recovery + Send + Sync>>,
@@ -148,13 +148,14 @@ impl MongoSnapshotExtractor {
         let sample_limit = estimated_sample_limit(self.sample_rate, estimated_count);
         let mut find_options = FindOptions::builder()
             .sort(doc! {MongoConstants::ID: 1})
+            .batch_size(self.batch_size)
             .build();
         if let Some(limit) = sample_limit.and_then(|limit| i64::try_from(limit).ok()) {
             find_options.limit = Some(limit);
         }
         let filter = resume_key.as_ref().map(Self::build_resume_filter);
         let mut cursor = collection.find(filter, find_options).await?;
-        let mut chunk_id_generator = SnapshotChunkIdGenerator::new(self.batch_size);
+        let mut chunk_id_generator = SnapshotChunkIdGenerator::new(self.batch_size as usize);
         while cursor.advance().await? {
             let doc = cursor.deserialize_current().map_err(|e| {
                 log_error!("error deserializing {}.{} document: {}", db, tb, e);

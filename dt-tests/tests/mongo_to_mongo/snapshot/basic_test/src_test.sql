@@ -12,6 +12,14 @@ db.tb_2.insertOne({ "name": "c", "age": "3" });
 db.tb_2.insertOne({ "name": "d", "age": "4" });
 db.tb_2.insertOne({ "name": "e", "age": "5" });
 
+db.tb_batch_read.insertMany([
+  { "_id": 1, "name": "batch_1" },
+  { "_id": 2, "name": "batch_2" },
+  { "_id": 3, "name": "batch_3" },
+  { "_id": 4, "name": "batch_4" },
+  { "_id": 5, "name": "batch_5" }
+]);
+
 use test_db_2
 
 -- insert records with custom defined _id and object_id

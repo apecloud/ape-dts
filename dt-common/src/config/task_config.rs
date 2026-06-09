@@ -433,7 +433,7 @@ impl TaskConfig {
         let keepalive_interval_secs: u64 =
             loader.get_with_default(EXTRACTOR, KEEPALIVE_INTERVAL_SECS, 10);
         let heartbeat_tb = loader.get_optional(EXTRACTOR, HEARTBEAT_TB);
-        let batch_size = loader.get_with_default(
+        let batch_size: usize = loader.get_with_default(
             EXTRACTOR,
             BATCH_SIZE,
             pipeline.capacity_limiter.buffer_size / Self::load_snapshot_parallel_size(loader),
@@ -621,21 +621,31 @@ impl TaskConfig {
                 let app_name: String =
                     loader.get_with_default(EXTRACTOR, APP_NAME, APE_DTS.to_string());
                 match extract_type {
-                    ExtractType::Snapshot => ExtractorConfig::MongoSnapshot {
-                        url,
-                        connection_auth,
-                        app_name,
-                        db: String::new(),
-                        tb: String::new(),
-                        db_tbs: HashMap::new(),
-                        parallel_size: Self::load_snapshot_parallel_size(loader),
-                        parallel_type: loader.get_with_default(
-                            EXTRACTOR,
-                            "parallel_type",
-                            RdbParallelType::Table,
-                        ),
-                        batch_size,
-                    },
+                    ExtractType::Snapshot => {
+                        let batch_size = match u32::try_from(batch_size) {
+                            std::result::Result::Ok(batch_size) => batch_size,
+                            Err(_) => bail! { Error::ConfigError(format!(
+                                "config [{}].{} default value exceeds u32::MAX",
+                                EXTRACTOR, BATCH_SIZE,
+                            ))},
+                        };
+
+                        ExtractorConfig::MongoSnapshot {
+                            url,
+                            connection_auth,
+                            app_name,
+                            db: String::new(),
+                            tb: String::new(),
+                            db_tbs: HashMap::new(),
+                            parallel_size: Self::load_snapshot_parallel_size(loader),
+                            parallel_type: loader.get_with_default(
+                                EXTRACTOR,
+                                "parallel_type",
+                                RdbParallelType::Table,
+                            ),
+                            batch_size: loader.get_with_default(EXTRACTOR, BATCH_SIZE, batch_size),
+                        }
+                    }
 
                     ExtractType::Cdc => ExtractorConfig::MongoCdc {
                         url,
