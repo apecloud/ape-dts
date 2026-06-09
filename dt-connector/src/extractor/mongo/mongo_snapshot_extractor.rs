@@ -192,6 +192,7 @@ impl MongoSnapshotExtractor {
             tb,
             extract_state.monitor.counters.pushed_record_count
         );
+        // push schema and table info without routing.
         base_extractor
             .push_snapshot_finished(
                 &mut extract_state,

@@ -22,7 +22,7 @@ use dt_common::{
 
 #[derive(Clone)]
 pub struct MongoSinker {
-    pub router: RdbRouter,
+    pub reverse_router: RdbRouter,
     pub batch_size: usize,
     pub mongo_client: Client,
     pub base_sinker: BaseSinker,
@@ -82,7 +82,9 @@ impl CheckableSink for MongoSinker {
 
 impl MongoSinker {
     async fn serial_sink(&mut self, data: &[RowData]) -> anyhow::Result<()> {
-        let task_id = self.base_sinker.task_id_for_rows(data);
+        let task_id = self
+            .base_sinker
+            .task_id_for_rows_with_reverse_router(data, &self.reverse_router);
         self.base_sinker.ensure_monitor_for(&task_id);
         let mut rts = LimitedQueue::new(cmp::min(100, data.len()));
         let monitor_interval = self.base_sinker.monitor_interval_secs();
@@ -192,9 +194,10 @@ impl MongoSinker {
         start_index: usize,
         batch_size: usize,
     ) -> anyhow::Result<()> {
-        let task_id = self
-            .base_sinker
-            .task_id_for_rows(&data[start_index..start_index + batch_size]);
+        let task_id = self.base_sinker.task_id_for_rows_with_reverse_router(
+            &data[start_index..start_index + batch_size],
+            &self.reverse_router,
+        );
         self.base_sinker.ensure_monitor_for(&task_id);
         let mut data_size = 0;
 
@@ -238,9 +241,10 @@ impl MongoSinker {
         start_index: usize,
         batch_size: usize,
     ) -> anyhow::Result<()> {
-        let task_id = self
-            .base_sinker
-            .task_id_for_rows(&data[start_index..start_index + batch_size]);
+        let task_id = self.base_sinker.task_id_for_rows_with_reverse_router(
+            &data[start_index..start_index + batch_size],
+            &self.reverse_router,
+        );
         self.base_sinker.ensure_monitor_for(&task_id);
         let mut data_size = 0;
 

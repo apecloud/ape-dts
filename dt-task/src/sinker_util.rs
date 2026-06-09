@@ -121,6 +121,7 @@ impl SinkerUtil {
                 ..
             } => {
                 let router = create_router!(config, Mysql);
+                let reverse_router = router.reverse();
 
                 let conn_pool = match client {
                     ConnClient::MySQL(conn_pool) => conn_pool,
@@ -136,7 +137,7 @@ impl SinkerUtil {
                         connection_auth: connection_auth.clone(),
                         conn_pool: conn_pool.clone(),
                         meta_manager: meta_manager.clone(),
-                        router: router.clone(),
+                        reverse_router: reverse_router.clone(),
                         batch_size,
                         base_sinker: BaseSinker::new(monitor.clone(), monitor_interval),
                         data_marker: data_marker.clone(),
@@ -154,6 +155,7 @@ impl SinkerUtil {
                 ..
             } => {
                 let router = create_router!(config, Pg);
+                let reverse_router = router.reverse();
                 let conn_pool = match client {
                     ConnClient::PostgreSQL(conn_pool) => conn_pool,
                     _ => {
@@ -168,7 +170,7 @@ impl SinkerUtil {
                         connection_auth: connection_auth.clone(),
                         conn_pool: conn_pool.clone(),
                         meta_manager: meta_manager.clone(),
-                        router: router.clone(),
+                        reverse_router: reverse_router.clone(),
                         batch_size,
                         base_sinker: BaseSinker::new(monitor.clone(), monitor_interval),
                         data_marker: data_marker.clone(),
@@ -180,6 +182,7 @@ impl SinkerUtil {
 
             SinkerConfig::Mongo { batch_size, .. } => {
                 let router = create_router!(config, Mongo);
+                let reverse_router = router.reverse();
                 let mongo_client = match client {
                     ConnClient::MongoDB(mongo_client) => mongo_client,
                     _ => {
@@ -189,7 +192,7 @@ impl SinkerUtil {
                 for _ in 0..parallel_size {
                     let sinker = MongoSinker {
                         batch_size,
-                        router: router.clone(),
+                        reverse_router: reverse_router.clone(),
                         mongo_client: mongo_client.clone(),
                         base_sinker: BaseSinker::new(monitor.clone(), monitor_interval),
                     };

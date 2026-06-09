@@ -489,18 +489,12 @@ impl BasePipeline {
                 continue;
             };
 
+            self.handle_snapshot_finished_control_item(&finish_position)
+                .await?;
+
             self.monitor
                 .with_type(MonitorType::Sinker)
                 .unregister_monitor(&task_id);
-            if let Some(checker) = &self.checker {
-                if let Err(err) = checker.snapshot_table_finished(&task_id).await {
-                    log_warn!(
-                        "checker snapshot_table_finished failed for {}: {}",
-                        task_id,
-                        err
-                    );
-                }
-            }
             self.monitor
                 .add_no_window_metrics(TaskMetricsType::FinishedProgressCount, 1);
             log_finished!("{}", finish_position.to_string());
@@ -515,6 +509,31 @@ impl BasePipeline {
             }
         }
 
+        Ok(())
+    }
+
+    async fn handle_snapshot_finished_control_item(
+        &mut self,
+        finish_position: &Position,
+    ) -> anyhow::Result<()> {
+        if matches!(finish_position, Position::RdbSnapshotFinished { .. }) {
+            // The table's data has already been sunk when the finished position reaches this
+            // point. Forward it as a control item so sinkers and checker can react to snapshot
+            // lifecycle events.
+            let item = DtItem {
+                dt_data: DtData::Commit { xid: String::new() },
+                position: finish_position.clone(),
+                data_origin_node: String::new(),
+            };
+            if let Some(checker) = &self.checker {
+                if let Err(err) = checker.handle_control_item(&item).await {
+                    log_warn!("checker handle_control_item failed: {}", err);
+                }
+            }
+            for sinker in self.sinkers.iter_mut() {
+                sinker.lock().await.handle_control_item(&item).await?;
+            }
+        }
         Ok(())
     }
 

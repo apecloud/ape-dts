@@ -25,6 +25,7 @@ use crate::{
     sinker::base_sinker::BaseSinker,
     sinker::mongo::mongo_cmd,
 };
+use dt_common::meta::dt_data::{DtData, DtItem};
 use dt_common::meta::{
     col_value::ColValue, ddl_meta::ddl_data::DdlData, mysql::mysql_tb_meta::MysqlTbMeta,
     pg::pg_tb_meta::PgTbMeta, position::Position, rdb_meta_manager::RdbMetaManager,
@@ -327,12 +328,15 @@ pub trait Checker: Send + Sync + 'static {
     async fn refresh_meta(&mut self, _data: &[DdlData]) -> anyhow::Result<()> {
         Ok(())
     }
+    async fn invalidate_meta_cache(&mut self, _schema: &str, _tb: &str) -> anyhow::Result<()> {
+        Ok(())
+    }
 }
 
 enum CheckerControlMsg {
     RecordCheckpoint { position: Position },
     InvalidateMetaCache { data: Vec<DdlData> },
-    SnapshotTableFinished { task_id: String },
+    HandleControlItem { item: Box<DtItem> },
     Close { position: Option<Position> },
 }
 
@@ -478,19 +482,19 @@ impl DataCheckerHandle {
         Ok(())
     }
 
-    pub async fn snapshot_table_finished(&self, task_id: &str) -> anyhow::Result<()> {
-        if task_id.is_empty() || self.shared.is_cdc {
+    pub async fn handle_control_item(&self, item: &DtItem) -> anyhow::Result<()> {
+        if self.shared.is_cdc {
             return Ok(());
         }
         if self
             .shared
             .control_tx
-            .send(CheckerControlMsg::SnapshotTableFinished {
-                task_id: task_id.to_string(),
+            .send(CheckerControlMsg::HandleControlItem {
+                item: Box::new(item.clone()),
             })
             .is_err()
         {
-            log_warn!("checker snapshot-finished signal dropped because checker already stopped");
+            log_warn!("checker control item signal dropped because checker already stopped");
         }
         self.shared.batch_notify.notify_one();
         Ok(())
@@ -519,9 +523,9 @@ impl CheckerHandle {
         }
     }
 
-    pub async fn snapshot_table_finished(&self, task_id: &str) -> anyhow::Result<()> {
+    pub async fn handle_control_item(&self, item: &DtItem) -> anyhow::Result<()> {
         match self {
-            CheckerHandle::Data(handle) => handle.snapshot_table_finished(task_id).await,
+            CheckerHandle::Data(handle) => handle.handle_control_item(item).await,
             CheckerHandle::Struct(_) => Ok(()),
         }
     }
@@ -834,8 +838,14 @@ impl<C: Checker> DataChecker<C> {
                     log_error!("Checker [{}] refresh_meta failed: {}", self.name, err);
                 }
             }
-            CheckerControlMsg::SnapshotTableFinished { task_id } => {
-                self.ctx.monitor.unregister_monitor(&task_id);
+            CheckerControlMsg::HandleControlItem { item } => {
+                if let Err(err) = self.handle_control_item(item.as_ref()).await {
+                    log_error!(
+                        "Checker [{}] handle_control_item failed: {}",
+                        self.name,
+                        err
+                    );
+                }
             }
             CheckerControlMsg::Close { position } => {
                 if let Some(position) = position.filter(|p| !matches!(p, Position::None)) {
@@ -844,6 +854,27 @@ impl<C: Checker> DataChecker<C> {
                 self.close_requested = true;
             }
         }
+    }
+
+    async fn handle_control_item(&mut self, item: &DtItem) -> anyhow::Result<()> {
+        if let (DtData::Commit { .. }, Position::RdbSnapshotFinished { schema, tb, .. }) =
+            (&item.dt_data, &item.position)
+        {
+            let task_id = TaskMonitorHandle::task_id_from_schema_tb(schema, tb);
+            self.ctx.monitor.unregister_monitor(&task_id);
+
+            if let Some(meta_manager) = self.ctx.extractor_meta_manager.as_mut() {
+                meta_manager.invalidate_cache(schema, tb);
+            }
+
+            let forward_router = self.ctx.reverse_router.reverse();
+            let (target_schema, target_tb) = forward_router.get_tb_map(schema, tb);
+            let (target_schema, target_tb) = (target_schema.to_string(), target_tb.to_string());
+            self.checker
+                .invalidate_meta_cache(&target_schema, &target_tb)
+                .await?;
+        }
+        Ok(())
     }
 
     fn collect_pending_controls(&mut self) {

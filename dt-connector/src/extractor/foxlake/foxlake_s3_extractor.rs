@@ -172,6 +172,7 @@ impl FoxlakeS3Extractor {
             start_after = continuous_meta_files.last().map(|s: &String| s.to_string());
         }
 
+        // push schema and table info without routing.
         base_extractor
             .push_snapshot_finished(
                 &mut extract_state,

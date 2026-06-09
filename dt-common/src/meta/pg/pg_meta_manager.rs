@@ -123,9 +123,12 @@ impl PgMetaManager {
         // TODO, if schema is not empty but tb is empty, only clear cache for the schema
         if !schema.is_empty() && !tb.is_empty() {
             let full_name = format!(r#""{}"."{}""#, schema, tb);
-            self.name_to_tb_meta.remove(&full_name);
+            if let Some(tb_meta) = self.name_to_tb_meta.remove(&full_name) {
+                self.oid_to_tb_meta.remove(&tb_meta.oid);
+            }
         } else {
             self.name_to_tb_meta.clear();
+            self.oid_to_tb_meta.clear();
         }
     }
 

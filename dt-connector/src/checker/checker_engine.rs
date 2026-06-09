@@ -432,9 +432,11 @@ impl<C: Checker> DataChecker<C> {
     }
 
     fn task_id_for_snapshot_entry(&self, entry: &CheckEntry) -> String {
-        self.ctx
-            .base_sinker
-            .task_id_for_schema_tb(&entry.key.schema, &entry.key.tb)
+        let (schema, tb) = self
+            .ctx
+            .reverse_router
+            .get_tb_map(&entry.key.schema, &entry.key.tb);
+        self.ctx.base_sinker.task_id_for_schema_tb(schema, tb)
     }
 
     async fn add_entry_metrics(&self, entry: &CheckEntry) {
@@ -855,7 +857,11 @@ impl<C: Checker> DataChecker<C> {
                 .collect::<Vec<_>>();
             let first_row = rows_to_fetch.first().context("checker group is empty")?;
             if monitor_task_id.is_none() {
-                monitor_task_id = Some(TaskMonitorHandle::task_id_from_row_data(first_row))
+                let (schema, tb) = self
+                    .ctx
+                    .reverse_router
+                    .get_tb_map(&first_row.schema, &first_row.tb);
+                monitor_task_id = Some(TaskMonitorHandle::task_id_from_schema_tb(schema, tb))
                     .filter(|id| !id.is_empty());
             }
             let dst_rows = self

@@ -508,6 +508,7 @@ impl MysqlSnapshotDispatchState {
             quote!(&table_id.tb),
             active_table.extracted_count
         );
+        // push schema and table info without routering.
         self.shared
             .base_extractor
             .push_snapshot_finished(
@@ -544,7 +545,7 @@ impl MysqlSnapshotDispatchState {
             &table_id.tb,
         )
         .await;
-        let tb_meta = self
+        let tb_meta = table_ctx
             .shared
             .meta_manager
             .get_tb_meta(&table_id.schema, &table_id.tb)
