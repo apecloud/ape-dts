@@ -26,4 +26,8 @@ pub trait Recovery {
     ) -> Option<Position>;
 
     async fn get_cdc_resume_position(&self) -> Option<Position>;
+
+    async fn get_cdc_resume_positions(&self) -> Vec<Position> {
+        self.get_cdc_resume_position().await.into_iter().collect()
+    }
 }

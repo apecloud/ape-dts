@@ -14,7 +14,10 @@ use dt_common::{
 
 use redis::Value;
 
-use super::{base_test_runner::BaseTestRunner, redis_cluster_connection::RedisClusterConnection};
+use super::{
+    base_test_runner::{BaseTestRunner, SqlLoadStrategy},
+    redis_cluster_connection::RedisClusterConnection,
+};
 use crate::test_runner::redis_test_util::RedisTestUtil;
 
 pub struct RedisTestRunner {
@@ -34,7 +37,10 @@ impl RedisTestRunner {
         relative_test_dir: &str,
         escape_pairs: Vec<(char, char)>,
     ) -> anyhow::Result<Self> {
-        let base = BaseTestRunner::new(relative_test_dir).await.unwrap();
+        let base =
+            BaseTestRunner::new_with_sql_load_strategy(relative_test_dir, SqlLoadStrategy::Line)
+                .await
+                .unwrap();
 
         let config = TaskConfig::new(&base.task_config_file).unwrap();
         let src_conn = match config.extractor {

@@ -11,7 +11,10 @@ use crate::extractor::resumer::{
     recovery::{from_database::DatabaseRecovery, from_log::LogRecovery, Recovery},
 };
 use dt_common::{
-    config::{config_enums::TaskType, resumer_config::ResumerConfig},
+    config::{
+        config_enums::TaskType, connection_auth_config::ConnectionAuthConfig,
+        resumer_config::ResumerConfig,
+    },
     log_info, log_warn,
     meta::position::Position,
 };
@@ -26,10 +29,19 @@ const DEFAULT_RESUMER_TABLE: &str = "apedts_task_position";
 const DEFAULT_POSITION_KEY: &str = "default_key";
 
 #[derive(Clone, Debug)]
+pub struct RedisResumerConn {
+    pub url: String,
+    pub connection_auth: ConnectionAuthConfig,
+    pub is_cluster: bool,
+    pub hash_tag: Option<String>,
+}
+
+#[derive(Clone, Debug)]
 pub enum ResumerDbPool {
     MySql(Pool<MySql>),
     Postgres(Pool<Postgres>),
     Mongo(Client),
+    Redis(RedisResumerConn),
 }
 
 #[derive(Clone, Display, EnumString, IntoStaticStr, Debug, PartialEq, Eq)]
@@ -49,7 +61,6 @@ impl ResumerType {
             | Position::PgCdc { .. }
             | Position::MongoCdc { .. }
             | Position::Redis { .. }
-            | Position::RedisCluster { .. }
             | Position::Kafka { .. } => Self::CdcDoing,
             _ => Self::NotSupported,
         }
@@ -110,29 +121,4 @@ pub async fn build_recovery(
         begin.elapsed().as_millis()
     );
     Ok(result)
-}
-
-#[cfg(test)]
-mod tests {
-    use dt_common::meta::position::{Position, RedisNodePosition};
-
-    use super::ResumerType;
-
-    #[test]
-    fn redis_cluster_position_is_cdc_doing() {
-        let position = Position::RedisCluster {
-            nodes: vec![RedisNodePosition {
-                node_id: "node-1".to_string(),
-                address: "127.0.0.1:6371".to_string(),
-                repl_id: "repl-1".to_string(),
-                repl_port: 10008,
-                repl_offset: 10,
-                now_db_id: 0,
-                timestamp: String::new(),
-            }],
-            timestamp: String::new(),
-        };
-
-        assert_eq!(ResumerType::from_position(&position), ResumerType::CdcDoing);
-    }
 }

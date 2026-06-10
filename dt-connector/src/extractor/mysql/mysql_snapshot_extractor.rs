@@ -1120,9 +1120,9 @@ impl MysqlTableCtx {
             .order_cols
             .iter()
             .any(|col| tb_meta.basic.is_col_nullable(col))
-            && !self
+            && self
                 .sample_limit
-                .is_some_and(|limit| extracted_count >= limit as u64)
+                .is_none_or(|limit| extracted_count < limit as u64)
         {
             let remaining_limit = self
                 .sample_limit

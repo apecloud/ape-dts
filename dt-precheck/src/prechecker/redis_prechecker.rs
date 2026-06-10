@@ -111,7 +111,6 @@ impl Prechecker for RedisPrechecker {
             heartbeat_key: String::new(),
             recovery: None,
             cluster_node: None,
-            cluster_position_tracker: None,
             wait_task_finish: true,
         };
 

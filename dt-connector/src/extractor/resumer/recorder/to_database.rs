@@ -8,9 +8,14 @@ use mongodb::{
 use sqlx::query;
 
 use crate::extractor::resumer::{
-    recorder::Recorder, utils::ResumerUtil, ResumerDbPool, ResumerType,
+    recorder::Recorder,
+    utils::{RedisResumerRecord, ResumerUtil},
+    ResumerDbPool, ResumerType,
 };
-use dt_common::{config::resumer_config::ResumerConfig, log_info, meta::position::Position};
+use dt_common::{
+    config::resumer_config::ResumerConfig, log_info, meta::position::Position,
+    utils::redis_util::RedisUtil,
+};
 
 pub struct DatabaseRecorder {
     task_id: String,
@@ -201,6 +206,30 @@ impl DatabaseRecorder {
                 }
                 Ok(())
             }
+            ResumerDbPool::Redis(redis_conn) => {
+                if is_init {
+                    let mut conn =
+                        RedisUtil::create_redis_conn(&redis_conn.url, &redis_conn.connection_auth)
+                            .await?;
+                    let pattern = ResumerUtil::get_redis_resumer_scan_pattern(
+                        task_id,
+                        redis_conn.hash_tag.as_deref(),
+                    );
+                    let keys = ResumerUtil::scan_redis_keys(&mut conn, &pattern)?;
+                    if !keys.is_empty() {
+                        redis::cmd("DEL")
+                            .arg(&keys)
+                            .query::<usize>(&mut conn)
+                            .with_context(|| {
+                                format!(
+                                    "failed to delete Redis resumer records with pattern: {}",
+                                    pattern
+                                )
+                            })?;
+                    }
+                }
+                Ok(())
+            }
         }
     }
 
@@ -226,6 +255,8 @@ impl Recorder for DatabaseRecorder {
             log_info!("recorder not supported resumer type: {:?}", position);
             return Ok(());
         }
+        // Redis backend stores one key per logical resumer row. In cluster mode all keys
+        // share one hash tag and are written through the owning master node.
 
         match &self.pool {
             ResumerDbPool::MySql(pool) => {
@@ -305,6 +336,32 @@ impl Recorder for DatabaseRecorder {
                             self.schema, self.table
                         )
                     })?;
+                Ok(())
+            }
+            ResumerDbPool::Redis(redis_conn) => {
+                let position_key = ResumerUtil::get_key_from_position(position);
+                let record = RedisResumerRecord {
+                    resumer_type: resumer_type.to_string(),
+                    position_key: position_key.clone(),
+                    position_data: position.to_string(),
+                };
+                let key = ResumerUtil::get_redis_resumer_key(
+                    &self.task_id,
+                    &record.resumer_type,
+                    &position_key,
+                    redis_conn.hash_tag.as_deref(),
+                );
+                let value = serde_json::to_string(&record)
+                    .context("failed to serialize Redis resumer record")?;
+                let mut conn =
+                    RedisUtil::create_redis_conn(&redis_conn.url, &redis_conn.connection_auth)
+                        .await?;
+
+                redis::cmd("SET")
+                    .arg(&key)
+                    .arg(value)
+                    .query::<()>(&mut conn)
+                    .with_context(|| format!("failed to set Redis resumer key: {}", key))?;
                 Ok(())
             }
         }

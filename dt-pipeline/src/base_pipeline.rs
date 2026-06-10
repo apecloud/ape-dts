@@ -29,7 +29,10 @@ use dt_common::{
     },
 };
 use dt_connector::{
-    checker::CheckerHandle, data_marker::DataMarker, extractor::resumer::recorder::Recorder, Sinker,
+    checker::CheckerHandle,
+    data_marker::DataMarker,
+    extractor::resumer::{recorder::Recorder, utils::ResumerUtil},
+    Sinker,
 };
 use dt_parallelizer::{DataSize, Parallelizer};
 
@@ -87,7 +90,7 @@ impl Pipeline for BasePipeline {
         let mut last_sink_time = Instant::now();
         let mut last_checkpoint_time = Instant::now();
         let mut last_received_position = Position::None;
-        let mut last_commit_position = Position::None;
+        let mut last_commit_positions = HashMap::new();
         let mut record_time = Instant::now();
 
         while !self.shut_down.load(Ordering::Acquire)
@@ -137,7 +140,7 @@ impl Pipeline for BasePipeline {
             }
 
             // process all row_data_items in buffer at a time
-            let (data_size, last_received, last_commit) = match self.get_sink_method(&data) {
+            let (data_size, last_received, last_commits) = match self.get_sink_method(&data) {
                 SinkMethod::Ddl => self.sink_ddl(data).await?,
                 SinkMethod::Dcl => self.sink_dcl(data).await?,
                 SinkMethod::Dml => self.sink_dml(data).await?,
@@ -149,15 +152,16 @@ impl Pipeline for BasePipeline {
                 self.syncer.lock().await.received_position = position.to_owned();
                 last_received_position = position.to_owned();
             }
-            if let Some(position) = &last_commit {
-                last_commit_position = position.to_owned();
+            for position in last_commits {
+                last_commit_positions
+                    .insert(ResumerUtil::get_key_from_position(&position), position);
             }
 
             last_checkpoint_time = self
                 .record_checkpoint(
                     Some(last_checkpoint_time),
                     &last_received_position,
-                    &last_commit_position,
+                    &last_commit_positions,
                 )
                 .await?;
 
@@ -180,7 +184,7 @@ impl Pipeline for BasePipeline {
             yield_now().await;
         }
 
-        self.record_checkpoint(None, &last_received_position, &last_commit_position)
+        self.record_checkpoint(None, &last_received_position, &last_commit_positions)
             .await?;
         self.try_finish_snapshot_tasks().await?;
         Ok(())
@@ -196,17 +200,17 @@ impl BasePipeline {
     async fn sink_raw(
         &mut self,
         all_data: Vec<DtItem>,
-    ) -> anyhow::Result<(DataSize, Option<Position>, Option<Position>)> {
-        let (data_count, last_received_position, last_commit_position) =
+    ) -> anyhow::Result<(DataSize, Option<Position>, Vec<Position>)> {
+        let (data_count, last_received_position, commit_positions) =
             Self::fetch_raw(&all_data, &mut self.pending_snapshot_finished);
         if data_count > 0 {
             let data_size = self.parallelizer.sink_raw(all_data, &self.sinkers).await?;
-            Ok((data_size, last_received_position, last_commit_position))
+            Ok((data_size, last_received_position, commit_positions))
         } else {
             Ok((
                 DataSize::default(),
                 last_received_position,
-                last_commit_position,
+                commit_positions,
             ))
         }
     }
@@ -214,7 +218,7 @@ impl BasePipeline {
     async fn sink_struct(
         &mut self,
         mut all_data: Vec<DtItem>,
-    ) -> anyhow::Result<(DataSize, Option<Position>, Option<Position>)> {
+    ) -> anyhow::Result<(DataSize, Option<Position>, Vec<Position>)> {
         let mut data = Vec::new();
         for i in all_data.drain(..) {
             if let DtData::Struct { struct_data } = i.dt_data {
@@ -222,7 +226,7 @@ impl BasePipeline {
             }
         }
         if data.is_empty() {
-            return Ok((DataSize::default(), None, None));
+            return Ok((DataSize::default(), None, Vec::new()));
         }
 
         let data_size = self
@@ -234,20 +238,21 @@ impl BasePipeline {
             checker.check_struct(data).await?;
         }
 
-        Ok((data_size, None, None))
+        Ok((data_size, None, Vec::new()))
     }
 
     async fn sink_dml(
         &mut self,
         all_data: Vec<DtItem>,
-    ) -> anyhow::Result<(DataSize, Option<Position>, Option<Position>)> {
+    ) -> anyhow::Result<(DataSize, Option<Position>, Vec<Position>)> {
         let (mut data, last_received_position, last_commit_position) =
             Self::fetch_dml(all_data, &mut self.pending_snapshot_finished);
+        let commit_positions = last_commit_position.into_iter().collect();
         if data.is_empty() {
             return Ok((
                 DataSize::default(),
                 last_received_position,
-                last_commit_position,
+                commit_positions,
             ));
         }
 
@@ -257,15 +262,16 @@ impl BasePipeline {
         }
 
         let data_size = self.parallelizer.sink_dml(data, &self.sinkers).await?;
-        Ok((data_size, last_received_position, last_commit_position))
+        Ok((data_size, last_received_position, commit_positions))
     }
 
     async fn sink_ddl(
         &mut self,
         all_data: Vec<DtItem>,
-    ) -> anyhow::Result<(DataSize, Option<Position>, Option<Position>)> {
+    ) -> anyhow::Result<(DataSize, Option<Position>, Vec<Position>)> {
         let (data, last_received_position, last_commit_position) =
             Self::fetch_ddl(all_data, &mut self.pending_snapshot_finished);
+        let commit_positions: Vec<_> = last_commit_position.clone().into_iter().collect();
         if !data.is_empty() {
             let data_size = self
                 .parallelizer
@@ -288,12 +294,12 @@ impl BasePipeline {
                     data_size.count,
                 )
                 .await;
-            Ok((data_size, last_received_position, last_commit_position))
+            Ok((data_size, last_received_position, commit_positions))
         } else {
             Ok((
                 DataSize::default(),
                 last_received_position,
-                last_commit_position,
+                commit_positions,
             ))
         }
     }
@@ -301,9 +307,10 @@ impl BasePipeline {
     async fn sink_dcl(
         &mut self,
         all_data: Vec<DtItem>,
-    ) -> anyhow::Result<(DataSize, Option<Position>, Option<Position>)> {
+    ) -> anyhow::Result<(DataSize, Option<Position>, Vec<Position>)> {
         let (data, last_received_position, last_commit_position) =
             Self::fetch_dcl(all_data, &mut self.pending_snapshot_finished);
+        let commit_positions = last_commit_position.into_iter().collect();
         let data_size = DataSize {
             count: data.len() as u64,
             bytes: 0,
@@ -311,29 +318,29 @@ impl BasePipeline {
         if data_size.count > 0 {
             self.parallelizer.sink_dcl(data, &self.sinkers).await?;
         }
-        Ok((data_size, last_received_position, last_commit_position))
+        Ok((data_size, last_received_position, commit_positions))
     }
 
     pub fn fetch_raw(
         data: &[DtItem],
         pending_snapshot_finished: &mut HashMap<String, Position>,
-    ) -> (u64, Option<Position>, Option<Position>) {
+    ) -> (u64, Option<Position>, Vec<Position>) {
         let mut data_count = 0;
         let mut last_received_position = Option::None;
-        let mut last_commit_position = Option::None;
+        let mut commit_positions = HashMap::new();
         for i in data.iter() {
             match &i.dt_data {
                 DtData::Commit { .. } => {
                     if Self::collect_snapshot_finished(&i.position, pending_snapshot_finished) {
                         continue;
                     }
-                    last_commit_position = Some(i.position.clone());
-                    last_received_position = last_commit_position.clone();
+                    Self::collect_commit_position(&mut commit_positions, &i.position);
+                    last_received_position = Some(i.position.clone());
                     continue;
                 }
                 DtData::Heartbeat {} | DtData::Ddl { .. } => {
-                    last_commit_position = Some(i.position.clone());
-                    last_received_position = last_commit_position.clone();
+                    Self::collect_commit_position(&mut commit_positions, &i.position);
+                    last_received_position = Some(i.position.clone());
                     continue;
                 }
                 DtData::Begin {} => {
@@ -342,7 +349,7 @@ impl BasePipeline {
 
                 DtData::Redis { .. } => {
                     last_received_position = Some(i.position.clone());
-                    last_commit_position = last_received_position.clone();
+                    Self::collect_commit_position(&mut commit_positions, &i.position);
                     data_count += 1;
                 }
 
@@ -353,7 +360,30 @@ impl BasePipeline {
             }
         }
 
-        (data_count, last_received_position, last_commit_position)
+        let mut commit_positions: Vec<(String, Position)> = commit_positions.into_iter().collect();
+        commit_positions.sort_by(|left, right| left.0.cmp(&right.0));
+        (
+            data_count,
+            last_received_position,
+            commit_positions
+                .into_iter()
+                .map(|(_, position)| position)
+                .collect(),
+        )
+    }
+
+    fn collect_commit_position(
+        commit_positions: &mut HashMap<String, Position>,
+        position: &Position,
+    ) {
+        if matches!(position, Position::None) {
+            return;
+        }
+
+        commit_positions.insert(
+            ResumerUtil::get_key_from_position(position),
+            position.clone(),
+        );
     }
 
     fn fetch_dml(
@@ -556,7 +586,7 @@ impl BasePipeline {
         &self,
         last_checkpoint_time: Option<Instant>,
         last_received_position: &Position,
-        last_commit_position: &Position,
+        last_commit_positions: &HashMap<String, Position>,
     ) -> anyhow::Result<Instant> {
         if let Some(last) = last_checkpoint_time {
             if last.elapsed().as_secs() < self.checkpoint_interval_secs {
@@ -568,33 +598,45 @@ impl BasePipeline {
             // extracting chunks will sink None position.
             log_position!("current_position | {}", last_received_position.to_string());
         }
-        log_position!("checkpoint_position | {}", last_commit_position.to_string());
+        let mut commit_positions: Vec<(&String, &Position)> =
+            last_commit_positions.iter().collect();
+        commit_positions.sort_by(|left, right| left.0.cmp(right.0));
+        for (_, position) in commit_positions.iter() {
+            log_position!("checkpoint_position | {}", position.to_string());
+        }
 
-        let record_position = if matches!(last_commit_position, Position::None) {
-            last_received_position
-        } else {
-            last_commit_position
-        };
+        let checker_position = commit_positions
+            .last()
+            .map(|(_, position)| *position)
+            .unwrap_or(last_received_position);
 
-        if !matches!(record_position, Position::None) {
+        if !matches!(checker_position, Position::None) {
             if let Some(checker) = &self.checker {
-                if let Err(err) = checker.record_checkpoint(record_position).await {
+                if let Err(err) = checker.record_checkpoint(checker_position).await {
                     log_warn!("checker checkpoint failed: {}", err);
                 }
             }
         }
         if let Some(handler) = &self.recorder {
-            if let Err(e) = handler.record_position(record_position).await {
-                log_error!(
-                    "failed to record position: {}, err: {:#}",
-                    record_position,
-                    e
-                );
+            if commit_positions.is_empty() {
+                if let Err(e) = handler.record_position(last_received_position).await {
+                    log_error!(
+                        "failed to record position: {}, err: {:#}",
+                        last_received_position,
+                        e
+                    );
+                }
+            } else {
+                for (_, position) in commit_positions.iter() {
+                    if let Err(e) = handler.record_position(position).await {
+                        log_error!("failed to record position: {}, err: {:#}", position, e);
+                    }
+                }
             }
         }
 
-        if !matches!(last_commit_position, Position::None) {
-            self.syncer.lock().await.committed_position = last_commit_position.to_owned();
+        if !matches!(checker_position, Position::None) {
+            self.syncer.lock().await.committed_position = checker_position.to_owned();
         }
 
         self.monitor.set_counter(
@@ -604,5 +646,65 @@ impl BasePipeline {
         );
 
         Ok(Instant::now())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use dt_common::meta::{
+        dt_data::{DtData, DtItem},
+        position::Position,
+        redis::redis_entry::RedisEntry,
+    };
+    use dt_connector::extractor::resumer::utils::ResumerUtil;
+
+    use super::BasePipeline;
+
+    fn redis_node_position(node_id: &str, repl_offset: u64) -> Position {
+        Position::Redis {
+            node_id: Some(node_id.to_string()),
+            address: Some(format!("127.0.0.1:{repl_offset}")),
+            repl_id: format!("repl-{node_id}"),
+            repl_port: 10008,
+            repl_offset,
+            now_db_id: 0,
+            timestamp: String::new(),
+        }
+    }
+
+    fn redis_item(position: Position) -> DtItem {
+        DtItem {
+            dt_data: DtData::Redis {
+                entry: RedisEntry::new(),
+            },
+            position,
+            data_origin_node: String::new(),
+        }
+    }
+
+    #[test]
+    fn fetch_raw_collects_latest_position_per_redis_node() {
+        let mut pending_snapshot_finished = HashMap::new();
+        let node_1_old = redis_node_position("node-1", 10);
+        let node_2 = redis_node_position("node-2", 20);
+        let node_1_new = redis_node_position("node-1", 30);
+        let data = vec![
+            redis_item(node_1_old),
+            redis_item(node_2.clone()),
+            redis_item(node_1_new.clone()),
+        ];
+
+        let (_, _, commit_positions) =
+            BasePipeline::fetch_raw(&data, &mut pending_snapshot_finished);
+
+        assert_eq!(commit_positions.len(), 2);
+        let by_key: HashMap<_, _> = commit_positions
+            .into_iter()
+            .map(|position| (ResumerUtil::get_key_from_position(&position), position))
+            .collect();
+        assert_eq!(by_key.get("redis-node-node-1"), Some(&node_1_new));
+        assert_eq!(by_key.get("redis-node-node-2"), Some(&node_2));
     }
 }

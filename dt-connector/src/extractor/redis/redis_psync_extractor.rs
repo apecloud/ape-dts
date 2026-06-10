@@ -1,5 +1,4 @@
 use std::{
-    collections::HashMap,
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
@@ -31,7 +30,7 @@ use dt_common::{
     log_debug, log_error, log_info, log_position, log_warn,
     meta::{
         dt_data::DtData,
-        position::{Position, RedisNodePosition},
+        position::Position,
         redis::{redis_entry::RedisEntry, redis_object::RedisCmd},
         syncer::Syncer,
     },
@@ -55,7 +54,6 @@ pub struct RedisPsyncExtractor {
     pub extract_type: ExtractType,
     pub recovery: Option<Arc<dyn Recovery + Send + Sync>>,
     pub cluster_node: Option<RedisPsyncNode>,
-    pub cluster_position_tracker: Option<RedisClusterPositionTracker>,
     pub wait_task_finish: bool,
 }
 
@@ -64,44 +62,6 @@ pub struct RedisPsyncNode {
     pub id: String,
     pub address: String,
     pub heartbeat_hash_tag: Option<String>,
-}
-
-#[derive(Clone, Default)]
-pub struct RedisClusterPositionTracker {
-    positions: Arc<Mutex<HashMap<String, RedisNodePosition>>>,
-}
-
-impl RedisClusterPositionTracker {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub fn from_positions(positions: Vec<RedisNodePosition>) -> Self {
-        let positions = positions
-            .into_iter()
-            .map(|position| (position.node_id.clone(), position))
-            .collect();
-        Self {
-            positions: Arc::new(Mutex::new(positions)),
-        }
-    }
-
-    pub async fn update(&self, position: RedisNodePosition) -> Position {
-        let timestamp = position.timestamp.clone();
-        let mut positions = self.positions.lock().await;
-        positions.insert(position.node_id.clone(), position);
-
-        Self::build_position(&positions, timestamp)
-    }
-
-    fn build_position(
-        positions: &HashMap<String, RedisNodePosition>,
-        timestamp: String,
-    ) -> Position {
-        let mut nodes: Vec<RedisNodePosition> = positions.values().cloned().collect();
-        nodes.sort_by(|left, right| left.node_id.cmp(&right.node_id));
-        Position::RedisCluster { nodes, timestamp }
-    }
 }
 
 #[async_trait]
@@ -218,7 +178,6 @@ impl RedisPsyncExtractor {
 
     async fn receive_rdb(&mut self) -> anyhow::Result<()> {
         let cluster_node = self.cluster_node.clone();
-        let cluster_position_tracker = self.cluster_position_tracker.clone();
         let repl_id = self.repl_id.clone();
         let repl_port = self.repl_port;
         let repl_offset = self.repl_offset;
@@ -293,7 +252,6 @@ impl RedisPsyncExtractor {
                         entry,
                         Self::rdb_entry_position_from_parts(
                             &cluster_node,
-                            &cluster_position_tracker,
                             &repl_id,
                             repl_port,
                             repl_offset,
@@ -317,7 +275,6 @@ impl RedisPsyncExtractor {
         // this log to mark the snapshot rdb was all received
         let position = Self::position_from_parts(
             &cluster_node,
-            &cluster_position_tracker,
             &repl_id,
             repl_port,
             repl_offset + 1,
@@ -499,7 +456,6 @@ impl RedisPsyncExtractor {
     ) -> Position {
         Self::position_from_parts(
             &self.cluster_node,
-            &self.cluster_position_tracker,
             &self.repl_id,
             self.repl_port,
             repl_offset,
@@ -511,24 +467,21 @@ impl RedisPsyncExtractor {
 
     async fn rdb_entry_position_from_parts(
         cluster_node: &Option<RedisPsyncNode>,
-        cluster_position_tracker: &Option<RedisClusterPositionTracker>,
         repl_id: &str,
         repl_port: u64,
         repl_offset: u64,
         now_db_id: i64,
     ) -> Position {
-        if let (Some(node), Some(tracker)) = (cluster_node, cluster_position_tracker) {
-            return tracker
-                .update(RedisNodePosition {
-                    node_id: node.id.clone(),
-                    address: node.address.clone(),
-                    repl_id: repl_id.to_string(),
-                    repl_port,
-                    repl_offset,
-                    now_db_id,
-                    timestamp: String::new(),
-                })
-                .await;
+        if let Some(node) = cluster_node {
+            return Position::Redis {
+                node_id: Some(node.id.clone()),
+                address: Some(node.address.clone()),
+                repl_id: repl_id.to_string(),
+                repl_port,
+                repl_offset,
+                now_db_id,
+                timestamp: String::new(),
+            };
         }
 
         Position::None
@@ -536,28 +489,27 @@ impl RedisPsyncExtractor {
 
     async fn position_from_parts(
         cluster_node: &Option<RedisPsyncNode>,
-        cluster_position_tracker: &Option<RedisClusterPositionTracker>,
         repl_id: &str,
         repl_port: u64,
         repl_offset: u64,
         now_db_id: i64,
         timestamp: String,
     ) -> Position {
-        if let (Some(node), Some(tracker)) = (cluster_node, cluster_position_tracker) {
-            return tracker
-                .update(RedisNodePosition {
-                    node_id: node.id.clone(),
-                    address: node.address.clone(),
-                    repl_id: repl_id.to_string(),
-                    repl_port,
-                    repl_offset,
-                    now_db_id,
-                    timestamp,
-                })
-                .await;
+        if let Some(node) = cluster_node {
+            return Position::Redis {
+                node_id: Some(node.id.clone()),
+                address: Some(node.address.clone()),
+                repl_id: repl_id.to_string(),
+                repl_port,
+                repl_offset,
+                now_db_id,
+                timestamp,
+            };
         }
 
         Position::Redis {
+            node_id: None,
+            address: None,
             repl_id: repl_id.to_string(),
             repl_port,
             repl_offset,
@@ -570,24 +522,22 @@ impl RedisPsyncExtractor {
         // send replconf ack to keep the connection alive
         let mut position_repl_offset = self.repl_offset;
         let committed_position = self.syncer.lock().await.committed_position.clone();
-        match committed_position {
-            Position::Redis { repl_offset, .. } => {
-                if repl_offset >= self.repl_offset {
+        if let Position::Redis {
+            node_id,
+            address,
+            repl_offset,
+            ..
+        } = committed_position
+        {
+            if let Some(cluster_node) = &self.cluster_node {
+                let same_node = node_id.as_deref() == Some(cluster_node.id.as_str())
+                    || address.as_deref() == Some(cluster_node.address.as_str());
+                if same_node && repl_offset >= self.repl_offset {
                     position_repl_offset = repl_offset
                 }
+            } else if repl_offset >= self.repl_offset {
+                position_repl_offset = repl_offset
             }
-            Position::RedisCluster { nodes, .. } => {
-                if let Some(node) = &self.cluster_node {
-                    if let Some(position) = nodes.iter().find(|position| {
-                        position.node_id == node.id || position.address == node.address
-                    }) {
-                        if position.repl_offset >= self.repl_offset {
-                            position_repl_offset = position.repl_offset
-                        }
-                    }
-                }
-            }
-            _ => {}
         }
 
         let repl_offset = &position_repl_offset.to_string();

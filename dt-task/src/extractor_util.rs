@@ -518,7 +518,6 @@ impl ExtractorUtil {
                     heartbeat_key: String::new(),
                     recovery,
                     cluster_node: None,
-                    cluster_position_tracker: None,
                     wait_task_finish: true,
                 };
                 Box::new(extractor)
@@ -599,7 +598,6 @@ impl ExtractorUtil {
                     extract_type: ExtractType::Cdc,
                     recovery,
                     cluster_node: None,
-                    cluster_position_tracker: None,
                     wait_task_finish: true,
                 };
                 Box::new(extractor)
@@ -649,7 +647,6 @@ impl ExtractorUtil {
                     heartbeat_key,
                     recovery,
                     cluster_node: None,
-                    cluster_position_tracker: None,
                     wait_task_finish: true,
                 };
                 Box::new(extractor)

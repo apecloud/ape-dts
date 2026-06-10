@@ -11,9 +11,7 @@ use crate::{
         extractor_monitor::ExtractorMonitor,
         redis::{
             redis_client::RedisClient,
-            redis_psync_extractor::{
-                RedisClusterPositionTracker, RedisPsyncExtractor, RedisPsyncNode,
-            },
+            redis_psync_extractor::{RedisPsyncExtractor, RedisPsyncNode},
         },
         resumer::recovery::Recovery,
     },
@@ -23,11 +21,7 @@ use dt_common::{
     config::{config_enums::ExtractType, connection_auth_config::ConnectionAuthConfig},
     error::Error,
     log_info, log_warn,
-    meta::{
-        position::{Position, RedisNodePosition},
-        redis::cluster_node::ClusterNode,
-        syncer::Syncer,
-    },
+    meta::{position::Position, redis::cluster_node::ClusterNode, syncer::Syncer},
     rdb_filter::RdbFilter,
     utils::redis_util::RedisUtil,
 };
@@ -53,20 +47,13 @@ impl Extractor for RedisClusterPsyncExtractor {
         log_info!("RedisClusterPsyncExtractor starts");
 
         let nodes = self.get_cluster_master_nodes().await?;
-        let recovery_position = self.get_recovery_position().await;
-        let recovered_positions =
-            Self::matched_recovery_positions(&nodes, recovery_position.as_ref());
-        let tracker = RedisClusterPositionTracker::from_positions(recovered_positions.clone());
+        let recovery_positions = self.get_recovery_positions().await;
+        let recovered_positions = Self::matched_recovery_positions(&nodes, &recovery_positions);
 
         let mut join_set = JoinSet::new();
         for node in nodes {
-            let node_position = recovered_positions
-                .iter()
-                .find(|position| position.node_id == node.id)
-                .cloned();
-            let mut extractor = self
-                .build_node_extractor(node, node_position, tracker.clone())
-                .await?;
+            let node_position = Self::match_node_position(&node, &recovered_positions);
+            let mut extractor = self.build_node_extractor(node, node_position).await?;
             join_set.spawn(async move { extractor.extract().await });
         }
 
@@ -112,53 +99,76 @@ impl RedisClusterPsyncExtractor {
         Ok(nodes)
     }
 
-    async fn get_recovery_position(&self) -> Option<Position> {
+    async fn get_recovery_positions(&self) -> Vec<Position> {
         let Some(recovery) = &self.recovery else {
-            return None;
+            return Vec::new();
         };
-        let position = recovery.get_cdc_resume_position().await;
-        match &position {
-            Some(Position::RedisCluster { .. }) => position,
-            Some(position) => {
-                log_warn!(
-                    "position:{} is not a valid redis cluster psync position",
-                    position
-                );
-                None
+
+        let positions = recovery.get_cdc_resume_positions().await;
+        let mut nodes = Vec::new();
+        for position in positions {
+            match position {
+                Position::Redis {
+                    node_id: Some(_),
+                    address: Some(_),
+                    ..
+                } => nodes.push(position),
+                position => {
+                    log_warn!(
+                        "position:{} is not a valid redis cluster psync position",
+                        position
+                    );
+                }
             }
-            None => None,
         }
+        nodes
     }
 
     fn match_node_position(
         node: &ClusterNode,
-        recovery_position: Option<&Position>,
-    ) -> Option<RedisNodePosition> {
-        let Some(Position::RedisCluster { nodes, .. }) = recovery_position else {
-            return None;
-        };
-
-        nodes
+        recovery_positions: &[Position],
+    ) -> Option<Position> {
+        recovery_positions
             .iter()
-            .find(|position| position.node_id == node.id)
+            .find(|position| match position {
+                Position::Redis { node_id, .. } => node_id.as_deref() == Some(node.id.as_str()),
+                _ => false,
+            })
             .or_else(|| {
-                nodes
-                    .iter()
-                    .find(|position| position.address == node.address)
+                recovery_positions.iter().find(|position| match position {
+                    Position::Redis { address, .. } => {
+                        address.as_deref() == Some(node.address.as_str())
+                    }
+                    _ => false,
+                })
             })
             .cloned()
     }
 
     fn matched_recovery_positions(
         nodes: &[ClusterNode],
-        recovery_position: Option<&Position>,
-    ) -> Vec<RedisNodePosition> {
+        recovery_positions: &[Position],
+    ) -> Vec<Position> {
         let mut positions = Vec::new();
         for node in nodes {
-            if let Some(mut position) = Self::match_node_position(node, recovery_position) {
-                position.node_id = node.id.clone();
-                position.address = node.address.clone();
-                positions.push(position);
+            if let Some(Position::Redis {
+                repl_id,
+                repl_port,
+                repl_offset,
+                now_db_id,
+                timestamp,
+                ..
+            }) = Self::match_node_position(node, recovery_positions)
+            {
+                positions.push(Position::Redis {
+                    node_id: Some(node.id.clone()),
+                    address: Some(node.address.clone()),
+                    repl_id,
+                    repl_port,
+                    repl_offset,
+                    now_db_id,
+                    timestamp,
+                });
             }
         }
         positions
@@ -167,23 +177,31 @@ impl RedisClusterPsyncExtractor {
     async fn build_node_extractor(
         &self,
         node: ClusterNode,
-        position: Option<RedisNodePosition>,
-        tracker: RedisClusterPositionTracker,
+        position: Option<Position>,
     ) -> anyhow::Result<RedisPsyncExtractor> {
         let node_url = Self::node_url(&self.url, &node)?;
         let node_state = self.derive_node_state().await;
 
-        let (repl_id, repl_offset, now_db_id) = if let Some(position) = position {
+        let (repl_id, repl_offset, now_db_id) = if let Some(Position::Redis {
+            node_id,
+            address,
+            repl_id,
+            repl_offset,
+            repl_port,
+            now_db_id,
+            ..
+        }) = position
+        {
             log_info!(
                 "redis cluster psync recovery node_id:[{}], address:[{}], repl_id:[{}], repl_offset:[{}], repl_port:[{}], now_db_id:[{}]",
-                position.node_id,
-                position.address,
-                position.repl_id,
-                position.repl_offset,
-                position.repl_port,
-                position.now_db_id
+                node_id.unwrap_or_default(),
+                address.unwrap_or_default(),
+                repl_id,
+                repl_offset,
+                repl_port,
+                now_db_id
             );
-            (position.repl_id, position.repl_offset, position.now_db_id)
+            (repl_id, repl_offset, now_db_id)
         } else {
             (String::new(), 0, 0)
         };
@@ -210,7 +228,6 @@ impl RedisClusterPsyncExtractor {
                 address: node.address,
                 heartbeat_hash_tag,
             }),
-            cluster_position_tracker: Some(tracker),
             wait_task_finish: false,
         })
     }
@@ -244,10 +261,9 @@ impl RedisClusterPsyncExtractor {
 mod tests {
     use std::collections::HashMap;
 
-    use dt_common::meta::position::{Position, RedisNodePosition};
+    use dt_common::meta::position::Position;
 
     use super::RedisClusterPsyncExtractor;
-    use crate::extractor::redis::redis_psync_extractor::RedisClusterPositionTracker;
     use dt_common::meta::redis::cluster_node::ClusterNode;
 
     fn node(id: &str, address: &str) -> ClusterNode {
@@ -264,10 +280,10 @@ mod tests {
         }
     }
 
-    fn position(node_id: &str, address: &str, repl_offset: u64) -> RedisNodePosition {
-        RedisNodePosition {
-            node_id: node_id.to_string(),
-            address: address.to_string(),
+    fn position(node_id: &str, address: &str, repl_offset: u64) -> Position {
+        Position::Redis {
+            node_id: Some(node_id.to_string()),
+            address: Some(address.to_string()),
             repl_id: format!("repl-{node_id}"),
             repl_port: 10008,
             repl_offset,
@@ -276,41 +292,52 @@ mod tests {
         }
     }
 
+    fn redis_fields(position: &Position) -> (&str, &str, u64) {
+        let Position::Redis {
+            node_id,
+            address,
+            repl_offset,
+            ..
+        } = position
+        else {
+            panic!("expected redis position");
+        };
+        (
+            node_id.as_deref().unwrap_or_default(),
+            address.as_deref().unwrap_or_default(),
+            *repl_offset,
+        )
+    }
+
     #[test]
     fn match_node_position_prefers_node_id_then_address() {
-        let recovery_position = Position::RedisCluster {
-            nodes: vec![
-                position("old-id", "127.0.0.1:6371", 10),
-                position("node-2", "127.0.0.1:6372", 20),
-            ],
-            timestamp: String::new(),
-        };
+        let recovery_positions = vec![
+            position("old-id", "127.0.0.1:6371", 10),
+            position("node-2", "127.0.0.1:6372", 20),
+        ];
 
         let id_match = RedisClusterPsyncExtractor::match_node_position(
             &node("node-2", "other:6379"),
-            Some(&recovery_position),
+            &recovery_positions,
         )
         .unwrap();
-        assert_eq!(id_match.repl_offset, 20);
+        assert_eq!(redis_fields(&id_match).2, 20);
 
         let address_match = RedisClusterPsyncExtractor::match_node_position(
             &node("new-id", "127.0.0.1:6371"),
-            Some(&recovery_position),
+            &recovery_positions,
         )
         .unwrap();
-        assert_eq!(address_match.repl_offset, 10);
+        assert_eq!(redis_fields(&address_match).2, 10);
     }
 
     #[test]
     fn matched_recovery_positions_use_current_cluster_nodes() {
-        let recovery_position = Position::RedisCluster {
-            nodes: vec![
-                position("old-id", "127.0.0.1:6371", 10),
-                position("node-2", "127.0.0.1:6372", 20),
-                position("removed-node", "127.0.0.1:6399", 99),
-            ],
-            timestamp: String::new(),
-        };
+        let recovery_positions = vec![
+            position("old-id", "127.0.0.1:6371", 10),
+            position("node-2", "127.0.0.1:6372", 20),
+            position("removed-node", "127.0.0.1:6399", 99),
+        ];
         let current_nodes = vec![
             node("node-1", "127.0.0.1:6371"),
             node("node-2", "127.0.0.1:6372"),
@@ -318,57 +345,17 @@ mod tests {
 
         let positions = RedisClusterPsyncExtractor::matched_recovery_positions(
             &current_nodes,
-            Some(&recovery_position),
+            &recovery_positions,
         );
 
         assert_eq!(positions.len(), 2);
-        assert!(positions.iter().any(|position| position.node_id == "node-1"
-            && position.address == "127.0.0.1:6371"
-            && position.repl_offset == 10));
-        assert!(positions.iter().any(|position| position.node_id == "node-2"
-            && position.address == "127.0.0.1:6372"
-            && position.repl_offset == 20));
-    }
-
-    #[tokio::test]
-    async fn seeded_tracker_keeps_quiet_shard_positions_after_update() {
-        let tracker = RedisClusterPositionTracker::from_positions(vec![
-            position("node-1", "127.0.0.1:6371", 10),
-            position("node-2", "127.0.0.1:6372", 20),
-            position("node-3", "127.0.0.1:6373", 30),
-        ]);
-
-        let updated = tracker
-            .update(position("node-2", "127.0.0.1:6372", 25))
-            .await;
-
-        let Position::RedisCluster { nodes, .. } = updated else {
-            panic!("expected redis cluster position");
-        };
-        assert_eq!(nodes.len(), 3);
-        assert_eq!(
-            nodes
-                .iter()
-                .find(|position| position.node_id == "node-1")
-                .unwrap()
-                .repl_offset,
-            10
-        );
-        assert_eq!(
-            nodes
-                .iter()
-                .find(|position| position.node_id == "node-2")
-                .unwrap()
-                .repl_offset,
-            25
-        );
-        assert_eq!(
-            nodes
-                .iter()
-                .find(|position| position.node_id == "node-3")
-                .unwrap()
-                .repl_offset,
-            30
-        );
+        assert!(positions.iter().any(|position| {
+            let (node_id, address, repl_offset) = redis_fields(position);
+            node_id == "node-1" && address == "127.0.0.1:6371" && repl_offset == 10
+        }));
+        assert!(positions.iter().any(|position| {
+            let (node_id, address, repl_offset) = redis_fields(position);
+            node_id == "node-2" && address == "127.0.0.1:6372" && repl_offset == 20
+        }));
     }
 }

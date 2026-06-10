@@ -75,6 +75,9 @@ impl CheckerStateStore {
             ResumerDbPool::Mongo(_) => {
                 anyhow::bail!("checker state store does not support MongoDB resumer backend")
             }
+            ResumerDbPool::Redis(_) => {
+                anyhow::bail!("checker state store only supports MySQL/Postgres")
+            }
         };
 
         let store = Self {

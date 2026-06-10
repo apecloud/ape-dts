@@ -352,7 +352,7 @@ suite_services() {
     redis_to_redis_5_0) echo "redis-src-5-0 redis-dst-5-0" ;;
     redis_to_redis_6_0) echo "redis-src-6-0 redis-dst-6-0" ;;
     redis_to_redis_6_2) echo "redis-src-6-2 redis-dst-6-2" ;;
-    redis_to_redis_7_0) echo "redis-src redis-dst redis-cycle-node3 redis-cluster-node1 redis-cluster-node2 redis-cluster-node3 redis-cluster-init" ;;
+    redis_to_redis_7_0) echo "redis-src redis-dst redis-cycle-node3 redis-source-cluster-node1 redis-source-cluster-node2 redis-source-cluster-node3 redis-source-cluster-init redis-target-cluster-node1 redis-target-cluster-node2 redis-target-cluster-node3 redis-target-cluster-init" ;;
     redis_to_redis_8_0) echo "redis-src-8-0 redis-dst-8-0" ;;
     redis_to_redis_cross_version) echo "redis-src-4-0 redis-src-5-0 redis-src-6-0 redis-src-6-2 redis-dst" ;;
     redis_to_redis_graph) echo "falkordb-src falkordb-dst" ;;
