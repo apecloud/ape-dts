@@ -1,6 +1,6 @@
 use std::{collections::HashMap, sync::Arc};
 
-use anyhow::bail;
+use anyhow::{anyhow, bail};
 use async_trait::async_trait;
 use mongodb::{
     bson::{doc, Document},
@@ -162,10 +162,12 @@ impl MongoSnapshotExtractor {
                 e
             })?;
 
-            let Some(key) = MongoKey::from_doc(&doc) else {
-                log_error!("skip {}.{} document without `_id`: {:?}", db, tb, doc);
-                continue;
-            };
+            let key = MongoKey::from_doc(&doc).ok_or(anyhow!(
+                "skip {}.{} document without `_id`: {:?}",
+                db,
+                tb,
+                doc
+            ))?;
 
             let after = Self::build_after_cols(&doc);
             let row_data = RowData::new(
@@ -213,12 +215,9 @@ impl MongoSnapshotExtractor {
 
     fn build_resume_filter(key: &MongoKey) -> Document {
         doc! {
-            "$expr": {
-                "$gt": [
-                    format!("${}", MongoConstants::ID),
-                    key.to_mongo_id(),
-                ],
-            },
+            MongoConstants::ID: {
+                "$gt": key.to_mongo_id(),
+            }
         }
     }
 

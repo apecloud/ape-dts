@@ -142,19 +142,25 @@ impl DatabaseRecorder {
             }
             ResumerDbPool::Mongo(client) => {
                 let database = client.database(&self.schema);
-                let collection_names =
-                    database
-                        .list_collection_names(None)
-                        .await
-                        .with_context(|| {
-                            format!("failed to list MongoDB collections in {}", self.schema)
-                        })?;
-                if !collection_names.iter().any(|name| name == &self.table) {
+                let collection_names = database
+                    .list_collection_names(doc! { "name": &self.table })
+                    .await
+                    .with_context(|| {
+                        format!(
+                            "failed to list MongoDB collection {}.{}",
+                            self.schema, self.table
+                        )
+                    })?;
+
+                if collection_names.is_empty() {
                     database
                         .create_collection(&self.table, None)
                         .await
                         .with_context(|| {
-                            format!("failed to create MongoDB collection {}", self.table)
+                            format!(
+                                "failed to create MongoDB collection {}.{}",
+                                self.schema, self.table
+                            )
                         })?;
                 }
 
