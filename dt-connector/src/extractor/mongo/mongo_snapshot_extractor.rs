@@ -214,10 +214,16 @@ impl MongoSnapshotExtractor {
     }
 
     fn build_resume_filter(key: &MongoKey) -> Document {
+        // use $expr to order multiple types of _id.
+        // for single type of _id, this has the same performance as filter like {"_id": {"$gt": key}}.
+        // ref https://www.mongodb.com/docs/manual/reference/operator/query/expr/
         doc! {
-            MongoConstants::ID: {
-                "$gt": key.to_mongo_id(),
-            }
+            "$expr": {
+                "$gt": [
+                    format!("${}", MongoConstants::ID),
+                    key.to_mongo_id(),
+                ],
+            },
         }
     }
 
