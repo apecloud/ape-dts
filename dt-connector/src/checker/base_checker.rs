@@ -184,8 +184,7 @@ pub struct CheckContext {
     pub summary: CheckSummaryLog,
     pub output_revise_sql: bool,
     pub extractor_meta_manager: Option<RdbMetaManager>,
-    pub router: RdbRouter,
-    pub reverse_router: RdbRouter,
+    pub router: Option<RdbRouter>,
     pub output_full_row: bool,
     pub revise_match_full_row: bool,
     pub global_summary: Option<Arc<Mutex<CheckSummaryLog>>>,
@@ -213,8 +212,7 @@ impl Default for CheckContext {
             summary: CheckSummaryLog::default(),
             output_revise_sql: false,
             extractor_meta_manager: None,
-            router: RdbRouter::default(),
-            reverse_router: RdbRouter::default(),
+            router: None,
             output_full_row: false,
             revise_match_full_row: false,
             global_summary: None,
@@ -268,7 +266,10 @@ impl CheckContext {
             return;
         }
         self.summary.checked_count += checked_count;
-        let (schema, tb) = self.reverse_router.get_tb_map(&row.schema, &row.tb);
+        let (schema, tb) = match &self.router {
+            Some(router) => router.reverse_get_tb_map(&row.schema, &row.tb),
+            None => (row.schema.as_str(), row.tb.as_str()),
+        };
         let has_target = row.schema != schema || row.tb != tb;
         self.summary.merge_table(CheckTableSummaryLog {
             schema: schema.to_string(),
@@ -869,7 +870,10 @@ impl<C: Checker> DataChecker<C> {
                 meta_manager.invalidate_cache_for_table(schema, tb);
             }
 
-            let (target_schema, target_tb) = self.ctx.router.get_tb_map(schema, tb);
+            let (target_schema, target_tb) = match &self.ctx.router {
+                Some(router) => router.get_tb_map(schema, tb),
+                None => (schema.as_str(), tb.as_str()),
+            };
             let (target_schema, target_tb) = (target_schema.to_string(), target_tb.to_string());
             self.checker
                 .invalidate_meta_cache(&target_schema, &target_tb)
@@ -1132,18 +1136,20 @@ mod tests {
     async fn handle_control_item_routes_snapshot_finished_before_invalidate() {
         let (_control_tx, control_rx) = mpsc::unbounded_channel();
         let invalidated = Arc::new(StdMutex::new(Vec::new()));
-        let mut router = RdbRouter::default();
-        router.tb_map.insert(
+        let mut tb_map = HashMap::new();
+        tb_map.insert(
             ("src_schema".to_string(), "src_tb".to_string()),
             ("dst_schema".to_string(), "dst_tb".to_string()),
         );
+        let router =
+            RdbRouter::from_maps_for_test(HashMap::new(), tb_map, HashMap::new(), HashMap::new());
         let mut checker = DataChecker::new(
             CaptureInvalidateChecker {
                 invalidated: invalidated.clone(),
             },
             "task-1".to_string(),
             CheckContext {
-                router,
+                router: Some(router),
                 ..Default::default()
             },
             CheckerIo {

@@ -36,11 +36,7 @@ impl BaseSinker {
         self.monitor.task_id_for_rows(rows)
     }
 
-    pub fn task_id_for_rows_with_reverse_router(
-        &self,
-        rows: &[RowData],
-        reverse_router: &RdbRouter,
-    ) -> String {
+    pub fn source_task_id_for_rows(&self, rows: &[RowData], router: &Option<RdbRouter>) -> String {
         if !self.monitor.is_snapshot_task() {
             return self.monitor.default_task_id().to_string();
         }
@@ -49,7 +45,10 @@ impl BaseSinker {
             return self.monitor.default_task_id().to_string();
         };
 
-        let (schema, tb) = reverse_router.get_tb_map(&first.schema, &first.tb);
+        let (schema, tb) = match router {
+            Some(router) => router.reverse_get_tb_map(&first.schema, &first.tb),
+            None => (first.schema.as_str(), first.tb.as_str()),
+        };
         self.task_id_for_schema_tb(schema, tb)
     }
 

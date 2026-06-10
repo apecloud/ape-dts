@@ -90,10 +90,9 @@ impl<C: Checker> DataChecker<C> {
                     Some(&diff_col_values),
                 )?;
                 let mut log = Self::build_miss_log(src_row_data, ctx, tb_meta).await?;
-                let routed_diffs = if let Some(col_map) = ctx
-                    .reverse_router
-                    .get_col_map(&src_row_data.schema, &src_row_data.tb)
-                {
+                let routed_diffs = if let Some(col_map) = ctx.router.as_ref().and_then(|router| {
+                    router.reverse_get_col_map(&src_row_data.schema, &src_row_data.tb)
+                }) {
                     diff_col_values
                         .into_iter()
                         .map(|(col, val)| {
@@ -115,11 +114,16 @@ impl<C: Checker> DataChecker<C> {
                     .collect();
                 log.dst_row = if ctx.output_full_row {
                     if ctx
-                        .reverse_router
-                        .get_col_map(&dst_row.schema, &dst_row.tb)
+                        .router
+                        .as_ref()
+                        .and_then(|router| router.reverse_get_col_map(&dst_row.schema, &dst_row.tb))
                         .is_some()
                     {
-                        let routed = ctx.reverse_router.route_row(dst_row.clone());
+                        let routed = ctx
+                            .router
+                            .as_ref()
+                            .unwrap()
+                            .reverse_route_row(dst_row.clone());
                         Self::clone_row_values(&routed)
                     } else {
                         Self::clone_row_values(dst_row)
@@ -432,10 +436,10 @@ impl<C: Checker> DataChecker<C> {
     }
 
     fn task_id_for_snapshot_entry(&self, entry: &CheckEntry) -> String {
-        let (schema, tb) = self
-            .ctx
-            .reverse_router
-            .get_tb_map(&entry.key.schema, &entry.key.tb);
+        let (schema, tb) = match &self.ctx.router {
+            Some(router) => router.reverse_get_tb_map(&entry.key.schema, &entry.key.tb),
+            None => (entry.key.schema.as_str(), entry.key.tb.as_str()),
+        };
         self.ctx.base_sinker.task_id_for_schema_tb(schema, tb)
     }
 
@@ -578,17 +582,24 @@ impl<C: Checker> DataChecker<C> {
         ctx: &mut CheckContext,
         tb_meta: &CheckerTbMeta,
     ) -> anyhow::Result<CheckLog> {
-        let (mapped_schema, mapped_tb) = ctx
-            .reverse_router
-            .get_tb_map(&src_row_data.schema, &src_row_data.tb);
+        let (mapped_schema, mapped_tb) = match &ctx.router {
+            Some(router) => router.reverse_get_tb_map(&src_row_data.schema, &src_row_data.tb),
+            None => (src_row_data.schema.as_str(), src_row_data.tb.as_str()),
+        };
         let has_col_map = ctx
-            .reverse_router
-            .get_col_map(&src_row_data.schema, &src_row_data.tb)
+            .router
+            .as_ref()
+            .and_then(|router| router.reverse_get_col_map(&src_row_data.schema, &src_row_data.tb))
             .is_some();
         let schema_changed = src_row_data.schema != mapped_schema || src_row_data.tb != mapped_tb;
 
         let routed_row = if has_col_map {
-            Cow::Owned(ctx.reverse_router.route_row(src_row_data.clone()))
+            Cow::Owned(
+                ctx.router
+                    .as_ref()
+                    .unwrap()
+                    .reverse_route_row(src_row_data.clone()),
+            )
         } else {
             Cow::Borrowed(src_row_data)
         };
@@ -857,10 +868,10 @@ impl<C: Checker> DataChecker<C> {
                 .collect::<Vec<_>>();
             let first_row = rows_to_fetch.first().context("checker group is empty")?;
             if monitor_task_id.is_none() {
-                let (schema, tb) = self
-                    .ctx
-                    .reverse_router
-                    .get_tb_map(&first_row.schema, &first_row.tb);
+                let (schema, tb) = match &self.ctx.router {
+                    Some(router) => router.reverse_get_tb_map(&first_row.schema, &first_row.tb),
+                    None => (first_row.schema.as_str(), first_row.tb.as_str()),
+                };
                 monitor_task_id = Some(TaskMonitorHandle::task_id_from_schema_tb(schema, tb))
                     .filter(|id| !id.is_empty());
             }

@@ -25,7 +25,7 @@ pub struct FoxlakeSinker {
     pub meta_manager: MysqlMetaManager,
     pub base_sinker: BaseSinker,
     pub conn_pool: Pool<MySql>,
-    pub router: RdbRouter,
+    pub router: Option<RdbRouter>,
     pub pusher: FoxlakePusher,
     pub merger: FoxlakeMerger,
     pub engine: String,

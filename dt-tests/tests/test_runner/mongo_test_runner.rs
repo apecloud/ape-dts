@@ -28,7 +28,7 @@ pub struct MongoTestRunner {
     pub base: BaseTestRunner,
     src_mongo_client: Option<Client>,
     dst_mongo_client: Option<Client>,
-    router: RdbRouter,
+    router: Option<RdbRouter>,
 }
 
 pub const SRC: &str = "src";
@@ -521,7 +521,10 @@ impl MongoTestRunner {
         println!("compare tb data, db: {}, tb: {}", db, tb);
         let src_data = self.fetch_data(db, tb, SRC).await;
 
-        let (dst_db, dst_tb) = self.router.get_tb_map(db, tb);
+        let (dst_db, dst_tb) = match &self.router {
+            Some(router) => router.get_tb_map(db, tb),
+            None => (db, tb),
+        };
         let dst_data = self.fetch_data(dst_db, dst_tb, DST).await;
 
         assert_eq!(src_data.len(), dst_data.len());

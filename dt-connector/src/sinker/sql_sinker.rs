@@ -11,7 +11,7 @@ use dt_common::{
 #[derive(Clone)]
 pub struct SqlSinker {
     pub meta_manager: RdbMetaManager,
-    pub router: RdbRouter,
+    pub router: Option<RdbRouter>,
     pub reverse: bool,
     pub base_sinker: BaseSinker,
 }

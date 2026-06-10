@@ -103,7 +103,7 @@ impl ExtractorUtil {
         monitor: TaskMonitorHandle,
         monitor_task_id: String,
         data_marker: Option<DataMarker>,
-        router: RdbRouter,
+        router: Option<RdbRouter>,
         recovery: Option<Arc<dyn Recovery + Send + Sync>>,
     ) -> anyhow::Result<Box<dyn Extractor + Send>> {
         let base_extractor = BaseExtractor {

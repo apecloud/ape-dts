@@ -31,14 +31,13 @@ pub struct ClickhouseStructSinker {
     pub conflict_policy: ConflictPolicyEnum,
     pub engine: String,
     pub filter: RdbFilter,
-    pub router: RdbRouter,
+    pub router: Option<RdbRouter>,
     pub extractor_meta_manager: RdbMetaManager,
 }
 
 #[async_trait]
 impl Sinker for ClickhouseStructSinker {
     async fn sink_struct(&mut self, data: Vec<StructData>) -> anyhow::Result<()> {
-        let reverse_router = self.router.reverse();
         for i in data {
             match i.statement {
                 StructStatement::MysqlCreateDatabase(statement) => {
@@ -50,8 +49,17 @@ impl Sinker for ClickhouseStructSinker {
                 }
 
                 StructStatement::MysqlCreateTable(statement) => {
-                    let (schema, tb) = reverse_router
-                        .get_tb_map(&statement.table.database_name, &statement.table.table_name);
+                    let (schema, tb) = if let Some(router) = &self.router {
+                        router.reverse_get_tb_map(
+                            &statement.table.database_name,
+                            &statement.table.table_name,
+                        )
+                    } else {
+                        (
+                            statement.table.database_name.as_str(),
+                            statement.table.table_name.as_str(),
+                        )
+                    };
                     if let Some(meta_manager) =
                         self.extractor_meta_manager.mysql_meta_manager.as_mut()
                     {
@@ -68,8 +76,17 @@ impl Sinker for ClickhouseStructSinker {
                 }
 
                 StructStatement::PgCreateTable(statement) => {
-                    let (schema, tb) = reverse_router
-                        .get_tb_map(&statement.table.schema_name, &statement.table.table_name);
+                    let (schema, tb) = if let Some(router) = &self.router {
+                        router.reverse_get_tb_map(
+                            &statement.table.schema_name,
+                            &statement.table.table_name,
+                        )
+                    } else {
+                        (
+                            statement.table.schema_name.as_str(),
+                            statement.table.table_name.as_str(),
+                        )
+                    };
                     if let Some(meta_manager) = self.extractor_meta_manager.pg_meta_manager.as_mut()
                     {
                         let tb_meta = meta_manager.get_tb_meta(schema, tb).await?.to_owned();

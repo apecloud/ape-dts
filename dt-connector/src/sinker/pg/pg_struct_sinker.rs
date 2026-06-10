@@ -19,7 +19,7 @@ pub struct PgStructSinker {
     pub conn_pool: Pool<Postgres>,
     pub conflict_policy: ConflictPolicyEnum,
     pub filter: RdbFilter,
-    pub router: RdbRouter,
+    pub router: Option<RdbRouter>,
     pub base_sinker: BaseSinker,
 }
 

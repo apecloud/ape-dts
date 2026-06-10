@@ -34,8 +34,7 @@ pub struct MysqlSinker {
     pub connection_auth: ConnectionAuthConfig,
     pub conn_pool: Pool<MySql>,
     pub meta_manager: MysqlMetaManager,
-    pub router: RdbRouter,
-    pub reverse_router: RdbRouter,
+    pub router: Option<RdbRouter>,
     pub batch_size: usize,
     pub base_sinker: BaseSinker,
     pub data_marker: Option<Arc<RwLock<DataMarker>>>,
@@ -169,8 +168,13 @@ impl Sinker for MysqlSinker {
         {
             // Snapshot finished positions keep source table names, so route them before
             // invalidating target-side metadata cache.
-            let (schema, tb) = self.router.get_tb_map(schema, tb);
-            self.meta_manager.invalidate_cache_for_table(schema, tb);
+            let (routed_schema, routed_tb) = if let Some(router) = &self.router {
+                router.get_tb_map(schema, tb)
+            } else {
+                (schema.as_str(), tb.as_str())
+            };
+            self.meta_manager
+                .invalidate_cache_for_table(routed_schema, routed_tb);
         }
         Ok(())
     }
@@ -202,9 +206,7 @@ impl CheckableSink for MysqlSinker {
 
 impl MysqlSinker {
     async fn serial_sink(&mut self, data: &[RowData]) -> anyhow::Result<()> {
-        let task_id = self
-            .base_sinker
-            .task_id_for_rows_with_reverse_router(data, &self.reverse_router);
+        let task_id = self.base_sinker.source_task_id_for_rows(data, &self.router);
         self.base_sinker.ensure_monitor_for(&task_id);
         let monitor_interval = self.base_sinker.monitor_interval_secs();
         let mut last_monitor_time = Instant::now();
@@ -268,10 +270,9 @@ impl MysqlSinker {
         start_index: usize,
         batch_size: usize,
     ) -> anyhow::Result<()> {
-        let task_id = self.base_sinker.task_id_for_rows_with_reverse_router(
-            &data[start_index..start_index + batch_size],
-            &self.reverse_router,
-        );
+        let task_id = self
+            .base_sinker
+            .source_task_id_for_rows(&data[start_index..start_index + batch_size], &self.router);
         self.base_sinker.ensure_monitor_for(&task_id);
         let tb_meta = self
             .meta_manager
@@ -307,10 +308,9 @@ impl MysqlSinker {
         start_index: usize,
         batch_size: usize,
     ) -> anyhow::Result<()> {
-        let task_id = self.base_sinker.task_id_for_rows_with_reverse_router(
-            &data[start_index..start_index + batch_size],
-            &self.reverse_router,
-        );
+        let task_id = self
+            .base_sinker
+            .source_task_id_for_rows(&data[start_index..start_index + batch_size], &self.router);
         self.base_sinker.ensure_monitor_for(&task_id);
         let tb_meta = self
             .meta_manager
