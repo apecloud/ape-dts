@@ -231,7 +231,10 @@ impl RedisPsyncExtractor {
                 continue;
             }
             if buf[0] != b'$' {
-                panic!("invalid rdb format");
+                bail! {Error::ExtractorError(format!(
+                    "invalid rdb format, expected '$', got byte: {}",
+                    buf[0]
+                ))}
             }
             break;
         }
