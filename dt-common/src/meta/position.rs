@@ -46,6 +46,10 @@ pub enum Position {
         timestamp: String,
     },
     Redis {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        node_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        address: Option<String>,
         repl_id: String,
         repl_port: u64,
         repl_offset: u64,
@@ -163,6 +167,8 @@ mod test {
             r#"{"type":"RdbSnapshot","db_type":"mysql","schema":"test_db_1","tb":"numeric_table","order_key":null}"#,
             r#"{"type":"RdbSnapshot","db_type":"mysql","schema":"test_db_1","tb":"numeric_table","order_key":{"single":["f_0","127"]}}"#,
             r#"{"type":"RdbSnapshot","db_type":"mysql","schema":"test_db_1","tb":"numeric_table","order_key":{"composite":[["f_0","127"],["f_1","128"]]}}"#,
+            r#"{"type":"Redis","repl_id":"repl-1","repl_port":10008,"repl_offset":123,"now_db_id":0,"timestamp":"2026-06-09 12:00:00.000"}"#,
+            r#"{"type":"Redis","node_id":"node-1","address":"127.0.0.1:6371","repl_id":"repl-1","repl_port":10008,"repl_offset":123,"now_db_id":0,"timestamp":"2026-06-09 12:00:00.000"}"#,
         ];
 
         let expected = [
@@ -170,6 +176,8 @@ mod test {
             r#"{"type":"RdbSnapshot","db_type":"mysql","schema":"test_db_1","tb":"numeric_table","order_key":null}"#,
             r#"{"type":"RdbSnapshot","db_type":"mysql","schema":"test_db_1","tb":"numeric_table","order_key":{"single":["f_0","127"]}}"#,
             r#"{"type":"RdbSnapshot","db_type":"mysql","schema":"test_db_1","tb":"numeric_table","order_key":{"composite":[["f_0","127"],["f_1","128"]]}}"#,
+            r#"{"type":"Redis","repl_id":"repl-1","repl_port":10008,"repl_offset":123,"now_db_id":0,"timestamp":"2026-06-09 12:00:00.000"}"#,
+            r#"{"type":"Redis","node_id":"node-1","address":"127.0.0.1:6371","repl_id":"repl-1","repl_port":10008,"repl_offset":123,"now_db_id":0,"timestamp":"2026-06-09 12:00:00.000"}"#,
         ];
 
         for (str, expected) in strs.iter().zip(expected.iter()) {

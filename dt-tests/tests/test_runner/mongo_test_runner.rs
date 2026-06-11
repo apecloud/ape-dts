@@ -2,7 +2,7 @@ use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::convert::TryFrom;
 
-use dt_common::meta::mongo::{mongo_constant::MongoConstants, mongo_key::MongoKey};
+use dt_common::meta::mongo::mongo_constant::MongoConstants;
 use dt_common::{
     config::{
         config_enums::DbType, extractor_config::ExtractorConfig, sinker_config::SinkerConfig,
@@ -28,7 +28,7 @@ pub struct MongoTestRunner {
     pub base: BaseTestRunner,
     src_mongo_client: Option<Client>,
     dst_mongo_client: Option<Client>,
-    router: RdbRouter,
+    router: Option<RdbRouter>,
 }
 
 pub const SRC: &str = "src";
@@ -521,7 +521,10 @@ impl MongoTestRunner {
         println!("compare tb data, db: {}, tb: {}", db, tb);
         let src_data = self.fetch_data(db, tb, SRC).await;
 
-        let (dst_db, dst_tb) = self.router.get_tb_map(db, tb);
+        let (dst_db, dst_tb) = match &self.router {
+            Some(router) => router.get_tb_map(db, tb),
+            None => (db, tb),
+        };
         let dst_data = self.fetch_data(dst_db, dst_tb, DST).await;
 
         assert_eq!(src_data.len(), dst_data.len());
@@ -549,7 +552,7 @@ impl MongoTestRunner {
             .unwrap()
     }
 
-    pub async fn fetch_data(&self, db: &str, tb: &str, from: &str) -> HashMap<MongoKey, Document> {
+    pub async fn fetch_data(&self, db: &str, tb: &str, from: &str) -> HashMap<String, Document> {
         let client = if from == SRC {
             self.src_mongo_client.as_ref().unwrap()
         } else {
@@ -565,10 +568,21 @@ impl MongoTestRunner {
         let mut results = HashMap::new();
         while cursor.advance().await.unwrap() {
             let doc = cursor.deserialize_current().unwrap();
-            let id = MongoKey::from_doc(&doc).unwrap();
+            let id = Self::doc_id_key(&doc);
             results.insert(id, doc);
         }
         results
+    }
+
+    fn doc_id_key(doc: &Document) -> String {
+        let id = doc.get(MongoConstants::ID).unwrap_or_else(|| {
+            panic!(
+                "Mongo document missing `_id`, doc: {}",
+                Bson::Document(doc.clone()).into_canonical_extjson()
+            )
+        });
+        // use canonical extended JSON to ensure consistent representation of the _id value.
+        id.clone().into_canonical_extjson().to_string()
     }
 
     fn slice_sqls_by_db(sqls: &[String]) -> HashMap<String, Vec<String>> {

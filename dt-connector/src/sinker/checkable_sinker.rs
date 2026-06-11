@@ -74,6 +74,10 @@ impl<S: CheckableSink + Send> Sinker for SinkerWithChecker<S> {
         delegate_inner!(self, refresh_meta(data))
     }
 
+    async fn handle_control_item(&mut self, item: &DtItem) -> anyhow::Result<()> {
+        delegate_inner!(self, handle_control_item(item))
+    }
+
     fn get_id(&self) -> String {
         self.inner.get_id()
     }

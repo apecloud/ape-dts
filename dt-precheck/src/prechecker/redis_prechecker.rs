@@ -110,6 +110,8 @@ impl Prechecker for RedisPrechecker {
             heartbeat_interval_secs: 0,
             heartbeat_key: String::new(),
             recovery: None,
+            cluster_node: None,
+            wait_task_finish: true,
         };
 
         if let Err(error) = psyncer.start_psync().await {

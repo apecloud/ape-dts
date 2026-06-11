@@ -25,6 +25,7 @@ use crate::{
     sinker::base_sinker::BaseSinker,
     sinker::mongo::mongo_cmd,
 };
+use dt_common::meta::dt_data::{DtData, DtItem};
 use dt_common::meta::{
     col_value::ColValue, ddl_meta::ddl_data::DdlData, mysql::mysql_tb_meta::MysqlTbMeta,
     pg::pg_tb_meta::PgTbMeta, position::Position, rdb_meta_manager::RdbMetaManager,
@@ -183,7 +184,7 @@ pub struct CheckContext {
     pub summary: CheckSummaryLog,
     pub output_revise_sql: bool,
     pub extractor_meta_manager: Option<RdbMetaManager>,
-    pub reverse_router: RdbRouter,
+    pub router: Option<RdbRouter>,
     pub output_full_row: bool,
     pub revise_match_full_row: bool,
     pub global_summary: Option<Arc<Mutex<CheckSummaryLog>>>,
@@ -211,7 +212,7 @@ impl Default for CheckContext {
             summary: CheckSummaryLog::default(),
             output_revise_sql: false,
             extractor_meta_manager: None,
-            reverse_router: RdbRouter::default(),
+            router: None,
             output_full_row: false,
             revise_match_full_row: false,
             global_summary: None,
@@ -265,7 +266,10 @@ impl CheckContext {
             return;
         }
         self.summary.checked_count += checked_count;
-        let (schema, tb) = self.reverse_router.get_tb_map(&row.schema, &row.tb);
+        let (schema, tb) = match &self.router {
+            Some(router) => router.reverse_get_tb_map(&row.schema, &row.tb),
+            None => (row.schema.as_str(), row.tb.as_str()),
+        };
         let has_target = row.schema != schema || row.tb != tb;
         self.summary.merge_table(CheckTableSummaryLog {
             schema: schema.to_string(),
@@ -327,12 +331,15 @@ pub trait Checker: Send + Sync + 'static {
     async fn refresh_meta(&mut self, _data: &[DdlData]) -> anyhow::Result<()> {
         Ok(())
     }
+    async fn invalidate_meta_cache(&mut self, _schema: &str, _tb: &str) -> anyhow::Result<()> {
+        Ok(())
+    }
 }
 
 enum CheckerControlMsg {
     RecordCheckpoint { position: Position },
     InvalidateMetaCache { data: Vec<DdlData> },
-    SnapshotTableFinished { task_id: String },
+    HandleControlItem { item: Box<DtItem> },
     Close { position: Option<Position> },
 }
 
@@ -478,19 +485,19 @@ impl DataCheckerHandle {
         Ok(())
     }
 
-    pub async fn snapshot_table_finished(&self, task_id: &str) -> anyhow::Result<()> {
-        if task_id.is_empty() || self.shared.is_cdc {
+    pub async fn handle_control_item(&self, item: &DtItem) -> anyhow::Result<()> {
+        if self.shared.is_cdc {
             return Ok(());
         }
         if self
             .shared
             .control_tx
-            .send(CheckerControlMsg::SnapshotTableFinished {
-                task_id: task_id.to_string(),
+            .send(CheckerControlMsg::HandleControlItem {
+                item: Box::new(item.clone()),
             })
             .is_err()
         {
-            log_warn!("checker snapshot-finished signal dropped because checker already stopped");
+            log_warn!("checker control item signal dropped because checker already stopped");
         }
         self.shared.batch_notify.notify_one();
         Ok(())
@@ -519,9 +526,9 @@ impl CheckerHandle {
         }
     }
 
-    pub async fn snapshot_table_finished(&self, task_id: &str) -> anyhow::Result<()> {
+    pub async fn handle_control_item(&self, item: &DtItem) -> anyhow::Result<()> {
         match self {
-            CheckerHandle::Data(handle) => handle.snapshot_table_finished(task_id).await,
+            CheckerHandle::Data(handle) => handle.handle_control_item(item).await,
             CheckerHandle::Struct(_) => Ok(()),
         }
     }
@@ -834,8 +841,14 @@ impl<C: Checker> DataChecker<C> {
                     log_error!("Checker [{}] refresh_meta failed: {}", self.name, err);
                 }
             }
-            CheckerControlMsg::SnapshotTableFinished { task_id } => {
-                self.ctx.monitor.unregister_monitor(&task_id);
+            CheckerControlMsg::HandleControlItem { item } => {
+                if let Err(err) = self.handle_control_item(item.as_ref()).await {
+                    log_error!(
+                        "Checker [{}] handle_control_item failed: {}",
+                        self.name,
+                        err
+                    );
+                }
             }
             CheckerControlMsg::Close { position } => {
                 if let Some(position) = position.filter(|p| !matches!(p, Position::None)) {
@@ -844,6 +857,29 @@ impl<C: Checker> DataChecker<C> {
                 self.close_requested = true;
             }
         }
+    }
+
+    async fn handle_control_item(&mut self, item: &DtItem) -> anyhow::Result<()> {
+        if let (DtData::Commit { .. }, Position::RdbSnapshotFinished { schema, tb, .. }) =
+            (&item.dt_data, &item.position)
+        {
+            let task_id = TaskMonitorHandle::task_id_from_schema_tb(schema, tb);
+            self.ctx.monitor.unregister_monitor(&task_id);
+
+            if let Some(meta_manager) = self.ctx.extractor_meta_manager.as_mut() {
+                meta_manager.invalidate_cache_for_table(schema, tb);
+            }
+
+            let (target_schema, target_tb) = match &self.ctx.router {
+                Some(router) => router.get_tb_map(schema, tb),
+                None => (schema.as_str(), tb.as_str()),
+            };
+            let (target_schema, target_tb) = (target_schema.to_string(), target_tb.to_string());
+            self.checker
+                .invalidate_meta_cache(&target_schema, &target_tb)
+                .await?;
+        }
+        Ok(())
     }
 
     fn collect_pending_controls(&mut self) {
@@ -955,6 +991,10 @@ mod tests {
         fetch_gate: Arc<Notify>,
     }
 
+    struct CaptureInvalidateChecker {
+        invalidated: Arc<StdMutex<Vec<(String, String)>>>,
+    }
+
     #[async_trait]
     impl Checker for BlockingFetchChecker {
         async fn load_table_meta(
@@ -977,6 +1017,32 @@ mod tests {
             let _ = self.fetch_started.send(());
             self.fetch_gate.notified().await;
             Err(anyhow::anyhow!("unit-test fetch failure"))
+        }
+    }
+
+    #[async_trait]
+    impl Checker for CaptureInvalidateChecker {
+        async fn load_table_meta(
+            &mut self,
+            _lookup_row: &RowData,
+        ) -> anyhow::Result<Arc<CheckerTbMeta>> {
+            unreachable!("control item test should not load table meta")
+        }
+
+        async fn fetch_rows_by_keys(
+            &mut self,
+            _table_meta: Arc<CheckerTbMeta>,
+            _lookup_rows: &[&RowData],
+        ) -> anyhow::Result<Vec<RowData>> {
+            unreachable!("control item test should not fetch rows")
+        }
+
+        async fn invalidate_meta_cache(&mut self, schema: &str, tb: &str) -> anyhow::Result<()> {
+            self.invalidated
+                .lock()
+                .unwrap()
+                .push((schema.to_string(), tb.to_string()));
+            Ok(())
         }
     }
 
@@ -1064,5 +1130,52 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
+    }
+
+    #[tokio::test]
+    async fn handle_control_item_routes_snapshot_finished_before_invalidate() {
+        let (_control_tx, control_rx) = mpsc::unbounded_channel();
+        let invalidated = Arc::new(StdMutex::new(Vec::new()));
+        let mut tb_map = HashMap::new();
+        tb_map.insert(
+            ("src_schema".to_string(), "src_tb".to_string()),
+            ("dst_schema".to_string(), "dst_tb".to_string()),
+        );
+        let router =
+            RdbRouter::from_maps_for_test(HashMap::new(), tb_map, HashMap::new(), HashMap::new());
+        let mut checker = DataChecker::new(
+            CaptureInvalidateChecker {
+                invalidated: invalidated.clone(),
+            },
+            "task-1".to_string(),
+            CheckContext {
+                router: Some(router),
+                ..Default::default()
+            },
+            CheckerIo {
+                batch_queue: Arc::new(StdMutex::new(LimitedQueue::new(1))),
+                batch_notify: Arc::new(Notify::new()),
+                dropped_items: Arc::new(AtomicU64::new(0)),
+                control_rx,
+            },
+            "unit-test",
+        );
+
+        let item = DtItem {
+            dt_data: DtData::Commit { xid: String::new() },
+            position: Position::RdbSnapshotFinished {
+                db_type: "mysql".to_string(),
+                schema: "src_schema".to_string(),
+                tb: "src_tb".to_string(),
+            },
+            data_origin_node: String::new(),
+        };
+
+        checker.handle_control_item(&item).await.unwrap();
+
+        assert_eq!(
+            invalidated.lock().unwrap().as_slice(),
+            &[("dst_schema".to_string(), "dst_tb".to_string())]
+        );
     }
 }

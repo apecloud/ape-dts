@@ -49,7 +49,8 @@ use dt_connector::{
             pg_struct_extractor::PgStructExtractor,
         },
         redis::{
-            redis_client::RedisClient, redis_psync_extractor::RedisPsyncExtractor,
+            redis_client::RedisClient, redis_cluster_psync_extractor::RedisClusterPsyncExtractor,
+            redis_psync_extractor::RedisPsyncExtractor,
             redis_reshard_extractor::RedisReshardExtractor,
             redis_scan_extractor::RedisScanExtractor,
             redis_snapshot_file_extractor::RedisSnapshotFileExtractor,
@@ -104,7 +105,7 @@ impl ExtractorUtil {
         monitor: TaskMonitorHandle,
         monitor_task_id: String,
         data_marker: Option<DataMarker>,
-        router: RdbRouter,
+        router: Option<RdbRouter>,
         recovery: Option<Arc<dyn Recovery + Send + Sync>>,
     ) -> anyhow::Result<Box<dyn Extractor + Send>> {
         let base_extractor = BaseExtractor {
@@ -482,7 +483,26 @@ impl ExtractorUtil {
                 url,
                 connection_auth,
                 repl_port,
+                is_cluster,
             } => {
+                if is_cluster {
+                    let extractor = RedisClusterPsyncExtractor {
+                        url,
+                        connection_auth,
+                        repl_port,
+                        syncer,
+                        filter,
+                        base_extractor,
+                        extract_state,
+                        extract_type: ExtractType::Snapshot,
+                        keepalive_interval_secs: 0,
+                        heartbeat_interval_secs: 0,
+                        heartbeat_key: String::new(),
+                        recovery,
+                    };
+                    return Ok(Box::new(extractor));
+                }
+
                 let extractor = RedisPsyncExtractor {
                     conn: RedisClient::new(&url, &connection_auth).await?,
                     syncer,
@@ -498,6 +518,8 @@ impl ExtractorUtil {
                     heartbeat_interval_secs: 0,
                     heartbeat_key: String::new(),
                     recovery,
+                    cluster_node: None,
+                    wait_task_finish: true,
                 };
                 Box::new(extractor)
             }
@@ -541,7 +563,26 @@ impl ExtractorUtil {
                 keepalive_interval_secs,
                 heartbeat_interval_secs,
                 heartbeat_key,
+                is_cluster,
             } => {
+                if is_cluster {
+                    let extractor = RedisClusterPsyncExtractor {
+                        url,
+                        connection_auth,
+                        repl_port,
+                        keepalive_interval_secs,
+                        heartbeat_interval_secs,
+                        heartbeat_key,
+                        syncer,
+                        filter,
+                        base_extractor,
+                        extract_state,
+                        extract_type: ExtractType::Cdc,
+                        recovery,
+                    };
+                    return Ok(Box::new(extractor));
+                }
+
                 let extractor = RedisPsyncExtractor {
                     conn: RedisClient::new(&url, &connection_auth).await?,
                     repl_id,
@@ -557,6 +598,8 @@ impl ExtractorUtil {
                     extract_state,
                     extract_type: ExtractType::Cdc,
                     recovery,
+                    cluster_node: None,
+                    wait_task_finish: true,
                 };
                 Box::new(extractor)
             }
@@ -569,7 +612,26 @@ impl ExtractorUtil {
                 keepalive_interval_secs,
                 heartbeat_interval_secs,
                 heartbeat_key,
+                is_cluster,
             } => {
+                if is_cluster {
+                    let extractor = RedisClusterPsyncExtractor {
+                        url,
+                        connection_auth,
+                        repl_port,
+                        keepalive_interval_secs,
+                        heartbeat_interval_secs,
+                        heartbeat_key,
+                        syncer,
+                        filter,
+                        base_extractor,
+                        extract_state,
+                        extract_type: ExtractType::SnapshotAndCdc,
+                        recovery,
+                    };
+                    return Ok(Box::new(extractor));
+                }
+
                 let extractor = RedisPsyncExtractor {
                     conn: RedisClient::new(&url, &connection_auth).await?,
                     syncer,
@@ -585,6 +647,8 @@ impl ExtractorUtil {
                     heartbeat_interval_secs,
                     heartbeat_key,
                     recovery,
+                    cluster_node: None,
+                    wait_task_finish: true,
                 };
                 Box::new(extractor)
             }

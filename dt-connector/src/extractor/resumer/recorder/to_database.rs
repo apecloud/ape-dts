@@ -1,11 +1,21 @@
 use anyhow::{bail, Context, Result};
 use async_trait::async_trait;
+use mongodb::{
+    bson::{doc, DateTime},
+    options::{IndexOptions, UpdateOptions},
+    IndexModel,
+};
 use sqlx::query;
 
 use crate::extractor::resumer::{
-    recorder::Recorder, utils::ResumerUtil, ResumerDbPool, ResumerType,
+    recorder::Recorder,
+    utils::{RedisResumerRecord, ResumerUtil},
+    ResumerDbPool, ResumerType,
 };
-use dt_common::{config::resumer_config::ResumerConfig, log_info, meta::position::Position};
+use dt_common::{
+    config::resumer_config::ResumerConfig, log_info, meta::position::Position,
+    utils::redis_util::RedisUtil,
+};
 
 pub struct DatabaseRecorder {
     task_id: String,
@@ -135,6 +145,91 @@ impl DatabaseRecorder {
                 }
                 Ok(())
             }
+            ResumerDbPool::Mongo(client) => {
+                let database = client.database(&self.schema);
+                let collection_names = database
+                    .list_collection_names(doc! { "name": &self.table })
+                    .await
+                    .with_context(|| {
+                        format!(
+                            "failed to list MongoDB collection {}.{}",
+                            self.schema, self.table
+                        )
+                    })?;
+
+                if collection_names.is_empty() {
+                    database
+                        .create_collection(&self.table, None)
+                        .await
+                        .with_context(|| {
+                            format!(
+                                "failed to create MongoDB collection {}.{}",
+                                self.schema, self.table
+                            )
+                        })?;
+                }
+
+                let collection = database.collection::<mongodb::bson::Document>(&self.table);
+                let index = IndexModel::builder()
+                    .keys(doc! {
+                        "task_id": 1,
+                        "resumer_type": 1,
+                        "position_key": 1,
+                    })
+                    .options(
+                        IndexOptions::builder()
+                            .name("uk_task_id_task_type_position_key".to_string())
+                            .unique(true)
+                            .build(),
+                    )
+                    .build();
+                collection
+                    .create_index(index, None)
+                    .await
+                    .with_context(|| {
+                        format!(
+                            "failed to create MongoDB resumer index on {}.{}",
+                            self.schema, self.table
+                        )
+                    })?;
+
+                if is_init {
+                    collection
+                        .delete_many(doc! { "task_id": task_id }, None)
+                        .await
+                        .with_context(|| {
+                            format!(
+                                "failed to delete MongoDB resumer records for task_id={}",
+                                task_id
+                            )
+                        })?;
+                }
+                Ok(())
+            }
+            ResumerDbPool::Redis(redis_conn) => {
+                if is_init {
+                    let mut conn =
+                        RedisUtil::create_redis_conn(&redis_conn.url, &redis_conn.connection_auth)
+                            .await?;
+                    let pattern = ResumerUtil::get_redis_resumer_scan_pattern(
+                        task_id,
+                        redis_conn.hash_tag.as_deref(),
+                    );
+                    let keys = ResumerUtil::scan_redis_keys(&mut conn, &pattern)?;
+                    if !keys.is_empty() {
+                        redis::cmd("DEL")
+                            .arg(&keys)
+                            .query::<usize>(&mut conn)
+                            .with_context(|| {
+                                format!(
+                                    "failed to delete Redis resumer records with pattern: {}",
+                                    pattern
+                                )
+                            })?;
+                    }
+                }
+                Ok(())
+            }
         }
     }
 
@@ -160,6 +255,8 @@ impl Recorder for DatabaseRecorder {
             log_info!("recorder not supported resumer type: {:?}", position);
             return Ok(());
         }
+        // Redis backend stores one key per logical resumer row. In cluster mode all keys
+        // share one hash tag and are written through the owning master node.
 
         match &self.pool {
             ResumerDbPool::MySql(pool) => {
@@ -201,6 +298,70 @@ impl Recorder for DatabaseRecorder {
                     .execute(pool)
                     .await
                     .with_context(|| format!("failed to upsert position record with sql: {sql}"))?;
+                Ok(())
+            }
+            ResumerDbPool::Mongo(client) => {
+                let collection = client
+                    .database(&self.schema)
+                    .collection::<mongodb::bson::Document>(&self.table);
+                let position_key = ResumerUtil::get_key_from_position(position);
+                let now = DateTime::now();
+                let update_options = UpdateOptions::builder().upsert(true).build();
+
+                collection
+                    .update_one(
+                        doc! {
+                            "task_id": &self.task_id,
+                            "resumer_type": resumer_type.to_string(),
+                            "position_key": &position_key,
+                        },
+                        doc! {
+                            "$set": {
+                                "position_data": position.to_string(),
+                                "updated_at": now,
+                            },
+                            "$setOnInsert": {
+                                "task_id": &self.task_id,
+                                "resumer_type": resumer_type.to_string(),
+                                "position_key": position_key,
+                                "created_at": now,
+                            },
+                        },
+                        update_options,
+                    )
+                    .await
+                    .with_context(|| {
+                        format!(
+                            "failed to upsert MongoDB resumer position in {}.{}",
+                            self.schema, self.table
+                        )
+                    })?;
+                Ok(())
+            }
+            ResumerDbPool::Redis(redis_conn) => {
+                let position_key = ResumerUtil::get_key_from_position(position);
+                let record = RedisResumerRecord {
+                    resumer_type: resumer_type.to_string(),
+                    position_key: position_key.clone(),
+                    position_data: position.to_string(),
+                };
+                let key = ResumerUtil::get_redis_resumer_key(
+                    &self.task_id,
+                    &record.resumer_type,
+                    &position_key,
+                    redis_conn.hash_tag.as_deref(),
+                );
+                let value = serde_json::to_string(&record)
+                    .context("failed to serialize Redis resumer record")?;
+                let mut conn =
+                    RedisUtil::create_redis_conn(&redis_conn.url, &redis_conn.connection_auth)
+                        .await?;
+
+                redis::cmd("SET")
+                    .arg(&key)
+                    .arg(value)
+                    .query::<()>(&mut conn)
+                    .with_context(|| format!("failed to set Redis resumer key: {}", key))?;
                 Ok(())
             }
         }

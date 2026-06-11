@@ -19,7 +19,7 @@ pub struct MysqlStructSinker {
     pub conn_pool: Pool<MySql>,
     pub conflict_policy: ConflictPolicyEnum,
     pub filter: RdbFilter,
-    pub router: RdbRouter,
+    pub router: Option<RdbRouter>,
     pub base_sinker: BaseSinker,
 }
 

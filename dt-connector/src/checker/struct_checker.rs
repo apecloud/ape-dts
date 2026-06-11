@@ -32,7 +32,7 @@ pub struct StructCheckerHandle {
     conn_pool_mysql: Option<Pool<MySql>>,
     conn_pool_pg: Option<Pool<Postgres>>,
     filter: RdbFilter,
-    router: RdbRouter,
+    router: Option<RdbRouter>,
     output_revise_sql: bool,
     retry_interval_secs: u64,
     max_retries: u32,
@@ -83,7 +83,7 @@ impl StructCheckerHandle {
         conn_pool_mysql: Option<Pool<MySql>>,
         conn_pool_pg: Option<Pool<Postgres>>,
         filter: RdbFilter,
-        router: RdbRouter,
+        router: Option<RdbRouter>,
         output_revise_sql: bool,
         retry_interval_secs: u64,
         max_retries: u32,
@@ -120,7 +120,11 @@ impl StructCheckerHandle {
     }
 
     async fn add_src_sqls(&mut self, struct_data: StructData) -> anyhow::Result<()> {
-        let routed = self.router.route_struct(struct_data);
+        let routed = if let Some(router) = &self.router {
+            router.route_struct(struct_data)
+        } else {
+            struct_data
+        };
         let mut statement = routed.statement;
         let sqls = statement.to_sqls(&self.filter)?;
         if !sqls.is_empty() {

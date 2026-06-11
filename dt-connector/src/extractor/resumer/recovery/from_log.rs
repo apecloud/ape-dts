@@ -6,6 +6,7 @@ use tokio::{fs::File, io::AsyncBufReadExt, io::BufReader};
 
 use crate::extractor::resumer::{
     recovery::{Recovery, RecoverySnapshotCache},
+    utils::ResumerUtil,
     CURRENT_POSITION_LOG_FLAG, TAIL_POSITION_COUNT,
 };
 use dt_common::{
@@ -87,13 +88,44 @@ impl LogRecovery {
         }
 
         if line.contains(CURRENT_POSITION_LOG_FLAG) {
-            self.cdc_cache
-                .insert(CDC_CURRENT_POSITION_KEY.to_string(), position);
+            self.cdc_cache.insert(
+                Self::cdc_cache_key(CDC_CURRENT_POSITION_KEY, &position),
+                position,
+            );
         } else {
-            self.cdc_cache
-                .insert(CDC_CHECKPOINT_POSITION_KEY.to_string(), position);
+            self.cdc_cache.insert(
+                Self::cdc_cache_key(CDC_CHECKPOINT_POSITION_KEY, &position),
+                position,
+            );
         }
         Ok(())
+    }
+
+    fn cdc_cache_key(prefix: &str, position: &Position) -> String {
+        format!(
+            "{}:{}",
+            prefix,
+            ResumerUtil::get_key_from_position(position)
+        )
+    }
+
+    fn get_cdc_resume_positions_by_prefix(&self, prefix: &str) -> Vec<Position> {
+        let key_prefix = format!("{}:", prefix);
+        let mut positions = self
+            .cdc_cache
+            .iter()
+            .filter_map(|entry| {
+                entry
+                    .key()
+                    .starts_with(&key_prefix)
+                    .then(|| (entry.key().clone(), entry.value().clone()))
+            })
+            .collect::<Vec<_>>();
+        positions.sort_by(|left, right| left.0.cmp(&right.0));
+        positions
+            .into_iter()
+            .map(|(_, position)| position)
+            .collect()
     }
 
     async fn parse_config_file<F>(
@@ -205,12 +237,92 @@ impl Recovery for LogRecovery {
         tb_positions.get(&key).map(|p| p.clone())
     }
     async fn get_cdc_resume_position(&self) -> Option<Position> {
-        if let Some(commit_position) = self.cdc_cache.get(CDC_CHECKPOINT_POSITION_KEY) {
-            Some(commit_position.clone())
+        let positions = self.get_cdc_resume_positions().await;
+        positions.into_iter().next()
+    }
+
+    async fn get_cdc_resume_positions(&self) -> Vec<Position> {
+        let checkpoint_positions =
+            self.get_cdc_resume_positions_by_prefix(CDC_CHECKPOINT_POSITION_KEY);
+        if !checkpoint_positions.is_empty() {
+            checkpoint_positions
         } else {
-            self.cdc_cache
-                .get(CDC_CURRENT_POSITION_KEY)
-                .map(|p| p.clone())
+            self.get_cdc_resume_positions_by_prefix(CDC_CURRENT_POSITION_KEY)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use dashmap::DashMap;
+
+    use super::{LogRecovery, RecoverySnapshotCache};
+    use crate::extractor::resumer::recovery::Recovery;
+    use dt_common::{
+        config::config_enums::{TaskKind, TaskType},
+        meta::position::Position,
+    };
+
+    fn new_log_recovery() -> LogRecovery {
+        LogRecovery {
+            task_type: TaskType::new(TaskKind::Cdc, None),
+            resume_config_file: String::new(),
+            resume_log_dir: String::new(),
+            snapshot_cache: RecoverySnapshotCache {
+                current_tb_positions: DashMap::new(),
+                checkpoint_tb_positions: DashMap::new(),
+                finished_tbs: DashMap::new(),
+            },
+            cdc_cache: DashMap::new(),
+        }
+    }
+
+    fn redis_position(node_id: &str, repl_offset: u64) -> Position {
+        Position::Redis {
+            node_id: Some(node_id.to_string()),
+            address: Some(format!("127.0.0.1:{repl_offset}")),
+            repl_id: format!("repl-{node_id}"),
+            repl_port: 10008,
+            repl_offset,
+            now_db_id: 0,
+            timestamp: String::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn cdc_log_recovery_keeps_cluster_checkpoint_positions_by_node() {
+        let recovery = new_log_recovery();
+        let node_1_old = redis_position("node-1", 10);
+        let node_1_new = redis_position("node-1", 30);
+        let node_2 = redis_position("node-2", 20);
+
+        recovery
+            .parse_cdc_line(&format!("checkpoint_position | {}", node_1_old))
+            .unwrap();
+        recovery
+            .parse_cdc_line(&format!("checkpoint_position | {}", node_2))
+            .unwrap();
+        recovery
+            .parse_cdc_line(&format!("checkpoint_position | {}", node_1_new))
+            .unwrap();
+
+        let positions = recovery.get_cdc_resume_positions().await;
+        assert_eq!(positions, vec![node_1_new, node_2]);
+    }
+
+    #[tokio::test]
+    async fn cdc_log_recovery_prefers_checkpoints_over_current_positions() {
+        let recovery = new_log_recovery();
+        let current = redis_position("node-1", 10);
+        let checkpoint = redis_position("node-1", 20);
+
+        recovery
+            .parse_cdc_line(&format!("current_position | {}", current))
+            .unwrap();
+        recovery
+            .parse_cdc_line(&format!("checkpoint_position | {}", checkpoint.clone()))
+            .unwrap();
+
+        assert_eq!(recovery.get_cdc_resume_positions().await, vec![checkpoint]);
     }
 }

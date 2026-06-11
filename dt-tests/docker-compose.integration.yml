@@ -683,11 +683,11 @@ services:
       start_period: 10s
       interval: 3s
 
-  redis-cluster-node1:
+  redis-source-cluster-node1:
     image: redis:7.0
-    container_name: redis-cluster-node1-it
+    container_name: redis-source-cluster-node1-it
     profiles: ["redis-cluster"]
-    hostname: redis-cluster-node1
+    hostname: redis-source-cluster-node1
     # DT_IT_HOST_IP is the host machine IPv4 address reachable by both the
     # local integration test process and containers. The integration test
     # script `dt-tests/scripts/run-integration-tests.sh` detects and exports
@@ -695,8 +695,8 @@ services:
     environment:
       DT_IT_HOST_IP: ${DT_IT_HOST_IP:-}
     ports:
-      - "6371:6379"
-      - "16371:16379"
+      - "26361:6379"
+      - "16361:16379"
     entrypoint:
       - sh
       - -c
@@ -708,19 +708,19 @@ services:
           --cluster-node-timeout 5000 \
           --appendonly yes \
           --cluster-announce-ip "$${DT_IT_HOST_IP:?DT_IT_HOST_IP is required}" \
-          --cluster-announce-port 6371 \
-          --cluster-announce-bus-port 16371
+          --cluster-announce-port 26361 \
+          --cluster-announce-bus-port 16361
 
-  redis-cluster-node2:
+  redis-source-cluster-node2:
     image: redis:7.0
-    container_name: redis-cluster-node2-it
+    container_name: redis-source-cluster-node2-it
     profiles: ["redis-cluster"]
-    hostname: redis-cluster-node2
+    hostname: redis-source-cluster-node2
     environment:
       DT_IT_HOST_IP: ${DT_IT_HOST_IP:-}
     ports:
-      - "6372:6379"
-      - "16372:16379"
+      - "26362:6379"
+      - "16362:16379"
     entrypoint:
       - sh
       - -c
@@ -732,19 +732,19 @@ services:
           --cluster-node-timeout 5000 \
           --appendonly yes \
           --cluster-announce-ip "$${DT_IT_HOST_IP:?DT_IT_HOST_IP is required}" \
-          --cluster-announce-port 6372 \
-          --cluster-announce-bus-port 16372
+          --cluster-announce-port 26362 \
+          --cluster-announce-bus-port 16362
 
-  redis-cluster-node3:
+  redis-source-cluster-node3:
     image: redis:7.0
-    container_name: redis-cluster-node3-it
+    container_name: redis-source-cluster-node3-it
     profiles: ["redis-cluster"]
-    hostname: redis-cluster-node3
+    hostname: redis-source-cluster-node3
     environment:
       DT_IT_HOST_IP: ${DT_IT_HOST_IP:-}
     ports:
-      - "6373:6379"
-      - "16373:16379"
+      - "26363:6379"
+      - "16363:16379"
     entrypoint:
       - sh
       - -c
@@ -756,17 +756,17 @@ services:
           --cluster-node-timeout 5000 \
           --appendonly yes \
           --cluster-announce-ip "$${DT_IT_HOST_IP:?DT_IT_HOST_IP is required}" \
-          --cluster-announce-port 6373 \
-          --cluster-announce-bus-port 16373
+          --cluster-announce-port 26363 \
+          --cluster-announce-bus-port 16363
 
-  redis-cluster-init:
+  redis-source-cluster-init:
     image: redis:7.0
-    container_name: redis-cluster-init-it
+    container_name: redis-source-cluster-init-it
     profiles: ["redis-cluster"]
     depends_on:
-      - redis-cluster-node1
-      - redis-cluster-node2
-      - redis-cluster-node3
+      - redis-source-cluster-node1
+      - redis-source-cluster-node2
+      - redis-source-cluster-node3
     # DT_IT_HOST_IP is reused here so `redis-cli --cluster create` reaches the
     # same host-published endpoints that Redis nodes advertise. The value is
     # provided automatically by `dt-tests/scripts/run-integration-tests.sh`.
@@ -778,23 +778,23 @@ services:
       - |
         set -eu
 
-        until redis-cli -h "$${DT_IT_HOST_IP:?DT_IT_HOST_IP is required}" -p 6371 ping \
-          && redis-cli -h "$${DT_IT_HOST_IP:?DT_IT_HOST_IP is required}" -p 6372 ping \
-          && redis-cli -h "$${DT_IT_HOST_IP:?DT_IT_HOST_IP is required}" -p 6373 ping; do
+        until redis-cli -h "$${DT_IT_HOST_IP:?DT_IT_HOST_IP is required}" -p 26361 ping \
+          && redis-cli -h "$${DT_IT_HOST_IP:?DT_IT_HOST_IP is required}" -p 26362 ping \
+          && redis-cli -h "$${DT_IT_HOST_IP:?DT_IT_HOST_IP is required}" -p 26363 ping; do
           sleep 1
         done
 
         cluster_ok() {
-          redis-cli -h "$${DT_IT_HOST_IP:?DT_IT_HOST_IP is required}" -p 6371 cluster info 2>/dev/null | grep -q 'cluster_state:ok' \
-            && redis-cli -h "$${DT_IT_HOST_IP:?DT_IT_HOST_IP is required}" -p 6371 cluster info 2>/dev/null | grep -q 'cluster_slots_assigned:16384'
+          redis-cli -h "$${DT_IT_HOST_IP:?DT_IT_HOST_IP is required}" -p 26361 cluster info 2>/dev/null | grep -q 'cluster_state:ok' \
+            && redis-cli -h "$${DT_IT_HOST_IP:?DT_IT_HOST_IP is required}" -p 26361 cluster info 2>/dev/null | grep -q 'cluster_slots_assigned:16384'
         }
 
         if ! cluster_ok; then
           for _ in $(seq 1 10); do
             if yes yes | redis-cli --cluster create \
-              "$${DT_IT_HOST_IP:?DT_IT_HOST_IP is required}":6371 \
-              "$${DT_IT_HOST_IP:?DT_IT_HOST_IP is required}":6372 \
-              "$${DT_IT_HOST_IP:?DT_IT_HOST_IP is required}":6373 \
+              "$${DT_IT_HOST_IP:?DT_IT_HOST_IP is required}":26361 \
+              "$${DT_IT_HOST_IP:?DT_IT_HOST_IP is required}":26362 \
+              "$${DT_IT_HOST_IP:?DT_IT_HOST_IP is required}":26363 \
               --cluster-replicas 0; then
               break
             fi
@@ -813,8 +813,142 @@ services:
         done
 
         echo "redis cluster failed to become ready" >&2
-        redis-cli -h "$${DT_IT_HOST_IP:?DT_IT_HOST_IP is required}" -p 6371 cluster nodes || true
-        redis-cli -h "$${DT_IT_HOST_IP:?DT_IT_HOST_IP is required}" -p 6371 cluster info || true
+        redis-cli -h "$${DT_IT_HOST_IP:?DT_IT_HOST_IP is required}" -p 26361 cluster nodes || true
+        redis-cli -h "$${DT_IT_HOST_IP:?DT_IT_HOST_IP is required}" -p 26361 cluster info || true
+        exit 1
+
+  redis-target-cluster-node1:
+    image: redis:7.0
+    container_name: redis-target-cluster-node1-it
+    profiles: ["redis-cluster"]
+    hostname: redis-target-cluster-node1
+    # DT_IT_HOST_IP is the host machine IPv4 address reachable by both the
+    # local integration test process and containers. The integration test
+    # script `dt-tests/scripts/run-integration-tests.sh` detects and exports
+    # this variable automatically before invoking `docker compose`.
+    environment:
+      DT_IT_HOST_IP: ${DT_IT_HOST_IP:-}
+    ports:
+      - "26371:6379"
+      - "16371:16379"
+    entrypoint:
+      - sh
+      - -c
+      - |
+        set -eu
+        exec redis-server \
+          --cluster-enabled yes \
+          --cluster-config-file nodes.conf \
+          --cluster-node-timeout 5000 \
+          --appendonly yes \
+          --cluster-announce-ip "$${DT_IT_HOST_IP:?DT_IT_HOST_IP is required}" \
+          --cluster-announce-port 26371 \
+          --cluster-announce-bus-port 16371
+
+  redis-target-cluster-node2:
+    image: redis:7.0
+    container_name: redis-target-cluster-node2-it
+    profiles: ["redis-cluster"]
+    hostname: redis-target-cluster-node2
+    environment:
+      DT_IT_HOST_IP: ${DT_IT_HOST_IP:-}
+    ports:
+      - "26372:6379"
+      - "16372:16379"
+    entrypoint:
+      - sh
+      - -c
+      - |
+        set -eu
+        exec redis-server \
+          --cluster-enabled yes \
+          --cluster-config-file nodes.conf \
+          --cluster-node-timeout 5000 \
+          --appendonly yes \
+          --cluster-announce-ip "$${DT_IT_HOST_IP:?DT_IT_HOST_IP is required}" \
+          --cluster-announce-port 26372 \
+          --cluster-announce-bus-port 16372
+
+  redis-target-cluster-node3:
+    image: redis:7.0
+    container_name: redis-target-cluster-node3-it
+    profiles: ["redis-cluster"]
+    hostname: redis-target-cluster-node3
+    environment:
+      DT_IT_HOST_IP: ${DT_IT_HOST_IP:-}
+    ports:
+      - "26373:6379"
+      - "16373:16379"
+    entrypoint:
+      - sh
+      - -c
+      - |
+        set -eu
+        exec redis-server \
+          --cluster-enabled yes \
+          --cluster-config-file nodes.conf \
+          --cluster-node-timeout 5000 \
+          --appendonly yes \
+          --cluster-announce-ip "$${DT_IT_HOST_IP:?DT_IT_HOST_IP is required}" \
+          --cluster-announce-port 26373 \
+          --cluster-announce-bus-port 16373
+
+  redis-target-cluster-init:
+    image: redis:7.0
+    container_name: redis-target-cluster-init-it
+    profiles: ["redis-cluster"]
+    depends_on:
+      - redis-target-cluster-node1
+      - redis-target-cluster-node2
+      - redis-target-cluster-node3
+    # DT_IT_HOST_IP is reused here so `redis-cli --cluster create` reaches the
+    # same host-published endpoints that Redis nodes advertise. The value is
+    # provided automatically by `dt-tests/scripts/run-integration-tests.sh`.
+    environment:
+      DT_IT_HOST_IP: ${DT_IT_HOST_IP:-}
+    entrypoint:
+      - sh
+      - -c
+      - |
+        set -eu
+
+        until redis-cli -h "$${DT_IT_HOST_IP:?DT_IT_HOST_IP is required}" -p 26371 ping \
+          && redis-cli -h "$${DT_IT_HOST_IP:?DT_IT_HOST_IP is required}" -p 26372 ping \
+          && redis-cli -h "$${DT_IT_HOST_IP:?DT_IT_HOST_IP is required}" -p 26373 ping; do
+          sleep 1
+        done
+
+        cluster_ok() {
+          redis-cli -h "$${DT_IT_HOST_IP:?DT_IT_HOST_IP is required}" -p 26371 cluster info 2>/dev/null | grep -q 'cluster_state:ok' \
+            && redis-cli -h "$${DT_IT_HOST_IP:?DT_IT_HOST_IP is required}" -p 26371 cluster info 2>/dev/null | grep -q 'cluster_slots_assigned:16384'
+        }
+
+        if ! cluster_ok; then
+          for _ in $(seq 1 10); do
+            if yes yes | redis-cli --cluster create \
+              "$${DT_IT_HOST_IP:?DT_IT_HOST_IP is required}":26371 \
+              "$${DT_IT_HOST_IP:?DT_IT_HOST_IP is required}":26372 \
+              "$${DT_IT_HOST_IP:?DT_IT_HOST_IP is required}":26373 \
+              --cluster-replicas 0; then
+              break
+            fi
+            sleep 2
+            if cluster_ok; then
+              break
+            fi
+          done
+        fi
+
+        for _ in $(seq 1 10); do
+          if cluster_ok; then
+            exit 0
+          fi
+          sleep 2
+        done
+
+        echo "redis cluster failed to become ready" >&2
+        redis-cli -h "$${DT_IT_HOST_IP:?DT_IT_HOST_IP is required}" -p 26371 cluster nodes || true
+        redis-cli -h "$${DT_IT_HOST_IP:?DT_IT_HOST_IP is required}" -p 26371 cluster info || true
         exit 1
 
   falkordb-src:

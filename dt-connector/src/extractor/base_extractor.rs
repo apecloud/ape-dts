@@ -141,7 +141,7 @@ impl ExtractState {
 #[derive(Clone)]
 pub struct BaseExtractor {
     pub buffer: Arc<DtQueue>,
-    pub router: RdbRouter,
+    pub router: Option<RdbRouter>,
     pub shut_down: Arc<AtomicBool>,
 }
 
@@ -181,7 +181,11 @@ impl BaseExtractor {
         row_data: RowData,
         position: Position,
     ) -> anyhow::Result<()> {
-        let row_data = self.router.route_row(row_data);
+        let row_data = if let Some(router) = &self.router {
+            router.route_row(row_data)
+        } else {
+            row_data
+        };
         self.push_dt_data(state, DtData::Dml { row_data }, position)
             .await
     }
@@ -192,7 +196,11 @@ impl BaseExtractor {
         ddl_data: DdlData,
         position: Position,
     ) -> anyhow::Result<()> {
-        let ddl_data = self.router.route_ddl(ddl_data);
+        let ddl_data = if let Some(router) = &self.router {
+            router.route_ddl(ddl_data)
+        } else {
+            ddl_data
+        };
         while !self.buffer.is_empty() {
             yield_now().await;
         }
@@ -215,7 +223,11 @@ impl BaseExtractor {
         state: &mut ExtractState,
         struct_data: StructData,
     ) -> anyhow::Result<()> {
-        let struct_data = self.router.route_struct(struct_data);
+        let struct_data = if let Some(router) = &self.router {
+            router.route_struct(struct_data)
+        } else {
+            struct_data
+        };
         self.push_dt_data(state, DtData::Struct { struct_data }, Position::None)
             .await
     }

@@ -4,6 +4,8 @@ use dt_common::{
     utils::limit_queue::LimitedQueue,
 };
 
+use crate::rdb_router::RdbRouter;
+
 #[derive(Clone, Default)]
 pub struct BaseSinker {
     pub monitor: TaskMonitorHandle,
@@ -32,6 +34,22 @@ impl BaseSinker {
 
     pub fn task_id_for_rows(&self, rows: &[RowData]) -> String {
         self.monitor.task_id_for_rows(rows)
+    }
+
+    pub fn source_task_id_for_rows(&self, rows: &[RowData], router: &Option<RdbRouter>) -> String {
+        if !self.monitor.is_snapshot_task() {
+            return self.monitor.default_task_id().to_string();
+        }
+
+        let Some(first) = rows.first() else {
+            return self.monitor.default_task_id().to_string();
+        };
+
+        let (schema, tb) = match router {
+            Some(router) => router.reverse_get_tb_map(&first.schema, &first.tb),
+            None => (first.schema.as_str(), first.tb.as_str()),
+        };
+        self.task_id_for_schema_tb(schema, tb)
     }
 
     pub fn ensure_monitor_for(&self, task_id: &str) {

@@ -97,15 +97,7 @@ impl RedisClient {
 
     pub async fn read_bytes(&mut self, length: usize) -> anyhow::Result<Vec<u8>> {
         let mut buf = vec![0; length];
-        // if length is bigger than buffer size of BufReader, the buf will be filled by 0,
-        // so here we must read from inner TcpStream instead of BufReader
-        // let n = self.stream.read(&mut buf).await.unwrap();
-        let mut read_count = 0;
-        while read_count < length {
-            // use async_std::net::TcpStream instead of tokio::net::TcpStream, tokio TcpStream may stuck
-            // when trying to get big data by multiple read.
-            read_count += self.stream.get_mut().read(&mut buf[read_count..]).await?;
-        }
+        self.stream.read_exact(&mut buf).await?;
         Ok(buf)
     }
 

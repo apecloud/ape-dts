@@ -7,7 +7,7 @@ use dt_common::{
 
 use crate::test_runner::redis_test_util::RedisTestUtil;
 
-use super::base_test_runner::BaseTestRunner;
+use super::base_test_runner::{BaseTestRunner, SqlLoadStrategy};
 
 pub struct RedisStatisticTestRunner {
     pub base: BaseTestRunner,
@@ -15,7 +15,10 @@ pub struct RedisStatisticTestRunner {
 
 impl RedisStatisticTestRunner {
     pub async fn new(relative_test_dir: &str) -> anyhow::Result<Self> {
-        let base = BaseTestRunner::new(relative_test_dir).await.unwrap();
+        let base =
+            BaseTestRunner::new_with_sql_load_strategy(relative_test_dir, SqlLoadStrategy::Line)
+                .await
+                .unwrap();
         Ok(Self { base })
     }
 

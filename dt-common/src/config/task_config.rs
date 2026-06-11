@@ -633,21 +633,31 @@ impl TaskConfig {
                 let app_name: String =
                     loader.get_with_default(EXTRACTOR, APP_NAME, APE_DTS.to_string());
                 match extract_type {
-                    ExtractType::Snapshot => ExtractorConfig::MongoSnapshot {
-                        url,
-                        connection_auth,
-                        app_name,
-                        db: String::new(),
-                        tb: String::new(),
-                        db_tbs: HashMap::new(),
-                        parallel_size: Self::load_snapshot_parallel_size(loader),
-                        parallel_type: loader.get_with_default(
-                            EXTRACTOR,
-                            "parallel_type",
-                            RdbParallelType::Table,
-                        ),
-                        batch_size,
-                    },
+                    ExtractType::Snapshot => {
+                        let batch_size = match u32::try_from(batch_size) {
+                            std::result::Result::Ok(batch_size) => batch_size,
+                            Err(_) => bail! { Error::ConfigError(format!(
+                                "config [{}].{} default value exceeds u32::MAX",
+                                EXTRACTOR, BATCH_SIZE,
+                            ))},
+                        };
+
+                        ExtractorConfig::MongoSnapshot {
+                            url,
+                            connection_auth,
+                            app_name,
+                            db: String::new(),
+                            tb: String::new(),
+                            db_tbs: HashMap::new(),
+                            parallel_size: Self::load_snapshot_parallel_size(loader),
+                            parallel_type: loader.get_with_default(
+                                EXTRACTOR,
+                                "parallel_type",
+                                RdbParallelType::Table,
+                            ),
+                            batch_size,
+                        }
+                    }
 
                     ExtractType::Cdc => ExtractorConfig::MongoCdc {
                         url,
@@ -679,6 +689,7 @@ impl TaskConfig {
                         url,
                         connection_auth,
                         repl_port,
+                        is_cluster: loader.get_optional(EXTRACTOR, "is_cluster"),
                     }
                 }
 
@@ -705,6 +716,7 @@ impl TaskConfig {
                         heartbeat_interval_secs,
                         heartbeat_key: loader.get_optional(EXTRACTOR, "heartbeat_key"),
                         now_db_id: loader.get_optional(EXTRACTOR, "now_db_id"),
+                        is_cluster: loader.get_optional(EXTRACTOR, "is_cluster"),
                     }
                 }
 
@@ -718,6 +730,7 @@ impl TaskConfig {
                         keepalive_interval_secs,
                         heartbeat_interval_secs,
                         heartbeat_key: loader.get_optional(EXTRACTOR, "heartbeat_key"),
+                        is_cluster: loader.get_optional(EXTRACTOR, "is_cluster"),
                     }
                 }
 

@@ -71,6 +71,24 @@ impl RdbMetaManager {
         }
     }
 
+    pub fn invalidate_cache(&mut self, schema: &str, tb: &str) {
+        if let Some(mysql_meta_manager) = &mut self.mysql_meta_manager {
+            mysql_meta_manager.invalidate_cache(schema, tb);
+        }
+        if let Some(pg_meta_manager) = &mut self.pg_meta_manager {
+            pg_meta_manager.invalidate_cache(schema, tb);
+        }
+    }
+
+    pub fn invalidate_cache_for_table(&mut self, schema: &str, tb: &str) {
+        if let Some(mysql_meta_manager) = &mut self.mysql_meta_manager {
+            mysql_meta_manager.invalidate_cache_for_table(schema, tb);
+        }
+        if let Some(pg_meta_manager) = &mut self.pg_meta_manager {
+            pg_meta_manager.invalidate_cache_for_table(schema, tb);
+        }
+    }
+
     pub fn parse_rdb_cols(
         key_map: &HashMap<String, Vec<String>>,
         cols: &[String],

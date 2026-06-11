@@ -69,13 +69,6 @@ macro_rules! create_filter {
     };
 }
 
-#[macro_export]
-macro_rules! create_router {
-    ($config:expr,$db_type:ident) => {
-        RdbRouter::from_config(&$config.router, &DbType::$db_type)?
-    };
-}
-
 impl SinkerUtil {
     fn push_sinker<S: Sinker + Send + 'static>(sub_sinkers: &mut Sinkers, sinker: S) {
         sub_sinkers.push(Arc::new(async_mutex::Mutex::new(Box::new(sinker))));
@@ -122,7 +115,7 @@ impl SinkerUtil {
                 replace,
                 ..
             } => {
-                let router = create_router!(config, Mysql);
+                let router = RdbRouter::from_config(&config.router, &DbType::Mysql)?;
 
                 let conn_pool = match client {
                     ConnClient::MySQL(conn_pool) => conn_pool,
@@ -155,7 +148,7 @@ impl SinkerUtil {
                 replace,
                 ..
             } => {
-                let router = create_router!(config, Pg);
+                let router = RdbRouter::from_config(&config.router, &DbType::Pg)?;
                 let conn_pool = match client {
                     ConnClient::PostgreSQL(conn_pool) => conn_pool,
                     _ => {
@@ -181,7 +174,7 @@ impl SinkerUtil {
             }
 
             SinkerConfig::Mongo { batch_size, .. } => {
-                let router = create_router!(config, Mongo);
+                let router = RdbRouter::from_config(&config.router, &DbType::Mongo)?;
                 let mongo_client = match client {
                     ConnClient::MongoDB(mongo_client) => mongo_client,
                     _ => {
@@ -206,7 +199,7 @@ impl SinkerUtil {
                 required_acks,
                 with_field_defs,
             } => {
-                let router = RdbRouter::from_config(
+                let router = RdbRouter::from_config_for_topic(
                     &config.router,
                     // use the db_type of extractor
                     &config.extractor_basic.db_type,
@@ -247,7 +240,7 @@ impl SinkerUtil {
                 conflict_policy, ..
             } => {
                 let filter = create_filter!(config, Mysql);
-                let router = create_router!(config, Mysql);
+                let router = RdbRouter::from_config(&config.router, &DbType::Mysql)?;
 
                 let conn_pool = match client {
                     ConnClient::MySQL(conn_pool) => conn_pool,
@@ -269,7 +262,7 @@ impl SinkerUtil {
                 conflict_policy, ..
             } => {
                 let filter = create_filter!(config, Pg);
-                let router = create_router!(config, Pg);
+                let router = RdbRouter::from_config(&config.router, &DbType::Pg)?;
 
                 let conn_pool = match client {
                     ConnClient::PostgreSQL(conn_pool) => conn_pool,
@@ -445,7 +438,7 @@ impl SinkerUtil {
                 )
                 .await?;
                 let filter = create_filter!(config, Mysql);
-                let router = create_router!(config, Mysql);
+                let router = RdbRouter::from_config(&config.router, &DbType::Mysql)?;
                 let extractor_meta_manager = ExtractorUtil::get_extractor_meta_manager(config)
                     .await?
                     .unwrap();
@@ -500,7 +493,7 @@ impl SinkerUtil {
                     .with_user(url_info.username())
                     .with_password(url_info.password().unwrap_or(""));
                 let filter = create_filter!(config, Mysql);
-                let router = create_router!(config, Mysql);
+                let router = RdbRouter::from_config(&config.router, &DbType::Mysql)?;
                 let extractor_meta_manager = ExtractorUtil::get_extractor_meta_manager(config)
                     .await?
                     .unwrap();
@@ -540,8 +533,7 @@ impl SinkerUtil {
                 s3_config,
                 engine,
             } => {
-                let router = create_router!(config, Mysql);
-                let reverse_router = router.reverse();
+                let router = RdbRouter::from_config(&config.router, &DbType::Mysql)?;
                 let conn_pool = TaskUtil::create_mysql_conn_pool(
                     &url,
                     &DbType::Foxlake,
@@ -575,7 +567,7 @@ impl SinkerUtil {
                         base_sinker: BaseSinker::new(monitor.clone(), monitor_interval),
                         schema,
                         tb,
-                        reverse_router: reverse_router.clone(),
+                        router: router.clone(),
                         orc_sequencer: orc_sequencer.clone(),
                     };
 
@@ -619,7 +611,7 @@ impl SinkerUtil {
                 )
                 .await?;
                 let s3_client = TaskUtil::create_s3_client(&s3_config)?;
-                let reverse_router = create_router!(config, Mysql).reverse();
+                let router = RdbRouter::from_config(&config.router, &DbType::Mysql)?;
                 let orc_sequencer = Arc::new(Mutex::new(OrcSequencer::new()));
 
                 for _ in 0..parallel_size {
@@ -643,7 +635,7 @@ impl SinkerUtil {
                         base_sinker: BaseSinker::new(monitor.clone(), monitor_interval),
                         schema,
                         tb,
-                        reverse_router: reverse_router.clone(),
+                        router: router.clone(),
                         orc_sequencer: orc_sequencer.clone(),
                     };
                     Self::push_sinker(&mut sub_sinkers, sinker);
@@ -685,7 +677,7 @@ impl SinkerUtil {
                 engine,
             } => {
                 let filter = create_filter!(config, Mysql);
-                let router = create_router!(config, Mysql);
+                let router = RdbRouter::from_config(&config.router, &DbType::Mysql)?;
                 let conn_pool = TaskUtil::create_mysql_conn_pool(
                     &url,
                     &DbType::Foxlake,

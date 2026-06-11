@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use anyhow::{bail, Result};
+use mongodb::Client;
 use sqlx::{MySql, Pool, Postgres};
 use strum::{Display, EnumString, IntoStaticStr};
 use tokio::time::Instant;
@@ -10,7 +11,10 @@ use crate::extractor::resumer::{
     recovery::{from_database::DatabaseRecovery, from_log::LogRecovery, Recovery},
 };
 use dt_common::{
-    config::{config_enums::TaskType, resumer_config::ResumerConfig},
+    config::{
+        config_enums::TaskType, connection_auth_config::ConnectionAuthConfig,
+        resumer_config::ResumerConfig,
+    },
     log_info, log_warn,
     meta::position::Position,
 };
@@ -28,7 +32,16 @@ const DEFAULT_POSITION_KEY: &str = "default_key";
 pub enum ResumerDbPool {
     MySql(Pool<MySql>),
     Postgres(Pool<Postgres>),
-    // TODO: add more database types here in the future
+    Mongo(Client),
+    Redis(RedisResumerConn),
+}
+
+#[derive(Clone, Debug)]
+pub struct RedisResumerConn {
+    pub url: String,
+    pub connection_auth: ConnectionAuthConfig,
+    pub is_cluster: bool,
+    pub hash_tag: Option<String>,
 }
 
 #[derive(Clone, Display, EnumString, IntoStaticStr, Debug, PartialEq, Eq)]

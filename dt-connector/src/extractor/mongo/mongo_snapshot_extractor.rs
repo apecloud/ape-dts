@@ -1,9 +1,9 @@
 use std::{collections::HashMap, sync::Arc};
 
-use anyhow::bail;
+use anyhow::{anyhow, bail};
 use async_trait::async_trait;
 use mongodb::{
-    bson::{doc, oid::ObjectId, Bson, Document},
+    bson::{doc, Document},
     options::FindOptions,
     Client,
 };
@@ -37,7 +37,7 @@ pub struct MongoSnapshotExtractor {
     pub db_tbs: HashMap<String, Vec<String>>,
     pub parallel_type: RdbParallelType,
     pub parallel_size: usize,
-    pub batch_size: usize,
+    pub batch_size: u32,
     pub mongo_client: Client,
     pub sample_rate: Option<u8>,
     pub recovery: Option<Arc<dyn Recovery + Send + Sync>>,
@@ -113,21 +113,21 @@ impl MongoSnapshotExtractor {
             self.batch_size
         );
 
-        let filter = if let Some(handler) = &self.recovery {
+        let resume_key = if let Some(handler) = &self.recovery {
             if let Some(Position::RdbSnapshot {
                 order_key: Some(OrderKey::Single((_, Some(value)))),
                 ..
             }) = handler.get_snapshot_resume_position(&db, &tb, false).await
             {
-                let value = ObjectId::parse_str(&value)?;
+                let key = Self::parse_resume_key(&value)?;
                 log_info!(
                     "[{}.{}] recovery from [{}]:[{}]",
                     db,
                     tb,
                     MongoConstants::ID,
-                    value
+                    key
                 );
-                Some(doc! {MongoConstants::ID: {"$gt": value}})
+                Some(key)
             } else {
                 None
             }
@@ -148,19 +148,26 @@ impl MongoSnapshotExtractor {
         let sample_limit = estimated_sample_limit(self.sample_rate, estimated_count);
         let mut find_options = FindOptions::builder()
             .sort(doc! {MongoConstants::ID: 1})
+            .batch_size(self.batch_size)
             .build();
         if let Some(limit) = sample_limit.and_then(|limit| i64::try_from(limit).ok()) {
             find_options.limit = Some(limit);
         }
+        let filter = resume_key.as_ref().map(Self::build_resume_filter);
         let mut cursor = collection.find(filter, find_options).await?;
-        let mut chunk_id_generator = SnapshotChunkIdGenerator::new(self.batch_size);
+        let mut chunk_id_generator = SnapshotChunkIdGenerator::new(self.batch_size as usize);
         while cursor.advance().await? {
             let doc = cursor.deserialize_current().map_err(|e| {
                 log_error!("error deserializing {}.{} document: {}", db, tb, e);
                 e
             })?;
 
-            let object_id = Self::get_object_id(&doc);
+            let key = MongoKey::from_doc(&doc).ok_or(anyhow!(
+                "skip {}.{} document without `_id`: {:?}",
+                db,
+                tb,
+                doc
+            ))?;
 
             let after = Self::build_after_cols(&doc);
             let row_data = RowData::new(
@@ -177,7 +184,7 @@ impl MongoSnapshotExtractor {
                 tb: tb.clone(),
                 order_key: Some(OrderKey::Single((
                     MongoConstants::ID.into(),
-                    Some(object_id),
+                    Some(key.to_string()),
                 ))),
             };
 
@@ -192,6 +199,7 @@ impl MongoSnapshotExtractor {
             tb,
             extract_state.monitor.counters.pushed_record_count
         );
+        // push schema and table info without routing.
         base_extractor
             .push_snapshot_finished(
                 &mut extract_state,
@@ -204,6 +212,20 @@ impl MongoSnapshotExtractor {
             .await?;
         extract_state.monitor.try_flush(true).await;
         Ok(())
+    }
+
+    fn build_resume_filter(key: &MongoKey) -> Document {
+        // use $expr to order multiple types of _id.
+        // for single type of _id, this has the same performance as filter like {"_id": {"$gt": key}}.
+        // ref https://www.mongodb.com/docs/manual/reference/operator/query/expr/
+        doc! {
+            "$expr": {
+                "$gt": [
+                    format!("${}", MongoConstants::ID),
+                    key.to_mongo_id(),
+                ],
+            },
+        }
     }
 
     fn build_after_cols(doc: &Document) -> HashMap<String, ColValue> {
@@ -219,13 +241,11 @@ impl MongoSnapshotExtractor {
         after
     }
 
-    fn get_object_id(doc: &Document) -> String {
-        if let Some(id) = doc.get(MongoConstants::ID) {
-            match id {
-                Bson::ObjectId(v) => return v.to_string(),
-                _ => return String::new(),
-            }
-        }
-        String::new()
+    fn parse_resume_key(value: &str) -> anyhow::Result<MongoKey> {
+        serde_json::from_str::<MongoKey>(value).or_else(|_| {
+            mongodb::bson::oid::ObjectId::parse_str(value)
+                .map(MongoKey::ObjectId)
+                .map_err(Into::into)
+        })
     }
 }

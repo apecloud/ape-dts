@@ -30,7 +30,7 @@ use dt_parallelizer::base_parallelizer::BaseParallelizer;
 #[derive(Default)]
 struct PositionInfo {
     last_received_position: Option<Position>,
-    last_commit_position: Option<Position>,
+    last_commit_positions: Vec<Position>,
     finished_positions: Vec<Position>,
 }
 
@@ -170,7 +170,7 @@ async fn fetch_new(
         .await
         .unwrap();
     let mut pending_snapshot_finished = HashMap::new();
-    let (_, last_received_position, last_commit_position) =
+    let (_, last_received_position, last_commit_positions) =
         BasePipeline::fetch_raw(&data, &mut pending_snapshot_finished);
     let finished_positions: Vec<Position> = pending_snapshot_finished.into_values().collect();
 
@@ -224,7 +224,7 @@ async fn fetch_new(
     pipeline.sent_batch_id.store(batch_id, Ordering::Release);
     if !response.data.is_empty()
         || last_received_position.is_some()
-        || last_commit_position.is_some()
+        || !last_commit_positions.is_empty()
         || !finished_positions.is_empty()
     {
         pending_ack_data.insert(batch_id, response);
@@ -232,7 +232,7 @@ async fn fetch_new(
             batch_id,
             PositionInfo {
                 last_received_position,
-                last_commit_position,
+                last_commit_positions,
                 finished_positions,
             },
         );
@@ -348,9 +348,9 @@ fn refresh_appending_ack_positions(
                 acked_position_info.last_received_position =
                     Some(last_received_position.to_owned());
             }
-            if let Some(last_commit_position) = &position_info.last_commit_position {
-                acked_position_info.last_commit_position = Some(last_commit_position.to_owned());
-            }
+            acked_position_info
+                .last_commit_positions
+                .extend(position_info.last_commit_positions.iter().cloned());
             acked_position_info
                 .finished_positions
                 .extend(position_info.finished_positions.iter().cloned());
@@ -364,7 +364,7 @@ fn record_checkpoint(position_info: &PositionInfo) {
     if let Some(current_position) = &position_info.last_received_position {
         log_position!("current_position | {}", current_position.to_string());
     }
-    if let Some(checkpoint_position) = &position_info.last_commit_position {
+    for checkpoint_position in &position_info.last_commit_positions {
         log_position!("checkpoint_position | {}", checkpoint_position.to_string());
     }
 }

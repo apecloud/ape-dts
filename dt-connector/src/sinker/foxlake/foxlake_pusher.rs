@@ -48,7 +48,7 @@ pub struct FoxlakePusher {
     pub batch_memory_bytes: usize,
     pub schema: Option<String>,
     pub tb: Option<String>,
-    pub reverse_router: RdbRouter,
+    pub router: Option<RdbRouter>,
     pub orc_sequencer: Arc<Mutex<OrcSequencer>>,
 }
 
@@ -153,9 +153,11 @@ impl FoxlakePusher {
 
             let (orc_data, insert_only) = self.generate_orc_data(batch_data, &tb_meta).await?;
 
-            let (src_schema, src_tb) = self
-                .reverse_router
-                .get_tb_map(&tb_meta.basic.schema, &tb_meta.basic.tb);
+            let (src_schema, src_tb) = if let Some(router) = &self.router {
+                router.reverse_get_tb_map(&tb_meta.basic.schema, &tb_meta.basic.tb)
+            } else {
+                (tb_meta.basic.schema.as_str(), tb_meta.basic.tb.as_str())
+            };
             let (data_file_name, meta_file_name, sequence_info) =
                 self.get_s3_file_info(src_schema, src_tb).await;
 

@@ -48,6 +48,10 @@ pub trait Sinker {
         Ok(())
     }
 
+    async fn handle_control_item(&mut self, _item: &DtItem) -> anyhow::Result<()> {
+        Ok(())
+    }
+
     fn get_id(&self) -> String {
         String::new()
     }

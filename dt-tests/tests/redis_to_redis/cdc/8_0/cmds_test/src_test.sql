@@ -16,7 +16,7 @@ BITFIELD 2-4 incrby u2 100 1 OVERFLOW SAT incrby u2 102 1
 BITFIELD 2-4 OVERFLOW FAIL incrby u2 102 1
 
 -- BITOP
--- AND 
+-- AND
 SET 3-1 "foobar"
 SET 3-2 "abcdef"
 BITOP AND 3-3 3-1 3-2
@@ -514,54 +514,56 @@ ZADD 80-1 2 "two"
 ZADD 80-2 1 "one"
 ZADD 80-2 2 "two"
 ZADD 80-2 3 "three"
-ZUNIONSTORE 80-3 2 80-1 zset2 WEIGHTS 2 3
+ZUNIONSTORE 80-3 2 80-1 80-2 WEIGHTS 2 3
 -- ZRANGE 80-3 0 -1 WITHSCORES
 
 -- Time Series
-TS.CREATE tsdb RETENTION 60000 DUPLICATE_POLICY LAST 
-TS.ADD tsdb 1000 10.5 
-TS.ADD tsdb 2000 20.7 
-TS.ADD tsdb 3000 30.2 
+TS.CREATE tsdb RETENTION 60000 DUPLICATE_POLICY LAST
+TS.ADD tsdb 1000 10.5
+TS.ADD tsdb 2000 20.7
+TS.ADD tsdb 3000 30.2
 TS.INCRBY tsdb 1.5 TIMESTAMP 3100
-TS.DECRBY tsdb 0.5 TIMESTAMP 3200 
+TS.DECRBY tsdb 0.5 TIMESTAMP 3200
 TS.MADD tsdb 4100 10 tsdb 4200 20
 TS.ALTER tsdb RETENTION 120000
 
 -- Bloom Filter
-BF.RESERVE bf -1 0.01 1000 
-BF.ADD bf -1 "item1" 
-BF.ADD bf -1 "item2" 
-BF.ADD bf -1 "item3" 
-BF.MADD bf -2 "item1" "item2" "item3" 
-BF.INSERT bf -3 CAPACITY 1000 ERROR 0.01 ITEMS "item1" "item2" "item3"
+BF.RESERVE bf-1 0.01 1000
+BF.ADD bf-1 "item1"
+BF.ADD bf-1 "item2"
+BF.ADD bf-1 "item3"
+BF.MADD bf-2 "item1" "item2" "item3"
+BF.INSERT bf-3 CAPACITY 1000 ERROR 0.01 ITEMS "item1" "item2" "item3"
 
 -- Cuckoo Filter
-CF.RESERVE cf -1 1000 
-CF.ADD cf -1 "item1" 
-CF.ADD cf -1 "item2" 
-CF.ADD cf -1 "item3" 
-CF.ADDNX cf -2 "item1" 
-CF.INSERT cf -3 CAPACITY 1000 ITEMS "item1" "item2" "item3" 
-CF.DEL cf -1 "item1"
+CF.RESERVE cf-1 1000
+CF.ADD cf-1 "item1"
+CF.ADD cf-1 "item2"
+CF.ADD cf-1 "item3"
+CF.ADDNX cf-2 "item1"
+CF.INSERT cf-3 CAPACITY 1000 ITEMS "item1" "item2" "item3"
+CF.DEL cf-1 "item1"
 
 -- Count-Min Sketch
-CMS.INITBYPROB cmsk -1 0.001 0.01 
-CMS.INCRBY cmsk -1 "item1" 5 
-CMS.INCRBY cmsk -1 "item2" 10 
-CMS.INCRBY cmsk -1 "item3" 15 
-CMS.INITBYDIM cmsk -2 1000 10 
-CMS.MERGE cmsk -3 2 cmsk -1 cmsk -2
+CMS.INITBYPROB cmsk-prob 0.001 0.01
+CMS.INITBYDIM cmsk-1 1000 10
+CMS.INCRBY cmsk-1 "item1" 5
+CMS.INCRBY cmsk-1 "item2" 10
+CMS.INCRBY cmsk-1 "item3" 15
+CMS.INITBYDIM cmsk-2 1000 10
+CMS.INITBYDIM cmsk-3 1000 10
+CMS.MERGE cmsk-3 2 cmsk-1 cmsk-2
 
 -- Top-K
-TOPK.RESERVE topk -1 3 50 5 0.9 
-TOPK.ADD topk -1 "item1" "item2" "item3" "item1" "item1" 
-TOPK.INCRBY topk -2 "item1" 5 "item2" 3 "item3" 1 
-TOPK.LIST topk -1 
-TOPK.QUERY topk -1 "item1" "item2" "item4"
+TOPK.RESERVE topk-1 3 50 5 0.9
+TOPK.ADD topk-1 "item1" "item2" "item3" "item1" "item1"
+TOPK.INCRBY topk-1 "item1" 5 "item2" 3 "item3" 1
+TOPK.LIST topk-1
+TOPK.QUERY topk-1 "item1" "item2" "item4"
 
 -- T-Digest
-TDIGEST.CREATE tdigest -1 100 
-TDIGEST.ADD tdigest -1 10 20 30 40 50 
-TDIGEST.RESET tdigest -1 
-TDIGEST.ADD tdigest -1 15 25 35 45 55 
-TDIGEST.MERGE tdigest -2 2 tdigest -1 tdigest -1
+TDIGEST.CREATE tdigest-1 COMPRESSION 100
+TDIGEST.ADD tdigest-1 10 20 30 40 50
+TDIGEST.RESET tdigest-1
+TDIGEST.ADD tdigest-1 15 25 35 45 55
+TDIGEST.MERGE tdigest-2 2 tdigest-1 tdigest-1

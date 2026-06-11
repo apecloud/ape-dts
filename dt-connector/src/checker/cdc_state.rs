@@ -245,7 +245,11 @@ impl<C: Checker> DataChecker<C> {
 
     fn build_restored_entry(&self, key: RecheckKey) -> CheckEntry {
         let lookup_row = key.to_lookup_row();
-        let source_row = self.ctx.reverse_router.route_row(lookup_row.clone());
+        let source_row = if let Some(router) = &self.ctx.router {
+            router.reverse_route_row(lookup_row.clone())
+        } else {
+            lookup_row.clone()
+        };
         let id_col_values = match source_row.row_type {
             RowType::Delete => source_row.before.as_ref(),
             _ => source_row.after.as_ref(),
@@ -283,11 +287,16 @@ impl<C: Checker> DataChecker<C> {
             .source_checker
             .clone()
             .context("missing source_checker for cdc recheck")?;
-        let forward_router = self.ctx.reverse_router.reverse();
         let lookup_rows = keys
             .iter()
             .map(RecheckKey::to_lookup_row)
-            .map(|row| self.ctx.reverse_router.route_row(row))
+            .map(|row| {
+                if let Some(router) = &self.ctx.router {
+                    router.reverse_route_row(row)
+                } else {
+                    row
+                }
+            })
             .collect::<Vec<_>>();
         let mut grouped = HashMap::<(&str, &str), Vec<&RowData>>::new();
         for row in &lookup_rows {
@@ -309,7 +318,13 @@ impl<C: Checker> DataChecker<C> {
                     .fetch_rows_by_keys(tb_meta, &group)
                     .await?
                     .into_iter()
-                    .map(|row| forward_router.route_row(row)),
+                    .map(|row| {
+                        if let Some(router) = &self.ctx.router {
+                            router.route_row(row)
+                        } else {
+                            row
+                        }
+                    }),
             );
         }
         Ok(rows)

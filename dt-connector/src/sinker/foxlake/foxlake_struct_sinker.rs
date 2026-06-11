@@ -21,7 +21,7 @@ pub struct FoxlakeStructSinker {
     pub conn_pool: Pool<MySql>,
     pub conflict_policy: ConflictPolicyEnum,
     pub filter: RdbFilter,
-    pub router: RdbRouter,
+    pub router: Option<RdbRouter>,
     pub engine: String,
     pub base_sinker: BaseSinker,
 }

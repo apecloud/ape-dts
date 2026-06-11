@@ -45,7 +45,7 @@ pub struct RdbTestRunner {
     pub dst_conn_pool_pg: Option<Pool<Postgres>>,
     pub meta_center_pool_mysql: Option<Pool<MySql>>,
     pub config: TaskConfig,
-    pub router: RdbRouter,
+    pub router: Option<RdbRouter>,
     pub filter: RdbFilter,
     pub unordered_compare: bool, // whether to compare rows in unordered way
 }
@@ -727,7 +727,10 @@ impl RdbTestRunner {
         let dst_db_type = self.get_db_type(DST);
 
         // router: col_map
-        let col_map = self.router.get_col_map(&src_db_tb.0, &src_db_tb.1);
+        let col_map = self
+            .router
+            .as_ref()
+            .and_then(|router| router.get_col_map(&src_db_tb.0, &src_db_tb.1));
         // filter: ignore_cols
         let ignore_cols = self.filter.get_ignore_cols(&src_db_tb.0, &src_db_tb.1);
 
@@ -1139,7 +1142,10 @@ impl RdbTestRunner {
 
         let mut dst_db_tbs = vec![];
         for (db, tb) in src_db_tbs.iter() {
-            let (dst_db, dst_tb) = self.router.get_tb_map(db, tb);
+            let (dst_db, dst_tb) = match &self.router {
+                Some(router) => router.get_tb_map(db, tb),
+                None => (db.as_str(), tb.as_str()),
+            };
             dst_db_tbs.push((dst_db.into(), dst_tb.into()));
         }
 

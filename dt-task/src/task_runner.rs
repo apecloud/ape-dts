@@ -23,10 +23,7 @@ use tokio::{
 use super::{
     extractor_util::ExtractorUtil, parallelizer_util::ParallelizerUtil, sinker_util::SinkerUtil,
 };
-use crate::{
-    create_router,
-    task_util::{ConnClient, TaskUtil},
-};
+use crate::task_util::{ConnClient, TaskUtil};
 use async_mutex::Mutex as AsyncMutex;
 use std::sync::Mutex as StdMutex;
 
@@ -466,7 +463,7 @@ impl TaskRunner {
         extractor_config: ExtractorConfig,
         extractor_client: ConnClient,
         sinker_client: ConnClient,
-        router: Arc<RdbRouter>,
+        router: Arc<Option<RdbRouter>>,
         recorder: Option<Arc<dyn Recorder + Send + Sync>>,
         recovery: Option<Arc<dyn Recovery + Send + Sync>>,
         check_summary: Option<Arc<AsyncMutex<CheckSummaryLog>>>,
@@ -492,6 +489,7 @@ impl TaskRunner {
         let syncer = Arc::new(Mutex::new(Syncer {
             received_position: Position::None,
             committed_position: Position::None,
+            committed_positions: HashMap::new(),
         }));
 
         let (extractor_data_marker, sinker_data_marker) = if let Some(data_marker_config) =
@@ -1026,11 +1024,11 @@ impl TaskRunner {
 
         let build_check_context =
             |extractor_meta_manager,
-             reverse_router,
+             router,
              source_checker: Option<Arc<AsyncMutex<Box<dyn Checker>>>>,
              revise_match_full_row| CheckContext {
                 extractor_meta_manager,
-                reverse_router,
+                router,
                 batch_size: checker_batch_size,
                 monitor: monitor.clone(),
                 base_sinker: BaseSinker::new(
@@ -1058,7 +1056,7 @@ impl TaskRunner {
 
         match checker_db_type {
             DbType::Mysql => {
-                let reverse_router = create_router!(self.config, Mysql).reverse();
+                let router = RdbRouter::from_config(&self.config.router, &DbType::Mysql)?;
                 let extractor_meta_manager =
                     ExtractorUtil::get_extractor_meta_manager(&self.config).await?;
                 let source_checker = self
@@ -1083,7 +1081,7 @@ impl TaskRunner {
                     checker_task_id.clone(),
                     build_check_context(
                         extractor_meta_manager,
-                        reverse_router,
+                        router,
                         source_checker,
                         cfg.revise_match_full_row,
                     ),
@@ -1093,7 +1091,7 @@ impl TaskRunner {
                 Ok(Some(CheckerHandle::Data(checker)))
             }
             DbType::Pg => {
-                let reverse_router = create_router!(self.config, Pg).reverse();
+                let router = RdbRouter::from_config(&self.config.router, &DbType::Pg)?;
                 let extractor_meta_manager =
                     ExtractorUtil::get_extractor_meta_manager(&self.config).await?;
                 let source_checker = self
@@ -1115,7 +1113,7 @@ impl TaskRunner {
                     checker_task_id.clone(),
                     build_check_context(
                         extractor_meta_manager,
-                        reverse_router,
+                        router,
                         source_checker,
                         cfg.revise_match_full_row,
                     ),
@@ -1125,7 +1123,7 @@ impl TaskRunner {
                 Ok(Some(CheckerHandle::Data(checker)))
             }
             DbType::Mongo => {
-                let reverse_router = create_router!(self.config, Mongo).reverse();
+                let router = RdbRouter::from_config(&self.config.router, &DbType::Mongo)?;
                 let source_checker = self
                     .create_source_checker(is_cdc_task, enable_sqlx_log)
                     .await?;
@@ -1143,7 +1141,7 @@ impl TaskRunner {
                 let checker = DataCheckerHandle::spawn(
                     MongoChecker::new(mongo_client),
                     checker_task_id.clone(),
-                    build_check_context(None, reverse_router, source_checker, false),
+                    build_check_context(None, router, source_checker, false),
                     queue_size,
                     "MongoChecker",
                 );

@@ -23,9 +23,22 @@ pub struct BaseTestRunner {
     pub meta_center_prepare_sqls: Vec<String>,
 }
 
+#[derive(Clone, Copy)]
+pub enum SqlLoadStrategy {
+    Semicolon,
+    Line,
+}
+
 #[allow(dead_code)]
 impl BaseTestRunner {
     pub async fn new(relative_test_dir: &str) -> anyhow::Result<Self> {
+        Self::new_with_sql_load_strategy(relative_test_dir, SqlLoadStrategy::Semicolon).await
+    }
+
+    pub async fn new_with_sql_load_strategy(
+        relative_test_dir: &str,
+        sql_load_strategy: SqlLoadStrategy,
+    ) -> anyhow::Result<Self> {
         let test_dir = TestConfigUtil::get_absolute_path(relative_test_dir);
 
         let dst_task_config_file =
@@ -41,7 +54,7 @@ impl BaseTestRunner {
             src_clean_sqls,
             dst_clean_sqls,
             meta_center_prepare_sqls,
-        ) = Self::load_sqls(&test_dir);
+        ) = Self::load_sqls(&test_dir, sql_load_strategy);
 
         Ok(Self {
             task_config_file: dst_task_config_file,
@@ -133,6 +146,7 @@ impl BaseTestRunner {
     #[allow(clippy::type_complexity)]
     fn load_sqls(
         test_dir: &str,
+        sql_load_strategy: SqlLoadStrategy,
     ) -> (
         Vec<String>,
         Vec<String>,
@@ -147,7 +161,7 @@ impl BaseTestRunner {
             if !Self::check_path_exists(&full_sql_path) {
                 return Vec::new();
             }
-            Self::load_sql_file(&full_sql_path)
+            Self::load_sql_file(&full_sql_path, sql_load_strategy)
         };
 
         (
@@ -165,8 +179,12 @@ impl BaseTestRunner {
     /// 1. Handles multi-line SQLs automatically.
     /// 2. Handles standard SQLs split across lines (e.g. INSERT VALUES ...) by waiting for a semicolon ';'.
     /// 3. Ignores lines starting with '--'.
-    fn load_sql_file(sql_file: &str) -> Vec<String> {
+    fn load_sql_file(sql_file: &str, sql_load_strategy: SqlLoadStrategy) -> Vec<String> {
         let lines = Self::load_file(sql_file);
+        if matches!(sql_load_strategy, SqlLoadStrategy::Line) {
+            return Self::load_sql_file_by_line(lines);
+        }
+
         let mut sqls = Vec::new();
         let mut current_sql = String::new();
         let mut in_backtick_block = false;
@@ -266,6 +284,23 @@ impl BaseTestRunner {
         sqls
     }
 
+    fn load_sql_file_by_line(lines: Vec<String>) -> Vec<String> {
+        let mut sqls = Vec::new();
+        for line in lines {
+            let line_content = if let Some(idx) = line.find("--") {
+                &line[..idx]
+            } else {
+                &line
+            };
+
+            let sql = line_content.trim().trim_end_matches(';').trim();
+            if !sql.is_empty() {
+                sqls.push(sql.to_string());
+            }
+        }
+        sqls
+    }
+
     fn flush_sql(current_sql: &mut String) -> String {
         let sql = current_sql.trim().trim_end_matches(';').to_string();
         current_sql.clear();
@@ -298,5 +333,30 @@ impl BaseTestRunner {
             return Some(data_marker);
         }
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::BaseTestRunner;
+
+    #[test]
+    fn load_sql_file_by_line_keeps_one_redis_command_per_line() {
+        let sqls = BaseTestRunner::load_sql_file_by_line(vec![
+            "-- comment".to_string(),
+            "SET key_1 value_1".to_string(),
+            "HSET key_2 field value;".to_string(),
+            "   ".to_string(),
+            "LPUSH key_3 value -- inline comment".to_string(),
+        ]);
+
+        assert_eq!(
+            sqls,
+            vec![
+                "SET key_1 value_1".to_string(),
+                "HSET key_2 field value".to_string(),
+                "LPUSH key_3 value".to_string(),
+            ]
+        );
     }
 }

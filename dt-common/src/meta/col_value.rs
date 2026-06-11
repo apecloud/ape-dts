@@ -343,7 +343,8 @@ impl ColValue {
     }
 
     fn mongo_doc_to_string(doc: &Document) -> String {
-        // Use Relaxed Extended JSON to make it more human-readable while preserving necessary types.
+        // Use Canonical Extended JSON so BSON values with the same JSON value but different BSON
+        // types, e.g. Int32(1) and Int64(1), remain distinguishable.
         // https://www.mongodb.com/docs/manual/reference/mongodb-extended-json/
         let bson = Bson::Document(doc.clone());
         match bson.into_relaxed_extjson() {
