@@ -18,7 +18,7 @@ use crate::extractor::{
         redis_resp_types::Value,
         StreamReader,
     },
-    resumer::recovery::Recovery,
+    resumer::{recovery::Recovery, utils::ResumerUtil},
 };
 use crate::Extractor;
 use dt_common::{
@@ -250,14 +250,7 @@ impl RedisPsyncExtractor {
                         &mut self.extract_state,
                         &mut self.filter,
                         entry,
-                        Self::rdb_entry_position_from_parts(
-                            &cluster_node,
-                            &repl_id,
-                            repl_port,
-                            repl_offset,
-                            self.now_db_id,
-                        )
-                        .await,
+                        Position::None,
                     )
                     .await?;
                 }
@@ -465,28 +458,6 @@ impl RedisPsyncExtractor {
         .await
     }
 
-    async fn rdb_entry_position_from_parts(
-        cluster_node: &Option<RedisPsyncNode>,
-        repl_id: &str,
-        repl_port: u64,
-        repl_offset: u64,
-        now_db_id: i64,
-    ) -> Position {
-        if let Some(node) = cluster_node {
-            return Position::Redis {
-                node_id: Some(node.id.clone()),
-                address: Some(node.address.clone()),
-                repl_id: repl_id.to_string(),
-                repl_port,
-                repl_offset,
-                now_db_id,
-                timestamp: String::new(),
-            };
-        }
-
-        Position::None
-    }
-
     async fn position_from_parts(
         cluster_node: &Option<RedisPsyncNode>,
         repl_id: &str,
@@ -521,7 +492,27 @@ impl RedisPsyncExtractor {
     async fn keep_alive_ack(&mut self) -> anyhow::Result<()> {
         // send replconf ack to keep the connection alive
         let mut position_repl_offset = self.repl_offset;
-        let committed_position = self.syncer.lock().await.committed_position.clone();
+        let committed_position = {
+            let syncer = self.syncer.lock().await;
+            if let Some(cluster_node) = &self.cluster_node {
+                let position_key = ResumerUtil::get_key_from_position(&Position::Redis {
+                    node_id: Some(cluster_node.id.clone()),
+                    address: Some(cluster_node.address.clone()),
+                    repl_id: String::new(),
+                    repl_port: 0,
+                    repl_offset: 0,
+                    now_db_id: 0,
+                    timestamp: String::new(),
+                });
+                syncer
+                    .committed_positions
+                    .get(&position_key)
+                    .cloned()
+                    .unwrap_or_else(|| syncer.committed_position.clone())
+            } else {
+                syncer.committed_position.clone()
+            }
+        };
         if let Position::Redis {
             node_id,
             address,

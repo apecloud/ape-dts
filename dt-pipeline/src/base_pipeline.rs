@@ -636,7 +636,11 @@ impl BasePipeline {
         }
 
         if !matches!(checker_position, Position::None) {
-            self.syncer.lock().await.committed_position = checker_position.to_owned();
+            let mut syncer = self.syncer.lock().await;
+            syncer.committed_position = checker_position.to_owned();
+            if !last_commit_positions.is_empty() {
+                syncer.committed_positions = last_commit_positions.clone();
+            }
         }
 
         self.monitor.set_counter(

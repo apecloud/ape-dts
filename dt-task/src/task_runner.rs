@@ -489,6 +489,7 @@ impl TaskRunner {
         let syncer = Arc::new(Mutex::new(Syncer {
             received_position: Position::None,
             committed_position: Position::None,
+            committed_positions: HashMap::new(),
         }));
 
         let (extractor_data_marker, sinker_data_marker) = if let Some(data_marker_config) =
