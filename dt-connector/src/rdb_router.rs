@@ -1,4 +1,4 @@
-use anyhow::Ok;
+use anyhow::{bail, Context, Ok};
 use dt_common::{
     config::{
         config_enums::DbType, config_token_parser::ConfigTokenParser, router_config::RouterConfig,
@@ -119,6 +119,18 @@ impl RdbRouter {
 
     pub fn reverse_route_struct(&self, struct_data: StructData) -> StructData {
         self.reverse.route_struct(struct_data)
+    }
+
+    pub fn route_redis_db_id(&self, db_id: i64) -> anyhow::Result<i64> {
+        self.forward.route_redis_db_id(db_id)
+    }
+
+    pub fn validate_redis_db_map(&self) -> anyhow::Result<()> {
+        self.forward.validate_redis_db_map()
+    }
+
+    pub fn validate_redis_target_cluster_db_map(&self) -> anyhow::Result<()> {
+        self.forward.validate_redis_target_cluster_db_map()
     }
 
     #[cfg(test)]
@@ -328,6 +340,45 @@ impl RdbRouterInner {
         }
 
         struct_data
+    }
+
+    fn route_redis_db_id(&self, db_id: i64) -> anyhow::Result<i64> {
+        let src_db = db_id.to_string();
+        let dst_db = self.get_schema_map(&src_db);
+        dst_db.parse::<i64>().with_context(|| {
+            format!(
+                "invalid Redis db mapping target. src_db=[{}], dst_db=[{}]",
+                src_db, dst_db
+            )
+        })
+    }
+
+    fn validate_redis_db_map(&self) -> anyhow::Result<()> {
+        for (src_db, dst_db) in self.schema_map.iter() {
+            src_db
+                .parse::<i64>()
+                .with_context(|| format!("invalid Redis db mapping source: {}", src_db))?;
+            dst_db
+                .parse::<i64>()
+                .with_context(|| format!("invalid Redis db mapping target: {}", dst_db))?;
+        }
+        Ok(())
+    }
+
+    fn validate_redis_target_cluster_db_map(&self) -> anyhow::Result<()> {
+        for (src_db, dst_db) in self.schema_map.iter() {
+            let dst_db_id = dst_db
+                .parse::<i64>()
+                .with_context(|| format!("invalid Redis db mapping target: {}", dst_db))?;
+            if dst_db_id != 0 {
+                bail!(
+                    "Redis Cluster target only supports db 0, invalid db_map: {}:{}",
+                    src_db,
+                    dst_db
+                );
+            }
+        }
+        Ok(())
     }
 
     fn parse_schema_map(config_str: &str, db_type: &DbType) -> anyhow::Result<SchemaMap> {
@@ -620,5 +671,35 @@ mod tests {
         assert_eq!(topic_router.get_col_map("src_db", "src_tb"), None);
         assert_eq!(topic_router.reverse_get_col_map("dst_db", "dst_tb"), None);
         assert_eq!(topic_router.get_topic("src_db", "src_tb"), "test");
+    }
+
+    #[test]
+    fn test_redis_db_map() {
+        let db_map = RdbRouter::parse_schema_map("0:1,2:3", &DbType::Redis).unwrap();
+        let router =
+            RdbRouter::from_maps_for_test(db_map, HashMap::new(), HashMap::new(), HashMap::new());
+
+        router.validate_redis_db_map().unwrap();
+        assert_eq!(router.route_redis_db_id(0).unwrap(), 1);
+        assert_eq!(router.route_redis_db_id(2).unwrap(), 3);
+        assert_eq!(router.route_redis_db_id(4).unwrap(), 4);
+    }
+
+    #[test]
+    fn test_redis_db_map_validation() {
+        let db_map = RdbRouter::parse_schema_map("0:abc", &DbType::Redis).unwrap();
+        let router =
+            RdbRouter::from_maps_for_test(db_map, HashMap::new(), HashMap::new(), HashMap::new());
+        assert!(router.validate_redis_db_map().is_err());
+
+        let db_map = RdbRouter::parse_schema_map("0:1", &DbType::Redis).unwrap();
+        let router =
+            RdbRouter::from_maps_for_test(db_map, HashMap::new(), HashMap::new(), HashMap::new());
+        assert!(router.validate_redis_target_cluster_db_map().is_err());
+
+        let db_map = RdbRouter::parse_schema_map("0:0", &DbType::Redis).unwrap();
+        let router =
+            RdbRouter::from_maps_for_test(db_map, HashMap::new(), HashMap::new(), HashMap::new());
+        router.validate_redis_target_cluster_db_map().unwrap();
     }
 }

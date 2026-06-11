@@ -11,6 +11,7 @@ use dt_common::{
     rdb_filter::RdbFilter,
     utils::{redis_util::RedisUtil, sql_util::SqlUtil, time_util::TimeUtil},
 };
+use dt_connector::rdb_router::RdbRouter;
 
 use redis::Value;
 
@@ -26,6 +27,7 @@ pub struct RedisTestRunner {
     dst_conn: RedisClusterConnection,
     redis_util: RedisTestUtil,
     filter: RdbFilter,
+    router: Option<RdbRouter>,
 }
 
 impl RedisTestRunner {
@@ -85,12 +87,14 @@ impl RedisTestRunner {
 
         let redis_util = RedisTestUtil::new(escape_pairs);
         let filter = RdbFilter::from_config(&config.filter, &DbType::Redis)?;
+        let router = RdbRouter::from_config(&config.router, &DbType::Redis)?;
         Ok(Self {
             base,
             src_conn,
             dst_conn,
             redis_util,
             filter,
+            router,
         })
     }
 
@@ -194,10 +198,15 @@ impl RedisTestRunner {
     }
 
     fn compare_data(&mut self, db: &str) -> anyhow::Result<()> {
+        let dst_db = self
+            .router
+            .as_ref()
+            .map(|router| router.get_schema_map(db).to_string())
+            .unwrap_or_else(|| db.to_string());
         self.redis_util
             .execute_cmd_in_cluster(&mut self.src_conn, &format!("SELECT {}", db));
         self.redis_util
-            .execute_cmd_in_cluster(&mut self.dst_conn, &format!("SELECT {}", db));
+            .execute_cmd_in_cluster(&mut self.dst_conn, &format!("SELECT {}", dst_db));
 
         let data_marker_key = if let Some(data_marker) = self.base.get_data_marker() {
             data_marker.marker

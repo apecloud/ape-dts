@@ -290,6 +290,13 @@ impl SinkerUtil {
                 let mut conn = RedisUtil::create_redis_conn(&url, &connection_auth).await?;
                 let version = RedisUtil::get_redis_version(&mut conn)?;
                 let method = RedisWriteMethod::from_str(&method)?;
+                let router = RdbRouter::from_config(&config.router, &DbType::Redis)?;
+                if let Some(router) = &router {
+                    router.validate_redis_db_map()?;
+                    if is_cluster {
+                        router.validate_redis_target_cluster_db_map()?;
+                    }
+                }
 
                 if is_cluster {
                     let url_info = Url::parse(&url)?;
@@ -315,6 +322,7 @@ impl SinkerUtil {
                             base_sinker: BaseSinker::new(monitor.clone(), monitor_interval),
                             data_marker: data_marker.clone(),
                             key_parser: KeyParser::new(),
+                            router: router.clone(),
                         };
                         Self::push_sinker(&mut sub_sinkers, sinker);
                     }
@@ -332,6 +340,7 @@ impl SinkerUtil {
                             base_sinker: BaseSinker::new(monitor.clone(), monitor_interval),
                             data_marker: data_marker.clone(),
                             key_parser: KeyParser::new(),
+                            router: router.clone(),
                         };
                         Self::push_sinker(&mut sub_sinkers, sinker);
                     }

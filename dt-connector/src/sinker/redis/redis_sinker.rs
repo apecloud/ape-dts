@@ -24,7 +24,10 @@ use dt_common::meta::row_data::RowData;
 use dt_common::meta::row_type::RowType;
 
 use super::entry_rewriter::EntryRewriter;
-use crate::{call_batch_fn, data_marker::DataMarker, sinker::base_sinker::BaseSinker, Sinker};
+use crate::{
+    call_batch_fn, data_marker::DataMarker, rdb_router::RdbRouter, sinker::base_sinker::BaseSinker,
+    Sinker,
+};
 
 pub struct RedisSinker {
     pub cluster_node: Option<ClusterNode>,
@@ -37,6 +40,7 @@ pub struct RedisSinker {
     pub base_sinker: BaseSinker,
     pub data_marker: Option<Arc<RwLock<DataMarker>>>,
     pub key_parser: KeyParser,
+    pub router: Option<RdbRouter>,
 }
 
 #[async_trait]
@@ -119,12 +123,18 @@ impl RedisSinker {
     fn rewrite_entry(&mut self, dt_data: &mut DtData) -> anyhow::Result<Vec<RedisCmd>> {
         let mut cmds = Vec::new();
         if let DtData::Redis { entry } = dt_data {
-            if entry.db_id != self.now_db_id {
-                let db_id = &entry.db_id.to_string();
+            let dst_db_id = if let Some(router) = &self.router {
+                router.route_redis_db_id(entry.db_id)?
+            } else {
+                entry.db_id
+            };
+
+            if dst_db_id != self.now_db_id {
+                let db_id = &dst_db_id.to_string();
                 let args = vec!["SELECT", db_id];
                 let cmd = RedisCmd::from_str_args(&args);
                 cmds.push(cmd);
-                self.now_db_id = entry.db_id;
+                self.now_db_id = dst_db_id;
             }
 
             match self.method {

@@ -1,0 +1,1 @@
+SET cdc_without_select_db0 cdc_db0
