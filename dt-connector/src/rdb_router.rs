@@ -401,6 +401,7 @@ impl RdbTopicRouterInner {
             RouterConfig::Rdb { topic_map, .. } => Ok(Self {
                 topic_map: Self::parse_topic_map(topic_map, db_type)?,
             }),
+            _ => Ok(Self::default()),
         }
     }
 
