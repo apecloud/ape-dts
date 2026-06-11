@@ -1,19 +1,21 @@
 use dt_common::config::ini_loader::IniLoader;
 use serde::de::DeserializeOwned;
 
-use crate::test_runner::mock_utils::{
+use crate::test_runner::mock_data::{
+    context::MockDbContext,
     mock_stmt::{Constraint, MockColType, MockStmt},
     random::Random,
 };
 
-pub struct MockConfig<T: MockColType> {
+pub struct MockData<T: MockColType> {
+    pub db_context: MockDbContext,
     pub insert_rows: usize,
     pub mock_stmts: Vec<MockStmt<T>>,
     pub seed: u64,
 }
 
-impl<T: MockColType + DeserializeOwned> MockConfig<T> {
-    pub fn new(config_file: &str) -> Option<Self> {
+impl<T: MockColType + DeserializeOwned> MockData<T> {
+    pub fn new(config_file: &str, db_context: MockDbContext) -> Option<Self> {
         let loader = IniLoader::new(config_file);
         let key_prefix = T::config_key_prefix();
         let col_types = if let Some(config_map) =
@@ -57,10 +59,11 @@ impl<T: MockColType + DeserializeOwned> MockConfig<T> {
                 MockStmt::new(&all_types, &db_str, &Self::gen_mock_tb_name(&mut tb_suffix))
                     .with_nullable_cols(&nullable_cols);
             for constraint in constraints {
-                mock_stmt = mock_stmt.with_index(constraint);
+                mock_stmt = mock_stmt.with_index(constraint, &db_context);
             }
             mock_stmts.push(mock_stmt);
-            return Some(MockConfig {
+            return Some(MockData {
+                db_context,
                 mock_stmts,
                 insert_rows,
                 seed,
@@ -84,7 +87,7 @@ impl<T: MockColType + DeserializeOwned> MockConfig<T> {
                 stmts.push(
                     MockStmt::new(types, &db_str, &Self::gen_mock_tb_name(&mut tb_suffix))
                         .with_nullable_cols(&(0..types.len()).collect::<Vec<usize>>())
-                        .with_index(Constraint::Primary(vec![col_idx])),
+                        .with_index(Constraint::Primary(vec![col_idx]), &db_context),
                 );
             }
             stmts
@@ -100,7 +103,7 @@ impl<T: MockColType + DeserializeOwned> MockConfig<T> {
                     stmts.push(
                         MockStmt::new(types, &db_str, &Self::gen_mock_tb_name(&mut tb_suffix))
                             .with_nullable_cols(&(0..types.len()).collect::<Vec<usize>>())
-                            .with_index(Constraint::Primary(vec![col_idx, col_idx2])),
+                            .with_index(Constraint::Primary(vec![col_idx, col_idx2]), &db_context),
                     );
                 }
             }
@@ -116,7 +119,7 @@ impl<T: MockColType + DeserializeOwned> MockConfig<T> {
                 stmts.push(
                     MockStmt::new(types, &db_str, &Self::gen_mock_tb_name(&mut tb_suffix))
                         .with_nullable_cols(&(0..types.len()).collect::<Vec<usize>>())
-                        .with_index(Constraint::Unique(vec![col_idx])),
+                        .with_index(Constraint::Unique(vec![col_idx]), &db_context),
                 );
             }
             stmts
@@ -132,7 +135,7 @@ impl<T: MockColType + DeserializeOwned> MockConfig<T> {
                     stmts.push(
                         MockStmt::new(types, &db_str, &Self::gen_mock_tb_name(&mut tb_suffix))
                             .with_nullable_cols(&(0..types.len()).collect::<Vec<usize>>())
-                            .with_index(Constraint::Unique(vec![col_idx, col_idx2])),
+                            .with_index(Constraint::Unique(vec![col_idx, col_idx2]), &db_context),
                     );
                 }
             }
@@ -148,10 +151,10 @@ impl<T: MockColType + DeserializeOwned> MockConfig<T> {
                 let mut stmt =
                     MockStmt::new(types, &db_str, &Self::gen_mock_tb_name(&mut tb_suffix))
                         .with_nullable_cols(&(0..types.len()).collect::<Vec<usize>>())
-                        .with_index(Constraint::Primary(vec![col_idx]));
+                        .with_index(Constraint::Primary(vec![col_idx]), &db_context);
                 for col_idx2 in 0..types.len() {
                     if col_idx2 != col_idx {
-                        stmt = stmt.with_index(Constraint::Unique(vec![col_idx2]));
+                        stmt = stmt.with_index(Constraint::Unique(vec![col_idx2]), &db_context);
                     }
                 }
                 stmts.push(stmt);
@@ -161,7 +164,8 @@ impl<T: MockColType + DeserializeOwned> MockConfig<T> {
                 .filter(|s| !s.indexs.is_empty())
                 .collect::<Vec<_>>()
         }));
-        Some(MockConfig {
+        Some(MockData {
+            db_context,
             mock_stmts,
             insert_rows,
             seed,
@@ -173,9 +177,9 @@ impl<T: MockColType + DeserializeOwned> MockConfig<T> {
         for (i, mock_stmt) in self.mock_stmts.iter().enumerate() {
             if i == 0 {
                 // create database/schema only once
-                res.extend(mock_stmt.create_schema_stmt());
+                res.extend(mock_stmt.create_schema_stmt(&self.db_context));
             }
-            res.push(mock_stmt.create_table_stmt());
+            res.push(mock_stmt.create_table_stmt(&self.db_context));
         }
         res
     }
@@ -184,8 +188,18 @@ impl<T: MockColType + DeserializeOwned> MockConfig<T> {
         let mut res = vec![];
         let mut random = Random::new(Some(self.seed));
         for mock_stmt in &self.mock_stmts {
-            res.extend(mock_stmt.insert_value_stmt(&mut random, self.insert_rows));
+            res.extend(mock_stmt.insert_value_stmt(
+                &self.db_context,
+                &mut random,
+                self.insert_rows,
+            ));
         }
+        let db_tbs = self
+            .mock_stmts
+            .iter()
+            .map(|stmt| (stmt.db.clone(), stmt.tb.clone()))
+            .collect::<Vec<_>>();
+        res.extend(T::after_all_insert_stmts(&db_tbs, &self.db_context));
         res
     }
 
@@ -199,6 +213,12 @@ impl<T: MockColType + DeserializeOwned> MockConfig<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use dt_common::config::config_enums::DbType;
+
+    use crate::test_runner::mock_data::{
+        context::MockDbContext, mysql_type::MysqlType, pg_type::PgType,
+    };
+
     #[test]
     fn test_serialization() {
         let constraints = vec![
@@ -216,5 +236,38 @@ mod tests {
         let serialized_cols1 = "[]".to_string();
         let deserialized_cols: Vec<usize> = serde_json::from_str(&serialized_cols1).unwrap();
         assert_eq!(deserialized_cols.len(), 0);
+    }
+
+    #[test]
+    fn test_pg_mock_dml_appends_analyze() {
+        let mock_data = MockData {
+            db_context: MockDbContext::new(DbType::Pg, "16.0"),
+            insert_rows: 2,
+            mock_stmts: vec![
+                MockStmt::new(&[PgType::Int4], "test_db", "test_tb_1"),
+                MockStmt::new(&[PgType::Int4], "test_db", "test_tb_2"),
+            ],
+            seed: 777,
+        };
+
+        let stmts = mock_data.mock_dml_stmts();
+        assert_eq!(stmts.len(), 3);
+        assert!(stmts[0].starts_with("INSERT INTO test_db.test_tb_1 VALUES "));
+        assert!(stmts[1].starts_with("INSERT INTO test_db.test_tb_2 VALUES "));
+        assert_eq!(stmts[2], "ANALYZE;");
+    }
+
+    #[test]
+    fn test_mysql_mock_dml_has_no_after_insert_stmt() {
+        let mock_data = MockData {
+            db_context: MockDbContext::new(DbType::Mysql, "8.0.0"),
+            insert_rows: 2,
+            mock_stmts: vec![MockStmt::new(&[MysqlType::Int], "test_db", "test_tb")],
+            seed: 777,
+        };
+
+        let stmts = mock_data.mock_dml_stmts();
+        assert_eq!(stmts.len(), 1);
+        assert!(stmts[0].starts_with("INSERT INTO `test_db`.`test_tb` VALUES "));
     }
 }

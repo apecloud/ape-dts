@@ -1,4 +1,5 @@
 mod log_reader;
+mod mock_test;
 mod mongo_to_mongo;
 mod mysql_to_clickhouse;
 mod mysql_to_doris;

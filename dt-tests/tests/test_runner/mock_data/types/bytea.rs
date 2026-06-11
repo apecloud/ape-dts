@@ -1,5 +1,5 @@
-use crate::test_runner::mock_utils::constants::ConstantValues;
-use crate::test_runner::mock_utils::random::{Random, RandomValue};
+use crate::test_runner::mock_data::constants::ConstantValues;
+use crate::test_runner::mock_data::random::{Random, RandomValue};
 
 /// PostgreSQL bytea: binary data (byte array)
 /// Output format: hex string (e.g., "deadbeef")

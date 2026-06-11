@@ -1,4 +1,4 @@
-use crate::test_runner::mock_utils::{pg_type::PgType, random::Random};
+use crate::test_runner::mock_data::{context::MockDbContext, pg_type::PgType, random::Random};
 
 pub struct Array {}
 
@@ -77,10 +77,10 @@ impl Array {
         }
     }
 
-    pub fn constant_values(pg_type: &PgType) -> Vec<String> {
+    pub fn constant_values(pg_type: &PgType, ctx: &MockDbContext) -> Vec<String> {
         // Get element type's constant values
         let element_values: Vec<String> = if let Some(elem_type) = Self::element_type(pg_type) {
-            PgType::constant_value_str(&elem_type)
+            PgType::constant_value_str(&elem_type, ctx)
         } else {
             panic!("unsupported array type: {:?}", pg_type)
         };
@@ -121,6 +121,11 @@ impl Array {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use dt_common::config::config_enums::DbType;
+
+    fn pg_ctx() -> MockDbContext {
+        MockDbContext::new(DbType::Pg, "16.0")
+    }
 
     #[test]
     fn test_bool_array() {
@@ -176,17 +181,18 @@ mod tests {
 
     #[test]
     fn test_constant_values() {
+        let ctx = pg_ctx();
         println!(
             "BoolArray constants: {:?}",
-            Array::constant_values(&PgType::BoolArray)
+            Array::constant_values(&PgType::BoolArray, &ctx)
         );
         println!(
             "Int4Array constants: {:?}",
-            Array::constant_values(&PgType::Int4Array)
+            Array::constant_values(&PgType::Int4Array, &ctx)
         );
         println!(
             "TextArray constants: {:?}",
-            Array::constant_values(&PgType::TextArray)
+            Array::constant_values(&PgType::TextArray, &ctx)
         );
     }
 }

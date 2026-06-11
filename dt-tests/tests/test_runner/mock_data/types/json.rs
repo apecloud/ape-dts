@@ -1,7 +1,7 @@
 use fake::{Fake, Faker};
 
-use crate::test_runner::mock_utils::constants::ConstantValues;
-use crate::test_runner::mock_utils::random::{Random, RandomValue};
+use crate::test_runner::mock_data::constants::ConstantValues;
+use crate::test_runner::mock_data::random::{Random, RandomValue};
 
 pub struct Json(pub serde_json::Value);
 

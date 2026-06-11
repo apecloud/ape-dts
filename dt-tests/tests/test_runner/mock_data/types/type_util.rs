@@ -2,7 +2,7 @@ use std::fmt;
 
 use fake::{Dummy, Fake, Faker};
 
-use crate::test_runner::mock_utils::random::Random;
+use crate::test_runner::mock_data::random::Random;
 
 pub struct TypeUtil {}
 

@@ -72,6 +72,7 @@ DEFAULT_LOG_BASE_DIR="${PROJECT_ROOT}/tmp/integration-logs"
 DEFAULT_RUN_ID="$(date '+%Y%m%d-%H%M%S')-$$"
 
 declare -a ALL_SUITES=(
+  "mock_test"
   "mysql_to_clickhouse"
   # "mysql_to_doris"       # disabled: local/CI Doris suite is temporarily excluded
   # "mysql_to_foxlake"      # disabled: local runnable Foxlake service is not provisioned
@@ -164,7 +165,7 @@ Options:
   --wait-timeout <secs>  Service wait timeout. Default: 30.
   --log-tail <lines>     Number of log lines for Docker logs. Default: 200.
   --keep-docker          Skip the final docker compose down cleanup.
-  --down-each-suite     Stop all integration Docker services after each suite.
+  --down-each-suite      Stop all integration Docker services after each suite.
   --keep-going           Continue with later suites after a suite fails.
   --no-fail-fast         Continue running remaining tests in the current suite after a test fails.
   --logs-on-failure      Dump Docker logs automatically when a test step fails.
@@ -329,6 +330,7 @@ is_suite_supported_on_current_arch() {
 suite_services() {
   local suite="$1"
   case "${suite}" in
+    mock_test) echo "mysql-src mysql-dst postgres-src postgres-dst" ;;
     mysql_to_clickhouse) echo "mysql-src clickhouse" ;;
     mysql_to_doris) echo "mysql-src doris-2-1-0" ;;
     mysql_to_foxlake) echo "mysql-src minio minio-init" ;;
@@ -401,6 +403,7 @@ resolve_service_container_id() {
 suite_nextest_filter() {
   local suite="$1"
   case "${suite}" in
+    mock_test) echo "test(mock_test::)" ;;
     mysql_to_clickhouse) echo "test(mysql_to_clickhouse::)" ;;
     mysql_to_doris) echo "test(mysql_to_doris::)" ;;
     mysql_to_foxlake) echo "test(mysql_to_foxlake::)" ;;

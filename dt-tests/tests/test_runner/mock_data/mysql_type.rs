@@ -1,16 +1,17 @@
 use serde::{Deserialize, Serialize};
 
-use crate::test_runner::mock_utils::{
+use crate::test_runner::mock_data::{
     constants::{ConstantValues, Constants},
+    context::MockDbContext,
     mock_stmt::MockColType,
     random::{Random, RandomValue},
     types::{
         bytea::Bytea,
-        geo::{
+        json::Json,
+        mysql::geo::{
             WktGeometryCollection, WktLineString, WktMultiLineString, WktMultiPoint,
             WktMultiPolygon, WktPoint, WktPolygon,
         },
-        json::Json,
     },
 };
 
@@ -146,8 +147,8 @@ impl MysqlType {
             MysqlType::Year => "YEAR",
 
             // Character strings (13.3.2)
-            MysqlType::Char => "CHAR(255)",
-            MysqlType::Varchar => "VARCHAR(255)",
+            MysqlType::Char => "CHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci",
+            MysqlType::Varchar => "VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci",
 
             // Binary strings (13.3.3)
             MysqlType::Binary => "BINARY(255)",
@@ -160,10 +161,10 @@ impl MysqlType {
             MysqlType::LongBlob => "LONGBLOB",
 
             // TEXT types (13.3.4)
-            MysqlType::TinyText => "TINYTEXT",
-            MysqlType::Text => "TEXT",
-            MysqlType::MediumText => "MEDIUMTEXT",
-            MysqlType::LongText => "LONGTEXT",
+            MysqlType::TinyText => "TINYTEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci",
+            MysqlType::Text => "TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci",
+            MysqlType::MediumText => "MEDIUMTEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci",
+            MysqlType::LongText => "LONGTEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci",
 
             // ENUM (13.3.5)
             MysqlType::Enum => "ENUM('v1','v2','v3','v4','v5')",
@@ -388,7 +389,7 @@ impl MysqlType {
 
             // --- Spatial types (13.4) ---
             // Values use ST_GeomFromText() with WKT (Well-Known Text) format.
-            // Random geometries generated via geo_types + fake crate (see types::geo).
+            // Random geometries generated via geo_types + fake crate (see types::mysql::geo).
             MysqlType::Point => {
                 format!("ST_GeomFromText('{}')", WktPoint::next_value(random))
             }
@@ -619,7 +620,7 @@ impl MysqlType {
             }
 
             // --- Spatial types (13.4) ---
-            // Constant WKT values using ST_GeomFromText(), sourced from types::geo
+            // Constant WKT values using ST_GeomFromText(), sourced from types::mysql::geo.
             MysqlType::Geometry => {
                 let mut v = WktPoint::next_values();
                 v.truncate(2);
@@ -667,31 +668,31 @@ impl MysqlType {
 }
 
 impl MockColType for MysqlType {
-    fn name(&self) -> &str {
+    fn name<'a>(&'a self, _ctx: &'a MockDbContext) -> &'a str {
         MysqlType::name(self)
     }
 
-    fn support_btree_index(&self) -> bool {
+    fn support_btree_index(&self, _ctx: &MockDbContext) -> bool {
         MysqlType::support_btree_index(self)
     }
 
-    fn next_value_str(&self, random: &mut Random) -> String {
+    fn next_value_str(&self, _ctx: &MockDbContext, random: &mut Random) -> String {
         MysqlType::next_value_str(self, random)
     }
 
-    fn constant_value_str(&self) -> Vec<String> {
+    fn constant_value_str(&self, _ctx: &MockDbContext) -> Vec<String> {
         MysqlType::constant_value_str(self)
     }
 
-    fn schema_drop_stmt(db: &str) -> String {
+    fn schema_drop_stmt(db: &str, _ctx: &MockDbContext) -> String {
         format!("DROP DATABASE IF EXISTS `{}`;", db)
     }
 
-    fn schema_create_stmt(db: &str) -> String {
+    fn schema_create_stmt(db: &str, _ctx: &MockDbContext) -> String {
         format!("CREATE DATABASE IF NOT EXISTS `{}`;", db)
     }
 
-    fn quote_identifier(name: &str) -> String {
+    fn quote_identifier(name: &str, _ctx: &MockDbContext) -> String {
         format!("`{}`", name)
     }
 

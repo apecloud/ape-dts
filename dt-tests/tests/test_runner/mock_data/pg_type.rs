@@ -2,17 +2,20 @@ use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::test_runner::mock_utils::{
+use crate::test_runner::mock_data::{
     constants::{ConstantValues, Constants},
+    context::MockDbContext,
     mock_stmt::MockColType,
     random::{Random, RandomValue},
     types::{
-        array::Array,
         bytea::Bytea,
-        geo::{Box, Circle, Line, LineSegment, Path, Point, Polygon},
         json::Json,
         money::Money,
         net::{Cidr, Inet, MacAddr, MacAddr8},
+        pg::{
+            array::Array,
+            geo::{Box, Circle, Line, LineSegment, Path, Point, Polygon},
+        },
         time::{Interval, PgDate, PgDateTime, PgTime},
         type_util::TypeUtil,
     },
@@ -411,9 +414,9 @@ impl PgType {
         }
     }
 
-    pub fn constant_value_str(&self) -> Vec<String> {
+    pub fn constant_value_str(&self, ctx: &MockDbContext) -> Vec<String> {
         if let Some(_elem_pg_type) = Array::element_type(self) {
-            return Array::constant_values(self)
+            return Array::constant_values(self, ctx)
                 .iter()
                 .map(|s| format!("{}::{}", s, self.name()))
                 .collect();
@@ -435,9 +438,14 @@ impl PgType {
                 .iter()
                 .map(|v| single_quote!(v.to_string()))
                 .collect::<Vec<String>>(),
-            PgType::Float8 | PgType::Numeric => Constants::next_f64()
+            PgType::Float8 => Constants::next_f64()
                 .iter()
                 .map(|v| single_quote!(v.to_string())) // quote for nan and inf
+                .collect::<Vec<String>>(),
+            PgType::Numeric => Constants::next_f64()
+                .iter()
+                .map(|v| single_quote!(v.to_string())) // quote for nan and inf
+                .filter(|v| ctx.version.major >= 14 || (v != "'inf'" && v != "'-inf'"))
                 .collect::<Vec<String>>(),
             PgType::Bpchar | PgType::Text | PgType::Varchar | PgType::Name => Constants::next_str()
                 .iter()
@@ -518,32 +526,36 @@ impl PgType {
 }
 
 impl MockColType for PgType {
-    fn name(&self) -> &str {
+    fn name<'a>(&'a self, _ctx: &'a MockDbContext) -> &'a str {
         PgType::name(self)
     }
 
-    fn support_btree_index(&self) -> bool {
+    fn support_btree_index(&self, _ctx: &MockDbContext) -> bool {
         PgType::support_btree_index(self)
     }
 
-    fn next_value_str(&self, random: &mut Random) -> String {
+    fn next_value_str(&self, _ctx: &MockDbContext, random: &mut Random) -> String {
         PgType::next_value_str(self, random)
     }
 
-    fn constant_value_str(&self) -> Vec<String> {
-        PgType::constant_value_str(self)
+    fn constant_value_str(&self, ctx: &MockDbContext) -> Vec<String> {
+        PgType::constant_value_str(self, ctx)
     }
 
-    fn schema_drop_stmt(db: &str) -> String {
+    fn schema_drop_stmt(db: &str, _ctx: &MockDbContext) -> String {
         format!("DROP SCHEMA IF EXISTS {} CASCADE;", db)
     }
 
-    fn schema_create_stmt(db: &str) -> String {
+    fn schema_create_stmt(db: &str, _ctx: &MockDbContext) -> String {
         format!("CREATE SCHEMA IF NOT EXISTS {};", db)
     }
 
-    fn quote_identifier(name: &str) -> String {
+    fn quote_identifier(name: &str, _ctx: &MockDbContext) -> String {
         name.to_string()
+    }
+
+    fn after_all_insert_stmts(_db_tbs: &[(String, String)], _ctx: &MockDbContext) -> Vec<String> {
+        vec!["ANALYZE;".to_string()]
     }
 
     fn config_key_prefix() -> &'static str {
@@ -554,6 +566,8 @@ impl MockColType for PgType {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use dt_common::config::config_enums::DbType;
+
     #[test]
     fn test_pg_type_vec_serialization() {
         let supported_pg_types = vec![
@@ -572,5 +586,22 @@ mod tests {
         );
         let deserialized: Vec<PgType> = serde_json::from_str(&serialized).unwrap();
         assert_eq!(supported_pg_types, deserialized);
+    }
+
+    #[test]
+    fn test_numeric_constant_values_filter_infinity_before_pg_14() {
+        let pg_13_ctx = MockDbContext::new(DbType::Pg, "13.12");
+        let values = PgType::constant_value_str(&PgType::Numeric, &pg_13_ctx);
+        assert!(!values.contains(&"'inf'".to_string()));
+        assert!(!values.contains(&"'-inf'".to_string()));
+
+        let array_values = PgType::constant_value_str(&PgType::NumericArray, &pg_13_ctx);
+        assert!(!array_values.iter().any(|v| v.contains("'inf'")));
+        assert!(!array_values.iter().any(|v| v.contains("'-inf'")));
+
+        let pg_14_ctx = MockDbContext::new(DbType::Pg, "14.0");
+        let values = PgType::constant_value_str(&PgType::Numeric, &pg_14_ctx);
+        assert!(values.contains(&"'inf'".to_string()));
+        assert!(values.contains(&"'-inf'".to_string()));
     }
 }

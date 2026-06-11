@@ -9,6 +9,7 @@ use dt_common::{
         config_enums::DbType,
         config_token_parser::{ConfigTokenParser, TokenEscapePair},
         extractor_config::ExtractorConfig,
+        ini_loader::IniLoader,
         meta_center_config::MetaCenterConfig,
         sinker_config::SinkerConfig,
         task_config::TaskConfig,
@@ -28,15 +29,18 @@ use dt_connector::{
 use dt_task::{task_runner::TaskRunner, task_util::TaskUtil};
 
 use sqlx::{query, types::BigDecimal, MySql, Pool, Postgres, Row};
-use tokio::task::JoinHandle;
+use tokio::{sync::Semaphore, task::JoinHandle};
 
 use crate::{
     test_config_util::TestConfigUtil,
-    test_runner::mock_utils::{mock_config::MockConfig, mysql_type::MysqlType, pg_type::PgType},
+    test_runner::mock_data::{
+        context::MockDbContext, mysql_type::MysqlType, pg_type::PgType, MockData,
+    },
 };
 
 use super::{base_test_runner::BaseTestRunner, rdb_util::RdbUtil};
 
+#[derive(Clone)]
 pub struct RdbTestRunner {
     pub base: BaseTestRunner,
     pub src_conn_pool_mysql: Option<Pool<MySql>>,
@@ -48,6 +52,7 @@ pub struct RdbTestRunner {
     pub router: Option<RdbRouter>,
     pub filter: RdbFilter,
     pub unordered_compare: bool, // whether to compare rows in unordered way
+    pub unordered_compare_threads: usize,
 }
 
 pub const SRC: &str = "src";
@@ -88,23 +93,6 @@ impl RdbTestRunner {
             dst_connection_auth = target.connection_auth;
         }
 
-        // generate mock sqls
-        let mut unordered_compare = false;
-        let mock_result: Option<(Vec<String>, Vec<String>)> = match src_db_type {
-            DbType::Pg => MockConfig::<PgType>::new(&base.task_config_file)
-                .map(|c| (c.mock_ddl_stmts(), c.mock_dml_stmts())),
-            DbType::Mysql => MockConfig::<MysqlType>::new(&base.task_config_file)
-                .map(|c| (c.mock_ddl_stmts(), c.mock_dml_stmts())),
-            _ => None,
-        };
-        if let Some((mock_ddl_stmts, mock_dml_stmts)) = mock_result {
-            base.src_prepare_sqls.extend(mock_ddl_stmts.clone());
-            base.dst_prepare_sqls.extend(mock_ddl_stmts);
-            base.src_test_sqls.extend(mock_dml_stmts);
-
-            unordered_compare = true;
-        }
-
         let mysql_conn_settings = Some(vec!["SET FOREIGN_KEY_CHECKS=0"]);
 
         match &src_db_type {
@@ -128,6 +116,33 @@ impl RdbTestRunner {
                 );
             }
             _ => {}
+        }
+
+        let (mut unordered_compare, unordered_compare_configured, unordered_compare_threads) =
+            Self::load_mock_compare_config(&base.task_config_file);
+        let mock_result: Option<(Vec<String>, Vec<String>)> = match src_db_type {
+            DbType::Pg => {
+                let context =
+                    Self::detect_pg_mock_context(src_conn_pool_pg.as_ref().unwrap()).await?;
+                MockData::<PgType>::new(&base.task_config_file, context)
+                    .map(|c| (c.mock_ddl_stmts(), c.mock_dml_stmts()))
+            }
+            DbType::Mysql => {
+                let context =
+                    Self::detect_mysql_mock_context(src_conn_pool_mysql.as_ref().unwrap()).await?;
+                MockData::<MysqlType>::new(&base.task_config_file, context)
+                    .map(|c| (c.mock_ddl_stmts(), c.mock_dml_stmts()))
+            }
+            _ => None,
+        };
+        if let Some((mock_ddl_stmts, mock_dml_stmts)) = mock_result {
+            base.src_prepare_sqls.extend(mock_ddl_stmts.clone());
+            base.dst_prepare_sqls.extend(mock_ddl_stmts);
+            base.src_test_sqls.extend(mock_dml_stmts);
+
+            if !unordered_compare_configured {
+                unordered_compare = true;
+            }
         }
 
         if !dst_url.is_empty() {
@@ -199,6 +214,7 @@ impl RdbTestRunner {
             filter,
             base,
             unordered_compare,
+            unordered_compare_threads,
         })
     }
 
@@ -216,6 +232,36 @@ impl RdbTestRunner {
             pool.close().await;
         }
         Ok(())
+    }
+
+    async fn detect_mysql_mock_context(pool: &Pool<MySql>) -> anyhow::Result<MockDbContext> {
+        let row = query("SELECT VERSION() AS version").fetch_one(pool).await?;
+        let version: String = row.try_get("version")?;
+        Ok(MockDbContext::new(DbType::Mysql, &version))
+    }
+
+    async fn detect_pg_mock_context(pool: &Pool<Postgres>) -> anyhow::Result<MockDbContext> {
+        let row = query("SHOW server_version").fetch_one(pool).await?;
+        let version: String = row.try_get("server_version")?;
+        Ok(MockDbContext::new(DbType::Pg, &version))
+    }
+
+    fn load_mock_compare_config(config_file: &str) -> (bool, bool, usize) {
+        let loader = IniLoader::new(config_file);
+        let unordered_compare_configured = loader.contains("mock", "unordered_compare")
+            || loader.contains("mock", "unorder_compare");
+        let unordered_compare = if loader.contains("mock", "unordered_compare") {
+            loader.get_with_default("mock", "unordered_compare", false)
+        } else {
+            loader.get_with_default("mock", "unorder_compare", false)
+        };
+        let unordered_compare_threads =
+            loader.get_with_default("mock", "unordered_compare_threads", 1usize);
+        (
+            unordered_compare,
+            unordered_compare_configured,
+            unordered_compare_threads.max(1),
+        )
     }
 
     pub async fn get_dst_mysql_version(&self) -> String {
@@ -654,6 +700,17 @@ impl RdbTestRunner {
         dst_db_tbs: &[(String, String)],
     ) -> anyhow::Result<bool> {
         let filtered_db_tbs = self.get_filtered_db_tbs();
+        if self.unordered_compare && self.unordered_compare_threads > 1 {
+            let mut compare_pairs = Vec::new();
+            for i in 0..src_db_tbs.len() {
+                if filtered_db_tbs.contains(&src_db_tbs[i]) {
+                    continue;
+                }
+                compare_pairs.push((src_db_tbs[i].clone(), dst_db_tbs[i].clone()));
+            }
+            return self.compare_tb_data_pairs_parallel(compare_pairs).await;
+        }
+
         for i in 0..src_db_tbs.len() {
             if filtered_db_tbs.contains(&src_db_tbs[i]) {
                 continue;
@@ -669,6 +726,22 @@ impl RdbTestRunner {
         dst_db_tbs: &[(String, String)],
     ) -> anyhow::Result<bool> {
         let filtered_db_tbs = self.get_filtered_db_tbs();
+        if self.unordered_compare && self.unordered_compare_threads > 1 {
+            let mut compare_pairs = Vec::new();
+            for i in 0..src_db_tbs.len() {
+                if filtered_db_tbs.contains(&src_db_tbs[i]) {
+                    let dst_data = self.fetch_data(&dst_db_tbs[i], DST).await?;
+                    if !dst_data.is_empty() {
+                        println!("tb: {:?} is filtered but dst is not empty", dst_db_tbs[i]);
+                        panic!()
+                    }
+                } else {
+                    compare_pairs.push((src_db_tbs[i].clone(), dst_db_tbs[i].clone()));
+                }
+            }
+            return self.compare_tb_data_pairs_parallel(compare_pairs).await;
+        }
+
         for i in 0..src_db_tbs.len() {
             if filtered_db_tbs.contains(&src_db_tbs[i]) {
                 let dst_data = self.fetch_data(&dst_db_tbs[i], DST).await?;
@@ -678,6 +751,31 @@ impl RdbTestRunner {
                 }
             } else {
                 assert!(self.compare_tb_data(&src_db_tbs[i], &dst_db_tbs[i]).await?)
+            }
+        }
+        Ok(true)
+    }
+
+    async fn compare_tb_data_pairs_parallel(
+        &self,
+        compare_pairs: Vec<((String, String), (String, String))>,
+    ) -> anyhow::Result<bool> {
+        let semaphore = std::sync::Arc::new(Semaphore::new(self.unordered_compare_threads));
+        let mut handles = Vec::with_capacity(compare_pairs.len());
+
+        for (src_db_tb, dst_db_tb) in compare_pairs {
+            let permit = semaphore.clone().acquire_owned().await?;
+            let runner = self.clone();
+            handles.push(tokio::spawn(async move {
+                let result = runner.compare_tb_data(&src_db_tb, &dst_db_tb).await;
+                drop(permit);
+                result
+            }));
+        }
+
+        for handle in handles {
+            if !handle.await?? {
+                return Ok(false);
             }
         }
         Ok(true)
@@ -1267,5 +1365,61 @@ impl RdbTestRunner {
         } else {
             format!("{} AND {}", res, condition)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{
+        fs,
+        time::{SystemTime, UNIX_EPOCH},
+    };
+
+    fn write_tmp_config(content: &str) -> String {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = format!("/tmp/dt_mock_compare_config_{}.ini", suffix);
+        fs::write(&path, content).unwrap();
+        path
+    }
+
+    #[test]
+    fn test_load_mock_compare_config_defaults() {
+        let path = write_tmp_config("[mock]\n");
+        let (unordered_compare, configured, threads) =
+            RdbTestRunner::load_mock_compare_config(&path);
+        fs::remove_file(path).unwrap();
+
+        assert!(!unordered_compare);
+        assert!(!configured);
+        assert_eq!(threads, 1);
+    }
+
+    #[test]
+    fn test_load_mock_compare_config_values() {
+        let path =
+            write_tmp_config("[mock]\nunordered_compare=true\nunordered_compare_threads=4\n");
+        let (unordered_compare, configured, threads) =
+            RdbTestRunner::load_mock_compare_config(&path);
+        fs::remove_file(path).unwrap();
+
+        assert!(unordered_compare);
+        assert!(configured);
+        assert_eq!(threads, 4);
+    }
+
+    #[test]
+    fn test_load_mock_compare_config_unorder_alias() {
+        let path = write_tmp_config("[mock]\nunorder_compare=true\nunordered_compare_threads=0\n");
+        let (unordered_compare, configured, threads) =
+            RdbTestRunner::load_mock_compare_config(&path);
+        fs::remove_file(path).unwrap();
+
+        assert!(unordered_compare);
+        assert!(configured);
+        assert_eq!(threads, 1);
     }
 }

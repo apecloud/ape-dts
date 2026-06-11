@@ -1,8 +1,8 @@
 use fake::{Fake, Faker};
 use time::{Date, Duration, PrimitiveDateTime, Time};
 
-use crate::test_runner::mock_utils::constants::ConstantValues;
-use crate::test_runner::mock_utils::random::{Random, RandomValue};
+use crate::test_runner::mock_data::constants::ConstantValues;
+use crate::test_runner::mock_data::random::{Random, RandomValue};
 
 // =============================================================================
 // Date

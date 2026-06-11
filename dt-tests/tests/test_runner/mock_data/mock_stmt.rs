@@ -6,20 +6,23 @@ use std::{
 use rand::seq::SliceRandom;
 use serde::{Deserialize, Serialize};
 
-use crate::test_runner::mock_utils::random::Random;
+use crate::test_runner::mock_data::{context::MockDbContext, random::Random};
 
 /// Trait abstracting over database column types for mock data generation.
 /// Implemented by both `PgType` and `MysqlType`.
 pub trait MockColType: std::fmt::Debug + Clone {
-    fn name(&self) -> &str;
-    fn support_btree_index(&self) -> bool;
-    fn next_value_str(&self, random: &mut Random) -> String;
-    fn constant_value_str(&self) -> Vec<String>;
+    fn name<'a>(&'a self, ctx: &'a MockDbContext) -> &'a str;
+    fn support_btree_index(&self, ctx: &MockDbContext) -> bool;
+    fn next_value_str(&self, ctx: &MockDbContext, random: &mut Random) -> String;
+    fn constant_value_str(&self, ctx: &MockDbContext) -> Vec<String>;
 
     // DDL dialect
-    fn schema_drop_stmt(db: &str) -> String;
-    fn schema_create_stmt(db: &str) -> String;
-    fn quote_identifier(name: &str) -> String;
+    fn schema_drop_stmt(db: &str, ctx: &MockDbContext) -> String;
+    fn schema_create_stmt(db: &str, ctx: &MockDbContext) -> String;
+    fn quote_identifier(name: &str, ctx: &MockDbContext) -> String;
+    fn after_all_insert_stmts(_db_tbs: &[(String, String)], _ctx: &MockDbContext) -> Vec<String> {
+        Vec::new()
+    }
 
     // Config key prefix (e.g., "pg_types", "mysql_types")
     fn config_key_prefix() -> &'static str;
@@ -63,7 +66,7 @@ impl<T: MockColType> MockStmt<T> {
         self
     }
 
-    pub fn with_index(mut self, index: Constraint) -> Self {
+    pub fn with_index(mut self, index: Constraint, ctx: &MockDbContext) -> Self {
         let filtered_index = index;
         match &filtered_index {
             Constraint::Primary(cols) | Constraint::Unique(cols) => {
@@ -74,7 +77,7 @@ impl<T: MockColType> MockStmt<T> {
                 let filtered_cols = cols
                     .iter()
                     .filter(|&&col_idx| col_idx < self.included_types.len())
-                    .filter(|&&col_idx| self.is_bad_col_for_index(col_idx))
+                    .filter(|&&col_idx| self.is_bad_col_for_index(col_idx, ctx))
                     .filter(|&&col_idx| set.insert(col_idx))
                     .cloned()
                     .collect::<Vec<usize>>();
@@ -104,26 +107,26 @@ impl<T: MockColType> MockStmt<T> {
         self
     }
 
-    pub fn create_schema_stmt(&self) -> Vec<String> {
+    pub fn create_schema_stmt(&self, ctx: &MockDbContext) -> Vec<String> {
         vec![
-            T::schema_drop_stmt(&self.db),
-            T::schema_create_stmt(&self.db),
+            T::schema_drop_stmt(&self.db, ctx),
+            T::schema_create_stmt(&self.db, ctx),
         ]
     }
 
-    pub fn create_table_stmt(&self) -> String {
+    pub fn create_table_stmt(&self, ctx: &MockDbContext) -> String {
         let mut col_defs = vec![];
         let mut col_names = vec![];
         // columns
         for (col_idx, col_type) in self.included_types.iter().enumerate() {
             let col_name = format!("col_{}", col_idx);
-            let quoted_col = T::quote_identifier(&col_name);
+            let quoted_col = T::quote_identifier(&col_name, ctx);
             let is_nullable = if self.nullable_cols.contains(&col_idx) {
                 ""
             } else {
                 " NOT NULL"
             };
-            let col_def = format!("{} {}{}", quoted_col, col_type.name(), is_nullable);
+            let col_def = format!("{} {}{}", quoted_col, col_type.name(ctx), is_nullable);
             col_names.push(col_name);
             col_defs.push(col_def);
         }
@@ -132,22 +135,22 @@ impl<T: MockColType> MockStmt<T> {
                 Constraint::Primary(col_idxs) => {
                     let pk_cols = col_idxs
                         .iter()
-                        .map(|&i| T::quote_identifier(col_names.get(i).unwrap()))
+                        .map(|&i| T::quote_identifier(col_names.get(i).unwrap(), ctx))
                         .collect::<Vec<String>>();
                     col_defs.push(format!("PRIMARY KEY ({})", pk_cols.join(", ")));
                 }
                 Constraint::Unique(col_idxs) => {
                     let uq_cols = col_idxs
                         .iter()
-                        .map(|&i| T::quote_identifier(col_names.get(i).unwrap()))
+                        .map(|&i| T::quote_identifier(col_names.get(i).unwrap(), ctx))
                         .collect::<Vec<String>>();
                     col_defs.push(format!("UNIQUE ({})", uq_cols.join(", ")));
                 }
                 _ => continue,
             }
         }
-        let db_quoted = T::quote_identifier(&self.db);
-        let tb_quoted = T::quote_identifier(&self.tb);
+        let db_quoted = T::quote_identifier(&self.db, ctx);
+        let tb_quoted = T::quote_identifier(&self.tb, ctx);
         format!(
             "CREATE TABLE {}.{} ({});",
             db_quoted,
@@ -156,7 +159,12 @@ impl<T: MockColType> MockStmt<T> {
         )
     }
 
-    pub fn insert_value_stmt(&self, random: &mut Random, cnt: usize) -> Vec<String> {
+    pub fn insert_value_stmt(
+        &self,
+        ctx: &MockDbContext,
+        random: &mut Random,
+        cnt: usize,
+    ) -> Vec<String> {
         // println!("Start generating insert statements for table {:?}.{:?}, stmt: {:?}", self.db, self.tb, self);
         let mut stmts = vec![];
         if cnt == 0 {
@@ -182,7 +190,7 @@ impl<T: MockColType> MockStmt<T> {
                     let col_constants = col_types
                         .iter()
                         .map(|col_type| {
-                            let mut values = col_type.constant_value_str();
+                            let mut values = col_type.constant_value_str(ctx);
                             values.shuffle(&mut random.rng);
                             values
                         })
@@ -196,7 +204,7 @@ impl<T: MockColType> MockStmt<T> {
                                 let value = if row_idx < values.len() {
                                     values[row_idx].clone()
                                 } else {
-                                    col_type.next_value_str(random)
+                                    col_type.next_value_str(ctx, random)
                                 };
                                 row.push(value);
                             }
@@ -225,7 +233,7 @@ impl<T: MockColType> MockStmt<T> {
                                     if k == j {
                                         null_vec.push(None);
                                     } else {
-                                        let value_str = col_type.next_value_str(random);
+                                        let value_str = col_type.next_value_str(ctx, random);
                                         null_vec.push(Some(value_str));
                                     }
                                 }
@@ -240,7 +248,7 @@ impl<T: MockColType> MockStmt<T> {
                             if self.nullable_cols.contains(col) {
                                 null_vec.push(None);
                             } else {
-                                let value_str = col_type.next_value_str(random);
+                                let value_str = col_type.next_value_str(ctx, random);
                                 null_vec.push(Some(value_str));
                             }
                         }
@@ -255,7 +263,7 @@ impl<T: MockColType> MockStmt<T> {
                         loop {
                             let mut key = vec![];
                             for col_type in &col_types {
-                                let value_str = col_type.next_value_str(random);
+                                let value_str = col_type.next_value_str(ctx, random);
                                 key.push(value_str);
                             }
                             if set.insert(key.clone()) {
@@ -280,8 +288,9 @@ impl<T: MockColType> MockStmt<T> {
             }
         }
 
-        let db_quoted = T::quote_identifier(&self.db);
-        let tb_quoted = T::quote_identifier(&self.tb);
+        let db_quoted = T::quote_identifier(&self.db, ctx);
+        let tb_quoted = T::quote_identifier(&self.tb, ctx);
+        let mut row_values = Vec::with_capacity(cnt);
         for i in 0..cnt {
             let mut values = vec![];
             for (idx, _col_type) in self.included_types.iter().enumerate() {
@@ -297,13 +306,11 @@ impl<T: MockColType> MockStmt<T> {
                     values.push(value_str);
                     continue;
                 }
-                let value = self.get_next_value_str(idx, random);
+                let value = self.get_next_value_str(idx, ctx, random);
                 values.push(value);
             }
-            stmts.push(format!(
-                "INSERT INTO {}.{} VALUES ({});",
-                db_quoted,
-                tb_quoted,
+            row_values.push(format!(
+                "({})",
                 values
                     .into_iter()
                     .map(|v| v.unwrap_or("NULL".to_string()))
@@ -311,8 +318,15 @@ impl<T: MockColType> MockStmt<T> {
                     .join(", ")
             ));
         }
+        stmts.push(format!(
+            "INSERT INTO {}.{} VALUES {};",
+            db_quoted,
+            tb_quoted,
+            row_values.join(", ")
+        ));
         println!(
-            "Generated {} insert statements for table {}.{}, stmt: {:?}",
+            "Generated {} rows in {} insert statements for table {}.{}, stmt: {:?}",
+            cnt,
             stmts.len(),
             self.db,
             self.tb,
@@ -321,17 +335,22 @@ impl<T: MockColType> MockStmt<T> {
         stmts
     }
 
-    fn get_next_value_str(&self, col_idx: usize, random: &mut Random) -> Option<String> {
+    fn get_next_value_str(
+        &self,
+        col_idx: usize,
+        ctx: &MockDbContext,
+        random: &mut Random,
+    ) -> Option<String> {
         let col_type = self.included_types.get(col_idx).unwrap();
         if self.nullable_cols.contains(&col_idx) && random.next_null() {
             return None;
         }
-        Some(col_type.next_value_str(random))
+        Some(col_type.next_value_str(ctx, random))
     }
 
-    fn is_bad_col_for_index(&self, col_idx: usize) -> bool {
+    fn is_bad_col_for_index(&self, col_idx: usize, ctx: &MockDbContext) -> bool {
         let col_type = self.included_types.get(col_idx).unwrap();
-        if !col_type.support_btree_index() {
+        if !col_type.support_btree_index(ctx) {
             // println!("unsupported type for btree index: {:?}", col_type);
             return false;
         }
@@ -342,17 +361,30 @@ impl<T: MockColType> MockStmt<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_runner::mock_utils::{mysql_type::MysqlType, pg_type::PgType};
+    use dt_common::config::config_enums::DbType;
+
+    use crate::test_runner::mock_data::{
+        context::MockDbContext, mysql_type::MysqlType, pg_type::PgType,
+    };
+
+    fn pg_ctx() -> MockDbContext {
+        MockDbContext::new(DbType::Pg, "16.0")
+    }
+
+    fn mysql_ctx() -> MockDbContext {
+        MockDbContext::new(DbType::Mysql, "8.0.0")
+    }
 
     #[test]
     fn test_schema_generation() {
         let mock_stmt = MockStmt::new(&[PgType::Int4, PgType::Varchar], "test_db", "test_tb");
-        let db_stmts = mock_stmt.create_schema_stmt();
+        let ctx = pg_ctx();
+        let db_stmts = mock_stmt.create_schema_stmt(&ctx);
         assert_eq!(db_stmts.len(), 2);
         assert_eq!(db_stmts[0], "DROP SCHEMA IF EXISTS test_db CASCADE;");
         assert_eq!(db_stmts[1], "CREATE SCHEMA IF NOT EXISTS test_db;");
 
-        let table_stmt = mock_stmt.create_table_stmt();
+        let table_stmt = mock_stmt.create_table_stmt(&ctx);
         assert_eq!(
             table_stmt,
             "CREATE TABLE test_db.test_tb (col_0 int4 NOT NULL, col_1 varchar NOT NULL);"
@@ -366,10 +398,12 @@ mod tests {
             "test_db",
             "test_tb",
         )
-        .with_index(Constraint::Primary(vec![0, 1]))
-        .with_index(Constraint::Unique(vec![2]))
         .with_nullable_cols(&[1, 2]);
-        let table_stmt = mock_stmt.create_table_stmt();
+        let ctx = pg_ctx();
+        let mock_stmt = mock_stmt
+            .with_index(Constraint::Primary(vec![0, 1]), &ctx)
+            .with_index(Constraint::Unique(vec![2]), &ctx);
+        let table_stmt = mock_stmt.create_table_stmt(&ctx);
         assert_eq!(
             table_stmt,
             "CREATE TABLE test_db.test_tb (col_0 int4 NOT NULL, col_1 varchar, col_2 float8, PRIMARY KEY (col_0, col_1), UNIQUE (col_2));"
@@ -383,11 +417,15 @@ mod tests {
             &[PgType::Int4, PgType::Float4, PgType::Bool],
             "test_db",
             "test_tb",
-        )
-        .with_index(Constraint::Primary(vec![0]))
-        .with_index(Constraint::Unique(vec![1]));
-        let insert_stmts = mock_stmt.insert_value_stmt(&mut random, 10);
-        assert_eq!(insert_stmts.len(), 10);
+        );
+        let ctx = pg_ctx();
+        let mock_stmt = mock_stmt
+            .with_index(Constraint::Primary(vec![0]), &ctx)
+            .with_index(Constraint::Unique(vec![1]), &ctx);
+        let insert_stmts = mock_stmt.insert_value_stmt(&ctx, &mut random, 10);
+        assert_eq!(insert_stmts.len(), 1);
+        assert!(insert_stmts[0].starts_with("INSERT INTO test_db.test_tb VALUES ("));
+        assert!(insert_stmts[0].contains("), ("));
         for stmt in insert_stmts {
             println!("{}", stmt);
         }
@@ -401,11 +439,15 @@ mod tests {
             "test_db",
             "test_tb",
         )
-        .with_nullable_cols(&[0, 1, 2, 3])
-        .with_index(Constraint::Primary(vec![0]))
-        .with_index(Constraint::Unique(vec![1, 2]));
-        let insert_stmts = mock_stmt.insert_value_stmt(&mut random, 20);
-        assert_eq!(insert_stmts.len(), 20);
+        .with_nullable_cols(&[0, 1, 2, 3]);
+        let ctx = pg_ctx();
+        let mock_stmt = mock_stmt
+            .with_index(Constraint::Primary(vec![0]), &ctx)
+            .with_index(Constraint::Unique(vec![1, 2]), &ctx);
+        let insert_stmts = mock_stmt.insert_value_stmt(&ctx, &mut random, 20);
+        assert_eq!(insert_stmts.len(), 1);
+        assert!(insert_stmts[0].starts_with("INSERT INTO test_db.test_tb VALUES ("));
+        assert!(insert_stmts[0].contains("), ("));
         for stmt in insert_stmts {
             println!("{}", stmt);
         }
@@ -414,15 +456,16 @@ mod tests {
     #[test]
     fn test_mysql_schema_generation() {
         let mock_stmt = MockStmt::new(&[MysqlType::Int, MysqlType::Varchar], "test_db", "test_tb");
-        let db_stmts = mock_stmt.create_schema_stmt();
+        let ctx = mysql_ctx();
+        let db_stmts = mock_stmt.create_schema_stmt(&ctx);
         assert_eq!(db_stmts.len(), 2);
         assert_eq!(db_stmts[0], "DROP DATABASE IF EXISTS `test_db`;");
         assert_eq!(db_stmts[1], "CREATE DATABASE IF NOT EXISTS `test_db`;");
 
-        let table_stmt = mock_stmt.create_table_stmt();
+        let table_stmt = mock_stmt.create_table_stmt(&ctx);
         assert_eq!(
             table_stmt,
-            "CREATE TABLE `test_db`.`test_tb` (`col_0` INT NOT NULL, `col_1` VARCHAR(255) NOT NULL);"
+            "CREATE TABLE `test_db`.`test_tb` (`col_0` INT NOT NULL, `col_1` VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci NOT NULL);"
         );
     }
 
@@ -433,13 +476,15 @@ mod tests {
             "test_db",
             "test_tb",
         )
-        .with_index(Constraint::Primary(vec![0, 1]))
-        .with_index(Constraint::Unique(vec![2]))
         .with_nullable_cols(&[1, 2]);
-        let table_stmt = mock_stmt.create_table_stmt();
+        let ctx = mysql_ctx();
+        let mock_stmt = mock_stmt
+            .with_index(Constraint::Primary(vec![0, 1]), &ctx)
+            .with_index(Constraint::Unique(vec![2]), &ctx);
+        let table_stmt = mock_stmt.create_table_stmt(&ctx);
         assert_eq!(
             table_stmt,
-            "CREATE TABLE `test_db`.`test_tb` (`col_0` INT NOT NULL, `col_1` VARCHAR(255), `col_2` DOUBLE, PRIMARY KEY (`col_0`, `col_1`), UNIQUE (`col_2`));"
+            "CREATE TABLE `test_db`.`test_tb` (`col_0` INT NOT NULL, `col_1` VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci, `col_2` DOUBLE, PRIMARY KEY (`col_0`, `col_1`), UNIQUE (`col_2`));"
         );
     }
 
@@ -450,11 +495,15 @@ mod tests {
             &[MysqlType::Int, MysqlType::Varchar, MysqlType::DateTime],
             "test_db",
             "test_tb",
-        )
-        .with_index(Constraint::Primary(vec![0]))
-        .with_index(Constraint::Unique(vec![1]));
-        let insert_stmts = mock_stmt.insert_value_stmt(&mut random, 10);
-        assert_eq!(insert_stmts.len(), 10);
+        );
+        let ctx = mysql_ctx();
+        let mock_stmt = mock_stmt
+            .with_index(Constraint::Primary(vec![0]), &ctx)
+            .with_index(Constraint::Unique(vec![1]), &ctx);
+        let insert_stmts = mock_stmt.insert_value_stmt(&ctx, &mut random, 10);
+        assert_eq!(insert_stmts.len(), 1);
+        assert!(insert_stmts[0].starts_with("INSERT INTO `test_db`.`test_tb` VALUES ("));
+        assert!(insert_stmts[0].contains("), ("));
         for stmt in insert_stmts {
             println!("{}", stmt);
         }

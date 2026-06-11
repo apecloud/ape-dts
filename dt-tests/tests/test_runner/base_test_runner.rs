@@ -9,7 +9,7 @@ use tokio::task::JoinHandle;
 
 use crate::test_config_util::TestConfigUtil;
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct BaseTestRunner {
     pub test_dir: String,
     pub task_config_file: String,
