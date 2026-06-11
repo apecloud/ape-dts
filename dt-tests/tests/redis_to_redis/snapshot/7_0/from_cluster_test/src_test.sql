@@ -1,8 +1,23 @@
-SET cluster_string_key value_1
-HSET cluster_hash_key field_1 value_1 field_2 value_2
-LPUSH cluster_list_key value_1 value_2 value_3
-SADD cluster_set_key value_1 value_2 value_3
-ZADD cluster_zset_key 1 value_1 2 value_2
-XADD cluster_stream_key * field_1 value_1 field_2 value_2
-SET cluster_expire_key expire_value
-PEXPIRE cluster_expire_key 60000
+SET cluster_cdc_string_key value_1;
+APPEND cluster_cdc_string_key _append;
+SET cluster_cdc_counter_key 1;
+INCRBY cluster_cdc_counter_key 9;
+MSET cluster_cdc_{mset}_key_1 value_1 cluster_cdc_{mset}_key_2 value_2;
+HSET cluster_cdc_hash_key field_1 value_1 field_2 value_2;
+HINCRBY cluster_cdc_hash_key field_3 3;
+HDEL cluster_cdc_hash_key field_2;
+LPUSH cluster_cdc_list_key value_1 value_2 value_3;
+RPUSH cluster_cdc_list_key value_4;
+LPOP cluster_cdc_list_key;
+SADD cluster_cdc_set_key value_1 value_2 value_3;
+SREM cluster_cdc_set_key value_2;
+SADD cluster_cdc_set_key_2 value_4 value_5;
+ZADD cluster_cdc_zset_key 1 value_1 2 value_2;
+ZINCRBY cluster_cdc_zset_key 3 value_2;
+ZREM cluster_cdc_zset_key value_1;
+XADD cluster_cdc_stream_key * field_1 value_1 field_2 value_2;
+XADD cluster_cdc_stream_key * field_3 value_3;
+SET cluster_cdc_expire_key expire_value;
+PEXPIRE cluster_cdc_expire_key 60000;
+SET cluster_cdc_delete_key delete_me;
+DEL cluster_cdc_delete_key;

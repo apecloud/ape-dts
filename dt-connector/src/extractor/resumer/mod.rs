@@ -29,19 +29,19 @@ const DEFAULT_RESUMER_TABLE: &str = "apedts_task_position";
 const DEFAULT_POSITION_KEY: &str = "default_key";
 
 #[derive(Clone, Debug)]
-pub struct RedisResumerConn {
-    pub url: String,
-    pub connection_auth: ConnectionAuthConfig,
-    pub is_cluster: bool,
-    pub hash_tag: Option<String>,
-}
-
-#[derive(Clone, Debug)]
 pub enum ResumerDbPool {
     MySql(Pool<MySql>),
     Postgres(Pool<Postgres>),
     Mongo(Client),
     Redis(RedisResumerConn),
+}
+
+#[derive(Clone, Debug)]
+pub struct RedisResumerConn {
+    pub url: String,
+    pub connection_auth: ConnectionAuthConfig,
+    pub is_cluster: bool,
+    pub hash_tag: Option<String>,
 }
 
 #[derive(Clone, Display, EnumString, IntoStaticStr, Debug, PartialEq, Eq)]
