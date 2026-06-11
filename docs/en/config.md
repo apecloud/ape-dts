@@ -18,6 +18,7 @@ Different tasks may require extra configs, refer to [task templates](/docs/templ
 | parallel_type   | snapshot extraction parallel strategy                                                       | table                                                                                                | table                                                   |
 | parallel_size   | number of workers for extracting a table                                                    | 4                                                                                                    | 1                                                       |
 | partition_cols  | partition column for data splitting during snapshot migration, only single column supported | json:[{"db":"db_1","tb":"tb_1","partition_col":"id"},{"db":"db_2","tb":"tb_2","partition_col":"id"}] | -                                                       |
+| is_cluster      | whether the Redis source is a Redis Cluster, only valid when `db_type=redis`                | true                                                                                                 | false                                                   |
 
 ## URL escaping
 
@@ -39,6 +40,12 @@ url=mysql://user1:abc%25%24%23%3F%40@127.0.0.1:3307?ssl-mode=disabled
 - MongoDB and Foxlake snapshot extractors currently support only `table`; `chunk` is not supported.
 - Deprecated compatibility: `[runtime] tb_parallel_size` is kept only as a legacy fallback when `[extractor] parallel_size` is not set.
 
+## Redis source cluster mode
+
+- When the Redis source is a Redis Cluster, set `[extractor].is_cluster=true`.
+- `[extractor].url` can point to any reachable node in the source cluster. DTS discovers all source master nodes through `CLUSTER NODES` and starts one PSYNC extractor for each master.
+- For standalone Redis sources, omit `is_cluster` or set it to `false`.
+
 # [sinker]
 
 | Config          | Description                                                                                                                          | Example                                                        | Default                                                 |
@@ -51,6 +58,14 @@ url=mysql://user1:abc%25%24%23%3F%40@127.0.0.1:3307?ssl-mode=disabled
 | max_connections | max connections for target database                                                                                                  | 10                                                             | currently 10, may be dynamically adjusted in the future |
 | batch_size      | number of records written in a batch, 1 for serial                                                                                   | 200                                                            | 200                                                     |
 | replace         | when inserting data, whether to force replacement if data already exists in target database, used in snapshot/cdc tasks for MySQL/PG | false                                                          | true                                                    |
+| is_cluster      | whether the Redis target is a Redis Cluster, only valid when `db_type=redis`                                                         | true                                                           | false                                                   |
+
+## Redis target cluster mode
+
+- When the Redis target is a Redis Cluster, set `[sinker].is_cluster=true`.
+- `[sinker].url` can point to any reachable node in the target cluster. DTS discovers all target master nodes through `CLUSTER NODES` and routes Redis commands to the owning node by key slot.
+- In Redis target cluster mode, DTS creates sinkers according to the target master nodes, instead of limiting the sinker count by `[parallelizer].parallel_size`.
+- For standalone Redis targets, omit `is_cluster` or set it to `false`.
 
 # [checker]
 
