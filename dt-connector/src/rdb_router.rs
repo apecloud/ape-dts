@@ -125,12 +125,14 @@ impl RdbRouter {
         self.forward.route_redis_db_id(db_id)
     }
 
-    pub fn validate_redis_db_map(&self) -> anyhow::Result<()> {
-        self.forward.validate_redis_db_map()
-    }
-
-    pub fn validate_redis_target_cluster_db_map(&self) -> anyhow::Result<()> {
-        self.forward.validate_redis_target_cluster_db_map()
+    pub fn validate_redis_db_map(&self, is_cluster: bool) -> anyhow::Result<()> {
+        if let Err(e) = self.forward.validate_redis_db_map() {
+            return Err(e);
+        }
+        if is_cluster {
+            return self.forward.validate_redis_target_cluster_db_map();
+        }
+        Ok(())
     }
 
     #[cfg(test)]
@@ -679,7 +681,7 @@ mod tests {
         let router =
             RdbRouter::from_maps_for_test(db_map, HashMap::new(), HashMap::new(), HashMap::new());
 
-        router.validate_redis_db_map().unwrap();
+        router.validate_redis_db_map(false).unwrap();
         assert_eq!(router.route_redis_db_id(0).unwrap(), 1);
         assert_eq!(router.route_redis_db_id(2).unwrap(), 3);
         assert_eq!(router.route_redis_db_id(4).unwrap(), 4);
@@ -690,16 +692,16 @@ mod tests {
         let db_map = RdbRouter::parse_schema_map("0:abc", &DbType::Redis).unwrap();
         let router =
             RdbRouter::from_maps_for_test(db_map, HashMap::new(), HashMap::new(), HashMap::new());
-        assert!(router.validate_redis_db_map().is_err());
+        assert!(router.validate_redis_db_map(false).is_err());
 
         let db_map = RdbRouter::parse_schema_map("0:1", &DbType::Redis).unwrap();
         let router =
             RdbRouter::from_maps_for_test(db_map, HashMap::new(), HashMap::new(), HashMap::new());
-        assert!(router.validate_redis_target_cluster_db_map().is_err());
+        assert!(router.validate_redis_db_map(true).is_err());
 
         let db_map = RdbRouter::parse_schema_map("0:0", &DbType::Redis).unwrap();
         let router =
             RdbRouter::from_maps_for_test(db_map, HashMap::new(), HashMap::new(), HashMap::new());
-        router.validate_redis_target_cluster_db_map().unwrap();
+        router.validate_redis_db_map(true).unwrap();
     }
 }

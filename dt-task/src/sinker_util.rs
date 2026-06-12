@@ -292,10 +292,7 @@ impl SinkerUtil {
                 let method = RedisWriteMethod::from_str(&method)?;
                 let router = RdbRouter::from_config(&config.router, &DbType::Redis)?;
                 if let Some(router) = &router {
-                    router.validate_redis_db_map()?;
-                    if is_cluster {
-                        router.validate_redis_target_cluster_db_map()?;
-                    }
+                    router.validate_redis_db_map(is_cluster)?;
                 }
 
                 if is_cluster {
