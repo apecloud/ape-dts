@@ -73,12 +73,12 @@ DEFAULT_RUN_ID="$(date '+%Y%m%d-%H%M%S')-$$"
 
 declare -a ALL_SUITES=(
   "mock_test"
+  "mock_test_amd_only"
   "mysql_to_clickhouse"
   # "mysql_to_doris"       # disabled: local/CI Doris suite is temporarily excluded
   # "mysql_to_foxlake"      # disabled: local runnable Foxlake service is not provisioned
   "mysql_to_kafka_to_mysql"
   "mysql_to_mysql"
-  # "mysql_to_mysql_5_7"   # disabled: MySQL 5.7 has some struct-related failure case and is unsupport for arm64.
   "mysql_to_mysql_case_sensitive"
   "mysql_to_mysql_lua"
   "mysql_to_redis"
@@ -138,7 +138,7 @@ TEST_FAIL_FAST=1
 declare -a REQUESTED_SUITES=()
 declare -a EXTRA_TEST_ARGS=()
 declare -a ARM_UNSUPPORTED_SUITES=(
-  "mysql_to_mysql_5_7"
+  "mock_test_amd_only"
   "redis_to_redis_2_8"
 )
 
@@ -330,13 +330,13 @@ is_suite_supported_on_current_arch() {
 suite_services() {
   local suite="$1"
   case "${suite}" in
-    mock_test) echo "mysql-src mysql-dst postgres-src postgres-dst" ;;
+    mock_test) echo "mysql-src-8-0 mysql-dst-8-0 postgres-src-13-3-4 postgres-dst-13-3-4 postgres-src-17-3-4 postgres-dst-17-3-4" ;;
+    mock_test_amd_only) echo "mysql-src-5-7 mysql-dst-5-7" ;;
     mysql_to_clickhouse) echo "mysql-src clickhouse" ;;
     mysql_to_doris) echo "mysql-src doris-2-1-0" ;;
     mysql_to_foxlake) echo "mysql-src minio minio-init" ;;
     mysql_to_kafka_to_mysql) echo "mysql-src mysql-dst kafka" ;;
     mysql_to_mysql) echo "mysql-src mysql-dst mysql-meta mysql-src-8-0 mysql-dst-8-0" ;;
-    mysql_to_mysql_5_7) echo "mysql-src-5-7 mysql-dst-5-7 mysql-meta-5-7 mysql-src-8-0 mysql-dst-8-0" ;;
     mysql_to_mysql_case_sensitive) echo "mysql-src-8-0 mysql-dst-8-0" ;;
     mysql_to_mysql_lua) echo "mysql-src mysql-dst mysql-meta" ;;
     mysql_to_redis) echo "mysql-src redis-dst" ;;
@@ -403,39 +403,39 @@ resolve_service_container_id() {
 suite_nextest_filter() {
   local suite="$1"
   case "${suite}" in
-    mock_test) echo "test(mock_test::)" ;;
-    mysql_to_clickhouse) echo "test(mysql_to_clickhouse::)" ;;
-    mysql_to_doris) echo "test(mysql_to_doris::)" ;;
-    mysql_to_foxlake) echo "test(mysql_to_foxlake::)" ;;
-    mysql_to_kafka_to_mysql) echo "test(mysql_to_kafka_to_mysql::)" ;;
-    mysql_to_mysql) echo "test(mysql_to_mysql::)" ;;
-    mysql_to_mysql_5_7) echo "test(mysql_to_mysql::)" ;;
-    mysql_to_mysql_case_sensitive) echo "test(mysql_to_mysql_case_sensitive::)" ;;
-    mysql_to_mysql_lua) echo "test(mysql_to_mysql_lua::)" ;;
-    mysql_to_redis) echo "test(mysql_to_redis::)" ;;
-    mysql_to_starrocks) echo "test(mysql_to_starrocks::)" ;;
-    mysql_to_tidb) echo "test(mysql_to_tidb::)" ;;
-    pg_to_clickhouse) echo "test(pg_to_clickhouse::)" ;;
-    pg_to_doris) echo "test(pg_to_doris::)" ;;
-    pg_to_kafka_to_pg) echo "test(pg_to_kafka_to_pg::)" ;;
-    pg_to_pg) echo "test(pg_to_pg::)" ;;
-    pg_to_pg_lua) echo "test(pg_to_pg_lua::)" ;;
-    pg_to_starrocks) echo "test(pg_to_starrocks::)" ;;
-    mongo_to_mongo) echo "test(mongo_to_mongo::)" ;;
-    redis_to_redis_2_8) echo "test(redis_to_redis::cdc_2_8_tests::) | test(redis_to_redis::snapshot_2_8_tests::)" ;;
-    redis_to_redis_4_0) echo "test(redis_to_redis::cdc_4_0_tests::) | test(redis_to_redis::snapshot_4_0_tests::)" ;;
-    redis_to_redis_5_0) echo "test(redis_to_redis::cdc_5_0_tests::) | test(redis_to_redis::snapshot_5_0_tests::)" ;;
-    redis_to_redis_6_0) echo "test(redis_to_redis::cdc_6_0_tests::) | test(redis_to_redis::snapshot_6_0_tests::)" ;;
-    redis_to_redis_6_2) echo "test(redis_to_redis::cdc_6_2_tests::) | test(redis_to_redis::snapshot_6_2_tests::)" ;;
-    redis_to_redis_7_0) echo "test(redis_to_redis::cdc_7_0_tests::) | test(redis_to_redis::snapshot_7_0_tests::) | test(redis_to_redis::snapshot_and_cdc_7_0_tests::)" ;;
-    redis_to_redis_8_0) echo "test(redis_to_redis::cdc_8_0_tests::) | test(redis_to_redis::snapshot_8_0_tests::)" ;;
-    redis_to_redis_cross_version) echo "test(redis_to_redis::cdc_cross_version_tests::) | test(redis_to_redis::snapshot_cross_version_tests::)" ;;
-    redis_to_redis_graph) echo "test(redis_to_redis::cdc_graph_tests::) | test(redis_to_redis::snapshot_graph_tests::)" ;;
-    redis_to_redis_rebloom) echo "test(redis_to_redis::cdc_rebloom_tests::) | test(redis_to_redis::snapshot_rebloom_tests::)" ;;
-    redis_to_redis_redisearch) echo "test(redis_to_redis::cdc_redisearch_tests::) | test(redis_to_redis::snapshot_redisearch_tests::)" ;;
-    redis_to_redis_rejson) echo "test(redis_to_redis::cdc_rejson_tests::) | test(redis_to_redis::snapshot_rejson_tests::)" ;;
-    redis_to_redis_precheck) echo "test(redis_to_redis::precheck_tests::)" ;;
-    no_services) echo "test(log_reader::)" ;;
+    mock_test) echo "test(/^mock_test::mysql_to_mysql::from_8_0_to_8_0::/) | test(/^mock_test::pg_to_pg::from_13_3_4_to_13_3_4::/) | test(/^mock_test::pg_to_pg::from_17_3_4_to_17_3_4::/)" ;;
+    mock_test_amd_only) echo "test(/^mock_test::mysql_to_mysql::from_5_7_to_5_7::/)" ;;
+    mysql_to_clickhouse) echo "test(/^mysql_to_clickhouse::/)" ;;
+    mysql_to_doris) echo "test(/^mysql_to_doris::/)" ;;
+    mysql_to_foxlake) echo "test(/^mysql_to_foxlake::/)" ;;
+    mysql_to_kafka_to_mysql) echo "test(/^mysql_to_kafka_to_mysql::/)" ;;
+    mysql_to_mysql) echo "test(/^mysql_to_mysql::/)" ;;
+    mysql_to_mysql_case_sensitive) echo "test(/^mysql_to_mysql_case_sensitive::/)" ;;
+    mysql_to_mysql_lua) echo "test(/^mysql_to_mysql_lua::/)" ;;
+    mysql_to_redis) echo "test(/^mysql_to_redis::/)" ;;
+    mysql_to_starrocks) echo "test(/^mysql_to_starrocks::/)" ;;
+    mysql_to_tidb) echo "test(/^mysql_to_tidb::/)" ;;
+    pg_to_clickhouse) echo "test(/^pg_to_clickhouse::/)" ;;
+    pg_to_doris) echo "test(/^pg_to_doris::/)" ;;
+    pg_to_kafka_to_pg) echo "test(/^pg_to_kafka_to_pg::/)" ;;
+    pg_to_pg) echo "test(/^pg_to_pg::/)" ;;
+    pg_to_pg_lua) echo "test(/^pg_to_pg_lua::/)" ;;
+    pg_to_starrocks) echo "test(/^pg_to_starrocks::/)" ;;
+    mongo_to_mongo) echo "test(/^mongo_to_mongo::/)" ;;
+    redis_to_redis_2_8) echo "test(/^redis_to_redis::cdc_2_8_tests::/) | test(/^redis_to_redis::snapshot_2_8_tests::/)" ;;
+    redis_to_redis_4_0) echo "test(/^redis_to_redis::cdc_4_0_tests::/) | test(/^redis_to_redis::snapshot_4_0_tests::/)" ;;
+    redis_to_redis_5_0) echo "test(/^redis_to_redis::cdc_5_0_tests::/) | test(/^redis_to_redis::snapshot_5_0_tests::/)" ;;
+    redis_to_redis_6_0) echo "test(/^redis_to_redis::cdc_6_0_tests::/) | test(/^redis_to_redis::snapshot_6_0_tests::/)" ;;
+    redis_to_redis_6_2) echo "test(/^redis_to_redis::cdc_6_2_tests::/) | test(/^redis_to_redis::snapshot_6_2_tests::/)" ;;
+    redis_to_redis_7_0) echo "test(/^redis_to_redis::cdc_7_0_tests::/) | test(/^redis_to_redis::snapshot_7_0_tests::/) | test(/^redis_to_redis::snapshot_and_cdc_7_0_tests::/)" ;;
+    redis_to_redis_8_0) echo "test(/^redis_to_redis::cdc_8_0_tests::/) | test(/^redis_to_redis::snapshot_8_0_tests::/)" ;;
+    redis_to_redis_cross_version) echo "test(/^redis_to_redis::cdc_cross_version_tests::/) | test(/^redis_to_redis::snapshot_cross_version_tests::/)" ;;
+    redis_to_redis_graph) echo "test(/^redis_to_redis::cdc_graph_tests::/) | test(/^redis_to_redis::snapshot_graph_tests::/)" ;;
+    redis_to_redis_rebloom) echo "test(/^redis_to_redis::cdc_rebloom_tests::/) | test(/^redis_to_redis::snapshot_rebloom_tests::/)" ;;
+    redis_to_redis_redisearch) echo "test(/^redis_to_redis::cdc_redisearch_tests::/) | test(/^redis_to_redis::snapshot_redisearch_tests::/)" ;;
+    redis_to_redis_rejson) echo "test(/^redis_to_redis::cdc_rejson_tests::/) | test(/^redis_to_redis::snapshot_rejson_tests::/)" ;;
+    redis_to_redis_precheck) echo "test(/^redis_to_redis::precheck_tests::/)" ;;
+    no_services) echo "test(/^log_reader::/)" ;;
     *) die "unknown suite '${suite}'" ;;
   esac
 }

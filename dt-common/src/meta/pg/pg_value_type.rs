@@ -7,7 +7,7 @@ const CHAR_OID: i32 = 18;
 const INT8_OID: i32 = 20;
 const INT2_OID: i32 = 21;
 const INT4_OID: i32 = 23;
-const TEXT_OID: i32 = 25;
+pub(super) const TEXT_OID: i32 = 25;
 const OID_OID: i32 = 26;
 // const TID_OID: i32 = 27;
 // const XID_OID: i32 = 28;
@@ -58,8 +58,8 @@ const FLOAT8_ARRAY_OID: i32 = 1022;
 // const ACLITEM_ARRAY_OID: i32 = 1034;
 // const MACADDR_ARRAY_OID: i32 = 1040;
 // const INET_ARRAY_OID: i32 = 1041;
-const BPCHAR_OID: i32 = 1042;
-const VARCHAR_OID: i32 = 1043;
+pub(super) const BPCHAR_OID: i32 = 1042;
+pub(super) const VARCHAR_OID: i32 = 1043;
 const DATE_OID: i32 = 1082;
 const TIME_OID: i32 = 1083;
 const TIMESTAMP_OID: i32 = 1114;
@@ -235,23 +235,4 @@ impl PgValueType {
         )
     }
 
-    pub fn can_be_splitted(&self) -> bool {
-        // Means wheather the type can be used in `max`/`min` aggregate operations and `order by` comparisons.
-        // Compatible with postgresql 14+. Reference: https://www.postgresql.org/docs/14/functions-aggregate.html
-        matches!(
-            self,
-            PgValueType::Int32
-                | PgValueType::Int16
-                | PgValueType::Int64
-                | PgValueType::Float32
-                | PgValueType::Float64
-                | PgValueType::Numeric
-                | PgValueType::TimestampTZ
-                | PgValueType::Timestamp
-                | PgValueType::Time
-                | PgValueType::TimeTZ
-                | PgValueType::Date
-                | PgValueType::String
-        )
-    }
 }

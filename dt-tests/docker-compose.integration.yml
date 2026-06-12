@@ -198,7 +198,7 @@ services:
       MYSQL_ROOT_PASSWORD: 123456
       MYSQL_DATABASE: test_db
     ports:
-      - "3307:3306"
+      - "4307:3306"
     command:
       - mysqld
       - --server-id=1
@@ -229,7 +229,7 @@ services:
       MYSQL_ROOT_PASSWORD: 123456
       MYSQL_DATABASE: test_db
     ports:
-      - "3308:3306"
+      - "4308:3306"
     command:
       - mysqld
       - --server-id=2
@@ -347,6 +347,118 @@ services:
       POSTGRES_DB: postgres
     ports:
       - "5434:5432"
+    command:
+      - postgres
+      - -c
+      - wal_level=logical
+      - -c
+      - max_wal_senders=10
+      - -c
+      - max_replication_slots=10
+    volumes:
+      - ./docker/postgres-init:/docker-entrypoint-initdb.d
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - psql -U postgres -c 'SELECT 1'
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+      interval: 5s
+
+  postgres-src-13-3-4:
+    image: postgis/postgis:13-3.4
+    container_name: postgres-src-13-3-4-it
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: postgres
+    ports:
+      - "6433:5432"
+    command:
+      - postgres
+      - -c
+      - wal_level=logical
+      - -c
+      - max_wal_senders=10
+      - -c
+      - max_replication_slots=10
+    volumes:
+      - ./docker/postgres-init:/docker-entrypoint-initdb.d
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - psql -U postgres -c 'SELECT 1'
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+      interval: 5s
+
+  postgres-dst-13-3-4:
+    image: postgis/postgis:13-3.4
+    container_name: postgres-dst-13-3-4-it
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: postgres
+    ports:
+      - "6434:5432"
+    command:
+      - postgres
+      - -c
+      - wal_level=logical
+      - -c
+      - max_wal_senders=10
+      - -c
+      - max_replication_slots=10
+    volumes:
+      - ./docker/postgres-init:/docker-entrypoint-initdb.d
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - psql -U postgres -c 'SELECT 1'
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+      interval: 5s
+
+  postgres-src-17-3-4:
+    image: postgis/postgis:17-3.4
+    container_name: postgres-src-17-3-4-it
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: postgres
+    ports:
+      - "7433:5432"
+    command:
+      - postgres
+      - -c
+      - wal_level=logical
+      - -c
+      - max_wal_senders=10
+      - -c
+      - max_replication_slots=10
+    volumes:
+      - ./docker/postgres-init:/docker-entrypoint-initdb.d
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - psql -U postgres -c 'SELECT 1'
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+      interval: 5s
+
+  postgres-dst-17-3-4:
+    image: postgis/postgis:17-3.4
+    container_name: postgres-dst-17-3-4-it
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: postgres
+    ports:
+      - "7434:5432"
     command:
       - postgres
       - -c

@@ -258,7 +258,7 @@ mod tests {
     }
 
     #[test]
-    fn test_mysql_mock_dml_has_no_after_insert_stmt() {
+    fn test_mysql_mock_dml_appends_analyze_table() {
         let mock_data = MockData {
             db_context: MockDbContext::new(DbType::Mysql, "8.0.0"),
             insert_rows: 2,
@@ -267,7 +267,29 @@ mod tests {
         };
 
         let stmts = mock_data.mock_dml_stmts();
-        assert_eq!(stmts.len(), 1);
+        assert_eq!(stmts.len(), 2);
         assert!(stmts[0].starts_with("INSERT INTO `test_db`.`test_tb` VALUES "));
+        assert_eq!(stmts[1], "ANALYZE TABLE `test_db`.`test_tb`;");
+    }
+
+    #[test]
+    fn test_mysql_mock_dml_batches_analyze_tables() {
+        let mock_stmts = (0..101)
+            .map(|idx| MockStmt::new(&[MysqlType::Int], "test_db", &format!("test_tb_{}", idx)))
+            .collect::<Vec<_>>();
+        let mock_data = MockData {
+            db_context: MockDbContext::new(DbType::Mysql, "8.0.0"),
+            insert_rows: 1,
+            mock_stmts,
+            seed: 777,
+        };
+
+        let stmts = mock_data.mock_dml_stmts();
+        assert_eq!(stmts.len(), 103);
+        assert!(stmts[101].starts_with(
+            "ANALYZE TABLE `test_db`.`test_tb_0`, `test_db`.`test_tb_1`"
+        ));
+        assert!(stmts[101].ends_with("`test_db`.`test_tb_99`;"));
+        assert_eq!(stmts[102], "ANALYZE TABLE `test_db`.`test_tb_100`;");
     }
 }

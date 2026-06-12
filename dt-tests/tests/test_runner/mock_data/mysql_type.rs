@@ -696,6 +696,28 @@ impl MockColType for MysqlType {
         format!("`{}`", name)
     }
 
+    fn after_all_insert_stmts(db_tbs: &[(String, String)], ctx: &MockDbContext) -> Vec<String> {
+        const ANALYZE_TABLE_BATCH_SIZE: usize = 100;
+
+        db_tbs
+            .chunks(ANALYZE_TABLE_BATCH_SIZE)
+            .map(|chunk| {
+                let tables = chunk
+                    .iter()
+                    .map(|(db, tb)| {
+                        format!(
+                            "{}.{}",
+                            Self::quote_identifier(db, ctx),
+                            Self::quote_identifier(tb, ctx)
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("ANALYZE TABLE {};", tables)
+            })
+            .collect()
+    }
+
     fn config_key_prefix() -> &'static str {
         "mysql_types"
     }
