@@ -126,9 +126,7 @@ impl RdbRouter {
     }
 
     pub fn validate_redis_db_map(&self, is_cluster: bool) -> anyhow::Result<()> {
-        if let Err(e) = self.forward.validate_redis_db_map() {
-            return Err(e);
-        }
+        self.forward.validate_redis_db_map()?;
         if is_cluster {
             return self.forward.validate_redis_target_cluster_db_map();
         }
@@ -286,10 +284,14 @@ impl RdbRouterInner {
     }
 
     fn route_ddl(&self, mut ddl_data: DdlData) -> DdlData {
+        let has_rename_target = !ddl_data.get_rename_to_schema_tb().1.is_empty();
         match &mut ddl_data.statement {
             DdlStatement::MysqlAlterTableRename(_)
             | DdlStatement::PgAlterTableRename(_)
-            | DdlStatement::RenameTable(_) => {
+            | DdlStatement::RenameTable(_)
+            | DdlStatement::MongoCommand(_)
+                if has_rename_target =>
+            {
                 let (src_schema, src_tb) = ddl_data.get_schema_tb();
                 let (src_new_schema, src_new_tb) = ddl_data.get_rename_to_schema_tb();
                 let (dst_schema, dst_tb) = self.get_tb_map(&src_schema, &src_tb);

@@ -89,21 +89,27 @@ impl MongoMerger {
         Ok((inserts, deletes, unmerged_rows))
     }
 
-    fn get_hash_key(row_data: &RowData) -> Option<MongoKey> {
+    fn get_hash_key(row_data: &RowData) -> Option<String> {
+        fn key_from_fields(fields: &HashMap<String, ColValue>) -> Option<String> {
+            if let Some(ColValue::MongoDoc(doc)) = fields.get(MongoConstants::DOCUMENT_KEY) {
+                return Some(format!("document_key:{:?}", doc));
+            }
+            if let Some(ColValue::MongoDoc(doc)) = fields.get(MongoConstants::DOC) {
+                return MongoKey::from_doc(doc).map(|key| format!("id:{}", key));
+            }
+            None
+        }
+
         match row_data.row_type {
             RowType::Insert => {
                 if let Ok(after) = row_data.require_after() {
-                    if let Some(ColValue::MongoDoc(doc)) = after.get(MongoConstants::DOC) {
-                        return MongoKey::from_doc(doc);
-                    }
+                    return key_from_fields(after);
                 }
             }
 
             RowType::Delete => {
                 if let Ok(before) = row_data.require_before() {
-                    if let Some(ColValue::MongoDoc(doc)) = before.get(MongoConstants::DOC) {
-                        return MongoKey::from_doc(doc);
-                    }
+                    return key_from_fields(before);
                 }
             }
 
@@ -115,8 +121,8 @@ impl MongoMerger {
                     // in which case we can NOT transfer Update into Delete + Insert
                     if after.get(MongoConstants::DOC).is_none() {
                         return None;
-                    } else if let Some(ColValue::MongoDoc(doc)) = before.get(MongoConstants::DOC) {
-                        return MongoKey::from_doc(doc);
+                    } else {
+                        return key_from_fields(before);
                     }
                 }
             }

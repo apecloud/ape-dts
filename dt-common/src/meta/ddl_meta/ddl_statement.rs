@@ -34,6 +34,8 @@ pub enum DdlStatement {
     RenameTable(RenameTableStatement),
     PgDropIndex(PgDropIndexStatement),
 
+    MongoCommand(MongoCommandStatement),
+
     #[default]
     Unknown,
 }
@@ -116,8 +118,11 @@ impl DdlStatement {
             DdlStatement::PgDropIndex(_)
             | DdlStatement::PgDropMultiIndex(_)
             | DdlStatement::DropMultiTable(_)
-            | DdlStatement::RenameMultiTable(_)
-            | DdlStatement::Unknown => (String::new(), String::new()),
+            | DdlStatement::RenameMultiTable(_) => (String::new(), String::new()),
+
+            DdlStatement::MongoCommand(s) => (s.schema.clone(), s.tb.clone()),
+
+            DdlStatement::Unknown => (String::new(), String::new()),
         }
     }
 
@@ -126,6 +131,7 @@ impl DdlStatement {
             DdlStatement::RenameTable(s) => (s.new_schema.clone(), s.new_tb.clone()),
             DdlStatement::MysqlAlterTableRename(s) => (s.new_db.clone(), s.new_tb.clone()),
             DdlStatement::PgAlterTableRename(s) => (s.new_schema.clone(), s.new_tb.clone()),
+            DdlStatement::MongoCommand(s) => (s.new_schema.clone(), s.new_tb.clone()),
             _ => (String::new(), String::new()),
         }
     }
@@ -168,6 +174,13 @@ impl DdlStatement {
                     s.new_schema = dst_new_schema;
                 }
                 s.tb = dst_tb;
+                s.new_tb = dst_new_tb;
+            }
+
+            DdlStatement::MongoCommand(s) => {
+                s.schema = dst_schema;
+                s.tb = dst_tb;
+                s.new_schema = dst_new_schema;
                 s.new_tb = dst_new_tb;
             }
 
@@ -253,6 +266,11 @@ impl DdlStatement {
                 s.tb = dst_tb;
             }
 
+            DdlStatement::MongoCommand(s) => {
+                s.schema = dst_schema;
+                s.tb = dst_tb;
+            }
+
             DdlStatement::DropTable(s) => {
                 if !s.schema.is_empty() {
                     s.schema = dst_schema;
@@ -272,6 +290,14 @@ impl DdlStatement {
             | DdlStatement::Unknown => {}
         }
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+pub struct MongoCommandStatement {
+    pub schema: String,
+    pub tb: String,
+    pub new_schema: String,
+    pub new_tb: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
@@ -892,6 +918,12 @@ impl DdlStatement {
                 size += mysql_drop_index_statement.tb.len() as u64;
                 size += mysql_drop_index_statement.index_name.len() as u64;
                 size += mysql_drop_index_statement.unparsed.len() as u64;
+            }
+            DdlStatement::MongoCommand(mongo_command_statement) => {
+                size += mongo_command_statement.schema.len() as u64;
+                size += mongo_command_statement.tb.len() as u64;
+                size += mongo_command_statement.new_schema.len() as u64;
+                size += mongo_command_statement.new_tb.len() as u64;
             }
             DdlStatement::Unknown => {}
         }

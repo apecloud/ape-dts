@@ -78,7 +78,7 @@ impl Prechecker for MongoPrechecker {
         // 1. replSet used
         // 2. the specify url is the master
         // let random_db = self.fetcher.get_random_db()?;
-        let rs_status = self.fetcher.execute_for_db("hello").await?;
+        let rs_status = self.fetcher.execute_for_admin("hello").await?;
 
         let (ok, primary, me): (bool, &str, &str) = (
             rs_status.get("ok").and_then(Bson::as_f64).unwrap_or(0.0) >= 1.0,
@@ -88,10 +88,13 @@ impl Prechecker for MongoPrechecker {
                 .unwrap_or(""),
             rs_status.get("me").and_then(Bson::as_str).unwrap_or(""),
         );
+        let is_mongos = rs_status.get("msg").and_then(Bson::as_str) == Some("isdbgrid");
 
         let mut err_msg = "";
         if !ok {
             err_msg = "fetching mongodb instance status with 'db.hello()' failed.";
+        } else if is_mongos {
+            err_msg = "";
         } else if primary.is_empty() || me.is_empty() {
             err_msg = "mongodb is not a replicaSet architecture.";
         } else if primary != me {

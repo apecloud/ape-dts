@@ -1,8 +1,11 @@
 use std::collections::HashMap;
 
-use crate::config::{
-    config_enums::RdbParallelType, connection_auth_config::ConnectionAuthConfig,
-    limiter_config::RateLimiterConfig,
+use crate::{
+    config::{
+        config_enums::RdbParallelType, connection_auth_config::ConnectionAuthConfig,
+        limiter_config::RateLimiterConfig,
+    },
+    meta::mongo::mongo_cdc_source::MongoCdcSource,
 };
 
 use super::{
@@ -105,6 +108,7 @@ pub enum ExtractorConfig {
     MongoSnapshot {
         url: String,
         connection_auth: ConnectionAuthConfig,
+        is_direct_connection: Option<bool>,
         app_name: String,
         db: String,
         tb: String,
@@ -117,11 +121,12 @@ pub enum ExtractorConfig {
     MongoCdc {
         url: String,
         connection_auth: ConnectionAuthConfig,
+        is_direct_connection: Option<bool>,
         app_name: String,
         resume_token: String,
         start_timestamp: u32,
         // op_log, change_stream
-        source: String,
+        source: MongoCdcSource,
         heartbeat_interval_secs: u64,
         heartbeat_tb: String,
     },
@@ -129,6 +134,7 @@ pub enum ExtractorConfig {
     MongoCheck {
         url: String,
         connection_auth: ConnectionAuthConfig,
+        is_direct_connection: Option<bool>,
         app_name: String,
         check_log_dir: String,
         batch_size: usize,
@@ -210,4 +216,6 @@ pub struct BasicExtractorConfig {
     pub connection_auth: ConnectionAuthConfig,
     pub max_connections: u32,
     pub rate_limiter: RateLimiterConfig,
+    pub app_name: Option<String>,
+    pub is_direct_connection: Option<bool>,
 }

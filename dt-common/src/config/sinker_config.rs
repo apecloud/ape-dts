@@ -6,6 +6,7 @@ use crate::config::{
     config_enums::{RdbTransactionIsolation, SinkType},
     connection_auth_config::ConnectionAuthConfig,
     limiter_config::RateLimiterConfig,
+    task_config::APE_DTS,
 };
 
 #[derive(Clone, Debug)]
@@ -34,8 +35,10 @@ pub enum SinkerConfig {
     Mongo {
         url: String,
         connection_auth: ConnectionAuthConfig,
+        is_direct_connection: Option<bool>,
         app_name: String,
         batch_size: usize,
+        require_shard_key_filter: bool,
     },
 
     MysqlStruct {
@@ -152,6 +155,9 @@ pub struct BasicSinkerConfig {
     pub batch_size: usize,
     pub max_connections: u32,
     pub rate_limiter: RateLimiterConfig,
+    // mongo special attrs
+    pub app_name: Option<String>,
+    pub is_direct_connection: Option<bool>,
 }
 
 impl Default for BasicSinkerConfig {
@@ -164,6 +170,8 @@ impl Default for BasicSinkerConfig {
             batch_size: 0,
             max_connections: 10,
             rate_limiter: RateLimiterConfig::default(),
+            app_name: Some(APE_DTS.to_string()),
+            is_direct_connection: None,
         }
     }
 }

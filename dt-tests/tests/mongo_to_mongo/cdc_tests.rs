@@ -18,6 +18,17 @@ mod test {
 
     #[tokio::test]
     #[serial]
+    async fn cdc_changestream_ddl_test() {
+        TestBase::run_mongo_changestream_ddl_test(
+            "mongo_to_mongo/cdc/changestream_ddl_test",
+            3000,
+            5000,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    #[serial]
     async fn cdc_resume_test() {
         TestBase::run_mongo_cdc_resume_test("mongo_to_mongo/cdc/resume_test", 3000, 3000).await;
     }

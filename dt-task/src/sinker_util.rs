@@ -13,6 +13,7 @@ use dt_common::{
     },
     meta::{
         avro::avro_converter::AvroConverter,
+        mongo::mongo_shard::list_shard_collections,
         mysql::mysql_meta_manager::MysqlMetaManager,
         pg::pg_meta_manager::PgMetaManager,
         redis::{
@@ -171,7 +172,11 @@ impl SinkerUtil {
                 }
             }
 
-            SinkerConfig::Mongo { batch_size, .. } => {
+            SinkerConfig::Mongo {
+                batch_size,
+                require_shard_key_filter,
+                ..
+            } => {
                 let router = RdbRouter::from_config(&config.router, &DbType::Mongo)?;
                 let mongo_client = match client {
                     ConnClient::MongoDB(mongo_client) => mongo_client,
@@ -179,12 +184,15 @@ impl SinkerUtil {
                         bail!("connection pool not found");
                     }
                 };
+                let target_shard_collections = list_shard_collections(&mongo_client).await?;
                 for _ in 0..parallel_size {
                     let sinker = MongoSinker {
                         batch_size,
                         router: router.clone(),
                         mongo_client: mongo_client.clone(),
                         base_sinker: BaseSinker::new(monitor.clone(), monitor_interval),
+                        target_shard_collections: target_shard_collections.clone(),
+                        require_shard_key_filter,
                     };
                     Self::push_checkable_sinker(&mut sub_sinkers, sinker, &checker);
                 }

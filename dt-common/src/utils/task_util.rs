@@ -52,6 +52,8 @@ mod tests {
             connection_auth: ConnectionAuthConfig::NoAuth,
             max_connections: 10,
             rate_limiter: RateLimiterConfig::default(),
+            app_name: None,
+            is_direct_connection: None,
         };
         let sinker_config = BasicSinkerConfig {
             db_type: DbType::Mysql,
@@ -61,6 +63,8 @@ mod tests {
             batch_size: 0,
             max_connections: 10,
             rate_limiter: RateLimiterConfig::default(),
+            app_name: None,
+            is_direct_connection: None,
         };
         let mut filter_config = FilterConfig {
             do_schemas: "db1,db2".to_string(),

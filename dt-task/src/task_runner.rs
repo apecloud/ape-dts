@@ -938,10 +938,6 @@ impl TaskRunner {
         let checker_db_type = checker_target.db_type.clone();
         let checker_url = checker_target.url.clone();
         let checker_auth = checker_target.connection_auth.clone();
-        let inline_check = self
-            .config
-            .task_type()
-            .is_some_and(|task_type| task_type.is_inline_check());
         let standalone_snapshot_check = self
             .task_type
             .is_some_and(|task_type| task_type.is_standalone_snapshot_check());
@@ -1127,14 +1123,11 @@ impl TaskRunner {
                 let source_checker = self
                     .create_source_checker(is_cdc_task, enable_sqlx_log)
                     .await?;
-                let app_name = match (&self.config.sinker, inline_check) {
-                    (SinkerConfig::Mongo { app_name, .. }, true) => app_name.as_str(),
-                    _ => "checker",
-                };
                 let mongo_client = TaskUtil::create_mongo_client(
                     &checker_url,
                     &checker_auth,
-                    app_name,
+                    checker_target.is_direct_connection,
+                    checker_target.app_name,
                     Some(max_connections),
                 )
                 .await?;
@@ -1193,7 +1186,8 @@ impl TaskRunner {
                 let client = TaskUtil::create_mongo_client(
                     &self.config.extractor_basic.url,
                     &self.config.extractor_basic.connection_auth,
-                    "checker-source",
+                    self.config.extractor_basic.is_direct_connection,
+                    self.config.extractor_basic.app_name.to_owned(),
                     Some(1),
                 )
                 .await?;
@@ -1599,6 +1593,7 @@ impl TaskRunner {
             ExtractorConfig::MongoSnapshot {
                 url,
                 connection_auth,
+                is_direct_connection,
                 app_name,
                 parallel_size,
                 parallel_type,
@@ -1607,6 +1602,7 @@ impl TaskRunner {
             } => ExtractorConfig::MongoSnapshot {
                 url: url.clone(),
                 connection_auth: connection_auth.clone(),
+                is_direct_connection: *is_direct_connection,
                 app_name: app_name.clone(),
                 db: String::new(),
                 tb: String::new(),

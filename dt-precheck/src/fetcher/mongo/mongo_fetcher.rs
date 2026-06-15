@@ -3,7 +3,10 @@ use std::collections::HashMap;
 use anyhow::bail;
 use async_trait::async_trait;
 
-use dt_common::{config::connection_auth_config::ConnectionAuthConfig, rdb_filter::RdbFilter};
+use dt_common::{
+    config::{connection_auth_config::ConnectionAuthConfig, task_config::APE_DTS},
+    rdb_filter::RdbFilter,
+};
 use dt_task::task_util::TaskUtil;
 use mongodb::{
     bson::{doc, Bson, Document},
@@ -26,13 +29,22 @@ pub struct MongoFetcher {
 #[async_trait]
 impl Fetcher for MongoFetcher {
     async fn build_connection(&mut self) -> anyhow::Result<()> {
-        self.pool =
-            Some(TaskUtil::create_mongo_client(&self.url, &self.connection_auth, "", None).await?);
+        self.pool = Some(
+            TaskUtil::create_mongo_client(
+                &self.url,
+                &self.connection_auth,
+                None,
+                Some(APE_DTS.to_owned()),
+                // TODO: is_direct_connection config
+                None,
+            )
+            .await?,
+        );
         Ok(())
     }
 
     async fn fetch_version(&mut self) -> anyhow::Result<String> {
-        let document = self.execute_for_db("buildInfo").await?;
+        let document = self.execute_for_admin("buildInfo").await?;
         Ok(String::from(
             document
                 .get("version")
@@ -66,6 +78,19 @@ impl Fetcher for MongoFetcher {
 }
 
 impl MongoFetcher {
+    pub async fn execute_for_admin(&self, command: &str) -> anyhow::Result<Document> {
+        let client = match &self.pool {
+            Some(pool) => pool,
+            None => bail! {"client is closed."},
+        };
+
+        let doc_command = doc! {command: 1};
+        Ok(client
+            .database("admin")
+            .run_command(doc_command, None)
+            .await?)
+    }
+
     pub async fn execute_for_db(&self, command: &str) -> anyhow::Result<Document> {
         let client = match &self.pool {
             Some(pool) => pool,

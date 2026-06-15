@@ -23,12 +23,17 @@ use dt_common::{
     log_error, log_info,
     meta::{
         col_value::ColValue,
-        mongo::{mongo_constant::MongoConstants, mongo_key::MongoKey},
+        ddl_meta::ddl_type::DdlType,
+        mongo::{
+            mongo_constant::MongoConstants, mongo_ddl::build_shard_collection_ddl,
+            mongo_key::MongoKey, mongo_shard::list_shard_collections,
+        },
         order_key::OrderKey,
         position::Position,
         row_data::RowData,
         row_type::RowType,
     },
+    rdb_filter::RdbFilter,
 };
 
 pub struct MongoSnapshotExtractor {
@@ -41,6 +46,7 @@ pub struct MongoSnapshotExtractor {
     pub mongo_client: Client,
     pub sample_rate: Option<u8>,
     pub recovery: Option<Arc<dyn Recovery + Send + Sync>>,
+    pub filter: RdbFilter,
 }
 
 #[async_trait]
@@ -52,6 +58,8 @@ impl Extractor for MongoSnapshotExtractor {
         if matches!(self.parallel_type, RdbParallelType::Chunk) {
             bail!("mongo snapshot extractor does not support parallel_type=chunk");
         }
+
+        self.prepare_mongo_sharding().await?;
 
         let tables = self.collect_tables();
         let this = self.clone_for_dispatch();
@@ -98,7 +106,44 @@ impl MongoSnapshotExtractor {
             mongo_client: self.mongo_client.clone(),
             sample_rate: self.sample_rate,
             recovery: self.recovery.clone(),
+            filter: self.filter.clone(),
         }
+    }
+
+    async fn prepare_mongo_sharding(&mut self) -> anyhow::Result<()> {
+        let source_shard_collections = list_shard_collections(&self.mongo_client).await?;
+        if source_shard_collections.is_empty() {
+            return Ok(());
+        }
+
+        for source_shard_collection in source_shard_collections.values() {
+            let Some((db, tb)) = source_shard_collection.ns.split_once('.') else {
+                continue;
+            };
+            if !self.db_tbs.get(db).is_some_and(|selected_tbs| {
+                selected_tbs.iter().any(|selected_tb| selected_tb == tb)
+            }) {
+                continue;
+            }
+            if self
+                .filter
+                .filter_ddl(db, tb, &DdlType::MongoShardCollection)
+            {
+                continue;
+            }
+
+            let Some(ddl_data) = build_shard_collection_ddl(
+                &source_shard_collection.ns,
+                source_shard_collection.key.clone(),
+                source_shard_collection.unique,
+            ) else {
+                continue;
+            };
+            self.base_extractor
+                .push_ddl(&mut self.extract_state, ddl_data, Position::None)
+                .await?;
+        }
+        Ok(())
     }
 
     async fn run_table_worker(&self, db: String, tb: String) -> anyhow::Result<()> {

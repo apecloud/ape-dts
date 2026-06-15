@@ -219,6 +219,18 @@ impl TestBase {
             .unwrap();
     }
 
+    pub async fn run_mongo_changestream_ddl_test(
+        test_dir: &str,
+        start_millis: u64,
+        parse_millis: u64,
+    ) {
+        let runner = MongoTestRunner::new(test_dir).await.unwrap();
+        runner
+            .run_changestream_ddl_test(start_millis, parse_millis)
+            .await
+            .unwrap();
+    }
+
     pub async fn run_mongo_cdc_resume_test(test_dir: &str, start_millis: u64, parse_millis: u64) {
         let runner = MongoTestRunner::new(test_dir).await.unwrap();
         runner

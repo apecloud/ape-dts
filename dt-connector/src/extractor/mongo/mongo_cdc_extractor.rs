@@ -25,7 +25,8 @@ use dt_common::{
         col_value::ColValue,
         dt_data::DtData,
         mongo::{
-            mongo_cdc_source::MongoCdcSource, mongo_constant::MongoConstants, mongo_key::MongoKey,
+            mongo_cdc_source::MongoCdcSource, mongo_constant::MongoConstants,
+            mongo_ddl::change_stream_event_to_ddl, mongo_key::MongoKey,
         },
         position::Position,
         row_data::RowData,
@@ -38,7 +39,7 @@ use dt_common::{
 };
 use mongodb::{
     bson::{doc, Bson, Document, Timestamp},
-    change_stream::event::{OperationType, ResumeToken},
+    change_stream::event::ResumeToken,
     options::{ChangeStreamOptions, FullDocumentBeforeChangeType, FullDocumentType, UpdateOptions},
     Client,
 };
@@ -66,6 +67,20 @@ impl MongoCdcExtractor {
                 ColValue::String(key.to_string()),
             );
         }
+    }
+
+    fn insert_document_key(target: &mut HashMap<String, ColValue>, document_key: &Document) {
+        target.insert(
+            MongoConstants::DOCUMENT_KEY.to_string(),
+            ColValue::MongoDoc(document_key.clone()),
+        );
+    }
+
+    fn parse_change_stream_ns(event: &Document) -> Option<(String, String)> {
+        let ns = event.get_document("ns").ok()?;
+        let db = ns.get_str("db").ok()?.to_string();
+        let tb = ns.get_str("coll").unwrap_or("").to_string();
+        Some((db, tb))
     }
 }
 
@@ -378,14 +393,20 @@ impl MongoCdcExtractor {
             .full_document_before_change(Some(FullDocumentBeforeChangeType::WhenAvailable))
             .build();
 
-        let mut change_stream = self.mongo_client.watch(None, stream_options).await?;
+        let mut change_stream = self
+            .mongo_client
+            .watch(None, stream_options)
+            .await?
+            .with_type::<Document>();
         loop {
             let result = change_stream.next_if_any().await?;
-            if let Some(doc) = result {
-                let resume_token = doc.id;
-                let position = if let Some(operation_time) = doc.cluster_time {
+            if let Some(event) = result {
+                let resume_token = change_stream.resume_token();
+                let position = if let Ok(operation_time) = event.get_timestamp("clusterTime") {
                     Position::MongoCdc {
-                        resume_token: json!(resume_token).to_string(),
+                        resume_token: resume_token
+                            .map(|token| json!(token).to_string())
+                            .unwrap_or_default(),
                         operation_time: operation_time.time,
                         timestamp: Position::format_timestamp_millis(
                             operation_time.time as i64 * 1000,
@@ -393,65 +414,95 @@ impl MongoCdcExtractor {
                     }
                 } else {
                     Position::MongoCdc {
-                        resume_token: json!(resume_token).to_string(),
+                        resume_token: resume_token
+                            .map(|token| json!(token).to_string())
+                            .unwrap_or_default(),
                         operation_time: 0,
                         timestamp: String::new(),
                     }
                 };
 
-                let (mut db, mut tb) = (String::new(), String::new());
-                if let Some(ns) = doc.ns {
-                    db = ns.db.clone();
-                    if let Some(coll) = ns.coll {
-                        tb = coll.clone();
-                    }
-                }
-
+                let (db, tb) = Self::parse_change_stream_ns(&event).unwrap_or_default();
+                let operation_type = event.get_str("operationType").unwrap_or("");
                 let mut row_type = RowType::Insert;
                 let mut before = HashMap::new();
                 let mut after = HashMap::new();
 
-                match doc.operation_type {
-                    OperationType::Insert => {
-                        Self::insert_id_from_doc(&mut after, doc.full_document.as_ref().unwrap());
+                match operation_type {
+                    "insert" => {
+                        let document = match event.get_document("fullDocument") {
+                            Ok(document) => document.clone(),
+                            Err(_) => continue,
+                        };
+                        if let Ok(document_key) = event.get_document("documentKey") {
+                            Self::insert_id_from_doc(&mut after, document_key);
+                            Self::insert_document_key(&mut after, document_key);
+                        }
+                        Self::insert_id_from_doc(&mut after, &document);
                         after.insert(
                             MongoConstants::DOC.to_string(),
-                            ColValue::MongoDoc(doc.full_document.unwrap()),
+                            ColValue::MongoDoc(document),
                         );
                     }
 
-                    OperationType::Delete => {
+                    "delete" => {
                         row_type = RowType::Delete;
-                        let doc = doc.document_key.unwrap();
-                        Self::insert_id_from_doc(&mut before, &doc);
-                        before.insert(MongoConstants::DOC.to_string(), ColValue::MongoDoc(doc));
+                        let document_key = match event.get_document("documentKey") {
+                            Ok(document_key) => document_key.clone(),
+                            Err(_) => continue,
+                        };
+                        Self::insert_id_from_doc(&mut before, &document_key);
+                        Self::insert_document_key(&mut before, &document_key);
+                        before.insert(
+                            MongoConstants::DOC.to_string(),
+                            ColValue::MongoDoc(document_key),
+                        );
                     }
 
-                    OperationType::Update | OperationType::Replace => {
+                    "update" | "replace" => {
                         row_type = RowType::Update;
-                        if let Some(document) = doc.full_document {
-                            if let Some(id_doc) = doc.document_key.as_ref() {
-                                Self::insert_id_from_doc(&mut after, id_doc);
-                            }
-                            Self::insert_id_from_doc(&mut after, &document);
-                            before.insert(
-                                MongoConstants::DOC.to_string(),
-                                ColValue::MongoDoc(doc.document_key.unwrap()),
-                            );
-                            after.insert(
-                                MongoConstants::DOC.to_string(),
-                                ColValue::MongoDoc(document),
-                            );
-                        }
+                        let document = match event.get_document("fullDocument") {
+                            Ok(document) => document.clone(),
+                            Err(_) => continue,
+                        };
+                        let document_key = match event.get_document("documentKey") {
+                            Ok(document_key) => document_key.clone(),
+                            Err(_) => continue,
+                        };
+                        Self::insert_id_from_doc(&mut before, &document_key);
+                        Self::insert_document_key(&mut before, &document_key);
+                        Self::insert_id_from_doc(&mut after, &document_key);
+                        Self::insert_document_key(&mut after, &document_key);
+                        Self::insert_id_from_doc(&mut after, &document);
+                        before.insert(
+                            MongoConstants::DOC.to_string(),
+                            ColValue::MongoDoc(document_key),
+                        );
+                        after.insert(
+                            MongoConstants::DOC.to_string(),
+                            ColValue::MongoDoc(document),
+                        );
                     }
-
-                    // TODO, heartbeat and DDL
                     _ => {
+                        if let Some(ddl_data) = change_stream_event_to_ddl(&event) {
+                            let (ddl_db, ddl_tb) = ddl_data.get_schema_tb();
+                            if !self.filter.filter_ddl(&ddl_db, &ddl_tb, &ddl_data.ddl_type) {
+                                self.base_extractor
+                                    .push_ddl(&mut self.extract_state, ddl_data, position)
+                                    .await?;
+                            }
+                        };
                         continue;
                     }
                 }
 
-                let row_data = RowData::new(db, tb, 0, row_type, Some(before), Some(after));
+                let before = if before.is_empty() {
+                    None
+                } else {
+                    Some(before)
+                };
+                let after = if after.is_empty() { None } else { Some(after) };
+                let row_data = RowData::new(db, tb, 0, row_type, before, after);
                 self.push_row_to_buf(row_data, position).await?;
             }
         }

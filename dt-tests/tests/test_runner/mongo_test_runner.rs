@@ -47,25 +47,34 @@ impl MongoTestRunner {
             ExtractorConfig::MongoSnapshot {
                 url,
                 connection_auth,
+                is_direct_connection,
                 app_name,
                 ..
             }
             | ExtractorConfig::MongoCdc {
                 url,
                 connection_auth,
+                is_direct_connection,
                 app_name,
                 ..
             }
             | ExtractorConfig::MongoCheck {
                 url,
                 connection_auth,
+                is_direct_connection,
                 app_name,
                 ..
             } => {
                 src_mongo_client = Some(
-                    TaskUtil::create_mongo_client(url, connection_auth, app_name, None)
-                        .await
-                        .unwrap(),
+                    TaskUtil::create_mongo_client(
+                        url,
+                        connection_auth,
+                        *is_direct_connection,
+                        Some(app_name.to_owned()),
+                        None,
+                    )
+                    .await
+                    .unwrap(),
                 );
             }
             _ => {}
@@ -74,14 +83,21 @@ impl MongoTestRunner {
         if let SinkerConfig::Mongo {
             url,
             connection_auth,
+            is_direct_connection,
             app_name,
             ..
         } = &config.sinker
         {
             dst_mongo_client = Some(
-                TaskUtil::create_mongo_client(url, connection_auth, app_name, None)
-                    .await
-                    .unwrap(),
+                TaskUtil::create_mongo_client(
+                    url,
+                    connection_auth,
+                    *is_direct_connection,
+                    Some(app_name.to_owned()),
+                    None,
+                )
+                .await
+                .unwrap(),
             );
         }
 
@@ -92,7 +108,8 @@ impl MongoTestRunner {
                         TaskUtil::create_mongo_client(
                             &checker_target.url,
                             &checker_target.connection_auth,
-                            "",
+                            None,
+                            None,
                             None,
                         )
                         .await
@@ -220,6 +237,28 @@ impl MongoTestRunner {
         self.base.abort_task(&task).await
     }
 
+    pub async fn run_changestream_ddl_test(
+        &self,
+        start_millis: u64,
+        parse_millis: u64,
+    ) -> anyhow::Result<()> {
+        self.execute_prepare_sqls().await?;
+        TimeUtil::sleep_millis(1200).await;
+
+        let task = self.base.spawn_task().await?;
+        TimeUtil::sleep_millis(start_millis).await;
+
+        self.execute_sqls_in_order_with_client(
+            self.src_mongo_client.as_ref().unwrap(),
+            &self.base.src_test_sqls,
+        )
+        .await?;
+        TimeUtil::sleep_millis(parse_millis).await;
+
+        self.assert_changestream_ddl_result().await?;
+        self.base.abort_task(&task).await
+    }
+
     pub async fn run_snapshot_test(&self, compare_data: bool) -> anyhow::Result<()> {
         self.execute_prepare_sqls().await?;
         self.execute_test_sqls().await?;
@@ -338,28 +377,81 @@ impl MongoTestRunner {
         Ok(())
     }
 
+    pub async fn execute_sqls_in_order_with_client(
+        &self,
+        client: &Client,
+        sqls: &[String],
+    ) -> anyhow::Result<()> {
+        let mut db = String::new();
+        for sql in sqls.iter() {
+            if sql.starts_with("use") {
+                db = Self::get_db(sql);
+                continue;
+            }
+
+            if self.execute_ddl_sql(client, &db, sql).await? {
+                continue;
+            }
+            self.execute_dml_sql(client, &db, sql).await?;
+        }
+        Ok(())
+    }
+
     async fn execute_ddls(&self, client: &Client, db: &str, sqls: &[String]) -> anyhow::Result<()> {
         for sql in sqls.iter() {
-            if sql.contains("dropDatabase") {
-                self.execute_drop_database(client, db).await.unwrap();
-            } else if sql.contains("drop") {
-                self.execute_drop(client, db, sql).await.unwrap();
-            } else if sql.contains("createCollection") {
-                self.execute_create(client, db, sql).await.unwrap();
-            }
+            self.execute_ddl_sql(client, db, sql).await?;
         }
         Ok(())
     }
 
     async fn execute_dmls(&self, client: &Client, db: &str, sqls: &[String]) -> anyhow::Result<()> {
         for sql in sqls.iter() {
-            if sql.contains(".insert") {
-                self.execute_insert(client, db, sql).await?;
-            } else if sql.contains(".update") {
-                self.execute_update(client, db, sql).await?;
-            } else if sql.contains(".delete") {
-                self.execute_delete(client, db, sql).await?;
-            }
+            self.execute_dml_sql(client, db, sql).await?;
+        }
+        Ok(())
+    }
+
+    async fn execute_ddl_sql(&self, client: &Client, db: &str, sql: &str) -> anyhow::Result<bool> {
+        if sql.contains("dropDatabase") {
+            self.execute_drop_database(client, db).await.unwrap();
+            return Ok(true);
+        }
+        if sql.contains("renameCollection") {
+            self.execute_rename_collection(client, db, sql)
+                .await
+                .unwrap();
+            return Ok(true);
+        }
+        if sql.contains("createIndex") {
+            self.execute_create_index(client, db, sql).await.unwrap();
+            return Ok(true);
+        }
+        if sql.contains("dropIndex") {
+            self.execute_drop_index(client, db, sql).await.unwrap();
+            return Ok(true);
+        }
+        if sql.contains("runCommand") {
+            self.execute_run_command(client, db, sql).await.unwrap();
+            return Ok(true);
+        }
+        if sql.contains(".drop()") {
+            self.execute_drop(client, db, sql).await.unwrap();
+            return Ok(true);
+        }
+        if sql.contains("createCollection") {
+            self.execute_create(client, db, sql).await.unwrap();
+            return Ok(true);
+        }
+        Ok(false)
+    }
+
+    async fn execute_dml_sql(&self, client: &Client, db: &str, sql: &str) -> anyhow::Result<()> {
+        if sql.contains(".insert") {
+            self.execute_insert(client, db, sql).await?;
+        } else if sql.contains(".update") {
+            self.execute_update(client, db, sql).await?;
+        } else if sql.contains(".delete") {
+            self.execute_delete(client, db, sql).await?;
         }
         Ok(())
     }
@@ -390,13 +482,116 @@ impl MongoTestRunner {
     }
 
     async fn execute_create(&self, client: &Client, db: &str, sql: &str) -> anyhow::Result<()> {
-        let re = Regex::new(r#"db.createCollection\("(\w+)"\)"#).unwrap();
+        let re = Regex::new(r#"db.createCollection\("(\w+)"(?:\s*,\s*([\w\W]+))?\)"#).unwrap();
         let cap = re.captures(sql).unwrap();
         let tb = cap.get(1).unwrap().as_str();
 
+        let mut command = doc! { "create": tb };
+        if let Some(options) = cap.get(2) {
+            let options = Self::parse_doc(options.as_str());
+            for (key, value) in options {
+                command.insert(key, value);
+            }
+        }
+
         client
             .database(db)
-            .create_collection(tb, None)
+            .run_command(command, None)
+            .await
+            .unwrap();
+        Ok(())
+    }
+
+    async fn execute_create_index(
+        &self,
+        client: &Client,
+        db: &str,
+        sql: &str,
+    ) -> anyhow::Result<()> {
+        let re = Regex::new(r"db.(\w+).createIndex\(([\w\W]+)\)").unwrap();
+        let cap = re.captures(sql).unwrap();
+        let tb = cap.get(1).unwrap().as_str();
+        let args = Self::split_top_level_args(cap.get(2).unwrap().as_str());
+        let key = Self::parse_doc(&args[0]);
+        let options = if args.len() > 1 {
+            Self::parse_doc(&args[1])
+        } else {
+            Document::new()
+        };
+        let name = options
+            .get_str("name")
+            .map(str::to_string)
+            .unwrap_or_else(|_| {
+                key.iter()
+                    .map(|(key, value)| format!("{}_{}", key, value))
+                    .collect::<Vec<_>>()
+                    .join("_")
+            });
+
+        let mut index = doc! { "key": key, "name": name };
+        for (key, value) in options {
+            if key != "name" {
+                index.insert(key, value);
+            }
+        }
+
+        client
+            .database(db)
+            .run_command(doc! { "createIndexes": tb, "indexes": [index] }, None)
+            .await
+            .unwrap();
+        Ok(())
+    }
+
+    async fn execute_drop_index(&self, client: &Client, db: &str, sql: &str) -> anyhow::Result<()> {
+        let re = Regex::new(r#"db.(\w+).dropIndex\("([^"]+)"\)"#).unwrap();
+        let cap = re.captures(sql).unwrap();
+        let tb = cap.get(1).unwrap().as_str();
+        let index = cap.get(2).unwrap().as_str();
+
+        client
+            .database(db)
+            .run_command(doc! { "dropIndexes": tb, "index": index }, None)
+            .await
+            .unwrap();
+        Ok(())
+    }
+
+    async fn execute_rename_collection(
+        &self,
+        client: &Client,
+        db: &str,
+        sql: &str,
+    ) -> anyhow::Result<()> {
+        let re = Regex::new(r#"db.(\w+).renameCollection\("(\w+)"\)"#).unwrap();
+        let cap = re.captures(sql).unwrap();
+        let from = cap.get(1).unwrap().as_str();
+        let to = cap.get(2).unwrap().as_str();
+
+        client
+            .database("admin")
+            .run_command(
+                doc! { "renameCollection": format!("{}.{}", db, from), "to": format!("{}.{}", db, to) },
+                None,
+            )
+            .await
+            .unwrap();
+        Ok(())
+    }
+
+    async fn execute_run_command(
+        &self,
+        client: &Client,
+        db: &str,
+        sql: &str,
+    ) -> anyhow::Result<()> {
+        let re = Regex::new(r"db.runCommand\(([\w\W]+)\)").unwrap();
+        let cap = re.captures(sql).unwrap();
+        let command = Self::parse_doc(cap.get(1).unwrap().as_str());
+
+        client
+            .database(db)
+            .run_command(command, None)
             .await
             .unwrap();
         Ok(())
@@ -490,9 +685,31 @@ impl MongoTestRunner {
     }
 
     fn split_update_args(args: &str) -> (String, String) {
+        let args = Self::split_top_level_args(args);
+        let query = args.first().cloned().unwrap_or_default();
+        let update = args.get(1).cloned().unwrap_or_default();
+        (query, update)
+    }
+
+    fn split_top_level_args(args: &str) -> Vec<String> {
         let mut depth = 0;
+        let mut in_string = false;
+        let mut escaped = false;
+        let mut start = 0;
+        let mut result = Vec::new();
         for (idx, ch) in args.char_indices() {
+            if in_string {
+                escaped = ch == '\\' && !escaped;
+                if ch == '"' && !escaped {
+                    in_string = false;
+                } else if ch != '\\' {
+                    escaped = false;
+                }
+                continue;
+            }
+
             match ch {
+                '"' => in_string = true,
                 '{' | '[' | '(' => depth += 1,
                 '}' | ']' | ')' => {
                     if depth > 0 {
@@ -500,14 +717,16 @@ impl MongoTestRunner {
                     }
                 }
                 ',' if depth == 0 => {
-                    let query = args[..idx].trim().to_string();
-                    let update = args[idx + 1..].trim().to_string();
-                    return (query, update);
+                    result.push(args[start..idx].trim().to_string());
+                    start = idx + 1;
                 }
                 _ => {}
             }
         }
-        (String::new(), String::new())
+        if start < args.len() {
+            result.push(args[start..].trim().to_string());
+        }
+        result
     }
 
     async fn compare_db_data(&self, db: &str) {
@@ -572,6 +791,31 @@ impl MongoTestRunner {
             results.insert(id, doc);
         }
         results
+    }
+
+    async fn assert_changestream_ddl_result(&self) -> anyhow::Result<()> {
+        let dst = self.dst_mongo_client.as_ref().unwrap();
+        let ddl_db = dst.database("ddl_db");
+        let collection_names = ddl_db.list_collection_names(None).await.unwrap();
+        assert!(collection_names.contains(&"created_coll".to_string()));
+        assert!(collection_names.contains(&"renamed_coll".to_string()));
+        assert!(!collection_names.contains(&"rename_me".to_string()));
+        assert!(!collection_names.contains(&"dropped_coll".to_string()));
+        assert!(!collection_names.contains(&"ignored_coll".to_string()));
+
+        let renamed_data = self.fetch_data("ddl_db", "renamed_coll", DST).await;
+        assert_eq!(renamed_data.len(), 1);
+
+        let created_data = self.fetch_data("ddl_db", "created_coll", DST).await;
+        assert_eq!(created_data.len(), 1);
+
+        assert!(dst
+            .database("ddl_drop_db")
+            .list_collection_names(None)
+            .await
+            .unwrap()
+            .is_empty());
+        Ok(())
     }
 
     fn doc_id_key(doc: &Document) -> String {
@@ -670,6 +914,15 @@ impl MongoTestRunner {
             format!("{}\"{}\":", &caps["prefix"], &caps["key"])
         })
         .to_string()
+    }
+
+    fn parse_doc(doc: &str) -> Document {
+        let normalized_doc = Self::normalize_doc_string(doc);
+        let json_value: Value = serde_json::from_str(&normalized_doc).unwrap();
+        match Self::convert_extended_json(Bson::try_from(json_value).unwrap()) {
+            Bson::Document(doc) => doc,
+            other => panic!("expected document, got {:?}", other),
+        }
     }
 
     fn convert_extended_json(value: Bson) -> Bson {

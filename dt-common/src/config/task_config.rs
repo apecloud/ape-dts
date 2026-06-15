@@ -16,6 +16,7 @@ use crate::{
         limiter_config::{CapacityLimiterConfig, RateLimiterConfig},
     },
     error::Error,
+    meta::mongo::mongo_cdc_source::MongoCdcSource,
     utils::task_util::TaskUtil,
 };
 
@@ -121,9 +122,11 @@ const CHECK_LOG_S3: &str = "check_log_s3";
 const S3_KEY_PREFIX: &str = "s3_key_prefix";
 const CDC_CHECK_LOG_INTERVAL_SECS: &str = "cdc_check_log_interval_secs";
 const SAMPLE_RATE: &str = "sample_rate";
+const IS_DIRECT_CONNECTION: &str = "is_direct_connection";
+const MONGO_REQUIRE_SHARD_KEY_FILTER: &str = "mongo_require_shard_key_filter";
 
 // default values
-const APE_DTS: &str = "APE_DTS";
+pub const APE_DTS: &str = "APE_DTS";
 const ASTRISK: &str = "*";
 const RESUMER_CONNECTION_LIMIT_DEFAULT: usize = 5;
 
@@ -450,6 +453,12 @@ impl TaskConfig {
             loader.get_with_default(EXTRACTOR, MAX_CONNECTIONS, DEFAULT_MAX_CONNECTIONS);
 
         let connection_auth = ConnectionAuthConfig::from(loader, EXTRACTOR);
+        let app_name: String = loader.get_with_default(EXTRACTOR, APP_NAME, APE_DTS.to_string());
+        let is_direct_connection = if loader.contains(EXTRACTOR, IS_DIRECT_CONNECTION) {
+            Some(loader.get_optional(EXTRACTOR, IS_DIRECT_CONNECTION))
+        } else {
+            None
+        };
 
         let rate_limiter = RateLimiterConfig {
             max_rps: loader.get_optional(EXTRACTOR, "max_rps"),
@@ -462,6 +471,8 @@ impl TaskConfig {
             connection_auth: connection_auth.clone(),
             max_connections,
             rate_limiter,
+            app_name: Some(app_name.to_owned()),
+            is_direct_connection,
         };
 
         let not_supported_err =
@@ -625,58 +636,61 @@ impl TaskConfig {
                 _ => bail! { not_supported_err },
             },
 
-            DbType::Mongo => {
-                let app_name: String =
-                    loader.get_with_default(EXTRACTOR, APP_NAME, APE_DTS.to_string());
-                match extract_type {
-                    ExtractType::Snapshot => {
-                        let batch_size = match u32::try_from(batch_size) {
-                            std::result::Result::Ok(batch_size) => batch_size,
-                            Err(_) => bail! { Error::ConfigError(format!(
-                                "config [{}].{} default value exceeds u32::MAX",
-                                EXTRACTOR, BATCH_SIZE,
-                            ))},
-                        };
+            DbType::Mongo => match extract_type {
+                ExtractType::Snapshot => {
+                    let batch_size = match u32::try_from(batch_size) {
+                        std::result::Result::Ok(batch_size) => batch_size,
+                        Err(_) => bail! { Error::ConfigError(format!(
+                            "config [{}].{} default value exceeds u32::MAX",
+                            EXTRACTOR, BATCH_SIZE,
+                        ))},
+                    };
 
-                        ExtractorConfig::MongoSnapshot {
-                            url,
-                            connection_auth,
-                            app_name,
-                            db: String::new(),
-                            tb: String::new(),
-                            db_tbs: HashMap::new(),
-                            parallel_size: Self::load_snapshot_parallel_size(loader),
-                            parallel_type: loader.get_with_default(
-                                EXTRACTOR,
-                                "parallel_type",
-                                RdbParallelType::Table,
-                            ),
-                            batch_size,
-                        }
-                    }
-
-                    ExtractType::Cdc => ExtractorConfig::MongoCdc {
+                    ExtractorConfig::MongoSnapshot {
                         url,
                         connection_auth,
+                        is_direct_connection,
+                        app_name,
+                        db: String::new(),
+                        tb: String::new(),
+                        db_tbs: HashMap::new(),
+                        parallel_size: Self::load_snapshot_parallel_size(loader),
+                        parallel_type: loader.get_with_default(
+                            EXTRACTOR,
+                            "parallel_type",
+                            RdbParallelType::Table,
+                        ),
+                        batch_size,
+                    }
+                }
+
+                ExtractType::Cdc => {
+                    let source: String =
+                        loader.get_with_default(EXTRACTOR, "source", "change_stream".to_string());
+                    ExtractorConfig::MongoCdc {
+                        url,
+                        connection_auth,
+                        is_direct_connection,
                         app_name,
                         resume_token: loader.get_optional(EXTRACTOR, "resume_token"),
                         start_timestamp: loader.get_optional(EXTRACTOR, "start_timestamp"),
-                        source: loader.get_optional(EXTRACTOR, "source"),
+                        source: MongoCdcSource::parse(&source)?,
                         heartbeat_interval_secs,
                         heartbeat_tb,
-                    },
-
-                    ExtractType::CheckLog => ExtractorConfig::MongoCheck {
-                        url,
-                        connection_auth,
-                        app_name,
-                        check_log_dir: loader.get_required(EXTRACTOR, CHECK_LOG_DIR),
-                        batch_size: loader.get_with_default(EXTRACTOR, BATCH_SIZE, 200),
-                    },
-
-                    _ => bail! { not_supported_err },
+                    }
                 }
-            }
+
+                ExtractType::CheckLog => ExtractorConfig::MongoCheck {
+                    url,
+                    connection_auth,
+                    is_direct_connection,
+                    app_name,
+                    check_log_dir: loader.get_required(EXTRACTOR, CHECK_LOG_DIR),
+                    batch_size: loader.get_with_default(EXTRACTOR, BATCH_SIZE, 200),
+                },
+
+                _ => bail! { not_supported_err },
+            },
 
             DbType::Redis => match extract_type {
                 ExtractType::Snapshot => {
@@ -807,6 +821,12 @@ impl TaskConfig {
         let max_connections =
             loader.get_with_default(SINKER, MAX_CONNECTIONS, DEFAULT_MAX_CONNECTIONS);
         let connection_auth = ConnectionAuthConfig::from(loader, SINKER);
+        let app_name: String = loader.get_with_default(SINKER, APP_NAME, APE_DTS.to_string());
+        let is_direct_connection = if loader.contains(SINKER, IS_DIRECT_CONNECTION) {
+            Some(loader.get_optional(SINKER, IS_DIRECT_CONNECTION))
+        } else {
+            None
+        };
 
         let rate_limiter = RateLimiterConfig {
             max_rps: loader.get_optional(SINKER, "max_rps"),
@@ -820,6 +840,8 @@ impl TaskConfig {
             batch_size,
             max_connections,
             rate_limiter,
+            app_name: Some(app_name.to_owned()),
+            is_direct_connection,
         };
 
         let conflict_policy: ConflictPolicyEnum =
@@ -882,20 +904,22 @@ impl TaskConfig {
                 _ => bail! { not_supported_err },
             },
 
-            DbType::Mongo => {
-                let app_name: String =
-                    loader.get_with_default(SINKER, APP_NAME, APE_DTS.to_string());
-                match sink_type {
-                    SinkType::Write => SinkerConfig::Mongo {
-                        url,
-                        connection_auth,
-                        app_name,
-                        batch_size,
-                    },
+            DbType::Mongo => match sink_type {
+                SinkType::Write => SinkerConfig::Mongo {
+                    url,
+                    connection_auth,
+                    is_direct_connection,
+                    app_name,
+                    batch_size,
+                    require_shard_key_filter: loader.get_with_default(
+                        SINKER,
+                        MONGO_REQUIRE_SHARD_KEY_FILTER,
+                        true,
+                    ),
+                },
 
-                    _ => bail! { not_supported_err },
-                }
-            }
+                _ => bail! { not_supported_err },
+            },
 
             DbType::Kafka => SinkerConfig::Kafka {
                 url,
@@ -1229,6 +1253,8 @@ impl TaskConfig {
             batch_size: checker.batch_size,
             max_connections: checker.max_connections,
             rate_limiter: RateLimiterConfig::default(),
+            app_name: Some(APP_NAME.to_string()),
+            is_direct_connection: None,
         }
     }
 

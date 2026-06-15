@@ -16,9 +16,9 @@ use dt_common::{
     },
     meta::{
         avro::avro_converter::AvroConverter, dt_queue::DtQueue,
-        mongo::mongo_cdc_source::MongoCdcSource, mysql::mysql_meta_manager::MysqlMetaManager,
-        pg::pg_meta_manager::PgMetaManager, rdb_meta_manager::RdbMetaManager,
-        redis::redis_statistic_type::RedisStatisticType, syncer::Syncer,
+        mysql::mysql_meta_manager::MysqlMetaManager, pg::pg_meta_manager::PgMetaManager,
+        rdb_meta_manager::RdbMetaManager, redis::redis_statistic_type::RedisStatisticType,
+        syncer::Syncer,
     },
     monitor::task_monitor_handle::TaskMonitorHandle,
     rdb_filter::RdbFilter,
@@ -377,6 +377,7 @@ impl ExtractorUtil {
                     base_extractor,
                     extract_state,
                     recovery,
+                    filter: filter.clone(),
                 };
                 Box::new(extractor)
             }
@@ -398,7 +399,7 @@ impl ExtractorUtil {
                     filter,
                     resume_token,
                     start_timestamp,
-                    source: MongoCdcSource::from_str(&source)?,
+                    source,
                     mongo_client,
                     app_name,
                     base_extractor,
