@@ -89,6 +89,23 @@ log4rs_file=./log4rs.yaml
 | source          | op_log / change_stream, change_stream is recommended if the source mongo version is 6.0+ | op_log     | change_stream              |
 | start_timestamp | the starting UTC timestamp to pull op logs from                                          | 1728525445 | 0, which means from newest |
 
+## Mongo CDC source capability boundary
+
+- `source=op_log` reads `local.oplog.rs` and replays DML from oplog entries. It supports insert,
+  delete, legacy `$set` / `$unset` updates, and common MongoDB `$v:2 diff` updates including
+  top-level `i` / `u` / `d` fields and nested document sub-diffs such as `sprofile.u.name`.
+  Array sub-diffs (`a`) are not fully supported yet; if an array is written as a whole field value
+  it can be replayed, but element-level array diffs may be skipped or unsupported. Oplog DDL replay
+  is not the recommended path.
+- `source=change_stream` watches MongoDB change streams with `fullDocument=UpdateLookup` and replays
+  update/replace events from the full post-image document. It is the recommended CDC source for
+  complex document fields such as arrays and nested documents. Change stream DDL replay depends on
+  MongoDB 6.0+ `showExpandedEvents`; on older MongoDB versions, use it for DML only.
+- For sharded targets, update/delete/upsert filters should contain the full target shard key. If the
+  target is sharded by `_id`, Mongo CDC can usually build the required filter from the document key.
+  For other shard keys, make sure the source event/full document carries the shard key fields or keep
+  the default fail-fast shard-key validation enabled.
+
 # CDC, by change_stream
 ```
 [extractor]

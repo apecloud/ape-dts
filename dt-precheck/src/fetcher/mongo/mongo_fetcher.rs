@@ -5,6 +5,7 @@ use async_trait::async_trait;
 
 use dt_common::{
     config::{connection_auth_config::ConnectionAuthConfig, task_config::APE_DTS},
+    meta::mongo::mongo_version::get_server_version,
     rdb_filter::RdbFilter,
 };
 use dt_task::task_util::TaskUtil;
@@ -22,6 +23,7 @@ pub struct MongoFetcher {
     pub pool: Option<Client>,
     pub url: String,
     pub connection_auth: ConnectionAuthConfig,
+    pub is_direct_connection: Option<bool>,
     pub is_source: bool,
     pub filter: RdbFilter,
 }
@@ -33,9 +35,8 @@ impl Fetcher for MongoFetcher {
             TaskUtil::create_mongo_client(
                 &self.url,
                 &self.connection_auth,
-                None,
+                self.is_direct_connection,
                 Some(APE_DTS.to_owned()),
-                // TODO: is_direct_connection config
                 None,
             )
             .await?,
@@ -44,13 +45,11 @@ impl Fetcher for MongoFetcher {
     }
 
     async fn fetch_version(&mut self) -> anyhow::Result<String> {
-        let document = self.execute_for_admin("buildInfo").await?;
-        Ok(String::from(
-            document
-                .get("version")
-                .and_then(Bson::as_str)
-                .unwrap_or("unknown"),
-        ))
+        let client = match &self.pool {
+            Some(pool) => pool,
+            None => bail! {"client is closed."},
+        };
+        Ok(format!("{}", get_server_version(client).await?))
     }
 
     async fn fetch_configuration(
@@ -85,10 +84,7 @@ impl MongoFetcher {
         };
 
         let doc_command = doc! {command: 1};
-        Ok(client
-            .database("admin")
-            .run_command(doc_command, None)
-            .await?)
+        Ok(client.database("admin").run_command(doc_command).await?)
     }
 
     pub async fn execute_for_db(&self, command: &str) -> anyhow::Result<Document> {
@@ -97,7 +93,7 @@ impl MongoFetcher {
             None => bail! {"client is closed."},
         };
 
-        let dbs = client.list_databases(None, None).await?;
+        let dbs = client.list_databases().await?;
         if dbs.is_empty() {
             bail! {"no db exists in mongo."};
         }
@@ -105,7 +101,7 @@ impl MongoFetcher {
         let doc_command = doc! {command: 1};
         let doc = client
             .database(&dbs[0].name)
-            .run_command(doc_command, None)
+            .run_command(doc_command)
             .await?;
         Ok(doc)
     }

@@ -31,6 +31,7 @@ pub enum DdlType {
     CreateIndex,
     #[strum(serialize = "drop_index")]
     DropIndex,
+    // MongoDB DDLs
     #[strum(serialize = "mongo_create_collection")]
     MongoCreateCollection,
     #[strum(serialize = "mongo_drop_collection")]
@@ -51,6 +52,7 @@ pub enum DdlType {
     MongoReshardCollection,
     #[strum(serialize = "mongo_refine_collection_shard_key")]
     MongoRefineCollectionShardKey,
+
     #[strum(serialize = "unknown")]
     Unknown,
 }

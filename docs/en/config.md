@@ -20,6 +20,7 @@ Different tasks may require extra configs, refer to [task templates](/docs/templ
 | parallel_size   | number of workers for extracting a table                                                                                                                                       | 4                                                                                                    | 1                                                       |
 | partition_cols  | partition column for data splitting during snapshot migration, only single column supported                                                                                    | json:[{"db":"db_1","tb":"tb_1","partition_col":"id"},{"db":"db_2","tb":"tb_2","partition_col":"id"}] | -                                                       |
 | is_cluster      | whether the Redis source is a Redis Cluster, only valid when `db_type=redis`                                                                                                   | true                                                                                                 | false                                                   |
+| is_direct_connection | whether to set MongoDB driver `directConnection`, only valid when `db_type=mongo`                                                                                       | true                                                                                                 | empty (driver default)                                  |
 
 
 ## URL escaping
@@ -48,6 +49,14 @@ url=mysql://user1:abc%25%24%23%3F%40@127.0.0.1:3307?ssl-mode=disabled
 - `[extractor].url` can point to any reachable node in the source cluster. DTS discovers all source master nodes through `CLUSTER NODES` and starts one PSYNC extractor for each master.
 - For standalone Redis sources, omit `is_cluster` or set it to `false`.
 
+## Mongo source connection mode
+
+- `[extractor].is_direct_connection` maps to the MongoDB driver `directConnection` option.
+- Omit it to let the driver infer the topology from the URL. This is the recommended default for
+  replica sets and sharded clusters.
+- Set it only when you intentionally want to connect directly to a specific MongoDB node. Do not set
+  it to `true` when connecting through `mongos` for sharded-cluster CDC or snapshot tasks.
+
 # [sinker]
 
 
@@ -62,6 +71,8 @@ url=mysql://user1:abc%25%24%23%3F%40@127.0.0.1:3307?ssl-mode=disabled
 | batch_size      | number of records written in a batch, 1 for serial                                                                                   | 200                                                                                         | 200                                                     |
 | replace         | when inserting data, whether to force replacement if data already exists in target database, used in snapshot/cdc tasks for MySQL/PG | false                                                                                       | true                                                    |
 | is_cluster      | whether the Redis target is a Redis Cluster, only valid when `db_type=redis`                                                         | true                                                                                        | false                                                   |
+| is_direct_connection | whether to set MongoDB driver `directConnection`, only valid when `db_type=mongo`                                               | true                                                                                        | empty (driver default)                                  |
+| mongo_require_shard_key_filter | fail fast when writing to a sharded MongoDB target and the row filter cannot include all shard key fields, only valid when `db_type=mongo` | true                                                                                        | true                                                    |
 
 
 ## Redis target cluster mode
@@ -70,6 +81,18 @@ url=mysql://user1:abc%25%24%23%3F%40@127.0.0.1:3307?ssl-mode=disabled
 - `[sinker].url` can point to any reachable node in the target cluster. DTS discovers all target master nodes through `CLUSTER NODES` and routes Redis commands to the owning node by key slot.
 - In Redis target cluster mode, DTS creates sinkers according to the target master nodes, instead of limiting the sinker count by `[parallelizer].parallel_size`.
 - For standalone Redis targets, omit `is_cluster` or set it to `false`.
+
+## Mongo target connection and shard-key mode
+
+- `[sinker].is_direct_connection` maps to the MongoDB driver `directConnection` option. Omit it to
+  let the driver infer the topology from the URL. For sharded targets, connect through `mongos` and
+  do not set it to `true`.
+- `[sinker].mongo_require_shard_key_filter=true` is the default. When the target collection is
+  sharded, DTS checks whether update/delete/upsert filters contain the full target shard key and
+  fails fast if required shard key fields are missing.
+- Keep `mongo_require_shard_key_filter=true` for normal migrations. Set it to `false` only when you
+  explicitly accept MongoDB server-side routing behavior, such as a controlled best-effort migration
+  on a compatible MongoDB version.
 
 # [checker]
 

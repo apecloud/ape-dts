@@ -14,7 +14,6 @@ use dt_connector::rdb_router::RdbRouter;
 use dt_task::task_util::TaskUtil;
 use mongodb::{
     bson::{doc, oid::ObjectId, Bson, Document},
-    options::FindOptions,
     Client,
 };
 use regex::{Captures, Regex};
@@ -470,14 +469,14 @@ impl MongoTestRunner {
         client
             .database(db)
             .collection::<Document>(tb)
-            .drop(None)
+            .drop()
             .await
             .unwrap();
         Ok(())
     }
 
     async fn execute_drop_database(&self, client: &Client, db: &str) -> anyhow::Result<()> {
-        client.database(db).drop(None).await.unwrap();
+        client.database(db).drop().await.unwrap();
         Ok(())
     }
 
@@ -494,11 +493,7 @@ impl MongoTestRunner {
             }
         }
 
-        client
-            .database(db)
-            .run_command(command, None)
-            .await
-            .unwrap();
+        client.database(db).run_command(command).await.unwrap();
         Ok(())
     }
 
@@ -537,7 +532,7 @@ impl MongoTestRunner {
 
         client
             .database(db)
-            .run_command(doc! { "createIndexes": tb, "indexes": [index] }, None)
+            .run_command(doc! { "createIndexes": tb, "indexes": [index] })
             .await
             .unwrap();
         Ok(())
@@ -551,7 +546,7 @@ impl MongoTestRunner {
 
         client
             .database(db)
-            .run_command(doc! { "dropIndexes": tb, "index": index }, None)
+            .run_command(doc! { "dropIndexes": tb, "index": index })
             .await
             .unwrap();
         Ok(())
@@ -570,10 +565,7 @@ impl MongoTestRunner {
 
         client
             .database("admin")
-            .run_command(
-                doc! { "renameCollection": format!("{}.{}", db, from), "to": format!("{}.{}", db, to) },
-                None,
-            )
+            .run_command(doc! { "renameCollection": format!("{}.{}", db, from), "to": format!("{}.{}", db, to) })
             .await
             .unwrap();
         Ok(())
@@ -589,11 +581,7 @@ impl MongoTestRunner {
         let cap = re.captures(sql).unwrap();
         let command = Self::parse_doc(cap.get(1).unwrap().as_str());
 
-        client
-            .database(db)
-            .run_command(command, None)
-            .await
-            .unwrap();
+        client.database(db).run_command(command).await.unwrap();
         Ok(())
     }
 
@@ -612,7 +600,7 @@ impl MongoTestRunner {
                 Bson::Document(doc) => doc,
                 other => panic!("expected document for insertOne, got {:?}", other),
             };
-            coll.insert_one(doc, None).await.unwrap();
+            coll.insert_one(doc).await.unwrap();
         } else {
             let docs = match parsed {
                 Bson::Array(arr) => arr
@@ -624,7 +612,7 @@ impl MongoTestRunner {
                     .collect::<Vec<Document>>(),
                 other => panic!("expected array for insertMany, got {:?}", other),
             };
-            coll.insert_many(docs, None).await.unwrap();
+            coll.insert_many(docs).await.unwrap();
         }
         Ok(())
     }
@@ -643,9 +631,9 @@ impl MongoTestRunner {
         };
         let coll = client.database(db).collection::<Document>(tb);
         if sql.contains("deleteOne") {
-            coll.delete_one(doc, None).await.unwrap();
+            coll.delete_one(doc).await.unwrap();
         } else {
-            coll.delete_many(doc, None).await.unwrap();
+            coll.delete_many(doc).await.unwrap();
         }
         Ok(())
     }
@@ -677,9 +665,9 @@ impl MongoTestRunner {
         };
         let coll = client.database(db).collection::<Document>(tb);
         if sql.contains("updateOne") {
-            coll.update_one(query_doc, update_doc, None).await.unwrap();
+            coll.update_one(query_doc, update_doc).await.unwrap();
         } else {
-            coll.update_many(query_doc, update_doc, None).await.unwrap();
+            coll.update_many(query_doc, update_doc).await.unwrap();
         }
         Ok(())
     }
@@ -764,11 +752,7 @@ impl MongoTestRunner {
         } else {
             self.dst_mongo_client.as_ref().unwrap()
         };
-        client
-            .database(db)
-            .list_collection_names(None)
-            .await
-            .unwrap()
+        client.database(db).list_collection_names().await.unwrap()
     }
 
     pub async fn fetch_data(&self, db: &str, tb: &str, from: &str) -> HashMap<String, Document> {
@@ -779,10 +763,11 @@ impl MongoTestRunner {
         };
 
         let collection = client.database(db).collection::<Document>(tb);
-        let find_options = FindOptions::builder()
+        let mut cursor = collection
+            .find(doc! {})
             .sort(doc! {MongoConstants::ID: 1})
-            .build();
-        let mut cursor = collection.find(None, find_options).await.unwrap();
+            .await
+            .unwrap();
 
         let mut results = HashMap::new();
         while cursor.advance().await.unwrap() {
@@ -796,7 +781,7 @@ impl MongoTestRunner {
     async fn assert_changestream_ddl_result(&self) -> anyhow::Result<()> {
         let dst = self.dst_mongo_client.as_ref().unwrap();
         let ddl_db = dst.database("ddl_db");
-        let collection_names = ddl_db.list_collection_names(None).await.unwrap();
+        let collection_names = ddl_db.list_collection_names().await.unwrap();
         assert!(collection_names.contains(&"created_coll".to_string()));
         assert!(collection_names.contains(&"renamed_coll".to_string()));
         assert!(!collection_names.contains(&"rename_me".to_string()));
@@ -811,7 +796,7 @@ impl MongoTestRunner {
 
         assert!(dst
             .database("ddl_drop_db")
-            .list_collection_names(None)
+            .list_collection_names()
             .await
             .unwrap()
             .is_empty());
@@ -897,7 +882,7 @@ impl MongoTestRunner {
             if db.is_empty() {
                 continue;
             }
-            client.database(db).drop(None).await?;
+            client.database(db).drop().await?;
         }
         Ok(())
     }

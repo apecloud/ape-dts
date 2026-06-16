@@ -200,9 +200,7 @@ impl DatabaseRecovery {
                 let collection = client
                     .database(&self.schema)
                     .collection::<mongodb::bson::Document>(&self.table);
-                let mut position_rows = collection
-                    .find(doc! { "task_id": &self.task_id }, None)
-                    .await?;
+                let mut position_rows = collection.find(doc! { "task_id": &self.task_id }).await?;
                 while let Some(row) = position_rows.try_next().await? {
                     let resumer_type_str = match row.get_str("resumer_type") {
                         Ok(value) => value.to_string(),

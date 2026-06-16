@@ -81,7 +81,7 @@ impl BatchCheckExtractor for MongoCheckExtractor {
             }
         };
 
-        let mut cursor = collection.find(filter, None).await?;
+        let mut cursor = collection.find(filter).await?;
         while cursor.advance().await? {
             let doc = cursor.deserialize_current()?;
             let mut after = HashMap::new();

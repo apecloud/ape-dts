@@ -186,7 +186,7 @@ impl MongoSnapshotExtractor {
             .filter(|rate| (1..100).contains(rate))
             .is_some()
         {
-            collection.estimated_document_count(None).await?
+            collection.estimated_document_count().await?
         } else {
             0
         };
@@ -198,8 +198,18 @@ impl MongoSnapshotExtractor {
         if let Some(limit) = sample_limit.and_then(|limit| i64::try_from(limit).ok()) {
             find_options.limit = Some(limit);
         }
-        let filter = resume_key.as_ref().map(Self::build_resume_filter);
-        let mut cursor = collection.find(filter, find_options).await?;
+        let filter = resume_key
+            .as_ref()
+            .map(Self::build_resume_filter)
+            .unwrap_or_default();
+        let mut find = collection
+            .find(filter)
+            .sort(doc! {MongoConstants::ID: 1})
+            .batch_size(self.batch_size);
+        if let Some(limit) = find_options.limit {
+            find = find.limit(limit);
+        }
+        let mut cursor = find.await?;
         let mut chunk_id_generator = SnapshotChunkIdGenerator::new(self.batch_size as usize);
         while cursor.advance().await? {
             let doc = cursor.deserialize_current().map_err(|e| {

@@ -479,7 +479,7 @@ services:
       interval: 5s
 
   mongo-src:
-    image: mongo:4.4
+    image: mongo:6.0.27
     container_name: mongo-src-it
     hostname: mongo-src
     environment:
@@ -505,7 +505,7 @@ services:
       interval: 5s
 
   mongo-dst:
-    image: mongo:4.4
+    image: mongo:6.0.27
     container_name: mongo-dst-it
     hostname: mongo-dst
     environment:

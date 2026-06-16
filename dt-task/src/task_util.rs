@@ -374,7 +374,7 @@ impl TaskUtil {
     ) -> anyhow::Result<mongodb::Client> {
         let final_url = ConnectionAuthConfig::merge_url_with_auth(url, connection_auth)?;
 
-        let mut client_options = ClientOptions::parse_async(&final_url).await?;
+        let mut client_options = ClientOptions::parse(&final_url).await?;
         // app_name only for debug usage
         if let Some(app) = app_name {
             client_options.app_name = Some(app.to_string());
@@ -685,7 +685,7 @@ WHERE
             }
         };
         let dbs = client
-            .list_database_names(None, None)
+            .list_database_names()
             .await?
             .into_iter()
             .filter(|name| !SystemDb::is_system_db(name, &DbType::Mongo))
@@ -703,7 +703,8 @@ WHERE
         // filter views and system tables
         let tbs = client
             .database(db)
-            .list_collection_names(Some(doc! { "type": "collection" }))
+            .list_collection_names()
+            .filter(doc! { "type": "collection" })
             .await?
             .into_iter()
             .filter(|name| !name.starts_with("system."))

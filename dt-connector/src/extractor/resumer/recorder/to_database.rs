@@ -2,7 +2,7 @@ use anyhow::{bail, Context, Result};
 use async_trait::async_trait;
 use mongodb::{
     bson::{doc, DateTime},
-    options::{IndexOptions, UpdateOptions},
+    options::IndexOptions,
     IndexModel,
 };
 use sqlx::query;
@@ -148,7 +148,8 @@ impl DatabaseRecorder {
             ResumerDbPool::Mongo(client) => {
                 let database = client.database(&self.schema);
                 let collection_names = database
-                    .list_collection_names(doc! { "name": &self.table })
+                    .list_collection_names()
+                    .filter(doc! { "name": &self.table })
                     .await
                     .with_context(|| {
                         format!(
@@ -159,7 +160,7 @@ impl DatabaseRecorder {
 
                 if collection_names.is_empty() {
                     database
-                        .create_collection(&self.table, None)
+                        .create_collection(&self.table)
                         .await
                         .with_context(|| {
                             format!(
@@ -183,19 +184,16 @@ impl DatabaseRecorder {
                             .build(),
                     )
                     .build();
-                collection
-                    .create_index(index, None)
-                    .await
-                    .with_context(|| {
-                        format!(
-                            "failed to create MongoDB resumer index on {}.{}",
-                            self.schema, self.table
-                        )
-                    })?;
+                collection.create_index(index).await.with_context(|| {
+                    format!(
+                        "failed to create MongoDB resumer index on {}.{}",
+                        self.schema, self.table
+                    )
+                })?;
 
                 if is_init {
                     collection
-                        .delete_many(doc! { "task_id": task_id }, None)
+                        .delete_many(doc! { "task_id": task_id })
                         .await
                         .with_context(|| {
                             format!(
@@ -306,8 +304,6 @@ impl Recorder for DatabaseRecorder {
                     .collection::<mongodb::bson::Document>(&self.table);
                 let position_key = ResumerUtil::get_key_from_position(position);
                 let now = DateTime::now();
-                let update_options = UpdateOptions::builder().upsert(true).build();
-
                 collection
                     .update_one(
                         doc! {
@@ -327,8 +323,8 @@ impl Recorder for DatabaseRecorder {
                                 "created_at": now,
                             },
                         },
-                        update_options,
                     )
+                    .upsert(true)
                     .await
                     .with_context(|| {
                         format!(

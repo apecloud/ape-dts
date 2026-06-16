@@ -9,7 +9,7 @@ db.tb_1.insertOne({ "name": "e", "age": "5" });
 
 db.tb_2.insertOne({ "name": "a", "age": "1" });
 db.tb_2.insertOne({ "name": "b", "age": "2" });
-db.tb_2.insertOne({ "name": "c", "age": "3" });
+db.tb_2.insertOne({ "name": "c", "age": "3", "profile": { "level": "silver" } });
 db.tb_2.insertOne({ "name": "d", "age": "4" });
 db.tb_2.insertOne({ "name": "e", "age": "5" });
 
@@ -36,6 +36,8 @@ db.tb_1.updateOne({ "age" : "5" }, { "$set": { "name" : "e_1" } });
 
 db.tb_2.updateOne({ "age" : "1" }, { "$set": { "name" : "a_1" } });
 db.tb_2.updateOne({ "age" : "2" }, { "$set": { "name" : "b_1" } });
+db.tb_2.updateOne({ "age" : "3" }, { "$set": { "name" : "c_1", "city" : "hangzhou" } });
+db.tb_2.updateOne({ "age" : "3" }, { "$set": { "profile.level" : "gold", "profile.status" : "active" } });
 
 db.id_types_tb.updateOne({ "_id": ObjectId("648195af9aa9cadd41a9dca1") }, { "$set": { "status": "updated_object_id" } });
 db.id_types_tb.updateOne({ "_id": ObjectId("648195af9aa9cadd41a9dca1") }, { "$set": { "status": "updated_object_id_again", "version": 2 } });

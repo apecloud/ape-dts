@@ -86,7 +86,7 @@ impl Checker for MongoChecker {
                     "$in": chunk.to_vec()
                 }
             };
-            let mut cursor = collection.find(filter, None).await?;
+            let mut cursor = collection.find(filter).await?;
 
             while cursor.advance().await? {
                 let doc = cursor.deserialize_current()?;

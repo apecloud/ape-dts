@@ -23,7 +23,7 @@ pub struct MongoShardCollection {
 pub async fn detect_topology(client: &Client) -> anyhow::Result<MongoTopology> {
     let hello = client
         .database("admin")
-        .run_command(doc! { "hello": 1 }, None)
+        .run_command(doc! { "hello": 1 })
         .await?;
     if hello.get_str("msg").ok() == Some("isdbgrid") {
         return Ok(MongoTopology::Mongos);
@@ -48,9 +48,7 @@ pub async fn list_shard_collections(
     let collection = client
         .database("config")
         .collection::<Document>("collections");
-    let mut cursor = collection
-        .find(doc! { "dropped": { "$ne": true } }, None)
-        .await?;
+    let mut cursor = collection.find(doc! { "dropped": { "$ne": true } }).await?;
 
     let mut result = HashMap::new();
     while let Some(doc) = cursor.try_next().await? {

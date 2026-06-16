@@ -23,10 +23,14 @@ use dt_common::{
     log_error, log_info, log_warn,
     meta::{
         col_value::ColValue,
+        ddl_meta::ddl_type::DdlType,
         dt_data::DtData,
         mongo::{
-            mongo_cdc_source::MongoCdcSource, mongo_constant::MongoConstants,
-            mongo_ddl::change_stream_event_to_ddl, mongo_key::MongoKey,
+            mongo_cdc_source::MongoCdcSource,
+            mongo_constant::MongoConstants,
+            mongo_ddl::change_stream_event_to_ddl,
+            mongo_key::MongoKey,
+            mongo_version::{get_server_version, MongoServerVersion},
         },
         position::Position,
         row_data::RowData,
@@ -40,7 +44,7 @@ use dt_common::{
 use mongodb::{
     bson::{doc, Bson, Document, Timestamp},
     change_stream::event::ResumeToken,
-    options::{ChangeStreamOptions, FullDocumentBeforeChangeType, FullDocumentType, UpdateOptions},
+    options::{FullDocumentBeforeChangeType, FullDocumentType},
     Client,
 };
 
@@ -60,6 +64,10 @@ pub struct MongoCdcExtractor {
 }
 
 impl MongoCdcExtractor {
+    fn supports_change_stream_6_0_features(version: &MongoServerVersion) -> bool {
+        version >= &MongoServerVersion::new(6, 0, 0)
+    }
+
     fn insert_id_from_doc(target: &mut HashMap<String, ColValue>, doc: &Document) {
         if let Some(key) = MongoKey::from_doc(doc) {
             target.insert(
@@ -76,11 +84,110 @@ impl MongoCdcExtractor {
         );
     }
 
+    fn append_oplog_diff_path(prefix: &str, field: &str) -> String {
+        if prefix.is_empty() {
+            field.to_string()
+        } else {
+            format!("{}.{}", prefix, field)
+        }
+    }
+
+    fn flatten_oplog_diff(
+        diff: &Document,
+        prefix: &str,
+        set_doc: &mut Document,
+        unset_doc: &mut Document,
+    ) {
+        if let Some(inserted) = diff.get("i").and_then(|value| value.as_document()) {
+            for (field, value) in inserted {
+                set_doc.insert(Self::append_oplog_diff_path(prefix, field), value.clone());
+            }
+        }
+
+        if let Some(updated) = diff.get("u").and_then(|value| value.as_document()) {
+            for (field, value) in updated {
+                set_doc.insert(Self::append_oplog_diff_path(prefix, field), value.clone());
+            }
+        }
+
+        if let Some(deleted) = diff.get("d").and_then(|value| value.as_document()) {
+            for (field, value) in deleted {
+                unset_doc.insert(Self::append_oplog_diff_path(prefix, field), value.clone());
+            }
+        }
+
+        for (field, value) in diff {
+            if matches!(field.as_str(), "i" | "u" | "d" | "a") {
+                continue;
+            }
+
+            let Some(nested_field) = field.strip_prefix('s') else {
+                continue;
+            };
+            if nested_field.is_empty() {
+                continue;
+            }
+            if let Some(nested_diff) = value.as_document() {
+                let nested_prefix = Self::append_oplog_diff_path(prefix, nested_field);
+                Self::flatten_oplog_diff(nested_diff, &nested_prefix, set_doc, unset_doc);
+            }
+        }
+    }
+
+    fn build_oplog_update_doc(after_doc: &Document) -> Document {
+        let mut set_doc = Document::new();
+        let mut unset_doc = Document::new();
+
+        if let Some(diff) = after_doc.get("diff").and_then(|value| value.as_document()) {
+            Self::flatten_oplog_diff(diff, "", &mut set_doc, &mut unset_doc);
+        } else {
+            if let Some(doc) = after_doc
+                .get(MongoConstants::SET)
+                .and_then(|value| value.as_document())
+            {
+                set_doc.extend(doc.clone());
+            }
+            if let Some(doc) = after_doc
+                .get(MongoConstants::UNSET)
+                .and_then(|value| value.as_document())
+            {
+                unset_doc.extend(doc.clone());
+            }
+        }
+
+        let mut update_doc = Document::new();
+        if !set_doc.is_empty() {
+            update_doc.insert(MongoConstants::SET, set_doc);
+        }
+        if !unset_doc.is_empty() {
+            update_doc.insert(MongoConstants::UNSET, unset_doc);
+        }
+        update_doc
+    }
+
     fn parse_change_stream_ns(event: &Document) -> Option<(String, String)> {
         let ns = event.get_document("ns").ok()?;
         let db = ns.get_str("db").ok()?.to_string();
         let tb = ns.get_str("coll").unwrap_or("").to_string();
         Some((db, tb))
+    }
+
+    fn filter_requests_change_stream_ddl(&self) -> bool {
+        if self.filter.do_ddls.contains("*") {
+            return true;
+        }
+
+        [
+            DdlType::MongoCreateCollection,
+            DdlType::MongoCreateIndex,
+            DdlType::MongoDropIndex,
+            DdlType::MongoCollMod,
+            DdlType::MongoShardCollection,
+            DdlType::MongoReshardCollection,
+            DdlType::MongoRefineCollectionShardKey,
+        ]
+        .iter()
+        .any(|ddl_type| self.filter.do_ddls.contains(&ddl_type.to_string()))
     }
 }
 
@@ -144,15 +251,14 @@ impl MongoCdcExtractor {
         let filter = doc! {
             "ts": { "$gte": start_timestamp }
         };
-        let options = mongodb::options::FindOptions::builder()
-            .cursor_type(mongodb::options::CursorType::TailableAwait)
-            .build();
-
         let oplog = self
             .mongo_client
             .database("local")
             .collection::<Document>("oplog.rs");
-        let mut cursor = oplog.find(filter, options).await?;
+        let mut cursor = oplog
+            .find(filter)
+            .cursor_type(mongodb::options::CursorType::TailableAwait)
+            .await?;
 
         while cursor.advance().await? {
             let doc: Document = cursor.deserialize_current()?;
@@ -192,24 +298,7 @@ impl MongoCdcExtractor {
                     // https://www.mongodb.com/docs/manual/reference/operator/update/#update-operators-1
                     // in MongoDB 4.4 and earlier, after_doc contains $set with all new document fields,
                     // after that, after_doc contains diff with only changed fields.
-                    let diff_doc = if let Some(doc) = after_doc.get("diff") {
-                        let doc = doc.as_document().unwrap();
-                        if let Some(i_doc) = doc.get("i") {
-                            doc! {MongoConstants::SET: i_doc.as_document().unwrap()}
-                        } else if let Some(u_doc) = doc.get("u") {
-                            doc! {MongoConstants::SET: u_doc.as_document().unwrap()}
-                        } else if let Some(d_doc) = doc.get("d") {
-                            doc! {MongoConstants::UNSET: d_doc.as_document().unwrap()}
-                        } else {
-                            doc! {}
-                        }
-                    } else if let Some(set_doc) = after_doc.get(MongoConstants::SET) {
-                        doc! {MongoConstants::SET: set_doc.as_document().unwrap()}
-                    } else if let Some(unset_doc) = after_doc.get(MongoConstants::UNSET) {
-                        doc! {MongoConstants::UNSET: unset_doc.as_document().unwrap()}
-                    } else {
-                        doc! {}
-                    };
+                    let diff_doc = Self::build_oplog_update_doc(after_doc);
 
                     if diff_doc.is_empty() {
                         log_error!(
@@ -383,21 +472,37 @@ impl MongoCdcExtractor {
             (Some(token), None)
         };
 
-        // refer: https://www.mongodb.com/docs/manual/changeStreams/
-        // Starting in MongoDB 6.0, you can use change stream events to output the version of
-        // a document before and after changes (the document pre- and post-images)
-        let stream_options = ChangeStreamOptions::builder()
-            .start_at_operation_time(start_timestamp)
-            .start_after(resume_token)
-            .full_document(Some(FullDocumentType::UpdateLookup))
-            .full_document_before_change(Some(FullDocumentBeforeChangeType::WhenAvailable))
-            .build();
+        let server_version = get_server_version(&self.mongo_client).await?;
+        let supports_change_stream_6_0_features =
+            Self::supports_change_stream_6_0_features(&server_version);
+        let requests_change_stream_ddl = self.filter_requests_change_stream_ddl();
+        let enable_change_stream_ddl =
+            requests_change_stream_ddl && supports_change_stream_6_0_features;
+        if requests_change_stream_ddl && !supports_change_stream_6_0_features {
+            log_warn!(
+                "MongoDB {} does not support change stream showExpandedEvents; change stream DDL events will be skipped",
+                server_version
+            );
+        }
 
-        let mut change_stream = self
+        let mut watch = self
             .mongo_client
-            .watch(None, stream_options)
-            .await?
-            .with_type::<Document>();
+            .watch()
+            .full_document(FullDocumentType::UpdateLookup);
+        if supports_change_stream_6_0_features {
+            watch = watch.full_document_before_change(FullDocumentBeforeChangeType::WhenAvailable);
+        }
+        if enable_change_stream_ddl {
+            watch = watch.show_expanded_events(true);
+        }
+        if let Some(start_timestamp) = start_timestamp {
+            watch = watch.start_at_operation_time(start_timestamp);
+        }
+        if let Some(resume_token) = resume_token {
+            watch = watch.start_after(resume_token);
+        }
+        let mut change_stream = watch.await?.with_type::<Document>();
+
         loop {
             let result = change_stream.next_if_any().await?;
             if let Some(event) = result {
@@ -484,6 +589,9 @@ impl MongoCdcExtractor {
                         );
                     }
                     _ => {
+                        if !enable_change_stream_ddl {
+                            continue;
+                        }
                         if let Some(ddl_data) = change_stream_event_to_ddl(&event) {
                             let (ddl_db, ddl_tb) = ddl_data.get_schema_tb();
                             if !self.filter.filter_ddl(&ddl_db, &ddl_tb, &ddl_data.ddl_type) {
@@ -626,13 +734,88 @@ impl MongoCdcExtractor {
         }};
 
         let collection = client.database(db).collection::<Document>(tb);
-        let options = UpdateOptions::builder().upsert(true).build();
         if let Err(err) = collection
-            .update_one(query_doc, update_doc, Some(options))
+            .update_one(query_doc, update_doc)
+            .upsert(true)
             .await
         {
             log_error!("heartbeat failed: {:?}", err);
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn build_oplog_update_doc_merges_insert_update_and_delete_diff() {
+        let after_doc = doc! {
+            "diff": {
+                "i": { "created": true },
+                "u": { "name": "new-name" },
+                "d": { "removed": false },
+            },
+        };
+
+        let update_doc = MongoCdcExtractor::build_oplog_update_doc(&after_doc);
+
+        assert_eq!(
+            update_doc.get_document(MongoConstants::SET).unwrap(),
+            &doc! { "created": true, "name": "new-name" }
+        );
+        assert_eq!(
+            update_doc.get_document(MongoConstants::UNSET).unwrap(),
+            &doc! { "removed": false }
+        );
+    }
+
+    #[test]
+    fn build_oplog_update_doc_flattens_nested_sub_diff() {
+        let after_doc = doc! {
+            "diff": {
+                "sprofile": {
+                    "u": { "name": "new-name" },
+                    "d": { "age": false },
+                    "saddress": {
+                        "i": { "city": "Hangzhou" },
+                    },
+                },
+            },
+        };
+
+        let update_doc = MongoCdcExtractor::build_oplog_update_doc(&after_doc);
+
+        assert_eq!(
+            update_doc.get_document(MongoConstants::SET).unwrap(),
+            &doc! {
+                "profile.name": "new-name",
+                "profile.address.city": "Hangzhou",
+            }
+        );
+        assert_eq!(
+            update_doc.get_document(MongoConstants::UNSET).unwrap(),
+            &doc! { "profile.age": false }
+        );
+    }
+
+    #[test]
+    fn build_oplog_update_doc_keeps_legacy_set_and_unset() {
+        let after_doc = doc! {
+            MongoConstants::SET: { "name": "new-name" },
+            MongoConstants::UNSET: { "age": "" },
+        };
+
+        let update_doc = MongoCdcExtractor::build_oplog_update_doc(&after_doc);
+
+        assert_eq!(
+            update_doc.get_document(MongoConstants::SET).unwrap(),
+            &doc! { "name": "new-name" }
+        );
+        assert_eq!(
+            update_doc.get_document(MongoConstants::UNSET).unwrap(),
+            &doc! { "age": "" }
+        );
     }
 }

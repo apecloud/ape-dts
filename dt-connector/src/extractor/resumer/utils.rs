@@ -100,7 +100,7 @@ impl ResumerUtil {
                 Ok(ResumerDbPool::Postgres(pool))
             }
             DbType::Mongo => {
-                let mut client_options = ClientOptions::parse_async(&final_url)
+                let mut client_options = ClientOptions::parse(&final_url)
                     .await
                     .context("failed to parse MongoDB connection URL")?;
                 client_options.app_name = Some("ape-dts-resumer".to_string());

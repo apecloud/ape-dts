@@ -38,17 +38,22 @@ impl PrecheckerBuilder {
     }
 
     pub fn build_checker(&self, is_source: bool) -> Option<Box<dyn Prechecker + Send>> {
-        let (db_type, url, connection_auth) = if is_source {
+        let (db_type, url, connection_auth, is_direct_connection) = if is_source {
             (
                 self.task_config.extractor_basic.db_type.clone(),
                 self.task_config.extractor_basic.url.clone(),
                 self.task_config.extractor_basic.connection_auth.clone(),
+                self.task_config
+                    .extractor_basic
+                    .is_direct_connection
+                    .clone(),
             )
         } else {
             (
                 self.task_config.sinker_basic.db_type.clone(),
                 self.task_config.sinker_basic.url.clone(),
                 self.task_config.sinker_basic.connection_auth.clone(),
+                self.task_config.sinker_basic.is_direct_connection.clone(),
             )
         };
 
@@ -83,6 +88,7 @@ impl PrecheckerBuilder {
                     pool: None,
                     url,
                     connection_auth,
+                    is_direct_connection,
                     is_source,
                     filter,
                 },

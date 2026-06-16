@@ -4,7 +4,6 @@ use anyhow::Context;
 use async_trait::async_trait;
 use mongodb::{
     bson::{doc, Document},
-    options::UpdateOptions,
     Client, Collection,
 };
 use tokio::time::Instant;
@@ -210,7 +209,7 @@ impl MongoSinker {
         match ddl_data.ddl_type {
             DdlType::MongoDropDatabase => {
                 let (db, _) = ddl_data.get_schema_tb();
-                self.mongo_client.database(&db).drop(None).await?;
+                self.mongo_client.database(&db).drop().await?;
             }
 
             DdlType::MongoShardCollection => {
@@ -233,10 +232,7 @@ impl MongoSinker {
             | DdlType::MongoDropIndex
             | DdlType::MongoCollMod => {
                 let (db, _) = ddl_data.get_schema_tb();
-                self.mongo_client
-                    .database(&db)
-                    .run_command(command, None)
-                    .await?;
+                self.mongo_client.database(&db).run_command(command).await?;
             }
 
             _ => {}
@@ -247,7 +243,7 @@ impl MongoSinker {
     async fn run_admin_command(&self, command: Document) -> anyhow::Result<()> {
         self.mongo_client
             .database("admin")
-            .run_command(command, None)
+            .run_command(command)
             .await?;
         Ok(())
     }
@@ -279,7 +275,7 @@ impl MongoSinker {
 
         self.mongo_client
             .database("admin")
-            .run_command(doc! { "enableSharding": db }, None)
+            .run_command(doc! { "enableSharding": db })
             .await?;
         Ok(true)
     }
@@ -354,7 +350,7 @@ impl MongoSinker {
                             Self::mongo_doc(before, MongoConstants::DOCUMENT_KEY).or(Some(doc)),
                             None,
                         )?;
-                        collection.delete_one(query_doc, None).await?;
+                        collection.delete_one(query_doc).await?;
                         rts.push((start_time.elapsed().as_millis() as u64, 1));
                     }
                 }
@@ -382,7 +378,7 @@ impl MongoSinker {
                             .context("mongo shard key update requires full document after image")?;
                         let new_filter =
                             self.complete_shard_filter(row_data, None, Some(new_doc))?;
-                        collection.delete_one(old_filter, None).await?;
+                        collection.delete_one(old_filter).await?;
                         self.upsert(
                             &collection,
                             new_filter,
@@ -505,7 +501,7 @@ impl MongoSinker {
         };
         let start_time = Instant::now();
         let mut rts = LimitedQueue::new(1);
-        collection.delete_many(query, None).await?;
+        collection.delete_many(query).await?;
         rts.push((start_time.elapsed().as_millis() as u64, 1));
 
         self.base_sinker
@@ -540,7 +536,7 @@ impl MongoSinker {
             }
         }
 
-        if let Err(error) = collection.insert_many(docs, None).await {
+        if let Err(error) = collection.insert_many(docs).await {
             log_error!(
                 "batch insert failed, will insert one by one, schema: {}, tb: {}, error: {}",
                 db,
@@ -562,9 +558,9 @@ impl MongoSinker {
         query_doc: Document,
         update_doc: Document,
     ) -> anyhow::Result<()> {
-        let options = UpdateOptions::builder().upsert(true).build();
         collection
-            .update_one(query_doc, update_doc, Some(options))
+            .update_one(query_doc, update_doc)
+            .upsert(true)
             .await?;
         Ok(())
     }
