@@ -739,6 +739,7 @@ WHERE
                 connection_auth,
                 db_type,
                 max_connections,
+                is_direct_connection,
                 ..
             } => {
                 let pool = ResumerUtil::create_pool(
@@ -746,6 +747,7 @@ WHERE
                     connection_auth,
                     db_type,
                     *max_connections as u32,
+                    *is_direct_connection,
                 )
                 .await?;
                 Some(pool)

@@ -8,6 +8,15 @@ MONGO_RS_NAME=${MONGO_RS_NAME:-rs0}
 MONGO_RS_HOST=${MONGO_RS_HOST:-mongo-src}
 MONGO_ROOT_USERNAME=${MONGO_INITDB_ROOT_USERNAME:-root}
 MONGO_ROOT_PASSWORD=${MONGO_INITDB_ROOT_PASSWORD:-123456}
+if command -v mongosh >/dev/null 2>&1; then
+  MONGO_SHELL=mongosh
+else
+  MONGO_SHELL=mongo
+fi
+
+mongo_admin() {
+  "${MONGO_SHELL}" "mongodb://127.0.0.1:27017/admin" --quiet "$@"
+}
 
 cp "${KEYFILE_SRC}" "${KEYFILE_DST}"
 chown mongodb:mongodb "${KEYFILE_DST}"
@@ -23,22 +32,22 @@ if [ ! -f "${MARKER}" ]; then
     --fork \
     --logpath /tmp/mongo-bootstrap.log
 
-  until mongo admin --host 127.0.0.1 --port 27017 --quiet --eval "db.adminCommand('ping').ok" | grep -q 1; do
+  until mongo_admin --eval "db.adminCommand('ping').ok" | grep -q 1; do
     sleep 1
   done
 
-  mongo admin --host 127.0.0.1 --port 27017 --quiet --eval "
+  mongo_admin --eval "
     rs.initiate({
       _id: '${MONGO_RS_NAME}',
       members: [{ _id: 0, host: '${MONGO_RS_HOST}:27017' }]
     });
   "
 
-  until mongo admin --host 127.0.0.1 --port 27017 --quiet --eval "quit(db.isMaster().ismaster ? 0 : 1)"; do
+  until mongo_admin --eval "quit(db.adminCommand({ hello: 1 }).isWritablePrimary ? 0 : 1)"; do
     sleep 1
   done
 
-  mongo admin --host 127.0.0.1 --port 27017 --quiet --eval "
+  mongo_admin --eval "
     db.createUser({
       user: '${MONGO_ROOT_USERNAME}',
       pwd: '${MONGO_ROOT_PASSWORD}',
@@ -46,9 +55,9 @@ if [ ! -f "${MARKER}" ]; then
     });
   "
 
-  mongo admin --host 127.0.0.1 --port 27017 --quiet --eval "db.shutdownServer({ force: true })" || true
+  mongo_admin --eval "db.shutdownServer({ force: true })" || true
 
-  until ! mongo admin --host 127.0.0.1 --port 27017 --quiet --eval "db.adminCommand('ping').ok" >/dev/null 2>&1; do
+  until ! mongo_admin --eval "db.adminCommand('ping').ok" >/dev/null 2>&1; do
     sleep 1
   done
 

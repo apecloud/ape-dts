@@ -60,6 +60,7 @@ impl ResumerUtil {
         connection_auth: &ConnectionAuthConfig,
         db_type: &DbType,
         max_connections: u32,
+        is_direct_connection: Option<bool>,
     ) -> anyhow::Result<ResumerDbPool> {
         let final_url = ConnectionAuthConfig::merge_url_with_auth(url, connection_auth)
             .context("failed to merge URL with connection auth")?;
@@ -104,8 +105,10 @@ impl ResumerUtil {
                     .await
                     .context("failed to parse MongoDB connection URL")?;
                 client_options.app_name = Some("ape-dts-resumer".to_string());
-                client_options.direct_connection = Some(true);
                 client_options.max_pool_size = Some(max_connections);
+                if let Some(is_direct_connection_option) = is_direct_connection {
+                    client_options.direct_connection = Some(is_direct_connection_option)
+                }
 
                 let client = mongodb::Client::with_options(client_options)
                     .context("failed to create MongoDB client")?;

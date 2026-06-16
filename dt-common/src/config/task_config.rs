@@ -1326,6 +1326,7 @@ impl TaskConfig {
         }
 
         let resume_type = loader.get_with_default(RESUMER, RESUME_TYPE, ResumeType::Dummy);
+
         match resume_type {
             ResumeType::FromLog => Ok(ResumerConfig::FromLog {
                 log_dir: loader.get_with_default(RESUMER, "log_dir", runtime.log_dir.clone()),
@@ -1352,19 +1353,28 @@ impl TaskConfig {
                         MAX_CONNECTIONS,
                         RESUMER_CONNECTION_LIMIT_DEFAULT,
                     ),
+                    is_direct_connection: target.is_direct_connection,
                 })
             }
-            ResumeType::FromDB => Ok(ResumerConfig::FromDB {
-                url: loader.get_required(RESUMER, URL),
-                connection_auth: ConnectionAuthConfig::from(loader, RESUMER),
-                db_type: loader.get_required(RESUMER, DB_TYPE),
-                table_full_name: loader.get_optional(RESUMER, "table_full_name"),
-                max_connections: loader.get_with_default(
-                    RESUMER,
-                    MAX_CONNECTIONS,
-                    RESUMER_CONNECTION_LIMIT_DEFAULT,
-                ),
-            }),
+            ResumeType::FromDB => {
+                let is_direct_connection = if loader.contains(RESUMER, IS_DIRECT_CONNECTION) {
+                    Some(loader.get_optional(RESUMER, IS_DIRECT_CONNECTION))
+                } else {
+                    None
+                };
+                Ok(ResumerConfig::FromDB {
+                    url: loader.get_required(RESUMER, URL),
+                    connection_auth: ConnectionAuthConfig::from(loader, RESUMER),
+                    db_type: loader.get_required(RESUMER, DB_TYPE),
+                    table_full_name: loader.get_optional(RESUMER, "table_full_name"),
+                    max_connections: loader.get_with_default(
+                        RESUMER,
+                        MAX_CONNECTIONS,
+                        RESUMER_CONNECTION_LIMIT_DEFAULT,
+                    ),
+                    is_direct_connection,
+                })
+            }
             _ => Ok(ResumerConfig::Dummy),
         }
     }

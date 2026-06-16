@@ -186,13 +186,20 @@ impl CheckTestRunner {
             connection_auth,
             db_type,
             max_connections,
+            is_direct_connection,
             ..
         } = &self.base.config.resumer
         else {
             anyhow::bail!("checker state store requires ResumerConfig::FromDB");
         };
-        let pool = ResumerUtil::create_pool(url, connection_auth, db_type, *max_connections as u32)
-            .await?;
+        let pool = ResumerUtil::create_pool(
+            url,
+            connection_auth,
+            db_type,
+            *max_connections as u32,
+            *is_direct_connection,
+        )
+        .await?;
         CheckerStateStore::new(pool, &self.base.config.resumer).await
     }
 
@@ -202,13 +209,20 @@ impl CheckTestRunner {
             connection_auth,
             db_type,
             max_connections,
+            is_direct_connection,
             ..
         } = &self.base.config.resumer
         else {
             anyhow::bail!("resumer tables require ResumerConfig::FromDB");
         };
-        let pool = ResumerUtil::create_pool(url, connection_auth, db_type, *max_connections as u32)
-            .await?;
+        let pool = ResumerUtil::create_pool(
+            url,
+            connection_auth,
+            db_type,
+            *max_connections as u32,
+            *is_direct_connection,
+        )
+        .await?;
         let _recorder = DatabaseRecorder::new(
             &self.base.config.global.task_id,
             &self.base.config.resumer,

@@ -498,7 +498,7 @@ services:
     healthcheck:
       test:
         - CMD-SHELL
-        - 'mongo admin -u $$MONGO_INITDB_ROOT_USERNAME -p $$MONGO_INITDB_ROOT_PASSWORD --quiet --eval "quit(db.isMaster().ismaster ? 0 : 1)"'
+        - 'if command -v mongosh >/dev/null 2>&1; then mongosh "mongodb://$$MONGO_INITDB_ROOT_USERNAME:$$MONGO_INITDB_ROOT_PASSWORD@127.0.0.1:27017/admin" --quiet --eval "quit(db.adminCommand({ hello: 1 }).isWritablePrimary ? 0 : 1)"; else mongo admin -u $$MONGO_INITDB_ROOT_USERNAME -p $$MONGO_INITDB_ROOT_PASSWORD --quiet --eval "quit(db.adminCommand({ hello: 1 }).isWritablePrimary ? 0 : 1)"; fi'
       timeout: 5s
       retries: 5
       start_period: 20s
@@ -520,7 +520,7 @@ services:
     healthcheck:
       test:
         - CMD-SHELL
-        - 'mongo admin -u $$MONGO_INITDB_ROOT_USERNAME -p $$MONGO_INITDB_ROOT_PASSWORD --quiet --eval "quit(db.adminCommand(''ping'').ok ? 0 : 1)"'
+        - 'if command -v mongosh >/dev/null 2>&1; then mongosh "mongodb://$$MONGO_INITDB_ROOT_USERNAME:$$MONGO_INITDB_ROOT_PASSWORD@127.0.0.1:27017/admin" --quiet --eval "quit(db.adminCommand(''ping'').ok ? 0 : 1)"; else mongo admin -u $$MONGO_INITDB_ROOT_USERNAME -p $$MONGO_INITDB_ROOT_PASSWORD --quiet --eval "quit(db.adminCommand(''ping'').ok ? 0 : 1)"; fi'
       timeout: 5s
       retries: 5
       start_period: 20s

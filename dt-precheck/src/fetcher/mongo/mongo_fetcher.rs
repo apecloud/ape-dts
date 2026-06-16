@@ -10,7 +10,7 @@ use dt_common::{
 };
 use dt_task::task_util::TaskUtil;
 use mongodb::{
-    bson::{doc, Bson, Document},
+    bson::{doc, Document},
     Client,
 };
 
