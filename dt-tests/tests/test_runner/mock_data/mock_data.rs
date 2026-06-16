@@ -54,7 +54,10 @@ impl<T: MockColType + DeserializeOwned> MockData<T> {
                 loader.get_with_default("mock", "nullable_cols", "[]".to_string());
             let constraints: Vec<Constraint> = serde_json::from_str(&constraints_str).unwrap();
             let nullable_cols: Vec<usize> = serde_json::from_str(&nullable_cols_str).unwrap();
-            let all_types = col_types.first().unwrap().clone();
+            let all_types = col_types
+                .iter()
+                .flat_map(|types| types.iter().cloned())
+                .collect::<Vec<_>>();
             let mut mock_stmt =
                 MockStmt::new(&all_types, &db_str, &Self::gen_mock_tb_name(&mut tb_suffix))
                     .with_nullable_cols(&nullable_cols);
@@ -172,19 +175,59 @@ impl<T: MockColType + DeserializeOwned> MockData<T> {
         })
     }
 
-    pub fn mock_ddl_stmts(&self) -> Vec<String> {
-        let mut res = vec![];
-        for (i, mock_stmt) in self.mock_stmts.iter().enumerate() {
-            if i == 0 {
-                // create database/schema only once
-                res.extend(mock_stmt.create_schema_stmt(&self.db_context));
-            }
-            res.push(mock_stmt.create_table_stmt(&self.db_context));
-        }
+    pub fn mock_schema_stmts(&self) -> Vec<String> {
+        self.mock_stmts
+            .first()
+            .map(|mock_stmt| mock_stmt.create_schema_stmt(&self.db_context))
+            .unwrap_or_default()
+    }
+
+    pub fn mock_table_ddl_stmts(&self) -> Vec<String> {
+        self.mock_stmts
+            .iter()
+            .map(|mock_stmt| mock_stmt.create_table_stmt(&self.db_context))
+            .collect()
+    }
+
+    pub fn mock_src_prepare_stmts(&self) -> Vec<String> {
+        let mut res = self.mock_schema_stmts();
+        res.extend(self.mock_table_ddl_stmts());
         res
     }
 
+    pub fn mock_dst_prepare_stmts_for_data_task(&self) -> Vec<String> {
+        self.mock_src_prepare_stmts()
+    }
+
+    pub fn mock_dst_prepare_stmts_for_struct_task(&self) -> Vec<String> {
+        self.mock_schema_stmts()
+    }
+
+    #[allow(dead_code)]
+    pub fn mock_ddl_stmts(&self) -> Vec<String> {
+        self.mock_src_prepare_stmts()
+    }
+
+    pub fn mock_db_tbs(&self) -> Vec<(String, String)> {
+        self.mock_stmts
+            .iter()
+            .map(|stmt| (stmt.db.clone(), stmt.tb.clone()))
+            .collect()
+    }
+
     pub fn mock_dml_stmts(&self) -> Vec<String> {
+        let mut res = vec![];
+        res.extend(self.mock_insert_stmts());
+        let db_tbs = self
+            .mock_stmts
+            .iter()
+            .map(|stmt| (stmt.db.clone(), stmt.tb.clone()))
+            .collect::<Vec<_>>();
+        res.extend(T::after_all_insert_stmts(&db_tbs, &self.db_context));
+        res
+    }
+
+    pub fn mock_insert_stmts(&self) -> Vec<String> {
         let mut res = vec![];
         let mut random = Random::new(Some(self.seed));
         for mock_stmt in &self.mock_stmts {
@@ -194,12 +237,6 @@ impl<T: MockColType + DeserializeOwned> MockData<T> {
                 self.insert_rows,
             ));
         }
-        let db_tbs = self
-            .mock_stmts
-            .iter()
-            .map(|stmt| (stmt.db.clone(), stmt.tb.clone()))
-            .collect::<Vec<_>>();
-        res.extend(T::after_all_insert_stmts(&db_tbs, &self.db_context));
         res
     }
 
@@ -291,6 +328,84 @@ mod tests {
         );
         assert!(stmts[101].ends_with("`test_db`.`test_tb_99`;"));
         assert_eq!(stmts[102], "ANALYZE TABLE `test_db`.`test_tb_100`;");
+    }
+
+    #[test]
+    fn test_mock_insert_stmts_excludes_after_insert_analyze() {
+        let mock_data = MockData {
+            db_context: MockDbContext::new(DbType::Pg, "16.0"),
+            insert_rows: 2,
+            mock_stmts: vec![MockStmt::new(&[PgType::Int4], "test_db", "test_tb")],
+            seed: 777,
+        };
+
+        let stmts = mock_data.mock_insert_stmts();
+        assert_eq!(stmts.len(), 1);
+        assert!(stmts[0].starts_with("INSERT INTO test_db.test_tb VALUES "));
+        assert!(!stmts.iter().any(|stmt| stmt == "ANALYZE;"));
+    }
+
+    #[test]
+    fn test_mock_prepare_stmts_split_struct_and_data_tasks() {
+        let mock_data = MockData {
+            db_context: MockDbContext::new(DbType::Mysql, "8.0.0"),
+            insert_rows: 1,
+            mock_stmts: vec![
+                MockStmt::new(&[MysqlType::Int], "test_db", "test_tb_1"),
+                MockStmt::new(&[MysqlType::TinyBlob], "test_db", "test_tb_2"),
+            ],
+            seed: 777,
+        };
+
+        let src_prepare = mock_data.mock_src_prepare_stmts();
+        let dst_data_prepare = mock_data.mock_dst_prepare_stmts_for_data_task();
+        let dst_struct_prepare = mock_data.mock_dst_prepare_stmts_for_struct_task();
+
+        assert_eq!(src_prepare.len(), 4);
+        assert_eq!(dst_data_prepare, src_prepare);
+        assert_eq!(dst_struct_prepare.len(), 2);
+        assert!(dst_struct_prepare
+            .iter()
+            .all(|stmt| !stmt.to_lowercase().starts_with("create table")));
+        assert_eq!(
+            mock_data.mock_db_tbs(),
+            vec![
+                ("test_db".to_string(), "test_tb_1".to_string()),
+                ("test_db".to_string(), "test_tb_2".to_string())
+            ]
+        );
+    }
+
+    #[test]
+    fn test_single_strategy_merges_all_mock_type_groups() {
+        let config_file = std::env::temp_dir().join("mock_single_strategy_test.ini");
+        std::fs::write(
+            &config_file,
+            r#"
+[mock]
+strategy=single
+db=mock_db_1
+mysql_types_a=["int"]
+mysql_types_b=["json"]
+mysql_types_c=["geometry"]
+"#,
+        )
+        .unwrap();
+        let config_file = config_file.to_string_lossy().to_string();
+        let mock_data =
+            MockData::<MysqlType>::new(&config_file, MockDbContext::new(DbType::Mysql, "8.0.39"))
+                .unwrap();
+
+        assert_eq!(mock_data.mock_stmts.len(), 1);
+        let type_names = mock_data.mock_stmts[0]
+            .included_types
+            .iter()
+            .map(|ty| ty.name())
+            .collect::<Vec<_>>();
+
+        assert!(type_names.contains(&"INT".to_string()));
+        assert!(type_names.contains(&"JSON".to_string()));
+        assert!(type_names.contains(&"GEOMETRY".to_string()));
     }
 
     #[test]

@@ -332,6 +332,13 @@ impl TestBase {
         runner.close().await.unwrap();
     }
 
+    pub async fn run_mock_struct_test(test_dir: &str) {
+        let mut runner = RdbStructTestRunner::new(test_dir).await.unwrap();
+        runner.run_mock_struct_test().await.unwrap();
+        runner.base.execute_clean_sqls().await.unwrap();
+        runner.close().await.unwrap();
+    }
+
     pub async fn run_precheck_test(
         test_dir: &str,
         ignore_check_items: &HashSet<String>,

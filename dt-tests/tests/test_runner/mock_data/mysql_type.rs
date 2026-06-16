@@ -30,6 +30,8 @@ const YEAR_MAX: i32 = 2155;
 // Predefined values for ENUM and SET types (13.3.5, 13.3.6)
 const ENUM_VALUES: &[&str] = &["v1", "v2", "v3", "v4", "v5"];
 const SET_VALUES: &[&str] = &["s1", "s2", "s3", "s4", "s5"];
+const ENUM_SET_CHARSET: &str = "utf8mb4";
+const ENUM_SET_COLLATION: &str = "utf8mb4_general_ci";
 
 /// Escape a string for use in MySQL single-quoted string literals.
 /// Handles: single quotes (' → ''), backslashes (\ → \\)
@@ -172,10 +174,16 @@ impl MysqlType {
             MysqlType::LongText(attrs) => format!("LONGTEXT {}", attrs.ddl_suffix()),
 
             // ENUM (13.3.5)
-            MysqlType::Enum => "ENUM('v1','v2','v3','v4','v5')".to_string(),
+            MysqlType::Enum => format!(
+                "ENUM('v1','v2','v3','v4','v5') CHARACTER SET {} COLLATE {}",
+                ENUM_SET_CHARSET, ENUM_SET_COLLATION
+            ),
 
             // SET (13.3.6)
-            MysqlType::Set => "SET('s1','s2','s3','s4','s5')".to_string(),
+            MysqlType::Set => format!(
+                "SET('s1','s2','s3','s4','s5') CHARACTER SET {} COLLATE {}",
+                ENUM_SET_CHARSET, ENUM_SET_COLLATION
+            ),
 
             // Spatial types (13.4)
             MysqlType::Geometry => "GEOMETRY".to_string(),
@@ -810,6 +818,18 @@ mod tests {
         let text: MysqlType =
             serde_json::from_str(r#"{"text":{"charset":"utf8","collation":"utf8_bin"}}"#).unwrap();
         assert_eq!(text.name(), "TEXT CHARACTER SET utf8 COLLATE utf8_bin");
+    }
+
+    #[test]
+    fn test_enum_and_set_type_names_include_fixed_charset_attrs() {
+        assert_eq!(
+            MysqlType::Enum.name(),
+            "ENUM('v1','v2','v3','v4','v5') CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci"
+        );
+        assert_eq!(
+            MysqlType::Set.name(),
+            "SET('s1','s2','s3','s4','s5') CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci"
+        );
     }
 
     #[test]

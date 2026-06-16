@@ -1,3 +1,4 @@
+use anyhow::bail;
 use dt_common::{
     config::{config_enums::DbType, task_config::TaskConfig},
     meta::ddl_meta::{ddl_parser::DdlParser, ddl_statement::DdlStatement},
@@ -200,9 +201,184 @@ impl RdbStructTestRunner {
         Ok(())
     }
 
+    pub async fn run_mock_struct_test(&mut self) -> anyhow::Result<()> {
+        match self.base.config.extractor_basic.db_type {
+            DbType::Mysql => self.run_mysql_mock_struct_test().await,
+            DbType::Pg => self.run_pg_mock_struct_test().await,
+            _ => bail!("mock struct test only supports mysql and pg"),
+        }
+    }
+
+    pub async fn run_mysql_mock_struct_test(&mut self) -> anyhow::Result<()> {
+        if self.base.mock_db_tbs.is_empty() {
+            bail!("mock struct test requires [mock] type config");
+        }
+
+        self.base.execute_prepare_sqls().await?;
+        self.base.base.start_task().await?;
+
+        let src_check_fetcher = MysqlStructCheckFetcher {
+            conn_pool: self.base.src_conn_pool_mysql.as_mut().unwrap().clone(),
+        };
+        let dst_check_fetcher = MysqlStructCheckFetcher {
+            conn_pool: self.base.dst_conn_pool_mysql.as_mut().unwrap().clone(),
+        };
+
+        let src_db_tbs = self.base.mock_db_tbs.clone();
+        let dst_db_tbs = self.route_db_tbs(&src_db_tbs);
+        for i in 0..src_db_tbs.len() {
+            let src_ddl_sql = src_check_fetcher
+                .fetch_table(&src_db_tbs[i].0, &src_db_tbs[i].1)
+                .await;
+            let dst_ddl_sql = dst_check_fetcher
+                .fetch_table(&dst_db_tbs[i].0, &dst_db_tbs[i].1)
+                .await;
+
+            println!(
+                "comparing src table: {:?} with dst table: {:?}\n",
+                src_db_tbs[i], dst_db_tbs[i]
+            );
+            println!("src_ddl_sql: {}\n", src_ddl_sql);
+            println!("dst_ddl_sql: {}\n", dst_ddl_sql);
+
+            assert_eq!(
+                Self::mysql_ddl_lines(&src_ddl_sql),
+                Self::mysql_ddl_lines(&dst_ddl_sql)
+            );
+        }
+
+        Ok(())
+    }
+
+    pub async fn run_pg_mock_struct_test(&mut self) -> anyhow::Result<()> {
+        if self.base.mock_db_tbs.is_empty() {
+            bail!("mock struct test requires [mock] type config");
+        }
+
+        self.base.execute_prepare_sqls().await?;
+        self.base.base.start_task().await?;
+
+        let src_check_fetcher = PgStructCheckFetcher {
+            conn_pool: self.base.src_conn_pool_pg.as_mut().unwrap().clone(),
+        };
+        let dst_check_fetcher = PgStructCheckFetcher {
+            conn_pool: self.base.dst_conn_pool_pg.as_mut().unwrap().clone(),
+        };
+
+        let src_db_tbs = self.base.mock_db_tbs.clone();
+        let dst_db_tbs = self.route_db_tbs(&src_db_tbs);
+        for i in 0..src_db_tbs.len() {
+            self.compare_pg_table(
+                &src_check_fetcher,
+                &dst_check_fetcher,
+                &src_db_tbs[i],
+                &dst_db_tbs[i],
+            )
+            .await?;
+        }
+
+        println!(
+            "summary: src mock tables: {:?}, dst mock tables: {:?}",
+            src_db_tbs, dst_db_tbs
+        );
+        Ok(())
+    }
+
     pub async fn run_struct_test_without_check(&mut self) -> anyhow::Result<()> {
         self.base.execute_prepare_sqls().await?;
         self.base.base.start_task().await
+    }
+
+    fn route_db_tbs(&self, src_db_tbs: &[(String, String)]) -> Vec<(String, String)> {
+        src_db_tbs
+            .iter()
+            .map(|(db, tb)| match &self.base.router {
+                Some(router) => {
+                    let (dst_db, dst_tb) = router.get_tb_map(db, tb);
+                    (dst_db.to_string(), dst_tb.to_string())
+                }
+                None => (db.clone(), tb.clone()),
+            })
+            .collect()
+    }
+
+    fn mysql_ddl_lines(sql: &str) -> HashSet<String> {
+        sql.split('\n')
+            .map(|line| line.trim().trim_end_matches(',').to_owned())
+            .collect()
+    }
+
+    async fn compare_pg_table(
+        &self,
+        src_check_fetcher: &PgStructCheckFetcher,
+        dst_check_fetcher: &PgStructCheckFetcher,
+        src_db_tb: &(String, String),
+        dst_db_tb: &(String, String),
+    ) -> anyhow::Result<()> {
+        let src_table = src_check_fetcher
+            .fetch_table(&src_db_tb.0, &src_db_tb.1)
+            .await?;
+        let mut dst_table = dst_check_fetcher
+            .fetch_table(&dst_db_tb.0, &dst_db_tb.1)
+            .await?;
+
+        println!(
+            "comparing src table: {:?} with dst table: {:?}\n",
+            src_db_tb, dst_db_tb
+        );
+
+        if src_db_tb == dst_db_tb {
+            println!("src_table: {:?}\n", src_table);
+            println!("dst_table: {:?}\n", dst_table);
+            assert_eq!(src_table, dst_table);
+            return Ok(());
+        }
+
+        assert_eq!(src_table.columns, dst_table.columns);
+        assert_eq!(src_table.summary, dst_table.summary);
+        assert_eq!(src_table.constraints, dst_table.constraints);
+        assert_eq!(src_table.indexes.len(), dst_table.indexes.len());
+        let parser = DdlParser::new(DbType::Pg);
+        for (j, src_index) in src_table.indexes.iter().enumerate() {
+            let src_indexdef = src_index.get(PG_GET_INDEXDEF);
+            if src_indexdef.is_none() {
+                continue;
+            }
+            let dst_index = &mut dst_table.indexes[j];
+
+            let src_indexdef = src_indexdef.unwrap();
+            let dst_indexdef = dst_index.get(PG_GET_INDEXDEF).unwrap();
+            let src_ddl_data = parser.parse(src_indexdef).unwrap().unwrap();
+            let dst_ddl_data = parser.parse(dst_indexdef).unwrap().unwrap();
+
+            if let DdlStatement::PgCreateIndex(src) = src_ddl_data.statement {
+                assert_eq!(src.schema, src_db_tb.0);
+                assert_eq!(src.tb, src_db_tb.1);
+
+                if let DdlStatement::PgCreateIndex(dst) = dst_ddl_data.statement {
+                    assert_eq!(dst.schema, dst_db_tb.0);
+                    assert_eq!(dst.tb, dst_db_tb.1);
+
+                    assert_eq!(src.index_name, dst.index_name);
+                    assert_eq!(src.is_unique, dst.is_unique);
+                    assert_eq!(src.is_concurrently, dst.is_concurrently);
+                    assert_eq!(src.if_not_exists, dst.if_not_exists);
+                    assert_eq!(src.is_only, dst.is_only);
+                    assert_eq!(src.unparsed, dst.unparsed);
+                }
+            }
+
+            assert_eq!(src_index.len(), dst_index.len());
+            for key in src_index.keys() {
+                if key == PG_GET_INDEXDEF {
+                    continue;
+                }
+                println!("index property: {}", key);
+                assert_eq!(src_index.get(key), dst_index.get(key));
+            }
+        }
+
+        Ok(())
     }
 
     pub async fn load_expect_ddl_sqls(&self) -> HashMap<String, String> {

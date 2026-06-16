@@ -6,7 +6,7 @@ use std::{
 use chrono::{Duration, Utc};
 use dt_common::{
     config::{
-        config_enums::DbType,
+        config_enums::{DbType, TaskKind},
         config_token_parser::{ConfigTokenParser, TokenEscapePair},
         extractor_config::ExtractorConfig,
         ini_loader::IniLoader,
@@ -18,6 +18,7 @@ use dt_common::{
     rdb_filter::RdbFilter,
     utils::{sql_util::SqlUtil, time_util::TimeUtil},
 };
+use serde::de::DeserializeOwned;
 
 use dt_common::meta::{
     col_value::ColValue, ddl_meta::ddl_parser::DdlParser,
@@ -54,6 +55,7 @@ pub struct RdbTestRunner {
     pub unordered_compare: bool, // whether to compare rows in unordered way
     pub unordered_compare_threads: usize,
     pub mock_data_only: bool,
+    pub mock_db_tbs: Vec<(String, String)>,
 }
 
 pub const SRC: &str = "src";
@@ -61,6 +63,32 @@ pub const DST: &str = "dst";
 pub const PUBLIC: &str = "public";
 
 const UTC_FORMAT: &str = "%Y-%m-%d %H:%M:%S";
+
+struct MockDataPrepare {
+    src_prepare_stmts: Vec<String>,
+    dst_prepare_stmts_for_data_task: Vec<String>,
+    dst_prepare_stmts_for_struct_task: Vec<String>,
+    snapshot_dml_stmts: Vec<String>,
+    cdc_insert_stmts: Vec<String>,
+    db_tbs: Vec<(String, String)>,
+}
+
+impl MockDataPrepare {
+    fn from_mock_data<
+        T: crate::test_runner::mock_data::mock_stmt::MockColType + DeserializeOwned,
+    >(
+        mock_data: MockData<T>,
+    ) -> Self {
+        Self {
+            src_prepare_stmts: mock_data.mock_src_prepare_stmts(),
+            dst_prepare_stmts_for_data_task: mock_data.mock_dst_prepare_stmts_for_data_task(),
+            dst_prepare_stmts_for_struct_task: mock_data.mock_dst_prepare_stmts_for_struct_task(),
+            snapshot_dml_stmts: mock_data.mock_dml_stmts(),
+            cdc_insert_stmts: mock_data.mock_insert_stmts(),
+            db_tbs: mock_data.mock_db_tbs(),
+        }
+    }
+}
 
 #[allow(dead_code)]
 impl RdbTestRunner {
@@ -122,32 +150,46 @@ impl RdbTestRunner {
         let (mut unordered_compare, unordered_compare_configured, unordered_compare_threads) =
             Self::load_mock_compare_config(&base.task_config_file);
         let configured_mock_data_only = Self::load_mock_data_only_config(&base.task_config_file);
-        let mock_result: Option<(Vec<String>, Vec<String>)> = match src_db_type {
+        let task_kind = config.task_type().map(|task_type| task_type.kind);
+        let is_struct_task = matches!(task_kind, Some(TaskKind::Struct));
+        let mock_result: Option<MockDataPrepare> = match src_db_type {
             DbType::Pg => {
                 let context =
                     Self::detect_pg_mock_context(src_conn_pool_pg.as_ref().unwrap()).await?;
                 MockData::<PgType>::new(&base.task_config_file, context)
-                    .map(|c| (c.mock_ddl_stmts(), c.mock_dml_stmts()))
+                    .map(MockDataPrepare::from_mock_data)
             }
             DbType::Mysql => {
                 let context =
                     Self::detect_mysql_mock_context(src_conn_pool_mysql.as_ref().unwrap()).await?;
                 MockData::<MysqlType>::new(&base.task_config_file, context)
-                    .map(|c| (c.mock_ddl_stmts(), c.mock_dml_stmts()))
+                    .map(MockDataPrepare::from_mock_data)
             }
             _ => None,
         };
         let has_mock_data = mock_result.is_some();
-        if let Some((mock_ddl_stmts, mock_dml_stmts)) = mock_result {
-            base.src_prepare_sqls.extend(mock_ddl_stmts.clone());
-            base.dst_prepare_sqls.extend(mock_ddl_stmts);
-            base.src_test_sqls.extend(mock_dml_stmts);
+        let mut mock_db_tbs = Vec::new();
+        if let Some(mock_prepare) = mock_result {
+            base.src_prepare_sqls.extend(mock_prepare.src_prepare_stmts);
+            if is_struct_task {
+                base.dst_prepare_sqls
+                    .extend(mock_prepare.dst_prepare_stmts_for_struct_task);
+            } else {
+                base.dst_prepare_sqls
+                    .extend(mock_prepare.dst_prepare_stmts_for_data_task);
+                if matches!(task_kind, Some(TaskKind::Cdc)) {
+                    base.src_test_sqls.extend(mock_prepare.cdc_insert_stmts);
+                } else {
+                    base.src_test_sqls.extend(mock_prepare.snapshot_dml_stmts);
+                }
+            }
+            mock_db_tbs = mock_prepare.db_tbs;
 
             if !unordered_compare_configured {
                 unordered_compare = true;
             }
         }
-        let mock_data_only = configured_mock_data_only && has_mock_data;
+        let mock_data_only = configured_mock_data_only && has_mock_data && !is_struct_task;
 
         if !dst_url.is_empty() && !mock_data_only {
             match &dst_db_type {
@@ -220,6 +262,7 @@ impl RdbTestRunner {
             unordered_compare,
             unordered_compare_threads,
             mock_data_only,
+            mock_db_tbs,
         })
     }
 
