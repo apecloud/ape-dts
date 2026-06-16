@@ -8,9 +8,12 @@ use crate::test_runner::mock_data::{
     types::{
         bytea::Bytea,
         json::Json,
-        mysql::geo::{
-            WktGeometryCollection, WktLineString, WktMultiLineString, WktMultiPoint,
-            WktMultiPolygon, WktPoint, WktPolygon,
+        mysql::{
+            charset::{MysqlCharAttrs, MysqlTextAttrs},
+            geo::{
+                WktGeometryCollection, WktLineString, WktMultiLineString, WktMultiPoint,
+                WktMultiPolygon, WktPoint, WktPolygon,
+            },
         },
     },
 };
@@ -75,8 +78,8 @@ pub enum MysqlType {
     Year,
 
     // --- 13.3.2 CHAR and VARCHAR ---
-    Char,
-    Varchar,
+    Char(MysqlCharAttrs),
+    Varchar(MysqlCharAttrs),
 
     // --- 13.3.3 BINARY and VARBINARY ---
     Binary,
@@ -87,10 +90,10 @@ pub enum MysqlType {
     Blob,
     MediumBlob,
     LongBlob,
-    TinyText,
-    Text,
-    MediumText,
-    LongText,
+    TinyText(MysqlTextAttrs),
+    Text(MysqlTextAttrs),
+    MediumText(MysqlTextAttrs),
+    LongText(MysqlTextAttrs),
 
     // --- 13.3.5 ENUM Type ---
     Enum,
@@ -115,75 +118,77 @@ pub enum MysqlType {
 impl MysqlType {
     /// Returns the MySQL DDL type name (used in CREATE TABLE).
     /// Types with size parameters use reasonable test defaults.
-    pub fn name(&self) -> &str {
+    pub fn name(&self) -> String {
         match self {
             // Integer types (13.1.2)
-            MysqlType::TinyInt => "TINYINT",
-            MysqlType::TinyIntUnsigned => "TINYINT UNSIGNED",
-            MysqlType::SmallInt => "SMALLINT",
-            MysqlType::SmallIntUnsigned => "SMALLINT UNSIGNED",
-            MysqlType::MediumInt => "MEDIUMINT",
-            MysqlType::MediumIntUnsigned => "MEDIUMINT UNSIGNED",
-            MysqlType::Int => "INT",
-            MysqlType::IntUnsigned => "INT UNSIGNED",
-            MysqlType::BigInt => "BIGINT",
-            MysqlType::BigIntUnsigned => "BIGINT UNSIGNED",
+            MysqlType::TinyInt => "TINYINT".to_string(),
+            MysqlType::TinyIntUnsigned => "TINYINT UNSIGNED".to_string(),
+            MysqlType::SmallInt => "SMALLINT".to_string(),
+            MysqlType::SmallIntUnsigned => "SMALLINT UNSIGNED".to_string(),
+            MysqlType::MediumInt => "MEDIUMINT".to_string(),
+            MysqlType::MediumIntUnsigned => "MEDIUMINT UNSIGNED".to_string(),
+            MysqlType::Int => "INT".to_string(),
+            MysqlType::IntUnsigned => "INT UNSIGNED".to_string(),
+            MysqlType::BigInt => "BIGINT".to_string(),
+            MysqlType::BigIntUnsigned => "BIGINT UNSIGNED".to_string(),
 
             // Fixed-point (13.1.3): precision=10, scale=2
-            MysqlType::Decimal => "DECIMAL(10,2)",
+            MysqlType::Decimal => "DECIMAL(10,2)".to_string(),
 
             // Floating-point (13.1.4)
-            MysqlType::Float => "FLOAT",
-            MysqlType::Double => "DOUBLE",
+            MysqlType::Float => "FLOAT".to_string(),
+            MysqlType::Double => "DOUBLE".to_string(),
 
             // Bit (13.1.5): 8 bits for testing
-            MysqlType::Bit => "BIT(8)",
+            MysqlType::Bit => "BIT(8)".to_string(),
 
             // Date/Time (13.2): use fsp=6 for fractional seconds
-            MysqlType::Date => "DATE",
-            MysqlType::DateTime => "DATETIME(6)",
-            MysqlType::Timestamp => "TIMESTAMP(6)",
-            MysqlType::Time => "TIME(6)",
-            MysqlType::Year => "YEAR",
+            MysqlType::Date => "DATE".to_string(),
+            MysqlType::DateTime => "DATETIME(6)".to_string(),
+            MysqlType::Timestamp => "TIMESTAMP(6)".to_string(),
+            MysqlType::Time => "TIME(6)".to_string(),
+            MysqlType::Year => "YEAR".to_string(),
 
             // Character strings (13.3.2)
-            MysqlType::Char => "CHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci",
-            MysqlType::Varchar => "VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci",
+            MysqlType::Char(attrs) => format!("CHAR({}) {}", attrs.length, attrs.ddl_suffix()),
+            MysqlType::Varchar(attrs) => {
+                format!("VARCHAR({}) {}", attrs.length, attrs.ddl_suffix())
+            }
 
             // Binary strings (13.3.3)
-            MysqlType::Binary => "BINARY(255)",
-            MysqlType::Varbinary => "VARBINARY(255)",
+            MysqlType::Binary => "BINARY(255)".to_string(),
+            MysqlType::Varbinary => "VARBINARY(255)".to_string(),
 
             // BLOB types (13.3.4)
-            MysqlType::TinyBlob => "TINYBLOB",
-            MysqlType::Blob => "BLOB",
-            MysqlType::MediumBlob => "MEDIUMBLOB",
-            MysqlType::LongBlob => "LONGBLOB",
+            MysqlType::TinyBlob => "TINYBLOB".to_string(),
+            MysqlType::Blob => "BLOB".to_string(),
+            MysqlType::MediumBlob => "MEDIUMBLOB".to_string(),
+            MysqlType::LongBlob => "LONGBLOB".to_string(),
 
             // TEXT types (13.3.4)
-            MysqlType::TinyText => "TINYTEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci",
-            MysqlType::Text => "TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci",
-            MysqlType::MediumText => "MEDIUMTEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci",
-            MysqlType::LongText => "LONGTEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci",
+            MysqlType::TinyText(attrs) => format!("TINYTEXT {}", attrs.ddl_suffix()),
+            MysqlType::Text(attrs) => format!("TEXT {}", attrs.ddl_suffix()),
+            MysqlType::MediumText(attrs) => format!("MEDIUMTEXT {}", attrs.ddl_suffix()),
+            MysqlType::LongText(attrs) => format!("LONGTEXT {}", attrs.ddl_suffix()),
 
             // ENUM (13.3.5)
-            MysqlType::Enum => "ENUM('v1','v2','v3','v4','v5')",
+            MysqlType::Enum => "ENUM('v1','v2','v3','v4','v5')".to_string(),
 
             // SET (13.3.6)
-            MysqlType::Set => "SET('s1','s2','s3','s4','s5')",
+            MysqlType::Set => "SET('s1','s2','s3','s4','s5')".to_string(),
 
             // Spatial types (13.4)
-            MysqlType::Geometry => "GEOMETRY",
-            MysqlType::Point => "POINT",
-            MysqlType::LineString => "LINESTRING",
-            MysqlType::Polygon => "POLYGON",
-            MysqlType::MultiPoint => "MULTIPOINT",
-            MysqlType::MultiLineString => "MULTILINESTRING",
-            MysqlType::MultiPolygon => "MULTIPOLYGON",
-            MysqlType::GeometryCollection => "GEOMETRYCOLLECTION",
+            MysqlType::Geometry => "GEOMETRY".to_string(),
+            MysqlType::Point => "POINT".to_string(),
+            MysqlType::LineString => "LINESTRING".to_string(),
+            MysqlType::Polygon => "POLYGON".to_string(),
+            MysqlType::MultiPoint => "MULTIPOINT".to_string(),
+            MysqlType::MultiLineString => "MULTILINESTRING".to_string(),
+            MysqlType::MultiPolygon => "MULTIPOLYGON".to_string(),
+            MysqlType::GeometryCollection => "GEOMETRYCOLLECTION".to_string(),
 
             // JSON (13.5)
-            MysqlType::Json => "JSON",
+            MysqlType::Json => "JSON".to_string(),
         }
     }
 
@@ -198,6 +203,13 @@ impl MysqlType {
     /// - BINARY: right-pads with \x00 to full width, causing constant values
     ///   like X'', X'00', X'00000000' to collide after padding
     pub fn support_btree_index(&self) -> bool {
+        match self {
+            MysqlType::Char(attrs) | MysqlType::Varchar(attrs) => {
+                return attrs.can_be_unique_key();
+            }
+            _ => {}
+        }
+
         matches!(
             self,
             MysqlType::TinyInt
@@ -218,8 +230,6 @@ impl MysqlType {
                 | MysqlType::Timestamp
                 | MysqlType::Time
                 | MysqlType::Year
-                | MysqlType::Char
-                | MysqlType::Varchar
                 | MysqlType::Varbinary
         )
     }
@@ -349,12 +359,15 @@ impl MysqlType {
 
             // --- Character string types (13.3.2, 13.3.4) ---
             // CHAR right-pads with spaces; trim trailing spaces like PG bpchar
-            MysqlType::Char => mysql_quote(random.next_str().trim_end_matches(' ')),
-            MysqlType::Varchar
-            | MysqlType::TinyText
-            | MysqlType::Text
-            | MysqlType::MediumText
-            | MysqlType::LongText => mysql_quote(&random.next_str()),
+            MysqlType::Char(attrs) => {
+                let value = attrs.normalize_value(random.next_str().trim_end_matches(' '));
+                mysql_quote(&value)
+            }
+            MysqlType::Varchar(attrs) => mysql_quote(&attrs.normalize_value(&random.next_str())),
+            MysqlType::TinyText(attrs)
+            | MysqlType::Text(attrs)
+            | MysqlType::MediumText(attrs)
+            | MysqlType::LongText(attrs) => mysql_quote(&attrs.normalize_value(&random.next_str())),
 
             // --- Binary string types (13.3.3, 13.3.4) ---
             MysqlType::Binary
@@ -586,14 +599,18 @@ impl MysqlType {
             ],
 
             // --- Character string types (13.3.2, 13.3.4) ---
-            MysqlType::Char
-            | MysqlType::Varchar
-            | MysqlType::TinyText
-            | MysqlType::Text
-            | MysqlType::MediumText
-            | MysqlType::LongText => Constants::next_str()
-                .iter()
-                .map(|s| mysql_quote(s))
+            MysqlType::Char(attrs) | MysqlType::Varchar(attrs) => attrs
+                .constant_values()
+                .into_iter()
+                .map(|s| mysql_quote(&s))
+                .collect(),
+            MysqlType::TinyText(attrs)
+            | MysqlType::Text(attrs)
+            | MysqlType::MediumText(attrs)
+            | MysqlType::LongText(attrs) => attrs
+                .constant_values()
+                .into_iter()
+                .map(|s| mysql_quote(&s))
                 .collect(),
 
             // --- Binary string types (13.3.3, 13.3.4) ---
@@ -668,7 +685,7 @@ impl MysqlType {
 }
 
 impl MockColType for MysqlType {
-    fn name<'a>(&'a self, _ctx: &'a MockDbContext) -> &'a str {
+    fn name(&self, _ctx: &MockDbContext) -> String {
         MysqlType::name(self)
     }
 
@@ -727,71 +744,124 @@ impl MockColType for MysqlType {
 mod tests {
     use super::*;
 
-    /// All MysqlType variants, used by multiple tests to ensure full coverage.
-    const ALL_TYPES: &[MysqlType] = &[
-        // 13.1 Numeric
-        MysqlType::TinyInt,
-        MysqlType::TinyIntUnsigned,
-        MysqlType::SmallInt,
-        MysqlType::SmallIntUnsigned,
-        MysqlType::MediumInt,
-        MysqlType::MediumIntUnsigned,
-        MysqlType::Int,
-        MysqlType::IntUnsigned,
-        MysqlType::BigInt,
-        MysqlType::BigIntUnsigned,
-        MysqlType::Decimal,
-        MysqlType::Float,
-        MysqlType::Double,
-        MysqlType::Bit,
-        // 13.2 Date/Time
-        MysqlType::Date,
-        MysqlType::DateTime,
-        MysqlType::Timestamp,
-        MysqlType::Time,
-        MysqlType::Year,
-        // 13.3 String
-        MysqlType::Char,
-        MysqlType::Varchar,
-        MysqlType::Binary,
-        MysqlType::Varbinary,
-        MysqlType::TinyBlob,
-        MysqlType::Blob,
-        MysqlType::MediumBlob,
-        MysqlType::LongBlob,
-        MysqlType::TinyText,
-        MysqlType::Text,
-        MysqlType::MediumText,
-        MysqlType::LongText,
-        MysqlType::Enum,
-        MysqlType::Set,
-        // 13.4 Spatial
-        MysqlType::Geometry,
-        MysqlType::Point,
-        MysqlType::LineString,
-        MysqlType::Polygon,
-        MysqlType::MultiPoint,
-        MysqlType::MultiLineString,
-        MysqlType::MultiPolygon,
-        MysqlType::GeometryCollection,
-        // 13.5 JSON
-        MysqlType::Json,
-    ];
+    fn all_types() -> Vec<MysqlType> {
+        vec![
+            // 13.1 Numeric
+            MysqlType::TinyInt,
+            MysqlType::TinyIntUnsigned,
+            MysqlType::SmallInt,
+            MysqlType::SmallIntUnsigned,
+            MysqlType::MediumInt,
+            MysqlType::MediumIntUnsigned,
+            MysqlType::Int,
+            MysqlType::IntUnsigned,
+            MysqlType::BigInt,
+            MysqlType::BigIntUnsigned,
+            MysqlType::Decimal,
+            MysqlType::Float,
+            MysqlType::Double,
+            MysqlType::Bit,
+            // 13.2 Date/Time
+            MysqlType::Date,
+            MysqlType::DateTime,
+            MysqlType::Timestamp,
+            MysqlType::Time,
+            MysqlType::Year,
+            // 13.3 String
+            MysqlType::Char(MysqlCharAttrs::default_with_length(255)),
+            MysqlType::Varchar(MysqlCharAttrs::default_with_length(255)),
+            MysqlType::Binary,
+            MysqlType::Varbinary,
+            MysqlType::TinyBlob,
+            MysqlType::Blob,
+            MysqlType::MediumBlob,
+            MysqlType::LongBlob,
+            MysqlType::TinyText(MysqlTextAttrs::default()),
+            MysqlType::Text(MysqlTextAttrs::default()),
+            MysqlType::MediumText(MysqlTextAttrs::default()),
+            MysqlType::LongText(MysqlTextAttrs::default()),
+            MysqlType::Enum,
+            MysqlType::Set,
+            // 13.4 Spatial
+            MysqlType::Geometry,
+            MysqlType::Point,
+            MysqlType::LineString,
+            MysqlType::Polygon,
+            MysqlType::MultiPoint,
+            MysqlType::MultiLineString,
+            MysqlType::MultiPolygon,
+            MysqlType::GeometryCollection,
+            // 13.5 JSON
+            MysqlType::Json,
+        ]
+    }
+
+    #[test]
+    fn test_character_type_names_include_attrs() {
+        let varchar: MysqlType = serde_json::from_str(
+            r#"{"varchar":{"length":191,"charset":"utf8mb4","collation":"utf8mb4_bin"}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            varchar.name(),
+            "VARCHAR(191) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin"
+        );
+
+        let text: MysqlType =
+            serde_json::from_str(r#"{"text":{"charset":"utf8","collation":"utf8_bin"}}"#).unwrap();
+        assert_eq!(text.name(), "TEXT CHARACTER SET utf8 COLLATE utf8_bin");
+    }
+
+    #[test]
+    fn test_utf8mb3_character_constants_exclude_4_byte_values() {
+        let utf8_text: MysqlType =
+            serde_json::from_str(r#"{"text":{"charset":"utf8","collation":"utf8_bin"}}"#).unwrap();
+        let utf8mb4_text: MysqlType =
+            serde_json::from_str(r#"{"text":{"charset":"utf8mb4","collation":"utf8mb4_bin"}}"#)
+                .unwrap();
+
+        assert!(!utf8_text
+            .constant_value_str()
+            .contains(&mysql_quote("🔥🚀")));
+        assert!(utf8mb4_text
+            .constant_value_str()
+            .contains(&mysql_quote("🔥🚀")));
+    }
+
+    #[test]
+    fn test_character_btree_index_allows_all_char_attrs() {
+        let bin_varchar: MysqlType = serde_json::from_str(
+            r#"{"varchar":{"length":255,"charset":"utf8mb4","collation":"utf8mb4_bin"}}"#,
+        )
+        .unwrap();
+        let ci_varchar: MysqlType = serde_json::from_str(
+            r#"{"varchar":{"length":255,"charset":"utf8mb4","collation":"utf8mb4_0900_ai_ci"}}"#,
+        )
+        .unwrap();
+        let cs_varchar: MysqlType = serde_json::from_str(
+            r#"{"varchar":{"length":255,"charset":"utf8mb4","collation":"utf8mb4_0900_as_cs"}}"#,
+        )
+        .unwrap();
+
+        assert!(bin_varchar.support_btree_index());
+        assert!(ci_varchar.support_btree_index());
+        assert!(cs_varchar.support_btree_index());
+    }
 
     /// Verify every variant survives serialize → deserialize round-trip.
     #[test]
     fn test_serde_roundtrip() {
-        for t in ALL_TYPES {
-            let json = serde_json::to_string(t).unwrap();
+        for t in all_types() {
+            let json = serde_json::to_string(&t).unwrap();
             let back: MysqlType = serde_json::from_str(&json).unwrap();
-            assert_eq!(t, &back, "serde round-trip failed for {:?}", t);
+            assert_eq!(t, back, "serde round-trip failed for {:?}", t);
         }
     }
 
     /// Verify every variant has a non-empty DDL type name.
     #[test]
     fn test_type_names() {
-        for t in ALL_TYPES {
+        for t in all_types() {
             let name = t.name();
             assert!(!name.is_empty(), "{:?} has empty name", t);
         }
@@ -801,7 +871,7 @@ mod tests {
     #[test]
     fn test_random_value_generation() {
         let mut random = Random::new(Some(42));
-        for t in ALL_TYPES {
+        for t in all_types() {
             let val = t.next_value_str(&mut random);
             assert!(!val.is_empty(), "{:?} generated empty value", t);
         }
@@ -810,7 +880,7 @@ mod tests {
     /// Verify every variant has at least one constant boundary value.
     #[test]
     fn test_constant_values() {
-        for t in ALL_TYPES {
+        for t in all_types() {
             let vals = t.constant_value_str();
             assert!(!vals.is_empty(), "{:?} has no constant values", t);
         }

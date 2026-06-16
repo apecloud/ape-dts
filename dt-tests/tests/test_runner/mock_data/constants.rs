@@ -49,7 +49,7 @@ impl Constants {
         f64::EPSILON,
     ];
 
-    const NEXT_STR: &[&str] = &[
+    const NEXT_STR_UTF8MB4: &[&str] = &[
         // --- 1. Emptiness & Whitespace ---
         r#""#, // Empty String (Length 0)
         // r#"   "#, // Pure Whitespace (Tests trimming logic in application or char(n))
@@ -76,6 +76,35 @@ Line2"#, // Multi-line string (Newlines \n)
         r#"a"#, // Min Length (1 char)
         // A very long string (simulating TOAST entry point, usually > 2KB)
         // Shortened here for readability, but in practice, generate 2KB+
+        r#"Lorem ipsum dolor sit amet, consectetur adipiscing elit..."#,
+    ];
+
+    const NEXT_STR_UTF8MB3: &[&str] = &[
+        // --- 1. Emptiness & Whitespace ---
+        r#""#,
+        " \t",
+        // --- 2. SQL Syntax & Injection Simulation ---
+        r#"O'Neil"#,
+        r#"'"#,
+        r#"value'); DROP TABLE x; --"#,
+        // --- 3. Special Characters & Formatting ---
+        r#"Line1
+Line2"#,
+        r#"C:\Windows\System32"#,
+        r#"<script>alert(1)</script>"#,
+        // --- 4. Unicode & Encoding (UTF-8) ---
+        r#"汉字"#,
+        // BMP symbols that exercise emoji-like rendering while remaining valid utf8mb3.
+        r#"☃"#,
+        r#"★"#,
+        r#"☕"#,
+        r#"♥"#,
+        r#"☺"#,
+        r#"Z͑ͫ̓ͪ̂ͫ̽͏̴Iͦ͊̽̔͌ͬ͛̎Gͫ̎̚Zͧͬͪ͐Ȁ̉G̿"#,
+        r#"ﷺ"#,
+        r#"مرحبا"#,
+        // --- 5. Length Boundaries ---
+        r#"a"#,
         r#"Lorem ipsum dolor sit amet, consectetur adipiscing elit..."#,
     ];
 
@@ -135,7 +164,21 @@ Line2"#, // Multi-line string (Newlines \n)
 
     #[inline]
     pub fn next_str() -> &'static [&'static str] {
-        Self::NEXT_STR
+        Self::NEXT_STR_UTF8MB4
+    }
+
+    pub fn next_str_utf8mb4() -> Vec<String> {
+        Self::NEXT_STR_UTF8MB4
+            .iter()
+            .map(|s| s.to_string())
+            .collect()
+    }
+
+    pub fn next_str_utf8mb3() -> Vec<String> {
+        Self::NEXT_STR_UTF8MB3
+            .iter()
+            .map(|s| s.to_string())
+            .collect()
     }
 }
 

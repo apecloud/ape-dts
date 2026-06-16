@@ -526,8 +526,8 @@ impl PgType {
 }
 
 impl MockColType for PgType {
-    fn name<'a>(&'a self, _ctx: &'a MockDbContext) -> &'a str {
-        PgType::name(self)
+    fn name(&self, _ctx: &MockDbContext) -> String {
+        PgType::name(self).to_string()
     }
 
     fn support_btree_index(&self, _ctx: &MockDbContext) -> bool {

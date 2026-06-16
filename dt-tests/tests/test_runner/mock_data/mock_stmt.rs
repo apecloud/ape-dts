@@ -11,7 +11,7 @@ use crate::test_runner::mock_data::{context::MockDbContext, random::Random};
 /// Trait abstracting over database column types for mock data generation.
 /// Implemented by both `PgType` and `MysqlType`.
 pub trait MockColType: std::fmt::Debug + Clone {
-    fn name<'a>(&'a self, ctx: &'a MockDbContext) -> &'a str;
+    fn name(&self, ctx: &MockDbContext) -> String;
     fn support_btree_index(&self, ctx: &MockDbContext) -> bool;
     fn next_value_str(&self, ctx: &MockDbContext, random: &mut Random) -> String;
     fn constant_value_str(&self, ctx: &MockDbContext) -> Vec<String>;
@@ -365,6 +365,7 @@ mod tests {
 
     use crate::test_runner::mock_data::{
         context::MockDbContext, mysql_type::MysqlType, pg_type::PgType,
+        types::mysql::charset::MysqlCharAttrs,
     };
 
     fn pg_ctx() -> MockDbContext {
@@ -455,7 +456,14 @@ mod tests {
 
     #[test]
     fn test_mysql_schema_generation() {
-        let mock_stmt = MockStmt::new(&[MysqlType::Int, MysqlType::Varchar], "test_db", "test_tb");
+        let mock_stmt = MockStmt::new(
+            &[
+                MysqlType::Int,
+                MysqlType::Varchar(MysqlCharAttrs::default_with_length(255)),
+            ],
+            "test_db",
+            "test_tb",
+        );
         let ctx = mysql_ctx();
         let db_stmts = mock_stmt.create_schema_stmt(&ctx);
         assert_eq!(db_stmts.len(), 2);
@@ -472,7 +480,11 @@ mod tests {
     #[test]
     fn test_mysql_full_schema_generation() {
         let mock_stmt = MockStmt::new(
-            &[MysqlType::Int, MysqlType::Varchar, MysqlType::Double],
+            &[
+                MysqlType::Int,
+                MysqlType::Varchar(MysqlCharAttrs::default_with_length(255)),
+                MysqlType::Double,
+            ],
             "test_db",
             "test_tb",
         )
@@ -492,7 +504,11 @@ mod tests {
     fn test_mysql_insert_value_generation() {
         let mut random = Random::new(Some(42));
         let mock_stmt = MockStmt::new(
-            &[MysqlType::Int, MysqlType::Varchar, MysqlType::DateTime],
+            &[
+                MysqlType::Int,
+                MysqlType::Varchar(MysqlCharAttrs::default_with_length(255)),
+                MysqlType::DateTime,
+            ],
             "test_db",
             "test_tb",
         );

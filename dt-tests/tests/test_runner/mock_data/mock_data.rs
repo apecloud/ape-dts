@@ -286,10 +286,51 @@ mod tests {
 
         let stmts = mock_data.mock_dml_stmts();
         assert_eq!(stmts.len(), 103);
-        assert!(stmts[101].starts_with(
-            "ANALYZE TABLE `test_db`.`test_tb_0`, `test_db`.`test_tb_1`"
-        ));
+        assert!(
+            stmts[101].starts_with("ANALYZE TABLE `test_db`.`test_tb_0`, `test_db`.`test_tb_1`")
+        );
         assert!(stmts[101].ends_with("`test_db`.`test_tb_99`;"));
         assert_eq!(stmts[102], "ANALYZE TABLE `test_db`.`test_tb_100`;");
+    }
+
+    #[test]
+    fn test_mysql_snapshot_mock_configs_load_character_attrs() {
+        for (relative_config, version, expected_collation) in [
+            (
+                "tests/mock_test/mysql_to_mysql/5_7_to_5_7/snapshot/table_parallel_test/task_config.ini",
+                "5.7.44",
+                "utf8mb4_general_ci",
+            ),
+            (
+                "tests/mock_test/mysql_to_mysql/5_7_to_5_7/snapshot/parallel_test/task_config.ini",
+                "5.7.44",
+                "utf8mb4_general_ci",
+            ),
+            (
+                "tests/mock_test/mysql_to_mysql/8_0_to_8_0/snapshot/table_parallel_test/task_config.ini",
+                "8.0.39",
+                "utf8mb4_0900_ai_ci",
+            ),
+            (
+                "tests/mock_test/mysql_to_mysql/8_0_to_8_0/snapshot/parallel_test/task_config.ini",
+                "8.0.39",
+                "utf8mb4_0900_ai_ci",
+            ),
+        ] {
+            let config_file = format!("{}/{}", env!("CARGO_MANIFEST_DIR"), relative_config);
+            let mock_data =
+                MockData::<MysqlType>::new(&config_file, MockDbContext::new(DbType::Mysql, version))
+                    .unwrap();
+            let type_names = mock_data
+                .mock_stmts
+                .iter()
+                .flat_map(|stmt| stmt.included_types.iter())
+                .map(MysqlType::name)
+                .collect::<Vec<_>>()
+                .join("\n");
+
+            assert!(type_names.contains(expected_collation));
+            assert!(type_names.contains("CHARACTER SET"));
+        }
     }
 }

@@ -234,5 +234,4 @@ impl PgValueType {
             Self::Int16 { .. } | Self::Int32 { .. } | Self::Int64 { .. }
         )
     }
-
 }
