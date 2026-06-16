@@ -298,6 +298,14 @@ impl StarrocksStructSinker {
 
             MysqlColType::Binary { .. }
             | MysqlColType::VarBinary { .. }
+            | MysqlColType::Geometry
+            | MysqlColType::Point
+            | MysqlColType::LineString
+            | MysqlColType::Polygon
+            | MysqlColType::MultiPoint
+            | MysqlColType::MultiLineString
+            | MysqlColType::MultiPolygon
+            | MysqlColType::GeometryCollection
             | MysqlColType::TinyBlob
             | MysqlColType::MediumBlob
             | MysqlColType::Blob

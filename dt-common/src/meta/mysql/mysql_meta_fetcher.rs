@@ -302,11 +302,15 @@ impl MysqlMetaFetcher {
             },
             "year" => MysqlColType::Year,
             "bit" => MysqlColType::Bit,
+            "geometry" => MysqlColType::Geometry,
+            "point" => MysqlColType::Point,
+            "linestring" => MysqlColType::LineString,
+            "polygon" => MysqlColType::Polygon,
+            "multipoint" => MysqlColType::MultiPoint,
+            "multilinestring" => MysqlColType::MultiLineString,
+            "multipolygon" => MysqlColType::MultiPolygon,
+            "geometrycollection" | "geomcollection" => MysqlColType::GeometryCollection,
             "json" => MysqlColType::Json,
-
-            // TODO
-            // "geometry": "geometrycollection": "linestring": "multilinestring":
-            // "multipoint": "multipolygon": "polygon": "point"
             _ => MysqlColType::Unknown,
         };
 

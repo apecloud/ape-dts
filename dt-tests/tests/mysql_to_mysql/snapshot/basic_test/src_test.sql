@@ -77,6 +77,52 @@ INSERT INTO test_db_1.date_time_table VALUES(4, '1000-01-01 00:00:00', '1000-01-
 
 INSERT INTO test_db_1.set_table VALUES(1, ''), (2, 'a'), (3, 'a,b'), (4, 'a,b,c,d,e'), (5, NULL);
 
+INSERT INTO test_db_1.spatial_table VALUES (
+    1,
+    ST_GeomFromText('POINT(0 0)'),
+    ST_GeomFromText('POINT(1 1)'),
+    ST_GeomFromText('LINESTRING(0 0, 1 1, 2 2)'),
+    ST_GeomFromText('POLYGON((0 0, 10 0, 10 10, 0 10, 0 0))'),
+    ST_GeomFromText('MULTIPOINT((0 0), (1 1), (2 2))'),
+    ST_GeomFromText('MULTILINESTRING((0 0, 1 1), (2 2, 3 3))'),
+    ST_GeomFromText('MULTIPOLYGON(((0 0, 10 0, 10 10, 0 10, 0 0)), ((20 20, 30 20, 30 30, 20 30, 20 20)))'),
+    ST_GeomFromText('GEOMETRYCOLLECTION(POINT(0 0), LINESTRING(0 0, 1 1))')
+);
+INSERT INTO test_db_1.spatial_table VALUES (2, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL);
+INSERT INTO test_db_1.spatial_table VALUES (
+    3,
+    ST_GeomFromText('LINESTRING(-1.5 -1.5, 0 0, 3.25 4.75)'),
+    ST_GeomFromText('POINT(-73.9857 40.7484)'),
+    ST_GeomFromText('LINESTRING(-10 -10, -5 0, 0 5, 10 10)'),
+    ST_GeomFromText('POLYGON((-5 -5, 5 -5, 5 5, -5 5, -5 -5))'),
+    ST_GeomFromText('MULTIPOINT((-1 -1), (0 0), (1 1))'),
+    ST_GeomFromText('MULTILINESTRING((-1 -1, 0 0), (10 10, 20 20, 30 30))'),
+    ST_GeomFromText('MULTIPOLYGON(((-5 -5, 0 -5, 0 0, -5 0, -5 -5)), ((1 1, 4 1, 4 4, 1 4, 1 1)))'),
+    ST_GeomFromText('GEOMETRYCOLLECTION(POINT(-1 -1), POLYGON((0 0, 2 0, 2 2, 0 2, 0 0)))')
+);
+INSERT INTO test_db_1.spatial_table VALUES (
+    4,
+    ST_GeomFromText('POLYGON((100 100, 110 100, 110 110, 100 110, 100 100))'),
+    ST_GeomFromText('POINT(180 -90)'),
+    ST_GeomFromText('LINESTRING(100 100, 110 105, 120 100)'),
+    ST_GeomFromText('POLYGON((0 0, 8 0, 8 8, 0 8, 0 0), (2 2, 6 2, 6 6, 2 6, 2 2))'),
+    ST_GeomFromText('MULTIPOINT((10 10), (20 20), (30 30), (40 40))'),
+    ST_GeomFromText('MULTILINESTRING((0 0, 0 10), (10 0, 10 10), (20 0, 20 10))'),
+    ST_GeomFromText('MULTIPOLYGON(((0 0, 3 0, 3 3, 0 3, 0 0)), ((5 5, 9 5, 9 9, 5 9, 5 5)))'),
+    ST_GeomFromText('GEOMETRYCOLLECTION(MULTIPOINT((1 1), (2 2)), LINESTRING(3 3, 4 4))')
+);
+INSERT INTO test_db_1.spatial_table VALUES (
+    5,
+    ST_GeomFromText('POINT(9 9)'),
+    NULL,
+    ST_GeomFromText('LINESTRING(9 9, 10 10)'),
+    NULL,
+    ST_GeomFromText('MULTIPOINT((9 9), (10 10))'),
+    NULL,
+    ST_GeomFromText('MULTIPOLYGON(((9 9, 10 9, 10 10, 9 10, 9 9)))'),
+    NULL
+);
+
 -- ignore cols
 INSERT INTO test_db_1.ignore_cols_1 VALUES(1, 1, 1, 1),(2, 2, 2, 2);
 INSERT INTO test_db_1.ignore_cols_2 VALUES(1, 1, 1, 1),(2, 2, 2, 2);

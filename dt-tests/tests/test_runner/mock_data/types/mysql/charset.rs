@@ -29,11 +29,11 @@ impl MysqlCharAttrs {
     }
 
     pub fn normalize_value(&self, value: &str) -> String {
-        normalize_value(&self.collation, value)
+        normalize_char_value(&self.collation, value)
     }
 
     pub fn constant_values(&self) -> Vec<String> {
-        constant_values(&self.charset, &self.collation)
+        constant_char_values(&self.charset, &self.collation)
     }
 
     pub fn can_be_unique_key(&self) -> bool {
@@ -79,12 +79,25 @@ fn constant_values(charset: &str, collation: &str) -> Vec<String> {
         .collect()
 }
 
+fn constant_char_values(charset: &str, collation: &str) -> Vec<String> {
+    constant_values(charset, collation)
+        .into_iter()
+        .map(|value| value.trim_end_matches(' ').to_string())
+        .collect()
+}
+
 fn normalize_value(collation: &str, value: &str) -> String {
     if is_case_insensitive_collation(collation) {
         value.to_lowercase()
     } else {
         value.to_string()
     }
+}
+
+fn normalize_char_value(collation: &str, value: &str) -> String {
+    normalize_value(collation, value)
+        .trim_end_matches(' ')
+        .to_string()
 }
 
 fn supports_4_byte_unicode(charset: &str) -> bool {
@@ -120,5 +133,17 @@ mod tests {
         };
 
         assert_eq!(attrs.normalize_value("O'Neil"), "o'neil");
+    }
+
+    #[test]
+    fn test_char_values_trim_trailing_spaces() {
+        let attrs = MysqlCharAttrs {
+            length: 255,
+            charset: "utf8mb4".to_string(),
+            collation: "utf8mb4_0900_ai_ci".to_string(),
+        };
+
+        assert_eq!(attrs.normalize_value("a   "), "a");
+        assert_eq!(attrs.normalize_value(" \t"), " \t");
     }
 }

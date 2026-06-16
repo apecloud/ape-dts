@@ -88,6 +88,19 @@ CREATE TABLE struct_it_mysql2mysql_1.full_column_type_with_default (
     json_col JSON DEFAULT NULL COMMENT 'json_col_comment'
 ) DEFAULT CHARSET=utf8mb4;
 
+-- spatial column type
+CREATE TABLE struct_it_mysql2mysql_1.spatial_column_type (
+    id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    geometry_col GEOMETRY COMMENT 'geometry_col_comment',
+    point_col POINT COMMENT 'point_col_comment',
+    linestring_col LINESTRING COMMENT 'linestring_col_comment',
+    polygon_col POLYGON COMMENT 'polygon_col_comment',
+    multipoint_col MULTIPOINT COMMENT 'multipoint_col_comment',
+    multilinestring_col MULTILINESTRING COMMENT 'multilinestring_col_comment',
+    multipolygon_col MULTIPOLYGON COMMENT 'multipolygon_col_comment',
+    geometrycollection_col GEOMETRYCOLLECTION COMMENT 'geometrycollection_col_comment'
+);
+
 -- default value and comment
 CREATE TABLE struct_it_mysql2mysql_1.special_default_and_comment (
     id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,

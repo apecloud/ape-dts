@@ -656,7 +656,16 @@ impl RdbQueryBuilder<'_> {
                 };
                 extract_cols.push(extract_col);
             } else {
-                extract_cols.push(self.escape(col));
+                let col_type = self
+                    .mysql_tb_meta
+                    .context("mysql table meta missing when building mysql extract cols")?
+                    .get_col_type(col)?;
+                let extract_col = if col_type.is_spatial() {
+                    format!("ST_AsBinary({}) AS {}", self.escape(col), self.escape(col))
+                } else {
+                    self.escape(col)
+                };
+                extract_cols.push(extract_col);
             }
         }
         Ok(extract_cols.join(","))
@@ -793,6 +802,11 @@ impl RdbQueryBuilder<'_> {
     }
 
     fn get_mysql_sql_value(&self, col: &str, col_value: &ColValue) -> anyhow::Result<String> {
+        let mysql_meta = self
+            .mysql_tb_meta
+            .as_ref()
+            .context("mysql table meta missing while formatting mysql sql value")?;
+        let col_type = mysql_meta.get_col_type(col)?;
         let (value, is_hex_str) = match col_value {
             // varchar, char, tinytext, mediumtext, longtext, text
             ColValue::RawString(v) => SqlUtil::binary_to_str(v),
@@ -810,15 +824,14 @@ impl RdbQueryBuilder<'_> {
         };
 
         if is_hex_str {
+            if col_type.is_spatial() {
+                return Ok(format!("ST_GeomFromWKB(x'{}')", value));
+            }
             return Ok(format!("x'{}'", value));
         }
 
-        let mysql_meta = self
-            .mysql_tb_meta
-            .as_ref()
-            .context("mysql table meta missing while formatting mysql sql value")?;
-        let col_type = mysql_meta.get_col_type(col)?;
         let is_str = match col_type {
+            col_type if col_type.is_spatial() => false,
             MysqlColType::DateTime { .. }
             | MysqlColType::Time { .. }
             | MysqlColType::Date { .. }
@@ -856,6 +869,12 @@ impl RdbQueryBuilder<'_> {
                 &col_type.alias
             };
             return Ok(format!("${}::{}", index, col_type_name));
+        }
+
+        if let Some(tb_meta) = self.mysql_tb_meta {
+            if tb_meta.get_col_type(col)?.is_spatial() {
+                return Ok("ST_GeomFromWKB(?)".to_string());
+            }
         }
 
         Ok("?".to_string())

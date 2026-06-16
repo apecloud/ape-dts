@@ -440,6 +440,14 @@ impl FoxlakePusher {
             MysqlColType::Binary { .. }
             | MysqlColType::VarBinary { .. }
             | MysqlColType::Bit
+            | MysqlColType::Geometry
+            | MysqlColType::Point
+            | MysqlColType::LineString
+            | MysqlColType::Polygon
+            | MysqlColType::MultiPoint
+            | MysqlColType::MultiLineString
+            | MysqlColType::MultiPolygon
+            | MysqlColType::GeometryCollection
             | MysqlColType::TinyBlob
             | MysqlColType::MediumBlob
             | MysqlColType::LongBlob

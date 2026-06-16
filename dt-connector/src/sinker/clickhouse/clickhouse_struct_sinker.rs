@@ -221,6 +221,15 @@ impl ClickhouseStructSinker {
             | MysqlColType::Blob
             | MysqlColType::LongBlob => "String",
 
+            MysqlColType::Geometry
+            | MysqlColType::Point
+            | MysqlColType::LineString
+            | MysqlColType::Polygon
+            | MysqlColType::MultiPoint
+            | MysqlColType::MultiLineString
+            | MysqlColType::MultiPolygon
+            | MysqlColType::GeometryCollection => "String",
+
             MysqlColType::Bit => "UInt64",
             MysqlColType::Set { items: _ } => "String",
             MysqlColType::Enum { items: _ } => "String",

@@ -185,7 +185,16 @@ impl<'r> RdbSnapshotExtractStatement<'r> {
                 };
                 extract_cols.push(extract_col);
             } else {
-                extract_cols.push(self.escape(col));
+                let col_type = self
+                    .mysql_tb_meta
+                    .expect("mysql table meta missing when building mysql snapshot extract cols")
+                    .get_col_type(col)?;
+                let extract_col = if col_type.is_spatial() {
+                    format!("ST_AsBinary({}) AS {}", self.escape(col), self.escape(col))
+                } else {
+                    self.escape(col)
+                };
+                extract_cols.push(extract_col);
             }
         }
         Ok(extract_cols.join(","))

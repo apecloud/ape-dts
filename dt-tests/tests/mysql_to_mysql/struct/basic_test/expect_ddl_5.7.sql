@@ -89,6 +89,20 @@ CREATE TABLE `special_default_and_comment` (
   PRIMARY KEY (`id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8 COMMENT='中文注释''special_default_and_comment'''
 
+struct_it_mysql2mysql_1.spatial_column_type
+CREATE TABLE `spatial_column_type` (
+  `id` int(10) unsigned NOT NULL AUTO_INCREMENT,
+  `geometry_col` geometry DEFAULT NULL COMMENT 'geometry_col_comment',
+  `point_col` point DEFAULT NULL COMMENT 'point_col_comment',
+  `linestring_col` linestring DEFAULT NULL COMMENT 'linestring_col_comment',
+  `polygon_col` polygon DEFAULT NULL COMMENT 'polygon_col_comment',
+  `multipoint_col` multipoint DEFAULT NULL COMMENT 'multipoint_col_comment',
+  `multilinestring_col` multilinestring DEFAULT NULL COMMENT 'multilinestring_col_comment',
+  `multipolygon_col` multipolygon DEFAULT NULL COMMENT 'multipolygon_col_comment',
+  `geometrycollection_col` geomcollection DEFAULT NULL COMMENT 'geometrycollection_col_comment',
+  PRIMARY KEY (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8
+
 struct_it_mysql2mysql_1.full_index_type
 CREATE TABLE `full_index_type` (
   `id` int(10) unsigned NOT NULL AUTO_INCREMENT,

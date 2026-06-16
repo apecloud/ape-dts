@@ -37,6 +37,19 @@ CREATE TABLE test_db_1.set_table( f_0 tinyint,
     f_1 SET('a','b','c','d','e'),
     PRIMARY KEY(f_0));
 
+CREATE TABLE test_db_1.spatial_table (
+    id int,
+    geometry_col GEOMETRY,
+    point_col POINT,
+    linestring_col LINESTRING,
+    polygon_col POLYGON,
+    multipoint_col MULTIPOINT,
+    multilinestring_col MULTILINESTRING,
+    multipolygon_col MULTIPOLYGON,
+    geometrycollection_col GEOMETRYCOLLECTION,
+    PRIMARY KEY(id)
+);
+
 CREATE TABLE test_db_1.ignore_cols_1 ( f_0 tinyint, f_1 smallint DEFAULT NULL, f_2 smallint DEFAULT NULL, f_3 smallint DEFAULT NULL, PRIMARY KEY (f_0) ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4; 
 CREATE TABLE test_db_1.ignore_cols_2 ( f_0 tinyint, f_1 smallint DEFAULT NULL, f_2 smallint DEFAULT NULL, f_3 smallint DEFAULT NULL, PRIMARY KEY (f_0) ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4; 
 

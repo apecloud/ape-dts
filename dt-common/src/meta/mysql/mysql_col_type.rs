@@ -89,6 +89,14 @@ pub enum MysqlColType {
     Enum {
         items: Vec<String>,
     },
+    Geometry,
+    Point,
+    LineString,
+    Polygon,
+    MultiPoint,
+    MultiLineString,
+    MultiPolygon,
+    GeometryCollection,
     Json,
 }
 
@@ -113,6 +121,20 @@ impl MysqlColType {
                 | Self::MediumText { .. }
                 | Self::Text { .. }
                 | Self::LongText { .. }
+        )
+    }
+
+    pub fn is_spatial(&self) -> bool {
+        matches!(
+            self,
+            Self::Geometry
+                | Self::Point
+                | Self::LineString
+                | Self::Polygon
+                | Self::MultiPoint
+                | Self::MultiLineString
+                | Self::MultiPolygon
+                | Self::GeometryCollection
         )
     }
 
