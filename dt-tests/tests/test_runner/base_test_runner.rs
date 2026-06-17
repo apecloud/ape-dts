@@ -308,14 +308,31 @@ impl BaseTestRunner {
     }
 
     fn extract_dollar_tag(line: &str) -> Option<String> {
-        let mut start = None;
-        for (idx, ch) in line.char_indices() {
-            if ch == '$' {
-                if let Some(s) = start {
-                    return Some(line[s..=idx].to_string());
-                }
-                start = Some(idx);
+        let bytes = line.as_bytes();
+        let mut idx = 0;
+        while idx < bytes.len() {
+            if bytes[idx] != b'$' {
+                idx += 1;
+                continue;
             }
+
+            if idx + 1 < bytes.len() && bytes[idx + 1] == b'$' {
+                return Some("$$".to_string());
+            }
+
+            let tag_start = idx + 1;
+            let mut tag_end = tag_start;
+            while tag_end < bytes.len()
+                && (bytes[tag_end].is_ascii_alphanumeric() || bytes[tag_end] == b'_')
+            {
+                tag_end += 1;
+            }
+
+            if tag_end > tag_start && tag_end < bytes.len() && bytes[tag_end] == b'$' {
+                return Some(line[idx..=tag_end].to_string());
+            }
+
+            idx += 1;
         }
         None
     }

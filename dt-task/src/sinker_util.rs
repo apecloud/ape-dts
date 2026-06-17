@@ -92,6 +92,7 @@ impl SinkerUtil {
         _monitor_task_id: String,
         data_marker: Option<Arc<RwLock<DataMarker>>>,
         checker: Option<DataCheckerHandle>,
+        is_snapshot_task: bool,
     ) -> anyhow::Result<Sinkers> {
         let log_level = &config.runtime.log_level;
         let enable_sqlx_log = TaskUtil::check_enable_sqlx_log(log_level);
@@ -184,7 +185,8 @@ impl SinkerUtil {
                         bail!("connection pool not found");
                     }
                 };
-                let target_shard_collections = list_shard_collections(&mongo_client).await?;
+                let (is_target_mongos, target_shard_collections) =
+                    list_shard_collections(&mongo_client).await?;
                 for _ in 0..parallel_size {
                     let sinker = MongoSinker {
                         batch_size,
@@ -193,6 +195,8 @@ impl SinkerUtil {
                         base_sinker: BaseSinker::new(monitor.clone(), monitor_interval),
                         target_shard_collections: target_shard_collections.clone(),
                         require_shard_key_filter,
+                        is_disable_ddl: is_snapshot_task && !is_target_mongos,
+                        is_target_mongos,
                     };
                     Self::push_checkable_sinker(&mut sub_sinkers, sinker, &checker);
                 }

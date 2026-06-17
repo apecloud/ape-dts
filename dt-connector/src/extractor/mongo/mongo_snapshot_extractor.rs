@@ -111,7 +111,7 @@ impl MongoSnapshotExtractor {
     }
 
     async fn prepare_mongo_sharding(&mut self) -> anyhow::Result<()> {
-        let source_shard_collections = list_shard_collections(&self.mongo_client).await?;
+        let (_, source_shard_collections) = list_shard_collections(&self.mongo_client).await?;
         if source_shard_collections.is_empty() {
             return Ok(());
         }

@@ -585,6 +585,7 @@ impl TaskRunner {
                 CheckerHandle::Data(handle) => Some(handle.clone()),
                 CheckerHandle::Struct(_) => None,
             }),
+            is_snapshot_task,
         )
         .await?;
 

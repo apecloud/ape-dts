@@ -449,6 +449,8 @@ impl MongoTestRunner {
             self.execute_insert(client, db, sql).await?;
         } else if sql.contains(".update") {
             self.execute_update(client, db, sql).await?;
+        } else if sql.contains(".replace") {
+            self.execute_replace(client, db, sql).await?;
         } else if sql.contains(".delete") {
             self.execute_delete(client, db, sql).await?;
         }
@@ -462,7 +464,7 @@ impl MongoTestRunner {
     }
 
     async fn execute_drop(&self, client: &Client, db: &str, sql: &str) -> anyhow::Result<()> {
-        let re = Regex::new(r"db.(\w+).drop()").unwrap();
+        let re = Regex::new(r"db\.(\w+)\.drop\(\)").unwrap();
         let cap = re.captures(sql).unwrap();
         let tb = cap.get(1).unwrap().as_str();
 
@@ -503,7 +505,7 @@ impl MongoTestRunner {
         db: &str,
         sql: &str,
     ) -> anyhow::Result<()> {
-        let re = Regex::new(r"db.(\w+).createIndex\(([\w\W]+)\)").unwrap();
+        let re = Regex::new(r"db\.(\w+)\.createIndex\(([\w\W]+)\)").unwrap();
         let cap = re.captures(sql).unwrap();
         let tb = cap.get(1).unwrap().as_str();
         let args = Self::split_top_level_args(cap.get(2).unwrap().as_str());
@@ -539,7 +541,7 @@ impl MongoTestRunner {
     }
 
     async fn execute_drop_index(&self, client: &Client, db: &str, sql: &str) -> anyhow::Result<()> {
-        let re = Regex::new(r#"db.(\w+).dropIndex\("([^"]+)"\)"#).unwrap();
+        let re = Regex::new(r#"db\.(\w+)\.dropIndex\("([^"]+)"\)"#).unwrap();
         let cap = re.captures(sql).unwrap();
         let tb = cap.get(1).unwrap().as_str();
         let index = cap.get(2).unwrap().as_str();
@@ -558,7 +560,7 @@ impl MongoTestRunner {
         db: &str,
         sql: &str,
     ) -> anyhow::Result<()> {
-        let re = Regex::new(r#"db.(\w+).renameCollection\("(\w+)"\)"#).unwrap();
+        let re = Regex::new(r#"db\.(\w+)\.renameCollection\("(\w+)"\)"#).unwrap();
         let cap = re.captures(sql).unwrap();
         let from = cap.get(1).unwrap().as_str();
         let to = cap.get(2).unwrap().as_str();
@@ -587,18 +589,27 @@ impl MongoTestRunner {
 
     async fn execute_insert(&self, client: &Client, db: &str, sql: &str) -> anyhow::Result<()> {
         // example: db.tb_2.insertOne({ "name": "a", "age": "1" })
-        let re = Regex::new(r"db.(\w+).insert(One|Many)\(([\w\W]+)\)").unwrap();
+        let re = Regex::new(r"db\.(\w+)\.insert(One|Many)").unwrap();
         let cap = re.captures(sql).unwrap();
         let tb = cap.get(1).unwrap().as_str();
-        let doc_content = Self::normalize_doc_string(cap.get(3).unwrap().as_str());
+        let is_insert_one = sql.contains(".insertOne(");
+        let is_insert_many = sql.contains(".insertMany(");
+        let args_start = sql.find('(').unwrap();
+        let args_end = sql.rfind(')').unwrap();
+        let args = &sql[args_start + 1..args_end];
+        let args = Self::split_top_level_args(args);
+        let doc_content = Self::normalize_doc_string(&args.first().cloned().unwrap_or_default());
 
         let coll = client.database(db).collection::<Document>(tb);
         let json_value: Value = serde_json::from_str(&doc_content).unwrap();
         let parsed = Self::convert_extended_json(Bson::try_from(json_value).unwrap());
-        if sql.contains("insertOne") {
+        if is_insert_one && !is_insert_many {
             let doc = match parsed {
                 Bson::Document(doc) => doc,
-                other => panic!("expected document for insertOne, got {:?}", other),
+                other => panic!(
+                    "expected document for insertOne, got {:?}, sql: {}",
+                    other, sql
+                ),
             };
             coll.insert_one(doc).await.unwrap();
         } else {
@@ -610,7 +621,10 @@ impl MongoTestRunner {
                         other => panic!("expected document inside array, got {:?}", other),
                     })
                     .collect::<Vec<Document>>(),
-                other => panic!("expected array for insertMany, got {:?}", other),
+                other => panic!(
+                    "expected array for insertMany, got {:?}, sql: {}",
+                    other, sql
+                ),
             };
             coll.insert_many(docs).await.unwrap();
         }
@@ -618,7 +632,7 @@ impl MongoTestRunner {
     }
 
     async fn execute_delete(&self, client: &Client, db: &str, sql: &str) -> anyhow::Result<()> {
-        let re = Regex::new(r"db.(\w+).delete(One|Many)\(([\w\W]+)\)").unwrap();
+        let re = Regex::new(r"db\.(\w+)\.delete(One|Many)\(([\w\W]+)\)").unwrap();
         let cap = re.captures(sql).unwrap();
         let tb = cap.get(1).unwrap().as_str();
         let doc = cap.get(3).unwrap().as_str();
@@ -639,7 +653,7 @@ impl MongoTestRunner {
     }
 
     async fn execute_update(&self, client: &Client, db: &str, sql: &str) -> anyhow::Result<()> {
-        let re = Regex::new(r"db.(\w+).update(One|Many)").unwrap();
+        let re = Regex::new(r"db\.(\w+)\.update(One|Many)").unwrap();
         let cap = match re.captures(sql) {
             Some(cap) => cap,
             None => return Ok(()),
@@ -669,6 +683,39 @@ impl MongoTestRunner {
         } else {
             coll.update_many(query_doc, update_doc).await.unwrap();
         }
+        Ok(())
+    }
+
+    async fn execute_replace(&self, client: &Client, db: &str, sql: &str) -> anyhow::Result<()> {
+        let re = Regex::new(r"db\.(\w+)\.replaceOne").unwrap();
+        let cap = match re.captures(sql) {
+            Some(cap) => cap,
+            None => return Ok(()),
+        };
+        let tb = cap.get(1).unwrap().as_str();
+        let args_start = sql.find('(').unwrap();
+        let args_end = sql.rfind(')').unwrap();
+        let args = &sql[args_start + 1..args_end];
+        let args = Self::split_top_level_args(args);
+        let query_doc = args.first().cloned().unwrap_or_default();
+        let replacement_doc = args.get(1).cloned().unwrap_or_default();
+        let normalized_query = Self::normalize_doc_string(&query_doc);
+        let normalized_replacement = Self::normalize_doc_string(&replacement_doc);
+        let json_query: Value = serde_json::from_str(&normalized_query).unwrap();
+        let json_replacement: Value = serde_json::from_str(&normalized_replacement).unwrap();
+        let parsed_query = Self::convert_extended_json(Bson::try_from(json_query).unwrap());
+        let parsed_replacement =
+            Self::convert_extended_json(Bson::try_from(json_replacement).unwrap());
+        let query_doc = match parsed_query {
+            Bson::Document(doc) => doc,
+            other => panic!("expected document for replace query, got {:?}", other),
+        };
+        let replacement_doc = match parsed_replacement {
+            Bson::Document(doc) => doc,
+            other => panic!("expected document for replace replacement, got {:?}", other),
+        };
+        let coll = client.database(db).collection::<Document>(tb);
+        coll.replace_one(query_doc, replacement_doc).await.unwrap();
         Ok(())
     }
 
@@ -790,9 +837,44 @@ impl MongoTestRunner {
 
         let renamed_data = self.fetch_data("ddl_db", "renamed_coll", DST).await;
         assert_eq!(renamed_data.len(), 1);
+        let renamed_doc = renamed_data
+            .values()
+            .find(|doc| doc.get_str(MongoConstants::ID).ok() == Some("renamed_doc"))
+            .expect("renamed_doc should exist");
+        assert_eq!(
+            renamed_doc.get_str("name").unwrap(),
+            "replaced_after_rename"
+        );
+        assert_eq!(
+            renamed_doc
+                .get_document("profile")
+                .unwrap()
+                .get_str("state")
+                .unwrap(),
+            "replaced_after_rename"
+        );
 
         let created_data = self.fetch_data("ddl_db", "created_coll", DST).await;
-        assert_eq!(created_data.len(), 1);
+        assert_eq!(created_data.len(), 2);
+        let created_doc = created_data
+            .values()
+            .find(|doc| doc.get_str(MongoConstants::ID).ok() == Some("created_doc"))
+            .expect("created_doc should exist");
+        assert_eq!(
+            created_doc
+                .get_document("profile")
+                .unwrap()
+                .get_str("state")
+                .unwrap(),
+            "updated_after_create"
+        );
+        assert_eq!(
+            created_doc.get_array("attrs").unwrap(),
+            &vec![
+                Bson::String("seed".to_string()),
+                Bson::String("after_update".to_string())
+            ]
+        );
 
         assert!(dst
             .database("ddl_drop_db")
@@ -837,13 +919,13 @@ impl MongoTestRunner {
         let mut update_sqls = Vec::new();
         let mut delete_sqls = Vec::new();
         for sql in sqls.iter() {
-            if sql.contains("insert") {
+            if sql.contains(".insert") {
                 insert_sqls.push(sql.clone());
             }
-            if sql.contains("update") {
+            if sql.contains(".update") || sql.contains(".replace") {
                 update_sqls.push(sql.clone());
             }
-            if sql.contains("delete") {
+            if sql.contains(".delete") {
                 delete_sqls.push(sql.clone());
             }
         }

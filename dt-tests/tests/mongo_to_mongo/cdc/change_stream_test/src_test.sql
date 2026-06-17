@@ -10,6 +10,10 @@ db.tb_1.insertOne({ "name": "e", "age": "5" });
 db.tb_2.insertOne({ "name": "a", "age": "1" });
 db.tb_2.insertOne({ "name": "b", "age": "2" });
 db.tb_2.insertOne({ "name": "c", "age": "3", "profile": { "level": "silver" }, "attrs": ["seed"] });
+db.tb_2.insertOne({ "_id": "full_document_doc", "name": "full_document", "profile": { "state": "new", "score": 1 }, "attrs": ["v1"], "history": [{ "step": 1, "state": "new" }] });
+db.tb_2.insertOne({ "_id": "replace_doc", "name": "before_replace", "profile": { "state": "old" }, "attrs": ["old"] });
+db.tb_2.insertOne({ "_id": "full_document_complex_doc", "name": "full_document_complex", "age": "30", "profile": { "state": "new", "score": 1, "nested": { "level": "bronze", "flags": ["seed"] } }, "attrs": ["seed", { "key": "source", "enabled": true }], "history": [{ "step": 0, "state": "inserted" }], "counters": { "seen": 0 }, "active": true });
+db.tb_2.insertOne({ "_id": "cs_marker", "name": "cs_marker", "age": "90", "payload": { "before_remove": true, "items": [1, 2, 3] } });
 db.tb_2.insertOne({ "name": "d", "age": "4" });
 db.tb_2.insertOne({ "name": "e", "age": "5" });
 
@@ -40,6 +44,13 @@ db.tb_2.updateOne({ "age" : "3" }, { "$set": { "name" : "c_1", "city" : "hangzho
 db.tb_2.updateOne({ "age" : "3" }, { "$set": { "profile.level" : "gold", "profile.status" : "active" } });
 db.tb_2.updateOne({ "age" : "3" }, { "$push": { "attrs" : "change_stream" } });
 db.tb_2.updateOne({ "age" : "3" }, { "$set": { "attrs.0" : "seed_updated" } });
+db.tb_2.updateOne({ "_id" : "full_document_doc" }, { "$set": { "profile.state" : "updated", "profile.score" : 2 }, "$push": { "attrs" : "v2", "history" : { "step": 2, "state": "updated" } } });
+db.tb_2.updateOne({ "_id" : "full_document_doc" }, { "$set": { "attrs.0" : "v1_updated", "history.0.state" : "updated_seed" } });
+db.tb_2.replaceOne({ "_id" : "replace_doc" }, { "_id": "replace_doc", "name": "after_replace", "profile": { "state": "replaced", "score": 9 }, "attrs": ["replaced"] });
+db.tb_2.updateOne({ "_id" : "full_document_complex_doc" }, { "$set": { "profile": { "state": "updated", "score": 2, "nested": { "level": "gold", "flags": ["updated", "lookup"] } }, "attrs": ["seed_updated", { "key": "source", "enabled": false }, ["nested_array"]], "history.0.state": "updated_nested" } });
+db.tb_2.updateOne({ "_id" : "full_document_complex_doc" }, { "$inc": { "counters.seen": 1 } });
+db.tb_2.updateOne({ "_id" : "full_document_complex_doc" }, { "$set": { "profile.nested.level": "platinum", "active": false }, "$push": { "history": { "step": 1, "state": "updated_again" } } });
+db.tb_2.replaceOne({ "_id" : "full_document_complex_doc" }, { "_id": "full_document_complex_doc", "name": "full_document_complex_replaced", "age": "31", "profile": { "state": "replaced", "score": 4, "nested": { "level": "diamond", "flags": ["replace_one"] } }, "attrs": ["replace_final", { "rank": 1 }], "history": [{ "step": 2, "state": "replaced" }], "counters": { "seen": 3 }, "active": false, "final_state": "replace_one" });
 
 db.id_types_tb.updateOne({ "_id": ObjectId("648195af9aa9cadd41a9dca1") }, { "$set": { "status": "updated_object_id" } });
 db.id_types_tb.updateOne({ "_id": ObjectId("648195af9aa9cadd41a9dca1") }, { "$set": { "status": "updated_object_id_again", "version": 2 } });
@@ -69,6 +80,7 @@ db.tb_1.deleteOne({ "name": "b", "age": "2" });
 
 db.tb_2.deleteOne({ "name": "d", "age": "4" });
 db.tb_2.deleteOne({ "name": "e", "age": "5" });
+db.tb_2.deleteOne({ "_id": "cs_marker" });
 
 db.id_types_tb.deleteOne({ "_id": false });
 db.id_types_tb.deleteOne({ "_id": { "$numberLong": "64" } });

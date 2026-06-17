@@ -40,9 +40,9 @@ pub async fn is_mongos(client: &Client) -> anyhow::Result<bool> {
 
 pub async fn list_shard_collections(
     client: &Client,
-) -> anyhow::Result<HashMap<String, MongoShardCollection>> {
+) -> anyhow::Result<(bool, HashMap<String, MongoShardCollection>)> {
     if !is_mongos(client).await? {
-        return Ok(HashMap::new());
+        return Ok((false, HashMap::new()));
     }
 
     let collection = client
@@ -71,12 +71,13 @@ pub async fn list_shard_collections(
             },
         );
     }
-    Ok(result)
+    Ok((true, result))
 }
 
 pub async fn get_shard_collection(
     client: &Client,
     ns: &str,
 ) -> anyhow::Result<Option<MongoShardCollection>> {
-    Ok(list_shard_collections(client).await?.remove(ns))
+    let (_, mut shard_collections) = list_shard_collections(client).await?;
+    Ok(shard_collections.remove(ns))
 }

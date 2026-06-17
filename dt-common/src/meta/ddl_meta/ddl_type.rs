@@ -62,3 +62,14 @@ impl Default for DdlType {
         Self::Unknown
     }
 }
+
+impl DdlType {
+    pub fn is_mongo_shard_ddl(&self) -> bool {
+        matches!(
+            self,
+            DdlType::MongoShardCollection
+                | DdlType::MongoReshardCollection
+                | DdlType::MongoRefineCollectionShardKey
+        )
+    }
+}

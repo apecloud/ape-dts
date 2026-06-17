@@ -8,6 +8,12 @@ use std::{
 
 use async_trait::async_trait;
 use chrono::Utc;
+use mongodb::{
+    bson::{doc, Bson, Document, Timestamp},
+    change_stream::event::ResumeToken,
+    options::{FullDocumentBeforeChangeType, FullDocumentType},
+    Client,
+};
 use serde_json::json;
 use tokio::{sync::Mutex, time::Instant};
 
@@ -40,12 +46,6 @@ use dt_common::{
     rdb_filter::RdbFilter,
     system_dbs::SystemDb,
     utils::time_util::TimeUtil,
-};
-use mongodb::{
-    bson::{doc, Bson, Document, Timestamp},
-    change_stream::event::ResumeToken,
-    options::{FullDocumentBeforeChangeType, FullDocumentType},
-    Client,
 };
 
 pub struct MongoCdcExtractor {
@@ -495,11 +495,10 @@ impl MongoCdcExtractor {
         if enable_change_stream_ddl {
             watch = watch.show_expanded_events(true);
         }
-        if let Some(start_timestamp) = start_timestamp {
-            watch = watch.start_at_operation_time(start_timestamp);
-        }
         if let Some(resume_token) = resume_token {
             watch = watch.start_after(resume_token);
+        } else if let Some(start_time) = start_timestamp {
+            watch = watch.start_at_operation_time(start_time);
         }
         let mut change_stream = watch.await?.with_type::<Document>();
 
@@ -579,6 +578,12 @@ impl MongoCdcExtractor {
                         Self::insert_id_from_doc(&mut after, &document_key);
                         Self::insert_document_key(&mut after, &document_key);
                         Self::insert_id_from_doc(&mut after, &document);
+                        if let Ok(pre_image) = event.get_document("fullDocumentBeforeChange") {
+                            before.insert(
+                                MongoConstants::PRE_IMAGE.to_string(),
+                                ColValue::MongoDoc(pre_image.clone()),
+                            );
+                        }
                         before.insert(
                             MongoConstants::DOC.to_string(),
                             ColValue::MongoDoc(document_key),

@@ -51,6 +51,12 @@ impl MongoMerger {
         let mut iter = data.into_iter();
 
         while let Some(row_data) = iter.next() {
+            if row_data.row_type == RowType::Update {
+                unmerged_rows.push(row_data);
+                unmerged_rows.extend(iter);
+                break;
+            }
+
             let Some(id) = Self::get_hash_key(&row_data) else {
                 unmerged_rows.push(row_data);
                 unmerged_rows.extend(iter);
@@ -68,20 +74,9 @@ impl MongoMerger {
                 continue;
             }
 
-            let schema = row_data.schema;
-            let tb = row_data.tb;
-            let delete_row = RowData::new(
-                schema.clone(),
-                tb.clone(),
-                0,
-                RowType::Delete,
-                row_data.before,
-                None,
-            );
-            delete_map.insert(id.clone(), delete_row);
-
-            let insert_row = RowData::new(schema, tb, 0, RowType::Insert, None, row_data.after);
-            insert_map.insert(id, insert_row);
+            unmerged_rows.push(row_data);
+            unmerged_rows.extend(iter);
+            break;
         }
 
         let inserts = insert_map.drain().map(|i| i.1).collect::<Vec<_>>();
@@ -114,17 +109,7 @@ impl MongoMerger {
             }
 
             RowType::Update => {
-                if let (Ok(before), Ok(after)) =
-                    (row_data.require_before(), row_data.require_after())
-                {
-                    // for Update row_data from oplog (NOT change stream), after contains diff_doc instead of doc,
-                    // in which case we can NOT transfer Update into Delete + Insert
-                    if after.get(MongoConstants::DOC).is_none() {
-                        return None;
-                    } else {
-                        return key_from_fields(before);
-                    }
-                }
+                return None;
             }
         }
         None
