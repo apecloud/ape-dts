@@ -22,17 +22,16 @@ impl<'q> SqlxPgExt<'q> for Query<'q, Postgres, PgArguments> {
                 return bind_pg_null(self, col_type);
             }
 
+            if col_type.alias == "oid" {
+                return self.bind(Oid(as_u32(value)));
+            }
+
             match col_type.value_type {
                 // used for sinking data from kafka and etc source, where the value type is determined by the column type in pg.
                 PgValueType::Boolean => return self.bind(as_bool(value)),
                 PgValueType::Int16 => return self.bind(as_i16(value)),
                 PgValueType::Int32 => return self.bind(as_i32(value)),
-                PgValueType::Int64 => {
-                    if col_type.alias == "oid" {
-                        return self.bind(Oid(as_u32(value)));
-                    }
-                    return self.bind(as_i64(value));
-                }
+                PgValueType::Int64 => return self.bind(as_i64(value)),
                 PgValueType::Float32 => return self.bind(as_f32(value)),
                 PgValueType::Float64 => return self.bind(as_f64(value)),
                 _ => {}
@@ -77,10 +76,10 @@ fn bind_pg_null<'q>(
     col_type: &PgColType,
 ) -> Query<'q, Postgres, PgArguments> {
     match col_type.value_type {
+        _ if col_type.alias == "oid" => query.bind(Option::<Oid>::None),
         PgValueType::Boolean => query.bind(Option::<bool>::None),
         PgValueType::Int16 => query.bind(Option::<i16>::None),
         PgValueType::Int32 => query.bind(Option::<i32>::None),
-        PgValueType::Int64 if col_type.alias == "oid" => query.bind(Option::<Oid>::None),
         PgValueType::Int64 => query.bind(Option::<i64>::None),
         PgValueType::Float32 => query.bind(Option::<f32>::None),
         PgValueType::Float64 => query.bind(Option::<f64>::None),

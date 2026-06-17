@@ -190,7 +190,7 @@ impl<'r> RdbSnapshotExtractStatement<'r> {
                     .expect("mysql table meta missing when building mysql snapshot extract cols")
                     .get_col_type(col)?;
                 let extract_col = if col_type.is_spatial() {
-                    format!("ST_AsBinary({}) AS {}", self.escape(col), self.escape(col))
+                    SqlUtil::mysql_spatial_as_wkb_expr(&self.escape(col), &self.escape(col))
                 } else {
                     self.escape(col)
                 };

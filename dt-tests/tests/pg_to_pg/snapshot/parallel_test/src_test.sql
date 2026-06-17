@@ -64,7 +64,19 @@ INSERT INTO test_db_2.tb_char VALUES
 (19,'c0000000-0000-0000-0000-000000000000',19), (20,'d0000000-0000-0000-0000-000000000000',20),
 (21,'e0000000-0000-0000-0000-000000000000',21);
 
--- 5. DateTime
+-- 5. OID Primary Key
+INSERT INTO test_db_2.tb_oid_pk VALUES
+(1,1::oid,1),(2,2::oid,2),(3,3::oid,3),(7,7::oid,7),(9,9::oid,9),(10,10::oid,10),
+(11,11::oid,11),(12,12::oid,12),(14,14::oid,14),(16,16::oid,16),(17,17::oid,17),
+(18,18::oid,18),(19,19::oid,19),(20,2147483648::oid,2147483648),(21,4294967295::oid,4294967295);
+
+-- 6. OID Unique Key
+INSERT INTO test_db_2.tb_oid_uk VALUES
+(1,1::oid,1),(2,2::oid,2),(3,3::oid,3),(7,7::oid,7),(9,9::oid,9),(10,10::oid,10),
+(11,11::oid,11),(12,12::oid,12),(14,14::oid,14),(16,16::oid,16),(17,17::oid,17),
+(18,18::oid,18),(19,19::oid,19),(100,NULL,100),(200,NULL,200),(300,2147483648::oid,2147483648);
+
+-- 7. DateTime
 INSERT INTO test_db_2.tb_datetime VALUES 
 (1,'2023-01-01 00:00:00.000',1), (2,'2023-01-01 00:00:00.001',2), 
 (3,'2023-12-31 23:59:59.999',3), (4,'2024-02-29 12:00:00.000',4), (5,NULL,5),
@@ -77,7 +89,7 @@ INSERT INTO test_db_2.tb_datetime VALUES
 (18,'2023-05-15 00:00:00',18), (19,'2023-06-15 00:00:00',19),
 (20,'2023-07-15 00:00:00',20), (21,'2023-08-15 00:00:00',21);
 
--- 6. Composite Key
+-- 8. Composite Key
 INSERT INTO test_db_2.tb_composite VALUES 
 (1,100,'admin',1), (2,100,'guest',2), (3,101,'admin',3), (4,102,'a',4), (5,102,'b',5),
 (6,103,'user1',6), (7,103,'user2',7), (8,103,'user3',8), (9,104,'test',9),
@@ -85,7 +97,7 @@ INSERT INTO test_db_2.tb_composite VALUES
 (14,101,'user_01',14), (15,200,'admin',15), (16,200,'guest',16), (17,300,'a',17),
 (18,300,'b',18), (19,300,'c',19), (20,400,'z',20), (21,500,'y',21);
 
--- 7. TinyInt (SmallInt)
+-- 9. TinyInt (SmallInt)
 INSERT INTO test_db_2.tb_tinyint VALUES 
 (1,-128,'min_val'), (2,-127,'min_p1'), (3,-100,'neg_100'), (4,-50,'neg_50'), 
 (5,-1,'neg_1'), (6,0,'zero'), (7,1,'pos_1'), (8,50,'pos_50'), (9,100,'pos_100'), 
@@ -93,7 +105,7 @@ INSERT INTO test_db_2.tb_tinyint VALUES
 (14,10,'pos_10'), (15,20,'pos_20'), (16,30,'pos_30'), (17,40,'pos_40'),
 (18,60,'pos_60'), (19,70,'pos_70'), (20,-70,'neg_70'), (21,-60,'neg_60');
 
--- 8. BigInt Unsigned (Numeric)
+-- 10. BigInt Unsigned (Numeric)
 INSERT INTO test_db_2.tb_bigint_unsigned VALUES 
 (1,0,'min_val'), (2,1,'one'), (3,100,'hundred'), (4,100000,'large'), 
 (5,4294967295,'max_int32'), (6,4294967296,'over_int32'), (7,18446744073709551615,'max_u64'),
@@ -103,7 +115,7 @@ INSERT INTO test_db_2.tb_bigint_unsigned VALUES
 (19,9000000000000000000,'huge_1'), (20,9100000000000000000,'huge_2'), 
 (21,50,'tiny');
 
--- 9. Decimal & Float
+-- 11. Decimal & Float
 INSERT INTO test_db_2.tb_decimal VALUES 
 (1,-99999.99,'min'), (2,-100.50,'neg_f'), (3,0.00,'zero'), (4,0.01,'small'),
 (5,1.00,'one'), (6,3.14,'pi'), (7,100.00,'hundred'), (8,12345.67,'random'),
@@ -112,7 +124,7 @@ INSERT INTO test_db_2.tb_decimal VALUES
 (17,100.01,'over_100'), (18,1000.00,'1k'), (19,2000.00,'2k'), (20,5000.55,'5k_f'),
 (21,1.11,'rep_1');
 
--- 10. Date
+-- 12. Date
 INSERT INTO test_db_2.tb_date VALUES 
 (1,'1000-01-01','min'), (2,'1970-01-01','epoch'), (3,'2000-01-01','y2k'),
 (4,'2020-02-29','leap'), (5,'9999-12-31','max'), (6,NULL,'null'),
@@ -122,7 +134,7 @@ INSERT INTO test_db_2.tb_date VALUES
 (16,'1980-01-01','past_2'), (17,'1990-01-01','past_3'), (18,'2023-02-01','feb'),
 (19,'2023-03-01','mar'), (20,'2023-04-01','apr'), (21,'2023-05-01','may');
 
--- 11. VarBinary (Bytea)
+-- 13. VarBinary (Bytea)
 -- Converted 0x... to '\x...' and strings to hex bytea representation
 -- INSERT INTO test_db_2.tb_varbinary VALUES 
 -- (1,'\x00','null_byte'), (2,'\x01','one'), (3,'\x41','A_hex41'), (4,'\x61','a_hex61'),
@@ -132,7 +144,7 @@ INSERT INTO test_db_2.tb_date VALUES
 -- (18,'\x1234','multi_1'), (19,'\x5678','multi_2'), (20,'\x9ABC','multi_3'), 
 -- (21,'\xFFFF','max_2byte');
 
--- 12. Varchar Primary Key
+-- 14. Varchar Primary Key
 INSERT INTO test_db_2.tb_varchar_pk VALUES 
 (1,'',0), (2,' ',0), (3,'-',0), (4,'0',0), (5,'1',1), (6,'10',10), (7,'100',100),
 (8,'2',2), (9,'A',65), (10,'a',97), (11,'AA',6565), (12,'B',66), 
@@ -140,7 +152,7 @@ INSERT INTO test_db_2.tb_varchar_pk VALUES
 (16,'User_1',999), (17,'User_2',888), (18,'你好',1000), (19,'测试',1001), 
 (20,'🌟',9999), (21,'🔥',9998), (22,'zzzz',99), (23,'~~~~',126);
 
--- 13. Text with Prefix Index
+-- 15. Text with Prefix Index
 INSERT INTO test_db_2.tb_text_pk VALUES 
 (1,'a',1), (2,'ab',2), (3,'abc',3), (4,REPEAT('a',60),4), (5,REPEAT('a',63),5), 
 (6,CONCAT(REPEAT('a',63),'X'),6), (7,CONCAT(REPEAT('a',63),'Y'),7), 
@@ -150,7 +162,7 @@ INSERT INTO test_db_2.tb_text_pk VALUES
 (18,'100',100), (19,'200',200), (20,'unique_prefix_1',300), 
 (21,'unique_prefix_2',301), (22,NULL,NULL);
 
--- 14. Blob with Prefix Index (Bytea)
+-- 16. Blob with Prefix Index (Bytea)
 -- Converted _binary literals to '\x...' style
 -- INSERT INTO test_db_2.tb_blob_pk VALUES 
 -- (1,'\x',0), (2,'\x61',97), (3,'\x41',65), (4,'\x6162',2), (5,'\x6163',3), (6,'\x00',0), (7,'\x0000',0), 
@@ -162,7 +174,7 @@ INSERT INTO test_db_2.tb_text_pk VALUES
 -- (22,'\xAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA01',91),
 -- (23,NULL,NULL);
 
--- 15. Float/Double
+-- 17. Float/Double
 INSERT INTO test_db_2.tb_float VALUES 
 (1,-3.402823e38,'min_float'), (2,-1000.5,'neg_large'), (3,-1.5,'neg_small'), (4,'NaN','nan_val'),
 (5,0.0,'zero'), (6,0.000001,'tiny'), (7,1.5,'small'), (8,3.14159,'pi'),

@@ -54,7 +54,7 @@ pub struct RdbTestRunner {
     pub filter: RdbFilter,
     pub unordered_compare: bool, // whether to compare rows in unordered way
     pub unordered_compare_threads: usize,
-    pub mock_data_only: bool,
+    pub mock_prepare_only: bool,
     pub mock_db_tbs: Vec<(String, String)>,
 }
 
@@ -149,7 +149,8 @@ impl RdbTestRunner {
 
         let (mut unordered_compare, unordered_compare_configured, unordered_compare_threads) =
             Self::load_mock_compare_config(&base.task_config_file);
-        let configured_mock_data_only = Self::load_mock_data_only_config(&base.task_config_file);
+        let configured_mock_prepare_only =
+            Self::load_mock_prepare_only_config(&base.task_config_file);
         let task_kind = config.task_type().map(|task_type| task_type.kind);
         let is_struct_task = matches!(task_kind, Some(TaskKind::Struct));
         let mock_result: Option<MockDataPrepare> = match src_db_type {
@@ -189,9 +190,9 @@ impl RdbTestRunner {
                 unordered_compare = true;
             }
         }
-        let mock_data_only = configured_mock_data_only && has_mock_data && !is_struct_task;
+        let mock_prepare_only = configured_mock_prepare_only && has_mock_data && !is_struct_task;
 
-        if !dst_url.is_empty() && !mock_data_only {
+        if !dst_url.is_empty() && !mock_prepare_only {
             match &dst_db_type {
                 DbType::Mysql
                 | DbType::Foxlake
@@ -261,7 +262,7 @@ impl RdbTestRunner {
             base,
             unordered_compare,
             unordered_compare_threads,
-            mock_data_only,
+            mock_prepare_only,
             mock_db_tbs,
         })
     }
@@ -312,9 +313,9 @@ impl RdbTestRunner {
         )
     }
 
-    fn load_mock_data_only_config(config_file: &str) -> bool {
+    fn load_mock_prepare_only_config(config_file: &str) -> bool {
         let loader = IniLoader::new(config_file);
-        loader.get_with_default("mock", "data_only", false)
+        loader.get_with_default("mock", "prepare_only", false)
     }
 
     pub async fn get_dst_mysql_version(&self) -> String {
@@ -326,8 +327,8 @@ impl RdbTestRunner {
     }
 
     pub async fn run_snapshot_test(&self, compare_data: bool) -> anyhow::Result<()> {
-        if self.mock_data_only {
-            self.execute_mock_data_only_sqls().await?;
+        if self.mock_prepare_only {
+            self.execute_mock_prepare_only_sqls().await?;
             return Ok(());
         }
 
@@ -346,7 +347,7 @@ impl RdbTestRunner {
         Ok(())
     }
 
-    pub async fn execute_mock_data_only_sqls(&self) -> anyhow::Result<()> {
+    pub async fn execute_mock_prepare_only_sqls(&self) -> anyhow::Result<()> {
         self.execute_src_sqls(&self.base.src_prepare_sqls).await?;
         self.execute_src_sqls(&self.base.src_test_sqls).await
     }
@@ -1496,20 +1497,20 @@ mod tests {
     }
 
     #[test]
-    fn test_load_mock_data_only_config() {
-        let path = write_tmp_config("[mock]\ndata_only=true\n");
-        let data_only = RdbTestRunner::load_mock_data_only_config(&path);
+    fn test_load_mock_prepare_only_config() {
+        let path = write_tmp_config("[mock]\nprepare_only=true\n");
+        let prepare_only = RdbTestRunner::load_mock_prepare_only_config(&path);
         fs::remove_file(path).unwrap();
 
-        assert!(data_only);
+        assert!(prepare_only);
     }
 
     #[test]
-    fn test_load_mock_data_only_config_defaults() {
+    fn test_load_mock_prepare_only_config_defaults() {
         let path = write_tmp_config("[mock]\n");
-        let data_only = RdbTestRunner::load_mock_data_only_config(&path);
+        let prepare_only = RdbTestRunner::load_mock_prepare_only_config(&path);
         fs::remove_file(path).unwrap();
 
-        assert!(!data_only);
+        assert!(!prepare_only);
     }
 }

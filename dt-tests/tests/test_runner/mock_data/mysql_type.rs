@@ -30,8 +30,8 @@ const YEAR_MAX: i32 = 2155;
 // Predefined values for ENUM and SET types (13.3.5, 13.3.6)
 const ENUM_VALUES: &[&str] = &["v1", "v2", "v3", "v4", "v5"];
 const SET_VALUES: &[&str] = &["s1", "s2", "s3", "s4", "s5"];
-const ENUM_SET_CHARSET: &str = "utf8mb4";
-const ENUM_SET_COLLATION: &str = "utf8mb4_general_ci";
+const ENUM_SET_CHARSET: &str = "utf8";
+const ENUM_SET_COLLATION: &str = "utf8_bin";
 
 /// Escape a string for use in MySQL single-quoted string literals.
 /// Handles: single quotes (' → ''), backslashes (\ → \\)
@@ -690,6 +690,10 @@ impl MysqlType {
                 .collect(),
         }
     }
+
+    fn needs_explicit_timestamp_defaults(ctx: &MockDbContext) -> bool {
+        ctx.version.major < 8
+    }
 }
 
 impl MockColType for MysqlType {
@@ -707,6 +711,22 @@ impl MockColType for MysqlType {
 
     fn constant_value_str(&self, _ctx: &MockDbContext) -> Vec<String> {
         MysqlType::constant_value_str(self)
+    }
+
+    fn column_def(&self, quoted_col: &str, nullable: bool, ctx: &MockDbContext) -> String {
+        if matches!(self, MysqlType::Timestamp) && Self::needs_explicit_timestamp_defaults(ctx) {
+            // MySQL 5.x may implicitly turn TIMESTAMP NULL inserts into CURRENT_TIMESTAMP.
+            // ref https://dev.mysql.com/doc/refman/5.7/en/timestamp-initialization.html
+            let suffix = if nullable {
+                "NULL DEFAULT NULL".to_string()
+            } else {
+                "NOT NULL DEFAULT '2000-01-01 00:00:00.000000'".to_string()
+            };
+            return format!("{} {} {}", quoted_col, MysqlType::name(self), suffix);
+        }
+
+        let is_nullable = if nullable { "" } else { " NOT NULL" };
+        format!("{} {}{}", quoted_col, MysqlType::name(self), is_nullable)
     }
 
     fn schema_drop_stmt(db: &str, _ctx: &MockDbContext) -> String {
@@ -824,11 +844,11 @@ mod tests {
     fn test_enum_and_set_type_names_include_fixed_charset_attrs() {
         assert_eq!(
             MysqlType::Enum.name(),
-            "ENUM('v1','v2','v3','v4','v5') CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci"
+            "ENUM('v1','v2','v3','v4','v5') CHARACTER SET utf8 COLLATE utf8_bin"
         );
         assert_eq!(
             MysqlType::Set.name(),
-            "SET('s1','s2','s3','s4','s5') CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci"
+            "SET('s1','s2','s3','s4','s5') CHARACTER SET utf8 COLLATE utf8_bin"
         );
     }
 

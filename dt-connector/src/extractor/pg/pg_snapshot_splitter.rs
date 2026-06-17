@@ -156,14 +156,17 @@ WHERE
     }
 
     async fn get_partition_col_range(&mut self, tb_meta: &PgTbMeta) -> anyhow::Result<ChunkRange> {
+        // type conversion is needed here to match the behavior of `pg value type` and converter's `from_query` method.
         let partition_col = &self.partition_col;
         let sql = format!(
             "SELECT
-    MIN({}) AS min_value, MAX({}) AS max_value
+    MIN({})::{} AS min_value, MAX({})::{} AS max_value
 FROM
     {}.{}",
             quote!(partition_col),
+            PgColValueConvertor::get_extract_type(tb_meta.get_col_type(partition_col)?),
             quote!(partition_col),
+            PgColValueConvertor::get_extract_type(tb_meta.get_col_type(partition_col)?),
             quote!(tb_meta.basic.schema),
             quote!(tb_meta.basic.tb)
         );

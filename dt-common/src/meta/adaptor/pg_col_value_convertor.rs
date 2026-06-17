@@ -45,6 +45,11 @@ impl PgColValueConvertor {
             return Ok(ColValue::String(value_str));
         }
 
+        if col_type.alias == "oid" {
+            let value: u32 = value_str.parse()?;
+            return Ok(ColValue::UnsignedLong(value));
+        }
+
         let col_value = match col_type.value_type {
             PgValueType::Boolean => ColValue::Bool("t" == value_str.to_lowercase()),
 
@@ -131,6 +136,11 @@ impl PgColValueConvertor {
         if col_type.is_array() {
             let value: String = row.try_get(col)?;
             return Ok(ColValue::String(value));
+        }
+
+        if col_type.alias == "oid" {
+            let value: i64 = row.try_get(col)?;
+            return Ok(ColValue::UnsignedLong(value as u32));
         }
 
         let col_value = match col_type.value_type {

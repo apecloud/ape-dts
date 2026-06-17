@@ -10,7 +10,7 @@ mod test {
         TestBase::run_cdc_test(
             "mock_test/mysql_to_mysql/8_0_to_8_0/cdc/basic_test",
             3000,
-            10000,
+            8000,
         )
         .await;
     }

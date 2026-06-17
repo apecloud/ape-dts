@@ -20,6 +20,10 @@ pub trait MockColType: std::fmt::Debug + Clone {
     fn schema_drop_stmt(db: &str, ctx: &MockDbContext) -> String;
     fn schema_create_stmt(db: &str, ctx: &MockDbContext) -> String;
     fn quote_identifier(name: &str, ctx: &MockDbContext) -> String;
+    fn column_def(&self, quoted_col: &str, nullable: bool, ctx: &MockDbContext) -> String {
+        let is_nullable = if nullable { "" } else { " NOT NULL" };
+        format!("{} {}{}", quoted_col, self.name(ctx), is_nullable)
+    }
     fn after_all_insert_stmts(_db_tbs: &[(String, String)], _ctx: &MockDbContext) -> Vec<String> {
         Vec::new()
     }
@@ -121,12 +125,8 @@ impl<T: MockColType> MockStmt<T> {
         for (col_idx, col_type) in self.included_types.iter().enumerate() {
             let col_name = format!("col_{}", col_idx);
             let quoted_col = T::quote_identifier(&col_name, ctx);
-            let is_nullable = if self.nullable_cols.contains(&col_idx) {
-                ""
-            } else {
-                " NOT NULL"
-            };
-            let col_def = format!("{} {}{}", quoted_col, col_type.name(ctx), is_nullable);
+            let col_def =
+                col_type.column_def(&quoted_col, self.nullable_cols.contains(&col_idx), ctx);
             col_names.push(col_name);
             col_defs.push(col_def);
         }
@@ -497,6 +497,42 @@ mod tests {
         assert_eq!(
             table_stmt,
             "CREATE TABLE `test_db`.`test_tb` (`col_0` INT NOT NULL, `col_1` VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci, `col_2` DOUBLE, PRIMARY KEY (`col_0`, `col_1`), UNIQUE (`col_2`));"
+        );
+    }
+
+    #[test]
+    fn test_mysql_5_7_timestamp_schema_generation_uses_explicit_defaults() {
+        let ctx = MockDbContext::new(DbType::Mysql, "5.7.0");
+
+        let nullable_stmt =
+            MockStmt::new(&[MysqlType::Timestamp], "test_db", "test_tb").with_nullable_cols(&[0]);
+        assert_eq!(
+            nullable_stmt.create_table_stmt(&ctx),
+            "CREATE TABLE `test_db`.`test_tb` (`col_0` TIMESTAMP(6) NULL DEFAULT NULL);"
+        );
+
+        let not_null_stmt = MockStmt::new(&[MysqlType::Timestamp], "test_db", "test_tb");
+        assert_eq!(
+            not_null_stmt.create_table_stmt(&ctx),
+            "CREATE TABLE `test_db`.`test_tb` (`col_0` TIMESTAMP(6) NOT NULL DEFAULT '2000-01-01 00:00:00.000000');"
+        );
+    }
+
+    #[test]
+    fn test_mysql_8_0_timestamp_schema_generation_keeps_default_column_def() {
+        let ctx = mysql_ctx();
+
+        let nullable_stmt =
+            MockStmt::new(&[MysqlType::Timestamp], "test_db", "test_tb").with_nullable_cols(&[0]);
+        assert_eq!(
+            nullable_stmt.create_table_stmt(&ctx),
+            "CREATE TABLE `test_db`.`test_tb` (`col_0` TIMESTAMP(6));"
+        );
+
+        let not_null_stmt = MockStmt::new(&[MysqlType::Timestamp], "test_db", "test_tb");
+        assert_eq!(
+            not_null_stmt.create_table_stmt(&ctx),
+            "CREATE TABLE `test_db`.`test_tb` (`col_0` TIMESTAMP(6) NOT NULL);"
         );
     }
 

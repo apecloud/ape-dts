@@ -661,7 +661,7 @@ impl RdbQueryBuilder<'_> {
                     .context("mysql table meta missing when building mysql extract cols")?
                     .get_col_type(col)?;
                 let extract_col = if col_type.is_spatial() {
-                    format!("ST_AsBinary({}) AS {}", self.escape(col), self.escape(col))
+                    SqlUtil::mysql_spatial_as_wkb_expr(&self.escape(col), &self.escape(col))
                 } else {
                     self.escape(col)
                 };
@@ -825,7 +825,7 @@ impl RdbQueryBuilder<'_> {
 
         if is_hex_str {
             if col_type.is_spatial() {
-                return Ok(format!("ST_GeomFromWKB(x'{}')", value));
+                return Ok(SqlUtil::mysql_spatial_from_wkb_hex_expr(&value));
             }
             return Ok(format!("x'{}'", value));
         }
@@ -873,7 +873,7 @@ impl RdbQueryBuilder<'_> {
 
         if let Some(tb_meta) = self.mysql_tb_meta {
             if tb_meta.get_col_type(col)?.is_spatial() {
-                return Ok("ST_GeomFromWKB(?)".to_string());
+                return Ok(SqlUtil::mysql_spatial_from_wkb_placeholder_expr());
             }
         }
 

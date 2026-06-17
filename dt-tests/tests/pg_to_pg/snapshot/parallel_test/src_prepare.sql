@@ -69,7 +69,23 @@ CREATE TABLE test_db_2.tb_char (
   UNIQUE (id)
 );
 
--- 5. DateTime (Timestamp)
+-- 5. OID Primary Key
+CREATE TABLE test_db_2.tb_oid_pk (
+  row_id int,
+  id oid NOT NULL,
+  value bigint DEFAULT NULL,
+  PRIMARY KEY (id)
+);
+
+-- 6. OID Unique Key
+CREATE TABLE test_db_2.tb_oid_uk (
+  row_id int,
+  id oid,
+  value bigint DEFAULT NULL,
+  UNIQUE (id)
+);
+
+-- 7. DateTime (Timestamp)
 CREATE TABLE test_db_2.tb_datetime (
   row_id int,
   id timestamp(3) DEFAULT NULL, -- Precision 3ms
@@ -77,7 +93,7 @@ CREATE TABLE test_db_2.tb_datetime (
   UNIQUE (id)
 );
 
--- 6. Composite Key
+-- 8. Composite Key
 CREATE TABLE test_db_2.tb_composite (
   row_id int,
   org_id int NOT NULL,
@@ -86,7 +102,7 @@ CREATE TABLE test_db_2.tb_composite (
   UNIQUE (org_id, user_code)
 );
 
--- 7. TinyInt (Mapped to SmallInt)
+-- 9. TinyInt (Mapped to SmallInt)
 CREATE TABLE test_db_2.tb_tinyint (
   row_id int,
   id smallint DEFAULT NULL,
@@ -94,7 +110,7 @@ CREATE TABLE test_db_2.tb_tinyint (
   UNIQUE (id)
 );
 
--- 8. BigInt Unsigned (Mapped to Numeric)
+-- 10. BigInt Unsigned (Mapped to Numeric)
 CREATE TABLE test_db_2.tb_bigint_unsigned (
   row_id int,
   id numeric(20,0) DEFAULT NULL, 
@@ -102,7 +118,7 @@ CREATE TABLE test_db_2.tb_bigint_unsigned (
   UNIQUE (id)
 );
 
--- 9. Decimal & Float
+-- 11. Decimal & Float
 CREATE TABLE test_db_2.tb_decimal (
   row_id int,
   id decimal(10,2) DEFAULT NULL,
@@ -110,7 +126,7 @@ CREATE TABLE test_db_2.tb_decimal (
   UNIQUE (id)
 );
 
--- 10. Date
+-- 12. Date
 CREATE TABLE test_db_2.tb_date (
   row_id int,
   id date DEFAULT NULL,
@@ -118,7 +134,7 @@ CREATE TABLE test_db_2.tb_date (
   UNIQUE (id)
 );
 
--- 11. VarBinary (Mapped to Bytea)
+-- 13. VarBinary (Mapped to Bytea)
 CREATE TABLE test_db_2.tb_varbinary (
   row_id int,
   id bytea DEFAULT NULL,
@@ -126,7 +142,7 @@ CREATE TABLE test_db_2.tb_varbinary (
   UNIQUE (id)
 );
 
--- 12. Varchar Primary Key
+-- 14. Varchar Primary Key
 CREATE TABLE test_db_2.tb_varchar_pk (
   row_id int,
   id varchar(255) NOT NULL, 
@@ -134,7 +150,7 @@ CREATE TABLE test_db_2.tb_varchar_pk (
   PRIMARY KEY (id)
 );
 
--- 13. Text with Prefix Index
+-- 15. Text with Prefix Index
 CREATE TABLE test_db_2.tb_text_pk (
   row_id int,
   id TEXT, 
@@ -143,7 +159,7 @@ CREATE TABLE test_db_2.tb_text_pk (
 -- Create unique index on prefix (first 64 chars)
 CREATE UNIQUE INDEX idx_text_prefix ON test_db_2.tb_text_pk (substring(id, 1, 64));
 
--- 14. Blob with Prefix Index (Mapped to Bytea)
+-- 16. Blob with Prefix Index (Mapped to Bytea)
 CREATE TABLE test_db_2.tb_blob_pk (
   row_id int,
   id BYTEA, 
@@ -152,7 +168,7 @@ CREATE TABLE test_db_2.tb_blob_pk (
 -- Create unique index on prefix (first 64 bytes)
 CREATE UNIQUE INDEX idx_blob_prefix ON test_db_2.tb_blob_pk (substring(id, 1, 64));
 
--- 15. Float/Double (Scenario: Floating point as Unique Key)
+-- 17. Float/Double (Scenario: Floating point as Unique Key)
 CREATE TABLE test_db_2.tb_float (
   row_id int,
   id double precision DEFAULT NULL,
