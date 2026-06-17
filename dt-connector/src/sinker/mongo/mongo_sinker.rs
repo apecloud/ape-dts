@@ -34,7 +34,6 @@ pub struct MongoSinker {
     pub base_sinker: BaseSinker,
     pub target_shard_collections: HashMap<String, MongoShardCollection>,
     pub require_shard_key_filter: bool,
-    pub is_disable_ddl: bool,
     pub is_target_mongos: bool,
 }
 
@@ -66,10 +65,6 @@ impl Sinker for MongoSinker {
     }
 
     async fn sink_ddl(&mut self, data: Vec<DdlData>, _batch: bool) -> anyhow::Result<()> {
-        if self.is_disable_ddl {
-            return Ok(());
-        }
-
         for ddl_data in data {
             if !self.is_target_mongos && ddl_data.ddl_type.is_mongo_shard_ddl() {
                 continue;

@@ -1,8 +1,9 @@
 #[cfg(test)]
 mod test {
+    use mongodb::bson::doc;
     use serial_test::serial;
 
-    use crate::test_runner::test_base::TestBase;
+    use crate::test_runner::{mongo_test_runner::MongoTestRunner, test_base::TestBase};
 
     #[tokio::test]
     #[serial]
@@ -25,6 +26,29 @@ mod test {
             5000,
         )
         .await;
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn cdc_sharding_test() {
+        let runner = MongoTestRunner::new("mongo_to_mongo/cdc/sharding_test")
+            .await
+            .unwrap();
+        runner.run_cdc_in_order_test(3000, 8000).await.unwrap();
+        runner
+            .assert_dst_shard_collection(
+                "sharding_cdc_db.accounts",
+                doc! { "tenant_id": 1, "account_id": 1, "region": 1 },
+                false,
+            )
+            .await;
+        runner
+            .assert_dst_shard_collection(
+                "sharding_cdc_db.events_hashed",
+                doc! { "region": "hashed" },
+                false,
+            )
+            .await;
     }
 
     #[tokio::test]

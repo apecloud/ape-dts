@@ -2,7 +2,7 @@ use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::convert::TryFrom;
 
-use dt_common::meta::mongo::mongo_constant::MongoConstants;
+use dt_common::meta::mongo::{mongo_constant::MongoConstants, mongo_shard::list_shard_collections};
 use dt_common::{
     config::{
         config_enums::DbType, extractor_config::ExtractorConfig, sinker_config::SinkerConfig,
@@ -258,6 +258,32 @@ impl MongoTestRunner {
         self.base.abort_task(&task).await
     }
 
+    pub async fn run_cdc_in_order_test(
+        &self,
+        start_millis: u64,
+        parse_millis: u64,
+    ) -> anyhow::Result<()> {
+        self.execute_prepare_sqls().await?;
+        TimeUtil::sleep_millis(1200).await;
+
+        let task = self.base.spawn_task().await?;
+        TimeUtil::sleep_millis(start_millis).await;
+
+        self.execute_sqls_in_order_with_client(
+            self.src_mongo_client.as_ref().unwrap(),
+            &self.base.src_test_sqls,
+        )
+        .await?;
+        TimeUtil::sleep_millis(parse_millis).await;
+
+        let src_sqls = Self::slice_sqls_by_db(&self.base.src_test_sqls);
+        for (db, _) in src_sqls.iter() {
+            self.compare_db_data(db).await;
+        }
+
+        self.base.abort_task(&task).await
+    }
+
     pub async fn run_snapshot_test(&self, compare_data: bool) -> anyhow::Result<()> {
         self.execute_prepare_sqls().await?;
         self.execute_test_sqls().await?;
@@ -411,6 +437,10 @@ impl MongoTestRunner {
     }
 
     async fn execute_ddl_sql(&self, client: &Client, db: &str, sql: &str) -> anyhow::Result<bool> {
+        if sql.contains("admin.runCommand") {
+            self.execute_admin_run_command(client, sql).await.unwrap();
+            return Ok(true);
+        }
         if sql.contains("dropDatabase") {
             self.execute_drop_database(client, db).await.unwrap();
             return Ok(true);
@@ -496,6 +526,15 @@ impl MongoTestRunner {
         }
 
         client.database(db).run_command(command).await.unwrap();
+        Ok(())
+    }
+
+    async fn execute_admin_run_command(&self, client: &Client, sql: &str) -> anyhow::Result<()> {
+        let re = Regex::new(r"admin\.runCommand\(([\w\W]+)\)").unwrap();
+        let cap = re.captures(sql).unwrap();
+        let command = Self::parse_doc(cap.get(1).unwrap().as_str());
+
+        client.database("admin").run_command(command).await.unwrap();
         Ok(())
     }
 
@@ -823,6 +862,21 @@ impl MongoTestRunner {
             results.insert(id, doc);
         }
         results
+    }
+
+    pub async fn assert_dst_shard_collection(&self, ns: &str, key: Document, unique: bool) {
+        let dst = self.dst_mongo_client.as_ref().unwrap();
+        let (is_mongos, shard_collections) = list_shard_collections(dst).await.unwrap();
+        assert!(is_mongos, "dst should be mongos for sharding assertions");
+        let shard_collection = shard_collections
+            .get(ns)
+            .unwrap_or_else(|| panic!("dst shard collection [{}] should exist", ns));
+        assert_eq!(shard_collection.key, key, "dst shard key mismatch: {}", ns);
+        assert_eq!(
+            shard_collection.unique, unique,
+            "dst shard unique mismatch: {}",
+            ns
+        );
     }
 
     async fn assert_changestream_ddl_result(&self) -> anyhow::Result<()> {

@@ -195,7 +195,6 @@ impl SinkerUtil {
                         base_sinker: BaseSinker::new(monitor.clone(), monitor_interval),
                         target_shard_collections: target_shard_collections.clone(),
                         require_shard_key_filter,
-                        is_disable_ddl: is_snapshot_task && !is_target_mongos,
                         is_target_mongos,
                     };
                     Self::push_checkable_sinker(&mut sub_sinkers, sinker, &checker);
