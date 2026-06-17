@@ -94,3 +94,18 @@ CREATE TABLE test_db_1.composite_unique_key_table_2 (val int, uk2 varchar(10), u
 
 --test multi primary and single unique key
 CREATE TABLE test_db_1.multi_primary_and_single_unique_table (pk1 int, pk2 varchar(10), uk1 int not null, uk2 varchar(10), val int, PRIMARY KEY(pk1, pk2), UNIQUE(uk1), UNIQUE(uk2));
+
+-- test negative time in composite snapshot order key
+CREATE TABLE test_db_1.negative_time_composite_pk_table (
+    time_col time(6) NOT NULL,
+    year_col year NOT NULL,
+    val int,
+    PRIMARY KEY(time_col, year_col)
+);
+
+CREATE TABLE test_db_1.negative_time_composite_uk_table (
+    time_col time(6) DEFAULT NULL,
+    year_col year DEFAULT NULL,
+    val int,
+    UNIQUE KEY uk_time_year(time_col, year_col)
+);

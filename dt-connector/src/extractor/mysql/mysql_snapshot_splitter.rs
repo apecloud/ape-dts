@@ -247,13 +247,20 @@ FROM
             String::new()
         };
         if self.current_col_value.is_some() {
+            let partition_col_placeholder =
+                SqlUtil::mysql_comparison_placeholder(partition_col_type);
             where_clause = if where_clause.is_empty() {
-                format!("WHERE {} > ?", quote!(tb_meta.basic.partition_col))
+                format!(
+                    "WHERE {} > {}",
+                    quote!(tb_meta.basic.partition_col),
+                    partition_col_placeholder
+                )
             } else {
                 format!(
-                    "{} AND {} > ?",
+                    "{} AND {} > {}",
                     where_clause,
-                    quote!(tb_meta.basic.partition_col)
+                    quote!(tb_meta.basic.partition_col),
+                    partition_col_placeholder
                 )
             };
         }

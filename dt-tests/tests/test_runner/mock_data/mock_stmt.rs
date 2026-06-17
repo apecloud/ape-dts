@@ -125,8 +125,19 @@ impl<T: MockColType> MockStmt<T> {
         for (col_idx, col_type) in self.included_types.iter().enumerate() {
             let col_name = format!("col_{}", col_idx);
             let quoted_col = T::quote_identifier(&col_name, ctx);
-            let col_def =
-                col_type.column_def(&quoted_col, self.nullable_cols.contains(&col_idx), ctx);
+            let mut is_nullable = self.nullable_cols.contains(&col_idx);
+            for index in &self.indexs {
+                match index {
+                    Constraint::Primary(cols) => {
+                        if cols.contains(&col_idx) {
+                            is_nullable = false;
+                            continue;
+                        }
+                    }
+                    _ => continue,
+                }
+            }
+            let col_def = col_type.column_def(&quoted_col, is_nullable, ctx);
             col_names.push(col_name);
             col_defs.push(col_def);
         }

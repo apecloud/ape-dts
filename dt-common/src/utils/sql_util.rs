@@ -2,6 +2,7 @@ use regex::Regex;
 use sqlx::{mysql::MySqlRow, ColumnIndex, Row};
 
 use crate::config::config_enums::DbType;
+use crate::meta::mysql::mysql_col_type::MysqlColType;
 
 pub struct SqlUtil {}
 
@@ -86,6 +87,14 @@ impl SqlUtil {
 
     pub fn mysql_spatial_from_wkb_placeholder_expr() -> String {
         "ST_GeomFromWKB(?)".to_string()
+    }
+
+    pub fn mysql_comparison_placeholder(col_type: &MysqlColType) -> String {
+        // https://dev.mysql.com/doc/refman/5.7/en/type-conversion.html
+        match col_type {
+            MysqlColType::Time { precision } => format!("CAST(? AS TIME({}))", precision),
+            _ => "?".to_string(),
+        }
     }
 
     pub fn get_escape_pairs(db_type: &DbType) -> Vec<(char, char)> {

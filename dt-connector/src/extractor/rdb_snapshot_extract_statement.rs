@@ -222,13 +222,15 @@ impl<'r> RdbSnapshotExtractStatement<'r> {
                 })
                 .collect::<Vec<String>>()
                 .join(", "))
-        } else if self.mysql_tb_meta.is_some() {
+        } else if let Some(mysql_tb_meta) = self.mysql_tb_meta {
             // MySQL: ?, ?, ...
-            Ok(order_cols
-                .iter()
-                .map(|_| "?".to_string())
-                .collect::<Vec<String>>()
-                .join(", "))
+            let mut placeholders = Vec::with_capacity(order_cols.len());
+            for col in order_cols {
+                placeholders.push(SqlUtil::mysql_comparison_placeholder(
+                    mysql_tb_meta.get_col_type(col)?,
+                ));
+            }
+            Ok(placeholders.join(", "))
         } else {
             bail!(
                 "unsupported db type: {:?} for building placeholder string",
@@ -396,6 +398,31 @@ mod tests {
         }
     }
 
+    fn create_mysql_time_order_tb_meta() -> MysqlTbMeta {
+        let cols = vec![
+            "time_col".to_string(),
+            "year_col".to_string(),
+            "val".to_string(),
+        ];
+
+        let basic = RdbTbMeta {
+            schema: "test_schema".to_string(),
+            tb: "time_order_table".to_string(),
+            cols,
+            ..Default::default()
+        };
+
+        let mut col_type_map = HashMap::new();
+        col_type_map.insert("time_col".to_string(), MysqlColType::Time { precision: 6 });
+        col_type_map.insert("year_col".to_string(), MysqlColType::Year);
+        col_type_map.insert("val".to_string(), MysqlColType::Int { unsigned: false });
+
+        MysqlTbMeta {
+            basic,
+            col_type_map,
+        }
+    }
+
     fn create_pg_tb_meta() -> PgTbMeta {
         let cols = vec![
             "id".to_string(),
@@ -542,6 +569,23 @@ mod tests {
     }
 
     #[test]
+    fn test_mysql_time_order_col_gt_casts_placeholder() {
+        let mysql_meta = create_mysql_time_order_tb_meta();
+        let stmt = RdbSnapshotExtractStatement::from(&mysql_meta);
+        let order_cols = vec!["time_col".to_string(), "year_col".to_string()];
+        let stmt = stmt
+            .with_order_cols(&order_cols)
+            .with_predicate_type(OrderKeyPredicateType::GreaterThan)
+            .with_limit(4);
+
+        let sql = stmt.build().unwrap();
+        assert_eq!(
+            sql,
+            r#"SELECT `time_col`,`year_col`,`val` FROM `test_schema`.`time_order_table` WHERE (`time_col`, `year_col`) > (CAST(? AS TIME(6)), ?) ORDER BY `test_schema`.`time_order_table`.`time_col` ASC, `test_schema`.`time_order_table`.`year_col` ASC LIMIT 4"#
+        );
+    }
+
+    #[test]
     fn test_mysql_single_order_col_range() {
         let mysql_meta = create_mysql_tb_meta();
         let stmt = RdbSnapshotExtractStatement::from(&mysql_meta);
@@ -554,6 +598,22 @@ mod tests {
         assert_eq!(
             sql,
             r#"SELECT `id`,`price`,`username`,`bio`,`large_blob` FROM `test_schema`.`test_table` WHERE `id` > ? AND `id` <= ? ORDER BY `test_schema`.`test_table`.`id` ASC"#
+        );
+    }
+
+    #[test]
+    fn test_mysql_time_order_col_range_casts_placeholder() {
+        let mysql_meta = create_mysql_time_order_tb_meta();
+        let stmt = RdbSnapshotExtractStatement::from(&mysql_meta);
+        let order_cols = vec!["time_col".to_string(), "year_col".to_string()];
+        let stmt = stmt
+            .with_order_cols(&order_cols)
+            .with_predicate_type(OrderKeyPredicateType::Range);
+
+        let sql = stmt.build().unwrap();
+        assert_eq!(
+            sql,
+            r#"SELECT `time_col`,`year_col`,`val` FROM `test_schema`.`time_order_table` WHERE (`time_col`, `year_col`) > (CAST(? AS TIME(6)), ?) AND (`time_col`, `year_col`) <= (CAST(? AS TIME(6)), ?) ORDER BY `test_schema`.`time_order_table`.`time_col` ASC, `test_schema`.`time_order_table`.`year_col` ASC"#
         );
     }
 
