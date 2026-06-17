@@ -461,6 +461,14 @@ impl MongoSinker {
                                         Self::mongo_doc(after, MongoConstants::DOC)
                                     }),
                                 )?)
+                            } else if let Some(document_key) = document_key {
+                                Some(self.complete_shard_filter(
+                                    row_data,
+                                    Some(document_key),
+                                    row_data.after.as_ref().and_then(|after| {
+                                        Self::mongo_doc(after, MongoConstants::DOC)
+                                    }),
+                                )?)
                             } else {
                                 None
                             }

@@ -583,11 +583,11 @@ impl MongoCdcExtractor {
                                 MongoConstants::PRE_IMAGE.to_string(),
                                 ColValue::MongoDoc(pre_image.clone()),
                             );
+                            before.insert(
+                                MongoConstants::DOC.to_string(),
+                                ColValue::MongoDoc(pre_image.clone()),
+                            );
                         }
-                        before.insert(
-                            MongoConstants::DOC.to_string(),
-                            ColValue::MongoDoc(document_key),
-                        );
                         after.insert(
                             MongoConstants::DOC.to_string(),
                             ColValue::MongoDoc(document),
