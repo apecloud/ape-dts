@@ -72,13 +72,16 @@ DEFAULT_LOG_BASE_DIR="${PROJECT_ROOT}/tmp/integration-logs"
 DEFAULT_RUN_ID="$(date '+%Y%m%d-%H%M%S')-$$"
 
 declare -a ALL_SUITES=(
-  "mock_test"
-  "mock_test_amd_only"
+  "mock_test_mysql_5_7"
+  "mock_test_mysql_8_0"
+  "mock_test_pg_13_3_4"
+  "mock_test_pg_17_3_4"
   "mysql_to_clickhouse"
   # "mysql_to_doris"       # disabled: local/CI Doris suite is temporarily excluded
   # "mysql_to_foxlake"      # disabled: local runnable Foxlake service is not provisioned
   "mysql_to_kafka_to_mysql"
   "mysql_to_mysql"
+  "mysql_to_mysql_check"
   "mysql_to_mysql_case_sensitive"
   "mysql_to_mysql_lua"
   "mysql_to_redis"
@@ -88,6 +91,7 @@ declare -a ALL_SUITES=(
   # "pg_to_doris"          # disabled: local/CI Doris suite is temporarily excluded
   "pg_to_kafka_to_pg"
   "pg_to_pg"
+  "pg_to_pg_check"
   "pg_to_pg_lua"
   # "pg_to_starrocks"       # disabled: temporarily excluded from default local matrix
   "mongo_to_mongo"
@@ -138,7 +142,7 @@ TEST_FAIL_FAST=1
 declare -a REQUESTED_SUITES=()
 declare -a EXTRA_TEST_ARGS=()
 declare -a ARM_UNSUPPORTED_SUITES=(
-  "mock_test_amd_only"
+  "mock_test_mysql_5_7"
   "redis_to_redis_2_8"
 )
 
@@ -330,13 +334,16 @@ is_suite_supported_on_current_arch() {
 suite_services() {
   local suite="$1"
   case "${suite}" in
-    mock_test) echo "mysql-src-8-0 mysql-dst-8-0 postgres-src-13-3-4 postgres-dst-13-3-4 postgres-src-17-3-4 postgres-dst-17-3-4" ;;
-    mock_test_amd_only) echo "mysql-src-5-7 mysql-dst-5-7" ;;
+    mock_test_mysql_5_7) echo "mysql-src-5-7 mysql-dst-5-7" ;;
+    mock_test_mysql_8_0) echo "mysql-src-8-0 mysql-dst-8-0" ;;
+    mock_test_pg_13_3_4) echo "postgres-src-13-3-4 postgres-dst-13-3-4" ;;
+    mock_test_pg_17_3_4) echo "postgres-src-17-3-4 postgres-dst-17-3-4" ;;
     mysql_to_clickhouse) echo "mysql-src clickhouse" ;;
     mysql_to_doris) echo "mysql-src doris-2-1-0" ;;
     mysql_to_foxlake) echo "mysql-src minio minio-init" ;;
     mysql_to_kafka_to_mysql) echo "mysql-src mysql-dst kafka" ;;
     mysql_to_mysql) echo "mysql-src mysql-dst mysql-meta mysql-src-8-0 mysql-dst-8-0" ;;
+    mysql_to_mysql_check) echo "mysql-src mysql-dst" ;;
     mysql_to_mysql_case_sensitive) echo "mysql-src-8-0 mysql-dst-8-0" ;;
     mysql_to_mysql_lua) echo "mysql-src mysql-dst mysql-meta" ;;
     mysql_to_redis) echo "mysql-src redis-dst" ;;
@@ -346,6 +353,7 @@ suite_services() {
     pg_to_doris) echo "postgres-src doris-2-1-0" ;;
     pg_to_kafka_to_pg) echo "postgres-src postgres-dst kafka" ;;
     pg_to_pg) echo "postgres-src postgres-dst postgres-node3" ;;
+    pg_to_pg_check) echo "postgres-src postgres-dst" ;;
     pg_to_pg_lua) echo "postgres-src postgres-dst" ;;
     pg_to_starrocks) echo "postgres-src starrocks-3-2-11" ;;
     mongo_to_mongo) echo "mongo-src mongo-dst" ;;
@@ -403,13 +411,16 @@ resolve_service_container_id() {
 suite_nextest_filter() {
   local suite="$1"
   case "${suite}" in
-    mock_test) echo "test(/^mock_test::mysql_to_mysql::from_8_0_to_8_0::/) | test(/^mock_test::pg_to_pg::from_13_3_4_to_13_3_4::/) | test(/^mock_test::pg_to_pg::from_17_3_4_to_17_3_4::/)" ;;
-    mock_test_amd_only) echo "test(/^mock_test::mysql_to_mysql::from_5_7_to_5_7::/)" ;;
+    mock_test_mysql_5_7) echo "test(/^mock_test::mysql_to_mysql::from_5_7_to_5_7::/)" ;;
+    mock_test_mysql_8_0) echo "test(/^mock_test::mysql_to_mysql::from_8_0_to_8_0::/)" ;;
+    mock_test_pg_13_3_4) echo "test(/^mock_test::pg_to_pg::from_13_3_4_to_13_3_4::/)" ;;
+    mock_test_pg_17_3_4) echo "test(/^mock_test::pg_to_pg::from_17_3_4_to_17_3_4::/)" ;;
     mysql_to_clickhouse) echo "test(/^mysql_to_clickhouse::/)" ;;
     mysql_to_doris) echo "test(/^mysql_to_doris::/)" ;;
     mysql_to_foxlake) echo "test(/^mysql_to_foxlake::/)" ;;
     mysql_to_kafka_to_mysql) echo "test(/^mysql_to_kafka_to_mysql::/)" ;;
-    mysql_to_mysql) echo "test(/^mysql_to_mysql::/)" ;;
+    mysql_to_mysql) echo "test(/^mysql_to_mysql::cdc_tests::/) | test(/^mysql_to_mysql::precheck_tests::/) | test(/^mysql_to_mysql::review_tests::/) | test(/^mysql_to_mysql::revise_tests::/) | test(/^mysql_to_mysql::snapshot_tests::/) | test(/^mysql_to_mysql::struct_tests::/)" ;;
+    mysql_to_mysql_check) echo "test(/^mysql_to_mysql::check_tests::/)" ;;
     mysql_to_mysql_case_sensitive) echo "test(/^mysql_to_mysql_case_sensitive::/)" ;;
     mysql_to_mysql_lua) echo "test(/^mysql_to_mysql_lua::/)" ;;
     mysql_to_redis) echo "test(/^mysql_to_redis::/)" ;;
@@ -418,7 +429,8 @@ suite_nextest_filter() {
     pg_to_clickhouse) echo "test(/^pg_to_clickhouse::/)" ;;
     pg_to_doris) echo "test(/^pg_to_doris::/)" ;;
     pg_to_kafka_to_pg) echo "test(/^pg_to_kafka_to_pg::/)" ;;
-    pg_to_pg) echo "test(/^pg_to_pg::/)" ;;
+    pg_to_pg) echo "test(/^pg_to_pg::cdc_tests::/) | test(/^pg_to_pg::precheck_tests::/) | test(/^pg_to_pg::review_tests::/) | test(/^pg_to_pg::revise_tests::/) | test(/^pg_to_pg::snapshot_tests::/) | test(/^pg_to_pg::struct_tests::/) | test(/^pg_to_pg::tb_meta_tests::/)" ;;
+    pg_to_pg_check) echo "test(/^pg_to_pg::check_tests::/)" ;;
     pg_to_pg_lua) echo "test(/^pg_to_pg_lua::/)" ;;
     pg_to_starrocks) echo "test(/^pg_to_starrocks::/)" ;;
     mongo_to_mongo) echo "test(/^mongo_to_mongo::/)" ;;
