@@ -35,6 +35,7 @@ use dt_connector::{
         mongo::{
             mongo_cdc_extractor::MongoCdcExtractor, mongo_check_extractor::MongoCheckExtractor,
             mongo_snapshot_extractor::MongoSnapshotExtractor,
+            mongo_struct_extractor::MongoStructExtractor,
         },
         mysql::{
             mysql_cdc_extractor::MysqlCdcExtractor,
@@ -427,6 +428,26 @@ impl ExtractorUtil {
                     batch_size,
                     base_extractor,
                     extract_state,
+                };
+                Box::new(extractor)
+            }
+
+            ExtractorConfig::MongoStruct {
+                dbs, db_batch_size, ..
+            } => {
+                let mongo_client = match extractor_client {
+                    ConnClient::MongoDB(mongo_client) => mongo_client,
+                    _ => bail!("connection pool not found"),
+                };
+                let db_batch_size_validated =
+                    MongoStructExtractor::validate_db_batch_size(db_batch_size)?;
+                let extractor = MongoStructExtractor {
+                    mongo_client,
+                    dbs,
+                    filter,
+                    base_extractor,
+                    extract_state,
+                    db_batch_size: db_batch_size_validated,
                 };
                 Box::new(extractor)
             }

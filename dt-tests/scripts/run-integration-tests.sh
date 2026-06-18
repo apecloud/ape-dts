@@ -443,8 +443,8 @@ suite_nextest_filter() {
     pg_to_pg_check) echo "test(/^pg_to_pg::check_tests::/)" ;;
     pg_to_pg_lua) echo "test(/^pg_to_pg_lua::/)" ;;
     pg_to_starrocks) echo "test(/^pg_to_starrocks::/)" ;;
-    mongo_to_mongo) echo "test(/^mongo_to_mongo::/) & !test(/^mongo_to_mongo::snapshot_tests::test::snapshot_sharding_test/) & !test(/^mongo_to_mongo::cdc_tests::test::cdc_sharding_test/)" ;;
-    mongo_to_mongo_sharding) echo "test(/^mongo_to_mongo::snapshot_tests::test::snapshot_sharding_test/) | test(/^mongo_to_mongo::cdc_tests::test::cdc_sharding_test/)" ;;
+    mongo_to_mongo) echo "test(/^mongo_to_mongo::/) & !test(/^mongo_to_mongo::snapshot_tests::test::snapshot_sharding_test/) & !test(/^mongo_to_mongo::cdc_tests::test::cdc_sharding_test/) & !test(/^mongo_to_mongo::struct_tests::test::struct_sharding_test/) & !test(/^mongo_to_mongo::struct_tests::test::struct_sharding_to_standalone_test/) & !test(/^mongo_to_mongo::struct_tests::test::struct_shardkey_id_test/)" ;;
+    mongo_to_mongo_sharding) echo "test(/^mongo_to_mongo::snapshot_tests::test::snapshot_sharding_test/) | test(/^mongo_to_mongo::cdc_tests::test::cdc_sharding_test/) | test(/^mongo_to_mongo::struct_tests::test::struct_sharding_test/) | test(/^mongo_to_mongo::struct_tests::test::struct_sharding_to_standalone_test/) | test(/^mongo_to_mongo::struct_tests::test::struct_shardkey_id_test/)" ;;
     redis_to_redis_2_8) echo "test(/^redis_to_redis::cdc_2_8_tests::/) | test(/^redis_to_redis::snapshot_2_8_tests::/)" ;;
     redis_to_redis_4_0) echo "test(/^redis_to_redis::cdc_4_0_tests::/) | test(/^redis_to_redis::snapshot_4_0_tests::/)" ;;
     redis_to_redis_5_0) echo "test(/^redis_to_redis::cdc_5_0_tests::/) | test(/^redis_to_redis::snapshot_5_0_tests::/)" ;;

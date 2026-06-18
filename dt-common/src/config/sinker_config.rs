@@ -41,6 +41,14 @@ pub enum SinkerConfig {
         require_shard_key_filter: bool,
     },
 
+    MongoStruct {
+        url: String,
+        connection_auth: ConnectionAuthConfig,
+        is_direct_connection: Option<bool>,
+        app_name: String,
+        conflict_policy: ConflictPolicyEnum,
+    },
+
     MysqlStruct {
         url: String,
         connection_auth: ConnectionAuthConfig,

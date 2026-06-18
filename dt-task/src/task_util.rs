@@ -923,6 +923,13 @@ impl ConnClient {
                 app_name,
                 ..
             }
+            | ExtractorConfig::MongoStruct {
+                url,
+                connection_auth,
+                is_direct_connection,
+                app_name,
+                ..
+            }
             | ExtractorConfig::MongoCdc {
                 url,
                 connection_auth,
@@ -1010,6 +1017,13 @@ impl ConnClient {
                 .await?,
             ),
             SinkerConfig::Mongo {
+                url,
+                connection_auth,
+                is_direct_connection,
+                app_name,
+                ..
+            }
+            | SinkerConfig::MongoStruct {
                 url,
                 connection_auth,
                 is_direct_connection,

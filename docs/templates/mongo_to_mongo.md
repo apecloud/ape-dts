@@ -2,7 +2,67 @@
 
 Refer to [config details](/docs/en/config.md) for explanations of common fields.
 
+# Struct
+
+```
+[extractor]
+db_type=mongo
+extract_type=struct
+url=mongodb://ape_dts:123456@mongo1:9042/?replicaSet=rs0
+
+[sinker]
+db_type=mongo
+sink_type=struct
+url=mongodb://ape_dts:123456@127.0.0.1:27018
+conflict_policy=interrupt
+
+[filter]
+do_dbs=
+ignore_dbs=
+do_tbs=test_db_1.*,test_db_2.*
+ignore_tbs=
+do_events=
+// do_structures=*
+// do_structures=collection,shardkey
+do_structures=collection
+
+[router]
+db_map=
+tb_map=
+col_map=
+
+[parallelizer]
+parallel_type=serial
+parallel_size=1
+
+[pipeline]
+buffer_size=100
+checkpoint_interval_secs=10
+
+[runtime]
+log_level=info
+log4rs_file=./log4rs.yaml
+log_dir=./logs
+```
+
+- [filter]
+
+| Config        | Description                                                                                                   | Example                   | Default             |
+| :------------ | :------------------------------------------------------------------------------------------------------------ | :------------------------ | :------------------ |
+| do_structures | one or multiple in [collection,shardkey]. `shardkey` is only meaningful when the source collection is sharded | collection,index,shardkey | \*, which means all |
+
+Mongo struct migration currently supports databases implicitly through collection creation. It does
+not use a separate Mongo `database` structure type. `collection` creates Mongo collections and
+copies collection options. `shardkey` copies
+the source sharding definition; when the target is a sharded cluster, DTS runs `enableSharding`
+before `shardCollection` if needed. When the target is not `mongos`, shard key statements are
+ignored and collection migration can still run.
+
+System collections such as `system.*` are filtered out. Views and time-series collections are not
+part of the current Mongo struct migration scope.
+
 # Snapshot
+
 ```
 [extractor]
 db_type=mongo
@@ -42,6 +102,7 @@ log_dir=./logs
 ```
 
 # CDC, by op_log
+
 ```
 [extractor]
 db_type=mongo
@@ -107,6 +168,7 @@ log4rs_file=./log4rs.yaml
   the default fail-fast shard-key validation enabled.
 
 # CDC, by change_stream
+
 ```
 [extractor]
 db_type=mongo
@@ -154,6 +216,7 @@ log4rs_file=./log4rs.yaml
 | resume_token | the resume_token to pull change stream from | -       | empty, which means from newest |
 
 # Standalone snapshot check
+
 ```
 [extractor]
 db_type=mongo
@@ -195,6 +258,7 @@ log_dir=./logs
 - the output will be in {log_dir}/check/
 
 # Inline snapshot check
+
 ```
 [extractor]
 db_type=mongo
@@ -247,6 +311,7 @@ MongoDB CDC currently does not support inline cdc check. Use standalone snapshot
 snapshot check instead.
 
 # Data revise
+
 ```
 [extractor]
 db_type=mongo
@@ -294,6 +359,7 @@ log_dir=./logs
 | check_log_dir | the directory of check log, required | ./check_task/logs/check | -       |
 
 # Data review
+
 ```
 [extractor]
 db_type=mongo

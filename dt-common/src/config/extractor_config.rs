@@ -140,6 +140,16 @@ pub enum ExtractorConfig {
         batch_size: usize,
     },
 
+    MongoStruct {
+        url: String,
+        connection_auth: ConnectionAuthConfig,
+        is_direct_connection: Option<bool>,
+        app_name: String,
+        db: String,
+        dbs: Vec<String>,
+        db_batch_size: usize,
+    },
+
     RedisSnapshot {
         url: String,
         connection_auth: ConnectionAuthConfig,

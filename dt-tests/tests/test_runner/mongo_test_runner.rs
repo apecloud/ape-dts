@@ -63,6 +63,13 @@ impl MongoTestRunner {
                 is_direct_connection,
                 app_name,
                 ..
+            }
+            | ExtractorConfig::MongoStruct {
+                url,
+                connection_auth,
+                is_direct_connection,
+                app_name,
+                ..
             } => {
                 src_mongo_client = Some(
                     TaskUtil::create_mongo_client(
@@ -80,6 +87,13 @@ impl MongoTestRunner {
         }
 
         if let SinkerConfig::Mongo {
+            url,
+            connection_auth,
+            is_direct_connection,
+            app_name,
+            ..
+        }
+        | SinkerConfig::MongoStruct {
             url,
             connection_auth,
             is_direct_connection,
@@ -363,6 +377,11 @@ impl MongoTestRunner {
         Ok(())
     }
 
+    pub async fn run_struct_test(&self) -> anyhow::Result<()> {
+        self.execute_prepare_sqls().await?;
+        self.base.start_task().await
+    }
+
     pub fn src_mongo_client(&self) -> &Client {
         self.src_mongo_client
             .as_ref()
@@ -451,16 +470,16 @@ impl MongoTestRunner {
                 .unwrap();
             return Ok(true);
         }
+        if sql.contains("runCommand") {
+            self.execute_run_command(client, db, sql).await.unwrap();
+            return Ok(true);
+        }
         if sql.contains("createIndex") {
             self.execute_create_index(client, db, sql).await.unwrap();
             return Ok(true);
         }
         if sql.contains("dropIndex") {
             self.execute_drop_index(client, db, sql).await.unwrap();
-            return Ok(true);
-        }
-        if sql.contains("runCommand") {
-            self.execute_run_command(client, db, sql).await.unwrap();
             return Ok(true);
         }
         if sql.contains(".drop()") {
@@ -877,6 +896,280 @@ impl MongoTestRunner {
             "dst shard unique mismatch: {}",
             ns
         );
+    }
+
+    pub async fn assert_dst_routed_shard_collection(
+        &self,
+        db: &str,
+        tb: &str,
+        key: Document,
+        unique: bool,
+    ) {
+        let (dst_db, dst_tb) = self.route_tb(db, tb);
+        self.assert_dst_shard_collection(&format!("{}.{}", dst_db, dst_tb), key, unique)
+            .await;
+    }
+
+    pub async fn assert_dst_collection_exists(&self, db: &str, tb: &str) {
+        let dst = self.dst_mongo_client.as_ref().unwrap();
+        let collections = dst.database(db).list_collection_names().await.unwrap();
+        assert!(
+            collections.contains(&tb.to_string()),
+            "dst collection [{}].[{}] should exist, collections: {:?}",
+            db,
+            tb,
+            collections
+        );
+    }
+
+    pub async fn assert_dst_collection_not_exists(&self, db: &str, tb: &str) {
+        let dst = self.dst_mongo_client.as_ref().unwrap();
+        let collections = dst.database(db).list_collection_names().await.unwrap();
+        assert!(
+            !collections.contains(&tb.to_string()),
+            "dst collection [{}].[{}] should not exist",
+            db,
+            tb
+        );
+    }
+
+    pub async fn assert_dst_routed_collection_exists(&self, db: &str, tb: &str) {
+        let (dst_db, dst_tb) = self.route_tb(db, tb);
+        self.assert_dst_collection_exists(&dst_db, &dst_tb).await;
+    }
+
+    pub async fn assert_dst_index_exists(
+        &self,
+        db: &str,
+        tb: &str,
+        index_name: &str,
+        key: Document,
+    ) {
+        let index = self.dst_index_doc(db, tb, index_name).await;
+        let index_key = index.get_document("key").unwrap();
+        assert_eq!(index_key, &key, "dst index key mismatch: {}", index_name);
+    }
+
+    pub async fn assert_dst_index_not_exists(&self, db: &str, tb: &str, index_name: &str) {
+        let indexes = self.dst_index_docs(db, tb).await;
+        assert!(
+            indexes
+                .iter()
+                .all(|index| index.get_str("name").ok() != Some(index_name)),
+            "dst index [{}] should not exist on {}.{}, indexes: {:?}",
+            index_name,
+            db,
+            tb,
+            indexes
+        );
+    }
+
+    pub async fn assert_dst_index_option_bool(
+        &self,
+        db: &str,
+        tb: &str,
+        index_name: &str,
+        option: &str,
+        expected: bool,
+    ) {
+        let index = self.dst_index_doc(db, tb, index_name).await;
+        assert_eq!(
+            index.get_bool(option).ok(),
+            Some(expected),
+            "dst index option [{}] mismatch for {}.{} index {}: {:?}",
+            option,
+            db,
+            tb,
+            index_name,
+            index
+        );
+    }
+
+    pub async fn assert_dst_index_option_i32(
+        &self,
+        db: &str,
+        tb: &str,
+        index_name: &str,
+        option: &str,
+        expected: i32,
+    ) {
+        let index = self.dst_index_doc(db, tb, index_name).await;
+        assert_eq!(
+            index.get_i32(option).ok(),
+            Some(expected),
+            "dst index option [{}] mismatch for {}.{} index {}: {:?}",
+            option,
+            db,
+            tb,
+            index_name,
+            index
+        );
+    }
+
+    pub async fn assert_dst_index_option_doc(
+        &self,
+        db: &str,
+        tb: &str,
+        index_name: &str,
+        option: &str,
+        expected: Document,
+    ) {
+        let index = self.dst_index_doc(db, tb, index_name).await;
+        let value = index.get_document(option).unwrap();
+        assert_eq!(
+            value, &expected,
+            "dst index option [{}] mismatch for {}.{} index {}",
+            option, db, tb, index_name
+        );
+    }
+
+    pub async fn assert_dst_collection_option_bool(
+        &self,
+        db: &str,
+        tb: &str,
+        option: &str,
+        expected: bool,
+    ) {
+        let options = self.dst_collection_options(db, tb).await;
+        assert_eq!(
+            options.get_bool(option).ok(),
+            Some(expected),
+            "dst collection option [{}] mismatch for {}.{}: {:?}",
+            option,
+            db,
+            tb,
+            options
+        );
+    }
+
+    pub async fn assert_dst_collection_option_str(
+        &self,
+        db: &str,
+        tb: &str,
+        option: &str,
+        expected: &str,
+    ) {
+        let options = self.dst_collection_options(db, tb).await;
+        assert_eq!(
+            options.get_str(option).ok(),
+            Some(expected),
+            "dst collection option [{}] mismatch for {}.{}: {:?}",
+            option,
+            db,
+            tb,
+            options
+        );
+    }
+
+    pub async fn assert_dst_collection_option_doc(
+        &self,
+        db: &str,
+        tb: &str,
+        option: &str,
+        expected: Document,
+    ) {
+        let options = self.dst_collection_options(db, tb).await;
+        let value = options.get_document(option).unwrap();
+        assert_eq!(
+            value, &expected,
+            "dst collection option [{}] mismatch for {}.{}",
+            option, db, tb
+        );
+    }
+
+    pub async fn assert_dst_collection_option_doc_contains(
+        &self,
+        db: &str,
+        tb: &str,
+        option: &str,
+        expected: Document,
+    ) {
+        let options = self.dst_collection_options(db, tb).await;
+        let value = options.get_document(option).unwrap();
+        assert!(
+            Self::document_contains(value, &expected),
+            "dst collection option [{}] for {}.{} should contain {:?}, actual: {:?}",
+            option,
+            db,
+            tb,
+            expected,
+            value
+        );
+    }
+
+    async fn dst_index_doc(&self, db: &str, tb: &str, index_name: &str) -> Document {
+        self.dst_index_docs(db, tb)
+            .await
+            .into_iter()
+            .find(|index| index.get_str("name").ok() == Some(index_name))
+            .unwrap_or_else(|| panic!("dst index [{}] should exist on {}.{}", index_name, db, tb))
+    }
+
+    async fn dst_index_docs(&self, db: &str, tb: &str) -> Vec<Document> {
+        let dst = self.dst_mongo_client.as_ref().unwrap();
+        let response = dst
+            .database(db)
+            .run_command(doc! { "listIndexes": tb })
+            .await
+            .unwrap();
+        response
+            .get_document("cursor")
+            .unwrap()
+            .get_array("firstBatch")
+            .unwrap()
+            .iter()
+            .map(|index| index.as_document().unwrap().clone())
+            .collect()
+    }
+
+    async fn dst_collection_options(&self, db: &str, tb: &str) -> Document {
+        let dst = self.dst_mongo_client.as_ref().unwrap();
+        let response = dst
+            .database(db)
+            .run_command(doc! {
+                "listCollections": 1,
+                "filter": { "name": tb },
+            })
+            .await
+            .unwrap();
+        let first_batch = response
+            .get_document("cursor")
+            .unwrap()
+            .get_array("firstBatch")
+            .unwrap();
+        let collection = first_batch
+            .first()
+            .unwrap_or_else(|| panic!("dst collection [{}].[{}] should exist", db, tb))
+            .as_document()
+            .unwrap();
+        collection
+            .get_document("options")
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    fn route_tb(&self, db: &str, tb: &str) -> (String, String) {
+        self.router
+            .as_ref()
+            .map(|router| {
+                let (dst_db, dst_tb) = router.get_tb_map(db, tb);
+                (dst_db.to_string(), dst_tb.to_string())
+            })
+            .unwrap_or_else(|| (db.to_string(), tb.to_string()))
+    }
+
+    fn document_contains(actual: &Document, expected: &Document) -> bool {
+        expected.iter().all(|(key, expected_value)| {
+            let Some(actual_value) = actual.get(key) else {
+                return false;
+            };
+            match (actual_value, expected_value) {
+                (Bson::Document(actual_doc), Bson::Document(expected_doc)) => {
+                    Self::document_contains(actual_doc, expected_doc)
+                }
+                _ => actual_value == expected_value,
+            }
+        })
     }
 
     async fn assert_changestream_ddl_result(&self) -> anyhow::Result<()> {

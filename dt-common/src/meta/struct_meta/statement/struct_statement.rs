@@ -7,6 +7,8 @@ use crate::{
 };
 
 use super::{
+    mongo_create_collection_statement::MongoCreateCollectionStatement,
+    mongo_shard_key_statement::MongoShardKeyStatement,
     mysql_create_database_statement::MysqlCreateDatabaseStatement,
     mysql_create_table_statement::MysqlCreateTableStatement,
     pg_create_rbac_statement::PgCreateRbacStatement,
@@ -19,6 +21,8 @@ pub enum StructStatement {
     MysqlCreateDatabase(MysqlCreateDatabaseStatement),
     PgCreateSchema(PgCreateSchemaStatement),
     MysqlCreateTable(MysqlCreateTableStatement),
+    MongoCreateCollection(MongoCreateCollectionStatement),
+    MongoShardKey(MongoShardKeyStatement),
     PgCreateTable(PgCreateTableStatement),
     PgCreateRbac(PgCreateRbacStatement),
     PgCreateUdf(PgCreateUdfStatement),
@@ -33,6 +37,8 @@ impl StructStatement {
             Self::MysqlCreateDatabase(s) => s.to_sqls(filter),
             Self::PgCreateSchema(s) => s.to_sqls(filter),
             Self::MysqlCreateTable(s) => s.to_sqls(filter),
+            Self::MongoCreateCollection(_) => Ok(vec![]),
+            Self::MongoShardKey(_) => Ok(vec![]),
             Self::PgCreateTable(s) => s.to_sqls(filter),
             Self::PgCreateRbac(s) => s.to_sqls(filter),
             Self::PgCreateUdf(s) => s.to_sqls(filter),

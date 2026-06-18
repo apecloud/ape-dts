@@ -585,7 +585,6 @@ impl TaskRunner {
                 CheckerHandle::Data(handle) => Some(handle.clone()),
                 CheckerHandle::Struct(_) => None,
             }),
-            is_snapshot_task,
         )
         .await?;
 
@@ -950,7 +949,9 @@ impl TaskRunner {
 
         let is_struct_task = matches!(
             extractor_config,
-            ExtractorConfig::MysqlStruct { .. } | ExtractorConfig::PgStruct { .. }
+            ExtractorConfig::MysqlStruct { .. }
+                | ExtractorConfig::PgStruct { .. }
+                | ExtractorConfig::MongoStruct { .. }
         );
 
         if is_struct_task {
@@ -1512,6 +1513,28 @@ impl TaskRunner {
                         schema: schema.clone(),
                         schemas,
                         do_global_structs: true,
+                        db_batch_size: *db_batch_size,
+                    },
+                    no_snapshot_data: false,
+                })
+            }
+            ExtractorConfig::MongoStruct {
+                url,
+                connection_auth,
+                is_direct_connection,
+                app_name,
+                db,
+                db_batch_size,
+                ..
+            } => {
+                return Ok(TaskInfo {
+                    extractor_config: ExtractorConfig::MongoStruct {
+                        url: url.clone(),
+                        connection_auth: connection_auth.clone(),
+                        is_direct_connection: *is_direct_connection,
+                        app_name: app_name.clone(),
+                        db: db.clone(),
+                        dbs: schemas,
                         db_batch_size: *db_batch_size,
                     },
                     no_snapshot_data: false,

@@ -26,5 +26,11 @@ pub enum StructureType {
     #[strum(serialize = "rbac")]
     Rbac,
     #[strum(serialize = "unknown")]
+    // MongoDB
+    #[strum(serialize = "collection")]
+    Collection,
+    #[strum(serialize = "shardkey")]
+    ShardKey,
+
     Unknown,
 }

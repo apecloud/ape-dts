@@ -1,3 +1,5 @@
+pub mod mongo_create_collection_statement;
+pub mod mongo_shard_key_statement;
 pub mod mysql_create_database_statement;
 pub mod mysql_create_table_statement;
 pub mod pg_create_rbac_statement;

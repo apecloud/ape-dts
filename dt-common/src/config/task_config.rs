@@ -689,6 +689,20 @@ impl TaskConfig {
                     batch_size: loader.get_with_default(EXTRACTOR, BATCH_SIZE, 200),
                 },
 
+                ExtractType::Struct => ExtractorConfig::MongoStruct {
+                    url,
+                    connection_auth,
+                    is_direct_connection,
+                    app_name,
+                    db: String::new(),
+                    dbs: Vec::new(),
+                    db_batch_size: loader.get_with_default(
+                        EXTRACTOR,
+                        "db_batch_size",
+                        DEFAULT_DB_BATCH_SIZE,
+                    ),
+                },
+
                 _ => bail! { not_supported_err },
             },
 
@@ -916,6 +930,14 @@ impl TaskConfig {
                         MONGO_REQUIRE_SHARD_KEY_FILTER,
                         true,
                     ),
+                },
+
+                SinkType::Struct => SinkerConfig::MongoStruct {
+                    url,
+                    connection_auth,
+                    is_direct_connection,
+                    app_name,
+                    conflict_policy,
                 },
 
                 _ => bail! { not_supported_err },

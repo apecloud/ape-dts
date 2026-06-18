@@ -45,7 +45,7 @@ use dt_connector::{
             orc_sequencer::OrcSequencer,
         },
         kafka::kafka_sinker::KafkaSinker,
-        mongo::mongo_sinker::MongoSinker,
+        mongo::{mongo_sinker::MongoSinker, mongo_struct_sinker::MongoStructSinker},
         mysql::{mysql_sinker::MysqlSinker, mysql_struct_sinker::MysqlStructSinker},
         pg::{pg_sinker::PgSinker, pg_struct_sinker::PgStructSinker},
         redis::{redis_sinker::RedisSinker, redis_statistic_sinker::RedisStatisticSinker},
@@ -92,7 +92,6 @@ impl SinkerUtil {
         _monitor_task_id: String,
         data_marker: Option<Arc<RwLock<DataMarker>>>,
         checker: Option<DataCheckerHandle>,
-        is_snapshot_task: bool,
     ) -> anyhow::Result<Sinkers> {
         let log_level = &config.runtime.log_level;
         let enable_sqlx_log = TaskUtil::check_enable_sqlx_log(log_level);
@@ -199,6 +198,29 @@ impl SinkerUtil {
                     };
                     Self::push_checkable_sinker(&mut sub_sinkers, sinker, &checker);
                 }
+            }
+
+            SinkerConfig::MongoStruct {
+                conflict_policy, ..
+            } => {
+                let filter = create_filter!(config, Mongo);
+                let mongo_client = match client {
+                    ConnClient::MongoDB(mongo_client) => mongo_client,
+                    _ => {
+                        bail!("connection pool not found");
+                    }
+                };
+                let (is_target_mongos, target_shard_collections) =
+                    list_shard_collections(&mongo_client).await?;
+                let sinker = MongoStructSinker {
+                    mongo_client,
+                    conflict_policy,
+                    filter,
+                    base_sinker: BaseSinker::new(monitor.clone(), monitor_interval),
+                    target_shard_collections,
+                    is_target_mongos,
+                };
+                Self::push_sinker(&mut sub_sinkers, sinker);
             }
 
             SinkerConfig::Kafka {
