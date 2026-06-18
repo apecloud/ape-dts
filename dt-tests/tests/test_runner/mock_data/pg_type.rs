@@ -740,7 +740,7 @@ impl PgType {
     fn next_date_range_value(random: &mut Random) -> String {
         let offset = random.random_range(0..335);
         single_quote!(format!(
-            "[{}, {})",
+            "[{},{})",
             Self::date_from_offset(offset),
             Self::date_from_offset(offset + 1)
         ))
