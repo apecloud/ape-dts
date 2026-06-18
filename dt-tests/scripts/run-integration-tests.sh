@@ -358,7 +358,7 @@ suite_services() {
     pg_to_pg_lua) echo "postgres-src postgres-dst" ;;
     pg_to_starrocks) echo "postgres-src starrocks-3-2-11" ;;
     mongo_to_mongo) echo "mongo-src mongo-dst" ;;
-    mongo_to_mongo_sharding) echo "mongo-sharding-src-config mongo-sharding-src-shard mongo-sharding-src-init mongo-sharding-src-mongos mongo-sharding-src-add-shard-init mongo-sharding-dst-config mongo-sharding-dst-shard mongo-sharding-dst-init mongo-sharding-dst-mongos mongo-sharding-dst-add-shard-init" ;;
+    mongo_to_mongo_sharding) echo "mongo-dst mongo-sharding-src-config mongo-sharding-src-shard mongo-sharding-src-init mongo-sharding-src-mongos mongo-sharding-src-add-shard-init mongo-sharding-dst-config mongo-sharding-dst-shard mongo-sharding-dst-init mongo-sharding-dst-mongos mongo-sharding-dst-add-shard-init" ;;
     redis_to_redis_2_8) echo "redis-src-2-8 redis-dst-2-8" ;;
     redis_to_redis_4_0) echo "redis-src-4-0 redis-dst-4-0" ;;
     redis_to_redis_5_0) echo "redis-src-5-0 redis-dst-5-0" ;;
