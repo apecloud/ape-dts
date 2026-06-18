@@ -240,6 +240,13 @@ impl MongoSinker {
         })
     }
 
+    fn id_filter(document_key: Option<&Document>, full_doc: Option<&Document>) -> Option<Document> {
+        let id = document_key
+            .and_then(|doc| doc.get(MongoConstants::ID))
+            .or_else(|| full_doc.and_then(|doc| doc.get(MongoConstants::ID)))?;
+        Some(doc! { MongoConstants::ID: id.clone() })
+    }
+
     async fn run_ddl(&mut self, ddl_data: &DdlData) -> anyhow::Result<()> {
         let mut command = query_to_command(&ddl_data.query)?;
         self.rewrite_ddl_command_namespace(ddl_data, &mut command);
@@ -472,7 +479,20 @@ impl MongoSinker {
                     if let Some(query_doc) = query_doc {
                         let after = row_data.require_after()?;
                         if let Some(doc) = Self::mongo_doc(after, MongoConstants::DIFF_DOC) {
-                            self.upsert(&collection, query_doc, doc.clone()).await?;
+                            let after_full_doc = Self::mongo_doc(after, MongoConstants::DOC);
+                            if let Some(after_full_doc) = after_full_doc {
+                                self.update_existing_with_fallback(
+                                    &collection,
+                                    row_data,
+                                    query_doc,
+                                    doc.clone(),
+                                    document_key,
+                                    after_full_doc,
+                                )
+                                .await?;
+                            } else {
+                                self.upsert(&collection, query_doc, doc.clone()).await?;
+                            }
                             rts.push((start_time.elapsed().as_millis() as u64, 1));
                         } else if let Some(doc) = Self::mongo_doc(after, MongoConstants::DOC) {
                             self.replace(&collection, query_doc, doc.clone()).await?;
@@ -616,6 +636,70 @@ impl MongoSinker {
             .update_one(query_doc, update_doc)
             .upsert(true)
             .await?;
+        Ok(())
+    }
+
+    async fn update_existing(
+        &mut self,
+        collection: &Collection<Document>,
+        query_doc: Document,
+        update_doc: Document,
+    ) -> anyhow::Result<bool> {
+        let result = collection.update_one(query_doc, update_doc).await?;
+        Ok(result.matched_count > 0)
+    }
+
+    async fn update_existing_with_fallback(
+        &mut self,
+        collection: &Collection<Document>,
+        row_data: &RowData,
+        query_doc: Document,
+        update_doc: Document,
+        document_key: Option<&Document>,
+        full_doc: &Document,
+    ) -> anyhow::Result<()> {
+        if self
+            .update_existing(collection, query_doc, update_doc.clone())
+            .await?
+        {
+            return Ok(());
+        }
+
+        if self.is_target_sharded(row_data) {
+            if let Some(id_filter) = Self::id_filter(document_key, Some(full_doc)) {
+                if let Some(target_doc) = collection.find_one(id_filter).await? {
+                    let retry_filter = self.complete_shard_filter_prefer_full_doc(
+                        row_data,
+                        document_key,
+                        Some(&target_doc),
+                    )?;
+                    if self
+                        .update_existing(collection, retry_filter, update_doc.clone())
+                        .await?
+                    {
+                        return Ok(());
+                    }
+                }
+            }
+
+            let new_filter = self.complete_shard_filter(row_data, None, Some(full_doc))?;
+            if self
+                .update_existing(collection, new_filter, update_doc.clone())
+                .await?
+            {
+                return Ok(());
+            }
+
+            anyhow::bail!(
+                "mongo update matched no target document for sharded collection [{}]",
+                self.target_ns(row_data)
+            );
+        }
+
+        if let Some(id_filter) = Self::id_filter(document_key, Some(full_doc)) {
+            self.replace(collection, id_filter, full_doc.clone())
+                .await?;
+        }
         Ok(())
     }
 

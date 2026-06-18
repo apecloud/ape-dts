@@ -165,6 +165,72 @@ impl MongoCdcExtractor {
         update_doc
     }
 
+    fn get_path_value<'a>(doc: &'a Document, path: &str) -> Option<&'a Bson> {
+        let mut current = doc;
+        let mut fields = path.split('.').peekable();
+        while let Some(field) = fields.next() {
+            let value = current.get(field)?;
+            if fields.peek().is_none() {
+                return Some(value);
+            }
+            current = value.as_document()?;
+        }
+        None
+    }
+
+    fn build_change_stream_update_doc(
+        update_description: &Document,
+        full_document: Option<&Document>,
+    ) -> Document {
+        let mut set_doc = Document::new();
+        let mut unset_doc = Document::new();
+
+        if let Some(updated_fields) = update_description
+            .get("updatedFields")
+            .and_then(|value| value.as_document())
+        {
+            set_doc.extend(updated_fields.clone());
+        }
+
+        if let Some(removed_fields) = update_description
+            .get("removedFields")
+            .and_then(|value| value.as_array())
+        {
+            for field in removed_fields {
+                if let Some(field) = field.as_str() {
+                    unset_doc.insert(field, "");
+                }
+            }
+        }
+
+        if let Some(truncated_arrays) = update_description
+            .get("truncatedArrays")
+            .and_then(|value| value.as_array())
+        {
+            for truncated_array in truncated_arrays {
+                let Some(truncated_array) = truncated_array.as_document() else {
+                    continue;
+                };
+                let Ok(field) = truncated_array.get_str("field") else {
+                    continue;
+                };
+                if let Some(value) = full_document.and_then(|doc| Self::get_path_value(doc, field))
+                {
+                    set_doc.insert(field, value.clone());
+                }
+            }
+        }
+
+        let mut update_doc = Document::new();
+        if !set_doc.is_empty() {
+            update_doc.insert(MongoConstants::SET, set_doc);
+        }
+        if !unset_doc.is_empty() {
+            update_doc.insert(MongoConstants::UNSET, unset_doc);
+        }
+        update_doc
+    }
+
     fn parse_change_stream_ns(event: &Document) -> Option<(String, String)> {
         let ns = event.get_document("ns").ok()?;
         let db = ns.get_str("db").ok()?.to_string();
@@ -563,7 +629,58 @@ impl MongoCdcExtractor {
                         );
                     }
 
-                    "update" | "replace" => {
+                    "update" => {
+                        row_type = RowType::Update;
+                        let document = event.get_document("fullDocument").ok().cloned();
+                        let document_key = match event.get_document("documentKey") {
+                            Ok(document_key) => document_key.clone(),
+                            Err(_) => continue,
+                        };
+                        Self::insert_id_from_doc(&mut before, &document_key);
+                        Self::insert_document_key(&mut before, &document_key);
+                        Self::insert_id_from_doc(&mut after, &document_key);
+                        Self::insert_document_key(&mut after, &document_key);
+                        if let Some(document) = &document {
+                            Self::insert_id_from_doc(&mut after, document);
+                        }
+                        if let Ok(pre_image) = event.get_document("fullDocumentBeforeChange") {
+                            before.insert(
+                                MongoConstants::PRE_IMAGE.to_string(),
+                                ColValue::MongoDoc(pre_image.clone()),
+                            );
+                            before.insert(
+                                MongoConstants::DOC.to_string(),
+                                ColValue::MongoDoc(pre_image.clone()),
+                            );
+                        }
+                        let update_description = match event.get_document("updateDescription") {
+                            Ok(update_description) => update_description,
+                            Err(_) => continue,
+                        };
+                        let update_doc = Self::build_change_stream_update_doc(
+                            update_description,
+                            document.as_ref(),
+                        );
+                        if update_doc.is_empty() {
+                            log_error!(
+                                "change stream updateDescription is empty or unsupported, ignore, event: {:?}",
+                                event
+                            );
+                            continue;
+                        }
+                        after.insert(
+                            MongoConstants::DIFF_DOC.to_string(),
+                            ColValue::MongoDoc(update_doc),
+                        );
+                        if let Some(document) = document {
+                            after.insert(
+                                MongoConstants::DOC.to_string(),
+                                ColValue::MongoDoc(document),
+                            );
+                        }
+                    }
+
+                    "replace" => {
                         row_type = RowType::Update;
                         let document = match event.get_document("fullDocument") {
                             Ok(document) => document.clone(),
@@ -821,6 +938,43 @@ mod tests {
         assert_eq!(
             update_doc.get_document(MongoConstants::UNSET).unwrap(),
             &doc! { "age": "" }
+        );
+    }
+
+    #[test]
+    fn build_change_stream_update_doc_converts_update_description() {
+        let update_description = doc! {
+            "updatedFields": {
+                "name": "new-name",
+                "profile.score": 10,
+            },
+            "removedFields": ["old_field"],
+            "truncatedArrays": [
+                { "field": "attrs", "newSize": 1 },
+            ],
+        };
+        let full_document = doc! {
+            "name": "new-name",
+            "profile": { "score": 10 },
+            "attrs": ["kept"],
+        };
+
+        let update_doc = MongoCdcExtractor::build_change_stream_update_doc(
+            &update_description,
+            Some(&full_document),
+        );
+
+        assert_eq!(
+            update_doc.get_document(MongoConstants::SET).unwrap(),
+            &doc! {
+                "name": "new-name",
+                "profile.score": 10,
+                "attrs": ["kept"],
+            }
+        );
+        assert_eq!(
+            update_doc.get_document(MongoConstants::UNSET).unwrap(),
+            &doc! { "old_field": "" }
         );
     }
 }
