@@ -180,8 +180,8 @@ impl SqlUtil {
 
 #[cfg(test)]
 mod tests {
-
     use super::*;
+
     #[test]
     #[ignore]
     fn test_check_valid_token_without_escapes() {

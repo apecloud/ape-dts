@@ -32,6 +32,10 @@ CREATE TABLE test_db_1.cash_table (pk SERIAL, csh MONEY, PRIMARY KEY(pk));
 
 CREATE TABLE test_db_1.bitbin_table (pk SERIAL, ba BYTEA, bol BIT(1), bol2 BIT, bs BIT(2), bs7 BIT(7), bv BIT VARYING(2), bv2 BIT VARYING(24), bvl BIT VARYING(64), bvunlimited1 BIT VARYING, bvunlimited2 BIT VARYING, PRIMARY KEY(pk));
 
+CREATE TABLE test_db_1.bit_order_key_table (bit_default BIT, bit_len BIT(10), bit_len_2 BIT(5), varbit_default VARBIT, varbit_len VARBIT(10), val VARCHAR(16), PRIMARY KEY(bit_default, bit_len, bit_len_2));
+
+CREATE TABLE test_db_1.varbit_order_key_table (varbit_default VARBIT, varbit_len VARBIT(10), bit_default BIT, bit_len BIT(10), val VARCHAR(16), PRIMARY KEY(varbit_default, varbit_len));
+
 CREATE TABLE test_db_1.bytea_binmode_table (pk SERIAL, ba BYTEA, PRIMARY KEY(pk));
 
 CREATE TABLE test_db_1.time_table (pk SERIAL, ts TIMESTAMP, tsneg TIMESTAMP(6) WITHOUT TIME ZONE, ts_ms TIMESTAMP(3), ts_us TIMESTAMP(6), tz TIMESTAMPTZ, date DATE, date_pinf DATE, date_ninf DATE, ti TIME, tip TIME(3), ttf TIME, ttz TIME WITH TIME ZONE, tptz TIME(3) WITH TIME ZONE, it INTERVAL, tsp TIMESTAMP (0) WITH TIME ZONE, ts_large TIMESTAMP, ts_large_us TIMESTAMP(6), ts_large_ms TIMESTAMP(3), tz_large TIMESTAMPTZ, ts_max TIMESTAMP(6), ts_min TIMESTAMP(6), tz_max TIMESTAMPTZ, tz_min TIMESTAMPTZ, ts_pinf TIMESTAMP(6), ts_ninf TIMESTAMP(6), tz_pinf TIMESTAMPTZ, tz_ninf TIMESTAMPTZ, PRIMARY KEY(pk));

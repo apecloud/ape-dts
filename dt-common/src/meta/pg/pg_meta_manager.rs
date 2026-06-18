@@ -179,7 +179,7 @@ impl PgMetaManager {
 
         // get col_type_oid of the table
         let sql = format!(
-            "SELECT a.attname AS col_name, a.atttypid as col_type_oid
+            "SELECT a.attname AS col_name, a.atttypid as col_type_oid, a.atttypmod as col_type_mod
             FROM pg_class t, pg_attribute a
             WHERE a.attrelid = t.oid
                 AND t.relname = '{}'
@@ -195,12 +195,14 @@ impl PgMetaManager {
             }
 
             let col_type_oid: i32 = row.try_get_unchecked("col_type_oid")?;
-            let col_type = type_registry
+            let col_type_mod: i32 = row.try_get_unchecked("col_type_mod")?;
+            let mut col_type = type_registry
                 .oid_to_type
                 .get(&col_type_oid)
                 .unwrap()
                 .clone();
-            col_origin_type_map.insert(col.clone(), col_type.alias.clone());
+            col_type.typmod = col_type_mod;
+            col_origin_type_map.insert(col.clone(), col_type.get_alias());
             col_type_map.insert(col, col_type);
         }
 

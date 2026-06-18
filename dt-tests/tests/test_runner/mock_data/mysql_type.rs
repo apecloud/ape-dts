@@ -705,15 +705,21 @@ impl MockColType for MysqlType {
         MysqlType::support_btree_index(self)
     }
 
-    fn next_value_str(&self, _ctx: &MockDbContext, random: &mut Random) -> String {
+    fn next_value_str(&self, _db: &str, _ctx: &MockDbContext, random: &mut Random) -> String {
         MysqlType::next_value_str(self, random)
     }
 
-    fn constant_value_str(&self, _ctx: &MockDbContext) -> Vec<String> {
+    fn constant_value_str(&self, _db: &str, _ctx: &MockDbContext) -> Vec<String> {
         MysqlType::constant_value_str(self)
     }
 
-    fn column_def(&self, quoted_col: &str, nullable: bool, ctx: &MockDbContext) -> String {
+    fn column_def(
+        &self,
+        quoted_col: &str,
+        nullable: bool,
+        _db: &str,
+        ctx: &MockDbContext,
+    ) -> String {
         if matches!(self, MysqlType::Timestamp) && Self::needs_explicit_timestamp_defaults(ctx) {
             // MySQL 5.x may implicitly turn TIMESTAMP NULL inserts into CURRENT_TIMESTAMP.
             // ref https://dev.mysql.com/doc/refman/5.7/en/timestamp-initialization.html

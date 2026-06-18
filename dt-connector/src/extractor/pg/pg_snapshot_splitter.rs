@@ -248,14 +248,14 @@ FROM
                 format!(
                     "WHERE {} > $1::{}",
                     quote!(tb_meta.basic.partition_col),
-                    partition_col_type.alias,
+                    partition_col_type.get_alias(),
                 )
             } else {
                 format!(
                     "{} AND {} > $1::{}",
                     where_clause,
                     quote!(tb_meta.basic.partition_col),
-                    partition_col_type.alias,
+                    partition_col_type.get_alias(),
                 )
             };
         }

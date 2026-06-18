@@ -12,17 +12,32 @@ use crate::test_runner::mock_data::{context::MockDbContext, random::Random};
 /// Implemented by both `PgType` and `MysqlType`.
 pub trait MockColType: std::fmt::Debug + Clone {
     fn name(&self, ctx: &MockDbContext) -> String;
+    fn type_name(&self, _db: &str, ctx: &MockDbContext) -> String {
+        self.name(ctx)
+    }
     fn support_btree_index(&self, ctx: &MockDbContext) -> bool;
-    fn next_value_str(&self, ctx: &MockDbContext, random: &mut Random) -> String;
-    fn constant_value_str(&self, ctx: &MockDbContext) -> Vec<String>;
+    fn next_value_str(&self, db: &str, ctx: &MockDbContext, random: &mut Random) -> String;
+    fn constant_value_str(&self, db: &str, ctx: &MockDbContext) -> Vec<String>;
+    fn custom_type_ddl_stmts(_types: &[Vec<Self>], _db: &str, _ctx: &MockDbContext) -> Vec<String>
+    where
+        Self: Sized,
+    {
+        Vec::new()
+    }
 
     // DDL dialect
     fn schema_drop_stmt(db: &str, ctx: &MockDbContext) -> String;
     fn schema_create_stmt(db: &str, ctx: &MockDbContext) -> String;
     fn quote_identifier(name: &str, ctx: &MockDbContext) -> String;
-    fn column_def(&self, quoted_col: &str, nullable: bool, ctx: &MockDbContext) -> String {
+    fn column_def(
+        &self,
+        quoted_col: &str,
+        nullable: bool,
+        db: &str,
+        ctx: &MockDbContext,
+    ) -> String {
         let is_nullable = if nullable { "" } else { " NOT NULL" };
-        format!("{} {}{}", quoted_col, self.name(ctx), is_nullable)
+        format!("{} {}{}", quoted_col, self.type_name(db, ctx), is_nullable)
     }
     fn after_all_insert_stmts(_db_tbs: &[(String, String)], _ctx: &MockDbContext) -> Vec<String> {
         Vec::new()
@@ -137,7 +152,7 @@ impl<T: MockColType> MockStmt<T> {
                     _ => continue,
                 }
             }
-            let col_def = col_type.column_def(&quoted_col, is_nullable, ctx);
+            let col_def = col_type.column_def(&quoted_col, is_nullable, &self.db, ctx);
             col_names.push(col_name);
             col_defs.push(col_def);
         }
@@ -201,7 +216,7 @@ impl<T: MockColType> MockStmt<T> {
                     let col_constants = col_types
                         .iter()
                         .map(|col_type| {
-                            let mut values = col_type.constant_value_str(ctx);
+                            let mut values = col_type.constant_value_str(&self.db, ctx);
                             values.shuffle(&mut random.rng);
                             values
                         })
@@ -215,7 +230,7 @@ impl<T: MockColType> MockStmt<T> {
                                 let value = if row_idx < values.len() {
                                     values[row_idx].clone()
                                 } else {
-                                    col_type.next_value_str(ctx, random)
+                                    col_type.next_value_str(&self.db, ctx, random)
                                 };
                                 row.push(value);
                             }
@@ -244,7 +259,8 @@ impl<T: MockColType> MockStmt<T> {
                                     if k == j {
                                         null_vec.push(None);
                                     } else {
-                                        let value_str = col_type.next_value_str(ctx, random);
+                                        let value_str =
+                                            col_type.next_value_str(&self.db, ctx, random);
                                         null_vec.push(Some(value_str));
                                     }
                                 }
@@ -259,7 +275,7 @@ impl<T: MockColType> MockStmt<T> {
                             if self.nullable_cols.contains(col) {
                                 null_vec.push(None);
                             } else {
-                                let value_str = col_type.next_value_str(ctx, random);
+                                let value_str = col_type.next_value_str(&self.db, ctx, random);
                                 null_vec.push(Some(value_str));
                             }
                         }
@@ -274,7 +290,7 @@ impl<T: MockColType> MockStmt<T> {
                         loop {
                             let mut key = vec![];
                             for col_type in &col_types {
-                                let value_str = col_type.next_value_str(ctx, random);
+                                let value_str = col_type.next_value_str(&self.db, ctx, random);
                                 key.push(value_str);
                             }
                             if set.insert(key.clone()) {
@@ -356,7 +372,7 @@ impl<T: MockColType> MockStmt<T> {
         if self.nullable_cols.contains(&col_idx) && random.next_null() {
             return None;
         }
-        Some(col_type.next_value_str(ctx, random))
+        Some(col_type.next_value_str(&self.db, ctx, random))
     }
 
     fn is_bad_col_for_index(&self, col_idx: usize, ctx: &MockDbContext) -> bool {
@@ -418,7 +434,7 @@ mod tests {
         let table_stmt = mock_stmt.create_table_stmt(&ctx);
         assert_eq!(
             table_stmt,
-            "CREATE TABLE test_db.test_tb (col_0 int4 NOT NULL, col_1 varchar, col_2 float8, PRIMARY KEY (col_0, col_1), UNIQUE (col_2));"
+            "CREATE TABLE test_db.test_tb (col_0 int4 NOT NULL, col_1 varchar NOT NULL, col_2 float8, PRIMARY KEY (col_0, col_1), UNIQUE (col_2));"
         );
     }
 
@@ -507,7 +523,7 @@ mod tests {
         let table_stmt = mock_stmt.create_table_stmt(&ctx);
         assert_eq!(
             table_stmt,
-            "CREATE TABLE `test_db`.`test_tb` (`col_0` INT NOT NULL, `col_1` VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci, `col_2` DOUBLE, PRIMARY KEY (`col_0`, `col_1`), UNIQUE (`col_2`));"
+            "CREATE TABLE `test_db`.`test_tb` (`col_0` INT NOT NULL, `col_1` VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci NOT NULL, `col_2` DOUBLE, PRIMARY KEY (`col_0`, `col_1`), UNIQUE (`col_2`));"
         );
     }
 

@@ -272,6 +272,7 @@ impl PgStructCheckFetcher {
             category: String::new(),
             enum_values: None,
             schema_name: String::new(),
+            typmod: 0,
         };
 
         if !alias.is_empty() {

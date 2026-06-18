@@ -11,6 +11,7 @@ pub struct MockData<T: MockColType> {
     pub db_context: MockDbContext,
     pub insert_rows: usize,
     pub mock_stmts: Vec<MockStmt<T>>,
+    pub custom_type_ddl_stmts: Vec<String>,
     pub seed: u64,
 }
 
@@ -46,6 +47,7 @@ impl<T: MockColType + DeserializeOwned> MockData<T> {
         let insert_rows = loader.get_with_default("mock", "insert_rows_each_table", 30);
         let seed = loader.get_with_default("mock", "seed", 777);
         let mock_strategy = loader.get_with_default("mock", "strategy", "multi".to_string());
+        let custom_type_ddl_stmts = T::custom_type_ddl_stmts(&col_types, &db_str, &db_context);
         let mut tb_suffix = 0usize;
         let mut mock_stmts = Vec::new();
         if mock_strategy == "single" {
@@ -68,6 +70,7 @@ impl<T: MockColType + DeserializeOwned> MockData<T> {
             return Some(MockData {
                 db_context,
                 mock_stmts,
+                custom_type_ddl_stmts,
                 insert_rows,
                 seed,
             });
@@ -170,6 +173,7 @@ impl<T: MockColType + DeserializeOwned> MockData<T> {
         Some(MockData {
             db_context,
             mock_stmts,
+            custom_type_ddl_stmts,
             insert_rows,
             seed,
         })
@@ -191,6 +195,7 @@ impl<T: MockColType + DeserializeOwned> MockData<T> {
 
     pub fn mock_src_prepare_stmts(&self) -> Vec<String> {
         let mut res = self.mock_schema_stmts();
+        res.extend(self.custom_type_ddl_stmts.clone());
         res.extend(self.mock_table_ddl_stmts());
         res
     }
@@ -200,7 +205,9 @@ impl<T: MockColType + DeserializeOwned> MockData<T> {
     }
 
     pub fn mock_dst_prepare_stmts_for_struct_task(&self) -> Vec<String> {
-        self.mock_schema_stmts()
+        let mut res = self.mock_schema_stmts();
+        res.extend(self.custom_type_ddl_stmts.clone());
+        res
     }
 
     #[allow(dead_code)]
@@ -284,6 +291,7 @@ mod tests {
                 MockStmt::new(&[PgType::Int4], "test_db", "test_tb_1"),
                 MockStmt::new(&[PgType::Int4], "test_db", "test_tb_2"),
             ],
+            custom_type_ddl_stmts: Vec::new(),
             seed: 777,
         };
 
@@ -300,6 +308,7 @@ mod tests {
             db_context: MockDbContext::new(DbType::Mysql, "8.0.0"),
             insert_rows: 2,
             mock_stmts: vec![MockStmt::new(&[MysqlType::Int], "test_db", "test_tb")],
+            custom_type_ddl_stmts: Vec::new(),
             seed: 777,
         };
 
@@ -318,6 +327,7 @@ mod tests {
             db_context: MockDbContext::new(DbType::Mysql, "8.0.0"),
             insert_rows: 1,
             mock_stmts,
+            custom_type_ddl_stmts: Vec::new(),
             seed: 777,
         };
 
@@ -336,6 +346,7 @@ mod tests {
             db_context: MockDbContext::new(DbType::Pg, "16.0"),
             insert_rows: 2,
             mock_stmts: vec![MockStmt::new(&[PgType::Int4], "test_db", "test_tb")],
+            custom_type_ddl_stmts: Vec::new(),
             seed: 777,
         };
 
@@ -354,6 +365,7 @@ mod tests {
                 MockStmt::new(&[MysqlType::Int], "test_db", "test_tb_1"),
                 MockStmt::new(&[MysqlType::TinyBlob], "test_db", "test_tb_2"),
             ],
+            custom_type_ddl_stmts: Vec::new(),
             seed: 777,
         };
 
@@ -374,6 +386,47 @@ mod tests {
                 ("test_db".to_string(), "test_tb_2".to_string())
             ]
         );
+    }
+
+    #[test]
+    fn test_pg_custom_type_prepare_stmts_split_struct_and_data_tasks() {
+        let config_file = std::env::temp_dir().join("pg_custom_type_prepare_test.ini");
+        std::fs::write(
+            &config_file,
+            r#"
+[mock]
+db=mock_db_1
+insert_rows_each_table=1
+pg_types_custom=["int4",{"custom":{"kind":"enum","name":"mock_mood","labels":["sad","ok","happy"]}}]
+"#,
+        )
+        .unwrap();
+        let config_file = config_file.to_string_lossy().to_string();
+        let mock_data =
+            MockData::<PgType>::new(&config_file, MockDbContext::new(DbType::Pg, "17.0")).unwrap();
+
+        let src_prepare = mock_data.mock_src_prepare_stmts();
+        let dst_struct_prepare = mock_data.mock_dst_prepare_stmts_for_struct_task();
+
+        assert_eq!(
+            mock_data.custom_type_ddl_stmts,
+            vec!["CREATE TYPE mock_db_1.mock_mood AS ENUM ('sad', 'ok', 'happy');"]
+        );
+        assert_eq!(
+            &src_prepare[0..3],
+            &[
+                "DROP SCHEMA IF EXISTS mock_db_1 CASCADE;".to_string(),
+                "CREATE SCHEMA IF NOT EXISTS mock_db_1;".to_string(),
+                "CREATE TYPE mock_db_1.mock_mood AS ENUM ('sad', 'ok', 'happy');".to_string()
+            ]
+        );
+        assert!(src_prepare
+            .iter()
+            .any(|stmt| { stmt.contains("CREATE TABLE") && stmt.contains("mock_db_1.mock_mood") }));
+        assert_eq!(dst_struct_prepare.len(), 3);
+        assert!(dst_struct_prepare
+            .iter()
+            .all(|stmt| !stmt.to_lowercase().starts_with("create table")));
     }
 
     #[test]
@@ -446,6 +499,125 @@ mysql_types_c=["geometry"]
 
             assert!(type_names.contains(expected_collation));
             assert!(type_names.contains("CHARACTER SET"));
+        }
+    }
+
+    #[test]
+    fn test_pg_mock_configs_load_newly_supported_types() {
+        for (relative_config, version, has_multirange) in [
+            (
+                "tests/mock_test/pg_to_pg/13_3_4_to_13_3_4/snapshot/table_parallel_test/task_config.ini",
+                "13.3.4",
+                false,
+            ),
+            (
+                "tests/mock_test/pg_to_pg/13_3_4_to_13_3_4/snapshot/parallel_test/task_config.ini",
+                "13.3.4",
+                false,
+            ),
+            (
+                "tests/mock_test/pg_to_pg/13_3_4_to_13_3_4/cdc/basic_test/task_config.ini",
+                "13.3.4",
+                false,
+            ),
+            (
+                "tests/mock_test/pg_to_pg/13_3_4_to_13_3_4/struct/basic_test/task_config.ini",
+                "13.3.4",
+                false,
+            ),
+            (
+                "tests/mock_test/pg_to_pg/17_3_4_to_17_3_4/snapshot/table_parallel_test/task_config.ini",
+                "17.3.4",
+                true,
+            ),
+            (
+                "tests/mock_test/pg_to_pg/17_3_4_to_17_3_4/snapshot/parallel_test/task_config.ini",
+                "17.3.4",
+                true,
+            ),
+            (
+                "tests/mock_test/pg_to_pg/17_3_4_to_17_3_4/cdc/basic_test/task_config.ini",
+                "17.3.4",
+                true,
+            ),
+            (
+                "tests/mock_test/pg_to_pg/17_3_4_to_17_3_4/struct/basic_test/task_config.ini",
+                "17.3.4",
+                true,
+            ),
+        ] {
+            let config_file = format!("{}/{}", env!("CARGO_MANIFEST_DIR"), relative_config);
+            let ctx = MockDbContext::new(DbType::Pg, version);
+            let mock_data = MockData::<PgType>::new(&config_file, ctx).unwrap();
+            let custom_types_enabled = std::fs::read_to_string(&config_file)
+                .unwrap()
+                .lines()
+                .any(|line| line.starts_with("pg_types_custom="));
+            let type_names = mock_data
+                .mock_stmts
+                .iter()
+                .flat_map(|stmt| stmt.included_types.iter())
+                .map(|ty| ty.type_name("mock_db_1", &mock_data.db_context))
+                .collect::<Vec<_>>();
+
+            for expected_type in [
+                "xml",
+                "tsvector",
+                "tsquery",
+                "jsonpath",
+                "int4range",
+                "int8range",
+                "numrange",
+                "tsrange",
+                "tstzrange",
+                "daterange",
+            ] {
+                assert!(
+                    type_names.iter().any(|type_name| type_name == expected_type),
+                    "{relative_config} missing {expected_type}"
+                );
+            }
+
+            assert_eq!(
+                type_names
+                    .iter()
+                    .any(|type_name| type_name == "int4multirange"),
+                has_multirange,
+                "{relative_config} multirange availability mismatch"
+            );
+
+            let prepare_stmts = mock_data.mock_src_prepare_stmts();
+            assert!(
+                prepare_stmts
+                    .iter()
+                    .any(|stmt| stmt.contains("CREATE TABLE")),
+                "{relative_config} generated no CREATE TABLE statement"
+            );
+            if custom_types_enabled {
+                assert!(
+                    prepare_stmts
+                        .iter()
+                        .any(|stmt| stmt.contains("CREATE TYPE mock_db_1.mock_mood")),
+                    "{relative_config} generated no custom enum type"
+                );
+                assert!(
+                    prepare_stmts
+                        .iter()
+                        .any(|stmt| stmt.contains("CREATE DOMAIN mock_db_1.mock_email")),
+                    "{relative_config} generated no custom domain type"
+                );
+                assert!(
+                    prepare_stmts
+                        .iter()
+                        .any(|stmt| stmt.contains("CREATE TYPE mock_db_1.mock_addr AS")),
+                    "{relative_config} generated no custom composite type"
+                );
+                assert!(
+                    prepare_stmts.iter().any(|stmt| stmt
+                        .contains("CREATE TYPE mock_db_1.mock_score_range AS RANGE")),
+                    "{relative_config} generated no custom range type"
+                );
+            }
         }
     }
 }

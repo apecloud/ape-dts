@@ -569,6 +569,11 @@ impl RdbTestRunner {
     }
 
     pub async fn run_cdc_test(&self, start_millis: u64, parse_millis: u64) -> anyhow::Result<()> {
+        if self.mock_prepare_only {
+            self.execute_mock_prepare_only_sqls().await?;
+            return Ok(());
+        }
+
         // prepare src and dst tables
         self.execute_prepare_sqls().await?;
 

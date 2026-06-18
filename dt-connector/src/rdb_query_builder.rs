@@ -862,12 +862,7 @@ impl RdbQueryBuilder<'_> {
                     index, col_type.schema_name, col_type.alias
                 ));
             }
-            // TODO: workaround for types like bit(3)
-            let col_type_name = if col_type.alias == "bit" {
-                "varbit"
-            } else {
-                &col_type.alias
-            };
+            let col_type_name = col_type.get_alias();
             return Ok(format!("${}::{}", index, col_type_name));
         }
 
@@ -936,7 +931,14 @@ mod tests {
             category: "S".to_string(),
             enum_values: None,
             schema_name: "pg_catalog".to_string(),
+            typmod: 0,
         }
+    }
+
+    fn build_pg_col_type_with_typmod(alias: &str, typmod: i32) -> PgColType {
+        let mut col_type = build_pg_col_type(alias);
+        col_type.typmod = typmod;
+        col_type
     }
 
     fn build_pg_tb_meta() -> PgTbMeta {
@@ -1027,6 +1029,29 @@ mod tests {
         }
     }
 
+    fn build_pg_bit_tb_meta() -> PgTbMeta {
+        let mut col_type_map = HashMap::new();
+        col_type_map.insert("bits".to_string(), build_pg_col_type_with_typmod("bit", 10));
+
+        PgTbMeta {
+            basic: RdbTbMeta {
+                schema: "public".to_string(),
+                tb: "bit_t1".to_string(),
+                cols: vec!["bits".to_string()],
+                col_origin_type_map: HashMap::new(),
+                key_map: HashMap::new(),
+                order_cols: vec![],
+                partition_col: "bits".to_string(),
+                id_cols: vec!["bits".to_string()],
+                foreign_keys: vec![],
+                ref_by_foreign_keys: vec![],
+                nullable_cols: HashSet::new(),
+            },
+            oid: 2,
+            col_type_map,
+        }
+    }
+
     fn build_insert_row_data(is_not_origin: bool) -> RowData {
         let mut after = HashMap::new();
         after.insert("id".to_string(), ColValue::Long(1));
@@ -1052,6 +1077,23 @@ mod tests {
                 Some(after),
             )
         }
+    }
+
+    fn build_bit_insert_row_data() -> RowData {
+        let mut after = HashMap::new();
+        after.insert(
+            "bits".to_string(),
+            ColValue::String("0010101011".to_string()),
+        );
+
+        RowData::new_no_origin(
+            "public".to_string(),
+            "bit_t1".to_string(),
+            0,
+            RowType::Insert,
+            None,
+            Some(after),
+        )
     }
 
     fn build_pk_changed_update_row_data() -> RowData {
@@ -1174,6 +1216,20 @@ mod tests {
             .contains(r#"UPDATE "public"."t1" SET "name"=$4::text"#));
         assert!(query_info.sql.contains(r#"WHERE "id"=$5::int4"#));
         assert!(!query_info.sql.contains(r#""code"=$"#));
+    }
+
+    #[test]
+    fn test_pg_bit_insert_query_uses_typmod_placeholder() {
+        let tb_meta = build_pg_bit_tb_meta();
+        let row_data = build_bit_insert_row_data();
+        let builder = RdbQueryBuilder::new_for_pg(&tb_meta, None);
+
+        let query_info = builder.get_query_info(&row_data, false).unwrap();
+
+        assert_eq!(
+            query_info.sql,
+            r#"INSERT INTO "public"."bit_t1"("bits") VALUES($1::bit(10))"#
+        );
     }
 
     #[test]

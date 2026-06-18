@@ -13,6 +13,7 @@ pub struct PgColType {
     pub category: String,
     pub enum_values: Option<Vec<String>>,
     pub schema_name: String,
+    pub typmod: i32,
 }
 
 impl std::fmt::Display for PgColType {
@@ -23,6 +24,20 @@ impl std::fmt::Display for PgColType {
 
 #[allow(dead_code)]
 impl PgColType {
+    pub fn get_alias(&self) -> String {
+        // PostgreSQL bit string docs:
+        // https://www.postgresql.org/docs/current/datatype-bit.html
+        // `bit` without a length is `bit(1)`, and explicit casts to `bit` will truncate the value to 1 bit.
+        //
+        // PostgreSQL stores bit-string typmod as the bit length directly.
+        // Reference: https://github.com/postgres/postgres/blob/master/src/backend/utils/adt/varbit.c#L18
+        match self.alias.as_str() {
+            "bit" if self.typmod > 0 => format!("bit({})", self.typmod),
+            "_bit" if self.typmod > 0 => format!("bit({})[]", self.typmod),
+            _ => self.alias.clone(),
+        }
+    }
+
     pub fn is_enum(&self) -> bool {
         "E" == self.category
     }
@@ -83,6 +98,7 @@ mod tests {
             category: String::new(),
             enum_values: None,
             schema_name: String::new(),
+            typmod: 0,
         }
     }
 
@@ -96,5 +112,28 @@ mod tests {
     #[test]
     fn test_unknown_string_oid_can_not_be_splitted() {
         assert!(!pg_col_type(PgValueType::String, 1027).can_be_splitted());
+    }
+
+    #[test]
+    fn test_get_alias_uses_bit_typmod() {
+        let mut col_type = pg_col_type(PgValueType::String, 1560);
+
+        col_type.alias = "bit".to_string();
+        col_type.typmod = 10;
+        assert_eq!("bit(10)", col_type.get_alias());
+
+        col_type.alias = "_bit".to_string();
+        assert_eq!("bit(10)[]", col_type.get_alias());
+
+        col_type.alias = "bit".to_string();
+        col_type.typmod = -1;
+        assert_eq!("bit", col_type.get_alias());
+
+        col_type.alias = "varbit".to_string();
+        col_type.typmod = 32;
+        assert_eq!("varbit", col_type.get_alias());
+
+        col_type.alias = "_varbit".to_string();
+        assert_eq!("_varbit", col_type.get_alias());
     }
 }

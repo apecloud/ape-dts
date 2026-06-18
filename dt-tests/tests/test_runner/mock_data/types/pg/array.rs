@@ -26,9 +26,14 @@ impl Array {
         format!("ARRAY[{}]", values.join(", "))
     }
 
-    pub fn next_value_str(pg_type: &PgType, rand: &mut Random) -> String {
+    pub fn next_value_str(
+        pg_type: &PgType,
+        db: &str,
+        ctx: &MockDbContext,
+        rand: &mut Random,
+    ) -> String {
         if let Some(elem_pg_type) = Array::element_type(pg_type) {
-            return Self::gen_array(rand, |r| PgType::next_value_str(&elem_pg_type, r));
+            return Self::gen_array(rand, |r| PgType::next_value_str(&elem_pg_type, db, ctx, r));
         };
         panic!("unsupported array type: {:?}", pg_type);
     }
@@ -52,6 +57,7 @@ impl Array {
             PgType::ByteaArray => Some(PgType::Bytea),
             PgType::JsonArray => Some(PgType::Json),
             PgType::JsonbArray => Some(PgType::Jsonb),
+            PgType::XmlArray => Some(PgType::Xml),
             PgType::UuidArray => Some(PgType::Uuid),
             PgType::DateArray => Some(PgType::Date),
             PgType::TimeArray => Some(PgType::Time),
@@ -73,14 +79,29 @@ impl Array {
             PgType::MoneyArray => Some(PgType::Money),
             PgType::BitArray => Some(PgType::Bit),
             PgType::VarbitArray => Some(PgType::Varbit),
+            PgType::TsVectorArray => Some(PgType::TsVector),
+            PgType::TsQueryArray => Some(PgType::TsQuery),
+            PgType::Int4RangeArray => Some(PgType::Int4Range),
+            PgType::Int8RangeArray => Some(PgType::Int8Range),
+            PgType::NumRangeArray => Some(PgType::NumRange),
+            PgType::TsRangeArray => Some(PgType::TsRange),
+            PgType::TstzRangeArray => Some(PgType::TstzRange),
+            PgType::DateRangeArray => Some(PgType::DateRange),
+            PgType::Int4MultirangeArray => Some(PgType::Int4Multirange),
+            PgType::Int8MultirangeArray => Some(PgType::Int8Multirange),
+            PgType::NumMultirangeArray => Some(PgType::NumMultirange),
+            PgType::TsMultirangeArray => Some(PgType::TsMultirange),
+            PgType::TstzMultirangeArray => Some(PgType::TstzMultirange),
+            PgType::DateMultirangeArray => Some(PgType::DateMultirange),
+            PgType::JsonpathArray => Some(PgType::Jsonpath),
             _ => None,
         }
     }
 
-    pub fn constant_values(pg_type: &PgType, ctx: &MockDbContext) -> Vec<String> {
+    pub fn constant_values(pg_type: &PgType, db: &str, ctx: &MockDbContext) -> Vec<String> {
         // Get element type's constant values
         let element_values: Vec<String> = if let Some(elem_type) = Self::element_type(pg_type) {
-            PgType::constant_value_str(&elem_type, ctx)
+            PgType::constant_value_str(&elem_type, db, ctx)
         } else {
             panic!("unsupported array type: {:?}", pg_type)
         };
@@ -133,7 +154,7 @@ mod tests {
         for _ in 0..3 {
             println!(
                 "BoolArray: {}",
-                Array::next_value_str(&PgType::BoolArray, &mut rand)
+                Array::next_value_str(&PgType::BoolArray, "test_db", &pg_ctx(), &mut rand)
             );
         }
     }
@@ -143,15 +164,15 @@ mod tests {
         let mut rand = Random::new(Some(42));
         println!(
             "Int2Array: {}",
-            Array::next_value_str(&PgType::Int2Array, &mut rand)
+            Array::next_value_str(&PgType::Int2Array, "test_db", &pg_ctx(), &mut rand)
         );
         println!(
             "Int4Array: {}",
-            Array::next_value_str(&PgType::Int4Array, &mut rand)
+            Array::next_value_str(&PgType::Int4Array, "test_db", &pg_ctx(), &mut rand)
         );
         println!(
             "Int8Array: {}",
-            Array::next_value_str(&PgType::Int8Array, &mut rand)
+            Array::next_value_str(&PgType::Int8Array, "test_db", &pg_ctx(), &mut rand)
         );
     }
 
@@ -161,7 +182,7 @@ mod tests {
         for _ in 0..3 {
             println!(
                 "TextArray: {}",
-                Array::next_value_str(&PgType::TextArray, &mut rand)
+                Array::next_value_str(&PgType::TextArray, "test_db", &pg_ctx(), &mut rand)
             );
         }
     }
@@ -171,11 +192,11 @@ mod tests {
         let mut rand = Random::new(Some(42));
         println!(
             "PointArray: {}",
-            Array::next_value_str(&PgType::PointArray, &mut rand)
+            Array::next_value_str(&PgType::PointArray, "test_db", &pg_ctx(), &mut rand)
         );
         println!(
             "CircleArray: {}",
-            Array::next_value_str(&PgType::CircleArray, &mut rand)
+            Array::next_value_str(&PgType::CircleArray, "test_db", &pg_ctx(), &mut rand)
         );
     }
 
@@ -184,15 +205,15 @@ mod tests {
         let ctx = pg_ctx();
         println!(
             "BoolArray constants: {:?}",
-            Array::constant_values(&PgType::BoolArray, &ctx)
+            Array::constant_values(&PgType::BoolArray, "test_db", &ctx)
         );
         println!(
             "Int4Array constants: {:?}",
-            Array::constant_values(&PgType::Int4Array, &ctx)
+            Array::constant_values(&PgType::Int4Array, "test_db", &ctx)
         );
         println!(
             "TextArray constants: {:?}",
-            Array::constant_values(&PgType::TextArray, &ctx)
+            Array::constant_values(&PgType::TextArray, "test_db", &ctx)
         );
     }
 }

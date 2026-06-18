@@ -27,6 +27,10 @@ INSERT INTO test_db_1.cash_table (pk, csh) VALUES (4, NULL);
 INSERT INTO test_db_1.bitbin_table (pk, ba, bol, bol2, bs, bs7, bv, bv2, bvl, bvunlimited1, bvunlimited2) VALUES (1, E'\\001\\002\\003'::bytea, '0'::bit(1), '1'::bit(1), '11'::bit(2), '1'::bit(7), '00'::bit(2), '000000110000001000000001'::bit(24),'1000000000000000000000000000000000000000000000000000000000000000'::bit(64), '101', '111011010001000110000001000000001');
 INSERT INTO test_db_1.bitbin_table (pk, ba, bol, bol2, bs, bs7, bv, bv2, bvl, bvunlimited1, bvunlimited2) VALUES (2, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL);
 
+INSERT INTO test_db_1.bit_order_key_table (bit_default, bit_len, bit_len_2, varbit_default, varbit_len, val) VALUES (B'0', B'0010101011', B'10101', B'101', B'0010101011', 'bit-1'), (B'0', B'0010101100', B'10110', B'10101', B'0010101100', 'bit-2'), (B'1', B'0010101101', B'10111', B'1010101', B'0010101101', 'bit-3');
+
+INSERT INTO test_db_1.varbit_order_key_table (varbit_default, varbit_len, bit_default, bit_len, val) VALUES (B'101', B'0010101011', B'0', B'0010101011', 'varbit-1'), (B'10101', B'0010101100', B'1', B'0010101100', 'varbit-2'), (B'1010101', B'0010101101', B'0', B'0010101101', 'varbit-3');
+
 INSERT INTO test_db_1.bytea_binmode_table (pk, ba) VALUES (1, E'\\001\\002\\003'::bytea);
 INSERT INTO test_db_1.bytea_binmode_table (pk, ba) VALUES (2, NULL);
 

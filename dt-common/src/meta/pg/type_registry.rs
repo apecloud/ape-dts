@@ -52,6 +52,7 @@ impl TypeRegistry {
         let alias = Self::name_to_alias(&name);
         let element_oid: i32 = row.get_unchecked("element");
         let parent_oid: i32 = row.get_unchecked("parentoid");
+        let typmod: i32 = row.get_unchecked("modifiers");
         let category: String = row.get_unchecked("category");
         let enum_values: Option<Vec<u8>> = row.get_unchecked("enum_values");
         let enum_values = if enum_values.is_none() {
@@ -72,6 +73,7 @@ impl TypeRegistry {
             category,
             enum_values,
             schema_name,
+            typmod,
         })
     }
 
