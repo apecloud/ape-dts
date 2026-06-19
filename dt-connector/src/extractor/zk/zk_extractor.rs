@@ -190,21 +190,31 @@ impl ZkExtractor {
             scan_result.entries.push(entry);
         }
 
-        let position = self.build_position(&scan_result.versions, scan_result.high_water_zxid);
+        let final_position =
+            self.build_position(&scan_result.versions, scan_result.high_water_zxid);
+        let emitted_entries = scan_result.entries.len();
         for entry in scan_result.entries {
             self.extract_state
-                .push_dt_data(&self.base_extractor, DtData::Zk { entry }, position.clone())
+                .push_dt_data(
+                    &self.base_extractor,
+                    DtData::Zk { entry },
+                    Self::staged_entry_position(),
+                )
                 .await?;
         }
+        self.extract_state
+            .push_dt_data(&self.base_extractor, DtData::Heartbeat {}, final_position)
+            .await?;
 
         *path_versions = scan_result.versions;
         *high_water_zxid = scan_result.high_water_zxid;
 
         log_info!(
-            "ZkExtractor reconciliation complete: reason={}, {} paths, high_water_zxid={}",
+            "ZkExtractor reconciliation complete: reason={}, {} paths, high_water_zxid={}, emitted_entries={}",
             reason,
             path_versions.len(),
-            high_water_zxid
+            high_water_zxid,
+            emitted_entries
         );
         Ok(())
     }
@@ -233,6 +243,10 @@ impl ZkExtractor {
 
     fn path_contains(root: &str, path: &str) -> bool {
         root == "/" || path == root || path.starts_with(&format!("{}/", root.trim_end_matches('/')))
+    }
+
+    fn staged_entry_position() -> Position {
+        Position::None
     }
 
     async fn full_scan(
@@ -687,5 +701,10 @@ mod tests {
         assert_eq!(old_versions.get("/app/service"), Some(&(1, 10)));
         assert!(scan_result.versions.is_empty());
         assert!(scan_result.entries.is_empty());
+    }
+
+    #[test]
+    fn staged_reconciliation_entries_do_not_carry_final_position() {
+        assert_eq!(ZkExtractor::staged_entry_position(), Position::None);
     }
 }
