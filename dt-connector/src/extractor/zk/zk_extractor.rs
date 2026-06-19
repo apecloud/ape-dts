@@ -11,7 +11,8 @@ use anyhow::bail;
 use async_trait::async_trait;
 use tokio::sync::{mpsc, Mutex};
 use zookeeper_client::{
-    Acls, AddWatchMode, Client as ZkClient, CreateMode, EventType, SessionState, Stat, WatchedEvent,
+    Acls, AddWatchMode, Client as ZkClient, CreateMode, Error as ZkError, EventType, SessionState,
+    Stat, WatchedEvent,
 };
 
 use dt_common::{
@@ -56,6 +57,13 @@ struct ZkWatchEvent {
 enum ReconcileScope {
     All,
     Path(String),
+}
+
+#[derive(Debug, Clone)]
+struct ZkScanResult {
+    versions: HashMap<String, (i32, i64)>,
+    high_water_zxid: i64,
+    entries: Vec<ZkEntry>,
 }
 
 impl ZkExtractor {
@@ -116,15 +124,20 @@ impl ZkExtractor {
         reason: &str,
     ) -> anyhow::Result<()> {
         let old_versions = path_versions.clone();
-        let mut current_versions = match scope {
-            ReconcileScope::All => HashMap::new(),
-            ReconcileScope::Path(_) => old_versions.clone(),
+        let mut scan_result = ZkScanResult {
+            versions: match scope {
+                ReconcileScope::All => HashMap::new(),
+                ReconcileScope::Path(_) => old_versions.clone(),
+            },
+            high_water_zxid: *high_water_zxid,
+            entries: Vec::new(),
         };
-        let mut current_zxid = *high_water_zxid;
         let roots = self.reconcile_roots(&scope);
 
         if matches!(scope, ReconcileScope::Path(_)) {
-            current_versions.retain(|path, _| !Self::scope_contains_path(&scope, path));
+            scan_result
+                .versions
+                .retain(|path, _| !Self::scope_contains_path(&scope, path));
         }
 
         log_info!(
@@ -138,22 +151,15 @@ impl ZkExtractor {
             if self.base_extractor.shut_down.load(Ordering::Relaxed) {
                 break;
             }
-            self.scan_node_recursive(
-                client,
-                &root,
-                &old_versions,
-                &mut current_versions,
-                &mut current_zxid,
-                source_id,
-            )
-            .await?;
+            self.scan_node_recursive(client, &root, &old_versions, &mut scan_result, source_id)
+                .await?;
         }
 
         for (path, (old_version, old_mzxid)) in &old_versions {
             if !Self::scope_contains_path(&scope, path) {
                 continue;
             }
-            if current_versions.contains_key(path) {
+            if scan_result.versions.contains_key(path) {
                 continue;
             }
             if self.filter.filter_path(path) {
@@ -181,14 +187,18 @@ impl ZkExtractor {
                 source_zxid: delete_zxid,
                 order_origin: ZkOrderOrigin::ReconcileObserved,
             };
-            let position = self.build_position(&current_versions, current_zxid);
+            scan_result.entries.push(entry);
+        }
+
+        let position = self.build_position(&scan_result.versions, scan_result.high_water_zxid);
+        for entry in scan_result.entries {
             self.extract_state
-                .push_dt_data(&self.base_extractor, DtData::Zk { entry }, position)
+                .push_dt_data(&self.base_extractor, DtData::Zk { entry }, position.clone())
                 .await?;
         }
 
-        *path_versions = current_versions;
-        *high_water_zxid = current_zxid;
+        *path_versions = scan_result.versions;
+        *high_water_zxid = scan_result.high_water_zxid;
 
         log_info!(
             "ZkExtractor reconciliation complete: reason={}, {} paths, high_water_zxid={}",
@@ -248,8 +258,7 @@ impl ZkExtractor {
         client: &ZkClient,
         path: &str,
         old_versions: &HashMap<String, (i32, i64)>,
-        current_versions: &mut HashMap<String, (i32, i64)>,
-        high_water_zxid: &mut i64,
+        scan_result: &mut ZkScanResult,
         source_id: &str,
     ) -> anyhow::Result<()> {
         if self.base_extractor.shut_down.load(Ordering::Relaxed) {
@@ -262,9 +271,11 @@ impl ZkExtractor {
 
         let (data, stat) = match client.get_data(path).await {
             Ok(r) => r,
-            Err(e) => {
-                log_warn!("ZkExtractor: get_data failed for {}: {}", path, e);
+            Err(ZkError::NoNode) => {
                 return Ok(());
+            }
+            Err(e) => {
+                bail!("ZkExtractor: get_data failed for {}: {}", path, e);
             }
         };
 
@@ -272,6 +283,16 @@ impl ZkExtractor {
         if self.filter.filter_ephemeral(ephemeral) {
             return Ok(());
         }
+
+        let children = match client.list_children(path).await {
+            Ok(c) => c,
+            Err(ZkError::NoNode) => {
+                return Ok(());
+            }
+            Err(e) => {
+                bail!("ZkExtractor: list_children failed for {}: {}", path, e);
+            }
+        };
 
         let (already_synced, is_update) = match old_versions.get(path) {
             Some((v, old_mzxid)) => (*v >= stat.version && *old_mzxid >= stat.mzxid, true),
@@ -295,24 +316,15 @@ impl ZkExtractor {
                 source_zxid: stat.mzxid,
                 order_origin: ZkOrderOrigin::SourceStatMtime,
             };
-            let position = self.build_position(current_versions, *high_water_zxid);
-            self.extract_state
-                .push_dt_data(&self.base_extractor, DtData::Zk { entry }, position)
-                .await?;
+            scan_result.entries.push(entry);
         }
 
-        current_versions.insert(path.to_string(), (stat.version, stat.mzxid));
-        if stat.mzxid > *high_water_zxid {
-            *high_water_zxid = stat.mzxid;
+        scan_result
+            .versions
+            .insert(path.to_string(), (stat.version, stat.mzxid));
+        if stat.mzxid > scan_result.high_water_zxid {
+            scan_result.high_water_zxid = stat.mzxid;
         }
-
-        let children = match client.list_children(path).await {
-            Ok(c) => c,
-            Err(e) => {
-                log_warn!("ZkExtractor: list_children failed for {}: {}", path, e);
-                return Ok(());
-            }
-        };
 
         for child in children {
             let child_path = if path == "/" {
@@ -324,8 +336,7 @@ impl ZkExtractor {
                 client,
                 &child_path,
                 old_versions,
-                current_versions,
-                high_water_zxid,
+                scan_result,
                 source_id,
             ))
             .await?;
@@ -612,6 +623,12 @@ impl Extractor for ZkExtractor {
                     if self.base_extractor.shut_down.load(Ordering::Relaxed) {
                         break;
                     }
+                    if session_uncertain {
+                        log_warn!(
+                            "ZkExtractor skips periodic reconciliation while session is uncertain"
+                        );
+                        continue;
+                    }
                     self.incremental_rescan(
                         &client,
                         &mut path_versions,
@@ -652,5 +669,23 @@ mod tests {
         assert!(ZkExtractor::scope_contains_path(&scope, "/app"));
         assert!(ZkExtractor::scope_contains_path(&scope, "/app/service"));
         assert!(!ZkExtractor::scope_contains_path(&scope, "/config"));
+    }
+
+    #[test]
+    fn aborted_scan_result_does_not_replace_old_versions_or_emit_deletes() {
+        let old_versions = HashMap::from([("/app/service".to_string(), (1, 10))]);
+        let scan_result = ZkScanResult {
+            versions: HashMap::new(),
+            high_water_zxid: 0,
+            entries: Vec::new(),
+        };
+        let scan_error: anyhow::Result<()> = Err(anyhow::anyhow!(
+            "ZkExtractor: list_children failed for /app"
+        ));
+
+        assert!(scan_error.is_err());
+        assert_eq!(old_versions.get("/app/service"), Some(&(1, 10)));
+        assert!(scan_result.versions.is_empty());
+        assert!(scan_result.entries.is_empty());
     }
 }

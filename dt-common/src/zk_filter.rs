@@ -27,16 +27,26 @@ impl ZkFilter {
     }
 
     pub fn filter_path(&self, path: &str) -> bool {
-        if Self::INTERNAL_PATHS.iter().any(|p| path.starts_with(p)) {
+        if Self::INTERNAL_PATHS
+            .iter()
+            .any(|p| Self::path_matches_prefix(p, path))
+        {
             return true;
         }
-        if self.ignore_paths.iter().any(|p| path.starts_with(p)) {
+        if self
+            .ignore_paths
+            .iter()
+            .any(|p| Self::path_matches_prefix(p, path))
+        {
             return true;
         }
         if self.do_paths.is_empty() {
             return false;
         }
-        !self.do_paths.iter().any(|p| path.starts_with(p))
+        !self
+            .do_paths
+            .iter()
+            .any(|p| Self::path_matches_prefix(p, path))
     }
 
     pub fn filter_ephemeral(&self, ephemeral: bool) -> bool {
@@ -51,6 +61,12 @@ impl ZkFilter {
             .split(',')
             .map(|s| s.trim().to_string())
             .collect()
+    }
+
+    fn path_matches_prefix(prefix: &str, path: &str) -> bool {
+        prefix == "/"
+            || path == prefix
+            || path.starts_with(&format!("{}/", prefix.trim_end_matches('/')))
     }
 }
 
@@ -70,11 +86,12 @@ mod tests {
 
     #[test]
     fn internal_paths_are_always_filtered() {
-        let filter = filter("/__ape_dts_shadow,/app", "");
+        let filter = filter("/", "");
 
         assert!(filter.filter_path("/__ape_dts_marker"));
         assert!(filter.filter_path("/__ape_dts_shadow/app"));
         assert!(filter.filter_path("/__ape_dts_heartbeat"));
+        assert!(!filter.filter_path("/__ape_dts_shadow2"));
         assert!(!filter.filter_path("/app/service"));
     }
 }
