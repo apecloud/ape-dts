@@ -98,19 +98,32 @@ impl ZkSinker {
     ) -> anyhow::Result<bool> {
         let shadow = shadow_path(path);
         if let Ok((data, _)) = client.get_data(&shadow).await {
-            if let Ok(shadow_meta) = serde_json::from_slice::<ZkShadowMeta>(&data) {
-                return Ok(Self::should_skip_by_shadow_meta(&shadow_meta, entry));
+            match serde_json::from_slice::<ZkShadowMeta>(&data) {
+                Ok(shadow_meta) => {
+                    return Ok(Self::should_skip_by_shadow_meta(&shadow_meta, entry));
+                }
+                Err(e) => {
+                    log_warn!(
+                        "ZK shadow {} has invalid metadata, ignoring for LWW: {}",
+                        shadow,
+                        e
+                    );
+                }
             }
         }
         Ok(false)
     }
 
     fn should_skip_by_shadow_meta(shadow: &ZkShadowMeta, entry: &ZkEntry) -> bool {
-        let shadow_order = shadow.source_order_millis();
-        let entry_order = entry.source_order_millis();
+        shadow.order_key() > Self::entry_order_key(entry)
+    }
 
-        shadow_order > entry_order
-            || (shadow_order == entry_order && shadow.source_id.as_str() > entry.source_id.as_str())
+    fn entry_order_key(entry: &ZkEntry) -> (i64, i64, &str) {
+        (
+            entry.source_order_millis(),
+            entry.source_zxid,
+            entry.source_id.as_str(),
+        )
     }
 
     async fn apply_zk_event(
@@ -276,9 +289,28 @@ impl ZkSinker {
     }
 
     fn shadow_data(entry: &ZkEntry, deleted: bool) -> anyhow::Result<Vec<u8>> {
+        if deleted {
+            Self::validate_tombstone_entry(entry)?;
+        }
         Ok(serde_json::to_vec(&ZkShadowMeta::from_entry(
             entry, deleted,
         ))?)
+    }
+
+    fn validate_tombstone_entry(entry: &ZkEntry) -> anyhow::Result<()> {
+        if entry.source_order_millis() <= 0 {
+            bail!(
+                "ZK tombstone for {} must have positive source_order_millis",
+                entry.path
+            );
+        }
+        if entry.source_zxid <= 0 {
+            bail!(
+                "ZK tombstone for {} must have positive source_zxid",
+                entry.path
+            );
+        }
+        Ok(())
     }
 
     async fn write_data_marker(&self, client: &zk::Client) -> anyhow::Result<()> {
@@ -349,6 +381,18 @@ impl ZkShadowMeta {
         } else {
             self.source_mtime
         }
+    }
+
+    fn source_zxid(&self) -> i64 {
+        self.source_zxid.unwrap_or_default()
+    }
+
+    fn order_key(&self) -> (i64, i64, &str) {
+        (
+            self.source_order_millis(),
+            self.source_zxid(),
+            self.source_id.as_str(),
+        )
     }
 }
 
@@ -450,6 +494,46 @@ mod tests {
     }
 
     #[test]
+    fn same_source_same_millis_shadow_zxid_newer_skips_old_upsert() {
+        let mut old_upsert = entry(100, "node-a", ZkEventType::Updated);
+        old_upsert.source_zxid = 10;
+        let newer_tombstone = ZkShadowMeta {
+            source_id: "node-a".to_string(),
+            source_order_millis: 100,
+            source_mtime: 100,
+            source_zxid: Some(11),
+            version: 1,
+            deleted: true,
+            order_origin: ZkOrderOrigin::ReconcileObserved,
+        };
+
+        assert!(ZkSinker::should_skip_by_shadow_meta(
+            &newer_tombstone,
+            &old_upsert
+        ));
+    }
+
+    #[test]
+    fn same_source_same_millis_entry_zxid_newer_passes_tombstone() {
+        let mut new_upsert = entry(100, "node-a", ZkEventType::Updated);
+        new_upsert.source_zxid = 12;
+        let older_tombstone = ZkShadowMeta {
+            source_id: "node-a".to_string(),
+            source_order_millis: 100,
+            source_mtime: 100,
+            source_zxid: Some(11),
+            version: 1,
+            deleted: true,
+            order_origin: ZkOrderOrigin::ReconcileObserved,
+        };
+
+        assert!(!ZkSinker::should_skip_by_shadow_meta(
+            &older_tombstone,
+            &new_upsert
+        ));
+    }
+
+    #[test]
     fn delete_shadow_data_is_tombstone() {
         let delete = ZkEntry {
             data: None,
@@ -466,6 +550,37 @@ mod tests {
         assert_eq!(shadow.source_mtime, 400);
         assert_eq!(shadow.source_zxid, Some(400));
         assert_eq!(shadow.order_origin, ZkOrderOrigin::ReconcileObserved);
+    }
+
+    #[test]
+    fn delete_shadow_rejects_zero_order() {
+        let delete = ZkEntry {
+            data: None,
+            event_type: ZkEventType::Deleted,
+            order_origin: ZkOrderOrigin::ReconcileObserved,
+            source_order_millis: 0,
+            stat: ZkStat {
+                mtime: 0,
+                ..Default::default()
+            },
+            source_zxid: 1,
+            ..entry(400, "node-a", ZkEventType::Deleted)
+        };
+
+        assert!(ZkSinker::shadow_data(&delete, true).is_err());
+    }
+
+    #[test]
+    fn delete_shadow_rejects_zero_zxid() {
+        let delete = ZkEntry {
+            data: None,
+            event_type: ZkEventType::Deleted,
+            order_origin: ZkOrderOrigin::ReconcileObserved,
+            source_zxid: 0,
+            ..entry(400, "node-a", ZkEventType::Deleted)
+        };
+
+        assert!(ZkSinker::shadow_data(&delete, true).is_err());
     }
 
     #[test]
