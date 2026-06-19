@@ -16,7 +16,11 @@ use dt_common::{
         dt_data::DtData,
         position::Position,
         syncer::Syncer,
-        zk::{zk_entry::ZkEntry, zk_event_type::ZkEventType, zk_stat::ZkStat},
+        zk::{
+            zk_entry::{ZkEntry, ZkOrderOrigin},
+            zk_event_type::ZkEventType,
+            zk_stat::ZkStat,
+        },
     },
     zk_filter::ZkFilter,
 };
@@ -165,6 +169,9 @@ impl ZkExtractor {
                 ephemeral,
                 event_type,
                 source_id: source_id.to_string(),
+                source_order_millis: stat.mtime,
+                source_zxid: stat.mzxid,
+                order_origin: ZkOrderOrigin::SourceStatMtime,
             };
             let position = self.build_position(current_versions, *high_water_zxid);
             self.extract_state
@@ -234,20 +241,29 @@ impl ZkExtractor {
         }
 
         // Detect deletes: paths in old_versions but missing from current scan
-        for (path, _) in &old_versions {
+        for (path, (old_version, old_mzxid)) in &old_versions {
             if current_versions.contains_key(path) {
                 continue;
             }
             if self.filter.filter_path(path) {
                 continue;
             }
+            let delete_order_millis = chrono::Utc::now().timestamp_millis();
             let entry = ZkEntry {
                 path: path.clone(),
                 data: None,
-                stat: ZkStat::default(),
+                stat: ZkStat {
+                    version: *old_version,
+                    mzxid: *old_mzxid,
+                    mtime: delete_order_millis,
+                    ..Default::default()
+                },
                 ephemeral: false,
                 event_type: ZkEventType::Deleted,
                 source_id: source_id.to_string(),
+                source_order_millis: delete_order_millis,
+                source_zxid: *old_mzxid,
+                order_origin: ZkOrderOrigin::ReconcileObserved,
             };
             let position = self.build_position(&current_versions, current_zxid);
             self.extract_state

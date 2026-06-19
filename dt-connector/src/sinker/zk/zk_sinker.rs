@@ -9,7 +9,7 @@ use dt_common::config::config_enums::ConflictPolicyEnum;
 use dt_common::log_info;
 use dt_common::log_warn;
 use dt_common::meta::dt_data::{DtData, DtItem};
-use dt_common::meta::zk::zk_entry::ZkEntry;
+use dt_common::meta::zk::zk_entry::{ZkEntry, ZkOrderOrigin};
 use dt_common::meta::zk::zk_event_type::ZkEventType;
 
 use crate::data_marker::DataMarker;
@@ -98,21 +98,19 @@ impl ZkSinker {
     ) -> anyhow::Result<bool> {
         let shadow = shadow_path(path);
         if let Ok((data, _)) = client.get_data(&shadow).await {
-            if let Ok(val) = serde_json::from_slice::<serde_json::Value>(&data) {
-                let source_mtime = val
-                    .get("source_mtime")
-                    .and_then(|v| v.as_i64())
-                    .unwrap_or(0);
-                let source_id = val.get("source_id").and_then(|v| v.as_str()).unwrap_or("");
-                if source_mtime > entry.stat.mtime {
-                    return Ok(true);
-                }
-                if source_mtime == entry.stat.mtime && *source_id > *entry.source_id {
-                    return Ok(true);
-                }
+            if let Ok(shadow_meta) = serde_json::from_slice::<ZkShadowMeta>(&data) {
+                return Ok(Self::should_skip_by_shadow_meta(&shadow_meta, entry));
             }
         }
         Ok(false)
+    }
+
+    fn should_skip_by_shadow_meta(shadow: &ZkShadowMeta, entry: &ZkEntry) -> bool {
+        let shadow_order = shadow.source_order_millis();
+        let entry_order = entry.source_order_millis();
+
+        shadow_order > entry_order
+            || (shadow_order == entry_order && shadow.source_id.as_str() > entry.source_id.as_str())
     }
 
     async fn apply_zk_event(
@@ -185,7 +183,7 @@ impl ZkSinker {
                     }
                     Err(e) => bail!("ZK delete {} failed: {}", path, e),
                 }
-                self.delete_shadow(client, path).await?;
+                self.write_tombstone_shadow(client, path, entry).await?;
                 Ok(())
             }
 
@@ -232,11 +230,7 @@ impl ZkSinker {
         entry: &ZkEntry,
     ) -> anyhow::Result<()> {
         let shadow = shadow_path(path);
-        let shadow_data = serde_json::to_vec(&serde_json::json!({
-            "source_id": entry.source_id,
-            "source_mtime": entry.stat.mtime,
-            "version": entry.stat.version,
-        }))?;
+        let shadow_data = Self::shadow_data(entry, false)?;
         match client.set_data(&shadow, &shadow_data, None).await {
             Ok(_) => {}
             Err(ref e) if is_no_node(e) => {
@@ -255,14 +249,36 @@ impl ZkSinker {
         Ok(())
     }
 
-    async fn delete_shadow(&self, client: &zk::Client, path: &str) -> anyhow::Result<()> {
+    async fn write_tombstone_shadow(
+        &self,
+        client: &zk::Client,
+        path: &str,
+        entry: &ZkEntry,
+    ) -> anyhow::Result<()> {
         let shadow = shadow_path(path);
-        match client.delete(&shadow, None).await {
-            Ok(()) => {}
-            Err(ref e) if is_no_node(e) => {}
-            Err(e) => bail!("ZK delete shadow {} failed: {}", shadow, e),
+        let shadow_data = Self::shadow_data(entry, true)?;
+        match client.set_data(&shadow, &shadow_data, None).await {
+            Ok(_) => {}
+            Err(ref e) if is_no_node(e) => {
+                self.ensure_parent_paths(client, &shadow).await?;
+                let options = self.persistent_options();
+                match client.create(&shadow, &shadow_data, &options).await {
+                    Ok(_) => {}
+                    Err(ref e) if is_node_exists(e) => {
+                        client.set_data(&shadow, &shadow_data, None).await.ok();
+                    }
+                    Err(e) => bail!("ZK create tombstone shadow {} failed: {}", shadow, e),
+                }
+            }
+            Err(e) => bail!("ZK write tombstone shadow {} failed: {}", shadow, e),
         }
         Ok(())
+    }
+
+    fn shadow_data(entry: &ZkEntry, deleted: bool) -> anyhow::Result<Vec<u8>> {
+        Ok(serde_json::to_vec(&ZkShadowMeta::from_entry(
+            entry, deleted,
+        ))?)
     }
 
     async fn write_data_marker(&self, client: &zk::Client) -> anyhow::Result<()> {
@@ -297,6 +313,45 @@ impl ZkSinker {
 
 const SHADOW_PREFIX: &str = "/__ape_dts_shadow";
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+struct ZkShadowMeta {
+    pub source_id: String,
+    #[serde(default)]
+    pub source_order_millis: i64,
+    #[serde(default)]
+    pub source_mtime: i64,
+    #[serde(default)]
+    pub source_zxid: Option<i64>,
+    #[serde(default)]
+    pub version: i32,
+    #[serde(default)]
+    pub deleted: bool,
+    #[serde(default)]
+    pub order_origin: ZkOrderOrigin,
+}
+
+impl ZkShadowMeta {
+    fn from_entry(entry: &ZkEntry, deleted: bool) -> Self {
+        Self {
+            source_id: entry.source_id.clone(),
+            source_order_millis: entry.source_order_millis(),
+            source_mtime: entry.stat.mtime,
+            source_zxid: (entry.source_zxid != 0).then_some(entry.source_zxid),
+            version: entry.stat.version,
+            deleted,
+            order_origin: entry.order_origin.clone(),
+        }
+    }
+
+    fn source_order_millis(&self) -> i64 {
+        if self.source_order_millis != 0 {
+            self.source_order_millis
+        } else {
+            self.source_mtime
+        }
+    }
+}
+
 fn shadow_path(path: &str) -> String {
     format!("{}{}", SHADOW_PREFIX, path)
 }
@@ -311,4 +366,115 @@ fn is_no_node(e: &zk::Error) -> bool {
 
 fn is_not_empty(e: &zk::Error) -> bool {
     matches!(e, zk::Error::NotEmpty)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use dt_common::meta::zk::zk_stat::ZkStat;
+
+    fn entry(order: i64, source_id: &str, event_type: ZkEventType) -> ZkEntry {
+        ZkEntry {
+            path: "/app/service".to_string(),
+            data: Some(b"value".to_vec()),
+            stat: ZkStat {
+                version: 1,
+                mtime: order,
+                mzxid: order,
+                ..Default::default()
+            },
+            ephemeral: false,
+            event_type,
+            source_id: source_id.to_string(),
+            source_order_millis: order,
+            source_zxid: order,
+            order_origin: ZkOrderOrigin::SourceStatMtime,
+        }
+    }
+
+    #[test]
+    fn newer_tombstone_skips_older_upsert() {
+        let old_upsert = entry(100, "node-a", ZkEventType::Updated);
+        let tombstone = ZkShadowMeta {
+            source_id: "node-b".to_string(),
+            source_order_millis: 200,
+            source_mtime: 200,
+            source_zxid: Some(200),
+            version: 1,
+            deleted: true,
+            order_origin: ZkOrderOrigin::ReconcileObserved,
+        };
+
+        assert!(ZkSinker::should_skip_by_shadow_meta(
+            &tombstone,
+            &old_upsert
+        ));
+    }
+
+    #[test]
+    fn newer_upsert_can_pass_older_tombstone() {
+        let new_upsert = entry(300, "node-a", ZkEventType::Updated);
+        let tombstone = ZkShadowMeta {
+            source_id: "node-b".to_string(),
+            source_order_millis: 200,
+            source_mtime: 200,
+            source_zxid: Some(200),
+            version: 1,
+            deleted: true,
+            order_origin: ZkOrderOrigin::ReconcileObserved,
+        };
+
+        assert!(!ZkSinker::should_skip_by_shadow_meta(
+            &tombstone,
+            &new_upsert
+        ));
+    }
+
+    #[test]
+    fn equal_order_uses_source_id_tie_break() {
+        let entry_from_a = entry(100, "node-a", ZkEventType::Updated);
+        let shadow_from_b = ZkShadowMeta {
+            source_id: "node-b".to_string(),
+            source_order_millis: 100,
+            source_mtime: 100,
+            source_zxid: Some(100),
+            version: 1,
+            deleted: false,
+            order_origin: ZkOrderOrigin::SourceStatMtime,
+        };
+
+        assert!(ZkSinker::should_skip_by_shadow_meta(
+            &shadow_from_b,
+            &entry_from_a
+        ));
+    }
+
+    #[test]
+    fn delete_shadow_data_is_tombstone() {
+        let delete = ZkEntry {
+            data: None,
+            event_type: ZkEventType::Deleted,
+            order_origin: ZkOrderOrigin::ReconcileObserved,
+            ..entry(400, "node-a", ZkEventType::Deleted)
+        };
+
+        let bytes = ZkSinker::shadow_data(&delete, true).unwrap();
+        let shadow: ZkShadowMeta = serde_json::from_slice(&bytes).unwrap();
+
+        assert!(shadow.deleted);
+        assert_eq!(shadow.source_order_millis, 400);
+        assert_eq!(shadow.source_mtime, 400);
+        assert_eq!(shadow.source_zxid, Some(400));
+        assert_eq!(shadow.order_origin, ZkOrderOrigin::ReconcileObserved);
+    }
+
+    #[test]
+    fn old_shadow_json_falls_back_to_source_mtime() {
+        let old_json = br#"{"source_id":"node-b","source_mtime":200,"version":1}"#;
+        let shadow: ZkShadowMeta = serde_json::from_slice(old_json).unwrap();
+        let old_upsert = entry(100, "node-a", ZkEventType::Updated);
+
+        assert_eq!(shadow.source_order_millis(), 200);
+        assert!(ZkSinker::should_skip_by_shadow_meta(&shadow, &old_upsert));
+    }
 }
