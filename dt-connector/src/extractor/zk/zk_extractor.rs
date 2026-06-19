@@ -4,11 +4,15 @@ use std::{
         atomic::{AtomicBool, Ordering},
         Arc,
     },
+    time::Duration,
 };
 
+use anyhow::bail;
 use async_trait::async_trait;
-use tokio::sync::Mutex;
-use zookeeper_client::{Acls, Client as ZkClient, CreateMode, Stat};
+use tokio::sync::{mpsc, Mutex};
+use zookeeper_client::{
+    Acls, AddWatchMode, Client as ZkClient, CreateMode, EventType, SessionState, Stat, WatchedEvent,
+};
 
 use dt_common::{
     log_error, log_info, log_warn,
@@ -40,6 +44,18 @@ pub struct ZkExtractor {
     pub extract_state: ExtractState,
     pub syncer: Arc<Mutex<Syncer>>,
     pub recovery: Option<Arc<dyn Recovery + Send + Sync>>,
+}
+
+#[derive(Debug, Clone)]
+struct ZkWatchEvent {
+    watch_path: String,
+    event: WatchedEvent,
+}
+
+#[derive(Debug, Clone)]
+enum ReconcileScope {
+    All,
+    Path(String),
 }
 
 impl ZkExtractor {
@@ -90,6 +106,125 @@ impl ZkExtractor {
         Ok((HashMap::new(), 0))
     }
 
+    async fn reconcile(
+        &mut self,
+        client: &ZkClient,
+        path_versions: &mut HashMap<String, (i32, i64)>,
+        high_water_zxid: &mut i64,
+        source_id: &str,
+        scope: ReconcileScope,
+        reason: &str,
+    ) -> anyhow::Result<()> {
+        let old_versions = path_versions.clone();
+        let mut current_versions = match scope {
+            ReconcileScope::All => HashMap::new(),
+            ReconcileScope::Path(_) => old_versions.clone(),
+        };
+        let mut current_zxid = *high_water_zxid;
+        let roots = self.reconcile_roots(&scope);
+
+        if matches!(scope, ReconcileScope::Path(_)) {
+            current_versions.retain(|path, _| !Self::scope_contains_path(&scope, path));
+        }
+
+        log_info!(
+            "ZkExtractor reconciliation start: reason={}, scope={:?}, roots={:?}",
+            reason,
+            scope,
+            roots
+        );
+
+        for root in roots {
+            if self.base_extractor.shut_down.load(Ordering::Relaxed) {
+                break;
+            }
+            self.scan_node_recursive(
+                client,
+                &root,
+                &old_versions,
+                &mut current_versions,
+                &mut current_zxid,
+                source_id,
+            )
+            .await?;
+        }
+
+        for (path, (old_version, old_mzxid)) in &old_versions {
+            if !Self::scope_contains_path(&scope, path) {
+                continue;
+            }
+            if current_versions.contains_key(path) {
+                continue;
+            }
+            if self.filter.filter_path(path) {
+                continue;
+            }
+            let delete_order_millis = chrono::Utc::now().timestamp_millis();
+            let delete_zxid = if *old_mzxid > 0 {
+                *old_mzxid
+            } else {
+                delete_order_millis
+            };
+            let entry = ZkEntry {
+                path: path.clone(),
+                data: None,
+                stat: ZkStat {
+                    version: *old_version,
+                    mzxid: delete_zxid,
+                    mtime: delete_order_millis,
+                    ..Default::default()
+                },
+                ephemeral: false,
+                event_type: ZkEventType::Deleted,
+                source_id: source_id.to_string(),
+                source_order_millis: delete_order_millis,
+                source_zxid: delete_zxid,
+                order_origin: ZkOrderOrigin::ReconcileObserved,
+            };
+            let position = self.build_position(&current_versions, current_zxid);
+            self.extract_state
+                .push_dt_data(&self.base_extractor, DtData::Zk { entry }, position)
+                .await?;
+        }
+
+        *path_versions = current_versions;
+        *high_water_zxid = current_zxid;
+
+        log_info!(
+            "ZkExtractor reconciliation complete: reason={}, {} paths, high_water_zxid={}",
+            reason,
+            path_versions.len(),
+            high_water_zxid
+        );
+        Ok(())
+    }
+
+    fn reconcile_roots(&self, scope: &ReconcileScope) -> Vec<String> {
+        match scope {
+            ReconcileScope::All => self.watch_paths.clone(),
+            ReconcileScope::Path(path) => {
+                if self.watch_paths.iter().any(|watch_path| {
+                    Self::path_contains(watch_path, path) || Self::path_contains(path, watch_path)
+                }) {
+                    vec![path.clone()]
+                } else {
+                    Vec::new()
+                }
+            }
+        }
+    }
+
+    fn scope_contains_path(scope: &ReconcileScope, path: &str) -> bool {
+        match scope {
+            ReconcileScope::All => true,
+            ReconcileScope::Path(scope_path) => Self::path_contains(scope_path, path),
+        }
+    }
+
+    fn path_contains(root: &str, path: &str) -> bool {
+        root == "/" || path == root || path.starts_with(&format!("{}/", root.trim_end_matches('/')))
+    }
+
     async fn full_scan(
         &mut self,
         client: &ZkClient,
@@ -97,28 +232,15 @@ impl ZkExtractor {
         high_water_zxid: &mut i64,
         source_id: &str,
     ) -> anyhow::Result<()> {
-        log_info!("ZkExtractor starting full scan");
-        let old_versions = path_versions.clone();
-        for watch_path in &self.watch_paths.clone() {
-            if self.base_extractor.shut_down.load(Ordering::Relaxed) {
-                break;
-            }
-            self.scan_node_recursive(
-                client,
-                watch_path,
-                &old_versions,
-                path_versions,
-                high_water_zxid,
-                source_id,
-            )
-            .await?;
-        }
-        log_info!(
-            "ZkExtractor full scan complete: {} paths, high_water_zxid={}",
-            path_versions.len(),
-            high_water_zxid
-        );
-        Ok(())
+        self.reconcile(
+            client,
+            path_versions,
+            high_water_zxid,
+            source_id,
+            ReconcileScope::All,
+            "initial",
+        )
+        .await
     }
 
     async fn scan_node_recursive(
@@ -219,66 +341,15 @@ impl ZkExtractor {
         high_water_zxid: &mut i64,
         source_id: &str,
     ) -> anyhow::Result<()> {
-        log_info!("ZkExtractor starting incremental rescan");
-        let old_versions = path_versions.clone();
-
-        let mut current_versions: HashMap<String, (i32, i64)> = HashMap::new();
-        let mut current_zxid = *high_water_zxid;
-
-        for watch_path in &self.watch_paths.clone() {
-            if self.base_extractor.shut_down.load(Ordering::Relaxed) {
-                break;
-            }
-            self.scan_node_recursive(
-                client,
-                watch_path,
-                &old_versions,
-                &mut current_versions,
-                &mut current_zxid,
-                source_id,
-            )
-            .await?;
-        }
-
-        // Detect deletes: paths in old_versions but missing from current scan
-        for (path, (old_version, old_mzxid)) in &old_versions {
-            if current_versions.contains_key(path) {
-                continue;
-            }
-            if self.filter.filter_path(path) {
-                continue;
-            }
-            let delete_order_millis = chrono::Utc::now().timestamp_millis();
-            let entry = ZkEntry {
-                path: path.clone(),
-                data: None,
-                stat: ZkStat {
-                    version: *old_version,
-                    mzxid: *old_mzxid,
-                    mtime: delete_order_millis,
-                    ..Default::default()
-                },
-                ephemeral: false,
-                event_type: ZkEventType::Deleted,
-                source_id: source_id.to_string(),
-                source_order_millis: delete_order_millis,
-                source_zxid: *old_mzxid,
-                order_origin: ZkOrderOrigin::ReconcileObserved,
-            };
-            let position = self.build_position(&current_versions, current_zxid);
-            self.extract_state
-                .push_dt_data(&self.base_extractor, DtData::Zk { entry }, position)
-                .await?;
-        }
-
-        *path_versions = current_versions;
-        *high_water_zxid = current_zxid;
-
-        log_info!(
-            "ZkExtractor incremental rescan complete: {} paths",
-            path_versions.len()
-        );
-        Ok(())
+        self.reconcile(
+            client,
+            path_versions,
+            high_water_zxid,
+            source_id,
+            ReconcileScope::All,
+            "periodic",
+        )
+        .await
     }
 
     fn build_position(
@@ -350,6 +421,135 @@ impl ZkExtractor {
             }
         });
     }
+
+    async fn start_watchers(
+        &self,
+        client: &ZkClient,
+    ) -> anyhow::Result<mpsc::UnboundedReceiver<ZkWatchEvent>> {
+        if self.watch_paths.is_empty() {
+            bail!("ZkExtractor requires at least one watch_path");
+        }
+
+        let (tx, rx) = mpsc::unbounded_channel();
+        for watch_path in self.watch_paths.clone() {
+            let mut watcher = client
+                .watch(&watch_path, AddWatchMode::PersistentRecursive)
+                .await
+                .map_err(|e| anyhow::anyhow!("ZK register watcher {} failed: {}", watch_path, e))?;
+            let tx = tx.clone();
+            let shut_down = self.base_extractor.shut_down.clone();
+
+            log_info!(
+                "ZkExtractor registered persistent recursive watcher on {}",
+                watch_path
+            );
+            tokio::spawn(async move {
+                loop {
+                    if shut_down.load(Ordering::Relaxed) {
+                        break;
+                    }
+
+                    let event = watcher.changed().await;
+                    let terminal = event.event_type == EventType::Session
+                        && event.session_state.is_terminated();
+                    if tx
+                        .send(ZkWatchEvent {
+                            watch_path: watch_path.clone(),
+                            event,
+                        })
+                        .is_err()
+                    {
+                        break;
+                    }
+                    if terminal {
+                        break;
+                    }
+                }
+            });
+        }
+        drop(tx);
+        Ok(rx)
+    }
+
+    async fn handle_watch_event(
+        &mut self,
+        client: &ZkClient,
+        path_versions: &mut HashMap<String, (i32, i64)>,
+        high_water_zxid: &mut i64,
+        source_id: &str,
+        watch_event: ZkWatchEvent,
+        session_uncertain: &mut bool,
+    ) -> anyhow::Result<()> {
+        let event = watch_event.event;
+        log_info!(
+            "ZkExtractor watcher event: watch_path={}, event_type={}, state={}, path={}, zxid={}",
+            watch_event.watch_path,
+            event.event_type,
+            event.session_state,
+            event.path,
+            event.zxid
+        );
+
+        match event.event_type {
+            EventType::Session => match event.session_state {
+                SessionState::Disconnected => {
+                    *session_uncertain = true;
+                    log_warn!(
+                        "ZkExtractor watcher disconnected; next connected event will force reconciliation"
+                    );
+                    Ok(())
+                }
+                SessionState::SyncConnected | SessionState::ConnectedReadOnly => {
+                    if *session_uncertain {
+                        *session_uncertain = false;
+                        self.reconcile(
+                            client,
+                            path_versions,
+                            high_water_zxid,
+                            source_id,
+                            ReconcileScope::All,
+                            "watch-reconnect",
+                        )
+                        .await?;
+                    }
+                    Ok(())
+                }
+                SessionState::AuthFailed | SessionState::Expired | SessionState::Closed => {
+                    bail!(
+                        "ZkExtractor watcher terminal session state: {}",
+                        event.session_state
+                    )
+                }
+            },
+            EventType::NodeCreated
+            | EventType::NodeDeleted
+            | EventType::NodeDataChanged
+            | EventType::NodeChildrenChanged => {
+                if event.path.is_empty() {
+                    return Ok(());
+                }
+                if self.filter.filter_path(&event.path) {
+                    return Ok(());
+                }
+                if *session_uncertain {
+                    log_warn!(
+                        "ZkExtractor treats watcher event {} as hint while session is uncertain",
+                        event.path
+                    );
+                    return Ok(());
+                }
+                self.reconcile(
+                    client,
+                    path_versions,
+                    high_water_zxid,
+                    source_id,
+                    ReconcileScope::Path(event.path.clone()),
+                    "watch-event",
+                )
+                .await
+            }
+        }
+    }
 }
 
 #[async_trait]
@@ -375,6 +575,8 @@ impl Extractor for ZkExtractor {
             source_id.clone(),
         );
 
+        let mut watch_rx = self.start_watchers(&client).await?;
+
         self.full_scan(
             &client,
             &mut path_versions,
@@ -383,18 +585,42 @@ impl Extractor for ZkExtractor {
         )
         .await?;
 
+        let mut reconciliation_timer =
+            tokio::time::interval(Duration::from_secs(self.scan_interval_secs.max(1)));
+        reconciliation_timer.tick().await;
+        let mut session_uncertain = false;
+        let mut watch_rx_closed = false;
+
         while !self.base_extractor.shut_down.load(Ordering::Relaxed) {
-            tokio::time::sleep(tokio::time::Duration::from_secs(self.scan_interval_secs)).await;
-            if self.base_extractor.shut_down.load(Ordering::Relaxed) {
-                break;
+            tokio::select! {
+                maybe_event = watch_rx.recv(), if !watch_rx_closed => {
+                    if let Some(watch_event) = maybe_event {
+                        self.handle_watch_event(
+                            &client,
+                            &mut path_versions,
+                            &mut high_water_zxid,
+                            &source_id,
+                            watch_event,
+                            &mut session_uncertain,
+                        ).await?;
+                    } else {
+                        log_warn!("ZkExtractor watcher channel closed; forcing periodic reconciliation only");
+                        watch_rx_closed = true;
+                    }
+                }
+                _ = reconciliation_timer.tick() => {
+                    if self.base_extractor.shut_down.load(Ordering::Relaxed) {
+                        break;
+                    }
+                    self.incremental_rescan(
+                        &client,
+                        &mut path_versions,
+                        &mut high_water_zxid,
+                        &source_id,
+                    )
+                    .await?;
+                }
             }
-            self.incremental_rescan(
-                &client,
-                &mut path_versions,
-                &mut high_water_zxid,
-                &source_id,
-            )
-            .await?;
         }
 
         self.base_extractor
@@ -404,5 +630,27 @@ impl Extractor for ZkExtractor {
 
     async fn close(&mut self) -> anyhow::Result<()> {
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn path_contains_matches_exact_and_descendants() {
+        assert!(ZkExtractor::path_contains("/", "/app"));
+        assert!(ZkExtractor::path_contains("/app", "/app"));
+        assert!(ZkExtractor::path_contains("/app", "/app/service"));
+        assert!(!ZkExtractor::path_contains("/app", "/application"));
+    }
+
+    #[test]
+    fn scoped_reconcile_only_matches_path_subtree() {
+        let scope = ReconcileScope::Path("/app".to_string());
+
+        assert!(ZkExtractor::scope_contains_path(&scope, "/app"));
+        assert!(ZkExtractor::scope_contains_path(&scope, "/app/service"));
+        assert!(!ZkExtractor::scope_contains_path(&scope, "/config"));
     }
 }
