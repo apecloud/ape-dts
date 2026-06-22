@@ -530,6 +530,51 @@ impl MongoCdcExtractor {
         (row_data, position)
     }
 
+    // Event example:
+    /*
+    {
+        _id : { // stores metadata
+            "_data" : <BinData|hex string> // resumeToken
+        },
+        "operationType" : "<operation>", // insert, delete, replace, update, drop, rename, dropDatabase, invalidate
+        "fullDocument" : { <document> }, // data after modification, appears in insert, replace, delete, update. Equivalent to the original "o" field
+        "ns" : { // namespace
+            "db" : "<database>",
+            "coll" : "<collection>"
+        },
+        "to" : { // only valid when operationType == rename, indicates the new namespace after renaming
+            "db" : "<database>",
+            "coll" : "<collection>"
+        },
+        "documentKey" : { "_id" : <value> }, // equivalent to o2 field. Appears in insert, replace, delete, update. Normally only contains _id, for sharded collections also includes shard key
+        "updateDescription" : { // only appears when operationType == update; represents incremental modification, while replace is complete replacement
+            "updatedFields" : { <document> }, // values of updated fields
+            "removedFields" : [ "<field>", ... ] // list of removed fields
+        },
+        "fullDocument" : { <document> }, // if full_document is enabled, is updateLookup, otherwise default
+        "clusterTime" : <Timestamp>, // equivalent to ts field
+        "txnNumber" : <NumberLong>, // equivalent to txnNumber in oplog, only appears in transactions. txnNumber is monotonically increasing within a logical session
+        "lsid" : { // equivalent to lsid field in oplog, only appears in transactions. Logical session id, id of session for the request
+               "id" : <UUID>,
+               "uid" : <BinData>
+           },
+        "operationDescription": { // stores index-related info in DDL operations (createIndexes/dropIndexes/collMod, etc.)
+          "index": {
+             "name": "age_1",
+             "hidden": true
+          }
+        },
+        "stateBeforeChange": { // only present in modify event; records status before collMod command
+          "collectionOptions": { // namespace options
+              "uuid": UUID("47d6baac-eeaa-488b-98ae-893f3abaaf25")
+          },
+          "indexOptions": { // index options
+             "hidden": false
+          }
+       },
+        "wallTime" : <Date>, // equivalent to wall field
+    }
+    */
     async fn extract_change_stream(&mut self) -> anyhow::Result<()> {
         let (resume_token, start_timestamp) = if self.resume_token.is_empty() {
             (None, Some(self.parse_start_timestamp()))

@@ -2,8 +2,10 @@
 mod test {
     use std::collections::HashMap;
 
+    use mongodb::bson::doc;
     use serial_test::serial;
 
+    use crate::test_runner::mongo_test_runner::MongoTestRunner;
     use crate::test_runner::test_base::TestBase;
 
     #[tokio::test]
@@ -22,6 +24,60 @@ mod test {
     #[serial]
     async fn snapshot_route_test() {
         TestBase::run_mongo_snapshot_test("mongo_to_mongo/snapshot/route_test").await;
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn snapshot_sharding_test() {
+        let runner = MongoTestRunner::new("mongo_to_mongo/snapshot/sharding_test")
+            .await
+            .unwrap();
+        runner.run_snapshot_test(true).await.unwrap();
+        runner
+            .assert_dst_shard_collection(
+                "mongo_snapshot_sharding_db.accounts",
+                doc! { "tenant_id": 1, "account_id": 1 },
+                false,
+            )
+            .await;
+        runner
+            .assert_dst_shard_collection(
+                "mongo_snapshot_sharding_db.events_hashed",
+                doc! { "region": "hashed" },
+                false,
+            )
+            .await;
+        runner
+            .assert_dst_shard_collection(
+                "mongo_snapshot_sharding_db.upsert_accounts",
+                doc! { "tenant_id": 1, "account_id": 1 },
+                false,
+            )
+            .await;
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn snapshot_sharding_to_standalone_test() {
+        let runner = MongoTestRunner::new("mongo_to_mongo/snapshot/sharding_to_standalone_test")
+            .await
+            .unwrap();
+        runner.run_snapshot_test(true).await.unwrap();
+        runner
+            .assert_dst_collection_exists("mongo_snapshot_sharding_to_standalone_db", "accounts")
+            .await;
+        runner
+            .assert_dst_collection_exists(
+                "mongo_snapshot_sharding_to_standalone_db",
+                "events_hashed",
+            )
+            .await;
+        runner
+            .assert_dst_collection_exists(
+                "mongo_snapshot_sharding_to_standalone_db",
+                "upsert_accounts",
+            )
+            .await;
     }
 
     #[tokio::test]

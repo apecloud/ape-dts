@@ -1,0 +1,16 @@
+use mongo_snapshot_sharding_db;
+db.dropDatabase();
+admin.runCommand({ "enableSharding": "mongo_snapshot_sharding_db" });
+db.createCollection("accounts");
+db.accounts.createIndex({ "tenant_id": 1, "account_id": 1 }, { "name": "tenant_account_idx" });
+admin.runCommand({ "shardCollection": "mongo_snapshot_sharding_db.accounts", "key": { "tenant_id": 1, "account_id": 1 } });
+db.createCollection("events_hashed");
+db.events_hashed.createIndex({ "region": "hashed" }, { "name": "region_hashed_idx" });
+admin.runCommand({ "shardCollection": "mongo_snapshot_sharding_db.events_hashed", "key": { "region": "hashed" } });
+db.createCollection("upsert_accounts");
+db.upsert_accounts.createIndex({ "tenant_id": 1, "account_id": 1 }, { "name": "tenant_account_upsert_idx" });
+admin.runCommand({ "shardCollection": "mongo_snapshot_sharding_db.upsert_accounts", "key": { "tenant_id": 1, "account_id": 1 } });
+db.upsert_accounts.insertMany([
+  { "_id": "upsert_1", "tenant_id": "tenant_u", "account_id": 1, "status": "old", "balance": 1 },
+  { "_id": "upsert_2", "tenant_id": "tenant_u", "account_id": 2, "status": "old", "balance": 2 }
+]);

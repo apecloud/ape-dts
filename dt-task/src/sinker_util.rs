@@ -1,4 +1,4 @@
-use std::{str::FromStr, sync::Arc};
+use std::{collections::HashMap, str::FromStr, sync::Arc};
 
 use anyhow::{bail, Context};
 use kafka::producer::{Producer, RequiredAcks};
@@ -13,7 +13,7 @@ use dt_common::{
     },
     meta::{
         avro::avro_converter::AvroConverter,
-        mongo::mongo_shard::list_shard_collections,
+        mongo::mongo_shard::{is_mongos, list_shard_collections},
         mysql::mysql_meta_manager::MysqlMetaManager,
         pg::pg_meta_manager::PgMetaManager,
         redis::{
@@ -184,15 +184,14 @@ impl SinkerUtil {
                         bail!("connection pool not found");
                     }
                 };
-                let (is_target_mongos, target_shard_collections) =
-                    list_shard_collections(&mongo_client).await?;
+                let is_target_mongos = is_mongos(&mongo_client).await?;
                 for _ in 0..parallel_size {
                     let sinker = MongoSinker {
                         batch_size,
                         router: router.clone(),
                         mongo_client: mongo_client.clone(),
                         base_sinker: BaseSinker::new(monitor.clone(), monitor_interval),
-                        target_shard_collections: target_shard_collections.clone(),
+                        target_shard_collections: HashMap::new(),
                         require_shard_key_filter,
                         is_target_mongos,
                     };

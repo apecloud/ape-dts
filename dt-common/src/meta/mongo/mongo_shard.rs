@@ -78,6 +78,29 @@ pub async fn get_shard_collection(
     client: &Client,
     ns: &str,
 ) -> anyhow::Result<Option<MongoShardCollection>> {
-    let (_, mut shard_collections) = list_shard_collections(client).await?;
-    Ok(shard_collections.remove(ns))
+    if !is_mongos(client).await? {
+        return Ok(None);
+    }
+
+    let collection = client
+        .database("config")
+        .collection::<Document>("collections");
+    let doc = collection
+        .find_one(doc! { "_id": ns, "dropped": { "$ne": true } })
+        .await?;
+    let Some(doc) = doc else {
+        return Ok(None);
+    };
+    let Some(Bson::Document(key)) = doc.get("key") else {
+        return Ok(None);
+    };
+    if key.is_empty() {
+        return Ok(None);
+    }
+    let unique = doc.get_bool("unique").unwrap_or(false);
+    Ok(Some(MongoShardCollection {
+        ns: ns.to_string(),
+        key: key.clone(),
+        unique,
+    }))
 }
