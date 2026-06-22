@@ -3,7 +3,7 @@ use std::collections::{HashMap, VecDeque};
 use super::task_util::TaskUtil;
 use anyhow::anyhow;
 use dt_common::{
-    config::{config_enums::ParallelType, sinker_config::SinkerConfig, task_config::TaskConfig},
+    config::{config_enums::ParallelType, task_config::TaskConfig},
     meta::redis::command::key_parser::KeyParser,
     monitor::task_monitor_handle::TaskMonitorHandle,
     utils::redis_util::RedisUtil,
