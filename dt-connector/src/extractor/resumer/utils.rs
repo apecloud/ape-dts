@@ -118,7 +118,7 @@ impl ResumerUtil {
                 let mut conn = RedisUtil::create_redis_conn(url, connection_auth)
                     .await
                     .context("failed to create Redis resumer connection")?;
-                let is_cluster = Self::is_redis_cluster(&mut conn);
+                let is_cluster = RedisUtil::is_redis_cluster(&mut conn);
 
                 if is_cluster {
                     let nodes = RedisUtil::get_cluster_master_nodes(&mut conn)
@@ -164,17 +164,6 @@ impl ResumerUtil {
                 )
             }
         }
-    }
-
-    fn is_redis_cluster(conn: &mut Connection) -> bool {
-        RedisUtil::send_cmd(conn, &["INFO", "cluster"])
-            .ok()
-            .and_then(|value| RedisUtil::parse_result_as_string(value).ok())
-            .is_some_and(|values| {
-                values
-                    .iter()
-                    .any(|value| value.contains("cluster_enabled:1"))
-            })
     }
 
     fn redis_node_url(base_url: &str, node: &ClusterNode) -> Result<String> {

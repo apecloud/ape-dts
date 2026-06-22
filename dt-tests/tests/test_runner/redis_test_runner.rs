@@ -49,21 +49,18 @@ impl RedisTestRunner {
             ExtractorConfig::RedisSnapshot {
                 url,
                 connection_auth,
-                is_cluster,
                 ..
             }
             | ExtractorConfig::RedisCdc {
                 url,
                 connection_auth,
-                is_cluster,
                 ..
             }
             | ExtractorConfig::RedisSnapshotAndCdc {
                 url,
                 connection_auth,
-                is_cluster,
                 ..
-            } => RedisClusterConnection::new(&url, &connection_auth, is_cluster)
+            } => RedisClusterConnection::new(&url, &connection_auth)
                 .await
                 .unwrap(),
             _ => {
@@ -75,9 +72,8 @@ impl RedisTestRunner {
             SinkerConfig::Redis {
                 url,
                 connection_auth,
-                is_cluster,
                 ..
-            } => RedisClusterConnection::new(&url, &connection_auth, is_cluster)
+            } => RedisClusterConnection::new(&url, &connection_auth)
                 .await
                 .unwrap(),
             _ => {

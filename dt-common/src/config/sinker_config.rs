@@ -74,7 +74,6 @@ pub enum SinkerConfig {
         connection_auth: ConnectionAuthConfig,
         batch_size: usize,
         method: String,
-        is_cluster: bool,
     },
 
     RedisStatistic {

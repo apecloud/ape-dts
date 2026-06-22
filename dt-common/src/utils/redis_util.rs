@@ -30,6 +30,17 @@ impl RedisUtil {
         Ok(conn)
     }
 
+    pub fn is_redis_cluster(conn: &mut Connection) -> bool {
+        Self::send_cmd(conn, &["INFO", "cluster"])
+            .ok()
+            .and_then(|value| Self::parse_result_as_string(value).ok())
+            .is_some_and(|values| {
+                values
+                    .iter()
+                    .any(|value| value.contains("cluster_enabled:1"))
+            })
+    }
+
     pub fn send_cmd(conn: &mut Connection, cmd: &[&str]) -> anyhow::Result<Value> {
         let cmd = RedisCmd::from_str_args(cmd);
         let packed_cmd = CmdEncoder::encode(&cmd);
