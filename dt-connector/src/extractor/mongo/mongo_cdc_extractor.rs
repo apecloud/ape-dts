@@ -231,6 +231,32 @@ impl MongoCdcExtractor {
         update_doc
     }
 
+    fn change_stream_update_requires_full_document(update_description: &Document) -> bool {
+        update_description
+            .get("disambiguatedPaths")
+            .and_then(|value| value.as_document())
+            .map(|doc| {
+                doc.values()
+                    .any(Self::disambiguated_path_requires_full_document)
+            })
+            .unwrap_or(false)
+    }
+
+    fn disambiguated_path_requires_full_document(path: &Bson) -> bool {
+        let Some(components) = path.as_array() else {
+            return true;
+        };
+        if components.is_empty() {
+            return true;
+        }
+
+        components.iter().any(|component| match component {
+            Bson::String(field) => field.contains('.'),
+            Bson::Int32(_) | Bson::Int64(_) => false,
+            _ => true,
+        })
+    }
+
     fn parse_change_stream_ns(event: &Document) -> Option<(String, String)> {
         let ns = event.get_document("ns").ok()?;
         let db = ns.get_str("db").ok()?.to_string();
@@ -603,7 +629,7 @@ impl MongoCdcExtractor {
         if supports_change_stream_6_0_features {
             watch = watch.full_document_before_change(FullDocumentBeforeChangeType::WhenAvailable);
         }
-        if enable_change_stream_ddl {
+        if supports_change_stream_6_0_features {
             watch = watch.show_expanded_events(true);
         }
         if let Some(resume_token) = resume_token {
@@ -702,26 +728,42 @@ impl MongoCdcExtractor {
                             Ok(update_description) => update_description,
                             Err(_) => continue,
                         };
-                        let update_doc = Self::build_change_stream_update_doc(
-                            update_description,
-                            document.as_ref(),
-                        );
-                        if update_doc.is_empty() {
-                            log_error!(
-                                "change stream updateDescription is empty or unsupported, ignore, event: {:?}",
-                                event
-                            );
-                            continue;
-                        }
-                        after.insert(
-                            MongoConstants::DIFF_DOC.to_string(),
-                            ColValue::MongoDoc(update_doc),
-                        );
-                        if let Some(document) = document {
+                        if Self::change_stream_update_requires_full_document(update_description) {
+                            // Ambiguous paths may refer to literal dotted field names, so a normal
+                            // $set/$unset dotted path can update the wrong shape.
+                            let Some(document) = document else {
+                                log_error!(
+                                    "change stream updateDescription has disambiguatedPaths, but fullDocument is missing, ignore, event: {:?}",
+                                    event
+                                );
+                                continue;
+                            };
                             after.insert(
                                 MongoConstants::DOC.to_string(),
                                 ColValue::MongoDoc(document),
                             );
+                        } else {
+                            let update_doc = Self::build_change_stream_update_doc(
+                                update_description,
+                                document.as_ref(),
+                            );
+                            if update_doc.is_empty() {
+                                log_error!(
+                                "change stream updateDescription is empty or unsupported, ignore, event: {:?}",
+                                event
+                            );
+                                continue;
+                            }
+                            after.insert(
+                                MongoConstants::DIFF_DOC.to_string(),
+                                ColValue::MongoDoc(update_doc),
+                            );
+                            if let Some(document) = document {
+                                after.insert(
+                                    MongoConstants::DOC.to_string(),
+                                    ColValue::MongoDoc(document),
+                                );
+                            }
                         }
                     }
 
@@ -1021,5 +1063,157 @@ mod tests {
             update_doc.get_document(MongoConstants::UNSET).unwrap(),
             &doc! { "old_field": "" }
         );
+    }
+
+    #[test]
+    fn change_stream_update_requires_full_document_for_literal_dot_path() {
+        let update_description = doc! {
+            "updatedFields": {
+                "home.town": "London",
+            },
+            "disambiguatedPaths": {
+                "home.town": ["home.town"],
+            },
+        };
+
+        assert!(
+            MongoCdcExtractor::change_stream_update_requires_full_document(&update_description)
+        );
+
+        let update_description = doc! {
+            "updatedFields": {
+                "profile.score": 10,
+            },
+        };
+
+        assert!(
+            !MongoCdcExtractor::change_stream_update_requires_full_document(&update_description)
+        );
+    }
+
+    #[test]
+    fn change_stream_disambiguated_paths_keeps_safe_update_paths_as_diff() {
+        let update_description = doc! {
+            "updatedFields": {
+                "profile.score": 10,
+                "attrs.0": "first",
+            },
+            "removedFields": ["profile.old"],
+            "disambiguatedPaths": {
+                "profile.score": ["profile", "score"],
+                "attrs.0": ["attrs", 0],
+                "profile.old": ["profile", "old"],
+            },
+        };
+
+        assert!(
+            !MongoCdcExtractor::change_stream_update_requires_full_document(&update_description)
+        );
+        let update_doc =
+            MongoCdcExtractor::build_change_stream_update_doc(&update_description, None);
+
+        assert_eq!(
+            update_doc.get_document(MongoConstants::SET).unwrap(),
+            &doc! {
+                "profile.score": 10,
+                "attrs.0": "first",
+            }
+        );
+        assert_eq!(
+            update_doc.get_document(MongoConstants::UNSET).unwrap(),
+            &doc! { "profile.old": "" }
+        );
+    }
+
+    #[test]
+    fn change_stream_disambiguated_paths_keeps_array_and_numeric_field_paths_as_diff() {
+        let update_description = doc! {
+            "updatedFields": {
+                "scores.2": 99,
+                "matrix.0.1": 42,
+                "residences.0.0": "street",
+                "profile.0": "zero-field",
+            },
+            "removedFields": ["old_scores.1", "profile.1"],
+            "disambiguatedPaths": {
+                "scores.2": ["scores", 2],
+                "matrix.0.1": ["matrix", 0, 1],
+                "residences.0.0": ["residences", 0, "0"],
+                "profile.0": ["profile", "0"],
+                "old_scores.1": ["old_scores", 1],
+                "profile.1": ["profile", "1"],
+            },
+        };
+
+        assert!(
+            !MongoCdcExtractor::change_stream_update_requires_full_document(&update_description)
+        );
+        let update_doc =
+            MongoCdcExtractor::build_change_stream_update_doc(&update_description, None);
+
+        assert_eq!(
+            update_doc.get_document(MongoConstants::SET).unwrap(),
+            &doc! {
+                "scores.2": 99,
+                "matrix.0.1": 42,
+                "residences.0.0": "street",
+                "profile.0": "zero-field",
+            }
+        );
+        assert_eq!(
+            update_doc.get_document(MongoConstants::UNSET).unwrap(),
+            &doc! {
+                "old_scores.1": "",
+                "profile.1": "",
+            }
+        );
+    }
+
+    #[test]
+    fn change_stream_disambiguated_paths_requires_full_document_for_literal_dot_fields() {
+        for update_description in [
+            doc! {
+                "updatedFields": { "home.town": "London" },
+                "disambiguatedPaths": { "home.town": ["home.town"] },
+            },
+            doc! {
+                "updatedFields": { "profile.name.first": "Ada" },
+                "disambiguatedPaths": { "profile.name.first": ["profile", "name.first"] },
+            },
+            doc! {
+                "removedFields": ["archive.2026.status"],
+                "disambiguatedPaths": { "archive.2026.status": ["archive.2026", "status"] },
+            },
+        ] {
+            assert!(
+                MongoCdcExtractor::change_stream_update_requires_full_document(&update_description),
+                "update_description should require fullDocument: {:?}",
+                update_description
+            );
+        }
+    }
+
+    #[test]
+    fn change_stream_disambiguated_paths_requires_full_document_for_malformed_paths() {
+        for update_description in [
+            doc! {
+                "updatedFields": { "profile.score": 10 },
+                "disambiguatedPaths": { "profile.score": [] },
+            },
+            doc! {
+                "updatedFields": { "profile.score": 10 },
+                "disambiguatedPaths": { "profile.score": "profile.score" },
+            },
+            doc! {
+                "updatedFields": { "profile.score": 10 },
+                "disambiguatedPaths": { "profile.score": ["profile", true] },
+            },
+        ] {
+            assert!(
+                MongoCdcExtractor::change_stream_update_requires_full_document(&update_description),
+                "malformed disambiguated path should require fullDocument: {:?}",
+                update_description
+            );
+        }
     }
 }

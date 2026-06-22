@@ -13,6 +13,11 @@ db.tb_2.insertOne({ "name": "c", "age": "3", "profile": { "level": "silver" }, "
 db.tb_2.insertOne({ "_id": "full_document_doc", "name": "full_document", "profile": { "state": "new", "score": 1 }, "attrs": ["v1"], "history": [{ "step": 1, "state": "new" }] });
 db.tb_2.insertOne({ "_id": "replace_doc", "name": "before_replace", "profile": { "state": "old" }, "attrs": ["old"] });
 db.tb_2.insertOne({ "_id": "full_document_complex_doc", "name": "full_document_complex", "age": "30", "profile": { "state": "new", "score": 1, "nested": { "level": "bronze", "flags": ["seed"] } }, "attrs": ["seed", { "key": "source", "enabled": true }], "history": [{ "step": 0, "state": "inserted" }], "counters": { "seen": 0 }, "active": true });
+db.tb_2.insertOne({ "_id": "literal_dot_doc", "name": "literal_dot", "home.town": "old_literal", "home": { "town": "nested_should_not_change" } });
+db.tb_2.insertOne({ "_id": "array_path_doc", "name": "array_path", "scores": [1, 2, 3], "matrix": [[1, 2], [3, 4]], "residences": [{ "0": "old_street", "city": "old_city" }], "profile": { "0": "zero", "1": "one" }, "old_scores": [10, 20, 30] });
+db.tb_2.insertOne({ "_id": "nested_array_path_doc", "name": "nested_array_path", "arr": [{ "items": [{ "value": "a" }, { "value": "b" }] }], "tags": ["x", "y"], "profile": { "state": "new" } });
+db.tb_2.insertOne({ "_id": "numeric_root_path_doc", "name": "numeric_root_path", "0": "zero", "nested": { "1": "one", "2": "two" } });
+db.tb_2.insertOne({ "_id": "truncated_array_doc", "name": "truncated_array", "items": [1, 2, 3, 4], "nested": { "items": ["a", "b", "c"] } });
 db.tb_2.insertOne({ "_id": "cs_marker", "name": "cs_marker", "age": "90", "payload": { "before_remove": true, "items": [1, 2, 3] } });
 db.tb_2.insertOne({ "name": "d", "age": "4" });
 db.tb_2.insertOne({ "name": "e", "age": "5" });
@@ -51,6 +56,11 @@ db.tb_2.updateOne({ "_id" : "full_document_complex_doc" }, { "$set": { "profile"
 db.tb_2.updateOne({ "_id" : "full_document_complex_doc" }, { "$inc": { "counters.seen": 1 } });
 db.tb_2.updateOne({ "_id" : "full_document_complex_doc" }, { "$set": { "profile.nested.level": "platinum", "active": false }, "$push": { "history": { "step": 1, "state": "updated_again" } } });
 db.tb_2.replaceOne({ "_id" : "full_document_complex_doc" }, { "_id": "full_document_complex_doc", "name": "full_document_complex_replaced", "age": "31", "profile": { "state": "replaced", "score": 4, "nested": { "level": "diamond", "flags": ["replace_one"] } }, "attrs": ["replace_final", { "rank": 1 }], "history": [{ "step": 2, "state": "replaced" }], "counters": { "seen": 3 }, "active": false, "final_state": "replace_one" });
+db.tb_2.replaceOne({ "_id" : "literal_dot_doc" }, { "_id": "literal_dot_doc", "name": "literal_dot", "home.town": "new_literal", "home": { "town": "nested_should_not_change" } });
+db.tb_2.updateOne({ "_id" : "array_path_doc" }, { "$set": { "scores.2": 99, "matrix.0.1": 42, "residences.0.0": "new_street", "profile.0": "zero_updated" }, "$unset": { "old_scores.1": "", "profile.1": "" } });
+db.tb_2.updateOne({ "_id" : "nested_array_path_doc" }, { "$set": { "arr.0.items.0.value": "a_updated", "tags.0": "x_updated", "profile.state": "updated" } });
+db.tb_2.updateOne({ "_id" : "numeric_root_path_doc" }, { "$set": { "0": "zero_updated", "nested.1": "one_updated" }, "$unset": { "nested.2": "" } });
+db.tb_2.updateOne({ "_id" : "truncated_array_doc" }, { "$pop": { "items": 1, "nested.items": -1 } });
 
 db.id_types_tb.updateOne({ "_id": ObjectId("648195af9aa9cadd41a9dca1") }, { "$set": { "status": "updated_object_id" } });
 db.id_types_tb.updateOne({ "_id": ObjectId("648195af9aa9cadd41a9dca1") }, { "$set": { "status": "updated_object_id_again", "version": 2 } });
