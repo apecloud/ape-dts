@@ -369,13 +369,13 @@ struct CreateArgs {
     #[arg(
         long = "source",
         required_unless_present = "file",
-        help = "Required unless --file is provided. Source database URL. Must include a supported scheme prefix: mysql://, postgres://, postgresql://, pg://, mongodb://, mongo://, or redis://. PostgreSQL and MongoDB URLs must include a database when --source-db is omitted."
+        help = "Required unless --file is provided. Source database URL. Must include a supported scheme prefix: mysql://, postgres://, postgresql://, pg://, mongodb://, mongo://, mongodb+srv://, or redis://. PostgreSQL URLs must include a database when --source-db is omitted."
     )]
     source_url: Option<String>,
     #[arg(
         long = "target",
         required_unless_present = "file",
-        help = "Required unless --file is provided. Target database URL. Must include a supported scheme prefix. PostgreSQL and MongoDB URLs must include a database when --target-db is omitted. v1 requires source and target to be the same engine."
+        help = "Required unless --file is provided. Target database URL. Must include a supported scheme prefix. PostgreSQL URLs must include a database when --target-db is omitted. v1 requires source and target to be the same engine."
     )]
     target_url: Option<String>,
     #[arg(

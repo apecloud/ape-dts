@@ -2,6 +2,7 @@ use std::{sync::atomic::AtomicBool, sync::Arc};
 
 use async_trait::async_trait;
 use tokio::sync::Mutex;
+use url::Url;
 
 use super::traits::Prechecker;
 use crate::{
@@ -15,10 +16,11 @@ use dt_common::{
         extractor_config::ExtractorConfig,
         task_config::TaskConfig,
     },
-    meta::{dt_queue::DtQueue, syncer::Syncer},
+    meta::{dt_queue::DtQueue, redis::cluster_node::ClusterNode, syncer::Syncer},
     monitor::{task_monitor::MonitorType, task_monitor_handle::TaskMonitorHandle},
     rdb_filter::RdbFilter,
     time_filter::TimeFilter,
+    utils::redis_util::RedisUtil,
 };
 use dt_connector::{
     extractor::{
@@ -37,6 +39,33 @@ pub struct RedisPrechecker {
 }
 
 const MIN_SUPPORTED_VERSION: f32 = 2.8;
+
+#[derive(Debug, PartialEq, Eq)]
+enum RedisCdcPrecheckMode {
+    ClusterNodePsync,
+    SingleNodePsync,
+}
+
+fn redis_cdc_precheck_mode(is_cluster: bool) -> RedisCdcPrecheckMode {
+    if is_cluster {
+        RedisCdcPrecheckMode::ClusterNodePsync
+    } else {
+        RedisCdcPrecheckMode::SingleNodePsync
+    }
+}
+
+fn redis_cluster_psync_url(base_url: &str, nodes: &[ClusterNode]) -> anyhow::Result<String> {
+    let node = nodes
+        .first()
+        .ok_or_else(|| anyhow::anyhow!("source redis cluster has no master nodes"))?;
+
+    let mut url = Url::parse(base_url)?;
+    url.set_host(Some(&node.host))
+        .map_err(|_| anyhow::anyhow!("invalid redis cluster node host: {}", node.host))?;
+    url.set_port(Some(node.port.parse()?))
+        .map_err(|_| anyhow::anyhow!("invalid redis cluster node port: {}", node.port))?;
+    Ok(url.to_string())
+}
 
 #[async_trait]
 impl Prechecker for RedisPrechecker {
@@ -79,6 +108,39 @@ impl Prechecker for RedisPrechecker {
             // should never happen since we've already checked the extractor type before into this function
             _ => 0,
         };
+        let precheck_mode = {
+            let conn = self
+                .fetcher
+                .conn
+                .as_mut()
+                .ok_or_else(|| anyhow::anyhow!("redis connection is not initialized"))?;
+            redis_cdc_precheck_mode(RedisUtil::is_redis_cluster(conn))
+        };
+
+        let psync_url = if let RedisCdcPrecheckMode::ClusterNodePsync = precheck_mode {
+            let conn = self
+                .fetcher
+                .conn
+                .as_mut()
+                .ok_or_else(|| anyhow::anyhow!("redis connection is not initialized"))?;
+            match RedisUtil::get_cluster_master_nodes(conn)
+                .and_then(|nodes| redis_cluster_psync_url(&self.fetcher.url, &nodes))
+            {
+                Ok(url) => url,
+                Err(error) => {
+                    return Ok(CheckResult::build_with_err(
+                        CheckItem::CheckAccountPermission,
+                        self.is_source,
+                        DbType::Redis,
+                        Some(error),
+                        None,
+                    ));
+                }
+            }
+        } else {
+            self.fetcher.url.clone()
+        };
+
         let buffer = Arc::new(DtQueue::new(1, 0, None, None));
 
         let filter = RdbFilter::from_config(&self.task_config.filter, &DbType::Redis)?;
@@ -96,7 +158,7 @@ impl Prechecker for RedisPrechecker {
         };
 
         let mut psyncer = RedisPsyncExtractor {
-            conn: RedisClient::new(&self.fetcher.url, &self.fetcher.connection_auth).await?,
+            conn: RedisClient::new(&psync_url, &self.fetcher.connection_auth).await?,
             repl_id: String::new(),
             repl_offset: 0,
             now_db_id: 0,
@@ -155,5 +217,39 @@ impl Prechecker for RedisPrechecker {
             None,
             None,
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use dt_common::meta::redis::cluster_node::ClusterNode;
+
+    fn cluster_node(address: &str) -> ClusterNode {
+        let (host, port) = address.split_once(':').unwrap();
+        ClusterNode {
+            is_master: true,
+            id: "node-1".to_string(),
+            master_id: "-".to_string(),
+            host: host.to_string(),
+            port: port.to_string(),
+            address: address.to_string(),
+            slots: vec![],
+            slot_hash_tag_map: Default::default(),
+        }
+    }
+
+    #[test]
+    fn cluster_cdc_precheck_uses_cluster_master_node_as_psync_target() {
+        assert_eq!(
+            redis_cdc_precheck_mode(true),
+            RedisCdcPrecheckMode::ClusterNodePsync
+        );
+
+        let nodes = vec![cluster_node("10.0.0.2:6380")];
+        let psync_url = redis_cluster_psync_url("redis://user:pass@10.0.0.1:6379/0", &nodes)
+            .expect("cluster node should become psync url");
+
+        assert_eq!(psync_url, "redis://user:pass@10.0.0.2:6380/0");
     }
 }

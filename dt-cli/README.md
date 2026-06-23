@@ -127,7 +127,7 @@ Supported database URL schemes:
 
 - `mysql://`
 - `postgres://`, `postgresql://`, `pg://`
-- `mongodb://`, `mongo://`
+- `mongodb://`, `mongo://`, `mongodb+srv://`
 - `redis://`
 
 Use `--do` and `--ignore` to filter databases/schemas or tables/collections.

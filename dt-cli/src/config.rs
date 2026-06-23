@@ -42,8 +42,9 @@ impl DbType {
             "pg" | "postgres" | "postgresql" => Ok(Self::Pg),
             "mongo" | "mongodb" => Ok(Self::Mongo),
             "redis" => Ok(Self::Redis),
+            "mongodb+srv" => Ok(Self::Mongo),
             _ => bail!(
-                "unsupported URL scheme '{scheme}', expected mysql/pg/postgres/postgresql/mongo/mongodb/redis"
+                "unsupported URL scheme '{scheme}', expected mysql/pg/postgres/postgresql/mongo/mongodb/mongodb+srv/redis"
             ),
         }
     }
@@ -93,7 +94,7 @@ pub fn infer_db_type(url: &str, explicit: Option<DbType>) -> Result<DbType> {
                 scheme
             );
         }
-    } else if matches!(inferred, DbType::Pg | DbType::Mongo) {
+    } else if matches!(inferred, DbType::Pg) {
         let parsed = Url::parse(url).map_err(|err| anyhow!("invalid url '{url}': {err}"))?;
         if parsed.path().trim_matches('/').is_empty() {
             bail!(
@@ -685,6 +686,37 @@ log_dir=/tmp/dts/logs/order_task
     }
 
     #[test]
+    fn mongo_sharding_url_generates_plain_mongo_config_without_topology_flags() {
+        let (log_dir, log4rs_file) = paths();
+        let create = CreateConfig {
+            task_name: "mongo_sharded_snapshot".to_string(),
+            mode: Mode::Snapshot,
+            source_url: "mongodb://mongos-src:27017".to_string(),
+            target_url: "mongodb://mongos-dst:27017".to_string(),
+            ..CreateConfig::default()
+        };
+
+        let actual = build_task_config(
+            &create,
+            &DbType::Mongo,
+            &DbType::Mongo,
+            log_dir,
+            log4rs_file,
+        )
+        .unwrap();
+
+        assert!(actual.contains(
+            "[extractor]\ndb_type=mongo\nextract_type=snapshot\nurl=mongodb://mongos-src:27017\n"
+        ));
+        assert!(actual.contains(
+            "[sinker]\ndb_type=mongo\nsink_type=write\nbatch_size=100\nurl=mongodb://mongos-dst:27017\n"
+        ));
+        assert!(actual.contains("[parallelizer]\nparallel_type=snapshot\nparallel_size=8\n"));
+        assert!(!actual.contains("is_direct_connection"));
+        assert!(!actual.contains("mongo_require_shard_key_filter"));
+    }
+
+    #[test]
     fn mode_4_cdc_config_matches_expected() {
         let (log_dir, log4rs_file) = paths();
         let create = CreateConfig {
@@ -809,8 +841,18 @@ log_dir=/tmp/dts/logs/order_task
         );
         assert!(infer_db_type("postgres://u:p@127.0.0.1:5432", None).is_err());
         assert!(infer_db_type("postgres://u:p@127.0.0.1:5432/", None).is_err());
-        assert!(infer_db_type("mongodb://127.0.0.1:27017", None).is_err());
-        assert!(infer_db_type("mongodb://127.0.0.1:27017/", None).is_err());
+        assert_eq!(
+            infer_db_type("mongodb://127.0.0.1:27017", None).unwrap(),
+            DbType::Mongo
+        );
+        assert_eq!(
+            infer_db_type("mongodb://127.0.0.1:27017/", None).unwrap(),
+            DbType::Mongo
+        );
+        assert_eq!(
+            infer_db_type("mongodb+srv://cluster.example.com", None).unwrap(),
+            DbType::Mongo
+        );
         assert_eq!(
             infer_db_type("postgres://u:p@127.0.0.1:5432", Some(DbType::Pg)).unwrap(),
             DbType::Pg

@@ -16,4 +16,16 @@ mod test {
         )
         .await;
     }
+
+    #[tokio::test]
+    #[serial]
+    async fn precheck_cluster_test() {
+        TestBase::run_precheck_test(
+            "redis_to_redis/precheck/cluster_test",
+            &HashSet::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+        )
+        .await;
+    }
 }

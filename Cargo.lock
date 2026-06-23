@@ -1660,6 +1660,7 @@ dependencies = [
  "sqlx",
  "strum",
  "tokio",
+ "url",
 ]
 
 [[package]]
