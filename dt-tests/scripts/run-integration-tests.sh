@@ -371,7 +371,7 @@ suite_services() {
     redis_to_redis_rebloom) echo "redis-rebloom" ;;
     redis_to_redis_redisearch) echo "redis-redisearch" ;;
     redis_to_redis_rejson) echo "redis-rejson-src redis-rejson-dst" ;;
-    redis_to_redis_precheck) echo "redis-src-8-0 redis-dst-8-0 redis-source-cluster-node1 redis-source-cluster-node2 redis-source-cluster-node3 redis-source-cluster-init" ;;
+    redis_to_redis_precheck) echo "redis-src-8-0 redis-dst-8-0 redis-dst redis-source-cluster-node1 redis-source-cluster-node2 redis-source-cluster-node3 redis-source-cluster-init" ;;
     no_services) echo "" ;;
     *) die "unknown suite '${suite}'" ;;
   esac
