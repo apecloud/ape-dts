@@ -35,6 +35,7 @@ use dt_common::{
         config_enums::{DbType, ExtractType, PipelineType, SinkType, TaskKind, TaskType},
         config_token_parser::{ConfigTokenParser, TokenEscapePair},
         extractor_config::ExtractorConfig,
+        limiter_config::CapacityLimiterConfig,
         sinker_config::SinkerConfig,
         task_config::{TaskConfig, DEFAULT_CHECK_LOG_FILE_SIZE},
     },
@@ -469,9 +470,15 @@ impl TaskRunner {
         check_summary: Option<Arc<AsyncMutex<CheckSummaryLog>>>,
         checker_state_store: Option<Arc<CheckerStateStore>>,
     ) -> anyhow::Result<()> {
+        // DtQueue is already bounded by buffer_size. Keep only byte capacity in
+        // the enqueue limiter to avoid a duplicate records semaphore.
+        let enqueue_capacity_limiter = CapacityLimiterConfig {
+            buffer_size: 0,
+            buffer_memory_mb: self.config.pipeline.capacity_limiter.buffer_memory_mb,
+        };
         let enqueue_limiter = BufferLimiter::from_config(
             Some(&self.config.extractor_basic.rate_limiter),
-            Some(&self.config.pipeline.capacity_limiter),
+            Some(&enqueue_capacity_limiter),
         )
         .map(Arc::new);
         let dequeue_limiter =
