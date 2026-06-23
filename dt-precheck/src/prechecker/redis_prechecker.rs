@@ -102,11 +102,19 @@ impl Prechecker for RedisPrechecker {
     }
 
     async fn check_cdc_supported(&mut self) -> anyhow::Result<CheckResult> {
-        let repl_port = match self.task_config.extractor {
-            ExtractorConfig::RedisCdc { repl_port, .. }
-            | ExtractorConfig::RedisSnapshot { repl_port, .. } => repl_port,
+        let (repl_port, is_cluster) = match self.task_config.extractor {
+            ExtractorConfig::RedisCdc {
+                repl_port,
+                is_cluster,
+                ..
+            }
+            | ExtractorConfig::RedisSnapshot {
+                repl_port,
+                is_cluster,
+                ..
+            } => (repl_port, is_cluster),
             // should never happen since we've already checked the extractor type before into this function
-            _ => 0,
+            _ => (0, None),
         };
         let precheck_mode = {
             let conn = self
@@ -114,7 +122,7 @@ impl Prechecker for RedisPrechecker {
                 .conn
                 .as_mut()
                 .ok_or_else(|| anyhow::anyhow!("redis connection is not initialized"))?;
-            redis_cdc_precheck_mode(RedisUtil::is_redis_cluster(conn))
+            redis_cdc_precheck_mode(RedisUtil::is_redis_cluster(conn, is_cluster))
         };
 
         let psync_url = if let RedisCdcPrecheckMode::ClusterNodePsync = precheck_mode {

@@ -74,6 +74,7 @@ pub enum SinkerConfig {
         connection_auth: ConnectionAuthConfig,
         batch_size: usize,
         method: String,
+        is_cluster: Option<bool>,
     },
 
     RedisStatistic {
@@ -165,6 +166,8 @@ pub struct BasicSinkerConfig {
     // mongo special attrs
     pub app_name: Option<String>,
     pub is_direct_connection: Option<bool>,
+    // redis special attrs
+    pub is_cluster: Option<bool>,
 }
 
 impl Default for BasicSinkerConfig {
@@ -179,6 +182,7 @@ impl Default for BasicSinkerConfig {
             rate_limiter: RateLimiterConfig::default(),
             app_name: Some(APE_DTS.to_string()),
             is_direct_connection: None,
+            is_cluster: None,
         }
     }
 }

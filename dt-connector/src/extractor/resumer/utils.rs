@@ -118,7 +118,7 @@ impl ResumerUtil {
                 let mut conn = RedisUtil::create_redis_conn(url, connection_auth)
                     .await
                     .context("failed to create Redis resumer connection")?;
-                let is_cluster = RedisUtil::is_redis_cluster(&mut conn);
+                let is_cluster = RedisUtil::is_redis_cluster(&mut conn, None);
 
                 if is_cluster {
                     let nodes = RedisUtil::get_cluster_master_nodes(&mut conn)

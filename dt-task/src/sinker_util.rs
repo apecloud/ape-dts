@@ -315,13 +315,14 @@ impl SinkerUtil {
                 connection_auth,
                 batch_size,
                 method,
+                is_cluster,
             } => {
                 // redis sinker may need meta data from RDB extractor
                 let meta_manager = ExtractorUtil::get_extractor_meta_manager(config).await?;
                 let mut conn = RedisUtil::create_redis_conn(&url, &connection_auth)
                     .await
                     .context("failed to create Redis sinker connection")?;
-                let is_cluster = RedisUtil::is_redis_cluster(&mut conn);
+                let is_cluster = RedisUtil::is_redis_cluster(&mut conn, is_cluster);
                 let version = RedisUtil::get_redis_version(&mut conn)?;
                 let method = RedisWriteMethod::from_str(&method)?;
                 let router = RdbRouter::from_config(&config.router, &DbType::Redis)?;

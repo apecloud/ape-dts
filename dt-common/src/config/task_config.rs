@@ -713,6 +713,7 @@ impl TaskConfig {
                         url,
                         connection_auth,
                         repl_port,
+                        is_cluster: Self::get_is_cluster_config(loader, EXTRACTOR),
                     }
                 }
 
@@ -739,6 +740,7 @@ impl TaskConfig {
                         heartbeat_interval_secs,
                         heartbeat_key: loader.get_optional(EXTRACTOR, "heartbeat_key"),
                         now_db_id: loader.get_optional(EXTRACTOR, "now_db_id"),
+                        is_cluster: Self::get_is_cluster_config(loader, EXTRACTOR),
                     }
                 }
 
@@ -752,6 +754,7 @@ impl TaskConfig {
                         keepalive_interval_secs,
                         heartbeat_interval_secs,
                         heartbeat_key: loader.get_optional(EXTRACTOR, "heartbeat_key"),
+                        is_cluster: Self::get_is_cluster_config(loader, EXTRACTOR),
                     }
                 }
 
@@ -838,11 +841,12 @@ impl TaskConfig {
         } else {
             None
         };
-
         let rate_limiter = RateLimiterConfig {
             max_rps: loader.get_optional(SINKER, "max_rps"),
             max_mbps: loader.get_optional(SINKER, "max_mbps"),
         };
+        let is_cluster = Self::get_is_cluster_config(loader, SINKER);
+
         let basic = BasicSinkerConfig {
             sink_type: sink_type.clone(),
             db_type: db_type.clone(),
@@ -853,6 +857,7 @@ impl TaskConfig {
             rate_limiter,
             app_name: Some(app_name.to_owned()),
             is_direct_connection,
+            is_cluster,
         };
 
         let conflict_policy: ConflictPolicyEnum =
@@ -954,6 +959,7 @@ impl TaskConfig {
                     connection_auth,
                     batch_size,
                     method: loader.get_optional(SINKER, "method"),
+                    is_cluster,
                 },
 
                 SinkType::Statistic => SinkerConfig::RedisStatistic {
@@ -1262,6 +1268,7 @@ impl TaskConfig {
         Ok(Some(config))
     }
 
+    // TODO: checker support mongo & redis special configs
     fn checker_as_basic_sinker(checker: &CheckerConfig) -> BasicSinkerConfig {
         BasicSinkerConfig {
             sink_type: SinkType::Dummy,
@@ -1273,6 +1280,7 @@ impl TaskConfig {
             rate_limiter: RateLimiterConfig::default(),
             app_name: Some(APP_NAME.to_string()),
             is_direct_connection: None,
+            is_cluster: None,
         }
     }
 
@@ -1468,6 +1476,15 @@ impl TaskConfig {
             }
         }
         Ok(Some(config))
+    }
+
+    fn get_is_cluster_config(loader: &IniLoader, section: &str) -> Option<bool> {
+        let key = "is_cluster";
+        if loader.contains(section, key) {
+            Some(loader.get_optional(section, key))
+        } else {
+            None
+        }
     }
 
     #[cfg(feature = "metrics")]

@@ -19,6 +19,7 @@
 | parallel_size        | 全量同步时，单表并行拉取任务数                                                                      | 4                                                                                                    | 1                              |
 | partition_cols       | 全量同步时，指定分区列，用于数据切分，仅支持单列                                                    | json:[{"db":"db_1","tb":"tb_1","partition_col":"id"},{"db":"db_2","tb":"tb_2","partition_col":"id"}] | -                              |
 | is_direct_connection | 是否设置 MongoDB driver 的 `directConnection`，仅在 `db_type=mongo` 时有效                          | true                                                                                                 | 空（使用 driver 默认行为）     |
+| is_cluster           | 是否按 Redis Cluster 模式处理，仅在 `db_type=redis` 且 `extract_type=snapshot/cdc/snapshot_and_cdc` 时有效 | true                                                                                                 | 空（根据连接地址自动判断）     |
 
 ## url 转义
 
@@ -43,6 +44,9 @@ url=mysql://user1:abc%25%24%23%3F%40@127.0.0.1:3307?ssl-mode=disabled
 ## Redis 源端集群模式
 
 - `[extractor].url` 可以指向源端集群中任意可访问的节点。DTS 会通过 `CLUSTER NODES` 发现所有源端 master 节点，并为每个 master 启动一个 PSYNC extractor。
+- `[extractor].is_cluster` 默认留空。留空时，DTS 会连接 `[extractor].url` 对应的 Redis 节点，并根据节点实际返回的 cluster 状态自动判断是否使用 Redis Cluster 模式。
+- `[extractor].is_cluster=true` 时，DTS 强制按 Redis Cluster 模式处理，会发现并同步整个源端集群。
+- `[extractor].is_cluster=false` 时，DTS 强制按单节点 Redis 处理，只对 `[extractor].url` 指向的节点执行 PSYNC。该模式可用于源端实际是 Redis Cluster，但只希望同步其中一个节点的场景。
 
 ## Mongo 源端连接模式
 
@@ -64,12 +68,16 @@ url=mysql://user1:abc%25%24%23%3F%40@127.0.0.1:3307?ssl-mode=disabled
 | max_connections                | 最大连接数                                                                                                            | 10                                                             | 目前是 10，未来可能会动态适配 |
 | replace                        | 插入数据时，如果已存在于目标库，是否强行替换，适用于 mysql/pg 的全量/增量任务                                         | false                                                          | true                          |
 | is_direct_connection           | 是否设置 MongoDB driver 的 `directConnection`，仅在 `db_type=mongo` 时有效                                            | true                                                           | 空（使用 driver 默认行为）    |
+| is_cluster                     | 是否按 Redis Cluster 模式处理，仅在 `db_type=redis` 时有效                                                           | true                                                           | 空（根据连接地址自动判断）    |
 | mongo_require_shard_key_filter | 写入 MongoDB sharded collection 时，如果 row filter 无法包含完整 shard key，是否提前失败，仅在 `db_type=mongo` 时有效 | true                                                           | true                          |
 
 ## Redis 目标端集群模式
 
 - `[sinker].url` 可以指向目标端集群中任意可访问的节点。DTS 会通过 `CLUSTER NODES` 发现所有目标端 master 节点，并按 key slot 将 Redis 命令路由到对应节点。
 - Redis 目标端集群模式下，DTS 会按目标端 master 节点创建 sinker，不会用 `[parallelizer].parallel_size` 限制 sinker 数量。
+- `[sinker].is_cluster` 默认留空。留空时，DTS 会连接 `[sinker].url` 对应的 Redis 节点，并根据节点实际返回的 cluster 状态自动判断是否使用 Redis Cluster 模式。
+- `[sinker].is_cluster=true` 时，DTS 强制按 Redis Cluster 模式写入目标端集群。
+- `[sinker].is_cluster=false` 时，DTS 强制按单节点 Redis 写入，只写入 `[sinker].url` 指向的节点。
 
 ## Mongo 目标端连接和 shard key 模式
 

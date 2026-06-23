@@ -154,6 +154,7 @@ pub enum ExtractorConfig {
         url: String,
         connection_auth: ConnectionAuthConfig,
         repl_port: u64,
+        is_cluster: Option<bool>,
     },
 
     RedisCdc {
@@ -166,6 +167,7 @@ pub enum ExtractorConfig {
         heartbeat_interval_secs: u64,
         heartbeat_key: String,
         now_db_id: i64,
+        is_cluster: Option<bool>,
     },
 
     RedisSnapshotAndCdc {
@@ -176,6 +178,7 @@ pub enum ExtractorConfig {
         keepalive_interval_secs: u64,
         heartbeat_interval_secs: u64,
         heartbeat_key: String,
+        is_cluster: Option<bool>,
     },
 
     RedisSnapshotFile {

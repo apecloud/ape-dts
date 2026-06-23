@@ -504,11 +504,12 @@ impl ExtractorUtil {
                 url,
                 connection_auth,
                 repl_port,
+                is_cluster,
             } => {
                 let mut conn = RedisUtil::create_redis_conn(&url, &connection_auth)
                     .await
                     .context("failed to create Redis extractor connection")?;
-                let is_cluster = RedisUtil::is_redis_cluster(&mut conn);
+                let is_cluster = RedisUtil::is_redis_cluster(&mut conn, is_cluster);
                 if is_cluster {
                     let extractor = RedisClusterPsyncExtractor {
                         url,
@@ -563,6 +564,7 @@ impl ExtractorUtil {
                 connection_auth,
                 scan_count,
                 statistic_type,
+                ..
             } => {
                 let conn = RedisUtil::create_redis_conn(&url, &connection_auth).await?;
                 let statistic_type = RedisStatisticType::from_str(&statistic_type)?;
@@ -587,11 +589,12 @@ impl ExtractorUtil {
                 keepalive_interval_secs,
                 heartbeat_interval_secs,
                 heartbeat_key,
+                is_cluster,
             } => {
                 let mut conn = RedisUtil::create_redis_conn(&url, &connection_auth)
                     .await
                     .context("failed to create Redis extractor connection")?;
-                let is_cluster = RedisUtil::is_redis_cluster(&mut conn);
+                let is_cluster = RedisUtil::is_redis_cluster(&mut conn, is_cluster);
                 if is_cluster {
                     let extractor = RedisClusterPsyncExtractor {
                         url,
@@ -639,11 +642,12 @@ impl ExtractorUtil {
                 keepalive_interval_secs,
                 heartbeat_interval_secs,
                 heartbeat_key,
+                is_cluster,
             } => {
                 let mut conn = RedisUtil::create_redis_conn(&url, &connection_auth)
                     .await
                     .context("failed to create Redis extractor connection")?;
-                let is_cluster = RedisUtil::is_redis_cluster(&mut conn);
+                let is_cluster = RedisUtil::is_redis_cluster(&mut conn, is_cluster);
                 if is_cluster {
                     let extractor = RedisClusterPsyncExtractor {
                         url,
