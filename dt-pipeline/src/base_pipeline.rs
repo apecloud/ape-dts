@@ -503,7 +503,9 @@ impl BasePipeline {
                     | SinkerConfig::Foxlake { .. } => return SinkMethod::Raw,
                     _ => return SinkMethod::Dml,
                 },
-                DtData::Redis { .. } | DtData::Foxlake { .. } => return SinkMethod::Raw,
+                DtData::Redis { .. } | DtData::Foxlake { .. } | DtData::Zk { .. } => {
+                    return SinkMethod::Raw
+                }
                 DtData::Begin {} | DtData::Commit { .. } | DtData::Heartbeat {} => continue,
             }
         }
@@ -661,6 +663,7 @@ mod tests {
         dt_data::{DtData, DtItem},
         position::Position,
         redis::redis_entry::RedisEntry,
+        zk::{zk_entry::ZkEntry, zk_event_type::ZkEventType, zk_stat::ZkStat},
     };
     use dt_connector::extractor::resumer::utils::ResumerUtil;
 
@@ -688,6 +691,34 @@ mod tests {
         }
     }
 
+    fn zk_item(position: Position) -> DtItem {
+        DtItem {
+            dt_data: DtData::Zk {
+                entry: ZkEntry {
+                    path: "/app/service".to_string(),
+                    data: Some(b"value".to_vec()),
+                    stat: ZkStat::default(),
+                    ephemeral: false,
+                    event_type: ZkEventType::Updated,
+                    source_id: "node-a".to_string(),
+                    source_order_millis: 1,
+                    source_zxid: 1,
+                    order_origin: Default::default(),
+                },
+            },
+            position,
+            data_origin_node: String::new(),
+        }
+    }
+
+    fn heartbeat_item(position: Position) -> DtItem {
+        DtItem {
+            dt_data: DtData::Heartbeat {},
+            position,
+            data_origin_node: String::new(),
+        }
+    }
+
     #[test]
     fn fetch_raw_collects_latest_position_per_redis_node() {
         let mut pending_snapshot_finished = HashMap::new();
@@ -710,5 +741,32 @@ mod tests {
             .collect();
         assert_eq!(by_key.get("redis-node-node-1"), Some(&node_1_new));
         assert_eq!(by_key.get("redis-node-node-2"), Some(&node_2));
+    }
+
+    #[test]
+    fn fetch_raw_advances_zk_position_only_on_trailing_heartbeat() {
+        let mut pending_snapshot_finished = HashMap::new();
+        let final_position = Position::Zk {
+            path_versions: HashMap::from([("/app/service".to_string(), (1, 10))]),
+            last_scan_timestamp: 100,
+            high_water_zxid: 10,
+            total_paths: 1,
+        };
+        let partial_data = vec![zk_item(Position::None)];
+
+        let (_, partial_position, partial_commits) =
+            BasePipeline::fetch_raw(&partial_data, &mut pending_snapshot_finished);
+        assert_eq!(partial_position, Some(Position::None));
+        assert!(partial_commits.is_empty());
+
+        let complete_data = vec![
+            zk_item(Position::None),
+            heartbeat_item(final_position.clone()),
+        ];
+        let (_, complete_position, complete_commits) =
+            BasePipeline::fetch_raw(&complete_data, &mut pending_snapshot_finished);
+
+        assert_eq!(complete_position, Some(final_position.clone()));
+        assert_eq!(complete_commits, vec![final_position]);
     }
 }

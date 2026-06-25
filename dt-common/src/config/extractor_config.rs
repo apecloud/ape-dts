@@ -216,6 +216,14 @@ pub enum ExtractorConfig {
         s3_config: S3Config,
         batch_size: usize,
     },
+
+    Zk {
+        url: String,
+        watch_paths: Vec<String>,
+        scan_interval_secs: u64,
+        include_ephemeral: bool,
+        heartbeat_interval_secs: u64,
+    },
 }
 
 #[derive(Clone, Debug, Hash)]

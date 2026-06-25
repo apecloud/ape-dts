@@ -13,6 +13,7 @@ pub mod resumer;
 pub mod snapshot_chunk_id_generator;
 pub mod snapshot_dispatcher;
 pub mod snapshot_types;
+pub mod zk;
 
 fn estimated_sample_limit(sample_rate: Option<u8>, estimated_count: u64) -> Option<usize> {
     let sample_rate = sample_rate.filter(|rate| (1..100).contains(rate))?;

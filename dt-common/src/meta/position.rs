@@ -1,4 +1,4 @@
-use std::str::FromStr;
+use std::{collections::HashMap, str::FromStr};
 
 use anyhow::Context;
 use chrono::{DateTime, NaiveDateTime};
@@ -60,6 +60,12 @@ pub enum Position {
         schema: String,
         tb: String,
         s3_meta_file: String,
+    },
+    Zk {
+        path_versions: HashMap<String, (i32, i64)>,
+        last_scan_timestamp: i64,
+        high_water_zxid: i64,
+        total_paths: usize,
     },
 }
 
@@ -128,6 +134,10 @@ impl Position {
                 }
                 0
             }
+            Position::Zk {
+                last_scan_timestamp,
+                ..
+            } => *last_scan_timestamp as u64,
             _ => 0,
         }
     }

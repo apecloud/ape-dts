@@ -20,6 +20,7 @@ pub mod s3_config;
 pub mod sinker_config;
 pub mod ssl_config;
 pub mod task_config;
+pub mod zk_filter_config;
 
 #[cfg(feature = "metrics")]
 pub mod metrics_config;

@@ -53,7 +53,9 @@ impl Sinker for MongoStructSinker {
                 Err(error) => {
                     log_error!("mongo struct failed, error: {}", error);
                     match self.conflict_policy {
-                        ConflictPolicyEnum::Interrupt => return Err(error),
+                        ConflictPolicyEnum::Interrupt | ConflictPolicyEnum::LastWriteWins => {
+                            return Err(error)
+                        }
                         ConflictPolicyEnum::Ignore => {}
                     }
                 }

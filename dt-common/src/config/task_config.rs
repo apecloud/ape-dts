@@ -42,6 +42,7 @@ use super::{
     runtime_config::RuntimeConfig,
     s3_config::S3Config,
     sinker_config::{BasicSinkerConfig, SinkerConfig},
+    zk_filter_config::ZkFilterConfig,
 };
 
 #[derive(Clone)]
@@ -61,6 +62,7 @@ pub struct TaskConfig {
     pub meta_center: Option<MetaCenterConfig>,
     pub data_marker: Option<DataMarkerConfig>,
     pub processor: Option<ProcessorConfig>,
+    pub zk_filter: ZkFilterConfig,
     #[cfg(feature = "metrics")]
     pub metrics: MetricsConfig,
 }
@@ -80,6 +82,7 @@ const FILTER: &str = "filter";
 const ROUTER: &str = "router";
 const RESUMER: &str = "resumer";
 const DATA_MARKER: &str = "data_marker";
+const ZK_FILTER: &str = "zk_filter";
 const PROCESSOR: &str = "processor";
 const CHECKER: &str = "checker";
 const META_CENTER: &str = "metacenter";
@@ -256,6 +259,7 @@ impl TaskConfig {
             checker,
             data_marker: Self::load_data_marker_config(&loader)?,
             processor: Self::load_processor_config(&loader)?,
+            zk_filter: Self::load_zk_filter_config(&loader),
             meta_center: Self::load_meta_center_config(&loader)?,
             #[cfg(feature = "metrics")]
             metrics: Self::load_metrics_config(&loader)?,
@@ -775,6 +779,33 @@ impl TaskConfig {
                 ack_interval_secs: loader.get_optional(EXTRACTOR, "ack_interval_secs"),
             },
 
+            DbType::Zk => {
+                let watch_paths_str: String = loader.get_optional(EXTRACTOR, "watch_paths");
+                let watch_paths = if watch_paths_str.is_empty() {
+                    vec!["/".to_string()]
+                } else {
+                    watch_paths_str
+                        .split(',')
+                        .map(|s| s.trim().to_string())
+                        .collect()
+                };
+                ExtractorConfig::Zk {
+                    url,
+                    watch_paths,
+                    scan_interval_secs: loader.get_with_default(
+                        EXTRACTOR,
+                        "scan_interval_secs",
+                        60,
+                    ),
+                    include_ephemeral: loader.get_with_default(
+                        EXTRACTOR,
+                        "include_ephemeral",
+                        false,
+                    ),
+                    heartbeat_interval_secs,
+                }
+            }
+
             db_type => {
                 bail! {Error::ConfigError(format!(
                     "extractor db type: {} not supported",
@@ -1020,6 +1051,25 @@ impl TaskConfig {
                     ),
                 },
 
+                _ => bail! { not_supported_err },
+            },
+
+            DbType::Zk => match sink_type {
+                SinkType::Write => SinkerConfig::Zk {
+                    url,
+                    batch_size,
+                    create_if_not_exists: loader.get_with_default(
+                        SINKER,
+                        "create_if_not_exists",
+                        true,
+                    ),
+                    sync_ephemeral_as_persistent: loader.get_with_default(
+                        SINKER,
+                        "sync_ephemeral_as_persistent",
+                        false,
+                    ),
+                    conflict_policy,
+                },
                 _ => bail! { not_supported_err },
             },
 
@@ -1402,6 +1452,18 @@ impl TaskConfig {
                 })
             }
             _ => Ok(ResumerConfig::Dummy),
+        }
+    }
+
+    fn load_zk_filter_config(loader: &IniLoader) -> ZkFilterConfig {
+        ZkFilterConfig {
+            do_paths: loader.get_optional(ZK_FILTER, "do_paths"),
+            ignore_paths: loader.get_with_default(
+                ZK_FILTER,
+                "ignore_paths",
+                "/zookeeper".to_string(),
+            ),
+            include_ephemeral: loader.get_with_default(ZK_FILTER, "include_ephemeral", false),
         }
     }
 

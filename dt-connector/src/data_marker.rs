@@ -2,7 +2,7 @@ use std::collections::HashSet;
 
 use dt_common::{
     config::{config_enums::DbType, data_marker_config::DataMarkerConfig},
-    meta::{dt_data::DtData, redis::redis_entry::RedisEntry},
+    meta::{dt_data::DtData, redis::redis_entry::RedisEntry, zk::zk_entry::ZkEntry},
 };
 
 #[derive(Debug, Clone, Default)]
@@ -76,6 +76,7 @@ impl DataMarker {
         match dt_data {
             DtData::Dml { row_data } => self.is_rdb_marker_info(&row_data.schema, &row_data.tb),
             DtData::Redis { entry } => self.is_redis_marker_info(entry),
+            DtData::Zk { entry } => self.is_zk_marker_info(entry),
             _ => false,
         }
     }
@@ -95,6 +96,10 @@ impl DataMarker {
         self.marker_schema == schema && self.marker_tb == tb
     }
 
+    pub fn is_zk_marker_info(&self, entry: &ZkEntry) -> bool {
+        entry.path == self.marker || entry.path.starts_with(&format!("{}/", self.marker))
+    }
+
     pub fn refresh(&mut self, dt_data: &DtData) {
         match dt_data {
             DtData::Dml { row_data } => {
@@ -111,6 +116,18 @@ impl DataMarker {
 
             DtData::Redis { entry } => {
                 self.data_origin_node = entry.cmd.get_str_arg(2);
+            }
+
+            DtData::Zk { entry } => {
+                if let Some(data) = &entry.data {
+                    if let Ok(marker_value) = serde_json::from_slice::<serde_json::Value>(data) {
+                        if let Some(source_id) =
+                            marker_value.get("source_id").and_then(|v| v.as_str())
+                        {
+                            self.data_origin_node = source_id.to_string();
+                        }
+                    }
+                }
             }
 
             _ => {}
