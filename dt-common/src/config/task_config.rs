@@ -1480,10 +1480,9 @@ impl TaskConfig {
 
     fn get_is_cluster_config(loader: &IniLoader, section: &str) -> Option<bool> {
         let key = "is_cluster";
-        if loader.contains(section, key) {
-            Some(loader.get_optional(section, key))
-        } else {
-            None
+        match loader.ini.get(section, key) {
+            Some(value) if !value.trim().is_empty() => Some(loader.get_optional(section, key)),
+            _ => None,
         }
     }
 
@@ -1520,7 +1519,9 @@ mod tests {
         ChunkPartitionerRebalanceCost, ChunkPartitionerRebalanceStrategy,
     };
 
-    use super::{CheckMode, ParallelType, TaskConfig, TaskKind, TaskType};
+    use super::{
+        CheckMode, ExtractorConfig, ParallelType, SinkerConfig, TaskConfig, TaskKind, TaskType,
+    };
 
     static NEXT_CONFIG_ID: AtomicU64 = AtomicU64::new(0);
 
@@ -1583,6 +1584,37 @@ url=mysql://127.0.0.1:3307
 parallel_type=rdb_merge
 "#
         )
+    }
+
+    #[test]
+    fn redis_empty_is_cluster_keeps_auto_detection() {
+        let config = load_temp_task_config(
+            r#"[extractor]
+db_type=redis
+extract_type=cdc
+url=redis://127.0.0.1:6379
+is_cluster=
+
+[sinker]
+db_type=redis
+sink_type=write
+url=redis://127.0.0.1:6380
+is_cluster=
+
+[parallelizer]
+parallel_type=redis
+"#,
+        )
+        .unwrap();
+
+        match config.extractor {
+            ExtractorConfig::RedisCdc { is_cluster, .. } => assert_eq!(is_cluster, None),
+            _ => panic!("expected redis cdc extractor"),
+        }
+        match config.sinker {
+            SinkerConfig::Redis { is_cluster, .. } => assert_eq!(is_cluster, None),
+            _ => panic!("expected redis sinker"),
+        }
     }
 
     #[test]
