@@ -66,3 +66,10 @@ openssl-sys = { version = "0.9", features = ["vendored"]}
 actix-web = "4.9.0"
 hex = "0.4.3"
 clickhouse = "0.13.1"
+
+[profile.profiling]
+inherits = 'release'
+debug = true
+strip = 'none'
+lto = false
+codegen-units = 16
