@@ -42,7 +42,7 @@ jobs:
         uses: dtolnay/rust-toolchain@1.85.0
 
       - name: Install cross
-        run: cargo install cross --version 0.2.5
+        run: cargo install cross --version 0.2.5 --locked
 
       - name: Build for x86_64
         if: contains(inputs.platforms, 'linux/amd64')
