@@ -78,5 +78,7 @@ codegen-units = 1
 
 [profile.profiling]
 inherits = 'release'
-debug = 'line-tables-only'
+debug = true
 strip = 'none'
+lto = false
+codegen-units = 16
