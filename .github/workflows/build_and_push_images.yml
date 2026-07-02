@@ -33,6 +33,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       CARGO_BUILD_PROFILE: ${{ inputs.build_profile == 'profiling' && '--profile profiling' || '--release' }}
+      CONSOLE_RUSTFLAGS: --cfg tokio_unstable
       PROFILING_RUSTFLAGS: ${{ inputs.build_profile == 'profiling' && '-C force-frame-pointers=yes' || '' }}
     steps:
       - name: Checkout code
@@ -47,13 +48,13 @@ jobs:
       - name: Build for x86_64
         if: contains(inputs.platforms, 'linux/amd64')
         run: |
-          RUSTFLAGS="${PROFILING_RUSTFLAGS}" cross build --target x86_64-unknown-linux-gnu ${CARGO_BUILD_PROFILE}
+          RUSTFLAGS="${CONSOLE_RUSTFLAGS} ${PROFILING_RUSTFLAGS}" cross build --target x86_64-unknown-linux-gnu ${CARGO_BUILD_PROFILE} --features tokio-console
           cp target/x86_64-unknown-linux-gnu/${{ inputs.build_profile }}/dt-main amd64-unknown-linux-gnu-dt-main
 
       - name: Build for aarch64
         if: contains(inputs.platforms, 'linux/arm64')
         run: |
-          RUSTFLAGS="${PROFILING_RUSTFLAGS}" cross build --target aarch64-unknown-linux-gnu ${CARGO_BUILD_PROFILE}
+          RUSTFLAGS="${CONSOLE_RUSTFLAGS} ${PROFILING_RUSTFLAGS}" cross build --target aarch64-unknown-linux-gnu ${CARGO_BUILD_PROFILE} --features tokio-console
           cp target/aarch64-unknown-linux-gnu/${{ inputs.build_profile }}/dt-main arm64-unknown-linux-gnu-dt-main
 
       - name: Set up docker buildx
