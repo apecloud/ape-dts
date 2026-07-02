@@ -79,6 +79,11 @@ FROM ${DIST_IMG} as dist
 #TARGETARCH - Architecture from --platform, e.g. arm64
 ARG MODULE_NAME="dt-main"
 ARG APT_MIRROR=mirrors.ustc.edu.cn
+ARG APE_DTS_IMAGE_TAG=""
+ARG APE_DTS_COMMIT_ID=""
+
+ENV APE_DTS_IMAGE_TAG=${APE_DTS_IMAGE_TAG}
+ENV APE_DTS_COMMIT_ID=${APE_DTS_COMMIT_ID}
 
 COPY log4rs.yaml /log4rs.yaml
 COPY --from=builder /app/bin/${MODULE_NAME} /ape-dts
