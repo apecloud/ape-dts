@@ -4,10 +4,13 @@ use dt_precheck::{config::task_config::PrecheckTaskConfig, do_precheck};
 use dt_task::task_runner::TaskRunner;
 
 const ENV_SHUTDOWN_TIMEOUT_SECS: &str = "SHUTDOWN_TIMEOUT_SECS";
+#[cfg(feature = "tokio-console")]
+const ENV_TOKIO_CONSOLE: &str = "APE_DTS_TOKIO_CONSOLE";
 
 #[tokio::main]
 async fn main() {
     env::set_var("RUST_BACKTRACE", "1");
+    init_tokio_console();
 
     tokio::spawn(async {
         tokio::signal::ctrl_c().await.unwrap();
@@ -29,3 +32,13 @@ async fn main() {
         runner.start_task(true).await.unwrap()
     }
 }
+
+#[cfg(feature = "tokio-console")]
+fn init_tokio_console() {
+    if env::var(ENV_TOKIO_CONSOLE).as_deref() == Ok("1") {
+        console_subscriber::init();
+    }
+}
+
+#[cfg(not(feature = "tokio-console"))]
+fn init_tokio_console() {}
