@@ -175,7 +175,7 @@ Refer to [test docs](./dt-tests/README.md) for details.
 ## Build
 
 - Minimum supported Rust version (MSRV)
-  The current minimum supported Rust version (MSRV) is 1.85.0.
+  The current minimum supported Rust version (MSRV) is 1.88.0.
 - cargo build
 - [build images](./docs/en/build_images.md)
 
