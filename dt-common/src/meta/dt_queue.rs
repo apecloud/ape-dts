@@ -1,7 +1,10 @@
-use std::sync::atomic::{AtomicU64, Ordering};
-use tokio::task::yield_now;
+use std::sync::{
+    atomic::{AtomicU64, Ordering},
+    Arc,
+};
+use tokio::sync::Notify;
 
-use concurrent_queue::{ConcurrentQueue, PopError};
+use concurrent_queue::{ConcurrentQueue, PopError, PushError};
 
 use super::dt_data::DtItem;
 
@@ -10,6 +13,7 @@ pub struct DtQueue {
     check_memory: bool,
     max_bytes: u64,
     cur_bytes: AtomicU64,
+    not_full: Arc<Notify>,
 }
 
 impl DtQueue {
@@ -19,6 +23,7 @@ impl DtQueue {
             max_bytes,
             check_memory: max_bytes > 0,
             cur_bytes: AtomicU64::new(0),
+            not_full: Arc::new(Notify::new()),
         }
     }
 
@@ -43,21 +48,23 @@ impl DtQueue {
     }
 
     #[inline(always)]
-    pub async fn push(&self, item: DtItem) -> anyhow::Result<()> {
-        while self.queue.is_full() {
-            yield_now().await;
-        }
-
-        if self.check_memory {
-            while self.cur_bytes.load(Ordering::Acquire) > self.max_bytes {
-                yield_now().await;
+    pub async fn push(&self, mut item: DtItem) -> anyhow::Result<()> {
+        let item_size = item.dt_data.get_data_size();
+        loop {
+            if !self.queue.is_full() && !self.is_mem_full() {
+                match self.queue.push(item) {
+                    Ok(_) => {
+                        self.cur_bytes.fetch_add(item_size, Ordering::Release);
+                        return Ok(());
+                    }
+                    Err(PushError::Full(returned_item)) => {
+                        item = returned_item;
+                    }
+                    Err(e) => return Err(e.into()),
+                }
             }
+            self.not_full.notified().await;
         }
-        self.cur_bytes
-            .fetch_add(item.dt_data.get_data_size(), Ordering::Release);
-
-        self.queue.push(item)?;
-        Ok(())
     }
 
     #[inline(always)]
@@ -71,6 +78,17 @@ impl DtQueue {
                 .fetch_sub(item.dt_data.get_data_size(), Ordering::Release);
         }
 
+        self.not_full.notify_one();
+
         Ok(item)
+    }
+
+    #[inline(always)]
+    fn is_mem_full(&self) -> bool {
+        if self.check_memory {
+            self.cur_bytes.load(Ordering::Acquire) > self.max_bytes
+        } else {
+            false
+        }
     }
 }
