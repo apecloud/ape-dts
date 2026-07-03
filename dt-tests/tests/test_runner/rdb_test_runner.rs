@@ -123,6 +123,11 @@ impl RdbTestRunner {
         }
 
         let mysql_conn_settings = Some(vec!["SET FOREIGN_KEY_CHECKS=0"]);
+        let dst_mysql_conn_settings = if matches!(dst_db_type, DbType::StarRocks | DbType::Doris) {
+            None
+        } else {
+            mysql_conn_settings.clone()
+        };
 
         match &src_db_type {
             DbType::Mysql => {
@@ -206,7 +211,7 @@ impl RdbTestRunner {
                             &dst_connection_auth,
                             5,
                             false,
-                            mysql_conn_settings.clone(),
+                            dst_mysql_conn_settings,
                         )
                         .await?,
                     );
