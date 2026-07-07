@@ -23,6 +23,7 @@ futures = { workspace = true }
 hex = { workspace = true }
 log = { workspace = true }
 log4rs = { workspace = true }
+libc = { workspace = true }
 mongodb = { workspace = true }
 project-root = { workspace = true }
 rdkafka = { workspace = true }

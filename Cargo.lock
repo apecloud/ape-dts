@@ -1589,6 +1589,7 @@ dependencies = [
  "thiserror 1.0.69",
  "tokio",
  "tokio-postgres",
+ "tokio-util 0.7.15",
  "url",
  "uuid",
 ]
@@ -1640,6 +1641,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
+ "tokio-util 0.7.15",
 ]
 
 [[package]]
@@ -1660,6 +1662,7 @@ dependencies = [
  "sqlx",
  "strum",
  "tokio",
+ "tokio-util 0.7.15",
  "url",
 ]
 
@@ -1698,6 +1701,7 @@ dependencies = [
  "sqlx",
  "strum",
  "tokio",
+ "tokio-util 0.7.15",
 ]
 
 [[package]]
@@ -1719,6 +1723,7 @@ dependencies = [
  "futures",
  "geo-types",
  "hex",
+ "libc",
  "log",
  "log4rs",
  "mongodb",
@@ -5709,6 +5714,8 @@ dependencies = [
  "futures-core",
  "futures-io",
  "futures-sink",
+ "futures-util",
+ "hashbrown 0.15.4",
  "pin-project-lite",
  "tokio",
 ]

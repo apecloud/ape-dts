@@ -1,7 +1,4 @@
-use std::sync::{
-    atomic::{AtomicU64, Ordering},
-    Arc,
-};
+use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::sync::Notify;
 
 use concurrent_queue::{ConcurrentQueue, PopError, PushError};
@@ -15,24 +12,26 @@ pub struct DtQueue {
     check_memory: bool,
     max_bytes: u64,
     cur_bytes: AtomicU64,
-    not_full: Arc<Notify>,
-    enqueue_limiter: Option<Arc<BufferLimiter>>,
-    dequeue_limiter: Option<Arc<BufferLimiter>>,
+    not_full: Notify,
+    is_empty: Notify,
+    enqueue_limiter: Option<BufferLimiter>,
+    dequeue_limiter: Option<BufferLimiter>,
 }
 
 impl DtQueue {
     pub fn new(
         capacity: usize,
         max_bytes: u64,
-        enqueue_limiter: Option<Arc<BufferLimiter>>,
-        dequeue_limiter: Option<Arc<BufferLimiter>>,
+        enqueue_limiter: Option<BufferLimiter>,
+        dequeue_limiter: Option<BufferLimiter>,
     ) -> Self {
         Self {
             queue: ConcurrentQueue::bounded(capacity),
-            max_bytes,
             check_memory: max_bytes > 0,
+            max_bytes,
             cur_bytes: AtomicU64::new(0),
-            not_full: Arc::new(Notify::new()),
+            not_full: Notify::new(),
+            is_empty: Notify::new(),
             enqueue_limiter,
             dequeue_limiter,
         }
@@ -41,6 +40,12 @@ impl DtQueue {
     #[inline(always)]
     pub fn is_empty(&self) -> bool {
         self.queue.is_empty()
+    }
+
+    pub async fn wait_until_empty(&self) {
+        while !self.queue.is_empty() {
+            self.is_empty.notified().await;
+        }
     }
 
     #[inline(always)]
@@ -96,6 +101,7 @@ impl DtQueue {
 
         if self.queue.is_empty() {
             self.cur_bytes.store(0, Ordering::Release);
+            self.is_empty.notify_one();
         } else {
             self.cur_bytes
                 .fetch_sub(item.dt_data.get_data_size(), Ordering::Release);
@@ -113,5 +119,21 @@ impl DtQueue {
         } else {
             false
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use futures::FutureExt;
+    use tokio::sync::Notify;
+
+    #[tokio::test]
+    async fn notify_one_before_notified_completes_next_waiter_once() {
+        let notify = Notify::new();
+
+        notify.notify_one();
+
+        assert!(notify.notified().now_or_never().is_some());
+        assert!(notify.notified().now_or_never().is_none());
     }
 }

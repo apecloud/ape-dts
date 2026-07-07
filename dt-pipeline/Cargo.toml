@@ -14,6 +14,7 @@ dt-parallelizer = {path = "../dt-parallelizer", version = "0.1.0"}
 async-trait = { workspace = true }
 async-mutex = { workspace = true }
 tokio = { workspace = true }
+tokio-util = { workspace = true }
 concurrent-queue = { workspace = true }
 log = { workspace = true }
 log4rs = { workspace = true }

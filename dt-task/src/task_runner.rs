@@ -19,6 +19,7 @@ use tokio::{
     sync::{Mutex, RwLock},
     task::JoinSet,
 };
+use tokio_util::sync::CancellationToken;
 
 use super::{
     extractor_util::ExtractorUtil, parallelizer_util::ParallelizerUtil, sinker_util::SinkerUtil,
@@ -35,7 +36,6 @@ use dt_common::{
         config_enums::{DbType, ExtractType, PipelineType, SinkType, TaskKind, TaskType},
         config_token_parser::{ConfigTokenParser, TokenEscapePair},
         extractor_config::ExtractorConfig,
-        limiter_config::CapacityLimiterConfig,
         sinker_config::SinkerConfig,
         task_config::{TaskConfig, DEFAULT_CHECK_LOG_FILE_SIZE},
     },
@@ -470,20 +470,11 @@ impl TaskRunner {
         check_summary: Option<Arc<AsyncMutex<CheckSummaryLog>>>,
         checker_state_store: Option<Arc<CheckerStateStore>>,
     ) -> anyhow::Result<()> {
-        // DtQueue is already bounded by buffer_size. Keep only byte capacity in
-        // the enqueue limiter to avoid a duplicate records semaphore.
-        let enqueue_capacity_limiter = CapacityLimiterConfig {
-            buffer_size: 0,
-            buffer_memory_mb: self.config.pipeline.capacity_limiter.buffer_memory_mb,
-        };
-        let enqueue_limiter = BufferLimiter::from_config(
-            Some(&self.config.extractor_basic.rate_limiter),
-            Some(&enqueue_capacity_limiter),
-        )
-        .map(Arc::new);
+        // DtQueue is already bounded by buffer_size and max_bytes.
+        let enqueue_limiter =
+            BufferLimiter::from_config(Some(&self.config.extractor_basic.rate_limiter), None);
         let dequeue_limiter =
-            BufferLimiter::from_config(Some(&self.config.sinker_basic.rate_limiter), None)
-                .map(Arc::new);
+            BufferLimiter::from_config(Some(&self.config.sinker_basic.rate_limiter), None);
         let max_bytes = self.config.pipeline.capacity_limiter.buffer_memory_mb * 1024 * 1024;
         let buffer = Arc::new(DtQueue::new(
             self.config.pipeline.capacity_limiter.buffer_size,
@@ -639,8 +630,8 @@ impl TaskRunner {
         let interval_secs = self.config.pipeline.checkpoint_interval_secs;
         let task_flush_monitors: Vec<Arc<dyn FlushableMonitor + Send + Sync>> =
             vec![self.task_monitor.clone()];
-        let monitor_shut_down = Arc::new(AtomicBool::new(false));
-        let monitor_task_shutdown = monitor_shut_down.clone();
+        let monitor_shutdown = CancellationToken::new();
+        let monitor_task_shutdown = monitor_shutdown.clone();
         let monitor_task = tokio::spawn(async move {
             TaskUtil::flush_monitors(interval_secs, monitor_task_shutdown, &task_flush_monitors)
                 .await;
@@ -650,7 +641,7 @@ impl TaskRunner {
         let worker_result =
             Self::run_task_workers(extractor.clone(), pipeline.clone(), shut_down.clone()).await;
 
-        monitor_shut_down.store(true, Ordering::Release);
+        monitor_shutdown.cancel();
         let monitor_result = monitor_task
             .await
             .context("monitor task exit error")
