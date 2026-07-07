@@ -25,7 +25,6 @@ mysql-binlog-connector-rust = { workspace = true }
 mongodb = { workspace = true }
 bytes = { workspace = true }
 tokio = { workspace = true }
-tokio-util = { workspace = true }
 concurrent-queue = { workspace = true }
 regex = { workspace = true }
 reqwest = { workspace = true }

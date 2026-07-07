@@ -17,7 +17,6 @@ sqlx = {workspace = true }
 strum = { workspace = true }
 async-trait = { workspace = true }
 tokio = { workspace = true }
-tokio-util = { workspace = true }
 configparser = { workspace = true }
 futures = { workspace = true }
 regex = { workspace = true }
