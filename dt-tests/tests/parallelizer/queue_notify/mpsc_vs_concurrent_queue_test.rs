@@ -441,7 +441,7 @@ fn write_benchmark_report(rows: &[ReportRow]) -> anyhow::Result<String> {
 #[ignore = "micro-benchmark; run with --ignored --nocapture, preferably with --release"]
 fn bench_mpsc_vs_concurrent_queue_pipeline_shape() -> anyhow::Result<()> {
     let mut rows = Vec::new();
-    let worker_threads = [1,2,4];
+    let worker_threads = [1, 2, 4];
     let producer_counts = [4];
     let capacities = [8192];
     let producer_batch_sizes = [2048];

@@ -61,15 +61,11 @@ impl Extractor for RedisClusterPsyncExtractor {
             match result {
                 Ok(Ok(())) => {}
                 Ok(Err(err)) => {
-                    self.base_extractor
-                        .shut_down
-                        .store(true, Ordering::Release);
+                    self.base_extractor.shut_down.store(true, Ordering::Release);
                     bail!(err);
                 }
                 Err(err) => {
-                    self.base_extractor
-                        .shut_down
-                        .store(true, Ordering::Release);
+                    self.base_extractor.shut_down.store(true, Ordering::Release);
                     bail!(Error::ExtractorError(format!(
                         "redis cluster psync task failed: {err}"
                     )));
