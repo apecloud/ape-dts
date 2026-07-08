@@ -13,7 +13,6 @@ pub struct DtQueue {
     max_bytes: u64,
     cur_bytes: AtomicU64,
     not_full: Notify,
-    is_empty: Notify,
     enqueue_limiter: Option<BufferLimiter>,
     dequeue_limiter: Option<BufferLimiter>,
 }
@@ -31,7 +30,6 @@ impl DtQueue {
             max_bytes,
             cur_bytes: AtomicU64::new(0),
             not_full: Notify::new(),
-            is_empty: Notify::new(),
             enqueue_limiter,
             dequeue_limiter,
         }
@@ -40,12 +38,6 @@ impl DtQueue {
     #[inline(always)]
     pub fn is_empty(&self) -> bool {
         self.queue.is_empty()
-    }
-
-    pub async fn wait_until_empty(&self) {
-        while !self.queue.is_empty() {
-            self.is_empty.notified().await;
-        }
     }
 
     #[inline(always)]
@@ -101,7 +93,6 @@ impl DtQueue {
 
         if self.queue.is_empty() {
             self.cur_bytes.store(0, Ordering::Release);
-            self.is_empty.notify_one();
         } else {
             self.cur_bytes
                 .fetch_sub(item.dt_data.get_data_size(), Ordering::Release);

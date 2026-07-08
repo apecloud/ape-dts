@@ -333,7 +333,10 @@ impl BaseExtractor {
     }
 
     pub async fn wait_task_finish(&self, state: &mut ExtractState) -> anyhow::Result<()> {
-        self.buffer.wait_until_empty().await;
+        while !self.buffer.is_empty() {
+            yield_now().await;
+        }
+
         state.monitor.try_flush(true).await;
         self.shut_down.store(true, Ordering::Release);
         Ok(())
