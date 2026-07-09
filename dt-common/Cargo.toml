@@ -10,6 +10,7 @@ workspace = true
 
 [features]
 metrics = ["prometheus"]
+tokio-console = ["dep:tracing", "dep:tracing-subscriber"]
 
 [dependencies]
 dotenv = { workspace = true }
@@ -50,3 +51,5 @@ actix-web = {workspace = true}
 prometheus = {version = "0.14.0", optional = true}
 urlencoding= {workspace = true}
 governor = { workspace = true }
+tracing = { workspace = true, optional = true }
+tracing-subscriber = { workspace = true, optional = true }

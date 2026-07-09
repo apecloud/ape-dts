@@ -98,7 +98,9 @@ impl DtQueue {
                 .fetch_sub(item.dt_data.get_data_size(), Ordering::Release);
         }
 
-        self.not_full.notify_one();
+        crate::runtime_trace::with_wake_source("dtqueue.not_full.notify_one", || {
+            self.not_full.notify_one();
+        });
 
         Ok(item)
     }

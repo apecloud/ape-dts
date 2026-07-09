@@ -64,21 +64,52 @@ async fn main() {
 
     if PrecheckTaskConfig::new(config).is_ok() {
         do_precheck(config).await;
+        dump_tokio_console_summary();
     } else {
         let runner = TaskRunner::new(config).unwrap();
-        runner.start_task(args.init).await.unwrap()
+        let result = runner.start_task(args.init).await;
+        dump_tokio_console_summary();
+        result.unwrap();
     }
 }
 
 #[cfg(feature = "tokio-console")]
 fn init_tokio_console() {
     if env::var(ENV_TOKIO_CONSOLE).as_deref() == Ok("1") {
-        console_subscriber::init();
+        use tracing_subscriber::{filter::Targets, prelude::*};
+
+        let fmt_filter = env::var("RUST_LOG")
+            .ok()
+            .and_then(|log_filter| match log_filter.parse::<Targets>() {
+                Ok(targets) => Some(targets),
+                Err(err) => {
+                    eprintln!("failed to parse RUST_LOG={log_filter:?}: {err}");
+                    None
+                }
+            })
+            .unwrap_or_else(|| "error".parse().expect("error filter should parse"));
+
+        dt_common::runtime_trace::enable();
+
+        let console_layer = console_subscriber::ConsoleLayer::builder().spawn();
+        tracing_subscriber::registry()
+            .with(console_layer)
+            .with(dt_common::runtime_trace::TaskStatsLayer::new())
+            .with(tracing_subscriber::fmt::layer().with_filter(fmt_filter))
+            .init();
     }
 }
 
 #[cfg(not(feature = "tokio-console"))]
 fn init_tokio_console() {}
+
+#[cfg(feature = "tokio-console")]
+fn dump_tokio_console_summary() {
+    dt_common::runtime_trace::dump_global_summary();
+}
+
+#[cfg(not(feature = "tokio-console"))]
+fn dump_tokio_console_summary() {}
 
 #[cfg(test)]
 mod tests {

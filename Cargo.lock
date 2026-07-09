@@ -1624,6 +1624,8 @@ dependencies = [
  "strum",
  "thiserror 1.0.69",
  "tokio",
+ "tracing",
+ "tracing-subscriber",
  "url",
  "urlencoding",
 ]
@@ -1682,11 +1684,13 @@ version = "2.0.26"
 dependencies = [
  "clap",
  "console-subscriber",
+ "dt-common",
  "dt-precheck",
  "dt-task",
  "tokio",
  "tonic",
  "tonic-prost",
+ "tracing-subscriber",
 ]
 
 [[package]]

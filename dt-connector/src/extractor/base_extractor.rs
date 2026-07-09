@@ -5,6 +5,7 @@ use std::sync::{
 
 use anyhow::bail;
 
+use crate::{data_marker::DataMarker, rdb_router::RdbRouter};
 use dt_common::{
     config::{
         config_enums::DbType,
@@ -29,9 +30,6 @@ use dt_common::{
     },
     time_filter::TimeFilter,
 };
-use tokio::task::yield_now;
-
-use crate::{data_marker::DataMarker, rdb_router::RdbRouter};
 
 use super::extractor_monitor::ExtractorMonitor;
 
@@ -203,7 +201,11 @@ impl BaseExtractor {
         };
         // can not use `buffer.wait_util_empty` since `push_ddl` is used with `push_row`
         while !self.buffer.is_empty() {
-            yield_now().await;
+            dt_common::runtime_trace::with_wake_source_future(
+                "yield_now.extractor.push_ddl",
+                tokio::task::yield_now(),
+            )
+            .await;
         }
         self.push_dt_data(state, DtData::Ddl { ddl_data }, position)
             .await
@@ -334,7 +336,11 @@ impl BaseExtractor {
 
     pub async fn wait_task_finish(&self, state: &mut ExtractState) -> anyhow::Result<()> {
         while !self.buffer.is_empty() {
-            yield_now().await;
+            dt_common::runtime_trace::with_wake_source_future(
+                "yield_now.extractor.wait_task_finish",
+                tokio::task::yield_now(),
+            )
+            .await;
         }
 
         state.monitor.try_flush(true).await;
