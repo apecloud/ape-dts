@@ -202,6 +202,13 @@ pub enum ExtractorConfig {
         offset: i64,
         ack_interval_secs: u64,
     },
+    Zk {
+        url: String,
+        watch_paths: Vec<String>,
+        scan_interval_secs: u64,
+        include_ephemeral: bool,
+        heartbeat_interval_secs: u64,
+    },
 }
 
 #[derive(Clone, Debug, Hash)]

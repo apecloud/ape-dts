@@ -10,6 +10,7 @@ pub mod meta_fetcher;
 pub mod rdb_query_builder;
 pub mod rdb_router;
 pub mod sinker;
+pub mod zk_router;
 
 use async_trait::async_trait;
 use checker::check_log::CheckLog;

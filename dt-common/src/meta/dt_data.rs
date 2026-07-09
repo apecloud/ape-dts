@@ -1,7 +1,10 @@
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use super::{ddl_meta::ddl_data::DdlData, row_data::RowData, struct_meta::struct_data::StructData};
+use super::{
+    ddl_meta::ddl_data::DdlData, row_data::RowData, struct_meta::struct_data::StructData,
+    zk::zk_entry::ZkEntry,
+};
 use crate::meta::dcl_meta::dcl_data::DclData;
 use crate::meta::row_type::RowSqlType;
 use crate::meta::{position::Position, redis::redis_entry::RedisEntry};
@@ -58,6 +61,9 @@ pub enum DtData {
     Redis {
         entry: RedisEntry,
     },
+    Zk {
+        entry: ZkEntry,
+    },
 }
 
 impl DtData {
@@ -83,6 +89,7 @@ impl DtData {
             DtData::Dcl { dcl_data } => dcl_data.get_malloc_size(),
             DtData::Ddl { ddl_data } => ddl_data.get_malloc_size(),
             DtData::Redis { entry } => entry.get_data_malloc_size() as u64,
+            DtData::Zk { entry } => entry.get_data_size(),
             // ignore other item types
             _ => 0,
         }

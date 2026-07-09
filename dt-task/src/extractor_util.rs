@@ -56,6 +56,7 @@ use dt_connector::{
             redis_snapshot_file_extractor::RedisSnapshotFileExtractor,
         },
         resumer::recovery::Recovery,
+        zk::zk_extractor::ZkExtractor,
     },
     rdb_router::RdbRouter,
     Extractor,
@@ -720,6 +721,28 @@ impl ExtractorUtil {
                     syncer,
                     base_extractor,
                     extract_state,
+                    recovery,
+                };
+                Box::new(extractor)
+            }
+            ExtractorConfig::Zk {
+                url,
+                watch_paths,
+                scan_interval_secs,
+                include_ephemeral,
+                heartbeat_interval_secs,
+            } => {
+                let zk_filter = dt_common::zk_filter::ZkFilter::from_config(&config.zk_filter)?;
+                let extractor = ZkExtractor {
+                    url,
+                    watch_paths,
+                    scan_interval_secs,
+                    include_ephemeral,
+                    heartbeat_interval_secs,
+                    filter: zk_filter,
+                    base_extractor,
+                    extract_state,
+                    syncer,
                     recovery,
                 };
                 Box::new(extractor)

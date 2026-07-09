@@ -34,6 +34,8 @@ pub enum DbType {
     Doris,
     #[strum(serialize = "tidb")]
     Tidb,
+    #[strum(serialize = "zk")]
+    Zk,
 }
 
 #[derive(Display, EnumString, IntoStaticStr, Debug, Clone, Hash, PartialEq, Eq)]
@@ -106,6 +108,8 @@ pub enum ConflictPolicyEnum {
     #[default]
     #[strum(serialize = "interrupt")]
     Interrupt,
+    #[strum(serialize = "last_write_wins")]
+    LastWriteWins,
 }
 
 #[derive(Display, EnumString, IntoStaticStr, PartialEq)]

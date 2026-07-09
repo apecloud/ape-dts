@@ -386,7 +386,9 @@ impl StarrocksStructSinker {
             Err(error) => {
                 log_error!("ddl failed, error: {}", error);
                 match self.conflict_policy {
-                    ConflictPolicyEnum::Interrupt => bail! {error},
+                    ConflictPolicyEnum::Interrupt | ConflictPolicyEnum::LastWriteWins => {
+                        bail! {error}
+                    }
                     ConflictPolicyEnum::Ignore => {}
                 }
             }
