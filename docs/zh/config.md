@@ -38,7 +38,7 @@ url=mysql://user1:abc%25%24%23%3F%40@127.0.0.1:3307?ssl-mode=disabled
 - 当 `parallel_type=chunk` 时，`[extractor].batch_size` 也作为目标 chunk 大小。chunk 边界会受实际数据分布影响，因此实际行数可能有偏差，但 extractor 会尽量让每个 chunk 接近 `batch_size`。
 - 这两种模式下，真正控制并发上限的都是 `parallel_size`。
 - MySQL 和 PostgreSQL 的 snapshot extractor 同时支持 `table` 与 `chunk`。
-- MongoDB 和 Foxlake 的 snapshot extractor 当前只支持 `table`，不支持 `chunk`。
+- MongoDB 的 snapshot extractor 当前只支持 `table`，不支持 `chunk`。
 - 废弃兼容说明：`[runtime] tb_parallel_size` 仅作为旧配置兼容 fallback 保留，只有在未设置 `[extractor] parallel_size` 时才会生效。
 
 ## Redis 源端集群模式

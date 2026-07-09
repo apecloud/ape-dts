@@ -12,7 +12,7 @@ on:
         description: "S3 bucket"
         required: true
         type: string
-        default: foxlake
+        default: apedts
       aws_destination_dir:
         description: "S3 destination directory"
         required: true

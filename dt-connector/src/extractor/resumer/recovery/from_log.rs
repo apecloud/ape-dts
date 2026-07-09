@@ -65,7 +65,7 @@ impl LogRecovery {
         };
         let position = Position::from_log(line);
         match &position {
-            Position::RdbSnapshot { schema, tb, .. } | Position::FoxlakeS3 { schema, tb, .. } => {
+            Position::RdbSnapshot { schema, tb, .. } => {
                 tb_positions.insert((schema.clone(), tb.clone()), position);
             }
             Position::RdbSnapshotFinished { schema, tb, .. } => {

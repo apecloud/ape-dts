@@ -123,7 +123,7 @@ impl Pipeline for BasePipeline {
                 record_time = Instant::now();
             }
 
-            // some sinkers (foxlake) need to accumulate data to a big batch and sink
+            // some sinkers need to accumulate data to a big batch and sink
             let data = if last_sink_time.elapsed().as_secs() < self.batch_sink_interval_secs
                 && !self.buffer.is_full()
             {
@@ -497,13 +497,8 @@ impl BasePipeline {
                 DtData::Struct { .. } => return SinkMethod::Struct,
                 DtData::Ddl { .. } => return SinkMethod::Ddl,
                 DtData::Dcl { .. } => return SinkMethod::Dcl,
-                DtData::Dml { .. } => match self.sinker_config {
-                    SinkerConfig::FoxlakePush { .. }
-                    | SinkerConfig::FoxlakeMerge { .. }
-                    | SinkerConfig::Foxlake { .. } => return SinkMethod::Raw,
-                    _ => return SinkMethod::Dml,
-                },
-                DtData::Redis { .. } | DtData::Foxlake { .. } => return SinkMethod::Raw,
+                DtData::Dml { .. } => return SinkMethod::Dml,
+                DtData::Redis { .. } => return SinkMethod::Raw,
                 DtData::Begin {} | DtData::Commit { .. } | DtData::Heartbeat {} => continue,
             }
         }

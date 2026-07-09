@@ -549,33 +549,6 @@ impl TaskConfig {
                         DEFAULT_DB_BATCH_SIZE,
                     ),
                 },
-
-                ExtractType::FoxlakeS3 => {
-                    let s3_config = S3Config {
-                        bucket: loader.get_optional(EXTRACTOR, "s3_bucket"),
-                        access_key: loader.get_optional(EXTRACTOR, "s3_access_key"),
-                        secret_key: loader.get_optional(EXTRACTOR, "s3_secret_key"),
-                        region: loader.get_optional(EXTRACTOR, "s3_region"),
-                        endpoint: loader.get_optional(EXTRACTOR, "s3_endpoint"),
-                        root_dir: loader.get_optional(EXTRACTOR, "s3_root_dir"),
-                        root_url: loader.get_optional(EXTRACTOR, "s3_root_url"),
-                    };
-                    ExtractorConfig::FoxlakeS3 {
-                        url,
-                        schema: String::new(),
-                        tb: String::new(),
-                        schema_tbs: HashMap::new(),
-                        parallel_size: Self::load_snapshot_parallel_size(loader),
-                        parallel_type: loader.get_with_default(
-                            EXTRACTOR,
-                            "parallel_type",
-                            RdbParallelType::Table,
-                        ),
-                        s3_config,
-                        batch_size,
-                    }
-                }
-
                 _ => bail! {not_supported_err},
             },
 
@@ -1022,49 +995,6 @@ impl TaskConfig {
 
                 _ => bail! { not_supported_err },
             },
-
-            DbType::Foxlake => {
-                let s3_config = S3Config {
-                    bucket: loader.get_optional(SINKER, "s3_bucket"),
-                    access_key: loader.get_optional(SINKER, "s3_access_key"),
-                    secret_key: loader.get_optional(SINKER, "s3_secret_key"),
-                    region: loader.get_optional(SINKER, "s3_region"),
-                    endpoint: loader.get_optional(SINKER, "s3_endpoint"),
-                    root_dir: loader.get_optional(SINKER, "s3_root_dir"),
-                    root_url: loader.get_optional(SINKER, "s3_root_url"),
-                };
-
-                match sink_type {
-                    SinkType::Write => SinkerConfig::Foxlake {
-                        url,
-                        batch_size,
-                        batch_memory_mb: loader.get_optional(SINKER, "batch_memory_mb"),
-                        s3_config,
-                        engine: loader.get_optional(SINKER, "engine"),
-                    },
-
-                    SinkType::Struct => SinkerConfig::FoxlakeStruct {
-                        url,
-                        conflict_policy,
-                        engine: loader.get_optional(SINKER, "engine"),
-                    },
-
-                    SinkType::Push => SinkerConfig::FoxlakePush {
-                        url,
-                        batch_size,
-                        batch_memory_mb: loader.get_optional(SINKER, "batch_memory_mb"),
-                        s3_config,
-                    },
-
-                    SinkType::Merge => SinkerConfig::FoxlakeMerge {
-                        url,
-                        batch_size,
-                        s3_config,
-                    },
-
-                    _ => bail! { not_supported_err },
-                }
-            }
         };
         Ok((basic, sinker))
     }
@@ -1162,9 +1092,6 @@ impl TaskConfig {
             counter_time_window_secs: loader.get_optional(PIPELINE, "counter_time_window_secs"),
             counter_max_sub_count: loader.get_with_default(PIPELINE, "counter_max_sub_count", 1000),
             pipeline_type: loader.get_with_default(PIPELINE, "pipeline_type", PipelineType::Basic),
-            http_host: loader.get_with_default(PIPELINE, "http_host", "0.0.0.0".to_string()),
-            http_port: loader.get_with_default(PIPELINE, "http_port", 10231),
-            with_field_defs: loader.get_with_default(PIPELINE, "with_field_defs", true),
         };
 
         if config.counter_time_window_secs == 0 {

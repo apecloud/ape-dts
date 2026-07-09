@@ -8,7 +8,6 @@ pub mod ddl_meta;
 pub mod dt_data;
 pub mod dt_queue;
 pub mod foreign_key;
-pub mod foxlake;
 pub mod kafka;
 pub mod mongo;
 pub mod mysql;
