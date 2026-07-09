@@ -1,7 +1,4 @@
-use super::{
-    config_enums::{ConflictPolicyEnum, DbType},
-    s3_config::S3Config,
-};
+use super::config_enums::{ConflictPolicyEnum, DbType};
 use crate::config::{
     config_enums::{RdbTransactionIsolation, SinkType},
     connection_auth_config::ConnectionAuthConfig,
@@ -117,33 +114,6 @@ pub enum SinkerConfig {
     },
 
     ClickhouseStruct {
-        url: String,
-        conflict_policy: ConflictPolicyEnum,
-        engine: String,
-    },
-
-    Foxlake {
-        url: String,
-        batch_size: usize,
-        batch_memory_mb: usize,
-        s3_config: S3Config,
-        engine: String,
-    },
-
-    FoxlakePush {
-        url: String,
-        batch_size: usize,
-        batch_memory_mb: usize,
-        s3_config: S3Config,
-    },
-
-    FoxlakeMerge {
-        url: String,
-        batch_size: usize,
-        s3_config: S3Config,
-    },
-
-    FoxlakeStruct {
         url: String,
         conflict_policy: ConflictPolicyEnum,
         engine: String,

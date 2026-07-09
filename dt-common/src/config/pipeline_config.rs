@@ -10,8 +10,4 @@ pub struct PipelineConfig {
     pub batch_sink_interval_secs: u64,
     pub counter_time_window_secs: u64,
     pub counter_max_sub_count: u64,
-    // Deprecated: used when pipeline_type == http_server
-    pub http_host: String,
-    pub http_port: u64,
-    pub with_field_defs: bool,
 }

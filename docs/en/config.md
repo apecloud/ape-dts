@@ -38,7 +38,7 @@ url=mysql://user1:abc%25%24%23%3F%40@127.0.0.1:3307?ssl-mode=disabled
 - When `parallel_type=chunk`, `[extractor].batch_size` is also the target chunk size. Chunk boundaries are data-dependent, so the actual row count may differ, but the extractor tries to make each chunk close to `batch_size`.
 - `parallel_size` is the effective concurrency limit in both modes.
 - MySQL and PostgreSQL snapshot extractors support both `table` and `chunk`.
-- MongoDB and Foxlake snapshot extractors currently support only `table`; `chunk` is not supported.
+- MongoDB snapshot extractors currently support only `table`; `chunk` is not supported.
 - Deprecated compatibility: `[runtime] tb_parallel_size` is kept only as a legacy fallback when `[extractor] parallel_size` is not set.
 
 ## Redis source cluster mode

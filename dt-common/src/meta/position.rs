@@ -56,11 +56,6 @@ pub enum Position {
         now_db_id: i64,
         timestamp: String,
     },
-    FoxlakeS3 {
-        schema: String,
-        tb: String,
-        s3_meta_file: String,
-    },
     Zk {
         path_versions: HashMap<String, (i32, i64)>,
         last_scan_timestamp: i64,

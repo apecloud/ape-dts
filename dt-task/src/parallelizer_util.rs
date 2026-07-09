@@ -9,10 +9,9 @@ use dt_common::{
     utils::redis_util::RedisUtil,
 };
 use dt_parallelizer::{
-    base_parallelizer::BaseParallelizer, foxlake_parallelizer::FoxlakeParallelizer,
-    merge_parallelizer::MergeParallelizer, mongo_merger::MongoMerger,
-    partition_parallelizer::PartitionParallelizer, rdb_merger::RdbMerger,
-    rdb_partitioner::RdbPartitioner, redis_parallelizer::RedisParallelizer,
+    base_parallelizer::BaseParallelizer, merge_parallelizer::MergeParallelizer,
+    mongo_merger::MongoMerger, partition_parallelizer::PartitionParallelizer,
+    rdb_merger::RdbMerger, rdb_partitioner::RdbPartitioner, redis_parallelizer::RedisParallelizer,
     serial_parallelizer::SerialParallelizer, snapshot_parallelizer::SnapshotParallelizer,
     table_parallelizer::TableParallelizer, Merger, Parallelizer,
 };
@@ -84,18 +83,6 @@ impl ParallelizerUtil {
                     slot_node_map,
                     key_parser: KeyParser::new(),
                     node_sinker_index_map: HashMap::new(),
-                })
-            }
-
-            ParallelType::Foxlake => {
-                let snapshot_parallelizer = SnapshotParallelizer {
-                    base_parallelizer,
-                    parallel_size,
-                    chunk_partitioner_rebalance: Default::default(),
-                };
-                Box::new(FoxlakeParallelizer {
-                    task_config: config.clone(),
-                    snapshot_parallelizer,
                 })
             }
         };

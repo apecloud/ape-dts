@@ -22,6 +22,5 @@ regex = { workspace = true }
 async-std = { workspace = true }
 mlua = { workspace = true }
 anyhow = { workspace = true }
-actix-web = { workspace = true }
 serde ={ workspace = true }
 serde_json = { workspace = true }

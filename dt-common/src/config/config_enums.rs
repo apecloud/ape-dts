@@ -32,8 +32,6 @@ pub enum DbType {
     StarRocks,
     #[strum(serialize = "doris")]
     Doris,
-    #[strum(serialize = "foxlake")]
-    Foxlake,
     #[strum(serialize = "tidb")]
     Tidb,
     #[strum(serialize = "zk")]
@@ -58,8 +56,6 @@ pub enum ExtractType {
     Scan,
     #[strum(serialize = "reshard")]
     Reshard,
-    #[strum(serialize = "foxlake_s3")]
-    FoxlakeS3,
 }
 
 #[derive(Display, EnumString, IntoStaticStr, Clone, Debug, Default, Hash)]
@@ -97,16 +93,12 @@ pub enum ParallelType {
     Mongo,
     #[strum(serialize = "redis")]
     Redis,
-    #[strum(serialize = "foxlake")]
-    Foxlake,
 }
 
 #[derive(EnumString, IntoStaticStr, Clone, Display)]
 pub enum PipelineType {
     #[strum(serialize = "basic")]
     Basic,
-    #[strum(serialize = "http_server")]
-    HttpServer,
 }
 
 #[derive(Clone, Debug, EnumString, IntoStaticStr, PartialEq, Default)]
