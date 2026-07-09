@@ -579,7 +579,6 @@ impl TaskRunner {
             &self.config,
             sinker_client.clone(),
             sinker_monitor_handle,
-            task_id.clone(),
             rw_sinker_data_marker.clone(),
             checker.as_ref().and_then(|handle| match handle {
                 CheckerHandle::Data(handle) => Some(handle.clone()),

@@ -7,9 +7,7 @@ use sqlx::types::chrono::Utc;
 use tokio::sync::RwLock;
 
 use dt_common::{
-    config::{
-        config_enums::DbType, sinker_config::SinkerConfig, task_config::TaskConfig,
-    },
+    config::{config_enums::DbType, sinker_config::SinkerConfig, task_config::TaskConfig},
     meta::{
         avro::avro_converter::AvroConverter,
         mongo::mongo_shard::{is_mongos, list_shard_collections},
@@ -82,7 +80,6 @@ impl SinkerUtil {
         config: &TaskConfig,
         client: ConnClient,
         monitor: TaskMonitorHandle,
-        _monitor_task_id: String,
         data_marker: Option<Arc<RwLock<DataMarker>>>,
         checker: Option<DataCheckerHandle>,
     ) -> anyhow::Result<Sinkers> {
