@@ -65,6 +65,7 @@ mod tests {
             rate_limiter: RateLimiterConfig::default(),
             app_name: None,
             is_direct_connection: None,
+            is_cluster: None,
         };
         let mut filter_config = FilterConfig {
             do_schemas: "db1,db2".to_string(),

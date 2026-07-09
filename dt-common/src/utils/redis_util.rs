@@ -30,15 +30,19 @@ impl RedisUtil {
         Ok(conn)
     }
 
-    pub fn is_redis_cluster(conn: &mut Connection) -> bool {
-        Self::send_cmd(conn, &["INFO", "cluster"])
-            .ok()
-            .and_then(|value| Self::parse_result_as_string(value).ok())
-            .is_some_and(|values| {
-                values
-                    .iter()
-                    .any(|value| value.contains("cluster_enabled:1"))
-            })
+    pub fn is_redis_cluster(conn: &mut Connection, is_cluster_option: Option<bool>) -> bool {
+        if let Some(is_cluster_option) = is_cluster_option {
+            is_cluster_option
+        } else {
+            Self::send_cmd(conn, &["INFO", "cluster"])
+                .ok()
+                .and_then(|value| Self::parse_result_as_string(value).ok())
+                .is_some_and(|values| {
+                    values
+                        .iter()
+                        .any(|value| value.contains("cluster_enabled:1"))
+                })
+        }
     }
 
     pub fn send_cmd(conn: &mut Connection, cmd: &[&str]) -> anyhow::Result<Value> {

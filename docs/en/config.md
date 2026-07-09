@@ -19,6 +19,7 @@ Different tasks may require extra configs, refer to [task templates](/docs/templ
 | parallel_size        | number of workers for extracting a table                                                                                                                                       | 4                                                                                                    | 1                                                       |
 | partition_cols       | partition column for data splitting during snapshot migration, only single column supported                                                                                    | json:[{"db":"db_1","tb":"tb_1","partition_col":"id"},{"db":"db_2","tb":"tb_2","partition_col":"id"}] | -                                                       |
 | is_direct_connection | whether to set MongoDB driver `directConnection`, only valid when `db_type=mongo`                                                                                              | true                                                                                                 | empty (driver default)                                  |
+| is_cluster           | whether to use Redis Cluster mode, only valid when `db_type=redis` and `extract_type=snapshot/cdc/snapshot_and_cdc`                                                           | true                                                                                                 | empty (detect from the URL target)                      |
 
 ## URL escaping
 
@@ -43,6 +44,9 @@ url=mysql://user1:abc%25%24%23%3F%40@127.0.0.1:3307?ssl-mode=disabled
 ## Redis source cluster mode
 
 - `[extractor].url` can point to any reachable node in the source cluster. DTS discovers all source master nodes through `CLUSTER NODES` and starts one PSYNC extractor for each master.
+- `[extractor].is_cluster` is optional. When omitted, DTS connects to the Redis node specified by `[extractor].url` and detects whether Redis Cluster mode should be used from the node's actual cluster state.
+- Set `[extractor].is_cluster=true` to force Redis Cluster mode. DTS discovers and syncs the whole source cluster.
+- Set `[extractor].is_cluster=false` to force single-node Redis mode. DTS runs PSYNC only against the node specified by `[extractor].url`. This can be used when the source is a Redis Cluster but only one cluster node should be synced.
 
 ## Mongo source connection mode
 
@@ -65,12 +69,16 @@ url=mysql://user1:abc%25%24%23%3F%40@127.0.0.1:3307?ssl-mode=disabled
 | batch_size                     | number of records written in a batch, 1 for serial                                                                                         | 200                                                                                         | 200                                                     |
 | replace                        | when inserting data, whether to force replacement if data already exists in target database, used in snapshot/cdc tasks for MySQL/PG       | false                                                                                       | true                                                    |     |
 | is_direct_connection           | whether to set MongoDB driver `directConnection`, only valid when `db_type=mongo`                                                          | true                                                                                        | empty (driver default)                                  |
+| is_cluster                     | whether to use Redis Cluster mode, only valid when `db_type=redis`                                                                         | true                                                                                        | empty (detect from the URL target)                      |
 | mongo_require_shard_key_filter | fail fast when writing to a sharded MongoDB target and the row filter cannot include all shard key fields, only valid when `db_type=mongo` | true                                                                                        | true                                                    |
 
 ## Redis target cluster mode
 
 - `[sinker].url` can point to any reachable node in the target cluster. DTS discovers all target master nodes through `CLUSTER NODES` and routes Redis commands to the owning node by key slot.
 - In Redis target cluster mode, DTS creates sinkers according to the target master nodes, instead of limiting the sinker count by `[parallelizer].parallel_size`.
+- `[sinker].is_cluster` is optional. When omitted, DTS connects to the Redis node specified by `[sinker].url` and detects whether Redis Cluster mode should be used from the node's actual cluster state.
+- Set `[sinker].is_cluster=true` to force Redis Cluster mode when writing to the target cluster.
+- Set `[sinker].is_cluster=false` to force single-node Redis mode and write only to the node specified by `[sinker].url`.
 
 ## Mongo target connection and shard-key mode
 

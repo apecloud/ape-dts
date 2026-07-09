@@ -95,6 +95,7 @@ declare -a ALL_SUITES=(
   "pg_to_pg_lua"
   # "pg_to_starrocks"       # disabled: temporarily excluded from default local matrix
   "mongo_to_mongo"
+  "mongo_to_mongo_precheck"
   "redis_to_redis_2_8"
   "redis_to_redis_4_0"
   "redis_to_redis_5_0"
@@ -357,6 +358,7 @@ suite_services() {
     pg_to_pg_lua) echo "postgres-src postgres-dst" ;;
     pg_to_starrocks) echo "postgres-src starrocks-3-2-11" ;;
     mongo_to_mongo) echo "mongo-src mongo-dst mongo-sharding-src-config mongo-sharding-src-shard mongo-sharding-src-init mongo-sharding-src-mongos mongo-sharding-src-add-shard-init mongo-sharding-dst-config mongo-sharding-dst-shard mongo-sharding-dst-init mongo-sharding-dst-mongos mongo-sharding-dst-add-shard-init" ;;
+    mongo_to_mongo_precheck) echo "mongo-src mongo-dst mongo-sharding-src-config mongo-sharding-src-shard mongo-sharding-src-init mongo-sharding-src-mongos mongo-sharding-src-add-shard-init mongo-sharding-dst-config mongo-sharding-dst-shard mongo-sharding-dst-init mongo-sharding-dst-mongos mongo-sharding-dst-add-shard-init" ;;
     redis_to_redis_2_8) echo "redis-src-2-8 redis-dst-2-8" ;;
     redis_to_redis_4_0) echo "redis-src-4-0 redis-dst-4-0" ;;
     redis_to_redis_5_0) echo "redis-src-5-0 redis-dst-5-0" ;;
@@ -369,7 +371,7 @@ suite_services() {
     redis_to_redis_rebloom) echo "redis-rebloom" ;;
     redis_to_redis_redisearch) echo "redis-redisearch" ;;
     redis_to_redis_rejson) echo "redis-rejson-src redis-rejson-dst" ;;
-    redis_to_redis_precheck) echo "redis-src-8-0 redis-dst-8-0" ;;
+    redis_to_redis_precheck) echo "redis-src-8-0 redis-dst-8-0 redis-dst redis-source-cluster-node1 redis-source-cluster-node2 redis-source-cluster-node3 redis-source-cluster-init" ;;
     no_services) echo "" ;;
     *) die "unknown suite '${suite}'" ;;
   esac
@@ -391,7 +393,7 @@ service_wait_mode() {
 suite_wait_timeout_secs() {
   local suite="$1"
   case "${suite}" in
-    mongo_to_mongo) echo "${MONGO_SHARDING_WAIT_TIMEOUT_SECS:-120}" ;;
+    mongo_to_mongo | mongo_to_mongo_precheck) echo "${MONGO_SHARDING_WAIT_TIMEOUT_SECS:-120}" ;;
     *) echo "${WAIT_TIMEOUT_SECS}" ;;
   esac
 }
@@ -441,7 +443,8 @@ suite_nextest_filter() {
     pg_to_pg_check) echo "test(/^pg_to_pg::check_tests::/)" ;;
     pg_to_pg_lua) echo "test(/^pg_to_pg_lua::/)" ;;
     pg_to_starrocks) echo "test(/^pg_to_starrocks::/)" ;;
-    mongo_to_mongo) echo "test(/^mongo_to_mongo::/)" ;;
+    mongo_to_mongo) echo "test(/^mongo_to_mongo::cdc_tests::/) | test(/^mongo_to_mongo::check_tests::/) | test(/^mongo_to_mongo::review_tests::/) | test(/^mongo_to_mongo::revise_tests::/) | test(/^mongo_to_mongo::snapshot_tests::/) | test(/^mongo_to_mongo::struct_tests::/)" ;;
+    mongo_to_mongo_precheck) echo "test(/^mongo_to_mongo::precheck_tests::/)" ;;
     redis_to_redis_2_8) echo "test(/^redis_to_redis::cdc_2_8_tests::/) | test(/^redis_to_redis::snapshot_2_8_tests::/)" ;;
     redis_to_redis_4_0) echo "test(/^redis_to_redis::cdc_4_0_tests::/) | test(/^redis_to_redis::snapshot_4_0_tests::/)" ;;
     redis_to_redis_5_0) echo "test(/^redis_to_redis::cdc_5_0_tests::/) | test(/^redis_to_redis::snapshot_5_0_tests::/)" ;;

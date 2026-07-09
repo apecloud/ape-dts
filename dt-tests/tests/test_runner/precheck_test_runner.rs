@@ -46,10 +46,27 @@ impl PrecheckTestRunner {
 
         let compare = |result: &CheckResult, expected_results: &HashMap<String, bool>| {
             if let Some(expected) = expected_results.get(&result.check_type_name) {
-                assert_eq!(&result.is_validate, expected);
+                if &result.is_validate != expected {
+                    println!(
+                        "{} checker: {} expect {}, found {}, dismatch",
+                        if result.is_source { "source" } else { "target" },
+                        result.check_type_name,
+                        expected,
+                        result.is_validate
+                    );
+                    assert!(false)
+                }
             } else {
                 // by default, is_validate == true
-                assert!(&result.is_validate);
+                if !&result.is_validate {
+                    println!(
+                        "{} checker: {} failed: {}",
+                        if result.is_source { "source" } else { "target" },
+                        result.check_type_name,
+                        result.error_msg
+                    );
+                    assert!(false)
+                }
             }
         };
 

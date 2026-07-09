@@ -74,7 +74,7 @@ impl ParallelizerUtil {
                     &config.sinker_basic.connection_auth,
                 )
                 .await?;
-                if RedisUtil::is_redis_cluster(&mut conn) {
+                if RedisUtil::is_redis_cluster(&mut conn, config.sinker_basic.is_cluster) {
                     let nodes = RedisUtil::get_cluster_master_nodes(&mut conn)?;
                     slot_node_map = RedisUtil::get_slot_address_map(&nodes);
                 }

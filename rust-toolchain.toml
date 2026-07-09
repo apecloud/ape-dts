@@ -1,4 +1,3 @@
-# Note: should NOT increase during a minor/patch release cycle
 [toolchain]
 channel = "1.85.0"
 profile = "default"

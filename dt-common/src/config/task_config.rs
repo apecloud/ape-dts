@@ -717,6 +717,7 @@ impl TaskConfig {
                         url,
                         connection_auth,
                         repl_port,
+                        is_cluster: Self::get_is_cluster_config(loader, EXTRACTOR),
                     }
                 }
 
@@ -743,6 +744,7 @@ impl TaskConfig {
                         heartbeat_interval_secs,
                         heartbeat_key: loader.get_optional(EXTRACTOR, "heartbeat_key"),
                         now_db_id: loader.get_optional(EXTRACTOR, "now_db_id"),
+                        is_cluster: Self::get_is_cluster_config(loader, EXTRACTOR),
                     }
                 }
 
@@ -756,6 +758,7 @@ impl TaskConfig {
                         keepalive_interval_secs,
                         heartbeat_interval_secs,
                         heartbeat_key: loader.get_optional(EXTRACTOR, "heartbeat_key"),
+                        is_cluster: Self::get_is_cluster_config(loader, EXTRACTOR),
                     }
                 }
 
@@ -869,11 +872,12 @@ impl TaskConfig {
         } else {
             None
         };
-
         let rate_limiter = RateLimiterConfig {
             max_rps: loader.get_optional(SINKER, "max_rps"),
             max_mbps: loader.get_optional(SINKER, "max_mbps"),
         };
+        let is_cluster = Self::get_is_cluster_config(loader, SINKER);
+
         let basic = BasicSinkerConfig {
             sink_type: sink_type.clone(),
             db_type: db_type.clone(),
@@ -884,6 +888,7 @@ impl TaskConfig {
             rate_limiter,
             app_name: Some(app_name.to_owned()),
             is_direct_connection,
+            is_cluster,
         };
 
         let conflict_policy: ConflictPolicyEnum =
@@ -985,6 +990,7 @@ impl TaskConfig {
                     connection_auth,
                     batch_size,
                     method: loader.get_optional(SINKER, "method"),
+                    is_cluster,
                 },
 
                 SinkType::Statistic => SinkerConfig::RedisStatistic {
@@ -1312,6 +1318,7 @@ impl TaskConfig {
         Ok(Some(config))
     }
 
+    // TODO: checker support mongo & redis special configs
     fn checker_as_basic_sinker(checker: &CheckerConfig) -> BasicSinkerConfig {
         BasicSinkerConfig {
             sink_type: SinkType::Dummy,
@@ -1323,6 +1330,7 @@ impl TaskConfig {
             rate_limiter: RateLimiterConfig::default(),
             app_name: Some(APP_NAME.to_string()),
             is_direct_connection: None,
+            is_cluster: None,
         }
     }
 
@@ -1532,6 +1540,14 @@ impl TaskConfig {
         Ok(Some(config))
     }
 
+    fn get_is_cluster_config(loader: &IniLoader, section: &str) -> Option<bool> {
+        let key = "is_cluster";
+        match loader.ini.get(section, key) {
+            Some(value) if !value.trim().is_empty() => Some(loader.get_optional(section, key)),
+            _ => None,
+        }
+    }
+
     #[cfg(feature = "metrics")]
     fn load_metrics_config(loader: &IniLoader) -> anyhow::Result<MetricsConfig> {
         let metrics_section = "metrics";
@@ -1565,7 +1581,9 @@ mod tests {
         ChunkPartitionerRebalanceCost, ChunkPartitionerRebalanceStrategy,
     };
 
-    use super::{CheckMode, ParallelType, TaskConfig, TaskKind, TaskType};
+    use super::{
+        CheckMode, ExtractorConfig, ParallelType, SinkerConfig, TaskConfig, TaskKind, TaskType,
+    };
 
     static NEXT_CONFIG_ID: AtomicU64 = AtomicU64::new(0);
 
@@ -1628,6 +1646,37 @@ url=mysql://127.0.0.1:3307
 parallel_type=rdb_merge
 "#
         )
+    }
+
+    #[test]
+    fn redis_empty_is_cluster_keeps_auto_detection() {
+        let config = load_temp_task_config(
+            r#"[extractor]
+db_type=redis
+extract_type=cdc
+url=redis://127.0.0.1:6379
+is_cluster=
+
+[sinker]
+db_type=redis
+sink_type=write
+url=redis://127.0.0.1:6380
+is_cluster=
+
+[parallelizer]
+parallel_type=redis
+"#,
+        )
+        .unwrap();
+
+        match config.extractor {
+            ExtractorConfig::RedisCdc { is_cluster, .. } => assert_eq!(is_cluster, None),
+            _ => panic!("expected redis cdc extractor"),
+        }
+        match config.sinker {
+            SinkerConfig::Redis { is_cluster, .. } => assert_eq!(is_cluster, None),
+            _ => panic!("expected redis sinker"),
+        }
     }
 
     #[test]
