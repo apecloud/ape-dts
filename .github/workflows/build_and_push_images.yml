@@ -18,6 +18,22 @@ on:
         required: true
         type: string
         default: linux/arm64,linux/amd64
+      build_profile:
+        description: "Cargo build profile"
+        required: true
+        type: choice
+        default: release
+        options:
+          - release
+          - profiling
+      enable_tokio_console:
+        description: "Build with tokio-console support"
+        required: true
+        type: choice
+        default: "false"
+        options:
+          - "false"
+          - "true"
 
 env:
   DOCKER_REGISTRY_URL: docker.io
@@ -31,6 +47,12 @@ jobs:
   build:
     name: Cross build
     runs-on: ubuntu-latest
+    env:
+      CARGO_BUILD_PROFILE: ${{ inputs.build_profile == 'profiling' && '--profile profiling' || '--release' }}
+      CARGO_TARGET_PROFILE: ${{ inputs.build_profile == 'profiling' && 'profiling' || 'release' }}
+      PROFILING_RUSTFLAGS: ${{ inputs.build_profile == 'profiling' && '-C force-frame-pointers=yes' || '' }}
+      TOKIO_CONSOLE_FEATURES: ${{ inputs.enable_tokio_console == 'true' && ',tokio-console' || '' }}
+      TOKIO_CONSOLE_RUSTFLAGS: ${{ inputs.enable_tokio_console == 'true' && '--cfg tokio_unstable' || '' }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -46,14 +68,14 @@ jobs:
       - name: Build for x86_64
         if: contains(inputs.platforms, 'linux/amd64')
         run: |
-          cross build --target x86_64-unknown-linux-gnu --release --features metrics
-          cp target/x86_64-unknown-linux-gnu/release/dt-main amd64-unknown-linux-gnu-dt-main
+          RUSTFLAGS="${TOKIO_CONSOLE_RUSTFLAGS} ${PROFILING_RUSTFLAGS}" cross build --target x86_64-unknown-linux-gnu ${CARGO_BUILD_PROFILE} --features metrics${TOKIO_CONSOLE_FEATURES}
+          cp target/x86_64-unknown-linux-gnu/${CARGO_TARGET_PROFILE}/dt-main amd64-unknown-linux-gnu-dt-main
 
       - name: Build for aarch64
         if: contains(inputs.platforms, 'linux/arm64')
         run: |
-          cross build --target aarch64-unknown-linux-gnu --release --features metrics
-          cp target/aarch64-unknown-linux-gnu/release/dt-main arm64-unknown-linux-gnu-dt-main
+          RUSTFLAGS="${TOKIO_CONSOLE_RUSTFLAGS} ${PROFILING_RUSTFLAGS}" cross build --target aarch64-unknown-linux-gnu ${CARGO_BUILD_PROFILE} --features metrics${TOKIO_CONSOLE_FEATURES}
+          cp target/aarch64-unknown-linux-gnu/${CARGO_TARGET_PROFILE}/dt-main arm64-unknown-linux-gnu-dt-main
 
       - name: Set up docker buildx
         uses: docker/setup-buildx-action@v2
@@ -76,6 +98,8 @@ jobs:
         run: |
           docker buildx build -f Dockerfile.github.workflow \
             --platform ${{ inputs.platforms }} \
+            --build-arg APE_DTS_IMAGE_TAG="${{ inputs.image_tag }}" \
+            --build-arg APE_DTS_COMMIT_ID="${{ github.sha }}" \
             --tag ${{ env.DOCKER_REGISTRY_URL }}/${{ inputs.image_name }}:${{ inputs.image_tag }} \
             --tag ${{ env.ALIYUN_REGISTRY_URL }}/${{ inputs.image_name }}:${{ inputs.image_tag }} \
             --push .
