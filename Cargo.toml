@@ -62,7 +62,7 @@ rust_decimal = "1.35.0"
 orc-format = {git = "https://github.com/apecloud/orc-format"}
 openssl = { version = "0.10", features = ["vendored"] }
 openssl-sys = { version = "0.9", features = ["vendored"]}
-actix-web = "4.9.0"
+actix-web = "=4.12.1"
 hex = "0.4.3"
 clickhouse = "0.13.1"
 dashmap = "6.1.0"
