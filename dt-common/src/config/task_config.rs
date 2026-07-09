@@ -1044,7 +1044,6 @@ impl TaskConfig {
                 },
                 _ => bail! { not_supported_err },
             },
-
         };
         Ok((basic, sinker))
     }
