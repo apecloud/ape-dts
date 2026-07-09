@@ -103,8 +103,6 @@ pub enum ParallelType {
 pub enum PipelineType {
     #[strum(serialize = "basic")]
     Basic,
-    #[strum(serialize = "http_server")]
-    HttpServer,
 }
 
 #[derive(Clone, Debug, EnumString, IntoStaticStr, PartialEq, Default)]

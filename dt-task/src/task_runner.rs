@@ -42,10 +42,7 @@ use dt_common::{
     error::Error,
     limiter::buffer_limiter::BufferLimiter,
     log_error, log_finished, log_info, log_warn,
-    meta::{
-        avro::avro_converter::AvroConverter, dt_queue::DtQueue, position::Position,
-        row_type::RowType, syncer::Syncer,
-    },
+    meta::{dt_queue::DtQueue, position::Position, row_type::RowType, syncer::Syncer},
     monitor::{
         task_metrics::TaskMetricsType,
         task_monitor::{MonitorType, TaskMonitor},
@@ -68,10 +65,7 @@ use dt_connector::{
     sinker::base_sinker::BaseSinker,
     Extractor, Sinker,
 };
-use dt_pipeline::{
-    base_pipeline::BasePipeline, http_server_pipeline::HttpServerPipeline,
-    lua_processor::LuaProcessor, Pipeline,
-};
+use dt_pipeline::{base_pipeline::BasePipeline, lua_processor::LuaProcessor, Pipeline};
 
 #[cfg(feature = "metrics")]
 use dt_common::monitor::prometheus_metrics::PrometheusMetrics;
@@ -852,23 +846,6 @@ impl TaskRunner {
                     recorder,
                     checker,
                 };
-                Ok(Box::new(pipeline) as Box<dyn Pipeline + Send>)
-            }
-
-            PipelineType::HttpServer => {
-                let meta_manager = ExtractorUtil::get_extractor_meta_manager(&self.config).await?;
-                let avro_converter =
-                    AvroConverter::new(meta_manager, self.config.pipeline.with_field_defs);
-                let pipeline = HttpServerPipeline::new(
-                    buffer,
-                    syncer,
-                    monitor,
-                    avro_converter,
-                    self.config.pipeline.checkpoint_interval_secs,
-                    self.config.pipeline.batch_sink_interval_secs,
-                    &self.config.pipeline.http_host,
-                    self.config.pipeline.http_port,
-                );
                 Ok(Box::new(pipeline) as Box<dyn Pipeline + Send>)
             }
         }

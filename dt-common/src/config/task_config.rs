@@ -1162,9 +1162,6 @@ impl TaskConfig {
             counter_time_window_secs: loader.get_optional(PIPELINE, "counter_time_window_secs"),
             counter_max_sub_count: loader.get_with_default(PIPELINE, "counter_max_sub_count", 1000),
             pipeline_type: loader.get_with_default(PIPELINE, "pipeline_type", PipelineType::Basic),
-            http_host: loader.get_with_default(PIPELINE, "http_host", "0.0.0.0".to_string()),
-            http_port: loader.get_with_default(PIPELINE, "http_port", 10231),
-            with_field_defs: loader.get_with_default(PIPELINE, "with_field_defs", true),
         };
 
         if config.counter_time_window_secs == 0 {
