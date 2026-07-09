@@ -8,9 +8,13 @@ workspace = true
 
 [features]
 metrics = ["dt-task/metrics"]
+tokio-console = ["dep:console-subscriber", "dep:tonic", "dep:tonic-prost", "tokio/tracing"]
 
 [dependencies]
 dt-task = {path = "../dt-task", version = "0.1.0"}
 dt-precheck = {path = "../dt-precheck", version = "0.1.0"}
 clap = { workspace = true }
+console-subscriber = { version = "=0.5.0", optional = true }
 tokio = { workspace = true }
+tonic = { version = "=0.14.5", optional = true }
+tonic-prost = { version = "=0.14.5", optional = true }
