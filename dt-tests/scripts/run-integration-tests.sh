@@ -78,7 +78,6 @@ declare -a ALL_SUITES=(
   "mock_test_pg_17_3_4"
   "mysql_to_clickhouse"
   # "mysql_to_doris"       # disabled: local/CI Doris suite is temporarily excluded
-  # "mysql_to_foxlake"      # disabled: local runnable Foxlake service is not provisioned
   "mysql_to_kafka_to_mysql"
   "mysql_to_mysql"
   "mysql_to_mysql_check"
@@ -341,7 +340,6 @@ suite_services() {
     mock_test_pg_17_3_4) echo "postgres-src-17-3-4 postgres-dst-17-3-4" ;;
     mysql_to_clickhouse) echo "mysql-src clickhouse" ;;
     mysql_to_doris) echo "mysql-src doris-2-1-0" ;;
-    mysql_to_foxlake) echo "mysql-src minio minio-init" ;;
     mysql_to_kafka_to_mysql) echo "mysql-src mysql-dst kafka" ;;
     mysql_to_mysql) echo "mysql-src mysql-dst mysql-meta mysql-src-8-0 mysql-dst-8-0" ;;
     mysql_to_mysql_check) echo "mysql-src mysql-dst" ;;
@@ -427,7 +425,6 @@ suite_nextest_filter() {
     mock_test_pg_17_3_4) echo "test(/^mock_test::pg_to_pg::from_17_3_4_to_17_3_4::/)" ;;
     mysql_to_clickhouse) echo "test(/^mysql_to_clickhouse::/)" ;;
     mysql_to_doris) echo "test(/^mysql_to_doris::/)" ;;
-    mysql_to_foxlake) echo "test(/^mysql_to_foxlake::/)" ;;
     mysql_to_kafka_to_mysql) echo "test(/^mysql_to_kafka_to_mysql::/)" ;;
     mysql_to_mysql) echo "test(/^mysql_to_mysql::cdc_tests::/) | test(/^mysql_to_mysql::precheck_tests::/) | test(/^mysql_to_mysql::review_tests::/) | test(/^mysql_to_mysql::revise_tests::/) | test(/^mysql_to_mysql::snapshot_tests::/) | test(/^mysql_to_mysql::struct_tests::/)" ;;
     mysql_to_mysql_check) echo "test(/^mysql_to_mysql::check_tests::/)" ;;

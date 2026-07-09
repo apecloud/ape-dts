@@ -577,7 +577,6 @@ impl TaskRunner {
         let sinker_monitor = sinker_monitor_handle.build_monitor("sinker", &task_id);
         let sinkers = SinkerUtil::create_sinkers(
             &self.config,
-            &extractor_config,
             sinker_client.clone(),
             sinker_monitor_handle,
             task_id.clone(),
@@ -1428,7 +1427,6 @@ impl TaskRunner {
             ExtractorConfig::MysqlSnapshot { .. }
                 | ExtractorConfig::PgSnapshot { .. }
                 | ExtractorConfig::MongoSnapshot { .. }
-                | ExtractorConfig::FoxlakeS3 { .. }
         );
 
         let mut schema_tbs = HashMap::new();
@@ -1619,25 +1617,6 @@ impl TaskRunner {
                 parallel_type: parallel_type.clone(),
                 batch_size: *batch_size,
             },
-
-            ExtractorConfig::FoxlakeS3 {
-                url,
-                s3_config,
-                parallel_size,
-                parallel_type,
-                batch_size,
-                ..
-            } => ExtractorConfig::FoxlakeS3 {
-                url: url.clone(),
-                schema: String::new(),
-                tb: String::new(),
-                schema_tbs,
-                parallel_size: *parallel_size,
-                parallel_type: parallel_type.clone(),
-                s3_config: s3_config.clone(),
-                batch_size: *batch_size,
-            },
-
             _ => self.config.extractor.clone(),
         };
         Ok(TaskInfo {

@@ -55,7 +55,7 @@ pub enum ResumerType {
 impl ResumerType {
     pub fn from_position(position: &Position) -> Self {
         match position {
-            Position::RdbSnapshot { .. } | Position::FoxlakeS3 { .. } => Self::SnapshotDoing,
+            Position::RdbSnapshot { .. } => Self::SnapshotDoing,
             Position::RdbSnapshotFinished { .. } => Self::SnapshotFinished,
             Position::MysqlCdc { .. }
             | Position::PgCdc { .. }

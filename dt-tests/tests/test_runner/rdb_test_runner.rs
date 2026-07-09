@@ -11,7 +11,6 @@ use dt_common::{
         extractor_config::ExtractorConfig,
         ini_loader::IniLoader,
         meta_center_config::MetaCenterConfig,
-        sinker_config::SinkerConfig,
         task_config::TaskConfig,
     },
     meta::{ddl_meta::ddl_type::DdlType, time::dt_utc_time::DtNaiveTime},
@@ -199,11 +198,7 @@ impl RdbTestRunner {
 
         if !dst_url.is_empty() && !mock_prepare_only {
             match &dst_db_type {
-                DbType::Mysql
-                | DbType::Foxlake
-                | DbType::StarRocks
-                | DbType::Doris
-                | DbType::Tidb => {
+                DbType::Mysql | DbType::StarRocks | DbType::Doris | DbType::Tidb => {
                     dst_conn_pool_mysql = Some(
                         TaskUtil::create_mysql_conn_pool(
                             &dst_url,
@@ -960,17 +955,6 @@ impl RdbTestRunner {
                     continue;
                 }
 
-                // TODO
-                // issue: https://github.com/apecloud/foxlake/issues/2108
-                // sqlx will execute: "SET time_zone='+00:00',NAMES utf8mb4 COLLATE utf8mb4_unicode_ci;"
-                // to initialize each connection.
-                // but it doesn't work on Foxlake
-                if matches!(self.base.get_config().sinker, SinkerConfig::Foxlake { .. })
-                    && matches!(dst_col_value, ColValue::Timestamp(..))
-                {
-                    continue;
-                }
-
                 println!(
                     "row index: {}, col: {}, src_col_value: {:?}, dst_col_value: {:?}",
                     i, src_col, src_col_value, dst_col_value
@@ -1141,17 +1125,6 @@ impl RdbTestRunner {
                 continue;
             }
 
-            // TODO
-            // issue: https://github.com/apecloud/foxlake/issues/2108
-            // sqlx will execute: "SET time_zone='+00:00',NAMES utf8mb4 COLLATE utf8mb4_unicode_ci;"
-            // to initialize each connection.
-            // but it doesn't work on Foxlake
-            if matches!(self.base.get_config().sinker, SinkerConfig::Foxlake { .. })
-                && matches!(dst_col_value, ColValue::Timestamp(..))
-            {
-                continue;
-            }
-
             if !Self::compare_col_value(src_col_value, dst_col_value, src_db_type, dst_db_type) {
                 return false;
             }
@@ -1185,7 +1158,6 @@ impl RdbTestRunner {
         // for example: we use Year in mysql, but INT in StarRocks,
         // so try to compare after both converted to string.
         match src_col_value {
-            // mysql 00:00:00 == foxlake 00:00:00.000000
             ColValue::Time(_) => {
                 DtNaiveTime::from_str(&src_col_value.to_string()).unwrap()
                     == DtNaiveTime::from_str(&dst_col_value.to_string()).unwrap()

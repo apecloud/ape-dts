@@ -232,8 +232,7 @@ impl ResumerUtil {
     pub fn get_key_from_position(position: &Position) -> String {
         match position {
             Position::RdbSnapshot { schema, tb, .. }
-            | Position::RdbSnapshotFinished { schema, tb, .. }
-            | Position::FoxlakeS3 { schema, tb, .. } => {
+            | Position::RdbSnapshotFinished { schema, tb, .. } => {
                 format!("{}-{}", schema, tb)
             }
             Position::Kafka {

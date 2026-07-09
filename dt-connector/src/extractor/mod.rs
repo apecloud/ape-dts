@@ -2,7 +2,6 @@ pub mod base_check_extractor;
 pub mod base_extractor;
 pub mod base_splitter;
 pub mod extractor_monitor;
-pub mod foxlake;
 pub mod kafka;
 pub mod mongo;
 pub mod mysql;

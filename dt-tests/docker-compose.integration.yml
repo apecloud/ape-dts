@@ -1404,10 +1404,6 @@ services:
     stdin_open: true
     tty: true
 
-  # Foxlake itself is intentionally not provisioned here yet.
-  # The repository does not define a runnable Foxlake image/startup contract,
-  # so adding a fake service would be more misleading than useful.
-
 networks:
   default:
     name: ape-dts-integration-network

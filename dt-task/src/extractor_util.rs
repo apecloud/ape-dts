@@ -30,7 +30,6 @@ use dt_connector::{
     extractor::{
         base_extractor::{BaseExtractor, ExtractState},
         extractor_monitor::ExtractorMonitor,
-        foxlake::foxlake_s3_extractor::FoxlakeS3Extractor,
         kafka::kafka_extractor::KafkaExtractor,
         mongo::{
             mongo_cdc_extractor::MongoCdcExtractor, mongo_check_extractor::MongoCheckExtractor,
@@ -721,29 +720,6 @@ impl ExtractorUtil {
                     syncer,
                     base_extractor,
                     extract_state,
-                    recovery,
-                };
-                Box::new(extractor)
-            }
-
-            ExtractorConfig::FoxlakeS3 {
-                schema_tbs,
-                parallel_size,
-                s3_config,
-                batch_size,
-                parallel_type,
-                ..
-            } => {
-                let s3_client = TaskUtil::create_s3_client(&s3_config)?;
-                let extractor = FoxlakeS3Extractor {
-                    schema_tbs,
-                    s3_config,
-                    s3_client,
-                    base_extractor,
-                    extract_state,
-                    batch_size,
-                    parallel_size,
-                    parallel_type,
                     recovery,
                 };
                 Box::new(extractor)
