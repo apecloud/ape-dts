@@ -13,7 +13,7 @@ use super::{
     rdb_redis_test_runner::RdbRedisTestRunner, rdb_sql_test_runner::RdbSqlTestRunner,
     rdb_starrocks_test_runner::RdbStarRocksTestRunner, rdb_struct_test_runner::RdbStructTestRunner,
     rdb_test_runner::RdbTestRunner, redis_statistic_runner::RedisStatisticTestRunner,
-    redis_test_runner::RedisTestRunner,
+    redis_test_runner::RedisTestRunner, zk_test_runner::ZkTestRunner,
 };
 
 pub struct TestBase {}
@@ -430,5 +430,13 @@ impl TestBase {
         let runner = RdbTestRunner::new(test_dir).await.unwrap();
         runner.dcl_check_sql_execution().await.unwrap();
         runner.close().await.unwrap();
+    }
+
+    pub async fn run_zk_cdc_test(test_dir: &str, start_millis: u64, parse_millis: u64) {
+        let runner = ZkTestRunner::new(test_dir).await.unwrap();
+        runner
+            .run_cdc_test(start_millis, parse_millis)
+            .await
+            .unwrap();
     }
 }

@@ -21,3 +21,5 @@ pub mod redis_statistic_runner;
 pub mod redis_test_runner;
 pub mod redis_test_util;
 pub mod test_base;
+pub mod zk_cycle_test_runner;
+pub mod zk_test_runner;

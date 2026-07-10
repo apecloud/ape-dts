@@ -1885,6 +1885,7 @@ dependencies = [
  "tokio",
  "url",
  "uuid",
+ "zookeeper-client",
 ]
 
 [[package]]

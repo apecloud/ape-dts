@@ -20,3 +20,4 @@ mod pg_to_starrocks;
 mod redis_to_redis;
 mod test_config_util;
 mod test_runner;
+mod zk_to_zk;
