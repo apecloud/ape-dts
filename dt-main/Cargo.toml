@@ -8,7 +8,7 @@ workspace = true
 
 [features]
 metrics = ["dt-task/metrics"]
-tokio-console = ["dep:console-subscriber", "dep:dt-common", "dep:tonic", "dep:tonic-prost", "dep:tracing-subscriber", "dt-common/tokio-console", "tokio/tracing"]
+tracing = ["dep:console-subscriber", "dep:dt-common", "dep:tonic", "dep:tonic-prost", "dep:tracing-subscriber", "dt-common/tracing", "tokio/tracing"]
 
 [dependencies]
 dt-task = {path = "../dt-task", version = "0.1.0"}

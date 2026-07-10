@@ -6,8 +6,6 @@ use dt_precheck::{config::task_config::PrecheckTaskConfig, do_precheck};
 use dt_task::task_runner::TaskRunner;
 
 const ENV_SHUTDOWN_TIMEOUT_SECS: &str = "SHUTDOWN_TIMEOUT_SECS";
-#[cfg(feature = "tokio-console")]
-const ENV_TOKIO_CONSOLE: &str = "APE_DTS_TOKIO_CONSOLE";
 
 #[derive(Debug, Parser)]
 struct Args {
@@ -38,7 +36,7 @@ async fn main() {
     unsafe {
         env::set_var("RUST_BACKTRACE", "1");
     }
-    init_tokio_console();
+    init_tracing();
 
     let args = Args::parse();
     if args.version || matches!(args.legacy_config.as_deref(), Some("version")) {
@@ -64,52 +62,39 @@ async fn main() {
 
     if PrecheckTaskConfig::new(config).is_ok() {
         do_precheck(config).await;
-        dump_tokio_console_summary();
     } else {
         let runner = TaskRunner::new(config).unwrap();
-        let result = runner.start_task(args.init).await;
-        dump_tokio_console_summary();
-        result.unwrap();
+        runner.start_task(args.init).await.unwrap();
     }
 }
 
-#[cfg(feature = "tokio-console")]
-fn init_tokio_console() {
-    if env::var(ENV_TOKIO_CONSOLE).as_deref() == Ok("1") {
-        use tracing_subscriber::{filter::Targets, prelude::*};
+#[cfg(feature = "tracing")]
+fn init_tracing() {
+    use tracing_subscriber::{filter::Targets, prelude::*};
 
-        let fmt_filter = env::var("RUST_LOG")
-            .ok()
-            .and_then(|log_filter| match log_filter.parse::<Targets>() {
-                Ok(targets) => Some(targets),
-                Err(err) => {
-                    eprintln!("failed to parse RUST_LOG={log_filter:?}: {err}");
-                    None
-                }
-            })
-            .unwrap_or_else(|| "error".parse().expect("error filter should parse"));
+    let fmt_filter = env::var("RUST_LOG")
+        .ok()
+        .and_then(|log_filter| match log_filter.parse::<Targets>() {
+            Ok(targets) => Some(targets),
+            Err(err) => {
+                eprintln!("failed to parse RUST_LOG={log_filter:?}: {err}");
+                None
+            }
+        })
+        .unwrap_or_else(|| "error".parse().expect("error filter should parse"));
 
-        dt_common::runtime_trace::enable();
+    dt_common::runtime_trace::enable();
 
-        let console_layer = console_subscriber::ConsoleLayer::builder().spawn();
-        tracing_subscriber::registry()
-            .with(console_layer)
-            .with(dt_common::runtime_trace::TaskStatsLayer::new())
-            .with(tracing_subscriber::fmt::layer().with_filter(fmt_filter))
-            .init();
-    }
+    let console_layer = console_subscriber::ConsoleLayer::builder().spawn();
+    tracing_subscriber::registry()
+        .with(console_layer)
+        .with(dt_common::runtime_trace::TaskStatsLayer::new())
+        .with(tracing_subscriber::fmt::layer().with_filter(fmt_filter))
+        .init();
 }
 
-#[cfg(not(feature = "tokio-console"))]
-fn init_tokio_console() {}
-
-#[cfg(feature = "tokio-console")]
-fn dump_tokio_console_summary() {
-    dt_common::runtime_trace::dump_global_summary();
-}
-
-#[cfg(not(feature = "tokio-console"))]
-fn dump_tokio_console_summary() {}
+#[cfg(not(feature = "tracing"))]
+fn init_tracing() {}
 
 #[cfg(test)]
 mod tests {

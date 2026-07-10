@@ -1,7 +1,7 @@
-#[cfg(feature = "tokio-console")]
+#[cfg(feature = "tracing")]
 use std::panic::Location;
 
-#[cfg(feature = "tokio-console")]
+#[cfg(feature = "tracing")]
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct WakeSource {
     name: &'static str,
@@ -9,7 +9,7 @@ pub struct WakeSource {
     line: u32,
 }
 
-#[cfg(feature = "tokio-console")]
+#[cfg(feature = "tracing")]
 impl WakeSource {
     fn new(name: &'static str, location: &'static Location<'static>) -> Self {
         Self {
@@ -24,10 +24,11 @@ impl WakeSource {
     }
 }
 
-#[cfg(feature = "tokio-console")]
+#[cfg(feature = "tracing")]
 mod imp {
     use std::{
         cell::RefCell,
+        fmt::Write,
         sync::{
             atomic::{AtomicBool, AtomicU64, Ordering},
             Arc, Mutex, OnceLock,
@@ -98,21 +99,23 @@ mod imp {
         ENABLED.store(true, Ordering::Release);
     }
 
-    pub fn dump_global_summary() {
+    pub fn dump_global_summary() -> Option<String> {
         if !is_enabled() {
-            return;
+            return None;
         }
 
+        let mut summary = String::new();
         let mut source_counts = collect_global_source_counts();
         let total_known_sources = source_counts.iter().map(|(_, count)| *count).sum::<u64>();
 
-        println!("=== ape-dts tokio wake trace summary ===");
+        let _ = writeln!(summary, "=== ape-dts tokio wake trace summary ===");
         if total_known_sources == 0 {
-            println!("known wake sources: none");
+            let _ = writeln!(summary, "known wake sources: none");
         } else {
-            println!("known wake sources: total={}", total_known_sources);
+            let _ = writeln!(summary, "known wake sources: total={}", total_known_sources);
             for (source, count) in source_counts.drain(..) {
-                println!(
+                let _ = writeln!(
+                    summary,
                     "  {:>8} {:>6.2}% {}",
                     count,
                     percent(count, total_known_sources),
@@ -123,8 +126,8 @@ mod imp {
 
         let mut tasks = collect_task_snapshots();
         if tasks.is_empty() {
-            println!("tokio tasks: none");
-            return;
+            let _ = writeln!(summary, "tokio tasks: none");
+            return Some(summary);
         }
 
         tasks.sort_by(|a, b| {
@@ -134,7 +137,7 @@ mod imp {
                 .then_with(|| a.id.cmp(&b.id))
         });
 
-        println!("tokio tasks: total={}", tasks.len());
+        let _ = writeln!(summary, "tokio tasks: total={}", tasks.len());
         for task in tasks {
             let known_task_sources = task
                 .wake_sources
@@ -142,7 +145,8 @@ mod imp {
                 .map(|(_, count)| *count)
                 .sum::<u64>();
             let location = task.location.as_deref().unwrap_or("-");
-            println!(
+            let _ = writeln!(
+                summary,
                 "  task={} name={} polls={} wakes={} self_wakes={} busy_ms={:.3} spawn={}",
                 task.id,
                 task.name,
@@ -155,7 +159,8 @@ mod imp {
 
             if known_task_sources > 0 {
                 for (source, count) in task.wake_sources {
-                    println!(
+                    let _ = writeln!(
+                        summary,
                         "    source {:>8} {:>6.2}% known {:>6.2}% wakes {}",
                         count,
                         percent(count, known_task_sources),
@@ -165,6 +170,8 @@ mod imp {
                 }
             }
         }
+
+        Some(summary)
     }
 
     pub fn with_wake_source<R>(source: WakeSource, f: impl FnOnce() -> R) -> R {
@@ -489,33 +496,35 @@ mod imp {
     }
 }
 
-#[cfg(not(feature = "tokio-console"))]
+#[cfg(not(feature = "tracing"))]
 mod imp {
     #[inline(always)]
     pub fn enable() {}
 
     #[inline(always)]
-    pub fn dump_global_summary() {}
+    pub fn dump_global_summary() -> Option<String> {
+        None
+    }
 }
 
 pub use imp::{dump_global_summary, enable};
 
-#[cfg(feature = "tokio-console")]
+#[cfg(feature = "tracing")]
 pub use imp::TaskStatsLayer;
 
-#[cfg(feature = "tokio-console")]
+#[cfg(feature = "tracing")]
 #[track_caller]
 pub fn with_wake_source<R>(name: &'static str, f: impl FnOnce() -> R) -> R {
     imp::with_wake_source(WakeSource::new(name, Location::caller()), f)
 }
 
-#[cfg(not(feature = "tokio-console"))]
+#[cfg(not(feature = "tracing"))]
 #[inline(always)]
 pub fn with_wake_source<R>(_name: &'static str, f: impl FnOnce() -> R) -> R {
     f()
 }
 
-#[cfg(feature = "tokio-console")]
+#[cfg(feature = "tracing")]
 #[track_caller]
 pub fn with_wake_source_future<Fut>(
     name: &'static str,
@@ -528,7 +537,7 @@ where
     imp::with_wake_source_future(source, future)
 }
 
-#[cfg(not(feature = "tokio-console"))]
+#[cfg(not(feature = "tracing"))]
 #[inline(always)]
 pub fn with_wake_source_future<Fut>(_name: &'static str, future: Fut) -> Fut
 where

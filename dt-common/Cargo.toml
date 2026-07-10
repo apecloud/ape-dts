@@ -10,7 +10,7 @@ workspace = true
 
 [features]
 metrics = ["prometheus"]
-tokio-console = ["dep:tracing", "dep:tracing-subscriber"]
+tracing = ["dep:tracing", "dep:tracing-subscriber"]
 
 [dependencies]
 dotenv = { workspace = true }

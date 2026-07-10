@@ -258,6 +258,9 @@ impl TaskRunner {
         self.remove_empty_check_logs().await?;
         self.upload_check_logs_to_s3().await?;
         log_finished!("task finished");
+        if let Some(summary) = dt_common::runtime_trace::dump_global_summary() {
+            log_info!("{}", summary.trim_end());
+        }
         log::logger().flush();
         Ok(())
     }
