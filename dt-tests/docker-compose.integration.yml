@@ -1404,6 +1404,22 @@ services:
     stdin_open: true
     tty: true
 
+  zk-src:
+    image: zookeeper:3.9
+    container_name: zk-src-it
+    ports:
+      - "2181:2181"
+    environment:
+      ZOO_MY_ID: 1
+
+  zk-dst:
+    image: zookeeper:3.9
+    container_name: zk-dst-it
+    ports:
+      - "2182:2181"
+    environment:
+      ZOO_MY_ID: 2
+
 networks:
   default:
     name: ape-dts-integration-network
