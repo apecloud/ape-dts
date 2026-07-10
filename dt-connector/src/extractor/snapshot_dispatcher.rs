@@ -65,7 +65,10 @@ impl SnapshotDispatcher {
                 break;
             };
             let run_worker = Arc::clone(&run);
-            join_set.spawn(async move { run_worker(work).await });
+            join_set.spawn(dt_common::runtime_trace::trace_task_future(
+                worker_name,
+                async move { run_worker(work).await },
+            ));
         }
 
         while let Some(result) = join_set.join_next().await {
@@ -79,7 +82,10 @@ impl SnapshotDispatcher {
                     break;
                 };
                 let run_worker = Arc::clone(&run);
-                join_set.spawn(async move { run_worker(work).await });
+                join_set.spawn(dt_common::runtime_trace::trace_task_future(
+                    worker_name,
+                    async move { run_worker(work).await },
+                ));
             }
         }
 

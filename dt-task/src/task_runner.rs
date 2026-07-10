@@ -153,6 +153,8 @@ impl TaskRunner {
     pub async fn start_task(&self, is_init: bool) -> anyhow::Result<()> {
         self.clear_check_logs().await?;
         self.init_log4rs().await?;
+        dt_common::runtime_trace::set_task_summary_mode(self.config.tracing.task_summary_mode);
+        dt_common::runtime_trace::set_output_format(self.config.tracing.output_format);
 
         let worker_thread_cnt = Handle::current().metrics().num_workers();
         log_info!(
@@ -259,7 +261,7 @@ impl TaskRunner {
         self.upload_check_logs_to_s3().await?;
         log_finished!("task finished");
         if let Some(summary) = dt_common::runtime_trace::dump_global_summary() {
-            log_info!("{}", summary.trim_end());
+            dt_common::log_runtime_trace!("{}", summary.trim_end());
         }
         log::logger().flush();
         Ok(())
@@ -669,20 +671,26 @@ impl TaskRunner {
         let mut join_set = JoinSet::new();
 
         let extractor_worker = extractor.clone();
-        join_set.spawn(async move {
-            (
-                SingleTaskWorker::Extractor,
-                Self::run_extractor_worker(extractor_worker).await,
-            )
-        });
+        join_set.spawn(dt_common::runtime_trace::trace_task_future(
+            "task.extractor_worker",
+            async move {
+                (
+                    SingleTaskWorker::Extractor,
+                    Self::run_extractor_worker(extractor_worker).await,
+                )
+            },
+        ));
 
         let pipeline_worker = pipeline.clone();
-        join_set.spawn(async move {
-            (
-                SingleTaskWorker::Pipeline,
-                Self::run_pipeline_worker(pipeline_worker).await,
-            )
-        });
+        join_set.spawn(dt_common::runtime_trace::trace_task_future(
+            "task.pipeline_worker",
+            async move {
+                (
+                    SingleTaskWorker::Pipeline,
+                    Self::run_pipeline_worker(pipeline_worker).await,
+                )
+            },
+        ));
         let mut extractor_done = false;
         let mut pipeline_done = false;
         let mut failure = None;
