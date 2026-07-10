@@ -1,4 +1,4 @@
-use anyhow::bail;
+use anyhow::{bail, ensure};
 use dt_common::{
     config::{
         extractor_config::ExtractorConfig, sinker_config::SinkerConfig, task_config::TaskConfig,
@@ -11,6 +11,7 @@ use zookeeper_client as zk;
 use super::base_test_runner::BaseTestRunner;
 
 const SHADOW_PREFIX: &str = "/__ape_dts_shadow";
+const POLL_INTERVAL_MILLIS: u64 = 200;
 
 pub struct ZkTestRunner {
     pub base: BaseTestRunner,
@@ -51,18 +52,31 @@ impl ZkTestRunner {
         self.prepare_znodes(&src, &dst).await?;
 
         let task = self.base.spawn_task().await?;
-        TimeUtil::sleep_millis(start_millis).await;
+        let test_result = async {
+            TimeUtil::sleep_millis(start_millis).await;
 
-        self.execute_test_operations(&src).await?;
-        TimeUtil::sleep_millis(parse_millis).await;
+            self.execute_live_test_operations(&src).await?;
+            Self::wait_for_live_sync(&dst, "/app/svc-gamma", b"gamma-v1", parse_millis).await?;
 
-        self.compare_znodes(&src, &dst, "/app").await?;
+            src.delete("/app/svc-gamma", None)
+                .await
+                .map_err(|e| anyhow::anyhow!("delete /app/svc-gamma failed: {}", e))?;
+            Self::wait_for_tombstone(&dst, "/app/svc-gamma", parse_millis).await?;
 
-        Self::assert_shadow_metadata(&dst, "/app/svc-alpha").await?;
-        Self::assert_shadow_metadata(&dst, "/app/svc-beta").await?;
-        Self::assert_shadow_tombstone(&dst, "/app/svc-gamma").await?;
+            Self::compare_znodes(&src, &dst, "/app").await?;
+            Self::assert_shadow_metadata(&dst, "/app/svc-alpha").await?;
+            Self::assert_shadow_metadata(&dst, "/app/svc-beta").await
+        }
+        .await;
 
-        self.base.abort_task(&task).await
+        let abort_result = self.base.abort_task(&task).await;
+        match test_result {
+            Ok(()) => abort_result,
+            Err(error) => {
+                let _ = abort_result;
+                Err(error)
+            }
+        }
     }
 
     async fn prepare_znodes(&self, src: &zk::Client, dst: &zk::Client) -> anyhow::Result<()> {
@@ -80,7 +94,7 @@ impl ZkTestRunner {
         Ok(())
     }
 
-    async fn execute_test_operations(&self, src: &zk::Client) -> anyhow::Result<()> {
+    async fn execute_live_test_operations(&self, src: &zk::Client) -> anyhow::Result<()> {
         let options = zk::CreateMode::Persistent.with_acls(zk::Acls::anyone_all());
 
         src.create("/app/svc-alpha", b"alpha-v1", &options)
@@ -99,15 +113,138 @@ impl ZkTestRunner {
             .await
             .map_err(|e| anyhow::anyhow!("create /app/svc-gamma failed: {}", e))?;
 
-        src.delete("/app/svc-gamma", None)
-            .await
-            .map_err(|e| anyhow::anyhow!("delete /app/svc-gamma failed: {}", e))?;
-
         Ok(())
     }
 
+    async fn wait_for_live_sync(
+        client: &zk::Client,
+        data_path: &str,
+        expected_data: &[u8],
+        timeout_millis: u64,
+    ) -> anyhow::Result<()> {
+        let shadow_path = format!("{}{}", SHADOW_PREFIX, data_path);
+        let deadline =
+            tokio::time::Instant::now() + tokio::time::Duration::from_millis(timeout_millis);
+
+        loop {
+            let (data_matches, data_observation) = match client.get_data(data_path).await {
+                Ok((data, _)) => (
+                    data == expected_data,
+                    format!("data={:?}", String::from_utf8_lossy(&data)),
+                ),
+                Err(ref e) if matches!(e, zk::Error::NoNode) => {
+                    (false, String::from("data=missing"))
+                }
+                Err(e) => bail!("get live data {} failed: {}", data_path, e),
+            };
+
+            let (shadow_matches, shadow_observation) = match client.get_data(&shadow_path).await {
+                Ok((data, _)) => {
+                    let json: serde_json::Value = serde_json::from_slice(&data).map_err(|e| {
+                        anyhow::anyhow!("shadow {} invalid JSON: {}", shadow_path, e)
+                    })?;
+                    (Self::live_shadow_matches(&json), format!("shadow={}", json))
+                }
+                Err(ref e) if matches!(e, zk::Error::NoNode) => {
+                    (false, String::from("shadow=missing"))
+                }
+                Err(e) => bail!("get live shadow {} failed: {}", shadow_path, e),
+            };
+
+            if data_matches && shadow_matches {
+                return Ok(());
+            }
+            let last_observation = format!("{}, {}", data_observation, shadow_observation);
+            if tokio::time::Instant::now() >= deadline {
+                bail!(
+                    "live sync {} did not converge within {}ms; last observation: {}",
+                    data_path,
+                    timeout_millis,
+                    last_observation
+                );
+            }
+            TimeUtil::sleep_millis(POLL_INTERVAL_MILLIS).await;
+        }
+    }
+
+    async fn wait_for_tombstone(
+        client: &zk::Client,
+        data_path: &str,
+        timeout_millis: u64,
+    ) -> anyhow::Result<()> {
+        let shadow_path = format!("{}{}", SHADOW_PREFIX, data_path);
+        let deadline =
+            tokio::time::Instant::now() + tokio::time::Duration::from_millis(timeout_millis);
+
+        loop {
+            let (data_absent, data_observation) = match client.get_data(data_path).await {
+                Ok((data, _)) => (false, format!("data={:?}", String::from_utf8_lossy(&data))),
+                Err(ref e) if matches!(e, zk::Error::NoNode) => {
+                    (true, String::from("data=missing"))
+                }
+                Err(e) => bail!("get deleted data {} failed: {}", data_path, e),
+            };
+
+            let (shadow_matches, shadow_observation) = match client.get_data(&shadow_path).await {
+                Ok((data, _)) => {
+                    let json: serde_json::Value = serde_json::from_slice(&data).map_err(|e| {
+                        anyhow::anyhow!("tombstone shadow {} invalid JSON: {}", shadow_path, e)
+                    })?;
+                    (
+                        Self::tombstone_shadow_matches(&json),
+                        format!("shadow={}", json),
+                    )
+                }
+                Err(ref e) if matches!(e, zk::Error::NoNode) => {
+                    (false, String::from("shadow=missing"))
+                }
+                Err(e) => bail!("get tombstone shadow {} failed: {}", shadow_path, e),
+            };
+
+            if data_absent && shadow_matches {
+                return Ok(());
+            }
+            let last_observation = format!("{}, {}", data_observation, shadow_observation);
+            if tokio::time::Instant::now() >= deadline {
+                bail!(
+                    "delete sync {} did not converge within {}ms; last observation: {}",
+                    data_path,
+                    timeout_millis,
+                    last_observation
+                );
+            }
+            TimeUtil::sleep_millis(POLL_INTERVAL_MILLIS).await;
+        }
+    }
+
+    fn live_shadow_matches(json: &serde_json::Value) -> bool {
+        json.get("source_id")
+            .and_then(|v| v.as_str())
+            .is_some_and(|v| !v.is_empty())
+            && json
+                .get("source_order_millis")
+                .and_then(|v| v.as_i64())
+                .is_some_and(|v| v > 0)
+            && json.get("version").and_then(|v| v.as_i64()).is_some()
+            && json.get("deleted").and_then(|v| v.as_bool()) == Some(false)
+    }
+
+    fn tombstone_shadow_matches(json: &serde_json::Value) -> bool {
+        json.get("source_id")
+            .and_then(|v| v.as_str())
+            .is_some_and(|v| !v.is_empty())
+            && json.get("deleted").and_then(|v| v.as_bool()) == Some(true)
+            && json
+                .get("source_order_millis")
+                .and_then(|v| v.as_i64())
+                .is_some_and(|v| v > 0)
+            && json
+                .get("source_zxid")
+                .and_then(|v| v.as_i64())
+                .is_some_and(|v| v > 0)
+    }
+
     fn compare_znodes<'a>(
-        &'a self,
         src: &'a zk::Client,
         dst: &'a zk::Client,
         path: &'a str,
@@ -139,10 +276,12 @@ impl ZkTestRunner {
                 .filter(|c| !c.starts_with("__ape_dts_"))
                 .collect();
 
-            assert_eq!(
-                src_filtered, dst_filtered,
+            ensure!(
+                src_filtered == dst_filtered,
                 "children mismatch at {}: src={:?}, dst={:?}",
-                path, src_filtered, dst_filtered
+                path,
+                src_filtered,
+                dst_filtered
             );
 
             for child in &src_filtered {
@@ -157,16 +296,15 @@ impl ZkTestRunner {
                     .await
                     .map_err(|e| anyhow::anyhow!("get_data dst {} failed: {}", child_path, e))?;
 
-                assert_eq!(
-                    src_data,
-                    dst_data,
+                ensure!(
+                    src_data == dst_data,
                     "data mismatch at {}: src={:?}, dst={:?}",
                     child_path,
                     String::from_utf8_lossy(&src_data),
                     String::from_utf8_lossy(&dst_data)
                 );
 
-                self.compare_znodes(src, dst, &child_path).await?;
+                Self::compare_znodes(src, dst, &child_path).await?;
             }
 
             Ok(())
@@ -181,68 +319,11 @@ impl ZkTestRunner {
             .map_err(|e| anyhow::anyhow!("shadow znode {} should exist: {}", shadow_path, e))?;
         let json: serde_json::Value = serde_json::from_slice(&data)
             .map_err(|e| anyhow::anyhow!("shadow {} invalid JSON: {}", shadow_path, e))?;
-        assert!(
-            json.get("source_id")
-                .and_then(|v| v.as_str())
-                .map_or(false, |v| !v.is_empty()),
-            "shadow {} missing or empty source_id",
-            shadow_path
-        );
-        assert!(
-            json.get("source_order_millis")
-                .and_then(|v| v.as_i64())
-                .map_or(false, |v| v > 0),
-            "shadow {} missing or zero source_order_millis",
-            shadow_path
-        );
-        assert!(
-            json.get("version").and_then(|v| v.as_i64()).is_some(),
-            "shadow {} missing or invalid version",
-            shadow_path
-        );
-        assert_eq!(
-            json.get("deleted").and_then(|v| v.as_bool()),
-            Some(false),
-            "shadow {} should have deleted=false",
-            shadow_path
-        );
-        Ok(())
-    }
-
-    async fn assert_shadow_tombstone(client: &zk::Client, data_path: &str) -> anyhow::Result<()> {
-        let shadow_path = format!("{}{}", SHADOW_PREFIX, data_path);
-        let (data, _) = client
-            .get_data(&shadow_path)
-            .await
-            .map_err(|e| anyhow::anyhow!("tombstone shadow {} should exist: {}", shadow_path, e))?;
-        let json: serde_json::Value = serde_json::from_slice(&data)
-            .map_err(|e| anyhow::anyhow!("tombstone shadow {} invalid JSON: {}", shadow_path, e))?;
-        assert!(
-            json.get("source_id")
-                .and_then(|v| v.as_str())
-                .map_or(false, |v| !v.is_empty()),
-            "tombstone shadow {} missing or empty source_id",
-            shadow_path
-        );
-        assert_eq!(
-            json.get("deleted").and_then(|v| v.as_bool()),
-            Some(true),
-            "tombstone shadow {} should have deleted=true",
-            shadow_path
-        );
-        assert!(
-            json.get("source_order_millis")
-                .and_then(|v| v.as_i64())
-                .map_or(false, |v| v > 0),
-            "tombstone shadow {} should have source_order_millis > 0",
-            shadow_path
-        );
-        assert!(
-            json.get("source_zxid")
-                .and_then(|v| v.as_i64())
-                .map_or(false, |v| v > 0),
-            "tombstone shadow {} should have source_zxid > 0",
-            shadow_path
+        ensure!(
+            Self::live_shadow_matches(&json),
+            "shadow {} missing required live metadata: {}",
+            shadow_path,
+            json
         );
         Ok(())
     }
