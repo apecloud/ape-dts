@@ -7,7 +7,7 @@ use std::sync::{
 use tokio::{
     sync::{Mutex, RwLock},
     task::yield_now,
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 use crate::{lua_processor::LuaProcessor, Pipeline};
@@ -93,10 +93,20 @@ impl Pipeline for BasePipeline {
         let mut last_commit_positions = HashMap::new();
         let mut record_time = Instant::now();
 
-        while !self.shut_down.load(Ordering::Acquire)
-            || !self.buffer.is_empty()
-            || !self.pending_snapshot_finished.is_empty()
-        {
+        loop {
+            let shutting_down = self.shut_down.load(Ordering::Acquire);
+            let buffer_empty = self.buffer.is_empty();
+            let pending_finish_empty = self.pending_snapshot_finished.is_empty();
+            let has_pending_work = !buffer_empty || !pending_finish_empty;
+
+            if shutting_down && !has_pending_work {
+                break;
+            }
+
+            if !has_pending_work {
+                self.buffer.wait_for_data(Duration::from_secs(1)).await;
+            }
+
             // to avoid too many sub counters, only add counter when buffer is not empty
             if !self.buffer.is_empty() {
                 self.monitor
