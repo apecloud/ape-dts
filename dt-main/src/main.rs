@@ -36,7 +36,6 @@ async fn main() {
     unsafe {
         env::set_var("RUST_BACKTRACE", "1");
     }
-    init_tracing();
 
     let args = Args::parse();
     if args.version || matches!(args.legacy_config.as_deref(), Some("version")) {
@@ -67,34 +66,6 @@ async fn main() {
         runner.start_task(args.init).await.unwrap();
     }
 }
-
-#[cfg(feature = "tracing")]
-fn init_tracing() {
-    use tracing_subscriber::{filter::Targets, prelude::*};
-
-    let fmt_filter = env::var("RUST_LOG")
-        .ok()
-        .and_then(|log_filter| match log_filter.parse::<Targets>() {
-            Ok(targets) => Some(targets),
-            Err(err) => {
-                eprintln!("failed to parse RUST_LOG={log_filter:?}: {err}");
-                None
-            }
-        })
-        .unwrap_or_else(|| "error".parse().expect("error filter should parse"));
-
-    dt_common::runtime_trace::enable();
-
-    let console_layer = console_subscriber::ConsoleLayer::builder().spawn();
-    tracing_subscriber::registry()
-        .with(console_layer)
-        .with(dt_common::runtime_trace::TaskStatsLayer::new())
-        .with(tracing_subscriber::fmt::layer().with_filter(fmt_filter))
-        .init();
-}
-
-#[cfg(not(feature = "tracing"))]
-fn init_tracing() {}
 
 #[cfg(test)]
 mod tests {

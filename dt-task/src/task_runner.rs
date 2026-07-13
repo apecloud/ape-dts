@@ -153,6 +153,7 @@ impl TaskRunner {
     pub async fn start_task(&self, is_init: bool) -> anyhow::Result<()> {
         self.clear_check_logs().await?;
         self.init_log4rs().await?;
+        dt_common::runtime_trace::init_tracing();
         dt_common::runtime_trace::set_task_summary_mode(self.config.tracing.task_summary_mode);
         dt_common::runtime_trace::set_output_format(self.config.tracing.output_format);
 

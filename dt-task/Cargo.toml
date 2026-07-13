@@ -8,6 +8,7 @@ workspace = true
 
 [features]
 metrics = ["dt-common/metrics", "prometheus"]
+tracing = ["dt-common/tracing"]
 
 [dependencies]
 dt-common = { path = "../dt-common", version = "0.1.0" }

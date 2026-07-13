@@ -74,7 +74,11 @@ impl DtQueue {
                     Err(e) => return Err(e.into()),
                 }
             }
-            self.not_full.notified().await;
+            crate::runtime_trace::with_wake_source_future(
+                "dtqueue.not_full.wait",
+                self.not_full.notified(),
+            )
+            .await;
         }
     }
 
@@ -98,9 +102,7 @@ impl DtQueue {
                 .fetch_sub(item.dt_data.get_data_size(), Ordering::Release);
         }
 
-        crate::runtime_trace::with_wake_source("dtqueue.not_full.notify_one", || {
-            self.not_full.notify_one();
-        });
+        self.not_full.notify_one();
 
         Ok(item)
     }

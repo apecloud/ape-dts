@@ -134,93 +134,101 @@ impl TaskMarker {
 #[cfg(feature = "tracing")]
 mod imp {
     use std::{
-        cell::RefCell,
         collections::HashMap,
         fmt::Write,
+        future::Future,
         sync::{
             atomic::{AtomicBool, AtomicU64, Ordering},
-            Arc, Mutex, OnceLock,
+            Arc, OnceLock,
         },
-        time::Instant,
+        task::{Context, Wake, Waker},
     };
 
+    use chrono::{SecondsFormat, Utc};
     use dashmap::DashMap;
-    use tracing::{
-        field::{Field, Visit},
-        span::{Attributes, Id},
-        subscriber::Interest,
-        Event, Metadata, Subscriber,
-    };
-    use tracing_subscriber::{layer::Context, registry::LookupSpan, Layer};
-
+    use futures::future::poll_fn;
     use serde_json::{json, Value};
+    use tokio_metrics::TaskMonitor;
+    use tracing_subscriber::filter::Targets;
 
     use super::{TaskMarker, TaskSummaryMode, TraceOutputFormat, WakeSource};
 
     static ENABLED: AtomicBool = AtomicBool::new(false);
-    static TASK_SUMMARY_MODE: AtomicU64 = AtomicU64::new(TaskSummaryMode::Task as u64);
+    static TASK_SUMMARY_MODE: AtomicU64 = AtomicU64::new(TaskSummaryMode::Marker as u64);
     static TRACE_OUTPUT_FORMAT: AtomicU64 = AtomicU64::new(TraceOutputFormat::Plain as u64);
-    static TASKS: OnceLock<DashMap<u64, Arc<TaskStats>>> = OnceLock::new();
-    static GLOBAL_WAKE_SOURCES: OnceLock<DashMap<WakeSource, AtomicU64>> = OnceLock::new();
+    static INIT_TRACING: OnceLock<()> = OnceLock::new();
+    static NEXT_TASK_ID: AtomicU64 = AtomicU64::new(1);
+    static TASKS: OnceLock<DashMap<u64, Arc<TaskTrace>>> = OnceLock::new();
 
-    thread_local! {
-        static WAKE_SOURCE_STACK: RefCell<Vec<WakeSource>> = const { RefCell::new(Vec::new()) };
-        static CURRENT_TASK_STACK: RefCell<Vec<u64>> = const { RefCell::new(Vec::new()) };
+    tokio::task_local! {
+        static TRACE_TASK: Arc<TaskTrace>;
     }
 
-    pub struct TaskStatsLayer;
-
-    struct TaskStats {
+    struct TaskTrace {
         id: u64,
-        name: Mutex<String>,
-        location: Mutex<Option<String>>,
-        polls: AtomicU64,
-        wakes: AtomicU64,
-        self_wakes: AtomicU64,
-        busy_ns: AtomicU64,
-        current_poll_started: Mutex<Option<Instant>>,
+        marker: TaskMarker,
+        monitor: TaskMonitor,
         wake_sources: DashMap<WakeSource, AtomicU64>,
-        marker: Mutex<Option<TaskMarker>>,
-    }
-
-    #[derive(Default)]
-    struct TaskFields {
-        name: Option<String>,
-        file: Option<String>,
-        line: Option<u64>,
-        column: Option<u64>,
-    }
-
-    #[derive(Default)]
-    struct WakerFields {
-        task_id: Option<u64>,
-        is_wake: bool,
     }
 
     struct TaskSnapshot {
         id: u64,
-        name: String,
-        location: Option<String>,
-        polls: u64,
-        wakes: u64,
-        self_wakes: u64,
+        marker: TaskMarker,
+        poll_count: u64,
+        scheduled_count: u64,
         busy_ns: u64,
+        // Raw attributed Waker calls are not equivalent to TaskMonitor scheduling cycles.
         wake_sources: Vec<(WakeSource, u64)>,
-        marker: Option<TaskMarker>,
     }
 
     struct MarkerSnapshot {
         marker: TaskMarker,
-        tasks: u64,
-        polls: u64,
-        wakes: u64,
-        self_wakes: u64,
+        task_count: u64,
+        poll_count: u64,
+        scheduled_count: u64,
         busy_ns: u64,
         wake_sources: Vec<(WakeSource, u64)>,
     }
 
+    struct CachedSourceWaker {
+        task: Arc<TaskTrace>,
+        original: Waker,
+        attributed: Waker,
+    }
+
+    struct AttributedWaker {
+        task: Arc<TaskTrace>,
+        source: WakeSource,
+        inner: Waker,
+    }
+
     pub fn enable() {
         ENABLED.store(true, Ordering::Release);
+    }
+
+    pub fn init_tracing() {
+        INIT_TRACING.get_or_init(|| {
+            enable();
+
+            let fmt_filter = std::env::var("RUST_LOG")
+                .ok()
+                .and_then(|log_filter| match log_filter.parse::<Targets>() {
+                    Ok(targets) => Some(targets),
+                    Err(err) => {
+                        eprintln!("failed to parse RUST_LOG={log_filter:?}: {err}");
+                        None
+                    }
+                })
+                .unwrap_or_else(|| "error".parse().expect("error filter should parse"));
+
+            use tracing_subscriber::prelude::*;
+
+            let console_layer = console_subscriber::ConsoleLayer::builder().spawn();
+            let _ = tracing_subscriber::registry()
+                .with(console_layer)
+                .with(tracing_subscriber::fmt::layer().with_filter(fmt_filter))
+                .try_init();
+        });
     }
 
     pub fn set_task_summary_mode(mode: TaskSummaryMode) {
@@ -236,49 +244,158 @@ mod imp {
             return None;
         }
 
+        let generated_at = Utc::now().to_rfc3339_opts(SecondsFormat::Micros, true);
         if trace_output_format() == TraceOutputFormat::Json {
-            return Some(dump_json_summary());
+            return Some(dump_json_summary(&generated_at));
         }
 
         let mut summary = String::new();
-        let mut source_counts = collect_global_source_counts();
-        let total_known_sources = source_counts.iter().map(|(_, count)| *count).sum::<u64>();
+        let source_counts = collect_global_source_counts();
+        let attributed_call_count = source_total(&source_counts);
 
-        let _ = writeln!(summary, "=== ape-dts tokio wake trace summary ===");
-        if total_known_sources == 0 {
-            let _ = writeln!(summary, "known wake sources: none");
+        let _ = writeln!(
+            summary,
+            "{generated_at} | ape-dts Tokio task runtime summary"
+        );
+        if attributed_call_count == 0 {
+            let _ = writeln!(summary, "attributed waker calls: none");
         } else {
-            let _ = writeln!(summary, "known wake sources: total={}", total_known_sources);
-            for (source, count) in source_counts.drain(..) {
+            let _ = writeln!(
+                summary,
+                "attributed waker calls: total={attributed_call_count}"
+            );
+            for (source, count) in source_counts {
                 let _ = writeln!(
                     summary,
-                    "  {:>8} {:>6.2}% {}",
-                    count,
-                    percent(count, total_known_sources),
+                    "  count={count} percent_of_all_attributed_calls={:.2}% wait_source={}",
+                    percent(count, attributed_call_count),
                     source.display()
                 );
             }
         }
 
-        if task_summary_mode() == TaskSummaryMode::Marker {
-            dump_marker_summary(&mut summary);
-            return Some(summary);
+        match task_summary_mode() {
+            TaskSummaryMode::Task => dump_task_summary(&mut summary),
+            TaskSummaryMode::Marker => dump_marker_summary(&mut summary),
         }
-
-        dump_task_summary(&mut summary);
         Some(summary)
     }
 
-    fn dump_json_summary() -> String {
+    pub async fn with_wake_source_future<Fut>(source: WakeSource, future: Fut) -> Fut::Output
+    where
+        Fut: Future,
+    {
+        let mut cached_waker = None;
+        futures::pin_mut!(future);
+
+        poll_fn(|cx| {
+            let Ok(task) = TRACE_TASK.try_with(Arc::clone) else {
+                return future.as_mut().poll(cx);
+            };
+
+            let rebuild_waker = cached_waker
+                .as_ref()
+                .is_none_or(|cached: &CachedSourceWaker| {
+                    !Arc::ptr_eq(&cached.task, &task) || !cached.original.will_wake(cx.waker())
+                });
+            if rebuild_waker {
+                let original = cx.waker().clone();
+                let attributed = Waker::from(Arc::new(AttributedWaker {
+                    task: Arc::clone(&task),
+                    source,
+                    inner: original.clone(),
+                }));
+                cached_waker = Some(CachedSourceWaker {
+                    task,
+                    original,
+                    attributed,
+                });
+            }
+
+            let attributed = &cached_waker
+                .as_ref()
+                .expect("source waker should be initialized")
+                .attributed;
+            let mut attributed_cx = Context::from_waker(attributed);
+            future.as_mut().poll(&mut attributed_cx)
+        })
+        .await
+    }
+
+    pub async fn trace_task_future<Fut>(marker: TaskMarker, future: Fut) -> Fut::Output
+    where
+        Fut: Future,
+    {
+        let task = Arc::new(TaskTrace::new(
+            NEXT_TASK_ID.fetch_add(1, Ordering::Relaxed),
+            marker,
+        ));
+        tasks().insert(task.id, Arc::clone(&task));
+
+        let instrumented = task.monitor.instrument(future);
+        TRACE_TASK.scope(task, instrumented).await
+    }
+
+    impl Wake for AttributedWaker {
+        fn wake(self: Arc<Self>) {
+            self.task.record_source(self.source);
+            self.inner.wake_by_ref();
+        }
+
+        fn wake_by_ref(self: &Arc<Self>) {
+            self.task.record_source(self.source);
+            self.inner.wake_by_ref();
+        }
+    }
+
+    impl TaskTrace {
+        fn new(id: u64, marker: TaskMarker) -> Self {
+            Self {
+                id,
+                marker,
+                monitor: TaskMonitor::new(),
+                wake_sources: DashMap::new(),
+            }
+        }
+
+        fn record_source(&self, source: WakeSource) {
+            increment_source(&self.wake_sources, source, 1);
+        }
+
+        fn snapshot(&self) -> TaskSnapshot {
+            let metrics = self.monitor.cumulative();
+            let mut wake_sources = self
+                .wake_sources
+                .iter()
+                .map(|entry| (*entry.key(), entry.value().load(Ordering::Acquire)))
+                .collect::<Vec<_>>();
+            sort_source_counts(&mut wake_sources);
+
+            TaskSnapshot {
+                id: self.id,
+                marker: self.marker,
+                poll_count: metrics.total_poll_count,
+                scheduled_count: metrics.total_scheduled_count,
+                busy_ns: duration_ns(metrics.total_poll_duration),
+                wake_sources,
+            }
+        }
+    }
+
+    fn dump_json_summary(generated_at: &str) -> String {
         let source_counts = collect_global_source_counts();
-        let total_known_sources = source_counts.iter().map(|(_, count)| *count).sum::<u64>();
+        let attributed_call_count = source_total(&source_counts);
         let mode = task_summary_mode();
         let mut summary = json!({
-            "known_wake_sources": {
-                "total": total_known_sources,
-                "sources": source_counts
+            "generated_at": generated_at,
+            "title": "ape-dts Tokio task runtime summary",
+            "attributed_waker_calls": {
+                "total": attributed_call_count,
+                "attributions": source_counts
                     .into_iter()
-                    .map(|(source, count)| source_count_json(source, count, total_known_sources))
+                    .map(|(source, count)| {
+                        source_count_json(source, count, attributed_call_count)
+                    })
                     .collect::<Vec<_>>(),
             },
             "task_summary_mode": mode.to_string(),
@@ -305,6 +422,7 @@ mod imp {
 
         serde_json::to_string(&summary).unwrap_or_else(|err| {
             json!({
+                "generated_at": generated_at,
                 "error": format!("failed to serialize runtime trace summary: {err}")
             })
             .to_string()
@@ -312,55 +430,41 @@ mod imp {
     }
 
     fn dump_task_summary(summary: &mut String) {
-        let tasks = collect_sorted_task_snapshots();
-        if tasks.is_empty() {
+        let task_snapshots = collect_sorted_task_snapshots();
+        if task_snapshots.is_empty() {
             let _ = writeln!(summary, "traced tokio tasks: none");
             return;
         }
 
-        let _ = writeln!(summary, "traced tokio tasks: total={}", tasks.len());
-        for task in tasks {
-            let known_task_sources = task
-                .wake_sources
-                .iter()
-                .map(|(_, count)| *count)
-                .sum::<u64>();
-            let location = task.location.as_deref().unwrap_or("-");
-            let marker = task
-                .marker
-                .map(|marker| marker.display())
-                .unwrap_or_else(|| "-".into());
+        let _ = writeln!(
+            summary,
+            "traced tokio tasks: total={}",
+            task_snapshots.len()
+        );
+        for task in task_snapshots {
+            let attributed_call_count = source_total(&task.wake_sources);
             let _ = writeln!(
                 summary,
-                "  task={} marker={} name={} polls={} wakes={} self_wakes={} busy_ms={:.3} spawn={}",
+                "  task_id={} marker={} poll_count={} scheduled_count={} busy_ms={:.3} attributed_waker_calls={}",
                 task.id,
-                marker,
-                task.name,
-                task.polls,
-                task.wakes,
-                task.self_wakes,
+                task.marker.display(),
+                task.poll_count,
+                task.scheduled_count,
                 task.busy_ns as f64 / 1_000_000.0,
-                location
+                attributed_call_count
             );
-
-            if known_task_sources > 0 {
-                for (source, count) in task.wake_sources {
-                    let _ = writeln!(
-                        summary,
-                        "    source {:>8} {:>6.2}% known {:>6.2}% wakes {}",
-                        count,
-                        percent(count, known_task_sources),
-                        percent(count, task.wakes),
-                        source.display()
-                    );
-                }
-            }
+            write_source_counts(
+                summary,
+                task.wake_sources,
+                attributed_call_count,
+                "percent_of_task_attributed_calls",
+            );
         }
     }
 
     fn dump_marker_summary(summary: &mut String) {
-        let markers = collect_sorted_marker_snapshots();
-        if markers.is_empty() {
+        let marker_snapshots = collect_sorted_marker_snapshots();
+        if marker_snapshots.is_empty() {
             let _ = writeln!(summary, "traced tokio task markers: none");
             return;
         }
@@ -368,326 +472,47 @@ mod imp {
         let _ = writeln!(
             summary,
             "traced tokio task markers: total={}",
-            markers.len()
+            marker_snapshots.len()
         );
-        for marker in markers {
-            let known_marker_sources = marker
-                .wake_sources
-                .iter()
-                .map(|(_, count)| *count)
-                .sum::<u64>();
+        for marker in marker_snapshots {
+            let attributed_call_count = source_total(&marker.wake_sources);
             let _ = writeln!(
                 summary,
-                "  marker={} tasks={} polls={} wakes={} self_wakes={} busy_ms={:.3}",
+                "  marker={} task_count={} poll_count={} scheduled_count={} busy_ms={:.3} attributed_waker_calls={}",
                 marker.marker.display(),
-                marker.tasks,
-                marker.polls,
-                marker.wakes,
-                marker.self_wakes,
-                marker.busy_ns as f64 / 1_000_000.0
+                marker.task_count,
+                marker.poll_count,
+                marker.scheduled_count,
+                marker.busy_ns as f64 / 1_000_000.0,
+                attributed_call_count
             );
-
-            if known_marker_sources > 0 {
-                for (source, count) in marker.wake_sources {
-                    let _ = writeln!(
-                        summary,
-                        "    source {:>8} {:>6.2}% known {:>6.2}% wakes {}",
-                        count,
-                        percent(count, known_marker_sources),
-                        percent(count, marker.wakes),
-                        source.display()
-                    );
-                }
-            }
+            write_source_counts(
+                summary,
+                marker.wake_sources,
+                attributed_call_count,
+                "percent_of_marker_attributed_calls",
+            );
         }
     }
 
-    pub fn with_wake_source<R>(source: WakeSource, f: impl FnOnce() -> R) -> R {
-        let _guard = WakeSourceGuard::new(source);
-        f()
-    }
-
-    pub async fn with_wake_source_future<Fut>(source: WakeSource, future: Fut) -> Fut::Output
-    where
-        Fut: std::future::Future,
-    {
-        let _guard = WakeSourceGuard::new(source);
-        future.await
-    }
-
-    pub async fn trace_task_future<Fut>(marker: TaskMarker, future: Fut) -> Fut::Output
-    where
-        Fut: std::future::Future,
-    {
-        mark_current_task(marker);
-        future.await
-    }
-
-    impl TaskStatsLayer {
-        pub fn new() -> Self {
-            Self
-        }
-    }
-
-    impl Default for TaskStatsLayer {
-        fn default() -> Self {
-            Self::new()
-        }
-    }
-
-    impl<S> Layer<S> for TaskStatsLayer
-    where
-        S: Subscriber + for<'a> LookupSpan<'a>,
-    {
-        fn register_callsite(&self, metadata: &'static Metadata<'static>) -> Interest {
-            if is_enabled() && (is_task_metadata(metadata) || is_waker_metadata(metadata)) {
-                Interest::always()
-            } else {
-                Interest::never()
-            }
-        }
-
-        fn on_new_span(&self, attrs: &Attributes<'_>, id: &Id, _ctx: Context<'_, S>) {
-            if !is_enabled() || !is_task_metadata(attrs.metadata()) {
-                return;
-            }
-
-            let mut fields = TaskFields::default();
-            attrs.record(&mut fields);
-
-            tasks().entry(id.into_u64()).or_insert_with(|| {
-                Arc::new(TaskStats::new(
-                    id.into_u64(),
-                    fields.name(),
-                    fields.location(),
-                ))
-            });
-        }
-
-        fn on_enter(&self, id: &Id, _ctx: Context<'_, S>) {
-            if !is_enabled() {
-                return;
-            }
-
-            let task_id = id.into_u64();
-            if let Some(task) = tasks().get(&task_id) {
-                task.start_poll();
-                CURRENT_TASK_STACK.with(|stack| stack.borrow_mut().push(task_id));
-            }
-        }
-
-        fn on_exit(&self, id: &Id, _ctx: Context<'_, S>) {
-            if !is_enabled() {
-                return;
-            }
-
-            let task_id = id.into_u64();
-            if let Some(task) = tasks().get(&task_id) {
-                task.end_poll();
-                CURRENT_TASK_STACK.with(|stack| {
-                    let mut stack = stack.borrow_mut();
-                    if let Some(pos) = stack.iter().rposition(|id| *id == task_id) {
-                        stack.remove(pos);
-                    }
-                });
-            }
-        }
-
-        fn on_event(&self, event: &Event<'_>, _ctx: Context<'_, S>) {
-            if !is_enabled() || !is_waker_metadata(event.metadata()) {
-                return;
-            }
-
-            let mut fields = WakerFields::default();
-            event.record(&mut fields);
-            if !fields.is_wake {
-                return;
-            }
-
-            let Some(task_id) = fields.task_id else {
-                return;
-            };
-
-            let task = tasks()
-                .entry(task_id)
-                .or_insert_with(|| Arc::new(TaskStats::new(task_id, "unknown".into(), None)))
-                .clone();
-            let self_wake = CURRENT_TASK_STACK.with(|stack| stack.borrow().contains(&task_id));
-            let source = current_wake_source();
-            task.record_wake(self_wake, source);
-
-            if let Some(source) = source {
-                increment_source(global_wake_sources(), source);
-            }
-        }
-    }
-
-    impl TaskStats {
-        fn new(id: u64, name: String, location: Option<String>) -> Self {
-            Self {
-                id,
-                name: Mutex::new(name),
-                location: Mutex::new(location),
-                polls: AtomicU64::new(0),
-                wakes: AtomicU64::new(0),
-                self_wakes: AtomicU64::new(0),
-                busy_ns: AtomicU64::new(0),
-                current_poll_started: Mutex::new(None),
-                wake_sources: DashMap::new(),
-                marker: Mutex::new(None),
-            }
-        }
-
-        fn set_marker(&self, marker: TaskMarker) {
-            *self.marker.lock().unwrap() = Some(marker);
-        }
-
-        fn start_poll(&self) {
-            let mut started = self.current_poll_started.lock().unwrap();
-            if started.is_none() {
-                *started = Some(Instant::now());
-                self.polls.fetch_add(1, Ordering::Release);
-            }
-        }
-
-        fn end_poll(&self) {
-            let Some(started) = self.current_poll_started.lock().unwrap().take() else {
-                return;
-            };
-
-            let elapsed = started.elapsed().as_nanos().min(u64::MAX as u128) as u64;
-            self.busy_ns.fetch_add(elapsed, Ordering::Release);
-        }
-
-        fn record_wake(&self, self_wake: bool, source: Option<WakeSource>) {
-            self.wakes.fetch_add(1, Ordering::Release);
-            if self_wake {
-                self.self_wakes.fetch_add(1, Ordering::Release);
-            }
-
-            if let Some(source) = source {
-                increment_source(&self.wake_sources, source);
-            }
-        }
-
-        fn snapshot(&self) -> TaskSnapshot {
-            let mut wake_sources = self
-                .wake_sources
-                .iter()
-                .map(|entry| (*entry.key(), entry.value().load(Ordering::Acquire)))
-                .collect::<Vec<_>>();
-            sort_source_counts(&mut wake_sources);
-
-            TaskSnapshot {
-                id: self.id,
-                name: self.name.lock().unwrap().clone(),
-                location: self.location.lock().unwrap().clone(),
-                polls: self.polls.load(Ordering::Acquire),
-                wakes: self.wakes.load(Ordering::Acquire),
-                self_wakes: self.self_wakes.load(Ordering::Acquire),
-                busy_ns: self.busy_ns.load(Ordering::Acquire),
-                wake_sources,
-                marker: *self.marker.lock().unwrap(),
-            }
-        }
-    }
-
-    impl TaskFields {
-        fn name(&self) -> String {
-            self.name.clone().unwrap_or_else(|| "unnamed".into())
-        }
-
-        fn location(&self) -> Option<String> {
-            match (&self.file, self.line, self.column) {
-                (Some(file), Some(line), Some(column)) => Some(format!("{file}:{line}:{column}")),
-                (Some(file), Some(line), None) => Some(format!("{file}:{line}")),
-                _ => None,
-            }
-        }
-    }
-
-    impl Visit for TaskFields {
-        fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
-            if field.name() == "task.name" {
-                self.name = Some(format!("{value:?}"));
-            }
-        }
-
-        fn record_str(&mut self, field: &Field, value: &str) {
-            match field.name() {
-                "task.name" => self.name = Some(value.into()),
-                "loc.file" => self.file = Some(value.into()),
-                _ => {}
-            }
-        }
-
-        fn record_u64(&mut self, field: &Field, value: u64) {
-            match field.name() {
-                "loc.line" => self.line = Some(value),
-                "loc.col" => self.column = Some(value),
-                _ => {}
-            }
-        }
-    }
-
-    impl Visit for WakerFields {
-        fn record_debug(&mut self, _field: &Field, _value: &dyn std::fmt::Debug) {}
-
-        fn record_u64(&mut self, field: &Field, value: u64) {
-            if field.name() == "task.id" {
-                self.task_id = Some(value);
-            }
-        }
-
-        fn record_str(&mut self, field: &Field, value: &str) {
-            if field.name() == "op" {
-                self.is_wake = matches!(value, "waker.wake" | "waker.wake_by_ref");
-            }
-        }
-    }
-
-    struct WakeSourceGuard {
-        active: bool,
-    }
-
-    impl WakeSourceGuard {
-        fn new(source: WakeSource) -> Self {
-            if !is_enabled() {
-                return Self { active: false };
-            }
-
-            WAKE_SOURCE_STACK.with(|stack| stack.borrow_mut().push(source));
-            Self { active: true }
-        }
-    }
-
-    impl Drop for WakeSourceGuard {
-        fn drop(&mut self) {
-            if self.active {
-                WAKE_SOURCE_STACK.with(|stack| {
-                    stack.borrow_mut().pop();
-                });
-            }
+    fn write_source_counts(
+        summary: &mut String,
+        source_counts: Vec<(WakeSource, u64)>,
+        attributed_call_count: u64,
+        percent_field: &str,
+    ) {
+        for (source, count) in source_counts {
+            let _ = writeln!(
+                summary,
+                "    count={count} {percent_field}={:.2}% wait_source={}",
+                percent(count, attributed_call_count),
+                source.display()
+            );
         }
     }
 
     fn is_enabled() -> bool {
         ENABLED.load(Ordering::Acquire)
-    }
-
-    fn is_task_metadata(metadata: &Metadata<'_>) -> bool {
-        matches!(
-            (metadata.name(), metadata.target()),
-            ("runtime.spawn", _) | ("task", "tokio::task")
-        )
-    }
-
-    fn is_waker_metadata(metadata: &Metadata<'_>) -> bool {
-        matches!(metadata.target(), "runtime::waker" | "tokio::task::waker")
-    }
-
-    fn current_wake_source() -> Option<WakeSource> {
-        WAKE_SOURCE_STACK.with(|stack| stack.borrow().last().copied())
     }
 
     fn task_summary_mode() -> TaskSummaryMode {
@@ -698,37 +523,30 @@ mod imp {
         TraceOutputFormat::from_u8(TRACE_OUTPUT_FORMAT.load(Ordering::Acquire) as u8)
     }
 
-    fn mark_current_task(marker: TaskMarker) {
-        let task_id = CURRENT_TASK_STACK.with(|stack| stack.borrow().last().copied());
-        let Some(task_id) = task_id else {
-            return;
-        };
-
-        if let Some(task) = tasks().get(&task_id) {
-            task.set_marker(marker);
-        }
-    }
-
-    fn tasks() -> &'static DashMap<u64, Arc<TaskStats>> {
+    fn tasks() -> &'static DashMap<u64, Arc<TaskTrace>> {
         TASKS.get_or_init(DashMap::new)
     }
 
-    fn global_wake_sources() -> &'static DashMap<WakeSource, AtomicU64> {
-        GLOBAL_WAKE_SOURCES.get_or_init(DashMap::new)
-    }
-
-    fn increment_source(sources: &DashMap<WakeSource, AtomicU64>, source: WakeSource) {
+    fn increment_source(sources: &DashMap<WakeSource, AtomicU64>, source: WakeSource, count: u64) {
         sources
             .entry(source)
             .or_insert_with(|| AtomicU64::new(0))
-            .fetch_add(1, Ordering::Release);
+            .fetch_add(count, Ordering::Release);
     }
 
     fn collect_global_source_counts() -> Vec<(WakeSource, u64)> {
-        let mut source_counts = global_wake_sources()
-            .iter()
-            .map(|entry| (*entry.key(), entry.value().load(Ordering::Acquire)))
-            .collect::<Vec<_>>();
+        let mut counts = HashMap::<WakeSource, u64>::new();
+        for task in tasks().iter() {
+            for source in task.wake_sources.iter() {
+                let count = source.value().load(Ordering::Acquire);
+                counts
+                    .entry(*source.key())
+                    .and_modify(|total| *total = total.saturating_add(count))
+                    .or_insert(count);
+            }
+        }
+
+        let mut source_counts = counts.into_iter().collect::<Vec<_>>();
         sort_source_counts(&mut source_counts);
         source_counts
     }
@@ -736,37 +554,30 @@ mod imp {
     fn collect_task_snapshots() -> Vec<TaskSnapshot> {
         tasks()
             .iter()
-            .filter_map(|entry| {
-                let snapshot = entry.value().snapshot();
-                snapshot.marker.is_some().then_some(snapshot)
-            })
+            .map(|entry| entry.value().snapshot())
             .collect()
     }
 
     fn collect_marker_snapshots() -> Vec<MarkerSnapshot> {
         let mut marker_snapshots = HashMap::<TaskMarker, MarkerSnapshot>::new();
         for task in collect_task_snapshots() {
-            let Some(marker) = task.marker else {
-                continue;
-            };
-
             let marker_snapshot =
                 marker_snapshots
-                    .entry(marker)
+                    .entry(task.marker)
                     .or_insert_with(|| MarkerSnapshot {
-                        marker,
-                        tasks: 0,
-                        polls: 0,
-                        wakes: 0,
-                        self_wakes: 0,
+                        marker: task.marker,
+                        task_count: 0,
+                        poll_count: 0,
+                        scheduled_count: 0,
                         busy_ns: 0,
                         wake_sources: Vec::new(),
                     });
-            marker_snapshot.tasks += 1;
-            marker_snapshot.polls += task.polls;
-            marker_snapshot.wakes += task.wakes;
-            marker_snapshot.self_wakes += task.self_wakes;
-            marker_snapshot.busy_ns += task.busy_ns;
+            marker_snapshot.task_count = marker_snapshot.task_count.saturating_add(1);
+            marker_snapshot.poll_count = marker_snapshot.poll_count.saturating_add(task.poll_count);
+            marker_snapshot.scheduled_count = marker_snapshot
+                .scheduled_count
+                .saturating_add(task.scheduled_count);
+            marker_snapshot.busy_ns = marker_snapshot.busy_ns.saturating_add(task.busy_ns);
 
             for (source, count) in task.wake_sources {
                 if let Some((_, existing_count)) = marker_snapshot
@@ -774,7 +585,7 @@ mod imp {
                     .iter_mut()
                     .find(|(existing_source, _)| *existing_source == source)
                 {
-                    *existing_count += count;
+                    *existing_count = existing_count.saturating_add(count);
                 } else {
                     marker_snapshot.wake_sources.push((source, count));
                 }
@@ -789,27 +600,27 @@ mod imp {
     }
 
     fn collect_sorted_task_snapshots() -> Vec<TaskSnapshot> {
-        let mut tasks = collect_task_snapshots();
-        tasks.sort_by(|a, b| {
-            b.polls
-                .cmp(&a.polls)
-                .then_with(|| b.wakes.cmp(&a.wakes))
+        let mut task_snapshots = collect_task_snapshots();
+        task_snapshots.sort_by(|a, b| {
+            b.poll_count
+                .cmp(&a.poll_count)
+                .then_with(|| b.scheduled_count.cmp(&a.scheduled_count))
                 .then_with(|| a.id.cmp(&b.id))
         });
-        tasks
+        task_snapshots
     }
 
     fn collect_sorted_marker_snapshots() -> Vec<MarkerSnapshot> {
-        let mut markers = collect_marker_snapshots();
-        markers.sort_by(|a, b| {
-            b.polls
-                .cmp(&a.polls)
-                .then_with(|| b.wakes.cmp(&a.wakes))
+        let mut marker_snapshots = collect_marker_snapshots();
+        marker_snapshots.sort_by(|a, b| {
+            b.poll_count
+                .cmp(&a.poll_count)
+                .then_with(|| b.scheduled_count.cmp(&a.scheduled_count))
                 .then_with(|| a.marker.name.cmp(b.marker.name))
                 .then_with(|| a.marker.file.cmp(b.marker.file))
                 .then_with(|| a.marker.line.cmp(&b.marker.line))
         });
-        markers
+        marker_snapshots
     }
 
     fn source_json(source: WakeSource) -> Value {
@@ -832,70 +643,56 @@ mod imp {
 
     fn source_count_json(source: WakeSource, count: u64, total: u64) -> Value {
         json!({
-            "source": source_json(source),
+            "wait_source": source_json(source),
             "count": count,
-            "percent": percent(count, total),
-        })
-    }
-
-    fn task_source_count_json(
-        source: WakeSource,
-        count: u64,
-        known_total: u64,
-        wakes: u64,
-    ) -> Value {
-        json!({
-            "source": source_json(source),
-            "count": count,
-            "percent_of_known": percent(count, known_total),
-            "percent_of_wakes": percent(count, wakes),
+            "percent_of_attributed_calls": percent(count, total),
         })
     }
 
     fn task_snapshot_json(task: TaskSnapshot) -> Value {
-        let known_sources = task
-            .wake_sources
-            .iter()
-            .map(|(_, count)| *count)
-            .sum::<u64>();
+        let attributed_call_count = source_total(&task.wake_sources);
         json!({
-            "id": task.id,
-            "name": task.name,
-            "spawn": task.location,
-            "polls": task.polls,
-            "wakes": task.wakes,
-            "self_wakes": task.self_wakes,
+            "task_id": task.id,
+            "marker": marker_json(task.marker),
+            "poll_count": task.poll_count,
+            "scheduled_count": task.scheduled_count,
             "busy_ms": task.busy_ns as f64 / 1_000_000.0,
-            "marker": task.marker.map(marker_json),
-            "wake_sources": task.wake_sources
-                .into_iter()
-                .map(|(source, count)| {
-                    task_source_count_json(source, count, known_sources, task.wakes)
-                })
-                .collect::<Vec<_>>(),
+            "attributed_waker_calls": {
+                "total": attributed_call_count,
+                "attributions": task.wake_sources
+                    .into_iter()
+                    .map(|(source, count)| {
+                        source_count_json(source, count, attributed_call_count)
+                    })
+                    .collect::<Vec<_>>(),
+            },
         })
     }
 
     fn marker_snapshot_json(marker: MarkerSnapshot) -> Value {
-        let known_sources = marker
-            .wake_sources
-            .iter()
-            .map(|(_, count)| *count)
-            .sum::<u64>();
+        let attributed_call_count = source_total(&marker.wake_sources);
         json!({
             "marker": marker_json(marker.marker),
-            "tasks": marker.tasks,
-            "polls": marker.polls,
-            "wakes": marker.wakes,
-            "self_wakes": marker.self_wakes,
+            "task_count": marker.task_count,
+            "poll_count": marker.poll_count,
+            "scheduled_count": marker.scheduled_count,
             "busy_ms": marker.busy_ns as f64 / 1_000_000.0,
-            "wake_sources": marker.wake_sources
-                .into_iter()
-                .map(|(source, count)| {
-                    task_source_count_json(source, count, known_sources, marker.wakes)
-                })
-                .collect::<Vec<_>>(),
+            "attributed_waker_calls": {
+                "total": attributed_call_count,
+                "attributions": marker.wake_sources
+                    .into_iter()
+                    .map(|(source, count)| {
+                        source_count_json(source, count, attributed_call_count)
+                    })
+                    .collect::<Vec<_>>(),
+            },
         })
+    }
+
+    fn source_total(source_counts: &[(WakeSource, u64)]) -> u64 {
+        source_counts
+            .iter()
+            .fold(0, |total, (_, count)| total.saturating_add(*count))
     }
 
     fn sort_source_counts(source_counts: &mut [(WakeSource, u64)]) {
@@ -907,11 +704,198 @@ mod imp {
         });
     }
 
+    fn duration_ns(duration: std::time::Duration) -> u64 {
+        duration.as_nanos().min(u64::MAX as u128) as u64
+    }
+
     fn percent(count: u64, total: u64) -> f64 {
         if total == 0 {
             0.0
         } else {
             count as f64 * 100.0 / total as f64
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use std::{
+            future::Future,
+            pin::Pin,
+            sync::{
+                atomic::{AtomicU64, Ordering},
+                Arc, Mutex,
+            },
+            task::{Context, Poll, Wake, Waker},
+        };
+
+        use futures::task::noop_waker;
+
+        use super::*;
+
+        struct CapturePendingWaker {
+            captured: Arc<Mutex<Option<Waker>>>,
+        }
+
+        impl Future for CapturePendingWaker {
+            type Output = ();
+
+            fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+                *self.captured.lock().unwrap() = Some(cx.waker().clone());
+                Poll::Pending
+            }
+        }
+
+        struct YieldOnce(bool);
+
+        impl Future for YieldOnce {
+            type Output = ();
+
+            fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+                if self.0 {
+                    Poll::Ready(())
+                } else {
+                    self.0 = true;
+                    cx.waker().wake_by_ref();
+                    Poll::Pending
+                }
+            }
+        }
+
+        #[derive(Default)]
+        struct SourceRecorder {
+            wakes: AtomicU64,
+        }
+
+        impl Wake for SourceRecorder {
+            fn wake(self: Arc<Self>) {
+                self.wakes.fetch_add(1, Ordering::Release);
+            }
+
+            fn wake_by_ref(self: &Arc<Self>) {
+                self.wakes.fetch_add(1, Ordering::Release);
+            }
+        }
+
+        #[track_caller]
+        fn test_source(name: &'static str) -> WakeSource {
+            WakeSource::new(name, std::panic::Location::caller())
+        }
+
+        #[track_caller]
+        fn test_marker(name: &'static str) -> TaskMarker {
+            TaskMarker::new(name, std::panic::Location::caller())
+        }
+
+        fn test_task(id: u64) -> Arc<TaskTrace> {
+            Arc::new(TaskTrace::new(id, test_marker("test.task")))
+        }
+
+        fn source_count(task: &TaskTrace, source: WakeSource) -> u64 {
+            task.wake_sources
+                .get(&source)
+                .map(|count| count.load(Ordering::Acquire))
+                .unwrap_or(0)
+        }
+
+        #[test]
+        fn trace_task_future_registers_marker_and_task_metrics() {
+            let marker = test_marker("test.monitored_task");
+            let mut future = Box::pin(trace_task_future(marker, YieldOnce(false)));
+            let waker = noop_waker();
+            let mut cx = Context::from_waker(&waker);
+
+            assert_eq!(future.as_mut().poll(&mut cx), Poll::Pending);
+            assert_eq!(future.as_mut().poll(&mut cx), Poll::Ready(()));
+
+            let task = tasks()
+                .iter()
+                .find(|task| task.marker == marker)
+                .expect("traced task should be registered");
+            let snapshot = task.snapshot();
+            assert_eq!(snapshot.marker, marker);
+            assert_eq!(snapshot.poll_count, 2);
+            assert_eq!(snapshot.scheduled_count, 1);
+        }
+
+        #[test]
+        fn wake_source_future_records_only_when_woken() {
+            let source = test_source("future.pending");
+            let task = test_task(1);
+            let captured = Arc::new(Mutex::new(None));
+            let mut future = Box::pin(TRACE_TASK.scope(
+                Arc::clone(&task),
+                with_wake_source_future(source, CapturePendingWaker { captured }),
+            ));
+            let waker = noop_waker();
+            let mut cx = Context::from_waker(&waker);
+
+            assert_eq!(future.as_mut().poll(&mut cx), Poll::Pending);
+            assert_eq!(source_count(&task, source), 0);
+        }
+
+        #[test]
+        fn wake_source_future_carries_source_with_stored_waker() {
+            let source = test_source("future.stored_waker");
+            let task = test_task(2);
+            let captured = Arc::new(Mutex::new(None));
+            let recorder = Arc::new(SourceRecorder::default());
+            let waker = Waker::from(Arc::clone(&recorder));
+            let mut future = Box::pin(TRACE_TASK.scope(
+                Arc::clone(&task),
+                with_wake_source_future(
+                    source,
+                    CapturePendingWaker {
+                        captured: Arc::clone(&captured),
+                    },
+                ),
+            ));
+            let mut cx = Context::from_waker(&waker);
+
+            assert_eq!(future.as_mut().poll(&mut cx), Poll::Pending);
+            let captured_waker = captured.lock().unwrap().take().unwrap();
+            std::thread::spawn(move || captured_waker.wake_by_ref())
+                .join()
+                .unwrap();
+
+            assert_eq!(source_count(&task, source), 1);
+            assert_eq!(recorder.wakes.load(Ordering::Acquire), 1);
+        }
+
+        #[test]
+        fn wake_source_future_keeps_target_tasks_isolated() {
+            let source = test_source("future.isolated");
+            let first_task = test_task(3);
+            let second_task = test_task(4);
+            let first_captured = Arc::new(Mutex::new(None));
+            let second_captured = Arc::new(Mutex::new(None));
+            let waker = noop_waker();
+            let mut cx = Context::from_waker(&waker);
+
+            let mut first_future = Box::pin(TRACE_TASK.scope(
+                Arc::clone(&first_task),
+                with_wake_source_future(
+                    source,
+                    CapturePendingWaker {
+                        captured: Arc::clone(&first_captured),
+                    },
+                ),
+            ));
+            let mut second_future = Box::pin(TRACE_TASK.scope(
+                Arc::clone(&second_task),
+                with_wake_source_future(
+                    source,
+                    CapturePendingWaker {
+                        captured: Arc::clone(&second_captured),
+                    },
+                ),
+            ));
+
+            assert_eq!(first_future.as_mut().poll(&mut cx), Poll::Pending);
+            assert_eq!(second_future.as_mut().poll(&mut cx), Poll::Pending);
+            first_captured.lock().unwrap().take().unwrap().wake_by_ref();
+
+            assert_eq!(source_count(&first_task, source), 1);
+            assert_eq!(source_count(&second_task, source), 0);
         }
     }
 }
@@ -920,6 +904,9 @@ mod imp {
 mod imp {
     #[inline(always)]
     pub fn enable() {}
+
+    #[inline(always)]
+    pub fn init_tracing() {}
 
     #[inline(always)]
     pub fn dump_global_summary() -> Option<String> {
@@ -933,22 +920,9 @@ mod imp {
     pub fn set_output_format(_format: super::TraceOutputFormat) {}
 }
 
-pub use imp::{dump_global_summary, enable, set_output_format, set_task_summary_mode};
-
-#[cfg(feature = "tracing")]
-pub use imp::TaskStatsLayer;
-
-#[cfg(feature = "tracing")]
-#[track_caller]
-pub fn with_wake_source<R>(name: &'static str, f: impl FnOnce() -> R) -> R {
-    imp::with_wake_source(WakeSource::new(name, Location::caller()), f)
-}
-
-#[cfg(not(feature = "tracing"))]
-#[inline(always)]
-pub fn with_wake_source<R>(_name: &'static str, f: impl FnOnce() -> R) -> R {
-    f()
-}
+pub use imp::{
+    dump_global_summary, enable, init_tracing, set_output_format, set_task_summary_mode,
+};
 
 #[cfg(feature = "tracing")]
 #[track_caller]
