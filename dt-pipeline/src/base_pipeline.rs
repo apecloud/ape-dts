@@ -7,6 +7,7 @@ use async_trait::async_trait;
 use tokio::{
     sync::{Mutex, RwLock},
     task::yield_now,
+    time::Duration,
     time::Instant,
 };
 
@@ -74,7 +75,18 @@ impl Pipeline for BasePipeline {
         let mut last_commit_position = Position::None;
         let mut record_time = Instant::now();
 
-        while !self.shut_down.load(Ordering::Acquire) || !self.buffer.is_empty() {
+        loop {
+            let shutting_down = self.shut_down.load(Ordering::Acquire);
+            let buffer_empty = self.buffer.is_empty();
+
+            if shutting_down && buffer_empty {
+                break;
+            }
+
+            if buffer_empty {
+                self.buffer.wait_for_data(Duration::from_secs(1)).await;
+            }
+
             // to avoid too many sub counters, only add counter when buffer is not empty
             if !self.buffer.is_empty() {
                 self.monitor

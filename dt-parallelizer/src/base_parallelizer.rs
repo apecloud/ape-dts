@@ -2,6 +2,7 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 
 use anyhow::bail;
+use concurrent_queue::PopError;
 use ratelimit::Ratelimiter;
 
 use dt_common::{
@@ -30,7 +31,7 @@ impl BaseParallelizer {
 
         let mut record_size_counter = Counter::new(0, 0);
         // ddls and dmls should be drained separately
-        while let Ok(item) = self.pop(buffer, &mut record_size_counter).await {
+        while let Some(item) = self.pop(buffer, &mut record_size_counter).await? {
             if data.is_empty()
                 || (data[0].get_row_sql_type() == item.get_row_sql_type()
                     && data[0].data_origin_node == item.data_origin_node)
@@ -54,7 +55,7 @@ impl BaseParallelizer {
     ) -> anyhow::Result<Vec<DtItem>> {
         let mut data = Vec::new();
         let mut record_size_counter = Counter::new(0, 0);
-        while let Ok(item) = self.pop(buffer, &mut record_size_counter).await {
+        while let Some(item) = self.pop(buffer, &mut record_size_counter).await? {
             data.push(item);
             if data.len() >= max_count {
                 break;
@@ -68,15 +69,16 @@ impl BaseParallelizer {
         &self,
         buffer: &DtQueue,
         record_size_counter: &mut Counter,
-    ) -> anyhow::Result<DtItem> {
+    ) -> anyhow::Result<Option<DtItem>> {
+        if buffer.is_empty() {
+            return Ok(None);
+        }
+
         // rps limit
         if let Some(rps_limiter) = &self.rps_limiter {
             // refer: https://docs.rs/ratelimit/0.10.0/ratelimit/
             if let Err(_sleep) = rps_limiter.try_wait() {
-                bail! {Error::PipelineError(format!(
-                    "reach rps limit: {}",
-                    rps_limiter.max_tokens(),
-                ))};
+                return Ok(None);
             }
         }
 
@@ -87,8 +89,9 @@ impl BaseParallelizer {
                     item.dt_data.get_data_size(),
                     item.dt_data.get_data_count() as u64,
                 );
-                Ok(item)
+                Ok(Some(item))
             }
+            Err(PopError::Empty) => Ok(None),
             Err(error) => bail! {Error::PipelineError(format!("buffer pop error: {}", error))},
         }
     }
@@ -184,5 +187,23 @@ impl BaseParallelizer {
             result??;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use dt_common::{meta::dt_queue::DtQueue, monitor::counter::Counter};
+
+    use super::BaseParallelizer;
+
+    #[tokio::test]
+    async fn pop_returns_none_when_queue_is_empty() {
+        let parallelizer = BaseParallelizer::default();
+        let queue = DtQueue::new(1, 0);
+        let mut counter = Counter::new(0, 0);
+
+        let item = parallelizer.pop(&queue, &mut counter).await.unwrap();
+
+        assert!(item.is_none());
     }
 }

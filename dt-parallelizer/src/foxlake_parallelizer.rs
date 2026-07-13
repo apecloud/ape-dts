@@ -81,7 +81,7 @@ impl FoxlakeParallelizer {
         }
 
         // pop to find the push_epoch of the last item
-        while let Ok(item) = base.pop(buffer, &mut record_size_counter).await {
+        while let Some(item) = base.pop(buffer, &mut record_size_counter).await? {
             if let DtData::Foxlake { file_meta } = &item.dt_data {
                 last_push_epoch = file_meta.push_epoch;
                 let sequencer_id = file_meta.sequencer_id;
