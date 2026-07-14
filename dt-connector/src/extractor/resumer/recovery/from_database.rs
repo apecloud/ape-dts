@@ -320,7 +320,7 @@ impl Recovery for DatabaseRecovery {
         if let Some(position_str) = position_str {
             let position = Position::from_log(&position_str);
             match &position {
-                Position::RdbSnapshot { .. } | Position::FoxlakeS3 { .. } => return Some(position),
+                Position::RdbSnapshot { .. } => return Some(position),
                 _ => return None,
             }
         }

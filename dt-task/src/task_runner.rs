@@ -36,16 +36,14 @@ use dt_common::{
         config_enums::{DbType, ExtractType, PipelineType, SinkType, TaskKind, TaskType},
         config_token_parser::{ConfigTokenParser, TokenEscapePair},
         extractor_config::ExtractorConfig,
+        limiter_config::CapacityLimiterConfig,
         sinker_config::SinkerConfig,
         task_config::{TaskConfig, DEFAULT_CHECK_LOG_FILE_SIZE},
     },
     error::Error,
     limiter::buffer_limiter::BufferLimiter,
     log_error, log_finished, log_info, log_warn,
-    meta::{
-        avro::avro_converter::AvroConverter, dt_queue::DtQueue, position::Position,
-        row_type::RowType, syncer::Syncer,
-    },
+    meta::{dt_queue::DtQueue, position::Position, row_type::RowType, syncer::Syncer},
     monitor::{
         task_metrics::TaskMetricsType,
         task_monitor::{MonitorType, TaskMonitor},
@@ -68,10 +66,7 @@ use dt_connector::{
     sinker::base_sinker::BaseSinker,
     Extractor, Sinker,
 };
-use dt_pipeline::{
-    base_pipeline::BasePipeline, http_server_pipeline::HttpServerPipeline,
-    lua_processor::LuaProcessor, Pipeline,
-};
+use dt_pipeline::{base_pipeline::BasePipeline, lua_processor::LuaProcessor, Pipeline};
 
 #[cfg(feature = "metrics")]
 use dt_common::monitor::prometheus_metrics::PrometheusMetrics;
@@ -476,9 +471,16 @@ impl TaskRunner {
         check_summary: Option<Arc<AsyncMutex<CheckSummaryLog>>>,
         checker_state_store: Option<Arc<CheckerStateStore>>,
     ) -> anyhow::Result<()> {
-        // DtQueue is already bounded by buffer_size and max_bytes.
-        let enqueue_limiter =
-            BufferLimiter::from_config(Some(&self.config.extractor_basic.rate_limiter), None);
+        // DtQueue is already bounded by buffer_size. Keep only byte capacity in
+        // the enqueue limiter to avoid a duplicate records semaphore.
+        let enqueue_capacity_limiter = CapacityLimiterConfig {
+            buffer_size: 0,
+            buffer_memory_mb: self.config.pipeline.capacity_limiter.buffer_memory_mb,
+        };
+        let enqueue_limiter = BufferLimiter::from_config(
+            Some(&self.config.extractor_basic.rate_limiter),
+            Some(&enqueue_capacity_limiter),
+        );
         let dequeue_limiter =
             BufferLimiter::from_config(Some(&self.config.sinker_basic.rate_limiter), None);
         let max_bytes = self.config.pipeline.capacity_limiter.buffer_memory_mb * 1024 * 1024;
@@ -580,10 +582,8 @@ impl TaskRunner {
         let sinker_monitor = sinker_monitor_handle.build_monitor("sinker", &task_id);
         let sinkers = SinkerUtil::create_sinkers(
             &self.config,
-            &extractor_config,
             sinker_client.clone(),
             sinker_monitor_handle,
-            task_id.clone(),
             rw_sinker_data_marker.clone(),
             checker.as_ref().and_then(|handle| match handle {
                 CheckerHandle::Data(handle) => Some(handle.clone()),
@@ -855,23 +855,6 @@ impl TaskRunner {
                     recorder,
                     checker,
                 };
-                Ok(Box::new(pipeline) as Box<dyn Pipeline + Send>)
-            }
-
-            PipelineType::HttpServer => {
-                let meta_manager = ExtractorUtil::get_extractor_meta_manager(&self.config).await?;
-                let avro_converter =
-                    AvroConverter::new(meta_manager, self.config.pipeline.with_field_defs);
-                let pipeline = HttpServerPipeline::new(
-                    buffer,
-                    syncer,
-                    monitor,
-                    avro_converter,
-                    self.config.pipeline.checkpoint_interval_secs,
-                    self.config.pipeline.batch_sink_interval_secs,
-                    &self.config.pipeline.http_host,
-                    self.config.pipeline.http_port,
-                );
                 Ok(Box::new(pipeline) as Box<dyn Pipeline + Send>)
             }
         }
@@ -1454,7 +1437,6 @@ impl TaskRunner {
             ExtractorConfig::MysqlSnapshot { .. }
                 | ExtractorConfig::PgSnapshot { .. }
                 | ExtractorConfig::MongoSnapshot { .. }
-                | ExtractorConfig::FoxlakeS3 { .. }
         );
 
         let mut schema_tbs = HashMap::new();
@@ -1645,25 +1627,6 @@ impl TaskRunner {
                 parallel_type: parallel_type.clone(),
                 batch_size: *batch_size,
             },
-
-            ExtractorConfig::FoxlakeS3 {
-                url,
-                s3_config,
-                parallel_size,
-                parallel_type,
-                batch_size,
-                ..
-            } => ExtractorConfig::FoxlakeS3 {
-                url: url.clone(),
-                schema: String::new(),
-                tb: String::new(),
-                schema_tbs,
-                parallel_size: *parallel_size,
-                parallel_type: parallel_type.clone(),
-                s3_config: s3_config.clone(),
-                batch_size: *batch_size,
-            },
-
             _ => self.config.extractor.clone(),
         };
         Ok(TaskInfo {

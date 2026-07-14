@@ -440,21 +440,14 @@ impl MysqlColValueConvertor {
                 let value: BigDecimal = row.get_unchecked(col);
                 Ok(ColValue::Decimal(value.to_string()))
             }
-            MysqlColType::Time { .. } => match db_type {
-                DbType::Foxlake => {
-                    let value: Vec<u8> = row.get_unchecked(col);
-                    let str: String = String::from_utf8_lossy(&value).to_string();
-                    Ok(ColValue::Time(str))
-                }
-                _ => {
-                    // do not use chrono::NaiveTime since it ignores year
-                    // let value: chrono::NaiveTime = row.try_get(col)?;
-                    let buf: Vec<u8> = row.get_unchecked(col);
-                    Self::parse_time(buf)
-                }
-            },
+            MysqlColType::Time { .. } => {
+                // do not use chrono::NaiveTime since it ignores year
+                // let value: chrono::NaiveTime = row.try_get(col)?;
+                let buf: Vec<u8> = row.get_unchecked(col);
+                Self::parse_time(buf)
+            }
             MysqlColType::Date { .. } => match db_type {
-                DbType::StarRocks | DbType::Foxlake => {
+                DbType::StarRocks => {
                     let value: Vec<u8> = row.get_unchecked(col);
                     let str: String = String::from_utf8_lossy(&value).to_string();
                     Ok(ColValue::Date(str))
@@ -465,7 +458,7 @@ impl MysqlColValueConvertor {
                 }
             },
             MysqlColType::DateTime { .. } => match db_type {
-                DbType::StarRocks | DbType::Foxlake => {
+                DbType::StarRocks => {
                     let value: Vec<u8> = row.get_unchecked(col);
                     let str: String = String::from_utf8_lossy(&value).to_string();
                     Ok(ColValue::DateTime(str))
@@ -477,20 +470,13 @@ impl MysqlColValueConvertor {
                     ))
                 }
             },
-            MysqlColType::Timestamp { .. } => match db_type {
-                DbType::Foxlake => {
-                    let value: Vec<u8> = row.get_unchecked(col);
-                    let str: String = String::from_utf8_lossy(&value).to_string();
-                    Ok(ColValue::Timestamp(str))
-                }
-                _ => {
-                    // we always set session.time_zone='+00:00' for connection
-                    let value: chrono::DateTime<Utc> = row.try_get(col)?;
-                    Ok(ColValue::Timestamp(
-                        value.format("%Y-%m-%d %H:%M:%S%.f").to_string(),
-                    ))
-                }
-            },
+            MysqlColType::Timestamp { .. } => {
+                // we always set session.time_zone='+00:00' for connection
+                let value: chrono::DateTime<Utc> = row.try_get(col)?;
+                Ok(ColValue::Timestamp(
+                    value.format("%Y-%m-%d %H:%M:%S%.f").to_string(),
+                ))
+            }
             MysqlColType::Year => {
                 let value: u16 = row.get_unchecked(col);
                 Ok(ColValue::Year(value))

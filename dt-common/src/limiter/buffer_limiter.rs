@@ -105,20 +105,28 @@ impl BufferLimiter {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{
-        atomic::{AtomicUsize, Ordering},
-        Arc,
+    use std::{
+        collections::HashMap,
+        sync::{
+            atomic::{AtomicUsize, Ordering},
+            Arc,
+        },
+        time::{Duration, Instant},
     };
-    use std::time::{Duration, Instant};
 
     use tokio::sync::Barrier;
 
-    use crate::config::limiter_config::{CapacityLimiterConfig, RateLimiterConfig};
-    use crate::meta::dt_data::{DtData, DtItem};
-    use crate::meta::foxlake::s3_file_meta::S3FileMeta;
-    use crate::meta::position::Position;
-
     use super::BufferLimiter;
+    use crate::{
+        config::limiter_config::{CapacityLimiterConfig, RateLimiterConfig},
+        meta::{
+            col_value::ColValue,
+            dt_data::{DtData, DtItem},
+            position::Position,
+            row_data::RowData,
+            row_type::RowType,
+        },
+    };
 
     // ── helpers ──────────────────────────────────────────────────────────────
 
@@ -151,10 +159,19 @@ mod tests {
     /// limiters apply.
     fn bytes_item(data_size: usize) -> DtItem {
         DtItem {
-            dt_data: DtData::Foxlake {
-                file_meta: S3FileMeta {
-                    data_size,
-                    ..Default::default()
+            dt_data: DtData::Dml {
+                row_data: RowData {
+                    schema: "db".to_string(),
+                    tb: "tb".to_string(),
+                    chunk_id: 0,
+                    row_type: RowType::Insert,
+                    before: None,
+                    after: Some(HashMap::from([(
+                        "c1".to_string(),
+                        ColValue::RawString(b"ij".to_vec()),
+                    )])),
+                    data_size: data_size,
+                    is_not_origin: false,
                 },
             },
             position: Position::None,

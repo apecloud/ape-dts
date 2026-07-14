@@ -8,10 +8,7 @@ use crate::{
     meta::mongo::mongo_cdc_source::MongoCdcSource,
 };
 
-use super::{
-    config_enums::{DbType, ExtractType},
-    s3_config::S3Config,
-};
+use super::config_enums::{DbType, ExtractType};
 
 #[derive(Clone, Debug)]
 pub enum ExtractorConfig {
@@ -204,17 +201,6 @@ pub enum ExtractorConfig {
         partition: i32,
         offset: i64,
         ack_interval_secs: u64,
-    },
-
-    FoxlakeS3 {
-        url: String,
-        schema: String,
-        tb: String,
-        schema_tbs: HashMap<String, Vec<String>>,
-        parallel_size: usize,
-        parallel_type: RdbParallelType,
-        s3_config: S3Config,
-        batch_size: usize,
     },
 }
 

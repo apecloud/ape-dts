@@ -6,7 +6,7 @@ use std::sync::{
 };
 use tokio::{
     sync::{Mutex, RwLock},
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 use crate::{lua_processor::LuaProcessor, Pipeline};
@@ -92,10 +92,20 @@ impl Pipeline for BasePipeline {
         let mut last_commit_positions = HashMap::new();
         let mut record_time = Instant::now();
 
-        while !self.shut_down.load(Ordering::Acquire)
-            || !self.buffer.is_empty()
-            || !self.pending_snapshot_finished.is_empty()
-        {
+        loop {
+            let shutting_down = self.shut_down.load(Ordering::Acquire);
+            let buffer_empty = self.buffer.is_empty();
+            let pending_finish_empty = self.pending_snapshot_finished.is_empty();
+            let has_pending_work = !buffer_empty || !pending_finish_empty;
+
+            if shutting_down && !has_pending_work {
+                break;
+            }
+
+            if !has_pending_work {
+                self.buffer.wait_for_data(Duration::from_secs(1)).await;
+            }
+
             // to avoid too many sub counters, only add counter when buffer is not empty
             if !self.buffer.is_empty() {
                 self.monitor
@@ -122,7 +132,7 @@ impl Pipeline for BasePipeline {
                 record_time = Instant::now();
             }
 
-            // some sinkers (foxlake) need to accumulate data to a big batch and sink
+            // some sinkers need to accumulate data to a big batch and sink
             let data = if last_sink_time.elapsed().as_secs() < self.batch_sink_interval_secs
                 && !self.buffer.is_full()
             {
@@ -500,13 +510,8 @@ impl BasePipeline {
                 DtData::Struct { .. } => return SinkMethod::Struct,
                 DtData::Ddl { .. } => return SinkMethod::Ddl,
                 DtData::Dcl { .. } => return SinkMethod::Dcl,
-                DtData::Dml { .. } => match self.sinker_config {
-                    SinkerConfig::FoxlakePush { .. }
-                    | SinkerConfig::FoxlakeMerge { .. }
-                    | SinkerConfig::Foxlake { .. } => return SinkMethod::Raw,
-                    _ => return SinkMethod::Dml,
-                },
-                DtData::Redis { .. } | DtData::Foxlake { .. } => return SinkMethod::Raw,
+                DtData::Dml { .. } => return SinkMethod::Dml,
+                DtData::Redis { .. } => return SinkMethod::Raw,
                 DtData::Begin {} | DtData::Commit { .. } | DtData::Heartbeat {} => continue,
             }
         }
