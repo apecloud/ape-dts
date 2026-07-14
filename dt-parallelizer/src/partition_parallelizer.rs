@@ -31,10 +31,10 @@ impl Parallelizer for PartitionParallelizer {
     async fn drain(&mut self, buffer: &DtQueue) -> anyhow::Result<Vec<DtItem>> {
         let mut data = Vec::new();
         let mut record_size_counter = Counter::new(0, 0);
-        while let Ok(item) = self
+        while let Some(item) = self
             .base_parallelizer
             .pop(buffer, &mut record_size_counter)
-            .await
+            .await?
         {
             match &item.dt_data {
                 DtData::Dml { row_data } => {
