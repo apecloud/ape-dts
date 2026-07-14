@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.25.1] - 2026-7-14
+
+### Fixed
+
+- [[526]](https://github.com/apecloud/ape-dts/pull/526) - fix: avoid busy-yield in dt queue
+- [[534]](https://github.com/apecloud/ape-dts/pull/534) - fix: reduce high CPU usage in idle pipelines
+
 ## [2.0.25] - 2025-12-11
 
 ### Added
