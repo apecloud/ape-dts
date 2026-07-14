@@ -89,7 +89,7 @@ impl DtQueue {
                     Err(e) => return Err(e.into()),
                 }
             }
-            crate::runtime_trace::with_wake_source_future(
+            crate::runtime_trace::instrument_wait(
                 "dtqueue.not_full.wait",
                 self.not_full.notified(),
             )
@@ -129,7 +129,7 @@ impl DtQueue {
     }
 
     pub async fn wait_for_data(&self, max_wait: Duration) {
-        let notified = crate::runtime_trace::with_wake_source_future(
+        let notified = crate::runtime_trace::instrument_wait(
             "dtqueue.not_empty.wait",
             self.not_empty.notified(),
         );

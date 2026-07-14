@@ -190,7 +190,7 @@ impl Pipeline for BasePipeline {
 
             self.try_finish_snapshot_tasks().await?;
 
-            dt_common::runtime_trace::with_wake_source_future(
+            dt_common::runtime_trace::instrument_wait(
                 "yield_now.pipeline.run",
                 tokio::task::yield_now(),
             )

@@ -201,7 +201,7 @@ impl BaseExtractor {
         };
         // can not use `buffer.wait_util_empty` since `push_ddl` is used with `push_row`
         while !self.buffer.is_empty() {
-            dt_common::runtime_trace::with_wake_source_future(
+            dt_common::runtime_trace::instrument_wait(
                 "yield_now.extractor.push_ddl",
                 tokio::task::yield_now(),
             )
@@ -336,7 +336,7 @@ impl BaseExtractor {
 
     pub async fn wait_task_finish(&self, state: &mut ExtractState) -> anyhow::Result<()> {
         while !self.buffer.is_empty() {
-            dt_common::runtime_trace::with_wake_source_future(
+            dt_common::runtime_trace::instrument_wait(
                 "yield_now.extractor.wait_task_finish",
                 tokio::task::yield_now(),
             )
