@@ -56,6 +56,6 @@ impl Limiter for RateLimiter {
     async fn release(&self, _n: u32) {}
 
     async fn get_unit_type(&self) -> UnitType {
-        self.unit_type.clone()
+        self.unit_type
     }
 }

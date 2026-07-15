@@ -19,6 +19,7 @@ use tokio::{
     sync::{Mutex, RwLock},
     task::JoinSet,
 };
+use tokio_util::sync::CancellationToken;
 
 use super::{
     extractor_util::ExtractorUtil, parallelizer_util::ParallelizerUtil, sinker_util::SinkerUtil,
@@ -147,6 +148,9 @@ impl TaskRunner {
     pub async fn start_task(&self, is_init: bool) -> anyhow::Result<()> {
         self.clear_check_logs().await?;
         self.init_log4rs().await?;
+        dt_common::runtime_trace::init_tracing();
+        dt_common::runtime_trace::set_task_summary_mode(self.config.tracing.task_summary_mode);
+        dt_common::runtime_trace::set_output_format(self.config.tracing.output_format);
 
         let worker_thread_cnt = Handle::current().metrics().num_workers();
         log_info!(
@@ -252,6 +256,9 @@ impl TaskRunner {
         self.remove_empty_check_logs().await?;
         self.upload_check_logs_to_s3().await?;
         log_finished!("task finished");
+        if let Some(summary) = dt_common::runtime_trace::dump_global_summary() {
+            dt_common::log_runtime_trace!("{}", summary.trim_end());
+        }
         log::logger().flush();
         Ok(())
     }
@@ -473,11 +480,9 @@ impl TaskRunner {
         let enqueue_limiter = BufferLimiter::from_config(
             Some(&self.config.extractor_basic.rate_limiter),
             Some(&enqueue_capacity_limiter),
-        )
-        .map(Arc::new);
+        );
         let dequeue_limiter =
-            BufferLimiter::from_config(Some(&self.config.sinker_basic.rate_limiter), None)
-                .map(Arc::new);
+            BufferLimiter::from_config(Some(&self.config.sinker_basic.rate_limiter), None);
         let max_bytes = self.config.pipeline.capacity_limiter.buffer_memory_mb * 1024 * 1024;
         let buffer = Arc::new(DtQueue::new(
             self.config.pipeline.capacity_limiter.buffer_size,
@@ -631,8 +636,8 @@ impl TaskRunner {
         let interval_secs = self.config.pipeline.checkpoint_interval_secs;
         let task_flush_monitors: Vec<Arc<dyn FlushableMonitor + Send + Sync>> =
             vec![self.task_monitor.clone()];
-        let monitor_shut_down = Arc::new(AtomicBool::new(false));
-        let monitor_task_shutdown = monitor_shut_down.clone();
+        let monitor_shutdown = CancellationToken::new();
+        let monitor_task_shutdown = monitor_shutdown.clone();
         let monitor_task = tokio::spawn(async move {
             TaskUtil::flush_monitors(interval_secs, monitor_task_shutdown, &task_flush_monitors)
                 .await;
@@ -642,7 +647,7 @@ impl TaskRunner {
         let worker_result =
             Self::run_task_workers(extractor.clone(), pipeline.clone(), shut_down.clone()).await;
 
-        monitor_shut_down.store(true, Ordering::Release);
+        monitor_shutdown.cancel();
         let monitor_result = monitor_task
             .await
             .context("monitor task exit error")
@@ -667,20 +672,26 @@ impl TaskRunner {
         let mut join_set = JoinSet::new();
 
         let extractor_worker = extractor.clone();
-        join_set.spawn(async move {
-            (
-                SingleTaskWorker::Extractor,
-                Self::run_extractor_worker(extractor_worker).await,
-            )
-        });
+        join_set.spawn(dt_common::runtime_trace::trace_task_future(
+            "task.extractor_worker",
+            async move {
+                (
+                    SingleTaskWorker::Extractor,
+                    Self::run_extractor_worker(extractor_worker).await,
+                )
+            },
+        ));
 
         let pipeline_worker = pipeline.clone();
-        join_set.spawn(async move {
-            (
-                SingleTaskWorker::Pipeline,
-                Self::run_pipeline_worker(pipeline_worker).await,
-            )
-        });
+        join_set.spawn(dt_common::runtime_trace::trace_task_future(
+            "task.pipeline_worker",
+            async move {
+                (
+                    SingleTaskWorker::Pipeline,
+                    Self::run_pipeline_worker(pipeline_worker).await,
+                )
+            },
+        ));
         let mut extractor_done = false;
         let mut pipeline_done = false;
         let mut failure = None;

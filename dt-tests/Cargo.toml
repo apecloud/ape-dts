@@ -6,6 +6,9 @@ version = "0.1.0"
 [lints]
 workspace = true
 
+[features]
+tracing = ["dt-task/tracing"]
+
 [dependencies]
 dt-common = { path = "../dt-common", version = "0.1.0" }
 dt-connector = { path = "../dt-connector", version = "0.1.0" }
@@ -23,6 +26,7 @@ futures = { workspace = true }
 hex = { workspace = true }
 log = { workspace = true }
 log4rs = { workspace = true }
+libc = { workspace = true }
 mongodb = { workspace = true }
 project-root = { workspace = true }
 rdkafka = { workspace = true }

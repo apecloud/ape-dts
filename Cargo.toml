@@ -37,6 +37,9 @@ postgres-openssl = {git = "https://github.com/apecloud/rust-postgres"}
 postgres-protocol = {git = "https://github.com/apecloud/rust-postgres"}
 postgres-types= {git = "https://github.com/apecloud/rust-postgres"}
 tokio = { version = "1.25.0", features = ["full"] }
+tokio-metrics = { version = "0.5.1", default-features = false }
+tokio-util = {version = "0.7.7", features = ["rt"]}
+tracing-subscriber = { version = "0.3.20", default-features = false, features = ["fmt", "registry", "std"] }
 bytes = "1.0"
 configparser = "3.0.2"
 async-mutex = "1.4.0"

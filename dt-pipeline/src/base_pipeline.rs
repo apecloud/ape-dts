@@ -6,7 +6,6 @@ use std::sync::{
 };
 use tokio::{
     sync::{Mutex, RwLock},
-    task::yield_now,
     time::{Duration, Instant},
 };
 
@@ -191,7 +190,11 @@ impl Pipeline for BasePipeline {
 
             self.try_finish_snapshot_tasks().await?;
 
-            yield_now().await;
+            dt_common::runtime_trace::instrument_wait(
+                "yield_now.pipeline.run",
+                tokio::task::yield_now(),
+            )
+            .await;
         }
 
         self.record_checkpoint(None, &last_received_position, &last_commit_positions)
