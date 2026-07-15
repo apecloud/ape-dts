@@ -8,10 +8,13 @@ use std::{
     },
 };
 
+use crate::task_util::{ConnClient, TaskUtil};
 use anyhow::{bail, Context};
+use async_mutex::Mutex as AsyncMutex;
 use chrono::Local;
 use log4rs::config::{Config, Deserializers, RawConfig};
 use opendal::Operator;
+use std::sync::Mutex as StdMutex;
 use tokio::{
     fs::{self as tokio_fs, metadata, File},
     io::AsyncReadExt,
@@ -21,15 +24,6 @@ use tokio::{
 };
 use tokio_util::sync::CancellationToken;
 
-use super::{
-    extractor_util::ExtractorUtil, parallelizer_util::ParallelizerUtil, sinker_util::SinkerUtil,
-};
-use crate::task_util::{ConnClient, TaskUtil};
-use async_mutex::Mutex as AsyncMutex;
-use std::sync::Mutex as StdMutex;
-
-static LOG_HANDLE: StdMutex<Option<log4rs::Handle>> = StdMutex::new(None);
-use dt_common::log_filter::{parse_size_limit, SizeLimitFilterDeserializer};
 use dt_common::{
     config::{
         checker_config::CheckerConfig,
@@ -42,7 +36,9 @@ use dt_common::{
     },
     error::Error,
     limiter::buffer_limiter::BufferLimiter,
-    log_error, log_finished, log_info, log_warn,
+    log_error,
+    log_filter::{parse_size_limit, SizeLimitFilterDeserializer},
+    log_finished, log_info, log_runtime_trace, log_warn,
     meta::{dt_queue::DtQueue, position::Position, row_type::RowType, syncer::Syncer},
     monitor::{
         task_metrics::TaskMetricsType,
@@ -51,6 +47,7 @@ use dt_common::{
         FlushableMonitor,
     },
     rdb_filter::RdbFilter,
+    runtime_trace,
     utils::sql_util::SqlUtil,
 };
 use dt_connector::{
@@ -68,8 +65,14 @@ use dt_connector::{
 };
 use dt_pipeline::{base_pipeline::BasePipeline, lua_processor::LuaProcessor, Pipeline};
 
+use super::{
+    extractor_util::ExtractorUtil, parallelizer_util::ParallelizerUtil, sinker_util::SinkerUtil,
+};
+
 #[cfg(feature = "metrics")]
 use dt_common::monitor::prometheus_metrics::PrometheusMetrics;
+
+static LOG_HANDLE: StdMutex<Option<log4rs::Handle>> = StdMutex::new(None);
 
 #[derive(Clone)]
 pub struct TaskInfo {
@@ -148,9 +151,9 @@ impl TaskRunner {
     pub async fn start_task(&self, is_init: bool) -> anyhow::Result<()> {
         self.clear_check_logs().await?;
         self.init_log4rs().await?;
-        dt_common::runtime_trace::init_tracing();
-        dt_common::runtime_trace::set_task_summary_mode(self.config.tracing.task_summary_mode);
-        dt_common::runtime_trace::set_output_format(self.config.tracing.output_format);
+        runtime_trace::init_tracing();
+        runtime_trace::set_task_summary_mode(self.config.tracing.task_summary_mode);
+        runtime_trace::set_output_format(self.config.tracing.output_format);
 
         let worker_thread_cnt = Handle::current().metrics().num_workers();
         log_info!(
@@ -256,8 +259,8 @@ impl TaskRunner {
         self.remove_empty_check_logs().await?;
         self.upload_check_logs_to_s3().await?;
         log_finished!("task finished");
-        if let Some(summary) = dt_common::runtime_trace::dump_global_summary() {
-            dt_common::log_runtime_trace!("{}", summary.trim_end());
+        if let Some(summary) = runtime_trace::dump_global_summary() {
+            log_runtime_trace!("{}", summary.trim_end());
         }
         log::logger().flush();
         Ok(())
@@ -672,7 +675,7 @@ impl TaskRunner {
         let mut join_set = JoinSet::new();
 
         let extractor_worker = extractor.clone();
-        join_set.spawn(dt_common::runtime_trace::trace_task_future(
+        join_set.spawn(runtime_trace::trace_task_future(
             "task.extractor_worker",
             async move {
                 (
@@ -683,7 +686,7 @@ impl TaskRunner {
         ));
 
         let pipeline_worker = pipeline.clone();
-        join_set.spawn(dt_common::runtime_trace::trace_task_future(
+        join_set.spawn(runtime_trace::trace_task_future(
             "task.pipeline_worker",
             async move {
                 (

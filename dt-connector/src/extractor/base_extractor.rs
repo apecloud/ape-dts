@@ -15,20 +15,16 @@ use dt_common::{
     log_debug, log_error, log_info,
     meta::{
         dcl_meta::{dcl_data::DclData, dcl_parser::DclParser},
-        ddl_meta::ddl_data::DdlData,
-        dt_queue::DtQueue,
-        struct_meta::struct_data::StructData,
-    },
-    utils::sql_util::SqlUtil,
-};
-use dt_common::{
-    meta::{
-        ddl_meta::ddl_parser::DdlParser,
+        ddl_meta::{ddl_data::DdlData, ddl_parser::DdlParser},
         dt_data::{DtData, DtItem},
+        dt_queue::DtQueue,
         position::Position,
         row_data::RowData,
+        struct_meta::struct_data::StructData,
     },
+    runtime_trace,
     time_filter::TimeFilter,
+    utils::sql_util::SqlUtil,
 };
 
 use super::extractor_monitor::ExtractorMonitor;
@@ -201,7 +197,7 @@ impl BaseExtractor {
         };
         // can not use `buffer.wait_util_empty` since `push_ddl` is used with `push_row`
         while !self.buffer.is_empty() {
-            dt_common::runtime_trace::instrument_wait(
+            runtime_trace::instrument_wait(
                 "yield_now.extractor.push_ddl",
                 tokio::task::yield_now(),
             )
@@ -336,7 +332,7 @@ impl BaseExtractor {
 
     pub async fn wait_task_finish(&self, state: &mut ExtractState) -> anyhow::Result<()> {
         while !self.buffer.is_empty() {
-            dt_common::runtime_trace::instrument_wait(
+            runtime_trace::instrument_wait(
                 "yield_now.extractor.wait_task_finish",
                 tokio::task::yield_now(),
             )

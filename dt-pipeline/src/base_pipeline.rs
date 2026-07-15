@@ -26,6 +26,7 @@ use dt_common::{
         counter_type::CounterType, task_metrics::TaskMetricsType, task_monitor::MonitorType,
         task_monitor_handle::TaskMonitorHandle,
     },
+    runtime_trace,
 };
 use dt_connector::{
     checker::CheckerHandle,
@@ -190,11 +191,8 @@ impl Pipeline for BasePipeline {
 
             self.try_finish_snapshot_tasks().await?;
 
-            dt_common::runtime_trace::instrument_wait(
-                "yield_now.pipeline.run",
-                tokio::task::yield_now(),
-            )
-            .await;
+            runtime_trace::instrument_wait("yield_now.pipeline.run", tokio::task::yield_now())
+                .await;
         }
 
         self.record_checkpoint(None, &last_received_position, &last_commit_positions)
