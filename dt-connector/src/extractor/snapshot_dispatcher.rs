@@ -3,7 +3,7 @@ use std::{collections::VecDeque, future::Future, sync::Arc};
 use anyhow::{anyhow, bail};
 use tokio::task::JoinSet;
 
-use dt_common::monitor::task_monitor_handle::TaskMonitorHandle;
+use dt_common::{monitor::task_monitor_handle::TaskMonitorHandle, runtime_trace};
 
 use super::{
     base_extractor::ExtractState,
@@ -65,7 +65,9 @@ impl SnapshotDispatcher {
                 break;
             };
             let run_worker = Arc::clone(&run);
-            join_set.spawn(async move { run_worker(work).await });
+            join_set.spawn(runtime_trace::trace_task_future(worker_name, async move {
+                run_worker(work).await
+            }));
         }
 
         while let Some(result) = join_set.join_next().await {
@@ -79,7 +81,9 @@ impl SnapshotDispatcher {
                     break;
                 };
                 let run_worker = Arc::clone(&run);
-                join_set.spawn(async move { run_worker(work).await });
+                join_set.spawn(runtime_trace::trace_task_future(worker_name, async move {
+                    run_worker(work).await
+                }));
             }
         }
 

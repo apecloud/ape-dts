@@ -30,6 +30,6 @@ impl Limiter for CapacityLimiter {
     }
 
     async fn get_unit_type(&self) -> UnitType {
-        self.unit_type.clone()
+        self.unit_type
     }
 }

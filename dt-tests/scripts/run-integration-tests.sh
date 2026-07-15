@@ -784,6 +784,7 @@ run_nextest_suite() {
   fi
 
   cargo nextest run \
+    --release \
     --package dt-tests \
     --test integration_test \
     "${fail_fast_args[@]}" \

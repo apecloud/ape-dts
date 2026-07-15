@@ -10,6 +10,7 @@ workspace = true
 
 [features]
 metrics = ["prometheus"]
+tracing = ["dep:console-subscriber", "dep:tokio-metrics", "dep:tonic", "dep:tonic-prost", "dep:tracing-subscriber", "tokio/tracing"]
 
 [dependencies]
 dotenv = { workspace = true }
@@ -29,6 +30,7 @@ serde_yaml = { workspace = true }
 regex = { workspace = true }
 nom = { workspace = true }
 tokio = { workspace = true }
+tokio-metrics = { workspace = true, optional = true }
 thiserror = { workspace = true }
 kafka = { workspace = true }
 apache-avro = {workspace = true}
@@ -50,3 +52,7 @@ actix-web = {workspace = true}
 prometheus = {version = "0.14.0", optional = true}
 urlencoding= {workspace = true}
 governor = { workspace = true }
+console-subscriber = { version = "=0.5.0", optional = true }
+tonic = { version = "=0.14.5", optional = true }
+tonic-prost = { version = "=0.14.5", optional = true }
+tracing-subscriber = { workspace = true, optional = true }

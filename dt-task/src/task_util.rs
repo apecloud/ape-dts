@@ -1,11 +1,4 @@
-use std::{
-    str::FromStr,
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc,
-    },
-    time::Duration,
-};
+use std::{str::FromStr, sync::Arc, time::Duration};
 
 use anyhow::bail;
 use futures::{future::join_all, TryStreamExt};
@@ -51,6 +44,7 @@ use dt_connector::{
     },
 };
 use tokio::select;
+use tokio_util::sync::CancellationToken;
 
 pub struct TaskUtil {}
 
@@ -785,32 +779,22 @@ WHERE
 
     pub async fn flush_monitors(
         interval_secs: u64,
-        shut_down: Arc<AtomicBool>,
+        shutdown: CancellationToken,
         monitors: &[Arc<dyn FlushableMonitor + Send + Sync>],
     ) {
         let mut interval = tokio::time::interval(Duration::from_secs(interval_secs));
         interval.tick().await;
 
         loop {
-            if shut_down.load(Ordering::Acquire) {
-                Self::flush_monitor_batch(monitors).await;
-                break;
-            }
-
             select! {
-                _ = interval.tick() => Self::flush_monitor_batch(monitors).await,
-                _ = Self::wait_for_shutdown(shut_down.clone()) => {
+                biased;
+                _ = shutdown.cancelled() => {
                     log_info!("task shutdown detected, do final flush");
                     Self::flush_monitor_batch(monitors).await;
                     break;
                 }
+                _ = interval.tick() => Self::flush_monitor_batch(monitors).await,
             }
-        }
-    }
-
-    pub async fn wait_for_shutdown(shut_down: Arc<AtomicBool>) {
-        while !shut_down.load(Ordering::Acquire) {
-            tokio::time::sleep(Duration::from_millis(100)).await;
         }
     }
 

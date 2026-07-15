@@ -42,6 +42,7 @@ use super::{
     runtime_config::RuntimeConfig,
     s3_config::S3Config,
     sinker_config::{BasicSinkerConfig, SinkerConfig},
+    tracing_config::TracingConfig,
 };
 
 #[derive(Clone)]
@@ -61,6 +62,7 @@ pub struct TaskConfig {
     pub meta_center: Option<MetaCenterConfig>,
     pub data_marker: Option<DataMarkerConfig>,
     pub processor: Option<ProcessorConfig>,
+    pub tracing: TracingConfig,
     #[cfg(feature = "metrics")]
     pub metrics: MetricsConfig,
 }
@@ -83,6 +85,7 @@ const DATA_MARKER: &str = "data_marker";
 const PROCESSOR: &str = "processor";
 const CHECKER: &str = "checker";
 const META_CENTER: &str = "metacenter";
+const TRACING: &str = "tracing";
 // keys
 const CHECK_LOG_DIR: &str = "check_log_dir";
 const CHECK_LOG_FILE_SIZE: &str = "check_log_file_size";
@@ -124,6 +127,8 @@ const CDC_CHECK_LOG_INTERVAL_SECS: &str = "cdc_check_log_interval_secs";
 const SAMPLE_RATE: &str = "sample_rate";
 const IS_DIRECT_CONNECTION: &str = "is_direct_connection";
 const MONGO_REQUIRE_SHARD_KEY_FILTER: &str = "mongo_require_shard_key_filter";
+const TASK_SUMMARY_MODE: &str = "task_summary_mode";
+const OUTPUT_FORMAT: &str = "output_format";
 
 // default values
 pub const APE_DTS: &str = "APE_DTS";
@@ -257,6 +262,7 @@ impl TaskConfig {
             data_marker: Self::load_data_marker_config(&loader)?,
             processor: Self::load_processor_config(&loader)?,
             meta_center: Self::load_meta_center_config(&loader)?,
+            tracing: Self::load_tracing_config(&loader),
             #[cfg(feature = "metrics")]
             metrics: Self::load_metrics_config(&loader)?,
         })
@@ -1228,6 +1234,18 @@ impl TaskConfig {
         })
     }
 
+    fn load_tracing_config(loader: &IniLoader) -> TracingConfig {
+        let default = TracingConfig::default();
+        TracingConfig {
+            task_summary_mode: loader.get_with_default(
+                TRACING,
+                TASK_SUMMARY_MODE,
+                default.task_summary_mode,
+            ),
+            output_format: loader.get_with_default(TRACING, OUTPUT_FORMAT, default.output_format),
+        }
+    }
+
     fn load_snapshot_parallel_size(loader: &IniLoader) -> usize {
         if loader.contains(EXTRACTOR, PARALLEL_SIZE) {
             loader.get_with_default(EXTRACTOR, PARALLEL_SIZE, 1)
@@ -1445,6 +1463,7 @@ mod tests {
     use crate::config::parallelizer_config::{
         ChunkPartitionerRebalanceCost, ChunkPartitionerRebalanceStrategy,
     };
+    use crate::runtime_trace::{TaskSummaryMode, TraceOutputFormat};
 
     use super::{
         CheckMode, ExtractorConfig, ParallelType, SinkerConfig, TaskConfig, TaskKind, TaskType,
@@ -1511,6 +1530,49 @@ url=mysql://127.0.0.1:3307
 parallel_type=rdb_merge
 "#
         )
+    }
+
+    fn basic_snapshot_config(extra_config: &str) -> String {
+        format!(
+            r#"[extractor]
+db_type=mysql
+extract_type=snapshot
+url=mysql://127.0.0.1:3306
+
+[sinker]
+db_type=mysql
+sink_type=write
+url=mysql://127.0.0.1:3307
+
+[parallelizer]
+parallel_type=rdb_merge
+
+{extra_config}
+"#
+        )
+    }
+
+    #[test]
+    fn tracing_config_defaults_to_marker_summary_mode() {
+        let config = load_temp_task_config(&basic_snapshot_config(""))
+            .expect("default tracing config should be valid");
+
+        assert_eq!(config.tracing.task_summary_mode, TaskSummaryMode::Marker);
+        assert_eq!(config.tracing.output_format, TraceOutputFormat::Plain);
+    }
+
+    #[test]
+    fn tracing_config_loads_marker_summary_mode_and_json_output() {
+        let config = load_temp_task_config(&basic_snapshot_config(
+            r#"[tracing]
+task_summary_mode=marker
+output_format=json
+"#,
+        ))
+        .expect("tracing config should be valid");
+
+        assert_eq!(config.tracing.task_summary_mode, TaskSummaryMode::Marker);
+        assert_eq!(config.tracing.output_format, TraceOutputFormat::Json);
     }
 
     #[test]
