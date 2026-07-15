@@ -234,9 +234,9 @@ impl RdbQueryBuilder<'_> {
             self.get_where_in_info(batch_size)?,
         );
 
-        let cap = batch_size.saturating_mul(self.rdb_tb_meta.id_cols.len());
         let cols = self.rdb_tb_meta.id_cols.clone();
-        let mut binds = Vec::with_capacity(cap);
+        let mut binds =
+            Vec::with_capacity(batch_size.saturating_mul(self.rdb_tb_meta.id_cols.len()));
         for row_data in data.iter().skip(start_index).take(batch_size) {
             data_size += row_data.data_size;
             let before = row_data.require_before()?;
