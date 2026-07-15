@@ -29,46 +29,23 @@ pub struct RdbQueryInfo<'a> {
     pub binds: Vec<Option<&'a ColValue>>,
 }
 
+impl RdbQueryInfo<'_> {
+    fn validate_bind_layout(&self) -> anyhow::Result<()> {
+        if !self.binds.is_empty()
+            && (self.cols.is_empty() || self.binds.len() % self.cols.len() != 0)
+        {
+            bail!("query bind column layout does not match bind values");
+        }
+        Ok(())
+    }
+}
+
 pub struct RdbQueryBuilder<'a> {
     rdb_tb_meta: &'a RdbTbMeta,
     db_type: DbType,
     ignore_cols: Option<&'a HashSet<String>>,
     pg_tb_meta: Option<&'a PgTbMeta>,
     mysql_tb_meta: Option<&'a MysqlTbMeta>,
-}
-
-fn bind_query<'q, 'v: 'q, 'm, Q, T: 'm, GetColType, BindColValue>(
-    mut query: Q,
-    query_info: &'q RdbQueryInfo<'v>,
-    get_col_type: GetColType,
-    bind_col_value: BindColValue,
-) -> anyhow::Result<Q>
-where
-    GetColType: Fn(&str) -> anyhow::Result<&'m T>,
-    BindColValue: Fn(Q, Option<&'v ColValue>, &'m T) -> Q,
-{
-    if query_info.binds.is_empty() {
-        return Ok(query);
-    }
-    if query_info.cols.is_empty() || query_info.binds.len() % query_info.cols.len() != 0 {
-        bail!("query bind column layout does not match bind values");
-    }
-    if query_info.binds.len() == query_info.cols.len() {
-        for (bind, col) in query_info.binds.iter().zip(query_info.cols.iter()) {
-            query = bind_col_value(query, *bind, get_col_type(col)?);
-        }
-        return Ok(query);
-    }
-
-    let col_types = query_info
-        .cols
-        .iter()
-        .map(|col| get_col_type(col))
-        .collect::<anyhow::Result<Vec<_>>>()?;
-    for (index, bind) in query_info.binds.iter().enumerate() {
-        query = bind_col_value(query, *bind, col_types[index % col_types.len()]);
-    }
-    Ok(query)
 }
 
 impl RdbQueryBuilder<'_> {
@@ -105,17 +82,30 @@ impl RdbQueryBuilder<'_> {
         &self,
         query_info: &'a RdbQueryInfo,
     ) -> anyhow::Result<Query<'a, MySql, MySqlArguments>> {
-        let query: Query<MySql, MySqlArguments> = sqlx::query(&query_info.sql);
+        query_info.validate_bind_layout()?;
+
+        let mut query: Query<MySql, MySqlArguments> = sqlx::query(&query_info.sql);
         let tb_meta = self
             .mysql_tb_meta
             .as_ref()
             .context("mysql table meta missing when creating mysql query")?;
-        bind_query(
-            query,
-            query_info,
-            |col| tb_meta.get_col_type(col),
-            |query, bind, col_type| query.bind_col_value(bind, col_type),
-        )
+
+        if query_info.binds.len() == query_info.cols.len() {
+            for (bind, col) in query_info.binds.iter().zip(query_info.cols.iter()) {
+                query = query.bind_col_value(*bind, tb_meta.get_col_type(col)?);
+            }
+            return Ok(query);
+        }
+
+        let col_types = query_info
+            .cols
+            .iter()
+            .map(|col| tb_meta.get_col_type(col))
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        for (index, bind) in query_info.binds.iter().enumerate() {
+            query = query.bind_col_value(*bind, col_types[index % col_types.len()]);
+        }
+        Ok(query)
     }
 
     #[inline(always)]
@@ -123,17 +113,30 @@ impl RdbQueryBuilder<'_> {
         &self,
         query_info: &'a RdbQueryInfo,
     ) -> anyhow::Result<Query<'a, Postgres, PgArguments>> {
-        let query: Query<Postgres, PgArguments> = sqlx::query(&query_info.sql);
+        query_info.validate_bind_layout()?;
+
+        let mut query: Query<Postgres, PgArguments> = sqlx::query(&query_info.sql);
         let tb_meta = self
             .pg_tb_meta
             .as_ref()
             .context("postgres table meta missing when creating pg query")?;
-        bind_query(
-            query,
-            query_info,
-            |col| tb_meta.get_col_type(col),
-            |query, bind, col_type| query.bind_col_value(bind, col_type),
-        )
+
+        if query_info.binds.len() == query_info.cols.len() {
+            for (bind, col) in query_info.binds.iter().zip(query_info.cols.iter()) {
+                query = query.bind_col_value(*bind, tb_meta.get_col_type(col)?);
+            }
+            return Ok(query);
+        }
+
+        let col_types = query_info
+            .cols
+            .iter()
+            .map(|col| tb_meta.get_col_type(col))
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        for (index, bind) in query_info.binds.iter().enumerate() {
+            query = query.bind_col_value(*bind, col_types[index % col_types.len()]);
+        }
+        Ok(query)
     }
 
     pub fn get_query_info<'a>(
@@ -150,12 +153,12 @@ impl RdbQueryBuilder<'_> {
     }
 
     fn get_batch_placeholders(&self, cols: &[String], batch_size: usize) -> anyhow::Result<String> {
+        if batch_size == 0 {
+            return Ok(String::new());
+        }
+
         let reuse_row_layout = self.mysql_tb_meta.is_some();
-        let row_count = if reuse_row_layout {
-            usize::from(batch_size > 0)
-        } else {
-            batch_size
-        };
+        let row_count = if reuse_row_layout { 1 } else { batch_size };
         let mut placeholder_index = 1;
         let mut values = String::new();
         for row_index in 0..row_count {
