@@ -8,7 +8,7 @@ use redis::ConnectionLike;
 use redis::Value;
 use tokio::{sync::RwLock, time::Instant};
 
-use dt_common::error::Error;
+use dt_common::error::{DtError, EndpointRole, Error, ErrorCode, OriginError, Stage};
 use dt_common::log_debug;
 use dt_common::meta::col_value::ColValue;
 use dt_common::meta::dt_data::DtData;
@@ -219,14 +219,11 @@ impl RedisSinker {
     }
 
     async fn dml_to_redis_cmd(&mut self, row_data: &RowData) -> anyhow::Result<Option<RedisCmd>> {
-        if self.meta_manager.is_none() {
+        let Some(meta_manager) = self.meta_manager.as_mut() else {
             return Ok(None);
-        }
+        };
 
-        let tb_meta = self
-            .meta_manager
-            .as_mut()
-            .unwrap()
+        let tb_meta = meta_manager
             .get_tb_meta(&row_data.schema, &row_data.tb)
             .await?;
 
@@ -373,10 +370,15 @@ impl RedisSinker {
                     // find the hash_tag for the slot which cmd.keys[0] belongs to,
                     // otherwise we may get: (error) CROSSSLOT Keys in request don't hash to the same slot
                     let slot = KeyParser::calc_slot(cmd.keys[0].as_bytes());
-                    node.slot_hash_tag_map.get(&slot).unwrap()
+                    node.slot_hash_tag_map
+                        .get(&slot)
+                        .ok_or_else(|| redis_sinker_metadata_error("find_redis_slot_hash_tag"))?
                 } else {
                     // if the redis cmd has no key, find a hash_tag for any slot in current node
-                    let (_, hash_tag) = node.slot_hash_tag_map.iter().next().unwrap();
+                    let (_, hash_tag) =
+                        node.slot_hash_tag_map.iter().next().ok_or_else(|| {
+                            redis_sinker_metadata_error("find_redis_node_hash_tag")
+                        })?;
                     hash_tag
                 };
                 &format!("{}{{{}}}", data_marker.marker, hash_tag)
@@ -391,4 +393,13 @@ impl RedisSinker {
         }
         Ok(None)
     }
+}
+
+#[track_caller]
+fn redis_sinker_metadata_error(operation: &'static str) -> DtError {
+    DtError::new(ErrorCode::MetadataFailed)
+        .stage(Stage::Sinker)
+        .operation(operation)
+        .endpoint(EndpointRole::Destination)
+        .origin(OriginError::new("redis", None::<String>))
 }

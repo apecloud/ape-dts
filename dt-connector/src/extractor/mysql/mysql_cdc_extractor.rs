@@ -33,7 +33,7 @@ use crate::{
 };
 use dt_common::{
     config::{config_enums::DbType, connection_auth_config::ConnectionAuthConfig},
-    error::Error,
+    error::{DtError, EndpointRole, Error, ErrorCode, OriginError, Stage},
     log_debug, log_error, log_info, log_warn,
     meta::{
         adaptor::mysql_col_value_convertor::MysqlColValueConvertor, col_value::ColValue,
@@ -241,7 +241,10 @@ impl MysqlCdcExtractor {
 
             EventData::WriteRows(mut w) => {
                 for event in w.rows.iter_mut() {
-                    let table_map_event = ctx.table_map_event_map.get(&w.table_id).unwrap();
+                    let table_map_event = ctx
+                        .table_map_event_map
+                        .get(&w.table_id)
+                        .ok_or_else(|| mysql_binlog_metadata_error("decode_mysql_write_rows"))?;
                     if self.filter_event(table_map_event, RowType::Insert) {
                         self.extract_state
                             .record_extracted_metrics(1, size_of_val(event) as u64);
@@ -265,7 +268,10 @@ impl MysqlCdcExtractor {
 
             EventData::UpdateRows(mut u) => {
                 for event in u.rows.iter_mut() {
-                    let table_map_event = ctx.table_map_event_map.get(&u.table_id).unwrap();
+                    let table_map_event = ctx
+                        .table_map_event_map
+                        .get(&u.table_id)
+                        .ok_or_else(|| mysql_binlog_metadata_error("decode_mysql_update_rows"))?;
                     if self.filter_event(table_map_event, RowType::Update) {
                         self.extract_state
                             .record_extracted_metrics(1, size_of_val(event) as u64);
@@ -292,7 +298,10 @@ impl MysqlCdcExtractor {
 
             EventData::DeleteRows(mut d) => {
                 for event in d.rows.iter_mut() {
-                    let table_map_event = ctx.table_map_event_map.get(&d.table_id).unwrap();
+                    let table_map_event = ctx
+                        .table_map_event_map
+                        .get(&d.table_id)
+                        .ok_or_else(|| mysql_binlog_metadata_error("decode_mysql_delete_rows"))?;
                     if self.filter_event(table_map_event, RowType::Delete) {
                         self.extract_state
                             .record_extracted_metrics(1, size_of_val(event) as u64);
@@ -488,9 +497,12 @@ impl MysqlCdcExtractor {
             let mut start_time = Instant::now();
             while !shut_down.load(Ordering::Acquire) {
                 if start_time.elapsed().as_secs() >= heartbeat_interval_secs {
-                    Self::heartbeat(server_id, &db_tb[0], &db_tb[1], &syncer, &conn_pool)
-                        .await
-                        .unwrap();
+                    if let Err(error) =
+                        Self::heartbeat(server_id, &db_tb[0], &db_tb[1], &syncer, &conn_pool).await
+                    {
+                        log_error!("heartbeat failed: {error:#}");
+                        break;
+                    }
                     start_time = Instant::now();
                 }
                 TimeUtil::sleep_millis(1000 * heartbeat_interval_secs).await;
@@ -574,4 +586,13 @@ impl MysqlCdcExtractor {
         }
         Ok(())
     }
+}
+
+#[track_caller]
+fn mysql_binlog_metadata_error(operation: &'static str) -> DtError {
+    DtError::new(ErrorCode::MetadataFailed)
+        .stage(Stage::Extractor)
+        .operation(operation)
+        .endpoint(EndpointRole::Source)
+        .origin(OriginError::new("mysql", None::<String>))
 }

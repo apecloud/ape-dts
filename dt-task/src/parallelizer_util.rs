@@ -1,9 +1,9 @@
 use std::collections::{HashMap, VecDeque};
 
 use super::task_util::TaskUtil;
-use anyhow::anyhow;
 use dt_common::{
     config::{config_enums::ParallelType, task_config::TaskConfig},
+    error::{DtError, ErrorCode, Stage},
     meta::redis::command::key_parser::KeyParser,
     monitor::task_monitor_handle::TaskMonitorHandle,
     utils::redis_util::RedisUtil,
@@ -37,7 +37,12 @@ impl ParallelizerUtil {
                 chunk_partitioner_rebalance: config
                     .parallelizer
                     .chunk_partitioner_rebalance()
-                    .expect("snapshot parallelizer should have rebalance config")
+                    .ok_or_else(|| {
+                        DtError::new(ErrorCode::InvalidConfig)
+                            .stage(Stage::Bootstrap)
+                            .operation("load_snapshot_rebalance_config")
+                            .detail("snapshot parallelizer rebalance configuration is missing")
+                    })?
                     .clone(),
             }),
 
@@ -94,7 +99,12 @@ impl ParallelizerUtil {
     ) -> anyhow::Result<Box<dyn Merger + Send + Sync>> {
         let rdb_meta_manager = TaskUtil::create_rdb_meta_manager(config)
             .await?
-            .ok_or_else(|| anyhow!("failed to create RDB meta manager for merger target"))?;
+            .ok_or_else(|| {
+                DtError::new(ErrorCode::InvalidConfig)
+                    .stage(Stage::Bootstrap)
+                    .operation("create_rdb_merger")
+                    .detail("the selected merger requires a relational database endpoint")
+            })?;
 
         let rdb_merger = RdbMerger { rdb_meta_manager };
         Ok(Box::new(rdb_merger))
@@ -103,7 +113,12 @@ impl ParallelizerUtil {
     async fn create_rdb_partitioner(config: &TaskConfig) -> anyhow::Result<RdbPartitioner> {
         let meta_manager = TaskUtil::create_rdb_meta_manager(config)
             .await?
-            .ok_or_else(|| anyhow!("failed to create RDB meta manager for partitioner target"))?;
+            .ok_or_else(|| {
+                DtError::new(ErrorCode::InvalidConfig)
+                    .stage(Stage::Bootstrap)
+                    .operation("create_rdb_partitioner")
+                    .detail("the selected partitioner requires a relational database endpoint")
+            })?;
         Ok(RdbPartitioner { meta_manager })
     }
 

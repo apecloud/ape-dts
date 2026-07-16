@@ -1,6 +1,5 @@
 use std::{
     collections::HashMap,
-    panic,
     path::{Component, Path},
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -39,7 +38,7 @@ use dt_common::{
         sinker_config::SinkerConfig,
         task_config::{TaskConfig, DEFAULT_CHECK_LOG_FILE_SIZE},
     },
-    error::Error,
+    error::{DtError, Error, ErrorCode, Stage},
     limiter::buffer_limiter::BufferLimiter,
     log_error, log_finished, log_info, log_warn,
     meta::{dt_queue::DtQueue, position::Position, row_type::RowType, syncer::Syncer},
@@ -144,6 +143,10 @@ impl TaskRunner {
         })
     }
 
+    pub fn task_id(&self) -> &str {
+        &self.config.global.task_id
+    }
+
     pub async fn start_task(&self, is_init: bool) -> anyhow::Result<()> {
         self.clear_check_logs().await?;
         self.init_log4rs().await?;
@@ -153,11 +156,6 @@ impl TaskRunner {
             "ape-dts started with {} worker thread(s)",
             worker_thread_cnt
         );
-
-        panic::set_hook(Box::new(|panic_info| {
-            let backtrace = std::backtrace::Backtrace::capture();
-            log_error!("panic: {}\nbacktrace:\n{}", panic_info, backtrace);
-        }));
 
         log_info!(
             "start task: [taskID: {}, taskType: {:?}]",
@@ -645,7 +643,13 @@ impl TaskRunner {
         monitor_shut_down.store(true, Ordering::Release);
         let monitor_result = monitor_task
             .await
-            .context("monitor task exit error")
+            .map_err(|error| -> anyhow::Error {
+                DtError::new(ErrorCode::WorkerFailed)
+                    .stage(Stage::Task)
+                    .operation("join_monitor_worker")
+                    .source(error)
+                    .into()
+            })
             .and_then(|result| result);
 
         let mut monitor_types = vec![MonitorType::Pipeline];
@@ -699,7 +703,11 @@ impl TaskRunner {
                 Err(err) => {
                     failure = Some((
                         None,
-                        anyhow::anyhow!("single task worker join error: {}", err),
+                        DtError::new(ErrorCode::WorkerFailed)
+                            .stage(Stage::Task)
+                            .operation("join_task_worker")
+                            .source(err)
+                            .into(),
                     ));
                     break;
                 }
@@ -1185,13 +1193,33 @@ impl TaskRunner {
 
     async fn init_log4rs(&self) -> anyhow::Result<()> {
         let log4rs_file = &self.config.runtime.log4rs_file;
-        if metadata(log4rs_file).await.is_err() {
-            return Ok(());
+        match metadata(log4rs_file).await {
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => {
+                return Err(DtError::new(ErrorCode::IoFailed)
+                    .stage(Stage::Bootstrap)
+                    .operation("read_log_config_metadata")
+                    .source(error)
+                    .into());
+            }
         }
 
         let mut config_str = String::new();
-        let mut file = File::open(log4rs_file).await?;
-        file.read_to_string(&mut config_str).await?;
+        let mut file = File::open(log4rs_file).await.map_err(|error| {
+            DtError::new(ErrorCode::IoFailed)
+                .stage(Stage::Bootstrap)
+                .operation("open_log_config")
+                .source(error)
+        })?;
+        file.read_to_string(&mut config_str)
+            .await
+            .map_err(|error| {
+                DtError::new(ErrorCode::IoFailed)
+                    .stage(Stage::Bootstrap)
+                    .operation("read_log_config")
+                    .source(error)
+            })?;
 
         match &self.config.sinker {
             SinkerConfig::RedisStatistic {
@@ -1245,24 +1273,49 @@ impl TaskRunner {
                 );
         }
 
-        let raw: RawConfig = serde_yaml::from_str(&config_str)?;
+        let raw: RawConfig = serde_yaml::from_str(&config_str).map_err(|error| {
+            DtError::new(ErrorCode::InvalidConfig)
+                .stage(Stage::Bootstrap)
+                .operation("parse_log_config")
+                .source(error)
+        })?;
         let mut deserializers = Deserializers::default();
         deserializers.insert("size_limit", SizeLimitFilterDeserializer);
         let (appenders, errors) = raw.appenders_lossy(&deserializers);
         if !errors.is_empty() {
-            bail!("errors deserializing appenders: {:?}", errors);
+            log_error!("errors deserializing log appenders: {:?}", errors);
+            return Err(DtError::new(ErrorCode::InvalidConfig)
+                .stage(Stage::Bootstrap)
+                .operation("parse_log_appenders")
+                .detail("one or more logging appenders are invalid")
+                .into());
         }
 
         let config = Config::builder()
             .appenders(appenders)
             .loggers(raw.loggers())
-            .build(raw.root())?;
-        let mut handle_guard = LOG_HANDLE.lock().unwrap();
+            .build(raw.root())
+            .map_err(|error| {
+                DtError::new(ErrorCode::InvalidConfig)
+                    .stage(Stage::Bootstrap)
+                    .operation("build_log_config")
+                    .source(error)
+            })?;
+        let mut handle_guard = LOG_HANDLE.lock().map_err(|_| {
+            DtError::new(ErrorCode::InvariantViolated)
+                .stage(Stage::Bootstrap)
+                .operation("lock_log_config")
+        })?;
         if let Some(handle) = handle_guard.as_ref() {
             // refresh log4rs config in one process
             handle.set_config(config);
         } else {
-            let handle = log4rs::init_config(config)?;
+            let handle = log4rs::init_config(config).map_err(|error| {
+                DtError::new(ErrorCode::InvalidConfig)
+                    .stage(Stage::Bootstrap)
+                    .operation("initialize_logging")
+                    .source(error)
+            })?;
             *handle_guard = Some(handle);
         }
         Ok(())

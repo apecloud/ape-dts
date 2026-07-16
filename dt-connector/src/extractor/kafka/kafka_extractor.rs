@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use anyhow::Context;
 use async_trait::async_trait;
 use rdkafka::{
     consumer::{Consumer, StreamConsumer},
@@ -16,6 +15,7 @@ use crate::{
     Extractor,
 };
 use dt_common::{
+    error::{EndpointRole, ErrorCode, Stage},
     log_info, log_warn,
     meta::{avro::avro_converter::AvroConverter, position::Position, syncer::Syncer},
 };
@@ -57,7 +57,7 @@ impl Extractor for KafkaExtractor {
             self.partition,
             self.offset
         );
-        let consumer = self.create_consumer();
+        let consumer = self.create_consumer()?;
         self.extract_avro(consumer).await
     }
 }
@@ -65,10 +65,15 @@ impl Extractor for KafkaExtractor {
 impl KafkaExtractor {
     async fn extract_avro(&mut self, consumer: StreamConsumer) -> anyhow::Result<()> {
         loop {
-            let msg = consumer
-                .recv()
-                .await
-                .with_context(|| format!("KafkaCdcExtractor failed, topic: {}", self.topic))?;
+            let msg = consumer.recv().await.map_err(|error| {
+                crate::kafka_error::rdkafka(
+                    error,
+                    ErrorCode::StatementFailed,
+                    Stage::Extractor,
+                    EndpointRole::Source,
+                    "consume_kafka_message",
+                )
+            })?;
             if let Some(payload) = msg.payload() {
                 let dt_data = self
                     .avro_converter
@@ -85,23 +90,47 @@ impl KafkaExtractor {
         }
     }
 
-    fn create_consumer(&self) -> StreamConsumer {
+    fn create_consumer(&self) -> anyhow::Result<StreamConsumer> {
         let mut config = ClientConfig::new();
         config.set("bootstrap.servers", &self.url);
         config.set("group.id", &self.group);
         config.set("auto.offset.reset", "latest");
         config.set("session.timeout.ms", "10000");
 
-        let consumer: StreamConsumer = config.create().unwrap();
+        let consumer: StreamConsumer = config.create().map_err(|error| {
+            crate::kafka_error::rdkafka(
+                error,
+                ErrorCode::InvalidConfig,
+                Stage::Extractor,
+                EndpointRole::Source,
+                "create_kafka_consumer",
+            )
+        })?;
         // only support extract data from one topic, one partition
         let mut tpl = TopicPartitionList::new();
         if self.offset >= 0 {
             tpl.add_partition_offset(&self.topic, self.partition, Offset::Offset(self.offset))
-                .unwrap();
+                .map_err(|error| {
+                    crate::kafka_error::rdkafka(
+                        error,
+                        ErrorCode::InvalidConfig,
+                        Stage::Extractor,
+                        EndpointRole::Source,
+                        "set_kafka_partition_offset",
+                    )
+                })?;
         } else {
             tpl.add_partition(&self.topic, self.partition);
         }
-        consumer.assign(&tpl).unwrap();
-        consumer
+        consumer.assign(&tpl).map_err(|error| {
+            crate::kafka_error::rdkafka(
+                error,
+                ErrorCode::InvalidConfig,
+                Stage::Extractor,
+                EndpointRole::Source,
+                "assign_kafka_partition",
+            )
+        })?;
+        Ok(consumer)
     }
 }

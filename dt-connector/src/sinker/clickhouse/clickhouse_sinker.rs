@@ -1,6 +1,5 @@
 use std::{cmp, collections::HashMap};
 
-use anyhow::bail;
 use async_trait::async_trait;
 use chrono::Utc;
 use reqwest::{Client, Method, Response, StatusCode};
@@ -8,7 +7,6 @@ use tokio::time::Instant;
 
 use dt_common::{
     config::config_enums::DbType,
-    error::Error,
     meta::{col_value::ColValue, row_data::RowData, row_type::RowType},
     utils::{limit_queue::LimitedQueue, sql_util::SqlUtil},
 };
@@ -99,7 +97,11 @@ impl ClickhouseSinker {
 
         let start_time = Instant::now();
         let mut rts = LimitedQueue::new(1);
-        let response = self.http_client.execute(request).await?;
+        let response = self
+            .http_client
+            .execute(request)
+            .await
+            .map_err(|error| super::super::http_error::reqwest(error, "clickhouse_insert"))?;
         rts.push((start_time.elapsed().as_millis() as u64, 1));
         let task_id = self
             .base_sinker
@@ -182,17 +184,18 @@ impl ClickhouseSinker {
             .request(Method::POST, url)
             .basic_auth(&self.username, password)
             .body(body);
-        Ok(post.build()?)
+        post.build().map_err(|error| {
+            super::super::http_error::reqwest(error, "build_clickhouse_request").into()
+        })
     }
 
     async fn check_response(response: Response) -> anyhow::Result<()> {
         let status_code = response.status();
-        let response_text = &response.text().await?;
+        response.text().await.map_err(|error| {
+            super::super::http_error::reqwest(error, "read_clickhouse_response")
+        })?;
         if status_code != StatusCode::OK {
-            bail! {Error::HttpError(format!(
-                "data load request failed, status_code: {}, response_text: {:?}",
-                status_code, response_text
-            ))}
+            return Err(super::super::http_error::status(status_code, "clickhouse_insert").into());
         }
         Ok(())
     }

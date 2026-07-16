@@ -164,6 +164,12 @@ impl MergeParallelizer {
         sinkers: &[Arc<async_mutex::Mutex<Box<dyn Sinker + Send>>>],
         merge_type: MergeType,
     ) -> anyhow::Result<DataSize> {
+        if self.parallel_size == 0 {
+            return Err(crate::error::invalid_config("validate_parallel_size").into());
+        }
+        if sinkers.is_empty() {
+            return Err(crate::error::invariant("validate_sinkers").into());
+        }
         let mut futures = Vec::new();
         let mut data_size = DataSize::default();
         for tb_merged_data in tb_merged_data_items.iter_mut() {
@@ -214,7 +220,9 @@ impl MergeParallelizer {
         }
 
         for future in futures {
-            future.await??;
+            future
+                .await
+                .map_err(|error| crate::error::worker(error, "join_merge_sink_worker"))??;
         }
         Ok(data_size)
     }

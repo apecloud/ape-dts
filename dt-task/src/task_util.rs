@@ -29,7 +29,10 @@ use dt_common::{
         sinker_config::{BasicSinkerConfig, SinkerConfig},
         task_config::TaskConfig,
     },
-    error::Error,
+    error::{
+        dt_error_from_mongodb, dt_error_from_sqlx, DtError, EndpointRole, Error, ErrorCode,
+        SqlxProvider, Stage,
+    },
     log_info, log_warn,
     meta::{
         mysql::{
@@ -53,6 +56,17 @@ use dt_connector::{
 use tokio::select;
 
 pub struct TaskUtil {}
+
+#[track_caller]
+fn task_sqlx_metadata_error(
+    error: sqlx::Error,
+    provider: SqlxProvider,
+    operation: &'static str,
+) -> DtError {
+    dt_error_from_sqlx(error, provider, ErrorCode::MetadataFailed)
+        .stage(Stage::Task)
+        .operation(operation)
+}
 
 impl TaskUtil {
     pub async fn create_rdb_meta_manager_for_target(
@@ -95,7 +109,10 @@ impl TaskUtil {
     ) -> anyhow::Result<Pool<MySql>> {
         let final_url = ConnectionAuthConfig::merge_url_with_auth(url, connection_auth)?;
 
-        let mut conn_options = MySqlConnectOptions::from_str(&final_url)?;
+        let mut conn_options = MySqlConnectOptions::from_str(&final_url).map_err(|error| {
+            dt_error_from_sqlx(error, SqlxProvider::MySql, ErrorCode::ConnectionFailed)
+                .operation("create_connection_pool")
+        })?;
         // The default character set is `utf8mb4`
         conn_options = conn_options
             .log_statements(log::LevelFilter::Debug)
@@ -136,7 +153,11 @@ impl TaskUtil {
             }
         }
 
-        Ok(conn_pool.connect_with(conn_options).await?)
+        conn_pool.connect_with(conn_options).await.map_err(|error| {
+            dt_error_from_sqlx(error, SqlxProvider::MySql, ErrorCode::ConnectionFailed)
+                .operation("create_connection_pool")
+                .into()
+        })
     }
 
     pub fn build_mysql_conn_settings(
@@ -179,7 +200,10 @@ impl TaskUtil {
     ) -> anyhow::Result<Pool<Postgres>> {
         let final_url = ConnectionAuthConfig::merge_url_with_auth(url, connection_auth)?;
 
-        let mut conn_options = PgConnectOptions::from_str(&final_url)?;
+        let mut conn_options = PgConnectOptions::from_str(&final_url).map_err(|error| {
+            dt_error_from_sqlx(error, SqlxProvider::Postgres, ErrorCode::ConnectionFailed)
+                .operation("create_connection_pool")
+        })?;
         conn_options = conn_options
             .log_statements(log::LevelFilter::Debug)
             .log_slow_statements(log::LevelFilter::Debug, Duration::from_secs(1));
@@ -209,7 +233,13 @@ impl TaskUtil {
             });
         }
 
-        let conn_pool = pool_options.connect_with(conn_options).await?;
+        let conn_pool = pool_options
+            .connect_with(conn_options)
+            .await
+            .map_err(|error| {
+                dt_error_from_sqlx(error, SqlxProvider::Postgres, ErrorCode::ConnectionFailed)
+                    .operation("create_connection_pool")
+            })?;
         Ok(conn_pool)
     }
 
@@ -374,7 +404,11 @@ impl TaskUtil {
     ) -> anyhow::Result<mongodb::Client> {
         let final_url = ConnectionAuthConfig::merge_url_with_auth(url, connection_auth)?;
 
-        let mut client_options = ClientOptions::parse(&final_url).await?;
+        let mut client_options = ClientOptions::parse(&final_url).await.map_err(|error| {
+            dt_error_from_mongodb(error, ErrorCode::InvalidConfig)
+                .stage(Stage::Bootstrap)
+                .operation("parse_mongodb_client_options")
+        })?;
         // app_name only for debug usage
         if let Some(app) = app_name {
             client_options.app_name = Some(app.to_string());
@@ -384,7 +418,12 @@ impl TaskUtil {
         }
         client_options.max_pool_size = max_pool_size;
 
-        Ok(mongodb::Client::with_options(client_options)?)
+        mongodb::Client::with_options(client_options).map_err(|error| {
+            dt_error_from_mongodb(error, ErrorCode::InvalidConfig)
+                .stage(Stage::Bootstrap)
+                .operation("create_mongodb_client")
+                .into()
+        })
     }
 
     pub fn check_enable_sqlx_log(log_level: &str) -> bool {
@@ -466,7 +505,9 @@ impl TaskUtil {
 
         let mut total_records = 0;
         let mut rows = sqlx::query(&sql).fetch(conn_pool);
-        while let Some(row) = rows.try_next().await.unwrap() {
+        while let Some(row) = rows.try_next().await.map_err(|error| {
+            task_sqlx_metadata_error(error, SqlxProvider::MySql, "estimate_mysql_rows")
+        })? {
             let schema = SqlUtil::try_get_mysql_string(&row, 0)?;
             let tb = SqlUtil::try_get_mysql_string(&row, 1)?;
             let records: u64 = row.try_get(2)?;
@@ -520,7 +561,9 @@ WHERE
 
         let mut total_length = 0;
         let mut rows = sqlx::query(&sql).fetch(conn_pool);
-        while let Some(row) = rows.try_next().await.unwrap() {
+        while let Some(row) = rows.try_next().await.map_err(|error| {
+            task_sqlx_metadata_error(error, SqlxProvider::Postgres, "estimate_postgres_rows")
+        })? {
             let schema: String = row.try_get(0)?;
             let table_name: String = row.try_get(1)?;
             let row_count: i64 = row.try_get(2)?;
@@ -596,7 +639,9 @@ WHERE
             FROM information_schema.schemata
             WHERE catalog_name = current_database()";
         let mut rows = sqlx::query(sql).fetch(conn_pool);
-        while let Some(row) = rows.try_next().await.unwrap() {
+        while let Some(row) = rows.try_next().await.map_err(|error| {
+            task_sqlx_metadata_error(error, SqlxProvider::Postgres, "list_postgres_schemas")
+        })? {
             let schema: String = row.try_get(0)?;
             if SystemDb::is_system_db(&schema, &DbType::Pg) {
                 continue;
@@ -625,7 +670,9 @@ WHERE
             schema
         );
         let mut rows = sqlx::query(&sql).fetch(conn_pool);
-        while let Some(row) = rows.try_next().await.unwrap() {
+        while let Some(row) = rows.try_next().await.map_err(|error| {
+            task_sqlx_metadata_error(error, SqlxProvider::Postgres, "list_postgres_tables")
+        })? {
             let tb: String = row.try_get(0)?;
             tbs.push(tb);
         }
@@ -644,7 +691,9 @@ WHERE
 
         let sql = "SELECT schema_name FROM information_schema.schemata";
         let mut rows = sqlx::query(sql).fetch(conn_pool);
-        while let Some(row) = rows.try_next().await.unwrap() {
+        while let Some(row) = rows.try_next().await.map_err(|error| {
+            task_sqlx_metadata_error(error, SqlxProvider::MySql, "list_mysql_databases")
+        })? {
             let db = SqlUtil::try_get_mysql_string(&row, 0)?;
             if SystemDb::is_system_db(&db, &DbType::Mysql) {
                 continue;
@@ -669,7 +718,9 @@ WHERE
             WHERE table_schema = ? 
             AND table_type = 'BASE TABLE'";
         let mut rows = sqlx::query(sql).bind(db).fetch(conn_pool);
-        while let Some(row) = rows.try_next().await.unwrap() {
+        while let Some(row) = rows.try_next().await.map_err(|error| {
+            task_sqlx_metadata_error(error, SqlxProvider::MySql, "list_mysql_tables")
+        })? {
             let tb = SqlUtil::try_get_mysql_string(&row, 0)?;
             tbs.push(tb);
         }
@@ -833,6 +884,15 @@ pub enum ConnClient {
 }
 
 impl ConnClient {
+    fn attach_endpoint(mut error: anyhow::Error, endpoint: EndpointRole) -> anyhow::Error {
+        if let Some(error) = error.downcast_mut::<DtError>() {
+            if error.endpoint.is_none() {
+                error.endpoint = Some(endpoint);
+            }
+        }
+        error
+    }
+
     pub async fn from_config(task_config: &TaskConfig) -> anyhow::Result<(Self, Self)> {
         let enable_sqlx_log = TaskUtil::check_enable_sqlx_log(&task_config.runtime.log_level);
         let extractor_max_connections = task_config.extractor_basic.max_connections;
@@ -878,7 +938,8 @@ impl ConnClient {
                     enable_sqlx_log,
                     None,
                 )
-                .await?,
+                .await
+                .map_err(|error| Self::attach_endpoint(error, EndpointRole::Source))?,
             ),
             ExtractorConfig::PgSnapshot {
                 url,
@@ -907,7 +968,8 @@ impl ConnClient {
                     enable_sqlx_log,
                     false,
                 )
-                .await?,
+                .await
+                .map_err(|error| Self::attach_endpoint(error, EndpointRole::Source))?,
             ),
             ExtractorConfig::MongoSnapshot {
                 url,
@@ -944,7 +1006,8 @@ impl ConnClient {
                     Some(app_name.to_string()),
                     Some(extractor_max_connections),
                 )
-                .await?,
+                .await
+                .map_err(|error| Self::attach_endpoint(error, EndpointRole::Source))?,
             ),
             _ => ConnClient::None,
         };
@@ -969,7 +1032,8 @@ impl ConnClient {
                         enable_sqlx_log,
                         conn_settings,
                     )
-                    .await?,
+                    .await
+                    .map_err(|error| Self::attach_endpoint(error, EndpointRole::Destination))?,
                 )
             }
             SinkerConfig::MysqlStruct {
@@ -985,7 +1049,8 @@ impl ConnClient {
                     enable_sqlx_log,
                     None,
                 )
-                .await?,
+                .await
+                .map_err(|error| Self::attach_endpoint(error, EndpointRole::Destination))?,
             ),
             SinkerConfig::Pg {
                 url,
@@ -1000,7 +1065,8 @@ impl ConnClient {
                     enable_sqlx_log,
                     *disable_foreign_key_checks,
                 )
-                .await?,
+                .await
+                .map_err(|error| Self::attach_endpoint(error, EndpointRole::Destination))?,
             ),
             SinkerConfig::PgStruct {
                 url,
@@ -1014,7 +1080,8 @@ impl ConnClient {
                     enable_sqlx_log,
                     false,
                 )
-                .await?,
+                .await
+                .map_err(|error| Self::attach_endpoint(error, EndpointRole::Destination))?,
             ),
             SinkerConfig::Mongo {
                 url,
@@ -1037,7 +1104,8 @@ impl ConnClient {
                     Some(app_name.to_string()),
                     Some(sinker_max_connections),
                 )
-                .await?,
+                .await
+                .map_err(|error| Self::attach_endpoint(error, EndpointRole::Destination))?,
             ),
             _ => ConnClient::None,
         };
@@ -1062,5 +1130,26 @@ impl ConnClient {
             _ => {}
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn connection_boundary_adds_endpoint_without_overwriting_it() {
+        let error = anyhow::Error::new(DtError::new(ErrorCode::ConnectionFailed));
+        let error = ConnClient::attach_endpoint(error, EndpointRole::Source);
+        assert_eq!(
+            error.downcast_ref::<DtError>().unwrap().endpoint,
+            Some(EndpointRole::Source)
+        );
+
+        let error = ConnClient::attach_endpoint(error, EndpointRole::Destination);
+        assert_eq!(
+            error.downcast_ref::<DtError>().unwrap().endpoint,
+            Some(EndpointRole::Source)
+        );
     }
 }

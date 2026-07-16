@@ -12,6 +12,7 @@ dt-connector = { path = "../dt-connector", version = "0.1.0" }
 dt-precheck = { path = "../dt-precheck", version = "0.1.0" }
 dt-parallelizer = { path = "../dt-parallelizer", version = "0.1.0" }
 dt-task = { path = "../dt-task", version = "0.1.0" }
+dt-main = { path = "../dt-main", version = "2.0.26" }
 
 anyhow = { workspace = true }
 chrono = { workspace = true }

@@ -1,4 +1,5 @@
 use dt_common::config::config_enums::DbType;
+use dt_common::error::{ErrorCode, ErrorReport};
 
 use super::check_item::CheckItem;
 
@@ -7,7 +8,9 @@ pub struct CheckResult {
     pub check_type_name: String,
     pub check_desc: String,
     pub is_validate: bool,
+    pub error_code: Option<ErrorCode>,
     pub error_msg: String,
+    pub warn_code: Option<ErrorCode>,
     pub warn_msg: String,
     pub is_source: bool,
     pub advise_msg: String,
@@ -19,7 +22,9 @@ impl CheckResult {
             check_type_name: check_item.to_string(),
             check_desc: String::from(""),
             is_validate: true,
+            error_code: None,
             error_msg: String::from(""),
+            warn_code: None,
             warn_msg: String::from(""),
             is_source,
             advise_msg: String::from(""),
@@ -33,11 +38,19 @@ impl CheckResult {
         err_option: Option<anyhow::Error>,
         warn_option: Option<anyhow::Error>,
     ) -> Self {
+        let fallback_code = match check_item {
+            CheckItem::CheckDatabaseConnection => ErrorCode::ConnectionFailed,
+            CheckItem::CheckIfStructExisted => ErrorCode::ObjectNotFound,
+            CheckItem::CheckDatabaseVersionSupported => ErrorCode::UnsupportedDatabaseVersion,
+            CheckItem::CheckIfDatabaseSupportCdc => ErrorCode::CdcNotEnabled,
+            CheckItem::CheckIfTableStructSupported => ErrorCode::UnsupportedTableStructure,
+            CheckItem::CheckAccountPermission => ErrorCode::PrerequisiteNotMet,
+        };
         let check_desc;
         let mut advise_msg = String::new();
         let mut source_or_sink = String::from("source");
         if !is_source {
-            source_or_sink = String::from("sink");
+            source_or_sink = String::from("destination");
         }
 
         match check_item {
@@ -92,16 +105,16 @@ impl CheckResult {
                 advise_msg = format!("{} wait for the next release.", advise_version);
             }
         }
-        let mut warn_msg = String::new();
-        if let Some(err) = warn_option {
-            warn_msg = err.to_string();
-        }
+        let (warn_code, warn_msg) = Self::classify_error(warn_option.as_ref(), fallback_code);
+        let (error_code, error_msg) = Self::classify_error(err_option.as_ref(), fallback_code);
         match err_option {
-            Some(err) => Self {
+            Some(_) => Self {
                 check_type_name: check_item.to_string(),
                 check_desc,
                 is_validate: false,
-                error_msg: err.to_string(),
+                error_code,
+                error_msg,
+                warn_code,
                 warn_msg,
                 is_source,
                 advise_msg,
@@ -110,16 +123,87 @@ impl CheckResult {
                 check_type_name: check_item.to_string(),
                 check_desc,
                 is_validate: true,
+                error_code: None,
                 error_msg: String::from(""),
+                warn_code,
                 warn_msg,
                 is_source,
-                advise_msg: String::from(""),
+                advise_msg: if warn_code.is_some() {
+                    advise_msg
+                } else {
+                    String::new()
+                },
             },
         }
     }
 
+    fn classify_error(
+        error: Option<&anyhow::Error>,
+        fallback: ErrorCode,
+    ) -> (Option<ErrorCode>, String) {
+        let Some(error) = error else {
+            return (None, String::new());
+        };
+        let report = ErrorReport::from_anyhow(error);
+        let code = if report.code == ErrorCode::Unclassified {
+            fallback
+        } else {
+            report.code
+        };
+        let message = if report.code == ErrorCode::Unclassified {
+            code.default_message().to_string()
+        } else {
+            report.message
+        };
+        (Some(code), message)
+    }
+
     pub fn log(&self) {
         println!("======================================");
-        println!("[check_type_name]:{} \n[is_validate]:{} \n[check_desc]:{} \n[error_messaeg]:{} \n[warn_message]:{} \n[advise_message]:{}\n", self.check_type_name, self.is_validate, self.check_desc, self.error_msg, self.warn_msg, self.advise_msg);
+        println!("[check_type_name]:{} \n[is_validate]:{} \n[check_desc]:{} \n[error_code]:{} \n[error_message]:{} \n[warn_code]:{} \n[warn_message]:{} \n[advise_message]:{}\n", self.check_type_name, self.is_validate, self.check_desc, self.error_code.map(|code| code.to_string()).unwrap_or_default(), self.error_msg, self.warn_code.map(|code| code.to_string()).unwrap_or_default(), self.warn_msg, self.advise_msg);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use dt_common::error::{DtError, Stage};
+
+    use super::*;
+
+    #[test]
+    fn assigns_action_specific_precheck_codes_without_exposing_raw_messages() {
+        let raw_message = "server version response contained private diagnostics";
+        let version_result = CheckResult::build_with_err(
+            CheckItem::CheckDatabaseVersionSupported,
+            true,
+            DbType::Pg,
+            Some(anyhow::anyhow!(raw_message)),
+            None,
+        );
+        assert_eq!(
+            version_result.error_code,
+            Some(ErrorCode::UnsupportedDatabaseVersion)
+        );
+        assert_eq!(
+            version_result.error_msg,
+            ErrorCode::UnsupportedDatabaseVersion.default_message()
+        );
+        assert!(!version_result.error_msg.contains(raw_message));
+
+        let capacity_result = CheckResult::build_with_err(
+            CheckItem::CheckIfDatabaseSupportCdc,
+            true,
+            DbType::Pg,
+            Some(
+                DtError::new(ErrorCode::ReplicationCapacityExhausted)
+                    .stage(Stage::Precheck)
+                    .into(),
+            ),
+            None,
+        );
+        assert_eq!(
+            capacity_result.error_code,
+            Some(ErrorCode::ReplicationCapacityExhausted)
+        );
     }
 }

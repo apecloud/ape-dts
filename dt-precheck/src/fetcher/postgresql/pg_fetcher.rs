@@ -38,8 +38,8 @@ impl Fetcher for PgFetcher {
         let results = self.fetch_all(sql, "pg query database version").await;
         match results {
             Ok(rows) => {
-                if !rows.is_empty() {
-                    version = rows.first().unwrap().get("current_setting");
+                if let Some(row) = rows.first() {
+                    version = row.try_get("current_setting")?;
                 }
             }
             Err(e) => bail! {e},
@@ -72,7 +72,8 @@ impl Fetcher for PgFetcher {
         match result {
             Ok(rows) => {
                 for row in rows {
-                    let (name, setting): (String, String) = (row.get("name"), row.get("setting"));
+                    let (name, setting): (String, String) =
+                        (row.try_get("name")?, row.try_get("setting")?);
                     if result_map.contains_key(name.as_str()) {
                         result_map.insert(name, setting);
                     }
@@ -95,9 +96,9 @@ impl Fetcher for PgFetcher {
         let rows_result = self.fetch_row(sql, "pg query schema sql");
         match rows_result {
             Ok(mut rows) => {
-                while let Some(row) = rows.try_next().await.unwrap() {
+                while let Some(row) = rows.try_next().await? {
                     let (database_name, schema_name): (String, String) =
-                        (row.get("catalog_name"), row.get("schema_name"));
+                        (row.try_get("catalog_name")?, row.try_get("schema_name")?);
                     if !self.filter.filter_schema(&schema_name) {
                         schemas.push(Schema {
                             database_name,
@@ -122,11 +123,11 @@ impl Fetcher for PgFetcher {
         let rows_result = self.fetch_row(table_sql, "pg query table sql");
         match rows_result {
             Ok(mut rows) => {
-                while let Some(row) = rows.try_next().await.unwrap() {
+                while let Some(row) = rows.try_next().await? {
                     let (database_name, schema_name, table_name): (String, String, String) = (
-                        row.get("table_catalog"),
-                        row.get("table_schema"),
-                        row.get("table_name"),
+                        row.try_get("table_catalog")?,
+                        row.try_get("table_schema")?,
+                        row.try_get("table_name")?,
                     );
                     if !self.filter.filter_tb(&schema_name, &table_name) {
                         tables.push(Table {
@@ -164,7 +165,7 @@ impl Fetcher for PgFetcher {
         let rows_result = self.fetch_row(sql, "pg query constraint sql");
         match rows_result {
             Ok(mut rows) => {
-                while let Some(row) = rows.try_next().await.unwrap() {
+                while let Some(row) = rows.try_next().await? {
                     let (
                         schema_name,
                         table_name,
@@ -173,12 +174,12 @@ impl Fetcher for PgFetcher {
                         constraint_name,
                         constraint_type,
                     ): (String, String, String, String, String, String) = (
-                        Self::get_text_with_null(&row, "schema_name").unwrap(),
-                        Self::get_text_with_null(&row, "table_name").unwrap(),
-                        Self::get_text_with_null(&row, "ref_schema_name").unwrap(),
-                        Self::get_text_with_null(&row, "ref_table_name").unwrap(),
-                        row.get("conname"),
-                        row.get("contype"),
+                        Self::get_text_with_null(&row, "schema_name")?,
+                        Self::get_text_with_null(&row, "table_name")?,
+                        Self::get_text_with_null(&row, "ref_schema_name")?,
+                        Self::get_text_with_null(&row, "ref_table_name")?,
+                        row.try_get("conname")?,
+                        row.try_get("contype")?,
                     );
                     if !self.filter.filter_tb(&schema_name, &table_name) {
                         constraints.push(Constraint {
@@ -243,7 +244,7 @@ impl PgFetcher {
         match result {
             Ok(rows) => {
                 for row in rows {
-                    let slot_name = row.get("slot_name");
+                    let slot_name = row.try_get("slot_name")?;
                     slots.push(slot_name);
                 }
             }
@@ -253,12 +254,8 @@ impl PgFetcher {
     }
 
     fn get_text_with_null(row: &PgRow, col_name: &str) -> anyhow::Result<String> {
-        let mut str_val = String::new();
-
-        if let Some(s) = row.get(col_name) {
-            str_val = s
-        }
-
-        Ok(str_val)
+        Ok(row
+            .try_get::<Option<String>, _>(col_name)?
+            .unwrap_or_default())
     }
 }

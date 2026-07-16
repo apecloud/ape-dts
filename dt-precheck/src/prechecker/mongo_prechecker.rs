@@ -23,12 +23,12 @@ pub struct MongoPrechecker {
 #[async_trait]
 impl Prechecker for MongoPrechecker {
     async fn build_connection(&mut self) -> anyhow::Result<CheckResult> {
-        self.fetcher.build_connection().await?;
+        let check_error = self.fetcher.build_connection().await.err();
         Ok(CheckResult::build_with_err(
             CheckItem::CheckDatabaseConnection,
             self.is_source,
             DbType::Mongo,
-            None,
+            check_error,
             None,
         ))
     }
@@ -37,7 +37,7 @@ impl Prechecker for MongoPrechecker {
         let mut check_error = None;
 
         let version = self.fetcher.fetch_version().await?;
-        let reg = Regex::new(MONGO_SUPPORTED_VERSION_REGEX).unwrap();
+        let reg = Regex::new(MONGO_SUPPORTED_VERSION_REGEX)?;
         if !reg.is_match(version.as_str()) {
             check_error = Some(anyhow::Error::msg(format!(
                 "mongo version:[{}] is invalid.",

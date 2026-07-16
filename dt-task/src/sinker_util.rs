@@ -8,6 +8,7 @@ use tokio::sync::RwLock;
 
 use dt_common::{
     config::{config_enums::DbType, sinker_config::SinkerConfig, task_config::TaskConfig},
+    error::{DtError, ErrorCode, Stage},
     meta::{
         avro::avro_converter::AvroConverter,
         mongo::mongo_shard::{is_mongos, list_shard_collections},
@@ -61,8 +62,49 @@ macro_rules! create_filter {
 }
 
 impl SinkerUtil {
+    #[track_caller]
+    fn parse_http_endpoint(
+        value: &str,
+        operation: &'static str,
+    ) -> anyhow::Result<(Url, String, String)> {
+        let url = Url::parse(value).map_err(|error| {
+            DtError::new(ErrorCode::InvalidConfig)
+                .stage(Stage::Bootstrap)
+                .operation(operation)
+                .source(error)
+        })?;
+        let host = url.host_str().map(str::to_string).ok_or_else(|| {
+            DtError::new(ErrorCode::InvalidConfig)
+                .stage(Stage::Bootstrap)
+                .operation(operation)
+                .detail("the destination HTTP URL must include a host")
+        })?;
+        let port = url.port_or_known_default().ok_or_else(|| {
+            DtError::new(ErrorCode::InvalidConfig)
+                .stage(Stage::Bootstrap)
+                .operation(operation)
+                .detail("the destination HTTP URL must include a port")
+        })?;
+        Ok((url, host, port.to_string()))
+    }
+
     fn push_sinker<S: Sinker + Send + 'static>(sub_sinkers: &mut Sinkers, sinker: S) {
         sub_sinkers.push(Arc::new(async_mutex::Mutex::new(Box::new(sinker))));
+    }
+
+    async fn require_extractor_meta_manager(
+        config: &TaskConfig,
+        operation: &'static str,
+    ) -> anyhow::Result<dt_common::meta::rdb_meta_manager::RdbMetaManager> {
+        ExtractorUtil::get_extractor_meta_manager(config)
+            .await?
+            .ok_or_else(|| {
+                DtError::new(ErrorCode::InvalidConfig)
+                    .stage(Stage::Bootstrap)
+                    .operation(operation)
+                    .detail("the selected sinker requires relational source metadata")
+                    .into()
+            })
     }
 
     fn push_checkable_sinker<S: CheckableSink + Send + 'static>(
@@ -241,8 +283,14 @@ impl SinkerUtil {
                         .with_ack_timeout(std::time::Duration::from_secs(ack_timeout_secs))
                         .with_required_acks(acks)
                         .create()
-                        .with_context(|| {
-                            format!("failed to create kafka producer, url: [{}]", url)
+                        .map_err(|error| {
+                            dt_connector::kafka_error::kafka(
+                                error,
+                                ErrorCode::ConnectionFailed,
+                                Stage::Sinker,
+                                dt_common::error::EndpointRole::Destination,
+                                "create_kafka_producer",
+                            )
                         })?;
                     // the sending performance of RdkafkaSinker is much worse than KafkaSinker
                     let sinker = KafkaSinker {
@@ -401,16 +449,21 @@ impl SinkerUtil {
                 stream_load_url,
             } => {
                 for _ in 0..parallel_size {
-                    let url_info = Url::parse(&stream_load_url)?;
-                    let host = url_info.host_str().unwrap().to_string();
-                    let port = format!("{}", url_info.port().unwrap());
+                    let (url_info, host, port) =
+                        Self::parse_http_endpoint(&stream_load_url, "parse_stream_load_url")?;
                     let username = url_info.username().to_string();
                     let password = url_info.password().unwrap_or("").to_string();
                     let custom = Policy::custom(|attempt| attempt.follow());
                     let http_client = reqwest::Client::builder()
                         .http1_title_case_headers()
                         .redirect(custom)
-                        .build()?;
+                        .build()
+                        .map_err(|error| {
+                            DtError::new(ErrorCode::InvalidConfig)
+                                .stage(Stage::Bootstrap)
+                                .operation("build_stream_load_http_client")
+                                .source(error)
+                        })?;
                     let conn_pool = TaskUtil::create_mysql_conn_pool(
                         &url,
                         &DbType::StarRocks,
@@ -468,9 +521,9 @@ impl SinkerUtil {
                 .await?;
                 let filter = create_filter!(config, Mysql);
                 let router = RdbRouter::from_config(&config.router, &DbType::Mysql)?;
-                let extractor_meta_manager = ExtractorUtil::get_extractor_meta_manager(config)
-                    .await?
-                    .unwrap();
+                let extractor_meta_manager =
+                    Self::require_extractor_meta_manager(config, "create_starrocks_struct_sinker")
+                        .await?;
                 let sinker = StarrocksStructSinker {
                     db_type: config.sinker_basic.db_type.clone(),
                     conn_pool,
@@ -485,16 +538,21 @@ impl SinkerUtil {
 
             SinkerConfig::ClickHouse { url, batch_size } => {
                 for _ in 0..parallel_size {
-                    let url_info = Url::parse(&url)?;
-                    let host = url_info.host_str().unwrap().to_string();
-                    let port = format!("{}", url_info.port().unwrap());
+                    let (url_info, host, port) =
+                        Self::parse_http_endpoint(&url, "parse_clickhouse_url")?;
                     let username = url_info.username().to_string();
                     let password = url_info.password().unwrap_or("").to_string();
                     let custom = Policy::custom(|attempt| attempt.follow());
                     let http_client = reqwest::Client::builder()
                         .http1_title_case_headers()
                         .redirect(custom)
-                        .build()?;
+                        .build()
+                        .map_err(|error| {
+                            DtError::new(ErrorCode::InvalidConfig)
+                                .stage(Stage::Bootstrap)
+                                .operation("build_clickhouse_http_client")
+                                .source(error)
+                        })?;
                     let sinker = ClickhouseSinker {
                         http_client,
                         host,
@@ -514,18 +572,17 @@ impl SinkerUtil {
                 conflict_policy,
                 engine,
             } => {
-                let url_info = Url::parse(&url)?;
-                let host = url_info.host_str().unwrap().to_string();
-                let port = format!("{}", url_info.port().unwrap());
+                let (url_info, host, port) =
+                    Self::parse_http_endpoint(&url, "parse_clickhouse_url")?;
                 let client = clickhouse::Client::default()
                     .with_url(format!("http://{}:{}", host, port))
                     .with_user(url_info.username())
                     .with_password(url_info.password().unwrap_or(""));
                 let filter = create_filter!(config, Mysql);
                 let router = RdbRouter::from_config(&config.router, &DbType::Mysql)?;
-                let extractor_meta_manager = ExtractorUtil::get_extractor_meta_manager(config)
-                    .await?
-                    .unwrap();
+                let extractor_meta_manager =
+                    Self::require_extractor_meta_manager(config, "create_clickhouse_struct_sinker")
+                        .await?;
                 let sinker = ClickhouseStructSinker {
                     client,
                     conflict_policy,
@@ -542,9 +599,8 @@ impl SinkerUtil {
                     RdbRouter::from_config(&config.router, &config.extractor_basic.db_type)?;
 
                 for _ in 0..parallel_size {
-                    let meta_manager = ExtractorUtil::get_extractor_meta_manager(config)
-                        .await?
-                        .unwrap();
+                    let meta_manager =
+                        Self::require_extractor_meta_manager(config, "create_sql_sinker").await?;
                     let sinker = SqlSinker {
                         meta_manager,
                         router: router.clone(),

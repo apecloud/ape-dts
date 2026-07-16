@@ -70,26 +70,25 @@ fn redis_cluster_psync_url(base_url: &str, nodes: &[ClusterNode]) -> anyhow::Res
 #[async_trait]
 impl Prechecker for RedisPrechecker {
     async fn build_connection(&mut self) -> anyhow::Result<CheckResult> {
-        self.fetcher.build_connection().await?;
+        let check_error = self.fetcher.build_connection().await.err();
         Ok(CheckResult::build_with_err(
             CheckItem::CheckDatabaseConnection,
             self.is_source,
             DbType::Redis,
-            None,
+            check_error,
             None,
         ))
     }
 
     async fn check_database_version(&mut self) -> anyhow::Result<CheckResult> {
         let version = self.fetcher.fetch_version().await?;
-        let version: f32 = version.parse().unwrap();
-        let check_error = if version < MIN_SUPPORTED_VERSION {
-            Some(anyhow::Error::msg(format!(
+        let check_error = match version.parse::<f32>() {
+            Ok(version) if version < MIN_SUPPORTED_VERSION => Some(anyhow::Error::msg(format!(
                 "redis version:[{}] is NOT supported, the minimum supported version is {}.",
                 version, MIN_SUPPORTED_VERSION
-            )))
-        } else {
-            None
+            ))),
+            Ok(_) => None,
+            Err(error) => Some(error.into()),
         };
 
         Ok(CheckResult::build_with_err(

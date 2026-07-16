@@ -6,6 +6,7 @@ pub mod checker;
 pub mod conn_util;
 pub mod data_marker;
 pub mod extractor;
+pub mod kafka_error;
 pub mod meta_fetcher;
 pub mod rdb_query_builder;
 pub mod rdb_router;

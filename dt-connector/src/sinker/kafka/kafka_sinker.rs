@@ -3,6 +3,7 @@ use kafka::producer::{Producer, Record};
 use tokio::time::Instant;
 
 use dt_common::{
+    error::{EndpointRole, ErrorCode, Stage},
     meta::{avro::avro_converter::AvroConverter, ddl_meta::ddl_data::DdlData, row_data::RowData},
     utils::limit_queue::LimitedQueue,
 };
@@ -40,7 +41,15 @@ impl Sinker for KafkaSinker {
                 partition: -1,
             });
         }
-        self.producer.send_all(&messages)?;
+        self.producer.send_all(&messages).map_err(|error| {
+            crate::kafka_error::kafka(
+                error,
+                ErrorCode::StatementFailed,
+                Stage::Sinker,
+                EndpointRole::Destination,
+                "sink_kafka_ddl",
+            )
+        })?;
         Ok(())
     }
 
@@ -83,7 +92,15 @@ impl KafkaSinker {
         //       making it impossible to see individual broker RT. This can be optimized in the future.
         let start_time = Instant::now();
         let mut rts = LimitedQueue::new(1);
-        self.producer.send_all(&messages)?;
+        self.producer.send_all(&messages).map_err(|error| {
+            crate::kafka_error::kafka(
+                error,
+                ErrorCode::StatementFailed,
+                Stage::Sinker,
+                EndpointRole::Destination,
+                "sink_kafka_dml",
+            )
+        })?;
         rts.push((
             start_time.elapsed().as_millis() as u64,
             messages.len() as u64,

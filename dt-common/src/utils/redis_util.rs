@@ -5,7 +5,7 @@ use anyhow::{bail, Context};
 use redis::{Connection, ConnectionLike, Value};
 
 use crate::config::connection_auth_config::ConnectionAuthConfig;
-use crate::error::Error;
+use crate::error::{DtError, Error, ErrorCode, OriginError};
 use crate::log_info;
 use crate::meta::redis::{
     cluster_node::ClusterNode,
@@ -24,9 +24,9 @@ impl RedisUtil {
     ) -> anyhow::Result<redis::Connection> {
         let final_url = ConnectionAuthConfig::merge_url_with_auth(url, connection_auth)?;
         let conn = redis::Client::open(final_url)
-            .with_context(|| format!("invalid redis url: [{}]", url))?
+            .context("invalid Redis connection URL")?
             .get_connection()
-            .with_context(|| format!("can not connect redis: [{}]", url))?;
+            .context("failed to connect to Redis")?;
         Ok(conn)
     }
 
@@ -89,8 +89,11 @@ impl RedisUtil {
         if let redis::Value::BulkString(data) = value {
             let info = String::from_utf8(data)?;
             log_info!("redis INFO result: {}", info);
-            let re = Regex::new(r"redis_version:(\S+)").unwrap();
-            let cap = re.captures(&info).unwrap();
+            let re = Regex::new(r"redis_version:(\S+)")
+                .expect("the Redis version regex is a static valid expression");
+            let cap = re
+                .captures(&info)
+                .ok_or_else(|| redis_metadata_error("read_redis_version"))?;
 
             let version_str = cap[1].to_string();
             let tokens: Vec<&str> = version_str.split('.').collect();
@@ -104,7 +107,8 @@ impl RedisUtil {
             if tokens.len() > 1 {
                 version = format!("{}.{}", tokens[0], tokens[1]);
             }
-            return Ok(f32::from_str(&version)?);
+            return f32::from_str(&version)
+                .map_err(|error| redis_metadata_source_error(error, "parse_redis_version").into());
         }
         bail! {Error::RedisResultError(
             "can not get redis version by INFO".into(),
@@ -193,15 +197,22 @@ impl RedisUtil {
             let master_id = words[3].to_string();
             let is_master = words[2].contains("master");
 
-            let mut address = words[1].split('@').next().unwrap().to_string();
-            let tokens: Vec<&str> = address.split(':').collect();
-            let (host, port, address) = if tokens.len() > 2 {
-                let port = tokens.last().unwrap().to_string();
-                let ipv6_addr = tokens[..tokens.len() - 1].join(":");
-                address = format!("[{}]:{}", ipv6_addr, port);
-                (ipv6_addr, port, address)
+            let raw_address = words[1]
+                .split('@')
+                .next()
+                .ok_or_else(|| redis_metadata_error("parse_redis_cluster_node"))?;
+            let (host, port) = raw_address
+                .rsplit_once(':')
+                .ok_or_else(|| redis_metadata_error("parse_redis_cluster_node"))?;
+            let host = host.trim_matches(['[', ']']).to_string();
+            if host.is_empty() || port.is_empty() {
+                return Err(redis_metadata_error("parse_redis_cluster_node").into());
+            }
+            let port = port.to_string();
+            let address = if host.contains(':') {
+                format!("[{}]:{}", host, port)
             } else {
-                (tokens[0].to_string(), tokens[1].to_string(), address)
+                format!("{}:{}", host, port)
             };
 
             let mut node = ClusterNode {
@@ -238,13 +249,23 @@ impl RedisUtil {
                 let range: Vec<&str> = word.split('-').collect();
                 let (start, end) = if range.len() > 1 {
                     (
-                        range[0].parse::<u16>().expect("failed to parse slot start"),
-                        range[1].parse::<u16>().expect("failed to parse slot end"),
+                        range[0].parse::<u16>().map_err(|error| {
+                            redis_metadata_source_error(error, "parse_redis_slot_range")
+                        })?,
+                        range[1].parse::<u16>().map_err(|error| {
+                            redis_metadata_source_error(error, "parse_redis_slot_range")
+                        })?,
                     )
                 } else {
-                    let slot_num = word.parse::<u16>().expect("failed to parse slot number");
+                    let slot_num = word
+                        .parse::<u16>()
+                        .map_err(|error| redis_metadata_source_error(error, "parse_redis_slot"))?;
                     (slot_num, slot_num)
                 };
+
+                if start > end || end as usize >= SLOTS_COUNT {
+                    return Err(redis_metadata_error("validate_redis_slot_range").into());
+                }
 
                 for j in start..=end {
                     slots.push(j);
@@ -255,8 +276,11 @@ impl RedisUtil {
             if !slots.is_empty() {
                 let mut node_slot_hash_tag_map = HashMap::with_capacity(slots.len());
                 for i in slots.iter() {
-                    node_slot_hash_tag_map
-                        .insert(*i, all_slot_hash_tag_map.get(i).unwrap().to_owned());
+                    let hash_tag = all_slot_hash_tag_map
+                        .get(i)
+                        .cloned()
+                        .ok_or_else(|| redis_metadata_error("map_redis_slot_hash_tag"))?;
+                    node_slot_hash_tag_map.insert(*i, hash_tag);
                 }
                 node.slot_hash_tag_map = node_slot_hash_tag_map;
             }
@@ -273,6 +297,21 @@ impl RedisUtil {
             Ok(parsed_nodes)
         }
     }
+}
+
+#[track_caller]
+fn redis_metadata_error(operation: &'static str) -> DtError {
+    DtError::new(ErrorCode::MetadataFailed)
+        .operation(operation)
+        .origin(OriginError::new("redis", None::<String>))
+}
+
+#[track_caller]
+fn redis_metadata_source_error(
+    error: impl Into<crate::error::BoxError>,
+    operation: &'static str,
+) -> DtError {
+    redis_metadata_error(operation).source(error)
 }
 
 #[cfg(test)]

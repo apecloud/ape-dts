@@ -1679,10 +1679,13 @@ dependencies = [
 name = "dt-main"
 version = "2.0.26"
 dependencies = [
+ "anyhow",
  "clap",
  "console-subscriber",
+ "dt-common",
  "dt-precheck",
  "dt-task",
+ "log",
  "tokio",
  "tonic",
  "tonic-prost",
@@ -1796,6 +1799,7 @@ dependencies = [
  "dotenv",
  "dt-common",
  "dt-connector",
+ "dt-main",
  "dt-parallelizer",
  "dt-precheck",
  "dt-task",

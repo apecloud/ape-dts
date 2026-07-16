@@ -94,28 +94,35 @@ impl Parallelizer for RedisParallelizer {
             }
 
             // find the dst node for entry by slot
-            let node = *self.slot_node_map.get(&slots[0]).unwrap();
-            let sinker_index = *self.node_sinker_index_map.get(node).unwrap();
-            node_data_items[sinker_index].push(dt_item);
+            let node = self
+                .slot_node_map
+                .get(&slots[0])
+                .copied()
+                .ok_or_else(|| crate::error::invariant("route_redis_slot"))?;
+            let sinker_index = self
+                .node_sinker_index_map
+                .get(node)
+                .copied()
+                .ok_or_else(|| crate::error::invariant("route_redis_node"))?;
+            node_data_items
+                .get_mut(sinker_index)
+                .ok_or_else(|| crate::error::invariant("route_redis_sinker"))?
+                .push(dt_item);
         }
 
         let mut futures = Vec::new();
         for sinker in sinkers.iter().take(node_data_items.len()) {
             let node_data = node_data_items.remove(0);
             let sinker = sinker.clone();
-            let future = tokio::spawn(async move {
-                sinker
-                    .lock()
-                    .await
-                    .sink_raw(node_data, false)
-                    .await
-                    .unwrap()
-            });
+            let future =
+                tokio::spawn(async move { sinker.lock().await.sink_raw(node_data, false).await });
             futures.push(future);
         }
 
         for future in futures {
-            future.await.unwrap();
+            future
+                .await
+                .map_err(|error| crate::error::worker(error, "join_redis_sink_worker"))??;
         }
 
         Ok(data_size)

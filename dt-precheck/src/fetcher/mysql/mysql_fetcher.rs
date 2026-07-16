@@ -49,9 +49,8 @@ impl Fetcher for MysqlFetcher {
         let result = self.fetch_all(sql, "mysql query database version").await;
         match result {
             Ok(rows) => {
-                if !rows.is_empty() {
-                    let version_str =
-                        SqlUtil::try_get_mysql_string(rows.first().unwrap(), "VERSION")?;
+                if let Some(row) = rows.first() {
+                    let version_str = SqlUtil::try_get_mysql_string(row, "VERSION")?;
                     version = version_str;
                 }
             }
@@ -106,7 +105,7 @@ impl Fetcher for MysqlFetcher {
         let rows_result = self.fetch_row(query_db, "mysql query dbs sql:");
         match rows_result {
             Ok(mut rows) => {
-                while let Some(row) = rows.try_next().await.unwrap() {
+                while let Some(row) = rows.try_next().await? {
                     let schema_name = SqlUtil::try_get_mysql_string(&row, "SCHEMA_NAME")?;
                     if !self.filter.filter_schema(&schema_name) {
                         results.push(Database {
@@ -132,7 +131,7 @@ impl Fetcher for MysqlFetcher {
         let rows_result = self.fetch_row(query_tb, "mysql query tables sql:");
         match rows_result {
             Ok(mut rows) => {
-                while let Some(row) = rows.try_next().await.unwrap() {
+                while let Some(row) = rows.try_next().await? {
                     let (db, tb) = (
                         SqlUtil::try_get_mysql_string(&row, "TABLE_SCHEMA")?,
                         SqlUtil::try_get_mysql_string(&row, "TABLE_NAME")?,
@@ -182,7 +181,7 @@ impl Fetcher for MysqlFetcher {
         let rows_result = self.fetch_row(query_constraint.as_str(), "mysql query constraints sql:");
         match rows_result {
             Ok(mut rows) => {
-                while let Some(row) = rows.try_next().await.unwrap() {
+                while let Some(row) = rows.try_next().await? {
                     let (db, table, rel_db, rel_table, constraint_name, constraint_type): (
                         String,
                         String,
@@ -191,12 +190,12 @@ impl Fetcher for MysqlFetcher {
                         String,
                         String,
                     ) = (
-                        Self::get_str_with_null(&row, "CONSTRAINT_SCHEMA").unwrap(),
-                        Self::get_str_with_null(&row, "TABLE_NAME").unwrap(),
-                        Self::get_str_with_null(&row, "REFERENCED_TABLE_SCHEMA").unwrap(),
-                        Self::get_str_with_null(&row, "REFERENCED_TABLE_NAME").unwrap(),
-                        Self::get_str_with_null(&row, "CONSTRAINT_NAME").unwrap(),
-                        Self::get_str_with_null(&row, "CONSTRAINT_TYPE").unwrap(),
+                        Self::get_str_with_null(&row, "CONSTRAINT_SCHEMA")?,
+                        Self::get_str_with_null(&row, "TABLE_NAME")?,
+                        Self::get_str_with_null(&row, "REFERENCED_TABLE_SCHEMA")?,
+                        Self::get_str_with_null(&row, "REFERENCED_TABLE_NAME")?,
+                        Self::get_str_with_null(&row, "CONSTRAINT_NAME")?,
+                        Self::get_str_with_null(&row, "CONSTRAINT_TYPE")?,
                     );
                     if !self.filter.filter_tb(&db, &table) {
                         results.push(Constraint {

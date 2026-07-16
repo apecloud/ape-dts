@@ -4,7 +4,10 @@ use sqlx::types::chrono;
 use super::{entry_parser::entry_parser::EntryParser, reader::rdb_reader::RdbReader};
 use crate::extractor::redis::{rdb::entry_parser::module2_parser::ModuleParser, StreamReader};
 use dt_common::meta::redis::{redis_entry::RedisEntry, redis_object::RedisCmd};
-use dt_common::{error::Error, log_debug, log_info};
+use dt_common::{
+    error::{DtError, EndpointRole, Error, ErrorCode, OriginError, Stage},
+    log_debug, log_info,
+};
 
 const K_FLAG_SLOT_INFO: u8 = 0xf4; // (244) (Redis 7.4+) RDB_OPCODE_SLOT_INFO: slot info
 const _K_FLAG_FUNCTION2: u8 = 0xf5; // (245) function library data
@@ -115,7 +118,14 @@ impl RdbParser<'_> {
                 match key.as_str() {
                     "repl-stream-db" => {
                         let value = String::from(value);
-                        self.repl_stream_db_id = value.parse::<i64>().unwrap();
+                        self.repl_stream_db_id = value.parse::<i64>().map_err(|error| {
+                            DtError::new(ErrorCode::StatementFailed)
+                                .stage(Stage::Extractor)
+                                .operation("parse_redis_rdb_metadata")
+                                .endpoint(EndpointRole::Source)
+                                .origin(OriginError::new("redis", None::<String>))
+                                .source(error)
+                        })?;
                         log_info!("RDB repl-stream-db: {}", self.repl_stream_db_id);
                     }
 
@@ -185,26 +195,25 @@ impl RdbParser<'_> {
                     EntryParser::parse_object(&mut self.reader, type_byte, key.clone()).await;
                 self.reader.copy_raw = false;
 
-                if let Err(error) = value {
-                    bail! {Error::RedisRdbError(format!(
-                        "parsing rdb failed, type_byte: {}, key: {}, error: {:?}",
-                        type_byte,
-                        String::from(key),
-                        error
-                    ))}
-                } else {
-                    let mut entry = RedisEntry::new();
-                    entry.is_base = true;
-                    entry.db_id = self.now_db_id;
-                    entry.raw_bytes = self.reader.drain_raw_bytes();
-                    entry.key = key;
-                    entry.value = value.unwrap();
-                    entry.value_type_byte = type_byte;
-                    entry.expire_ms = self.expire_ms;
-                    // reset expire_ms
-                    self.expire_ms = 0;
-                    return Ok(Some(entry));
-                }
+                let value = value.map_err(|error| {
+                    DtError::new(ErrorCode::StatementFailed)
+                        .stage(Stage::Extractor)
+                        .operation("parse_redis_rdb_entry")
+                        .endpoint(EndpointRole::Source)
+                        .origin(OriginError::new("redis", None::<String>))
+                        .source(error.into_boxed_dyn_error())
+                })?;
+                let mut entry = RedisEntry::new();
+                entry.is_base = true;
+                entry.db_id = self.now_db_id;
+                entry.raw_bytes = self.reader.drain_raw_bytes();
+                entry.key = key;
+                entry.value = value;
+                entry.value_type_byte = type_byte;
+                entry.expire_ms = self.expire_ms;
+                // reset expire_ms
+                self.expire_ms = 0;
+                return Ok(Some(entry));
             }
         }
 

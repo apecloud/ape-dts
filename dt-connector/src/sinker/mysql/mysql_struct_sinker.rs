@@ -6,12 +6,13 @@ use crate::{
     sinker::{
         base_sinker::BaseSinker,
         base_struct_sinker::{BaseStructSinker, DBConnPool},
+        sqlx_error,
     },
     Sinker,
 };
 use dt_common::{
-    config::config_enums::ConflictPolicyEnum, meta::struct_meta::struct_data::StructData,
-    rdb_filter::RdbFilter,
+    config::config_enums::ConflictPolicyEnum, error::ErrorCode,
+    meta::struct_meta::struct_data::StructData, rdb_filter::RdbFilter,
 };
 
 #[derive(Clone)]
@@ -34,6 +35,9 @@ impl Sinker for MysqlStructSinker {
             &self.base_sinker,
         )
         .await
+        .map_err(|error| {
+            sqlx_error::mysql_from_anyhow(error, ErrorCode::StatementFailed, "sink_struct")
+        })
     }
 
     async fn close(&mut self) -> anyhow::Result<()> {

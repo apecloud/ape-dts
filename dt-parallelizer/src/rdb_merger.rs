@@ -89,7 +89,7 @@ impl RdbMerger {
 
             RowType::Update => {
                 // if pk/uk change found in any row_data, for safety, all following row_data won't be merged
-                if Self::check_key_changed(tb_meta, &row_data) {
+                if Self::check_key_changed(tb_meta, &row_data)? {
                     merged.unmerged_rows.push(row_data);
                     return Ok(());
                 }
@@ -142,18 +142,28 @@ impl RdbMerger {
         Ok(())
     }
 
-    fn check_key_changed(tb_meta: &RdbTbMeta, row_data: &RowData) -> bool {
-        let before = row_data.before.as_ref().unwrap();
-        let after = row_data.after.as_ref().unwrap();
+    fn check_key_changed(tb_meta: &RdbTbMeta, row_data: &RowData) -> anyhow::Result<bool> {
+        let before = row_data.require_before().map_err(|error| {
+            dt_common::error::DtError::new(dt_common::error::ErrorCode::InvariantViolated)
+                .stage(dt_common::error::Stage::Parallelizer)
+                .operation("merge_update_before")
+                .source(error.into_boxed_dyn_error())
+        })?;
+        let after = row_data.require_after().map_err(|error| {
+            dt_common::error::DtError::new(dt_common::error::ErrorCode::InvariantViolated)
+                .stage(dt_common::error::Stage::Parallelizer)
+                .operation("merge_update_after")
+                .source(error.into_boxed_dyn_error())
+        })?;
         for key_cols in tb_meta.key_map.values() {
             for col in key_cols {
                 if before.get(col) != after.get(col) {
                     log_debug!("rdb_merger, key change found, row_data: {:?}", row_data);
-                    return true;
+                    return Ok(true);
                 }
             }
         }
-        false
+        Ok(false)
     }
 
     fn check_collision(
@@ -278,7 +288,7 @@ mod tests {
         let tb_meta = build_tb_meta();
         let row_data = build_update_row("id");
 
-        assert!(RdbMerger::check_key_changed(&tb_meta, &row_data));
+        assert!(RdbMerger::check_key_changed(&tb_meta, &row_data).unwrap());
     }
 
     #[test]
@@ -286,7 +296,7 @@ mod tests {
         let tb_meta = build_tb_meta();
         let row_data = build_update_row("uk_1");
 
-        assert!(RdbMerger::check_key_changed(&tb_meta, &row_data));
+        assert!(RdbMerger::check_key_changed(&tb_meta, &row_data).unwrap());
     }
 
     #[test]
@@ -294,6 +304,6 @@ mod tests {
         let tb_meta = build_tb_meta();
         let row_data = build_update_row("value");
 
-        assert!(!RdbMerger::check_key_changed(&tb_meta, &row_data));
+        assert!(!RdbMerger::check_key_changed(&tb_meta, &row_data).unwrap());
     }
 }

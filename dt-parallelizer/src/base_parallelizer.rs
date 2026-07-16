@@ -1,6 +1,5 @@
 use std::{collections::VecDeque, future::Future, sync::Arc};
 
-use anyhow::bail;
 use concurrent_queue::PopError;
 use tokio::task::JoinSet;
 
@@ -180,10 +179,10 @@ impl BaseParallelizer {
             return Ok(());
         }
         if parallel_size < 1 {
-            bail!("parallel_size must be greater than 0");
+            return Err(crate::error::invalid_config("validate_parallel_size").into());
         }
         if sinkers.is_empty() {
-            bail!("sinkers must not be empty");
+            return Err(crate::error::invariant("validate_sinkers").into());
         }
 
         let mut pending = sub_data_items.into_iter();
@@ -214,7 +213,8 @@ impl BaseParallelizer {
         }
 
         while let Some(result) = join_set.join_next().await {
-            let sinker_index = result??;
+            let sinker_index =
+                result.map_err(|error| crate::error::worker(error, "join_sink_worker"))??;
             if let Some(data) = pending.next() {
                 spawn_sink_task(
                     &mut join_set,

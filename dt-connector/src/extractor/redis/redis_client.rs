@@ -8,7 +8,7 @@ use async_trait::async_trait;
 use super::{redis_resp_reader::RedisRespReader, redis_resp_types::Value, StreamReader};
 use dt_common::{
     config::connection_auth_config::ConnectionAuthConfig,
-    error::Error,
+    error::{DtError, EndpointRole, Error, ErrorCode, Stage},
     meta::redis::{command::cmd_encoder::CmdEncoder, redis_object::RedisCmd},
 };
 
@@ -27,14 +27,28 @@ impl StreamReader for RedisClient {
 
 impl RedisClient {
     pub async fn new(url: &str, connection_auth: &ConnectionAuthConfig) -> anyhow::Result<Self> {
-        let url_info = Url::parse(url)?;
-        let host = url_info.host_str().unwrap();
-        let port = url_info.port().unwrap();
+        let url_info = Url::parse(url).map_err(|error| {
+            DtError::new(ErrorCode::InvalidConfig)
+                .stage(Stage::Extractor)
+                .operation("parse_redis_url")
+                .endpoint(EndpointRole::Source)
+                .source(error)
+        })?;
+        let host = url_info.host_str().ok_or_else(|| {
+            DtError::new(ErrorCode::InvalidConfig)
+                .stage(Stage::Extractor)
+                .operation("parse_redis_url")
+                .endpoint(EndpointRole::Source)
+                .detail("the source Redis URL must include a host")
+        })?;
+        let port = url_info.port().unwrap_or(6379);
 
         let username = Self::extract_username(connection_auth, &url_info)?;
         let password = Self::extract_password(connection_auth, &url_info)?;
 
-        let stream = TcpStream::connect(format!("{}:{}", host, port)).await?;
+        let stream = TcpStream::connect(format!("{}:{}", host, port))
+            .await
+            .map_err(|error| redis_io_error(error, "connect_redis"))?;
         let mut me = Self {
             url: url.into(),
             connection_auth: connection_auth.clone(),
@@ -53,22 +67,30 @@ impl RedisClient {
             if let Ok(Value::Okay) = me.read().await {
                 return Ok(me);
             }
-            bail! {Error::RedisResultError(format!(
-                "can't connect redis: {}",
-                url
-            ))}
+            return Err(DtError::new(ErrorCode::AuthenticationFailed)
+                .stage(Stage::Extractor)
+                .operation("authenticate_redis")
+                .endpoint(EndpointRole::Source)
+                .into());
         }
 
         Ok(me)
     }
 
     pub async fn close(&mut self) -> anyhow::Result<()> {
-        self.stream.get_mut().shutdown(std::net::Shutdown::Both)?;
+        self.stream
+            .get_mut()
+            .shutdown(std::net::Shutdown::Both)
+            .map_err(|error| redis_io_error(error, "close_redis_connection"))?;
         Ok(())
     }
 
     pub async fn send_packed(&mut self, packed_cmd: &[u8]) -> anyhow::Result<()> {
-        self.stream.get_mut().write_all(packed_cmd).await?;
+        self.stream
+            .get_mut()
+            .write_all(packed_cmd)
+            .await
+            .map_err(|error| redis_io_error(error, "write_redis_command"))?;
         Ok(())
     }
 
@@ -97,7 +119,10 @@ impl RedisClient {
 
     pub async fn read_bytes(&mut self, length: usize) -> anyhow::Result<Vec<u8>> {
         let mut buf = vec![0; length];
-        self.stream.read_exact(&mut buf).await?;
+        self.stream
+            .read_exact(&mut buf)
+            .await
+            .map_err(|error| redis_io_error(error, "read_redis_response"))?;
         Ok(buf)
     }
 
@@ -167,4 +192,22 @@ impl RedisClient {
                 .transpose(),
         }
     }
+}
+
+#[track_caller]
+fn redis_io_error(error: std::io::Error, operation: &'static str) -> DtError {
+    let code = if matches!(
+        error.kind(),
+        std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+    ) {
+        ErrorCode::ConnectionTimeout
+    } else {
+        ErrorCode::ConnectionFailed
+    };
+    DtError::new(code)
+        .stage(Stage::Extractor)
+        .operation(operation)
+        .endpoint(EndpointRole::Source)
+        .origin(dt_common::error::OriginError::new("redis", None::<String>))
+        .source(error)
 }

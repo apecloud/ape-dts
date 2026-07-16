@@ -38,6 +38,7 @@ use dt_common::{
         config_enums::DbType, config_token_parser::ConfigTokenParser,
         connection_auth_config::ConnectionAuthConfig,
     },
+    error::{DtError, EndpointRole, ErrorCode, ErrorObject, OriginError, Stage},
     log_error, log_info, log_warn,
     meta::{
         adaptor::pg_col_value_convertor::PgColValueConvertor,
@@ -235,9 +236,24 @@ impl PgCdcExtractor {
                     log_info!("received unknown replication data: {:?}", data);
                 }
 
-                Some(Err(error)) => panic!("unexpected replication stream error: {}", error),
+                Some(Err(error)) => {
+                    return Err(DtError::new(ErrorCode::ConnectionFailed)
+                        .stage(Stage::Extractor)
+                        .operation("read_postgres_replication_stream")
+                        .endpoint(EndpointRole::Source)
+                        .origin(OriginError::new("postgres", None::<String>))
+                        .source(error)
+                        .into());
+                }
 
-                None => panic!("unexpected replication stream end"),
+                None => {
+                    return Err(DtError::new(ErrorCode::ConnectionFailed)
+                        .stage(Stage::Extractor)
+                        .operation("read_postgres_replication_stream")
+                        .endpoint(EndpointRole::Source)
+                        .origin(OriginError::new("postgres", None::<String>))
+                        .into());
+                }
             }
         }
     }
@@ -247,16 +263,24 @@ impl PgCdcExtractor {
         stream: &mut Pin<&mut LogicalReplicationStream>,
         start_lsn: &str,
     ) -> anyhow::Result<()> {
-        let lsn: PgLsn =
+        let lsn_value =
             if let Position::PgCdc { lsn, .. } = &self.syncer.lock().await.committed_position {
                 if lsn.is_empty() {
-                    start_lsn.parse().unwrap()
+                    start_lsn.to_string()
                 } else {
-                    lsn.parse().unwrap()
+                    lsn.clone()
                 }
             } else {
-                start_lsn.parse().unwrap()
+                start_lsn.to_string()
             };
+        let lsn: PgLsn = lsn_value.parse().map_err(|_| {
+            DtError::new(ErrorCode::CheckpointReadFailed)
+                .stage(Stage::Extractor)
+                .operation("parse_postgres_lsn")
+                .endpoint(EndpointRole::Source)
+                .origin(OriginError::new("postgres", None::<String>))
+                .detail("the saved PostgreSQL replication position is invalid")
+        })?;
         log_info!("confirmed flush lsn: {}", lsn.to_string());
 
         // Postgres epoch is 2000-01-01T00:00:00Z
@@ -294,14 +318,25 @@ impl PgCdcExtractor {
         let mut tb_meta = self.meta_manager.get_tb_meta(schema, tb).await?.to_owned();
         let mut col_names = Vec::new();
         for column in event.columns() {
+            let col_name = column.name()?;
             // todo: check type_id in oid_to_type
             let col_type = self
                 .meta_manager
                 .type_registry
                 .oid_to_type
                 .get(&column.type_id())
-                .unwrap();
-            let col_name = column.name()?;
+                .ok_or_else(|| {
+                    DtError::new(ErrorCode::MetadataFailed)
+                        .stage(Stage::Extractor)
+                        .operation("decode_postgres_relation")
+                        .endpoint(EndpointRole::Source)
+                        .object(ErrorObject {
+                            schema: Some(schema.to_string()),
+                            table: Some(tb.to_string()),
+                            column: Some(col_name.to_string()),
+                            ..Default::default()
+                        })
+                })?;
             // update meta
             tb_meta
                 .col_type_map
@@ -374,7 +409,19 @@ impl PgCdcExtractor {
         } else if !basic.id_cols.is_empty() {
             let mut col_values_tmp = HashMap::new();
             for col in basic.id_cols.iter() {
-                col_values_tmp.insert(col.to_string(), col_values_after.get(col).unwrap().clone());
+                let value = col_values_after.get(col).cloned().ok_or_else(|| {
+                    DtError::new(ErrorCode::MetadataFailed)
+                        .stage(Stage::Extractor)
+                        .operation("decode_postgres_update_key")
+                        .endpoint(EndpointRole::Source)
+                        .object(ErrorObject {
+                            schema: Some(basic.schema.clone()),
+                            table: Some(basic.tb.clone()),
+                            column: Some(col.to_string()),
+                            ..Default::default()
+                        })
+                })?;
+                col_values_tmp.insert(col.to_string(), value);
             }
             col_values_tmp
         } else {
@@ -576,7 +623,7 @@ impl PgCdcExtractor {
             let mut start_time = Instant::now();
             while !shut_down.load(Ordering::Acquire) {
                 if start_time.elapsed().as_secs() >= heartbeat_interval_secs {
-                    Self::heartbeat(
+                    if let Err(error) = Self::heartbeat(
                         &slot_name,
                         &schema_tb[0],
                         &schema_tb[1],
@@ -584,7 +631,10 @@ impl PgCdcExtractor {
                         &conn_pool,
                     )
                     .await
-                    .unwrap();
+                    {
+                        log_error!("heartbeat failed: {error:#}");
+                        break;
+                    }
                     start_time = Instant::now();
                 }
                 TimeUtil::sleep_millis(1000 * heartbeat_interval_secs).await;

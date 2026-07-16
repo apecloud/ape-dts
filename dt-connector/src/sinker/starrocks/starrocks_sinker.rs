@@ -1,6 +1,5 @@
 use std::{cmp, collections::HashMap, str::FromStr};
 
-use anyhow::bail;
 use async_trait::async_trait;
 use chrono::Utc;
 use reqwest::{header, Client, Method, Response, StatusCode};
@@ -9,7 +8,6 @@ use tokio::time::Instant;
 
 use dt_common::{
     config::config_enums::DbType,
-    error::Error,
     log_error,
     meta::{
         col_value::ColValue,
@@ -155,7 +153,11 @@ impl StarRocksSinker {
         let request = self.build_request(&url, op, body)?;
 
         let start_time = Instant::now();
-        let response = self.http_client.execute(request).await?;
+        let response = self
+            .http_client
+            .execute(request)
+            .await
+            .map_err(|error| super::super::http_error::reqwest(error, "stream_load_request"))?;
         rts.push((start_time.elapsed().as_millis() as u64, 1));
         let task_id = self.base_sinker.task_id_for_schema_tb(&db, &tb);
         self.base_sinker.ensure_monitor_for(&task_id);
@@ -274,17 +276,20 @@ impl StarRocksSinker {
                 _ => {}
             }
         }
-        Ok(put.build()?)
+        put.build().map_err(|error| {
+            super::super::http_error::reqwest(error, "build_stream_load_request").into()
+        })
     }
 
     async fn check_response(response: Response) -> anyhow::Result<()> {
         let status_code = response.status();
-        let response_text = &response.text().await?;
+        let response_text = &response.text().await.map_err(|error| {
+            super::super::http_error::reqwest(error, "read_stream_load_response")
+        })?;
         if status_code != StatusCode::OK {
-            bail! {Error::HttpError(format!(
-                "data load request failed, status_code: {}, response_text: {:?}",
-                status_code, response_text
-            ))}
+            return Err(
+                super::super::http_error::status(status_code, "stream_load_request").into(),
+            );
         }
 
         // response example:
@@ -305,14 +310,18 @@ impl StarRocksSinker {
         //     "WriteDataTimeMs": 107,
         //     "CommitAndPublishTimeMs": 36
         // }
-        let json_value: Value = serde_json::from_str(response_text)?;
+        let json_value: Value = serde_json::from_str(response_text).map_err(|error| {
+            super::super::http_error::invalid_response(error, "parse_stream_load_response")
+        })?;
         if json_value["Status"] != "Success" {
             let err = format!(
                 "stream load request failed, status_code: {}, load_result: {}",
                 status_code, response_text,
             );
             log_error!("{}", err);
-            bail! {Error::HttpError(err)}
+            return Err(
+                super::super::http_error::rejected(status_code, "stream_load_request").into(),
+            );
         }
         Ok(())
     }

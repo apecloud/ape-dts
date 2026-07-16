@@ -152,22 +152,22 @@ impl RdbTestRunner {
         }
 
         let (mut unordered_compare, unordered_compare_configured, unordered_compare_threads) =
-            Self::load_mock_compare_config(&base.task_config_file);
+            Self::load_mock_compare_config(&base.task_config_file)?;
         let configured_mock_prepare_only =
-            Self::load_mock_prepare_only_config(&base.task_config_file);
+            Self::load_mock_prepare_only_config(&base.task_config_file)?;
         let task_kind = config.task_type().map(|task_type| task_type.kind);
         let is_struct_task = matches!(task_kind, Some(TaskKind::Struct));
         let mock_result: Option<MockDataPrepare> = match src_db_type {
             DbType::Pg => {
                 let context =
                     Self::detect_pg_mock_context(src_conn_pool_pg.as_ref().unwrap()).await?;
-                MockData::<PgType>::new(&base.task_config_file, context)
+                MockData::<PgType>::new(&base.task_config_file, context)?
                     .map(MockDataPrepare::from_mock_data)
             }
             DbType::Mysql => {
                 let context =
                     Self::detect_mysql_mock_context(src_conn_pool_mysql.as_ref().unwrap()).await?;
-                MockData::<MysqlType>::new(&base.task_config_file, context)
+                MockData::<MysqlType>::new(&base.task_config_file, context)?
                     .map(MockDataPrepare::from_mock_data)
             }
             _ => None,
@@ -295,26 +295,26 @@ impl RdbTestRunner {
         Ok(MockDbContext::new(DbType::Pg, &version))
     }
 
-    fn load_mock_compare_config(config_file: &str) -> (bool, bool, usize) {
-        let loader = IniLoader::new(config_file);
+    fn load_mock_compare_config(config_file: &str) -> anyhow::Result<(bool, bool, usize)> {
+        let loader = IniLoader::new(config_file)?;
         let unordered_compare_configured = loader.contains("mock", "unordered_compare")
             || loader.contains("mock", "unorder_compare");
         let unordered_compare = if loader.contains("mock", "unordered_compare") {
-            loader.get_with_default("mock", "unordered_compare", false)
+            loader.get_with_default("mock", "unordered_compare", false)?
         } else {
-            loader.get_with_default("mock", "unorder_compare", false)
+            loader.get_with_default("mock", "unorder_compare", false)?
         };
         let unordered_compare_threads =
-            loader.get_with_default("mock", "unordered_compare_threads", 1usize);
-        (
+            loader.get_with_default("mock", "unordered_compare_threads", 1usize)?;
+        Ok((
             unordered_compare,
             unordered_compare_configured,
             unordered_compare_threads.max(1),
-        )
+        ))
     }
 
-    fn load_mock_prepare_only_config(config_file: &str) -> bool {
-        let loader = IniLoader::new(config_file);
+    fn load_mock_prepare_only_config(config_file: &str) -> anyhow::Result<bool> {
+        let loader = IniLoader::new(config_file)?;
         loader.get_with_default("mock", "prepare_only", false)
     }
 
@@ -1445,7 +1445,7 @@ mod tests {
     fn test_load_mock_compare_config_defaults() {
         let path = write_tmp_config("[mock]\n");
         let (unordered_compare, configured, threads) =
-            RdbTestRunner::load_mock_compare_config(&path);
+            RdbTestRunner::load_mock_compare_config(&path).unwrap();
         fs::remove_file(path).unwrap();
 
         assert!(!unordered_compare);
@@ -1458,7 +1458,7 @@ mod tests {
         let path =
             write_tmp_config("[mock]\nunordered_compare=true\nunordered_compare_threads=4\n");
         let (unordered_compare, configured, threads) =
-            RdbTestRunner::load_mock_compare_config(&path);
+            RdbTestRunner::load_mock_compare_config(&path).unwrap();
         fs::remove_file(path).unwrap();
 
         assert!(unordered_compare);
@@ -1470,7 +1470,7 @@ mod tests {
     fn test_load_mock_compare_config_unorder_alias() {
         let path = write_tmp_config("[mock]\nunorder_compare=true\nunordered_compare_threads=0\n");
         let (unordered_compare, configured, threads) =
-            RdbTestRunner::load_mock_compare_config(&path);
+            RdbTestRunner::load_mock_compare_config(&path).unwrap();
         fs::remove_file(path).unwrap();
 
         assert!(unordered_compare);
@@ -1481,7 +1481,7 @@ mod tests {
     #[test]
     fn test_load_mock_prepare_only_config() {
         let path = write_tmp_config("[mock]\nprepare_only=true\n");
-        let prepare_only = RdbTestRunner::load_mock_prepare_only_config(&path);
+        let prepare_only = RdbTestRunner::load_mock_prepare_only_config(&path).unwrap();
         fs::remove_file(path).unwrap();
 
         assert!(prepare_only);
@@ -1490,7 +1490,7 @@ mod tests {
     #[test]
     fn test_load_mock_prepare_only_config_defaults() {
         let path = write_tmp_config("[mock]\n");
-        let prepare_only = RdbTestRunner::load_mock_prepare_only_config(&path);
+        let prepare_only = RdbTestRunner::load_mock_prepare_only_config(&path).unwrap();
         fs::remove_file(path).unwrap();
 
         assert!(!prepare_only);

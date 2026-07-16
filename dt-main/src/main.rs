@@ -1,11 +1,15 @@
-use std::env;
+use std::{env, panic, process::ExitCode};
 
 use clap::Parser;
 
-use dt_precheck::{config::task_config::PrecheckTaskConfig, do_precheck};
-use dt_task::task_runner::TaskRunner;
+use dt_common::{
+    error::{DtError, ErrorCode, Stage},
+    log_error,
+};
+use dt_main::{format_error, run_config};
 
 const ENV_SHUTDOWN_TIMEOUT_SECS: &str = "SHUTDOWN_TIMEOUT_SECS";
+const ENV_VERBOSE_ERRORS: &str = "APE_DTS_VERBOSE_ERRORS";
 #[cfg(feature = "tokio-console")]
 const ENV_TOKIO_CONSOLE: &str = "APE_DTS_TOKIO_CONSOLE";
 
@@ -22,6 +26,9 @@ struct Args {
 
     #[arg(long)]
     init: bool,
+
+    #[arg(long)]
+    verbose_errors: bool,
 }
 
 impl Args {
@@ -34,24 +41,48 @@ impl Args {
 }
 
 #[tokio::main]
-async fn main() {
+async fn main() -> ExitCode {
     unsafe {
         env::set_var("RUST_BACKTRACE", "1");
     }
+    install_panic_hook();
     init_tokio_console();
 
     let args = Args::parse();
+    let verbose_errors = args.verbose_errors || env::var(ENV_VERBOSE_ERRORS).as_deref() == Ok("1");
+    match run(args).await {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("{}", format_error(&error, verbose_errors));
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn install_panic_hook() {
+    panic::set_hook(Box::new(|panic_info| {
+        let backtrace = std::backtrace::Backtrace::capture();
+        log_error!("panic: {}\nbacktrace:\n{}", panic_info, backtrace);
+    }));
+}
+
+async fn run(args: Args) -> anyhow::Result<()> {
     if args.version || matches!(args.legacy_config.as_deref(), Some("version")) {
         println!("dt-main {}", env!("CARGO_PKG_VERSION"));
-        return;
+        return Ok(());
     }
 
-    let config = args
-        .config_path()
-        .unwrap_or_else(|| panic!("no task_config provided in args"));
+    let config = args.config_path().ok_or_else(|| {
+        DtError::new(ErrorCode::MissingConfig)
+            .message("no task config was provided")
+            .hint("pass --config <CONFIG> or a positional config path")
+            .stage(Stage::Bootstrap)
+    })?;
 
     tokio::spawn(async {
-        tokio::signal::ctrl_c().await.unwrap();
+        if tokio::signal::ctrl_c().await.is_err() {
+            return;
+        }
         tokio::time::sleep(std::time::Duration::from_secs(
             std::env::var(ENV_SHUTDOWN_TIMEOUT_SECS)
                 .ok()
@@ -62,12 +93,7 @@ async fn main() {
         std::process::exit(0);
     });
 
-    if PrecheckTaskConfig::new(config).is_ok() {
-        do_precheck(config).await;
-    } else {
-        let runner = TaskRunner::new(config).unwrap();
-        runner.start_task(args.init).await.unwrap()
-    }
+    run_config(config, args.init).await
 }
 
 #[cfg(feature = "tokio-console")]
@@ -107,6 +133,12 @@ mod tests {
     fn accepts_legacy_version_command() {
         let args = Args::try_parse_from(["dt-main", "version"]).unwrap();
         assert_eq!(args.legacy_config.as_deref(), Some("version"));
+    }
+
+    #[test]
+    fn accepts_verbose_errors_flag() {
+        let args = Args::try_parse_from(["dt-main", "--verbose-errors"]).unwrap();
+        assert!(args.verbose_errors);
     }
 
     #[test]

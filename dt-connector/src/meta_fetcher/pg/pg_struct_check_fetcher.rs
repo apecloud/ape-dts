@@ -227,7 +227,13 @@ impl PgStructCheckFetcher {
     ) -> anyhow::Result<Vec<HashMap<String, String>>> {
         let mut results = Vec::new();
         let mut rows = sqlx::query(sql).fetch(&self.conn_pool);
-        while let Some(row) = rows.try_next().await.unwrap() {
+        while let Some(row) = rows.try_next().await.map_err(|error| {
+            crate::extractor::sqlx_error::postgres(
+                error,
+                dt_common::error::ErrorCode::MetadataFailed,
+                "fetch_postgres_structure",
+            )
+        })? {
             let res = Self::parse_row(&row, col_names, col_types)?;
             results.push(res);
         }
@@ -244,7 +250,7 @@ impl PgStructCheckFetcher {
             let col_value = if let Some(col_type) = col_types.get(*col_name) {
                 PgColValueConvertor::from_query(row, col_name, col_type)?
             } else {
-                let value: Option<String> = row.try_get_unchecked(col_name).unwrap();
+                let value: Option<String> = row.try_get_unchecked(col_name)?;
                 if let Some(v) = value {
                     ColValue::String(v)
                 } else {

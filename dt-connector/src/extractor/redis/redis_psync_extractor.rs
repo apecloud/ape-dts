@@ -577,7 +577,10 @@ impl RedisPsyncExtractor {
             let mut start_time = Instant::now();
             while !shut_down.load(Ordering::Acquire) {
                 if start_time.elapsed().as_secs() >= heartbeat_interval_secs {
-                    Self::heartbeat(&key, &mut conn).await.unwrap();
+                    if let Err(error) = Self::heartbeat(&key, &mut conn).await {
+                        log_error!("heartbeat failed: {error:#}");
+                        break;
+                    }
                     start_time = Instant::now();
                 }
                 TimeUtil::sleep_millis(1000 * heartbeat_interval_secs).await;

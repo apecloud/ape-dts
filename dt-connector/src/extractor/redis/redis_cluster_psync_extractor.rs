@@ -19,7 +19,7 @@ use crate::{
 };
 use dt_common::{
     config::{config_enums::ExtractType, connection_auth_config::ConnectionAuthConfig},
-    error::Error,
+    error::{DtError, Error, ErrorCode, Stage},
     log_info, log_warn,
     meta::{position::Position, redis::cluster_node::ClusterNode, syncer::Syncer},
     rdb_filter::RdbFilter,
@@ -70,9 +70,11 @@ impl Extractor for RedisClusterPsyncExtractor {
                     self.base_extractor
                         .shut_down
                         .store(true, std::sync::atomic::Ordering::Release);
-                    bail!(Error::ExtractorError(format!(
-                        "redis cluster psync task failed: {err}"
-                    )));
+                    return Err(DtError::new(ErrorCode::WorkerFailed)
+                        .stage(Stage::Extractor)
+                        .operation("join_redis_psync_worker")
+                        .source(err)
+                        .into());
                 }
             }
         }

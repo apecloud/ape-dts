@@ -22,7 +22,10 @@ impl Fetcher for RedisFetcher {
     }
 
     async fn fetch_version(&mut self) -> anyhow::Result<String> {
-        let conn = self.conn.as_mut().unwrap();
+        let conn = self
+            .conn
+            .as_mut()
+            .ok_or_else(|| anyhow::anyhow!("redis connection is not initialized"))?;
         let version = RedisUtil::get_redis_version(conn)?;
         Ok(version.to_string())
     }

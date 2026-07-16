@@ -26,12 +26,12 @@ pub struct MySqlPrechecker {
 #[async_trait]
 impl Prechecker for MySqlPrechecker {
     async fn build_connection(&mut self) -> anyhow::Result<CheckResult> {
-        self.fetcher.build_connection().await?;
+        let check_error = self.fetcher.build_connection().await.err();
         Ok(CheckResult::build_with_err(
             CheckItem::CheckDatabaseConnection,
             self.is_source,
             DbType::Mysql,
-            None,
+            check_error,
             None,
         ))
     }
@@ -46,7 +46,7 @@ impl Prechecker for MySqlPrechecker {
                 if version.is_empty() {
                     check_error = Some(anyhow::Error::msg("found no version info."));
                 } else {
-                    let re = Regex::new(MYSQL_SUPPORT_DB_VERSION_REGEX).unwrap();
+                    let re = Regex::new(MYSQL_SUPPORT_DB_VERSION_REGEX)?;
                     if !re.is_match(version.as_str()) {
                         check_error = Some(anyhow::Error::msg(format!(
                             "mysql version:[{}] is invalid.",
@@ -179,7 +179,7 @@ impl Prechecker for MySqlPrechecker {
             DbTable::from_str(&self.filter_config.do_schemas, &mut models)
         }
 
-        let (dbs, tb_dbs, tbs) = DbTable::get_config_maps(&models).unwrap();
+        let (dbs, tb_dbs, tbs) = DbTable::get_config_maps(&models)?;
         let mut all_db_names = Vec::new();
         all_db_names.extend(&dbs);
         all_db_names.extend(&tb_dbs);
@@ -287,7 +287,7 @@ impl Prechecker for MySqlPrechecker {
         } else if !self.filter_config.do_schemas.is_empty() {
             DbTable::from_str(&self.filter_config.do_schemas, &mut models)
         }
-        let (dbs, tb_dbs, _) = DbTable::get_config_maps(&models).unwrap();
+        let (dbs, tb_dbs, _) = DbTable::get_config_maps(&models)?;
         let mut all_db_names = Vec::new();
         all_db_names.extend(&dbs);
         all_db_names.extend(&tb_dbs);
