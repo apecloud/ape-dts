@@ -24,8 +24,20 @@ use dt_common::{
 
 pub struct RdbQueryInfo<'a> {
     pub sql: String,
+    // Batch queries may repeat this column layout across multiple rows of binds.
     pub cols: Vec<String>,
     pub binds: Vec<Option<&'a ColValue>>,
+}
+
+impl RdbQueryInfo<'_> {
+    fn validate_bind_layout(&self) -> anyhow::Result<()> {
+        if !self.binds.is_empty()
+            && (self.cols.is_empty() || self.binds.len() % self.cols.len() != 0)
+        {
+            bail!("query bind column layout does not match bind values");
+        }
+        Ok(())
+    }
 }
 
 pub struct RdbQueryBuilder<'a> {
@@ -70,14 +82,28 @@ impl RdbQueryBuilder<'_> {
         &self,
         query_info: &'a RdbQueryInfo,
     ) -> anyhow::Result<Query<'a, MySql, MySqlArguments>> {
+        query_info.validate_bind_layout()?;
+
         let mut query: Query<MySql, MySqlArguments> = sqlx::query(&query_info.sql);
         let tb_meta = self
             .mysql_tb_meta
             .as_ref()
             .context("mysql table meta missing when creating mysql query")?;
-        for i in 0..query_info.binds.len() {
-            let col_type = tb_meta.get_col_type(&query_info.cols[i])?;
-            query = query.bind_col_value(query_info.binds[i], col_type);
+
+        if query_info.binds.len() == query_info.cols.len() {
+            for (bind, col) in query_info.binds.iter().zip(query_info.cols.iter()) {
+                query = query.bind_col_value(*bind, tb_meta.get_col_type(col)?);
+            }
+            return Ok(query);
+        }
+
+        let col_types = query_info
+            .cols
+            .iter()
+            .map(|col| tb_meta.get_col_type(col))
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        for (index, bind) in query_info.binds.iter().enumerate() {
+            query = query.bind_col_value(*bind, col_types[index % col_types.len()]);
         }
         Ok(query)
     }
@@ -87,14 +113,28 @@ impl RdbQueryBuilder<'_> {
         &self,
         query_info: &'a RdbQueryInfo,
     ) -> anyhow::Result<Query<'a, Postgres, PgArguments>> {
+        query_info.validate_bind_layout()?;
+
         let mut query: Query<Postgres, PgArguments> = sqlx::query(&query_info.sql);
         let tb_meta = self
             .pg_tb_meta
             .as_ref()
             .context("postgres table meta missing when creating pg query")?;
-        for i in 0..query_info.binds.len() {
-            let col_type = tb_meta.get_col_type(&query_info.cols[i])?;
-            query = query.bind_col_value(query_info.binds[i], col_type);
+
+        if query_info.binds.len() == query_info.cols.len() {
+            for (bind, col) in query_info.binds.iter().zip(query_info.cols.iter()) {
+                query = query.bind_col_value(*bind, tb_meta.get_col_type(col)?);
+            }
+            return Ok(query);
+        }
+
+        let col_types = query_info
+            .cols
+            .iter()
+            .map(|col| tb_meta.get_col_type(col))
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        for (index, bind) in query_info.binds.iter().enumerate() {
+            query = query.bind_col_value(*bind, col_types[index % col_types.len()]);
         }
         Ok(query)
     }
@@ -110,6 +150,45 @@ impl RdbQueryBuilder<'_> {
     pub fn get_query_sql(&self, row_data: &RowData, replace: bool) -> anyhow::Result<String> {
         let query_info = self.get_query_info_internal(row_data, replace, false)?;
         Ok(query_info.sql + ";")
+    }
+
+    fn get_batch_placeholders(&self, cols: &[String], batch_size: usize) -> anyhow::Result<String> {
+        if batch_size == 0 {
+            return Ok(String::new());
+        }
+
+        let reuse_row_layout = self.mysql_tb_meta.is_some();
+        let row_count = if reuse_row_layout { 1 } else { batch_size };
+        let mut placeholder_index = 1;
+        let mut values = String::new();
+        for row_index in 0..row_count {
+            if row_index > 0 {
+                values.push(',');
+            }
+            values.push('(');
+            for (col_index, col) in cols.iter().enumerate() {
+                if col_index > 0 {
+                    values.push(',');
+                }
+                values.push_str(&self.get_placeholder(placeholder_index, col)?);
+                placeholder_index += 1;
+            }
+            values.push(')');
+        }
+
+        if !reuse_row_layout || batch_size <= 1 {
+            return Ok(values);
+        }
+
+        let row_value = values;
+        let mut values = String::with_capacity((row_value.len() + 1) * batch_size);
+        for row_index in 0..batch_size {
+            if row_index > 0 {
+                values.push(',');
+            }
+            values.push_str(&row_value);
+        }
+        Ok(values)
     }
 
     fn get_query_info_internal<'a>(
@@ -148,33 +227,20 @@ impl RdbQueryBuilder<'_> {
         batch_size: usize,
     ) -> anyhow::Result<(RdbQueryInfo<'a>, usize)> {
         let mut data_size = 0;
-        let mut all_placeholders = Vec::with_capacity(batch_size);
-        let mut placeholder_index = 1;
-        for _ in 0..batch_size {
-            let mut placeholders = Vec::with_capacity(self.rdb_tb_meta.id_cols.len());
-            for col in self.rdb_tb_meta.id_cols.iter() {
-                placeholders.push(self.get_placeholder(placeholder_index, col)?);
-                placeholder_index += 1;
-            }
-            all_placeholders.push(format!("({})", placeholders.join(",")));
-        }
-
         let sql = format!(
-            "DELETE FROM {}.{} WHERE ({}) IN ({})",
+            "DELETE FROM {}.{} WHERE {}",
             self.escape(&self.rdb_tb_meta.schema),
             self.escape(&self.rdb_tb_meta.tb),
-            self.escape_cols(&self.rdb_tb_meta.id_cols).join(","),
-            all_placeholders.join(",")
+            self.get_where_in_info(batch_size)?,
         );
 
-        let cap = batch_size.saturating_mul(self.rdb_tb_meta.id_cols.len());
-        let mut cols = Vec::with_capacity(cap);
-        let mut binds = Vec::with_capacity(cap);
+        let cols = self.rdb_tb_meta.id_cols.clone();
+        let mut binds =
+            Vec::with_capacity(batch_size.saturating_mul(self.rdb_tb_meta.id_cols.len()));
         for row_data in data.iter().skip(start_index).take(batch_size) {
             data_size += row_data.data_size;
             let before = row_data.require_before()?;
-            for col in self.rdb_tb_meta.id_cols.iter() {
-                cols.push(col.clone());
+            for col in cols.iter() {
                 let col_value = before.get(col);
                 if col_value.is_none() || matches!(col_value, Some(ColValue::None)) {
                     bail! {
@@ -196,32 +262,22 @@ impl RdbQueryBuilder<'_> {
         replace: bool,
     ) -> anyhow::Result<(RdbQueryInfo<'a>, usize)> {
         let mut malloc_size = 0;
-        let mut placeholder_index = 1;
-        let mut row_values = Vec::with_capacity(batch_size);
-        for _ in 0..batch_size {
-            let mut col_values = Vec::with_capacity(self.rdb_tb_meta.cols.len());
-            for col in self.rdb_tb_meta.cols.iter() {
-                col_values.push(self.get_placeholder(placeholder_index, col)?);
-                placeholder_index += 1;
-            }
-            row_values.push(format!("({})", col_values.join(",")));
-        }
+        let row_values = self.get_batch_placeholders(&self.rdb_tb_meta.cols, batch_size)?;
 
         let mut sql = format!(
             "INSERT INTO {}.{}({}) VALUES{}",
             self.escape(&self.rdb_tb_meta.schema),
             self.escape(&self.rdb_tb_meta.tb),
             self.escape_cols(&self.rdb_tb_meta.cols).join(","),
-            row_values.join(",")
+            row_values
         );
 
-        let mut cols = Vec::with_capacity(batch_size.saturating_mul(self.rdb_tb_meta.cols.len()));
+        let cols = self.rdb_tb_meta.cols.clone();
         let mut binds = Vec::with_capacity(batch_size.saturating_mul(self.rdb_tb_meta.cols.len()));
         for row_data in data.iter().skip(start_index).take(batch_size) {
             malloc_size += row_data.data_size;
             let after = row_data.require_after()?;
-            for col_name in self.rdb_tb_meta.cols.iter() {
-                cols.push(col_name.clone());
+            for col_name in cols.iter() {
                 binds.push(after.get(col_name));
             }
         }
@@ -615,8 +671,7 @@ impl RdbQueryBuilder<'_> {
             where_sql,
         );
 
-        let mut cols =
-            Vec::with_capacity(batch_size.saturating_mul(self.rdb_tb_meta.id_cols.len()));
+        let cols = self.rdb_tb_meta.id_cols.clone();
         let mut binds =
             Vec::with_capacity(batch_size.saturating_mul(self.rdb_tb_meta.id_cols.len()));
         for &row_data in data.iter().skip(start_index).take(batch_size) {
@@ -624,8 +679,7 @@ impl RdbQueryBuilder<'_> {
                 RowType::Delete => row_data.require_before()?,
                 _ => row_data.require_after()?,
             };
-            for col in self.rdb_tb_meta.id_cols.iter() {
-                cols.push(col.clone());
+            for col in cols.iter() {
                 let col_value = id_values.get(col);
                 if col_value.is_none() || matches!(col_value, Some(ColValue::None)) {
                     bail! {
@@ -691,8 +745,7 @@ impl RdbQueryBuilder<'_> {
                 if *value == ColValue::None {
                     where_sql = format!("{} {} IS NULL", where_sql, escaped_col);
                 } else {
-                    let sql_value =
-                        self.get_sql_value(index, col, &col_value_map.get(col), placeholder)?;
+                    let sql_value = self.get_sql_value(index, col, &col_value, placeholder)?;
                     where_sql = format!("{} {} = {}", where_sql, escaped_col, sql_value);
                     not_null_cols.push(col.clone());
                     index += 1;
@@ -705,21 +758,10 @@ impl RdbQueryBuilder<'_> {
     }
 
     fn get_where_in_info(&self, batch_size: usize) -> anyhow::Result<String> {
-        let mut all_placeholders = Vec::with_capacity(batch_size);
-        let mut placeholder_index = 1;
-        for _ in 0..batch_size {
-            let mut placeholders = Vec::with_capacity(self.rdb_tb_meta.id_cols.len());
-            for col in self.rdb_tb_meta.id_cols.iter() {
-                placeholders.push(self.get_placeholder(placeholder_index, col)?);
-                placeholder_index += 1;
-            }
-            all_placeholders.push(format!("({})", placeholders.join(",")));
-        }
-
         Ok(format!(
             "({}) IN ({})",
             self.escape_cols(&self.rdb_tb_meta.id_cols).join(","),
-            all_placeholders.join(",")
+            self.get_batch_placeholders(&self.rdb_tb_meta.id_cols, batch_size)?,
         ))
     }
 
@@ -912,6 +954,7 @@ mod tests {
 
     use dt_common::meta::{
         col_value::ColValue,
+        mysql::{mysql_col_type::MysqlColType, mysql_tb_meta::MysqlTbMeta},
         pg::{pg_col_type::PgColType, pg_tb_meta::PgTbMeta, pg_value_type::PgValueType},
         rdb_tb_meta::RdbTbMeta,
         row_data::RowData,
@@ -939,6 +982,42 @@ mod tests {
         let mut col_type = build_pg_col_type(alias);
         col_type.typmod = typmod;
         col_type
+    }
+
+    fn build_mysql_tb_meta() -> MysqlTbMeta {
+        let mut col_type_map = HashMap::new();
+        col_type_map.insert("id".to_string(), MysqlColType::Int { unsigned: false });
+        col_type_map.insert(
+            "code".to_string(),
+            MysqlColType::Varchar {
+                length: 32,
+                charset: "utf8mb4".to_string(),
+            },
+        );
+        col_type_map.insert(
+            "name".to_string(),
+            MysqlColType::Varchar {
+                length: 64,
+                charset: "utf8mb4".to_string(),
+            },
+        );
+
+        MysqlTbMeta {
+            basic: RdbTbMeta {
+                schema: "public".to_string(),
+                tb: "t1".to_string(),
+                cols: vec!["id".to_string(), "code".to_string(), "name".to_string()],
+                col_origin_type_map: HashMap::new(),
+                key_map: HashMap::new(),
+                order_cols: vec!["id".to_string()],
+                partition_col: "id".to_string(),
+                id_cols: vec!["id".to_string()],
+                foreign_keys: vec![],
+                ref_by_foreign_keys: vec![],
+                nullable_cols: HashSet::new(),
+            },
+            col_type_map,
+        }
     }
 
     fn build_pg_tb_meta() -> PgTbMeta {
@@ -1230,6 +1309,91 @@ mod tests {
             query_info.sql,
             r#"INSERT INTO "public"."bit_t1"("bits") VALUES($1::bit(10))"#
         );
+    }
+
+    #[test]
+    fn test_mysql_batch_queries_reuse_column_layout() {
+        let tb_meta = build_mysql_tb_meta();
+        let builder = RdbQueryBuilder::new_for_mysql(&tb_meta, None);
+        let insert_data = vec![build_insert_row_data(false), build_insert_row_data(false)];
+
+        let (insert_query_info, _) = builder
+            .get_batch_insert_query(&insert_data, 0, insert_data.len(), false)
+            .unwrap();
+        assert_eq!(
+            insert_query_info.sql,
+            "INSERT INTO `public`.`t1`(`id`,`code`,`name`) VALUES(?,?,?),(?,?,?)"
+        );
+        assert_eq!(insert_query_info.cols, tb_meta.basic.cols);
+        assert_eq!(insert_query_info.binds.len(), 6);
+        let _ = builder.create_mysql_query(&insert_query_info).unwrap();
+
+        let delete_data = vec![build_delete_row_data(), build_delete_row_data()];
+        let (delete_query_info, _) = builder
+            .get_batch_delete_query(&delete_data, 0, delete_data.len())
+            .unwrap();
+        assert_eq!(
+            delete_query_info.sql,
+            "DELETE FROM `public`.`t1` WHERE (`id`) IN ((?),(?))"
+        );
+        assert_eq!(delete_query_info.cols, tb_meta.basic.id_cols);
+        assert_eq!(delete_query_info.binds.len(), 2);
+        let _ = builder.create_mysql_query(&delete_query_info).unwrap();
+
+        let delete_refs = delete_data.iter().collect::<Vec<_>>();
+        let select_query_info = builder
+            .get_batch_select_query(&delete_refs, 0, delete_refs.len())
+            .unwrap();
+        assert_eq!(
+            select_query_info.sql,
+            "SELECT `id`,`code`,`name` FROM `public`.`t1` WHERE (`id`) IN ((?),(?))"
+        );
+        assert_eq!(select_query_info.cols, tb_meta.basic.id_cols);
+        assert_eq!(select_query_info.binds.len(), 2);
+        let _ = builder.create_mysql_query(&select_query_info).unwrap();
+    }
+
+    #[test]
+    fn test_pg_batch_queries_reuse_column_layout() {
+        let tb_meta = build_pg_tb_meta();
+        let data = vec![build_insert_row_data(false), build_insert_row_data(false)];
+        let builder = RdbQueryBuilder::new_for_pg(&tb_meta, None);
+
+        let (query_info, _) = builder
+            .get_batch_insert_query(&data, 0, data.len(), false)
+            .unwrap();
+
+        assert_eq!(
+            query_info.sql,
+            r#"INSERT INTO "public"."t1"("id","code","name") VALUES($1::int4,$2::text,$3::text),($4::int4,$5::text,$6::text)"#
+        );
+        assert_eq!(query_info.cols, tb_meta.basic.cols);
+        assert_eq!(query_info.binds.len(), 6);
+        let _ = builder.create_pg_query(&query_info).unwrap();
+
+        let delete_data = vec![build_delete_row_data(), build_delete_row_data()];
+        let (delete_query_info, _) = builder
+            .get_batch_delete_query(&delete_data, 0, delete_data.len())
+            .unwrap();
+        assert_eq!(
+            delete_query_info.sql,
+            r#"DELETE FROM "public"."t1" WHERE ("id") IN (($1::int4),($2::int4))"#
+        );
+        assert_eq!(delete_query_info.cols, tb_meta.basic.id_cols);
+        assert_eq!(delete_query_info.binds.len(), 2);
+        let _ = builder.create_pg_query(&delete_query_info).unwrap();
+
+        let delete_refs = delete_data.iter().collect::<Vec<_>>();
+        let select_query_info = builder
+            .get_batch_select_query(&delete_refs, 0, delete_refs.len())
+            .unwrap();
+        assert_eq!(
+            select_query_info.sql,
+            r#"SELECT "id"::int4,"code"::text,"name"::text FROM "public"."t1" WHERE ("id") IN (($1::int4),($2::int4))"#
+        );
+        assert_eq!(select_query_info.cols, tb_meta.basic.id_cols);
+        assert_eq!(select_query_info.binds.len(), 2);
+        let _ = builder.create_pg_query(&select_query_info).unwrap();
     }
 
     #[test]
