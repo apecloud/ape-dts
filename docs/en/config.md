@@ -2,24 +2,29 @@
 
 Different tasks may require extra configs, refer to [task templates](/docs/templates/) and [tutorial](/docs/en/tutorial/)
 
-# Example: MySQL -> MySQL
+For configuration changes between releases, see [Config changelog](/docs/en/config_changelog.md).
 
 # [extractor]
 
-| Config               | Description                                                                                                                                                                    | Example                                                                                              | Default                                                 |
-| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------- | ------------------------------------------------------- |
-| db_type              | source database type                                                                                                                                                           | mysql                                                                                                | -                                                       |
-| extract_type         | snapshot, cdc                                                                                                                                                                  | snapshot                                                                                             | -                                                       |
-| url                  | database URL. You can specify the username and password directly in the URL.                                                                                                   | mysql://127.0.0.1:3307 or mysql://root:[password@127.0.0.1](mailto:password@127.0.0.1):3307          |                                                         |
-| username             | database connection username                                                                                                                                                   | root                                                                                                 |                                                         |
-| password             | database connection password                                                                                                                                                   | password                                                                                             | -                                                       |
-| max_connections      | max connections for source database                                                                                                                                            | 10                                                                                                   | currently 10, may be dynamically adjusted in the future |
-| batch_size           | number of extracted records in a batch; when chunk splitting is used, the extractor also uses it as the target chunk size and tries to keep each chunk close to this row count | 10000                                                                                                | same as [pipeline] buffer_size                          |
-| parallel_type        | snapshot extraction parallel strategy                                                                                                                                          | table                                                                                                | table                                                   |
-| parallel_size        | number of workers for extracting a table                                                                                                                                       | 4                                                                                                    | 1                                                       |
-| partition_cols       | partition column for data splitting during snapshot migration, only single column supported                                                                                    | json:[{"db":"db_1","tb":"tb_1","partition_col":"id"},{"db":"db_2","tb":"tb_2","partition_col":"id"}] | -                                                       |
-| is_direct_connection | whether to set MongoDB driver `directConnection`, only valid when `db_type=mongo`                                                                                              | true                                                                                                 | empty (driver default)                                  |
-| is_cluster           | whether to use Redis Cluster mode, only valid when `db_type=redis` and `extract_type=snapshot/cdc/snapshot_and_cdc`                                                           | true                                                                                                 | empty (detect from the URL target)                      |
+| Config               | Description                                                                                                                                                                    | Example                                                                                              | Default                                                        |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------- | -------------------------------------------------------------- |
+| db_type              | source database type                                                                                                                                                           | mysql                                                                                                | required                                                       |
+| extract_type         | extraction type; available values depend on `db_type`                                                                                                                          | snapshot                                                                                             | required                                                       |
+| url                  | database URL; credentials may be included in the URL or configured separately                                                                                                  | `mysql://127.0.0.1:3307`                                                                             | empty                                                          |
+| username             | database connection username                                                                                                                                                   | root                                                                                                 | empty                                                          |
+| password             | database connection password                                                                                                                                                   | password                                                                                             | empty                                                          |
+| ssl_mode             | MySQL/PostgreSQL TLS mode: `disable`, `require`, `verify_ca`, or `verify_full`                                                                                                  | verify_full                                                                                          | not set                                                        |
+| ssl_ca_path          | CA certificate path used by TLS verification                                                                                                                                  | /etc/ssl/certs/ca.pem                                                                                | empty                                                          |
+| max_connections      | maximum source connection pool size                                                                                                                                            | 10                                                                                                   | 10                                                             |
+| batch_size           | extracted records per batch; with chunk splitting, also the target source chunk size                                                                                           | 10000                                                                                                | `[pipeline].buffer_size / effective snapshot parallel_size`    |
+| max_rps              | optional source-side rate limit in records per second; `0` disables the limit                                                                                                  | 1000                                                                                                 | 0                                                              |
+| max_mbps             | optional source-side rate limit in MiB per second; `0` disables the limit                                                                                                      | 100                                                                                                  | 0                                                              |
+| app_name             | connection application name, currently used by MongoDB                                                                                                                        | APE_DTS                                                                                              | APE_DTS                                                        |
+| parallel_type        | snapshot extraction parallel strategy                                                                                                                                          | table                                                                                                | table                                                          |
+| parallel_size        | source snapshot worker limit                                                                                                                                                   | 4                                                                                                    | 1; legacy fallback: `[runtime].tb_parallel_size`               |
+| partition_cols       | partition column for data splitting during MySQL/PostgreSQL snapshot migration; only one column per table is supported                                                        | json:[{"db":"db_1","tb":"tb_1","partition_col":"id"},{"db":"db_2","tb":"tb_2","partition_col":"id"}] | empty                                                          |
+| is_direct_connection | MongoDB driver `directConnection` option                                                                                                                                       | true                                                                                                 | not set (driver default)                                       |
+| is_cluster           | Redis Cluster mode for snapshot/CDC/snapshot-and-CDC                                                                                                                           | true                                                                                                 | not set or empty (detect from the connected Redis node)        |
 
 ## URL escaping
 
@@ -30,6 +35,10 @@ create user user1@'%' identified by 'abc%$#?@';
 The url should be:
 url=mysql://user1:abc%25%24%23%3F%40@127.0.0.1:3307?ssl-mode=disabled
 ```
+
+Credentials configured through `username` and `password` are percent-encoded and merged into the URL
+by DTS. If `ssl_mode` is set, `ssl_ca_path` is optional unless the selected verification mode and
+server setup require a CA certificate.
 
 ## extractor.parallel_type
 
@@ -58,19 +67,27 @@ url=mysql://user1:abc%25%24%23%3F%40@127.0.0.1:3307?ssl-mode=disabled
 
 # [sinker]
 
-| Config                         | Description                                                                                                                                | Example                                                                                     | Default                                                 |
-| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------- | ------------------------------------------------------- | --- |
-| db_type                        | target database type                                                                                                                       | mysql                                                                                       | -                                                       |
-| sink_type                      | write, dummy                                                                                                                               | write                                                                                       | write                                                   |
-| url                            | database URL. You can specify the username and password directly in the URL.                                                               | mysql://127.0.0.1:3307 or mysql://root:[password@127.0.0.1](mailto:password@127.0.0.1):3307 |                                                         |
-| username                       | database connection username                                                                                                               | root                                                                                        |                                                         |
-| password                       | database connection password                                                                                                               | password                                                                                    | -                                                       |
-| max_connections                | max connections for target database                                                                                                        | 10                                                                                          | currently 10, may be dynamically adjusted in the future |
-| batch_size                     | number of records written in a batch, 1 for serial                                                                                         | 200                                                                                         | 200                                                     |
-| replace                        | when inserting data, whether to force replacement if data already exists in target database, used in snapshot/cdc tasks for MySQL/PG       | false                                                                                       | true                                                    |     |
-| is_direct_connection           | whether to set MongoDB driver `directConnection`, only valid when `db_type=mongo`                                                          | true                                                                                        | empty (driver default)                                  |
-| is_cluster                     | whether to use Redis Cluster mode, only valid when `db_type=redis`                                                                         | true                                                                                        | empty (detect from the URL target)                      |
-| mongo_require_shard_key_filter | fail fast when writing to a sharded MongoDB target and the row filter cannot include all shard key fields, only valid when `db_type=mongo` | true                                                                                        | true                                                    |
+| Config                         | Description                                                                                                                                | Example                      | Default                                                 |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------- | ------------------------------------------------------- |
+| db_type                        | target database type                                                                                                                       | mysql                        | required except for `sink_type=dummy`                   |
+| sink_type                      | target operation; supported values depend on `db_type`                                                                                     | write                        | write when `[sinker]` exists; dummy when omitted for standalone checker |
+| url                            | database URL; credentials may be included in the URL or configured separately                                                             | `mysql://127.0.0.1:3307`     | empty                                                   |
+| username                       | database connection username                                                                                                               | root                         | empty                                                   |
+| password                       | database connection password                                                                                                               | password                     | empty                                                   |
+| ssl_mode                       | MySQL/PostgreSQL TLS mode: `disable`, `require`, `verify_ca`, or `verify_full`                                                             | verify_full                  | not set                                                 |
+| ssl_ca_path                    | CA certificate path used by TLS verification                                                                                              | /etc/ssl/certs/ca.pem        | empty                                                   |
+| max_connections                | maximum target connection pool size                                                                                                        | 10                           | 10                                                      |
+| batch_size                     | records written per batch; must be greater than `0`                                                                                        | 200                          | 200                                                     |
+| max_rps                        | optional target-side rate limit in records per second; `0` disables the limit                                                             | 1000                         | 0                                                       |
+| max_mbps                       | optional target-side rate limit in MiB per second; `0` disables the limit                                                                 | 100                          | 0                                                       |
+| replace                        | replace an existing row on insert conflict, for MySQL/PostgreSQL snapshot and CDC tasks                                                    | false                        | true                                                    |
+| disable_foreign_key_checks     | disable foreign-key checks while writing MySQL/PostgreSQL                                                                                  | true                         | true                                                    |
+| transaction_isolation          | MySQL/TiDB target transaction isolation: `default`, `read_uncommitted`, `read_committed`, `repeatable_read`, or `serializable`             | read_committed               | default                                                 |
+| conflict_policy                | structure migration conflict policy: `interrupt` or `ignore`                                                                              | interrupt                    | interrupt                                               |
+| app_name                       | connection application name, currently used by MongoDB                                                                                    | APE_DTS                      | APE_DTS                                                 |
+| is_direct_connection           | MongoDB driver `directConnection` option                                                                                                   | true                         | not set (driver default)                                |
+| is_cluster                     | Redis Cluster mode                                                                                                                         | true                         | not set or empty (detect from the connected Redis node) |
+| mongo_require_shard_key_filter | fail fast when a MongoDB update/delete/upsert filter cannot contain the complete target shard key                                          | true                         | true                                                    |
 
 ## Redis target cluster mode
 
@@ -127,6 +144,8 @@ Struct check is supported only for standalone MySQL/PostgreSQL checker targets.
 | url                         | checker target URL (standalone target only)                            | mysql://... | -                                 |
 | username                    | checker target username (standalone target only)                       | root        | empty                             |
 | password                    | checker target password (standalone target only)                       | password    | empty                             |
+| ssl_mode                    | checker target TLS mode (standalone target only)                       | verify_full | not set                           |
+| ssl_ca_path                 | checker target CA certificate path (standalone target only)            | /ca.pem     | empty                             |
 | check_log_s3                | upload check logs to S3 for standalone snapshot or inline CDC check    | false       | false                             |
 | cdc_check_log_interval_secs | interval (seconds) for periodic CDC check snapshot output              | 30          | 30                                |
 | s3_bucket                   | S3 bucket for check log upload                                         | my-bucket   | -                                 |
@@ -134,6 +153,8 @@ Struct check is supported only for standalone MySQL/PostgreSQL checker targets.
 | s3_secret_access_key        | S3 secret access key                                                   | \*\*\*\*    | -                                 |
 | s3_region                   | S3 region                                                              | us-east-1   | -                                 |
 | s3_endpoint                 | S3 endpoint                                                            | https://... | -                                 |
+| s3_root_dir                 | local or mounted root directory used by the S3 helper                  | /tmp/check  | empty                             |
+| s3_root_url                 | root URL used by the S3 helper                                         | s3://bucket | empty                             |
 | s3_key_prefix               | S3 key prefix for check logs                                           | task1/check | empty                             |
 
 Notes:
@@ -209,8 +230,9 @@ Notes:
 | do_tbs           | tables to be synced, takes union with do_dbs                         | db_1.tb_1,db_2*.tb_2*,db*&#.tb*&#                                                                                                    | -       |
 | ignore_tbs       | tables to be filtered, takes union with ignore_dbs                   | db_1.tb_1,db_2*.tb_2*,db*&#.tb*&#                                                                                                    | -       |
 | ignore_cols      | table columns to be filtered                                         | json:[{"db":"db_1","tb":"tb_1","ignore_cols":["f_2","f_3"]},{"db":"db_2","tb":"tb_2","ignore_cols":["f_3"]}]                         | -       |
-| do_events        | events to be synced                                                  | insert,update,delete                                                                                                                 | -       |
+| do_events        | events to be synced                                                  | insert,update,delete                                                                                                                 | \*      |
 | do_ddls          | ddls to be synced, for mysql cdc tasks                               | create_database,drop_database,alter_database,create_table,drop_table,truncate_table,rename_table,alter_table,create_index,drop_index | -       |
+| do_dcls          | DCL statements to be synced, for supported structure tasks          | create_user,grant                                                                                                                     | -       |
 | do_structures    | structures to be migrated in structure migration tasks               | mysql/pg: database,table,constraint,sequence,comment,index; mongo: collection,shardkey                                               | \*      |
 | ignore_cmds      | commands to be filtered, for redis cdc tasks                         | flushall,flushdb                                                                                                                     | -       |
 | where_conditions | where conditions for the source SELECT SQL during snapshot migration | json:[{"db":"db_1","tb":"tb_1","condition":"f_0 > 1"},{"db":"db_2","tb":"tb_2","condition":"f_0 > 1 AND f_1 < 9"}]                   | -       |
@@ -218,10 +240,12 @@ Notes:
 ## Values
 
 - All configurations support multiple items, which are separated by ",". Example: do_dbs=db_1,db_2.
-- Set to to match all. Example: do_dbs=.
+- Set to `*` to match all. Example: `do_dbs=*`.
 - Keep empty to match nothing. Example: ignore_dbs=.
-- `ignore_cols` and `where_conditions` are in JSON format, it should starts with "json:".
+- `ignore_cols` and `where_conditions` are in JSON format and must start with `json:`.
 - do_events takes one or more values from **insert**, **update**, and **delete**.
+- do_dcls takes one or more values from **create_user**, **alter_user**, **create_role**,
+  **drop_user**, **drop_role**, **grant**, **revoke**, and **set_role**.
 - `do_structures` takes structure object types. For MySQL/PostgreSQL, common values include
   **database**, **table**, **constraint**, **sequence**, **comment**, and **index**. For MongoDB,
   supported values are **collection**, **shardkey**. MongoDB does not use a separate
@@ -231,7 +255,7 @@ Notes:
 
 ## Priority
 
-- ignore_tbs + ignore_tbs > do_tbs + do_dbs.
+- ignore_tbs + ignore_dbs > do_tbs + do_dbs.
 - If a table matches both **ignore** configs and **do** configs, the table will be filtered.
 - If both do_tbs and do_dbs are configured, **the filter is the union of both**. If both ignore_tbs and ignore_dbs are configured, **the filter is the union of both**.
 
@@ -239,7 +263,7 @@ Notes:
 
 | Wildcard | Description                 |
 | -------- | --------------------------- |
-|          | Matches multiple characters |
+| \*       | Matches multiple characters |
 | ?        | Matches 0 or 1 characters   |
 
 Used in: do_dbs, ignore_dbs, do_tbs, and ignore_tbs.
@@ -248,10 +272,10 @@ Used in: do_dbs, ignore_dbs, do_tbs, and ignore_tbs.
 
 | Database | Before      | After           |
 | -------- | ----------- | --------------- |
-| mysql    | db&#        | db&#            |
-| mysql    | db*&#.tb*$# | db*&#.tb*$#     |
-| pg       | db&#        | "db&#"          |
-| pg       | db*&#.tb*$# | "db*&#"."tb*$#" |
+| mysql    | db\*&#      | \`db\*&#\`          |
+| mysql    | db*&#.tb*$# | \`db*&#\`.\`tb*$#\` |
+| pg       | db\*&#      | "db\*&#"            |
+| pg       | db*&#.tb*$# | "db\*&#"."tb*$#"    |
 
 Names should be enclosed in escape characters if there are special characters.
 
@@ -264,20 +288,20 @@ Used in: do_dbs, ignore_dbs, do_tbs and ignore_tbs.
 | db_map    | database mapping                                                    | db_1:dst_db_1,db_2:dst_db_2                                                  | -       |
 | tb_map    | table mapping                                                       | db_1.tb_1:dst_db_1.dst_tb_1,db_1.tb_2:dst_db_1.dst_tb_2                      | -       |
 | col_map   | column mapping                                                      | json:[{"db":"db_1","tb":"tb_1","col_map":{"f_0":"dst_f_0","f_1":"dst_f_1"}}] | -       |
-| topic_map | table -> kafka topic mapping, for mysql/pg -> kafka tasks. required | .:default_topic,test_db_2.:topic2,test_db_2.tb_1:topic3                      | -       |
+| topic_map | table -> kafka topic mapping, for mysql/pg -> kafka tasks. required | \*.\*:default_topic,test_db_2.\*:topic2,test_db_2.tb_1:topic3                | -       |
 
 ## Values
 
 - A mapping rule consists of the source and target, which are separated by ":".
 - All configurations support multiple items, which are separated by ",". Example: db_map=db_1:dst_db_1,db_2:dst_db_2.
-- col_map value is in JSON format, it should starts with "json:".
+- col_map value is in JSON format and must start with `json:`.
 - If not set, data will be routed to the same databases/tables/columns with the source database.
 
 ## Priority
 
 - tb_map > db_map.
 - col_map only works for column mapping. If a table needs database + table + column mapping, tb_map/db_map must be set.
-- topic_map: test_db_2.tb_1:topic3 > test_db_2.:topic2 > .:default_topic.
+- topic_map: test_db_2.tb_1:topic3 > test_db_2.\*:topic2 > \*.\*:default_topic.
 
 ## Wildcard
 
@@ -294,8 +318,10 @@ Same with [filter].
 | buffer_size              | max cached records in memory                                                                                                    | 16000   | 16000                                         |
 | buffer_memory_mb         | [optional] memory limit for buffer, if reached, new records will be blocked even if buffer_size is not reached, 0 means not set | 200     | 0                                             |
 | checkpoint_interval_secs | interval to flush logs/statistics/position                                                                                      | 10      | 10                                            |
-| max_rps                  | [optional] max synced records in a second                                                                                       | 1000    | -                                             |
+| batch_sink_interval_secs | maximum interval before flushing a non-empty sink batch                                                                         | 1       | 0                                             |
 | counter_time_window_secs | time window for monitor counters                                                                                                | 10      | same with [pipeline] checkpoint_interval_secs |
+| counter_max_sub_count    | maximum number of sub-counters                                                                                                  | 1000    | 1000                                          |
+| pipeline_type            | pipeline implementation; only `basic` is supported                                                                              | basic   | basic                                          |
 
 # [parallelizer]
 
@@ -358,13 +384,78 @@ In some scenarios, task_id is used to distinguish task uniqueness, such as when 
 
 # [resumer]
 
-| Config          | Description                                                                | Example                                                | Default                                |
-| --------------- | -------------------------------------------------------------------------- | ------------------------------------------------------ | -------------------------------------- |
-| resume_type     | Type: [from_log;from_target;from_db]                                       | from_target                                            |                                        |
-| log_dir         | Valid when resume_type is from_log, the log directory location             | ./logs                                                 |                                        |
-| url             | Valid when resume_type is from_db, database connection URL                 | mysql://xxx:[xxx@127.0.0.1](mailto:xxx@127.0.0.1):3306 |                                        |
-| db_type         | Valid when resume_type is from_db, database type                           | mysql                                                  |                                        |
-| table_full_name | Valid when resume_type is from_db or from_target, table name for recording | apecloud_metadata_test.apedts_task_position            | apecloud_metadata.apedts_task_position |
-| max_connections | Maximum connections for the resumer connection pool                        | 1                                                      | 1                                      |
+| Config               | Description                                                                  | Example                                     | Default                  |
+| -------------------- | ---------------------------------------------------------------------------- | ------------------------------------------- | ------------------------ |
+| resume_type          | `dummy`, `from_log`, `from_target`, or `from_db`                             | from_target                                 | dummy                    |
+| log_dir              | log directory used by `from_log`                                              | ./logs                                      | `[runtime].log_dir`      |
+| config_file          | optional resume config file used by `from_log`                               | ./resume.config                             | empty                    |
+| url                  | database URL used by `from_db`                                                | `mysql://127.0.0.1:3306`                    | required for `from_db`   |
+| db_type              | database type used by `from_db`                                               | mysql                                       | required for `from_db`   |
+| username             | database username used by `from_db`                                           | root                                        | empty                    |
+| password             | database password used by `from_db`                                           | password                                    | empty                    |
+| ssl_mode             | MySQL/PostgreSQL TLS mode used by `from_db`                                  | verify_full                                 | not set                  |
+| ssl_ca_path          | CA certificate path used by `from_db`                                         | /etc/ssl/certs/ca.pem                       | empty                    |
+| is_direct_connection | MongoDB driver `directConnection` option used by `from_db`                   | true                                        | not set                  |
+| table_full_name      | target table used to store resume state for `from_db` or `from_target`       | apecloud_metadata.apedts_task_position      | empty                    |
+| max_connections      | maximum resumer connection pool size                                          | 5                                           | 5                        |
 
 For details, please refer to the resumer documentation: [resuming at breakpoint](/docs/en/snapshot/resume.md).
+
+`resume_type=from_target` reuses the parsed sinker target. For a standalone checker with a dummy or
+omitted sinker, it reuses the checker target. The legacy keys `resume_from_log`, `resume_log_dir`,
+and `resume_config_file` are rejected; migrate them to `resume_type=from_log`, `log_dir`, and
+`config_file`.
+
+# [tracing]
+
+| Config            | Description                                      | Example | Default |
+| ----------------- | ------------------------------------------------ | ------- | ------- |
+| task_summary_mode | trace aggregation mode: `task` or `marker`       | marker  | marker  |
+| output_format     | trace output format: `plain` or `json`           | json    | plain   |
+
+# [metacenter]
+
+This optional section is used by the MySQL `dbengine` metadata-center mode.
+
+| Config              | Description                                                    | Example                    | Default   |
+| ------------------- | -------------------------------------------------------------- | -------------------------- | --------- |
+| type                | metadata-center type: `basic` or `dbengine`                    | dbengine                   | basic     |
+| url                 | metadata database URL; required for MySQL `dbengine` mode      | `mysql://127.0.0.1:3306`   | required  |
+| username            | metadata database username                                     | root                       | empty     |
+| password            | metadata database password                                     | password                   | empty     |
+| ssl_mode            | MySQL TLS mode                                                 | verify_full                | not set   |
+| ssl_ca_path         | CA certificate path                                            | /etc/ssl/certs/ca.pem      | empty     |
+| ddl_conflict_policy | DDL conflict policy: `interrupt` or `ignore`                   | interrupt                  | interrupt |
+
+The metadata-center URL must differ from both the extractor URL and the effective destination URL.
+
+# [data_marker]
+
+If this section is present, the required topology marker configuration is loaded.
+
+| Config       | Description                     | Default  |
+| ------------ | ------------------------------- | -------- |
+| topo_name    | topology name                   | required |
+| topo_nodes   | topology node list              | empty    |
+| src_node     | source node                     | required |
+| dst_node     | destination node                | required |
+| do_nodes     | included nodes                  | required |
+| ignore_nodes | excluded nodes                  | empty    |
+| marker       | marker value                    | required |
+
+# [processor]
+
+| Config        | Description                                | Default |
+| ------------- | ------------------------------------------ | ------- |
+| lua_code_file | Lua processor source file loaded by DTS    | empty   |
+
+# [metrics]
+
+This section is available only when DTS is built with the `metrics` feature.
+
+| Config    | Description                                      | Example       | Default |
+| --------- | ------------------------------------------------ | ------------- | ------- |
+| http_host | metrics HTTP bind address                        | 0.0.0.0       | 0.0.0.0 |
+| http_port | metrics HTTP port                                | 9090          | 9090    |
+| workers   | metrics HTTP worker count                        | 2             | 2       |
+| labels    | comma-separated `key=value` metric labels        | env=prod,az=a | empty   |
