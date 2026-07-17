@@ -29,12 +29,15 @@ serde_yaml = { workspace = true }
 regex = { workspace = true }
 nom = { workspace = true }
 tokio = { workspace = true }
+tokio-postgres = { workspace = true }
 thiserror = { workspace = true }
 kafka = { workspace = true }
+rdkafka = { workspace = true }
 apache-avro = {workspace = true}
 log = { workspace = true }
 log4rs = { workspace = true }
 redis = { workspace = true }
+reqwest = { workspace = true }
 mlua = { workspace = true }
 anyhow = { workspace = true }
 url = { workspace = true }

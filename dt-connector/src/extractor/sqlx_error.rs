@@ -40,9 +40,9 @@ mod tests {
             "list_binary_logs",
         );
 
-        assert_eq!(error.code, ErrorCode::ConnectionTimeout);
-        assert_eq!(error.stage, Some(Stage::Extractor));
-        assert_eq!(error.operation, Some("list_binary_logs"));
+        assert_eq!(error.code(), ErrorCode::ConnectionTimeout);
+        assert_eq!(error.root_stage(), Some(Stage::Extractor));
+        assert_eq!(error.root_operation(), Some("list_binary_logs"));
         assert_eq!(error.endpoint, Some(EndpointRole::Source));
         assert_eq!(error.location.file(), file!());
         assert_eq!(error.location.line(), caller_line);

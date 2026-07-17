@@ -6,16 +6,16 @@ pub type BoxError = Box<dyn StdError + Send + Sync + 'static>;
 
 #[derive(Debug)]
 pub struct DtError {
-    pub code: ErrorCode,
+    code: ErrorCode,
     pub message: String,
     pub detail: Option<String>,
     pub hint: Option<String>,
-    pub stage: Option<Stage>,
-    pub operation: Option<&'static str>,
+    stage: Option<Stage>,
+    operation: Option<&'static str>,
     pub task_id: Option<String>,
     pub endpoint: Option<EndpointRole>,
     pub object: Option<ErrorObject>,
-    pub origin: Option<OriginError>,
+    origin: Option<OriginError>,
     pub location: &'static Location<'static>,
     source: Option<BoxError>,
 }
@@ -42,6 +42,22 @@ impl DtError {
     pub fn message(mut self, message: impl Into<String>) -> Self {
         self.message = message.into();
         self
+    }
+
+    pub const fn code(&self) -> ErrorCode {
+        self.code
+    }
+
+    pub const fn root_stage(&self) -> Option<Stage> {
+        self.stage
+    }
+
+    pub const fn root_operation(&self) -> Option<&'static str> {
+        self.operation
+    }
+
+    pub fn origin_error(&self) -> Option<&OriginError> {
+        self.origin.as_ref()
     }
 
     pub fn detail(mut self, detail: impl Into<String>) -> Self {
@@ -125,6 +141,24 @@ mod tests {
         let error = DtError::new(ErrorCode::StatementFailed)
             .stage(Stage::Sinker)
             .stage(Stage::Task);
-        assert_eq!(error.stage, Some(Stage::Sinker));
+        assert_eq!(error.root_stage(), Some(Stage::Sinker));
+    }
+
+    #[test]
+    fn root_context_is_set_only_once() {
+        let error = DtError::new(ErrorCode::StatementFailed)
+            .stage(Stage::Extractor)
+            .operation("read_source")
+            .stage(Stage::Task)
+            .operation("run_task")
+            .origin(OriginError::new("mysql", Some("1146")))
+            .origin(OriginError::new("postgres", Some("42P01")));
+
+        assert_eq!(error.root_stage(), Some(Stage::Extractor));
+        assert_eq!(error.root_operation(), Some("read_source"));
+        assert_eq!(
+            error.origin_error(),
+            Some(&OriginError::new("mysql", Some("1146")))
+        );
     }
 }

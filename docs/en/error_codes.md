@@ -18,6 +18,8 @@ HINT: Check object routing and create the required object or enable structure in
 `MD001` is the only error identity. Stage and operation are independent
 diagnostic fields. Application logic must compare the typed `ErrorCode`; it
 must not parse messages or combine code and stage into another identifier.
+Operation is free-form diagnostic metadata and must never be used as a policy
+key.
 
 ## Compatibility rules
 
@@ -28,6 +30,11 @@ must not parse messages or combine code and stage into another identifier.
 - Once a stage has been assigned, callers must not overwrite it.
 - Retry, skip, fallback, and DLQ behavior are policy decisions outside the
   error-code contract.
+
+The catalog is declared once in `dt-common::error` and generates the enum,
+wire-code mapping, default message, default hint, and complete code list. New
+codes must be added to that declaration rather than maintained in parallel
+matches.
 
 ## Code catalog
 
@@ -74,6 +81,11 @@ must not parse messages or combine code and stage into another identifier.
 
 ## User and diagnostic views
 
+`ErrorReport` JSON is a versioned machine interface. The current
+`schema_version` is `1`. Adding optional fields is compatible; removing,
+renaming, or changing the meaning of an existing user-facing field requires a
+new schema version. CLI text layout is not a stable machine interface.
+
 The default text and JSON views contain only user-safe fields: the stable code,
 user message, detail, hint, task ID, endpoint role, affected object, and a
 human-readable phase. They must not contain raw SQL, row data, authenticated
@@ -83,6 +95,11 @@ Internal diagnostics remain available on the in-memory report as
 `stage`, `operation`, `origin`, `contexts`, `diagnostic_message`, and the
 captured source `location`. These fields are intended for protected logs and
 support diagnostics, not normal CLI or API output.
+
+Component-authored `message`, `detail`, and `hint` values remain free text. The
+report boundary applies basic credential and authenticated-URL redaction before
+they enter the user view. Provider messages and `anyhow::Context` values remain
+diagnostic-only.
 
 Developers can run the CLI with `--verbose-errors` or set
 `APE_DTS_VERBOSE_ERRORS=1` to append a diagnostic section:
@@ -107,17 +124,30 @@ operation, task ID, endpoint role, database object, provider origin, and source
 error. The endpoint role is `source`, `destination`, or `metadata`. Database
 objects may include schema, table, column, and constraint names.
 
+The root code, stage, operation, and origin use first-writer semantics. A
+component that receives an existing structured error preserves this root
+context. Additional propagation details use the `anyhow::Context` and source
+error chains available in the diagnostic view.
+
+A single `DtError` always has one primary code. Components that already report
+multiple independent results, such as precheck, keep that aggregation in their
+own result type rather than adding it to the common error contract.
+
 `ErrorReport` is the user-facing boundary representation. Its text form uses
 `ERROR`, `TASK`, `AFFECTED`, `PHASE`, `DETAIL`, and `HINT` lines.
 
-Provider classification belongs in `dt-common` when the provider crate is
-shared, and otherwise in one provider adapter in `dt-connector`.
+Provider classifiers and adapters live under
+`dt-common::error::provider`. A classifier uses provider-native codes, typed
+error kinds, and Rust error variants; it must not parse provider messages. An
+adapter attaches the provider origin and source chain but does not set stage,
+endpoint, or operation.
+
 Component-specific enrichment belongs in a small wrapper at the component
-boundary: the wrapper assigns its fixed stage and endpoint, while the call site
-supplies the operation and fallback code. Such wrappers must use
-`#[track_caller]` so the captured location continues to identify the failing
-component operation. Extractor, sinker, resumer, and other components should
-follow this pattern without adding the component to the stable error code.
+boundary. The first Ape-DTS component boundary assigns the root stage and
+endpoint, while the call site supplies the operation and fallback code. Later
+boundaries preserve the root error. These wrappers must use `#[track_caller]`
+so the captured location continues to identify the failing component
+operation.
 
 ## Provider error preservation
 
@@ -131,6 +161,7 @@ under `origin` whenever available. Initial SQLx mappings are:
 | PostgreSQL SQLSTATE class `28`, MySQL `1045` | `AU001` |
 | PostgreSQL `42501`, MySQL `1044`/`1142`/`1143`/`1227`/`1370` | `AU002` |
 | PostgreSQL SQLSTATE class `08` | `CN001` |
+| PostgreSQL SQLSTATE class `23` | `IC001` |
 | MySQL `2002`/`2003`/`2006`/`2013` | `CN001` |
 | SQLx connection configuration error | `CF002` |
 | SQLx I/O, protocol, or closed pool | `CN001` |
@@ -144,9 +175,8 @@ Every SQLx boundary also supplies an operation-specific fallback such as
 metadata, and source error chain are preserved even when the fallback is used.
 
 The `tokio-postgres` replication adapter uses the same PostgreSQL SQLSTATE
-rules. It additionally maps SQLSTATE class `23` to `IC001`; URL parsing uses
-`CF002`, connection establishment uses `CN001`, and rejected replication
-commands use the operation fallback.
+rules. URL parsing uses `CF002`, connection establishment uses `CN001`, and
+rejected replication commands use the operation fallback.
 
 Other initial provider mappings are:
 

@@ -80,15 +80,15 @@ mod tests {
             "sink_dml",
         );
 
-        assert_eq!(error.code, ErrorCode::ConnectionFailed);
-        assert_eq!(error.stage, Some(Stage::Sinker));
-        assert_eq!(error.operation, Some("sink_dml"));
+        assert_eq!(error.code(), ErrorCode::ConnectionFailed);
+        assert_eq!(error.root_stage(), Some(Stage::Sinker));
+        assert_eq!(error.root_operation(), Some("sink_dml"));
         assert_eq!(error.endpoint, Some(EndpointRole::Destination));
         assert_eq!(error.location.file(), file!());
         assert_eq!(error.location.line(), caller_line);
         assert_eq!(
-            error.origin,
-            Some(OriginError::new("mysql", None::<String>))
+            error.origin_error(),
+            Some(&OriginError::new("mysql", None::<String>))
         );
     }
 

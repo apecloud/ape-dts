@@ -1,6 +1,10 @@
 use sqlx::error::ErrorKind;
 
-use super::{DtError, ErrorCode, ErrorObject, OriginError};
+use super::{
+    super::{DtError, ErrorCode, ErrorObject, OriginError},
+    classification::{classify_mysql_code, classify_postgres_code},
+    ProviderErrorClassification,
+};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SqlxProvider {
@@ -19,18 +23,11 @@ impl SqlxProvider {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct SqlxErrorClassification {
-    pub code: ErrorCode,
-    pub origin: OriginError,
-    pub object: Option<ErrorObject>,
-}
-
 pub fn classify_sqlx_error(
     error: &sqlx::Error,
     provider: SqlxProvider,
     fallback: ErrorCode,
-) -> SqlxErrorClassification {
+) -> ProviderErrorClassification {
     let provider = infer_provider(error, provider);
     let mut code = fallback;
     let mut origin_code = None;
@@ -70,11 +67,8 @@ pub fn classify_sqlx_error(
         _ => {}
     }
 
-    SqlxErrorClassification {
-        code,
-        origin: OriginError::new(provider.as_str(), origin_code),
-        object,
-    }
+    ProviderErrorClassification::new(code, OriginError::new(provider.as_str(), origin_code))
+        .object(object)
 }
 
 #[track_caller]
@@ -160,25 +154,8 @@ fn classify_database_error(
     }
 
     match (provider, provider_code) {
-        (SqlxProvider::Postgres, Some("42P01" | "42703" | "42704"))
-        | (SqlxProvider::MySql, Some("1054" | "1146")) => ErrorCode::ObjectNotFound,
-        (SqlxProvider::Postgres, Some("3D000")) | (SqlxProvider::MySql, Some("1049")) => {
-            ErrorCode::DatabaseNotFound
-        }
-        (SqlxProvider::Postgres, Some(code)) if code.starts_with("28") => {
-            ErrorCode::AuthenticationFailed
-        }
-        (SqlxProvider::MySql, Some("1045")) => ErrorCode::AuthenticationFailed,
-        (SqlxProvider::Postgres, Some("42501"))
-        | (SqlxProvider::MySql, Some("1044" | "1142" | "1143" | "1227" | "1370")) => {
-            ErrorCode::PermissionDenied
-        }
-        (SqlxProvider::Postgres, Some(code)) if code.starts_with("08") => {
-            ErrorCode::ConnectionFailed
-        }
-        (SqlxProvider::MySql, Some("2002" | "2003" | "2006" | "2013")) => {
-            ErrorCode::ConnectionFailed
-        }
+        (SqlxProvider::Postgres, Some(code)) => classify_postgres_code(code, fallback),
+        (SqlxProvider::MySql, Some(code)) => classify_mysql_code(code, fallback),
         _ => fallback,
     }
 }
@@ -327,8 +304,8 @@ mod tests {
             ErrorCode::StatementFailed,
         )
         .unwrap();
-        assert_eq!(dt_error.code, ErrorCode::ConnectionTimeout);
-        assert_eq!(dt_error.origin.unwrap().system, "postgres");
+        assert_eq!(dt_error.code(), ErrorCode::ConnectionTimeout);
+        assert_eq!(dt_error.origin_error().unwrap().system, "postgres");
 
         let existing = anyhow::Error::new(DtError::new(ErrorCode::InvariantViolated));
         assert!(try_dt_error_from_anyhow_sqlx(

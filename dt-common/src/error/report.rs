@@ -1,5 +1,6 @@
-use std::{error::Error as StdError, fmt};
+use std::{error::Error as StdError, fmt, sync::OnceLock};
 
+use regex::{Captures, Regex};
 use serde::Serialize;
 
 use super::{
@@ -7,8 +8,11 @@ use super::{
     Error, ErrorCode, ErrorObject, OriginError, SqlxProvider, Stage,
 };
 
+pub const ERROR_REPORT_SCHEMA_VERSION: u16 = 1;
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct ErrorReport {
+    pub schema_version: u16,
     pub code: ErrorCode,
     pub message: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -128,24 +132,25 @@ impl ErrorReport {
     }
 
     fn from_dt_error(error: &DtError, contexts: Vec<String>) -> Self {
-        let stage = error.stage.unwrap_or(Stage::Unknown);
+        let stage = error.root_stage().unwrap_or(Stage::Unknown);
         Self {
-            code: error.code,
-            message: error.message.clone(),
-            detail: error.detail.clone(),
-            hint: Some(
+            schema_version: ERROR_REPORT_SCHEMA_VERSION,
+            code: error.code(),
+            message: sanitize_user_text(&error.message),
+            detail: error.detail.as_deref().map(sanitize_user_text),
+            hint: Some(sanitize_user_text(
                 error
                     .hint
-                    .clone()
-                    .unwrap_or_else(|| error.code.default_hint().to_string()),
-            ),
+                    .as_deref()
+                    .unwrap_or_else(|| error.code().default_hint()),
+            )),
             phase: stage.user_description().map(str::to_string),
             stage,
-            operation: error.operation.map(str::to_string),
+            operation: error.root_operation().map(str::to_string),
             task_id: error.task_id.clone(),
             endpoint: error.endpoint,
             object: error.object.clone(),
-            origin: error.origin.clone(),
+            origin: error.origin_error().cloned(),
             contexts,
             diagnostic_message: StdError::source(error).map(ToString::to_string),
             location: Some(format!(
@@ -195,6 +200,7 @@ impl ErrorReport {
         contexts: Vec<String>,
     ) -> Self {
         Self {
+            schema_version: ERROR_REPORT_SCHEMA_VERSION,
             code,
             message: code.default_message().to_string(),
             detail: None,
@@ -243,6 +249,34 @@ impl ErrorReport {
     pub fn diagnostic(&self) -> DiagnosticReport<'_> {
         DiagnosticReport { report: self }
     }
+}
+
+fn sanitize_user_text(value: &str) -> String {
+    static SECRET_VALUE: OnceLock<Regex> = OnceLock::new();
+    static URL_PASSWORD: OnceLock<Regex> = OnceLock::new();
+
+    let value = SECRET_VALUE
+        .get_or_init(|| {
+            Regex::new(
+                r#"(?i)((?:password|passwd|pwd|secret|token|api[_-]?key|access[_-]?key)[\"']?\s*[:=]\s*[\"']?)[^\"',;\s}\]]+"#,
+            )
+            .expect("valid sensitive-value regular expression")
+        })
+        .replace_all(value, |captures: &Captures<'_>| {
+            let matched = captures.get(0).expect("full match").as_str();
+            let normalized = matched.to_ascii_lowercase();
+            if normalized.ends_with("<redacted>") || normalized.ends_with("[redacted]") {
+                matched.to_string()
+            } else {
+                format!("{}[REDACTED]", &captures[1])
+            }
+        });
+    URL_PASSWORD
+        .get_or_init(|| {
+            Regex::new(r"(://[^:/@\s]+:)[^@\s]+@").expect("valid URL-password regular expression")
+        })
+        .replace_all(&value, "${1}[REDACTED]@")
+        .into_owned()
 }
 
 fn format_object(object: &ErrorObject) -> Option<String> {
@@ -456,6 +490,26 @@ mod tests {
         }
         assert!(report.diagnostic_message.is_some());
         assert!(!report.contexts.is_empty());
+    }
+
+    #[test]
+    fn serializes_schema_version_and_redacts_user_text() {
+        let error = anyhow::Error::new(
+            DtError::new(ErrorCode::InvalidConfig)
+                .message("password=secret is invalid")
+                .detail("endpoint=mysql://user:hunter2@localhost:3306/db")
+                .hint("set token:abc123 before retrying"),
+        );
+        let report = ErrorReport::from_anyhow(&error);
+        let json = serde_json::to_value(&report).unwrap();
+
+        assert_eq!(report.schema_version, 1);
+        assert_eq!(json["schema_version"], 1);
+        let rendered = report.to_string();
+        assert!(!rendered.contains("secret"));
+        assert!(!rendered.contains("hunter2"));
+        assert!(!rendered.contains("abc123"));
+        assert!(rendered.contains("[REDACTED]"));
     }
 
     #[test]

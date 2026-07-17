@@ -1,23 +1,13 @@
-use dt_common::error::{DtError, EndpointRole, ErrorCode, OriginError, Stage};
+use dt_common::error::{
+    dt_error_from_reqwest, DtError, EndpointRole, ErrorCode, OriginError, Stage,
+};
 
 #[track_caller]
 pub(super) fn reqwest(error: reqwest::Error, operation: &'static str) -> DtError {
-    let code = if error.is_builder() {
-        ErrorCode::InvalidConfig
-    } else if error.is_timeout() {
-        ErrorCode::ConnectionTimeout
-    } else if error.is_connect() || error.is_request() {
-        ErrorCode::ConnectionFailed
-    } else {
-        ErrorCode::StatementFailed
-    };
-    let status = error.status().map(|status| status.as_u16().to_string());
-    DtError::new(code)
+    dt_error_from_reqwest(error, ErrorCode::StatementFailed)
         .stage(Stage::Sinker)
         .operation(operation)
         .endpoint(EndpointRole::Destination)
-        .origin(OriginError::new("http", status))
-        .source(error)
 }
 
 #[track_caller]

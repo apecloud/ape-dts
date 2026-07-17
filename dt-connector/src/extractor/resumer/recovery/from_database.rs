@@ -128,7 +128,7 @@ impl DatabaseRecovery {
                             }
                             _ => {
                                 let error = self.classify_sqlx_error(error, SqlxProvider::MySql);
-                                if Self::is_missing_resume_store(error.code) {
+                                if Self::is_missing_resume_store(error.code()) {
                                     log::info!(
                                             "Resume table {}.{} does not exist, will start from beginning",
                                             self.schema, self.table
@@ -168,7 +168,7 @@ impl DatabaseRecovery {
                             }
                             _ => {
                                 let error = self.classify_sqlx_error(error, SqlxProvider::Postgres);
-                                if Self::is_missing_resume_store(error.code) {
+                                if Self::is_missing_resume_store(error.code()) {
                                     log::info!(
                                             "Resume table {}.{} does not exist, will start from beginning",
                                             self.schema, self.table
