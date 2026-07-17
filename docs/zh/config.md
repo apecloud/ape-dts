@@ -2,24 +2,29 @@
 
 不同任务类型需要不同的参数，详情请参考 [任务模版](/docs/templates/) 和 [教程](/docs/en/tutorial/)。
 
-# 示例: MySQL -> MySQL
+版本之间的配置变化请参考 [配置变更记录](/docs/zh/config_changelog.md)。
 
 # [extractor]
 
-| 配置                 | 作用                                                                                                | 示例                                                                                                 | 默认                           |
-| :------------------- | :-------------------------------------------------------------------------------------------------- | :--------------------------------------------------------------------------------------------------- | :----------------------------- |
-| db_type              | 源库类型                                                                                            | mysql                                                                                                | -                              |
-| extract_type         | 拉取类型（全量：snapshot，增量：cdc）                                                               | snapshot                                                                                             | -                              |
-| url                  | 数据库 URL。也可以在 URL 中直接指定用户名和密码。                                                   | mysql://127.0.0.1:3307 或 mysql://root:password@127.0.0.1:3307                                       |
-| username             | 数据库连接账号                                                                                      | root                                                                                                 |
-| password             | 数据库连接密码                                                                                      | password                                                                                             | -                              |
-| max_connections      | 最大连接数                                                                                          | 10                                                                                                   | 目前是 10，未来可能会动态适配  |
-| batch_size           | 批量拉取数据条数；使用 chunk 切分时，也作为目标 chunk 大小，extractor 会尽量让每个 chunk 接近该行数 | 10000                                                                                                | 和 [pipeline] buffer_size 一致 |
-| parallel_type        | 全量拉取并发策略                                                                                    | table                                                                                                | table                          |
-| parallel_size        | 全量同步时，单表并行拉取任务数                                                                      | 4                                                                                                    | 1                              |
-| partition_cols       | 全量同步时，指定分区列，用于数据切分，仅支持单列                                                    | json:[{"db":"db_1","tb":"tb_1","partition_col":"id"},{"db":"db_2","tb":"tb_2","partition_col":"id"}] | -                              |
-| is_direct_connection | 是否设置 MongoDB driver 的 `directConnection`，仅在 `db_type=mongo` 时有效                          | true                                                                                                 | 空（使用 driver 默认行为）     |
-| is_cluster           | 是否按 Redis Cluster 模式处理，仅在 `db_type=redis` 且 `extract_type=snapshot/cdc/snapshot_and_cdc` 时有效 | true                                                                                                 | 空（根据连接地址自动判断）     |
+| 配置                 | 作用                                                                                                  | 示例                                                                                                 | 默认                                                        |
+| :------------------- | :---------------------------------------------------------------------------------------------------- | :--------------------------------------------------------------------------------------------------- | :---------------------------------------------------------- |
+| db_type              | 源端数据库类型                                                                                        | mysql                                                                                                | 必填                                                        |
+| extract_type         | 拉取类型，支持值由 `db_type` 决定                                                                     | snapshot                                                                                             | 必填                                                        |
+| url                  | 数据库 URL；账号密码可写入 URL，也可单独配置                                                          | `mysql://127.0.0.1:3307`                                                                             | 空                                                          |
+| username             | 数据库连接账号                                                                                        | root                                                                                                 | 空                                                          |
+| password             | 数据库连接密码                                                                                        | password                                                                                             | 空                                                          |
+| ssl_mode             | MySQL/PostgreSQL TLS 模式：`disable`、`require`、`verify_ca`、`verify_full`                            | verify_full                                                                                          | 不设置                                                      |
+| ssl_ca_path          | TLS 校验使用的 CA 证书路径                                                                            | /etc/ssl/certs/ca.pem                                                                                | 空                                                          |
+| max_connections      | 源端连接池最大连接数                                                                                  | 10                                                                                                   | 10                                                          |
+| batch_size           | 批量拉取行数；使用 chunk 切分时，也作为源端目标 chunk 大小                                            | 10000                                                                                                | `[pipeline].buffer_size / 有效 snapshot 并发数`             |
+| max_rps              | 源端每秒最大记录数，`0` 表示不限制                                                                    | 1000                                                                                                 | 0                                                           |
+| max_mbps             | 源端每秒最大 MiB，`0` 表示不限制                                                                      | 100                                                                                                  | 0                                                           |
+| app_name             | 连接应用名，当前用于 MongoDB                                                                          | APE_DTS                                                                                              | APE_DTS                                                     |
+| parallel_type        | 全量拉取并发策略                                                                                      | table                                                                                                | table                                                       |
+| parallel_size        | 源端 snapshot worker 上限                                                                             | 4                                                                                                    | 1；兼容回退到 `[runtime].tb_parallel_size`                  |
+| partition_cols       | MySQL/PostgreSQL 全量同步的数据切分列，每张表只支持一列                                               | json:[{"db":"db_1","tb":"tb_1","partition_col":"id"},{"db":"db_2","tb":"tb_2","partition_col":"id"}] | 空                                                          |
+| is_direct_connection | MongoDB driver 的 `directConnection` 选项                                                            | true                                                                                                 | 不设置（使用 driver 默认行为）                              |
+| is_cluster           | Redis snapshot/CDC/snapshot-and-CDC 是否使用集群模式                                                  | true                                                                                                 | 不设置或空（根据实际连接的 Redis 节点自动判断）             |
 
 ## url 转义
 
@@ -30,6 +35,9 @@ create user user1@'%' identified by 'abc%$#?@';
 对应的 url 为：
 url=mysql://user1:abc%25%24%23%3F%40@127.0.0.1:3307?ssl-mode=disabled
 ```
+
+通过 `username`、`password` 单独配置的账号密码会由 DTS 做百分号编码后合并进 URL。设置
+`ssl_mode` 后，`ssl_ca_path` 仍是可选项；是否必须提供 CA 取决于校验模式和服务端 TLS 配置。
 
 ## extractor.parallel_type
 
@@ -57,19 +65,27 @@ url=mysql://user1:abc%25%24%23%3F%40@127.0.0.1:3307?ssl-mode=disabled
 
 # [sinker]
 
-| 配置                           | 作用                                                                                                                  | 示例                                                           | 默认                          |
-| :----------------------------- | :-------------------------------------------------------------------------------------------------------------------- | :------------------------------------------------------------- | :---------------------------- |
-| db_type                        | 目标库类型                                                                                                            | mysql                                                          | -                             |
-| sink_type                      | 写入类型（写入：write，空写入：dummy）                                                                                | write                                                          | write                         |
-| url                            | 数据库 URL。也可以在 URL 中直接指定用户名和密码。                                                                     | mysql://127.0.0.1:3307 或 mysql://root:password@127.0.0.1:3307 |
-| username                       | 数据库连接账号                                                                                                        | root                                                           |
-| password                       | 数据库连接密码                                                                                                        | password                                                       |
-| batch_size                     | 批量写入数据条数，1 代表串行                                                                                          | 200                                                            | 200                           |
-| max_connections                | 最大连接数                                                                                                            | 10                                                             | 目前是 10，未来可能会动态适配 |
-| replace                        | 插入数据时，如果已存在于目标库，是否强行替换，适用于 mysql/pg 的全量/增量任务                                         | false                                                          | true                          |
-| is_direct_connection           | 是否设置 MongoDB driver 的 `directConnection`，仅在 `db_type=mongo` 时有效                                            | true                                                           | 空（使用 driver 默认行为）    |
-| is_cluster                     | 是否按 Redis Cluster 模式处理，仅在 `db_type=redis` 时有效                                                           | true                                                           | 空（根据连接地址自动判断）    |
-| mongo_require_shard_key_filter | 写入 MongoDB sharded collection 时，如果 row filter 无法包含完整 shard key，是否提前失败，仅在 `db_type=mongo` 时有效 | true                                                           | true                          |
+| 配置                           | 作用                                                                                                         | 示例                       | 默认                                                        |
+| :----------------------------- | :----------------------------------------------------------------------------------------------------------- | :------------------------- | :---------------------------------------------------------- |
+| db_type                        | 目标数据库类型                                                                                               | mysql                      | 除 `sink_type=dummy` 外必填                                 |
+| sink_type                      | 目标端操作类型，支持值由 `db_type` 决定                                                                      | write                      | 有 `[sinker]` 时为 write；standalone checker 省略时为 dummy |
+| url                            | 数据库 URL；账号密码可写入 URL，也可单独配置                                                                 | `mysql://127.0.0.1:3307`   | 空                                                          |
+| username                       | 数据库连接账号                                                                                               | root                       | 空                                                          |
+| password                       | 数据库连接密码                                                                                               | password                   | 空                                                          |
+| ssl_mode                       | MySQL/PostgreSQL TLS 模式：`disable`、`require`、`verify_ca`、`verify_full`                                   | verify_full                | 不设置                                                      |
+| ssl_ca_path                    | TLS 校验使用的 CA 证书路径                                                                                   | /etc/ssl/certs/ca.pem      | 空                                                          |
+| batch_size                     | 批量写入行数，必须大于 `0`                                                                                   | 200                        | 200                                                         |
+| max_connections                | 目标端连接池最大连接数                                                                                       | 10                         | 10                                                          |
+| max_rps                        | 目标端每秒最大记录数，`0` 表示不限制                                                                         | 1000                       | 0                                                           |
+| max_mbps                       | 目标端每秒最大 MiB，`0` 表示不限制                                                                           | 100                        | 0                                                           |
+| replace                        | 插入冲突时是否替换已有行，适用于 MySQL/PostgreSQL 全量及增量任务                                             | false                      | true                                                        |
+| disable_foreign_key_checks     | 写入 MySQL/PostgreSQL 时是否禁用外键检查                                                                     | true                       | true                                                        |
+| transaction_isolation          | MySQL/TiDB 目标端事务隔离级别：`default`、`read_uncommitted`、`read_committed`、`repeatable_read`、`serializable` | read_committed          | default                                                     |
+| conflict_policy                | 结构迁移冲突策略：`interrupt` 或 `ignore`                                                                    | interrupt                  | interrupt                                                   |
+| app_name                       | 连接应用名，当前用于 MongoDB                                                                                 | APE_DTS                    | APE_DTS                                                     |
+| is_direct_connection           | MongoDB driver 的 `directConnection` 选项                                                                    | true                       | 不设置（使用 driver 默认行为）                              |
+| is_cluster                     | Redis 是否使用集群模式                                                                                       | true                       | 不设置或空（根据实际连接的 Redis 节点自动判断）             |
+| mongo_require_shard_key_filter | MongoDB update/delete/upsert filter 缺少完整目标 shard key 时是否提前失败                                    | true                       | true                                                        |
 
 ## Redis 目标端集群模式
 
@@ -121,6 +137,8 @@ struct check 仅支持 standalone MySQL/PostgreSQL checker target。
 | url                         | 校验目标 URL（仅 standalone 目标配置）                          | mysql://... | -                                |
 | username                    | 校验目标用户名（仅 standalone 目标配置）                        | root        | 空                               |
 | password                    | 校验目标密码（仅 standalone 目标配置）                          | password    | 空                               |
+| ssl_mode                    | 校验目标 TLS 模式（仅 standalone 目标配置）                    | verify_full | 不设置                           |
+| ssl_ca_path                 | 校验目标 CA 证书路径（仅 standalone 目标配置）                 | /ca.pem     | 空                               |
 | check_log_s3                | standalone snapshot 或 inline CDC check 上传校验日志到 S3       | false       | false                            |
 | cdc_check_log_interval_secs | CDC 校验快照输出间隔（秒）                                      | 30          | 30                               |
 | s3_bucket                   | 校验日志上传的 S3 存储桶                                        | my-bucket   | -                                |
@@ -128,6 +146,8 @@ struct check 仅支持 standalone MySQL/PostgreSQL checker target。
 | s3_secret_access_key        | S3 秘密访问密钥                                                 | \*\*\*\*    | -                                |
 | s3_region                   | S3 区域                                                         | us-east-1   | -                                |
 | s3_endpoint                 | S3 端点                                                         | https://... | -                                |
+| s3_root_dir                 | S3 helper 使用的本地或挂载根目录                               | /tmp/check  | 空                               |
+| s3_root_url                 | S3 helper 使用的根 URL                                         | s3://bucket | 空                               |
 | s3_key_prefix               | 校验日志的 S3 键前缀                                            | task1/check | 空                               |
 
 说明：
@@ -142,7 +162,6 @@ struct check 仅支持 standalone MySQL/PostgreSQL checker target。
   时基于该过滤条件估算。如果没有有效估算，则读取完整源端 stream。该抽样
   是源端 Top-N limit，不是 key hash 抽样，也不是随机抽样。Inline snapshot check 和 inline CDC
   check 会先完整写入所有行/变更，然后在 checker 目标端 fetch 前进行确定性的 key hash 抽样；
-  相同 key 的行/变更会保持一致的抽样结果。
 - `queue_size` 统计的是 checker DML 队列中的待处理批次数，不是行数。checkpoint、`refresh_meta`
   这类控制信号会绕过这条队列。
 - 在 inline 写后校验链路里，如果 checker DML 队列已满，会丢弃最旧的待校验批次并记录 warning
@@ -197,8 +216,9 @@ struct check 仅支持 standalone MySQL/PostgreSQL checker target。
 | do_tbs           | 需同步的表，和 do_dbs 取并集               | db_1.tb_1,db_2*.tb_2*,\`db*&#\`.\`tb*&#\`                                                                                            | -    |
 | ignore_tbs       | 需过滤的表，和 ignore_dbs 取并集           | db_1.tb_1,db_2*.tb_2*,\`db*&#\`.\`tb*&#\`                                                                                            | -    |
 | ignore_cols      | 某些表需过滤的列                           | json:[{"db":"db_1","tb":"tb_1","ignore_cols":["f_2","f_3"]},{"db":"db_2","tb":"tb_2","ignore_cols":["f_3"]}]                         | -    |
-| do_events        | 需同步的事件                               | insert、update、delete                                                                                                               | -    |
+| do_events        | 需同步的事件                               | insert、update、delete                                                                                                               | \*   |
 | do_ddls          | 需同步的 ddl，适用于 mysql cdc 任务        | create_database,drop_database,alter_database,create_table,drop_table,truncate_table,rename_table,alter_table,create_index,drop_index | -    |
+| do_dcls          | 需同步的 DCL，适用于支持的结构任务         | create_user,grant                                                                                                                     | -    |
 | do_structures    | 结构迁移任务中需同步的结构                 | mysql/pg: database,table,constraint,sequence,comment,index；mongo: collection,shardkey                                               | \*   |
 | ignore_cmds      | 需忽略的命令，适用于 redis 增量任务        | flushall,flushdb                                                                                                                     | -    |
 | where_conditions | 全量同步时，对源端 select sql 添加过滤条件 | json:[{"db":"db_1","tb":"tb_1","condition":"f_0 > 1"},{"db":"db_2","tb":"tb_2","condition":"f_0 > 1 AND f_1 < 9"}]                   | -    |
@@ -210,6 +230,8 @@ struct check 仅支持 standalone MySQL/PostgreSQL checker target。
 - 如某配置项不匹配任何条目，则设置成空，如 ignore_dbs=。
 - ignore_cols 和 where_conditions 是 JSON 格式，应包含 "json:" 前缀。
 - do_events 取值：insert、update、delete 中的一个或多个。
+- do_dcls 取值：create_user、alter_user、create_role、drop_user、drop_role、grant、revoke、
+  set_role 中的一个或多个。
 - do_structures 用于选择结构对象类型。MySQL/PostgreSQL 常用取值包括 **database**、**table**、
   **constraint**、**sequence**、**comment**、**index**。MongoDB 支持 **collection**、**shardkey**。MongoDB 不使用独立的 **database** 结构类型，database 会在创建
   collection 时由 MongoDB 隐式创建。**shardkey** 用于同步源端 sharded collection 的分片定义，
@@ -280,8 +302,10 @@ struct check 仅支持 standalone MySQL/PostgreSQL checker target。
 | buffer_size              | 内存中最多缓存数据的条数，数据同步采用多线程 & 批量写入，故须配置此项                                | 16000 | 16000                                       |
 | buffer_memory_mb         | 可选，缓存数据使用内存上限，如果已超上限，则即使数据条数未达 buffer_size，也将阻塞写入。0 代表不设置 | 200   | 0                                           |
 | checkpoint_interval_secs | 任务当前状态（统计数据，同步位点信息等）写入日志的频率，单位：秒                                     | 10    | 10                                          |
-| max_rps                  | 可选，限制每秒最多同步数据的条数，避免对数据库性能影响                                               | 1000  | -                                           |
+| batch_sink_interval_secs | 非空写入批次的最大等待时间，单位：秒                                                                 | 1     | 0                                           |
 | counter_time_window_secs | 监控统计信息的时间窗口                                                                               | 10    | 和 [pipeline] checkpoint_interval_secs 一致 |
+| counter_max_sub_count    | 子计数器数量上限                                                                                     | 1000  | 1000                                        |
+| pipeline_type            | pipeline 实现类型，当前仅支持 `basic`                                                               | basic | basic                                       |
 
 # [parallelizer]
 
@@ -346,13 +370,77 @@ rebalance_cost=rows
 
 # [resumer]
 
-| 配置            | 作用                                                           | 示例                                        | 默认                                   |
-| :-------------- | :------------------------------------------------------------- | :------------------------------------------ | :------------------------------------- |
-| resume_type     | 类型: [from_log;from_target;from_db]                           | from_target                                 |                                        |
-| log_dir         | resume_type 为 from_log 时有效，日志目录位置                   | ./logs                                      |                                        |
-| url             | resume_type 为 from_db 时有效，数据库连接 URL                  | mysql://xxx:xxx@127.0.0.1:3306              |                                        |
-| db_type         | resume_type 为 from_db 时有效，数据库类型                      | mysql                                       |                                        |
-| table_full_name | resume_type 为 from_db 或 from_target 时有效，用于记录的表全名 | apecloud_metadata_test.apedts_task_position | apecloud_metadata.apedts_task_position |
-| max_connections | 断点续传连接池的最大连接数                                     | 1                                           | 1                                      |
+| 配置                 | 作用                                                        | 示例                                   | 默认                  |
+| :------------------- | :---------------------------------------------------------- | :------------------------------------- | :-------------------- |
+| resume_type          | `dummy`、`from_log`、`from_target` 或 `from_db`             | from_target                            | dummy                 |
+| log_dir              | `from_log` 使用的日志目录                                   | ./logs                                 | `[runtime].log_dir`   |
+| config_file          | `from_log` 使用的可选 resume 配置文件                       | ./resume.config                        | 空                    |
+| url                  | `from_db` 使用的数据库 URL                                  | `mysql://127.0.0.1:3306`               | `from_db` 时必填      |
+| db_type              | `from_db` 使用的数据库类型                                  | mysql                                  | `from_db` 时必填      |
+| username             | `from_db` 使用的数据库账号                                  | root                                   | 空                    |
+| password             | `from_db` 使用的数据库密码                                  | password                               | 空                    |
+| ssl_mode             | `from_db` 使用的 MySQL/PostgreSQL TLS 模式                  | verify_full                            | 不设置                |
+| ssl_ca_path          | `from_db` 使用的 CA 证书路径                                | /etc/ssl/certs/ca.pem                  | 空                    |
+| is_direct_connection | `from_db` 使用的 MongoDB driver `directConnection` 选项     | true                                   | 不设置                |
+| table_full_name      | `from_db` 或 `from_target` 保存断点状态的目标表              | apecloud_metadata.apedts_task_position | 空                    |
+| max_connections      | resumer 连接池最大连接数                                    | 5                                      | 5                     |
 
 详情请参考断点续传文档：[断点续传](/docs/zh/snapshot/resume.md)。
+
+`resume_type=from_target` 会复用已解析的 sinker 目标；standalone checker 使用 dummy 或省略
+sinker 时，会复用 checker 目标。旧配置 `resume_from_log`、`resume_log_dir`、
+`resume_config_file` 会直接报错，请分别迁移到 `resume_type=from_log`、`log_dir`、`config_file`。
+
+# [tracing]
+
+| 配置              | 作用                             | 示例   | 默认   |
+| :---------------- | :------------------------------- | :----- | :----- |
+| task_summary_mode | trace 聚合模式：`task` 或 `marker` | marker | marker |
+| output_format     | trace 输出格式：`plain` 或 `json` | json   | plain  |
+
+# [metacenter]
+
+该可选 section 用于 MySQL `dbengine` 元数据中心模式。
+
+| 配置                | 作用                                             | 示例                     | 默认      |
+| :------------------ | :----------------------------------------------- | :----------------------- | :-------- |
+| type                | 元数据中心类型：`basic` 或 `dbengine`            | dbengine                 | basic     |
+| url                 | 元数据库 URL，MySQL `dbengine` 模式下必填        | `mysql://127.0.0.1:3306` | 必填      |
+| username            | 元数据库账号                                     | root                     | 空        |
+| password            | 元数据库密码                                     | password                 | 空        |
+| ssl_mode            | MySQL TLS 模式                                   | verify_full              | 不设置    |
+| ssl_ca_path         | CA 证书路径                                      | /etc/ssl/certs/ca.pem    | 空        |
+| ddl_conflict_policy | DDL 冲突策略：`interrupt` 或 `ignore`            | interrupt                | interrupt |
+
+元数据中心 URL 必须与 extractor URL 及实际目标端 URL 不同。
+
+# [data_marker]
+
+存在该 section 时，会加载拓扑 marker 配置。
+
+| 配置         | 作用          | 默认 |
+| :----------- | :------------ | :--- |
+| topo_name    | 拓扑名称      | 必填 |
+| topo_nodes   | 拓扑节点列表  | 空   |
+| src_node     | 源节点        | 必填 |
+| dst_node     | 目标节点      | 必填 |
+| do_nodes     | 包含的节点    | 必填 |
+| ignore_nodes | 排除的节点    | 空   |
+| marker       | marker 值     | 必填 |
+
+# [processor]
+
+| 配置          | 作用                       | 默认 |
+| :------------ | :------------------------- | :--- |
+| lua_code_file | DTS 加载的 Lua processor 文件 | 空   |
+
+# [metrics]
+
+只有使用 `metrics` feature 构建 DTS 时才支持该 section。
+
+| 配置      | 作用                              | 示例          | 默认    |
+| :-------- | :-------------------------------- | :------------ | :------ |
+| http_host | metrics HTTP 监听地址             | 0.0.0.0       | 0.0.0.0 |
+| http_port | metrics HTTP 端口                 | 9090          | 9090    |
+| workers   | metrics HTTP worker 数量          | 2             | 2       |
+| labels    | 逗号分隔的 `key=value` 指标标签   | env=prod,az=a | 空      |
