@@ -3,15 +3,19 @@ use std::{collections::HashMap, sync::Arc};
 use anyhow::bail;
 use async_trait::async_trait;
 
+use dt_common::{
+    error::Error,
+    log_warn,
+    meta::{
+        dt_data::{DtData, DtItem},
+        dt_queue::DtQueue,
+        redis::command::key_parser::KeyParser,
+    },
+};
+use dt_connector::Sinker;
+
 use super::base_parallelizer::BaseParallelizer;
 use crate::{DataSize, Parallelizer};
-use dt_common::meta::{
-    dt_data::{DtData, DtItem},
-    dt_queue::DtQueue,
-    redis::command::key_parser::KeyParser,
-};
-use dt_common::{error::Error, log_warn};
-use dt_connector::Sinker;
 
 pub struct RedisParallelizer {
     pub base_parallelizer: BaseParallelizer,

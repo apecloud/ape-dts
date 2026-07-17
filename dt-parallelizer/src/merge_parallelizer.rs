@@ -1,17 +1,20 @@
 use std::{cmp, sync::Arc};
 
-use super::{base_parallelizer::BaseParallelizer, mongo_merger::MongoMerger};
-use crate::{DataSize, Merger, Parallelizer};
+use async_mutex::Mutex;
 use async_trait::async_trait;
-use dt_common::config::sinker_config::BasicSinkerConfig;
-use dt_common::meta::dcl_meta::dcl_data::DclData;
-use dt_common::meta::ddl_meta::ddl_data::DdlData;
-use dt_common::meta::dt_queue::DtQueue;
-use dt_common::meta::{
-    dt_data::DtItem, rdb_meta_manager::RdbMetaManager, row_data::RowData, row_type::RowType,
-    struct_meta::struct_data::StructData,
+
+use dt_common::{
+    config::sinker_config::BasicSinkerConfig,
+    meta::{
+        dcl_meta::dcl_data::DclData, ddl_meta::ddl_data::DdlData, dt_data::DtItem,
+        dt_queue::DtQueue, rdb_meta_manager::RdbMetaManager, row_data::RowData, row_type::RowType,
+        struct_meta::struct_data::StructData,
+    },
 };
 use dt_connector::Sinker;
+
+use super::{base_parallelizer::BaseParallelizer, mongo_merger::MongoMerger};
+use crate::{DataSize, Merger, Parallelizer};
 
 // Shared parallelizer for merge and checker flows.
 pub struct MergeParallelizer {
@@ -54,7 +57,7 @@ impl Parallelizer for MergeParallelizer {
     async fn sink_dml(
         &mut self,
         data: Vec<RowData>,
-        sinkers: &[Arc<async_mutex::Mutex<Box<dyn Sinker + Send>>>],
+        sinkers: &[Arc<Mutex<Box<dyn Sinker + Send>>>],
     ) -> anyhow::Result<DataSize> {
         let mut data_size = DataSize::default();
         let mut tb_merged_data = self.merger.merge(data).await?;
@@ -70,7 +73,7 @@ impl Parallelizer for MergeParallelizer {
     async fn sink_ddl(
         &mut self,
         data: Vec<DdlData>,
-        sinkers: &[Arc<async_mutex::Mutex<Box<dyn Sinker + Send>>>],
+        sinkers: &[Arc<Mutex<Box<dyn Sinker + Send>>>],
     ) -> anyhow::Result<DataSize> {
         let data_size = DataSize {
             count: data.len() as u64,

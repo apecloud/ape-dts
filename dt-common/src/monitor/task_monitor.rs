@@ -1,6 +1,11 @@
 use std::{cmp, collections::BTreeMap, sync::Arc};
 
-use super::{group_monitor::GroupMonitor, monitor::Monitor};
+use async_trait::async_trait;
+use dashmap::DashMap;
+
+use super::{
+    group_monitor::GroupMonitor, monitor::Monitor, sinker_worker_metrics::SinkerWorkerMetrics,
+};
 #[cfg(feature = "metrics")]
 use crate::monitor::prometheus_metrics::PrometheusMetrics;
 use crate::{
@@ -9,8 +14,6 @@ use crate::{
     monitor::{counter_type::CounterType, task_metrics::TaskMetricsType, FlushableMonitor},
     utils::limit_queue::LimitedQueue,
 };
-use async_trait::async_trait;
-use dashmap::DashMap;
 
 #[derive(Clone)]
 pub struct TaskMonitor {
@@ -26,6 +29,7 @@ pub struct TaskMonitor {
     checkers: DashMap<String, Arc<Monitor>>,
 
     no_window_metrics_map: DashMap<TaskMetricsType, u64>,
+    sinker_worker_metrics: Arc<SinkerWorkerMetrics>,
     #[cfg(feature = "metrics")]
     pub prometheus_metrics: Arc<PrometheusMetrics>,
 }
@@ -85,6 +89,7 @@ impl TaskMonitor {
             sinkers: DashMap::new(),
             checkers: DashMap::new(),
             no_window_metrics_map: DashMap::new(),
+            sinker_worker_metrics: Arc::new(SinkerWorkerMetrics::default()),
         }
     }
 
@@ -101,6 +106,7 @@ impl TaskMonitor {
             sinkers: DashMap::new(),
             checkers: DashMap::new(),
             no_window_metrics_map: DashMap::new(),
+            sinker_worker_metrics: Arc::new(SinkerWorkerMetrics::default()),
             prometheus_metrics,
         }
     }
@@ -112,6 +118,10 @@ impl TaskMonitor {
 
     pub fn get_task_type(&self) -> Option<&TaskType> {
         self.task_type.as_ref()
+    }
+
+    pub fn sinker_worker_metrics(&self) -> Arc<SinkerWorkerMetrics> {
+        self.sinker_worker_metrics.clone()
     }
 
     pub fn register(&self, task_id: &str, monitors: Vec<(MonitorType, Arc<Monitor>)>) {
@@ -643,6 +653,7 @@ impl TaskMonitor {
                 cmp::min(finished_progress_count * 100 / total_progress_count, 100),
             );
         }
+        collect_sinker_worker_metrics(&self.sinker_worker_metrics, &mut metrics);
 
         Some(metrics)
     }
@@ -739,6 +750,18 @@ impl TaskMonitor {
         monitors.extend(self.checkers.iter().map(|item| item.value().clone()));
         monitors
     }
+}
+
+fn collect_sinker_worker_metrics(
+    tracker: &SinkerWorkerMetrics,
+    metrics: &mut BTreeMap<TaskMetricsType, u64>,
+) {
+    let snapshot = tracker.snapshot();
+    metrics.insert(
+        TaskMetricsType::SinkerWorkersConfigured,
+        snapshot.configured,
+    );
+    metrics.insert(TaskMetricsType::SinkerWorkersBusy, snapshot.busy);
 }
 
 impl MonitorType {
@@ -849,5 +872,30 @@ fn calc_nowindow_metrics(
             .entry(metrics_type)
             .and_modify(|v| *v = (*v).max(value))
             .or_insert(value);
+    }
+}
+
+#[cfg(test)]
+mod sinker_worker_tests {
+    use super::collect_sinker_worker_metrics;
+    use crate::monitor::{
+        sinker_worker_metrics::SinkerWorkerMetrics, task_metrics::TaskMetricsType,
+    };
+    use std::{collections::BTreeMap, sync::Arc};
+
+    #[test]
+    fn maps_all_sinker_worker_values_to_task_metrics() {
+        let metrics = Arc::new(SinkerWorkerMetrics::default());
+        let worker = metrics.register_worker();
+        let guard = worker.enter();
+        let mut result = BTreeMap::new();
+
+        collect_sinker_worker_metrics(&metrics, &mut result);
+
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[&TaskMetricsType::SinkerWorkersConfigured], 1);
+        assert_eq!(result[&TaskMetricsType::SinkerWorkersBusy], 1);
+
+        drop(guard);
     }
 }

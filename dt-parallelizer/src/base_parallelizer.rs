@@ -1,6 +1,7 @@
 use std::{collections::VecDeque, future::Future, sync::Arc};
 
 use anyhow::bail;
+use async_mutex::Mutex;
 use concurrent_queue::PopError;
 use tokio::task::JoinSet;
 
@@ -18,7 +19,7 @@ use dt_common::{
 };
 use dt_connector::Sinker;
 
-type SharedSinker = Arc<async_mutex::Mutex<Box<dyn Sinker + Send>>>;
+type SharedSinker = Arc<Mutex<Box<dyn Sinker + Send>>>;
 
 #[derive(Default)]
 pub struct BaseParallelizer {
