@@ -7,7 +7,7 @@ use prometheus::{Gauge, Opts, Registry, TextEncoder};
 
 use crate::config::config_enums::{TaskKind, TaskType};
 use crate::config::metrics_config::MetricsConfig;
-use crate::error::{DtError, ErrorCode, Stage};
+use crate::error_boundary::config::metrics_initialization as metrics_initialization_error;
 use crate::monitor::task_metrics::TaskMetricsType;
 
 pub struct PrometheusMetrics {
@@ -302,17 +302,6 @@ impl PrometheusMetrics {
             }
         }
     }
-}
-
-fn metrics_initialization_error(error: prometheus::Error, metrics_name: &str) -> DtError {
-    DtError::new(ErrorCode::InvalidConfig)
-        .message("Metrics configuration is invalid")
-        .detail(format!(
-            "Failed to initialize metric [{metrics_name}]: {error}"
-        ))
-        .stage(Stage::Bootstrap)
-        .operation("initialize_metrics")
-        .source(error)
 }
 
 async fn metrics_handler(registry: web::Data<Arc<Registry>>) -> impl Responder {

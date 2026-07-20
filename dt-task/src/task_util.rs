@@ -22,9 +22,7 @@ use dt_common::{
         sinker_config::{BasicSinkerConfig, SinkerConfig},
         task_config::TaskConfig,
     },
-    error::{
-        dt_error_from_mongodb, dt_error_from_sqlx, EndpointRole, ErrorCode, SqlxProvider, Stage,
-    },
+    error::{EndpointRole, SqlxProvider},
     log_info, log_warn,
     meta::{
         mysql::{
@@ -48,7 +46,7 @@ use dt_connector::{
 use tokio::select;
 use tokio_util::sync::CancellationToken;
 
-use crate::error::connection::{
+use crate::error_boundary::connection::{
     self as connection_error, invalid_config as invalid_task_config,
     metadata as task_sqlx_metadata_error, missing as missing_task_client,
 };
@@ -97,8 +95,7 @@ impl TaskUtil {
         let final_url = ConnectionAuthConfig::merge_url_with_auth(url, connection_auth)?;
 
         let mut conn_options = MySqlConnectOptions::from_str(&final_url).map_err(|error| {
-            dt_error_from_sqlx(error, SqlxProvider::MySql, ErrorCode::ConnectionFailed)
-                .operation("create_connection_pool")
+            connection_error::sqlx(error, SqlxProvider::MySql, "create_connection_pool")
         })?;
         // The default character set is `utf8mb4`
         conn_options = conn_options
@@ -141,9 +138,7 @@ impl TaskUtil {
         }
 
         conn_pool.connect_with(conn_options).await.map_err(|error| {
-            dt_error_from_sqlx(error, SqlxProvider::MySql, ErrorCode::ConnectionFailed)
-                .operation("create_connection_pool")
-                .into()
+            connection_error::sqlx(error, SqlxProvider::MySql, "create_connection_pool").into()
         })
     }
 
@@ -188,8 +183,7 @@ impl TaskUtil {
         let final_url = ConnectionAuthConfig::merge_url_with_auth(url, connection_auth)?;
 
         let mut conn_options = PgConnectOptions::from_str(&final_url).map_err(|error| {
-            dt_error_from_sqlx(error, SqlxProvider::Postgres, ErrorCode::ConnectionFailed)
-                .operation("create_connection_pool")
+            connection_error::sqlx(error, SqlxProvider::Postgres, "create_connection_pool")
         })?;
         conn_options = conn_options
             .log_statements(log::LevelFilter::Debug)
@@ -224,8 +218,7 @@ impl TaskUtil {
             .connect_with(conn_options)
             .await
             .map_err(|error| {
-                dt_error_from_sqlx(error, SqlxProvider::Postgres, ErrorCode::ConnectionFailed)
-                    .operation("create_connection_pool")
+                connection_error::sqlx(error, SqlxProvider::Postgres, "create_connection_pool")
             })?;
         Ok(conn_pool)
     }
@@ -392,9 +385,7 @@ impl TaskUtil {
         let final_url = ConnectionAuthConfig::merge_url_with_auth(url, connection_auth)?;
 
         let mut client_options = ClientOptions::parse(&final_url).await.map_err(|error| {
-            dt_error_from_mongodb(error, ErrorCode::InvalidConfig)
-                .stage(Stage::Bootstrap)
-                .operation("parse_mongodb_client_options")
+            connection_error::mongodb_config(error, "parse_mongodb_client_options")
         })?;
         // app_name only for debug usage
         if let Some(app) = app_name {
@@ -406,10 +397,7 @@ impl TaskUtil {
         client_options.max_pool_size = max_pool_size;
 
         mongodb::Client::with_options(client_options).map_err(|error| {
-            dt_error_from_mongodb(error, ErrorCode::InvalidConfig)
-                .stage(Stage::Bootstrap)
-                .operation("create_mongodb_client")
-                .into()
+            connection_error::mongodb_config(error, "create_mongodb_client").into()
         })
     }
 
@@ -1117,7 +1105,7 @@ impl ConnClient {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dt_common::error::DtError;
+    use dt_common::error::{DtError, ErrorCode};
 
     #[test]
     fn connection_boundary_adds_endpoint_without_overwriting_it() {

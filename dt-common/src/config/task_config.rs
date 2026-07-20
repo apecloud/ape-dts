@@ -13,16 +13,10 @@ use crate::{
         limiter_config::{CapacityLimiterConfig, RateLimiterConfig},
     },
     error::{DtError, ErrorCode, Stage},
+    error_boundary::config::invalid_task as invalid_task_config,
     meta::mongo::mongo_cdc_source::MongoCdcSource,
     utils::task_util::TaskUtil,
 };
-
-#[track_caller]
-fn invalid_task_config(detail: impl Into<String>) -> DtError {
-    DtError::new(ErrorCode::InvalidConfig)
-        .detail(detail)
-        .stage(Stage::Bootstrap)
-}
 
 use super::{
     checker_config::CheckerConfig,
@@ -1508,10 +1502,19 @@ mod tests {
     use crate::runtime_trace::{TaskSummaryMode, TraceOutputFormat};
 
     use super::{
-        CheckMode, ExtractorConfig, ParallelType, SinkerConfig, TaskConfig, TaskKind, TaskType,
+        invalid_task_config, CheckMode, ExtractorConfig, ParallelType, SinkerConfig, TaskConfig,
+        TaskKind, TaskType,
     };
 
     static NEXT_CONFIG_ID: AtomicU64 = AtomicU64::new(0);
+
+    #[test]
+    fn centralized_error_boundary_preserves_the_config_callsite() {
+        let expected_line = line!() + 1;
+        let error = invalid_task_config("invalid test config");
+        assert_eq!(error.location.file(), file!());
+        assert_eq!(error.location.line(), expected_line);
+    }
 
     fn cdc_inline_check_config(parallel_type: &str, extra_checker: &str) -> String {
         format!(

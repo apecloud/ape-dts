@@ -12,7 +12,7 @@ use crate::{
     call_batch_fn, data_marker::DataMarker, rdb_query_builder::RdbQueryBuilder,
     rdb_router::RdbRouter, sinker::base_sinker::BaseSinker, Sinker,
 };
-use crate::{error::sinker as sinker_error, sinker::checkable_sinker::CheckableSink};
+use crate::{error_boundary::sinker as sinker_error, sinker::checkable_sinker::CheckableSink};
 use dt_common::{
     config::connection_auth_config::ConnectionAuthConfig,
     error::ErrorCode,

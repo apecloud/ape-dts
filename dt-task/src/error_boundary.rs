@@ -1,7 +1,24 @@
 pub(crate) mod connection {
     use dt_common::error::{
-        dt_error_from_sqlx, DtError, EndpointRole, ErrorCode, SqlxProvider, Stage,
+        dt_error_from_mongodb, dt_error_from_sqlx, DtError, EndpointRole, ErrorCode, SqlxProvider,
+        Stage,
     };
+
+    #[track_caller]
+    pub(crate) fn sqlx(
+        error: sqlx::Error,
+        provider: SqlxProvider,
+        operation: &'static str,
+    ) -> DtError {
+        dt_error_from_sqlx(error, provider, ErrorCode::ConnectionFailed).operation(operation)
+    }
+
+    #[track_caller]
+    pub(crate) fn mongodb_config(error: mongodb::error::Error, operation: &'static str) -> DtError {
+        dt_error_from_mongodb(error, ErrorCode::InvalidConfig)
+            .stage(Stage::Bootstrap)
+            .operation(operation)
+    }
 
     #[track_caller]
     pub(crate) fn metadata(
@@ -9,7 +26,7 @@ pub(crate) mod connection {
         provider: SqlxProvider,
         operation: &'static str,
     ) -> DtError {
-        dt_error_from_sqlx(error, provider, ErrorCode::MetadataFailed)
+        dt_error_from_sqlx(error, provider, ErrorCode::MetadataReadFailed)
             .stage(Stage::Task)
             .operation(operation)
     }
@@ -63,7 +80,7 @@ pub(crate) mod extractor {
 }
 
 pub(crate) mod sinker {
-    use dt_common::error::{DtError, ErrorCode, Stage};
+    use dt_common::error::{BoxError, DtError, ErrorCode, Stage};
 
     #[track_caller]
     pub(crate) fn missing_client() -> DtError {
@@ -71,6 +88,28 @@ pub(crate) mod sinker {
             .detail("the configured destination connection client is missing")
             .stage(Stage::Task)
             .operation("build_sinker")
+    }
+
+    #[track_caller]
+    pub(crate) fn invalid_http_endpoint(
+        detail: impl Into<String>,
+        operation: &'static str,
+    ) -> DtError {
+        DtError::new(ErrorCode::InvalidConfig)
+            .detail(detail)
+            .stage(Stage::Bootstrap)
+            .operation(operation)
+    }
+
+    #[track_caller]
+    pub(crate) fn invalid_http_endpoint_source(
+        error: impl Into<BoxError>,
+        operation: &'static str,
+    ) -> DtError {
+        DtError::new(ErrorCode::InvalidConfig)
+            .stage(Stage::Bootstrap)
+            .operation(operation)
+            .source(error)
     }
 }
 

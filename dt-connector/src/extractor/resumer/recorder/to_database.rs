@@ -8,7 +8,7 @@ use mongodb::{
 use sqlx::query;
 
 use crate::{
-    error::extractor::resumer_config as resumer_config_error,
+    error_boundary::extractor::resumer_config as resumer_config_error,
     extractor::resumer::{
         recorder::Recorder,
         utils::{RedisResumerRecord, ResumerUtil},

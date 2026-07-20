@@ -99,7 +99,7 @@ const CHECK_RESULT_STDOUT_APPENDER_PLACEHOLDER: &str = "CHECK_RESULT_STDOUT_APPE
 const DEFAULT_CHECK_LOG_DIR_PLACEHOLDER: &str = "LOG_DIR_PLACEHOLDER/check";
 const DEFAULT_STATISTIC_LOG_DIR_PLACEHOLDER: &str = "LOG_DIR_PLACEHOLDER/statistic";
 
-use crate::error::runner::invalid_config as invalid_task_config;
+use crate::error_boundary::runner::invalid_config as invalid_task_config;
 
 fn init_task_check_summary() -> CheckSummaryLog {
     CheckSummaryLog {

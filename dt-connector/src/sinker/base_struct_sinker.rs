@@ -4,7 +4,7 @@ use anyhow::bail;
 use sqlx::{query, MySql, Pool, Postgres};
 use tokio::time::Instant;
 
-use crate::{error::sinker as sinker_error, sinker::base_sinker::BaseSinker};
+use crate::{error_boundary::sinker as sinker_error, sinker::base_sinker::BaseSinker};
 use dt_common::{
     config::config_enums::ConflictPolicyEnum, error::ErrorCode, log_error, log_info,
     meta::struct_meta::struct_data::StructData, rdb_filter::RdbFilter,

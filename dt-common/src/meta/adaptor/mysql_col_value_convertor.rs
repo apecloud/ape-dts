@@ -366,7 +366,7 @@ impl MysqlColValueConvertor {
                 | MysqlColType::Blob
                 | MysqlColType::LongBlob => ColValue::Blob(hex::decode(value_str)?),
                 MysqlColType::Unknown => {
-                    bail! {DtError::new(ErrorCode::MetadataFailed).detail(format!(
+                    bail! {DtError::new(ErrorCode::UnsupportedTableStructure).detail(format!(
                         "unsupported column type: {:?}",
                         col_type
                     )) }

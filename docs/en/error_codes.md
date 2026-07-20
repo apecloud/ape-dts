@@ -55,7 +55,7 @@ matches.
 | `PR005` | `UnsupportedTableStructure` | A table structure is unsupported |
 | `MD001` | `ObjectNotFound` | A required table, topic, or other endpoint object does not exist |
 | `MD002` | `DatabaseNotFound` | A database does not exist |
-| `MD099` | `MetadataFailed` | An endpoint metadata operation failed without a narrower classification |
+| `MD099` | `MetadataReadFailed` | Database information required by the migration could not be read |
 | `DB001` | `StatementFailed` | A source or destination operation failed |
 | `IC001` | `IntegrityViolation` | A constraint was violated |
 | `ST001` | `CheckpointReadFailed` | Checkpoint state could not be read |
@@ -155,11 +155,31 @@ boundaries preserve the root error. These wrappers must use `#[track_caller]`
 so the captured location continues to identify the failing component
 operation.
 
-Each business crate keeps all of its component wrappers in one `src/error.rs`
+Each crate keeps all of its component wrappers in one `src/error_boundary.rs`
 file and separates ownership with nested modules such as `extractor`, `sinker`,
 or provider-specific modules. Do not add component error helper files beside
-business modules. The shared provider classifiers remain in
+business modules. `error_boundary` means the point where a lower-level failure
+is classified or enriched for Ape-DTS; it is distinct from the public error
+contract in `dt-common::error`. Shared provider classifiers remain in
 `dt-common::error::provider`.
+
+`MD099 MetadataReadFailed` is only the fallback for reading or decoding endpoint
+catalog and control metadata. A schema object being migrated does not make every
+structure error a metadata-read failure. Missing objects use `MD001`/`MD002`,
+unsupported structures use `PR005`, unmet version or topology requirements use
+`PR001`/`PR002`, and rejected destination DDL uses `DB001`.
+
+Classify errors by what the user can verify or change, not by the internal module
+or data structure that detected the failure. A missing schema, table, or column
+uses `MD001` and identifies the affected object. A CDC row event without its
+matching table or relation definition uses `DB001` and tells the user how to
+restart from an earlier log position. An incomplete Redis slot map uses `PR001`
+and tells the user to stabilize the cluster topology. Use `IN001` only when no
+endpoint, configuration, or migration action can reasonably resolve the failure.
+Internal terms such as cache entry, OID map, or Rust type must never be the only
+explanation. The user message and hint must state the affected endpoint behavior
+and the next action. `DETAIL` may include a provider identifier such as a table or
+relation ID when it helps correlate the failure with provider logs.
 
 ## Provider error preservation
 

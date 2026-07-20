@@ -2,7 +2,7 @@ use futures::TryStreamExt;
 use sqlx::{postgres::PgRow, Pool, Postgres, Row};
 use std::collections::HashMap;
 
-use crate::error::{dt_error_from_sqlx, ErrorCode, SqlxProvider};
+use crate::{error::ErrorCode, error_boundary::metadata::postgres_sqlx};
 
 use super::{pg_col_type::PgColType, pg_value_type::PgValueType};
 
@@ -41,8 +41,11 @@ impl TypeRegistry {
             WHERE n.nspname != 'pg_toast'";
         let mut rows = sqlx::query(sql).fetch(&self.conn_pool);
         while let Some(row) = rows.try_next().await.map_err(|error| {
-            dt_error_from_sqlx(error, SqlxProvider::Postgres, ErrorCode::MetadataFailed)
-                .operation("load_postgres_type_registry")
+            postgres_sqlx(
+                error,
+                ErrorCode::MetadataReadFailed,
+                "load_postgres_type_registry",
+            )
         })? {
             let col_type = self.parse_col_meta(&row)?;
             self.oid_to_type.insert(col_type.oid, col_type.clone());

@@ -2,7 +2,7 @@ use mongodb::bson::{doc, Bson, Document};
 
 use crate::{
     config::config_enums::DbType,
-    error::{DtError, ErrorCode, OriginError},
+    error_boundary::metadata::mongodb_ddl as mongo_ddl_error,
     meta::ddl_meta::{
         ddl_data::DdlData,
         ddl_statement::{DdlStatement, MongoCommandStatement},
@@ -34,14 +34,6 @@ pub fn query_to_command(query: &str) -> anyhow::Result<Document> {
             "MongoDB DDL payload is not a document: {other:?}"
         ))),
     }
-}
-
-#[track_caller]
-fn mongo_ddl_error(detail: impl Into<String>) -> DtError {
-    DtError::new(ErrorCode::StatementFailed)
-        .detail(detail)
-        .operation("parse_mongodb_ddl")
-        .origin(OriginError::new("mongodb", None::<String>))
 }
 
 pub fn build_shard_collection_ddl(ns: &str, key: Document, unique: bool) -> Option<DdlData> {

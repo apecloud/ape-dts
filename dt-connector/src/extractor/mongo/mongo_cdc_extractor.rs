@@ -18,7 +18,7 @@ use serde_json::json;
 use tokio::{sync::Mutex, time::Instant};
 
 use crate::{
-    error::extractor::mongodb_oplog,
+    error_boundary::extractor::mongodb_oplog,
     extractor::{
         base_extractor::{BaseExtractor, ExtractState},
         resumer::recovery::Recovery,

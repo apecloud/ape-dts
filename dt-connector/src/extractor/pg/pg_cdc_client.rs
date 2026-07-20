@@ -9,7 +9,7 @@ use tokio_postgres::{
 };
 use url::Url;
 
-use crate::error::extractor as extractor_error;
+use crate::error_boundary::extractor as extractor_error;
 use dt_common::{
     config::{
         connection_auth_config::ConnectionAuthConfig,
@@ -224,7 +224,7 @@ impl PgCdcClient {
         let res = client.simple_query(&query).await.map_err(|error| {
             extractor_error::postgres(
                 error,
-                ErrorCode::MetadataFailed,
+                ErrorCode::MetadataReadFailed,
                 "check_postgres_publication",
             )
         })?;
@@ -305,7 +305,16 @@ impl PgCdcClient {
                     _ => None,
                 })
                 .ok_or_else(|| {
-                    DtError::new(ErrorCode::MetadataFailed)
+                    DtError::new(ErrorCode::StatementFailed)
+                        .message(
+                            "PostgreSQL did not return a start position for the new replication slot",
+                        )
+                        .detail(
+                            "the CREATE_REPLICATION_SLOT response is missing consistent_point",
+                        )
+                        .hint(
+                            "Remove the incomplete replication slot and restart the task. If it repeats, check PostgreSQL replication logs.",
+                        )
                         .stage(Stage::Extractor)
                         .operation("read_created_replication_slot")
                         .endpoint(EndpointRole::Source)
@@ -330,7 +339,7 @@ impl PgCdcClient {
         let res = client.simple_query(&query).await.map_err(|error| {
             extractor_error::postgres(
                 error,
-                ErrorCode::MetadataFailed,
+                ErrorCode::MetadataReadFailed,
                 "check_postgres_replication_slot",
             )
         })?;
@@ -405,17 +414,10 @@ impl PgCdcClient {
     }
 }
 
-#[track_caller]
 fn parse_lsn(value: &str, operation: &'static str) -> anyhow::Result<PgLsn> {
-    value.parse().map_err(|_| {
-        DtError::new(ErrorCode::CheckpointReadFailed)
-            .stage(Stage::Extractor)
-            .operation(operation)
-            .endpoint(EndpointRole::Source)
-            .origin(OriginError::new("postgres", None::<String>))
-            .detail("a PostgreSQL replication position is invalid")
-            .into()
-    })
+    value
+        .parse()
+        .map_err(|_| extractor_error::invalid_postgres_lsn(operation).into())
 }
 
 #[cfg(test)]

@@ -8,7 +8,7 @@ use mongodb::bson::doc;
 use sqlx::{query, Error as SqlxError, Row};
 
 use crate::{
-    error::extractor::{checkpoint_sqlx, resumer_config as resumer_config_error},
+    error_boundary::extractor::{checkpoint_sqlx, resumer_config as resumer_config_error},
     extractor::resumer::{
         recovery::Recovery,
         utils::{RedisResumerRecord, ResumerUtil},

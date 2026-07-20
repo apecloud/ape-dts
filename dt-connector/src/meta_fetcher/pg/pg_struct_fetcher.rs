@@ -550,7 +550,7 @@ impl PgStructFetcher {
                 column.column_type = column_types
                     .get(&column.column_name)
                     .ok_or_else(|| {
-                        DtError::new(ErrorCode::MetadataFailed)
+                        DtError::new(ErrorCode::UnsupportedTableStructure)
                             .detail(format!(
                                 "column type is missing for {table_schema}.{table_name}.{}",
                                 column.column_name

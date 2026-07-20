@@ -26,7 +26,11 @@ use dt_common::{
 
 use super::task_util::TaskUtil;
 use crate::{
-    error::sinker::missing_client as missing_sinker_client, extractor_util::ExtractorUtil,
+    error_boundary::sinker::{
+        invalid_http_endpoint, invalid_http_endpoint_source,
+        missing_client as missing_sinker_client,
+    },
+    extractor_util::ExtractorUtil,
     task_util::ConnClient,
 };
 use dt_connector::{
@@ -65,28 +69,17 @@ macro_rules! create_filter {
 }
 
 impl SinkerUtil {
-    #[track_caller]
     fn parse_http_endpoint(
         value: &str,
         operation: &'static str,
     ) -> anyhow::Result<(Url, String, String)> {
-        let url = Url::parse(value).map_err(|error| {
-            DtError::new(ErrorCode::InvalidConfig)
-                .stage(Stage::Bootstrap)
-                .operation(operation)
-                .source(error)
-        })?;
+        let url =
+            Url::parse(value).map_err(|error| invalid_http_endpoint_source(error, operation))?;
         let host = url.host_str().map(str::to_string).ok_or_else(|| {
-            DtError::new(ErrorCode::InvalidConfig)
-                .stage(Stage::Bootstrap)
-                .operation(operation)
-                .detail("the destination HTTP URL must include a host")
+            invalid_http_endpoint("the destination HTTP URL must include a host", operation)
         })?;
         let port = url.port_or_known_default().ok_or_else(|| {
-            DtError::new(ErrorCode::InvalidConfig)
-                .stage(Stage::Bootstrap)
-                .operation(operation)
-                .detail("the destination HTTP URL must include a port")
+            invalid_http_endpoint("the destination HTTP URL must include a port", operation)
         })?;
         Ok((url, host, port.to_string()))
     }
@@ -287,7 +280,7 @@ impl SinkerUtil {
                         .with_required_acks(acks)
                         .create()
                         .map_err(|error| {
-                            dt_connector::error::sinker::kafka(
+                            dt_connector::error_boundary::sinker::kafka(
                                 error,
                                 ErrorCode::ConnectionFailed,
                                 "create_kafka_producer",

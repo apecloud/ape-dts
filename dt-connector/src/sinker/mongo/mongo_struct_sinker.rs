@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use mongodb::{bson::doc, Client};
 use tokio::time::Instant;
 
-use crate::{error::sinker::mongodb_struct, sinker::base_sinker::BaseSinker, Sinker};
+use crate::{error_boundary::sinker::mongodb_struct, sinker::base_sinker::BaseSinker, Sinker};
 use dt_common::{
     config::config_enums::ConflictPolicyEnum,
     log_error, log_info,

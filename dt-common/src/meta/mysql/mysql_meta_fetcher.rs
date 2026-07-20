@@ -115,11 +115,20 @@ impl MysqlMetaFetcher {
             self.cache.insert(full_name.clone(), tb_meta);
         }
         self.cache.get(&full_name).ok_or_else(|| {
-            DtError::new(ErrorCode::InvariantViolated)
+            DtError::new(ErrorCode::ObjectNotFound)
+                .message("The source table definition could not be loaded")
                 .detail(format!(
-                    "table metadata cache entry is missing: {full_name}"
+                    "Ape-DTS could not find the previously loaded definition for source table {full_name}"
                 ))
+                .hint(
+                    "Verify that the source table still exists and is readable, then restart the task.",
+                )
                 .operation("get_mysql_table_metadata")
+                .object(ErrorObject {
+                    schema: Some(schema.to_string()),
+                    table: Some(tb.to_string()),
+                    ..Default::default()
+                })
                 .origin(OriginError::new("mysql", None::<String>))
                 .into()
         })
@@ -176,7 +185,7 @@ impl MysqlMetaFetcher {
         }
 
         if cols.is_empty() {
-            bail! {DtError::new(ErrorCode::MetadataFailed)
+            bail! {DtError::new(ErrorCode::ObjectNotFound)
             .detail(format!(
                 "failed to get table metadata for: `{}`.`{}`",
                 schema, tb
@@ -456,7 +465,7 @@ impl MysqlMetaFetcher {
             self.version = version.trim().into();
             return Ok(());
         }
-        bail! {DtError::new(ErrorCode::MetadataFailed)
+        bail! {DtError::new(ErrorCode::UnsupportedDatabaseVersion)
         .detail("failed to init mysql version")
         .operation("read_mysql_version")
         .origin(OriginError::new("mysql", None::<String>))}

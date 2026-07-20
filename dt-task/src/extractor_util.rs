@@ -62,7 +62,7 @@ use dt_connector::{
 };
 
 use crate::{
-    error::extractor::{
+    error_boundary::extractor::{
         invalid_config as invalid_extractor_config, missing_client as missing_extractor_client,
     },
     task_util::ConnClient,

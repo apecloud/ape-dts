@@ -11,7 +11,7 @@ use crate::{
         config_token_parser::{ConfigTokenParser, TokenEscapePair},
         filter_config::FilterConfig,
     },
-    error::{DtError, ErrorCode, Stage},
+    error_boundary::config::invalid_filter as invalid_filter_config,
     meta::{
         ddl_meta::ddl_type::DdlType, row_type::RowType,
         struct_meta::structure::structure_type::StructureType,
@@ -309,14 +309,6 @@ impl RdbFilter {
         }
         Ok(results)
     }
-}
-
-#[track_caller]
-fn invalid_filter_config(detail: impl Into<String>) -> DtError {
-    DtError::new(ErrorCode::InvalidConfig)
-        .detail(detail)
-        .stage(Stage::Bootstrap)
-        .operation("parse_filter_config")
 }
 
 #[cfg(test)]

@@ -11,7 +11,7 @@ use super::{
 };
 use crate::{
     config::config_enums::DbType,
-    error::{DtError, ErrorCode, ErrorObject},
+    error_boundary::metadata::row_conversion as row_conversion_error,
     meta::adaptor::{
         mysql_col_value_convertor::MysqlColValueConvertor,
         pg_col_value_convertor::PgColValueConvertor,
@@ -323,28 +323,6 @@ impl RowData {
         // ignore other fields
         size
     }
-}
-
-#[track_caller]
-fn row_conversion_error(
-    error: anyhow::Error,
-    schema: &str,
-    table: &str,
-    column: &str,
-    operation: &'static str,
-) -> DtError {
-    DtError::new(ErrorCode::StatementFailed)
-        .detail(format!(
-            "failed to convert column {schema}.{table}.{column}"
-        ))
-        .operation(operation)
-        .object(ErrorObject {
-            schema: Some(schema.to_string()),
-            table: Some(table.to_string()),
-            column: Some(column.to_string()),
-            ..Default::default()
-        })
-        .source(error)
 }
 
 #[cfg(test)]

@@ -23,6 +23,31 @@ pub(crate) fn failure(
         .into()
 }
 
+pub(crate) mod report {
+    use dt_common::error::{ErrorCode, ErrorReport};
+
+    pub(crate) fn classify(
+        error: Option<&anyhow::Error>,
+        fallback: ErrorCode,
+    ) -> (Option<ErrorCode>, String) {
+        let Some(error) = error else {
+            return (None, String::new());
+        };
+        let report = ErrorReport::from_anyhow(error);
+        let code = if report.code == ErrorCode::Unclassified {
+            fallback
+        } else {
+            report.code
+        };
+        let message = if report.code == ErrorCode::Unclassified {
+            code.default_message().to_string()
+        } else {
+            report.message
+        };
+        (Some(code), message)
+    }
+}
+
 pub(crate) mod mysql {
     use dt_common::error::{
         dt_error_from_sqlx, DtError, EndpointRole, ErrorCode, SqlxProvider, Stage,

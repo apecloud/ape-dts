@@ -2,7 +2,7 @@ use anyhow::bail;
 use sqlx::types::chrono;
 
 use super::{entry_parser::entry_parser::EntryParser, reader::rdb_reader::RdbReader};
-use crate::error::extractor::redis_rdb as rdb_error;
+use crate::error_boundary::extractor::redis_rdb as rdb_error;
 use crate::extractor::redis::{rdb::entry_parser::module2_parser::ModuleParser, StreamReader};
 use dt_common::meta::redis::{redis_entry::RedisEntry, redis_object::RedisCmd};
 use dt_common::{

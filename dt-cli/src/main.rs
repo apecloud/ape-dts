@@ -16,10 +16,10 @@ use dt_common::error::{ErrorCode, ErrorReport};
 use serde::{Deserialize, Serialize};
 
 mod config;
-mod error;
+mod error_boundary;
 
 use config::{build_task_config, infer_db_type, CreateConfig, DbType, Mode};
-use error::{config as config_error, task as task_error};
+use error_boundary::{config as config_error, task as task_error};
 
 const APP_NAME: &str = "dtscli";
 const ABOUT: &str = "A Command Line Interface for ApeCloud DTS";

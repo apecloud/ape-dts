@@ -99,8 +99,16 @@ pub(crate) mod extractor {
     }
 
     #[track_caller]
-    pub(crate) fn redis_reshard_metadata(operation: &'static str) -> DtError {
-        enrich(DtError::new(ErrorCode::MetadataFailed), operation)
+    pub(crate) fn redis_reshard_topology(
+        detail: impl Into<String>,
+        operation: &'static str,
+    ) -> DtError {
+        enrich(DtError::new(ErrorCode::PrerequisiteNotMet), operation)
+            .message("The Redis cluster topology is incomplete or changed")
+            .detail(detail)
+            .hint(
+                "Ensure every Redis cluster slot has a stable master owner, then restart the task.",
+            )
             .origin(OriginError::new("redis", None::<String>))
     }
 
@@ -125,8 +133,19 @@ pub(crate) mod extractor {
     }
 
     #[track_caller]
-    pub(crate) fn mysql_binlog_metadata(operation: &'static str) -> DtError {
-        enrich(DtError::new(ErrorCode::MetadataFailed), operation)
+    pub(crate) fn mysql_binlog_table_map_missing(
+        table_id: u64,
+        event_type: &'static str,
+        operation: &'static str,
+    ) -> DtError {
+        enrich(DtError::new(ErrorCode::StatementFailed), operation)
+            .message("A MySQL row event could not be decoded")
+            .detail(format!(
+                "the {event_type} event for source table ID {table_id} arrived before Ape-DTS received its table definition"
+            ))
+            .hint(
+                "Restart from an earlier binlog position so Ape-DTS can reload the table definition. If it repeats, check binlog retention and the source database logs.",
+            )
             .origin(OriginError::new("mysql", None::<String>))
     }
 
@@ -149,6 +168,13 @@ pub(crate) mod extractor {
         enrich(DtError::new(ErrorCode::TlsFailed), operation)
             .origin(OriginError::new("postgres", None::<String>))
             .source(error)
+    }
+
+    #[track_caller]
+    pub(crate) fn invalid_postgres_lsn(operation: &'static str) -> DtError {
+        enrich(DtError::new(ErrorCode::CheckpointReadFailed), operation)
+            .origin(OriginError::new("postgres", None::<String>))
+            .detail("a PostgreSQL replication position is invalid")
     }
 
     #[track_caller]
@@ -306,12 +332,14 @@ pub mod sinker {
     }
 
     #[track_caller]
-    pub(crate) fn redis_metadata(operation: &'static str) -> DtError {
+    pub(crate) fn redis_slot_topology(operation: &'static str) -> DtError {
         redis_destination(
-            ErrorCode::MetadataFailed,
-            "Redis cluster slot metadata is missing",
+            ErrorCode::PrerequisiteNotMet,
+            "A required Redis cluster slot has no master owner in the loaded topology",
             operation,
         )
+        .message("The Redis cluster slot map is incomplete or changed")
+        .hint("Ensure all Redis cluster slots are assigned and stable, then restart the task.")
     }
 
     #[track_caller]
@@ -323,10 +351,17 @@ pub mod sinker {
     }
 
     #[track_caller]
-    pub(crate) fn clickhouse_metadata() -> DtError {
+    pub(crate) fn clickhouse_source_metadata_missing() -> DtError {
         enrich(
-            DtError::new(ErrorCode::MetadataFailed),
+            DtError::new(ErrorCode::ObjectNotFound),
             "build_clickhouse_table",
+        )
+        .message("Source table metadata is unavailable for ClickHouse structure migration")
+        .detail(
+            "Ape-DTS could not determine the source table definition needed to build the ClickHouse table",
+        )
+        .hint(
+            "Verify that the source table still exists and rerun structure migration. If it repeats, contact support with the task ID and error code.",
         )
         .origin(OriginError::new("clickhouse", None::<String>))
     }
@@ -403,7 +438,7 @@ mod tests {
         let caller_line = line!() + 1;
         let extractor_error = extractor::mysql_sqlx(
             sqlx::Error::PoolTimedOut,
-            ErrorCode::MetadataFailed,
+            ErrorCode::MetadataReadFailed,
             "list_binary_logs",
         );
         assert_eq!(extractor_error.code(), ErrorCode::ConnectionTimeout);
@@ -442,5 +477,62 @@ mod tests {
         assert_eq!(report.stage, Stage::Task);
         assert_eq!(report.operation.as_deref(), Some("join_worker"));
         assert_eq!(report.endpoint, None);
+    }
+
+    #[test]
+    fn component_errors_explain_the_problem_and_next_action() {
+        let redis_reshard = anyhow::Error::new(extractor::redis_reshard_topology(
+            "Redis slot 42 has no master owner",
+            "find_redis_slot_owner",
+        ));
+        let report = ErrorReport::from_anyhow(&redis_reshard);
+        assert_eq!(report.code, ErrorCode::PrerequisiteNotMet);
+        assert_eq!(
+            report.message,
+            "The Redis cluster topology is incomplete or changed"
+        );
+        assert_eq!(
+            report.detail.as_deref(),
+            Some("Redis slot 42 has no master owner")
+        );
+        assert!(report
+            .hint
+            .as_deref()
+            .is_some_and(|hint| hint.contains("stable master owner")));
+
+        let mysql_binlog = anyhow::Error::new(extractor::mysql_binlog_table_map_missing(
+            73,
+            "write rows",
+            "decode_mysql_write_rows",
+        ));
+        let report = ErrorReport::from_anyhow(&mysql_binlog);
+        assert_eq!(report.code, ErrorCode::StatementFailed);
+        assert_eq!(report.message, "A MySQL row event could not be decoded");
+        assert!(report
+            .detail
+            .as_deref()
+            .is_some_and(|detail| detail.contains("table ID 73")));
+        assert!(report
+            .hint
+            .as_deref()
+            .is_some_and(|hint| hint.contains("earlier binlog position")));
+
+        let redis_sink =
+            anyhow::Error::new(sinker::redis_slot_topology("find_redis_slot_hash_tag"));
+        let report = ErrorReport::from_anyhow(&redis_sink);
+        assert_eq!(report.code, ErrorCode::PrerequisiteNotMet);
+        assert_eq!(
+            report.message,
+            "The Redis cluster slot map is incomplete or changed"
+        );
+
+        let clickhouse = anyhow::Error::new(sinker::clickhouse_source_metadata_missing());
+        let report = ErrorReport::from_anyhow(&clickhouse);
+        assert_eq!(report.code, ErrorCode::ObjectNotFound);
+        assert!(report.message.contains("ClickHouse structure migration"));
+        assert!(report
+            .hint
+            .as_deref()
+            .is_some_and(|hint| hint.contains("rerun structure migration")));
     }
 }

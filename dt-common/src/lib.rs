@@ -1,5 +1,6 @@
 pub mod config;
 pub mod error;
+mod error_boundary;
 pub mod limiter;
 pub mod log_filter;
 pub mod logger;

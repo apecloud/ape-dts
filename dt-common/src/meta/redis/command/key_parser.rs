@@ -2,7 +2,9 @@ use std::collections::{HashMap, HashSet};
 
 use anyhow::bail;
 
-use crate::error::{DtError, ErrorCode, OriginError};
+use crate::error_boundary::redis::{
+    command as redis_command_error, command_catalog as redis_command_catalog_error,
+};
 
 use super::{cmd_constants::CmdConstants, cmd_meta::CmdMeta};
 
@@ -231,23 +233,6 @@ impl KeyParser {
         }
         crc
     }
-}
-
-#[track_caller]
-fn redis_command_error(detail: impl Into<String>) -> DtError {
-    DtError::new(ErrorCode::StatementFailed)
-        .detail(detail)
-        .operation("parse_redis_command_keys")
-        .origin(OriginError::new("redis", None::<String>))
-}
-
-#[track_caller]
-fn redis_command_catalog_error(error: serde_json::Error, operation: &'static str) -> DtError {
-    DtError::new(ErrorCode::InvariantViolated)
-        .detail("the embedded Redis command catalog is invalid")
-        .operation(operation)
-        .origin(OriginError::new("redis", None::<String>))
-        .source(error)
 }
 
 #[cfg(test)]

@@ -1,7 +1,7 @@
 use anyhow::bail;
 use dt_common::error::ErrorCode;
 
-use crate::error::extractor::redis_source as redis_protocol_error;
+use crate::error_boundary::extractor::redis_source as redis_protocol_error;
 
 /// Represents a redis RESP protocol response
 /// https://redis.io/topics/protocol#resp-protocol-description

@@ -6,7 +6,7 @@ use async_std::{io::BufReader, net::TcpStream, prelude::*};
 use async_trait::async_trait;
 
 use super::{redis_resp_reader::RedisRespReader, redis_resp_types::Value, StreamReader};
-use crate::error::extractor::{
+use crate::error_boundary::extractor::{
     redis_invalid_config as invalid_config, redis_io, redis_source as redis_source_error,
 };
 use dt_common::{

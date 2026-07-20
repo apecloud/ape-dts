@@ -326,7 +326,11 @@ impl PgCdcExtractor {
                 .oid_to_type
                 .get(&column.type_id())
                 .ok_or_else(|| {
-                    DtError::new(ErrorCode::MetadataFailed)
+                    DtError::new(ErrorCode::UnsupportedTableStructure)
+                        .detail(format!(
+                            "PostgreSQL type OID {} is not supported for column {col_name}",
+                            column.type_id()
+                        ))
                         .stage(Stage::Extractor)
                         .operation("decode_postgres_relation")
                         .endpoint(EndpointRole::Source)
@@ -410,7 +414,16 @@ impl PgCdcExtractor {
             let mut col_values_tmp = HashMap::new();
             for col in basic.id_cols.iter() {
                 let value = col_values_after.get(col).cloned().ok_or_else(|| {
-                    DtError::new(ErrorCode::MetadataFailed)
+                    DtError::new(ErrorCode::UnsupportedTableStructure)
+                        .message(
+                            "PostgreSQL update events do not contain the columns needed to identify rows",
+                        )
+                        .detail(format!(
+                            "PostgreSQL update does not contain key column {col}; check replica identity"
+                        ))
+                        .hint(
+                            "Configure a primary key or REPLICA IDENTITY FULL for the source table, then restart the task.",
+                        )
                         .stage(Stage::Extractor)
                         .operation("decode_postgres_update_key")
                         .endpoint(EndpointRole::Source)

@@ -1,7 +1,7 @@
 use anyhow::bail;
 
 use super::rdb_reader::RdbReader;
-use crate::error::extractor::redis_rdb as rdb_error;
+use crate::error_boundary::extractor::redis_rdb as rdb_error;
 use crate::extractor::redis::StreamReader;
 use dt_common::meta::redis::redis_object::RedisString;
 

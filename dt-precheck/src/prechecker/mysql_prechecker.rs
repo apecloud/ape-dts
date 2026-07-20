@@ -13,7 +13,7 @@ use crate::{
 };
 
 use super::traits::Prechecker;
-use crate::error::failure as precheck_failure;
+use crate::error_boundary::failure as precheck_failure;
 use dt_common::error::ErrorCode;
 
 const MYSQL_SUPPORT_DB_VERSION_REGEX: &str = r"5\..*|8\..*";

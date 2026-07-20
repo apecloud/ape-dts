@@ -12,7 +12,7 @@ use dt_common::{
 };
 
 use crate::{
-    call_batch_fn, error::sinker as sinker_error, sinker::base_sinker::BaseSinker, Sinker,
+    call_batch_fn, error_boundary::sinker as sinker_error, sinker::base_sinker::BaseSinker, Sinker,
 };
 
 const SIGN_COL_NAME: &str = "_ape_dts_is_deleted";

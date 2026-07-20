@@ -6,7 +6,7 @@ use tokio::{sync::Mutex, task::JoinSet};
 use url::Url;
 
 use crate::{
-    error::extractor::{
+    error_boundary::extractor::{
         redis_invalid_config as invalid_config, redis_source as redis_source_error,
     },
     extractor::{
@@ -94,7 +94,7 @@ impl RedisClusterPsyncExtractor {
         let nodes = RedisUtil::get_cluster_master_nodes(&mut conn)?;
         if nodes.is_empty() {
             bail!(redis_source_error(
-                ErrorCode::MetadataFailed,
+                ErrorCode::PrerequisiteNotMet,
                 "source Redis cluster has no master nodes",
                 "list_redis_cluster_master_nodes",
             ));

@@ -24,8 +24,15 @@ impl MysqlTbMeta {
     #[inline(always)]
     pub fn get_col_type(&self, col: &str) -> anyhow::Result<&MysqlColType> {
         self.col_type_map.get(col).ok_or_else(|| {
-            DtError::new(ErrorCode::MetadataFailed)
-                .detail(format!("column {col} is missing from MySQL table metadata"))
+            DtError::new(ErrorCode::ObjectNotFound)
+                .message("A required source column was not found in the loaded table definition")
+                .detail(format!(
+                    "column {col} is missing from the MySQL definition for {}.{}",
+                    self.basic.schema, self.basic.tb
+                ))
+                .hint(
+                    "Check configured column names and whether the source table changed, then restart the task to reload its definition.",
+                )
                 .operation("get_mysql_column_type")
                 .object(ErrorObject {
                     schema: Some(self.basic.schema.clone()),

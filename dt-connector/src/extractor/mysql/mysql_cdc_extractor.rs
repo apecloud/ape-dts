@@ -24,7 +24,7 @@ use mysql_binlog_connector_rust::{
 };
 
 use crate::{
-    error::extractor::{mysql_binlog, mysql_binlog_metadata},
+    error_boundary::extractor::{mysql_binlog, mysql_binlog_table_map_missing},
     extractor::{
         base_extractor::{BaseExtractor, ExtractState},
         mysql::binlog_util::BinlogUtil,
@@ -259,10 +259,14 @@ impl MysqlCdcExtractor {
 
             EventData::WriteRows(mut w) => {
                 for event in w.rows.iter_mut() {
-                    let table_map_event = ctx
-                        .table_map_event_map
-                        .get(&w.table_id)
-                        .ok_or_else(|| mysql_binlog_metadata("decode_mysql_write_rows"))?;
+                    let table_map_event =
+                        ctx.table_map_event_map.get(&w.table_id).ok_or_else(|| {
+                            mysql_binlog_table_map_missing(
+                                w.table_id,
+                                "write rows",
+                                "decode_mysql_write_rows",
+                            )
+                        })?;
                     if self.filter_event(table_map_event, RowType::Insert) {
                         self.extract_state
                             .record_extracted_metrics(1, size_of_val(event) as u64);
@@ -286,10 +290,14 @@ impl MysqlCdcExtractor {
 
             EventData::UpdateRows(mut u) => {
                 for event in u.rows.iter_mut() {
-                    let table_map_event = ctx
-                        .table_map_event_map
-                        .get(&u.table_id)
-                        .ok_or_else(|| mysql_binlog_metadata("decode_mysql_update_rows"))?;
+                    let table_map_event =
+                        ctx.table_map_event_map.get(&u.table_id).ok_or_else(|| {
+                            mysql_binlog_table_map_missing(
+                                u.table_id,
+                                "update rows",
+                                "decode_mysql_update_rows",
+                            )
+                        })?;
                     if self.filter_event(table_map_event, RowType::Update) {
                         self.extract_state
                             .record_extracted_metrics(1, size_of_val(event) as u64);
@@ -316,10 +324,14 @@ impl MysqlCdcExtractor {
 
             EventData::DeleteRows(mut d) => {
                 for event in d.rows.iter_mut() {
-                    let table_map_event = ctx
-                        .table_map_event_map
-                        .get(&d.table_id)
-                        .ok_or_else(|| mysql_binlog_metadata("decode_mysql_delete_rows"))?;
+                    let table_map_event =
+                        ctx.table_map_event_map.get(&d.table_id).ok_or_else(|| {
+                            mysql_binlog_table_map_missing(
+                                d.table_id,
+                                "delete rows",
+                                "decode_mysql_delete_rows",
+                            )
+                        })?;
                     if self.filter_event(table_map_event, RowType::Delete) {
                         self.extract_state
                             .record_extracted_metrics(1, size_of_val(event) as u64);
@@ -394,8 +406,10 @@ impl MysqlCdcExtractor {
         let ignore_cols = self.filter.get_ignore_cols(db, tb);
 
         if included_columns.len() != event.column_values.len() {
-            bail! {DtError::new(ErrorCode::InvariantViolated)
-            .detail("included columns do not match column values in the MySQL binlog event")
+            bail! {DtError::new(ErrorCode::StatementFailed)
+            .message("A MySQL row event could not be decoded")
+            .detail("the included-column bitmap does not match the values in the MySQL binlog event")
+            .hint("Restart from an earlier binlog position. If it repeats, check binlog integrity and the source database logs.")
             .stage(Stage::Extractor)
             .operation("parse_mysql_binlog_row")
             .endpoint(EndpointRole::Source)

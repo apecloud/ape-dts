@@ -606,7 +606,7 @@ impl MysqlStructFetcher {
                 }
             }
             Err(error) => {
-                bail! {crate::error::extractor::mysql_sqlx(
+                bail! {crate::error_boundary::extractor::mysql_sqlx(
                     error,
                     ErrorCode::StatementFailed,
                     "unescape_mysql_expression",

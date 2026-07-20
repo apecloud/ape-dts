@@ -1,4 +1,6 @@
-use crate::{error::sinker::clickhouse_metadata, rdb_router::RdbRouter, Sinker};
+use crate::{
+    error_boundary::sinker::clickhouse_source_metadata_missing, rdb_router::RdbRouter, Sinker,
+};
 
 use anyhow::bail;
 use clickhouse::Client;
@@ -117,7 +119,9 @@ impl ClickhouseStructSinker {
         let rdb_tb_meta = if let Some(tb_meta) = pg_tb_meta {
             &tb_meta.basic
         } else {
-            &mysql_tb_meta.ok_or_else(clickhouse_metadata)?.basic
+            &mysql_tb_meta
+                .ok_or_else(clickhouse_source_metadata_missing)?
+                .basic
         };
 
         let mut dst_cols = vec![];
@@ -164,7 +168,10 @@ impl ClickhouseStructSinker {
         let dst_col_type = if let Some(tb_meta) = mysql_tb_meta {
             Self::get_dst_col_type_from_mysql(col, tb_meta)
         } else {
-            Self::get_dst_col_type_from_pg(col, pg_tb_meta.ok_or_else(clickhouse_metadata)?)
+            Self::get_dst_col_type_from_pg(
+                col,
+                pg_tb_meta.ok_or_else(clickhouse_source_metadata_missing)?,
+            )
         }?;
 
         // Nested type Array() cannot be inside Nullable type

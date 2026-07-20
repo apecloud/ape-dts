@@ -189,7 +189,7 @@ impl PgCreateTableStatement {
             }
             Ok(ddl_data.to_sql())
         } else {
-            bail! {DtError::new(ErrorCode::MetadataFailed).detail(format!(
+            bail! {DtError::new(ErrorCode::UnsupportedTableStructure).detail(format!(
                 "failed to parse index, schema: {}, tb: {}, definition: {}",
                 &index.schema_name, &index.table_name, index.definition
             ))}

@@ -11,7 +11,7 @@ use async_trait::async_trait;
 use tokio::{sync::Mutex, time::Instant};
 
 use super::redis_client::RedisClient;
-use crate::error::extractor::redis_source as redis_source_error;
+use crate::error_boundary::extractor::redis_source as redis_source_error;
 use crate::extractor::{
     base_extractor::{BaseExtractor, ExtractState},
     redis::{

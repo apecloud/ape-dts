@@ -228,9 +228,9 @@ impl PgStructCheckFetcher {
         let mut results = Vec::new();
         let mut rows = sqlx::query(sql).fetch(&self.conn_pool);
         while let Some(row) = rows.try_next().await.map_err(|error| {
-            crate::error::extractor::postgres_sqlx(
+            crate::error_boundary::extractor::postgres_sqlx(
                 error,
-                dt_common::error::ErrorCode::MetadataFailed,
+                dt_common::error::ErrorCode::MetadataReadFailed,
                 "fetch_postgres_structure",
             )
         })? {

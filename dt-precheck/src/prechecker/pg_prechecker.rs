@@ -17,7 +17,7 @@ use crate::{
 };
 
 use super::{basic::BasicPrechecker, traits::Prechecker};
-use crate::error::failure as precheck_failure;
+use crate::error_boundary::failure as precheck_failure;
 
 const PG_SUPPORT_DB_VERSION_NUM_MIN: i32 = 120000;
 

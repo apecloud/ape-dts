@@ -179,10 +179,10 @@ impl BaseParallelizer {
             return Ok(());
         }
         if parallel_size < 1 {
-            return Err(crate::error::invalid_config("validate_parallel_size").into());
+            return Err(crate::error_boundary::invalid_config("validate_parallel_size").into());
         }
         if sinkers.is_empty() {
-            return Err(crate::error::invariant("validate_sinkers").into());
+            return Err(crate::error_boundary::invariant("validate_sinkers").into());
         }
 
         let mut pending = sub_data_items.into_iter();
@@ -213,8 +213,8 @@ impl BaseParallelizer {
         }
 
         while let Some(result) = join_set.join_next().await {
-            let sinker_index =
-                result.map_err(|error| crate::error::worker(error, "join_sink_worker"))??;
+            let sinker_index = result
+                .map_err(|error| crate::error_boundary::worker(error, "join_sink_worker"))??;
             if let Some(data) = pending.next() {
                 spawn_sink_task(
                     &mut join_set,

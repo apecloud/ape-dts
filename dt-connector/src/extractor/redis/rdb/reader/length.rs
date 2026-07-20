@@ -1,7 +1,7 @@
 use crate::extractor::redis::StreamReader;
 
 use super::rdb_reader::RdbReader;
-use crate::error::extractor::redis_rdb as rdb_error;
+use crate::error_boundary::extractor::redis_rdb as rdb_error;
 use anyhow::bail;
 use byteorder::{BigEndian, ByteOrder};
 

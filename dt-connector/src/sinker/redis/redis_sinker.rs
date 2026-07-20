@@ -27,8 +27,9 @@ use super::entry_rewriter::EntryRewriter;
 use crate::{
     call_batch_fn,
     data_marker::DataMarker,
-    error::sinker::{
-        redis as redis_driver_error, redis_destination as redis_destination_error, redis_metadata,
+    error_boundary::sinker::{
+        redis as redis_driver_error, redis_destination as redis_destination_error,
+        redis_slot_topology,
     },
     rdb_router::RdbRouter,
     sinker::base_sinker::BaseSinker,
@@ -387,14 +388,14 @@ impl RedisSinker {
                     let slot = KeyParser::calc_slot(cmd.keys[0].as_bytes());
                     node.slot_hash_tag_map
                         .get(&slot)
-                        .ok_or_else(|| redis_metadata("find_redis_slot_hash_tag"))?
+                        .ok_or_else(|| redis_slot_topology("find_redis_slot_hash_tag"))?
                 } else {
                     // if the redis cmd has no key, find a hash_tag for any slot in current node
                     let (_, hash_tag) = node
                         .slot_hash_tag_map
                         .iter()
                         .next()
-                        .ok_or_else(|| redis_metadata("find_redis_node_hash_tag"))?;
+                        .ok_or_else(|| redis_slot_topology("find_redis_node_hash_tag"))?;
                     hash_tag
                 };
                 &format!("{}{{{}}}", data_marker.marker, hash_tag)

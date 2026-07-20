@@ -131,8 +131,12 @@ impl StarrocksStructSinker {
         } else if let Some(tb_meta) = mysql_tb_meta {
             &tb_meta.basic
         } else {
-            return Err(DtError::new(ErrorCode::MetadataFailed)
+            return Err(DtError::new(ErrorCode::ObjectNotFound)
+                .message("Source table metadata is unavailable for StarRocks structure migration")
                 .detail("source table metadata is missing while building StarRocks DDL")
+                .hint(
+                    "Verify that the source table still exists and rerun structure migration. If it repeats, contact support with the task ID and error code.",
+                )
                 .stage(Stage::Sinker)
                 .operation("build_starrocks_create_table")
                 .into());
@@ -219,11 +223,15 @@ impl StarrocksStructSinker {
         } else if let Some(tb_meta) = pg_tb_meta {
             self.get_dst_col_type_from_pg(col, tb_meta)
         } else {
-            return Err(DtError::new(ErrorCode::MetadataFailed)
+            return Err(DtError::new(ErrorCode::ObjectNotFound)
+                .message("Source column metadata is unavailable for StarRocks structure migration")
                 .detail(format!(
                     "source column metadata is missing for {}.{}.{}",
                     rdb_tb_meta.schema, rdb_tb_meta.tb, col
                 ))
+                .hint(
+                    "Check whether the source table changed, then restart structure migration to reload its definition.",
+                )
                 .stage(Stage::Sinker)
                 .operation("build_starrocks_column")
                 .into());

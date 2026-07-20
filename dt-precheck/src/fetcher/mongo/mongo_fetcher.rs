@@ -16,7 +16,7 @@ use mongodb::{
 };
 
 use crate::{
-    error::mongodb::{
+    error_boundary::mongodb::{
         provider as mongo_precheck_provider_error, state as mongo_precheck_state_error,
     },
     fetcher::traits::Fetcher,

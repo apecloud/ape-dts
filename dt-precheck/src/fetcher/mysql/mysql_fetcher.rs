@@ -6,7 +6,7 @@ use async_trait::async_trait;
 use sqlx::{mysql::MySqlRow, query, MySql, Pool};
 
 use crate::{
-    error::mysql::provider as mysql_precheck_error,
+    error_boundary::mysql::provider as mysql_precheck_error,
     fetcher::traits::Fetcher,
     meta::database_mode::{Constraint, Database, Schema, Table},
 };

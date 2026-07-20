@@ -6,7 +6,7 @@ use async_std::prelude::*;
 use dt_common::error::ErrorCode;
 
 use super::redis_resp_types::Value;
-use crate::error::extractor::redis_source as redis_protocol_error;
+use crate::error_boundary::extractor::redis_source as redis_protocol_error;
 
 pub struct RedisRespReader {
     pub read_len: usize,

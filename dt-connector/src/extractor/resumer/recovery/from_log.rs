@@ -5,7 +5,7 @@ use dashmap::DashMap;
 use tokio::{fs::File, io::AsyncBufReadExt, io::BufReader};
 
 use crate::{
-    error::extractor::resumer_config as resumer_config_error,
+    error_boundary::extractor::resumer_config as resumer_config_error,
     extractor::resumer::{
         recovery::{Recovery, RecoverySnapshotCache},
         utils::ResumerUtil,

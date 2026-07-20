@@ -50,7 +50,7 @@ HINT: Check object routing and create the required object or enable structure in
 | `PR005` | `UnsupportedTableStructure` | 表结构不受支持 |
 | `MD001` | `ObjectNotFound` | 必要的表、topic 或其他端点对象不存在 |
 | `MD002` | `DatabaseNotFound` | 数据库不存在 |
-| `MD099` | `MetadataFailed` | 端点元数据操作失败，且无法进一步分类 |
+| `MD099` | `MetadataReadFailed` | 无法读取迁移所需的数据库系统信息 |
 | `DB001` | `StatementFailed` | 源端或目标端操作失败 |
 | `IC001` | `IntegrityViolation` | 数据违反约束 |
 | `ST001` | `CheckpointReadFailed` | 无法读取 checkpoint 状态 |
@@ -135,10 +135,24 @@ Provider 分类器和适配器统一位于 `dt-common::error::provider`。分类
 根阶段和端点，调用点负责提供操作和回退错误码。后续边界必须保留根错误。这些 wrapper
 必须使用 `#[track_caller]`，确保记录的位置仍然指向组件中实际失败的操作。
 
-每个业务 crate 必须将组件 wrapper 统一放在唯一的 `src/error.rs` 中，并通过
+每个 crate 必须将组件 wrapper 统一放在唯一的 `src/error_boundary.rs` 中，并通过
 `extractor`、`sinker` 或 provider 等内部模块区分所有权。禁止继续在业务模块旁新增
-组件错误 helper 文件。公共 provider 分类器仍统一位于
-`dt-common::error::provider`。
+组件错误 helper 文件。`error_boundary` 表示将底层失败分类或补充为 Ape-DTS 错误的
+边界，与 `dt-common::error` 中的公共错误契约相互独立。公共 provider 分类器仍统一
+位于 `dt-common::error::provider`。
+
+`MD099 MetadataReadFailed` 只作为读取或解析端点 catalog、控制面元数据失败时的
+兜底码。Schema/结构本身是迁移对象，并不代表所有结构错误都是元数据读取错误。对象
+不存在使用 `MD001`/`MD002`，结构不受支持使用 `PR005`，版本或拓扑前置条件不满足
+使用 `PR001`/`PR002`，目标端拒绝 DDL 使用 `DB001`。
+
+错误分类必须依据用户能够检查或修改什么，而不是依据发现错误的内部模块或数据结构。
+找不到 schema、table 或 column 时使用 `MD001`，并填写受影响对象；CDC row event 缺少
+对应的 table/relation definition 时使用 `DB001`，并提示如何从更早的日志位置重启；
+Redis slot map 不完整时使用 `PR001`，并提示先稳定集群拓扑。只有不存在合理的端点、
+配置或迁移侧处理方式时才使用 `IN001`。cache entry、OID map 或 Rust type 等内部术语
+不得成为唯一解释；用户消息和处理建议必须说明受影响的端点行为与下一步动作。
+`DETAIL` 可以保留 table ID、relation ID 等有助于关联 provider 日志的标识。
 
 ## Provider 原始错误保留
 

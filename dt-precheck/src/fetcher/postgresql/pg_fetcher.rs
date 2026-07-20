@@ -11,7 +11,7 @@ use futures::{Stream, TryStreamExt};
 use sqlx::{postgres::PgRow, query, Pool, Postgres, Row};
 
 use crate::{
-    error::postgres::provider as postgres_precheck_error,
+    error_boundary::postgres::provider as postgres_precheck_error,
     fetcher::traits::Fetcher,
     meta::database_mode::{Constraint, Database, Schema, Table},
 };

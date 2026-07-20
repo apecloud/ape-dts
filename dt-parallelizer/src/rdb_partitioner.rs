@@ -110,7 +110,7 @@ impl RdbPartitioner {
         &mut self,
         _data: Vec<RowData>,
     ) -> anyhow::Result<Vec<Vec<RowData>>> {
-        Err(crate::error::invariant("partition_for_row_data").into())
+        Err(crate::error_boundary::invariant("partition_for_row_data").into())
     }
 
     pub async fn close(&mut self) -> anyhow::Result<()> {

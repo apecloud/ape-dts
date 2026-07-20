@@ -14,7 +14,7 @@ use std::collections::HashMap;
 use dt_common::meta::{col_value::ColValue, row_data::RowData};
 use serde::{Deserialize, Serialize};
 
-use crate::error::router::invalid_config as invalid_router_config;
+use crate::error_boundary::router::invalid_config as invalid_router_config;
 
 type SchemaMap = HashMap<String, String>;
 type TbMap = HashMap<(String, String), (String, String)>;

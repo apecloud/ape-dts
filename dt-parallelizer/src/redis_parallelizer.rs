@@ -68,7 +68,7 @@ impl Parallelizer for RedisParallelizer {
                 let slots = entry.cal_slots(&self.key_parser)?;
                 for i in 1..slots.len() {
                     if slots[i] != slots[0] {
-                        bail! {crate::error::redis_command(
+                        bail! {crate::error_boundary::redis_command(
                             format!(
                             "multi keys don't hash to the same slot, cmd: {}",
                             entry.cmd
@@ -101,15 +101,15 @@ impl Parallelizer for RedisParallelizer {
                 .slot_node_map
                 .get(&slots[0])
                 .copied()
-                .ok_or_else(|| crate::error::invariant("route_redis_slot"))?;
+                .ok_or_else(|| crate::error_boundary::invariant("route_redis_slot"))?;
             let sinker_index = self
                 .node_sinker_index_map
                 .get(node)
                 .copied()
-                .ok_or_else(|| crate::error::invariant("route_redis_node"))?;
+                .ok_or_else(|| crate::error_boundary::invariant("route_redis_node"))?;
             node_data_items
                 .get_mut(sinker_index)
-                .ok_or_else(|| crate::error::invariant("route_redis_sinker"))?
+                .ok_or_else(|| crate::error_boundary::invariant("route_redis_sinker"))?
                 .push(dt_item);
         }
 
@@ -123,9 +123,9 @@ impl Parallelizer for RedisParallelizer {
         }
 
         for future in futures {
-            future
-                .await
-                .map_err(|error| crate::error::worker(error, "join_redis_sink_worker"))??;
+            future.await.map_err(|error| {
+                crate::error_boundary::worker(error, "join_redis_sink_worker")
+            })??;
         }
 
         Ok(data_size)

@@ -25,10 +25,15 @@ impl PgTbMeta {
     #[inline(always)]
     pub fn get_col_type(&self, col: &str) -> anyhow::Result<&PgColType> {
         self.col_type_map.get(col).ok_or_else(|| {
-            DtError::new(ErrorCode::MetadataFailed)
+            DtError::new(ErrorCode::ObjectNotFound)
+                .message("A required source column was not found in the loaded table definition")
                 .detail(format!(
-                    "column {col} is missing from PostgreSQL table metadata"
+                    "column {col} is missing from the PostgreSQL definition for {}.{}",
+                    self.basic.schema, self.basic.tb
                 ))
+                .hint(
+                    "Check configured column names and whether the source table changed, then restart the task to reload its definition.",
+                )
                 .operation("get_postgres_column_type")
                 .object(ErrorObject {
                     schema: Some(self.basic.schema.clone()),

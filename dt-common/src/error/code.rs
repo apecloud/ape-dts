@@ -117,10 +117,10 @@ define_error_codes! {
         message: "The configured database was not found",
         hint: "Check the database name and create the database if it is required.",
     }
-    MetadataFailed {
+    MetadataReadFailed {
         code: "MD099",
-        message: "Source or destination metadata could not be read",
-        hint: "Check metadata permissions and endpoint availability, then retry.",
+        message: "Ape-DTS could not read the database information required for migration",
+        hint: "Review the provider error, verify access to system catalogs and database compatibility, then retry.",
     }
     StatementFailed {
         code: "DB001",
@@ -202,5 +202,16 @@ mod tests {
             serde_json::to_string(&ErrorCode::ObjectNotFound).unwrap(),
             "\"MD001\""
         );
+        assert_eq!(
+            serde_json::to_string(&ErrorCode::MetadataReadFailed).unwrap(),
+            "\"MD099\""
+        );
+        assert_eq!(
+            ErrorCode::MetadataReadFailed.default_message(),
+            "Ape-DTS could not read the database information required for migration"
+        );
+        assert!(ErrorCode::MetadataReadFailed
+            .default_hint()
+            .contains("system catalogs"));
     }
 }

@@ -7,7 +7,7 @@ use sqlx::{query, ColumnIndex, Database, Decode, MySql, Pool, Postgres, QueryBui
 use dt_common::{config::resumer_config::ResumerConfig, meta::position::Position};
 
 use crate::{
-    error::checker::state_config,
+    error_boundary::checker::state_config,
     extractor::resumer::{utils::ResumerUtil, ResumerDbPool, ResumerType},
 };
 

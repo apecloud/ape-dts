@@ -4,7 +4,7 @@ use anyhow::{bail, Result};
 use clap::ValueEnum;
 use url::Url;
 
-use crate::error::config as config_error;
+use crate::error_boundary::config as config_error;
 
 const SERVER_ID_MIN: u64 = 10001;
 const SERVER_ID_MAX: u64 = 4_294_836_224;

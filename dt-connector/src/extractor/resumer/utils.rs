@@ -11,7 +11,7 @@ use sqlx::{
 use url::Url;
 
 use crate::{
-    error::extractor::resumer_config as resumer_config_error,
+    error_boundary::extractor::resumer_config as resumer_config_error,
     extractor::resumer::{
         RedisResumerConn, ResumerDbPool, ResumerType, DEFAULT_POSITION_KEY, DEFAULT_RESUMER_SCHEMA,
         DEFAULT_RESUMER_TABLE,

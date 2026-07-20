@@ -5,7 +5,7 @@ use tokio::sync::Mutex;
 use url::Url;
 
 use super::traits::Prechecker;
-use crate::error::failure as precheck_failure;
+use crate::error_boundary::failure as precheck_failure;
 use crate::{
     config::precheck_config::PrecheckConfig,
     fetcher::{redis::redis_fetcher::RedisFetcher, traits::Fetcher},
@@ -59,7 +59,7 @@ fn redis_cdc_precheck_mode(is_cluster: bool) -> RedisCdcPrecheckMode {
 fn redis_cluster_psync_url(base_url: &str, nodes: &[ClusterNode]) -> anyhow::Result<String> {
     let node = nodes.first().ok_or_else(|| {
         precheck_failure(
-            ErrorCode::MetadataFailed,
+            ErrorCode::PrerequisiteNotMet,
             "source Redis cluster has no master nodes",
             true,
             "build_redis_psync_url",

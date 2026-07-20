@@ -6,7 +6,7 @@ use sqlx::{MySql, Pool, Postgres};
 use strum::{Display, EnumString, IntoStaticStr};
 use tokio::time::Instant;
 
-use crate::error::extractor::resumer_config as resumer_config_error;
+use crate::error_boundary::extractor::resumer_config as resumer_config_error;
 use crate::extractor::resumer::{
     recorder::{to_database::DatabaseRecorder, Recorder},
     recovery::{from_database::DatabaseRecovery, from_log::LogRecovery, Recovery},

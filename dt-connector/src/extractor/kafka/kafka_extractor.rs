@@ -66,7 +66,7 @@ impl KafkaExtractor {
     async fn extract_avro(&mut self, consumer: StreamConsumer) -> anyhow::Result<()> {
         loop {
             let msg = consumer.recv().await.map_err(|error| {
-                crate::error::extractor::kafka(
+                crate::error_boundary::extractor::kafka(
                     error,
                     ErrorCode::StatementFailed,
                     "consume_kafka_message",
@@ -96,14 +96,18 @@ impl KafkaExtractor {
         config.set("session.timeout.ms", "10000");
 
         let consumer: StreamConsumer = config.create().map_err(|error| {
-            crate::error::extractor::kafka(error, ErrorCode::InvalidConfig, "create_kafka_consumer")
+            crate::error_boundary::extractor::kafka(
+                error,
+                ErrorCode::InvalidConfig,
+                "create_kafka_consumer",
+            )
         })?;
         // only support extract data from one topic, one partition
         let mut tpl = TopicPartitionList::new();
         if self.offset >= 0 {
             tpl.add_partition_offset(&self.topic, self.partition, Offset::Offset(self.offset))
                 .map_err(|error| {
-                    crate::error::extractor::kafka(
+                    crate::error_boundary::extractor::kafka(
                         error,
                         ErrorCode::InvalidConfig,
                         "set_kafka_partition_offset",
@@ -113,7 +117,7 @@ impl KafkaExtractor {
             tpl.add_partition(&self.topic, self.partition);
         }
         consumer.assign(&tpl).map_err(|error| {
-            crate::error::extractor::kafka(
+            crate::error_boundary::extractor::kafka(
                 error,
                 ErrorCode::InvalidConfig,
                 "assign_kafka_partition",

@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use sqlx::{MySql, Pool};
 
 use crate::{
-    error::sinker as sinker_error,
+    error_boundary::sinker as sinker_error,
     rdb_router::RdbRouter,
     sinker::{
         base_sinker::BaseSinker,

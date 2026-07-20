@@ -16,7 +16,7 @@ use dt_common::{
 use redis::{Connection, Value};
 
 use crate::{
-    error::extractor::redis_source as redis_source_error,
+    error_boundary::extractor::redis_source as redis_source_error,
     extractor::base_extractor::{BaseExtractor, ExtractState},
     Extractor,
 };
