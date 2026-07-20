@@ -10,8 +10,6 @@ use dt_main::{format_error, run_config};
 
 const ENV_SHUTDOWN_TIMEOUT_SECS: &str = "SHUTDOWN_TIMEOUT_SECS";
 const ENV_VERBOSE_ERRORS: &str = "APE_DTS_VERBOSE_ERRORS";
-#[cfg(feature = "tokio-console")]
-const ENV_TOKIO_CONSOLE: &str = "APE_DTS_TOKIO_CONSOLE";
 
 #[derive(Debug, Parser)]
 struct Args {
@@ -46,7 +44,6 @@ async fn main() -> ExitCode {
         env::set_var("RUST_BACKTRACE", "1");
     }
     install_panic_hook();
-    init_tokio_console();
 
     let args = Args::parse();
     let verbose_errors = args.verbose_errors || env::var(ENV_VERBOSE_ERRORS).as_deref() == Ok("1");
@@ -95,16 +92,6 @@ async fn run(args: Args) -> anyhow::Result<()> {
 
     run_config(config, args.init).await
 }
-
-#[cfg(feature = "tokio-console")]
-fn init_tokio_console() {
-    if env::var(ENV_TOKIO_CONSOLE).as_deref() == Ok("1") {
-        console_subscriber::init();
-    }
-}
-
-#[cfg(not(feature = "tokio-console"))]
-fn init_tokio_console() {}
 
 #[cfg(test)]
 mod tests {

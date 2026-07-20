@@ -1,4 +1,4 @@
-use std::{sync::atomic::AtomicBool, sync::Arc};
+use std::sync::{atomic::AtomicBool, Arc};
 
 use async_trait::async_trait;
 use tokio::sync::Mutex;

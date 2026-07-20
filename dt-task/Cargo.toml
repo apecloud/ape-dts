@@ -8,6 +8,7 @@ workspace = true
 
 [features]
 metrics = ["dt-common/metrics", "prometheus"]
+tracing = ["dt-common/tracing"]
 
 [dependencies]
 dt-common = { path = "../dt-common", version = "0.1.0" }
@@ -20,6 +21,7 @@ async-mutex = { workspace = true }
 async-trait = { workspace = true }
 mongodb = { workspace = true }
 tokio = { workspace = true }
+tokio-util = { workspace = true }
 concurrent-queue = { workspace = true }
 reqwest = { workspace = true }
 futures = { workspace = true }

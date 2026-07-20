@@ -169,6 +169,23 @@ appenders:
       roller:
         kind: delete
 
+  runtime_trace_appender:
+    kind: rolling_file
+    append: true
+    path: "LOG_DIR_PLACEHOLDER/runtime_trace.log"
+    encoder:
+      pattern: "{m}{n}"
+    policy:
+      kind: compound
+      trigger:
+        kind: size
+        limit: 100mb
+      roller:
+        kind: fixed_window
+        base: 1
+        count: 1
+        pattern: "LOG_DIR_PLACEHOLDER/runtime_trace{}.log"
+
   http_appender:
     kind: rolling_file
     append: true
@@ -255,6 +272,12 @@ loggers:
     level: LOG_LEVEL_PLACEHOLDER
     appenders:
       - task_appender
+    additive: false
+
+  runtime_trace_logger:
+    level: info
+    appenders:
+      - runtime_trace_appender
     additive: false
 
   http_logger:

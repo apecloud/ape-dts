@@ -5,6 +5,7 @@ use tokio::task::JoinSet;
 use dt_common::{
     error::{DtError, ErrorCode, Stage},
     monitor::task_monitor_handle::TaskMonitorHandle,
+    runtime_trace,
 };
 
 use super::{
@@ -39,7 +40,7 @@ impl SnapshotDispatcher {
     >(
         mut state: State,
         parallel_size: usize,
-        _worker_name: &'static str,
+        worker_name: &'static str,
         next_work: NextWork,
         run: Run,
         on_done: OnDone,
@@ -70,7 +71,9 @@ impl SnapshotDispatcher {
                 break;
             };
             let run_worker = Arc::clone(&run);
-            join_set.spawn(async move { run_worker(work).await });
+            join_set.spawn(runtime_trace::trace_task_future(worker_name, async move {
+                run_worker(work).await
+            }));
         }
 
         while let Some(result) = join_set.join_next().await {
@@ -89,7 +92,9 @@ impl SnapshotDispatcher {
                     break;
                 };
                 let run_worker = Arc::clone(&run);
-                join_set.spawn(async move { run_worker(work).await });
+                join_set.spawn(runtime_trace::trace_task_future(worker_name, async move {
+                    run_worker(work).await
+                }));
             }
         }
 

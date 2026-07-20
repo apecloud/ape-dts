@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 pub enum UnitType {
     Bytes,
     Records,

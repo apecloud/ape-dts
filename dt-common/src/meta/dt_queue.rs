@@ -26,16 +26,16 @@ pub struct DtQueue {
     cur_bytes: AtomicU64,
     not_empty: Arc<Notify>,
     not_full: Arc<Notify>,
-    enqueue_limiter: Option<Arc<BufferLimiter>>,
-    dequeue_limiter: Option<Arc<BufferLimiter>>,
+    enqueue_limiter: Option<BufferLimiter>,
+    dequeue_limiter: Option<BufferLimiter>,
 }
 
 impl DtQueue {
     pub fn new(
         capacity: usize,
         max_bytes: u64,
-        enqueue_limiter: Option<Arc<BufferLimiter>>,
-        dequeue_limiter: Option<Arc<BufferLimiter>>,
+        enqueue_limiter: Option<BufferLimiter>,
+        dequeue_limiter: Option<BufferLimiter>,
     ) -> Self {
         Self {
             queue: ConcurrentQueue::bounded(capacity),
@@ -89,7 +89,11 @@ impl DtQueue {
                     Err(e) => return Err(e.into()),
                 }
             }
-            self.not_full.notified().await;
+            crate::runtime_trace::instrument_wait(
+                "dtqueue.not_full.wait",
+                self.not_full.notified(),
+            )
+            .await;
         }
     }
 
@@ -125,7 +129,11 @@ impl DtQueue {
     }
 
     pub async fn wait_for_data(&self, max_wait: Duration) {
-        let _ = timeout(max_wait, self.not_empty.notified()).await;
+        let notified = crate::runtime_trace::instrument_wait(
+            "dtqueue.not_empty.wait",
+            self.not_empty.notified(),
+        );
+        let _ = timeout(max_wait, notified).await;
     }
 
     #[inline(always)]
@@ -142,7 +150,11 @@ impl DtQueue {
 mod tests {
     use std::{collections::HashMap, sync::Arc, time::Duration};
 
-    use tokio::time::{sleep, timeout};
+    use futures::FutureExt;
+    use tokio::{
+        sync::Notify,
+        time::{sleep, timeout},
+    };
 
     use super::{DtQueue, DtQueuePopError};
     use crate::{
@@ -156,6 +168,16 @@ mod tests {
             row_type::RowType,
         },
     };
+
+    #[tokio::test]
+    async fn notify_one_before_notified_completes_next_waiter_once() {
+        let notify = Notify::new();
+
+        notify.notify_one();
+
+        assert!(notify.notified().now_or_never().is_some());
+        assert!(notify.notified().now_or_never().is_none());
+    }
 
     fn heartbeat_item() -> DtItem {
         DtItem {
@@ -211,9 +233,7 @@ mod tests {
             max_mbps: 1,
             max_rps: 0,
         };
-        let dequeue_limiter = BufferLimiter::from_config(Some(&rate_config), None)
-            .map(Arc::new)
-            .unwrap();
+        let dequeue_limiter = BufferLimiter::from_config(Some(&rate_config), None).unwrap();
         let queue = DtQueue::new(1, 0, None, Some(dequeue_limiter));
         queue.push(bytes_item(2 * 1024 * 1024)).await.unwrap();
 

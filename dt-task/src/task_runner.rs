@@ -7,10 +7,13 @@ use std::{
     },
 };
 
+use crate::task_util::{ConnClient, TaskUtil};
 use anyhow::{bail, Context};
+use async_mutex::Mutex as AsyncMutex;
 use chrono::Local;
 use log4rs::config::{Config, Deserializers, RawConfig};
 use opendal::Operator;
+use std::sync::Mutex as StdMutex;
 use tokio::{
     fs::{self as tokio_fs, metadata, File},
     io::AsyncReadExt,
@@ -18,16 +21,8 @@ use tokio::{
     sync::{Mutex, RwLock},
     task::JoinSet,
 };
+use tokio_util::sync::CancellationToken;
 
-use super::{
-    extractor_util::ExtractorUtil, parallelizer_util::ParallelizerUtil, sinker_util::SinkerUtil,
-};
-use crate::task_util::{ConnClient, TaskUtil};
-use async_mutex::Mutex as AsyncMutex;
-use std::sync::Mutex as StdMutex;
-
-static LOG_HANDLE: StdMutex<Option<log4rs::Handle>> = StdMutex::new(None);
-use dt_common::log_filter::{parse_size_limit, SizeLimitFilterDeserializer};
 use dt_common::{
     config::{
         checker_config::CheckerConfig,
@@ -40,7 +35,9 @@ use dt_common::{
     },
     error::{DtError, Error, ErrorCode, Stage},
     limiter::buffer_limiter::BufferLimiter,
-    log_error, log_finished, log_info, log_warn,
+    log_error,
+    log_filter::{parse_size_limit, SizeLimitFilterDeserializer},
+    log_finished, log_info, log_runtime_trace, log_warn,
     meta::{dt_queue::DtQueue, position::Position, row_type::RowType, syncer::Syncer},
     monitor::{
         task_metrics::TaskMetricsType,
@@ -49,6 +46,7 @@ use dt_common::{
         FlushableMonitor,
     },
     rdb_filter::RdbFilter,
+    runtime_trace,
     utils::sql_util::SqlUtil,
 };
 use dt_connector::{
@@ -66,8 +64,14 @@ use dt_connector::{
 };
 use dt_pipeline::{base_pipeline::BasePipeline, lua_processor::LuaProcessor, Pipeline};
 
+use super::{
+    extractor_util::ExtractorUtil, parallelizer_util::ParallelizerUtil, sinker_util::SinkerUtil,
+};
+
 #[cfg(feature = "metrics")]
 use dt_common::monitor::prometheus_metrics::PrometheusMetrics;
+
+static LOG_HANDLE: StdMutex<Option<log4rs::Handle>> = StdMutex::new(None);
 
 #[derive(Clone)]
 pub struct TaskInfo {
@@ -150,6 +154,9 @@ impl TaskRunner {
     pub async fn start_task(&self, is_init: bool) -> anyhow::Result<()> {
         self.clear_check_logs().await?;
         self.init_log4rs().await?;
+        runtime_trace::init_tracing();
+        runtime_trace::set_task_summary_mode(self.config.tracing.task_summary_mode);
+        runtime_trace::set_output_format(self.config.tracing.output_format);
 
         let worker_thread_cnt = Handle::current().metrics().num_workers();
         log_info!(
@@ -250,6 +257,9 @@ impl TaskRunner {
         self.remove_empty_check_logs().await?;
         self.upload_check_logs_to_s3().await?;
         log_finished!("task finished");
+        if let Some(summary) = runtime_trace::dump_global_summary() {
+            log_runtime_trace!("{}", summary.trim_end());
+        }
         log::logger().flush();
         Ok(())
     }
@@ -471,11 +481,9 @@ impl TaskRunner {
         let enqueue_limiter = BufferLimiter::from_config(
             Some(&self.config.extractor_basic.rate_limiter),
             Some(&enqueue_capacity_limiter),
-        )
-        .map(Arc::new);
+        );
         let dequeue_limiter =
-            BufferLimiter::from_config(Some(&self.config.sinker_basic.rate_limiter), None)
-                .map(Arc::new);
+            BufferLimiter::from_config(Some(&self.config.sinker_basic.rate_limiter), None);
         let max_bytes = self.config.pipeline.capacity_limiter.buffer_memory_mb * 1024 * 1024;
         let buffer = Arc::new(DtQueue::new(
             self.config.pipeline.capacity_limiter.buffer_size,
@@ -629,8 +637,8 @@ impl TaskRunner {
         let interval_secs = self.config.pipeline.checkpoint_interval_secs;
         let task_flush_monitors: Vec<Arc<dyn FlushableMonitor + Send + Sync>> =
             vec![self.task_monitor.clone()];
-        let monitor_shut_down = Arc::new(AtomicBool::new(false));
-        let monitor_task_shutdown = monitor_shut_down.clone();
+        let monitor_shutdown = CancellationToken::new();
+        let monitor_task_shutdown = monitor_shutdown.clone();
         let monitor_task = tokio::spawn(async move {
             TaskUtil::flush_monitors(interval_secs, monitor_task_shutdown, &task_flush_monitors)
                 .await;
@@ -640,7 +648,7 @@ impl TaskRunner {
         let worker_result =
             Self::run_task_workers(extractor.clone(), pipeline.clone(), shut_down.clone()).await;
 
-        monitor_shut_down.store(true, Ordering::Release);
+        monitor_shutdown.cancel();
         let monitor_result = monitor_task
             .await
             .map_err(|error| -> anyhow::Error {
@@ -671,20 +679,26 @@ impl TaskRunner {
         let mut join_set = JoinSet::new();
 
         let extractor_worker = extractor.clone();
-        join_set.spawn(async move {
-            (
-                SingleTaskWorker::Extractor,
-                Self::run_extractor_worker(extractor_worker).await,
-            )
-        });
+        join_set.spawn(runtime_trace::trace_task_future(
+            "task.extractor_worker",
+            async move {
+                (
+                    SingleTaskWorker::Extractor,
+                    Self::run_extractor_worker(extractor_worker).await,
+                )
+            },
+        ));
 
         let pipeline_worker = pipeline.clone();
-        join_set.spawn(async move {
-            (
-                SingleTaskWorker::Pipeline,
-                Self::run_pipeline_worker(pipeline_worker).await,
-            )
-        });
+        join_set.spawn(runtime_trace::trace_task_future(
+            "task.pipeline_worker",
+            async move {
+                (
+                    SingleTaskWorker::Pipeline,
+                    Self::run_pipeline_worker(pipeline_worker).await,
+                )
+            },
+        ));
         let mut extractor_done = false;
         let mut pipeline_done = false;
         let mut failure = None;

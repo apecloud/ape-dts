@@ -4,8 +4,8 @@ use std::sync::{
 };
 
 use anyhow::bail;
-use tokio::task::yield_now;
 
+use crate::{data_marker::DataMarker, rdb_router::RdbRouter};
 use dt_common::{
     config::{
         config_enums::DbType,
@@ -15,23 +15,17 @@ use dt_common::{
     log_debug, log_error, log_info,
     meta::{
         dcl_meta::{dcl_data::DclData, dcl_parser::DclParser},
-        ddl_meta::ddl_data::DdlData,
-        dt_queue::DtQueue,
-        struct_meta::struct_data::StructData,
-    },
-    utils::sql_util::SqlUtil,
-};
-use dt_common::{
-    meta::{
-        ddl_meta::ddl_parser::DdlParser,
+        ddl_meta::{ddl_data::DdlData, ddl_parser::DdlParser},
         dt_data::{DtData, DtItem},
+        dt_queue::DtQueue,
         position::Position,
         row_data::RowData,
+        struct_meta::struct_data::StructData,
     },
+    runtime_trace,
     time_filter::TimeFilter,
+    utils::sql_util::SqlUtil,
 };
-
-use crate::{data_marker::DataMarker, rdb_router::RdbRouter};
 
 use super::extractor_monitor::ExtractorMonitor;
 
@@ -201,8 +195,13 @@ impl BaseExtractor {
         } else {
             ddl_data
         };
+        // can not use `buffer.wait_util_empty` since `push_ddl` is used with `push_row`
         while !self.buffer.is_empty() {
-            yield_now().await;
+            runtime_trace::instrument_wait(
+                "yield_now.extractor.push_ddl",
+                tokio::task::yield_now(),
+            )
+            .await;
         }
         self.push_dt_data(state, DtData::Ddl { ddl_data }, position)
             .await
@@ -333,7 +332,11 @@ impl BaseExtractor {
 
     pub async fn wait_task_finish(&self, state: &mut ExtractState) -> anyhow::Result<()> {
         while !self.buffer.is_empty() {
-            yield_now().await;
+            runtime_trace::instrument_wait(
+                "yield_now.extractor.wait_task_finish",
+                tokio::task::yield_now(),
+            )
+            .await;
         }
 
         state.monitor.try_flush(true).await;

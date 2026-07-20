@@ -1599,6 +1599,7 @@ dependencies = [
  "chrono",
  "concurrent-queue",
  "configparser",
+ "console-subscriber",
  "dashmap",
  "dotenv",
  "futures",
@@ -1626,7 +1627,11 @@ dependencies = [
  "strum",
  "thiserror 1.0.69",
  "tokio",
+ "tokio-metrics",
  "tokio-postgres",
+ "tonic",
+ "tonic-prost",
+ "tracing-subscriber",
  "url",
  "urlencoding",
 ]
@@ -1684,14 +1689,11 @@ version = "2.0.26"
 dependencies = [
  "anyhow",
  "clap",
- "console-subscriber",
  "dt-common",
  "dt-precheck",
  "dt-task",
  "log",
  "tokio",
- "tonic",
- "tonic-prost",
 ]
 
 [[package]]
@@ -1788,6 +1790,7 @@ dependencies = [
  "sqlx",
  "strum",
  "tokio",
+ "tokio-util 0.7.15",
 ]
 
 [[package]]
@@ -1810,6 +1813,7 @@ dependencies = [
  "futures",
  "geo-types",
  "hex",
+ "libc",
  "log",
  "log4rs",
  "mongodb",
@@ -5787,6 +5791,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "tokio-metrics"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9eb550d0339653b52b1a4b03b96d0e6a97ee0641ed88b3c0cd098c7fabb275f3"
+dependencies = [
+ "futures-util",
+ "pin-project-lite",
+ "tokio-stream",
+]
+
+[[package]]
 name = "tokio-native-tls"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5874,6 +5889,8 @@ dependencies = [
  "futures-core",
  "futures-io",
  "futures-sink",
+ "futures-util",
+ "hashbrown 0.15.4",
  "pin-project-lite",
  "tokio",
 ]
