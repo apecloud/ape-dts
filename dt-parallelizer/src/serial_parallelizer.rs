@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+
 use dt_common::meta::{
     dcl_meta::dcl_data::DclData, ddl_meta::ddl_data::DdlData, dt_data::DtItem, dt_queue::DtQueue,
     row_data::RowData, struct_meta::struct_data::StructData,
@@ -103,7 +104,11 @@ impl Parallelizer for SerialParallelizer {
             bytes: 0,
         };
 
+        let workers_used = usize::from(!data.is_empty());
         sinkers[0].lock().await.sink_struct(data).await?;
+        self.base_parallelizer
+            .record_workers_per_drain(workers_used)
+            .await;
 
         Ok(data_size)
     }

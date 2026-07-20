@@ -1,17 +1,20 @@
 use std::{cmp, sync::Arc};
 
-use super::{base_parallelizer::BaseParallelizer, mongo_merger::MongoMerger};
-use crate::{DataSize, Merger, Parallelizer};
+use async_mutex::Mutex;
 use async_trait::async_trait;
-use dt_common::config::sinker_config::BasicSinkerConfig;
-use dt_common::meta::dcl_meta::dcl_data::DclData;
-use dt_common::meta::ddl_meta::ddl_data::DdlData;
-use dt_common::meta::dt_queue::DtQueue;
-use dt_common::meta::{
-    dt_data::DtItem, rdb_meta_manager::RdbMetaManager, row_data::RowData, row_type::RowType,
-    struct_meta::struct_data::StructData,
+
+use dt_common::{
+    config::sinker_config::BasicSinkerConfig,
+    meta::{
+        dcl_meta::dcl_data::DclData, ddl_meta::ddl_data::DdlData, dt_data::DtItem,
+        dt_queue::DtQueue, rdb_meta_manager::RdbMetaManager, row_data::RowData, row_type::RowType,
+        struct_meta::struct_data::StructData,
+    },
 };
 use dt_connector::Sinker;
+
+use super::{base_parallelizer::BaseParallelizer, mongo_merger::MongoMerger};
+use crate::{DataSize, Merger, Parallelizer};
 
 // Shared parallelizer for merge and checker flows.
 pub struct MergeParallelizer {
@@ -54,23 +57,28 @@ impl Parallelizer for MergeParallelizer {
     async fn sink_dml(
         &mut self,
         data: Vec<RowData>,
-        sinkers: &[Arc<async_mutex::Mutex<Box<dyn Sinker + Send>>>],
+        sinkers: &[Arc<Mutex<Box<dyn Sinker + Send>>>],
     ) -> anyhow::Result<DataSize> {
         let mut data_size = DataSize::default();
         let mut tb_merged_data = self.merger.merge(data).await?;
+        let mut workers_used = 0;
         for merge_type in [MergeType::Delete, MergeType::Insert, MergeType::Unmerged] {
-            data_size.add(
-                self.sink_dml_adaptive(&mut tb_merged_data, sinkers, merge_type)
-                    .await?,
-            );
+            let (sub_data_size, sub_workers_used) = self
+                .sink_dml_adaptive(&mut tb_merged_data, sinkers, merge_type)
+                .await?;
+            data_size.add(sub_data_size);
+            workers_used = workers_used.max(sub_workers_used);
         }
+        self.base_parallelizer
+            .record_workers_per_drain(workers_used)
+            .await;
         Ok(data_size)
     }
 
     async fn sink_ddl(
         &mut self,
         data: Vec<DdlData>,
-        sinkers: &[Arc<async_mutex::Mutex<Box<dyn Sinker + Send>>>],
+        sinkers: &[Arc<Mutex<Box<dyn Sinker + Send>>>],
     ) -> anyhow::Result<DataSize> {
         let data_size = DataSize {
             count: data.len() as u64,
@@ -107,7 +115,11 @@ impl Parallelizer for MergeParallelizer {
         sinkers: &[Arc<async_mutex::Mutex<Box<dyn Sinker + Send>>>],
     ) -> anyhow::Result<DataSize> {
         let count = data.len() as u64;
+        let workers_used = usize::from(!data.is_empty());
         sinkers[0].lock().await.sink_struct(data).await?;
+        self.base_parallelizer
+            .record_workers_per_drain(workers_used)
+            .await;
         Ok(DataSize { count, bytes: 0 })
     }
 }
@@ -163,7 +175,7 @@ impl MergeParallelizer {
         tb_merged_data_items: &mut [TbMergedData],
         sinkers: &[Arc<async_mutex::Mutex<Box<dyn Sinker + Send>>>],
         merge_type: MergeType,
-    ) -> anyhow::Result<DataSize> {
+    ) -> anyhow::Result<(DataSize, usize)> {
         let mut futures = Vec::new();
         let mut data_size = DataSize::default();
         for tb_merged_data in tb_merged_data_items.iter_mut() {
@@ -213,10 +225,11 @@ impl MergeParallelizer {
             }
         }
 
+        let workers_used = futures.len().min(self.parallel_size);
         for future in futures {
             future.await??;
         }
-        Ok(data_size)
+        Ok((data_size, workers_used))
     }
 
     async fn sink_unmerged_rows(
