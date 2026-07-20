@@ -450,11 +450,18 @@ impl TaskConfig {
         let keepalive_interval_secs: u64 =
             loader.get_with_default(EXTRACTOR, KEEPALIVE_INTERVAL_SECS, 10);
         let heartbeat_tb = loader.get_optional(EXTRACTOR, HEARTBEAT_TB);
-        let batch_size = loader.get_with_default(
-            EXTRACTOR,
-            BATCH_SIZE,
-            pipeline.capacity_limiter.buffer_size / Self::load_snapshot_parallel_size(loader),
-        );
+        let mut default_batch_size =
+            pipeline.capacity_limiter.buffer_size / Self::load_snapshot_parallel_size(loader);
+        if default_batch_size == 0 {
+            default_batch_size = pipeline.capacity_limiter.buffer_size;
+        }
+        let batch_size = loader.get_with_default(EXTRACTOR, BATCH_SIZE, default_batch_size);
+        if batch_size == 0 {
+            bail!(Error::ConfigError(format!(
+                "config [extractor].{} must be greater than 0",
+                BATCH_SIZE
+            )));
+        }
         let max_connections =
             loader.get_with_default(EXTRACTOR, MAX_CONNECTIONS, DEFAULT_MAX_CONNECTIONS);
 
@@ -1857,6 +1864,57 @@ parallel_size=2
         assert_eq!(rebalance.max_partitions_per_sinker, 2);
         assert_eq!(rebalance.min_partition_rows, 128);
         assert_eq!(rebalance.split_skew_ratio, 1.0);
+    }
+
+    #[test]
+    fn snapshot_extractor_default_batch_size_is_at_least_one() {
+        let config_path = write_temp_task_config(
+            r#"[extractor]
+db_type=mysql
+extract_type=snapshot
+url=mysql://127.0.0.1:3306
+parallel_size=32
+
+[sinker]
+db_type=mysql
+sink_type=write
+url=mysql://127.0.0.1:3307
+
+[pipeline]
+buffer_size=4
+"#,
+        );
+        let config = TaskConfig::new(config_path.to_str().unwrap()).unwrap();
+        fs::remove_file(config_path).unwrap();
+
+        match config.extractor {
+            ExtractorConfig::MysqlSnapshot { batch_size, .. } => {
+                assert_eq!(batch_size, 4);
+            }
+            _ => panic!("expected mysql snapshot extractor config"),
+        }
+    }
+
+    #[test]
+    fn snapshot_extractor_batch_size_must_be_greater_than_zero() {
+        let result = load_temp_task_config(
+            r#"[extractor]
+db_type=mysql
+extract_type=snapshot
+url=mysql://127.0.0.1:3306
+batch_size=0
+
+[sinker]
+db_type=mysql
+sink_type=write
+url=mysql://127.0.0.1:3307
+"#,
+        );
+
+        assert_eq!(
+            result.err().unwrap().to_string(),
+            "config error: config [extractor].batch_size must be greater than 0"
+        );
     }
 
     #[test]

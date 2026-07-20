@@ -67,8 +67,6 @@ impl Parallelizer for MergeParallelizer {
                 .sink_dml_adaptive(&mut tb_merged_data, sinkers, merge_type)
                 .await?;
             data_size.add(sub_data_size);
-            // Every adaptive phase assigns sinkers from index 0, so the union
-            // of workers used by all phases is the largest phase prefix.
             workers_used = workers_used.max(sub_workers_used);
         }
         self.base_parallelizer
