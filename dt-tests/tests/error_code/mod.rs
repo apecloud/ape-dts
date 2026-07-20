@@ -1,5 +1,7 @@
 use std::path::{Path, PathBuf};
 
+use dt_common::error::{ErrorCode, ErrorReport};
+
 mod config_errors;
 mod database_errors;
 
@@ -9,7 +11,7 @@ fn config_path(name: &str) -> PathBuf {
         .join(name)
 }
 
-async fn assert_error_output(config: &Path, expected: &str) {
+async fn error_report(config: &Path) -> ErrorReport {
     let error = dt_main::run_config(
         config
             .to_str()
@@ -18,7 +20,10 @@ async fn assert_error_output(config: &Path, expected: &str) {
     )
     .await
     .expect_err("error-code fixture must fail");
-    let output = dt_main::format_error(&error, false);
-    assert_eq!(output, expected);
-    assert!(!output.contains("panicked"), "{output}");
+    ErrorReport::from_anyhow(&error)
+}
+
+fn assert_error_identity(report: &ErrorReport, code: ErrorCode) {
+    assert_eq!(report.schema_version, 1);
+    assert_eq!(report.code, code);
 }

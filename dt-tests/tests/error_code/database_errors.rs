@@ -1,42 +1,43 @@
-use super::{assert_error_output, config_path};
+use dt_common::error::{EndpointRole, ErrorCode, Stage};
 use serial_test::serial;
 
+use super::{assert_error_identity, config_path, error_report};
+
 #[tokio::test]
 #[serial]
-async fn invalid_mysql_url_output_is_stable() {
-    assert_error_output(
-        &config_path("mysql_invalid_url.ini"),
-        "ERROR [CN001]: The database endpoint could not be reached\n\
-         TASK: error-code-mysql\n\
-         AFFECTED: source mysql\n\
-         HINT: Check the endpoint address, database service, network, firewall, and security group.",
-    )
-    .await;
+async fn invalid_mysql_url_report_identifies_source_and_provider() {
+    let report = error_report(&config_path("mysql_invalid_url.ini")).await;
+
+    assert_error_identity(&report, ErrorCode::InvalidConfig);
+    assert_eq!(report.task_id.as_deref(), Some("error-code-mysql"));
+    assert_eq!(report.endpoint, Some(EndpointRole::Source));
+    assert_eq!(
+        report.origin.as_ref().map(|origin| origin.system.as_str()),
+        Some("mysql")
+    );
 }
 
 #[tokio::test]
 #[serial]
-async fn invalid_postgres_url_output_is_stable() {
-    assert_error_output(
-        &config_path("pg_invalid_url.ini"),
-        "ERROR [CN001]: The database endpoint could not be reached\n\
-         TASK: error-code-pg\n\
-         AFFECTED: source postgres\n\
-         HINT: Check the endpoint address, database service, network, firewall, and security group.",
-    )
-    .await;
+async fn invalid_postgres_url_report_identifies_source_and_provider() {
+    let report = error_report(&config_path("pg_invalid_url.ini")).await;
+
+    assert_error_identity(&report, ErrorCode::InvalidConfig);
+    assert_eq!(report.task_id.as_deref(), Some("error-code-pg"));
+    assert_eq!(report.endpoint, Some(EndpointRole::Source));
+    assert_eq!(
+        report.origin.as_ref().map(|origin| origin.system.as_str()),
+        Some("postgres")
+    );
 }
 
 #[tokio::test]
 #[serial]
-async fn malformed_database_url_output_is_stable() {
-    assert_error_output(
-        &config_path("malformed_url.ini"),
-        "ERROR [CF002]: database connection URL is invalid\n\
-         TASK: error-code-malformed-url\n\
-         AFFECTED: source\n\
-         PHASE: loading task configuration\n\
-         HINT: Correct the reported configuration value and start the task again.",
-    )
-    .await;
+async fn malformed_database_url_report_identifies_config_and_source() {
+    let report = error_report(&config_path("malformed_url.ini")).await;
+
+    assert_error_identity(&report, ErrorCode::InvalidConfig);
+    assert_eq!(report.stage, Stage::Bootstrap);
+    assert_eq!(report.task_id.as_deref(), Some("error-code-malformed-url"));
+    assert_eq!(report.endpoint, Some(EndpointRole::Source));
 }
