@@ -104,7 +104,11 @@ impl Parallelizer for SerialParallelizer {
             bytes: 0,
         };
 
+        let workers_used = usize::from(!data.is_empty());
         sinkers[0].lock().await.sink_struct(data).await?;
+        self.base_parallelizer
+            .record_workers_per_drain(workers_used)
+            .await;
 
         Ok(data_size)
     }

@@ -169,6 +169,16 @@ impl PrometheusMetrics {
             TaskMetricsType::SinkerWorkersBusy,
         );
         register_handler(
+            "sinker_workers_per_drain_max",
+            "the max distinct sinker workers receiving non-empty data per pipeline drain",
+            TaskMetricsType::SinkerWorkersPerDrainMax,
+        );
+        register_handler(
+            "sinker_workers_per_drain_avg",
+            "the average distinct sinker workers receiving non-empty data per pipeline drain",
+            TaskMetricsType::SinkerWorkersPerDrainAvg,
+        );
+        register_handler(
             "sinker_sinked_records",
             "the number of records sinked",
             TaskMetricsType::SinkerSinkedRecords,
@@ -360,6 +370,8 @@ mod tests {
         let metrics = BTreeMap::from([
             (TaskMetricsType::SinkerWorkersConfigured, 10),
             (TaskMetricsType::SinkerWorkersBusy, 4),
+            (TaskMetricsType::SinkerWorkersPerDrainMax, 8),
+            (TaskMetricsType::SinkerWorkersPerDrainAvg, 6),
         ]);
         prometheus.set_metrics(&metrics);
 
@@ -370,5 +382,7 @@ mod tests {
 
         assert!(output.contains("sinker_workers_configured 10"));
         assert!(output.contains("sinker_workers_busy 4"));
+        assert!(output.contains("sinker_workers_per_drain_max 8"));
+        assert!(output.contains("sinker_workers_per_drain_avg 6"));
     }
 }

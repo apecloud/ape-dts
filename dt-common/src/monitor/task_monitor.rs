@@ -464,6 +464,23 @@ impl TaskMonitor {
                 continue;
             }
             calc_monitors.push((MonitorType::Pipeline, monitor.clone()));
+            let counter = monitor
+                .time_window_counters
+                .get(&CounterType::SinkerWorkersPerDrain)
+                .map(|r| r.value().clone());
+            if let Some(counter) = counter {
+                let statics = counter.statistics().await;
+                calc_handler(
+                    CalcType::Max,
+                    TaskMetricsType::SinkerWorkersPerDrainMax,
+                    statics.max,
+                );
+                calc_handler(
+                    CalcType::Avg,
+                    TaskMetricsType::SinkerWorkersPerDrainAvg,
+                    statics.avg_by_count,
+                );
+            }
         }
 
         let sinkers: Vec<Arc<Monitor>> = self
@@ -877,11 +894,42 @@ fn calc_nowindow_metrics(
 
 #[cfg(test)]
 mod sinker_worker_tests {
-    use super::collect_sinker_worker_metrics;
-    use crate::monitor::{
-        sinker_worker_metrics::SinkerWorkerMetrics, task_metrics::TaskMetricsType,
+    use super::{collect_sinker_worker_metrics, MonitorType, TaskMonitor};
+    use crate::{
+        config::config_enums::{TaskKind, TaskType},
+        monitor::{
+            counter_type::CounterType, monitor::Monitor,
+            sinker_worker_metrics::SinkerWorkerMetrics, task_metrics::TaskMetricsType,
+        },
     };
     use std::{collections::BTreeMap, sync::Arc};
+
+    fn build_task_monitor() -> TaskMonitor {
+        let task_type = TaskType::new(TaskKind::Cdc, None);
+        #[cfg(not(feature = "metrics"))]
+        {
+            TaskMonitor::new(Some(task_type))
+        }
+        #[cfg(feature = "metrics")]
+        {
+            use crate::{
+                config::metrics_config::MetricsConfig,
+                monitor::prometheus_metrics::PrometheusMetrics,
+            };
+            use std::collections::HashMap;
+
+            let prometheus = Arc::new(PrometheusMetrics::new(
+                Some(task_type),
+                MetricsConfig {
+                    http_host: "127.0.0.1".to_owned(),
+                    http_port: 0,
+                    workers: 1,
+                    metrics_labels: HashMap::new(),
+                },
+            ));
+            TaskMonitor::new(Some(task_type), prometheus)
+        }
+    }
 
     #[test]
     fn maps_all_sinker_worker_values_to_task_metrics() {
@@ -897,5 +945,25 @@ mod sinker_worker_tests {
         assert_eq!(result[&TaskMetricsType::SinkerWorkersBusy], 1);
 
         drop(guard);
+    }
+
+    #[tokio::test]
+    async fn aggregates_sinker_workers_used_per_drain_by_max_and_average() {
+        let task_monitor = build_task_monitor();
+        let pipeline_monitor = Arc::new(Monitor::new("pipeline", "task", 60, 1000, 10));
+        task_monitor.register(
+            "task",
+            vec![(MonitorType::Pipeline, pipeline_monitor.clone())],
+        );
+        pipeline_monitor
+            .add_batch_counter(CounterType::SinkerWorkersPerDrain, 2, 1)
+            .await
+            .add_batch_counter(CounterType::SinkerWorkersPerDrain, 4, 1)
+            .await;
+
+        let metrics = task_monitor.calc().await.unwrap();
+
+        assert_eq!(metrics[&TaskMetricsType::SinkerWorkersPerDrainMax], 4);
+        assert_eq!(metrics[&TaskMetricsType::SinkerWorkersPerDrainAvg], 3);
     }
 }

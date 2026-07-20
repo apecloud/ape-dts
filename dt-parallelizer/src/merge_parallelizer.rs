@@ -61,12 +61,19 @@ impl Parallelizer for MergeParallelizer {
     ) -> anyhow::Result<DataSize> {
         let mut data_size = DataSize::default();
         let mut tb_merged_data = self.merger.merge(data).await?;
+        let mut workers_used = 0;
         for merge_type in [MergeType::Delete, MergeType::Insert, MergeType::Unmerged] {
-            data_size.add(
-                self.sink_dml_adaptive(&mut tb_merged_data, sinkers, merge_type)
-                    .await?,
-            );
+            let (sub_data_size, sub_workers_used) = self
+                .sink_dml_adaptive(&mut tb_merged_data, sinkers, merge_type)
+                .await?;
+            data_size.add(sub_data_size);
+            // Every adaptive phase assigns sinkers from index 0, so the union
+            // of workers used by all phases is the largest phase prefix.
+            workers_used = workers_used.max(sub_workers_used);
         }
+        self.base_parallelizer
+            .record_workers_per_drain(workers_used)
+            .await;
         Ok(data_size)
     }
 
@@ -110,7 +117,11 @@ impl Parallelizer for MergeParallelizer {
         sinkers: &[Arc<async_mutex::Mutex<Box<dyn Sinker + Send>>>],
     ) -> anyhow::Result<DataSize> {
         let count = data.len() as u64;
+        let workers_used = usize::from(!data.is_empty());
         sinkers[0].lock().await.sink_struct(data).await?;
+        self.base_parallelizer
+            .record_workers_per_drain(workers_used)
+            .await;
         Ok(DataSize { count, bytes: 0 })
     }
 }
@@ -166,7 +177,7 @@ impl MergeParallelizer {
         tb_merged_data_items: &mut [TbMergedData],
         sinkers: &[Arc<async_mutex::Mutex<Box<dyn Sinker + Send>>>],
         merge_type: MergeType,
-    ) -> anyhow::Result<DataSize> {
+    ) -> anyhow::Result<(DataSize, usize)> {
         let mut futures = Vec::new();
         let mut data_size = DataSize::default();
         for tb_merged_data in tb_merged_data_items.iter_mut() {
@@ -216,10 +227,11 @@ impl MergeParallelizer {
             }
         }
 
+        let workers_used = futures.len().min(self.parallel_size);
         for future in futures {
             future.await??;
         }
-        Ok(data_size)
+        Ok((data_size, workers_used))
     }
 
     async fn sink_unmerged_rows(

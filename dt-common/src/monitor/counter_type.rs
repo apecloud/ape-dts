@@ -21,6 +21,8 @@ pub enum CounterType {
     RtPerQuery,
     #[strum(serialize = "buffer_size")]
     BufferSize,
+    #[strum(serialize = "sinker_workers_per_drain")]
+    SinkerWorkersPerDrain,
     #[strum(serialize = "checker_miss_count")]
     CheckerMissCount,
     #[strum(serialize = "checker_diff_count")]
@@ -86,6 +88,7 @@ impl CounterType {
             | Self::RecordsPerQuery
             | Self::RtPerQuery
             | Self::BufferSize
+            | Self::SinkerWorkersPerDrain
             | Self::DataBytes
             | Self::RecordSize
             | Self::ExtractedRecords
@@ -107,7 +110,10 @@ impl CounterType {
             WindowType::NoWindow => vec![AggregateType::Latest],
 
             WindowType::TimeWindow => match self {
-                Self::RecordsPerQuery | Self::RtPerQuery | Self::BufferSize => {
+                Self::RecordsPerQuery
+                | Self::RtPerQuery
+                | Self::BufferSize
+                | Self::SinkerWorkersPerDrain => {
                     vec![
                         AggregateType::Sum,
                         AggregateType::AvgByCount,

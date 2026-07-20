@@ -103,6 +103,10 @@ impl Parallelizer for RedisParallelizer {
             node_data_items[sinker_index].push(dt_item);
         }
 
+        let workers_used = node_data_items
+            .iter()
+            .filter(|node_data| !node_data.is_empty())
+            .count();
         let mut futures = Vec::new();
         for sinker in sinkers.iter().take(node_data_items.len()) {
             let node_data = node_data_items.remove(0);
@@ -121,6 +125,9 @@ impl Parallelizer for RedisParallelizer {
         for future in futures {
             future.await.unwrap();
         }
+        self.base_parallelizer
+            .record_workers_per_drain(workers_used)
+            .await;
 
         Ok(data_size)
     }

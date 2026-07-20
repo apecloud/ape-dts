@@ -34,6 +34,7 @@
 dt-main crate 提供了几个可选组件，可以通过 `Cargo [features]` 启用：
 
 - `metrics`: 启用 Prometheus 格式的任务指标 HTTP 服务接口。
+  指标名称、单位和语义请参阅 [Task metrics 指标说明](./docs/zh/monitor/task_metrics.md)。
   启用此功能后，您可以通过以下配置自定义指标服务：
 
   ```

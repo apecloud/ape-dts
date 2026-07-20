@@ -108,13 +108,16 @@ impl BaseParallelizer {
         parallel_size: usize,
         batch: bool,
     ) -> anyhow::Result<()> {
-        self.sink_by_available_sinker(
-            sub_data_items,
-            sinkers,
-            parallel_size,
-            move |sinker, data| async move { sinker.lock().await.sink_dml(data, batch).await },
-        )
-        .await
+        let workers_used = self
+            .sink_by_available_sinker(
+                sub_data_items,
+                sinkers,
+                parallel_size,
+                move |sinker, data| async move { sinker.lock().await.sink_dml(data, batch).await },
+            )
+            .await?;
+        self.record_workers_per_drain(workers_used).await;
+        Ok(())
     }
 
     pub async fn sink_ddl(
@@ -124,13 +127,16 @@ impl BaseParallelizer {
         parallel_size: usize,
         batch: bool,
     ) -> anyhow::Result<()> {
-        self.sink_by_available_sinker(
-            sub_data_items,
-            sinkers,
-            parallel_size,
-            move |sinker, data| async move { sinker.lock().await.sink_ddl(data, batch).await },
-        )
-        .await
+        let workers_used = self
+            .sink_by_available_sinker(
+                sub_data_items,
+                sinkers,
+                parallel_size,
+                move |sinker, data| async move { sinker.lock().await.sink_ddl(data, batch).await },
+            )
+            .await?;
+        self.record_workers_per_drain(workers_used).await;
+        Ok(())
     }
 
     pub async fn sink_dcl(
@@ -140,13 +146,16 @@ impl BaseParallelizer {
         parallel_size: usize,
         batch: bool,
     ) -> anyhow::Result<()> {
-        self.sink_by_available_sinker(
-            sub_data_items,
-            sinkers,
-            parallel_size,
-            move |sinker, data| async move { sinker.lock().await.sink_dcl(data, batch).await },
-        )
-        .await
+        let workers_used = self
+            .sink_by_available_sinker(
+                sub_data_items,
+                sinkers,
+                parallel_size,
+                move |sinker, data| async move { sinker.lock().await.sink_dcl(data, batch).await },
+            )
+            .await?;
+        self.record_workers_per_drain(workers_used).await;
+        Ok(())
     }
 
     pub async fn sink_raw(
@@ -156,13 +165,16 @@ impl BaseParallelizer {
         parallel_size: usize,
         batch: bool,
     ) -> anyhow::Result<()> {
-        self.sink_by_available_sinker(
-            sub_data_items,
-            sinkers,
-            parallel_size,
-            move |sinker, data| async move { sinker.lock().await.sink_raw(data, batch).await },
-        )
-        .await
+        let workers_used = self
+            .sink_by_available_sinker(
+                sub_data_items,
+                sinkers,
+                parallel_size,
+                move |sinker, data| async move { sinker.lock().await.sink_raw(data, batch).await },
+            )
+            .await?;
+        self.record_workers_per_drain(workers_used).await;
+        Ok(())
     }
 
     async fn sink_by_available_sinker<T, Run, Fut>(
@@ -171,14 +183,14 @@ impl BaseParallelizer {
         sinkers: &[SharedSinker],
         parallel_size: usize,
         run: Run,
-    ) -> anyhow::Result<()>
+    ) -> anyhow::Result<usize>
     where
         T: Send + 'static,
         Run: Fn(SharedSinker, Vec<T>) -> Fut + Clone + Send + Sync + 'static,
         Fut: Future<Output = anyhow::Result<()>> + Send + 'static,
     {
         if sub_data_items.is_empty() {
-            return Ok(());
+            return Ok(0);
         }
         if parallel_size < 1 {
             bail!("parallel_size must be greater than 0");
@@ -190,14 +202,15 @@ impl BaseParallelizer {
         let mut pending = sub_data_items.into_iter();
         let active_sinkers = parallel_size.min(sinkers.len());
         let mut join_set = JoinSet::new();
-        let spawn_sink_task = |join_set: &mut JoinSet<anyhow::Result<usize>>,
+        let spawn_sink_task = |join_set: &mut JoinSet<anyhow::Result<(usize, bool)>>,
                                sinker_index: usize,
+                               worker_used: bool,
                                sinker: SharedSinker,
                                data: Vec<T>,
                                run: Run| {
             join_set.spawn(async move {
                 run(sinker, data).await?;
-                Ok(sinker_index)
+                Ok((sinker_index, worker_used))
             });
         };
 
@@ -208,34 +221,105 @@ impl BaseParallelizer {
             spawn_sink_task(
                 &mut join_set,
                 sinker_index,
+                !data.is_empty(),
                 sinker.clone(),
                 data,
                 run.clone(),
             );
         }
 
+        let mut workers_used_count = 0;
         while let Some(result) = join_set.join_next().await {
-            let sinker_index = result??;
+            let (sinker_index, worker_used) = result??;
+            if let Some(data) = pending.next() {
+                let worker_used = worker_used || !data.is_empty();
+                spawn_sink_task(
+                    &mut join_set,
+                    sinker_index,
+                    worker_used,
+                    sinkers[sinker_index].clone(),
+                    data,
+                    run.clone(),
+                );
+            } else if worker_used {
+                workers_used_count += 1;
+            }
+        }
+
+        Ok(workers_used_count)
+    }
+
+    pub async fn record_workers_per_drain(&self, workers_used_count: usize) {
+        if workers_used_count == 0 {
+            return;
+        }
+        self.monitor
+            .add_batch_counter(
+                self.monitor.default_task_id(),
+                CounterType::SinkerWorkersPerDrain,
+                workers_used_count as u64,
+                1,
+            )
+            .await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{collections::VecDeque, hint::black_box, sync::Arc, time::Instant};
+
+    use async_mutex::Mutex;
+    use dt_common::{
+        config::config_enums::{TaskKind, TaskType},
+        meta::dt_queue::DtQueue,
+        monitor::{
+            counter::Counter, monitor::Monitor, task_monitor::MonitorType,
+            task_monitor::TaskMonitor, task_monitor_handle::TaskMonitorHandle,
+        },
+    };
+    use dt_connector::{sinker::dummy_sinker::DummySinker, Sinker};
+    use tokio::task::JoinSet;
+
+    use super::BaseParallelizer;
+
+    async fn dispatch_without_worker_count(
+        sub_data_items: Vec<Vec<usize>>,
+        sinkers: &[Arc<Mutex<Box<dyn Sinker + Send>>>],
+        parallel_size: usize,
+    ) {
+        let mut pending = sub_data_items.into_iter();
+        let active_sinkers = parallel_size.min(sinkers.len());
+        let mut join_set = JoinSet::new();
+        let spawn_sink_task = |join_set: &mut JoinSet<usize>,
+                               sinker_index: usize,
+                               sinker: Arc<Mutex<Box<dyn Sinker + Send>>>,
+                               data: Vec<usize>| {
+            join_set.spawn(async move {
+                black_box(sinker);
+                black_box(data);
+                sinker_index
+            });
+        };
+
+        for (sinker_index, sinker) in sinkers.iter().enumerate().take(active_sinkers) {
+            let Some(data) = pending.next() else {
+                break;
+            };
+            spawn_sink_task(&mut join_set, sinker_index, sinker.clone(), data);
+        }
+
+        while let Some(result) = join_set.join_next().await {
+            let sinker_index = result.unwrap();
             if let Some(data) = pending.next() {
                 spawn_sink_task(
                     &mut join_set,
                     sinker_index,
                     sinkers[sinker_index].clone(),
                     data,
-                    run.clone(),
                 );
             }
         }
-
-        Ok(())
     }
-}
-
-#[cfg(test)]
-mod tests {
-    use dt_common::{meta::dt_queue::DtQueue, monitor::counter::Counter};
-
-    use super::BaseParallelizer;
 
     #[tokio::test]
     async fn pop_returns_none_when_queue_is_empty() {
@@ -246,5 +330,160 @@ mod tests {
         let item = parallelizer.pop(&queue, &mut counter).await.unwrap();
 
         assert!(item.is_none());
+    }
+
+    #[tokio::test]
+    async fn sink_by_available_sinker_counts_distinct_workers_with_non_empty_data() {
+        let parallelizer = BaseParallelizer::default();
+        let sinkers = (0..3)
+            .map(|_| {
+                Arc::new(Mutex::new(
+                    Box::new(DummySinker {}) as Box<dyn Sinker + Send>
+                ))
+            })
+            .collect::<Vec<_>>();
+
+        let workers_used = parallelizer
+            .sink_by_available_sinker(
+                vec![vec![1_u8], Vec::new(), vec![2_u8]],
+                &sinkers,
+                3,
+                |_sinker, _data| async { Ok(()) },
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(workers_used, 2);
+
+        let reused_worker = parallelizer
+            .sink_by_available_sinker(
+                vec![Vec::new(), vec![1_u8]],
+                &sinkers[..1],
+                1,
+                |_sinker, _data| async { Ok(()) },
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(reused_worker, 1);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore = "manual release-mode drain metric overhead measurement"]
+    async fn measures_workers_per_drain_metric_overhead() {
+        const ITERATIONS: u32 = 50_000;
+        const WORKERS: usize = 10;
+
+        let task_monitor = Arc::new(TaskMonitor::new(Some(TaskType::new(TaskKind::Cdc, None))));
+        let pipeline_monitor = Arc::new(Monitor::new("pipeline", "task", 60, 10_000, 10));
+        task_monitor.register("task", vec![(MonitorType::Pipeline, pipeline_monitor)]);
+        let monitor = TaskMonitorHandle::new(
+            task_monitor,
+            MonitorType::Pipeline,
+            "task".to_owned(),
+            60,
+            10_000,
+            10,
+        );
+        let parallelizer = BaseParallelizer {
+            popped_data: VecDeque::new(),
+            monitor,
+        };
+        let sinkers = (0..WORKERS)
+            .map(|_| {
+                Arc::new(Mutex::new(
+                    Box::new(DummySinker {}) as Box<dyn Sinker + Send>
+                ))
+            })
+            .collect::<Vec<_>>();
+
+        for _ in 0..100 {
+            dispatch_without_worker_count(
+                (0..WORKERS).map(|i| vec![i]).collect(),
+                &sinkers,
+                WORKERS,
+            )
+            .await;
+            let workers_used = parallelizer
+                .sink_by_available_sinker(
+                    (0..WORKERS).map(|i| vec![i]).collect(),
+                    &sinkers,
+                    WORKERS,
+                    |_sinker, _data| async { Ok(()) },
+                )
+                .await
+                .unwrap();
+            black_box(workers_used);
+        }
+
+        let mut baseline_total_ns = 0_u128;
+        let mut tracked_total_ns = 0_u128;
+        for iteration in 0..ITERATIONS {
+            if iteration % 2 == 0 {
+                let started = Instant::now();
+                dispatch_without_worker_count(
+                    (0..WORKERS).map(|i| vec![i]).collect(),
+                    &sinkers,
+                    WORKERS,
+                )
+                .await;
+                baseline_total_ns += started.elapsed().as_nanos();
+
+                let started = Instant::now();
+                let workers_used = parallelizer
+                    .sink_by_available_sinker(
+                        (0..WORKERS).map(|i| vec![i]).collect(),
+                        &sinkers,
+                        WORKERS,
+                        |_sinker, _data| async { Ok(()) },
+                    )
+                    .await
+                    .unwrap();
+                black_box(workers_used);
+                tracked_total_ns += started.elapsed().as_nanos();
+            } else {
+                let started = Instant::now();
+                let workers_used = parallelizer
+                    .sink_by_available_sinker(
+                        (0..WORKERS).map(|i| vec![i]).collect(),
+                        &sinkers,
+                        WORKERS,
+                        |_sinker, _data| async { Ok(()) },
+                    )
+                    .await
+                    .unwrap();
+                black_box(workers_used);
+                tracked_total_ns += started.elapsed().as_nanos();
+
+                let started = Instant::now();
+                dispatch_without_worker_count(
+                    (0..WORKERS).map(|i| vec![i]).collect(),
+                    &sinkers,
+                    WORKERS,
+                )
+                .await;
+                baseline_total_ns += started.elapsed().as_nanos();
+            }
+        }
+        let baseline_ns = baseline_total_ns as f64 / f64::from(ITERATIONS);
+        let tracked_dispatch_ns = tracked_total_ns as f64 / f64::from(ITERATIONS);
+
+        let started = Instant::now();
+        for _ in 0..ITERATIONS {
+            parallelizer.record_workers_per_drain(WORKERS).await;
+        }
+        let metric_write_ns = started.elapsed().as_nanos() as f64 / f64::from(ITERATIONS);
+        let tracking_delta_ns = tracked_dispatch_ns - baseline_ns;
+        let tracking_delta_percent = tracking_delta_ns / baseline_ns * 100.0;
+        let total_delta_ns = tracking_delta_ns + metric_write_ns;
+        let total_delta_percent = total_delta_ns / baseline_ns * 100.0;
+
+        eprintln!(
+            "workers-per-drain: baseline={baseline_ns:.2} ns/drain, \
+             tracked_dispatch={tracked_dispatch_ns:.2} ns/drain, \
+             tracking_delta={tracking_delta_ns:.2} ns ({tracking_delta_percent:.2}%), \
+             metric_write={metric_write_ns:.2} ns/drain, \
+             estimated_total_delta={total_delta_ns:.2} ns ({total_delta_percent:.2}%)"
+        );
     }
 }
