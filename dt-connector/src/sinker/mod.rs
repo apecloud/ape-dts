@@ -1,5 +1,6 @@
 pub mod base_sinker;
 pub mod base_struct_sinker;
+pub mod busy_tracking_sinker;
 pub mod checkable_sinker;
 pub mod clickhouse;
 pub mod dummy_sinker;

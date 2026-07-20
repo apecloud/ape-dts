@@ -158,7 +158,26 @@ impl PrometheusMetrics {
             "the average bytes per second of sinker",
             TaskMetricsType::SinkerBpsAvg,
         );
-
+        register_handler(
+            "sinker_workers_configured",
+            "the number of configured sinker workers",
+            TaskMetricsType::SinkerWorkersConfigured,
+        );
+        register_handler(
+            "sinker_workers_busy",
+            "the number of sinker workers currently executing sinker operations",
+            TaskMetricsType::SinkerWorkersBusy,
+        );
+        register_handler(
+            "sinker_workers_per_drain_max",
+            "the max distinct sinker workers receiving non-empty data per pipeline drain",
+            TaskMetricsType::SinkerWorkersPerDrainMax,
+        );
+        register_handler(
+            "sinker_workers_per_drain_avg",
+            "the average distinct sinker workers receiving non-empty data per pipeline drain",
+            TaskMetricsType::SinkerWorkersPerDrainAvg,
+        );
         register_handler(
             "sinker_sinked_records",
             "the number of records sinked",
@@ -264,8 +283,8 @@ impl PrometheusMetrics {
 
     pub fn set_metrics(&self, metrics: &BTreeMap<TaskMetricsType, u64>) {
         for (metrics_type, value) in metrics.iter() {
-            if let Some(metrics) = self.metrics.get_mut(metrics_type) {
-                metrics.set(*value as f64);
+            if let Some(metric) = self.metrics.get_mut(metrics_type) {
+                metric.set(*value as f64);
             }
         }
     }
@@ -323,4 +342,47 @@ async fn not_found_handler() -> Result<impl Responder> {
     Ok(HttpResponse::NotFound()
         .content_type("application/json")
         .body(r#"{"error":"Not Found","message":"The requested endpoint does not exist"}"#))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::{BTreeMap, HashMap};
+
+    use prometheus::TextEncoder;
+
+    use crate::{config::metrics_config::MetricsConfig, monitor::task_metrics::TaskMetricsType};
+
+    use super::PrometheusMetrics;
+
+    #[test]
+    fn exports_sinker_worker_metrics_with_public_units() {
+        let prometheus = PrometheusMetrics::new(
+            None,
+            MetricsConfig {
+                http_host: "127.0.0.1".to_owned(),
+                http_port: 0,
+                workers: 1,
+                metrics_labels: HashMap::new(),
+            },
+        );
+        prometheus.initialization();
+
+        let metrics = BTreeMap::from([
+            (TaskMetricsType::SinkerWorkersConfigured, 10),
+            (TaskMetricsType::SinkerWorkersBusy, 4),
+            (TaskMetricsType::SinkerWorkersPerDrainMax, 8),
+            (TaskMetricsType::SinkerWorkersPerDrainAvg, 6),
+        ]);
+        prometheus.set_metrics(&metrics);
+
+        let mut output = String::new();
+        TextEncoder::new()
+            .encode_utf8(&prometheus.registry.gather(), &mut output)
+            .unwrap();
+
+        assert!(output.contains("sinker_workers_configured 10"));
+        assert!(output.contains("sinker_workers_busy 4"));
+        assert!(output.contains("sinker_workers_per_drain_max 8"));
+        assert!(output.contains("sinker_workers_per_drain_avg 6"));
+    }
 }

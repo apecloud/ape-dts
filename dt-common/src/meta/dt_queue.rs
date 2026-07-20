@@ -4,11 +4,10 @@ use std::sync::{
 };
 
 use concurrent_queue::{ConcurrentQueue, PopError, PushError};
-use tokio::{sync::Notify, time::timeout, time::Duration};
-
-use crate::limiter::buffer_limiter::BufferLimiter;
+use tokio::{pin, sync::Notify, time::timeout, time::Duration};
 
 use super::dt_data::DtItem;
+use crate::{limiter::buffer_limiter::BufferLimiter, runtime_trace::instrument_wait};
 
 #[derive(Debug, thiserror::Error)]
 pub enum DtQueuePopError {
@@ -75,7 +74,7 @@ impl DtQueue {
         }
         let item_size = item.dt_data.get_data_size();
         loop {
-            if !self.queue.is_full() && !self.is_mem_full() {
+            if !self.is_queue_full() {
                 let res = self.queue.push(item);
                 match res {
                     Ok(_) => {
@@ -89,11 +88,17 @@ impl DtQueue {
                     Err(e) => return Err(e.into()),
                 }
             }
-            crate::runtime_trace::instrument_wait(
-                "dtqueue.not_full.wait",
-                self.not_full.notified(),
-            )
-            .await;
+
+            // MPSC channel: https://docs.rs/tokio/1.48.0/tokio/sync/struct.Notify.html
+            let notified = self.not_full.notified();
+            pin!(notified);
+            notified.as_mut().enable();
+
+            if !self.is_queue_full() {
+                continue;
+            }
+
+            instrument_wait("dtqueue.not_full.wait", notified).await;
         }
     }
 
@@ -128,12 +133,25 @@ impl DtQueue {
         Ok(item)
     }
 
+    // Concurrent pop is not supported; currently, only pipeline notifies here
     pub async fn wait_for_data(&self, max_wait: Duration) {
-        let notified = crate::runtime_trace::instrument_wait(
-            "dtqueue.not_empty.wait",
-            self.not_empty.notified(),
-        );
-        let _ = timeout(max_wait, notified).await;
+        if !self.queue.is_empty() {
+            return;
+        }
+
+        let notified = self.not_empty.notified();
+        pin!(notified);
+        notified.as_mut().enable();
+
+        if !self.queue.is_empty() {
+            return;
+        }
+
+        let _ = timeout(
+            max_wait,
+            instrument_wait("dtqueue.not_empty.wait", notified),
+        )
+        .await;
     }
 
     #[inline(always)]
@@ -144,12 +162,18 @@ impl DtQueue {
             false
         }
     }
+
+    #[inline(always)]
+    fn is_queue_full(&self) -> bool {
+        self.queue.is_full() || self.is_mem_full()
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use std::{collections::HashMap, sync::Arc, time::Duration};
 
+    use concurrent_queue::PopError;
     use futures::FutureExt;
     use tokio::{
         sync::Notify,
@@ -225,6 +249,47 @@ mod tests {
             .await
             .expect("waiter should wake after push")
             .unwrap();
+    }
+
+    #[tokio::test]
+    async fn bounded_queue_wakes_all_concurrent_producers() {
+        const PRODUCERS: usize = 32;
+        const ITEMS_PER_PRODUCER: usize = 16;
+
+        let queue = Arc::new(DtQueue::new(4, 0, None, None));
+        let mut producers = Vec::with_capacity(PRODUCERS);
+        for _ in 0..PRODUCERS {
+            let queue = queue.clone();
+            producers.push(tokio::spawn(async move {
+                for _ in 0..ITEMS_PER_PRODUCER {
+                    queue.push(heartbeat_item()).await.unwrap();
+                }
+            }));
+        }
+
+        let consumer_queue = queue.clone();
+        let consumer = tokio::spawn(async move {
+            for _ in 0..PRODUCERS * ITEMS_PER_PRODUCER {
+                loop {
+                    match consumer_queue.pop().await {
+                        Ok(_) => break,
+                        Err(DtQueuePopError::Queue(PopError::Empty)) => {
+                            consumer_queue.wait_for_data(Duration::from_secs(1)).await;
+                        }
+                        Err(error) => panic!("unexpected pop error: {error}"),
+                    }
+                }
+            }
+        });
+
+        timeout(Duration::from_secs(2), async {
+            for producer in producers {
+                producer.await.unwrap();
+            }
+            consumer.await.unwrap();
+        })
+        .await
+        .expect("all blocked producers should be woken");
     }
 
     #[tokio::test]

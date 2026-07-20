@@ -33,6 +33,8 @@
 The dt-main crate provides several optional components which can be enabled via `Cargo [features]`:
 
 - `metrics`: Enable Prometheus format task metrics HTTP service interface.
+  See the [task metrics reference](./docs/en/monitor/task_metrics.md) for metric
+  names, units, and semantics.
   After enabling this feature, you can customize the metrics service with the following configuration:
 
   ```
