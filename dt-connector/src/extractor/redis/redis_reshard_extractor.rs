@@ -4,12 +4,12 @@ use std::{cmp, collections::HashMap};
 use url::Url;
 
 use crate::{
+    error::extractor::redis_reshard_metadata,
     extractor::base_extractor::{BaseExtractor, ExtractState},
     Extractor,
 };
 use dt_common::{
     config::connection_auth_config::ConnectionAuthConfig,
-    error::{DtError, EndpointRole, ErrorCode, OriginError, Stage},
     log_debug, log_info,
     meta::redis::{
         cluster_node::ClusterNode, command::cmd_encoder::CmdEncoder, redis_object::RedisCmd,
@@ -42,7 +42,7 @@ impl RedisReshardExtractor {
         let mut conn = RedisUtil::create_redis_conn(&self.url, &self.connection_auth).await?;
         let nodes = RedisUtil::get_cluster_master_nodes(&mut conn)?;
         if nodes.is_empty() {
-            return Err(redis_reshard_metadata_error("list_redis_cluster_masters").into());
+            return Err(redis_reshard_metadata("list_redis_cluster_masters").into());
         }
         let slot_address_map = RedisUtil::get_slot_address_map(&nodes);
         let avg_slot_count = SLOTS_COUNT / nodes.len();
@@ -89,7 +89,7 @@ impl RedisReshardExtractor {
             let dst_node = nodes
                 .iter()
                 .find(|i| i.id == *dst_node_id)
-                .ok_or_else(|| redis_reshard_metadata_error("find_redis_reshard_destination"))?;
+                .ok_or_else(|| redis_reshard_metadata("find_redis_reshard_destination"))?;
             let mut dst_conn = self.get_node_conn(dst_node).await?;
 
             let mut cur_src_node: Option<ClusterNode> = None;
@@ -98,12 +98,12 @@ impl RedisReshardExtractor {
                 // get src_node by address
                 let src_address = slot_address_map
                     .get(slot)
-                    .ok_or_else(|| redis_reshard_metadata_error("find_redis_slot_owner"))?
+                    .ok_or_else(|| redis_reshard_metadata("find_redis_slot_owner"))?
                     .to_string();
                 let src_node = nodes
                     .iter()
                     .find(|i| i.address == src_address)
-                    .ok_or_else(|| redis_reshard_metadata_error("find_redis_reshard_source"))?;
+                    .ok_or_else(|| redis_reshard_metadata("find_redis_reshard_source"))?;
 
                 // get src conn
                 let src_node_changed = cur_src_node
@@ -120,7 +120,7 @@ impl RedisReshardExtractor {
                     dst_node,
                     cur_src_conn
                         .as_mut()
-                        .ok_or_else(|| redis_reshard_metadata_error("open_redis_reshard_source"))?,
+                        .ok_or_else(|| redis_reshard_metadata("open_redis_reshard_source"))?,
                     &mut dst_conn,
                     *slot,
                 )
@@ -225,13 +225,4 @@ impl RedisReshardExtractor {
         let url = format!("redis://{}:{}@{}", username, password, node.address);
         RedisUtil::create_redis_conn(&url, &self.connection_auth).await
     }
-}
-
-#[track_caller]
-fn redis_reshard_metadata_error(operation: &'static str) -> DtError {
-    DtError::new(ErrorCode::MetadataFailed)
-        .stage(Stage::Extractor)
-        .operation(operation)
-        .endpoint(EndpointRole::Source)
-        .origin(OriginError::new("redis", None::<String>))
 }

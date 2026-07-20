@@ -209,7 +209,15 @@ impl StructCheckerHandle {
                     }
                 }
             }
-            _ => bail!("struct check not supported for db_type: {}", self.db_type),
+            _ => bail!(
+                dt_common::error::DtError::new(dt_common::error::ErrorCode::InvalidConfig,)
+                    .detail(format!(
+                        "structure checking is not supported for database type: {}",
+                        self.db_type
+                    ))
+                    .stage(dt_common::error::Stage::Bootstrap)
+                    .operation("build_structure_checker")
+            ),
         }
         Ok(dst_map)
     }

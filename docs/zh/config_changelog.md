@@ -13,7 +13,7 @@
 | `[extractor].sample_interval` | 使用 `[checker].sample_rate=1..100`；空值表示全量校验。 |
 | `[sinker]` 下的 check 目标配置，包括 `check_log_dir` | Standalone check 移到 `[checker]`；inline check 复用 `[sinker]`。 |
 | `[pipeline].max_rps` | 使用 `[extractor].max_rps` 和/或 `[sinker].max_rps`。 |
-| `[resumer].resume_from_log`、`resume_log_dir`、`resume_config_file` | 使用 `resume_type=from_log`、`log_dir`、`config_file`；旧配置返回 `ConfigError`。 |
+| `[resumer].resume_from_log`、`resume_log_dir`、`resume_config_file` | 使用 `resume_type=from_log`、`log_dir`、`config_file`；旧配置返回错误码 `CF002`。 |
 | `[pipeline].pipeline_type=http_server`、`http_host`、`http_port`、pipeline `with_field_defs` | 已删除，仅保留 `pipeline_type=basic`。Kafka `[sinker].with_field_defs` 不受影响。 |
 | `db_type=foxlake`、`extract_type=foxlake_s3` 及 Foxlake 专用字段 | 不再支持 Foxlake 任务。 |
 

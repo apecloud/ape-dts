@@ -1,8 +1,10 @@
 use std::{collections::BTreeMap, path::Path};
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::{bail, Result};
 use clap::ValueEnum;
 use url::Url;
+
+use crate::error::config as config_error;
 
 const SERVER_ID_MIN: u64 = 10001;
 const SERVER_ID_MAX: u64 = 4_294_836_224;
@@ -43,9 +45,12 @@ impl DbType {
             "mongo" | "mongodb" => Ok(Self::Mongo),
             "redis" => Ok(Self::Redis),
             "mongodb+srv" => Ok(Self::Mongo),
-            _ => bail!(
-                "unsupported URL scheme '{scheme}', expected mysql/pg/postgres/postgresql/mongo/mongodb/mongodb+srv/redis"
-            ),
+            _ => bail!(config_error(
+                format!(
+                    "Unsupported URL scheme [{scheme}]; expected mysql, pg, postgres, postgresql, mongo, mongodb, mongodb+srv, or redis"
+                ),
+                "parse_database_url_scheme"
+            )),
         }
     }
 
@@ -84,23 +89,39 @@ pub fn infer_db_type(url: &str, explicit: Option<DbType>) -> Result<DbType> {
     let scheme = url
         .split_once("://")
         .map(|(scheme, _)| scheme)
-        .ok_or_else(|| anyhow!("invalid url '{url}', expected '<scheme>://...'"))?;
+        .ok_or_else(|| {
+            config_error(
+                format!("Invalid endpoint URL [{url}]; expected <scheme>://..."),
+                "infer_database_type",
+            )
+        })?;
     let inferred = DbType::from_scheme(scheme)?;
     if let Some(value) = explicit {
         if value != inferred {
-            bail!(
-                "explicit db type '{}' does not match url scheme '{}'",
-                value.as_config_value(),
-                scheme
-            );
+            bail!(config_error(
+                format!(
+                    "Explicit database type [{}] does not match URL scheme [{scheme}]",
+                    value.as_config_value()
+                ),
+                "infer_database_type"
+            ));
         }
     } else if matches!(inferred, DbType::Pg) {
-        let parsed = Url::parse(url).map_err(|err| anyhow!("invalid url '{url}': {err}"))?;
+        let parsed = Url::parse(url).map_err(|error| {
+            config_error(
+                format!("Invalid endpoint URL [{url}]: {error}"),
+                "parse_database_url",
+            )
+            .source(error)
+        })?;
         if parsed.path().trim_matches('/').is_empty() {
-            bail!(
-                "invalid {} url '{url}', database is required when db type is inferred",
-                inferred.as_config_value()
-            );
+            bail!(config_error(
+                format!(
+                    "Database is required in inferred {} URL [{url}]",
+                    inferred.as_config_value()
+                ),
+                "validate_database_url"
+            ));
         }
     }
     Ok(inferred)
@@ -223,12 +244,18 @@ pub fn build_task_config(
     }
 
     for item in &create.set {
-        let (path, value) = item
-            .split_once('=')
-            .ok_or_else(|| anyhow!("--set must use section.key=value, got '{item}'"))?;
-        let (section, key) = path
-            .split_once('.')
-            .ok_or_else(|| anyhow!("--set must use section.key=value, got '{item}'"))?;
+        let (path, value) = item.split_once('=').ok_or_else(|| {
+            config_error(
+                format!("--set must use section.key=value; received [{item}]"),
+                "parse_config_override",
+            )
+        })?;
+        let (section, key) = path.split_once('.').ok_or_else(|| {
+            config_error(
+                format!("--set must use section.key=value; received [{item}]"),
+                "parse_config_override",
+            )
+        })?;
         ini.set(section, key, value);
     }
 
@@ -260,9 +287,12 @@ fn split_filter_patterns(patterns: &str, db_type: &DbType) -> Result<FilterPatte
         match split_unescaped(pattern, '.', escape)?.len() {
             1 => dbs.push(pattern),
             2 => tbs.push(pattern),
-            _ => bail!(
-                "invalid filter expression '{pattern}', expected db or db.table; enclose names containing '.' or ',' with the database identifier escape"
-            ),
+            _ => bail!(config_error(
+                format!(
+                    "Invalid filter expression [{pattern}]; expected db or db.table and escaped identifiers containing '.' or ','"
+                ),
+                "parse_filter_expression"
+            )),
         }
     }
 
@@ -310,10 +340,16 @@ fn split_unescaped(value: &str, delimiter: char, escape: Option<char>) -> Result
         }
     }
     if in_escape {
-        bail!("unclosed identifier escape in filter expression '{value}'");
+        bail!(config_error(
+            format!("Unclosed identifier escape in filter expression [{value}]"),
+            "parse_filter_expression"
+        ));
     }
     if in_regex {
-        bail!("unclosed regex escape in filter expression '{value}'");
+        bail!(config_error(
+            format!("Unclosed regex escape in filter expression [{value}]"),
+            "parse_filter_expression"
+        ));
     }
     push_filter_token(&mut tokens, &value[start..], value)?;
     Ok(tokens)
@@ -331,7 +367,10 @@ fn is_filter_token_start(value: &str, index: usize) -> bool {
 fn push_filter_token<'a>(tokens: &mut Vec<&'a str>, token: &'a str, value: &str) -> Result<()> {
     let token = token.trim();
     if token.is_empty() {
-        bail!("empty filter expression in '{value}'");
+        bail!(config_error(
+            format!("Empty filter expression in [{value}]"),
+            "parse_filter_expression"
+        ));
     }
     tokens.push(token);
     Ok(())
@@ -412,9 +451,8 @@ impl IniDoc {
     fn set(&mut self, section: &str, key: &str, value: &str) {
         if !self.values.contains_key(section) {
             self.sections.push(section.to_string());
-            self.values.insert(section.to_string(), Vec::new());
         }
-        let entries = self.values.get_mut(section).expect("section exists");
+        let entries = self.values.entry(section.to_string()).or_default();
         if let Some((_, old)) = entries.iter_mut().find(|(item_key, _)| item_key == key) {
             *old = value.to_string();
         } else {

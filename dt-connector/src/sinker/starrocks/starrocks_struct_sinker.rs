@@ -5,6 +5,7 @@ use crate::{close_conn_pool, rdb_router::RdbRouter, Sinker};
 use anyhow::bail;
 use dt_common::{
     config::config_enums::{ConflictPolicyEnum, DbType},
+    error::{DtError, ErrorCode, Stage},
     log_error, log_info,
     meta::{
         mysql::{mysql_col_type::MysqlColType, mysql_tb_meta::MysqlTbMeta},
@@ -127,8 +128,14 @@ impl StarrocksStructSinker {
     ) -> anyhow::Result<String> {
         let rdb_tb_meta = if let Some(tb_meta) = pg_tb_meta {
             &tb_meta.basic
+        } else if let Some(tb_meta) = mysql_tb_meta {
+            &tb_meta.basic
         } else {
-            &mysql_tb_meta.as_ref().unwrap().basic
+            return Err(DtError::new(ErrorCode::MetadataFailed)
+                .detail("source table metadata is missing while building StarRocks DDL")
+                .stage(Stage::Sinker)
+                .operation("build_starrocks_create_table")
+                .into());
         };
 
         let mut dst_cols = vec![];
@@ -209,8 +216,17 @@ impl StarrocksStructSinker {
         let col = &column.column_name;
         let dst_col_type = if let Some(tb_meta) = mysql_tb_meta {
             self.get_dst_col_type_from_mysql(col, tb_meta)
+        } else if let Some(tb_meta) = pg_tb_meta {
+            self.get_dst_col_type_from_pg(col, tb_meta)
         } else {
-            self.get_dst_col_type_from_pg(col, pg_tb_meta.unwrap())
+            return Err(DtError::new(ErrorCode::MetadataFailed)
+                .detail(format!(
+                    "source column metadata is missing for {}.{}.{}",
+                    rdb_tb_meta.schema, rdb_tb_meta.tb, col
+                ))
+                .stage(Stage::Sinker)
+                .operation("build_starrocks_column")
+                .into());
         }?;
 
         // The delete operation in Doris (-H "merge_type: delete") is implemented by inserting a record marked for deletion,

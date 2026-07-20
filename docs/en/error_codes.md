@@ -2,8 +2,8 @@
 
 Ape-DTS task-runtime errors have a stable five-character condition code. The
 code identifies what happened; runtime location is recorded separately as a
-stage. In v1, `dt-main` is the user-facing report boundary. The separate
-`dtscli` command layer is not yet part of this contract.
+stage. In v1, both `dt-main` and `dtscli` render failures through the same
+user-facing error report boundary.
 
 For example:
 
@@ -86,23 +86,24 @@ matches.
 renaming, or changing the meaning of an existing user-facing field requires a
 new schema version. CLI text layout is not a stable machine interface.
 
-The default text and JSON views contain only user-safe fields: the stable code,
+The `ErrorReport` JSON view contains only user-facing fields: the stable code,
 user message, detail, hint, task ID, endpoint role, affected object, and a
-human-readable phase. They must not contain raw SQL, row data, authenticated
-URLs, `anyhow::Context` values, source chains, or provider error messages.
+human-readable phase. The text view includes those fields followed by the
+diagnostic section.
 
-Internal diagnostics remain available on the in-memory report as
+Internal diagnostics are available on the in-memory report as
 `stage`, `operation`, `origin`, `contexts`, `diagnostic_message`, and the
-captured source `location`. These fields are intended for protected logs and
-support diagnostics, not normal CLI or API output.
+captured source `location`. `ErrorReport` text rendering always includes these
+fields after the user-facing section. API consumers must use the versioned JSON
+view rather than parse CLI text.
 
 Component-authored `message`, `detail`, and `hint` values remain free text. The
-report boundary applies basic credential and authenticated-URL redaction before
-they enter the user view. Provider messages and `anyhow::Context` values remain
-diagnostic-only.
+report boundary uses `rtb-redact` to remove credentials, authenticated URL
+userinfo, authorization values, provider tokens, JWTs, long opaque tokens, and
+private keys before they enter the user view. The text renderer applies the
+same redaction to provider messages and `anyhow::Context` values.
 
-Developers can run the CLI with `--verbose-errors` or set
-`APE_DTS_VERBOSE_ERRORS=1` to append a diagnostic section:
+CLI failures include a diagnostic section by default:
 
 ```text
 DIAGNOSTIC [MD001]
@@ -113,9 +114,9 @@ ENDPOINT: destination
 ORIGIN: postgres/42P01
 ```
 
-This mode can include provider messages and `anyhow::Context` values. Use it
-only in a protected diagnostic environment; normal user output remains
-redacted.
+Diagnostics can include SQL, row data, object names, provider messages, and
+`anyhow::Context` values. Credential-shaped values and authenticated URLs are
+redacted, but stderr and captured logs must still be treated as sensitive data.
 
 ## Structured errors
 
@@ -123,6 +124,11 @@ redacted.
 operation, task ID, endpoint role, database object, provider origin, and source
 error. The endpoint role is `source`, `destination`, or `metadata`. Database
 objects may include schema, table, column, and constraint names.
+
+`DtError` is the only application error type in `dt-common::error`; there is no
+legacy compatibility enum. New application-authored failures must construct a
+`DtError`. Raw provider errors may cross only a short boundary before a
+provider adapter or `ErrorReport` classifies them.
 
 The root code, stage, operation, and origin use first-writer semantics. A
 component that receives an existing structured error preserves this root
@@ -148,6 +154,12 @@ endpoint, while the call site supplies the operation and fallback code. Later
 boundaries preserve the root error. These wrappers must use `#[track_caller]`
 so the captured location continues to identify the failing component
 operation.
+
+Each business crate keeps all of its component wrappers in one `src/error.rs`
+file and separates ownership with nested modules such as `extractor`, `sinker`,
+or provider-specific modules. Do not add component error helper files beside
+business modules. The shared provider classifiers remain in
+`dt-common::error::provider`.
 
 ## Provider error preservation
 

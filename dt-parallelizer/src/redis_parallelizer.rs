@@ -5,12 +5,12 @@ use async_trait::async_trait;
 
 use super::base_parallelizer::BaseParallelizer;
 use crate::{DataSize, Parallelizer};
+use dt_common::log_warn;
 use dt_common::meta::{
     dt_data::{DtData, DtItem},
     dt_queue::DtQueue,
     redis::command::key_parser::KeyParser,
 };
-use dt_common::{error::Error, log_warn};
 use dt_connector::Sinker;
 
 pub struct RedisParallelizer {
@@ -68,10 +68,13 @@ impl Parallelizer for RedisParallelizer {
                 let slots = entry.cal_slots(&self.key_parser)?;
                 for i in 1..slots.len() {
                     if slots[i] != slots[0] {
-                        bail! {Error::RedisCmdError(format!(
+                        bail! {crate::error::redis_command(
+                            format!(
                             "multi keys don't hash to the same slot, cmd: {}",
                             entry.cmd
-                        ))};
+                            ),
+                            "route_redis_command",
+                        )};
                     }
                 }
 

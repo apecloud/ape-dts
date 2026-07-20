@@ -9,6 +9,7 @@ use tokio_postgres::{
 };
 use url::Url;
 
+use crate::error::extractor as extractor_error;
 use dt_common::{
     config::{
         connection_auth_config::ConnectionAuthConfig,
@@ -33,7 +34,7 @@ impl PgCdcClient {
         let client = match ssl_config.ssl_mode {
             SslMode::Disable => {
                 let (client, connection) = config.connect(NoTls).await.map_err(|error| {
-                    super::error::postgres(
+                    extractor_error::postgres(
                         error,
                         ErrorCode::ConnectionFailed,
                         "connect_postgres_cdc",
@@ -50,7 +51,7 @@ impl PgCdcClient {
             _ => {
                 let connector = Self::build_tls_connector(&ssl_config)?;
                 let (client, connection) = config.connect(connector).await.map_err(|error| {
-                    super::error::postgres(
+                    extractor_error::postgres(
                         error,
                         ErrorCode::ConnectionFailed,
                         "connect_postgres_cdc",
@@ -71,7 +72,7 @@ impl PgCdcClient {
     fn build_replication_config(&self) -> anyhow::Result<(Config, SslConfig)> {
         let (sanitized_url, url_ssl_config) = Self::parse_url_ssl_config(&self.url)?;
         let mut config: Config = Config::from_str(&sanitized_url).map_err(|error| {
-            super::error::postgres(error, ErrorCode::InvalidConfig, "parse_postgres_cdc_url")
+            extractor_error::postgres(error, ErrorCode::InvalidConfig, "parse_postgres_cdc_url")
         })?;
         config.replication_mode(ReplicationMode::Logical);
 
@@ -112,7 +113,7 @@ impl PgCdcClient {
 
     fn build_tls_connector(ssl_config: &SslConfig) -> anyhow::Result<MakeTlsConnector> {
         let mut builder = SslConnector::builder(SslMethod::tls())
-            .map_err(|error| postgres_tls_error(error, "build_postgres_tls"))?;
+            .map_err(|error| extractor_error::postgres_tls(error, "build_postgres_tls"))?;
 
         match ssl_config.ssl_mode {
             SslMode::Disable => {
@@ -136,7 +137,9 @@ impl PgCdcClient {
                 }
                 builder
                     .set_ca_file(&ssl_config.ssl_ca_path)
-                    .map_err(|error| postgres_tls_error(error, "load_postgres_ca_certificate"))?;
+                    .map_err(|error| {
+                        extractor_error::postgres_tls(error, "load_postgres_ca_certificate")
+                    })?;
                 builder.set_verify(SslVerifyMode::PEER);
             }
         }
@@ -219,7 +222,7 @@ impl PgCdcClient {
             "pg_catalog.pg_publication", pub_name
         );
         let res = client.simple_query(&query).await.map_err(|error| {
-            super::error::postgres(
+            extractor_error::postgres(
                 error,
                 ErrorCode::MetadataFailed,
                 "check_postgres_publication",
@@ -232,7 +235,7 @@ impl PgCdcClient {
             let query = format!("CREATE PUBLICATION {} FOR ALL TABLES", pub_name);
             log_info!("execute: {}", query);
             client.simple_query(&query).await.map_err(|error| {
-                super::error::postgres(
+                extractor_error::postgres(
                     error,
                     ErrorCode::StatementFailed,
                     "create_postgres_publication",
@@ -273,7 +276,7 @@ impl PgCdcClient {
                 );
                 log_info!("execute: {}", query);
                 client.simple_query(&query).await.map_err(|error| {
-                    super::error::postgres(
+                    extractor_error::postgres(
                         error,
                         ErrorCode::StatementFailed,
                         "drop_postgres_replication_slot",
@@ -288,7 +291,7 @@ impl PgCdcClient {
             log_info!("execute: {}", query);
 
             let res = client.simple_query(&query).await.map_err(|error| {
-                super::error::postgres(
+                extractor_error::postgres(
                     error,
                     ErrorCode::StatementFailed,
                     "create_postgres_replication_slot",
@@ -325,7 +328,7 @@ impl PgCdcClient {
             "pg_catalog.pg_replication_slots", self.slot_name
         );
         let res = client.simple_query(&query).await.map_err(|error| {
-            super::error::postgres(
+            extractor_error::postgres(
                 error,
                 ErrorCode::MetadataFailed,
                 "check_postgres_replication_slot",
@@ -359,7 +362,7 @@ impl PgCdcClient {
             .simple_query("SET extra_float_digits=3")
             .await
             .map_err(|error| {
-                super::error::postgres(
+                extractor_error::postgres(
                     error,
                     ErrorCode::StatementFailed,
                     "configure_postgres_replication_session",
@@ -369,7 +372,7 @@ impl PgCdcClient {
             .simple_query("SET TIME ZONE 'UTC'")
             .await
             .map_err(|error| {
-                super::error::postgres(
+                extractor_error::postgres(
                     error,
                     ErrorCode::StatementFailed,
                     "configure_postgres_replication_session",
@@ -391,7 +394,7 @@ impl PgCdcClient {
             .copy_both_simple::<bytes::Bytes>(&query)
             .await
             .map_err(|error| {
-                super::error::postgres(
+                extractor_error::postgres(
                     error,
                     ErrorCode::StatementFailed,
                     "start_postgres_replication",
@@ -400,16 +403,6 @@ impl PgCdcClient {
         let stream = LogicalReplicationStream::new(copy_stream);
         Ok((stream, start_lsn))
     }
-}
-
-#[track_caller]
-fn postgres_tls_error(error: openssl::error::ErrorStack, operation: &'static str) -> DtError {
-    DtError::new(ErrorCode::TlsFailed)
-        .stage(Stage::Extractor)
-        .operation(operation)
-        .endpoint(EndpointRole::Source)
-        .origin(OriginError::new("postgres", None::<String>))
-        .source(error)
 }
 
 #[track_caller]

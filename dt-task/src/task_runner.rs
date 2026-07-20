@@ -33,7 +33,7 @@ use dt_common::{
         sinker_config::SinkerConfig,
         task_config::{TaskConfig, DEFAULT_CHECK_LOG_FILE_SIZE},
     },
-    error::{DtError, Error, ErrorCode, Stage},
+    error::{DtError, ErrorCode, Stage},
     limiter::buffer_limiter::BufferLimiter,
     log_error,
     log_filter::{parse_size_limit, SizeLimitFilterDeserializer},
@@ -98,6 +98,8 @@ const RUNTIME_STDOUT_APPENDER_PLACEHOLDER: &str = "RUNTIME_STDOUT_APPENDER_PLACE
 const CHECK_RESULT_STDOUT_APPENDER_PLACEHOLDER: &str = "CHECK_RESULT_STDOUT_APPENDER_PLACEHOLDER";
 const DEFAULT_CHECK_LOG_DIR_PLACEHOLDER: &str = "LOG_DIR_PLACEHOLDER/check";
 const DEFAULT_STATISTIC_LOG_DIR_PLACEHOLDER: &str = "LOG_DIR_PLACEHOLDER/statistic";
+
+use crate::error::runner::invalid_config as invalid_task_config;
 
 fn init_task_check_summary() -> CheckSummaryLog {
     CheckSummaryLog {
@@ -189,9 +191,8 @@ impl TaskRunner {
             .is_some_and(|task_type| task_type.is_cdc_inline_check())
             && checker_state_store.is_none()
         {
-            bail!(Error::ConfigError(
+            bail!(invalid_task_config(
                 "config [checker] with CDC tasks requires [resumer] resume_type=from_target or from_db to persist checker state"
-                    .into(),
             ));
         }
         let (extractor_client, sinker_client) = ConnClient::from_config(&self.config).await?;
@@ -204,7 +205,7 @@ impl TaskRunner {
 
         #[cfg(feature = "metrics")]
         self.prometheus_metrics
-            .initialization()
+            .initialization()?
             .start_metrics()
             .await;
 
@@ -418,9 +419,7 @@ impl TaskRunner {
             return Ok(None);
         }
         let s3_cfg = cfg.s3_config.as_ref().ok_or_else(|| {
-            Error::ConfigError(
-                "check_log_s3=true but checker s3 config is missing in [checker]".into(),
-            )
+            invalid_task_config("check_log_s3=true but checker s3 config is missing in [checker]")
         })?;
         Ok(Some((
             TaskUtil::create_s3_client(s3_cfg)?,
@@ -912,7 +911,7 @@ impl TaskRunner {
         let checker_task_id = task_id.to_string();
         let cdc_check_log_max_file_size =
             parse_size_limit(&cfg.check_log_file_size).map_err(|e| {
-                Error::ConfigError(format!(
+                invalid_task_config(format!(
                     "invalid config [checker].check_log_file_size: {}, error: {}",
                     cfg.check_log_file_size, e
                 ))
@@ -938,7 +937,7 @@ impl TaskRunner {
         let checker_target = self
             .config
             .checker_target()
-            .ok_or_else(|| Error::ConfigError("config [checker] target is missing".into()))?;
+            .ok_or_else(|| invalid_task_config("config [checker] target is missing"))?;
         let checker_db_type = checker_target.db_type.clone();
         let checker_url = checker_target.url.clone();
         let checker_auth = checker_target.connection_auth.clone();
@@ -1146,7 +1145,9 @@ impl TaskRunner {
                 );
                 Ok(Some(CheckerHandle::Data(checker)))
             }
-            _ => bail!("checker not supported for db_type: {}", checker_db_type),
+            _ => bail!(invalid_task_config(format!(
+                "checker is not supported for database type: {checker_db_type}"
+            ))),
         }
     }
 

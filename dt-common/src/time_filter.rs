@@ -1,5 +1,4 @@
-use anyhow::Context;
-
+use crate::error::{DtError, ErrorCode, Stage};
 use crate::utils::time_util::TimeUtil;
 
 #[derive(Clone)]
@@ -17,8 +16,12 @@ impl TimeFilter {
             0
         } else {
             TimeUtil::datetime_from_utc_str(start_time_utc)
-                .with_context(|| {
-                    format!("time_filter, invalid start_time_utc: [{}]", start_time_utc)
+                .map_err(|error| {
+                    DtError::new(ErrorCode::InvalidConfig)
+                        .detail("config [extractor].start_time_utc is invalid")
+                        .stage(Stage::Bootstrap)
+                        .operation("parse_start_time_filter")
+                        .source(error)
                 })?
                 .timestamp() as u32
         };
@@ -27,7 +30,13 @@ impl TimeFilter {
             u32::MAX
         } else {
             TimeUtil::datetime_from_utc_str(end_time_utc)
-                .with_context(|| format!("time_filter, invalid end_time_utc: [{}]", end_time_utc))?
+                .map_err(|error| {
+                    DtError::new(ErrorCode::InvalidConfig)
+                        .detail("config [extractor].end_time_utc is invalid")
+                        .stage(Stage::Bootstrap)
+                        .operation("parse_end_time_filter")
+                        .source(error)
+                })?
                 .timestamp() as u32
         };
 

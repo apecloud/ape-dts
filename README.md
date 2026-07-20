@@ -88,6 +88,8 @@ Refer to [test docs](./dt-tests/README.md) for details.
 
 - Configurations
   - [config details](./docs/en/config.md)
+- Error handling
+  - [error codes](./docs/en/error_codes.md)
 - Structure tasks
   - [migration](./docs/en/structure/migration.md)
   - [check](./docs/en/structure/check.md)

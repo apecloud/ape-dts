@@ -189,7 +189,7 @@ struct check 仅支持 standalone MySQL/PostgreSQL checker target。
   `username`、`password`；checker 会直接复用 `[sinker]` 已解析的目标端配置。
 - 在 inline cdc check 中，必须配置 `[resumer] resume_type=from_target` 或 `from_db` 来持久化
   checker 状态。
-- 对 inline cdc check，下面这些组合会直接报 `ConfigError`：出现 `[checker]` section 但缺少
+- 对 inline cdc check，下面这些组合会直接报错误码 `CF002`：出现 `[checker]` section 但缺少
   `enable`；`[pipeline].pipeline_type != basic`；`[sinker].sink_type != write`；
   `[parallelizer].parallel_type != rdb_merge`；`[sinker].db_type` 不属于 `mysql` / `pg`；
   以及在 `[checker]` 中显式填写目标端字段 `db_type` / `url` / `username` / `password`。

@@ -1,8 +1,9 @@
-use anyhow::{bail, Context};
 use mongodb::{
     bson::{doc, Document},
     Client,
 };
+
+use crate::error::{dt_error_from_mongodb, DtError, ErrorCode, OriginError};
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct MongoServerVersion {
@@ -41,20 +42,43 @@ pub async fn get_server_version(client: &Client) -> anyhow::Result<MongoServerVe
         .unwrap_or_else(|| client.database("admin"))
         .run_command(doc! { "buildInfo": 1 })
         .await
-        .context("failed to run MongoDB buildInfo")?;
-    let version = build_info
-        .get_str("version")
-        .context("MongoDB buildInfo response missing version")?;
+        .map_err(|error| {
+            dt_error_from_mongodb(error, ErrorCode::MetadataFailed)
+                .operation("fetch_mongodb_server_version")
+        })?;
+    let version = build_info.get_str("version").map_err(|error| {
+        DtError::new(ErrorCode::MetadataFailed)
+            .detail("MongoDB buildInfo response is missing a valid version")
+            .operation("parse_mongodb_server_version")
+            .origin(OriginError::new("mongodb", None::<String>))
+            .source(error)
+    })?;
     MongoServerVersion::parse(version)
 }
 
 fn parse_version_part(part: Option<&str>, original: &str, field: &str) -> anyhow::Result<u32> {
-    let part = part.with_context(|| format!("MongoDB version missing {field}: {original}"))?;
+    let part = part.ok_or_else(|| {
+        DtError::new(ErrorCode::MetadataFailed)
+            .detail(format!("MongoDB version is missing {field}: {original}"))
+            .operation("parse_mongodb_server_version")
+            .origin(OriginError::new("mongodb", None::<String>))
+    })?;
     let digits: String = part.chars().take_while(|c| c.is_ascii_digit()).collect();
     if digits.is_empty() {
-        bail!("invalid MongoDB version {field}: {original}");
+        return Err(DtError::new(ErrorCode::MetadataFailed)
+            .detail(format!("invalid MongoDB version {field}: {original}"))
+            .operation("parse_mongodb_server_version")
+            .origin(OriginError::new("mongodb", None::<String>))
+            .into());
     }
-    Ok(digits.parse()?)
+    digits.parse().map_err(|error| {
+        DtError::new(ErrorCode::MetadataFailed)
+            .detail(format!("invalid MongoDB version {field}: {original}"))
+            .operation("parse_mongodb_server_version")
+            .origin(OriginError::new("mongodb", None::<String>))
+            .source(error)
+            .into()
+    })
 }
 
 #[cfg(test)]

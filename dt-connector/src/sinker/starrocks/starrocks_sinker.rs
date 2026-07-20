@@ -21,7 +21,9 @@ use dt_common::{
     utils::{limit_queue::LimitedQueue, sql_util::SqlUtil},
 };
 
-use crate::{call_batch_fn, sinker::base_sinker::BaseSinker, Sinker};
+use crate::{
+    call_batch_fn, error::sinker as sinker_error, sinker::base_sinker::BaseSinker, Sinker,
+};
 
 const SIGN_COL_NAME: &str = "_ape_dts_is_deleted";
 const TIMESTAMP_COL_NAME: &str = "_ape_dts_timestamp";
@@ -157,7 +159,7 @@ impl StarRocksSinker {
             .http_client
             .execute(request)
             .await
-            .map_err(|error| super::super::http_error::reqwest(error, "stream_load_request"))?;
+            .map_err(|error| sinker_error::reqwest(error, "stream_load_request"))?;
         rts.push((start_time.elapsed().as_millis() as u64, 1));
         let task_id = self.base_sinker.task_id_for_schema_tb(&db, &tb);
         self.base_sinker.ensure_monitor_for(&task_id);
@@ -276,20 +278,18 @@ impl StarRocksSinker {
                 _ => {}
             }
         }
-        put.build().map_err(|error| {
-            super::super::http_error::reqwest(error, "build_stream_load_request").into()
-        })
+        put.build()
+            .map_err(|error| sinker_error::reqwest(error, "build_stream_load_request").into())
     }
 
     async fn check_response(response: Response) -> anyhow::Result<()> {
         let status_code = response.status();
-        let response_text = &response.text().await.map_err(|error| {
-            super::super::http_error::reqwest(error, "read_stream_load_response")
-        })?;
+        let response_text = &response
+            .text()
+            .await
+            .map_err(|error| sinker_error::reqwest(error, "read_stream_load_response"))?;
         if status_code != StatusCode::OK {
-            return Err(
-                super::super::http_error::status(status_code, "stream_load_request").into(),
-            );
+            return Err(sinker_error::http_status(status_code, "stream_load_request").into());
         }
 
         // response example:
@@ -311,7 +311,7 @@ impl StarRocksSinker {
         //     "CommitAndPublishTimeMs": 36
         // }
         let json_value: Value = serde_json::from_str(response_text).map_err(|error| {
-            super::super::http_error::invalid_response(error, "parse_stream_load_response")
+            sinker_error::http_invalid_response(error, "parse_stream_load_response")
         })?;
         if json_value["Status"] != "Success" {
             let err = format!(
@@ -319,9 +319,7 @@ impl StarRocksSinker {
                 status_code, response_text,
             );
             log_error!("{}", err);
-            return Err(
-                super::super::http_error::rejected(status_code, "stream_load_request").into(),
-            );
+            return Err(sinker_error::http_rejected(status_code, "stream_load_request").into());
         }
         Ok(())
     }

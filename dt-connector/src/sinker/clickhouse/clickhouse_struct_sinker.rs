@@ -1,10 +1,9 @@
-use crate::{rdb_router::RdbRouter, Sinker};
+use crate::{error::sinker::clickhouse_metadata, rdb_router::RdbRouter, Sinker};
 
 use anyhow::bail;
 use clickhouse::Client;
 use dt_common::{
     config::config_enums::ConflictPolicyEnum,
-    error::{DtError, EndpointRole, ErrorCode, OriginError, Stage},
     log_error, log_info,
     meta::{
         mysql::{mysql_col_type::MysqlColType, mysql_tb_meta::MysqlTbMeta},
@@ -118,7 +117,7 @@ impl ClickhouseStructSinker {
         let rdb_tb_meta = if let Some(tb_meta) = pg_tb_meta {
             &tb_meta.basic
         } else {
-            &mysql_tb_meta.ok_or_else(clickhouse_metadata_error)?.basic
+            &mysql_tb_meta.ok_or_else(clickhouse_metadata)?.basic
         };
 
         let mut dst_cols = vec![];
@@ -165,7 +164,7 @@ impl ClickhouseStructSinker {
         let dst_col_type = if let Some(tb_meta) = mysql_tb_meta {
             Self::get_dst_col_type_from_mysql(col, tb_meta)
         } else {
-            Self::get_dst_col_type_from_pg(col, pg_tb_meta.ok_or_else(clickhouse_metadata_error)?)
+            Self::get_dst_col_type_from_pg(col, pg_tb_meta.ok_or_else(clickhouse_metadata)?)
         }?;
 
         // Nested type Array() cannot be inside Nullable type
@@ -295,13 +294,4 @@ impl ClickhouseStructSinker {
         }
         Ok(())
     }
-}
-
-#[track_caller]
-fn clickhouse_metadata_error() -> DtError {
-    DtError::new(ErrorCode::MetadataFailed)
-        .stage(Stage::Sinker)
-        .operation("build_clickhouse_table")
-        .endpoint(EndpointRole::Destination)
-        .origin(OriginError::new("clickhouse", None::<String>))
 }

@@ -2,6 +2,7 @@ use mongodb::bson::{doc, Bson, Document};
 
 use crate::{
     config::config_enums::DbType,
+    error::{DtError, ErrorCode, OriginError},
     meta::ddl_meta::{
         ddl_data::DdlData,
         ddl_statement::{DdlStatement, MongoCommandStatement},
@@ -23,11 +24,24 @@ pub fn command_to_query(command: Document) -> String {
 }
 
 pub fn query_to_command(query: &str) -> anyhow::Result<Document> {
-    let value: serde_json::Value = serde_json::from_str(query)?;
-    match Bson::try_from(value)? {
+    let value: serde_json::Value = serde_json::from_str(query)
+        .map_err(|error| mongo_ddl_error("MongoDB DDL payload is not valid JSON").source(error))?;
+    match Bson::try_from(value)
+        .map_err(|error| mongo_ddl_error("MongoDB DDL payload is not valid BSON").source(error))?
+    {
         Bson::Document(command) => Ok(command),
-        other => anyhow::bail!("mongo ddl query is not a document: {:?}", other),
+        other => anyhow::bail!(mongo_ddl_error(format!(
+            "MongoDB DDL payload is not a document: {other:?}"
+        ))),
     }
+}
+
+#[track_caller]
+fn mongo_ddl_error(detail: impl Into<String>) -> DtError {
+    DtError::new(ErrorCode::StatementFailed)
+        .detail(detail)
+        .operation("parse_mongodb_ddl")
+        .origin(OriginError::new("mongodb", None::<String>))
 }
 
 pub fn build_shard_collection_ddl(ns: &str, key: Document, unique: bool) -> Option<DdlData> {

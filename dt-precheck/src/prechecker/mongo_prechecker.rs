@@ -10,6 +10,8 @@ use crate::{
 };
 
 use super::traits::Prechecker;
+use crate::error::failure as precheck_failure;
+use dt_common::error::ErrorCode;
 
 const MONGO_SUPPORTED_VERSION_REGEX: &str = r"4.*|5.0.*|6.0.*|7.0.*";
 
@@ -39,10 +41,12 @@ impl Prechecker for MongoPrechecker {
         let version = self.fetcher.fetch_version().await?;
         let reg = Regex::new(MONGO_SUPPORTED_VERSION_REGEX)?;
         if !reg.is_match(version.as_str()) {
-            check_error = Some(anyhow::Error::msg(format!(
-                "mongo version:[{}] is invalid.",
-                version
-            )));
+            check_error = Some(precheck_failure(
+                ErrorCode::UnsupportedDatabaseVersion,
+                format!("MongoDB version {version} is not supported"),
+                self.is_source,
+                "check_mongodb_version",
+            ));
         }
 
         Ok(CheckResult::build_with_err(
@@ -102,7 +106,12 @@ impl Prechecker for MongoPrechecker {
         }
 
         if !err_msg.is_empty() {
-            check_error = Some(anyhow::Error::msg(err_msg));
+            check_error = Some(precheck_failure(
+                ErrorCode::CdcNotEnabled,
+                err_msg,
+                self.is_source,
+                "check_mongodb_cdc_configuration",
+            ));
         }
 
         Ok(CheckResult::build_with_err(
@@ -130,8 +139,11 @@ impl Prechecker for MongoPrechecker {
         let invalid_dbs = vec!["admin", "local"];
         for db in invalid_dbs {
             if !self.fetcher.filter.filter_schema(db) {
-                check_error = Some(anyhow::Error::msg(
-                    "database 'admin' and 'local' are not supported as source and target.",
+                check_error = Some(precheck_failure(
+                    ErrorCode::UnsupportedTableStructure,
+                    "MongoDB databases admin and local are not supported migration objects",
+                    self.is_source,
+                    "check_mongodb_migration_objects",
                 ));
                 break;
             }

@@ -63,8 +63,8 @@ impl PgStructCheckFetcher {
         col_types.insert("oid", Self::mock_col_type("oid"));
 
         let rows = self.execute_sql(&sql, &col_names, &col_types).await?;
-        if !rows.is_empty() {
-            return Ok(rows[0].get("oid").unwrap().into());
+        if let Some(oid) = rows.first().and_then(|row| row.get("oid")) {
+            return Ok(oid.into());
         }
         Ok(String::new())
     }
@@ -228,7 +228,7 @@ impl PgStructCheckFetcher {
         let mut results = Vec::new();
         let mut rows = sqlx::query(sql).fetch(&self.conn_pool);
         while let Some(row) = rows.try_next().await.map_err(|error| {
-            crate::extractor::sqlx_error::postgres(
+            crate::error::extractor::postgres_sqlx(
                 error,
                 dt_common::error::ErrorCode::MetadataFailed,
                 "fetch_postgres_structure",

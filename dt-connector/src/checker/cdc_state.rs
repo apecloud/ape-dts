@@ -18,8 +18,8 @@ struct IdentityJsonPayload<'a> {
     id_col_values: BTreeMap<&'a str, Option<&'a str>>,
 }
 
-pub(super) fn build_identity_json(entry: &CheckEntry) -> String {
-    serde_json::to_string(&IdentityJsonPayload {
+pub(super) fn build_identity_json(entry: &CheckEntry) -> anyhow::Result<String> {
+    Ok(serde_json::to_string(&IdentityJsonPayload {
         schema: &entry.log.schema,
         tb: &entry.log.tb,
         id_col_values: entry
@@ -28,12 +28,13 @@ pub(super) fn build_identity_json(entry: &CheckEntry) -> String {
             .iter()
             .map(|(key, value)| (key.as_str(), value.as_deref()))
             .collect(),
-    })
-    .expect("identity json serialization should not fail")
+    })?)
 }
 
-pub(super) fn build_identity_key(entry: &CheckEntry) -> String {
-    hex::encode(openssl::sha::sha256(build_identity_json(entry).as_bytes()))
+pub(super) fn build_identity_key(entry: &CheckEntry) -> anyhow::Result<String> {
+    Ok(hex::encode(openssl::sha::sha256(
+        build_identity_json(entry)?.as_bytes(),
+    )))
 }
 
 fn build_state_row(
@@ -42,7 +43,7 @@ fn build_state_row(
 ) -> anyhow::Result<CheckerStateRow> {
     Ok(CheckerStateRow {
         row_key: store_key.row_key,
-        identity_key: build_identity_key(entry),
+        identity_key: build_identity_key(entry)?,
         payload: serde_json::to_string(&entry.key)?,
     })
 }
@@ -423,7 +424,7 @@ impl<C: Checker> DataChecker<C> {
                                 .await?;
                                 self.store_entry(lookup_row, row_key, entry).await;
                             } else {
-                                self.remove_store_entry(lookup_row, row_key);
+                                self.remove_store_entry(lookup_row, row_key)?;
                             }
                         }
                         (Some(source_row), None) => {
@@ -442,7 +443,7 @@ impl<C: Checker> DataChecker<C> {
                             self.store_entry(lookup_row, row_key, entry).await;
                         }
                         (None, None) => {
-                            self.remove_store_entry(lookup_row, row_key);
+                            self.remove_store_entry(lookup_row, row_key)?;
                         }
                     }
                 }

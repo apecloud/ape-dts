@@ -6,12 +6,13 @@ use async_trait::async_trait;
 use sqlx::{mysql::MySqlRow, query, MySql, Pool};
 
 use crate::{
+    error::mysql::provider as mysql_precheck_error,
     fetcher::traits::Fetcher,
     meta::database_mode::{Constraint, Database, Schema, Table},
 };
 use dt_common::{
     config::{config_enums::DbType, connection_auth_config::ConnectionAuthConfig},
-    error::Error,
+    error::EndpointRole,
     rdb_filter::RdbFilter,
     utils::sql_util::SqlUtil,
 };
@@ -221,34 +222,55 @@ impl Fetcher for MysqlFetcher {
 }
 
 impl MysqlFetcher {
-    async fn fetch_all(&self, sql: String, mut sql_msg: &str) -> Result<Vec<MySqlRow>, Error> {
+    async fn fetch_all(&self, sql: String, mut sql_msg: &str) -> anyhow::Result<Vec<MySqlRow>> {
+        let endpoint = if self.is_source {
+            EndpointRole::Source
+        } else {
+            EndpointRole::Destination
+        };
         let mysql_pool = match &self.pool {
             Some(pool) => pool,
-            None => return Err(Error::from(sqlx::Error::PoolClosed)),
+            None => {
+                return Err(mysql_precheck_error(
+                    sqlx::Error::PoolClosed,
+                    endpoint,
+                    "run_mysql_precheck_query",
+                )
+                .into())
+            }
         };
 
         sql_msg = if sql_msg.is_empty() { "sql" } else { sql_msg };
         println!("{}: {}", sql_msg, sql);
 
-        let rows_result = query(&sql).fetch_all(mysql_pool).await;
-        match rows_result {
-            Ok(rows) => Ok(rows),
-            Err(e) => Err(Error::from(e)),
-        }
+        query(&sql).fetch_all(mysql_pool).await.map_err(|error| {
+            mysql_precheck_error(error, endpoint, "run_mysql_precheck_query").into()
+        })
     }
 
     fn fetch_row<'a>(
         &self,
         sql: &'a str,
         mut sql_msg: &str,
-    ) -> anyhow::Result<impl Stream<Item = anyhow::Result<MySqlRow, sqlx::Error>> + 'a> {
+    ) -> anyhow::Result<impl Stream<Item = anyhow::Result<MySqlRow>> + 'a> {
+        let endpoint = if self.is_source {
+            EndpointRole::Source
+        } else {
+            EndpointRole::Destination
+        };
         match &self.pool {
             Some(pool) => {
                 sql_msg = if sql_msg.is_empty() { "sql" } else { sql_msg };
                 println!("{}: {}", sql_msg, sql);
-                Ok(query(sql).fetch(pool))
+                Ok(query(sql).fetch(pool).map_err(move |error| {
+                    mysql_precheck_error(error, endpoint, "stream_mysql_precheck_query").into()
+                }))
             }
-            None => bail! {Error::from(sqlx::Error::PoolClosed)},
+            None => bail! {mysql_precheck_error(
+                sqlx::Error::PoolClosed,
+                endpoint,
+                "stream_mysql_precheck_query",
+            )},
         }
     }
 

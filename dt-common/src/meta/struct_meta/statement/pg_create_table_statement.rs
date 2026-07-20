@@ -1,7 +1,7 @@
 use anyhow::bail;
 
 use crate::config::config_enums::DbType;
-use crate::error::Error;
+use crate::error::{DtError, ErrorCode};
 use crate::meta::ddl_meta::ddl_parser::DdlParser;
 use crate::meta::ddl_meta::ddl_statement::DdlStatement;
 use crate::meta::struct_meta::structure::column::ColumnDefault;
@@ -189,10 +189,10 @@ impl PgCreateTableStatement {
             }
             Ok(ddl_data.to_sql())
         } else {
-            bail! {Error::Unexpected( format!(
+            bail! {DtError::new(ErrorCode::MetadataFailed).detail(format!(
                 "failed to parse index, schema: {}, tb: {}, definition: {}",
                 &index.schema_name, &index.table_name, index.definition
-            ) )}
+            ))}
         }
     }
 

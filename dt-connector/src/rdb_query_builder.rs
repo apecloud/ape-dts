@@ -5,7 +5,7 @@ use sqlx::{mysql::MySqlArguments, postgres::PgArguments, query::Query, MySql, Po
 
 use dt_common::{
     config::config_enums::DbType,
-    error::Error,
+    error::{DtError, ErrorCode, ErrorObject},
     log_warn,
     meta::{
         adaptor::{
@@ -34,7 +34,9 @@ impl RdbQueryInfo<'_> {
         if !self.binds.is_empty()
             && (self.cols.is_empty() || self.binds.len() % self.cols.len() != 0)
         {
-            bail!("query bind column layout does not match bind values");
+            bail!(DtError::new(ErrorCode::InvariantViolated)
+                .detail("query bind column layout does not match bind values")
+                .operation("validate_query_bind_layout"));
         }
         Ok(())
     }
@@ -530,10 +532,17 @@ impl RdbQueryBuilder<'_> {
         }
 
         if set_pairs.is_empty() {
-            bail! {Error::Unexpected(format!(
-                "schema: {}, tb: {}, no cols in after, which should not happen in update",
-                self.rdb_tb_meta.schema, self.rdb_tb_meta.tb
-            ))}
+            bail! {DtError::new(ErrorCode::InvariantViolated)
+            .detail(format!(
+            "schema: {}, tb: {}, no cols in after, which should not happen in update",
+            self.rdb_tb_meta.schema, self.rdb_tb_meta.tb
+            ))
+            .operation("build_update_query")
+            .object(ErrorObject {
+                schema: Some(self.rdb_tb_meta.schema.clone()),
+                table: Some(self.rdb_tb_meta.tb.clone()),
+                ..Default::default()
+            })}
         }
 
         let (where_sql, not_null_cols) = self.get_where_info(index, before, placeholder)?;
@@ -782,10 +791,18 @@ impl RdbQueryBuilder<'_> {
             return Ok("NULL".to_string());
         };
         if col_value.is_unchanged_toast() {
-            bail! {Error::Unexpected(format!(
-                "schema: {}, tb: {}, col: {}, UnchangedToast should not be converted to sql value directly",
-                self.rdb_tb_meta.schema, self.rdb_tb_meta.tb, col
-            ))}
+            bail! {DtError::new(ErrorCode::InvariantViolated)
+            .detail(format!(
+            "schema: {}, tb: {}, col: {}, UnchangedToast should not be converted to sql value directly",
+            self.rdb_tb_meta.schema, self.rdb_tb_meta.tb, col
+            ))
+            .operation("convert_column_to_sql")
+            .object(ErrorObject {
+                schema: Some(self.rdb_tb_meta.schema.clone()),
+                table: Some(self.rdb_tb_meta.tb.clone()),
+                column: Some(col.to_string()),
+                ..Default::default()
+            })}
         }
 
         if self.mysql_tb_meta.is_some() {

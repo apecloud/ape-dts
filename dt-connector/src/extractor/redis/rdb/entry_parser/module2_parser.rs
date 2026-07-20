@@ -1,5 +1,5 @@
+use crate::error::extractor::redis_rdb as rdb_error;
 use anyhow::bail;
-use dt_common::error::Error;
 use dt_common::log_info;
 use dt_common::meta::redis::redis_object::{ModuleObject, RedisString};
 
@@ -17,9 +17,9 @@ impl ModuleParser {
         type_byte: u8,
     ) -> anyhow::Result<ModuleObject> {
         if type_byte == super::RDB_TYPE_MODULE {
-            bail! {Error::RedisRdbError(format!(
+            bail! {rdb_error(format!(
                 "module type with version 1 is not supported, key=[{}]",
-                String::from(key)
+                key
             ))}
         }
 
@@ -41,7 +41,7 @@ impl ModuleParser {
             name_list[i] = name_char_set[(module_id & 63) as usize] as u8;
             module_id >>= 6;
         }
-        String::from_utf8(name_list).unwrap()
+        String::from_utf8_lossy(&name_list).into_owned()
     }
 
     async fn skip_module_data(reader: &mut RdbReader<'_>) -> anyhow::Result<()> {
@@ -61,7 +61,7 @@ impl ModuleParser {
                     reader.read_string().await?;
                 }
                 _ => {
-                    bail! {Error::RedisRdbError(format!(
+                    bail! {rdb_error(format!(
                         "unknown module opcode: {}", opcode
                     ))}
                 }

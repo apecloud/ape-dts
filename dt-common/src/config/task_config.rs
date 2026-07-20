@@ -12,10 +12,17 @@ use crate::{
         global_config::GlobalConfig,
         limiter_config::{CapacityLimiterConfig, RateLimiterConfig},
     },
-    error::{DtError, Error, ErrorCode, Stage},
+    error::{DtError, ErrorCode, Stage},
     meta::mongo::mongo_cdc_source::MongoCdcSource,
     utils::task_util::TaskUtil,
 };
+
+#[track_caller]
+fn invalid_task_config(detail: impl Into<String>) -> DtError {
+    DtError::new(ErrorCode::InvalidConfig)
+        .detail(detail)
+        .stage(Stage::Bootstrap)
+}
 
 use super::{
     checker_config::CheckerConfig,
@@ -148,23 +155,21 @@ impl TaskConfig {
             if matches!(extractor_basic.extract_type, ExtractType::Cdc)
                 && !matches!(sinker_basic.sink_type, SinkType::Write)
             {
-                bail!(Error::ConfigError(
-                    "config [checker] with [extractor] extract_type=cdc requires [sinker] sink_type=write"
-                        .into(),
+                bail!(invalid_task_config(
+                    "config [checker] with [extractor] extract_type=cdc requires [sinker] sink_type=write",
                 ));
             }
             if matches!(extractor_basic.extract_type, ExtractType::Cdc)
                 && !matches!(parallelizer.parallel_type(), ParallelType::RdbMerge)
             {
-                bail!(Error::ConfigError(
-                    "config [checker].enable=true with [extractor] extract_type=cdc and [sinker] sink_type=write currently supports only [parallelizer] parallel_type=rdb_merge"
-                        .into(),
+                bail!(invalid_task_config(
+                    "config [checker].enable=true with [extractor] extract_type=cdc and [sinker] sink_type=write currently supports only [parallelizer] parallel_type=rdb_merge",
                 ));
             }
 
             if !matches!(pipeline.pipeline_type, PipelineType::Basic) {
-                bail!(Error::ConfigError(
-                    "config [checker] only supports [pipeline] pipeline_type=basic".into(),
+                bail!(invalid_task_config(
+                    "config [checker] only supports [pipeline] pipeline_type=basic",
                 ));
             }
 
@@ -188,7 +193,7 @@ impl TaskConfig {
                         true,
                     )
                     .ok_or_else(|| {
-                        Error::ConfigError(format!(
+                        invalid_task_config(format!(
                             "config [checker] is not supported for [checker] db_type={} with [extractor] extract_type={} and [sinker] sink_type={}",
                             checker_cfg.db_type, extractor_basic.extract_type, sinker_basic.sink_type
                         ))
@@ -200,14 +205,14 @@ impl TaskConfig {
                 task_type.is_cdc_inline_check() || task_type.is_standalone_snapshot_check()
             });
             if checker_cfg.check_log_s3 && !check_log_s3_supported {
-                bail!(Error::ConfigError(format!(
+                bail!(invalid_task_config(format!(
                     "config [checker].{} only supports standalone snapshot check or inline cdc check",
                     CHECK_LOG_S3
                 )));
             }
             if checker_cfg.check_log_s3 && checker_cfg.s3_config.is_none() {
-                bail!(Error::ConfigError(
-                    "check_log_s3=true but checker s3 config is missing in [checker]".into(),
+                bail!(invalid_task_config(
+                    "check_log_s3=true but checker s3 config is missing in [checker]",
                 ));
             }
 
@@ -223,7 +228,7 @@ impl TaskConfig {
                     })
                 )
             {
-                bail!(Error::ConfigError(format!(
+                bail!(invalid_task_config(format!(
                     "config [checker].{} only supports snapshot check or inline cdc check",
                     SAMPLE_RATE
                 )));
@@ -339,9 +344,8 @@ impl TaskConfig {
                 .iter()
                 .any(|key| loader.contains(CHECKER, key))
         {
-            bail!(Error::ConfigError(
-                "inline check does not accept [checker] target fields; configure them via [sinker]"
-                    .into(),
+            bail!(invalid_task_config(
+                "inline check does not accept [checker] target fields; configure them via [sinker]",
             ));
         }
         if !inline_check
@@ -352,8 +356,8 @@ impl TaskConfig {
                     .is_none_or(|value| value.is_empty())
             })
         {
-            bail!(Error::ConfigError(
-                "config [checker] standalone target requires non-empty db_type and url".into(),
+            bail!(invalid_task_config(
+                "config [checker] standalone target requires non-empty db_type and url",
             ));
         }
         Ok(())
@@ -479,7 +483,7 @@ impl TaskConfig {
         };
 
         let not_supported_err =
-            Error::ConfigError(format!("extract type: {} not supported", extract_type));
+            invalid_task_config(format!("extract type: {} not supported", extract_type));
 
         let extractor = match db_type {
             DbType::Mysql => match extract_type {
@@ -616,7 +620,7 @@ impl TaskConfig {
                 ExtractType::Snapshot => {
                     let batch_size = match u32::try_from(batch_size) {
                         std::result::Result::Ok(batch_size) => batch_size,
-                        Err(_) => bail! { Error::ConfigError(format!(
+                        Err(_) => bail! { invalid_task_config(format!(
                             "config [{}].{} default value exceeds u32::MAX",
                             EXTRACTOR, BATCH_SIZE,
                         ))},
@@ -755,7 +759,7 @@ impl TaskConfig {
             },
 
             db_type => {
-                bail! {Error::ConfigError(format!(
+                bail! {invalid_task_config(format!(
                     "extractor db type: {} not supported",
                     db_type
                 ))}
@@ -769,8 +773,8 @@ impl TaskConfig {
             return Ok(false);
         }
         if !loader.contains(CHECKER, ENABLE) {
-            bail!(Error::ConfigError(
-                "config [checker].enable is required when [checker] section is present".into(),
+            bail!(invalid_task_config(
+                "config [checker].enable is required when [checker] section is present",
             ));
         }
         Ok(loader.get_with_default(CHECKER, ENABLE, false)?)
@@ -782,13 +786,13 @@ impl TaskConfig {
 
         if !has_sinker {
             if !has_checker {
-                bail!(Error::ConfigError(
-                    "config [sinker] is required when [checker] is not set".into()
+                bail!(invalid_task_config(
+                    "config [sinker] is required when [checker] is not set"
                 ));
             }
             if !Self::is_checker_enabled(loader)? {
-                bail!(Error::ConfigError(
-                    "config [sinker] is required unless [checker].enable=true".into()
+                bail!(invalid_task_config(
+                    "config [sinker] is required unless [checker].enable=true"
                 ));
             }
         }
@@ -807,8 +811,8 @@ impl TaskConfig {
         let url: String = loader.get_optional(SINKER, URL)?;
         let batch_size: usize = loader.get_with_default(SINKER, BATCH_SIZE, 200)?;
         if batch_size == 0 {
-            bail!(Error::ConfigError(
-                "config [sinker].batch_size must be greater than 0".into()
+            bail!(invalid_task_config(
+                "config [sinker].batch_size must be greater than 0"
             ));
         }
         let max_connections =
@@ -843,7 +847,7 @@ impl TaskConfig {
             loader.get_with_default(SINKER, "conflict_policy", ConflictPolicyEnum::Interrupt)?;
 
         let not_supported_err =
-            Error::ConfigError(format!("sinker db type: {} not supported", db_type));
+            invalid_task_config(format!("sinker db type: {} not supported", db_type));
 
         let sinker = match db_type {
             DbType::Mysql | DbType::Tidb => match sink_type {
@@ -1036,7 +1040,7 @@ impl TaskConfig {
             },
         )?;
         if min_partition_rows == 0 {
-            bail!(Error::ConfigError(format!(
+            bail!(invalid_task_config(format!(
                 "config [parallelizer].{} must be greater than 0",
                 REBALANCE_MIN_PARTITION_ROWS
             )));
@@ -1048,7 +1052,7 @@ impl TaskConfig {
             default_rebalance.max_partitions_per_sinker,
         )?;
         if max_partitions_per_sinker == 0 {
-            bail!(Error::ConfigError(format!(
+            bail!(invalid_task_config(format!(
                 "config [parallelizer].{} must be greater than 0",
                 REBALANCE_MAX_PARTITIONS_PER_SINKER
             )));
@@ -1060,7 +1064,7 @@ impl TaskConfig {
             default_rebalance.split_skew_ratio,
         )?;
         if split_skew_ratio <= 0.0 {
-            bail!(Error::ConfigError(format!(
+            bail!(invalid_task_config(format!(
                 "config [parallelizer].{} must be greater than 0",
                 REBALANCE_SPLIT_SKEW_RATIO
             )));
@@ -1127,13 +1131,13 @@ impl TaskConfig {
         let sample_rate = match loader.ini.get(CHECKER, SAMPLE_RATE) {
             Some(raw) if !raw.is_empty() => {
                 let sample_rate = raw.parse::<usize>().map_err(|_| {
-                    Error::ConfigError(format!(
+                    invalid_task_config(format!(
                         "config [checker].{}={}, can not be parsed as usize",
                         SAMPLE_RATE, raw
                     ))
                 })?;
                 if !(1..=100).contains(&sample_rate) {
-                    bail!(Error::ConfigError(format!(
+                    bail!(invalid_task_config(format!(
                         "config [checker].sample_rate must be between 1 and 100, got {}",
                         sample_rate
                     )));
@@ -1314,7 +1318,7 @@ impl TaskConfig {
             .filter(|key| loader.contains(RESUMER, key))
             .collect::<Vec<_>>();
         if !legacy_keys.is_empty() {
-            bail!(Error::ConfigError(format!(
+            bail!(invalid_task_config(format!(
                 "legacy [resumer] configs {} are no longer supported; migrate to resume_type=from_log, log_dir, and config_file",
                 legacy_keys.join(", ")
             )));
@@ -1330,8 +1334,8 @@ impl TaskConfig {
             ResumeType::FromTarget => {
                 let target = if matches!(sinker_basic.sink_type, SinkType::Dummy) {
                     let Some(checker) = checker else {
-                        bail!(Error::ConfigError(
-                            "config [checker] target is required when [resumer] resume_type=from_target".into()
+                        bail!(invalid_task_config(
+                            "config [checker] target is required when [resumer] resume_type=from_target"
                         ));
                     };
                     Self::checker_as_basic_sinker(checker)
@@ -1437,7 +1441,7 @@ impl TaskConfig {
             };
             let meta_center_url: String = loader.get_required(META_CENTER, URL)?;
             if extractor_url == meta_center_url || target_url == meta_center_url {
-                bail!(Error::ConfigError(format!(
+                bail!(invalid_task_config(format!(
                     "config, [{}].{} should be different with [{}].{} and [{}].{}",
                     META_CENTER, URL, EXTRACTOR, URL, SINKER, URL
                 )));
@@ -1500,6 +1504,7 @@ mod tests {
     use crate::config::parallelizer_config::{
         ChunkPartitionerRebalanceCost, ChunkPartitionerRebalanceStrategy,
     };
+    use crate::error::{DtError, ErrorCode};
     use crate::runtime_trace::{TaskSummaryMode, TraceOutputFormat};
 
     use super::{
@@ -1856,9 +1861,12 @@ sample_rate=10
                 "config error: config [checker].sample_rate only supports snapshot check or inline cdc check",
             ),
         ] {
+            let error = load_temp_task_config(&config).err().unwrap();
+            let error = error.downcast_ref::<DtError>().unwrap();
+            assert_eq!(error.code(), ErrorCode::InvalidConfig);
             assert_eq!(
-                load_temp_task_config(&config).err().unwrap().to_string(),
-                expected_err
+                error.detail.as_deref(),
+                expected_err.strip_prefix("config error: ")
             );
         }
     }
@@ -1984,13 +1992,16 @@ rebalance_max_partitions_per_sinker=0
         );
         let err = TaskConfig::new(config_path.to_str().unwrap())
             .err()
-            .unwrap()
-            .to_string();
+            .unwrap();
         fs::remove_file(config_path).unwrap();
 
+        let err = err.downcast_ref::<DtError>().unwrap();
+        assert_eq!(err.code(), ErrorCode::InvalidConfig);
         assert_eq!(
-            err,
-            "config error: config [parallelizer].rebalance_max_partitions_per_sinker must be greater than 0"
+            err.detail.as_deref(),
+            Some(
+                "config [parallelizer].rebalance_max_partitions_per_sinker must be greater than 0"
+            )
         );
     }
 
@@ -2013,10 +2024,14 @@ batch_size=0
         fs::remove_file(config_path).unwrap();
 
         match result {
-            Err(err) => assert_eq!(
-                err.to_string(),
-                "config error: config [sinker].batch_size must be greater than 0"
-            ),
+            Err(err) => {
+                let err = err.downcast_ref::<DtError>().unwrap();
+                assert_eq!(err.code(), ErrorCode::InvalidConfig);
+                assert_eq!(
+                    err.detail.as_deref(),
+                    Some("config [sinker].batch_size must be greater than 0")
+                );
+            }
             Ok(_) => panic!("expected config validation error"),
         }
     }

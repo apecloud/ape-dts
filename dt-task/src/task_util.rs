@@ -23,8 +23,7 @@ use dt_common::{
         task_config::TaskConfig,
     },
     error::{
-        dt_error_from_mongodb, dt_error_from_sqlx, DtError, EndpointRole, Error, ErrorCode,
-        SqlxProvider, Stage,
+        dt_error_from_mongodb, dt_error_from_sqlx, EndpointRole, ErrorCode, SqlxProvider, Stage,
     },
     log_info, log_warn,
     meta::{
@@ -49,18 +48,12 @@ use dt_connector::{
 use tokio::select;
 use tokio_util::sync::CancellationToken;
 
-pub struct TaskUtil {}
+use crate::error::connection::{
+    self as connection_error, invalid_config as invalid_task_config,
+    metadata as task_sqlx_metadata_error, missing as missing_task_client,
+};
 
-#[track_caller]
-fn task_sqlx_metadata_error(
-    error: sqlx::Error,
-    provider: SqlxProvider,
-    operation: &'static str,
-) -> DtError {
-    dt_error_from_sqlx(error, provider, ErrorCode::MetadataFailed)
-        .stage(Stage::Task)
-        .operation(operation)
-}
+pub struct TaskUtil {}
 
 impl TaskUtil {
     pub async fn create_rdb_meta_manager_for_target(
@@ -478,7 +471,7 @@ impl TaskUtil {
         let conn_pool = match conn_pool {
             ConnClient::MySQL(conn_pool) => conn_pool,
             _ => {
-                bail!("conn_pool is not found")
+                bail!(missing_task_client("MySQL", "estimate_mysql_snapshot_rows"))
             }
         };
 
@@ -522,7 +515,10 @@ impl TaskUtil {
         let conn_pool = match conn_pool {
             ConnClient::PostgreSQL(conn_pool) => conn_pool,
             _ => {
-                bail!("conn_pool is not found")
+                bail!(missing_task_client(
+                    "PostgreSQL",
+                    "estimate_postgres_snapshot_rows"
+                ))
             }
         };
 
@@ -625,7 +621,7 @@ WHERE
         let conn_pool = match conn_client {
             ConnClient::PostgreSQL(conn_pool) => conn_pool,
             _ => {
-                bail!("conn_pool is not found")
+                bail!(missing_task_client("PostgreSQL", "list_postgres_schemas"))
             }
         };
 
@@ -651,7 +647,7 @@ WHERE
         let conn_pool = match conn_client {
             ConnClient::PostgreSQL(conn_pool) => conn_pool,
             _ => {
-                bail!("conn_pool is not found")
+                bail!(missing_task_client("PostgreSQL", "list_postgres_tables"))
             }
         };
 
@@ -679,7 +675,7 @@ WHERE
         let conn_pool = match conn_client {
             ConnClient::MySQL(conn_pool) => conn_pool,
             _ => {
-                bail!("conn_pool is not found")
+                bail!(missing_task_client("MySQL", "list_mysql_databases"))
             }
         };
 
@@ -703,7 +699,7 @@ WHERE
         let conn_pool = match conn_client {
             ConnClient::MySQL(conn_pool) => conn_pool,
             _ => {
-                bail!("conn_pool is not found")
+                bail!(missing_task_client("MySQL", "list_mysql_tables"))
             }
         };
 
@@ -726,7 +722,7 @@ WHERE
         let client = match conn_client {
             ConnClient::MongoDB(client) => client,
             _ => {
-                bail!("client is not found")
+                bail!(missing_task_client("MongoDB", "list_mongodb_databases"))
             }
         };
         let dbs = client
@@ -742,7 +738,7 @@ WHERE
         let client = match conn_client {
             ConnClient::MongoDB(client) => client,
             _ => {
-                bail!("client is not found")
+                bail!(missing_task_client("MongoDB", "list_mongodb_collections"))
             }
         };
         // filter views and system tables
@@ -868,28 +864,19 @@ pub enum ConnClient {
 }
 
 impl ConnClient {
-    fn attach_endpoint(mut error: anyhow::Error, endpoint: EndpointRole) -> anyhow::Error {
-        if let Some(error) = error.downcast_mut::<DtError>() {
-            if error.endpoint.is_none() {
-                error.endpoint = Some(endpoint);
-            }
-        }
-        error
-    }
-
     pub async fn from_config(task_config: &TaskConfig) -> anyhow::Result<(Self, Self)> {
         let enable_sqlx_log = TaskUtil::check_enable_sqlx_log(&task_config.runtime.log_level);
         let extractor_max_connections = task_config.extractor_basic.max_connections;
         let sinker_max_connections = task_config.sinker_basic.max_connections;
         if extractor_max_connections < 1 {
-            bail!(Error::ConfigError(
-                "`extractor.max_connections` must be greater than 0".into()
+            bail!(invalid_task_config(
+                "`extractor.max_connections` must be greater than 0"
             ));
         }
         let sinker_exists = !matches!(task_config.sinker, SinkerConfig::Dummy);
         if sinker_exists && sinker_max_connections < 1 {
-            bail!(Error::ConfigError(
-                "`sinker.max_connections` must be greater than 0".into()
+            bail!(invalid_task_config(
+                "`sinker.max_connections` must be greater than 0"
             ));
         }
 
@@ -923,7 +910,7 @@ impl ConnClient {
                     None,
                 )
                 .await
-                .map_err(|error| Self::attach_endpoint(error, EndpointRole::Source))?,
+                .map_err(|error| connection_error::attach_endpoint(error, EndpointRole::Source))?,
             ),
             ExtractorConfig::PgSnapshot {
                 url,
@@ -953,7 +940,7 @@ impl ConnClient {
                     false,
                 )
                 .await
-                .map_err(|error| Self::attach_endpoint(error, EndpointRole::Source))?,
+                .map_err(|error| connection_error::attach_endpoint(error, EndpointRole::Source))?,
             ),
             ExtractorConfig::MongoSnapshot {
                 url,
@@ -991,7 +978,7 @@ impl ConnClient {
                     Some(extractor_max_connections),
                 )
                 .await
-                .map_err(|error| Self::attach_endpoint(error, EndpointRole::Source))?,
+                .map_err(|error| connection_error::attach_endpoint(error, EndpointRole::Source))?,
             ),
             _ => ConnClient::None,
         };
@@ -1017,7 +1004,9 @@ impl ConnClient {
                         conn_settings,
                     )
                     .await
-                    .map_err(|error| Self::attach_endpoint(error, EndpointRole::Destination))?,
+                    .map_err(|error| {
+                        connection_error::attach_endpoint(error, EndpointRole::Destination)
+                    })?,
                 )
             }
             SinkerConfig::MysqlStruct {
@@ -1034,7 +1023,9 @@ impl ConnClient {
                     None,
                 )
                 .await
-                .map_err(|error| Self::attach_endpoint(error, EndpointRole::Destination))?,
+                .map_err(|error| {
+                    connection_error::attach_endpoint(error, EndpointRole::Destination)
+                })?,
             ),
             SinkerConfig::Pg {
                 url,
@@ -1050,7 +1041,9 @@ impl ConnClient {
                     *disable_foreign_key_checks,
                 )
                 .await
-                .map_err(|error| Self::attach_endpoint(error, EndpointRole::Destination))?,
+                .map_err(|error| {
+                    connection_error::attach_endpoint(error, EndpointRole::Destination)
+                })?,
             ),
             SinkerConfig::PgStruct {
                 url,
@@ -1065,7 +1058,9 @@ impl ConnClient {
                     false,
                 )
                 .await
-                .map_err(|error| Self::attach_endpoint(error, EndpointRole::Destination))?,
+                .map_err(|error| {
+                    connection_error::attach_endpoint(error, EndpointRole::Destination)
+                })?,
             ),
             SinkerConfig::Mongo {
                 url,
@@ -1089,7 +1084,9 @@ impl ConnClient {
                     Some(sinker_max_connections),
                 )
                 .await
-                .map_err(|error| Self::attach_endpoint(error, EndpointRole::Destination))?,
+                .map_err(|error| {
+                    connection_error::attach_endpoint(error, EndpointRole::Destination)
+                })?,
             ),
             _ => ConnClient::None,
         };
@@ -1120,17 +1117,18 @@ impl ConnClient {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use dt_common::error::DtError;
 
     #[test]
     fn connection_boundary_adds_endpoint_without_overwriting_it() {
         let error = anyhow::Error::new(DtError::new(ErrorCode::ConnectionFailed));
-        let error = ConnClient::attach_endpoint(error, EndpointRole::Source);
+        let error = connection_error::attach_endpoint(error, EndpointRole::Source);
         assert_eq!(
             error.downcast_ref::<DtError>().unwrap().endpoint,
             Some(EndpointRole::Source)
         );
 
-        let error = ConnClient::attach_endpoint(error, EndpointRole::Destination);
+        let error = connection_error::attach_endpoint(error, EndpointRole::Destination);
         assert_eq!(
             error.downcast_ref::<DtError>().unwrap().endpoint,
             Some(EndpointRole::Source)

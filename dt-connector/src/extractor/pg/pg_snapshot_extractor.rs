@@ -25,6 +25,7 @@ use crate::{
 use dt_common::utils::sql_util::PG_ESCAPE;
 use dt_common::{
     config::config_enums::{DbType, RdbParallelType},
+    error::{DtError, ErrorCode, Stage},
     log_debug, log_info,
     meta::{
         adaptor::{pg_col_value_convertor::PgColValueConvertor, sqlx_ext::SqlxPgExt},
@@ -110,7 +111,10 @@ enum PgSnapshotWorkResult {
 impl Extractor for PgSnapshotExtractor {
     async fn extract(&mut self) -> anyhow::Result<()> {
         if self.parallel_size < 1 {
-            bail!("parallel_size must be greater than 0");
+            bail!(DtError::new(ErrorCode::InvalidConfig)
+                .detail("parallel_size must be greater than 0")
+                .stage(Stage::Bootstrap)
+                .operation("build_postgres_snapshot_extractor"));
         }
 
         let tables = self.collect_tables();
@@ -303,9 +307,12 @@ impl PgSnapshotExtractor {
                         ),
                     };
 
-                    *running_chunks = running_chunks
-                        .checked_sub(1)
-                        .ok_or_else(|| anyhow!("pg split chunk running count underflow"))?;
+                    *running_chunks = running_chunks.checked_sub(1).ok_or_else(|| {
+                        DtError::new(ErrorCode::InvariantViolated)
+                            .detail("PostgreSQL split chunk running count underflow")
+                            .stage(Stage::Extractor)
+                            .operation("track_postgres_snapshot_split")
+                    })?;
 
                     if let Some(position) =
                         splitter.get_next_checkpoint_position(chunk_id, partition_col_value)
@@ -352,7 +359,12 @@ impl PgSnapshotExtractor {
                             table_id.tb
                         )
                     })?;
-                    let partition_col = finish_partition_col.clone().unwrap();
+                    let partition_col = finish_partition_col.clone().ok_or_else(|| {
+                        DtError::new(ErrorCode::InvariantViolated)
+                            .detail("finished PostgreSQL split is missing its partition column")
+                            .stage(Stage::Extractor)
+                            .operation("finish_postgres_snapshot_split")
+                    })?;
                     if active_table.tb_meta.basic.is_col_nullable(&partition_col) {
                         state.pending_works.push_back(PgSnapshotWork::NullChunk {
                             table_id: table_id.clone(),
@@ -424,7 +436,7 @@ impl PgSnapshotExtractor {
             partition_col_value =
                 PgColValueConvertor::from_query(&row, &partition_col, &partition_col_type)?;
             let row_data =
-                RowData::from_pg_row(&row, &tb_meta, &ignore_cols.as_ref(), Some(chunk_id));
+                RowData::from_pg_row(&row, &tb_meta, &ignore_cols.as_ref(), Some(chunk_id))?;
             shared
                 .base_extractor
                 .push_row(&mut extract_state, row_data, Position::None)
@@ -624,10 +636,12 @@ impl PgSnapshotDispatchState {
             return Ok(None);
         };
 
-        let work = self
-            .pending_works
-            .remove(index)
-            .ok_or_else(|| anyhow!("failed to remove pending pg snapshot work"))?;
+        let work = self.pending_works.remove(index).ok_or_else(|| {
+            DtError::new(ErrorCode::InvariantViolated)
+                .detail("pending PostgreSQL snapshot work is missing")
+                .stage(Stage::Extractor)
+                .operation("dispatch_postgres_snapshot_work")
+        })?;
         self.mark_work_started(&work)?;
         Ok(Some(work))
     }
@@ -685,9 +699,12 @@ impl PgSnapshotDispatchState {
                 )
             }
         };
-        *queued_chunks = queued_chunks
-            .checked_sub(1)
-            .ok_or_else(|| anyhow!("pg split chunk queued count underflow"))?;
+        *queued_chunks = queued_chunks.checked_sub(1).ok_or_else(|| {
+            DtError::new(ErrorCode::InvariantViolated)
+                .detail("PostgreSQL split chunk queued count underflow")
+                .stage(Stage::Extractor)
+                .operation("track_postgres_snapshot_split")
+        })?;
         *running_chunks += 1;
         Ok(())
     }
@@ -928,7 +945,7 @@ impl PgTableCtx {
         let mut chunk_id_generator = SnapshotChunkIdGenerator::new(self.shared.batch_size);
         while let Some(row) = rows.try_next().await? {
             let row_chunk_id = chunk_id_generator.next_row_chunk_id();
-            let row_data = RowData::from_pg_row(&row, tb_meta, &ignore_cols, Some(row_chunk_id));
+            let row_data = RowData::from_pg_row(&row, tb_meta, &ignore_cols, Some(row_chunk_id))?;
             self.shared
                 .base_extractor
                 .push_row(extract_state, row_data, Position::None)
@@ -1032,7 +1049,7 @@ impl PgTableCtx {
                     let row_chunk_id = chunk_id_generator.next_row_chunk_id();
 
                     let row_data =
-                        RowData::from_pg_row(&row, tb_meta, &ignore_cols, Some(row_chunk_id));
+                        RowData::from_pg_row(&row, tb_meta, &ignore_cols, Some(row_chunk_id))?;
                     let position = tb_meta.basic.build_position_for_single_col(
                         &DbType::Pg,
                         order_col,
@@ -1089,7 +1106,7 @@ impl PgTableCtx {
                     let row_chunk_id = chunk_id_generator.next_row_chunk_id();
 
                     let row_data =
-                        RowData::from_pg_row(&row, tb_meta, &ignore_cols, Some(row_chunk_id));
+                        RowData::from_pg_row(&row, tb_meta, &ignore_cols, Some(row_chunk_id))?;
                     let position = tb_meta.basic.build_position(&DbType::Pg, &start_values);
                     self.shared
                         .base_extractor
@@ -1167,7 +1184,7 @@ impl PgTableCtx {
         while let Some(row) = rows.try_next().await? {
             extracted_count += 1;
             let row_chunk_id = chunk_id_generator.next_row_chunk_id();
-            let row_data = RowData::from_pg_row(&row, tb_meta, &ignore_cols, Some(row_chunk_id));
+            let row_data = RowData::from_pg_row(&row, tb_meta, &ignore_cols, Some(row_chunk_id))?;
             self.shared
                 .base_extractor
                 .push_row(extract_state, row_data, Position::None)

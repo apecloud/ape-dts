@@ -201,7 +201,7 @@ Notes:
   `username`, or `password`; the checker always reuses the parsed `[sinker]` target.
 - In inline cdc check, `[resumer] resume_type=from_target` or `from_db` is required to persist
   checker state.
-- In inline cdc check, the following combinations fail fast with `ConfigError`: `[checker]`
+- In inline cdc check, the following combinations fail fast with error code `CF002`: `[checker]`
   section present without `enable`; `[pipeline].pipeline_type != basic`; `[sinker].sink_type != write`;
   `[parallelizer].parallel_type != rdb_merge`; `[sinker].db_type` not in `mysql` / `pg`; or any
   target field (`db_type` / `url` / `username` / `password`) set under `[checker]`.

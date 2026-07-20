@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use anyhow::bail;
 
-use crate::error::Error;
+use crate::error::{DtError, ErrorCode, OriginError};
 
 use super::{cmd_constants::CmdConstants, cmd_meta::CmdMeta};
 
@@ -12,20 +12,21 @@ pub struct KeyParser {
 }
 
 impl KeyParser {
-    pub fn new() -> Self {
-        let containers: HashSet<String> =
-            serde_json::from_str(CmdConstants::CONTAINER_COMMANDS).unwrap();
-        let metas: Vec<CmdMeta> = serde_json::from_str(CmdConstants::COMMAND_METAS).unwrap();
+    pub fn new() -> anyhow::Result<Self> {
+        let containers: HashSet<String> = serde_json::from_str(CmdConstants::CONTAINER_COMMANDS)
+            .map_err(|error| redis_command_catalog_error(error, "load_redis_container_commands"))?;
+        let metas: Vec<CmdMeta> = serde_json::from_str(CmdConstants::COMMAND_METAS)
+            .map_err(|error| redis_command_catalog_error(error, "load_redis_command_metadata"))?;
 
         let mut cmd_metas = HashMap::new();
         for cmd in metas {
             cmd_metas.insert(cmd.name.clone(), cmd);
         }
 
-        Self {
+        Ok(Self {
             container_cmds: containers,
             cmd_metas,
-        }
+        })
     }
 
     pub fn parse_key_from_argv(
@@ -33,18 +34,21 @@ impl KeyParser {
         argv: &[String],
     ) -> anyhow::Result<(String, String, Vec<String>, Vec<usize>)> {
         // refer: https://github.com/tair-opensource/RedisShake/blob/v4/internal/commands/keys.go
-        let mut cmd_name = argv[0].to_uppercase();
+        let mut cmd_name = argv
+            .first()
+            .ok_or_else(|| redis_command_error("empty Redis command"))?
+            .to_uppercase();
         if self.container_cmds.contains(&cmd_name) {
-            cmd_name = format!("{}-{}", cmd_name, argv[1].to_uppercase());
+            let subcommand = argv.get(1).ok_or_else(|| {
+                redis_command_error(format!("missing subcommand for command: {cmd_name}"))
+            })?;
+            cmd_name = format!("{}-{}", cmd_name, subcommand.to_uppercase());
         }
 
         let cmd = match self.cmd_metas.get(&cmd_name) {
             Some(cmd) => cmd,
             None => {
-                bail! {Error::RedisCmdError(format!(
-                    "unknown command: {}",
-                    cmd_name
-                ))}
+                bail!(redis_command_error(format!("unknown command: {cmd_name}")))
             }
         };
 
@@ -75,10 +79,9 @@ impl KeyParser {
 
                     loop {
                         if idx <= 0 || idx >= arg_cout {
-                            bail! {Error::RedisCmdError(format!(
-                                "keyword not found: {}",
-                                cmd_name
-                            ))}
+                            bail!(redis_command_error(format!(
+                                "keyword not found: {cmd_name}"
+                            )))
                         }
                         if argv[idx as usize].to_uppercase() == spec.begin_search_keyword {
                             begin = idx + 1;
@@ -89,7 +92,7 @@ impl KeyParser {
                 }
 
                 _ => {
-                    bail! {Error::RedisCmdError(format!(
+                    bail! {redis_command_error(format!(
                         "unsupported begin search type: {}",
                         spec.begin_search_type
                     ))}
@@ -118,7 +121,12 @@ impl KeyParser {
                     // keystep: the number of arguments that should be skipped,
                     // after finding a key, to find the next one.
                     for idx in (begin..=last_key_idx).step_by(spec.find_keys_range_key_step) {
-                        keys.push(argv[idx as usize].clone());
+                        let key = argv.get(idx as usize).ok_or_else(|| {
+                            redis_command_error(format!(
+                                "key index {idx} is out of range for command: {cmd_name}"
+                            ))
+                        })?;
+                        keys.push(key.clone());
                         keys_indexes.push(idx as usize + 1);
                         limit_count -= 1;
                         if limit_count <= 0 {
@@ -130,27 +138,40 @@ impl KeyParser {
                 "keynum" => {
                     // keynumidx: the index, relative to begin_search, of the argument containing the number of keys.
                     let keynum_idx = begin + spec.find_keys_keynum_index;
-                    if keynum_idx < 0 || keynum_idx > arg_cout {
-                        bail! {Error::RedisCmdError(format!(
+                    if keynum_idx < 0 || keynum_idx >= arg_cout {
+                        bail! {redis_command_error(format!(
                             "wrong keynumidx: {}",
                             keynum_idx
                         ))}
                     }
 
-                    let key_count = argv[keynum_idx as usize].parse::<usize>().unwrap();
+                    let key_count =
+                        argv[keynum_idx as usize]
+                            .parse::<usize>()
+                            .map_err(|error| {
+                                redis_command_error(format!(
+                                    "invalid key count for command {cmd_name}: {error}"
+                                ))
+                                .source(error)
+                            })?;
                     // firstkey: the index, relative to begin_search, of the first key.
                     // This is usually the next argument after keynumidx, and its value, in this case, is greater by one.
                     for idx in (begin + spec.find_keys_keynum_first_key..)
                         .step_by(spec.find_keys_keynum_key_step)
                         .take(key_count)
                     {
-                        keys.push(argv[idx as usize].clone());
+                        let key = argv.get(idx as usize).ok_or_else(|| {
+                            redis_command_error(format!(
+                                "key index {idx} is out of range for command: {cmd_name}"
+                            ))
+                        })?;
+                        keys.push(key.clone());
                         keys_indexes.push(idx as usize + 1);
                     }
                 }
 
                 _ => {
-                    bail! {Error::RedisCmdError(format!(
+                    bail! {redis_command_error(format!(
                         "unsupported find keys type: {}",
                         spec.find_keys_type
                     ))}
@@ -212,6 +233,23 @@ impl KeyParser {
     }
 }
 
+#[track_caller]
+fn redis_command_error(detail: impl Into<String>) -> DtError {
+    DtError::new(ErrorCode::StatementFailed)
+        .detail(detail)
+        .operation("parse_redis_command_keys")
+        .origin(OriginError::new("redis", None::<String>))
+}
+
+#[track_caller]
+fn redis_command_catalog_error(error: serde_json::Error, operation: &'static str) -> DtError {
+    DtError::new(ErrorCode::InvariantViolated)
+        .detail("the embedded Redis command catalog is invalid")
+        .operation(operation)
+        .origin(OriginError::new("redis", None::<String>))
+        .source(error)
+}
+
 #[cfg(test)]
 mod tests {
 
@@ -243,7 +281,7 @@ mod tests {
     fn test_parse_key_from_argv_1() {
         let (cmds, expected_cmd_names, expected_keys_vec) = mock_parse_key_test_data();
 
-        let key_parser = KeyParser::new();
+        let key_parser = KeyParser::new().unwrap();
 
         for i in 0..cmds.len() {
             let argv: Vec<String> = cmds[i].split(" ").map(|arg| arg.to_string()).collect();
@@ -274,7 +312,7 @@ mod tests {
         let expected_cmd_names = ["SET", "XADD"];
         let expected_keys_vec = [vec!["set_key_3_  😀"], vec!["stream_key_2  中文😀"]];
 
-        let key_parser = KeyParser::new();
+        let key_parser = KeyParser::new().unwrap();
         for i in 0..cmd_argv_vec.len() {
             let argv: Vec<String> = cmd_argv_vec[i].iter().map(|arg| arg.to_string()).collect();
             let (cmd_name, _group, keys, _key_indexes) =

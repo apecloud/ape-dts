@@ -94,7 +94,7 @@ impl IniLoader {
     {
         value.parse::<T>().map_err(|_| {
             let rendered_value = if Self::is_sensitive_key(key) {
-                "<redacted>"
+                "[redacted]"
             } else {
                 value
             };
@@ -150,7 +150,7 @@ mod tests {
         let error =
             IniLoader::parse_value::<u32>("extractor", "password", "not-a-number").unwrap_err();
         let rendered = ErrorReport::from_anyhow(&error).to_string();
-        assert!(rendered.contains("<redacted>"));
+        assert!(rendered.contains("[redacted]"));
         assert!(!rendered.contains("not-a-number"));
     }
 

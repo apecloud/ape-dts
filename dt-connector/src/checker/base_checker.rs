@@ -410,7 +410,11 @@ impl DataCheckerHandle {
             return Ok(());
         }
         let dropped = {
-            let mut queue = self.shared.batch_queue.lock().unwrap();
+            let mut queue = self
+                .shared
+                .batch_queue
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             queue.push_with_eviction(data)
         };
         if let Some(dropped) = dropped {
@@ -576,7 +580,13 @@ impl RecheckKey {
                     .get(col)
                     .cloned()
                     .map(|value| (col.clone(), value))
-                    .ok_or_else(|| anyhow::anyhow!("missing id col value: {col}"))
+                    .ok_or_else(|| {
+                        dt_common::error::DtError::new(dt_common::error::ErrorCode::StatementFailed)
+                            .detail(format!("missing ID column value: {col}"))
+                            .stage(dt_common::error::Stage::Checker)
+                            .operation("build_checker_row_key")
+                            .into()
+                    })
             })
             .collect::<anyhow::Result<BTreeMap<_, _>>>()?;
         Ok(Self {
@@ -894,7 +904,10 @@ impl<C: Checker> DataChecker<C> {
             self.collect_pending_controls();
 
             let batch = {
-                let mut queue = self.batch_queue.lock().unwrap();
+                let mut queue = self
+                    .batch_queue
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
                 queue.pop()
             };
             let Some(batch) = batch else {

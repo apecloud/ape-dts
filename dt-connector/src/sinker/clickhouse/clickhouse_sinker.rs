@@ -11,7 +11,9 @@ use dt_common::{
     utils::{limit_queue::LimitedQueue, sql_util::SqlUtil},
 };
 
-use crate::{call_batch_fn, sinker::base_sinker::BaseSinker, Sinker};
+use crate::{
+    call_batch_fn, error::sinker as sinker_error, sinker::base_sinker::BaseSinker, Sinker,
+};
 
 const SIGN_COL_NAME: &str = "_ape_dts_is_deleted";
 const TIMESTAMP_COL_NAME: &str = "_ape_dts_timestamp";
@@ -101,7 +103,7 @@ impl ClickhouseSinker {
             .http_client
             .execute(request)
             .await
-            .map_err(|error| super::super::http_error::reqwest(error, "clickhouse_insert"))?;
+            .map_err(|error| sinker_error::reqwest(error, "clickhouse_insert"))?;
         rts.push((start_time.elapsed().as_millis() as u64, 1));
         let task_id = self
             .base_sinker
@@ -184,18 +186,18 @@ impl ClickhouseSinker {
             .request(Method::POST, url)
             .basic_auth(&self.username, password)
             .body(body);
-        post.build().map_err(|error| {
-            super::super::http_error::reqwest(error, "build_clickhouse_request").into()
-        })
+        post.build()
+            .map_err(|error| sinker_error::reqwest(error, "build_clickhouse_request").into())
     }
 
     async fn check_response(response: Response) -> anyhow::Result<()> {
         let status_code = response.status();
-        response.text().await.map_err(|error| {
-            super::super::http_error::reqwest(error, "read_clickhouse_response")
-        })?;
+        response
+            .text()
+            .await
+            .map_err(|error| sinker_error::reqwest(error, "read_clickhouse_response"))?;
         if status_code != StatusCode::OK {
-            return Err(super::super::http_error::status(status_code, "clickhouse_insert").into());
+            return Err(sinker_error::http_status(status_code, "clickhouse_insert").into());
         }
         Ok(())
     }

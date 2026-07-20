@@ -2,6 +2,7 @@ use async_trait::async_trait;
 use governor;
 
 use crate::{
+    error::{DtError, ErrorCode},
     limiter::base_limiter::{Limiter, UnitType},
     log_error, log_warn,
 };
@@ -20,11 +21,12 @@ impl RateLimiter {
                 "Rate limiter is set to 0, which means no limit. Using max u32 value as the rate."
             );
         }
-        let quota = governor::Quota::per_second(std::num::NonZeroU32::new(rate).unwrap());
+        let rate = std::num::NonZeroU32::new(rate).unwrap_or(std::num::NonZeroU32::MAX);
+        let quota = governor::Quota::per_second(rate);
         let limiter = governor::RateLimiter::direct(quota);
         Self {
             limiter,
-            capacity: rate,
+            capacity: rate.get(),
             unit_type,
         }
     }
@@ -47,7 +49,10 @@ impl Limiter for RateLimiter {
                     n, self.capacity, e
                 );
                 log_error!("{}", error_msg);
-                return Err(anyhow::anyhow!(error_msg));
+                return Err(DtError::new(ErrorCode::InvalidConfig)
+                    .detail(error_msg)
+                    .operation("acquire_rate_limit_capacity")
+                    .into());
             }
         }
         Ok(())

@@ -193,9 +193,11 @@ impl From<String> for RedisString {
     }
 }
 
-impl From<RedisString> for String {
-    fn from(redis_string: RedisString) -> Self {
-        String::from_utf8(redis_string.bytes).unwrap()
+impl TryFrom<RedisString> for String {
+    type Error = std::string::FromUtf8Error;
+
+    fn try_from(redis_string: RedisString) -> Result<Self, Self::Error> {
+        String::from_utf8(redis_string.bytes)
     }
 }
 

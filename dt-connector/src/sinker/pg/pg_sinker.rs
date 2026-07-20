@@ -8,11 +8,11 @@ use sqlx::{
 };
 use tokio::{sync::RwLock, time::Instant};
 
-use crate::sinker::{checkable_sinker::CheckableSink, sqlx_error};
 use crate::{
     call_batch_fn, data_marker::DataMarker, rdb_query_builder::RdbQueryBuilder,
     rdb_router::RdbRouter, sinker::base_sinker::BaseSinker, Sinker,
 };
+use crate::{error::sinker as sinker_error, sinker::checkable_sinker::CheckableSink};
 use dt_common::{
     config::connection_auth_config::ConnectionAuthConfig,
     error::ErrorCode,
@@ -86,7 +86,11 @@ impl Sinker for PgSinker {
             )?;
             let mut conn_options =
                 PgConnectOptions::from_str(final_url.as_str()).map_err(|error| {
-                    sqlx_error::postgres(error, ErrorCode::ConnectionFailed, "connect_for_sink_ddl")
+                    sinker_error::postgres(
+                        error,
+                        ErrorCode::ConnectionFailed,
+                        "connect_for_sink_ddl",
+                    )
                 })?;
             let mut pool_options = PgPoolOptions::new().max_connections(1);
             if let Some(ssl) = self.connection_auth.ssl_config() {
@@ -119,11 +123,15 @@ impl Sinker for PgSinker {
                 .connect_with(conn_options)
                 .await
                 .map_err(|error| {
-                    sqlx_error::postgres(error, ErrorCode::ConnectionFailed, "connect_for_sink_ddl")
+                    sinker_error::postgres(
+                        error,
+                        ErrorCode::ConnectionFailed,
+                        "connect_for_sink_ddl",
+                    )
                 })?;
             let query = sqlx::query(&sql);
             query.execute(&conn_pool).await.map_err(|error| {
-                sqlx_error::postgres(error, ErrorCode::StatementFailed, "sink_ddl")
+                sinker_error::postgres(error, ErrorCode::StatementFailed, "sink_ddl")
             })?;
 
             rts.push((start_time.elapsed().as_millis() as u64, 1));
@@ -212,16 +220,15 @@ impl PgSinker {
         let mut data_len = 0;
         let mut last_monitor_time = Instant::now();
 
-        let mut tx =
-            self.conn_pool.begin().await.map_err(|error| {
-                sqlx_error::postgres(error, ErrorCode::StatementFailed, "sink_dml")
-            })?;
+        let mut tx = self.conn_pool.begin().await.map_err(|error| {
+            sinker_error::postgres(error, ErrorCode::StatementFailed, "sink_dml")
+        })?;
         if let Some(sql) = self.get_data_marker_sql().await {
             sqlx::query(&sql)
                 .execute(&mut *tx)
                 .await
                 .map_err(|error| {
-                    sqlx_error::postgres(error, ErrorCode::StatementFailed, "sink_dml")
+                    sinker_error::postgres(error, ErrorCode::StatementFailed, "sink_dml")
                 })
                 .with_context(|| format!("failed to execute data marker sql: [{}]", sql))?;
         }
@@ -241,7 +248,7 @@ impl PgSinker {
                 .execute(&mut *tx)
                 .await
                 .map_err(|error| {
-                    sqlx_error::postgres(error, ErrorCode::StatementFailed, "sink_dml")
+                    sinker_error::postgres(error, ErrorCode::StatementFailed, "sink_dml")
                 })
                 .with_context(|| {
                     format!(
@@ -264,9 +271,9 @@ impl PgSinker {
                 last_monitor_time = Instant::now();
             }
         }
-        tx.commit()
-            .await
-            .map_err(|error| sqlx_error::postgres(error, ErrorCode::StatementFailed, "sink_dml"))?;
+        tx.commit().await.map_err(|error| {
+            sinker_error::postgres(error, ErrorCode::StatementFailed, "sink_dml")
+        })?;
 
         if data_len > 0 || data_size > 0 {
             self.base_sinker
@@ -300,20 +307,20 @@ impl PgSinker {
         let mut rts = LimitedQueue::new(1);
         if let Some(sql) = self.get_data_marker_sql().await {
             let mut tx = self.conn_pool.begin().await.map_err(|error| {
-                sqlx_error::postgres(error, ErrorCode::StatementFailed, "sink_dml")
+                sinker_error::postgres(error, ErrorCode::StatementFailed, "sink_dml")
             })?;
             sqlx::query(&sql).execute(&mut *tx).await.map_err(|error| {
-                sqlx_error::postgres(error, ErrorCode::StatementFailed, "sink_dml")
+                sinker_error::postgres(error, ErrorCode::StatementFailed, "sink_dml")
             })?;
             query.execute(&mut *tx).await.map_err(|error| {
-                sqlx_error::postgres(error, ErrorCode::StatementFailed, "sink_dml")
+                sinker_error::postgres(error, ErrorCode::StatementFailed, "sink_dml")
             })?;
             tx.commit().await.map_err(|error| {
-                sqlx_error::postgres(error, ErrorCode::StatementFailed, "sink_dml")
+                sinker_error::postgres(error, ErrorCode::StatementFailed, "sink_dml")
             })?;
         } else {
             query.execute(&self.conn_pool).await.map_err(|error| {
-                sqlx_error::postgres(error, ErrorCode::StatementFailed, "sink_dml")
+                sinker_error::postgres(error, ErrorCode::StatementFailed, "sink_dml")
             })?;
         }
         rts.push((start_time.elapsed().as_millis() as u64, 1));
@@ -349,13 +356,13 @@ impl PgSinker {
         let mut rts = LimitedQueue::new(1);
         let exec_error = if let Some(sql) = self.get_data_marker_sql().await {
             let mut tx = self.conn_pool.begin().await.map_err(|error| {
-                sqlx_error::postgres(error, ErrorCode::StatementFailed, "sink_dml")
+                sinker_error::postgres(error, ErrorCode::StatementFailed, "sink_dml")
             })?;
             sqlx::query(&sql).execute(&mut *tx).await.map_err(|error| {
-                sqlx_error::postgres(error, ErrorCode::StatementFailed, "sink_dml")
+                sinker_error::postgres(error, ErrorCode::StatementFailed, "sink_dml")
             })?;
             query.execute(&mut *tx).await.map_err(|error| {
-                sqlx_error::postgres(error, ErrorCode::StatementFailed, "sink_dml")
+                sinker_error::postgres(error, ErrorCode::StatementFailed, "sink_dml")
             })?;
             tx.commit().await
         } else {

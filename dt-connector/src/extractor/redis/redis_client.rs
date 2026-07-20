@@ -6,9 +6,12 @@ use async_std::{io::BufReader, net::TcpStream, prelude::*};
 use async_trait::async_trait;
 
 use super::{redis_resp_reader::RedisRespReader, redis_resp_types::Value, StreamReader};
+use crate::error::extractor::{
+    redis_invalid_config as invalid_config, redis_io, redis_source as redis_source_error,
+};
 use dt_common::{
     config::connection_auth_config::ConnectionAuthConfig,
-    error::{DtError, EndpointRole, Error, ErrorCode, Stage},
+    error::{DtError, EndpointRole, ErrorCode, Stage},
     meta::redis::{command::cmd_encoder::CmdEncoder, redis_object::RedisCmd},
 };
 
@@ -48,7 +51,7 @@ impl RedisClient {
 
         let stream = TcpStream::connect(format!("{}:{}", host, port))
             .await
-            .map_err(|error| redis_io_error(error, "connect_redis"))?;
+            .map_err(|error| redis_io(error, "connect_redis"))?;
         let mut me = Self {
             url: url.into(),
             connection_auth: connection_auth.clone(),
@@ -81,7 +84,7 @@ impl RedisClient {
         self.stream
             .get_mut()
             .shutdown(std::net::Shutdown::Both)
-            .map_err(|error| redis_io_error(error, "close_redis_connection"))?;
+            .map_err(|error| redis_io(error, "close_redis_connection"))?;
         Ok(())
     }
 
@@ -90,7 +93,7 @@ impl RedisClient {
             .get_mut()
             .write_all(packed_cmd)
             .await
-            .map_err(|error| redis_io_error(error, "write_redis_command"))?;
+            .map_err(|error| redis_io(error, "write_redis_command"))?;
         Ok(())
     }
 
@@ -102,7 +105,11 @@ impl RedisClient {
         let mut resp_reader = RedisRespReader { read_len: 0 };
         match resp_reader.decode(&mut self.stream).await {
             Ok(value) => Ok(value),
-            Err(err) => bail! {Error::RedisResultError(err.to_string())},
+            Err(error) => bail! {redis_source_error(
+                ErrorCode::StatementFailed,
+                error.to_string(),
+                "decode_redis_response",
+            ).source(error)},
         }
     }
 
@@ -122,7 +129,7 @@ impl RedisClient {
         self.stream
             .read_exact(&mut buf)
             .await
-            .map_err(|error| redis_io_error(error, "read_redis_response"))?;
+            .map_err(|error| redis_io(error, "read_redis_response"))?;
         Ok(buf)
     }
 
@@ -145,8 +152,10 @@ impl RedisClient {
             Value::Status(data) => results.push(data),
 
             _ => {
-                bail! {Error::RedisResultError(
-                    "redis result type can not be parsed as string".into(),
+                bail! {redis_source_error(
+                    ErrorCode::StatementFailed,
+                    "Redis response cannot be converted to strings",
+                    "parse_redis_response",
                 )}
             }
         }
@@ -154,10 +163,15 @@ impl RedisClient {
     }
 
     fn decode_url_component(component: &str, field_name: &str) -> anyhow::Result<String> {
-        percent_encoding::percent_decode_str(component)
+        Ok(percent_encoding::percent_decode_str(component)
             .decode_utf8()
             .map(|s| s.to_string())
-            .map_err(|e| Error::ConfigError(format!("{} parse failed: {}", field_name, e)).into())
+            .map_err(|error| {
+                invalid_config(
+                    format!("failed to decode Redis URL {field_name}: {error}"),
+                    "decode_redis_url_component",
+                )
+            })?)
     }
 
     fn extract_username<'a>(
@@ -192,22 +206,4 @@ impl RedisClient {
                 .transpose(),
         }
     }
-}
-
-#[track_caller]
-fn redis_io_error(error: std::io::Error, operation: &'static str) -> DtError {
-    let code = if matches!(
-        error.kind(),
-        std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
-    ) {
-        ErrorCode::ConnectionTimeout
-    } else {
-        ErrorCode::ConnectionFailed
-    };
-    DtError::new(code)
-        .stage(Stage::Extractor)
-        .operation(operation)
-        .endpoint(EndpointRole::Source)
-        .origin(dt_common::error::OriginError::new("redis", None::<String>))
-        .source(error)
 }

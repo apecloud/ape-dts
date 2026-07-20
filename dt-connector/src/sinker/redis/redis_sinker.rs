@@ -8,7 +8,7 @@ use redis::ConnectionLike;
 use redis::Value;
 use tokio::{sync::RwLock, time::Instant};
 
-use dt_common::error::{DtError, EndpointRole, Error, ErrorCode, OriginError, Stage};
+use dt_common::error::ErrorCode;
 use dt_common::log_debug;
 use dt_common::meta::col_value::ColValue;
 use dt_common::meta::dt_data::DtData;
@@ -25,7 +25,13 @@ use dt_common::meta::row_type::RowType;
 
 use super::entry_rewriter::EntryRewriter;
 use crate::{
-    call_batch_fn, data_marker::DataMarker, rdb_router::RdbRouter, sinker::base_sinker::BaseSinker,
+    call_batch_fn,
+    data_marker::DataMarker,
+    error::sinker::{
+        redis as redis_driver_error, redis_destination as redis_destination_error, redis_metadata,
+    },
+    rdb_router::RdbRouter,
+    sinker::base_sinker::BaseSinker,
     Sinker,
 };
 
@@ -160,7 +166,11 @@ impl RedisSinker {
                             let cmd = EntryRewriter::rewrite_as_restore(entry, self.version)?;
                             Ok(vec![cmd])
                         }
-                        _ => bail! {Error::SinkerError("rewrite not implemented".into())},
+                        _ => bail! {redis_destination_error(
+                            ErrorCode::StatementFailed,
+                            "Redis object rewrite is not implemented",
+                            "rewrite_redis_entry",
+                        )},
                     }?;
                     if let Some(expire_cmd) = EntryRewriter::rewrite_expire(entry)? {
                         rewrite_cmds.push(expire_cmd)
@@ -320,10 +330,11 @@ impl RedisSinker {
 
         match result {
             Err(error) => {
-                bail! {Error::SinkerError(format!(
-                    "batch sink failed, error: {:?}",
-                    error
-                ))}
+                bail! {redis_driver_error(
+                    error,
+                    ErrorCode::StatementFailed,
+                    "write_redis_batch",
+                )}
             }
 
             Ok(values) => {
@@ -345,10 +356,14 @@ impl RedisSinker {
 
                     match v {
                         Value::ServerError(e) => {
-                            bail! {Error::SinkerError(format!(
+                            bail! {redis_destination_error(
+                                ErrorCode::StatementFailed,
+                                format!(
                                 "sink failed, server error: [{:?}], result: [{:?}], cmd: [{}]",
                                 e, v, cmd
-                            ))}
+                                ),
+                                "write_redis_command",
+                            )}
                         }
                         _ => {
                             log_debug!("sink result: [{:?}], cmd: [{}]", v, cmd)
@@ -372,13 +387,14 @@ impl RedisSinker {
                     let slot = KeyParser::calc_slot(cmd.keys[0].as_bytes());
                     node.slot_hash_tag_map
                         .get(&slot)
-                        .ok_or_else(|| redis_sinker_metadata_error("find_redis_slot_hash_tag"))?
+                        .ok_or_else(|| redis_metadata("find_redis_slot_hash_tag"))?
                 } else {
                     // if the redis cmd has no key, find a hash_tag for any slot in current node
-                    let (_, hash_tag) =
-                        node.slot_hash_tag_map.iter().next().ok_or_else(|| {
-                            redis_sinker_metadata_error("find_redis_node_hash_tag")
-                        })?;
+                    let (_, hash_tag) = node
+                        .slot_hash_tag_map
+                        .iter()
+                        .next()
+                        .ok_or_else(|| redis_metadata("find_redis_node_hash_tag"))?;
                     hash_tag
                 };
                 &format!("{}{{{}}}", data_marker.marker, hash_tag)
@@ -393,13 +409,4 @@ impl RedisSinker {
         }
         Ok(None)
     }
-}
-
-#[track_caller]
-fn redis_sinker_metadata_error(operation: &'static str) -> DtError {
-    DtError::new(ErrorCode::MetadataFailed)
-        .stage(Stage::Sinker)
-        .operation(operation)
-        .endpoint(EndpointRole::Destination)
-        .origin(OriginError::new("redis", None::<String>))
 }

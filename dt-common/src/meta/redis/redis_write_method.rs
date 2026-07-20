@@ -1,6 +1,5 @@
-use std::str::FromStr;
+use std::{convert::Infallible, str::FromStr};
 
-use crate::error::Error;
 use strum::IntoStaticStr;
 
 #[derive(Clone, IntoStaticStr, Debug)]
@@ -13,7 +12,7 @@ pub enum RedisWriteMethod {
 }
 
 impl FromStr for RedisWriteMethod {
-    type Err = Error;
+    type Err = Infallible;
     fn from_str(str: &str) -> Result<Self, Self::Err> {
         match str {
             "rewrite" => Ok(Self::Rewrite),

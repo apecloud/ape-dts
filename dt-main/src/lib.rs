@@ -1,15 +1,6 @@
-use dt_common::error::{DtError, ErrorReport};
+use dt_common::error::DtError;
 use dt_precheck::{config::task_config::PrecheckTaskConfig, do_precheck};
 use dt_task::task_runner::TaskRunner;
-
-pub fn format_error(error: &anyhow::Error, verbose: bool) -> String {
-    let report = ErrorReport::from_anyhow(error);
-    if verbose {
-        format!("{report}\n{}", report.diagnostic())
-    } else {
-        report.to_string()
-    }
-}
 
 pub async fn run_config(config: &str, init: bool) -> anyhow::Result<()> {
     match PrecheckTaskConfig::load_if_present(config)? {

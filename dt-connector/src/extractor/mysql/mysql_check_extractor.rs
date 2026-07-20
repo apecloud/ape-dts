@@ -74,7 +74,7 @@ impl BatchCheckExtractor for MysqlCheckExtractor {
 
         let mut rows = query.fetch(&self.conn_pool);
         while let Some(row) = rows.try_next().await? {
-            let mut row_data = RowData::from_mysql_row(&row, tb_meta, &ignore_cols, None);
+            let mut row_data = RowData::from_mysql_row(&row, tb_meta, &ignore_cols, None)?;
 
             if is_diff && self.replay_diff_as_update {
                 row_data.row_type = RowType::Update;

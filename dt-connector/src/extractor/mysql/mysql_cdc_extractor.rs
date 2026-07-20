@@ -24,6 +24,7 @@ use mysql_binlog_connector_rust::{
 };
 
 use crate::{
+    error::extractor::{mysql_binlog, mysql_binlog_metadata},
     extractor::{
         base_extractor::{BaseExtractor, ExtractState},
         mysql::binlog_util::BinlogUtil,
@@ -33,7 +34,7 @@ use crate::{
 };
 use dt_common::{
     config::{config_enums::DbType, connection_auth_config::ConnectionAuthConfig},
-    error::{DtError, EndpointRole, Error, ErrorCode, OriginError, Stage},
+    error::{DtError, EndpointRole, ErrorCode, OriginError, Stage},
     log_debug, log_error, log_info, log_warn,
     meta::{
         adaptor::mysql_col_value_convertor::MysqlColValueConvertor, col_value::ColValue,
@@ -148,8 +149,16 @@ impl MysqlCdcExtractor {
         };
 
         let url = ConnectionAuthConfig::merge_url_with_auth(&self.url, &self.connection_auth)
-            .map_err(|e| {
-                Error::ConfigError(format!("failed to merge url with connection auth: {}", e))
+            .map_err(|error| {
+                DtError::new(ErrorCode::InvalidConfig)
+                    .detail(format!(
+                        "failed to merge the MySQL URL with connection authentication: {error}"
+                    ))
+                    .stage(Stage::Bootstrap)
+                    .operation("build_mysql_cdc_url")
+                    .endpoint(EndpointRole::Source)
+                    .origin(OriginError::new("mysql", None::<String>))
+                    .source(error)
             })?;
 
         let mut stream = BinlogClient::new(&url, self.server_id, start_position)
@@ -160,7 +169,10 @@ impl MysqlCdcExtractor {
                 Duration::from_secs(self.keepalive_interval_secs),
             )
             .connect()
-            .await?;
+            .await
+            .map_err(|error| {
+                mysql_binlog(error, ErrorCode::ConnectionFailed, "connect_mysql_binlog")
+            })?;
 
         let mut ctx = Context {
             binlog_filename: self.binlog_filename.clone(),
@@ -168,7 +180,9 @@ impl MysqlCdcExtractor {
             gtid_set: None,
         };
         if self.gtid_enabled {
-            ctx.gtid_set = Some(GtidSet::new(self.gtid_set.as_str())?);
+            ctx.gtid_set = Some(GtidSet::new(self.gtid_set.as_str()).map_err(|error| {
+                mysql_binlog(error, ErrorCode::InvalidConfig, "parse_mysql_gtid_set")
+            })?);
         }
 
         // start heartbeat
@@ -176,11 +190,15 @@ impl MysqlCdcExtractor {
 
         loop {
             if self.extract_state.time_filter.ended {
-                stream.close().await?;
+                stream.close().await.map_err(|error| {
+                    mysql_binlog(error, ErrorCode::ConnectionFailed, "close_mysql_binlog")
+                })?;
                 return Ok(());
             }
 
-            let (header, data) = stream.read().await?;
+            let (header, data) = stream.read().await.map_err(|error| {
+                mysql_binlog(error, ErrorCode::StatementFailed, "read_mysql_binlog")
+            })?;
             match data {
                 EventData::Rotate(r) => {
                     ctx.binlog_filename = r.binlog_filename;
@@ -244,7 +262,7 @@ impl MysqlCdcExtractor {
                     let table_map_event = ctx
                         .table_map_event_map
                         .get(&w.table_id)
-                        .ok_or_else(|| mysql_binlog_metadata_error("decode_mysql_write_rows"))?;
+                        .ok_or_else(|| mysql_binlog_metadata("decode_mysql_write_rows"))?;
                     if self.filter_event(table_map_event, RowType::Insert) {
                         self.extract_state
                             .record_extracted_metrics(1, size_of_val(event) as u64);
@@ -271,7 +289,7 @@ impl MysqlCdcExtractor {
                     let table_map_event = ctx
                         .table_map_event_map
                         .get(&u.table_id)
-                        .ok_or_else(|| mysql_binlog_metadata_error("decode_mysql_update_rows"))?;
+                        .ok_or_else(|| mysql_binlog_metadata("decode_mysql_update_rows"))?;
                     if self.filter_event(table_map_event, RowType::Update) {
                         self.extract_state
                             .record_extracted_metrics(1, size_of_val(event) as u64);
@@ -301,7 +319,7 @@ impl MysqlCdcExtractor {
                     let table_map_event = ctx
                         .table_map_event_map
                         .get(&d.table_id)
-                        .ok_or_else(|| mysql_binlog_metadata_error("decode_mysql_delete_rows"))?;
+                        .ok_or_else(|| mysql_binlog_metadata("decode_mysql_delete_rows"))?;
                     if self.filter_event(table_map_event, RowType::Delete) {
                         self.extract_state
                             .record_extracted_metrics(1, size_of_val(event) as u64);
@@ -376,15 +394,27 @@ impl MysqlCdcExtractor {
         let ignore_cols = self.filter.get_ignore_cols(db, tb);
 
         if included_columns.len() != event.column_values.len() {
-            bail! {Error::ExtractorError(
-                "included_columns not match column_values in binlog".into(),
-            )}
+            bail! {DtError::new(ErrorCode::InvariantViolated)
+            .detail("included columns do not match column values in the MySQL binlog event")
+            .stage(Stage::Extractor)
+            .operation("parse_mysql_binlog_row")
+            .endpoint(EndpointRole::Source)
+            .origin(OriginError::new("mysql", None::<String>))}
         }
 
         let mut data = HashMap::new();
         let col_count = cmp::min(tb_meta.basic.cols.len(), included_columns.len());
         for i in (0..col_count).rev() {
-            let col = tb_meta.basic.cols.get(i).unwrap();
+            let col = tb_meta.basic.cols.get(i).ok_or_else(|| {
+                DtError::new(ErrorCode::InvariantViolated)
+                    .detail(format!(
+                        "column index {i} is missing from MySQL table metadata"
+                    ))
+                    .stage(Stage::Extractor)
+                    .operation("parse_mysql_binlog_row")
+                    .endpoint(EndpointRole::Source)
+                    .origin(OriginError::new("mysql", None::<String>))
+            })?;
             if ignore_cols.is_some_and(|cols| cols.contains(col)) {
                 continue;
             }
@@ -586,13 +616,4 @@ impl MysqlCdcExtractor {
         }
         Ok(())
     }
-}
-
-#[track_caller]
-fn mysql_binlog_metadata_error(operation: &'static str) -> DtError {
-    DtError::new(ErrorCode::MetadataFailed)
-        .stage(Stage::Extractor)
-        .operation(operation)
-        .endpoint(EndpointRole::Source)
-        .origin(OriginError::new("mysql", None::<String>))
 }

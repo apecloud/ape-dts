@@ -10,12 +10,15 @@ use mongodb::{
 use serde_json::Value as JsonValue;
 
 use crate::checker::base_checker::{Checker, CheckerTbMeta, CHECKER_MAX_QUERY_BATCH};
-use dt_common::meta::{
-    col_value::ColValue,
-    mongo::{mongo_constant::MongoConstants, mongo_key::MongoKey},
-    rdb_tb_meta::RdbTbMeta,
-    row_data::RowData,
-    row_type::RowType,
+use dt_common::{
+    error::{DtError, ErrorCode, ErrorObject, Stage},
+    meta::{
+        col_value::ColValue,
+        mongo::{mongo_constant::MongoConstants, mongo_key::MongoKey},
+        rdb_tb_meta::RdbTbMeta,
+        row_data::RowData,
+        row_type::RowType,
+    },
 };
 use dt_common::{log_error, log_warn};
 
@@ -176,6 +179,15 @@ impl MongoChecker {
                 return Ok(Bson::String(s.clone()));
             }
         }
-        anyhow::bail!("missing _id in row data")
+        anyhow::bail!(DtError::new(ErrorCode::StatementFailed)
+            .detail("MongoDB row data is missing _id")
+            .stage(Stage::Checker)
+            .operation("read_mongodb_row_id")
+            .object(ErrorObject {
+                schema: Some(row.schema.clone()),
+                table: Some(row.tb.clone()),
+                column: Some(MongoConstants::ID.to_string()),
+                ..Default::default()
+            }))
     }
 }

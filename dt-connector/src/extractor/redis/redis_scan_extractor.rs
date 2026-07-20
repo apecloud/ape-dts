@@ -1,6 +1,6 @@
 use anyhow::bail;
 use async_trait::async_trait;
-use dt_common::{error::Error, log_info, rdb_filter::RdbFilter};
+use dt_common::{error::ErrorCode, log_info, rdb_filter::RdbFilter};
 use dt_common::{
     meta::{
         dt_data::DtData,
@@ -16,6 +16,7 @@ use dt_common::{
 use redis::{Connection, Value};
 
 use crate::{
+    error::extractor::redis_source as redis_source_error,
     extractor::base_extractor::{BaseExtractor, ExtractState},
     Extractor,
 };
@@ -37,10 +38,14 @@ impl Extractor for RedisScanExtractor {
         if let RedisStatisticType::HotKey = self.statistic_type {
             let maxmemory_policy = self.get_maxmemory_policy().await?;
             if maxmemory_policy != "allkeys-lfu" {
-                bail! {Error::MetadataError(format!(
+                bail! {redis_source_error(
+                    ErrorCode::PrerequisiteNotMet,
+                    format!(
                     "maxmemory_policy is {}, should be allkeys-lfu",
                     maxmemory_policy
-                ))}
+                    ),
+                    "check_redis_maxmemory_policy",
+                )}
             }
         }
 
@@ -53,7 +58,11 @@ impl Extractor for RedisScanExtractor {
             // select db
             let cmd = ["SELECT", &db];
             if Value::Okay != RedisUtil::send_cmd(&mut self.conn, &cmd)? {
-                bail! {Error::RedisResultError(format!("\"SELECT {}\" failed", db))}
+                bail! {redis_source_error(
+                    ErrorCode::StatementFailed,
+                    format!("SELECT {db} failed"),
+                    "select_redis_database",
+                )}
             }
 
             // scan

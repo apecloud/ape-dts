@@ -7,6 +7,7 @@ use prometheus::{Gauge, Opts, Registry, TextEncoder};
 
 use crate::config::config_enums::{TaskKind, TaskType};
 use crate::config::metrics_config::MetricsConfig;
+use crate::error::{DtError, ErrorCode, Stage};
 use crate::monitor::task_metrics::TaskMetricsType;
 
 pub struct PrometheusMetrics {
@@ -26,209 +27,214 @@ impl PrometheusMetrics {
         }
     }
 
-    pub fn initialization(&self) -> &Self {
-        let register_handler =
-            |metrics_name: &str, metrics_desc: &str, metrics_type: TaskMetricsType| {
-                let metrics = Gauge::with_opts(
-                    Opts::new(metrics_name, metrics_desc)
-                        .const_labels(self.config.metrics_labels.to_owned()),
-                )
-                .unwrap();
+    pub fn initialization(&self) -> anyhow::Result<&Self> {
+        let register_handler = |metrics_name: &str,
+                                metrics_desc: &str,
+                                metrics_type: TaskMetricsType|
+         -> anyhow::Result<()> {
+            let metrics = Gauge::with_opts(
+                Opts::new(metrics_name, metrics_desc)
+                    .const_labels(self.config.metrics_labels.to_owned()),
+            )
+            .map_err(|error| metrics_initialization_error(error, metrics_name))?;
 
-                self.registry.register(Box::new(metrics.clone())).unwrap();
-                self.metrics.insert(metrics_type, metrics);
-            };
+            self.registry
+                .register(Box::new(metrics.clone()))
+                .map_err(|error| metrics_initialization_error(error, metrics_name))?;
+            self.metrics.insert(metrics_type, metrics);
+            Ok(())
+        };
 
         register_handler(
             "extractor_rps_max",
             "the max records per second of extractor",
             TaskMetricsType::ExtractorRpsMax,
-        );
+        )?;
         register_handler(
             "extractor_rps_min",
             "the min records per second of extractor",
             TaskMetricsType::ExtractorRpsMin,
-        );
+        )?;
         register_handler(
             "extractor_rps_avg",
             "the average records per second of extractor",
             TaskMetricsType::ExtractorRpsAvg,
-        );
+        )?;
         register_handler(
             "extractor_bps_max",
             "the max bytes per second of extractor",
             TaskMetricsType::ExtractorBpsMax,
-        );
+        )?;
         register_handler(
             "extractor_bps_min",
             "the min bytes per second of extractor",
             TaskMetricsType::ExtractorBpsMin,
-        );
+        )?;
         register_handler(
             "extractor_bps_avg",
             "the average bytes per second of extractor",
             TaskMetricsType::ExtractorBpsAvg,
-        );
+        )?;
 
         register_handler(
             "extractor_pushed_rps_max",
             "the max pushed records per second of extractor",
             TaskMetricsType::ExtractorPushedRpsMax,
-        );
+        )?;
         register_handler(
             "extractor_pushed_rps_min",
             "the min pushed records per second of extractor",
             TaskMetricsType::ExtractorPushedRpsMin,
-        );
+        )?;
         register_handler(
             "extractor_pushed_rps_avg",
             "the average pushed records per second of extractor",
             TaskMetricsType::ExtractorPushedRpsAvg,
-        );
+        )?;
         register_handler(
             "extractor_pushed_bps_max",
             "the max pushed bytes per second of extractor",
             TaskMetricsType::ExtractorPushedBpsMax,
-        );
+        )?;
         register_handler(
             "extractor_pushed_bps_min",
             "the min pushed bytes per second of extractor",
             TaskMetricsType::ExtractorPushedBpsMin,
-        );
+        )?;
         register_handler(
             "extractor_pushed_bps_avg",
             "the average pushed bytes per second of extractor",
             TaskMetricsType::ExtractorPushedBpsAvg,
-        );
+        )?;
 
         register_handler(
             "pipeline_queue_size",
             "the records size of pipeline queue",
             TaskMetricsType::PipelineQueueSize,
-        );
+        )?;
         register_handler(
             "pipeline_queue_bytes",
             "the bytes in pipeline queue",
             TaskMetricsType::PipelineQueueBytes,
-        );
+        )?;
 
         register_handler(
             "sinker_rt_max",
             "the max response time of sinker, the unit is millisecond",
             TaskMetricsType::SinkerRtMax,
-        );
+        )?;
         register_handler(
             "sinker_rt_min",
             "the min response time of sinker, the unit is millisecond",
             TaskMetricsType::SinkerRtMin,
-        );
+        )?;
         register_handler(
             "sinker_rt_avg",
             "the average response time of sinker, the unit is millisecond",
             TaskMetricsType::SinkerRtAvg,
-        );
+        )?;
 
         register_handler(
             "sinker_rps_max",
             "the max records per second of sinker",
             TaskMetricsType::SinkerRpsMax,
-        );
+        )?;
         register_handler(
             "sinker_rps_min",
             "the min records per second of sinker",
             TaskMetricsType::SinkerRpsMin,
-        );
+        )?;
         register_handler(
             "sinker_rps_avg",
             "the average records per second of sinker",
             TaskMetricsType::SinkerRpsAvg,
-        );
+        )?;
         register_handler(
             "sinker_bps_max",
             "the max bytes per second of sinker",
             TaskMetricsType::SinkerBpsMax,
-        );
+        )?;
         register_handler(
             "sinker_bps_min",
             "the min bytes per second of sinker",
             TaskMetricsType::SinkerBpsMin,
-        );
+        )?;
         register_handler(
             "sinker_bps_avg",
             "the average bytes per second of sinker",
             TaskMetricsType::SinkerBpsAvg,
-        );
+        )?;
 
         register_handler(
             "sinker_sinked_records",
             "the number of records sinked",
             TaskMetricsType::SinkerSinkedRecords,
-        );
+        )?;
         register_handler(
             "sinker_sinked_bytes",
             "the bytes of records sinked",
             TaskMetricsType::SinkerSinkedBytes,
-        );
+        )?;
         register_handler(
             "checker_miss_total",
             "the total miss count detected by checker",
             TaskMetricsType::CheckerMissCount,
-        );
+        )?;
         register_handler(
             "checker_diff_total",
             "the total diff count detected by checker",
             TaskMetricsType::CheckerDiffCount,
-        );
+        )?;
         register_handler(
             "checker_queue_size",
             "the unresolved rows currently tracked by checker",
             TaskMetricsType::CheckerPending,
-        );
+        )?;
         register_handler(
             "checker_rps_min",
             "the min checked records per second of checker",
             TaskMetricsType::CheckerRpsMin,
-        );
+        )?;
         register_handler(
             "checker_rps_max",
             "the max checked records per second of checker",
             TaskMetricsType::CheckerRpsMax,
-        );
+        )?;
         register_handler(
             "checker_rps_avg",
             "the average checked records per second of checker",
             TaskMetricsType::CheckerRpsAvg,
-        );
+        )?;
         register_handler(
             "checker_miss_rps_min",
             "the min miss records per second of checker",
             TaskMetricsType::CheckerMissRpsMin,
-        );
+        )?;
         register_handler(
             "checker_miss_rps_max",
             "the max miss records per second of checker",
             TaskMetricsType::CheckerMissRpsMax,
-        );
+        )?;
         register_handler(
             "checker_miss_rps_avg",
             "the average miss records per second of checker",
             TaskMetricsType::CheckerMissRpsAvg,
-        );
+        )?;
         register_handler(
             "checker_diff_rps_min",
             "the min diff records per second of checker",
             TaskMetricsType::CheckerDiffRpsMin,
-        );
+        )?;
         register_handler(
             "checker_diff_rps_max",
             "the max diff records per second of checker",
             TaskMetricsType::CheckerDiffRpsMax,
-        );
+        )?;
         register_handler(
             "checker_diff_rps_avg",
             "the average diff records per second of checker",
             TaskMetricsType::CheckerDiffRpsAvg,
-        );
+        )?;
 
         if let Some(task_type) = &self.task_type {
             match task_type.kind {
@@ -237,29 +243,29 @@ impl PrometheusMetrics {
                         "extractor_plan_records",
                         "the records estimated by extractor plan",
                         TaskMetricsType::ExtractorPlanRecords,
-                    );
+                    )?;
                     register_handler(
                         "progress",
                         "the progress of task",
                         TaskMetricsType::Progress,
-                    );
+                    )?;
                 }
                 TaskKind::Cdc => {
                     register_handler(
                         "timestamp",
                         "the timestamp of task",
                         TaskMetricsType::Timestamp,
-                    );
+                    )?;
                     register_handler(
                         "sinker_ddl_count",
                         "the count of DDL operations",
                         TaskMetricsType::SinkerDdlCount,
-                    );
+                    )?;
                 }
                 TaskKind::Struct => {}
             }
         }
-        self
+        Ok(self)
     }
 
     pub fn set_metrics(&self, metrics: &BTreeMap<TaskMetricsType, u64>) {
@@ -296,6 +302,17 @@ impl PrometheusMetrics {
             }
         }
     }
+}
+
+fn metrics_initialization_error(error: prometheus::Error, metrics_name: &str) -> DtError {
+    DtError::new(ErrorCode::InvalidConfig)
+        .message("Metrics configuration is invalid")
+        .detail(format!(
+            "Failed to initialize metric [{metrics_name}]: {error}"
+        ))
+        .stage(Stage::Bootstrap)
+        .operation("initialize_metrics")
+        .source(error)
 }
 
 async fn metrics_handler(registry: web::Data<Arc<Registry>>) -> impl Responder {

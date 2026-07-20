@@ -28,6 +28,7 @@ bytes = { workspace = true }
 futures = { workspace = true }
 serde_yaml = { workspace = true }
 regex = { workspace = true }
+rtb-redact = { workspace = true }
 nom = { workspace = true }
 tokio = { workspace = true }
 tokio-postgres = { workspace = true }
@@ -40,7 +41,6 @@ log = { workspace = true }
 log4rs = { workspace = true }
 redis = { workspace = true }
 reqwest = { workspace = true }
-mlua = { workspace = true }
 anyhow = { workspace = true }
 url = { workspace = true }
 concurrent-queue = { workspace = true }

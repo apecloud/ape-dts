@@ -91,7 +91,11 @@ impl ColValue {
             Self::UnsignedLong(v) => Ok(*v as i128),
             Self::LongLong(v) => Ok(*v as i128),
             Self::UnsignedLongLong(v) => Ok(*v as i128),
-            _ => bail!("can not convert {:?} into 128-bit integer", self),
+            _ => bail!(
+                crate::error::DtError::new(crate::error::ErrorCode::InvariantViolated,)
+                    .detail(format!("cannot convert {self:?} into a 128-bit integer"))
+                    .operation("convert_column_to_integer")
+            ),
         }
     }
 
@@ -120,7 +124,11 @@ impl ColValue {
                 *v as i128 + t,
                 i64::MAX as i128,
             ) as u64)),
-            _ => bail!("{} can not add 128-bit integer", self),
+            _ => bail!(
+                crate::error::DtError::new(crate::error::ErrorCode::InvariantViolated,)
+                    .detail(format!("cannot add a 128-bit integer to {self}"))
+                    .operation("increment_column_integer")
+            ),
         }
     }
 
@@ -128,7 +136,11 @@ impl ColValue {
         match self {
             Self::Float(v) => Ok(*v as f64),
             Self::Double(v) => Ok(*v),
-            _ => bail!("can not convert {:?} into double", self),
+            _ => bail!(
+                crate::error::DtError::new(crate::error::ErrorCode::InvariantViolated,)
+                    .detail(format!("cannot convert {self:?} into a double"))
+                    .operation("convert_column_to_double")
+            ),
         }
     }
 

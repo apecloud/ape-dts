@@ -1,11 +1,14 @@
 use std::sync::{atomic::Ordering, Arc};
 
-use anyhow::{bail, Context};
+use anyhow::bail;
 use async_trait::async_trait;
 use tokio::{sync::Mutex, task::JoinSet};
 use url::Url;
 
 use crate::{
+    error::extractor::{
+        redis_invalid_config as invalid_config, redis_source as redis_source_error,
+    },
     extractor::{
         base_extractor::{BaseExtractor, ExtractState},
         extractor_monitor::ExtractorMonitor,
@@ -19,7 +22,7 @@ use crate::{
 };
 use dt_common::{
     config::{config_enums::ExtractType, connection_auth_config::ConnectionAuthConfig},
-    error::{DtError, Error, ErrorCode, Stage},
+    error::{DtError, ErrorCode, Stage},
     log_info, log_warn,
     meta::{position::Position, redis::cluster_node::ClusterNode, syncer::Syncer},
     rdb_filter::RdbFilter,
@@ -90,8 +93,10 @@ impl RedisClusterPsyncExtractor {
         let mut conn = RedisUtil::create_redis_conn(&self.url, &self.connection_auth).await?;
         let nodes = RedisUtil::get_cluster_master_nodes(&mut conn)?;
         if nodes.is_empty() {
-            bail!(Error::MetadataError(
-                "source redis cluster has no master nodes".into()
+            bail!(redis_source_error(
+                ErrorCode::MetadataFailed,
+                "source Redis cluster has no master nodes",
+                "list_redis_cluster_master_nodes",
             ));
         }
         Ok(nodes)
@@ -241,15 +246,31 @@ impl RedisClusterPsyncExtractor {
     }
 
     fn node_url(base_url: &str, node: &ClusterNode) -> anyhow::Result<String> {
-        let mut url = Url::parse(base_url)?;
-        url.set_host(Some(&node.host)).map_err(|_| {
-            Error::ConfigError(format!("invalid redis cluster node host: {}", node.host))
+        let mut url = Url::parse(base_url).map_err(|error| {
+            invalid_config(
+                format!("invalid source Redis URL: {error}"),
+                "parse_redis_cluster_url",
+            )
+            .source(error)
         })?;
-        url.set_port(Some(node.port.parse().with_context(|| {
-            format!("invalid redis cluster node port: {}", node.port)
-        })?))
-        .map_err(|_| {
-            Error::ConfigError(format!("invalid redis cluster node port: {}", node.port))
+        url.set_host(Some(&node.host)).map_err(|_| {
+            invalid_config(
+                format!("invalid Redis cluster node host: {}", node.host),
+                "build_redis_cluster_node_url",
+            )
+        })?;
+        let port = node.port.parse().map_err(|error| {
+            invalid_config(
+                format!("invalid Redis cluster node port: {}", node.port),
+                "build_redis_cluster_node_url",
+            )
+            .source(error)
+        })?;
+        url.set_port(Some(port)).map_err(|_| {
+            invalid_config(
+                format!("invalid Redis cluster node port: {}", node.port),
+                "build_redis_cluster_node_url",
+            )
         })?;
         Ok(url.to_string())
     }

@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 
-use anyhow::Context;
 use serde::Serialize;
 use serde_json::json;
 
+use crate::error::{DtError, ErrorCode, ErrorObject, OriginError};
 use crate::meta::rdb_tb_meta::RdbTbMeta;
 
 use super::mysql_col_type::MysqlColType;
@@ -23,11 +23,18 @@ impl std::fmt::Display for MysqlTbMeta {
 impl MysqlTbMeta {
     #[inline(always)]
     pub fn get_col_type(&self, col: &str) -> anyhow::Result<&MysqlColType> {
-        let col_type = self
-            .col_type_map
-            .get(col)
-            .with_context(|| format!("col: [{}] not exists in tb_meta: [{}]", col, self))
-            .unwrap();
-        Ok(col_type)
+        self.col_type_map.get(col).ok_or_else(|| {
+            DtError::new(ErrorCode::MetadataFailed)
+                .detail(format!("column {col} is missing from MySQL table metadata"))
+                .operation("get_mysql_column_type")
+                .object(ErrorObject {
+                    schema: Some(self.basic.schema.clone()),
+                    table: Some(self.basic.tb.clone()),
+                    column: Some(col.to_string()),
+                    ..Default::default()
+                })
+                .origin(OriginError::new("mysql", None::<String>))
+                .into()
+        })
     }
 }

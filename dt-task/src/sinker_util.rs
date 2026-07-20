@@ -25,7 +25,10 @@ use dt_common::{
 };
 
 use super::task_util::TaskUtil;
-use crate::{extractor_util::ExtractorUtil, task_util::ConnClient};
+use crate::{
+    error::sinker::missing_client as missing_sinker_client, extractor_util::ExtractorUtil,
+    task_util::ConnClient,
+};
 use dt_connector::{
     checker::DataCheckerHandle,
     data_marker::DataMarker,
@@ -151,7 +154,7 @@ impl SinkerUtil {
                 let conn_pool = match client {
                     ConnClient::MySQL(conn_pool) => conn_pool,
                     _ => {
-                        bail!("connection pool not found");
+                        bail!(missing_sinker_client());
                     }
                 };
                 let meta_manager = MysqlMetaManager::new(conn_pool.clone()).await?;
@@ -183,7 +186,7 @@ impl SinkerUtil {
                 let conn_pool = match client {
                     ConnClient::PostgreSQL(conn_pool) => conn_pool,
                     _ => {
-                        bail!("connection pool not found");
+                        bail!(missing_sinker_client());
                     }
                 };
                 let meta_manager = PgMetaManager::new(conn_pool.clone()).await?;
@@ -213,7 +216,7 @@ impl SinkerUtil {
                 let mongo_client = match client {
                     ConnClient::MongoDB(mongo_client) => mongo_client,
                     _ => {
-                        bail!("connection pool not found");
+                        bail!(missing_sinker_client());
                     }
                 };
                 let is_target_mongos = is_mongos(&mongo_client).await?;
@@ -238,7 +241,7 @@ impl SinkerUtil {
                 let mongo_client = match client {
                     ConnClient::MongoDB(mongo_client) => mongo_client,
                     _ => {
-                        bail!("connection pool not found");
+                        bail!(missing_sinker_client());
                     }
                 };
                 let (is_target_mongos, target_shard_collections) =
@@ -268,7 +271,7 @@ impl SinkerUtil {
                 )?;
                 // kafka sinker may need meta data from RDB extractor
                 let meta_manager = ExtractorUtil::get_extractor_meta_manager(config).await?;
-                let avro_converter = AvroConverter::new(meta_manager, with_field_defs);
+                let avro_converter = AvroConverter::new(meta_manager, with_field_defs)?;
 
                 let brokers = vec![url.to_string()];
                 let acks = match required_acks.as_str() {
@@ -284,11 +287,9 @@ impl SinkerUtil {
                         .with_required_acks(acks)
                         .create()
                         .map_err(|error| {
-                            dt_connector::kafka_error::kafka(
+                            dt_connector::error::sinker::kafka(
                                 error,
                                 ErrorCode::ConnectionFailed,
-                                Stage::Sinker,
-                                dt_common::error::EndpointRole::Destination,
                                 "create_kafka_producer",
                             )
                         })?;
@@ -313,7 +314,7 @@ impl SinkerUtil {
                 let conn_pool = match client {
                     ConnClient::MySQL(conn_pool) => conn_pool,
                     _ => {
-                        bail!("connection pool not found");
+                        bail!(missing_sinker_client());
                     }
                 };
                 let sinker = MysqlStructSinker {
@@ -335,7 +336,7 @@ impl SinkerUtil {
                 let conn_pool = match client {
                     ConnClient::PostgreSQL(conn_pool) => conn_pool,
                     _ => {
-                        bail!("connection pool not found");
+                        bail!(missing_sinker_client());
                     }
                 };
                 let sinker = PgStructSinker {
@@ -391,7 +392,7 @@ impl SinkerUtil {
                             meta_manager: meta_manager.clone(),
                             base_sinker: BaseSinker::new(monitor.clone(), monitor_interval),
                             data_marker: data_marker.clone(),
-                            key_parser: KeyParser::new(),
+                            key_parser: KeyParser::new()?,
                             router: router.clone(),
                         };
                         Self::push_sinker(&mut sub_sinkers, sinker);
@@ -409,7 +410,7 @@ impl SinkerUtil {
                             meta_manager: meta_manager.clone(),
                             base_sinker: BaseSinker::new(monitor.clone(), monitor_interval),
                             data_marker: data_marker.clone(),
-                            key_parser: KeyParser::new(),
+                            key_parser: KeyParser::new()?,
                             router: router.clone(),
                         };
                         Self::push_sinker(&mut sub_sinkers, sinker);

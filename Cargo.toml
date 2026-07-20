@@ -46,6 +46,7 @@ async-mutex = "1.4.0"
 project-root = "0.2.2"
 strum = { version = "0.25.0", features = ["derive"] }
 regex = "1.5.4"
+rtb-redact = "=0.6.0"
 rdkafka = { version = "0.38.0", features = ["cmake-build","libz-static"] }
 kafka = "0.10.0"
 reqwest = {git = "https://github.com/apecloud/reqwest", features = ["redirect-with-sensitive-headers"] }

@@ -11,6 +11,7 @@ use async_trait::async_trait;
 use tokio::{sync::Mutex, time::Instant};
 
 use super::redis_client::RedisClient;
+use crate::error::extractor::redis_source as redis_source_error;
 use crate::extractor::{
     base_extractor::{BaseExtractor, ExtractState},
     redis::{
@@ -26,7 +27,7 @@ use dt_common::{
         config_enums::{DbType, ExtractType},
         config_token_parser::{ConfigTokenParser, TokenEscapePair},
     },
-    error::Error,
+    error::ErrorCode,
     log_debug, log_error, log_info, log_position, log_warn,
     meta::{
         dt_data::DtData,
@@ -139,8 +140,10 @@ impl RedisPsyncExtractor {
         self.conn.send(&repl_cmd).await?;
         if let Value::Okay = self.conn.read().await? {
         } else {
-            bail! {Error::ExtractorError(
-                "replconf listening-port response is not Ok".into(),
+            bail! {redis_source_error(
+                ErrorCode::StatementFailed,
+                "REPLCONF listening-port response is not OK",
+                "start_redis_psync",
             )}
         }
 
@@ -160,17 +163,43 @@ impl RedisPsyncExtractor {
         if let Value::Status(s) = value {
             log_info!("PSYNC command response status: {:?}", s);
             if full_sync {
-                let tokens: Vec<&str> = s.split_whitespace().collect();
-                self.repl_id = tokens[1].to_string();
-                self.repl_offset = tokens[2].parse::<u64>()?;
+                let mut tokens = s.split_whitespace();
+                let response_type = tokens.next();
+                let repl_id = tokens.next();
+                let repl_offset = tokens.next();
+                if response_type != Some("FULLRESYNC") || repl_id.is_none() || repl_offset.is_none()
+                {
+                    bail! {redis_source_error(
+                        ErrorCode::StatementFailed,
+                        format!("invalid PSYNC full-resync response: {s}"),
+                        "parse_redis_psync_response",
+                    )}
+                }
+                self.repl_id = repl_id.unwrap_or_default().to_string();
+                self.repl_offset =
+                    repl_offset
+                        .unwrap_or_default()
+                        .parse::<u64>()
+                        .map_err(|error| {
+                            redis_source_error(
+                                ErrorCode::StatementFailed,
+                                format!("invalid replication offset in PSYNC response: {s}"),
+                                "parse_redis_psync_response",
+                            )
+                            .source(error)
+                        })?;
             } else if s != "CONTINUE" {
-                bail! {Error::ExtractorError(
-                    "PSYNC command response is NOT CONTINUE".into(),
+                bail! {redis_source_error(
+                    ErrorCode::StatementFailed,
+                    "PSYNC command response is not CONTINUE",
+                    "start_redis_psync",
                 )}
             }
         } else {
-            bail! {Error::ExtractorError(
-                "PSYNC command response is NOT status".into(),
+            bail! {redis_source_error(
+                ErrorCode::StatementFailed,
+                "PSYNC command response is not a status response",
+                "start_redis_psync",
             )}
         };
         Ok(full_sync)
@@ -190,10 +219,14 @@ impl RedisPsyncExtractor {
                 continue;
             }
             if buf[0] != b'$' {
-                bail! {Error::ExtractorError(format!(
+                bail! {redis_source_error(
+                    ErrorCode::StatementFailed,
+                    format!(
                     "invalid rdb format, expected '$', got byte: {}",
                     buf[0]
-                ))}
+                    ),
+                    "receive_redis_rdb",
+                )}
             }
             break;
         }
@@ -415,10 +448,14 @@ impl RedisPsyncExtractor {
                 }
             }
             v => {
-                bail! {Error::RedisRdbError(format!(
+                bail! {redis_source_error(
+                    ErrorCode::StatementFailed,
+                    format!(
                     "received unexpected aof value: {:?}",
                     v
-                ))}
+                    ),
+                    "parse_redis_aof",
+                )}
             }
         }
         Ok(cmd)

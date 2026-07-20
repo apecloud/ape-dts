@@ -9,10 +9,6 @@ pub struct PgCreateUdfStatement {
 }
 
 impl PgCreateUdfStatement {
-    pub fn route(&mut self, _dst_schema: &str) {
-        todo!("support route");
-    }
-
     pub fn to_sqls(&self, filter: &RdbFilter) -> anyhow::Result<Vec<(String, String)>> {
         let mut sqls = Vec::new();
         if filter.filter_structure(&StructureType::Udf) {

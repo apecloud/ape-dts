@@ -4,10 +4,13 @@ use async_trait::async_trait;
 use dashmap::DashMap;
 use tokio::{fs::File, io::AsyncBufReadExt, io::BufReader};
 
-use crate::extractor::resumer::{
-    recovery::{Recovery, RecoverySnapshotCache},
-    utils::ResumerUtil,
-    CURRENT_POSITION_LOG_FLAG, TAIL_POSITION_COUNT,
+use crate::{
+    error::extractor::resumer_config as resumer_config_error,
+    extractor::resumer::{
+        recovery::{Recovery, RecoverySnapshotCache},
+        utils::ResumerUtil,
+        CURRENT_POSITION_LOG_FLAG, TAIL_POSITION_COUNT,
+    },
 };
 use dt_common::{
     config::{
@@ -50,7 +53,10 @@ impl LogRecovery {
                 cdc_cache: DashMap::new(),
             },
             _ => {
-                bail!("logRecovery only supports ResumerConfig::FromLog");
+                bail!(resumer_config_error(
+                    "log checkpoint recovery requires resume_type=from_log",
+                    "build_log_checkpoint_recovery",
+                ));
             }
         };
         recovery.initialization().await?;
@@ -207,7 +213,13 @@ impl LogRecovery {
                     .await?;
                 }
             }
-            _ => bail!("logRecovery not supports TaskType: {:?}", self.task_type),
+            _ => bail!(resumer_config_error(
+                format!(
+                    "log checkpoint recovery does not support task type: {:?}",
+                    self.task_type
+                ),
+                "load_log_checkpoint",
+            )),
         }
         Ok(())
     }

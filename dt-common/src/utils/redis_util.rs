@@ -5,7 +5,7 @@ use anyhow::{bail, Context};
 use redis::{Connection, ConnectionLike, Value};
 
 use crate::config::connection_auth_config::ConnectionAuthConfig;
-use crate::error::{DtError, Error, ErrorCode, OriginError};
+use crate::error::{DtError, ErrorCode, OriginError};
 use crate::log_info;
 use crate::meta::redis::{
     cluster_node::ClusterNode,
@@ -57,13 +57,16 @@ impl RedisUtil {
         let cmd = RedisCmd::from_str_args(&["cluster", "nodes"]);
         let value = conn.req_packed_command(&CmdEncoder::encode(&cmd))?;
         if let redis::Value::BulkString(data) = value {
-            let nodes_str = String::from_utf8(data)?;
+            let nodes_str = String::from_utf8(data).map_err(|error| {
+                redis_metadata_source_error(error, "decode_redis_cluster_nodes")
+            })?;
             let nodes = Self::parse_cluster_nodes(&nodes_str)?;
             let master_nodes = nodes.into_iter().filter(|i| i.is_master).collect();
             Ok(master_nodes)
         } else {
-            bail! {Error::RedisResultError(
-                "can not get redis cluster nodes".into(),
+            bail! {redis_metadata_detail(
+                "can not get redis cluster nodes",
+                "read_redis_cluster_nodes",
             )}
         }
     }
@@ -87,10 +90,11 @@ impl RedisUtil {
         let cmd = RedisCmd::from_str_args(&["INFO"]);
         let value = conn.req_packed_command(&CmdEncoder::encode(&cmd))?;
         if let redis::Value::BulkString(data) = value {
-            let info = String::from_utf8(data)?;
+            let info = String::from_utf8(data)
+                .map_err(|error| redis_metadata_source_error(error, "decode_redis_info"))?;
             log_info!("redis INFO result: {}", info);
             let re = Regex::new(r"redis_version:(\S+)")
-                .expect("the Redis version regex is a static valid expression");
+                .map_err(|error| redis_metadata_source_error(error, "compile_redis_version"))?;
             let cap = re
                 .captures(&info)
                 .ok_or_else(|| redis_metadata_error("read_redis_version"))?;
@@ -98,8 +102,9 @@ impl RedisUtil {
             let version_str = cap[1].to_string();
             let tokens: Vec<&str> = version_str.split('.').collect();
             if tokens.is_empty() {
-                bail! {Error::RedisResultError(
-                    "can not get redis version by INFO".into(),
+                bail! {redis_metadata_detail(
+                    "can not get redis version by INFO",
+                    "read_redis_version",
                 )}
             }
 
@@ -110,8 +115,9 @@ impl RedisUtil {
             return f32::from_str(&version)
                 .map_err(|error| redis_metadata_source_error(error, "parse_redis_version").into());
         }
-        bail! {Error::RedisResultError(
-            "can not get redis version by INFO".into(),
+        bail! {redis_metadata_detail(
+            "can not get redis version by INFO",
+            "read_redis_version",
         )}
     }
 
@@ -148,8 +154,9 @@ impl RedisUtil {
             }
 
             _ => {
-                bail! {Error::RedisResultError(
+                bail! {redis_metadata_detail(
                     format!("redis result type can not be parsed as string, value: {:?}", value),
+                    "parse_redis_result",
                 )}
             }
         }
@@ -187,10 +194,10 @@ impl RedisUtil {
             let words: Vec<&str> = line.split_whitespace().collect();
 
             if words.len() < 8 {
-                bail! {Error::MetadataError(format!(
-                    "invalid cluster nodes line: {}",
-                    line
-                ))}
+                bail! {redis_metadata_detail(
+                    format!("invalid cluster nodes line: {}", line),
+                    "parse_redis_cluster_node",
+                )}
             }
 
             let id = words[0].to_string();
@@ -289,10 +296,13 @@ impl RedisUtil {
         }
 
         if all_slots_count != SLOTS_COUNT {
-            bail! {Error::MetadataError(format!(
-                "invalid cluster nodes slots. slots_count={}, cluster_nodes={}",
-                all_slots_count, nodes_str
-            ))}
+            bail! {redis_metadata_detail(
+                format!(
+                    "invalid cluster nodes slots. slots_count={}, cluster_nodes={}",
+                    all_slots_count, nodes_str
+                ),
+                "validate_redis_cluster_slots",
+            )}
         } else {
             Ok(parsed_nodes)
         }
@@ -304,6 +314,11 @@ fn redis_metadata_error(operation: &'static str) -> DtError {
     DtError::new(ErrorCode::MetadataFailed)
         .operation(operation)
         .origin(OriginError::new("redis", None::<String>))
+}
+
+#[track_caller]
+fn redis_metadata_detail(detail: impl Into<String>, operation: &'static str) -> DtError {
+    redis_metadata_error(operation).detail(detail)
 }
 
 #[track_caller]

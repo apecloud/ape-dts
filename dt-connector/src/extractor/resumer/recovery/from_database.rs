@@ -7,16 +7,17 @@ use futures::TryStreamExt;
 use mongodb::bson::doc;
 use sqlx::{query, Error as SqlxError, Row};
 
-use crate::extractor::resumer::{
-    recovery::Recovery,
-    utils::{RedisResumerRecord, ResumerUtil},
-    ResumerDbPool, ResumerType,
+use crate::{
+    error::extractor::{checkpoint_sqlx, resumer_config as resumer_config_error},
+    extractor::resumer::{
+        recovery::Recovery,
+        utils::{RedisResumerRecord, ResumerUtil},
+        ResumerDbPool, ResumerType,
+    },
 };
 use dt_common::{
     config::resumer_config::ResumerConfig,
-    error::{
-        dt_error_from_sqlx, DtError, EndpointRole, ErrorCode, ErrorObject, SqlxProvider, Stage,
-    },
+    error::{ErrorCode, SqlxProvider},
     log_info, log_warn,
     meta::position::Position,
     utils::redis_util::RedisUtil,
@@ -53,7 +54,10 @@ impl DatabaseRecovery {
                 }
             }
             _ => {
-                bail!("databaseRecovery only supports ResumerConfig::FromDB")
+                bail!(resumer_config_error(
+                    "database checkpoint recovery requires resume_type=from_db",
+                    "build_database_checkpoint_recovery",
+                ))
             }
         };
         recovery.initialization().await?;
@@ -127,7 +131,13 @@ impl DatabaseRecovery {
                                 break;
                             }
                             _ => {
-                                let error = self.classify_sqlx_error(error, SqlxProvider::MySql);
+                                let error = checkpoint_sqlx(
+                                    error,
+                                    SqlxProvider::MySql,
+                                    &self.task_id,
+                                    &self.schema,
+                                    &self.table,
+                                );
                                 if Self::is_missing_resume_store(error.code()) {
                                     log::info!(
                                             "Resume table {}.{} does not exist, will start from beginning",
@@ -167,7 +177,13 @@ impl DatabaseRecovery {
                                 break;
                             }
                             _ => {
-                                let error = self.classify_sqlx_error(error, SqlxProvider::Postgres);
+                                let error = checkpoint_sqlx(
+                                    error,
+                                    SqlxProvider::Postgres,
+                                    &self.task_id,
+                                    &self.schema,
+                                    &self.table,
+                                );
                                 if Self::is_missing_resume_store(error.code()) {
                                     log::info!(
                                             "Resume table {}.{} does not exist, will start from beginning",
@@ -247,19 +263,6 @@ impl DatabaseRecovery {
         Ok(())
     }
 
-    fn classify_sqlx_error(&self, error: SqlxError, provider: SqlxProvider) -> DtError {
-        let mut error = dt_error_from_sqlx(error, provider, ErrorCode::CheckpointReadFailed)
-            .message("failed to query resume position from database")
-            .stage(Stage::Resumer)
-            .operation("load_checkpoint")
-            .task_id(&self.task_id)
-            .endpoint(EndpointRole::Metadata);
-        let object = error.object.get_or_insert_with(ErrorObject::default);
-        object.schema.get_or_insert_with(|| self.schema.clone());
-        object.table.get_or_insert_with(|| self.table.clone());
-        error
-    }
-
     fn is_missing_resume_store(code: ErrorCode) -> bool {
         matches!(
             code,
@@ -298,24 +301,6 @@ impl DatabaseRecovery {
                 self.task_id
             );
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn only_missing_resume_store_codes_restart_from_beginning() {
-        assert!(DatabaseRecovery::is_missing_resume_store(
-            ErrorCode::ObjectNotFound
-        ));
-        assert!(DatabaseRecovery::is_missing_resume_store(
-            ErrorCode::DatabaseNotFound
-        ));
-        assert!(!DatabaseRecovery::is_missing_resume_store(
-            ErrorCode::CheckpointReadFailed
-        ));
     }
 }
 
@@ -368,5 +353,23 @@ impl Recovery for DatabaseRecovery {
                 (!matches!(position, Position::None)).then_some(position)
             })
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_missing_resume_store_codes_restart_from_beginning() {
+        assert!(DatabaseRecovery::is_missing_resume_store(
+            ErrorCode::ObjectNotFound
+        ));
+        assert!(DatabaseRecovery::is_missing_resume_store(
+            ErrorCode::DatabaseNotFound
+        ));
+        assert!(!DatabaseRecovery::is_missing_resume_store(
+            ErrorCode::CheckpointReadFailed
+        ));
     }
 }

@@ -25,6 +25,7 @@ use crate::{
 use dt_common::utils::sql_util::MYSQL_ESCAPE;
 use dt_common::{
     config::config_enums::{DbType, RdbParallelType},
+    error::{DtError, ErrorCode, Stage},
     log_debug, log_info,
     meta::{
         adaptor::{mysql_col_value_convertor::MysqlColValueConvertor, sqlx_ext::SqlxMysqlExt},
@@ -113,7 +114,10 @@ enum MysqlSnapshotWorkResult {
 impl Extractor for MysqlSnapshotExtractor {
     async fn extract(&mut self) -> anyhow::Result<()> {
         if self.parallel_size < 1 {
-            bail!("parallel_size must be greater than 0");
+            bail!(DtError::new(ErrorCode::InvalidConfig)
+                .detail("parallel_size must be greater than 0")
+                .stage(Stage::Bootstrap)
+                .operation("build_mysql_snapshot_extractor"));
         }
 
         let tables = self.collect_tables();
@@ -306,9 +310,12 @@ impl MysqlSnapshotExtractor {
                         ),
                     };
 
-                    *running_chunks = running_chunks
-                        .checked_sub(1)
-                        .ok_or_else(|| anyhow!("mysql split chunk running count underflow"))?;
+                    *running_chunks = running_chunks.checked_sub(1).ok_or_else(|| {
+                        DtError::new(ErrorCode::InvariantViolated)
+                            .detail("MySQL split chunk running count underflow")
+                            .stage(Stage::Extractor)
+                            .operation("track_mysql_snapshot_split")
+                    })?;
 
                     if let Some(position) =
                         splitter.get_next_checkpoint_position(chunk_id, partition_col_value)
@@ -355,7 +362,12 @@ impl MysqlSnapshotExtractor {
                             table_id.tb
                         )
                     })?;
-                    let partition_col = finish_partition_col.clone().unwrap();
+                    let partition_col = finish_partition_col.clone().ok_or_else(|| {
+                        DtError::new(ErrorCode::InvariantViolated)
+                            .detail("finished MySQL split is missing its partition column")
+                            .stage(Stage::Extractor)
+                            .operation("finish_mysql_snapshot_split")
+                    })?;
                     if active_table.tb_meta.basic.is_col_nullable(&partition_col) {
                         state.pending_works.push_back(MysqlSnapshotWork::NullChunk {
                             table_id: table_id.clone(),
@@ -427,7 +439,7 @@ impl MysqlSnapshotExtractor {
             partition_col_value =
                 MysqlColValueConvertor::from_query(&row, &partition_col, &partition_col_type)?;
             let row_data =
-                RowData::from_mysql_row(&row, &tb_meta, &ignore_cols.as_ref(), Some(chunk_id));
+                RowData::from_mysql_row(&row, &tb_meta, &ignore_cols.as_ref(), Some(chunk_id))?;
             shared
                 .base_extractor
                 .push_row(&mut extract_state, row_data, Position::None)
@@ -632,10 +644,12 @@ impl MysqlSnapshotDispatchState {
             return Ok(None);
         };
 
-        let work = self
-            .pending_works
-            .remove(index)
-            .ok_or_else(|| anyhow!("failed to remove pending mysql snapshot work"))?;
+        let work = self.pending_works.remove(index).ok_or_else(|| {
+            DtError::new(ErrorCode::InvariantViolated)
+                .detail("pending MySQL snapshot work is missing")
+                .stage(Stage::Extractor)
+                .operation("dispatch_mysql_snapshot_work")
+        })?;
         self.mark_work_started(&work)?;
         Ok(Some(work))
     }
@@ -693,9 +707,12 @@ impl MysqlSnapshotDispatchState {
                 )
             }
         };
-        *queued_chunks = queued_chunks
-            .checked_sub(1)
-            .ok_or_else(|| anyhow!("mysql split chunk queued count underflow"))?;
+        *queued_chunks = queued_chunks.checked_sub(1).ok_or_else(|| {
+            DtError::new(ErrorCode::InvariantViolated)
+                .detail("MySQL split chunk queued count underflow")
+                .stage(Stage::Extractor)
+                .operation("track_mysql_snapshot_split")
+        })?;
         *running_chunks += 1;
         Ok(())
     }
@@ -935,7 +952,8 @@ impl MysqlTableCtx {
         let mut chunk_id_generator = SnapshotChunkIdGenerator::new(self.shared.batch_size);
         while let Some(row) = rows.try_next().await? {
             let row_chunk_id = chunk_id_generator.next_row_chunk_id();
-            let row_data = RowData::from_mysql_row(&row, tb_meta, &ignore_cols, Some(row_chunk_id));
+            let row_data =
+                RowData::from_mysql_row(&row, tb_meta, &ignore_cols, Some(row_chunk_id))?;
             self.shared
                 .base_extractor
                 .push_row(extract_state, row_data, Position::None)
@@ -1039,7 +1057,7 @@ impl MysqlTableCtx {
                     let row_chunk_id = chunk_id_generator.next_row_chunk_id();
 
                     let row_data =
-                        RowData::from_mysql_row(&row, tb_meta, &ignore_cols, Some(row_chunk_id));
+                        RowData::from_mysql_row(&row, tb_meta, &ignore_cols, Some(row_chunk_id))?;
                     let position = tb_meta.basic.build_position_for_single_col(
                         &DbType::Mysql,
                         order_col,
@@ -1097,7 +1115,7 @@ impl MysqlTableCtx {
                     let row_chunk_id = chunk_id_generator.next_row_chunk_id();
 
                     let row_data =
-                        RowData::from_mysql_row(&row, tb_meta, &ignore_cols, Some(row_chunk_id));
+                        RowData::from_mysql_row(&row, tb_meta, &ignore_cols, Some(row_chunk_id))?;
                     let position = tb_meta.basic.build_position(&DbType::Mysql, &start_values);
                     self.shared
                         .base_extractor
@@ -1175,7 +1193,8 @@ impl MysqlTableCtx {
         while let Some(row) = rows.try_next().await? {
             extracted_count += 1;
             let row_chunk_id = chunk_id_generator.next_row_chunk_id();
-            let row_data = RowData::from_mysql_row(&row, tb_meta, &ignore_cols, Some(row_chunk_id));
+            let row_data =
+                RowData::from_mysql_row(&row, tb_meta, &ignore_cols, Some(row_chunk_id))?;
             self.shared
                 .base_extractor
                 .push_row(extract_state, row_data, Position::None)

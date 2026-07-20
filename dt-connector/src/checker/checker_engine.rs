@@ -113,17 +113,12 @@ impl<C: Checker> DataChecker<C> {
                     .filter(|(col, _)| diff_cols.contains(col))
                     .collect();
                 log.dst_row = if ctx.output_full_row {
-                    if ctx
-                        .router
-                        .as_ref()
-                        .and_then(|router| router.reverse_get_col_map(&dst_row.schema, &dst_row.tb))
-                        .is_some()
-                    {
-                        let routed = ctx
-                            .router
-                            .as_ref()
-                            .unwrap()
-                            .reverse_route_row(dst_row.clone());
+                    if let Some(router) = ctx.router.as_ref().filter(|router| {
+                        router
+                            .reverse_get_col_map(&dst_row.schema, &dst_row.tb)
+                            .is_some()
+                    }) {
+                        let routed = router.reverse_route_row(dst_row.clone());
                         Self::clone_row_values(&routed)
                     } else {
                         Self::clone_row_values(dst_row)
@@ -324,14 +319,14 @@ impl<C: Checker> DataChecker<C> {
         &mut self,
         rows: &[&'a RowData],
         tb_meta: &CheckerTbMeta,
-    ) -> Vec<(&'a RowData, u128)> {
+    ) -> anyhow::Result<Vec<(&'a RowData, u128)>> {
         let mut prepared_rows = Vec::with_capacity(rows.len());
         for row in rows {
             let row = *row;
             match Self::lookup_match_key(row, tb_meta.basic()) {
                 Ok(Some(key)) => {
                     if self.ctx.is_cdc {
-                        self.cleanup_stale_update_key(row, tb_meta.basic(), Some(key));
+                        self.cleanup_stale_update_key(row, tb_meta.basic(), Some(key))?;
                     }
                     if Self::should_sample_key(self.ctx.sample_rate, key) {
                         prepared_rows.push((row, key));
@@ -339,7 +334,7 @@ impl<C: Checker> DataChecker<C> {
                 }
                 Ok(None) => {
                     if self.ctx.is_cdc {
-                        self.cleanup_stale_update_key(row, tb_meta.basic(), None);
+                        self.cleanup_stale_update_key(row, tb_meta.basic(), None)?;
                     }
                     log_warn!(
                         "Skipping row with NULL key component in {}.{}.",
@@ -351,7 +346,7 @@ impl<C: Checker> DataChecker<C> {
                 }
                 Err(e) => {
                     if self.ctx.is_cdc {
-                        self.cleanup_stale_update_key(row, tb_meta.basic(), None);
+                        self.cleanup_stale_update_key(row, tb_meta.basic(), None)?;
                     }
                     log_warn!(
                         "Skipping unhashable row in {}.{}: {}",
@@ -364,7 +359,7 @@ impl<C: Checker> DataChecker<C> {
                 }
             }
         }
-        prepared_rows
+        Ok(prepared_rows)
     }
 
     /// Computes a PK composite hash with `31 * h + col_hash` and returns 0 when any PK column is NULL.
@@ -478,11 +473,11 @@ impl<C: Checker> DataChecker<C> {
             .set_checker_counter(CounterType::CheckerPending, self.store.len() as u64);
     }
 
-    pub fn remove_store_entry(&mut self, row_data: &RowData, row_key: u128) {
+    pub fn remove_store_entry(&mut self, row_data: &RowData, row_key: u128) -> anyhow::Result<()> {
         let store_key = CheckerStoreKey::new(&row_data.schema, &row_data.tb, row_key);
         if let Some(entry) = self.store.shift_remove(&store_key) {
             self.dirty_upserts.shift_remove(&store_key);
-            let identity_key = build_identity_key(&entry);
+            let identity_key = build_identity_key(&entry)?;
             if self
                 .persisted_identity_keys
                 .as_ref()
@@ -494,6 +489,7 @@ impl<C: Checker> DataChecker<C> {
             self.optional_logs_dirty = true;
             self.update_pending_counter();
         }
+        Ok(())
     }
 
     fn cleanup_stale_update_key(
@@ -501,18 +497,18 @@ impl<C: Checker> DataChecker<C> {
         row_data: &RowData,
         tb_meta: &RdbTbMeta,
         new_key: Option<u128>,
-    ) {
+    ) -> anyhow::Result<()> {
         if row_data.row_type != RowType::Update {
-            return;
+            return Ok(());
         }
 
         let Some(before_values) = row_data.before.as_ref() else {
-            return;
+            return Ok(());
         };
 
         match Self::match_key_from_values(before_values, tb_meta) {
             Ok(Some(old_key)) if Some(old_key) != new_key => {
-                self.remove_store_entry(row_data, old_key);
+                self.remove_store_entry(row_data, old_key)?;
             }
             Ok(_) => {}
             Err(err) => {
@@ -524,6 +520,7 @@ impl<C: Checker> DataChecker<C> {
                 );
             }
         }
+        Ok(())
     }
 
     async fn reconcile_row_inconsistency(
@@ -544,7 +541,7 @@ impl<C: Checker> DataChecker<C> {
             .await?;
             self.store_entry(src_row_data, row_key, entry).await;
         } else {
-            self.remove_store_entry(src_row_data, row_key);
+            self.remove_store_entry(src_row_data, row_key)?;
         }
         Ok(())
     }
@@ -593,13 +590,8 @@ impl<C: Checker> DataChecker<C> {
             .is_some();
         let schema_changed = src_row_data.schema != mapped_schema || src_row_data.tb != mapped_tb;
 
-        let routed_row = if has_col_map {
-            Cow::Owned(
-                ctx.router
-                    .as_ref()
-                    .unwrap()
-                    .reverse_route_row(src_row_data.clone()),
-            )
+        let routed_row = if let Some(router) = ctx.router.as_ref().filter(|_| has_col_map) {
+            Cow::Owned(router.reverse_route_row(src_row_data.clone()))
         } else {
             Cow::Borrowed(src_row_data)
         };
@@ -794,7 +786,7 @@ impl<C: Checker> DataChecker<C> {
             return Ok(Some(item));
         }
 
-        self.cleanup_stale_update_key(&item.row, tb_meta.basic(), Some(key));
+        self.cleanup_stale_update_key(&item.row, tb_meta.basic(), Some(key))?;
         self.reconcile_row_inconsistency(key, &item.row, dst_row.as_ref(), tb_meta.as_ref())
             .await?;
         Ok(None)
@@ -802,12 +794,10 @@ impl<C: Checker> DataChecker<C> {
 
     pub async fn drain_retries(&mut self) -> anyhow::Result<()> {
         while !self.retry_queue.is_empty() {
-            let next_retry_at = self
-                .retry_queue
-                .iter()
-                .map(|item| item.next_retry_at)
-                .min()
-                .expect("retry queue should not be empty");
+            let Some(next_retry_at) = self.retry_queue.iter().map(|item| item.next_retry_at).min()
+            else {
+                break;
+            };
             let now = Instant::now();
             if next_retry_at > now {
                 sleep(next_retry_at.duration_since(now)).await;
@@ -858,7 +848,7 @@ impl<C: Checker> DataChecker<C> {
         for (_, rows) in groups {
             let first_row = rows.first().context("checker group is empty")?;
             let tb_meta = self.checker.load_table_meta(first_row).await?;
-            let prepared_rows = self.prepare_rows_for_fetch(&rows, tb_meta.as_ref());
+            let prepared_rows = self.prepare_rows_for_fetch(&rows, tb_meta.as_ref())?;
             if prepared_rows.is_empty() {
                 continue;
             }

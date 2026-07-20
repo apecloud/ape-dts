@@ -1,11 +1,10 @@
-use std::{error::Error as StdError, fmt, sync::OnceLock};
+use std::{error::Error as StdError, fmt};
 
-use regex::{Captures, Regex};
 use serde::Serialize;
 
 use super::{
     classify_mongodb_error, classify_redis_error, classify_sqlx_error, DtError, EndpointRole,
-    Error, ErrorCode, ErrorObject, OriginError, SqlxProvider, Stage,
+    ErrorCode, ErrorObject, OriginError, SqlxProvider, Stage,
 };
 
 pub const ERROR_REPORT_SCHEMA_VERSION: u16 = 1;
@@ -23,7 +22,6 @@ pub struct ErrorReport {
     pub phase: Option<String>,
     #[serde(skip_serializing)]
     pub stage: Stage,
-    #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(skip_serializing)]
     pub operation: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -42,18 +40,10 @@ pub struct ErrorReport {
     pub location: Option<String>,
 }
 
-pub struct DiagnosticReport<'a> {
-    report: &'a ErrorReport,
-}
-
 impl ErrorReport {
     pub fn from_anyhow(error: &anyhow::Error) -> Self {
         if let Some(dt_error) = error.downcast_ref::<DtError>() {
             return Self::from_dt_error(dt_error, contexts_before::<DtError>(error));
-        }
-
-        if let Some(legacy) = error.downcast_ref::<Error>() {
-            return Self::from_legacy_error(legacy, contexts_before::<Error>(error));
         }
 
         if let Some(sqlx_error) = error.downcast_ref::<sqlx::Error>() {
@@ -65,7 +55,7 @@ impl ErrorReport {
             return Self::new(
                 classification.code,
                 Stage::Unknown,
-                error.to_string(),
+                sqlx_error.to_string(),
                 contexts_before::<sqlx::Error>(error),
             )
             .with_origin(classification.origin)
@@ -77,7 +67,7 @@ impl ErrorReport {
             return Self::new(
                 classification.code,
                 Stage::Unknown,
-                error.to_string(),
+                redis_error.to_string(),
                 contexts_before::<redis::RedisError>(error),
             )
             .with_origin(classification.origin);
@@ -88,46 +78,55 @@ impl ErrorReport {
             return Self::new(
                 classification.code,
                 Stage::Unknown,
-                error.to_string(),
+                mongodb_error.to_string(),
                 contexts_before::<mongodb::error::Error>(error),
             )
             .with_origin(classification.origin);
         }
 
-        if error.downcast_ref::<tokio::task::JoinError>().is_some() {
+        if let Some(join_error) = error.downcast_ref::<tokio::task::JoinError>() {
             return Self::new(
                 ErrorCode::WorkerFailed,
                 Stage::Task,
-                error.to_string(),
+                join_error.to_string(),
                 contexts_before::<tokio::task::JoinError>(error),
             );
         }
 
-        if error.downcast_ref::<url::ParseError>().is_some()
-            || error.downcast_ref::<serde_yaml::Error>().is_some()
-        {
+        if let Some(url_error) = error.downcast_ref::<url::ParseError>() {
             return Self::new(
                 ErrorCode::InvalidConfig,
                 Stage::Bootstrap,
-                error.to_string(),
-                error.chain().skip(1).map(ToString::to_string).collect(),
+                url_error.to_string(),
+                contexts_before::<url::ParseError>(error),
             );
         }
 
-        if error.downcast_ref::<std::io::Error>().is_some() {
+        if let Some(yaml_error) = error.downcast_ref::<serde_yaml::Error>() {
+            return Self::new(
+                ErrorCode::InvalidConfig,
+                Stage::Bootstrap,
+                yaml_error.to_string(),
+                contexts_before::<serde_yaml::Error>(error),
+            );
+        }
+
+        if let Some(io_error) = error.downcast_ref::<std::io::Error>() {
             return Self::new(
                 ErrorCode::IoFailed,
                 Stage::Unknown,
-                error.to_string(),
+                io_error.to_string(),
                 contexts_before::<std::io::Error>(error),
             );
         }
 
+        let mut chain: Vec<_> = error.chain().map(ToString::to_string).collect();
+        let diagnostic_message = chain.pop().unwrap_or_else(|| error.to_string());
         Self::new(
             ErrorCode::Unclassified,
             Stage::Unknown,
-            error.to_string(),
-            error.chain().skip(1).map(ToString::to_string).collect(),
+            diagnostic_message,
+            chain,
         )
     }
 
@@ -160,37 +159,6 @@ impl ErrorReport {
                 error.location.column()
             )),
         }
-    }
-
-    fn from_legacy_error(error: &Error, contexts: Vec<String>) -> Self {
-        if let Error::SqlxError(sqlx_error) = error {
-            let classification = classify_sqlx_error(
-                sqlx_error,
-                SqlxProvider::Unknown,
-                ErrorCode::StatementFailed,
-            );
-            return Self::new(
-                classification.code,
-                error.stage(),
-                error.to_string(),
-                contexts,
-            )
-            .with_origin(classification.origin)
-            .with_object(classification.object);
-        }
-
-        if let Error::MongodbError(mongodb_error) = error {
-            let classification = classify_mongodb_error(mongodb_error, ErrorCode::StatementFailed);
-            return Self::new(
-                classification.code,
-                error.stage(),
-                error.to_string(),
-                contexts,
-            )
-            .with_origin(classification.origin);
-        }
-
-        Self::new(error.code(), error.stage(), error.to_string(), contexts)
     }
 
     fn new(
@@ -245,38 +213,10 @@ impl ErrorReport {
         }
         (!parts.is_empty()).then(|| parts.join(" "))
     }
-
-    pub fn diagnostic(&self) -> DiagnosticReport<'_> {
-        DiagnosticReport { report: self }
-    }
 }
 
 fn sanitize_user_text(value: &str) -> String {
-    static SECRET_VALUE: OnceLock<Regex> = OnceLock::new();
-    static URL_PASSWORD: OnceLock<Regex> = OnceLock::new();
-
-    let value = SECRET_VALUE
-        .get_or_init(|| {
-            Regex::new(
-                r#"(?i)((?:password|passwd|pwd|secret|token|api[_-]?key|access[_-]?key)[\"']?\s*[:=]\s*[\"']?)[^\"',;\s}\]]+"#,
-            )
-            .expect("valid sensitive-value regular expression")
-        })
-        .replace_all(value, |captures: &Captures<'_>| {
-            let matched = captures.get(0).expect("full match").as_str();
-            let normalized = matched.to_ascii_lowercase();
-            if normalized.ends_with("<redacted>") || normalized.ends_with("[redacted]") {
-                matched.to_string()
-            } else {
-                format!("{}[REDACTED]", &captures[1])
-            }
-        });
-    URL_PASSWORD
-        .get_or_init(|| {
-            Regex::new(r"(://[^:/@\s]+:)[^@\s]+@").expect("valid URL-password regular expression")
-        })
-        .replace_all(&value, "${1}[REDACTED]@")
-        .into_owned()
+    rtb_redact::string(value).into_owned()
 }
 
 fn format_object(object: &ErrorObject) -> Option<String> {
@@ -328,35 +268,28 @@ impl fmt::Display for ErrorReport {
         if let Some(hint) = &self.hint {
             write!(f, "\nHINT: {hint}")?;
         }
-        Ok(())
-    }
-}
-
-impl fmt::Display for DiagnosticReport<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let report = self.report;
-        write!(f, "DIAGNOSTIC [{}]", report.code)?;
-        if let Some(location) = &report.location {
+        write!(f, "\nDIAGNOSTIC [{}]", self.code)?;
+        if let Some(location) = &self.location {
             write!(f, "\nLOCATION: {location}")?;
         }
-        write!(f, "\nSTAGE: {}", report.stage.diagnostic_name())?;
-        if let Some(operation) = &report.operation {
+        write!(f, "\nSTAGE: {}", self.stage.diagnostic_name())?;
+        if let Some(operation) = &self.operation {
             write!(f, "\nOPERATION: {operation}")?;
         }
-        if let Some(endpoint) = report.endpoint {
+        if let Some(endpoint) = self.endpoint {
             write!(f, "\nENDPOINT: {}", endpoint.user_description())?;
         }
-        if let Some(origin) = &report.origin {
+        if let Some(origin) = &self.origin {
             write!(f, "\nORIGIN: {}", origin.system)?;
             if let Some(code) = &origin.code {
                 write!(f, "/{code}")?;
             }
         }
-        for context in &report.contexts {
-            write!(f, "\nCONTEXT: {context}")?;
+        for context in &self.contexts {
+            write!(f, "\nCONTEXT: {}", sanitize_user_text(context))?;
         }
-        if let Some(message) = &report.diagnostic_message {
-            write!(f, "\nCAUSE: {message}")?;
+        if let Some(message) = &self.diagnostic_message {
+            write!(f, "\nCAUSE: {}", sanitize_user_text(message))?;
         }
         Ok(())
     }
@@ -400,23 +333,17 @@ mod tests {
             Some("resume_position")
         );
         assert_eq!(report.contexts, ["starting task", "loading task state"]);
-        let diagnostic = report.diagnostic().to_string();
-        assert!(diagnostic.contains("DIAGNOSTIC [MD001]"));
-        assert!(diagnostic.contains("LOCATION:"));
-        assert!(diagnostic.contains("STAGE: resumer"));
-        assert!(diagnostic.contains("OPERATION: load_checkpoint"));
-        assert!(diagnostic.contains("ORIGIN: postgres/42P01"));
-        assert!(diagnostic.contains("CONTEXT: starting task"));
+        let rendered = report.to_string();
+        assert!(rendered.contains("DIAGNOSTIC [MD001]"));
+        assert!(rendered.contains("LOCATION:"));
+        assert!(rendered.contains("STAGE: resumer"));
+        assert!(rendered.contains("OPERATION: load_checkpoint"));
+        assert!(rendered.contains("ORIGIN: postgres/42P01"));
+        assert!(rendered.contains("CONTEXT: starting task"));
     }
 
     #[test]
-    fn maps_legacy_and_unknown_errors() {
-        let legacy = anyhow::Error::new(Error::MetadataError("table metadata missing".into()));
-        assert_eq!(
-            ErrorReport::from_anyhow(&legacy).code,
-            ErrorCode::MetadataFailed
-        );
-
+    fn maps_unknown_errors() {
         let unknown = anyhow::anyhow!("plain error");
         assert_eq!(
             ErrorReport::from_anyhow(&unknown).code,
@@ -458,11 +385,11 @@ mod tests {
         assert!(rendered.contains("\nTASK: task-42"));
         assert!(rendered.contains("\nAFFECTED: destination postgres sales.orders"));
         assert!(rendered.contains("\nPHASE: writing to the destination"));
-        assert!(!rendered.contains("42P01"));
+        assert!(rendered.contains("\nORIGIN: postgres/42P01"));
     }
 
     #[test]
-    fn default_views_hide_diagnostic_context_and_unknown_messages() {
+    fn text_includes_diagnostics_while_json_excludes_them() {
         let error = anyhow::anyhow!("password=secret, sql=INSERT, row_data=private")
             .context("internal worker context");
         let report = ErrorReport::from_anyhow(&error);
@@ -470,15 +397,15 @@ mod tests {
         let json = serde_json::to_string(&report).unwrap();
 
         assert_eq!(report.message, ErrorCode::Unclassified.default_message());
-        for secret in [
-            "password=secret",
-            "sql=INSERT",
-            "row_data=private",
-            "internal worker",
-        ] {
-            assert!(!rendered.contains(secret));
-            assert!(!json.contains(secret));
-        }
+        assert!(rendered.contains("DIAGNOSTIC [IN999]"));
+        assert!(rendered.contains("CONTEXT: internal worker context"));
+        assert!(rendered.contains("sql=INSERT"));
+        assert!(rendered.contains("row_data=private"));
+        assert!(!rendered.contains("password=secret"));
+        assert!(!json.contains("internal worker context"));
+        assert!(!json.contains("sql=INSERT"));
+        assert!(!json.contains("row_data=private"));
+        assert!(!json.contains("password=secret"));
         for diagnostic_field in [
             "stage",
             "operation",
@@ -498,7 +425,7 @@ mod tests {
             DtError::new(ErrorCode::InvalidConfig)
                 .message("password=secret is invalid")
                 .detail("endpoint=mysql://user:hunter2@localhost:3306/db")
-                .hint("set token:abc123 before retrying"),
+                .hint("set token=abc123 before retrying"),
         );
         let report = ErrorReport::from_anyhow(&error);
         let json = serde_json::to_value(&report).unwrap();
@@ -509,7 +436,21 @@ mod tests {
         assert!(!rendered.contains("secret"));
         assert!(!rendered.contains("hunter2"));
         assert!(!rendered.contains("abc123"));
-        assert!(rendered.contains("[REDACTED]"));
+        assert!(rendered.contains("[redacted]"));
+    }
+
+    #[test]
+    fn full_text_redacts_diagnostic_credentials() {
+        let error = anyhow::anyhow!(
+            "failed to connect to mysql://user:hunter2@localhost:3306/db with password=secret"
+        )
+        .context("token=abc123");
+        let rendered = ErrorReport::from_anyhow(&error).to_string();
+
+        for secret in ["hunter2", "password=secret", "token=abc123"] {
+            assert!(!rendered.contains(secret), "{rendered}");
+        }
+        assert!(rendered.contains("[redacted]"), "{rendered}");
     }
 
     #[test]
@@ -527,7 +468,9 @@ mod tests {
         let report = ErrorReport::from_anyhow(&error);
         assert_eq!(report.code, ErrorCode::WorkerFailed);
         assert_eq!(report.stage, Stage::Task);
-        assert!(!report.to_string().contains("worker panic for test"));
+        let rendered = report.to_string();
+        assert!(rendered.contains("DIAGNOSTIC [RT001]"));
+        assert!(rendered.contains("worker panic for test"));
     }
 
     #[test]
@@ -544,5 +487,23 @@ mod tests {
             ErrorReport::from_anyhow(&yaml_error).code,
             ErrorCode::InvalidConfig
         );
+    }
+
+    #[test]
+    fn separates_anyhow_context_from_typed_root_cause() {
+        let error = anyhow::Error::new(std::io::Error::other("root I/O failure"))
+            .context("opening checkpoint file");
+        let report = ErrorReport::from_anyhow(&error);
+
+        assert_eq!(report.contexts, ["opening checkpoint file"]);
+        assert_eq!(
+            report.diagnostic_message.as_deref(),
+            Some("root I/O failure")
+        );
+
+        let rendered = report.to_string();
+        assert!(rendered.contains("CONTEXT: opening checkpoint file"));
+        assert!(rendered.contains("CAUSE: root I/O failure"));
+        assert!(!rendered.contains("CAUSE: opening checkpoint file"));
     }
 }

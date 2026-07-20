@@ -1,11 +1,13 @@
 use anyhow::bail;
-use dt_common::error::Error;
+use dt_common::error::ErrorCode;
 use dt_common::meta::redis::{
     redis_entry::RedisEntry,
     redis_object::{
         HashObject, ListObject, ModuleObject, RedisCmd, SetObject, StringObject, ZsetObject,
     },
 };
+
+use crate::error::sinker::redis_destination as redis_destination_error;
 
 const CRC64_TABLE: [u64; 256] = [
     0x0000000000000000,
@@ -306,8 +308,10 @@ impl EntryRewriter {
     }
 
     pub fn rewrite_module(_obj: &mut ModuleObject) -> anyhow::Result<Vec<RedisCmd>> {
-        bail! {Error::RedisRdbError(
-            "module rewrite not implemented".into(),
+        bail! {redis_destination_error(
+            ErrorCode::StatementFailed,
+            "Redis module rewrite is not implemented",
+            "rewrite_redis_module",
         )}
     }
 

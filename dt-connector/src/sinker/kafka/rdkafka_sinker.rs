@@ -5,7 +5,7 @@ use rdkafka::producer::{FutureProducer, FutureRecord};
 use tokio::{time::Duration, time::Instant};
 
 use dt_common::{
-    error::{EndpointRole, ErrorCode, Stage},
+    error::ErrorCode,
     meta::{avro::avro_converter::AvroConverter, row_data::RowData},
     utils::limit_queue::LimitedQueue,
 };
@@ -71,11 +71,9 @@ impl RdkafkaSinker {
         for future in futures {
             let start_time = Instant::now();
             if let Err((error, _message)) = future.await {
-                return Err(crate::kafka_error::rdkafka(
+                return Err(crate::error::sinker::rdkafka(
                     error,
                     ErrorCode::StatementFailed,
-                    Stage::Sinker,
-                    EndpointRole::Destination,
                     "sink_kafka_dml",
                 )
                 .into());

@@ -1,5 +1,7 @@
 use anyhow::bail;
-use thiserror::Error;
+use dt_common::error::ErrorCode;
+
+use crate::error::extractor::redis_source as redis_protocol_error;
 
 /// Represents a redis RESP protocol response
 /// https://redis.io/topics/protocol#resp-protocol-description
@@ -21,13 +23,6 @@ pub enum Value {
     Bulk(Vec<Value>),
 }
 
-#[derive(Error, Debug)]
-#[error("RedisError (command: {command:?}, message: {message:?})")]
-pub struct RedisError {
-    pub command: String,
-    pub message: String,
-}
-
 impl Value {
     pub fn try_into<T: ParseFrom<Self>>(self) -> anyhow::Result<T> {
         T::parse_from(self)
@@ -42,7 +37,11 @@ impl ParseFrom<Value> for () {
     fn parse_from(value: Value) -> anyhow::Result<Self> {
         match value {
             Value::Okay => Ok(()),
-            v => bail! {format!("Failed parsing {:?}", v)},
+            v => bail! {redis_protocol_error(
+                ErrorCode::StatementFailed,
+                format!("failed to parse Redis response: {v:?}"),
+                "parse_redis_response",
+            )},
         }
     }
 }
@@ -51,7 +50,11 @@ impl ParseFrom<Value> for i64 {
     fn parse_from(value: Value) -> anyhow::Result<Self> {
         match value {
             Value::Int(n) => Ok(n),
-            v => bail! {format!("Failed parsing {:?}", v)},
+            v => bail! {redis_protocol_error(
+                ErrorCode::StatementFailed,
+                format!("failed to parse Redis response: {v:?}"),
+                "parse_redis_response",
+            )},
         }
     }
 }
@@ -60,7 +63,11 @@ impl ParseFrom<Value> for Vec<u8> {
     fn parse_from(value: Value) -> anyhow::Result<Self> {
         match value {
             Value::Data(bytes) => Ok(bytes),
-            v => bail! {format!("Failed parsing {:?}", v)},
+            v => bail! {redis_protocol_error(
+                ErrorCode::StatementFailed,
+                format!("failed to parse Redis response: {v:?}"),
+                "parse_redis_response",
+            )},
         }
     }
 }
@@ -72,8 +79,20 @@ impl ParseFrom<Value> for String {
             Value::Nil => Ok(String::new()),
             Value::Int(n) => Ok(format!("{}", n)),
             Value::Status(s) => Ok(s),
-            Value::Data(bytes) => Ok(String::from_utf8(bytes.to_vec())?),
-            v => bail! {format!("Failed parsing {:?}", v)},
+            Value::Data(bytes) => String::from_utf8(bytes).map_err(|error| {
+                redis_protocol_error(
+                    ErrorCode::StatementFailed,
+                    "Redis string response is not valid UTF-8",
+                    "parse_redis_response",
+                )
+                .source(error)
+                .into()
+            }),
+            v => bail! {redis_protocol_error(
+                ErrorCode::StatementFailed,
+                format!("failed to parse Redis response: {v:?}"),
+                "parse_redis_response",
+            )},
         }
     }
 }
@@ -90,6 +109,10 @@ where
             }
             return Ok(result);
         }
-        bail! { format!("Failed parsing {:?}", v)}
+        bail! {redis_protocol_error(
+            ErrorCode::StatementFailed,
+            format!("failed to parse Redis response: {v:?}"),
+            "parse_redis_response",
+        )}
     }
 }

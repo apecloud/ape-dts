@@ -8,11 +8,11 @@ use sqlx::{
 };
 use tokio::{sync::RwLock, time::Instant};
 
-use crate::sinker::{checkable_sinker::CheckableSink, sqlx_error};
 use crate::{
     call_batch_fn, data_marker::DataMarker, rdb_query_builder::RdbQueryBuilder,
     rdb_router::RdbRouter, sinker::base_sinker::BaseSinker, Sinker,
 };
+use crate::{error::sinker as sinker_error, sinker::checkable_sinker::CheckableSink};
 use dt_common::{
     config::connection_auth_config::ConnectionAuthConfig,
     error::ErrorCode,
@@ -88,7 +88,7 @@ impl Sinker for MysqlSinker {
             )?;
             let mut conn_options =
                 MySqlConnectOptions::from_str(final_url.as_str()).map_err(|error| {
-                    sqlx_error::mysql(error, ErrorCode::ConnectionFailed, "connect_for_sink_ddl")
+                    sinker_error::mysql(error, ErrorCode::ConnectionFailed, "connect_for_sink_ddl")
                 })?;
             if !db.is_empty() {
                 match ddl_data.ddl_type {
@@ -111,10 +111,10 @@ impl Sinker for MysqlSinker {
                 .connect_with(conn_options)
                 .await
                 .map_err(|error| {
-                    sqlx_error::mysql(error, ErrorCode::ConnectionFailed, "connect_for_sink_ddl")
+                    sinker_error::mysql(error, ErrorCode::ConnectionFailed, "connect_for_sink_ddl")
                 })?;
             query.execute(&conn_pool).await.map_err(|error| {
-                sqlx_error::mysql(error, ErrorCode::StatementFailed, "sink_ddl")
+                sinker_error::mysql(error, ErrorCode::StatementFailed, "sink_ddl")
             })?;
 
             rts.push((start_time.elapsed().as_millis() as u64, 1));
@@ -154,7 +154,7 @@ impl Sinker for MysqlSinker {
                 .execute(&self.conn_pool)
                 .await
                 .map_err(|error| {
-                    sqlx_error::mysql(error, ErrorCode::StatementFailed, "sink_dcl")
+                    sinker_error::mysql(error, ErrorCode::StatementFailed, "sink_dcl")
                 })?;
             rts.push((start_time.elapsed().as_millis() as u64, 1));
         }
@@ -226,13 +226,13 @@ impl MysqlSinker {
         let mut last_monitor_time = Instant::now();
         let mut tx =
             self.conn_pool.begin().await.map_err(|error| {
-                sqlx_error::mysql(error, ErrorCode::StatementFailed, "sink_dml")
+                sinker_error::mysql(error, ErrorCode::StatementFailed, "sink_dml")
             })?;
         if let Some(sql) = self.get_data_marker_sql().await {
             sqlx::query(&sql)
                 .execute(&mut *tx)
                 .await
-                .map_err(|error| sqlx_error::mysql(error, ErrorCode::StatementFailed, "sink_dml"))
+                .map_err(|error| sinker_error::mysql(error, ErrorCode::StatementFailed, "sink_dml"))
                 .with_context(|| format!("failed to execute data marker sql: [{}]", sql))?;
         }
 
@@ -251,7 +251,7 @@ impl MysqlSinker {
             query
                 .execute(&mut *tx)
                 .await
-                .map_err(|error| sqlx_error::mysql(error, ErrorCode::StatementFailed, "sink_dml"))
+                .map_err(|error| sinker_error::mysql(error, ErrorCode::StatementFailed, "sink_dml"))
                 .with_context(|| {
                     format!(
                         "serial sink failed, sql: [{}], row_data: [{}]",
@@ -275,7 +275,7 @@ impl MysqlSinker {
         }
         tx.commit()
             .await
-            .map_err(|error| sqlx_error::mysql(error, ErrorCode::StatementFailed, "sink_dml"))?;
+            .map_err(|error| sinker_error::mysql(error, ErrorCode::StatementFailed, "sink_dml"))?;
 
         if data_len > 0 || data_size > 0 {
             self.base_sinker
@@ -312,20 +312,20 @@ impl MysqlSinker {
         let mut rts = LimitedQueue::new(1);
         if let Some(sql) = self.get_data_marker_sql().await {
             let mut tx = self.conn_pool.begin().await.map_err(|error| {
-                sqlx_error::mysql(error, ErrorCode::StatementFailed, "sink_dml")
+                sinker_error::mysql(error, ErrorCode::StatementFailed, "sink_dml")
             })?;
             sqlx::query(&sql).execute(&mut *tx).await.map_err(|error| {
-                sqlx_error::mysql(error, ErrorCode::StatementFailed, "sink_dml")
+                sinker_error::mysql(error, ErrorCode::StatementFailed, "sink_dml")
             })?;
             query.execute(&mut *tx).await.map_err(|error| {
-                sqlx_error::mysql(error, ErrorCode::StatementFailed, "sink_dml")
+                sinker_error::mysql(error, ErrorCode::StatementFailed, "sink_dml")
             })?;
             tx.commit().await.map_err(|error| {
-                sqlx_error::mysql(error, ErrorCode::StatementFailed, "sink_dml")
+                sinker_error::mysql(error, ErrorCode::StatementFailed, "sink_dml")
             })?;
         } else {
             query.execute(&self.conn_pool).await.map_err(|error| {
-                sqlx_error::mysql(error, ErrorCode::StatementFailed, "sink_dml")
+                sinker_error::mysql(error, ErrorCode::StatementFailed, "sink_dml")
             })?;
         }
         rts.push((start_time.elapsed().as_millis() as u64, 1));
@@ -361,13 +361,13 @@ impl MysqlSinker {
         let mut rts = LimitedQueue::new(1);
         let exec_error = if let Some(sql) = self.get_data_marker_sql().await {
             let mut tx = self.conn_pool.begin().await.map_err(|error| {
-                sqlx_error::mysql(error, ErrorCode::StatementFailed, "sink_dml")
+                sinker_error::mysql(error, ErrorCode::StatementFailed, "sink_dml")
             })?;
             sqlx::query(&sql).execute(&mut *tx).await.map_err(|error| {
-                sqlx_error::mysql(error, ErrorCode::StatementFailed, "sink_dml")
+                sinker_error::mysql(error, ErrorCode::StatementFailed, "sink_dml")
             })?;
             query.execute(&mut *tx).await.map_err(|error| {
-                sqlx_error::mysql(error, ErrorCode::StatementFailed, "sink_dml")
+                sinker_error::mysql(error, ErrorCode::StatementFailed, "sink_dml")
             })?;
             match tx.commit().await {
                 Err(e) => Some(e),

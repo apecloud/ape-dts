@@ -9,7 +9,7 @@ use sqlx::{mysql::MySqlRow, MySql, Pool, Row};
 
 use dt_common::{
     config::config_enums::DbType,
-    error::Error,
+    error::{DtError, EndpointRole, ErrorCode, OriginError, Stage},
     meta::{
         mysql::{mysql_col_type::MysqlColType, mysql_meta_manager::MysqlMetaManager},
         struct_meta::{
@@ -124,10 +124,15 @@ impl MysqlStructFetcher {
             .cloned()
             .collect();
         if !filtered_dbs.is_empty() {
-            bail! {Error::StructError(format!(
-                "dbs: {} not found",
-                filtered_dbs.join(",")
-            ))}
+            bail! {DtError::new(ErrorCode::DatabaseNotFound)
+            .detail(format!(
+            "dbs: {} not found",
+            filtered_dbs.join(",")
+            ))
+            .stage(Stage::Extractor)
+            .operation("fetch_mysql_databases")
+            .endpoint(EndpointRole::Source)
+            .origin(OriginError::new("mysql", None::<String>))}
         }
 
         Ok(dbs.into_values().collect())
@@ -595,13 +600,17 @@ impl MysqlStructFetcher {
         let sql = format!("select '{}' as result", text);
         match sqlx::query(&sql).fetch_all(&self.conn_pool).await {
             Ok(rows) => {
-                if !rows.is_empty() {
-                    let result: String = rows.first().unwrap().get("result");
+                if let Some(row) = rows.first() {
+                    let result: String = row.get("result");
                     return Ok(result);
                 }
             }
             Err(error) => {
-                bail! {Error::SqlxError(error)}
+                bail! {crate::error::extractor::mysql_sqlx(
+                    error,
+                    ErrorCode::StatementFailed,
+                    "unescape_mysql_expression",
+                )}
             }
         }
         Ok(text)

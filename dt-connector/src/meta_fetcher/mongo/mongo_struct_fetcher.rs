@@ -188,7 +188,19 @@ impl MongoStructFetcher {
         if let Some(collection) = ns.strip_prefix(&prefix) {
             return Ok(collection);
         }
-        anyhow::bail!("namespace does not start with database prefix [{}]", prefix)
+        anyhow::bail!(
+            dt_common::error::DtError::new(dt_common::error::ErrorCode::MetadataFailed,)
+                .detail(format!(
+                    "MongoDB namespace does not start with database prefix {prefix}"
+                ))
+                .stage(dt_common::error::Stage::Extractor)
+                .operation("parse_mongodb_cursor_namespace")
+                .endpoint(dt_common::error::EndpointRole::Source)
+                .origin(dt_common::error::OriginError::new(
+                    "mongodb",
+                    None::<String>,
+                ))
+        )
     }
 
     fn is_system_collection(collection: &str) -> bool {

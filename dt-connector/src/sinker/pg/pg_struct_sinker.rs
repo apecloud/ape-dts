@@ -2,11 +2,11 @@ use async_trait::async_trait;
 use sqlx::{Pool, Postgres};
 
 use crate::{
+    error::sinker as sinker_error,
     rdb_router::RdbRouter,
     sinker::{
         base_sinker::BaseSinker,
         base_struct_sinker::{BaseStructSinker, DBConnPool},
-        sqlx_error,
     },
     Sinker,
 };
@@ -36,7 +36,7 @@ impl Sinker for PgStructSinker {
         )
         .await
         .map_err(|error| {
-            sqlx_error::postgres_from_anyhow(error, ErrorCode::StatementFailed, "sink_struct")
+            sinker_error::postgres_from_anyhow(error, ErrorCode::StatementFailed, "sink_struct")
         })
     }
 

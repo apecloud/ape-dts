@@ -3,13 +3,12 @@ use std::{env, panic, process::ExitCode};
 use clap::Parser;
 
 use dt_common::{
-    error::{DtError, ErrorCode, Stage},
+    error::{DtError, ErrorCode, ErrorReport, Stage},
     log_error,
 };
-use dt_main::{format_error, run_config};
+use dt_main::run_config;
 
 const ENV_SHUTDOWN_TIMEOUT_SECS: &str = "SHUTDOWN_TIMEOUT_SECS";
-const ENV_VERBOSE_ERRORS: &str = "APE_DTS_VERBOSE_ERRORS";
 
 #[derive(Debug, Parser)]
 struct Args {
@@ -24,9 +23,6 @@ struct Args {
 
     #[arg(long)]
     init: bool,
-
-    #[arg(long)]
-    verbose_errors: bool,
 }
 
 impl Args {
@@ -46,11 +42,11 @@ async fn main() -> ExitCode {
     install_panic_hook();
 
     let args = Args::parse();
-    let verbose_errors = args.verbose_errors || env::var(ENV_VERBOSE_ERRORS).as_deref() == Ok("1");
     match run(args).await {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
-            eprintln!("{}", format_error(&error, verbose_errors));
+            let report = ErrorReport::from_anyhow(&error);
+            eprintln!("{report}");
             ExitCode::FAILURE
         }
     }
@@ -120,12 +116,6 @@ mod tests {
     fn accepts_legacy_version_command() {
         let args = Args::try_parse_from(["dt-main", "version"]).unwrap();
         assert_eq!(args.legacy_config.as_deref(), Some("version"));
-    }
-
-    #[test]
-    fn accepts_verbose_errors_flag() {
-        let args = Args::try_parse_from(["dt-main", "--verbose-errors"]).unwrap();
-        assert!(args.verbose_errors);
     }
 
     #[test]

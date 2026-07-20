@@ -1,6 +1,5 @@
 use std::collections::{HashMap, HashSet};
 
-use anyhow::Context;
 use dashmap::DashMap;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -12,6 +11,7 @@ use crate::{
         config_token_parser::{ConfigTokenParser, TokenEscapePair},
         filter_config::FilterConfig,
     },
+    error::{DtError, ErrorCode, Stage},
     meta::{
         ddl_meta::ddl_type::DdlType, row_type::RowType,
         struct_meta::structure::structure_type::StructureType,
@@ -218,10 +218,7 @@ impl RdbFilter {
         }
         pattern = format!(r"^{}$", pattern);
 
-        Regex::new(&pattern)
-            .with_context(|| format!("invalid filter pattern: [{}]", pattern))
-            .unwrap()
-            .is_match(item)
+        Regex::new(&pattern).is_ok_and(|regex| regex.is_match(item))
     }
 
     fn parse_pair_tokens(
@@ -250,12 +247,22 @@ impl RdbFilter {
             REGEX_ESCAPE_PAIR.0.to_string(),
             REGEX_ESCAPE_PAIR.1.to_string(),
         ))];
-        ConfigTokenParser::parse_config(
+        let tokens = ConfigTokenParser::parse_config(
             config_str,
             db_type,
             &delimiters,
             Some(&custom_escape_pairs),
-        )
+        )?;
+        for token in &tokens {
+            if token.starts_with(REGEX_ESCAPE_PAIR.0) && token.ends_with(REGEX_ESCAPE_PAIR.1) {
+                let pattern = &token[REGEX_ESCAPE_PAIR.0.len()..token.len() - 1];
+                Regex::new(pattern).map_err(|error| {
+                    invalid_filter_config(format!("invalid filter regex {token}: {error}"))
+                        .source(error)
+                })?;
+            }
+        }
+        Ok(tokens)
     }
 
     fn parse_ignore_cols(config_str: &str) -> anyhow::Result<IgnoreCols> {
@@ -271,7 +278,9 @@ impl RdbFilter {
             ignore_cols: HashSet<String>,
         }
         let config: Vec<IgnoreColsType> =
-            serde_json::from_str(config_str.trim_start_matches(JSON_PREFIX))?;
+            serde_json::from_str(config_str.trim_start_matches(JSON_PREFIX)).map_err(|error| {
+                invalid_filter_config("config [filter].ignore_cols is invalid JSON").source(error)
+            })?;
         for i in config {
             results.insert((i.db, i.tb), i.ignore_cols);
         }
@@ -291,12 +300,23 @@ impl RdbFilter {
             condition: String,
         }
         let config: Vec<Condition> =
-            serde_json::from_str(config_str.trim_start_matches(JSON_PREFIX))?;
+            serde_json::from_str(config_str.trim_start_matches(JSON_PREFIX)).map_err(|error| {
+                invalid_filter_config("config [filter].where_conditions is invalid JSON")
+                    .source(error)
+            })?;
         for i in config {
             results.insert((i.db, i.tb), i.condition);
         }
         Ok(results)
     }
+}
+
+#[track_caller]
+fn invalid_filter_config(detail: impl Into<String>) -> DtError {
+    DtError::new(ErrorCode::InvalidConfig)
+        .detail(detail)
+        .stage(Stage::Bootstrap)
+        .operation("parse_filter_config")
 }
 
 #[cfg(test)]

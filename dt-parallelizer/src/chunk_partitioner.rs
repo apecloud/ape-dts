@@ -207,7 +207,9 @@ impl PartitionPlan {
         }
 
         let group = &groups[self.group_index];
-        let prefix_bytes = group.prefix_bytes.as_ref().unwrap();
+        let Some(prefix_bytes) = group.prefix_bytes.as_ref() else {
+            return self.start + (self.rows() + 1) / 2;
+        };
         let start_bytes = prefix_bytes[self.start];
         let target_bytes = start_bytes + self.bytes / 2;
         let search_start = self.start + 1;

@@ -13,7 +13,7 @@ Current reference: [Config details](/docs/en/config.md).
 | `[extractor].sample_interval` | Use `[checker].sample_rate=1..100`; empty means full check. |
 | Check target fields under `[sinker]`, including `check_log_dir` | Move them to `[checker]` for standalone check. Inline check reuses `[sinker]`. |
 | `[pipeline].max_rps` | Use `[extractor].max_rps` and/or `[sinker].max_rps`. |
-| `[resumer].resume_from_log`, `resume_log_dir`, `resume_config_file` | Use `resume_type=from_log`, `log_dir`, `config_file`. Old keys return `ConfigError`. |
+| `[resumer].resume_from_log`, `resume_log_dir`, `resume_config_file` | Use `resume_type=from_log`, `log_dir`, `config_file`. Old keys return error code `CF002`. |
 | `[pipeline].pipeline_type=http_server`, `http_host`, `http_port`, pipeline `with_field_defs` | Removed. Only `pipeline_type=basic` remains. Kafka `[sinker].with_field_defs` is unchanged. |
 | `db_type=foxlake`, `extract_type=foxlake_s3`, and Foxlake-only fields | Foxlake tasks are no longer supported. |
 

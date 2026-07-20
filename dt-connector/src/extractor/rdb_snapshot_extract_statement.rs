@@ -4,6 +4,7 @@ use std::collections::HashSet;
 use anyhow::bail;
 use dt_common::{
     config::config_enums::DbType,
+    error::{DtError, ErrorCode},
     meta::{
         adaptor::pg_col_value_convertor::PgColValueConvertor, mysql::mysql_tb_meta::MysqlTbMeta,
         pg::pg_tb_meta::PgTbMeta, rdb_tb_meta::RdbTbMeta,
@@ -187,7 +188,11 @@ impl<'r> RdbSnapshotExtractStatement<'r> {
             } else {
                 let col_type = self
                     .mysql_tb_meta
-                    .expect("mysql table meta missing when building mysql snapshot extract cols")
+                    .ok_or_else(|| {
+                        DtError::new(ErrorCode::InvariantViolated)
+                            .detail("MySQL table metadata is missing while building snapshot SQL")
+                            .operation("build_snapshot_extract_columns")
+                    })?
                     .get_col_type(col)?;
                 let extract_col = if col_type.is_spatial() {
                     SqlUtil::mysql_spatial_as_wkb_expr(&self.escape(col), &self.escape(col))
@@ -212,16 +217,14 @@ impl<'r> RdbSnapshotExtractStatement<'r> {
     fn build_place_holder_str(&self, order_cols: &[String]) -> anyhow::Result<String> {
         if let Some(pg_tb_meta) = self.pg_tb_meta {
             // PostgreSQL: $1::type, $2::type, ...
-            Ok(order_cols
-                .iter()
-                .map(|col| {
-                    let col_type = pg_tb_meta.get_col_type(col).unwrap();
-                    let idx = self.placeholder_index.get() + 1;
-                    self.placeholder_index.set(idx);
-                    format!(r#"${}::{}"#, idx, col_type.get_alias())
-                })
-                .collect::<Vec<String>>()
-                .join(", "))
+            let mut placeholders = Vec::with_capacity(order_cols.len());
+            for col in order_cols {
+                let col_type = pg_tb_meta.get_col_type(col)?;
+                let idx = self.placeholder_index.get() + 1;
+                self.placeholder_index.set(idx);
+                placeholders.push(format!(r#"${}::{}"#, idx, col_type.get_alias()));
+            }
+            Ok(placeholders.join(", "))
         } else if let Some(mysql_tb_meta) = self.mysql_tb_meta {
             // MySQL: ?, ?, ...
             let mut placeholders = Vec::with_capacity(order_cols.len());

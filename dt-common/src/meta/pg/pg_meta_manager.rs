@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::{
-    error::Error,
+    error::{DtError, ErrorCode, ErrorObject, OriginError},
     meta::{ddl_meta::ddl_data::DdlData, rdb_meta_manager::RDB_PRIMARY_KEY_FLAG},
 };
 use anyhow::{bail, Context};
@@ -116,7 +116,15 @@ impl PgMetaManager {
             self.oid_to_tb_meta.insert(oid, tb_meta.clone());
             self.name_to_tb_meta.insert(full_name.clone(), tb_meta);
         }
-        Ok(self.name_to_tb_meta.get(&full_name).unwrap())
+        self.name_to_tb_meta.get(&full_name).ok_or_else(|| {
+            DtError::new(ErrorCode::InvariantViolated)
+                .detail(format!(
+                    "table metadata cache entry is missing: {full_name}"
+                ))
+                .operation("get_postgres_table_metadata")
+                .origin(OriginError::new("postgres", None::<String>))
+                .into()
+        })
     }
 
     pub fn invalidate_cache_for_table(&mut self, schema: &str, tb: &str) {
@@ -199,8 +207,21 @@ impl PgMetaManager {
             let mut col_type = type_registry
                 .oid_to_type
                 .get(&col_type_oid)
-                .unwrap()
-                .clone();
+                .cloned()
+                .ok_or_else(|| {
+                    DtError::new(ErrorCode::MetadataFailed)
+                        .detail(format!(
+                            "PostgreSQL type OID {col_type_oid} is missing from the type registry"
+                        ))
+                        .operation("resolve_postgres_column_type")
+                        .object(ErrorObject {
+                            schema: Some(schema.to_string()),
+                            table: Some(tb.to_string()),
+                            column: Some(col.clone()),
+                            ..Default::default()
+                        })
+                        .origin(OriginError::new("postgres", Some(col_type_oid.to_string())))
+                })?;
             col_type.typmod = col_type_mod;
             col_origin_type_map.insert(col.clone(), col_type.get_alias());
             col_type_map.insert(col, col_type);
@@ -300,10 +321,15 @@ impl PgMetaManager {
             return Ok(oid);
         }
 
-        bail! {Error::MetadataError(format!(
-            "failed to get oid for: {} by query: {}",
-            tb, sql
-        ))}
+        bail! {DtError::new(ErrorCode::ObjectNotFound)
+        .detail(format!("failed to get oid for: {} by query: {}", tb, sql))
+        .operation("get_postgres_table_oid")
+        .object(ErrorObject {
+            schema: Some(schema.to_string()),
+            table: Some(tb.to_string()),
+            ..Default::default()
+        })
+        .origin(OriginError::new("postgres", None::<String>))}
     }
 
     #[allow(dead_code)]

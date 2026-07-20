@@ -17,6 +17,3 @@ pub use redis::{classify_redis_error, dt_error_from_redis};
 pub use sqlx::{
     classify_sqlx_error, dt_error_from_sqlx, try_dt_error_from_anyhow_sqlx, SqlxProvider,
 };
-
-pub type ExternalErrorClassification = ProviderErrorClassification;
-pub type SqlxErrorClassification = ProviderErrorClassification;

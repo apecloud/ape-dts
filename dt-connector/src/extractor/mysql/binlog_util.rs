@@ -80,7 +80,7 @@ impl BinlogUtil {
 
         let mut rows = sqlx::raw_sql(sql).fetch(conn_pool);
         while let Some(row) = rows.try_next().await.map_err(|error| {
-            crate::extractor::sqlx_error::mysql(
+            crate::error::extractor::mysql_sqlx(
                 error,
                 ErrorCode::MetadataFailed,
                 "list_binary_logs",

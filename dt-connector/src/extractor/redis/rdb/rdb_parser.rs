@@ -2,10 +2,11 @@ use anyhow::bail;
 use sqlx::types::chrono;
 
 use super::{entry_parser::entry_parser::EntryParser, reader::rdb_reader::RdbReader};
+use crate::error::extractor::redis_rdb as rdb_error;
 use crate::extractor::redis::{rdb::entry_parser::module2_parser::ModuleParser, StreamReader};
 use dt_common::meta::redis::{redis_entry::RedisEntry, redis_object::RedisCmd};
 use dt_common::{
-    error::{DtError, EndpointRole, Error, ErrorCode, OriginError, Stage},
+    error::{DtError, EndpointRole, ErrorCode, OriginError, Stage},
     log_debug, log_info,
 };
 
@@ -46,7 +47,7 @@ impl RdbParser<'_> {
         let mut buf = self.reader.read_bytes(5).await?;
         let magic = String::from_utf8(buf)?;
         if magic != "REDIS" {
-            bail! {Error::RedisRdbError("invalid rdb format".to_string())}
+            bail! {rdb_error("invalid rdb format")}
         }
 
         // version
@@ -92,7 +93,7 @@ impl RdbParser<'_> {
                             self.reader.read_string().await?;
                         }
                         _ => {
-                            bail! {Error::RedisRdbError(format!(
+                            bail! {rdb_error(format!(
                                 "module aux opcode not found. module_name=[{}], opcode=[{}]",
                                 module_name, opcode
                             ))}
@@ -113,11 +114,16 @@ impl RdbParser<'_> {
             }
 
             K_FLAG_AUX => {
-                let key = String::from(self.reader.read_string().await?);
+                let key = String::try_from(self.reader.read_string().await?).map_err(|error| {
+                    rdb_error("Redis RDB metadata key is not valid UTF-8").source(error)
+                })?;
                 let value = self.reader.read_string().await?;
                 match key.as_str() {
                     "repl-stream-db" => {
-                        let value = String::from(value);
+                        let value = String::try_from(value).map_err(|error| {
+                            rdb_error("Redis RDB replication database value is not valid UTF-8")
+                                .source(error)
+                        })?;
                         self.repl_stream_db_id = value.parse::<i64>().map_err(|error| {
                             DtError::new(ErrorCode::StatementFailed)
                                 .stage(Stage::Extractor)

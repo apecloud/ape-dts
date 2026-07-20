@@ -1,7 +1,11 @@
 use std::{collections::HashMap, str::FromStr};
 
 use anyhow::Context;
-use dt_common::{error::Error, meta::col_value::ColValue, utils::serialize_util::SerializeUtil};
+use dt_common::{
+    error::{DtError, ErrorCode, Stage},
+    meta::col_value::ColValue,
+    utils::serialize_util::SerializeUtil,
+};
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -176,11 +180,17 @@ impl StructCheckLog {
 }
 
 impl FromStr for CheckLog {
-    type Err = Error;
+    type Err = DtError;
     fn from_str(str: &str) -> Result<Self, Self::Err> {
         serde_json::from_str(str)
             .with_context(|| format!("invalid check log: [{}]", str))
-            .map_err(|e| Error::Unexpected(e.to_string()))
+            .map_err(|error| {
+                DtError::new(ErrorCode::StatementFailed)
+                    .detail(error.to_string())
+                    .stage(Stage::Checker)
+                    .operation("parse_check_log")
+                    .source(error)
+            })
     }
 }
 

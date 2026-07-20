@@ -1,8 +1,8 @@
 use std::io::Cursor;
 
+use crate::error::extractor::redis_rdb as rdb_error;
 use anyhow::bail;
 use byteorder::{LittleEndian, ReadBytesExt};
-use dt_common::error::Error;
 use dt_common::meta::redis::redis_object::RedisString;
 
 use crate::extractor::redis::StreamReader;
@@ -52,9 +52,7 @@ impl RdbReader<'_> {
 
         let last_byte = reader.read_u8()?;
         if last_byte != 0xFF {
-            bail! {Error::RedisRdbError(
-                "read_listpack: last byte is not 0xFF".into(),
-            )};
+            bail! {rdb_error("read_listpack: last byte is not 0xFF")};
         }
         Ok(elements)
     }
@@ -137,7 +135,7 @@ impl RdbReader<'_> {
             // uval = 12345678900000000 + uint64(fireByte)
             // negstart = math.MaxUint64
             // negmax = 0
-            bail! {Error::RedisRdbError(format!(
+            bail! {rdb_error(format!(
                 "unknown encoding: {}",
                 first_byte
             ))}

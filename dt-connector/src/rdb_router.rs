@@ -14,6 +14,8 @@ use std::collections::HashMap;
 use dt_common::meta::{col_value::ColValue, row_data::RowData};
 use serde::{Deserialize, Serialize};
 
+use crate::error::router::invalid_config as invalid_router_config;
+
 type SchemaMap = HashMap<String, String>;
 type TbMap = HashMap<(String, String), (String, String)>;
 type TbColMap = HashMap<(String, String), HashMap<String, String>>;
@@ -225,8 +227,12 @@ impl RdbRouterInner {
             for (src_col, dst_col) in col_map.iter() {
                 reverse_col_map.insert(dst_col.into(), src_col.into());
             }
-            let dst_tb = self.tb_map.get(src_schema_tb).unwrap();
-            reverse_tb_col_map.insert(dst_tb.clone(), reverse_col_map);
+            let dst_tb = self
+                .tb_map
+                .get(src_schema_tb)
+                .cloned()
+                .unwrap_or_else(|| src_schema_tb.clone());
+            reverse_tb_col_map.insert(dst_tb, reverse_col_map);
         }
 
         for (src_tb, dst_tb) in self.tb_map.iter() {
@@ -252,11 +258,9 @@ impl RdbRouterInner {
         row_data.tb = dst_tb.to_string();
 
         // col map
-        let col_map = self.get_col_map(&schema, &tb);
-        if col_map.is_none() {
+        let Some(col_map) = self.get_col_map(&schema, &tb) else {
             return row_data;
-        }
-        let col_map = col_map.unwrap();
+        };
 
         let route_col_values =
             |col_values: HashMap<String, ColValue>| -> HashMap<String, ColValue> {
@@ -440,7 +444,9 @@ impl RdbRouterInner {
         }
         // col_map=json:[{"db":"test_db","tb":"tb_1","col_map":{"f_0":"dst_f_0","f_1":"dst_f_1"}}]
         let config: Vec<TbColMapType> =
-            serde_json::from_str(config_str.trim_start_matches(JSON_PREFIX))?;
+            serde_json::from_str(config_str.trim_start_matches(JSON_PREFIX)).map_err(|error| {
+                invalid_router_config("config [router].col_map is invalid JSON").source(error)
+            })?;
         for i in config {
             results.insert((i.db, i.tb), i.col_map);
         }
@@ -481,7 +487,9 @@ impl RdbTopicRouterInner {
             return topic;
         }
         // should always has a default topic map
-        self.topic_map.get(&("*".into(), "*".into())).unwrap()
+        self.topic_map
+            .get(&("*".into(), "*".into()))
+            .map_or("", String::as_str)
     }
 
     fn parse_topic_map(

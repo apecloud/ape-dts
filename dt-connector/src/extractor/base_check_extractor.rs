@@ -23,7 +23,7 @@ impl BaseCheckExtractor {
             self.batch_size
         );
 
-        let mut log_reader = LogReader::new(&self.check_log_dir);
+        let mut log_reader = LogReader::new(&self.check_log_dir)?;
         let mut batch = Vec::new();
 
         while let Some(log) = log_reader.nextval()? {
