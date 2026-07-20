@@ -409,10 +409,10 @@ impl RdbTestRunner {
             }
             let src_ddl_sql = src_fetcher
                 .fetch_table(&src_db_tbs[i].0, &src_db_tbs[i].1)
-                .await;
+                .await?;
             let meta_center_ddl_sql = meta_center_fetcher
                 .fetch_table(&dst_db_tbs[i].0, &dst_db_tbs[i].1)
-                .await;
+                .await?;
             assert_eq!(src_ddl_sql, meta_center_ddl_sql);
         }
         Ok(())
