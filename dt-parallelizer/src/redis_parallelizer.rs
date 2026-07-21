@@ -3,15 +3,18 @@ use std::{collections::HashMap, sync::Arc};
 use anyhow::bail;
 use async_trait::async_trait;
 
-use super::base_parallelizer::BaseParallelizer;
-use crate::{DataSize, Parallelizer};
-use dt_common::log_warn;
-use dt_common::meta::{
-    dt_data::{DtData, DtItem},
-    dt_queue::DtQueue,
-    redis::command::key_parser::KeyParser,
+use dt_common::{
+    log_warn,
+    meta::{
+        dt_data::{DtData, DtItem},
+        dt_queue::DtQueue,
+        redis::command::key_parser::KeyParser,
+    },
 };
 use dt_connector::Sinker;
+
+use super::base_parallelizer::BaseParallelizer;
+use crate::{DataSize, Parallelizer};
 
 pub struct RedisParallelizer {
     pub base_parallelizer: BaseParallelizer,
@@ -113,6 +116,10 @@ impl Parallelizer for RedisParallelizer {
                 .push(dt_item);
         }
 
+        let workers_used = node_data_items
+            .iter()
+            .filter(|node_data| !node_data.is_empty())
+            .count();
         let mut futures = Vec::new();
         for sinker in sinkers.iter().take(node_data_items.len()) {
             let node_data = node_data_items.remove(0);
@@ -127,6 +134,9 @@ impl Parallelizer for RedisParallelizer {
                 crate::error_boundary::worker(error, "join_redis_sink_worker")
             })??;
         }
+        self.base_parallelizer
+            .record_workers_per_drain(workers_used)
+            .await;
 
         Ok(data_size)
     }

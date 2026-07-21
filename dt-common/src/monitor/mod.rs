@@ -9,6 +9,7 @@ pub mod task_monitor_handle;
 
 #[allow(clippy::module_inception)]
 pub mod monitor;
+pub mod sinker_worker_metrics;
 pub mod time_window_counter;
 
 #[cfg(feature = "metrics")]

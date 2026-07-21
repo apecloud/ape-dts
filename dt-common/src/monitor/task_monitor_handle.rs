@@ -6,6 +6,7 @@ use crate::{
     monitor::{
         counter_type::CounterType,
         monitor::Monitor,
+        sinker_worker_metrics::SinkerWorkerMetrics,
         task_metrics::TaskMetricsType,
         task_monitor::{MonitorType, TaskMonitor},
     },
@@ -68,6 +69,13 @@ impl TaskMonitorHandle {
         self.task_monitor
             .as_ref()
             .and_then(|task_monitor| task_monitor.get_task_type().copied())
+    }
+
+    pub fn sinker_worker_metrics(&self) -> Arc<SinkerWorkerMetrics> {
+        self.task_monitor
+            .as_ref()
+            .map(|task_monitor| task_monitor.sinker_worker_metrics())
+            .unwrap_or_default()
     }
 
     pub fn is_snapshot_task(&self) -> bool {

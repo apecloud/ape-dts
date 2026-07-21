@@ -71,6 +71,11 @@ pub enum TaskMetricsType {
     SinkerBpsMin,
     SinkerBpsAvg,
 
+    SinkerWorkersConfigured,
+    SinkerWorkersBusy,
+    SinkerWorkersPerDrainMax,
+    SinkerWorkersPerDrainAvg,
+
     SinkerSinkedRecords,
     SinkerSinkedBytes,
 
