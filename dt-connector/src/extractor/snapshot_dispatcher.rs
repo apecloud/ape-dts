@@ -3,10 +3,12 @@ use std::{collections::VecDeque, future::Future, sync::Arc};
 use tokio::task::JoinSet;
 
 use dt_common::{
-    error::{DtError, ErrorCode, Stage},
+    error::{DtError, DtErrorContextExt, ErrorCode, Stage},
     monitor::task_monitor_handle::TaskMonitorHandle,
     runtime_trace,
 };
+
+use crate::error_boundary::extractor_error::worker;
 
 use super::{
     base_extractor::ExtractState,
@@ -56,10 +58,11 @@ impl SnapshotDispatcher {
         OnDoneFut: Future<Output = anyhow::Result<State>>,
     {
         if parallel_size < 1 {
-            return Err(DtError::new(ErrorCode::InvalidConfig)
-                .stage(Stage::Extractor)
-                .operation("validate_snapshot_parallel_size")
-                .into());
+            return Err(DtError::ConfigError(
+                "snapshot parallel size must be greater than zero".to_string(),
+            )
+            .with_code(ErrorCode::InvalidConfig)
+            .with_stage(Stage::Extractor));
         }
         let run = Arc::new(run);
         let mut join_set = JoinSet::new();
@@ -77,12 +80,7 @@ impl SnapshotDispatcher {
         }
 
         while let Some(result) = join_set.join_next().await {
-            let result = result.map_err(|error| {
-                DtError::new(ErrorCode::WorkerFailed)
-                    .stage(Stage::Extractor)
-                    .operation("join_snapshot_worker")
-                    .source(error)
-            })??;
+            let result = result.map_err(worker)??;
             state = on_done(state, result).await?;
 
             while join_set.len() < parallel_size {

@@ -13,7 +13,7 @@ use crate::{
 };
 
 use super::traits::Prechecker;
-use crate::error_boundary::failure as precheck_failure;
+use crate::error_boundary::precheck_failure;
 use dt_common::error::ErrorCode;
 
 const MYSQL_SUPPORT_DB_VERSION_REGEX: &str = r"5\..*|8\..*";
@@ -50,7 +50,6 @@ impl Prechecker for MySqlPrechecker {
                         ErrorCode::UnsupportedDatabaseVersion,
                         "MySQL returned no version information",
                         self.is_source,
-                        "check_mysql_version",
                     ));
                 } else {
                     let re = Regex::new(MYSQL_SUPPORT_DB_VERSION_REGEX)?;
@@ -59,7 +58,6 @@ impl Prechecker for MySqlPrechecker {
                             ErrorCode::UnsupportedDatabaseVersion,
                             format!("MySQL version {version} is not supported"),
                             self.is_source,
-                            "check_mysql_version",
                         ));
                     }
                 }
@@ -145,7 +143,6 @@ impl Prechecker for MySqlPrechecker {
                 ErrorCode::CdcNotEnabled,
                 errs.join(";"),
                 self.is_source,
-                "check_mysql_cdc_configuration",
             ))
         }
 
@@ -184,7 +181,6 @@ impl Prechecker for MySqlPrechecker {
                     ErrorCode::ObjectNotFound,
                     "structure existence precheck does not support pattern filters",
                     self.is_source,
-                    "check_mysql_structure_existence",
                 )),
             ));
         }
@@ -262,7 +258,6 @@ impl Prechecker for MySqlPrechecker {
                 ErrorCode::ObjectNotFound,
                 err_msgs.join("."),
                 self.is_source,
-                "check_mysql_structure_existence",
             ))
         }
 
@@ -301,7 +296,6 @@ impl Prechecker for MySqlPrechecker {
                     ErrorCode::UnsupportedTableStructure,
                     "table structure precheck does not support pattern filters",
                     self.is_source,
-                    "check_mysql_table_structures",
                 )),
             ));
         }
@@ -409,7 +403,6 @@ impl Prechecker for MySqlPrechecker {
                 ErrorCode::UnsupportedTableStructure,
                 err_msgs.join(";"),
                 self.is_source,
-                "check_mysql_table_structures",
             ))
         }
         if !warn_msgs.is_empty() {
@@ -417,7 +410,6 @@ impl Prechecker for MySqlPrechecker {
                 ErrorCode::UnsupportedTableStructure,
                 warn_msgs.join(";"),
                 self.is_source,
-                "check_mysql_table_structures",
             ))
         }
 

@@ -4,7 +4,8 @@ use apache_avro::{from_avro_datum, to_avro_datum, types::Value, Schema};
 
 use crate::{
     config::config_enums::DbType,
-    error::{DtError, ErrorCode},
+    error::ErrorCode,
+    error_boundary::metadata::avro_source,
     meta::{
         col_value::ColValue,
         ddl_meta::{ddl_data::DdlData, ddl_type::DdlType},
@@ -140,10 +141,11 @@ impl AvroConverter {
                 });
             }
             let value = apache_avro::to_value(fields).map_err(|error| {
-                DtError::new(ErrorCode::StatementFailed)
-                    .detail("failed to encode Avro field definitions")
-                    .operation("encode_avro_field_definitions")
-                    .source(error)
+                avro_source(
+                    error,
+                    ErrorCode::StatementFailed,
+                    "failed to encode Avro field definitions",
+                )
             })?;
             Value::Union(1, Box::new(value))
         };
@@ -248,11 +250,11 @@ impl AvroConverter {
     fn avro_to_fields(&self, value: Option<Value>) -> anyhow::Result<Vec<AvroFieldDef>> {
         if let Some(v) = value {
             return apache_avro::from_value(&v).map_err(|error| {
-                DtError::new(ErrorCode::StatementFailed)
-                    .detail("failed to decode Avro field definitions")
-                    .operation("decode_avro_field_definitions")
-                    .source(error)
-                    .into()
+                avro_source(
+                    error,
+                    ErrorCode::StatementFailed,
+                    "failed to decode Avro field definitions",
+                )
             });
         }
         Ok(vec![])

@@ -11,7 +11,7 @@ use super::{
 };
 use crate::{
     config::config_enums::DbType,
-    error_boundary::metadata::row_conversion as row_conversion_error,
+    error_boundary::metadata::row_conversion_error,
     meta::adaptor::{
         mysql_col_value_convertor::MysqlColValueConvertor,
         pg_col_value_convertor::PgColValueConvertor,
@@ -139,13 +139,7 @@ impl RowData {
             let col_val =
                 MysqlColValueConvertor::from_query_mysql_compatible(row, col, col_type, db_type)
                     .map_err(|error| {
-                        row_conversion_error(
-                            error,
-                            &tb_meta.basic.schema,
-                            &tb_meta.basic.tb,
-                            col,
-                            "convert_mysql_row",
-                        )
+                        row_conversion_error(error, &tb_meta.basic.schema, &tb_meta.basic.tb, col)
                     })?;
             after.insert(col.to_string(), col_val);
         }
@@ -166,13 +160,7 @@ impl RowData {
 
             let col_value =
                 PgColValueConvertor::from_query(row, col, col_type).map_err(|error| {
-                    row_conversion_error(
-                        error,
-                        &tb_meta.basic.schema,
-                        &tb_meta.basic.tb,
-                        col,
-                        "convert_postgres_row",
-                    )
+                    row_conversion_error(error, &tb_meta.basic.schema, &tb_meta.basic.tb, col)
                 })?;
             after.insert(col.to_string(), col_value);
         }

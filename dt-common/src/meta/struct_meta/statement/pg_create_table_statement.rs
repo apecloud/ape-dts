@@ -1,7 +1,7 @@
 use anyhow::bail;
 
 use crate::config::config_enums::DbType;
-use crate::error::{DtError, ErrorCode};
+use crate::error::{DtError, DtErrorContextExt, ErrorCode};
 use crate::meta::ddl_meta::ddl_parser::DdlParser;
 use crate::meta::ddl_meta::ddl_statement::DdlStatement;
 use crate::meta::struct_meta::structure::column::ColumnDefault;
@@ -189,10 +189,10 @@ impl PgCreateTableStatement {
             }
             Ok(ddl_data.to_sql())
         } else {
-            bail! {DtError::new(ErrorCode::UnsupportedTableStructure).detail(format!(
+            bail! {DtError::StructError(format!(
                 "failed to parse index, schema: {}, tb: {}, definition: {}",
                 &index.schema_name, &index.table_name, index.definition
-            ))}
+            )).with_code(ErrorCode::UnsupportedTableStructure)}
         }
     }
 

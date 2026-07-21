@@ -4,7 +4,7 @@ use anyhow::bail;
 use async_trait::async_trait;
 use dt_common::{
     config::{config_enums::DbType, filter_config::FilterConfig},
-    error::{DtError, ErrorCode, Stage},
+    error::{DtError, DtErrorContextExt, ErrorCode, Stage},
 };
 
 use crate::{
@@ -17,7 +17,7 @@ use crate::{
 };
 
 use super::{basic::BasicPrechecker, traits::Prechecker};
-use crate::error_boundary::failure as precheck_failure;
+use crate::error_boundary::precheck_failure;
 
 const PG_SUPPORT_DB_VERSION_NUM_MIN: i32 = 120000;
 
@@ -58,7 +58,6 @@ impl Prechecker for PostgresqlPrechecker {
                         ErrorCode::UnsupportedDatabaseVersion,
                         "PostgreSQL returned no version information",
                         self.is_source,
-                        "check_postgres_version",
                     ));
                 } else {
                     match version.parse::<i32>() {
@@ -67,7 +66,6 @@ impl Prechecker for PostgresqlPrechecker {
                                 ErrorCode::UnsupportedDatabaseVersion,
                                 format!("PostgreSQL version {version_i32} is not supported"),
                                 self.is_source,
-                                "check_postgres_version",
                             ));
                         }
                         Ok(_) => {}
@@ -162,7 +160,6 @@ impl Prechecker for PostgresqlPrechecker {
                 ErrorCode::CdcNotEnabled,
                 err_msgs.join(";"),
                 self.is_source,
-                "check_postgres_cdc_configuration",
             ));
         }
 
@@ -173,13 +170,14 @@ impl Prechecker for PostgresqlPrechecker {
                 Ok(slots) => {
                     if max_replication_slots_i32 == (slots.len() as i32) {
                         check_error = Some(
-                            DtError::new(ErrorCode::ReplicationCapacityExhausted)
-                                .message("All PostgreSQL replication slots are in use")
-                                .detail(format!(
-                                    "configured replication slots: {max_replication_slots_i32}"
-                                ))
-                                .stage(Stage::Precheck)
-                                .into(),
+                            DtError::Unexpected(
+                                "All PostgreSQL replication slots are in use".to_string(),
+                            )
+                            .with_code(ErrorCode::ReplicationCapacityExhausted)
+                            .with_detail(format!(
+                                "configured replication slots: {max_replication_slots_i32}"
+                            ))
+                            .with_stage(Stage::Precheck),
                         );
                     }
                 }
@@ -221,7 +219,6 @@ impl Prechecker for PostgresqlPrechecker {
                     ErrorCode::ObjectNotFound,
                     "structure existence precheck does not support pattern filters",
                     self.is_source,
-                    "check_postgres_structure_existence",
                 )),
             ));
         }
@@ -299,7 +296,6 @@ impl Prechecker for PostgresqlPrechecker {
                 ErrorCode::ObjectNotFound,
                 err_msgs.join("."),
                 self.is_source,
-                "check_postgres_structure_existence",
             ))
         }
 
@@ -339,7 +335,6 @@ impl Prechecker for PostgresqlPrechecker {
                     ErrorCode::UnsupportedTableStructure,
                     "table structure precheck does not support pattern filters",
                     self.is_source,
-                    "check_postgres_table_structures",
                 )),
             ));
         }
@@ -358,7 +353,6 @@ impl Prechecker for PostgresqlPrechecker {
                 ErrorCode::InvariantViolated,
                 "missing PostgreSQL primary constraint code",
                 self.is_source,
-                "check_postgres_table_structures",
             )
         })?;
         let unique = ConstraintTypeEnum::Unique.to_str().ok_or_else(|| {
@@ -366,7 +360,6 @@ impl Prechecker for PostgresqlPrechecker {
                 ErrorCode::InvariantViolated,
                 "missing PostgreSQL unique constraint code",
                 self.is_source,
-                "check_postgres_table_structures",
             )
         })?;
         let foreign = ConstraintTypeEnum::Foreign.to_str().ok_or_else(|| {
@@ -374,7 +367,6 @@ impl Prechecker for PostgresqlPrechecker {
                 ErrorCode::InvariantViolated,
                 "missing PostgreSQL foreign constraint code",
                 self.is_source,
-                "check_postgres_table_structures",
             )
         })?;
         let mut all_schemas = Vec::new();
@@ -450,7 +442,6 @@ impl Prechecker for PostgresqlPrechecker {
                 ErrorCode::UnsupportedTableStructure,
                 err_msgs.join(";"),
                 self.is_source,
-                "check_postgres_table_structures",
             ))
         }
         if !warn_msgs.is_empty() {
@@ -458,7 +449,6 @@ impl Prechecker for PostgresqlPrechecker {
                 ErrorCode::UnsupportedTableStructure,
                 warn_msgs.join(";"),
                 self.is_source,
-                "check_postgres_table_structures",
             ))
         }
 

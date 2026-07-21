@@ -11,7 +11,7 @@ use futures::{Stream, TryStreamExt};
 use sqlx::{postgres::PgRow, query, Pool, Postgres, Row};
 
 use crate::{
-    error_boundary::postgres::provider as postgres_precheck_error,
+    error_boundary::postgres::postgres_precheck_error,
     fetcher::traits::Fetcher,
     meta::database_mode::{Constraint, Database, Schema, Table},
 };
@@ -218,16 +218,16 @@ impl PgFetcher {
             None => bail! {postgres_precheck_error(
                 sqlx::Error::PoolClosed,
                 endpoint,
-                "run_postgres_precheck_query",
             )},
         };
 
         sql_msg = if sql_msg.is_empty() { "sql" } else { sql_msg };
         println!("{}: {}", sql_msg, sql);
 
-        query(&sql).fetch_all(pg_pool).await.map_err(|error| {
-            postgres_precheck_error(error, endpoint, "run_postgres_precheck_query").into()
-        })
+        query(&sql)
+            .fetch_all(pg_pool)
+            .await
+            .map_err(|error| postgres_precheck_error(error, endpoint))
     }
 
     fn fetch_row<'a>(
@@ -244,15 +244,13 @@ impl PgFetcher {
             Some(pool) => {
                 sql_msg = if sql_msg.is_empty() { "sql" } else { sql_msg };
                 println!("{}: {}", sql_msg, sql);
-                Ok(query(sql).fetch(pool).map_err(move |error| {
-                    postgres_precheck_error(error, endpoint, "stream_postgres_precheck_query")
-                        .into()
-                }))
+                Ok(query(sql)
+                    .fetch(pool)
+                    .map_err(move |error| postgres_precheck_error(error, endpoint)))
             }
             None => bail! {postgres_precheck_error(
                 sqlx::Error::PoolClosed,
                 endpoint,
-                "stream_postgres_precheck_query",
             )},
         }
     }

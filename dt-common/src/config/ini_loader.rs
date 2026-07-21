@@ -2,7 +2,10 @@ use std::{any::type_name, fs::File, io::Read, str::FromStr};
 
 use configparser::ini::Ini;
 
-use crate::error::{DtError, ErrorCode, Stage};
+use crate::{
+    error::{DtError, DtErrorContextExt, ErrorCode, Stage},
+    error_boundary::config::source,
+};
 
 #[derive(Debug)]
 pub struct IniLoader {
@@ -19,29 +22,32 @@ impl IniLoader {
                 } else {
                     ErrorCode::IoFailed
                 };
-                DtError::new(code)
-                    .message("failed to open config file")
-                    .detail(format!("path: {ini_file}"))
-                    .stage(Stage::Bootstrap)
-                    .source(error)
+                source(
+                    error,
+                    code,
+                    "failed to open config file",
+                    format!("path: {ini_file}"),
+                )
             })?
             .read_to_string(&mut config_str)
             .map_err(|error| {
-                DtError::new(ErrorCode::IoFailed)
-                    .message("failed to read config file")
-                    .detail(format!("path: {ini_file}"))
-                    .stage(Stage::Bootstrap)
-                    .source(error)
+                source(
+                    error,
+                    ErrorCode::IoFailed,
+                    "failed to read config file",
+                    format!("path: {ini_file}"),
+                )
             })?;
         let mut ini = Ini::new();
         // allow using comment symbols(; and #) in value
         // E.g. do_dbs=`a;`,`bcd`
         ini.set_inline_comment_symbols(Some(&Vec::new()));
         ini.read(config_str).map_err(|_| {
-            DtError::new(ErrorCode::InvalidConfig)
-                .message("failed to parse config file")
-                .detail(format!("path: {ini_file}"))
-                .stage(Stage::Bootstrap)
+            DtError::ConfigError(format!("failed to parse config file: {ini_file}"))
+                .with_code(ErrorCode::InvalidConfig)
+                .with_message("failed to parse config file")
+                .with_detail(format!("path: {ini_file}"))
+                .with_stage(Stage::Bootstrap)
         })?;
         Ok(Self { ini })
     }
@@ -55,13 +61,12 @@ impl IniLoader {
                 return Self::parse_value(section, key, &value);
             }
         }
-        Err(DtError::new(ErrorCode::MissingConfigItem)
-            .message("required config value is missing")
-            .detail(format!(
-                "config [{section}].{key} does not exist or is empty"
-            ))
-            .stage(Stage::Bootstrap)
-            .into())
+        Err(DtError::ConfigError(format!(
+            "config [{section}].{key} does not exist or is empty"
+        ))
+        .with_code(ErrorCode::MissingConfigItem)
+        .with_message("required config value is missing")
+        .with_stage(Stage::Bootstrap))
     }
 
     pub fn get_optional<T>(&self, section: &str, key: &str) -> anyhow::Result<T>
@@ -98,14 +103,13 @@ impl IniLoader {
             } else {
                 value
             };
-            DtError::new(ErrorCode::InvalidConfig)
-                .message("config value has an invalid type")
-                .detail(format!(
-                    "config [{section}].{key}={rendered_value} can not be parsed as {}",
-                    type_name::<T>()
-                ))
-                .stage(Stage::Bootstrap)
-                .into()
+            DtError::ConfigError(format!(
+                "config [{section}].{key}={rendered_value} can not be parsed as {}",
+                type_name::<T>()
+            ))
+            .with_code(ErrorCode::InvalidConfig)
+            .with_message("config value has an invalid type")
+            .with_stage(Stage::Bootstrap)
         })
     }
 

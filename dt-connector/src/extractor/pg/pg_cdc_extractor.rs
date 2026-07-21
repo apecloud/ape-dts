@@ -26,6 +26,7 @@ use tokio::{sync::Mutex, time::Duration, time::Instant};
 use tokio_postgres::replication::LogicalReplicationStream;
 
 use crate::{
+    error_boundary::extractor_error::provider_source,
     extractor::{
         base_extractor::{BaseExtractor, ExtractState},
         pg::pg_cdc_client::PgCdcClient,
@@ -38,7 +39,7 @@ use dt_common::{
         config_enums::DbType, config_token_parser::ConfigTokenParser,
         connection_auth_config::ConnectionAuthConfig,
     },
-    error::{DtError, EndpointRole, ErrorCode, ErrorObject, OriginError, Stage},
+    error::{DtError, DtErrorContextExt, EndpointRole, ErrorCode, ErrorObject, OriginError, Stage},
     log_error, log_info, log_warn,
     meta::{
         adaptor::pg_col_value_convertor::PgColValueConvertor,
@@ -237,22 +238,21 @@ impl PgCdcExtractor {
                 }
 
                 Some(Err(error)) => {
-                    return Err(DtError::new(ErrorCode::ConnectionFailed)
-                        .stage(Stage::Extractor)
-                        .operation("read_postgres_replication_stream")
-                        .endpoint(EndpointRole::Source)
-                        .origin(OriginError::new("postgres", None::<String>))
-                        .source(error)
-                        .into());
+                    return Err(provider_source(
+                        error,
+                        ErrorCode::ConnectionFailed,
+                        "postgres",
+                    ));
                 }
 
                 None => {
-                    return Err(DtError::new(ErrorCode::ConnectionFailed)
-                        .stage(Stage::Extractor)
-                        .operation("read_postgres_replication_stream")
-                        .endpoint(EndpointRole::Source)
-                        .origin(OriginError::new("postgres", None::<String>))
-                        .into());
+                    return Err(DtError::ExtractorError(
+                        "PostgreSQL replication stream ended unexpectedly".to_string(),
+                    )
+                    .with_code(ErrorCode::ConnectionFailed)
+                    .with_stage(Stage::Extractor)
+                    .with_endpoint(EndpointRole::Source)
+                    .with_origin(OriginError::new("postgres", None::<String>)));
                 }
             }
         }
@@ -274,12 +274,13 @@ impl PgCdcExtractor {
                 start_lsn.to_string()
             };
         let lsn: PgLsn = lsn_value.parse().map_err(|_| {
-            DtError::new(ErrorCode::CheckpointReadFailed)
-                .stage(Stage::Extractor)
-                .operation("parse_postgres_lsn")
-                .endpoint(EndpointRole::Source)
-                .origin(OriginError::new("postgres", None::<String>))
-                .detail("the saved PostgreSQL replication position is invalid")
+            DtError::ExtractorError(
+                "the saved PostgreSQL replication position is invalid".to_string(),
+            )
+            .with_code(ErrorCode::CheckpointReadFailed)
+            .with_stage(Stage::Extractor)
+            .with_endpoint(EndpointRole::Source)
+            .with_origin(OriginError::new("postgres", None::<String>))
         })?;
         log_info!("confirmed flush lsn: {}", lsn.to_string());
 
@@ -326,20 +327,19 @@ impl PgCdcExtractor {
                 .oid_to_type
                 .get(&column.type_id())
                 .ok_or_else(|| {
-                    DtError::new(ErrorCode::UnsupportedTableStructure)
-                        .detail(format!(
-                            "PostgreSQL type OID {} is not supported for column {col_name}",
-                            column.type_id()
-                        ))
-                        .stage(Stage::Extractor)
-                        .operation("decode_postgres_relation")
-                        .endpoint(EndpointRole::Source)
-                        .object(ErrorObject {
-                            schema: Some(schema.to_string()),
-                            table: Some(tb.to_string()),
-                            column: Some(col_name.to_string()),
-                            ..Default::default()
-                        })
+                    DtError::MetadataError(format!(
+                        "PostgreSQL type OID {} is not supported for column {col_name}",
+                        column.type_id()
+                    ))
+                    .with_code(ErrorCode::UnsupportedTableStructure)
+                    .with_stage(Stage::Extractor)
+                    .with_endpoint(EndpointRole::Source)
+                    .with_object(ErrorObject {
+                        schema: Some(schema.to_string()),
+                        table: Some(tb.to_string()),
+                        column: Some(col_name.to_string()),
+                        ..Default::default()
+                    })
                 })?;
             // update meta
             tb_meta
@@ -414,20 +414,21 @@ impl PgCdcExtractor {
             let mut col_values_tmp = HashMap::new();
             for col in basic.id_cols.iter() {
                 let value = col_values_after.get(col).cloned().ok_or_else(|| {
-                    DtError::new(ErrorCode::UnsupportedTableStructure)
-                        .message(
+                    let detail = format!(
+                        "PostgreSQL update does not contain key column {col}; check replica identity"
+                    );
+                    DtError::ExtractorError(detail.clone())
+                        .with_code(ErrorCode::UnsupportedTableStructure)
+                        .with_message(
                             "PostgreSQL update events do not contain the columns needed to identify rows",
                         )
-                        .detail(format!(
-                            "PostgreSQL update does not contain key column {col}; check replica identity"
-                        ))
-                        .hint(
+                        .with_detail(detail)
+                        .with_hint(
                             "Configure a primary key or REPLICA IDENTITY FULL for the source table, then restart the task.",
                         )
-                        .stage(Stage::Extractor)
-                        .operation("decode_postgres_update_key")
-                        .endpoint(EndpointRole::Source)
-                        .object(ErrorObject {
+                        .with_stage(Stage::Extractor)
+                        .with_endpoint(EndpointRole::Source)
+                        .with_object(ErrorObject {
                             schema: Some(basic.schema.clone()),
                             table: Some(basic.tb.clone()),
                             column: Some(col.to_string()),

@@ -42,11 +42,7 @@ impl Sinker for KafkaSinker {
             });
         }
         self.producer.send_all(&messages).map_err(|error| {
-            crate::error_boundary::sinker::kafka(
-                error,
-                ErrorCode::StatementFailed,
-                "sink_kafka_ddl",
-            )
+            crate::error_boundary::sinker_error::kafka(error, ErrorCode::StatementFailed)
         })?;
         Ok(())
     }
@@ -91,11 +87,7 @@ impl KafkaSinker {
         let start_time = Instant::now();
         let mut rts = LimitedQueue::new(1);
         self.producer.send_all(&messages).map_err(|error| {
-            crate::error_boundary::sinker::kafka(
-                error,
-                ErrorCode::StatementFailed,
-                "sink_kafka_dml",
-            )
+            crate::error_boundary::sinker_error::kafka(error, ErrorCode::StatementFailed)
         })?;
         rts.push((
             start_time.elapsed().as_millis() as u64,

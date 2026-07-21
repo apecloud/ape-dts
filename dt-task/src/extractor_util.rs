@@ -62,9 +62,7 @@ use dt_connector::{
 };
 
 use crate::{
-    error_boundary::extractor::{
-        invalid_config as invalid_extractor_config, missing_client as missing_extractor_client,
-    },
+    error_boundary::extractor::{invalid_config_source, missing_extractor_client},
     task_util::ConnClient,
 };
 
@@ -779,11 +777,7 @@ impl ExtractorUtil {
         }
         let config: Vec<PartitionColsType> =
             serde_json::from_str(config_str.trim_start_matches(JSON_PREFIX)).map_err(|error| {
-                invalid_extractor_config(
-                    "config [extractor].partition_cols is invalid JSON",
-                    "parse_snapshot_partition_columns",
-                )
-                .source(error)
+                invalid_config_source("config [extractor].partition_cols is invalid JSON", error)
             })?;
         for i in config {
             results.insert((i.db, i.tb), i.partition_col);

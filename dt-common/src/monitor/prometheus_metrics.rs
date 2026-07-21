@@ -7,7 +7,7 @@ use prometheus::{Gauge, Opts, Registry, TextEncoder};
 
 use crate::config::config_enums::{TaskKind, TaskType};
 use crate::config::metrics_config::MetricsConfig;
-use crate::error_boundary::config::metrics_initialization as metrics_initialization_error;
+use crate::error_boundary::config::metrics_initialization_error;
 use crate::monitor::task_metrics::TaskMetricsType;
 
 pub struct PrometheusMetrics {

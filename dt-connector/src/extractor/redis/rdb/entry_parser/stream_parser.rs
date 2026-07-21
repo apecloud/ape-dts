@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::error_boundary::extractor::redis_rdb as rdb_error;
+use crate::error_boundary::extractor_error::{rdb_error, redis_rdb_source};
 use anyhow::bail;
 use byteorder::{BigEndian, ByteOrder};
 use dt_common::meta::redis::redis_object::{RedisCmd, RedisString, StreamObject};
@@ -53,7 +53,7 @@ impl StreamParser {
             // master entry end by zero
             let last_entry =
                 String::try_from(Self::next(&mut inx, &elements)?.clone()).map_err(|error| {
-                    rdb_error("stream listpack marker is not valid UTF-8").source(error)
+                    redis_rdb_source("stream listpack marker is not valid UTF-8", error)
                 })?;
             if last_entry != "0" {
                 bail! {rdb_error(format!(
@@ -256,13 +256,11 @@ impl StreamParser {
             .ok_or_else(|| rdb_error("unexpected end of stream listpack"))?;
         *inx += 1;
         let value = String::try_from(ele.clone()).map_err(|error| {
-            rdb_error("stream listpack integer is not valid UTF-8").source(error)
+            redis_rdb_source("stream listpack integer is not valid UTF-8", error)
         })?;
-        value.parse::<i64>().map_err(|error| {
-            rdb_error("invalid integer in stream listpack")
-                .source(error)
-                .into()
-        })
+        value
+            .parse::<i64>()
+            .map_err(|error| redis_rdb_source("invalid integer in stream listpack", error))
     }
 
     fn next<'a>(inx: &mut usize, elements: &'a [RedisString]) -> anyhow::Result<&'a RedisString> {

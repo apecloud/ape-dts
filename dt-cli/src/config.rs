@@ -4,7 +4,7 @@ use anyhow::{bail, Result};
 use clap::ValueEnum;
 use url::Url;
 
-use crate::error_boundary::config as config_error;
+use crate::error_boundary::{config_error, config_source};
 
 const SERVER_ID_MIN: u64 = 10001;
 const SERVER_ID_MAX: u64 = 4_294_836_224;
@@ -49,7 +49,6 @@ impl DbType {
                 format!(
                     "Unsupported URL scheme [{scheme}]; expected mysql, pg, postgres, postgresql, mongo, mongodb, mongodb+srv, or redis"
                 ),
-                "parse_database_url_scheme"
             )),
         }
     }
@@ -90,38 +89,27 @@ pub fn infer_db_type(url: &str, explicit: Option<DbType>) -> Result<DbType> {
         .split_once("://")
         .map(|(scheme, _)| scheme)
         .ok_or_else(|| {
-            config_error(
-                format!("Invalid endpoint URL [{url}]; expected <scheme>://..."),
-                "infer_database_type",
-            )
+            config_error(format!(
+                "Invalid endpoint URL [{url}]; expected <scheme>://..."
+            ))
         })?;
     let inferred = DbType::from_scheme(scheme)?;
     if let Some(value) = explicit {
         if value != inferred {
-            bail!(config_error(
-                format!(
-                    "Explicit database type [{}] does not match URL scheme [{scheme}]",
-                    value.as_config_value()
-                ),
-                "infer_database_type"
-            ));
+            bail!(config_error(format!(
+                "Explicit database type [{}] does not match URL scheme [{scheme}]",
+                value.as_config_value()
+            ),));
         }
     } else if matches!(inferred, DbType::Pg) {
         let parsed = Url::parse(url).map_err(|error| {
-            config_error(
-                format!("Invalid endpoint URL [{url}]: {error}"),
-                "parse_database_url",
-            )
-            .source(error)
+            config_source(format!("Invalid endpoint URL [{url}]: {error}"), error)
         })?;
         if parsed.path().trim_matches('/').is_empty() {
-            bail!(config_error(
-                format!(
-                    "Database is required in inferred {} URL [{url}]",
-                    inferred.as_config_value()
-                ),
-                "validate_database_url"
-            ));
+            bail!(config_error(format!(
+                "Database is required in inferred {} URL [{url}]",
+                inferred.as_config_value()
+            ),));
         }
     }
     Ok(inferred)
@@ -245,16 +233,14 @@ pub fn build_task_config(
 
     for item in &create.set {
         let (path, value) = item.split_once('=').ok_or_else(|| {
-            config_error(
-                format!("--set must use section.key=value; received [{item}]"),
-                "parse_config_override",
-            )
+            config_error(format!(
+                "--set must use section.key=value; received [{item}]"
+            ))
         })?;
         let (section, key) = path.split_once('.').ok_or_else(|| {
-            config_error(
-                format!("--set must use section.key=value; received [{item}]"),
-                "parse_config_override",
-            )
+            config_error(format!(
+                "--set must use section.key=value; received [{item}]"
+            ))
         })?;
         ini.set(section, key, value);
     }
@@ -291,7 +277,6 @@ fn split_filter_patterns(patterns: &str, db_type: &DbType) -> Result<FilterPatte
                 format!(
                     "Invalid filter expression [{pattern}]; expected db or db.table and escaped identifiers containing '.' or ','"
                 ),
-                "parse_filter_expression"
             )),
         }
     }
@@ -340,16 +325,14 @@ fn split_unescaped(value: &str, delimiter: char, escape: Option<char>) -> Result
         }
     }
     if in_escape {
-        bail!(config_error(
-            format!("Unclosed identifier escape in filter expression [{value}]"),
-            "parse_filter_expression"
-        ));
+        bail!(config_error(format!(
+            "Unclosed identifier escape in filter expression [{value}]"
+        ),));
     }
     if in_regex {
-        bail!(config_error(
-            format!("Unclosed regex escape in filter expression [{value}]"),
-            "parse_filter_expression"
-        ));
+        bail!(config_error(format!(
+            "Unclosed regex escape in filter expression [{value}]"
+        ),));
     }
     push_filter_token(&mut tokens, &value[start..], value)?;
     Ok(tokens)
@@ -367,10 +350,9 @@ fn is_filter_token_start(value: &str, index: usize) -> bool {
 fn push_filter_token<'a>(tokens: &mut Vec<&'a str>, token: &'a str, value: &str) -> Result<()> {
     let token = token.trim();
     if token.is_empty() {
-        bail!(config_error(
-            format!("Empty filter expression in [{value}]"),
-            "parse_filter_expression"
-        ));
+        bail!(config_error(format!(
+            "Empty filter expression in [{value}]"
+        ),));
     }
     tokens.push(token);
     Ok(())

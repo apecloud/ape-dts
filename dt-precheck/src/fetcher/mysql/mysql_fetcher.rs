@@ -6,7 +6,7 @@ use async_trait::async_trait;
 use sqlx::{mysql::MySqlRow, query, MySql, Pool};
 
 use crate::{
-    error_boundary::mysql::provider as mysql_precheck_error,
+    error_boundary::mysql::mysql_precheck_error,
     fetcher::traits::Fetcher,
     meta::database_mode::{Constraint, Database, Schema, Table},
 };
@@ -230,22 +230,16 @@ impl MysqlFetcher {
         };
         let mysql_pool = match &self.pool {
             Some(pool) => pool,
-            None => {
-                return Err(mysql_precheck_error(
-                    sqlx::Error::PoolClosed,
-                    endpoint,
-                    "run_mysql_precheck_query",
-                )
-                .into())
-            }
+            None => return Err(mysql_precheck_error(sqlx::Error::PoolClosed, endpoint)),
         };
 
         sql_msg = if sql_msg.is_empty() { "sql" } else { sql_msg };
         println!("{}: {}", sql_msg, sql);
 
-        query(&sql).fetch_all(mysql_pool).await.map_err(|error| {
-            mysql_precheck_error(error, endpoint, "run_mysql_precheck_query").into()
-        })
+        query(&sql)
+            .fetch_all(mysql_pool)
+            .await
+            .map_err(|error| mysql_precheck_error(error, endpoint))
     }
 
     fn fetch_row<'a>(
@@ -262,14 +256,13 @@ impl MysqlFetcher {
             Some(pool) => {
                 sql_msg = if sql_msg.is_empty() { "sql" } else { sql_msg };
                 println!("{}: {}", sql_msg, sql);
-                Ok(query(sql).fetch(pool).map_err(move |error| {
-                    mysql_precheck_error(error, endpoint, "stream_mysql_precheck_query").into()
-                }))
+                Ok(query(sql)
+                    .fetch(pool)
+                    .map_err(move |error| mysql_precheck_error(error, endpoint)))
             }
             None => bail! {mysql_precheck_error(
                 sqlx::Error::PoolClosed,
                 endpoint,
-                "stream_mysql_precheck_query",
             )},
         }
     }

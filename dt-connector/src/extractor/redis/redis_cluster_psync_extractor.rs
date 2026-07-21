@@ -6,8 +6,8 @@ use tokio::{sync::Mutex, task::JoinSet};
 use url::Url;
 
 use crate::{
-    error_boundary::extractor::{
-        redis_invalid_config as invalid_config, redis_source as redis_source_error,
+    error_boundary::extractor_error::{
+        invalid_redis_config, redis_invalid_config_source, redis_source_error, worker,
     },
     extractor::{
         base_extractor::{BaseExtractor, ExtractState},
@@ -22,7 +22,7 @@ use crate::{
 };
 use dt_common::{
     config::{config_enums::ExtractType, connection_auth_config::ConnectionAuthConfig},
-    error::{DtError, ErrorCode, Stage},
+    error::ErrorCode,
     log_info, log_warn,
     meta::{position::Position, redis::cluster_node::ClusterNode, syncer::Syncer},
     rdb_filter::RdbFilter,
@@ -69,11 +69,7 @@ impl Extractor for RedisClusterPsyncExtractor {
                 }
                 Err(err) => {
                     self.base_extractor.shut_down.store(true, Ordering::Release);
-                    return Err(DtError::new(ErrorCode::WorkerFailed)
-                        .stage(Stage::Extractor)
-                        .operation("join_redis_psync_worker")
-                        .source(err)
-                        .into());
+                    return Err(worker(err));
                 }
             }
         }
@@ -96,7 +92,6 @@ impl RedisClusterPsyncExtractor {
             bail!(redis_source_error(
                 ErrorCode::PrerequisiteNotMet,
                 "source Redis cluster has no master nodes",
-                "list_redis_cluster_master_nodes",
             ));
         }
         Ok(nodes)
@@ -247,30 +242,19 @@ impl RedisClusterPsyncExtractor {
 
     fn node_url(base_url: &str, node: &ClusterNode) -> anyhow::Result<String> {
         let mut url = Url::parse(base_url).map_err(|error| {
-            invalid_config(
-                format!("invalid source Redis URL: {error}"),
-                "parse_redis_cluster_url",
-            )
-            .source(error)
+            redis_invalid_config_source(format!("invalid source Redis URL: {error}"), error)
         })?;
         url.set_host(Some(&node.host)).map_err(|_| {
-            invalid_config(
-                format!("invalid Redis cluster node host: {}", node.host),
-                "build_redis_cluster_node_url",
-            )
+            invalid_redis_config(format!("invalid Redis cluster node host: {}", node.host))
         })?;
         let port = node.port.parse().map_err(|error| {
-            invalid_config(
+            redis_invalid_config_source(
                 format!("invalid Redis cluster node port: {}", node.port),
-                "build_redis_cluster_node_url",
+                error,
             )
-            .source(error)
         })?;
         url.set_port(Some(port)).map_err(|_| {
-            invalid_config(
-                format!("invalid Redis cluster node port: {}", node.port),
-                "build_redis_cluster_node_url",
-            )
+            invalid_redis_config(format!("invalid Redis cluster node port: {}", node.port))
         })?;
         Ok(url.to_string())
     }

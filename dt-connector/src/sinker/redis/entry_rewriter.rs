@@ -7,7 +7,7 @@ use dt_common::meta::redis::{
     },
 };
 
-use crate::error_boundary::sinker::redis_destination as redis_destination_error;
+use crate::error_boundary::sinker_error::redis_destination_error;
 
 const CRC64_TABLE: [u64; 256] = [
     0x0000000000000000,
@@ -311,7 +311,6 @@ impl EntryRewriter {
         bail! {redis_destination_error(
             ErrorCode::StatementFailed,
             "Redis module rewrite is not implemented",
-            "rewrite_redis_module",
         )}
     }
 

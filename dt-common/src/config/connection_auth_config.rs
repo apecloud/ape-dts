@@ -4,7 +4,8 @@ use urlencoding::encode;
 
 use crate::{
     config::ini_loader::IniLoader,
-    error::{DtError, ErrorCode, Stage},
+    error::{DtError, DtErrorContextExt, ErrorCode, Stage},
+    error_boundary::config::source,
 };
 
 use super::ssl_config::SslConfig;
@@ -75,11 +76,12 @@ impl ConnectionAuthConfig {
 
     pub fn merge_url_with_auth(original_url: &str, connection_auth: &Self) -> Result<String> {
         let mut parsed_url = Url::parse(original_url).map_err(|error| {
-            DtError::new(ErrorCode::InvalidConfig)
-                .message("database connection URL is invalid")
-                .stage(Stage::Bootstrap)
-                .operation("parse_connection_url")
-                .source(error)
+            source(
+                error,
+                ErrorCode::InvalidConfig,
+                "database connection URL is invalid",
+                "the configured database connection URL could not be parsed",
+            )
         })?;
 
         match connection_auth {
@@ -93,10 +95,11 @@ impl ConnectionAuthConfig {
                     parsed_url
                         .set_username(encode(username).into_owned().as_str())
                         .map_err(|_| {
-                            DtError::new(ErrorCode::InvalidConfig)
-                                .message("database connection URL does not support a username")
-                                .stage(Stage::Bootstrap)
-                                .operation("apply_connection_auth")
+                            DtError::ConfigError(
+                                "database connection URL does not support a username".to_string(),
+                            )
+                            .with_code(ErrorCode::InvalidConfig)
+                            .with_stage(Stage::Bootstrap)
                         })?;
                 }
 
@@ -105,10 +108,12 @@ impl ConnectionAuthConfig {
                         parsed_url
                             .set_password(Some(encode(pwd).into_owned().as_str()))
                             .map_err(|_| {
-                                DtError::new(ErrorCode::InvalidConfig)
-                                    .message("database connection URL does not support a password")
-                                    .stage(Stage::Bootstrap)
-                                    .operation("apply_connection_auth")
+                                DtError::ConfigError(
+                                    "database connection URL does not support a password"
+                                        .to_string(),
+                                )
+                                .with_code(ErrorCode::InvalidConfig)
+                                .with_stage(Stage::Bootstrap)
                             })?;
                     }
                 }

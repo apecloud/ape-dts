@@ -1,24 +1,19 @@
 use rdkafka::error::{KafkaError as RdKafkaError, RDKafkaErrorCode};
 
 use super::{
-    super::{DtError, ErrorCode, OriginError},
+    super::{ErrorCode, OriginError},
     ProviderErrorClassification,
 };
 
-pub fn classify_rdkafka_error(
-    error: &RdKafkaError,
-    fallback: ErrorCode,
-) -> ProviderErrorClassification {
+pub fn classify_rdkafka_error(error: &RdKafkaError) -> ProviderErrorClassification {
     let provider_code = error.rdkafka_error_code();
     let code = match error {
         RdKafkaError::ClientConfig(..)
         | RdKafkaError::ClientCreation(_)
         | RdKafkaError::Nul(_)
         | RdKafkaError::SetPartitionOffset(_)
-        | RdKafkaError::Subscription(_) => ErrorCode::InvalidConfig,
-        _ => provider_code
-            .map(|code| classify_rdkafka_code(code, fallback))
-            .unwrap_or(fallback),
+        | RdKafkaError::Subscription(_) => Some(ErrorCode::InvalidConfig),
+        _ => provider_code.and_then(classify_rdkafka_code),
     };
     ProviderErrorClassification::new(
         code,
@@ -26,101 +21,81 @@ pub fn classify_rdkafka_error(
     )
 }
 
-#[track_caller]
-pub fn dt_error_from_rdkafka(error: RdKafkaError, fallback: ErrorCode) -> DtError {
-    let classification = classify_rdkafka_error(&error, fallback);
-    DtError::new(classification.code)
-        .origin(classification.origin)
-        .source(error)
-}
-
-pub fn classify_kafka_error(
-    error: &::kafka::Error,
-    fallback: ErrorCode,
-) -> ProviderErrorClassification {
-    let (code, provider_code) = classify_kafka_kind(error, fallback);
+pub fn classify_kafka_error(error: &::kafka::Error) -> ProviderErrorClassification {
+    let (code, provider_code) = classify_kafka_kind(error);
     ProviderErrorClassification::new(code, OriginError::new("kafka", provider_code))
 }
 
-#[track_caller]
-pub fn dt_error_from_kafka(error: ::kafka::Error, fallback: ErrorCode) -> DtError {
-    let classification = classify_kafka_error(&error, fallback);
-    DtError::new(classification.code)
-        .origin(classification.origin)
-        .source(error)
-}
-
-fn classify_rdkafka_code(code: RDKafkaErrorCode, fallback: ErrorCode) -> ErrorCode {
+fn classify_rdkafka_code(code: RDKafkaErrorCode) -> Option<ErrorCode> {
     match code {
         RDKafkaErrorCode::Authentication | RDKafkaErrorCode::SaslAuthenticationFailed => {
-            ErrorCode::AuthenticationFailed
+            Some(ErrorCode::AuthenticationFailed)
         }
         RDKafkaErrorCode::TopicAuthorizationFailed
         | RDKafkaErrorCode::GroupAuthorizationFailed
         | RDKafkaErrorCode::ClusterAuthorizationFailed
-        | RDKafkaErrorCode::TransactionalIdAuthorizationFailed => ErrorCode::PermissionDenied,
+        | RDKafkaErrorCode::TransactionalIdAuthorizationFailed => Some(ErrorCode::PermissionDenied),
         RDKafkaErrorCode::UnknownTopic
         | RDKafkaErrorCode::UnknownPartition
-        | RDKafkaErrorCode::UnknownTopicOrPartition => ErrorCode::ObjectNotFound,
+        | RDKafkaErrorCode::UnknownTopicOrPartition => Some(ErrorCode::ObjectNotFound),
         RDKafkaErrorCode::MessageTimedOut
         | RDKafkaErrorCode::OperationTimedOut
         | RDKafkaErrorCode::TimedOutQueue
-        | RDKafkaErrorCode::RequestTimedOut => ErrorCode::ConnectionTimeout,
+        | RDKafkaErrorCode::RequestTimedOut => Some(ErrorCode::ConnectionTimeout),
         RDKafkaErrorCode::BrokerDestroy
         | RDKafkaErrorCode::BrokerTransportFailure
         | RDKafkaErrorCode::Resolve
         | RDKafkaErrorCode::AllBrokersDown
         | RDKafkaErrorCode::BrokerNotAvailable
-        | RDKafkaErrorCode::NetworkException => ErrorCode::ConnectionFailed,
-        RDKafkaErrorCode::SSL => ErrorCode::TlsFailed,
+        | RDKafkaErrorCode::NetworkException => Some(ErrorCode::ConnectionFailed),
+        RDKafkaErrorCode::SSL => Some(ErrorCode::TlsFailed),
         RDKafkaErrorCode::InvalidArgument
         | RDKafkaErrorCode::InvalidTopic
         | RDKafkaErrorCode::InvalidGroupId
-        | RDKafkaErrorCode::InvalidConfig => ErrorCode::InvalidConfig,
-        _ => fallback,
+        | RDKafkaErrorCode::InvalidConfig => Some(ErrorCode::InvalidConfig),
+        _ => None,
     }
 }
 
-fn classify_kafka_kind(error: &::kafka::Error, fallback: ErrorCode) -> (ErrorCode, Option<String>) {
+fn classify_kafka_kind(error: &::kafka::Error) -> (Option<ErrorCode>, Option<String>) {
     match error {
         ::kafka::Error::Io(error) if is_timeout(error.kind()) => {
-            (ErrorCode::ConnectionTimeout, None)
+            (Some(ErrorCode::ConnectionTimeout), None)
         }
         ::kafka::Error::Io(_) | ::kafka::Error::NoHostReachable => {
-            (ErrorCode::ConnectionFailed, None)
+            (Some(ErrorCode::ConnectionFailed), None)
         }
         ::kafka::Error::NoTopicsAssigned
         | ::kafka::Error::InvalidDuration
         | ::kafka::Error::UnsetOffsetStorage
-        | ::kafka::Error::UnsetGroupId => (ErrorCode::InvalidConfig, None),
-        ::kafka::Error::Kafka(code) => (
-            classify_kafka_code(*code, fallback),
-            Some(format!("{code:?}")),
-        ),
+        | ::kafka::Error::UnsetGroupId => (Some(ErrorCode::InvalidConfig), None),
+        ::kafka::Error::Kafka(code) => (classify_kafka_code(*code), Some(format!("{code:?}"))),
         ::kafka::Error::TopicPartitionError { error_code, .. } => (
-            classify_kafka_code(*error_code, fallback),
+            classify_kafka_code(*error_code),
             Some(format!("{error_code:?}")),
         ),
-        ::kafka::Error::ArcSelf(error) => classify_kafka_kind(error, fallback),
-        _ => (fallback, None),
+        ::kafka::Error::ArcSelf(error) => classify_kafka_kind(error),
+        _ => (None, None),
     }
 }
 
-fn classify_kafka_code(code: ::kafka::error::KafkaCode, fallback: ErrorCode) -> ErrorCode {
+fn classify_kafka_code(code: ::kafka::error::KafkaCode) -> Option<ErrorCode> {
     use ::kafka::error::KafkaCode;
 
     match code {
         KafkaCode::TopicAuthorizationFailed
         | KafkaCode::GroupAuthorizationFailed
-        | KafkaCode::ClusterAuthorizationFailed => ErrorCode::PermissionDenied,
-        KafkaCode::UnknownTopicOrPartition => ErrorCode::ObjectNotFound,
-        KafkaCode::RequestTimedOut => ErrorCode::ConnectionTimeout,
-        KafkaCode::BrokerNotAvailable | KafkaCode::NetworkException => ErrorCode::ConnectionFailed,
+        | KafkaCode::ClusterAuthorizationFailed => Some(ErrorCode::PermissionDenied),
+        KafkaCode::UnknownTopicOrPartition => Some(ErrorCode::ObjectNotFound),
+        KafkaCode::RequestTimedOut => Some(ErrorCode::ConnectionTimeout),
+        KafkaCode::BrokerNotAvailable | KafkaCode::NetworkException => {
+            Some(ErrorCode::ConnectionFailed)
+        }
         KafkaCode::InvalidTopic
         | KafkaCode::InvalidGroupId
         | KafkaCode::InvalidSessionTimeout
-        | KafkaCode::InvalidRequiredAcks => ErrorCode::InvalidConfig,
-        _ => fallback,
+        | KafkaCode::InvalidRequiredAcks => Some(ErrorCode::InvalidConfig),
+        _ => None,
     }
 }
 
@@ -138,25 +113,16 @@ mod tests {
     #[test]
     fn classifies_rdkafka_provider_codes() {
         assert_eq!(
-            classify_rdkafka_code(
-                RDKafkaErrorCode::SaslAuthenticationFailed,
-                ErrorCode::StatementFailed,
-            ),
-            ErrorCode::AuthenticationFailed
+            classify_rdkafka_code(RDKafkaErrorCode::SaslAuthenticationFailed),
+            Some(ErrorCode::AuthenticationFailed)
         );
         assert_eq!(
-            classify_rdkafka_code(
-                RDKafkaErrorCode::TopicAuthorizationFailed,
-                ErrorCode::StatementFailed,
-            ),
-            ErrorCode::PermissionDenied
+            classify_rdkafka_code(RDKafkaErrorCode::TopicAuthorizationFailed),
+            Some(ErrorCode::PermissionDenied)
         );
         assert_eq!(
-            classify_rdkafka_code(
-                RDKafkaErrorCode::UnknownTopicOrPartition,
-                ErrorCode::StatementFailed,
-            ),
-            ErrorCode::ObjectNotFound
+            classify_rdkafka_code(RDKafkaErrorCode::UnknownTopicOrPartition),
+            Some(ErrorCode::ObjectNotFound)
         );
     }
 }

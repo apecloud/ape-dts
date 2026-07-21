@@ -1,24 +1,23 @@
 use redis::ErrorKind as RedisErrorKind;
 
 use super::{
-    super::{DtError, ErrorCode, OriginError},
+    super::{ErrorCode, OriginError},
     ProviderErrorClassification,
 };
 
-pub fn classify_redis_error(
-    error: &redis::RedisError,
-    fallback: ErrorCode,
-) -> ProviderErrorClassification {
+pub fn classify_redis_error(error: &redis::RedisError) -> ProviderErrorClassification {
     let provider_code = error.code().map(str::to_string);
     let code = if error.is_timeout() {
-        ErrorCode::ConnectionTimeout
+        Some(ErrorCode::ConnectionTimeout)
     } else {
         match (error.kind(), error.code()) {
             (RedisErrorKind::AuthenticationFailed, _) | (_, Some("NOAUTH" | "WRONGPASS")) => {
-                ErrorCode::AuthenticationFailed
+                Some(ErrorCode::AuthenticationFailed)
             }
-            (RedisErrorKind::ReadOnly, _) | (_, Some("NOPERM")) => ErrorCode::PermissionDenied,
-            (RedisErrorKind::InvalidClientConfig, _) => ErrorCode::InvalidConfig,
+            (RedisErrorKind::ReadOnly, _) | (_, Some("NOPERM")) => {
+                Some(ErrorCode::PermissionDenied)
+            }
+            (RedisErrorKind::InvalidClientConfig, _) => Some(ErrorCode::InvalidConfig),
             (
                 RedisErrorKind::IoError
                 | RedisErrorKind::ClusterDown
@@ -26,20 +25,12 @@ pub fn classify_redis_error(
                 | RedisErrorKind::ClusterConnectionNotFound
                 | RedisErrorKind::NoValidReplicasFoundBySentinel,
                 _,
-            ) => ErrorCode::ConnectionFailed,
-            _ => fallback,
+            ) => Some(ErrorCode::ConnectionFailed),
+            _ => None,
         }
     };
 
     ProviderErrorClassification::new(code, OriginError::new("redis", provider_code))
-}
-
-#[track_caller]
-pub fn dt_error_from_redis(error: redis::RedisError, fallback: ErrorCode) -> DtError {
-    let classification = classify_redis_error(&error, fallback);
-    DtError::new(classification.code)
-        .origin(classification.origin)
-        .source(error)
 }
 
 #[cfg(test)]
@@ -55,28 +46,28 @@ mod tests {
             "authentication failed",
         ));
         assert_eq!(
-            classify_redis_error(&auth, ErrorCode::StatementFailed).code,
-            ErrorCode::AuthenticationFailed
+            classify_redis_error(&auth).code,
+            Some(ErrorCode::AuthenticationFailed)
         );
 
         let invalid =
             redis::RedisError::from((RedisErrorKind::InvalidClientConfig, "invalid client config"));
         assert_eq!(
-            classify_redis_error(&invalid, ErrorCode::StatementFailed).code,
-            ErrorCode::InvalidConfig
+            classify_redis_error(&invalid).code,
+            Some(ErrorCode::InvalidConfig)
         );
 
         let timeout = redis::RedisError::from(io::Error::from(io::ErrorKind::TimedOut));
         assert_eq!(
-            classify_redis_error(&timeout, ErrorCode::StatementFailed).code,
-            ErrorCode::ConnectionTimeout
+            classify_redis_error(&timeout).code,
+            Some(ErrorCode::ConnectionTimeout)
         );
 
         let unavailable =
             redis::RedisError::from(io::Error::from(io::ErrorKind::ConnectionRefused));
         assert_eq!(
-            classify_redis_error(&unavailable, ErrorCode::StatementFailed).code,
-            ErrorCode::ConnectionFailed
+            classify_redis_error(&unavailable).code,
+            Some(ErrorCode::ConnectionFailed)
         );
     }
 }

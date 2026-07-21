@@ -1,125 +1,146 @@
-pub(crate) mod connection {
+use dt_common::error::{DtErrorContext, Stage};
+
+fn scoped(context: DtErrorContext, stage: Stage) -> DtErrorContext {
+    DtErrorContext::new().stage(stage).inherit(context)
+}
+
+pub(crate) mod connection_error {
     use dt_common::error::{
-        dt_error_from_mongodb, dt_error_from_sqlx, DtError, EndpointRole, ErrorCode, SqlxProvider,
-        Stage,
+        classify_mongodb_error, classify_sqlx_error, DtError, DtErrorContextExt, EndpointRole,
+        ErrorCode, SqlxProvider, Stage,
     };
-
-    #[track_caller]
-    pub(crate) fn sqlx(
-        error: sqlx::Error,
-        provider: SqlxProvider,
-        operation: &'static str,
-    ) -> DtError {
-        dt_error_from_sqlx(error, provider, ErrorCode::ConnectionFailed).operation(operation)
-    }
-
-    #[track_caller]
-    pub(crate) fn mongodb_config(error: mongodb::error::Error, operation: &'static str) -> DtError {
-        dt_error_from_mongodb(error, ErrorCode::InvalidConfig)
-            .stage(Stage::Bootstrap)
-            .operation(operation)
-    }
-
-    #[track_caller]
-    pub(crate) fn metadata(
-        error: sqlx::Error,
-        provider: SqlxProvider,
-        operation: &'static str,
-    ) -> DtError {
-        dt_error_from_sqlx(error, provider, ErrorCode::MetadataReadFailed)
-            .stage(Stage::Task)
-            .operation(operation)
-    }
-
-    #[track_caller]
-    pub(crate) fn missing(expected: &'static str, operation: &'static str) -> DtError {
-        DtError::new(ErrorCode::InvariantViolated)
-            .detail(format!("expected {expected} connection client is missing"))
-            .stage(Stage::Task)
-            .operation(operation)
-    }
-
-    #[track_caller]
-    pub(crate) fn invalid_config(detail: impl Into<String>) -> DtError {
-        DtError::new(ErrorCode::InvalidConfig)
-            .detail(detail)
-            .stage(Stage::Bootstrap)
-    }
-
-    pub(crate) fn attach_endpoint(
-        mut error: anyhow::Error,
-        endpoint: EndpointRole,
-    ) -> anyhow::Error {
-        if let Some(error) = error.downcast_mut::<DtError>() {
-            if error.endpoint.is_none() {
-                error.endpoint = Some(endpoint);
-            }
-        }
+    pub(crate) fn sqlx(error: sqlx::Error, provider: SqlxProvider) -> anyhow::Error {
+        let context = classify_sqlx_error(&error, provider).into_context();
         error
+            .with_code(ErrorCode::ConnectionFailed)
+            .with_context(context)
+    }
+    pub(crate) fn mongodb_config(error: mongodb::error::Error) -> anyhow::Error {
+        let context = classify_mongodb_error(&error).into_context();
+        error
+            .with_code(ErrorCode::InvalidConfig)
+            .with_context(context)
+            .with_stage(Stage::Bootstrap)
+    }
+    pub(crate) fn task_sqlx_metadata_error(
+        error: sqlx::Error,
+        provider: SqlxProvider,
+    ) -> anyhow::Error {
+        let context = classify_sqlx_error(&error, provider).into_context();
+        error
+            .with_code(ErrorCode::MetadataReadFailed)
+            .with_context(context)
+            .with_stage(Stage::Task)
+    }
+    pub(crate) fn missing_task_client(expected: &'static str) -> anyhow::Error {
+        DtError::Unexpected(format!("expected {expected} connection client is missing"))
+            .with_code(ErrorCode::InvariantViolated)
+            .with_stage(Stage::Task)
+    }
+    pub(crate) fn invalid_task_config(detail: impl Into<String>) -> anyhow::Error {
+        DtError::ConfigError(detail.into())
+            .with_code(ErrorCode::InvalidConfig)
+            .with_stage(Stage::Bootstrap)
+    }
+
+    pub(crate) fn attach_endpoint(error: anyhow::Error, endpoint: EndpointRole) -> anyhow::Error {
+        error.with_endpoint(endpoint)
     }
 }
 
 pub(crate) mod extractor {
-    use dt_common::error::{DtError, ErrorCode, Stage};
+    use std::error::Error as StdError;
 
-    #[track_caller]
-    pub(crate) fn missing_client() -> DtError {
-        DtError::new(ErrorCode::InvariantViolated)
-            .detail("the configured source connection client is missing")
-            .stage(Stage::Task)
-            .operation("build_extractor")
+    use dt_common::error::{DtError, DtErrorContext, DtErrorContextExt, ErrorCode, Stage};
+    pub(crate) fn missing_extractor_client() -> anyhow::Error {
+        DtError::ExtractorError("the configured source connection client is missing".to_string())
+            .with_code(ErrorCode::InvariantViolated)
+            .with_stage(Stage::Task)
     }
-
-    #[track_caller]
-    pub(crate) fn invalid_config(detail: impl Into<String>, operation: &'static str) -> DtError {
-        DtError::new(ErrorCode::InvalidConfig)
-            .detail(detail)
-            .stage(Stage::Bootstrap)
-            .operation(operation)
+    pub(crate) fn invalid_config_source<E>(detail: impl Into<String>, error: E) -> anyhow::Error
+    where
+        E: StdError + Send + Sync + 'static,
+    {
+        super::scoped(
+            DtErrorContext::new()
+                .code(ErrorCode::InvalidConfig)
+                .detail(detail),
+            Stage::Bootstrap,
+        )
+        .attach(error)
     }
 }
 
 pub(crate) mod sinker {
-    use dt_common::error::{BoxError, DtError, ErrorCode, Stage};
+    use std::error::Error as StdError;
 
-    #[track_caller]
-    pub(crate) fn missing_client() -> DtError {
-        DtError::new(ErrorCode::InvariantViolated)
-            .detail("the configured destination connection client is missing")
-            .stage(Stage::Task)
-            .operation("build_sinker")
+    use dt_common::error::{DtError, DtErrorContext, DtErrorContextExt, ErrorCode, Stage};
+    pub(crate) fn missing_sinker_client() -> anyhow::Error {
+        DtError::SinkerError("the configured destination connection client is missing".to_string())
+            .with_code(ErrorCode::InvariantViolated)
+            .with_stage(Stage::Task)
     }
-
-    #[track_caller]
-    pub(crate) fn invalid_http_endpoint(
-        detail: impl Into<String>,
-        operation: &'static str,
-    ) -> DtError {
-        DtError::new(ErrorCode::InvalidConfig)
-            .detail(detail)
-            .stage(Stage::Bootstrap)
-            .operation(operation)
+    pub(crate) fn invalid_http_endpoint(detail: impl Into<String>) -> anyhow::Error {
+        DtError::HttpError(detail.into())
+            .with_code(ErrorCode::InvalidConfig)
+            .with_stage(Stage::Bootstrap)
     }
-
-    #[track_caller]
-    pub(crate) fn invalid_http_endpoint_source(
-        error: impl Into<BoxError>,
-        operation: &'static str,
-    ) -> DtError {
-        DtError::new(ErrorCode::InvalidConfig)
-            .stage(Stage::Bootstrap)
-            .operation(operation)
-            .source(error)
+    pub(crate) fn invalid_http_endpoint_source<E>(error: E) -> anyhow::Error
+    where
+        E: StdError + Send + Sync + 'static,
+    {
+        super::scoped(
+            DtErrorContext::new().code(ErrorCode::InvalidConfig),
+            Stage::Bootstrap,
+        )
+        .attach(error)
+    }
+    pub(crate) fn invalid_http_client<E>(error: E) -> anyhow::Error
+    where
+        E: StdError + Send + Sync + 'static,
+    {
+        super::scoped(
+            DtErrorContext::new().code(ErrorCode::InvalidConfig),
+            Stage::Bootstrap,
+        )
+        .attach(error)
     }
 }
 
 pub(crate) mod runner {
-    use dt_common::error::{DtError, ErrorCode, Stage};
+    use std::error::Error as StdError;
 
-    #[track_caller]
-    pub(crate) fn invalid_config(detail: impl Into<String>) -> DtError {
-        DtError::new(ErrorCode::InvalidConfig)
-            .detail(detail)
-            .stage(Stage::Bootstrap)
+    use dt_common::error::{DtError, DtErrorContext, DtErrorContextExt, ErrorCode, Stage};
+    pub(crate) fn invalid_task_config(detail: impl Into<String>) -> anyhow::Error {
+        DtError::ConfigError(detail.into())
+            .with_code(ErrorCode::InvalidConfig)
+            .with_stage(Stage::Bootstrap)
+    }
+    pub(crate) fn task_worker_error(error: tokio::task::JoinError) -> anyhow::Error {
+        super::scoped(
+            DtErrorContext::new().code(ErrorCode::WorkerFailed),
+            Stage::Task,
+        )
+        .attach(error)
+    }
+    pub(crate) fn task_io_error<E>(error: E) -> anyhow::Error
+    where
+        E: StdError + Send + Sync + 'static,
+    {
+        super::scoped(
+            DtErrorContext::new().code(ErrorCode::IoFailed),
+            Stage::Bootstrap,
+        )
+        .attach(error)
+    }
+    pub(crate) fn invalid_task_config_source<E>(error: E) -> anyhow::Error
+    where
+        E: StdError + Send + Sync + 'static,
+    {
+        super::scoped(
+            DtErrorContext::new().code(ErrorCode::InvalidConfig),
+            Stage::Bootstrap,
+        )
+        .attach(error)
     }
 }

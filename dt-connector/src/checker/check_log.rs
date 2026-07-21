@@ -1,12 +1,10 @@
 use std::{collections::HashMap, str::FromStr};
 
 use anyhow::Context;
-use dt_common::{
-    error::{DtError, ErrorCode, Stage},
-    meta::col_value::ColValue,
-    utils::serialize_util::SerializeUtil,
-};
+use dt_common::{meta::col_value::ColValue, utils::serialize_util::SerializeUtil};
 use serde::{Deserialize, Serialize};
+
+use crate::error_boundary::checker::parse_source;
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct CheckLog {
@@ -180,16 +178,13 @@ impl StructCheckLog {
 }
 
 impl FromStr for CheckLog {
-    type Err = DtError;
+    type Err = anyhow::Error;
     fn from_str(str: &str) -> Result<Self, Self::Err> {
         serde_json::from_str(str)
             .with_context(|| format!("invalid check log: [{}]", str))
             .map_err(|error| {
-                DtError::new(ErrorCode::StatementFailed)
-                    .detail(error.to_string())
-                    .stage(Stage::Checker)
-                    .operation("parse_check_log")
-                    .source(error)
+                let detail = error.to_string();
+                parse_source(error, detail)
             })
     }
 }

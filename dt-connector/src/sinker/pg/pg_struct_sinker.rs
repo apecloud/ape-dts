@@ -1,8 +1,8 @@
+use anyhow::Context;
 use async_trait::async_trait;
 use sqlx::{Pool, Postgres};
 
 use crate::{
-    error_boundary::sinker as sinker_error,
     rdb_router::RdbRouter,
     sinker::{
         base_sinker::BaseSinker,
@@ -11,8 +11,8 @@ use crate::{
     Sinker,
 };
 use dt_common::{
-    config::config_enums::ConflictPolicyEnum, error::ErrorCode,
-    meta::struct_meta::struct_data::StructData, rdb_filter::RdbFilter,
+    config::config_enums::ConflictPolicyEnum, meta::struct_meta::struct_data::StructData,
+    rdb_filter::RdbFilter,
 };
 
 #[derive(Clone)]
@@ -35,9 +35,7 @@ impl Sinker for PgStructSinker {
             &self.base_sinker,
         )
         .await
-        .map_err(|error| {
-            sinker_error::postgres_from_anyhow(error, ErrorCode::StatementFailed, "sink_struct")
-        })
+        .context("sink_struct")
     }
 
     async fn close(&mut self) -> anyhow::Result<()> {

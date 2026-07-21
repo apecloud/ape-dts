@@ -177,10 +177,10 @@ impl MergeParallelizer {
         merge_type: MergeType,
     ) -> anyhow::Result<(DataSize, usize)> {
         if self.parallel_size == 0 {
-            return Err(crate::error_boundary::invalid_config("validate_parallel_size").into());
+            return Err(crate::error_boundary::invalid_config());
         }
         if sinkers.is_empty() {
-            return Err(crate::error_boundary::invariant("validate_sinkers").into());
+            return Err(crate::error_boundary::invariant());
         }
         let mut futures = Vec::new();
         let mut data_size = DataSize::default();
@@ -233,9 +233,7 @@ impl MergeParallelizer {
 
         let workers_used = futures.len().min(self.parallel_size);
         for future in futures {
-            future.await.map_err(|error| {
-                crate::error_boundary::worker(error, "join_merge_sink_worker")
-            })??;
+            future.await.map_err(crate::error_boundary::worker)??;
         }
         Ok((data_size, workers_used))
     }

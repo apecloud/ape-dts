@@ -10,13 +10,11 @@ Ape-DTS 任务运行时错误使用稳定的五位条件码。错误码用于说
 ERROR [MD001]: A required database object was not found
 TASK: sync-orders-01
 AFFECTED: destination postgres sales.orders
-PHASE: writing to the destination
 HINT: Check object routing and create the required object or enable structure initialization.
 ```
 
-`MD001` 是该错误唯一的身份标识。阶段和操作是相互独立的诊断字段。应用逻辑必须
-比较类型化的 `ErrorCode`，禁止解析错误消息，也禁止将错误码和阶段组合成新的标识。
-操作（operation）是自由文本诊断信息，不得用作策略判断依据。
+`MD001` 是该错误唯一的身份标识。阶段是独立的诊断元数据。应用逻辑必须比较类型化的
+`ErrorCode`，禁止解析错误消息，也禁止将错误码和阶段组合成新的标识。
 
 ## 兼容性规则
 
@@ -81,13 +79,12 @@ HINT: Check object routing and create the required object or enable structure in
 版本。CLI 文本格式不是稳定的机器接口。
 
 `ErrorReport` JSON 视图只包含面向用户的字段：稳定错误码、用户消息、详细信息、处理
-建议、任务 ID、端点角色、受影响对象和易于理解的阶段说明。文本视图先输出这些字段，
-然后输出诊断部分。
+建议、任务 ID、端点角色和受影响对象。文本视图先输出这些字段，然后输出诊断部分。
 
-内存中的报告还包含 `stage`、`operation`、`origin`、`contexts`、
-`diagnostic_message` 和记录错误创建位置的 `location`。`ErrorReport` 的文本输出始终在
-用户信息后输出这些诊断字段。API 使用方必须使用带版本的 JSON 视图，不得解析 CLI
-文本。
+内存中的报告还包含 `stage`、`origin`、脱敏后的 `error_chain`、`context_count`，以及
+可选的已捕获 `backtrace`。这些字段不会写入 JSON。
+`ErrorReport` 的文本输出始终在用户信息后输出全部可用诊断字段。API 使用方必须使用
+带版本的 JSON 视图，不得解析 CLI 文本。
 
 组件提供的 `message`、`detail` 和 `hint` 保持自由文本。报告边界使用 `rtb-redact`
 对凭据、带认证信息的 URL、authorization 值、provider token、JWT、长随机 token 和
@@ -97,52 +94,80 @@ CLI 错误默认包含诊断部分：
 
 ```text
 DIAGNOSTIC [MD001]
-LOCATION: dt-connector/src/sinker/pg/pg_sinker.rs:250:22
 STAGE: sinker
-OPERATION: sink_dml
 ENDPOINT: destination
 ORIGIN: postgres/42P01
+CONTEXT 1: starting task
+CAUSE 1: relation missing
+BACKTRACE:
+...
 ```
 
 诊断信息可能包含 SQL、行数据、对象名、provider 消息和 `anyhow::Context`。符合凭据
 特征的值和带认证信息的 URL 会被脱敏，但 stderr 和采集后的日志仍应作为敏感数据处理。
+进程不会自行开启 backtrace。`RUST_LIB_BACKTRACE=0` 会关闭错误 backtrace，设置为任意
+其他值时开启。该变量未设置时，按相同规则读取 `RUST_BACKTRACE`。当前错误报告始终使用
+简短格式输出已捕获的 backtrace。没有捕获到 backtrace 时，结构化诊断和错误链仍会
+完整输出，只省略 `BACKTRACE` 区块。
 
 ## 结构化错误
 
-`DtError` 可以记录条件码、消息、详细信息、处理建议、阶段、操作、任务 ID、端点角色、
-数据库对象、provider 原始错误和源错误。端点角色包括 `source`、`destination` 和
-`metadata`。数据库对象可以包含 schema、table、column 和 constraint 名称。
+`anyhow::Error` 是唯一的错误传输容器。`DtErrorContext` 是类型化 metadata frame，
+其中的错误码、消息、详细信息、处理建议、阶段、任务 ID、端点角色、数据库对象和
+provider origin 都是可选字段。它实现 `Display`，但刻意不实现
+`std::error::Error`。端点角色包括 `source`、`destination` 和 `metadata`。
 
-`DtError` 是 `dt-common::error` 中唯一的应用错误类型，不再保留旧错误枚举兼容层。
-应用代码主动产生的错误必须构造 `DtError`。provider 原始错误只允许短距离传播，随后
-必须由 provider adapter 或 `ErrorReport` 完成分类。
+错误链最内层始终是真正实现 `Error` 的 cause。Provider 失败直接保留原始 provider
+错误；应用主动产生的失败使用基于 `thiserror` 的 `DtError` 枚举。
 
-根错误码、阶段、操作和 provider 原始错误采用首次写入生效的语义。组件收到已有的
-结构化错误时必须保留根错误上下文。额外的传播信息通过诊断视图中的
-`anyhow::Context` 和源错误链记录。
+项目主动失败先创建根因，再通过 `DtErrorContextExt` 的 fluent 方法逐层挂载 metadata，
+例如 `DtError::ConfigError(detail).with_code(ErrorCode::InvalidConfig)`。同一 extension trait
+也为 `anyhow::Error` 和已支持的 provider 错误类型实现。未知的具体错误只允许在组件边界
+通过 `DtErrorContext::attach` 挂载。
 
-一个 `DtError` 始终只有一个主错误码。对于 precheck 等本身会报告多个独立结果的
-组件，应继续在自己的结果类型中聚合，不得把聚合能力加入公共错误契约。
+`DtError` variant 只描述项目自有的具体根因，不隐含也不分类 `ErrorCode`。同一个 variant
+可能对应多个错误码，因此失败点必须显式挂载业务错误码；禁止增加根据 variant 猜测
+错误码的 `DtError` classifier。
+
+Metadata 在错误跨越所有权边界时逐层挂载。叶子 frame 可以提供错误码、detail、对象和
+origin；组件 frame 提供 stage 和 endpoint；任务入口通过
+`DtErrorContextExt::with_task_id` 提供 task ID。Frame 挂载后不再修改。
+`ErrorReport` 从最外层 frame 开始递归读取 metadata 父链；每个字段使用第一个非空的
+外层值，外层为空时才继承内层值。
+如果所有 frame 都没有提供 detail，报告构建时才使用项目自有 `DtError` 的 payload
+作为 detail；provider 消息仍只作为诊断 cause 输出。
+
+组件边界先借用原始 provider 错误完成分类，再通过 `DtErrorContext::attach` 挂载。
+得到的 `anyhow::Error` 既能 downcast 到 `DtErrorContext`，也能 downcast 到原始
+provider 错误类型。provider 错误一旦擦除为 `anyhow::Error` 就不得再次分类；分类必须
+发生在仍持有具体 provider 类型的第一个边界。
 
 `ErrorReport` 是面向用户的边界表示。其文本格式使用 `ERROR`、`TASK`、`AFFECTED`、
-`PHASE`、`DETAIL`、`HINT` 和 `DIAGNOSTIC` 等行。
+`DETAIL`、`HINT` 和 `DIAGNOSTIC` 等行。
 
-Provider 分类器和适配器统一位于 `dt-common::error::provider`。分类器根据 provider
-原始错误码、类型化错误种类和 Rust 错误变体进行判断，禁止解析 provider 错误消息。
-适配器负责附加 provider 原始错误和源错误链，但不设置阶段、端点和操作。
+Provider 分类器统一位于 `dt-common::error::provider`。分类器根据 provider 原始错误码、
+类型化错误种类和 Rust 错误变体进行判断，禁止解析 provider 错误消息。
+`ProviderErrorClassification::into_context` 生成包含可选精确错误码、provider origin 和
+受影响对象的 frame。组件边界先挂载当前操作的默认错误码，再挂载 provider frame；
+因此精确的 provider 分类会覆盖默认码，未识别的 provider 错误会继承默认码。stage 和
+endpoint 位于这两层之外，原始 provider 错误保持不变。
 
-组件级补充信息应放在组件边界的小型 wrapper 中。第一个 Ape-DTS 组件边界负责设置
-根阶段和端点，调用点负责提供操作和回退错误码。后续边界必须保留根错误。这些 wrapper
-必须使用 `#[track_caller]`，确保记录的位置仍然指向组件中实际失败的操作。
+组件级元数据应放在组件边界的小型 wrapper 中。组件边界负责设置操作默认错误码、
+阶段和端点。Provider classifier 不接收业务默认码；无法识别时返回空 code 并继承边界
+默认码。任务级字段只允许在任务入口挂载。
 
 每个 crate 必须将组件 wrapper 统一放在唯一的 `src/error_boundary.rs` 中，并通过
-`extractor`、`sinker` 或 provider 等内部模块区分所有权。禁止继续在业务模块旁新增
+`extractor_error`、`sinker_error` 或 provider 等内部模块区分所有权。禁止继续在业务模块旁新增
 组件错误 helper 文件。`error_boundary` 表示将底层失败分类或补充为 Ape-DTS 错误的
 边界，与 `dt-common::error` 中的公共错误契约相互独立。公共 provider 分类器仍统一
 位于 `dt-common::error::provider`。
 
+`ErrorReport` 只读取类型化 context 和错误链，不再尝试 provider 分类。没有
+`DtErrorContext` 的错误到达报告层时稳定输出 `IN999`。遗漏的分类位置通过失败路径测试
+和代码评审暴露。
+
 `MD099 MetadataReadFailed` 只作为读取或解析端点 catalog、控制面元数据失败时的
-兜底码。Schema/结构本身是迁移对象，并不代表所有结构错误都是元数据读取错误。对象
+默认码。Schema/结构本身是迁移对象，并不代表所有结构错误都是元数据读取错误。对象
 不存在使用 `MD001`/`MD002`，结构不受支持使用 `PR005`，版本或拓扑前置条件不满足
 使用 `PR001`/`PR002`，目标端拒绝 DDL 使用 `DB001`。
 
@@ -175,12 +200,12 @@ Provider 错误码属于诊断信息，不是 Ape-DTS 错误码。只要能够�
 | SQLx worker 崩溃 | `RT001` |
 | SQLx 完整性错误种类 | `IC001` |
 
-每个 SQLx 边界还会提供与操作相关的回退错误码，例如 `CN001`、`DB001` 或 `ST001`。
-即使使用回退错误码，也必须保留 provider 原始错误码、constraint/table 元数据和源
-错误链。
+每个 SQLx 边界还会提供与操作相关的默认错误码，例如 `CN001`、`DB001` 或 `ST001`。
+精确的 provider 分类会覆盖该默认码，无法识别时则继承默认码；两种情况下都必须保留
+provider 原始错误码、constraint/table 元数据和源错误链。
 
 `tokio-postgres` 复制适配器使用相同的 PostgreSQL SQLSTATE 规则。URL 解析错误使用
-`CF002`，连接建立失败使用 `CN001`，复制命令被拒绝时使用该操作的回退错误码。
+`CF002`，连接建立失败使用 `CN001`，复制命令被拒绝时使用该操作的边界默认错误码。
 
 其他首批 provider 映射如下：
 
@@ -195,7 +220,7 @@ Provider 错误码属于诊断信息，不是 Ape-DTS 错误码。只要能够�
 | MongoDB 命令错误码 `13` | `AU002` |
 | MongoDB 命令错误码 `26` | `MD001` |
 | MongoDB 重复键错误码 `11000`/`11001`/`12582` | `IC001` |
-| MongoDB 客户端选项无效 / TLS 配置无效 | 边界回退码 `CF002` / `CN003` |
+| MongoDB 客户端选项无效 / TLS 配置无效 | 边界默认码 `CF002` / `CN003` |
 | MongoDB DNS、I/O、连接池清空、server selection 或 shutdown | `CN001`；I/O 超时为 `CN002` |
 | Kafka 认证 / 授权错误 | `AU001` / `AU002` |
 | Kafka topic 或 partition 不存在 | `MD001` |
@@ -203,8 +228,9 @@ Provider 错误码属于诊断信息，不是 Ape-DTS 错误码。只要能够�
 | HTTP 请求超时 / 连接失败 | `CN002` / `CN001` |
 | HTTP 非成功响应或响应体无效 | `DB001` |
 
-Worker join 失败使用 `RT001`。报告边界上的 URL 和 YAML 解析错误使用 `CF002`。本地
-文件系统 `std::io::Error` 使用 `IO001`；网络 I/O 必须在 provider 边界分类为
+Worker join 失败使用 `RT001`。在组件边界分类的 URL 和 YAML 解析错误使用 `CF002`；
+未分类原始错误到达 `ErrorReport` 时使用 `IN999`。本地文件系统 `std::io::Error` 使用
+`IO001`；网络 I/O 必须在 provider 边界分类为
 `CN001` 或 `CN002`。
 
 数据库连接 URL 格式错误属于配置错误，使用 `CF002`。只有格式正确的端点无法访问，

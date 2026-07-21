@@ -1,6 +1,6 @@
 use anyhow::bail;
 
-use crate::error_boundary::extractor::redis_rdb as rdb_error;
+use crate::error_boundary::extractor_error::rdb_error;
 use crate::extractor::redis::rdb::reader::rdb_reader::RdbReader;
 use dt_common::meta::redis::redis_object::{HashObject, RedisString};
 

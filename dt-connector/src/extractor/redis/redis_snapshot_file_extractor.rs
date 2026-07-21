@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use tokio::{fs::metadata, fs::File, io::AsyncReadExt};
 
 use super::StreamReader;
-use crate::error_boundary::extractor::redis_snapshot_file;
+use crate::error_boundary::extractor_error::redis_snapshot_file;
 use crate::extractor::base_extractor::{BaseExtractor, ExtractState};
 use crate::extractor::redis::rdb::rdb_parser::RdbParser;
 use crate::extractor::redis::rdb::reader::rdb_reader::RdbReader;
@@ -28,10 +28,10 @@ impl Extractor for RedisSnapshotFileExtractor {
     async fn extract(&mut self) -> anyhow::Result<()> {
         let file = File::open(&self.file_path)
             .await
-            .map_err(|error| redis_snapshot_file(error, "open_redis_snapshot_file"))?;
+            .map_err(redis_snapshot_file)?;
         let metadata = metadata(&self.file_path)
             .await
-            .map_err(|error| redis_snapshot_file(error, "read_redis_snapshot_file_metadata"))?;
+            .map_err(redis_snapshot_file)?;
         let mut file_reader = RdbFileReader { file };
         let mut stream_reader: Box<&mut (dyn StreamReader + Send)> = Box::new(&mut file_reader);
 

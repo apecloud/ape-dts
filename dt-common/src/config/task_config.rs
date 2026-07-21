@@ -12,8 +12,9 @@ use crate::{
         global_config::GlobalConfig,
         limiter_config::{CapacityLimiterConfig, RateLimiterConfig},
     },
-    error::{DtError, ErrorCode, Stage},
-    error_boundary::config::invalid_task as invalid_task_config,
+    error::ErrorCode,
+    error_boundary::config::invalid_task_config,
+    error_boundary::config::source,
     meta::mongo::mongo_cdc_source::MongoCdcSource,
     utils::task_util::TaskUtil,
 };
@@ -1410,11 +1411,12 @@ impl TaskConfig {
                 } else {
                     ErrorCode::IoFailed
                 };
-                DtError::new(code)
-                    .message("failed to read processor Lua file")
-                    .detail(format!("path: {lua_code_file}"))
-                    .stage(Stage::Bootstrap)
-                    .source(error)
+                source(
+                    error,
+                    code,
+                    "failed to read processor Lua file",
+                    format!("path: {lua_code_file}"),
+                )
             })?;
         }
 
@@ -1505,23 +1507,14 @@ mod tests {
     use crate::config::parallelizer_config::{
         ChunkPartitionerRebalanceCost, ChunkPartitionerRebalanceStrategy,
     };
-    use crate::error::{DtError, ErrorCode};
+    use crate::error::{ErrorCode, ErrorReport};
     use crate::runtime_trace::{TaskSummaryMode, TraceOutputFormat};
 
     use super::{
-        invalid_task_config, CheckMode, ExtractorConfig, ParallelType, SinkerConfig, TaskConfig,
-        TaskKind, TaskType,
+        CheckMode, ExtractorConfig, ParallelType, SinkerConfig, TaskConfig, TaskKind, TaskType,
     };
 
     static NEXT_CONFIG_ID: AtomicU64 = AtomicU64::new(0);
-
-    #[test]
-    fn centralized_error_boundary_preserves_the_config_callsite() {
-        let expected_line = line!() + 1;
-        let error = invalid_task_config("invalid test config");
-        assert_eq!(error.location.file(), file!());
-        assert_eq!(error.location.line(), expected_line);
-    }
 
     fn cdc_inline_check_config(parallel_type: &str, extra_checker: &str) -> String {
         format!(
@@ -1872,10 +1865,10 @@ sample_rate=10
             ),
         ] {
             let error = load_temp_task_config(&config).err().unwrap();
-            let error = error.downcast_ref::<DtError>().unwrap();
-            assert_eq!(error.code(), ErrorCode::InvalidConfig);
+            let report = ErrorReport::from_anyhow(&error);
+            assert_eq!(report.code, ErrorCode::InvalidConfig);
             assert_eq!(
-                error.detail.as_deref(),
+                report.detail.as_deref(),
                 expected_err.strip_prefix("config error: ")
             );
         }
@@ -1960,10 +1953,10 @@ url=mysql://127.0.0.1:3307
         );
 
         let error = result.err().unwrap();
-        let error = error.downcast_ref::<DtError>().unwrap();
-        assert_eq!(error.code(), ErrorCode::InvalidConfig);
+        let report = ErrorReport::from_anyhow(&error);
+        assert_eq!(report.code, ErrorCode::InvalidConfig);
         assert_eq!(
-            error.detail.as_deref(),
+            report.detail.as_deref(),
             Some("config [extractor].batch_size must be greater than 0")
         );
     }
@@ -2059,10 +2052,10 @@ rebalance_max_partitions_per_sinker=0
             .unwrap();
         fs::remove_file(config_path).unwrap();
 
-        let err = err.downcast_ref::<DtError>().unwrap();
-        assert_eq!(err.code(), ErrorCode::InvalidConfig);
+        let report = ErrorReport::from_anyhow(&err);
+        assert_eq!(report.code, ErrorCode::InvalidConfig);
         assert_eq!(
-            err.detail.as_deref(),
+            report.detail.as_deref(),
             Some(
                 "config [parallelizer].rebalance_max_partitions_per_sinker must be greater than 0"
             )
@@ -2089,10 +2082,10 @@ batch_size=0
 
         match result {
             Err(err) => {
-                let err = err.downcast_ref::<DtError>().unwrap();
-                assert_eq!(err.code(), ErrorCode::InvalidConfig);
+                let report = ErrorReport::from_anyhow(&err);
+                assert_eq!(report.code, ErrorCode::InvalidConfig);
                 assert_eq!(
-                    err.detail.as_deref(),
+                    report.detail.as_deref(),
                     Some("config [sinker].batch_size must be greater than 0")
                 );
             }

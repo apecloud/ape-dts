@@ -3,7 +3,7 @@ use std::collections::{HashMap, VecDeque};
 use super::task_util::TaskUtil;
 use dt_common::{
     config::{config_enums::ParallelType, task_config::TaskConfig},
-    error::{DtError, ErrorCode, Stage},
+    error::{DtError, DtErrorContextExt, ErrorCode, Stage},
     meta::redis::command::key_parser::KeyParser,
     monitor::task_monitor_handle::TaskMonitorHandle,
     utils::redis_util::RedisUtil,
@@ -38,10 +38,11 @@ impl ParallelizerUtil {
                     .parallelizer
                     .chunk_partitioner_rebalance()
                     .ok_or_else(|| {
-                        DtError::new(ErrorCode::InvalidConfig)
-                            .stage(Stage::Bootstrap)
-                            .operation("load_snapshot_rebalance_config")
-                            .detail("snapshot parallelizer rebalance configuration is missing")
+                        DtError::ConfigError(
+                            "snapshot parallelizer rebalance configuration is missing".to_string(),
+                        )
+                        .with_code(ErrorCode::InvalidConfig)
+                        .with_stage(Stage::Bootstrap)
                     })?
                     .clone(),
             }),
@@ -100,10 +101,11 @@ impl ParallelizerUtil {
         let rdb_meta_manager = TaskUtil::create_rdb_meta_manager(config)
             .await?
             .ok_or_else(|| {
-                DtError::new(ErrorCode::InvalidConfig)
-                    .stage(Stage::Bootstrap)
-                    .operation("create_rdb_merger")
-                    .detail("the selected merger requires a relational database endpoint")
+                DtError::ConfigError(
+                    "the selected merger requires a relational database endpoint".to_string(),
+                )
+                .with_code(ErrorCode::InvalidConfig)
+                .with_stage(Stage::Bootstrap)
             })?;
 
         let rdb_merger = RdbMerger { rdb_meta_manager };
@@ -114,10 +116,11 @@ impl ParallelizerUtil {
         let meta_manager = TaskUtil::create_rdb_meta_manager(config)
             .await?
             .ok_or_else(|| {
-                DtError::new(ErrorCode::InvalidConfig)
-                    .stage(Stage::Bootstrap)
-                    .operation("create_rdb_partitioner")
-                    .detail("the selected partitioner requires a relational database endpoint")
+                DtError::ConfigError(
+                    "the selected partitioner requires a relational database endpoint".to_string(),
+                )
+                .with_code(ErrorCode::InvalidConfig)
+                .with_stage(Stage::Bootstrap)
             })?;
         Ok(RdbPartitioner { meta_manager })
     }

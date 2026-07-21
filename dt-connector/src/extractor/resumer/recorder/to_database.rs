@@ -8,7 +8,7 @@ use mongodb::{
 use sqlx::query;
 
 use crate::{
-    error_boundary::extractor::resumer_config as resumer_config_error,
+    error_boundary::extractor_error::invalid_resumer_config,
     extractor::resumer::{
         recorder::Recorder,
         utils::{RedisResumerRecord, ResumerUtil},
@@ -47,9 +47,8 @@ impl DatabaseRecorder {
                 }
             }
             _ => {
-                bail!(resumer_config_error(
+                bail!(invalid_resumer_config(
                     "database checkpoint recording requires resume_type=from_db",
-                    "build_database_checkpoint_recorder",
                 ))
             }
         };

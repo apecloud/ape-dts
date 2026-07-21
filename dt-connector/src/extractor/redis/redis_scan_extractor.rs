@@ -16,7 +16,7 @@ use dt_common::{
 use redis::{Connection, Value};
 
 use crate::{
-    error_boundary::extractor::redis_source as redis_source_error,
+    error_boundary::extractor_error::redis_source_error,
     extractor::base_extractor::{BaseExtractor, ExtractState},
     Extractor,
 };
@@ -44,7 +44,6 @@ impl Extractor for RedisScanExtractor {
                     "maxmemory_policy is {}, should be allkeys-lfu",
                     maxmemory_policy
                     ),
-                    "check_redis_maxmemory_policy",
                 )}
             }
         }
@@ -61,7 +60,6 @@ impl Extractor for RedisScanExtractor {
                 bail! {redis_source_error(
                     ErrorCode::StatementFailed,
                     format!("SELECT {db} failed"),
-                    "select_redis_database",
                 )}
             }
 

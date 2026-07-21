@@ -11,7 +11,7 @@ use sqlx::{
 use url::Url;
 
 use crate::{
-    error_boundary::extractor::resumer_config as resumer_config_error,
+    error_boundary::extractor_error::{invalid_resumer_config, resumer_config_source},
     extractor::resumer::{
         RedisResumerConn, ResumerDbPool, ResumerType, DEFAULT_POSITION_KEY, DEFAULT_RESUMER_SCHEMA,
         DEFAULT_RESUMER_TABLE,
@@ -48,18 +48,16 @@ impl ResumerUtil {
 
         let parts = full_table_name.split('.').collect::<Vec<&str>>();
         if parts.len() != 2 {
-            bail!(resumer_config_error(
-                format!("invalid checkpoint table name: {full_table_name}"),
-                "parse_checkpoint_table_name",
-            ))
+            bail!(invalid_resumer_config(format!(
+                "invalid checkpoint table name: {full_table_name}"
+            ),))
         }
         let schema = parts[0];
         let table = parts[1];
         if schema.is_empty() || table.is_empty() {
-            bail!(resumer_config_error(
-                format!("invalid checkpoint table name: {full_table_name}"),
-                "parse_checkpoint_table_name",
-            ))
+            bail!(invalid_resumer_config(format!(
+                "invalid checkpoint table name: {full_table_name}"
+            ),))
         }
         Ok((schema.to_string(), table.to_string()))
     }
@@ -167,40 +165,27 @@ impl ResumerUtil {
                 }
             }
             _ => {
-                bail!(resumer_config_error(
-                    format!("checkpoint storage does not support database type: {db_type:?}"),
-                    "build_checkpoint_storage",
-                ))
+                bail!(invalid_resumer_config(format!(
+                    "checkpoint storage does not support database type: {db_type:?}"
+                ),))
             }
         }
     }
 
     fn redis_node_url(base_url: &str, node: &ClusterNode) -> Result<String> {
-        let mut url = Url::parse(base_url).map_err(|error| {
-            resumer_config_error(
-                "checkpoint Redis URL is invalid",
-                "build_redis_checkpoint_url",
-            )
-            .source(error)
-        })?;
+        let mut url = Url::parse(base_url)
+            .map_err(|error| resumer_config_source("checkpoint Redis URL is invalid", error))?;
         url.set_host(Some(&node.host)).map_err(|_| {
-            resumer_config_error(
-                format!("invalid Redis cluster node host: {}", node.host),
-                "build_redis_checkpoint_url",
-            )
+            invalid_resumer_config(format!("invalid Redis cluster node host: {}", node.host))
         })?;
         let port = node.port.parse().map_err(|error| {
-            resumer_config_error(
+            resumer_config_source(
                 format!("invalid Redis cluster node port: {}", node.port),
-                "build_redis_checkpoint_url",
+                error,
             )
-            .source(error)
         })?;
         url.set_port(Some(port)).map_err(|_| {
-            resumer_config_error(
-                format!("invalid Redis cluster node port: {}", node.port),
-                "build_redis_checkpoint_url",
-            )
+            invalid_resumer_config(format!("invalid Redis cluster node port: {}", node.port))
         })?;
         Ok(url.to_string())
     }

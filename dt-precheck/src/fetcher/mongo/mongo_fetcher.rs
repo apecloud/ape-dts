@@ -5,7 +5,7 @@ use async_trait::async_trait;
 
 use dt_common::{
     config::{connection_auth_config::ConnectionAuthConfig, task_config::APE_DTS},
-    error::{DtError, EndpointRole, ErrorCode, Stage},
+    error::{DtError, DtErrorContextExt, EndpointRole, ErrorCode, Stage},
     meta::mongo::mongo_version::get_server_version,
     rdb_filter::RdbFilter,
 };
@@ -16,9 +16,7 @@ use mongodb::{
 };
 
 use crate::{
-    error_boundary::mongodb::{
-        provider as mongo_precheck_provider_error, state as mongo_precheck_state_error,
-    },
+    error_boundary::mongodb::{mongo_precheck_provider_error, mongo_precheck_state_error},
     fetcher::traits::Fetcher,
     meta::database_mode::{Constraint, Database, Schema, Table},
 };
@@ -53,7 +51,6 @@ impl Fetcher for MongoFetcher {
             Some(pool) => pool,
             None => bail! {mongo_precheck_state_error(
                 self.is_source,
-                "fetch_mongodb_version",
             )},
         };
         Ok(format!("{}", get_server_version(client).await?))
@@ -89,7 +86,6 @@ impl MongoFetcher {
             Some(pool) => pool,
             None => bail! {mongo_precheck_state_error(
                 self.is_source,
-                "run_mongodb_admin_precheck",
             )},
         };
 
@@ -98,10 +94,7 @@ impl MongoFetcher {
             .database("admin")
             .run_command(doc_command)
             .await
-            .map_err(|error| {
-                mongo_precheck_provider_error(error, self.is_source, "run_mongodb_admin_precheck")
-                    .into()
-            })
+            .map_err(|error| mongo_precheck_provider_error(error, self.is_source))
     }
 
     pub async fn execute_for_db(&self, command: &str) -> anyhow::Result<Document> {
@@ -109,19 +102,18 @@ impl MongoFetcher {
             Some(pool) => pool,
             None => bail! {mongo_precheck_state_error(
                 self.is_source,
-                "run_mongodb_database_precheck",
             )},
         };
 
-        let dbs = client.list_databases().await.map_err(|error| {
-            mongo_precheck_provider_error(error, self.is_source, "list_mongodb_precheck_databases")
-        })?;
+        let dbs = client
+            .list_databases()
+            .await
+            .map_err(|error| mongo_precheck_provider_error(error, self.is_source))?;
         if dbs.is_empty() {
-            bail! {DtError::new(ErrorCode::DatabaseNotFound)
-            .detail("no database exists in MongoDB")
-            .stage(Stage::Precheck)
-            .operation("list_mongodb_precheck_databases")
-            .endpoint(if self.is_source {
+            bail! {DtError::MetadataError("no database exists in MongoDB".to_string())
+            .with_code(ErrorCode::DatabaseNotFound)
+            .with_stage(Stage::Precheck)
+            .with_endpoint(if self.is_source {
                 EndpointRole::Source
             } else {
                 EndpointRole::Destination
@@ -133,13 +125,7 @@ impl MongoFetcher {
             .database(&dbs[0].name)
             .run_command(doc_command)
             .await
-            .map_err(|error| {
-                mongo_precheck_provider_error(
-                    error,
-                    self.is_source,
-                    "run_mongodb_database_precheck",
-                )
-            })?;
+            .map_err(|error| mongo_precheck_provider_error(error, self.is_source))?;
         Ok(doc)
     }
 }

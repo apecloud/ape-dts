@@ -24,7 +24,7 @@ use dt_common::meta::struct_meta::{
 };
 use dt_common::{
     config::{config_enums::DbType, config_token_parser::ConfigTokenParser},
-    error::{DtError, EndpointRole, ErrorCode, OriginError, Stage},
+    error::{DtError, DtErrorContextExt, EndpointRole, ErrorCode, OriginError, Stage},
     log_error, log_info, log_warn,
     rdb_filter::RdbFilter,
     utils::sql_util::SqlUtil,
@@ -197,15 +197,14 @@ impl PgStructFetcher {
             .cloned()
             .collect();
         if !filtered_schemas.is_empty() {
-            bail! {DtError::new(ErrorCode::ObjectNotFound)
-            .detail(format!(
-            "schemas: {} not found",
-            filtered_schemas.join(",")
+            bail! {DtError::MetadataError(format!(
+                "schemas: {} not found",
+                filtered_schemas.join(",")
             ))
-            .stage(Stage::Extractor)
-            .operation("fetch_postgres_schemas")
-            .endpoint(EndpointRole::Source)
-            .origin(OriginError::new("postgres", None::<String>))}
+            .with_code(ErrorCode::ObjectNotFound)
+            .with_stage(Stage::Extractor)
+            .with_endpoint(EndpointRole::Source)
+            .with_origin(OriginError::new("postgres", None::<String>))}
         } else {
             Ok(schemas.into_iter().map(|s| Schema { name: s }).collect())
         }
@@ -550,15 +549,14 @@ impl PgStructFetcher {
                 column.column_type = column_types
                     .get(&column.column_name)
                     .ok_or_else(|| {
-                        DtError::new(ErrorCode::UnsupportedTableStructure)
-                            .detail(format!(
-                                "column type is missing for {table_schema}.{table_name}.{}",
-                                column.column_name
-                            ))
-                            .stage(Stage::Extractor)
-                            .operation("fetch_postgres_column_types")
-                            .endpoint(EndpointRole::Source)
-                            .origin(OriginError::new("postgres", None::<String>))
+                        DtError::MetadataError(format!(
+                            "column type is missing for {table_schema}.{table_name}.{}",
+                            column.column_name
+                        ))
+                        .with_code(ErrorCode::UnsupportedTableStructure)
+                        .with_stage(Stage::Extractor)
+                        .with_endpoint(EndpointRole::Source)
+                        .with_origin(OriginError::new("postgres", None::<String>))
                     })?
                     .to_owned();
             }

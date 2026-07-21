@@ -1,4 +1,4 @@
-use crate::error::{DtError, ErrorCode, Stage};
+use crate::error::{DtError, DtErrorContextExt, ErrorCode, Stage};
 use strum::IntoStaticStr;
 
 #[derive(Clone, IntoStaticStr, Debug)]
@@ -15,10 +15,11 @@ impl MongoCdcSource {
         match str.to_ascii_lowercase().as_str() {
             "op_log" => Ok(Self::OpLog),
             "change_stream" => Ok(Self::ChangeStream),
-            _ => Err(DtError::new(ErrorCode::InvalidConfig)
-                .detail(format!("invalid MongoCdcSource: {}", str))
-                .stage(Stage::Bootstrap)
-                .into()),
+            _ => Err(
+                DtError::ConfigError(format!("invalid MongoCdcSource: {}", str))
+                    .with_code(ErrorCode::InvalidConfig)
+                    .with_stage(Stage::Bootstrap),
+            ),
         }
     }
 }

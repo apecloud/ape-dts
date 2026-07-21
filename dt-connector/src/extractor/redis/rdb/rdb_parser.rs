@@ -2,13 +2,12 @@ use anyhow::bail;
 use sqlx::types::chrono;
 
 use super::{entry_parser::entry_parser::EntryParser, reader::rdb_reader::RdbReader};
-use crate::error_boundary::extractor::redis_rdb as rdb_error;
+use crate::error_boundary::extractor_error::{
+    rdb_error, redis_rdb_source, redis_source_error_with_anyhow, redis_source_error_with_cause,
+};
 use crate::extractor::redis::{rdb::entry_parser::module2_parser::ModuleParser, StreamReader};
 use dt_common::meta::redis::{redis_entry::RedisEntry, redis_object::RedisCmd};
-use dt_common::{
-    error::{DtError, EndpointRole, ErrorCode, OriginError, Stage},
-    log_debug, log_info,
-};
+use dt_common::{error::ErrorCode, log_debug, log_info};
 
 const K_FLAG_SLOT_INFO: u8 = 0xf4; // (244) (Redis 7.4+) RDB_OPCODE_SLOT_INFO: slot info
 const _K_FLAG_FUNCTION2: u8 = 0xf5; // (245) function library data
@@ -115,22 +114,23 @@ impl RdbParser<'_> {
 
             K_FLAG_AUX => {
                 let key = String::try_from(self.reader.read_string().await?).map_err(|error| {
-                    rdb_error("Redis RDB metadata key is not valid UTF-8").source(error)
+                    redis_rdb_source("Redis RDB metadata key is not valid UTF-8", error)
                 })?;
                 let value = self.reader.read_string().await?;
                 match key.as_str() {
                     "repl-stream-db" => {
                         let value = String::try_from(value).map_err(|error| {
-                            rdb_error("Redis RDB replication database value is not valid UTF-8")
-                                .source(error)
+                            redis_rdb_source(
+                                "Redis RDB replication database value is not valid UTF-8",
+                                error,
+                            )
                         })?;
                         self.repl_stream_db_id = value.parse::<i64>().map_err(|error| {
-                            DtError::new(ErrorCode::StatementFailed)
-                                .stage(Stage::Extractor)
-                                .operation("parse_redis_rdb_metadata")
-                                .endpoint(EndpointRole::Source)
-                                .origin(OriginError::new("redis", None::<String>))
-                                .source(error)
+                            redis_source_error_with_cause(
+                                ErrorCode::StatementFailed,
+                                "Redis RDB replication database value is invalid",
+                                error,
+                            )
                         })?;
                         log_info!("RDB repl-stream-db: {}", self.repl_stream_db_id);
                     }
@@ -202,12 +202,11 @@ impl RdbParser<'_> {
                 self.reader.copy_raw = false;
 
                 let value = value.map_err(|error| {
-                    DtError::new(ErrorCode::StatementFailed)
-                        .stage(Stage::Extractor)
-                        .operation("parse_redis_rdb_entry")
-                        .endpoint(EndpointRole::Source)
-                        .origin(OriginError::new("redis", None::<String>))
-                        .source(error.into_boxed_dyn_error())
+                    redis_source_error_with_anyhow(
+                        ErrorCode::StatementFailed,
+                        "failed to parse Redis RDB entry",
+                        error,
+                    )
                 })?;
                 let mut entry = RedisEntry::new();
                 entry.is_base = true;

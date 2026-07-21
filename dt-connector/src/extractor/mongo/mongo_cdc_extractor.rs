@@ -18,7 +18,7 @@ use serde_json::json;
 use tokio::{sync::Mutex, time::Instant};
 
 use crate::{
-    error_boundary::extractor::mongodb_oplog,
+    error_boundary::extractor_error::mongodb_oplog,
     extractor::{
         base_extractor::{BaseExtractor, ExtractState},
         resumer::recovery::Recovery,
@@ -552,7 +552,6 @@ impl MongoCdcExtractor {
             mongodb_oplog(format!(
                 "oplog field {field} is missing or is not a document"
             ))
-            .into()
         })
     }
 

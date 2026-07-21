@@ -27,9 +27,8 @@ use super::entry_rewriter::EntryRewriter;
 use crate::{
     call_batch_fn,
     data_marker::DataMarker,
-    error_boundary::sinker::{
-        redis as redis_driver_error, redis_destination as redis_destination_error,
-        redis_slot_topology,
+    error_boundary::sinker_error::{
+        redis_destination_error, redis_driver_error, redis_slot_topology,
     },
     rdb_router::RdbRouter,
     sinker::base_sinker::BaseSinker,
@@ -170,7 +169,6 @@ impl RedisSinker {
                         _ => bail! {redis_destination_error(
                             ErrorCode::StatementFailed,
                             "Redis object rewrite is not implemented",
-                            "rewrite_redis_entry",
                         )},
                     }?;
                     if let Some(expire_cmd) = EntryRewriter::rewrite_expire(entry)? {
@@ -334,7 +332,6 @@ impl RedisSinker {
                 bail! {redis_driver_error(
                     error,
                     ErrorCode::StatementFailed,
-                    "write_redis_batch",
                 )}
             }
 
@@ -363,7 +360,6 @@ impl RedisSinker {
                                 "sink failed, server error: [{:?}], result: [{:?}], cmd: [{}]",
                                 e, v, cmd
                                 ),
-                                "write_redis_command",
                             )}
                         }
                         _ => {
@@ -388,14 +384,14 @@ impl RedisSinker {
                     let slot = KeyParser::calc_slot(cmd.keys[0].as_bytes());
                     node.slot_hash_tag_map
                         .get(&slot)
-                        .ok_or_else(|| redis_slot_topology("find_redis_slot_hash_tag"))?
+                        .ok_or_else(redis_slot_topology)?
                 } else {
                     // if the redis cmd has no key, find a hash_tag for any slot in current node
                     let (_, hash_tag) = node
                         .slot_hash_tag_map
                         .iter()
                         .next()
-                        .ok_or_else(|| redis_slot_topology("find_redis_node_hash_tag"))?;
+                        .ok_or_else(redis_slot_topology)?;
                     hash_tag
                 };
                 &format!("{}{{{}}}", data_marker.marker, hash_tag)

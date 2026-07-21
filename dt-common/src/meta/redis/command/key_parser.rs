@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet};
 use anyhow::bail;
 
 use crate::error_boundary::redis::{
-    command as redis_command_error, command_catalog as redis_command_catalog_error,
+    redis_command_catalog_error, redis_command_error, redis_command_source,
 };
 
 use super::{cmd_constants::CmdConstants, cmd_meta::CmdMeta};
@@ -16,9 +16,9 @@ pub struct KeyParser {
 impl KeyParser {
     pub fn new() -> anyhow::Result<Self> {
         let containers: HashSet<String> = serde_json::from_str(CmdConstants::CONTAINER_COMMANDS)
-            .map_err(|error| redis_command_catalog_error(error, "load_redis_container_commands"))?;
+            .map_err(redis_command_catalog_error)?;
         let metas: Vec<CmdMeta> = serde_json::from_str(CmdConstants::COMMAND_METAS)
-            .map_err(|error| redis_command_catalog_error(error, "load_redis_command_metadata"))?;
+            .map_err(redis_command_catalog_error)?;
 
         let mut cmd_metas = HashMap::new();
         for cmd in metas {
@@ -151,10 +151,10 @@ impl KeyParser {
                         argv[keynum_idx as usize]
                             .parse::<usize>()
                             .map_err(|error| {
-                                redis_command_error(format!(
-                                    "invalid key count for command {cmd_name}: {error}"
-                                ))
-                                .source(error)
+                                redis_command_source(
+                                    format!("invalid key count for command {cmd_name}: {error}"),
+                                    error,
+                                )
                             })?;
                     // firstkey: the index, relative to begin_search, of the first key.
                     // This is usually the next argument after keynumidx, and its value, in this case, is greater by one.

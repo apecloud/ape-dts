@@ -11,7 +11,7 @@ use async_trait::async_trait;
 use tokio::{sync::Mutex, time::Instant};
 
 use super::redis_client::RedisClient;
-use crate::error_boundary::extractor::redis_source as redis_source_error;
+use crate::error_boundary::extractor_error::{redis_source_error, redis_source_error_with_cause};
 use crate::extractor::{
     base_extractor::{BaseExtractor, ExtractState},
     redis::{
@@ -143,7 +143,6 @@ impl RedisPsyncExtractor {
             bail! {redis_source_error(
                 ErrorCode::StatementFailed,
                 "REPLCONF listening-port response is not OK",
-                "start_redis_psync",
             )}
         }
 
@@ -172,7 +171,6 @@ impl RedisPsyncExtractor {
                     bail! {redis_source_error(
                         ErrorCode::StatementFailed,
                         format!("invalid PSYNC full-resync response: {s}"),
-                        "parse_redis_psync_response",
                     )}
                 }
                 self.repl_id = repl_id.unwrap_or_default().to_string();
@@ -181,25 +179,22 @@ impl RedisPsyncExtractor {
                         .unwrap_or_default()
                         .parse::<u64>()
                         .map_err(|error| {
-                            redis_source_error(
+                            redis_source_error_with_cause(
                                 ErrorCode::StatementFailed,
                                 format!("invalid replication offset in PSYNC response: {s}"),
-                                "parse_redis_psync_response",
+                                error,
                             )
-                            .source(error)
                         })?;
             } else if s != "CONTINUE" {
                 bail! {redis_source_error(
                     ErrorCode::StatementFailed,
                     "PSYNC command response is not CONTINUE",
-                    "start_redis_psync",
                 )}
             }
         } else {
             bail! {redis_source_error(
                 ErrorCode::StatementFailed,
                 "PSYNC command response is not a status response",
-                "start_redis_psync",
             )}
         };
         Ok(full_sync)
@@ -225,7 +220,6 @@ impl RedisPsyncExtractor {
                     "invalid rdb format, expected '$', got byte: {}",
                     buf[0]
                     ),
-                    "receive_redis_rdb",
                 )}
             }
             break;
@@ -454,7 +448,6 @@ impl RedisPsyncExtractor {
                     "received unexpected aof value: {:?}",
                     v
                     ),
-                    "parse_redis_aof",
                 )}
             }
         }

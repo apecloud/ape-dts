@@ -4,8 +4,8 @@ use mongodb::{
 };
 
 use crate::{
-    error::{DtError, ErrorCode, OriginError},
-    error_boundary::metadata::mongodb_provider,
+    error::{DtError, DtErrorContextExt, ErrorCode, OriginError},
+    error_boundary::metadata::{mongodb_provider, mongodb_version_source},
 };
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -51,50 +51,42 @@ pub async fn get_server_version(client: &Client) -> anyhow::Result<MongoServerVe
         .unwrap_or_else(|| client.database("admin"))
         .run_command(doc! { "buildInfo": 1 })
         .await
-        .map_err(|error| {
-            mongodb_provider(
-                error,
-                ErrorCode::MetadataReadFailed,
-                "fetch_mongodb_server_version",
-            )
-        })?;
+        .map_err(|error| mongodb_provider(error, ErrorCode::MetadataReadFailed))?;
     let version = build_info.get_str("version").map_err(|error| {
-        DtError::new(ErrorCode::UnsupportedDatabaseVersion)
-            .detail("MongoDB buildInfo response is missing a valid version")
-            .operation("parse_mongodb_server_version")
-            .origin(OriginError::new("mongodb", None::<String>))
-            .source(error)
+        mongodb_version_source(
+            "MongoDB buildInfo response is missing a valid version",
+            error,
+        )
     })?;
     MongoServerVersion::parse(version)
 }
 
 fn parse_version_part(part: Option<&str>, original: &str, field: &str) -> anyhow::Result<u32> {
     let part = part.ok_or_else(|| {
-        DtError::new(ErrorCode::UnsupportedDatabaseVersion)
-            .detail(format!("MongoDB version is missing {field}: {original}"))
-            .operation("parse_mongodb_server_version")
-            .origin(OriginError::new("mongodb", None::<String>))
+        DtError::MetadataError(format!("MongoDB version is missing {field}: {original}"))
+            .with_code(ErrorCode::UnsupportedDatabaseVersion)
+            .with_origin(OriginError::new("mongodb", None::<String>))
     })?;
     let digits: String = part.chars().take_while(|c| c.is_ascii_digit()).collect();
     if digits.is_empty() {
-        return Err(DtError::new(ErrorCode::UnsupportedDatabaseVersion)
-            .detail(format!("invalid MongoDB version {field}: {original}"))
-            .operation("parse_mongodb_server_version")
-            .origin(OriginError::new("mongodb", None::<String>))
-            .into());
+        return Err(
+            DtError::MetadataError(format!("invalid MongoDB version {field}: {original}"))
+                .with_code(ErrorCode::UnsupportedDatabaseVersion)
+                .with_origin(OriginError::new("mongodb", None::<String>)),
+        );
     }
     digits.parse().map_err(|error| {
-        DtError::new(ErrorCode::UnsupportedDatabaseVersion)
-            .detail(format!("invalid MongoDB version {field}: {original}"))
-            .operation("parse_mongodb_server_version")
-            .origin(OriginError::new("mongodb", None::<String>))
-            .source(error)
-            .into()
+        mongodb_version_source(
+            format!("invalid MongoDB version {field}: {original}"),
+            error,
+        )
     })
 }
 
 #[cfg(test)]
 mod tests {
+    use crate::error::DtErrorContext;
+
     use super::*;
 
     #[test]
@@ -125,7 +117,9 @@ mod tests {
     fn invalid_version_is_classified_as_unsupported() {
         let error = MongoServerVersion::parse("6.invalid").unwrap_err();
         assert_eq!(
-            error.downcast_ref::<DtError>().map(DtError::code),
+            error
+                .downcast_ref::<DtErrorContext>()
+                .and_then(DtErrorContext::error_code),
             Some(ErrorCode::UnsupportedDatabaseVersion)
         );
     }

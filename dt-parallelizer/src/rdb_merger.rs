@@ -143,18 +143,12 @@ impl RdbMerger {
     }
 
     fn check_key_changed(tb_meta: &RdbTbMeta, row_data: &RowData) -> anyhow::Result<bool> {
-        let before = row_data.require_before().map_err(|error| {
-            dt_common::error::DtError::new(dt_common::error::ErrorCode::InvariantViolated)
-                .stage(dt_common::error::Stage::Parallelizer)
-                .operation("merge_update_before")
-                .source(error.into_boxed_dyn_error())
-        })?;
-        let after = row_data.require_after().map_err(|error| {
-            dt_common::error::DtError::new(dt_common::error::ErrorCode::InvariantViolated)
-                .stage(dt_common::error::Stage::Parallelizer)
-                .operation("merge_update_after")
-                .source(error.into_boxed_dyn_error())
-        })?;
+        let before = row_data
+            .require_before()
+            .map_err(crate::error_boundary::invariant_source)?;
+        let after = row_data
+            .require_after()
+            .map_err(crate::error_boundary::invariant_source)?;
         for key_cols in tb_meta.key_map.values() {
             for col in key_cols {
                 if before.get(col) != after.get(col) {

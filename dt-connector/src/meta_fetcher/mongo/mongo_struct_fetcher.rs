@@ -7,6 +7,7 @@ use mongodb::{
 };
 
 use dt_common::{
+    error::{DtError, DtErrorContextExt, EndpointRole, ErrorCode, OriginError, Stage},
     meta::{
         mongo::mongo_shard::list_shard_collections,
         struct_meta::statement::{
@@ -188,21 +189,17 @@ impl MongoStructFetcher {
         if let Some(collection) = ns.strip_prefix(&prefix) {
             return Ok(collection);
         }
-        anyhow::bail!(dt_common::error::DtError::new(
-            dt_common::error::ErrorCode::InvalidConfig,
-        )
-        .message("MongoDB returned data for a database other than the configured source")
-        .detail(format!(
+        anyhow::bail!(DtError::MetadataError(format!(
             "the returned MongoDB namespace does not belong to the configured database {db}"
         ))
-        .hint("Check the database name in the MongoDB source URL and task routing, then retry.")
-        .stage(dt_common::error::Stage::Extractor)
-        .operation("parse_mongodb_cursor_namespace")
-        .endpoint(dt_common::error::EndpointRole::Source)
-        .origin(dt_common::error::OriginError::new(
-            "mongodb",
-            None::<String>,
-        )))
+        .with_code(ErrorCode::InvalidConfig)
+        .with_message("MongoDB returned data for a database other than the configured source")
+        .with_hint(
+            "Check the database name in the MongoDB source URL and task routing, then retry."
+        )
+        .with_stage(Stage::Extractor)
+        .with_endpoint(EndpointRole::Source)
+        .with_origin(OriginError::new("mongodb", None::<String>)))
     }
 
     fn is_system_collection(collection: &str) -> bool {

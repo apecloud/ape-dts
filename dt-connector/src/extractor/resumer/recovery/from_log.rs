@@ -5,7 +5,7 @@ use dashmap::DashMap;
 use tokio::{fs::File, io::AsyncBufReadExt, io::BufReader};
 
 use crate::{
-    error_boundary::extractor::resumer_config as resumer_config_error,
+    error_boundary::extractor_error::invalid_resumer_config,
     extractor::resumer::{
         recovery::{Recovery, RecoverySnapshotCache},
         utils::ResumerUtil,
@@ -53,9 +53,8 @@ impl LogRecovery {
                 cdc_cache: DashMap::new(),
             },
             _ => {
-                bail!(resumer_config_error(
+                bail!(invalid_resumer_config(
                     "log checkpoint recovery requires resume_type=from_log",
-                    "build_log_checkpoint_recovery",
                 ));
             }
         };
@@ -213,13 +212,10 @@ impl LogRecovery {
                     .await?;
                 }
             }
-            _ => bail!(resumer_config_error(
-                format!(
-                    "log checkpoint recovery does not support task type: {:?}",
-                    self.task_type
-                ),
-                "load_log_checkpoint",
-            )),
+            _ => bail!(invalid_resumer_config(format!(
+                "log checkpoint recovery does not support task type: {:?}",
+                self.task_type
+            ),)),
         }
         Ok(())
     }

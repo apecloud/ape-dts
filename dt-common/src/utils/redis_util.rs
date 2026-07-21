@@ -65,7 +65,6 @@ impl RedisUtil {
                 redis_topology_source_error(
                     "the Redis CLUSTER NODES response could not be decoded",
                     error,
-                    "decode_redis_cluster_nodes",
                 )
             })?;
             let nodes = Self::parse_cluster_nodes(&nodes_str)?;
@@ -74,7 +73,6 @@ impl RedisUtil {
         } else {
             bail! {redis_topology_error(
                 "Redis did not return CLUSTER NODES data",
-                "read_redis_cluster_nodes",
             )}
         }
     }
@@ -99,19 +97,14 @@ impl RedisUtil {
         let value = conn.req_packed_command(&CmdEncoder::encode(&cmd))?;
         if let redis::Value::BulkString(data) = value {
             let info = String::from_utf8(data).map_err(|error| {
-                redis_source_error(
-                    ErrorCode::UnsupportedDatabaseVersion,
-                    error,
-                    "decode_redis_info",
-                )
+                redis_source_error(ErrorCode::UnsupportedDatabaseVersion, error)
             })?;
             log_info!("redis INFO result: {}", info);
-            let re = Regex::new(r"redis_version:(\S+)").map_err(|error| {
-                redis_source_error(ErrorCode::InvariantViolated, error, "compile_redis_version")
-            })?;
-            let cap = re.captures(&info).ok_or_else(|| {
-                redis_error(ErrorCode::UnsupportedDatabaseVersion, "read_redis_version")
-            })?;
+            let re = Regex::new(r"redis_version:(\S+)")
+                .map_err(|error| redis_source_error(ErrorCode::InvariantViolated, error))?;
+            let cap = re
+                .captures(&info)
+                .ok_or_else(|| redis_error(ErrorCode::UnsupportedDatabaseVersion))?;
 
             let version_str = cap[1].to_string();
             let tokens: Vec<&str> = version_str.split('.').collect();
@@ -119,7 +112,6 @@ impl RedisUtil {
                 bail! {redis_error_detail(
                     ErrorCode::UnsupportedDatabaseVersion,
                     "can not get redis version by INFO",
-                    "read_redis_version",
                 )}
             }
 
@@ -127,19 +119,12 @@ impl RedisUtil {
             if tokens.len() > 1 {
                 version = format!("{}.{}", tokens[0], tokens[1]);
             }
-            return f32::from_str(&version).map_err(|error| {
-                redis_source_error(
-                    ErrorCode::UnsupportedDatabaseVersion,
-                    error,
-                    "parse_redis_version",
-                )
-                .into()
-            });
+            return f32::from_str(&version)
+                .map_err(|error| redis_source_error(ErrorCode::UnsupportedDatabaseVersion, error));
         }
         bail! {redis_error_detail(
             ErrorCode::UnsupportedDatabaseVersion,
             "can not get redis version by INFO",
-            "read_redis_version",
         )}
     }
 
@@ -179,7 +164,6 @@ impl RedisUtil {
                 bail! {redis_error_detail(
                     ErrorCode::StatementFailed,
                     format!("redis result type can not be parsed as string, value: {:?}", value),
-                    "parse_redis_result",
                 )}
             }
         }
@@ -219,7 +203,6 @@ impl RedisUtil {
             if words.len() < 8 {
                 bail! {redis_topology_error(
                     format!("invalid cluster nodes line: {}", line),
-                    "parse_redis_cluster_node",
                 )}
             }
 
@@ -228,24 +211,21 @@ impl RedisUtil {
             let is_master = words[2].contains("master");
 
             let raw_address = words[1].split('@').next().ok_or_else(|| {
-                redis_topology_error(
-                    format!("Redis cluster node has an invalid address: {}", words[1]),
-                    "parse_redis_cluster_node",
-                )
+                redis_topology_error(format!(
+                    "Redis cluster node has an invalid address: {}",
+                    words[1]
+                ))
             })?;
             let (host, port) = raw_address.rsplit_once(':').ok_or_else(|| {
-                redis_topology_error(
-                    format!("Redis cluster node has an invalid address: {raw_address}"),
-                    "parse_redis_cluster_node",
-                )
+                redis_topology_error(format!(
+                    "Redis cluster node has an invalid address: {raw_address}"
+                ))
             })?;
             let host = host.trim_matches(['[', ']']).to_string();
             if host.is_empty() || port.is_empty() {
-                return Err(redis_topology_error(
-                    format!("Redis cluster node has an invalid address: {raw_address}"),
-                    "parse_redis_cluster_node",
-                )
-                .into());
+                return Err(redis_topology_error(format!(
+                    "Redis cluster node has an invalid address: {raw_address}"
+                )));
             }
             let port = port.to_string();
             let address = if host.contains(':') {
@@ -292,14 +272,12 @@ impl RedisUtil {
                             redis_topology_source_error(
                                 format!("Redis cluster returned an invalid slot range: {word}"),
                                 error,
-                                "parse_redis_slot_range",
                             )
                         })?,
                         range[1].parse::<u16>().map_err(|error| {
                             redis_topology_source_error(
                                 format!("Redis cluster returned an invalid slot range: {word}"),
                                 error,
-                                "parse_redis_slot_range",
                             )
                         })?,
                     )
@@ -308,18 +286,15 @@ impl RedisUtil {
                         redis_topology_source_error(
                             format!("Redis cluster returned an invalid slot: {word}"),
                             error,
-                            "parse_redis_slot",
                         )
                     })?;
                     (slot_num, slot_num)
                 };
 
                 if start > end || end as usize >= SLOTS_COUNT {
-                    return Err(redis_topology_error(
-                        format!("Redis cluster returned an invalid slot range: {word}"),
-                        "validate_redis_slot_range",
-                    )
-                    .into());
+                    return Err(redis_topology_error(format!(
+                        "Redis cluster returned an invalid slot range: {word}"
+                    )));
                 }
 
                 for j in start..=end {
@@ -331,9 +306,10 @@ impl RedisUtil {
             if !slots.is_empty() {
                 let mut node_slot_hash_tag_map = HashMap::with_capacity(slots.len());
                 for i in slots.iter() {
-                    let hash_tag = all_slot_hash_tag_map.get(i).cloned().ok_or_else(|| {
-                        redis_error(ErrorCode::InvariantViolated, "map_redis_slot_hash_tag")
-                    })?;
+                    let hash_tag = all_slot_hash_tag_map
+                        .get(i)
+                        .cloned()
+                        .ok_or_else(|| redis_error(ErrorCode::InvariantViolated))?;
                     node_slot_hash_tag_map.insert(*i, hash_tag);
                 }
                 node.slot_hash_tag_map = node_slot_hash_tag_map;
@@ -347,7 +323,6 @@ impl RedisUtil {
                 format!(
                     "Redis cluster reports {all_slots_count} assigned slots; expected {SLOTS_COUNT}"
                 ),
-                "validate_redis_cluster_slots",
             )}
         } else {
             Ok(parsed_nodes)
@@ -357,7 +332,7 @@ impl RedisUtil {
 
 #[cfg(test)]
 mod tests {
-    use crate::error::DtError;
+    use crate::error::DtErrorContext;
 
     use super::*;
 
@@ -401,7 +376,9 @@ mod tests {
             Err(error) => error,
         };
         assert_eq!(
-            error.downcast_ref::<DtError>().map(DtError::code),
+            error
+                .downcast_ref::<DtErrorContext>()
+                .and_then(DtErrorContext::error_code),
             Some(ErrorCode::PrerequisiteNotMet)
         );
         let report = crate::error::ErrorReport::from_anyhow(&error);

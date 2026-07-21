@@ -5,7 +5,9 @@ use async_trait::async_trait;
 use mongodb::{bson::doc, Client};
 use tokio::time::Instant;
 
-use crate::{error_boundary::sinker::mongodb_struct, sinker::base_sinker::BaseSinker, Sinker};
+use crate::{
+    error_boundary::sinker_error::mongodb_struct, sinker::base_sinker::BaseSinker, Sinker,
+};
 use dt_common::{
     config::config_enums::ConflictPolicyEnum,
     log_error, log_info,
@@ -127,7 +129,7 @@ impl MongoStructSinker {
         database
             .run_command(command)
             .await
-            .map_err(|error| mongodb_struct(error, "create_mongodb_collection"))?;
+            .map_err(mongodb_struct)?;
         log_info!("mongo create collection succeed");
         Ok(())
     }
@@ -153,7 +155,7 @@ impl MongoStructSinker {
             .database(&statement.database_name)
             .run_command(command)
             .await
-            .map_err(|error| mongodb_struct(error, "create_mongodb_indexes"))?;
+            .map_err(mongodb_struct)?;
         log_info!("mongo create indexes succeed");
         Ok(())
     }
@@ -194,7 +196,7 @@ impl MongoStructSinker {
             .database("admin")
             .run_command(doc! { "enableSharding": db })
             .await
-            .map_err(|error| mongodb_struct(error, "enable_mongodb_sharding"))?;
+            .map_err(mongodb_struct)?;
 
         let command = doc! {
             "shardCollection": shard_collection.ns.clone(),
@@ -206,7 +208,7 @@ impl MongoStructSinker {
             .database("admin")
             .run_command(command)
             .await
-            .map_err(|error| mongodb_struct(error, "shard_mongodb_collection"))?;
+            .map_err(mongodb_struct)?;
         log_info!("mongo shard collection succeed");
         Ok(())
     }

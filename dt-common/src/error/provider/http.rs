@@ -1,29 +1,18 @@
 use super::{
-    super::{DtError, ErrorCode, OriginError},
+    super::{ErrorCode, OriginError},
     ProviderErrorClassification,
 };
 
-pub fn classify_reqwest_error(
-    error: &reqwest::Error,
-    fallback: ErrorCode,
-) -> ProviderErrorClassification {
+pub fn classify_reqwest_error(error: &reqwest::Error) -> ProviderErrorClassification {
     let code = if error.is_builder() {
-        ErrorCode::InvalidConfig
+        Some(ErrorCode::InvalidConfig)
     } else if error.is_timeout() {
-        ErrorCode::ConnectionTimeout
+        Some(ErrorCode::ConnectionTimeout)
     } else if error.is_connect() || error.is_request() {
-        ErrorCode::ConnectionFailed
+        Some(ErrorCode::ConnectionFailed)
     } else {
-        fallback
+        None
     };
     let status = error.status().map(|status| status.as_u16().to_string());
     ProviderErrorClassification::new(code, OriginError::new("http", status))
-}
-
-#[track_caller]
-pub fn dt_error_from_reqwest(error: reqwest::Error, fallback: ErrorCode) -> DtError {
-    let classification = classify_reqwest_error(&error, fallback);
-    DtError::new(classification.code)
-        .origin(classification.origin)
-        .source(error)
 }

@@ -1,4 +1,4 @@
-use crate::error_boundary::extractor::redis_rdb as rdb_error;
+use crate::error_boundary::extractor_error::rdb_error;
 use anyhow::bail;
 use dt_common::meta::redis::redis_object::{RedisString, ZSetEntry, ZsetObject};
 

@@ -146,7 +146,7 @@ impl CheckResult {
 
 #[cfg(test)]
 mod tests {
-    use dt_common::error::{DtError, Stage};
+    use dt_common::error::{DtError, DtErrorContextExt, Stage};
 
     use super::*;
 
@@ -175,9 +175,9 @@ mod tests {
             true,
             DbType::Pg,
             Some(
-                DtError::new(ErrorCode::ReplicationCapacityExhausted)
-                    .stage(Stage::Precheck)
-                    .into(),
+                DtError::Unexpected("replication capacity exhausted".to_string())
+                    .with_code(ErrorCode::ReplicationCapacityExhausted)
+                    .with_stage(Stage::Precheck),
             ),
             None,
         );

@@ -4,7 +4,7 @@ use dt_common::meta::col_value::ColValue;
 use dt_common::utils::redis_util::RedisUtil;
 use dt_common::{
     config::{sinker_config::SinkerConfig, task_config::TaskConfig},
-    error::{DtError, ErrorCode, Stage},
+    error::{DtError, DtErrorContextExt, ErrorCode, Stage},
     utils::time_util::TimeUtil,
 };
 use dt_task::task_util::TaskUtil;
@@ -50,9 +50,9 @@ impl RdbRedisTestRunner {
                 .await
                 .unwrap(),
             _ => {
-                bail! {DtError::new(ErrorCode::InvalidConfig)
-                .detail("unsupported sinker config")
-                .stage(Stage::Bootstrap)};
+                bail! {DtError::ConfigError("unsupported sinker config".to_string())
+                .with_code(ErrorCode::InvalidConfig)
+                .with_stage(Stage::Bootstrap)};
             }
         };
         let redis_util = RedisTestUtil::new_default();

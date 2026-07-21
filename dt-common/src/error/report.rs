@@ -1,10 +1,10 @@
-use std::{error::Error as StdError, fmt};
+use std::{backtrace::BacktraceStatus, fmt};
 
 use serde::Serialize;
 
 use super::{
-    classify_mongodb_error, classify_redis_error, classify_sqlx_error, DtError, EndpointRole,
-    ErrorCode, ErrorObject, OriginError, SqlxProvider, Stage,
+    error_context::DT_ERROR_CONTEXT_MARKER, DtError, DtErrorContext, EndpointRole, ErrorCode,
+    ErrorObject, OriginError, Stage,
 };
 
 pub const ERROR_REPORT_SCHEMA_VERSION: u16 = 1;
@@ -18,12 +18,8 @@ pub struct ErrorReport {
     pub detail: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hint: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub phase: Option<String>,
     #[serde(skip_serializing)]
     pub stage: Stage,
-    #[serde(skip_serializing)]
-    pub operation: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub task_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -33,167 +29,79 @@ pub struct ErrorReport {
     #[serde(skip_serializing)]
     pub origin: Option<OriginError>,
     #[serde(skip_serializing)]
-    pub contexts: Vec<String>,
+    pub error_chain: Vec<String>,
     #[serde(skip_serializing)]
-    pub diagnostic_message: Option<String>,
+    pub context_count: usize,
     #[serde(skip_serializing)]
-    pub location: Option<String>,
+    pub backtrace: Option<String>,
 }
 
 impl ErrorReport {
     pub fn from_anyhow(error: &anyhow::Error) -> Self {
-        if let Some(dt_error) = error.downcast_ref::<DtError>() {
-            return Self::from_dt_error(dt_error, contexts_before::<DtError>(error));
-        }
+        let context = error.downcast_ref::<DtErrorContext>();
+        let project_detail = error.downcast_ref::<DtError>().map(DtError::detail);
+        let (error_chain, context_count) = split_error_chain(error);
+        let backtrace = captured_backtrace(error);
 
-        if let Some(sqlx_error) = error.downcast_ref::<sqlx::Error>() {
-            let classification = classify_sqlx_error(
-                sqlx_error,
-                SqlxProvider::Unknown,
-                ErrorCode::StatementFailed,
-            );
-            return Self::new(
-                classification.code,
-                Stage::Unknown,
-                sqlx_error.to_string(),
-                contexts_before::<sqlx::Error>(error),
-            )
-            .with_origin(classification.origin)
-            .with_object(classification.object);
-        }
-
-        if let Some(redis_error) = error.downcast_ref::<redis::RedisError>() {
-            let classification = classify_redis_error(redis_error, ErrorCode::StatementFailed);
-            return Self::new(
-                classification.code,
-                Stage::Unknown,
-                redis_error.to_string(),
-                contexts_before::<redis::RedisError>(error),
-            )
-            .with_origin(classification.origin);
-        }
-
-        if let Some(mongodb_error) = error.downcast_ref::<mongodb::error::Error>() {
-            let classification = classify_mongodb_error(mongodb_error, ErrorCode::StatementFailed);
-            return Self::new(
-                classification.code,
-                Stage::Unknown,
-                mongodb_error.to_string(),
-                contexts_before::<mongodb::error::Error>(error),
-            )
-            .with_origin(classification.origin);
-        }
-
-        if let Some(join_error) = error.downcast_ref::<tokio::task::JoinError>() {
-            return Self::new(
-                ErrorCode::WorkerFailed,
-                Stage::Task,
-                join_error.to_string(),
-                contexts_before::<tokio::task::JoinError>(error),
+        if let Some(context) = context {
+            return Self::from_context(
+                context,
+                project_detail,
+                error_chain,
+                context_count,
+                backtrace,
             );
         }
 
-        if let Some(url_error) = error.downcast_ref::<url::ParseError>() {
-            return Self::new(
-                ErrorCode::InvalidConfig,
-                Stage::Bootstrap,
-                url_error.to_string(),
-                contexts_before::<url::ParseError>(error),
-            );
-        }
-
-        if let Some(yaml_error) = error.downcast_ref::<serde_yaml::Error>() {
-            return Self::new(
-                ErrorCode::InvalidConfig,
-                Stage::Bootstrap,
-                yaml_error.to_string(),
-                contexts_before::<serde_yaml::Error>(error),
-            );
-        }
-
-        if let Some(io_error) = error.downcast_ref::<std::io::Error>() {
-            return Self::new(
-                ErrorCode::IoFailed,
-                Stage::Unknown,
-                io_error.to_string(),
-                contexts_before::<std::io::Error>(error),
-            );
-        }
-
-        let mut chain: Vec<_> = error.chain().map(ToString::to_string).collect();
-        let diagnostic_message = chain.pop().unwrap_or_else(|| error.to_string());
-        Self::new(
-            ErrorCode::Unclassified,
-            Stage::Unknown,
-            diagnostic_message,
-            chain,
-        )
-    }
-
-    fn from_dt_error(error: &DtError, contexts: Vec<String>) -> Self {
-        let stage = error.root_stage().unwrap_or(Stage::Unknown);
         Self {
             schema_version: ERROR_REPORT_SCHEMA_VERSION,
-            code: error.code(),
-            message: sanitize_user_text(&error.message),
-            detail: error.detail.as_deref().map(sanitize_user_text),
-            hint: Some(sanitize_user_text(
-                error
-                    .hint
-                    .as_deref()
-                    .unwrap_or_else(|| error.code().default_hint()),
-            )),
-            phase: stage.user_description().map(str::to_string),
-            stage,
-            operation: error.root_operation().map(str::to_string),
-            task_id: error.task_id.clone(),
-            endpoint: error.endpoint,
-            object: error.object.clone(),
-            origin: error.origin_error().cloned(),
-            contexts,
-            diagnostic_message: StdError::source(error).map(ToString::to_string),
-            location: Some(format!(
-                "{}:{}:{}",
-                error.location.file(),
-                error.location.line(),
-                error.location.column()
-            )),
-        }
-    }
-
-    fn new(
-        code: ErrorCode,
-        stage: Stage,
-        diagnostic_message: String,
-        contexts: Vec<String>,
-    ) -> Self {
-        Self {
-            schema_version: ERROR_REPORT_SCHEMA_VERSION,
-            code,
-            message: code.default_message().to_string(),
+            code: ErrorCode::Unclassified,
+            message: ErrorCode::Unclassified.default_message().to_string(),
             detail: None,
-            hint: Some(code.default_hint().to_string()),
-            phase: stage.user_description().map(str::to_string),
-            stage,
-            operation: None,
+            hint: Some(ErrorCode::Unclassified.default_hint().to_string()),
+            stage: Stage::Unknown,
             task_id: None,
             endpoint: None,
             object: None,
             origin: None,
-            contexts,
-            diagnostic_message: Some(diagnostic_message),
-            location: None,
+            error_chain,
+            context_count,
+            backtrace,
         }
     }
 
-    fn with_origin(mut self, origin: OriginError) -> Self {
-        self.origin = Some(origin);
-        self
-    }
-
-    fn with_object(mut self, object: Option<ErrorObject>) -> Self {
-        self.object = object;
-        self
+    fn from_context(
+        context: &DtErrorContext,
+        project_detail: Option<&str>,
+        error_chain: Vec<String>,
+        context_count: usize,
+        backtrace: Option<String>,
+    ) -> Self {
+        let code = context.error_code().unwrap_or(ErrorCode::Unclassified);
+        Self {
+            schema_version: ERROR_REPORT_SCHEMA_VERSION,
+            code,
+            message: sanitize_user_text(
+                context
+                    .message_text()
+                    .unwrap_or_else(|| code.default_message()),
+            ),
+            detail: context
+                .detail_text()
+                .or(project_detail)
+                .map(sanitize_user_text),
+            hint: Some(sanitize_user_text(
+                context.hint_text().unwrap_or_else(|| code.default_hint()),
+            )),
+            stage: context.stage_value().unwrap_or(Stage::Unknown),
+            task_id: context.task_id_value().map(str::to_string),
+            endpoint: context.endpoint_role(),
+            object: context.error_object().cloned(),
+            origin: context.origin_error().cloned(),
+            error_chain,
+            context_count,
+            backtrace,
+        }
     }
 
     fn affected_resource(&self) -> Option<String> {
@@ -239,15 +147,34 @@ fn format_object(object: &ErrorObject) -> Option<String> {
     (!parts.is_empty()).then(|| parts.join(", "))
 }
 
-fn contexts_before<T>(error: &anyhow::Error) -> Vec<String>
-where
-    T: std::error::Error + Send + Sync + 'static,
-{
-    error
+fn split_error_chain(error: &anyhow::Error) -> (Vec<String>, usize) {
+    let raw_chain: Vec<_> = error
         .chain()
-        .take_while(|cause| cause.downcast_ref::<T>().is_none())
-        .map(ToString::to_string)
-        .collect()
+        .map(|cause| sanitize_user_text(&cause.to_string()))
+        .collect();
+    let marker = sanitize_user_text(DT_ERROR_CONTEXT_MARKER);
+    let Some(root_context_index) = raw_chain.iter().rposition(|item| item == &marker) else {
+        let context_count = raw_chain.len().saturating_sub(1);
+        return (raw_chain, context_count);
+    };
+
+    let mut chain = Vec::with_capacity(raw_chain.len());
+    let mut context_count = 0;
+    for (index, item) in raw_chain.into_iter().enumerate() {
+        if item == marker {
+            continue;
+        }
+        if index < root_context_index {
+            context_count += 1;
+        }
+        chain.push(item);
+    }
+    (chain, context_count)
+}
+
+fn captured_backtrace(error: &anyhow::Error) -> Option<String> {
+    (error.backtrace().status() == BacktraceStatus::Captured)
+        .then(|| format!("{}", error.backtrace()))
 }
 
 impl fmt::Display for ErrorReport {
@@ -259,23 +186,14 @@ impl fmt::Display for ErrorReport {
         if let Some(affected) = self.affected_resource() {
             write!(f, "\nAFFECTED: {affected}")?;
         }
-        if let Some(phase) = &self.phase {
-            write!(f, "\nPHASE: {phase}")?;
-        }
         if let Some(detail) = &self.detail {
             write!(f, "\nDETAIL: {detail}")?;
         }
         if let Some(hint) = &self.hint {
             write!(f, "\nHINT: {hint}")?;
         }
-        write!(f, "\nDIAGNOSTIC [{}]", self.code)?;
-        if let Some(location) = &self.location {
-            write!(f, "\nLOCATION: {location}")?;
-        }
+        write!(f, "\n\nDIAGNOSTIC [{}]", self.code)?;
         write!(f, "\nSTAGE: {}", self.stage.diagnostic_name())?;
-        if let Some(operation) = &self.operation {
-            write!(f, "\nOPERATION: {operation}")?;
-        }
         if let Some(endpoint) = self.endpoint {
             write!(f, "\nENDPOINT: {}", endpoint.user_description())?;
         }
@@ -285,11 +203,15 @@ impl fmt::Display for ErrorReport {
                 write!(f, "/{code}")?;
             }
         }
-        for context in &self.contexts {
-            write!(f, "\nCONTEXT: {}", sanitize_user_text(context))?;
+        for (index, item) in self.error_chain.iter().enumerate() {
+            if index < self.context_count {
+                write!(f, "\nCONTEXT {}: {item}", index + 1)?;
+            } else {
+                write!(f, "\nCAUSE {}: {item}", index - self.context_count + 1)?;
+            }
         }
-        if let Some(message) = &self.diagnostic_message {
-            write!(f, "\nCAUSE: {}", sanitize_user_text(message))?;
+        if let Some(backtrace) = &self.backtrace {
+            write!(f, "\nBACKTRACE:\n{backtrace}")?;
         }
         Ok(())
     }
@@ -297,33 +219,42 @@ impl fmt::Display for ErrorReport {
 
 #[cfg(test)]
 mod tests {
+    use std::io;
+
+    use crate::error::{DtError, DtErrorContextExt};
+
     use super::*;
 
     #[test]
     fn preserves_structured_error_through_anyhow_context() {
-        let error = anyhow::Error::new(
-            DtError::new(ErrorCode::ObjectNotFound)
-                .message("resume table does not exist")
-                .stage(Stage::Resumer)
-                .operation("load_checkpoint")
-                .object(ErrorObject {
-                    schema: Some("ape_dts".to_string()),
-                    table: Some("resume_position".to_string()),
-                    ..Default::default()
-                })
-                .origin(OriginError::new("postgres", Some("42P01"))),
-        )
-        .context("loading task state")
-        .context("starting task");
+        let error = DtErrorContext::new()
+            .code(ErrorCode::ObjectNotFound)
+            .message("inner message")
+            .detail("inner detail")
+            .hint("inner hint")
+            .object(ErrorObject {
+                schema: Some("ape_dts".to_string()),
+                table: Some("resume_position".to_string()),
+                ..Default::default()
+            })
+            .origin(OriginError::new("postgres", Some("42P01")))
+            .attach(io::Error::new(io::ErrorKind::NotFound, "relation missing")) // error-boundary-audit: allow-test
+            .context("loading task state")
+            .with_message("outer message")
+            .with_stage(Stage::Resumer)
+            .with_endpoint(EndpointRole::Metadata)
+            .with_hint("outer hint")
+            .with_task_id("task-42")
+            .context("starting task");
 
         let report = ErrorReport::from_anyhow(&error);
         assert_eq!(report.code, ErrorCode::ObjectNotFound);
+        assert_eq!(report.message, "outer message");
+        assert_eq!(report.detail.as_deref(), Some("inner detail"));
+        assert_eq!(report.hint.as_deref(), Some("outer hint"));
         assert_eq!(report.stage, Stage::Resumer);
-        assert_eq!(
-            report.phase.as_deref(),
-            Some("restoring saved task progress")
-        );
-        assert_eq!(report.operation.as_deref(), Some("load_checkpoint"));
+        assert_eq!(report.task_id.as_deref(), Some("task-42"));
+        assert_eq!(report.endpoint, Some(EndpointRole::Metadata));
         assert_eq!(
             report.origin.as_ref().unwrap().code.as_deref(),
             Some("42P01")
@@ -332,14 +263,25 @@ mod tests {
             report.object.as_ref().unwrap().table.as_deref(),
             Some("resume_position")
         );
-        assert_eq!(report.contexts, ["starting task", "loading task state"]);
+        assert_eq!(
+            error.downcast_ref::<io::Error>().map(io::Error::kind),
+            Some(io::ErrorKind::NotFound)
+        );
+        assert_eq!(
+            report.error_chain,
+            ["starting task", "loading task state", "relation missing"]
+        );
+        assert_eq!(report.context_count, 2);
         let rendered = report.to_string();
         assert!(rendered.contains("DIAGNOSTIC [MD001]"));
-        assert!(rendered.contains("LOCATION:"));
+        assert!(!rendered.contains("LOCATION:"));
         assert!(rendered.contains("STAGE: resumer"));
-        assert!(rendered.contains("OPERATION: load_checkpoint"));
+        assert!(!rendered.contains("OPERATION:"));
+        assert!(rendered.contains("TASK: task-42"));
+        assert!(rendered.contains("ENDPOINT: metadata"));
         assert!(rendered.contains("ORIGIN: postgres/42P01"));
-        assert!(rendered.contains("CONTEXT: starting task"));
+        assert!(rendered.contains("CONTEXT 1: starting task"));
+        assert!(rendered.contains("CAUSE 1: relation missing"));
     }
 
     #[test]
@@ -353,38 +295,35 @@ mod tests {
 
     #[test]
     fn renders_pg_style_report() {
-        let error = anyhow::Error::new(
-            DtError::new(ErrorCode::InvalidConfig)
-                .stage(Stage::Bootstrap)
-                .detail("config [runtime].worker_threads is invalid")
-                .hint("use a positive integer"),
-        );
+        let error = DtError::ConfigError("config [runtime].worker_threads is invalid".to_string())
+            .with_code(ErrorCode::InvalidConfig)
+            .with_stage(Stage::Bootstrap)
+            .with_hint("use a positive integer");
         let rendered = ErrorReport::from_anyhow(&error).to_string();
         assert!(rendered.starts_with("ERROR [CF002]:"));
-        assert!(rendered.contains("\nPHASE: loading task configuration"));
-        assert!(rendered.contains("\nDETAIL:"));
+        assert!(!rendered.contains("\nPHASE:"));
+        assert!(rendered.contains("\nDETAIL: config [runtime].worker_threads is invalid"));
         assert!(rendered.contains("\nHINT:"));
     }
 
     #[test]
     fn renders_user_known_task_endpoint_and_object() {
-        let error = anyhow::Error::new(
-            DtError::new(ErrorCode::ObjectNotFound)
-                .stage(Stage::Sinker)
-                .task_id("task-42")
-                .endpoint(EndpointRole::Destination)
-                .object(ErrorObject {
-                    schema: Some("sales".to_string()),
-                    table: Some("orders".to_string()),
-                    ..Default::default()
-                })
-                .origin(OriginError::new("postgres", Some("42P01"))),
-        );
+        let error = DtError::MetadataError("source table is missing".to_string())
+            .with_code(ErrorCode::ObjectNotFound)
+            .with_stage(Stage::Sinker)
+            .with_task_id("task-42")
+            .with_endpoint(EndpointRole::Destination)
+            .with_object(ErrorObject {
+                schema: Some("sales".to_string()),
+                table: Some("orders".to_string()),
+                ..Default::default()
+            })
+            .with_origin(OriginError::new("postgres", Some("42P01")));
 
         let rendered = ErrorReport::from_anyhow(&error).to_string();
         assert!(rendered.contains("\nTASK: task-42"));
         assert!(rendered.contains("\nAFFECTED: destination postgres sales.orders"));
-        assert!(rendered.contains("\nPHASE: writing to the destination"));
+        assert!(!rendered.contains("\nPHASE:"));
         assert!(rendered.contains("\nORIGIN: postgres/42P01"));
     }
 
@@ -398,7 +337,8 @@ mod tests {
 
         assert_eq!(report.message, ErrorCode::Unclassified.default_message());
         assert!(rendered.contains("DIAGNOSTIC [IN999]"));
-        assert!(rendered.contains("CONTEXT: internal worker context"));
+        assert!(rendered.contains("CONTEXT 1: internal worker context"));
+        assert!(rendered.contains("CAUSE 1:"));
         assert!(rendered.contains("sql=INSERT"));
         assert!(rendered.contains("row_data=private"));
         assert!(!rendered.contains("password=secret"));
@@ -407,26 +347,26 @@ mod tests {
         assert!(!json.contains("row_data=private"));
         assert!(!json.contains("password=secret"));
         for diagnostic_field in [
+            "phase",
             "stage",
-            "operation",
             "origin",
-            "contexts",
-            "diagnostic_message",
+            "error_chain",
+            "context_count",
+            "backtrace",
         ] {
             assert!(!json.contains(diagnostic_field));
         }
-        assert!(report.diagnostic_message.is_some());
-        assert!(!report.contexts.is_empty());
+        assert_eq!(report.context_count, 1);
+        assert_eq!(report.error_chain.len(), 2);
     }
 
     #[test]
     fn serializes_schema_version_and_redacts_user_text() {
-        let error = anyhow::Error::new(
-            DtError::new(ErrorCode::InvalidConfig)
-                .message("password=secret is invalid")
-                .detail("endpoint=mysql://user:hunter2@localhost:3306/db")
-                .hint("set token=abc123 before retrying"),
-        );
+        let error = DtError::ConfigError("password=secret is invalid".to_string())
+            .with_code(ErrorCode::InvalidConfig)
+            .with_message("password=secret is invalid")
+            .with_detail("endpoint=mysql://user:hunter2@localhost:3306/db")
+            .with_hint("set token=abc123 before retrying");
         let report = ErrorReport::from_anyhow(&error);
         let json = serde_json::to_value(&report).unwrap();
 
@@ -454,38 +394,18 @@ mod tests {
     }
 
     #[test]
-    fn captures_the_structured_error_creation_location() {
-        let error = anyhow::Error::new(DtError::new(ErrorCode::InvariantViolated));
-        let report = ErrorReport::from_anyhow(&error);
-        let location = report.location.unwrap();
-        assert!(location.contains("error/report.rs"), "{location}");
-    }
-
-    #[tokio::test]
-    async fn maps_worker_join_errors() {
-        let handle = tokio::spawn(async { panic!("worker panic for test") });
-        let error = anyhow::Error::new(handle.await.unwrap_err());
-        let report = ErrorReport::from_anyhow(&error);
-        assert_eq!(report.code, ErrorCode::WorkerFailed);
-        assert_eq!(report.stage, Stage::Task);
-        let rendered = report.to_string();
-        assert!(rendered.contains("DIAGNOSTIC [RT001]"));
-        assert!(rendered.contains("worker panic for test"));
-    }
-
-    #[test]
-    fn maps_url_and_yaml_errors_to_invalid_config() {
+    fn raw_provider_errors_remain_unclassified() {
         let url_error = anyhow::Error::new(url::Url::parse("://bad").unwrap_err());
         assert_eq!(
             ErrorReport::from_anyhow(&url_error).code,
-            ErrorCode::InvalidConfig
+            ErrorCode::Unclassified
         );
 
         let yaml_error =
             anyhow::Error::new(serde_yaml::from_str::<serde_yaml::Value>("key: [").unwrap_err());
         assert_eq!(
             ErrorReport::from_anyhow(&yaml_error).code,
-            ErrorCode::InvalidConfig
+            ErrorCode::Unclassified
         );
     }
 
@@ -495,15 +415,15 @@ mod tests {
             .context("opening checkpoint file");
         let report = ErrorReport::from_anyhow(&error);
 
-        assert_eq!(report.contexts, ["opening checkpoint file"]);
         assert_eq!(
-            report.diagnostic_message.as_deref(),
-            Some("root I/O failure")
+            report.error_chain,
+            ["opening checkpoint file", "root I/O failure"]
         );
+        assert_eq!(report.context_count, 1);
 
         let rendered = report.to_string();
-        assert!(rendered.contains("CONTEXT: opening checkpoint file"));
-        assert!(rendered.contains("CAUSE: root I/O failure"));
-        assert!(!rendered.contains("CAUSE: opening checkpoint file"));
+        assert!(rendered.contains("CONTEXT 1: opening checkpoint file"));
+        assert!(rendered.contains("CAUSE 1: root I/O failure"));
+        assert!(!rendered.contains("CAUSE 1: opening checkpoint file"));
     }
 }

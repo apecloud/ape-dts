@@ -6,7 +6,7 @@ use sqlx::{MySql, Pool, Postgres};
 use strum::{Display, EnumString, IntoStaticStr};
 use tokio::time::Instant;
 
-use crate::error_boundary::extractor::resumer_config as resumer_config_error;
+use crate::error_boundary::extractor_error::invalid_resumer_config;
 use crate::extractor::resumer::{
     recorder::{to_database::DatabaseRecorder, Recorder},
     recovery::{from_database::DatabaseRecovery, from_log::LogRecovery, Recovery},
@@ -78,9 +78,8 @@ pub async fn build_recorder(
         ResumerConfig::FromDB { .. } => {
             let pool_inner = match pool {
                 Some(p) => p,
-                None => bail!(resumer_config_error(
+                None => bail!(invalid_resumer_config(
                     "a database pool is required when resume_type=from_db",
-                    "build_checkpoint_recorder",
                 )),
             };
             let recorder =
@@ -105,9 +104,8 @@ pub async fn build_recovery(
         ResumerConfig::FromDB { .. } => {
             let pool_inner = match pool {
                 Some(p) => p,
-                None => bail!(resumer_config_error(
+                None => bail!(invalid_resumer_config(
                     "a database pool is required when resume_type=from_db",
-                    "build_checkpoint_recovery",
                 )),
             };
             let recovery = DatabaseRecovery::new(task_id, resumer_config, pool_inner).await?;

@@ -19,7 +19,7 @@ mod config;
 mod error_boundary;
 
 use config::{build_task_config, infer_db_type, CreateConfig, DbType, Mode};
-use error_boundary::{config as config_error, task as task_error};
+use error_boundary::{config_error, config_source, task_error, task_source};
 
 const APP_NAME: &str = "dtscli";
 const ABOUT: &str = "A Command Line Interface for ApeCloud DTS";
@@ -457,25 +457,16 @@ impl CreateArgs {
     fn into_config(self) -> Result<CreateConfig> {
         Ok(CreateConfig {
             task_name: self.task_name,
-            mode: self.mode.ok_or_else(|| {
-                config_error(
-                    "--mode is required unless --file is provided",
-                    "parse_create_arguments",
-                )
-            })?,
+            mode: self
+                .mode
+                .ok_or_else(|| config_error("--mode is required unless --file is provided"))?,
             preflight: self.preflight,
-            source_url: self.source_url.ok_or_else(|| {
-                config_error(
-                    "--source is required unless --file is provided",
-                    "parse_create_arguments",
-                )
-            })?,
-            target_url: self.target_url.ok_or_else(|| {
-                config_error(
-                    "--target is required unless --file is provided",
-                    "parse_create_arguments",
-                )
-            })?,
+            source_url: self
+                .source_url
+                .ok_or_else(|| config_error("--source is required unless --file is provided"))?,
+            target_url: self
+                .target_url
+                .ok_or_else(|| config_error("--target is required unless --file is provided"))?,
             source_db: self.source_db,
             target_db: self.target_db,
             source_user: self.source_user,
@@ -564,12 +555,11 @@ fn handle_config(command: ConfigCommand) -> Result<()> {
         ConfigSubcommand::Get => {
             let cfg = load_cli_config()?;
             let output = serde_json::to_string_pretty(&cfg).map_err(|error| {
-                task_error(
+                task_source(
                     ErrorCode::InvariantViolated,
                     format!("Failed to serialize dtscli configuration: {error}"),
-                    "display_cli_config",
+                    error,
                 )
-                .source(error)
             })?;
             println!("{output}");
         }
@@ -583,12 +573,11 @@ fn handle_config(command: ConfigCommand) -> Result<()> {
             }
             save_cli_config(&cfg)?;
             let output = serde_json::to_string_pretty(&cfg).map_err(|error| {
-                task_error(
+                task_source(
                     ErrorCode::InvariantViolated,
                     format!("Failed to serialize dtscli configuration: {error}"),
-                    "display_cli_config",
+                    error,
                 )
-                .source(error)
             })?;
             println!("{output}");
             warn_if_workspace_binaries_missing(&cfg);
@@ -672,14 +661,11 @@ fn handle_create(create: CreateArgs) -> Result<()> {
     let source_db = infer_db_type(source_url, create.source_db.clone())?;
     let target_db = infer_db_type(target_url, create.target_db.clone())?;
     if source_db != target_db {
-        bail!(config_error(
-            format!(
-                "This release only supports same-engine tasks; source is [{}] and destination is [{}]",
-                source_db.as_config_value(),
-                target_db.as_config_value()
-            ),
-            "validate_task_engines"
-        ));
+        bail!(config_error(format!(
+            "This release only supports same-engine tasks; source is [{}] and destination is [{}]",
+            source_db.as_config_value(),
+            target_db.as_config_value()
+        ),));
     }
 
     let preflight_dir = create.preflight.then(|| preflight_temp_dir(task_name));
@@ -748,10 +734,10 @@ fn inspect_task_config(config_file: &Path, workspace: &Path) -> Result<TaskConfi
     let mut ini = Ini::new();
     ini.load(config_file.display().to_string())
         .map_err(|error| {
-            config_error(
-                format!("Failed to parse [{}]: {error}", config_file.display()),
-                "inspect_task_config",
-            )
+            config_error(format!(
+                "Failed to parse [{}]: {error}",
+                config_file.display()
+            ))
         })?;
 
     let runtime_log_dir = resolve_workspace_path(
@@ -808,7 +794,6 @@ fn start_persistent_task(
                 "Task [{task_name}] already exists at [{}]",
                 task_dir.display()
             ),
-            "create_task"
         ));
     }
     fs::create_dir_all(&task_dir)
@@ -863,7 +848,6 @@ fn reject_if_task_running(task_dir: &Path, metadata: &TaskMetadata) -> Result<()
                 "Task [{}] is already running with pid [{pid}]",
                 metadata.task_name
             ),
-            "start_task"
         ));
     }
     Ok(())
@@ -909,12 +893,11 @@ fn launch_persistent_task(
     metadata.dt_main = dt_main.display().to_string();
     metadata.pid = Some(pid);
     let metadata_json = serde_json::to_string_pretty(&metadata).map_err(|error| {
-        task_error(
+        task_source(
             ErrorCode::InvariantViolated,
             format!("Failed to serialize task metadata: {error}"),
-            "write_task_metadata",
+            error,
         )
-        .source(error)
     })?;
     fs::write(task_dir.join("metadata.json"), metadata_json)?;
 
@@ -972,14 +955,12 @@ fn run_preflight(
         bail!(task_error(
             ErrorCode::PrerequisiteNotMet,
             "Preflight was interrupted",
-            "run_preflight"
         ));
     }
     if !status.success() {
         bail!(task_error(
             ErrorCode::PrerequisiteNotMet,
             format!("Preflight failed with status [{status}]"),
-            "run_preflight"
         ));
     }
     println!("preflight finished successfully");
@@ -1091,12 +1072,11 @@ fn handle_show(args: ShowArgs) -> Result<()> {
     let task_dir = existing_task_dir(&args.task_name)?;
     let metadata = read_metadata(&task_dir)?;
     let output = serde_json::to_string_pretty(&metadata).map_err(|error| {
-        task_error(
+        task_source(
             ErrorCode::InvariantViolated,
             format!("Failed to serialize task metadata: {error}"),
-            "display_task_metadata",
+            error,
         )
-        .source(error)
     })?;
     println!("{output}");
     Ok(())
@@ -1130,7 +1110,6 @@ fn handle_stop(stop: StopArgs) -> Result<()> {
         task_error(
             ErrorCode::CheckpointReadFailed,
             format!("PID was not found for task [{}]", stop.task_name),
-            "stop_task",
         )
     })?;
     if !process_exists(pid) {
@@ -1154,7 +1133,6 @@ fn handle_delete(delete: DeleteArgs) -> Result<()> {
                     "Task [{}] is still running with pid [{pid}]; stop it first or use --force",
                     delete.task_name
                 ),
-                "delete_task"
             ));
         }
     }
@@ -1217,27 +1195,19 @@ fn delete_runtime_log_dir(metadata: &TaskMetadata) -> Result<()> {
 fn validate_task_name(task_name: &str) -> Result<()> {
     let mut chars = task_name.chars();
     let Some(first) = chars.next() else {
-        bail!(config_error(
-            "task_name must not be empty",
-            "validate_task_name"
-        ));
+        bail!(config_error("task_name must not be empty",));
     };
     if task_name.len() > 128 {
-        bail!(config_error(
-            "task_name must be at most 128 bytes",
-            "validate_task_name"
-        ));
+        bail!(config_error("task_name must be at most 128 bytes",));
     }
     if !first.is_ascii_alphanumeric() {
         bail!(config_error(
             "task_name must start with an ASCII letter or digit",
-            "validate_task_name"
         ));
     }
     if !chars.all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '.')) {
         bail!(config_error(
             "task_name can only contain ASCII letters, digits, '_', '-', and '.'",
-            "validate_task_name"
         ));
     }
     Ok(())
@@ -1251,15 +1221,13 @@ fn load_cli_config() -> Result<CliConfig> {
     let content =
         fs::read_to_string(&path).with_context(|| format!("failed to read {}", path.display()))?;
     serde_json::from_str(&content).map_err(|error| {
-        config_error(
+        config_source(
             format!(
                 "Failed to parse dtscli configuration [{}]: {error}",
                 path.display()
             ),
-            "load_cli_config",
+            error,
         )
-        .source(error)
-        .into()
     })
 }
 
@@ -1269,12 +1237,11 @@ fn save_cli_config(cfg: &CliConfig) -> Result<()> {
         fs::create_dir_all(parent)?;
     }
     let content = serde_json::to_string_pretty(cfg).map_err(|error| {
-        task_error(
+        task_source(
             ErrorCode::InvariantViolated,
             format!("Failed to serialize dtscli configuration: {error}"),
-            "save_cli_config",
+            error,
         )
-        .source(error)
     })?;
     fs::write(&path, content)?;
     Ok(())
@@ -1285,11 +1252,7 @@ fn cli_home() -> Result<PathBuf> {
         return Ok(PathBuf::from(home));
     }
     let home = env::var("HOME").map_err(|error| {
-        config_error(
-            "HOME is not set and APE_DTS_HOME is not configured",
-            "resolve_cli_home",
-        )
-        .source(error)
+        config_source("HOME is not set and APE_DTS_HOME is not configured", error)
     })?;
     Ok(PathBuf::from(home).join(".ape-dts"))
 }
@@ -1308,7 +1271,6 @@ fn existing_task_dir(task_name: &str) -> Result<PathBuf> {
         bail!(task_error(
             ErrorCode::ObjectNotFound,
             format!("Task [{task_name}] does not exist"),
-            "find_task"
         ));
     }
     Ok(task_dir)
@@ -1457,7 +1419,6 @@ fn resolve_dt_main(cfg: &CliConfig) -> Result<PathBuf> {
             "dt-main was not found under workspace [{}]",
             workspace.display()
         ),
-        "resolve_dt_main"
     ))
 }
 
@@ -1471,7 +1432,6 @@ fn dt_main_version(dt_main: &Path) -> Result<String> {
         bail!(task_error(
             ErrorCode::WorkerFailed,
             format!("dt-main --version failed: {}", stderr.trim()),
-            "read_dt_main_version"
         ));
     }
 
@@ -1485,7 +1445,6 @@ fn dt_main_version(dt_main: &Path) -> Result<String> {
         bail!(task_error(
             ErrorCode::InvariantViolated,
             "dt-main returned an empty version",
-            "read_dt_main_version"
         ));
     }
     Ok(version.to_string())
@@ -1546,16 +1505,14 @@ fn read_metadata(task_dir: &Path) -> Result<TaskMetadata> {
         )
     })?;
     serde_json::from_str(&content).map_err(|error| {
-        task_error(
+        task_source(
             ErrorCode::CheckpointReadFailed,
             format!(
                 "Failed to parse task metadata [{}]: {error}",
                 task_dir.join("metadata.json").display()
             ),
-            "read_task_metadata",
+            error,
         )
-        .source(error)
-        .into()
     })
 }
 
@@ -1632,7 +1589,6 @@ fn send_signal(pid: u32, signal: &str) -> Result<()> {
         bail!(task_error(
             ErrorCode::WorkerFailed,
             format!("Failed to send SIG{signal} to pid [{pid}]"),
-            "signal_task"
         ));
     }
     Ok(())
@@ -1654,7 +1610,6 @@ fn stop_pid(task_name: &str, pid: u32, timeout_secs: u64, force: bool) -> Result
         bail!(task_error(
             ErrorCode::WorkerFailed,
             format!("Task [{task_name}] is still running with pid [{pid}]"),
-            "stop_task"
         ));
     }
     Ok(())
@@ -1675,7 +1630,6 @@ fn print_tail(path: &Path, lines: usize) -> Result<bool> {
         bail!(task_error(
             ErrorCode::ObjectNotFound,
             format!("Log file [{}] does not exist", path.display()),
-            "read_task_log"
         ));
     }
     let file = File::open(path)?;
@@ -1701,10 +1655,7 @@ fn resolve_log_file(metadata: &TaskMetadata, file: &str) -> Result<PathBuf> {
         "default" | "monitor" | "commit" | "position" | "finished" => {
             Ok(PathBuf::from(&metadata.log_dir).join(format!("{file}.log")))
         }
-        other => bail!(config_error(
-            format!("Unsupported log file [{other}]"),
-            "resolve_log_file"
-        )),
+        other => bail!(config_error(format!("Unsupported log file [{other}]"),)),
     }
 }
 
@@ -1737,7 +1688,6 @@ fn select_default_log_file(metadata: &TaskMetadata) -> Result<PathBuf> {
                 .collect::<Vec<_>>()
                 .join(", ")
         ),
-        "select_task_log"
     ))
 }
 
@@ -1775,6 +1725,8 @@ fn unix_nanos() -> u128 {
 
 #[cfg(test)]
 mod tests {
+    use dt_common::error::DtErrorContext;
+
     use super::*;
 
     fn test_metadata(task_dir: &Path, config_file: &Path, log_dir: &Path) -> TaskMetadata {
@@ -1854,8 +1806,8 @@ mod tests {
         let err = restart_persistent_task(&task_dir, &root, Path::new("/bin/sh"), &mut metadata)
             .unwrap_err();
         assert_eq!(
-            err.downcast_ref::<dt_common::error::DtError>()
-                .map(dt_common::error::DtError::code),
+            err.downcast_ref::<DtErrorContext>()
+                .and_then(DtErrorContext::error_code),
             Some(ErrorCode::PrerequisiteNotMet)
         );
 

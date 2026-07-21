@@ -9,7 +9,7 @@ use sqlx::{mysql::MySqlRow, MySql, Pool, Row};
 
 use dt_common::{
     config::config_enums::DbType,
-    error::{DtError, EndpointRole, ErrorCode, OriginError, Stage},
+    error::{DtError, DtErrorContextExt, EndpointRole, ErrorCode, OriginError, Stage},
     meta::{
         mysql::{mysql_col_type::MysqlColType, mysql_meta_manager::MysqlMetaManager},
         struct_meta::{
@@ -124,15 +124,14 @@ impl MysqlStructFetcher {
             .cloned()
             .collect();
         if !filtered_dbs.is_empty() {
-            bail! {DtError::new(ErrorCode::DatabaseNotFound)
-            .detail(format!(
-            "dbs: {} not found",
-            filtered_dbs.join(",")
+            bail! {DtError::MetadataError(format!(
+                "dbs: {} not found",
+                filtered_dbs.join(",")
             ))
-            .stage(Stage::Extractor)
-            .operation("fetch_mysql_databases")
-            .endpoint(EndpointRole::Source)
-            .origin(OriginError::new("mysql", None::<String>))}
+            .with_code(ErrorCode::DatabaseNotFound)
+            .with_stage(Stage::Extractor)
+            .with_endpoint(EndpointRole::Source)
+            .with_origin(OriginError::new("mysql", None::<String>))}
         }
 
         Ok(dbs.into_values().collect())
@@ -606,10 +605,9 @@ impl MysqlStructFetcher {
                 }
             }
             Err(error) => {
-                bail! {crate::error_boundary::extractor::mysql_sqlx(
+                bail! {crate::error_boundary::extractor_error::mysql_sqlx(
                     error,
                     ErrorCode::StatementFailed,
-                    "unescape_mysql_expression",
                 )}
             }
         }

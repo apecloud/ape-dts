@@ -20,7 +20,7 @@ use crate::{
 };
 use dt_common::{
     config::config_enums::{DbType, RdbParallelType},
-    error::{DtError, ErrorCode, Stage},
+    error::{DtError, DtErrorContextExt, ErrorCode, Stage},
     log_error, log_info,
     meta::{
         col_value::ColValue,
@@ -50,16 +50,18 @@ pub struct MongoSnapshotExtractor {
 impl Extractor for MongoSnapshotExtractor {
     async fn extract(&mut self) -> anyhow::Result<()> {
         if self.parallel_size < 1 {
-            bail!(DtError::new(ErrorCode::InvalidConfig)
-                .detail("parallel_size must be greater than 0")
-                .stage(Stage::Bootstrap)
-                .operation("build_mongodb_snapshot_extractor"));
+            bail!(
+                DtError::ConfigError("parallel_size must be greater than 0".to_string(),)
+                    .with_code(ErrorCode::InvalidConfig)
+                    .with_stage(Stage::Bootstrap)
+            );
         }
         if matches!(self.parallel_type, RdbParallelType::Chunk) {
-            bail!(DtError::new(ErrorCode::InvalidConfig)
-                .detail("MongoDB snapshot extraction does not support parallel_type=chunk")
-                .stage(Stage::Bootstrap)
-                .operation("build_mongodb_snapshot_extractor"));
+            bail!(DtError::ConfigError(
+                "MongoDB snapshot extraction does not support parallel_type=chunk".to_string(),
+            )
+            .with_code(ErrorCode::InvalidConfig)
+            .with_stage(Stage::Bootstrap));
         }
 
         let tables = self.collect_tables();

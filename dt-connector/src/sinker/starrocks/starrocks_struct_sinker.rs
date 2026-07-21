@@ -5,7 +5,7 @@ use crate::{close_conn_pool, rdb_router::RdbRouter, Sinker};
 use anyhow::bail;
 use dt_common::{
     config::config_enums::{ConflictPolicyEnum, DbType},
-    error::{DtError, ErrorCode, Stage},
+    error::{DtError, DtErrorContextExt, ErrorCode, Stage},
     log_error, log_info,
     meta::{
         mysql::{mysql_col_type::MysqlColType, mysql_tb_meta::MysqlTbMeta},
@@ -131,15 +131,16 @@ impl StarrocksStructSinker {
         } else if let Some(tb_meta) = mysql_tb_meta {
             &tb_meta.basic
         } else {
-            return Err(DtError::new(ErrorCode::ObjectNotFound)
-                .message("Source table metadata is unavailable for StarRocks structure migration")
-                .detail("source table metadata is missing while building StarRocks DDL")
-                .hint(
+            return Err(DtError::SinkerError(
+                "source table metadata is missing while building StarRocks DDL".to_string(),
+            )
+                .with_code(ErrorCode::ObjectNotFound)
+                .with_message("Source table metadata is unavailable for StarRocks structure migration")
+                .with_detail("source table metadata is missing while building StarRocks DDL")
+                .with_hint(
                     "Verify that the source table still exists and rerun structure migration. If it repeats, contact support with the task ID and error code.",
                 )
-                .stage(Stage::Sinker)
-                .operation("build_starrocks_create_table")
-                .into());
+                .with_stage(Stage::Sinker));
         };
 
         let mut dst_cols = vec![];
@@ -223,18 +224,18 @@ impl StarrocksStructSinker {
         } else if let Some(tb_meta) = pg_tb_meta {
             self.get_dst_col_type_from_pg(col, tb_meta)
         } else {
-            return Err(DtError::new(ErrorCode::ObjectNotFound)
-                .message("Source column metadata is unavailable for StarRocks structure migration")
-                .detail(format!(
-                    "source column metadata is missing for {}.{}.{}",
-                    rdb_tb_meta.schema, rdb_tb_meta.tb, col
-                ))
-                .hint(
+            let detail = format!(
+                "source column metadata is missing for {}.{}.{}",
+                rdb_tb_meta.schema, rdb_tb_meta.tb, col
+            );
+            return Err(DtError::SinkerError(detail.clone())
+                .with_code(ErrorCode::ObjectNotFound)
+                .with_message("Source column metadata is unavailable for StarRocks structure migration")
+                .with_detail(detail)
+                .with_hint(
                     "Check whether the source table changed, then restart structure migration to reload its definition.",
                 )
-                .stage(Stage::Sinker)
-                .operation("build_starrocks_column")
-                .into());
+                .with_stage(Stage::Sinker));
         }?;
 
         // The delete operation in Doris (-H "merge_type: delete") is implemented by inserting a record marked for deletion,

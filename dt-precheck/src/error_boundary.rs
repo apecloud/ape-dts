@@ -1,4 +1,6 @@
-use dt_common::error::{DtError, EndpointRole, ErrorCode, Stage};
+use dt_common::error::{
+    DtError, DtErrorContext, DtErrorContextExt, EndpointRole, ErrorCode, Stage,
+};
 
 fn endpoint(is_source: bool) -> EndpointRole {
     if is_source {
@@ -8,19 +10,22 @@ fn endpoint(is_source: bool) -> EndpointRole {
     }
 }
 
-#[track_caller]
-pub(crate) fn failure(
+fn scoped(context: DtErrorContext, endpoint: EndpointRole) -> DtErrorContext {
+    DtErrorContext::new()
+        .stage(Stage::Precheck)
+        .endpoint(endpoint)
+        .inherit(context)
+}
+
+pub(crate) fn precheck_failure(
     code: ErrorCode,
     detail: impl Into<String>,
     is_source: bool,
-    operation: &'static str,
 ) -> anyhow::Error {
-    DtError::new(code)
-        .detail(detail)
-        .stage(Stage::Precheck)
-        .operation(operation)
-        .endpoint(endpoint(is_source))
-        .into()
+    DtError::Unexpected(detail.into())
+        .with_code(code)
+        .with_stage(Stage::Precheck)
+        .with_endpoint(endpoint(is_source))
 }
 
 pub(crate) mod report {
@@ -50,63 +55,81 @@ pub(crate) mod report {
 
 pub(crate) mod mysql {
     use dt_common::error::{
-        dt_error_from_sqlx, DtError, EndpointRole, ErrorCode, SqlxProvider, Stage,
+        classify_sqlx_error, DtErrorContextExt, EndpointRole, ErrorCode, SqlxProvider, Stage,
     };
-
-    #[track_caller]
-    pub(crate) fn provider(
+    pub(crate) fn mysql_precheck_error(
         error: sqlx::Error,
         endpoint: EndpointRole,
-        operation: &'static str,
-    ) -> DtError {
-        dt_error_from_sqlx(error, SqlxProvider::MySql, ErrorCode::StatementFailed)
-            .stage(Stage::Precheck)
-            .operation(operation)
-            .endpoint(endpoint)
+    ) -> anyhow::Error {
+        let context = classify_sqlx_error(&error, SqlxProvider::MySql).into_context();
+        error
+            .with_code(ErrorCode::StatementFailed)
+            .with_context(context)
+            .with_stage(Stage::Precheck)
+            .with_endpoint(endpoint)
     }
 }
 
 pub(crate) mod postgres {
     use dt_common::error::{
-        dt_error_from_sqlx, DtError, EndpointRole, ErrorCode, SqlxProvider, Stage,
+        classify_sqlx_error, DtErrorContextExt, EndpointRole, ErrorCode, SqlxProvider, Stage,
     };
-
-    #[track_caller]
-    pub(crate) fn provider(
+    pub(crate) fn postgres_precheck_error(
         error: sqlx::Error,
         endpoint: EndpointRole,
-        operation: &'static str,
-    ) -> DtError {
-        dt_error_from_sqlx(error, SqlxProvider::Postgres, ErrorCode::StatementFailed)
-            .stage(Stage::Precheck)
-            .operation(operation)
-            .endpoint(endpoint)
+    ) -> anyhow::Error {
+        let context = classify_sqlx_error(&error, SqlxProvider::Postgres).into_context();
+        error
+            .with_code(ErrorCode::StatementFailed)
+            .with_context(context)
+            .with_stage(Stage::Precheck)
+            .with_endpoint(endpoint)
     }
 }
 
 pub(crate) mod mongodb {
-    use dt_common::error::{dt_error_from_mongodb, DtError, ErrorCode, Stage};
+    use dt_common::error::{classify_mongodb_error, DtError, DtErrorContextExt, ErrorCode, Stage};
 
     use super::endpoint;
-
-    #[track_caller]
-    pub(crate) fn state(is_source: bool, operation: &'static str) -> DtError {
-        DtError::new(ErrorCode::InvariantViolated)
-            .detail("the MongoDB precheck client is not initialized")
-            .stage(Stage::Precheck)
-            .operation(operation)
-            .endpoint(endpoint(is_source))
+    pub(crate) fn mongo_precheck_state_error(is_source: bool) -> anyhow::Error {
+        DtError::Unexpected("the MongoDB precheck client is not initialized".to_string())
+            .with_code(ErrorCode::InvariantViolated)
+            .with_stage(Stage::Precheck)
+            .with_endpoint(endpoint(is_source))
     }
-
-    #[track_caller]
-    pub(crate) fn provider(
+    pub(crate) fn mongo_precheck_provider_error(
         error: mongodb::error::Error,
         is_source: bool,
-        operation: &'static str,
-    ) -> DtError {
-        dt_error_from_mongodb(error, ErrorCode::StatementFailed)
-            .stage(Stage::Precheck)
-            .operation(operation)
-            .endpoint(endpoint(is_source))
+    ) -> anyhow::Error {
+        let context = classify_mongodb_error(&error).into_context();
+        error
+            .with_code(ErrorCode::StatementFailed)
+            .with_context(context)
+            .with_stage(Stage::Precheck)
+            .with_endpoint(endpoint(is_source))
+    }
+}
+
+pub(crate) mod redis {
+    use std::error::Error as StdError;
+
+    use dt_common::error::{DtErrorContext, EndpointRole, ErrorCode, OriginError};
+    pub(crate) fn redis_source<E>(
+        error: E,
+        code: ErrorCode,
+        detail: impl Into<String>,
+        endpoint: EndpointRole,
+    ) -> anyhow::Error
+    where
+        E: StdError + Send + Sync + 'static,
+    {
+        super::scoped(
+            DtErrorContext::new()
+                .code(code)
+                .detail(detail)
+                .origin(OriginError::new("redis", None::<String>)),
+            endpoint,
+        )
+        .attach(error)
     }
 }

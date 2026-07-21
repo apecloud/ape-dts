@@ -3,7 +3,7 @@ use std::{env, panic, process::ExitCode};
 use clap::Parser;
 
 use dt_common::{
-    error::{DtError, ErrorCode, ErrorReport, Stage},
+    error::{DtError, DtErrorContextExt, ErrorCode, ErrorReport, Stage},
     log_error,
 };
 use dt_main::run_config;
@@ -36,9 +36,6 @@ impl Args {
 
 #[tokio::main]
 async fn main() -> ExitCode {
-    unsafe {
-        env::set_var("RUST_BACKTRACE", "1");
-    }
     install_panic_hook();
 
     let args = Args::parse();
@@ -66,10 +63,11 @@ async fn run(args: Args) -> anyhow::Result<()> {
     }
 
     let config = args.config_path().ok_or_else(|| {
-        DtError::new(ErrorCode::MissingConfig)
-            .message("no task config was provided")
-            .hint("pass --config <CONFIG> or a positional config path")
-            .stage(Stage::Bootstrap)
+        DtError::ConfigError("no task config was provided".to_string())
+            .with_code(ErrorCode::MissingConfig)
+            .with_message("no task config was provided")
+            .with_hint("pass --config <CONFIG> or a positional config path")
+            .with_stage(Stage::Bootstrap)
     })?;
 
     tokio::spawn(async {

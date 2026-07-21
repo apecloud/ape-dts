@@ -76,7 +76,6 @@ impl Parallelizer for RedisParallelizer {
                             "multi keys don't hash to the same slot, cmd: {}",
                             entry.cmd
                             ),
-                            "route_redis_command",
                         )};
                     }
                 }
@@ -104,15 +103,15 @@ impl Parallelizer for RedisParallelizer {
                 .slot_node_map
                 .get(&slots[0])
                 .copied()
-                .ok_or_else(|| crate::error_boundary::invariant("route_redis_slot"))?;
+                .ok_or_else(crate::error_boundary::invariant)?;
             let sinker_index = self
                 .node_sinker_index_map
                 .get(node)
                 .copied()
-                .ok_or_else(|| crate::error_boundary::invariant("route_redis_node"))?;
+                .ok_or_else(crate::error_boundary::invariant)?;
             node_data_items
                 .get_mut(sinker_index)
-                .ok_or_else(|| crate::error_boundary::invariant("route_redis_sinker"))?
+                .ok_or_else(crate::error_boundary::invariant)?
                 .push(dt_item);
         }
 
@@ -130,9 +129,7 @@ impl Parallelizer for RedisParallelizer {
         }
 
         for future in futures {
-            future.await.map_err(|error| {
-                crate::error_boundary::worker(error, "join_redis_sink_worker")
-            })??;
+            future.await.map_err(crate::error_boundary::worker)??;
         }
         self.base_parallelizer
             .record_workers_per_drain(workers_used)

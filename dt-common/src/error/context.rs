@@ -30,21 +30,6 @@ impl Stage {
             Self::Unknown => "unknown",
         }
     }
-
-    pub const fn user_description(self) -> Option<&'static str> {
-        match self {
-            Self::Bootstrap => Some("loading task configuration"),
-            Self::Precheck => Some("checking migration prerequisites"),
-            Self::Extractor => Some("reading from the source"),
-            Self::Parallelizer => Some("preparing migration work"),
-            Self::Pipeline => Some("processing migration data"),
-            Self::Sinker => Some("writing to the destination"),
-            Self::Checker => Some("checking migrated data"),
-            Self::Resumer => Some("restoring saved task progress"),
-            Self::Task => Some("running the migration task"),
-            Self::Unknown => None,
-        }
-    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]

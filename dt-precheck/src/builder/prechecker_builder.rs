@@ -2,7 +2,7 @@ use std::vec;
 
 use dt_common::{
     config::{config_enums::DbType, task_config::TaskConfig},
-    error::{DtError, EndpointRole, ErrorCode, Stage},
+    error::{DtError, DtErrorContextExt, EndpointRole, ErrorCode, Stage},
     rdb_filter::RdbFilter,
 };
 
@@ -115,22 +115,24 @@ impl PrecheckerBuilder {
 
     pub async fn check(&self) -> anyhow::Result<Vec<anyhow::Result<CheckResult>>> {
         if !self.valid_config() {
-            return Err(DtError::new(ErrorCode::InvalidConfig)
-                .message("precheck config is invalid")
-                .stage(Stage::Precheck)
-                .task_id(&self.task_config.global.task_id)
-                .into());
+            return Err(
+                DtError::ConfigError("precheck config is invalid".to_string())
+                    .with_code(ErrorCode::InvalidConfig)
+                    .with_stage(Stage::Precheck)
+                    .with_task_id(&self.task_config.global.task_id),
+            );
         }
         let (source_checker_option, sink_checker_option) =
             (self.build_checker(true)?, self.build_checker(false)?);
         let (Some(mut source_checker), Some(mut sink_checker)) =
             (source_checker_option, sink_checker_option)
         else {
-            return Err(DtError::new(ErrorCode::InvalidConfig)
-                .message("failed to build precheck checker from database type")
-                .stage(Stage::Precheck)
-                .task_id(&self.task_config.global.task_id)
-                .into());
+            return Err(DtError::ConfigError(
+                "failed to build precheck checker from database type".to_string(),
+            )
+            .with_code(ErrorCode::InvalidConfig)
+            .with_stage(Stage::Precheck)
+            .with_task_id(&self.task_config.global.task_id));
         };
 
         println!("[*]begin to check the connection");
@@ -156,12 +158,13 @@ impl PrecheckerBuilder {
             };
             check_source_connection.log();
             check_sink_connection.log();
-            return Err(DtError::new(error_code)
-                .message("database connection precheck failed")
-                .stage(Stage::Precheck)
-                .task_id(&self.task_config.global.task_id)
-                .endpoint(endpoint)
-                .into());
+            return Err(
+                DtError::Unexpected("database connection precheck failed".to_string())
+                    .with_code(error_code)
+                    .with_stage(Stage::Precheck)
+                    .with_task_id(&self.task_config.global.task_id)
+                    .with_endpoint(endpoint),
+            );
         }
 
         let mut check_results: Vec<anyhow::Result<CheckResult>> = vec![];
@@ -216,13 +219,14 @@ impl PrecheckerBuilder {
                 }
                 if error_count > 0 {
                     let mut error =
-                        DtError::new(first_error_code.unwrap_or(ErrorCode::PrerequisiteNotMet))
-                            .stage(Stage::Precheck)
-                            .task_id(&self.task_config.global.task_id);
+                        DtError::Unexpected("one or more prerequisite checks failed".to_string())
+                            .with_code(first_error_code.unwrap_or(ErrorCode::PrerequisiteNotMet))
+                            .with_stage(Stage::Precheck)
+                            .with_task_id(&self.task_config.global.task_id);
                     if let Some(endpoint) = first_error_endpoint {
-                        error = error.endpoint(endpoint);
+                        error = error.with_endpoint(endpoint);
                     }
-                    Err(error.into())
+                    Err(error)
                 } else {
                     Ok(())
                 }

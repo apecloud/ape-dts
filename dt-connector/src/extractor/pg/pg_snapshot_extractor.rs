@@ -25,7 +25,7 @@ use crate::{
 use dt_common::utils::sql_util::PG_ESCAPE;
 use dt_common::{
     config::config_enums::{DbType, RdbParallelType},
-    error::{DtError, ErrorCode, Stage},
+    error::{DtError, DtErrorContextExt, ErrorCode, Stage},
     log_debug, log_info,
     meta::{
         adaptor::{pg_col_value_convertor::PgColValueConvertor, sqlx_ext::SqlxPgExt},
@@ -111,10 +111,11 @@ enum PgSnapshotWorkResult {
 impl Extractor for PgSnapshotExtractor {
     async fn extract(&mut self) -> anyhow::Result<()> {
         if self.parallel_size < 1 {
-            bail!(DtError::new(ErrorCode::InvalidConfig)
-                .detail("parallel_size must be greater than 0")
-                .stage(Stage::Bootstrap)
-                .operation("build_postgres_snapshot_extractor"));
+            bail!(
+                DtError::ConfigError("parallel_size must be greater than 0".to_string(),)
+                    .with_code(ErrorCode::InvalidConfig)
+                    .with_stage(Stage::Bootstrap)
+            );
         }
 
         let tables = self.collect_tables();
@@ -308,10 +309,11 @@ impl PgSnapshotExtractor {
                     };
 
                     *running_chunks = running_chunks.checked_sub(1).ok_or_else(|| {
-                        DtError::new(ErrorCode::InvariantViolated)
-                            .detail("PostgreSQL split chunk running count underflow")
-                            .stage(Stage::Extractor)
-                            .operation("track_postgres_snapshot_split")
+                        DtError::Unexpected(
+                            "PostgreSQL split chunk running count underflow".to_string(),
+                        )
+                        .with_code(ErrorCode::InvariantViolated)
+                        .with_stage(Stage::Extractor)
                     })?;
 
                     if let Some(position) =
@@ -360,10 +362,11 @@ impl PgSnapshotExtractor {
                         )
                     })?;
                     let partition_col = finish_partition_col.clone().ok_or_else(|| {
-                        DtError::new(ErrorCode::InvariantViolated)
-                            .detail("finished PostgreSQL split is missing its partition column")
-                            .stage(Stage::Extractor)
-                            .operation("finish_postgres_snapshot_split")
+                        DtError::Unexpected(
+                            "finished PostgreSQL split is missing its partition column".to_string(),
+                        )
+                        .with_code(ErrorCode::InvariantViolated)
+                        .with_stage(Stage::Extractor)
                     })?;
                     if active_table.tb_meta.basic.is_col_nullable(&partition_col) {
                         state.pending_works.push_back(PgSnapshotWork::NullChunk {
@@ -637,10 +640,9 @@ impl PgSnapshotDispatchState {
         };
 
         let work = self.pending_works.remove(index).ok_or_else(|| {
-            DtError::new(ErrorCode::InvariantViolated)
-                .detail("pending PostgreSQL snapshot work is missing")
-                .stage(Stage::Extractor)
-                .operation("dispatch_postgres_snapshot_work")
+            DtError::Unexpected("pending PostgreSQL snapshot work is missing".to_string())
+                .with_code(ErrorCode::InvariantViolated)
+                .with_stage(Stage::Extractor)
         })?;
         self.mark_work_started(&work)?;
         Ok(Some(work))
@@ -700,10 +702,9 @@ impl PgSnapshotDispatchState {
             }
         };
         *queued_chunks = queued_chunks.checked_sub(1).ok_or_else(|| {
-            DtError::new(ErrorCode::InvariantViolated)
-                .detail("PostgreSQL split chunk queued count underflow")
-                .stage(Stage::Extractor)
-                .operation("track_postgres_snapshot_split")
+            DtError::Unexpected("PostgreSQL split chunk queued count underflow".to_string())
+                .with_code(ErrorCode::InvariantViolated)
+                .with_stage(Stage::Extractor)
         })?;
         *running_chunks += 1;
         Ok(())

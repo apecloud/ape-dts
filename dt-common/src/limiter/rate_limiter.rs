@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use governor;
 
 use crate::{
-    error::{DtError, ErrorCode},
+    error::{DtError, DtErrorContextExt, ErrorCode},
     limiter::base_limiter::{Limiter, UnitType},
     log_error, log_warn,
 };
@@ -49,10 +49,7 @@ impl Limiter for RateLimiter {
                     n, self.capacity, e
                 );
                 log_error!("{}", error_msg);
-                return Err(DtError::new(ErrorCode::InvalidConfig)
-                    .detail(error_msg)
-                    .operation("acquire_rate_limit_capacity")
-                    .into());
+                return Err(DtError::ConfigError(error_msg).with_code(ErrorCode::InvalidConfig));
             }
         }
         Ok(())

@@ -10,7 +10,7 @@ use crate::{
 };
 
 use super::traits::Prechecker;
-use crate::error_boundary::failure as precheck_failure;
+use crate::error_boundary::precheck_failure;
 use dt_common::error::ErrorCode;
 
 const MONGO_SUPPORTED_VERSION_REGEX: &str = r"4.*|5.0.*|6.0.*|7.0.*";
@@ -45,7 +45,6 @@ impl Prechecker for MongoPrechecker {
                 ErrorCode::UnsupportedDatabaseVersion,
                 format!("MongoDB version {version} is not supported"),
                 self.is_source,
-                "check_mongodb_version",
             ));
         }
 
@@ -110,7 +109,6 @@ impl Prechecker for MongoPrechecker {
                 ErrorCode::CdcNotEnabled,
                 err_msg,
                 self.is_source,
-                "check_mongodb_cdc_configuration",
             ));
         }
 
@@ -143,7 +141,6 @@ impl Prechecker for MongoPrechecker {
                     ErrorCode::UnsupportedTableStructure,
                     "MongoDB databases admin and local are not supported migration objects",
                     self.is_source,
-                    "check_mongodb_migration_objects",
                 ));
                 break;
             }

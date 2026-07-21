@@ -1,7 +1,7 @@
 use anyhow::bail;
 use dt_common::error::ErrorCode;
 
-use crate::error_boundary::extractor::redis_source as redis_protocol_error;
+use crate::error_boundary::extractor_error::{redis_source_error, redis_source_error_with_cause};
 
 /// Represents a redis RESP protocol response
 /// https://redis.io/topics/protocol#resp-protocol-description
@@ -37,10 +37,9 @@ impl ParseFrom<Value> for () {
     fn parse_from(value: Value) -> anyhow::Result<Self> {
         match value {
             Value::Okay => Ok(()),
-            v => bail! {redis_protocol_error(
+            v => bail! {redis_source_error(
                 ErrorCode::StatementFailed,
                 format!("failed to parse Redis response: {v:?}"),
-                "parse_redis_response",
             )},
         }
     }
@@ -50,10 +49,9 @@ impl ParseFrom<Value> for i64 {
     fn parse_from(value: Value) -> anyhow::Result<Self> {
         match value {
             Value::Int(n) => Ok(n),
-            v => bail! {redis_protocol_error(
+            v => bail! {redis_source_error(
                 ErrorCode::StatementFailed,
                 format!("failed to parse Redis response: {v:?}"),
-                "parse_redis_response",
             )},
         }
     }
@@ -63,10 +61,9 @@ impl ParseFrom<Value> for Vec<u8> {
     fn parse_from(value: Value) -> anyhow::Result<Self> {
         match value {
             Value::Data(bytes) => Ok(bytes),
-            v => bail! {redis_protocol_error(
+            v => bail! {redis_source_error(
                 ErrorCode::StatementFailed,
                 format!("failed to parse Redis response: {v:?}"),
-                "parse_redis_response",
             )},
         }
     }
@@ -80,18 +77,15 @@ impl ParseFrom<Value> for String {
             Value::Int(n) => Ok(format!("{}", n)),
             Value::Status(s) => Ok(s),
             Value::Data(bytes) => String::from_utf8(bytes).map_err(|error| {
-                redis_protocol_error(
+                redis_source_error_with_cause(
                     ErrorCode::StatementFailed,
                     "Redis string response is not valid UTF-8",
-                    "parse_redis_response",
+                    error,
                 )
-                .source(error)
-                .into()
             }),
-            v => bail! {redis_protocol_error(
+            v => bail! {redis_source_error(
                 ErrorCode::StatementFailed,
                 format!("failed to parse Redis response: {v:?}"),
-                "parse_redis_response",
             )},
         }
     }
@@ -109,10 +103,9 @@ where
             }
             return Ok(result);
         }
-        bail! {redis_protocol_error(
+        bail! {redis_source_error(
             ErrorCode::StatementFailed,
             format!("failed to parse Redis response: {v:?}"),
-            "parse_redis_response",
         )}
     }
 }

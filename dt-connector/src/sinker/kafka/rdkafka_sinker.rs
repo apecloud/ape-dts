@@ -71,12 +71,10 @@ impl RdkafkaSinker {
         for future in futures {
             let start_time = Instant::now();
             if let Err((error, _message)) = future.await {
-                return Err(crate::error_boundary::sinker::rdkafka(
+                return Err(crate::error_boundary::sinker_error::rdkafka(
                     error,
                     ErrorCode::StatementFailed,
-                    "sink_kafka_dml",
-                )
-                .into());
+                ));
             }
             rts.push((start_time.elapsed().as_millis() as u64, 1));
         }

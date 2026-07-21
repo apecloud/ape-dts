@@ -14,7 +14,7 @@ use std::collections::HashMap;
 use dt_common::meta::{col_value::ColValue, row_data::RowData};
 use serde::{Deserialize, Serialize};
 
-use crate::error_boundary::router::invalid_config as invalid_router_config;
+use crate::error_boundary::router::invalid_config_source;
 
 type SchemaMap = HashMap<String, String>;
 type TbMap = HashMap<(String, String), (String, String)>;
@@ -445,7 +445,7 @@ impl RdbRouterInner {
         // col_map=json:[{"db":"test_db","tb":"tb_1","col_map":{"f_0":"dst_f_0","f_1":"dst_f_1"}}]
         let config: Vec<TbColMapType> =
             serde_json::from_str(config_str.trim_start_matches(JSON_PREFIX)).map_err(|error| {
-                invalid_router_config("config [router].col_map is invalid JSON").source(error)
+                invalid_config_source("config [router].col_map is invalid JSON", error)
             })?;
         for i in config {
             results.insert((i.db, i.tb), i.col_map);

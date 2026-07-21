@@ -4,7 +4,7 @@ use std::collections::HashSet;
 use anyhow::bail;
 use dt_common::{
     config::config_enums::DbType,
-    error::{DtError, ErrorCode},
+    error::{DtError, DtErrorContextExt, ErrorCode},
     meta::{
         adaptor::pg_col_value_convertor::PgColValueConvertor, mysql::mysql_tb_meta::MysqlTbMeta,
         pg::pg_tb_meta::PgTbMeta, rdb_tb_meta::RdbTbMeta,
@@ -189,9 +189,11 @@ impl<'r> RdbSnapshotExtractStatement<'r> {
                 let col_type = self
                     .mysql_tb_meta
                     .ok_or_else(|| {
-                        DtError::new(ErrorCode::InvariantViolated)
-                            .detail("MySQL table metadata is missing while building snapshot SQL")
-                            .operation("build_snapshot_extract_columns")
+                        DtError::Unexpected(
+                            "MySQL table metadata is missing while building snapshot SQL"
+                                .to_string(),
+                        )
+                        .with_code(ErrorCode::InvariantViolated)
                     })?
                     .get_col_type(col)?;
                 let extract_col = if col_type.is_spatial() {

@@ -8,7 +8,7 @@ use mongodb::bson::doc;
 use sqlx::{query, Error as SqlxError, Row};
 
 use crate::{
-    error_boundary::extractor::{checkpoint_sqlx, resumer_config as resumer_config_error},
+    error_boundary::extractor_error::{checkpoint_sqlx, invalid_resumer_config},
     extractor::resumer::{
         recovery::Recovery,
         utils::{RedisResumerRecord, ResumerUtil},
@@ -17,7 +17,7 @@ use crate::{
 };
 use dt_common::{
     config::resumer_config::ResumerConfig,
-    error::{ErrorCode, SqlxProvider},
+    error::{AnyhowErrorExt, ErrorCode, SqlxProvider},
     log_info, log_warn,
     meta::position::Position,
     utils::redis_util::RedisUtil,
@@ -54,9 +54,8 @@ impl DatabaseRecovery {
                 }
             }
             _ => {
-                bail!(resumer_config_error(
+                bail!(invalid_resumer_config(
                     "database checkpoint recovery requires resume_type=from_db",
-                    "build_database_checkpoint_recovery",
                 ))
             }
         };
@@ -138,14 +137,18 @@ impl DatabaseRecovery {
                                     &self.schema,
                                     &self.table,
                                 );
-                                if Self::is_missing_resume_store(error.code()) {
+                                if error.dt_context().is_some_and(|context| {
+                                    context
+                                        .error_code()
+                                        .is_some_and(Self::is_missing_resume_store)
+                                }) {
                                     log::info!(
                                             "Resume table {}.{} does not exist, will start from beginning",
                                             self.schema, self.table
                                         );
                                     break;
                                 }
-                                return Err(error.into());
+                                return Err(error);
                             }
                         },
                     }
@@ -184,14 +187,18 @@ impl DatabaseRecovery {
                                     &self.schema,
                                     &self.table,
                                 );
-                                if Self::is_missing_resume_store(error.code()) {
+                                if error.dt_context().is_some_and(|context| {
+                                    context
+                                        .error_code()
+                                        .is_some_and(Self::is_missing_resume_store)
+                                }) {
                                     log::info!(
                                             "Resume table {}.{} does not exist, will start from beginning",
                                             self.schema, self.table
                                         );
                                     break;
                                 }
-                                return Err(error.into());
+                                return Err(error);
                             }
                         },
                     }

@@ -11,15 +11,12 @@ For example:
 ERROR [MD001]: A required database object was not found
 TASK: sync-orders-01
 AFFECTED: destination postgres sales.orders
-PHASE: writing to the destination
 HINT: Check object routing and create the required object or enable structure initialization.
 ```
 
-`MD001` is the only error identity. Stage and operation are independent
-diagnostic fields. Application logic must compare the typed `ErrorCode`; it
-must not parse messages or combine code and stage into another identifier.
-Operation is free-form diagnostic metadata and must never be used as a policy
-key.
+`MD001` is the only error identity. Stage is independent diagnostic metadata.
+Application logic must compare the typed `ErrorCode`; it must not parse
+messages or combine code and stage into another identifier.
 
 ## Compatibility rules
 
@@ -87,15 +84,15 @@ renaming, or changing the meaning of an existing user-facing field requires a
 new schema version. CLI text layout is not a stable machine interface.
 
 The `ErrorReport` JSON view contains only user-facing fields: the stable code,
-user message, detail, hint, task ID, endpoint role, affected object, and a
-human-readable phase. The text view includes those fields followed by the
-diagnostic section.
+user message, detail, hint, task ID, endpoint role, and affected object. The
+text view includes these fields before the diagnostic section.
 
-Internal diagnostics are available on the in-memory report as
-`stage`, `operation`, `origin`, `contexts`, `diagnostic_message`, and the
-captured source `location`. `ErrorReport` text rendering always includes these
-fields after the user-facing section. API consumers must use the versioned JSON
-view rather than parse CLI text.
+Internal diagnostics are available on the in-memory report as `stage`,
+`origin`, the redacted `error_chain`, its `context_count`, and an optional
+captured `backtrace`. These fields are excluded from JSON.
+`ErrorReport` text rendering always includes all available diagnostics after
+the user-facing section. API consumers must use the versioned JSON view rather
+than parse CLI text.
 
 Component-authored `message`, `detail`, and `hint` values remain free text. The
 report boundary uses `rtb-redact` to remove credentials, authenticated URL
@@ -107,63 +104,100 @@ CLI failures include a diagnostic section by default:
 
 ```text
 DIAGNOSTIC [MD001]
-LOCATION: dt-connector/src/sinker/pg/pg_sinker.rs:250:22
 STAGE: sinker
-OPERATION: sink_dml
 ENDPOINT: destination
 ORIGIN: postgres/42P01
+CONTEXT 1: starting task
+CAUSE 1: relation missing
+BACKTRACE:
+...
 ```
 
 Diagnostics can include SQL, row data, object names, provider messages, and
 `anyhow::Context` values. Credential-shaped values and authenticated URLs are
 redacted, but stderr and captured logs must still be treated as sensitive data.
+The process never enables backtraces itself. `RUST_LIB_BACKTRACE=0` disables
+error backtraces; any other configured value enables them. When that variable
+is unset, `RUST_BACKTRACE` is interpreted by the same rule. The current error
+report renders captured backtraces in the short format. Without a captured
+backtrace, the complete structured diagnostic and error chain are still
+printed and only the `BACKTRACE` block is omitted.
 
 ## Structured errors
 
-`DtError` can record the condition code, message, detail, hint, stage,
-operation, task ID, endpoint role, database object, provider origin, and source
-error. The endpoint role is `source`, `destination`, or `metadata`. Database
-objects may include schema, table, column, and constraint names.
+`anyhow::Error` is the only error transport container. `DtErrorContext` is a
+typed metadata frame whose code, message, detail, hint, stage, task ID,
+endpoint role, database object, and provider origin are all optional. It
+implements `Display` but intentionally does not implement
+`std::error::Error`. The endpoint role is `source`, `destination`, or
+`metadata`. Database objects may include schema, table, column, and constraint
+names.
 
-`DtError` is the only application error type in `dt-common::error`; there is no
-legacy compatibility enum. New application-authored failures must construct a
-`DtError`. Raw provider errors may cross only a short boundary before a
-provider adapter or `ErrorReport` classifies them.
+The innermost cause is always a real error. Provider failures keep their
+original provider error type. Application-authored failures use the
+`thiserror`-based `DtError` enum.
 
-The root code, stage, operation, and origin use first-writer semantics. A
-component that receives an existing structured error preserves this root
-context. Additional propagation details use the `anyhow::Context` and source
-error chains available in the diagnostic view.
+Project-owned failures construct the root cause first and add one immutable
+metadata frame per fluent `DtErrorContextExt` call. For example,
+`DtError::ConfigError(detail).with_code(ErrorCode::InvalidConfig).with_stage(Stage::Bootstrap)`.
+The same extension trait is implemented for `anyhow::Error` and the supported
+provider error types. Unknown concrete errors use `DtErrorContext::attach` at
+the component boundary.
 
-A single `DtError` always has one primary code. Components that already report
-multiple independent results, such as precheck, keep that aggregation in their
-own result type rather than adding it to the common error contract.
+`DtError` variants describe the concrete project-owned root cause; they do not
+imply or classify an `ErrorCode`. A single variant can be used with several
+codes, so the failure site must attach the explicit business code. Do not add a
+`DtError` classifier that guesses the code from the variant.
+
+Metadata is added as the error crosses ownership boundaries. A leaf frame can
+contain code, detail, object, and origin; a component frame adds stage and
+endpoint; the task entry adds task ID through
+`DtErrorContextExt::with_task_id`. Frames are immutable after attachment.
+`ErrorReport` starts at the outermost frame and recursively reads its metadata
+parents. For every field, the first non-empty outer value wins and a missing
+value is inherited from the inner frame.
+If no frame supplies a detail, report construction uses the project-owned
+`DtError` payload as the detail. Provider messages remain diagnostic causes.
+
+At a component boundary, a raw provider error is first classified by borrowing
+it, then attached with `DtErrorContext::attach`. The resulting `anyhow::Error`
+can be downcast both to `DtErrorContext` and to the original provider error
+type. Once a provider error has been erased to `anyhow::Error`, it must not be
+classified again; classification belongs at the first boundary that still has
+the concrete provider type.
 
 `ErrorReport` is the user-facing boundary representation. Its text form uses
-`ERROR`, `TASK`, `AFFECTED`, `PHASE`, `DETAIL`, and `HINT` lines.
+`ERROR`, `TASK`, `AFFECTED`, `DETAIL`, and `HINT` lines.
 
-Provider classifiers and adapters live under
-`dt-common::error::provider`. A classifier uses provider-native codes, typed
-error kinds, and Rust error variants; it must not parse provider messages. An
-adapter attaches the provider origin and source chain but does not set stage,
-endpoint, or operation.
+Provider classifiers live under `dt-common::error::provider`. A classifier
+uses provider-native codes, typed error kinds, and Rust error variants; it must
+not parse provider messages. `ProviderErrorClassification::into_context`
+creates a metadata frame containing an optional recognized code, provider
+origin, and affected object. The component boundary first attaches its
+operation-specific default code, then attaches the provider frame so a
+recognized provider condition overrides that default. Stage and endpoint are
+added outside both frames, while the provider error itself remains unchanged.
 
-Component-specific enrichment belongs in a small wrapper at the component
-boundary. The first Ape-DTS component boundary assigns the root stage and
-endpoint, while the call site supplies the operation and fallback code. Later
-boundaries preserve the root error. These wrappers must use `#[track_caller]`
-so the captured location continues to identify the failing component
-operation.
+Component-specific metadata belongs in a small wrapper at the component
+boundary. The component assigns the operation-specific default code, stage,
+and endpoint. Provider classifiers never accept a business default: an
+unrecognized provider condition returns no code and inherits the boundary
+default. Task-level metadata is attached only at the task entry.
 
 Each crate keeps all of its component wrappers in one `src/error_boundary.rs`
-file and separates ownership with nested modules such as `extractor`, `sinker`,
+file and separates ownership with nested modules such as `extractor_error`, `sinker_error`,
 or provider-specific modules. Do not add component error helper files beside
 business modules. `error_boundary` means the point where a lower-level failure
 is classified or enriched for Ape-DTS; it is distinct from the public error
 contract in `dt-common::error`. Shared provider classifiers remain in
 `dt-common::error::provider`.
 
-`MD099 MetadataReadFailed` is only the fallback for reading or decoding endpoint
+`ErrorReport` only reads the typed context and error chain; it never attempts
+provider classification. An error that reaches the report without a
+`DtErrorContext` deterministically becomes `IN999`. Failure-path tests and the
+code review expose missed classification sites.
+
+`MD099 MetadataReadFailed` is only the default for reading or decoding endpoint
 catalog and control metadata. A schema object being migrated does not make every
 structure error a metadata-read failure. Missing objects use `MD001`/`MD002`,
 unsupported structures use `PR005`, unmet version or topology requirements use
@@ -202,13 +236,14 @@ under `origin` whenever available. Initial SQLx mappings are:
 | SQLx worker crash | `RT001` |
 | SQLx integrity error kinds | `IC001` |
 
-Every SQLx boundary also supplies an operation-specific fallback such as
-`CN001`, `DB001`, or `ST001`. The original provider code, constraint/table
-metadata, and source error chain are preserved even when the fallback is used.
+Every SQLx boundary also supplies an operation-specific default such as
+`CN001`, `DB001`, or `ST001`. A recognized provider classification overrides
+that default; otherwise the error inherits it. The original provider code,
+constraint/table metadata, and source error chain are always preserved.
 
 The `tokio-postgres` replication adapter uses the same PostgreSQL SQLSTATE
 rules. URL parsing uses `CF002`, connection establishment uses `CN001`, and
-rejected replication commands use the operation fallback.
+rejected replication commands use the operation-specific boundary default.
 
 Other initial provider mappings are:
 
@@ -223,7 +258,7 @@ Other initial provider mappings are:
 | MongoDB command code `13` | `AU002` |
 | MongoDB command code `26` | `MD001` |
 | MongoDB duplicate-key codes `11000`/`11001`/`12582` | `IC001` |
-| MongoDB invalid client options / invalid TLS configuration | boundary fallback `CF002` / `CN003` |
+| MongoDB invalid client options / invalid TLS configuration | boundary default `CF002` / `CN003` |
 | MongoDB DNS, I/O, pool-cleared, server-selection, or shutdown | `CN001` or `CN002` for I/O timeout |
 | Kafka authentication / authorization | `AU001` / `AU002` |
 | Kafka unknown topic or partition | `MD001` |
@@ -231,8 +266,9 @@ Other initial provider mappings are:
 | HTTP request timeout / connection failure | `CN002` / `CN001` |
 | HTTP non-success response or invalid response body | `DB001` |
 
-Worker join failures are `RT001`. URL and YAML parsing errors at the report
-boundary are `CF002`. A local filesystem `std::io::Error` is `IO001`; network
+Worker join failures are `RT001`. URL and YAML parsing errors classified at
+their component boundary are `CF002`. An unclassified raw error reaching
+`ErrorReport` is `IN999`. A local filesystem `std::io::Error` is `IO001`; network
 I/O must be classified at its provider boundary so that it becomes `CN001` or
 `CN002` instead.
 

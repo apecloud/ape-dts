@@ -1,5 +1,5 @@
 use crate::{
-    error_boundary::sinker::clickhouse_source_metadata_missing, rdb_router::RdbRouter, Sinker,
+    error_boundary::sinker_error::clickhouse_source_metadata_missing, rdb_router::RdbRouter, Sinker,
 };
 
 use anyhow::bail;

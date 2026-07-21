@@ -7,7 +7,7 @@ use sqlx::{mysql::MySqlRow, MySql, Pool, Row};
 use super::{mysql_col_type::MysqlColType, mysql_tb_meta::MysqlTbMeta};
 use crate::{
     config::config_enums::DbType,
-    error::{DtError, ErrorCode, ErrorObject, OriginError},
+    error::{DtError, DtErrorContextExt, ErrorCode, ErrorObject, OriginError},
     meta::{
         ddl_meta::ddl_data::DdlData, foreign_key::ForeignKey, rdb_meta_manager::RdbMetaManager,
         rdb_meta_manager::RDB_PRIMARY_KEY_FLAG, rdb_tb_meta::RdbTbMeta, row_data::RowData,
@@ -115,22 +115,20 @@ impl MysqlMetaFetcher {
             self.cache.insert(full_name.clone(), tb_meta);
         }
         self.cache.get(&full_name).ok_or_else(|| {
-            DtError::new(ErrorCode::ObjectNotFound)
-                .message("The source table definition could not be loaded")
-                .detail(format!(
-                    "Ape-DTS could not find the previously loaded definition for source table {full_name}"
-                ))
-                .hint(
+            DtError::MetadataError(format!(
+                "Ape-DTS could not find the previously loaded definition for source table {full_name}"
+            ))
+                .with_code(ErrorCode::ObjectNotFound)
+                .with_message("The source table definition could not be loaded")
+                .with_hint(
                     "Verify that the source table still exists and is readable, then restart the task.",
                 )
-                .operation("get_mysql_table_metadata")
-                .object(ErrorObject {
+                .with_object(ErrorObject {
                     schema: Some(schema.to_string()),
                     table: Some(tb.to_string()),
                     ..Default::default()
                 })
-                .origin(OriginError::new("mysql", None::<String>))
-                .into()
+                .with_origin(OriginError::new("mysql", None::<String>))
         })
     }
 
@@ -185,18 +183,17 @@ impl MysqlMetaFetcher {
         }
 
         if cols.is_empty() {
-            bail! {DtError::new(ErrorCode::ObjectNotFound)
-            .detail(format!(
+            bail! {DtError::MetadataError(format!(
                 "failed to get table metadata for: `{}`.`{}`",
                 schema, tb
             ))
-            .operation("read_mysql_columns")
-            .object(ErrorObject {
+            .with_code(ErrorCode::ObjectNotFound)
+            .with_object(ErrorObject {
                 schema: Some(schema.to_string()),
                 table: Some(tb.to_string()),
                 ..Default::default()
             })
-            .origin(OriginError::new("mysql", None::<String>)) }
+            .with_origin(OriginError::new("mysql", None::<String>)) }
         }
         Ok((cols, col_origin_type_map, col_type_map, nullable_cols))
     }
@@ -465,9 +462,8 @@ impl MysqlMetaFetcher {
             self.version = version.trim().into();
             return Ok(());
         }
-        bail! {DtError::new(ErrorCode::UnsupportedDatabaseVersion)
-        .detail("failed to init mysql version")
-        .operation("read_mysql_version")
-        .origin(OriginError::new("mysql", None::<String>))}
+        bail! {DtError::MetadataError("failed to init mysql version".to_string())
+        .with_code(ErrorCode::UnsupportedDatabaseVersion)
+        .with_origin(OriginError::new("mysql", None::<String>))}
     }
 }

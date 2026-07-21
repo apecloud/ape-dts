@@ -33,7 +33,7 @@ use dt_common::{
         sinker_config::SinkerConfig,
         task_config::{TaskConfig, DEFAULT_CHECK_LOG_FILE_SIZE},
     },
-    error::{DtError, ErrorCode, Stage},
+    error::{DtError, DtErrorContextExt, ErrorCode, Stage},
     limiter::buffer_limiter::BufferLimiter,
     log_error,
     log_filter::{parse_size_limit, SizeLimitFilterDeserializer},
@@ -99,7 +99,9 @@ const CHECK_RESULT_STDOUT_APPENDER_PLACEHOLDER: &str = "CHECK_RESULT_STDOUT_APPE
 const DEFAULT_CHECK_LOG_DIR_PLACEHOLDER: &str = "LOG_DIR_PLACEHOLDER/check";
 const DEFAULT_STATISTIC_LOG_DIR_PLACEHOLDER: &str = "LOG_DIR_PLACEHOLDER/statistic";
 
-use crate::error_boundary::runner::invalid_config as invalid_task_config;
+use crate::error_boundary::runner::{
+    invalid_task_config, invalid_task_config_source, task_io_error, task_worker_error,
+};
 
 fn init_task_check_summary() -> CheckSummaryLog {
     CheckSummaryLog {
@@ -650,13 +652,7 @@ impl TaskRunner {
         monitor_shutdown.cancel();
         let monitor_result = monitor_task
             .await
-            .map_err(|error| -> anyhow::Error {
-                DtError::new(ErrorCode::WorkerFailed)
-                    .stage(Stage::Task)
-                    .operation("join_monitor_worker")
-                    .source(error)
-                    .into()
-            })
+            .map_err(task_worker_error)
             .and_then(|result| result);
 
         let mut monitor_types = vec![MonitorType::Pipeline];
@@ -714,14 +710,7 @@ impl TaskRunner {
                     break;
                 }
                 Err(err) => {
-                    failure = Some((
-                        None,
-                        DtError::new(ErrorCode::WorkerFailed)
-                            .stage(Stage::Task)
-                            .operation("join_task_worker")
-                            .source(err)
-                            .into(),
-                    ));
+                    failure = Some((None, task_worker_error(err)));
                     break;
                 }
             }
@@ -1212,29 +1201,15 @@ impl TaskRunner {
             Ok(_) => {}
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
             Err(error) => {
-                return Err(DtError::new(ErrorCode::IoFailed)
-                    .stage(Stage::Bootstrap)
-                    .operation("read_log_config_metadata")
-                    .source(error)
-                    .into());
+                return Err(task_io_error(error));
             }
         }
 
         let mut config_str = String::new();
-        let mut file = File::open(log4rs_file).await.map_err(|error| {
-            DtError::new(ErrorCode::IoFailed)
-                .stage(Stage::Bootstrap)
-                .operation("open_log_config")
-                .source(error)
-        })?;
+        let mut file = File::open(log4rs_file).await.map_err(task_io_error)?;
         file.read_to_string(&mut config_str)
             .await
-            .map_err(|error| {
-                DtError::new(ErrorCode::IoFailed)
-                    .stage(Stage::Bootstrap)
-                    .operation("read_log_config")
-                    .source(error)
-            })?;
+            .map_err(task_io_error)?;
 
         match &self.config.sinker {
             SinkerConfig::RedisStatistic {
@@ -1288,49 +1263,35 @@ impl TaskRunner {
                 );
         }
 
-        let raw: RawConfig = serde_yaml::from_str(&config_str).map_err(|error| {
-            DtError::new(ErrorCode::InvalidConfig)
-                .stage(Stage::Bootstrap)
-                .operation("parse_log_config")
-                .source(error)
-        })?;
+        let raw: RawConfig =
+            serde_yaml::from_str(&config_str).map_err(invalid_task_config_source)?;
         let mut deserializers = Deserializers::default();
         deserializers.insert("size_limit", SizeLimitFilterDeserializer);
         let (appenders, errors) = raw.appenders_lossy(&deserializers);
         if !errors.is_empty() {
             log_error!("errors deserializing log appenders: {:?}", errors);
-            return Err(DtError::new(ErrorCode::InvalidConfig)
-                .stage(Stage::Bootstrap)
-                .operation("parse_log_appenders")
-                .detail("one or more logging appenders are invalid")
-                .into());
+            return Err(DtError::ConfigError(
+                "one or more logging appenders are invalid".to_string(),
+            )
+            .with_code(ErrorCode::InvalidConfig)
+            .with_stage(Stage::Bootstrap));
         }
 
         let config = Config::builder()
             .appenders(appenders)
             .loggers(raw.loggers())
             .build(raw.root())
-            .map_err(|error| {
-                DtError::new(ErrorCode::InvalidConfig)
-                    .stage(Stage::Bootstrap)
-                    .operation("build_log_config")
-                    .source(error)
-            })?;
+            .map_err(invalid_task_config_source)?;
         let mut handle_guard = LOG_HANDLE.lock().map_err(|_| {
-            DtError::new(ErrorCode::InvariantViolated)
-                .stage(Stage::Bootstrap)
-                .operation("lock_log_config")
+            DtError::Unexpected("the logging configuration lock is poisoned".to_string())
+                .with_code(ErrorCode::InvariantViolated)
+                .with_stage(Stage::Bootstrap)
         })?;
         if let Some(handle) = handle_guard.as_ref() {
             // refresh log4rs config in one process
             handle.set_config(config);
         } else {
-            let handle = log4rs::init_config(config).map_err(|error| {
-                DtError::new(ErrorCode::InvalidConfig)
-                    .stage(Stage::Bootstrap)
-                    .operation("initialize_logging")
-                    .source(error)
-            })?;
+            let handle = log4rs::init_config(config).map_err(invalid_task_config_source)?;
             *handle_guard = Some(handle);
         }
         Ok(())
