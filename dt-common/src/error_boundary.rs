@@ -13,9 +13,9 @@ pub(crate) mod config {
     {
         DtErrorContext::new()
             .code(ErrorCode::InvalidConfig)
-            .detail(detail)
             .stage(Stage::Bootstrap)
             .attach(error)
+            .context(detail.into())
     }
     pub(crate) fn source<E>(
         error: E,
@@ -29,15 +29,15 @@ pub(crate) mod config {
         DtErrorContext::new()
             .code(code)
             .message(message)
-            .detail(detail)
             .stage(Stage::Bootstrap)
             .attach(error)
+            .context(detail.into())
     }
     pub(crate) fn anyhow_source(error: anyhow::Error, detail: impl Into<String>) -> anyhow::Error {
         error
             .with_code(ErrorCode::InvalidConfig)
-            .with_detail(detail)
             .with_stage(Stage::Bootstrap)
+            .context(detail.into())
     }
 
     #[cfg(feature = "metrics")]
@@ -48,11 +48,11 @@ pub(crate) mod config {
         DtErrorContext::new()
             .code(ErrorCode::InvalidConfig)
             .message("Metrics configuration is invalid")
-            .detail(format!(
-                "Failed to initialize metric [{metrics_name}]: {error}"
-            ))
             .stage(Stage::Bootstrap)
             .attach(error)
+            .context(format!(
+                "Failed to initialize metric [{metrics_name}]: {error}"
+            ))
     }
 }
 
@@ -63,6 +63,9 @@ pub(crate) mod metadata {
         classify_mongodb_error, classify_sqlx_error, DtError, DtErrorContext, DtErrorContextExt,
         ErrorCode, ErrorObject, OriginError, SqlxProvider,
     };
+    pub(crate) fn invariant(detail: impl Into<String>) -> anyhow::Error {
+        DtError::General(detail.into()).with_code(ErrorCode::InvariantViolated)
+    }
     pub(crate) fn mongodb_provider(
         error: mongodb::error::Error,
         default_code: ErrorCode,
@@ -82,15 +85,15 @@ pub(crate) mod metadata {
     ) -> anyhow::Error {
         error
             .with_code(ErrorCode::StatementFailed)
-            .with_detail(format!(
-                "failed to convert column {schema}.{table}.{column}"
-            ))
             .with_object(ErrorObject {
                 schema: Some(schema.to_string()),
                 table: Some(table.to_string()),
                 column: Some(column.to_string()),
                 ..Default::default()
             })
+            .context(format!(
+                "failed to convert column {schema}.{table}.{column}"
+            ))
     }
     pub(crate) fn mongo_ddl_error(detail: impl Into<String>) -> anyhow::Error {
         DtError::MetadataError(detail.into())
@@ -103,9 +106,9 @@ pub(crate) mod metadata {
     {
         DtErrorContext::new()
             .code(ErrorCode::StatementFailed)
-            .detail(detail)
             .origin(OriginError::new("mongodb", None::<String>))
             .attach(error)
+            .context(detail.into())
     }
     pub(crate) fn mongodb_version_source<E>(detail: impl Into<String>, error: E) -> anyhow::Error
     where
@@ -113,9 +116,9 @@ pub(crate) mod metadata {
     {
         DtErrorContext::new()
             .code(ErrorCode::UnsupportedDatabaseVersion)
-            .detail(detail)
             .origin(OriginError::new("mongodb", None::<String>))
             .attach(error)
+            .context(detail.into())
     }
     pub(crate) fn avro_source<E>(
         error: E,
@@ -127,8 +130,8 @@ pub(crate) mod metadata {
     {
         DtErrorContext::new()
             .code(code)
-            .detail(detail)
             .attach(error)
+            .context(detail.into())
     }
 }
 
@@ -142,7 +145,7 @@ pub(crate) mod redis {
             .origin(OriginError::new("redis", None::<String>))
     }
     pub(crate) fn redis_error(code: ErrorCode) -> anyhow::Error {
-        DtError::Unexpected(code.default_message().to_string())
+        DtError::General(code.default_message().to_string())
             .with_code(code)
             .with_origin(OriginError::new("redis", None::<String>))
     }
@@ -162,7 +165,6 @@ pub(crate) mod redis {
         DtError::RedisResultError(detail.clone())
             .with_code(ErrorCode::PrerequisiteNotMet)
             .with_message("The Redis cluster topology is invalid or incomplete")
-            .with_detail(detail)
             .with_hint(
                 "Ensure all 16384 Redis cluster slots are assigned to stable master nodes, then retry.",
             )
@@ -177,11 +179,10 @@ pub(crate) mod redis {
     {
         let context = redis_context(ErrorCode::PrerequisiteNotMet)
             .message("The Redis cluster topology is invalid or incomplete")
-            .detail(detail)
             .hint(
                 "Ensure all 16384 Redis cluster slots are assigned to stable master nodes, then retry.",
             );
-        context.attach(error)
+        context.attach(error).context(detail.into())
     }
     pub(crate) fn redis_command_error(detail: impl Into<String>) -> anyhow::Error {
         DtError::RedisCmdError(detail.into())
@@ -193,12 +194,12 @@ pub(crate) mod redis {
         E: StdError + Send + Sync + 'static,
     {
         redis_context(ErrorCode::StatementFailed)
-            .detail(detail)
             .attach(error)
+            .context(detail.into())
     }
     pub(crate) fn redis_command_catalog_error(error: serde_json::Error) -> anyhow::Error {
         redis_context(ErrorCode::InvariantViolated)
-            .detail("the embedded Redis command catalog is invalid")
             .attach(error)
+            .context("the embedded Redis command catalog is invalid")
     }
 }

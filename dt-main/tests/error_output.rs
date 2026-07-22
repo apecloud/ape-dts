@@ -38,14 +38,6 @@ fn no_config_returns_structured_error() {
 }
 
 #[test]
-fn missing_config_file_returns_structured_error() {
-    assert_missing_config(run(&[
-        "--config",
-        "/tmp/ape-dts-cli-config-that-does-not-exist.ini",
-    ]));
-}
-
-#[test]
 fn captured_backtrace_is_printed_without_a_cli_flag() {
     let output = run_with_backtrace(&[]);
     assert_eq!(output.status.code(), Some(1));

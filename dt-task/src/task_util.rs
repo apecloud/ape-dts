@@ -22,7 +22,7 @@ use dt_common::{
         sinker_config::{BasicSinkerConfig, SinkerConfig},
         task_config::TaskConfig,
     },
-    error::{EndpointRole, SqlxProvider},
+    error::{DtErrorContextExt, EndpointRole, SqlxProvider},
     log_info, log_warn,
     meta::{
         mysql::{
@@ -46,8 +46,9 @@ use dt_connector::{
 use tokio::select;
 use tokio_util::sync::CancellationToken;
 
-use crate::error_boundary::connection_error::{
-    self, invalid_task_config, missing_task_client, task_sqlx_metadata_error,
+use crate::error_boundary::{
+    connection_error::{self, missing_task_client, task_sqlx_metadata_error},
+    invalid_task_config,
 };
 
 pub struct TaskUtil {}
@@ -901,7 +902,7 @@ impl ConnClient {
                     None,
                 )
                 .await
-                .map_err(|error| connection_error::attach_endpoint(error, EndpointRole::Source))?,
+                .map_err(|error| error.with_endpoint(EndpointRole::Source))?,
             ),
             ExtractorConfig::PgSnapshot {
                 url,
@@ -931,7 +932,7 @@ impl ConnClient {
                     false,
                 )
                 .await
-                .map_err(|error| connection_error::attach_endpoint(error, EndpointRole::Source))?,
+                .map_err(|error| error.with_endpoint(EndpointRole::Source))?,
             ),
             ExtractorConfig::MongoSnapshot {
                 url,
@@ -969,7 +970,7 @@ impl ConnClient {
                     Some(extractor_max_connections),
                 )
                 .await
-                .map_err(|error| connection_error::attach_endpoint(error, EndpointRole::Source))?,
+                .map_err(|error| error.with_endpoint(EndpointRole::Source))?,
             ),
             _ => ConnClient::None,
         };
@@ -995,9 +996,7 @@ impl ConnClient {
                         conn_settings,
                     )
                     .await
-                    .map_err(|error| {
-                        connection_error::attach_endpoint(error, EndpointRole::Destination)
-                    })?,
+                    .map_err(|error| error.with_endpoint(EndpointRole::Destination))?,
                 )
             }
             SinkerConfig::MysqlStruct {
@@ -1014,9 +1013,7 @@ impl ConnClient {
                     None,
                 )
                 .await
-                .map_err(|error| {
-                    connection_error::attach_endpoint(error, EndpointRole::Destination)
-                })?,
+                .map_err(|error| error.with_endpoint(EndpointRole::Destination))?,
             ),
             SinkerConfig::Pg {
                 url,
@@ -1032,9 +1029,7 @@ impl ConnClient {
                     *disable_foreign_key_checks,
                 )
                 .await
-                .map_err(|error| {
-                    connection_error::attach_endpoint(error, EndpointRole::Destination)
-                })?,
+                .map_err(|error| error.with_endpoint(EndpointRole::Destination))?,
             ),
             SinkerConfig::PgStruct {
                 url,
@@ -1049,9 +1044,7 @@ impl ConnClient {
                     false,
                 )
                 .await
-                .map_err(|error| {
-                    connection_error::attach_endpoint(error, EndpointRole::Destination)
-                })?,
+                .map_err(|error| error.with_endpoint(EndpointRole::Destination))?,
             ),
             SinkerConfig::Mongo {
                 url,
@@ -1075,9 +1068,7 @@ impl ConnClient {
                     Some(sinker_max_connections),
                 )
                 .await
-                .map_err(|error| {
-                    connection_error::attach_endpoint(error, EndpointRole::Destination)
-                })?,
+                .map_err(|error| error.with_endpoint(EndpointRole::Destination))?,
             ),
             _ => ConnClient::None,
         };
@@ -1102,34 +1093,5 @@ impl ConnClient {
             _ => {}
         }
         Ok(())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use dt_common::error::{DtError, DtErrorContext, DtErrorContextExt, ErrorCode};
-
-    #[test]
-    fn connection_boundary_uses_the_outer_endpoint() {
-        let error = DtError::Unexpected("connection failed".to_string())
-            .with_code(ErrorCode::ConnectionFailed);
-        let error = connection_error::attach_endpoint(error, EndpointRole::Source);
-        assert_eq!(
-            error
-                .downcast_ref::<DtErrorContext>()
-                .unwrap()
-                .endpoint_role(),
-            Some(EndpointRole::Source)
-        );
-
-        let error = connection_error::attach_endpoint(error, EndpointRole::Destination);
-        assert_eq!(
-            error
-                .downcast_ref::<DtErrorContext>()
-                .unwrap()
-                .endpoint_role(),
-            Some(EndpointRole::Destination)
-        );
     }
 }

@@ -39,7 +39,7 @@ use dt_common::{
         config_enums::DbType, config_token_parser::ConfigTokenParser,
         connection_auth_config::ConnectionAuthConfig,
     },
-    error::{DtError, DtErrorContextExt, EndpointRole, ErrorCode, ErrorObject, OriginError, Stage},
+    error::{DtError, DtErrorContextExt, ErrorCode, ErrorObject, OriginError},
     log_error, log_info, log_warn,
     meta::{
         adaptor::pg_col_value_convertor::PgColValueConvertor,
@@ -250,8 +250,6 @@ impl PgCdcExtractor {
                         "PostgreSQL replication stream ended unexpectedly".to_string(),
                     )
                     .with_code(ErrorCode::ConnectionFailed)
-                    .with_stage(Stage::Extractor)
-                    .with_endpoint(EndpointRole::Source)
                     .with_origin(OriginError::new("postgres", None::<String>)));
                 }
             }
@@ -278,8 +276,6 @@ impl PgCdcExtractor {
                 "the saved PostgreSQL replication position is invalid".to_string(),
             )
             .with_code(ErrorCode::CheckpointReadFailed)
-            .with_stage(Stage::Extractor)
-            .with_endpoint(EndpointRole::Source)
             .with_origin(OriginError::new("postgres", None::<String>))
         })?;
         log_info!("confirmed flush lsn: {}", lsn.to_string());
@@ -332,8 +328,6 @@ impl PgCdcExtractor {
                         column.type_id()
                     ))
                     .with_code(ErrorCode::UnsupportedTableStructure)
-                    .with_stage(Stage::Extractor)
-                    .with_endpoint(EndpointRole::Source)
                     .with_object(ErrorObject {
                         schema: Some(schema.to_string()),
                         table: Some(tb.to_string()),
@@ -422,12 +416,9 @@ impl PgCdcExtractor {
                         .with_message(
                             "PostgreSQL update events do not contain the columns needed to identify rows",
                         )
-                        .with_detail(detail)
                         .with_hint(
                             "Configure a primary key or REPLICA IDENTITY FULL for the source table, then restart the task.",
                         )
-                        .with_stage(Stage::Extractor)
-                        .with_endpoint(EndpointRole::Source)
                         .with_object(ErrorObject {
                             schema: Some(basic.schema.clone()),
                             table: Some(basic.tb.clone()),

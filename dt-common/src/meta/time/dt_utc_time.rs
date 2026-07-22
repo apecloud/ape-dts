@@ -35,7 +35,7 @@ impl FromStr for DtNaiveTime {
             ..Default::default()
         };
         let parse_error = || {
-            DtError::Unexpected(format!("failed to parse str: [{}] to DtUtcTime", str))
+            DtError::General(format!("failed to parse str: [{}] to DtUtcTime", str))
                 .with_code(ErrorCode::StatementFailed)
         };
 

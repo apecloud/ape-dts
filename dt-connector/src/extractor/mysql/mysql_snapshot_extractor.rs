@@ -312,9 +312,8 @@ impl MysqlSnapshotExtractor {
                     };
 
                     *running_chunks = running_chunks.checked_sub(1).ok_or_else(|| {
-                        DtError::Unexpected("MySQL split chunk running count underflow".to_string())
+                        DtError::General("MySQL split chunk running count underflow".to_string())
                             .with_code(ErrorCode::InvariantViolated)
-                            .with_stage(Stage::Extractor)
                     })?;
 
                     if let Some(position) =
@@ -363,11 +362,10 @@ impl MysqlSnapshotExtractor {
                         )
                     })?;
                     let partition_col = finish_partition_col.clone().ok_or_else(|| {
-                        DtError::Unexpected(
+                        DtError::General(
                             "finished MySQL split is missing its partition column".to_string(),
                         )
                         .with_code(ErrorCode::InvariantViolated)
-                        .with_stage(Stage::Extractor)
                     })?;
                     if active_table.tb_meta.basic.is_col_nullable(&partition_col) {
                         state.pending_works.push_back(MysqlSnapshotWork::NullChunk {
@@ -646,9 +644,8 @@ impl MysqlSnapshotDispatchState {
         };
 
         let work = self.pending_works.remove(index).ok_or_else(|| {
-            DtError::Unexpected("pending MySQL snapshot work is missing".to_string())
+            DtError::General("pending MySQL snapshot work is missing".to_string())
                 .with_code(ErrorCode::InvariantViolated)
-                .with_stage(Stage::Extractor)
         })?;
         self.mark_work_started(&work)?;
         Ok(Some(work))
@@ -708,9 +705,8 @@ impl MysqlSnapshotDispatchState {
             }
         };
         *queued_chunks = queued_chunks.checked_sub(1).ok_or_else(|| {
-            DtError::Unexpected("MySQL split chunk queued count underflow".to_string())
+            DtError::General("MySQL split chunk queued count underflow".to_string())
                 .with_code(ErrorCode::InvariantViolated)
-                .with_stage(Stage::Extractor)
         })?;
         *running_chunks += 1;
         Ok(())

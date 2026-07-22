@@ -2,7 +2,7 @@ use std::vec;
 
 use dt_common::{
     config::{config_enums::DbType, task_config::TaskConfig},
-    error::{DtError, DtErrorContextExt, EndpointRole, ErrorCode, Stage},
+    error::{DtError, DtErrorContextExt, EndpointRole, ErrorCode},
     rdb_filter::RdbFilter,
 };
 
@@ -117,27 +117,33 @@ impl PrecheckerBuilder {
         if !self.valid_config() {
             return Err(
                 DtError::ConfigError("precheck config is invalid".to_string())
-                    .with_code(ErrorCode::InvalidConfig)
-                    .with_stage(Stage::Precheck)
-                    .with_task_id(&self.task_config.global.task_id),
+                    .with_code(ErrorCode::InvalidConfig),
             );
         }
-        let (source_checker_option, sink_checker_option) =
-            (self.build_checker(true)?, self.build_checker(false)?);
+        let source_checker_option = self
+            .build_checker(true)
+            .map_err(|error| error.with_endpoint(EndpointRole::Source))?;
+        let sink_checker_option = self
+            .build_checker(false)
+            .map_err(|error| error.with_endpoint(EndpointRole::Destination))?;
         let (Some(mut source_checker), Some(mut sink_checker)) =
             (source_checker_option, sink_checker_option)
         else {
             return Err(DtError::ConfigError(
                 "failed to build precheck checker from database type".to_string(),
             )
-            .with_code(ErrorCode::InvalidConfig)
-            .with_stage(Stage::Precheck)
-            .with_task_id(&self.task_config.global.task_id));
+            .with_code(ErrorCode::InvalidConfig));
         };
 
         println!("[*]begin to check the connection");
-        let check_source_connection = source_checker.build_connection().await?;
-        let check_sink_connection = sink_checker.build_connection().await?;
+        let check_source_connection = source_checker
+            .build_connection()
+            .await
+            .map_err(|error| error.with_endpoint(EndpointRole::Source))?;
+        let check_sink_connection = sink_checker
+            .build_connection()
+            .await
+            .map_err(|error| error.with_endpoint(EndpointRole::Destination))?;
 
         // if connection failed, no need to do other check
         if !check_source_connection.is_validate || !check_sink_connection.is_validate {
@@ -159,10 +165,8 @@ impl PrecheckerBuilder {
             check_source_connection.log();
             check_sink_connection.log();
             return Err(
-                DtError::Unexpected("database connection precheck failed".to_string())
+                DtError::General("database connection precheck failed".to_string())
                     .with_code(error_code)
-                    .with_stage(Stage::Precheck)
-                    .with_task_id(&self.task_config.global.task_id)
                     .with_endpoint(endpoint),
             );
         }
@@ -172,21 +176,56 @@ impl PrecheckerBuilder {
         check_results.push(Ok(check_sink_connection));
 
         println!("[*]begin to check the database version");
-        check_results.push(source_checker.check_database_version().await);
-        check_results.push(sink_checker.check_database_version().await);
+        check_results.push(
+            source_checker
+                .check_database_version()
+                .await
+                .map_err(|error| error.with_endpoint(EndpointRole::Source)),
+        );
+        check_results.push(
+            sink_checker
+                .check_database_version()
+                .await
+                .map_err(|error| error.with_endpoint(EndpointRole::Destination)),
+        );
 
         if self.precheck_config.do_cdc {
             println!("[*]begin to check the cdc setting");
-            check_results.push(source_checker.check_cdc_supported().await);
+            check_results.push(
+                source_checker
+                    .check_cdc_supported()
+                    .await
+                    .map_err(|error| error.with_endpoint(EndpointRole::Source)),
+            );
         }
 
         println!("[*]begin to check the if the structs is existed or not");
-        check_results.push(source_checker.check_struct_existed_or_not().await);
-        check_results.push(sink_checker.check_struct_existed_or_not().await);
+        check_results.push(
+            source_checker
+                .check_struct_existed_or_not()
+                .await
+                .map_err(|error| error.with_endpoint(EndpointRole::Source)),
+        );
+        check_results.push(
+            sink_checker
+                .check_struct_existed_or_not()
+                .await
+                .map_err(|error| error.with_endpoint(EndpointRole::Destination)),
+        );
 
         println!("[*]begin to check the database structs");
-        check_results.push(source_checker.check_table_structs().await);
-        check_results.push(sink_checker.check_table_structs().await);
+        check_results.push(
+            source_checker
+                .check_table_structs()
+                .await
+                .map_err(|error| error.with_endpoint(EndpointRole::Source)),
+        );
+        check_results.push(
+            sink_checker
+                .check_table_structs()
+                .await
+                .map_err(|error| error.with_endpoint(EndpointRole::Destination)),
+        );
 
         Ok(check_results)
     }
@@ -219,10 +258,8 @@ impl PrecheckerBuilder {
                 }
                 if error_count > 0 {
                     let mut error =
-                        DtError::Unexpected("one or more prerequisite checks failed".to_string())
-                            .with_code(first_error_code.unwrap_or(ErrorCode::PrerequisiteNotMet))
-                            .with_stage(Stage::Precheck)
-                            .with_task_id(&self.task_config.global.task_id);
+                        DtError::General("one or more prerequisite checks failed".to_string())
+                            .with_code(first_error_code.unwrap_or(ErrorCode::PrerequisiteNotMet));
                     if let Some(endpoint) = first_error_endpoint {
                         error = error.with_endpoint(endpoint);
                     }

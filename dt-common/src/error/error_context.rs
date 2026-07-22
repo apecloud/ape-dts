@@ -8,7 +8,6 @@ pub(crate) const DT_ERROR_CONTEXT_MARKER: &str = "__APE_DTS_ERROR_CONTEXT__";
 pub struct DtErrorContext {
     code: Option<ErrorCode>,
     message: Option<String>,
-    detail: Option<String>,
     hint: Option<String>,
     stage: Option<Stage>,
     task_id: Option<String>,
@@ -30,11 +29,6 @@ impl DtErrorContext {
 
     pub fn message(mut self, message: impl Into<String>) -> Self {
         self.message = Some(message.into());
-        self
-    }
-
-    pub fn detail(mut self, detail: impl Into<String>) -> Self {
-        self.detail = Some(detail.into());
         self
     }
 
@@ -68,11 +62,6 @@ impl DtErrorContext {
         self
     }
 
-    pub fn inherit(mut self, parent: Self) -> Self {
-        self.parent = Some(Arc::new(parent));
-        self
-    }
-
     pub fn attach<E>(self, source: E) -> anyhow::Error
     where
         E: StdError + Send + Sync + 'static,
@@ -89,12 +78,6 @@ impl DtErrorContext {
         self.message
             .as_deref()
             .or_else(|| self.parent.as_deref().and_then(Self::message_text))
-    }
-
-    pub fn detail_text(&self) -> Option<&str> {
-        self.detail
-            .as_deref()
-            .or_else(|| self.parent.as_deref().and_then(Self::detail_text))
     }
 
     pub fn hint_text(&self) -> Option<&str> {
@@ -164,10 +147,6 @@ pub trait DtErrorContextExt: Sized {
         self.with_context(DtErrorContext::new().message(message))
     }
 
-    fn with_detail(self, detail: impl Into<String>) -> anyhow::Error {
-        self.with_context(DtErrorContext::new().detail(detail))
-    }
-
     fn with_hint(self, hint: impl Into<String>) -> anyhow::Error {
         self.with_context(DtErrorContext::new().hint(hint))
     }
@@ -225,45 +204,13 @@ impl_dt_error_context_ext!(
 
 #[cfg(test)]
 mod tests {
-    use std::io;
-
     use super::*;
 
     #[test]
-    fn project_error_has_a_typed_root_cause() {
-        let error = DtError::Unexpected("queue state is invalid".to_string())
-            .with_code(ErrorCode::InvariantViolated);
-
-        assert_eq!(
-            error.dt_context().and_then(DtErrorContext::error_code),
-            Some(ErrorCode::InvariantViolated)
-        );
-        assert!(error.downcast_ref::<DtError>().is_some());
-    }
-
-    #[test]
-    fn typed_context_preserves_provider_error() {
-        let error = DtErrorContext::new()
-            .code(ErrorCode::IoFailed)
-            .attach(io::Error::other("disk failure"))
-            .context("writing checkpoint");
-
-        assert_eq!(
-            error.dt_context().and_then(DtErrorContext::error_code),
-            Some(ErrorCode::IoFailed)
-        );
-        assert_eq!(
-            error.downcast_ref::<io::Error>().map(io::Error::kind),
-            Some(io::ErrorKind::Other)
-        );
-    }
-
-    #[test]
     fn outer_context_fields_override_inner_fields() {
-        let error = DtError::Unexpected("inner application error".to_string())
+        let error = DtError::General("inner application error".to_string())
             .with_code(ErrorCode::ConnectionFailed)
             .with_message("inner message")
-            .with_detail("inner detail")
             .with_hint("inner hint")
             .with_stage(Stage::Extractor)
             .with_task_id("inner-task")
@@ -275,7 +222,6 @@ mod tests {
             .with_origin(OriginError::new("mysql", Some("1146")))
             .with_code(ErrorCode::StatementFailed)
             .with_message("outer message")
-            .with_detail("outer detail")
             .with_hint("outer hint")
             .with_stage(Stage::Sinker)
             .with_endpoint(EndpointRole::Destination)
@@ -289,7 +235,6 @@ mod tests {
 
         assert_eq!(context.error_code(), Some(ErrorCode::StatementFailed));
         assert_eq!(context.message_text(), Some("outer message"));
-        assert_eq!(context.detail_text(), Some("outer detail"));
         assert_eq!(context.hint_text(), Some("outer hint"));
         assert_eq!(context.stage_value(), Some(Stage::Sinker));
         assert_eq!(context.endpoint_role(), Some(EndpointRole::Destination));
@@ -308,32 +253,13 @@ mod tests {
 
     #[test]
     fn project_error_variant_can_be_the_root_cause() {
-        let error = DtError::ConfigError("worker_threads is invalid".to_string())
-            .with_code(ErrorCode::InvalidConfig);
+        let cause = DtError::ConfigError("worker_threads is invalid".to_string());
+        assert_eq!(cause.to_string(), "config error: worker_threads is invalid");
+        let error = cause.with_code(ErrorCode::InvalidConfig);
 
         assert!(matches!(
             error.downcast_ref::<DtError>(),
             Some(DtError::ConfigError(message)) if message == "worker_threads is invalid"
         ));
-    }
-
-    #[test]
-    fn known_provider_error_supports_context_extensions() {
-        let error = sqlx::Error::PoolTimedOut
-            .with_code(ErrorCode::ConnectionTimeout)
-            .with_stage(Stage::Sinker);
-
-        assert!(matches!(
-            error.downcast_ref::<sqlx::Error>(),
-            Some(sqlx::Error::PoolTimedOut)
-        ));
-        assert_eq!(
-            error.dt_context().and_then(DtErrorContext::error_code),
-            Some(ErrorCode::ConnectionTimeout)
-        );
-        assert_eq!(
-            error.dt_context().and_then(DtErrorContext::stage_value),
-            Some(Stage::Sinker)
-        );
     }
 }

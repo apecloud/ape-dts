@@ -180,7 +180,7 @@ impl MongoChecker {
             }
         }
         anyhow::bail!(
-            DtError::Unexpected("MongoDB row data is missing _id".to_string())
+            DtError::General("MongoDB row data is missing _id".to_string())
                 .with_code(ErrorCode::StatementFailed)
                 .with_stage(Stage::Checker)
                 .with_object(ErrorObject {

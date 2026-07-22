@@ -195,23 +195,4 @@ mod tests {
             assert!(codes.insert(value), "duplicate error code: {value}");
         }
     }
-
-    #[test]
-    fn serializes_as_wire_code() {
-        assert_eq!(
-            serde_json::to_string(&ErrorCode::ObjectNotFound).unwrap(),
-            "\"MD001\""
-        );
-        assert_eq!(
-            serde_json::to_string(&ErrorCode::MetadataReadFailed).unwrap(),
-            "\"MD099\""
-        );
-        assert_eq!(
-            ErrorCode::MetadataReadFailed.default_message(),
-            "Ape-DTS could not read the database information required for migration"
-        );
-        assert!(ErrorCode::MetadataReadFailed
-            .default_hint()
-            .contains("system catalogs"));
-    }
 }

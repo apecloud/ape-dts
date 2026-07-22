@@ -17,7 +17,7 @@ use crate::{
 };
 use dt_common::{
     config::resumer_config::ResumerConfig,
-    error::{AnyhowErrorExt, ErrorCode, SqlxProvider},
+    error::{AnyhowErrorExt, DtErrorContextExt, EndpointRole, ErrorCode, SqlxProvider, Stage},
     log_info, log_warn,
     meta::position::Position,
     utils::redis_util::RedisUtil,
@@ -59,7 +59,11 @@ impl DatabaseRecovery {
                 ))
             }
         };
-        recovery.initialization().await?;
+        recovery.initialization().await.map_err(|error| {
+            error
+                .with_stage(Stage::Resumer)
+                .with_endpoint(EndpointRole::Metadata)
+        })?;
         Ok(recovery)
     }
 
@@ -133,7 +137,6 @@ impl DatabaseRecovery {
                                 let error = checkpoint_sqlx(
                                     error,
                                     SqlxProvider::MySql,
-                                    &self.task_id,
                                     &self.schema,
                                     &self.table,
                                 );
@@ -183,7 +186,6 @@ impl DatabaseRecovery {
                                 let error = checkpoint_sqlx(
                                     error,
                                     SqlxProvider::Postgres,
-                                    &self.task_id,
                                     &self.schema,
                                     &self.table,
                                 );

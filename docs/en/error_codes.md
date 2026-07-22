@@ -24,7 +24,8 @@ messages or combine code and stage into another identifier.
 - Codes are append-only and must never be reused for a different condition.
 - A category code ending in `000` is reserved and must not be emitted.
 - The stage is not part of the stable error identity.
-- Once a stage has been assigned, callers must not overwrite it.
+- Stage and endpoint are explicitly attached by execution boundaries; reports
+  never infer either field from a code, provider, or module name.
 - Retry, skip, fallback, and DLQ behavior are policy decisions outside the
   error-code contract.
 
@@ -94,11 +95,12 @@ captured `backtrace`. These fields are excluded from JSON.
 the user-facing section. API consumers must use the versioned JSON view rather
 than parse CLI text.
 
-Component-authored `message`, `detail`, and `hint` values remain free text. The
-report boundary uses `rtb-redact` to remove credentials, authenticated URL
+Component-authored `message` and `hint` values remain free text. `detail` is
+assembled by `ErrorReport` from ordinary `anyhow::Context` values and the
+concrete cause chain, from outermost to innermost, with duplicate text removed.
+The report boundary uses `rtb-redact` to remove credentials, authenticated URL
 userinfo, authorization values, provider tokens, JWTs, long opaque tokens, and
-private keys before they enter the user view. The text renderer applies the
-same redaction to provider messages and `anyhow::Context` values.
+private keys before any of these values enter the user view.
 
 CLI failures include a diagnostic section by default:
 
@@ -126,8 +128,8 @@ printed and only the `BACKTRACE` block is omitted.
 ## Structured errors
 
 `anyhow::Error` is the only error transport container. `DtErrorContext` is a
-typed metadata frame whose code, message, detail, hint, stage, task ID,
-endpoint role, database object, and provider origin are all optional. It
+typed metadata frame whose code, message, hint, stage, task ID, endpoint role,
+database object, and provider origin are all optional. It
 implements `Display` but intentionally does not implement
 `std::error::Error`. The endpoint role is `source`, `destination`, or
 `metadata`. Database objects may include schema, table, column, and constraint
@@ -150,14 +152,24 @@ codes, so the failure site must attach the explicit business code. Do not add a
 `DtError` classifier that guesses the code from the variant.
 
 Metadata is added as the error crosses ownership boundaries. A leaf frame can
-contain code, detail, object, and origin; a component frame adds stage and
-endpoint; the task entry adds task ID through
-`DtErrorContextExt::with_task_id`. Frames are immutable after attachment.
-`ErrorReport` starts at the outermost frame and recursively reads its metadata
-parents. For every field, the first non-empty outer value wins and a missing
-value is inherited from the inner frame.
-If no frame supplies a detail, report construction uses the project-owned
-`DtError` payload as the detail. Provider messages remain diagnostic causes.
+contain the business code, affected object, and provider origin. Stage,
+endpoint, and task ID are attached explicitly at the highest boundary that
+still knows those values: for example, the extractor worker attaches
+`extractor/source`, the common sinker adapter attaches `sinker/destination`,
+the recovery initialization boundary attaches `resumer/metadata`, and the
+precheck entry attaches `precheck` and the task ID while its builder attaches
+`source` or `destination` around each checker call. The normal task entry is
+the only production boundary that attaches its task ID. No report-time
+inference is used.
+
+Frames are immutable after attachment. `ErrorReport` starts at the outermost
+frame and recursively reads its metadata parents. For every field, the first
+non-empty outer value wins and a missing value is inherited from the inner
+frame. `DtErrorContext` has no detail field. Report construction derives
+`detail` from the redacted ordinary contexts and concrete causes in the error
+chain. Project-owned `DtError` values retain their variant-specific full
+`Display` text and typed payload, just as provider errors retain their own
+`Display`, source chain, and concrete type.
 
 At a component boundary, a raw provider error is first classified by borrowing
 it, then attached with `DtErrorContext::attach`. The resulting `anyhow::Error`
@@ -178,11 +190,12 @@ operation-specific default code, then attaches the provider frame so a
 recognized provider condition overrides that default. Stage and endpoint are
 added outside both frames, while the provider error itself remains unchanged.
 
-Component-specific metadata belongs in a small wrapper at the component
-boundary. The component assigns the operation-specific default code, stage,
-and endpoint. Provider classifiers never accept a business default: an
-unrecognized provider condition returns no code and inherits the boundary
-default. Task-level metadata is attached only at the task entry.
+Provider-specific metadata belongs in a small wrapper at the component
+boundary. The component assigns the operation-specific default code. Provider
+classifiers never accept a business default: an unrecognized provider
+condition returns no code and inherits the boundary default. Stage, endpoint,
+and task ID are attached explicitly at their highest semantic execution
+boundaries, outside provider classification.
 
 Each crate keeps all of its component wrappers in one `src/error_boundary.rs`
 file and separates ownership with nested modules such as `extractor_error`, `sinker_error`,

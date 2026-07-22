@@ -1867,10 +1867,7 @@ sample_rate=10
             let error = load_temp_task_config(&config).err().unwrap();
             let report = ErrorReport::from_anyhow(&error);
             assert_eq!(report.code, ErrorCode::InvalidConfig);
-            assert_eq!(
-                report.detail.as_deref(),
-                expected_err.strip_prefix("config error: ")
-            );
+            assert_eq!(report.detail.as_deref(), Some(expected_err));
         }
     }
 
@@ -1957,7 +1954,7 @@ url=mysql://127.0.0.1:3307
         assert_eq!(report.code, ErrorCode::InvalidConfig);
         assert_eq!(
             report.detail.as_deref(),
-            Some("config [extractor].batch_size must be greater than 0")
+            Some("config error: config [extractor].batch_size must be greater than 0")
         );
     }
 
@@ -2057,7 +2054,7 @@ rebalance_max_partitions_per_sinker=0
         assert_eq!(
             report.detail.as_deref(),
             Some(
-                "config [parallelizer].rebalance_max_partitions_per_sinker must be greater than 0"
+                "config error: config [parallelizer].rebalance_max_partitions_per_sinker must be greater than 0"
             )
         );
     }
@@ -2086,7 +2083,7 @@ batch_size=0
                 assert_eq!(report.code, ErrorCode::InvalidConfig);
                 assert_eq!(
                     report.detail.as_deref(),
-                    Some("config [sinker].batch_size must be greater than 0")
+                    Some("config error: config [sinker].batch_size must be greater than 0")
                 );
             }
             Ok(_) => panic!("expected config validation error"),

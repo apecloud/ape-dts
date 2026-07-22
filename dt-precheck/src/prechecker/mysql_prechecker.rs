@@ -49,7 +49,6 @@ impl Prechecker for MySqlPrechecker {
                     check_error = Some(precheck_failure(
                         ErrorCode::UnsupportedDatabaseVersion,
                         "MySQL returned no version information",
-                        self.is_source,
                     ));
                 } else {
                     let re = Regex::new(MYSQL_SUPPORT_DB_VERSION_REGEX)?;
@@ -57,7 +56,6 @@ impl Prechecker for MySqlPrechecker {
                         check_error = Some(precheck_failure(
                             ErrorCode::UnsupportedDatabaseVersion,
                             format!("MySQL version {version} is not supported"),
-                            self.is_source,
                         ));
                     }
                 }
@@ -139,11 +137,7 @@ impl Prechecker for MySqlPrechecker {
             Err(e) => bail! {e},
         }
         if !errs.is_empty() {
-            check_error = Some(precheck_failure(
-                ErrorCode::CdcNotEnabled,
-                errs.join(";"),
-                self.is_source,
-            ))
+            check_error = Some(precheck_failure(ErrorCode::CdcNotEnabled, errs.join(";")))
         }
 
         Ok(CheckResult::build_with_err(
@@ -180,7 +174,6 @@ impl Prechecker for MySqlPrechecker {
                 Some(precheck_failure(
                     ErrorCode::ObjectNotFound,
                     "structure existence precheck does not support pattern filters",
-                    self.is_source,
                 )),
             ));
         }
@@ -257,7 +250,6 @@ impl Prechecker for MySqlPrechecker {
             check_error = Some(precheck_failure(
                 ErrorCode::ObjectNotFound,
                 err_msgs.join("."),
-                self.is_source,
             ))
         }
 
@@ -295,7 +287,6 @@ impl Prechecker for MySqlPrechecker {
                 Some(precheck_failure(
                     ErrorCode::UnsupportedTableStructure,
                     "table structure precheck does not support pattern filters",
-                    self.is_source,
                 )),
             ));
         }
@@ -402,14 +393,12 @@ impl Prechecker for MySqlPrechecker {
             check_error = Some(precheck_failure(
                 ErrorCode::UnsupportedTableStructure,
                 err_msgs.join(";"),
-                self.is_source,
             ))
         }
         if !warn_msgs.is_empty() {
             warn_error = Some(precheck_failure(
                 ErrorCode::UnsupportedTableStructure,
                 warn_msgs.join(";"),
-                self.is_source,
             ))
         }
 

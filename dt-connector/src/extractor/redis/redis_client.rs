@@ -12,7 +12,7 @@ use crate::error_boundary::extractor_error::{
 };
 use dt_common::{
     config::connection_auth_config::ConnectionAuthConfig,
-    error::{DtError, DtErrorContextExt, EndpointRole, ErrorCode, Stage},
+    error::{DtError, DtErrorContextExt, ErrorCode},
     meta::redis::{command::cmd_encoder::CmdEncoder, redis_object::RedisCmd},
 };
 
@@ -41,8 +41,6 @@ impl RedisClient {
         let host = url_info.host_str().ok_or_else(|| {
             DtError::ConfigError("the source Redis URL must include a host".to_string())
                 .with_code(ErrorCode::InvalidConfig)
-                .with_stage(Stage::Extractor)
-                .with_endpoint(EndpointRole::Source)
         })?;
         let port = url_info.port().unwrap_or(6379);
 
@@ -72,9 +70,7 @@ impl RedisClient {
             }
             return Err(
                 DtError::ExtractorError("Redis authentication failed".to_string())
-                    .with_code(ErrorCode::AuthenticationFailed)
-                    .with_stage(Stage::Extractor)
-                    .with_endpoint(EndpointRole::Source),
+                    .with_code(ErrorCode::AuthenticationFailed),
             );
         }
 

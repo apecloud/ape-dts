@@ -17,6 +17,7 @@ use dt_common::{
         config_enums::{TaskKind, TaskType},
         resumer_config::ResumerConfig,
     },
+    error::{DtErrorContextExt, EndpointRole, Stage},
     log_warn,
     meta::position::Position,
     utils::file_util::FileUtil,
@@ -58,7 +59,11 @@ impl LogRecovery {
                 ));
             }
         };
-        recovery.initialization().await?;
+        recovery.initialization().await.map_err(|error| {
+            error
+                .with_stage(Stage::Resumer)
+                .with_endpoint(EndpointRole::Metadata)
+        })?;
         Ok(recovery)
     }
 

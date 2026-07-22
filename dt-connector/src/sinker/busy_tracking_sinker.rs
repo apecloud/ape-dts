@@ -7,7 +7,7 @@ use dt_common::{
     monitor::sinker_worker_metrics::SinkerWorkerRecorder,
 };
 
-use crate::Sinker;
+use crate::{error_boundary::sinker_error, Sinker};
 
 pub struct BusyTrackingSinker {
     inner: Box<dyn Sinker + Send>,
@@ -26,41 +26,62 @@ impl BusyTrackingSinker {
 impl Sinker for BusyTrackingSinker {
     async fn sink_dml(&mut self, data: Vec<RowData>, batch: bool) -> anyhow::Result<()> {
         let _guard = self.recorder.enter();
-        self.inner.sink_dml(data, batch).await
+        self.inner
+            .sink_dml(data, batch)
+            .await
+            .map_err(sinker_error::scope)
     }
 
     async fn sink_ddl(&mut self, data: Vec<DdlData>, batch: bool) -> anyhow::Result<()> {
         let _guard = self.recorder.enter();
-        self.inner.sink_ddl(data, batch).await
+        self.inner
+            .sink_ddl(data, batch)
+            .await
+            .map_err(sinker_error::scope)
     }
 
     async fn sink_dcl(&mut self, data: Vec<DclData>, batch: bool) -> anyhow::Result<()> {
         let _guard = self.recorder.enter();
-        self.inner.sink_dcl(data, batch).await
+        self.inner
+            .sink_dcl(data, batch)
+            .await
+            .map_err(sinker_error::scope)
     }
 
     async fn sink_raw(&mut self, data: Vec<DtItem>, batch: bool) -> anyhow::Result<()> {
         let _guard = self.recorder.enter();
-        self.inner.sink_raw(data, batch).await
+        self.inner
+            .sink_raw(data, batch)
+            .await
+            .map_err(sinker_error::scope)
     }
 
     async fn sink_struct(&mut self, data: Vec<StructData>) -> anyhow::Result<()> {
         let _guard = self.recorder.enter();
-        self.inner.sink_struct(data).await
+        self.inner
+            .sink_struct(data)
+            .await
+            .map_err(sinker_error::scope)
     }
 
     async fn refresh_meta(&mut self, data: Vec<DdlData>) -> anyhow::Result<()> {
         let _guard = self.recorder.enter();
-        self.inner.refresh_meta(data).await
+        self.inner
+            .refresh_meta(data)
+            .await
+            .map_err(sinker_error::scope)
     }
 
     async fn handle_control_item(&mut self, item: &DtItem) -> anyhow::Result<()> {
         let _guard = self.recorder.enter();
-        self.inner.handle_control_item(item).await
+        self.inner
+            .handle_control_item(item)
+            .await
+            .map_err(sinker_error::scope)
     }
 
     async fn close(&mut self) -> anyhow::Result<()> {
-        self.inner.close().await
+        self.inner.close().await.map_err(sinker_error::scope)
     }
 
     fn get_id(&self) -> String {
@@ -83,6 +104,7 @@ mod tests {
     use anyhow::bail;
     use async_trait::async_trait;
     use dt_common::{
+        error::{AnyhowErrorExt, EndpointRole, Stage},
         meta::{
             dcl_meta::dcl_data::DclData,
             ddl_meta::ddl_data::DdlData,
@@ -180,7 +202,10 @@ mod tests {
         assert_eq!(metrics.snapshot().busy, 0);
 
         fail.store(true, Ordering::Relaxed);
-        assert!(sinker.sink_dml(Vec::new(), false).await.is_err());
+        let error = sinker.sink_dml(Vec::new(), false).await.unwrap_err();
+        let context = error.dt_context().unwrap();
+        assert_eq!(context.stage_value(), Some(Stage::Sinker));
+        assert_eq!(context.endpoint_role(), Some(EndpointRole::Destination));
         assert_eq!(metrics.snapshot().busy, 0);
     }
 

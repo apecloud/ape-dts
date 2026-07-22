@@ -175,7 +175,7 @@ mod tests {
             true,
             DbType::Pg,
             Some(
-                DtError::Unexpected("replication capacity exhausted".to_string())
+                DtError::General("replication capacity exhausted".to_string())
                     .with_code(ErrorCode::ReplicationCapacityExhausted)
                     .with_stage(Stage::Precheck),
             ),

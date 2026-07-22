@@ -34,7 +34,7 @@ impl RdbQueryInfo<'_> {
         if !self.binds.is_empty()
             && (self.cols.is_empty() || self.binds.len() % self.cols.len() != 0)
         {
-            bail!(DtError::Unexpected(
+            bail!(DtError::General(
                 "query bind column layout does not match bind values".to_string(),
             )
             .with_code(ErrorCode::InvariantViolated));
@@ -533,7 +533,7 @@ impl RdbQueryBuilder<'_> {
         }
 
         if set_pairs.is_empty() {
-            bail! {DtError::Unexpected(format!(
+            bail! {DtError::General(format!(
                 "schema: {}, tb: {}, no cols in after, which should not happen in update",
                 self.rdb_tb_meta.schema, self.rdb_tb_meta.tb
             ))
@@ -791,7 +791,7 @@ impl RdbQueryBuilder<'_> {
             return Ok("NULL".to_string());
         };
         if col_value.is_unchanged_toast() {
-            bail! {DtError::Unexpected(format!(
+            bail! {DtError::General(format!(
                 "schema: {}, tb: {}, col: {}, UnchangedToast should not be converted to sql value directly",
                 self.rdb_tb_meta.schema, self.rdb_tb_meta.tb, col
             ))

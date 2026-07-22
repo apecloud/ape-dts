@@ -15,7 +15,7 @@ use dt_common::{
         connection_auth_config::ConnectionAuthConfig,
         ssl_config::{SslConfig, SslMode},
     },
-    error::{DtError, DtErrorContextExt, EndpointRole, ErrorCode, OriginError, Stage},
+    error::{DtError, DtErrorContextExt, ErrorCode, OriginError},
     log_info, log_warn,
 };
 
@@ -111,9 +111,7 @@ impl PgCdcClient {
                 return Err(DtError::ConfigError(
                     "TLS connector requested while PostgreSQL TLS is disabled".to_string(),
                 )
-                .with_code(ErrorCode::InvalidConfig)
-                .with_stage(Stage::Extractor)
-                .with_endpoint(EndpointRole::Source));
+                .with_code(ErrorCode::InvalidConfig));
             }
             SslMode::Require => {
                 builder.set_verify(SslVerifyMode::NONE);
@@ -123,9 +121,7 @@ impl PgCdcClient {
                     return Err(DtError::ConfigError(
                         "a CA certificate path is required by the selected TLS mode".to_string(),
                     )
-                    .with_code(ErrorCode::InvalidConfig)
-                    .with_stage(Stage::Extractor)
-                    .with_endpoint(EndpointRole::Source));
+                    .with_code(ErrorCode::InvalidConfig));
                 }
                 builder
                     .set_ca_file(&ssl_config.ssl_ca_path)
@@ -188,9 +184,7 @@ impl PgCdcClient {
             _ => Err(DtError::ConfigError(
                 "the PostgreSQL CDC URL contains an unsupported TLS mode".to_string(),
             )
-            .with_code(ErrorCode::InvalidConfig)
-            .with_stage(Stage::Extractor)
-            .with_endpoint(EndpointRole::Source)),
+            .with_code(ErrorCode::InvalidConfig)),
         }
     }
 
@@ -286,14 +280,9 @@ impl PgCdcClient {
                         .with_message(
                             "PostgreSQL did not return a start position for the new replication slot",
                         )
-                        .with_detail(
-                            "the CREATE_REPLICATION_SLOT response is missing consistent_point",
-                        )
                         .with_hint(
                             "Remove the incomplete replication slot and restart the task. If it repeats, check PostgreSQL replication logs.",
                         )
-                        .with_stage(Stage::Extractor)
-                        .with_endpoint(EndpointRole::Source)
                         .with_origin(OriginError::new("postgres", None::<String>))
                 })?;
 

@@ -27,8 +27,7 @@ use dt_common::{
 use super::task_util::TaskUtil;
 use crate::{
     error_boundary::sinker::{
-        invalid_http_client, invalid_http_endpoint, invalid_http_endpoint_source,
-        missing_sinker_client,
+        invalid_http_cause, invalid_http_endpoint, kafka_error, missing_sinker_client,
     },
     extractor_util::ExtractorUtil,
     task_util::ConnClient,
@@ -71,7 +70,7 @@ macro_rules! create_filter {
 
 impl SinkerUtil {
     fn parse_http_endpoint(value: &str) -> anyhow::Result<(Url, String, String)> {
-        let url = Url::parse(value).map_err(invalid_http_endpoint_source)?;
+        let url = Url::parse(value).map_err(invalid_http_cause)?;
         let host = url
             .host_str()
             .map(str::to_string)
@@ -302,12 +301,7 @@ impl SinkerUtil {
                         .with_ack_timeout(std::time::Duration::from_secs(ack_timeout_secs))
                         .with_required_acks(acks)
                         .create()
-                        .map_err(|error| {
-                            dt_connector::error_boundary::sinker_error::kafka(
-                                error,
-                                ErrorCode::ConnectionFailed,
-                            )
-                        })?;
+                        .map_err(|error| kafka_error(error, ErrorCode::ConnectionFailed))?;
                     // the sending performance of RdkafkaSinker is much worse than KafkaSinker
                     let sinker = KafkaSinker {
                         batch_size,
@@ -473,7 +467,7 @@ impl SinkerUtil {
                         .http1_title_case_headers()
                         .redirect(custom)
                         .build()
-                        .map_err(invalid_http_client)?;
+                        .map_err(invalid_http_cause)?;
                     let conn_pool = TaskUtil::create_mysql_conn_pool(
                         &url,
                         &DbType::StarRocks,
@@ -554,7 +548,7 @@ impl SinkerUtil {
                         .http1_title_case_headers()
                         .redirect(custom)
                         .build()
-                        .map_err(invalid_http_client)?;
+                        .map_err(invalid_http_cause)?;
                     let sinker = ClickhouseSinker {
                         http_client,
                         host,

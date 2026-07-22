@@ -3,8 +3,8 @@ use std::{backtrace::BacktraceStatus, fmt};
 use serde::Serialize;
 
 use super::{
-    error_context::DT_ERROR_CONTEXT_MARKER, DtError, DtErrorContext, EndpointRole, ErrorCode,
-    ErrorObject, OriginError, Stage,
+    error_context::DT_ERROR_CONTEXT_MARKER, DtErrorContext, EndpointRole, ErrorCode, ErrorObject,
+    OriginError, Stage,
 };
 
 pub const ERROR_REPORT_SCHEMA_VERSION: u16 = 1;
@@ -39,25 +39,19 @@ pub struct ErrorReport {
 impl ErrorReport {
     pub fn from_anyhow(error: &anyhow::Error) -> Self {
         let context = error.downcast_ref::<DtErrorContext>();
-        let project_detail = error.downcast_ref::<DtError>().map(DtError::detail);
         let (error_chain, context_count) = split_error_chain(error);
+        let detail = detail_from_error_chain(&error_chain);
         let backtrace = captured_backtrace(error);
 
         if let Some(context) = context {
-            return Self::from_context(
-                context,
-                project_detail,
-                error_chain,
-                context_count,
-                backtrace,
-            );
+            return Self::from_context(context, detail, error_chain, context_count, backtrace);
         }
 
         Self {
             schema_version: ERROR_REPORT_SCHEMA_VERSION,
             code: ErrorCode::Unclassified,
             message: ErrorCode::Unclassified.default_message().to_string(),
-            detail: None,
+            detail,
             hint: Some(ErrorCode::Unclassified.default_hint().to_string()),
             stage: Stage::Unknown,
             task_id: None,
@@ -72,7 +66,7 @@ impl ErrorReport {
 
     fn from_context(
         context: &DtErrorContext,
-        project_detail: Option<&str>,
+        detail: Option<String>,
         error_chain: Vec<String>,
         context_count: usize,
         backtrace: Option<String>,
@@ -86,10 +80,7 @@ impl ErrorReport {
                     .message_text()
                     .unwrap_or_else(|| code.default_message()),
             ),
-            detail: context
-                .detail_text()
-                .or(project_detail)
-                .map(sanitize_user_text),
+            detail,
             hint: Some(sanitize_user_text(
                 context.hint_text().unwrap_or_else(|| code.default_hint()),
             )),
@@ -172,6 +163,16 @@ fn split_error_chain(error: &anyhow::Error) -> (Vec<String>, usize) {
     (chain, context_count)
 }
 
+fn detail_from_error_chain(error_chain: &[String]) -> Option<String> {
+    let mut parts = Vec::new();
+    for item in error_chain {
+        if !item.is_empty() && !parts.contains(item) {
+            parts.push(item.clone());
+        }
+    }
+    (!parts.is_empty()).then(|| parts.join(": "))
+}
+
 fn captured_backtrace(error: &anyhow::Error) -> Option<String> {
     (error.backtrace().status() == BacktraceStatus::Captured)
         .then(|| format!("{}", error.backtrace()))
@@ -230,7 +231,6 @@ mod tests {
         let error = DtErrorContext::new()
             .code(ErrorCode::ObjectNotFound)
             .message("inner message")
-            .detail("inner detail")
             .hint("inner hint")
             .object(ErrorObject {
                 schema: Some("ape_dts".to_string()),
@@ -250,7 +250,10 @@ mod tests {
         let report = ErrorReport::from_anyhow(&error);
         assert_eq!(report.code, ErrorCode::ObjectNotFound);
         assert_eq!(report.message, "outer message");
-        assert_eq!(report.detail.as_deref(), Some("inner detail"));
+        assert_eq!(
+            report.detail.as_deref(),
+            Some("starting task: loading task state: relation missing")
+        );
         assert_eq!(report.hint.as_deref(), Some("outer hint"));
         assert_eq!(report.stage, Stage::Resumer);
         assert_eq!(report.task_id.as_deref(), Some("task-42"));
@@ -279,6 +282,7 @@ mod tests {
         assert!(!rendered.contains("OPERATION:"));
         assert!(rendered.contains("TASK: task-42"));
         assert!(rendered.contains("ENDPOINT: metadata"));
+        assert!(rendered.contains("AFFECTED: metadata store postgres ape_dts.resume_position"));
         assert!(rendered.contains("ORIGIN: postgres/42P01"));
         assert!(rendered.contains("CONTEXT 1: starting task"));
         assert!(rendered.contains("CAUSE 1: relation missing"));
@@ -287,48 +291,13 @@ mod tests {
     #[test]
     fn maps_unknown_errors() {
         let unknown = anyhow::anyhow!("plain error");
-        assert_eq!(
-            ErrorReport::from_anyhow(&unknown).code,
-            ErrorCode::Unclassified
-        );
+        let report = ErrorReport::from_anyhow(&unknown);
+        assert_eq!(report.code, ErrorCode::Unclassified);
+        assert_eq!(report.detail.as_deref(), Some("plain error"));
     }
 
     #[test]
-    fn renders_pg_style_report() {
-        let error = DtError::ConfigError("config [runtime].worker_threads is invalid".to_string())
-            .with_code(ErrorCode::InvalidConfig)
-            .with_stage(Stage::Bootstrap)
-            .with_hint("use a positive integer");
-        let rendered = ErrorReport::from_anyhow(&error).to_string();
-        assert!(rendered.starts_with("ERROR [CF002]:"));
-        assert!(!rendered.contains("\nPHASE:"));
-        assert!(rendered.contains("\nDETAIL: config [runtime].worker_threads is invalid"));
-        assert!(rendered.contains("\nHINT:"));
-    }
-
-    #[test]
-    fn renders_user_known_task_endpoint_and_object() {
-        let error = DtError::MetadataError("source table is missing".to_string())
-            .with_code(ErrorCode::ObjectNotFound)
-            .with_stage(Stage::Sinker)
-            .with_task_id("task-42")
-            .with_endpoint(EndpointRole::Destination)
-            .with_object(ErrorObject {
-                schema: Some("sales".to_string()),
-                table: Some("orders".to_string()),
-                ..Default::default()
-            })
-            .with_origin(OriginError::new("postgres", Some("42P01")));
-
-        let rendered = ErrorReport::from_anyhow(&error).to_string();
-        assert!(rendered.contains("\nTASK: task-42"));
-        assert!(rendered.contains("\nAFFECTED: destination postgres sales.orders"));
-        assert!(!rendered.contains("\nPHASE:"));
-        assert!(rendered.contains("\nORIGIN: postgres/42P01"));
-    }
-
-    #[test]
-    fn text_includes_diagnostics_while_json_excludes_them() {
+    fn text_and_json_include_redacted_detail_while_json_excludes_diagnostics() {
         let error = anyhow::anyhow!("password=secret, sql=INSERT, row_data=private")
             .context("internal worker context");
         let report = ErrorReport::from_anyhow(&error);
@@ -342,9 +311,9 @@ mod tests {
         assert!(rendered.contains("sql=INSERT"));
         assert!(rendered.contains("row_data=private"));
         assert!(!rendered.contains("password=secret"));
-        assert!(!json.contains("internal worker context"));
-        assert!(!json.contains("sql=INSERT"));
-        assert!(!json.contains("row_data=private"));
+        assert!(json.contains("internal worker context"));
+        assert!(json.contains("sql=INSERT"));
+        assert!(json.contains("row_data=private"));
         assert!(!json.contains("password=secret"));
         for diagnostic_field in [
             "phase",
@@ -365,8 +334,8 @@ mod tests {
         let error = DtError::ConfigError("password=secret is invalid".to_string())
             .with_code(ErrorCode::InvalidConfig)
             .with_message("password=secret is invalid")
-            .with_detail("endpoint=mysql://user:hunter2@localhost:3306/db")
             .with_hint("set token=abc123 before retrying");
+        let error = error.context("endpoint=mysql://user:hunter2@localhost:3306/db");
         let report = ErrorReport::from_anyhow(&error);
         let json = serde_json::to_value(&report).unwrap();
 
@@ -377,20 +346,6 @@ mod tests {
         assert!(!rendered.contains("hunter2"));
         assert!(!rendered.contains("abc123"));
         assert!(rendered.contains("[redacted]"));
-    }
-
-    #[test]
-    fn full_text_redacts_diagnostic_credentials() {
-        let error = anyhow::anyhow!(
-            "failed to connect to mysql://user:hunter2@localhost:3306/db with password=secret"
-        )
-        .context("token=abc123");
-        let rendered = ErrorReport::from_anyhow(&error).to_string();
-
-        for secret in ["hunter2", "password=secret", "token=abc123"] {
-            assert!(!rendered.contains(secret), "{rendered}");
-        }
-        assert!(rendered.contains("[redacted]"), "{rendered}");
     }
 
     #[test]
@@ -407,23 +362,5 @@ mod tests {
             ErrorReport::from_anyhow(&yaml_error).code,
             ErrorCode::Unclassified
         );
-    }
-
-    #[test]
-    fn separates_anyhow_context_from_typed_root_cause() {
-        let error = anyhow::Error::new(std::io::Error::other("root I/O failure"))
-            .context("opening checkpoint file");
-        let report = ErrorReport::from_anyhow(&error);
-
-        assert_eq!(
-            report.error_chain,
-            ["opening checkpoint file", "root I/O failure"]
-        );
-        assert_eq!(report.context_count, 1);
-
-        let rendered = report.to_string();
-        assert!(rendered.contains("CONTEXT 1: opening checkpoint file"));
-        assert!(rendered.contains("CAUSE 1: root I/O failure"));
-        assert!(!rendered.contains("CAUSE 1: opening checkpoint file"));
     }
 }

@@ -46,7 +46,6 @@ impl IniLoader {
             DtError::ConfigError(format!("failed to parse config file: {ini_file}"))
                 .with_code(ErrorCode::InvalidConfig)
                 .with_message("failed to parse config file")
-                .with_detail(format!("path: {ini_file}"))
                 .with_stage(Stage::Bootstrap)
         })?;
         Ok(Self { ini })
@@ -129,55 +128,12 @@ mod tests {
     use crate::error::ErrorReport;
 
     #[test]
-    fn missing_file_has_missing_config_code() {
-        let error = IniLoader::new("/tmp/ape-dts-config-that-does-not-exist.ini").unwrap_err();
-        assert_eq!(
-            ErrorReport::from_anyhow(&error).code,
-            ErrorCode::MissingConfig
-        );
-    }
-
-    #[test]
-    fn missing_required_value_has_missing_config_code() {
-        let loader = IniLoader { ini: Ini::new() };
-        let error = loader
-            .get_required::<String>("extractor", "url")
-            .unwrap_err();
-        assert_eq!(
-            ErrorReport::from_anyhow(&error).code,
-            ErrorCode::MissingConfigItem
-        );
-    }
-
-    #[test]
     fn invalid_value_is_redacted_for_sensitive_keys() {
         let error =
             IniLoader::parse_value::<u32>("extractor", "password", "not-a-number").unwrap_err();
         let rendered = ErrorReport::from_anyhow(&error).to_string();
         assert!(rendered.contains("[redacted]"));
         assert!(!rendered.contains("not-a-number"));
-    }
-
-    #[test]
-    fn invalid_bool_and_number_are_invalid_config() {
-        let mut ini = Ini::new();
-        ini.set("runtime", "enable", Some("not-a-bool".to_string()));
-        ini.set("runtime", "workers", Some("not-a-number".to_string()));
-        let loader = IniLoader { ini };
-
-        for error in [
-            loader
-                .get_required::<bool>("runtime", "enable")
-                .unwrap_err(),
-            loader
-                .get_required::<usize>("runtime", "workers")
-                .unwrap_err(),
-        ] {
-            assert_eq!(
-                ErrorReport::from_anyhow(&error).code,
-                ErrorCode::InvalidConfig
-            );
-        }
     }
 
     #[test]

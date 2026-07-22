@@ -7,7 +7,7 @@ use mongodb::{
 };
 
 use dt_common::{
-    error::{DtError, DtErrorContextExt, EndpointRole, ErrorCode, OriginError, Stage},
+    error::{DtError, DtErrorContextExt, ErrorCode, OriginError},
     meta::{
         mongo::mongo_shard::list_shard_collections,
         struct_meta::statement::{
@@ -197,8 +197,6 @@ impl MongoStructFetcher {
         .with_hint(
             "Check the database name in the MongoDB source URL and task routing, then retry."
         )
-        .with_stage(Stage::Extractor)
-        .with_endpoint(EndpointRole::Source)
         .with_origin(OriginError::new("mongodb", None::<String>)))
     }
 

@@ -36,7 +36,7 @@ use crate::{
 };
 use dt_common::{
     config::{config_enums::DbType, connection_auth_config::ConnectionAuthConfig},
-    error::{DtError, DtErrorContextExt, EndpointRole, ErrorCode, OriginError, Stage},
+    error::{DtError, DtErrorContextExt, ErrorCode, OriginError},
     log_debug, log_error, log_info, log_warn,
     meta::{
         adaptor::mysql_col_value_convertor::MysqlColValueConvertor, col_value::ColValue,
@@ -399,10 +399,7 @@ impl MysqlCdcExtractor {
             bail! {DtError::ExtractorError(detail.to_string())
             .with_code(ErrorCode::StatementFailed)
             .with_message("A MySQL row event could not be decoded")
-            .with_detail(detail)
             .with_hint("Restart from an earlier binlog position. If it repeats, check binlog integrity and the source database logs.")
-            .with_stage(Stage::Extractor)
-            .with_endpoint(EndpointRole::Source)
             .with_origin(OriginError::new("mysql", None::<String>))}
         }
 
@@ -410,12 +407,10 @@ impl MysqlCdcExtractor {
         let col_count = cmp::min(tb_meta.basic.cols.len(), included_columns.len());
         for i in (0..col_count).rev() {
             let col = tb_meta.basic.cols.get(i).ok_or_else(|| {
-                DtError::Unexpected(format!(
+                DtError::General(format!(
                     "column index {i} is missing from MySQL table metadata"
                 ))
                 .with_code(ErrorCode::InvariantViolated)
-                .with_stage(Stage::Extractor)
-                .with_endpoint(EndpointRole::Source)
                 .with_origin(OriginError::new("mysql", None::<String>))
             })?;
             if ignore_cols.is_some_and(|cols| cols.contains(col)) {

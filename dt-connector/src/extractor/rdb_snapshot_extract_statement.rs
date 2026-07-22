@@ -189,7 +189,7 @@ impl<'r> RdbSnapshotExtractStatement<'r> {
                 let col_type = self
                     .mysql_tb_meta
                     .ok_or_else(|| {
-                        DtError::Unexpected(
+                        DtError::General(
                             "MySQL table metadata is missing while building snapshot SQL"
                                 .to_string(),
                         )

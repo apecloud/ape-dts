@@ -48,7 +48,7 @@ impl DclParser {
                         format!("code: {:?}, input: {}", e.code, to_string(e.input))
                     }
                 };
-                bail! {DtError::Unexpected(format!("failed to parse sql: {}, error: {}", sql, error))
+                bail! {DtError::General(format!("failed to parse sql: {}, error: {}", sql, error))
                 .with_code(ErrorCode::StatementFailed)}
             }
         }

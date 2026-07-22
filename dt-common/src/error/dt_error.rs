@@ -9,8 +9,8 @@ pub enum DtError {
     #[error("sinker error: {0}")]
     SinkerError(String),
 
-    #[error("unexpected internal error: {0}")]
-    Unexpected(String),
+    #[error("{0}")]
+    General(String),
 
     #[error("parse Redis RDB error: {0}")]
     RedisRdbError(String),
@@ -29,21 +29,4 @@ pub enum DtError {
 
     #[error("HTTP error: {0}")]
     HttpError(String),
-}
-
-impl DtError {
-    pub(crate) fn detail(&self) -> &str {
-        match self {
-            Self::ConfigError(detail)
-            | Self::ExtractorError(detail)
-            | Self::SinkerError(detail)
-            | Self::Unexpected(detail)
-            | Self::RedisRdbError(detail)
-            | Self::RedisCmdError(detail)
-            | Self::RedisResultError(detail)
-            | Self::MetadataError(detail)
-            | Self::StructError(detail)
-            | Self::HttpError(detail) => detail,
-        }
-    }
 }

@@ -5,7 +5,7 @@ use crate::{close_conn_pool, rdb_router::RdbRouter, Sinker};
 use anyhow::bail;
 use dt_common::{
     config::config_enums::{ConflictPolicyEnum, DbType},
-    error::{DtError, DtErrorContextExt, ErrorCode, Stage},
+    error::{DtError, DtErrorContextExt, ErrorCode},
     log_error, log_info,
     meta::{
         mysql::{mysql_col_type::MysqlColType, mysql_tb_meta::MysqlTbMeta},
@@ -136,11 +136,10 @@ impl StarrocksStructSinker {
             )
                 .with_code(ErrorCode::ObjectNotFound)
                 .with_message("Source table metadata is unavailable for StarRocks structure migration")
-                .with_detail("source table metadata is missing while building StarRocks DDL")
                 .with_hint(
                     "Verify that the source table still exists and rerun structure migration. If it repeats, contact support with the task ID and error code.",
                 )
-                .with_stage(Stage::Sinker));
+                );
         };
 
         let mut dst_cols = vec![];
@@ -231,11 +230,10 @@ impl StarrocksStructSinker {
             return Err(DtError::SinkerError(detail.clone())
                 .with_code(ErrorCode::ObjectNotFound)
                 .with_message("Source column metadata is unavailable for StarRocks structure migration")
-                .with_detail(detail)
                 .with_hint(
                     "Check whether the source table changed, then restart structure migration to reload its definition.",
                 )
-                .with_stage(Stage::Sinker));
+                );
         }?;
 
         // The delete operation in Doris (-H "merge_type: delete") is implemented by inserting a record marked for deletion,

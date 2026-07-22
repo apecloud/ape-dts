@@ -33,7 +33,7 @@ use dt_common::{
         sinker_config::SinkerConfig,
         task_config::{TaskConfig, DEFAULT_CHECK_LOG_FILE_SIZE},
     },
-    error::{DtError, DtErrorContextExt, ErrorCode, Stage},
+    error::{DtError, DtErrorContextExt, EndpointRole, ErrorCode, Stage},
     limiter::buffer_limiter::BufferLimiter,
     log_error,
     log_filter::{parse_size_limit, SizeLimitFilterDeserializer},
@@ -99,8 +99,9 @@ const CHECK_RESULT_STDOUT_APPENDER_PLACEHOLDER: &str = "CHECK_RESULT_STDOUT_APPE
 const DEFAULT_CHECK_LOG_DIR_PLACEHOLDER: &str = "LOG_DIR_PLACEHOLDER/check";
 const DEFAULT_STATISTIC_LOG_DIR_PLACEHOLDER: &str = "LOG_DIR_PLACEHOLDER/statistic";
 
-use crate::error_boundary::runner::{
-    invalid_task_config, invalid_task_config_source, task_io_error, task_worker_error,
+use crate::error_boundary::{
+    invalid_task_config,
+    runner::{invalid_task_config_source, task_io_error, task_worker_error},
 };
 
 fn init_task_check_summary() -> CheckSummaryLog {
@@ -772,8 +773,20 @@ impl TaskRunner {
             extractor.close().await
         };
 
-        extract_result.context("extractor.extract failed")?;
-        close_result.context("extractor.close failed")?;
+        extract_result
+            .map_err(|error| {
+                error
+                    .with_stage(Stage::Extractor)
+                    .with_endpoint(EndpointRole::Source)
+            })
+            .context("extractor.extract failed")?;
+        close_result
+            .map_err(|error| {
+                error
+                    .with_stage(Stage::Extractor)
+                    .with_endpoint(EndpointRole::Source)
+            })
+            .context("extractor.close failed")?;
         Ok(())
     }
 
@@ -1283,7 +1296,7 @@ impl TaskRunner {
             .build(raw.root())
             .map_err(invalid_task_config_source)?;
         let mut handle_guard = LOG_HANDLE.lock().map_err(|_| {
-            DtError::Unexpected("the logging configuration lock is poisoned".to_string())
+            DtError::General("the logging configuration lock is poisoned".to_string())
                 .with_code(ErrorCode::InvariantViolated)
                 .with_stage(Stage::Bootstrap)
         })?;

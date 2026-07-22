@@ -583,7 +583,7 @@ impl RecheckKey {
                     .cloned()
                     .map(|value| (col.clone(), value))
                     .ok_or_else(|| {
-                        DtError::Unexpected(format!("missing ID column value: {col}"))
+                        DtError::General(format!("missing ID column value: {col}"))
                             .with_code(ErrorCode::StatementFailed)
                             .with_stage(Stage::Checker)
                     })

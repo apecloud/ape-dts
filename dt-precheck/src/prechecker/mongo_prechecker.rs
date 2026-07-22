@@ -44,7 +44,6 @@ impl Prechecker for MongoPrechecker {
             check_error = Some(precheck_failure(
                 ErrorCode::UnsupportedDatabaseVersion,
                 format!("MongoDB version {version} is not supported"),
-                self.is_source,
             ));
         }
 
@@ -105,11 +104,7 @@ impl Prechecker for MongoPrechecker {
         }
 
         if !err_msg.is_empty() {
-            check_error = Some(precheck_failure(
-                ErrorCode::CdcNotEnabled,
-                err_msg,
-                self.is_source,
-            ));
+            check_error = Some(precheck_failure(ErrorCode::CdcNotEnabled, err_msg));
         }
 
         Ok(CheckResult::build_with_err(
@@ -140,7 +135,6 @@ impl Prechecker for MongoPrechecker {
                 check_error = Some(precheck_failure(
                     ErrorCode::UnsupportedTableStructure,
                     "MongoDB databases admin and local are not supported migration objects",
-                    self.is_source,
                 ));
                 break;
             }

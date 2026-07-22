@@ -309,11 +309,10 @@ impl PgSnapshotExtractor {
                     };
 
                     *running_chunks = running_chunks.checked_sub(1).ok_or_else(|| {
-                        DtError::Unexpected(
+                        DtError::General(
                             "PostgreSQL split chunk running count underflow".to_string(),
                         )
                         .with_code(ErrorCode::InvariantViolated)
-                        .with_stage(Stage::Extractor)
                     })?;
 
                     if let Some(position) =
@@ -362,11 +361,10 @@ impl PgSnapshotExtractor {
                         )
                     })?;
                     let partition_col = finish_partition_col.clone().ok_or_else(|| {
-                        DtError::Unexpected(
+                        DtError::General(
                             "finished PostgreSQL split is missing its partition column".to_string(),
                         )
                         .with_code(ErrorCode::InvariantViolated)
-                        .with_stage(Stage::Extractor)
                     })?;
                     if active_table.tb_meta.basic.is_col_nullable(&partition_col) {
                         state.pending_works.push_back(PgSnapshotWork::NullChunk {
@@ -640,9 +638,8 @@ impl PgSnapshotDispatchState {
         };
 
         let work = self.pending_works.remove(index).ok_or_else(|| {
-            DtError::Unexpected("pending PostgreSQL snapshot work is missing".to_string())
+            DtError::General("pending PostgreSQL snapshot work is missing".to_string())
                 .with_code(ErrorCode::InvariantViolated)
-                .with_stage(Stage::Extractor)
         })?;
         self.mark_work_started(&work)?;
         Ok(Some(work))
@@ -702,9 +699,8 @@ impl PgSnapshotDispatchState {
             }
         };
         *queued_chunks = queued_chunks.checked_sub(1).ok_or_else(|| {
-            DtError::Unexpected("PostgreSQL split chunk queued count underflow".to_string())
+            DtError::General("PostgreSQL split chunk queued count underflow".to_string())
                 .with_code(ErrorCode::InvariantViolated)
-                .with_stage(Stage::Extractor)
         })?;
         *running_chunks += 1;
         Ok(())

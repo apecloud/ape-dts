@@ -8,11 +8,7 @@ use anyhow::bail;
 use mongodb::bson::{Bson, Document};
 use serde::{Deserialize, Serialize, Serializer};
 
-use crate::error::{DtError, DtErrorContextExt, ErrorCode};
-
-fn invariant_error(detail: String) -> anyhow::Error {
-    DtError::Unexpected(detail).with_code(ErrorCode::InvariantViolated)
-}
+use crate::error_boundary::metadata::invariant;
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[allow(dead_code)]
@@ -97,7 +93,7 @@ impl ColValue {
             Self::UnsignedLong(v) => Ok(*v as i128),
             Self::LongLong(v) => Ok(*v as i128),
             Self::UnsignedLongLong(v) => Ok(*v as i128),
-            _ => bail!(invariant_error(format!(
+            _ => bail!(invariant(format!(
                 "cannot convert {self:?} into a 128-bit integer"
             ))),
         }
@@ -128,9 +124,7 @@ impl ColValue {
                 *v as i128 + t,
                 i64::MAX as i128,
             ) as u64)),
-            _ => bail!(invariant_error(format!(
-                "cannot add a 128-bit integer to {self}"
-            ))),
+            _ => bail!(invariant(format!("cannot add a 128-bit integer to {self}"))),
         }
     }
 
@@ -138,9 +132,7 @@ impl ColValue {
         match self {
             Self::Float(v) => Ok(*v as f64),
             Self::Double(v) => Ok(*v),
-            _ => bail!(invariant_error(format!(
-                "cannot convert {self:?} into a double"
-            ))),
+            _ => bail!(invariant(format!("cannot convert {self:?} into a double"))),
         }
     }
 

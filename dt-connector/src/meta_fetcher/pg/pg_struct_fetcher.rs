@@ -24,7 +24,7 @@ use dt_common::meta::struct_meta::{
 };
 use dt_common::{
     config::{config_enums::DbType, config_token_parser::ConfigTokenParser},
-    error::{DtError, DtErrorContextExt, EndpointRole, ErrorCode, OriginError, Stage},
+    error::{DtError, DtErrorContextExt, ErrorCode, OriginError},
     log_error, log_info, log_warn,
     rdb_filter::RdbFilter,
     utils::sql_util::SqlUtil,
@@ -202,8 +202,6 @@ impl PgStructFetcher {
                 filtered_schemas.join(",")
             ))
             .with_code(ErrorCode::ObjectNotFound)
-            .with_stage(Stage::Extractor)
-            .with_endpoint(EndpointRole::Source)
             .with_origin(OriginError::new("postgres", None::<String>))}
         } else {
             Ok(schemas.into_iter().map(|s| Schema { name: s }).collect())
@@ -554,8 +552,6 @@ impl PgStructFetcher {
                             column.column_name
                         ))
                         .with_code(ErrorCode::UnsupportedTableStructure)
-                        .with_stage(Stage::Extractor)
-                        .with_endpoint(EndpointRole::Source)
                         .with_origin(OriginError::new("postgres", None::<String>))
                     })?
                     .to_owned();

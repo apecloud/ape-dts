@@ -12,7 +12,6 @@ use crate::{
 };
 use dt_common::{
     config::{config_enums::DbType, connection_auth_config::ConnectionAuthConfig},
-    error::EndpointRole,
     rdb_filter::RdbFilter,
     utils::sql_util::SqlUtil,
 };
@@ -223,14 +222,9 @@ impl Fetcher for MysqlFetcher {
 
 impl MysqlFetcher {
     async fn fetch_all(&self, sql: String, mut sql_msg: &str) -> anyhow::Result<Vec<MySqlRow>> {
-        let endpoint = if self.is_source {
-            EndpointRole::Source
-        } else {
-            EndpointRole::Destination
-        };
         let mysql_pool = match &self.pool {
             Some(pool) => pool,
-            None => return Err(mysql_precheck_error(sqlx::Error::PoolClosed, endpoint)),
+            None => return Err(mysql_precheck_error(sqlx::Error::PoolClosed)),
         };
 
         sql_msg = if sql_msg.is_empty() { "sql" } else { sql_msg };
@@ -239,7 +233,7 @@ impl MysqlFetcher {
         query(&sql)
             .fetch_all(mysql_pool)
             .await
-            .map_err(|error| mysql_precheck_error(error, endpoint))
+            .map_err(mysql_precheck_error)
     }
 
     fn fetch_row<'a>(
@@ -247,23 +241,13 @@ impl MysqlFetcher {
         sql: &'a str,
         mut sql_msg: &str,
     ) -> anyhow::Result<impl Stream<Item = anyhow::Result<MySqlRow>> + 'a> {
-        let endpoint = if self.is_source {
-            EndpointRole::Source
-        } else {
-            EndpointRole::Destination
-        };
         match &self.pool {
             Some(pool) => {
                 sql_msg = if sql_msg.is_empty() { "sql" } else { sql_msg };
                 println!("{}: {}", sql_msg, sql);
-                Ok(query(sql)
-                    .fetch(pool)
-                    .map_err(move |error| mysql_precheck_error(error, endpoint)))
+                Ok(query(sql).fetch(pool).map_err(mysql_precheck_error))
             }
-            None => bail! {mysql_precheck_error(
-                sqlx::Error::PoolClosed,
-                endpoint,
-            )},
+            None => bail! {mysql_precheck_error(sqlx::Error::PoolClosed)},
         }
     }
 

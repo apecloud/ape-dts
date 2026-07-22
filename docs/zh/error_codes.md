@@ -22,7 +22,7 @@ HINT: Check object routing and create the required object or enable structure in
 - 错误码只允许追加，禁止将已有错误码复用于其他错误条件。
 - 以 `000` 结尾的类别码为保留码，不得实际输出。
 - 阶段不属于稳定的错误身份。
-- 阶段一旦设置，上层调用方不得覆盖。
+- stage 和 endpoint 由执行边界显式挂载；报告层禁止根据错误码、provider 或模块名推导。
 - 重试、跳过、降级和 DLQ 行为属于策略层，不属于错误码契约。
 
 错误码目录在 `dt-common::error` 中集中声明一次，并由该声明生成枚举、序列化错误码
@@ -86,9 +86,10 @@ HINT: Check object routing and create the required object or enable structure in
 `ErrorReport` 的文本输出始终在用户信息后输出全部可用诊断字段。API 使用方必须使用
 带版本的 JSON 视图，不得解析 CLI 文本。
 
-组件提供的 `message`、`detail` 和 `hint` 保持自由文本。报告边界使用 `rtb-redact`
-对凭据、带认证信息的 URL、authorization 值、provider token、JWT、长随机 token 和
-私钥进行脱敏。文本输出对 provider 消息和 `anyhow::Context` 使用相同的脱敏逻辑。
+组件提供的 `message` 和 `hint` 保持自由文本。`detail` 由 `ErrorReport` 按从外到内的
+顺序组合普通 `anyhow::Context` 和具体 cause，并去除重复文本。报告边界使用
+`rtb-redact` 对凭据、带认证信息的 URL、authorization 值、provider token、JWT、长随机
+token 和私钥进行脱敏，之后这些内容才能进入用户视图。
 
 CLI 错误默认包含诊断部分：
 
@@ -113,8 +114,8 @@ BACKTRACE:
 ## 结构化错误
 
 `anyhow::Error` 是唯一的错误传输容器。`DtErrorContext` 是类型化 metadata frame，
-其中的错误码、消息、详细信息、处理建议、阶段、任务 ID、端点角色、数据库对象和
-provider origin 都是可选字段。它实现 `Display`，但刻意不实现
+其中的错误码、消息、处理建议、阶段、任务 ID、端点角色、数据库对象和 provider
+origin 都是可选字段。它实现 `Display`，但刻意不实现
 `std::error::Error`。端点角色包括 `source`、`destination` 和 `metadata`。
 
 错误链最内层始终是真正实现 `Error` 的 cause。Provider 失败直接保留原始 provider
@@ -129,13 +130,18 @@ provider origin 都是可选字段。它实现 `Display`，但刻意不实现
 可能对应多个错误码，因此失败点必须显式挂载业务错误码；禁止增加根据 variant 猜测
 错误码的 `DtError` classifier。
 
-Metadata 在错误跨越所有权边界时逐层挂载。叶子 frame 可以提供错误码、detail、对象和
-origin；组件 frame 提供 stage 和 endpoint；任务入口通过
-`DtErrorContextExt::with_task_id` 提供 task ID。Frame 挂载后不再修改。
-`ErrorReport` 从最外层 frame 开始递归读取 metadata 父链；每个字段使用第一个非空的
-外层值，外层为空时才继承内层值。
-如果所有 frame 都没有提供 detail，报告构建时才使用项目自有 `DtError` 的 payload
-作为 detail；provider 消息仍只作为诊断 cause 输出。
+Metadata 在错误跨越所有权边界时逐层挂载。叶子 frame 可以提供业务错误码、受影响对象
+和 provider origin。stage、endpoint 和 task ID 在仍然明确知道其含义的最高层边界显式
+挂载：例如 extractor worker 挂载 `extractor/source`，统一 sinker adapter 挂载
+`sinker/destination`，recovery 初始化边界挂载 `resumer/metadata`，precheck 入口挂载
+`precheck` 和 task ID，而 precheck builder 在各 checker 调用外层挂载 `source` 或
+`destination`。普通任务的 task ID 只在任务入口挂载。报告阶段不做推导。
+
+Frame 挂载后不再修改。`ErrorReport` 从最外层 frame 开始递归读取 metadata 父链；每个
+字段使用第一个非空的外层值，外层为空时才继承内层值。`DtErrorContext` 不包含 detail
+字段；报告构建时从已脱敏的普通 context 和具体 cause 生成 detail。项目自有 `DtError`
+会保留 variant 对应的完整 `Display` 文本和类型化 payload，与 provider error 保留自身
+`Display`、source chain 和具体类型的方式一致。
 
 组件边界先借用原始 provider 错误完成分类，再通过 `DtErrorContext::attach` 挂载。
 得到的 `anyhow::Error` 既能 downcast 到 `DtErrorContext`，也能 downcast 到原始
@@ -152,9 +158,10 @@ Provider 分类器统一位于 `dt-common::error::provider`。分类器根据 pr
 因此精确的 provider 分类会覆盖默认码，未识别的 provider 错误会继承默认码。stage 和
 endpoint 位于这两层之外，原始 provider 错误保持不变。
 
-组件级元数据应放在组件边界的小型 wrapper 中。组件边界负责设置操作默认错误码、
-阶段和端点。Provider classifier 不接收业务默认码；无法识别时返回空 code 并继承边界
-默认码。任务级字段只允许在任务入口挂载。
+Provider 相关元数据应放在组件边界的小型 wrapper 中。组件边界负责设置操作默认错误
+码。Provider classifier 不接收业务默认码；无法识别时返回空 code 并继承边界默认码。
+stage、endpoint 和 task ID 在 provider 分类之外、仍明确知道其语义的最高层执行边界
+显式挂载。
 
 每个 crate 必须将组件 wrapper 统一放在唯一的 `src/error_boundary.rs` 中，并通过
 `extractor_error`、`sinker_error` 或 provider 等内部模块区分所有权。禁止继续在业务模块旁新增

@@ -3,7 +3,7 @@ use std::{collections::VecDeque, future::Future, sync::Arc};
 use tokio::task::JoinSet;
 
 use dt_common::{
-    error::{DtError, DtErrorContextExt, ErrorCode, Stage},
+    error::{DtError, DtErrorContextExt, ErrorCode},
     monitor::task_monitor_handle::TaskMonitorHandle,
     runtime_trace,
 };
@@ -61,8 +61,7 @@ impl SnapshotDispatcher {
             return Err(DtError::ConfigError(
                 "snapshot parallel size must be greater than zero".to_string(),
             )
-            .with_code(ErrorCode::InvalidConfig)
-            .with_stage(Stage::Extractor));
+            .with_code(ErrorCode::InvalidConfig));
         }
         let run = Arc::new(run);
         let mut join_set = JoinSet::new();

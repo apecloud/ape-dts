@@ -4,7 +4,7 @@ use anyhow::bail;
 use async_trait::async_trait;
 use dt_common::{
     config::{config_enums::DbType, filter_config::FilterConfig},
-    error::{DtError, DtErrorContextExt, ErrorCode, Stage},
+    error::{DtError, DtErrorContextExt, ErrorCode},
 };
 
 use crate::{
@@ -57,7 +57,6 @@ impl Prechecker for PostgresqlPrechecker {
                     check_error = Some(precheck_failure(
                         ErrorCode::UnsupportedDatabaseVersion,
                         "PostgreSQL returned no version information",
-                        self.is_source,
                     ));
                 } else {
                     match version.parse::<i32>() {
@@ -65,7 +64,6 @@ impl Prechecker for PostgresqlPrechecker {
                             check_error = Some(precheck_failure(
                                 ErrorCode::UnsupportedDatabaseVersion,
                                 format!("PostgreSQL version {version_i32} is not supported"),
-                                self.is_source,
                             ));
                         }
                         Ok(_) => {}
@@ -159,7 +157,6 @@ impl Prechecker for PostgresqlPrechecker {
             check_error = Some(precheck_failure(
                 ErrorCode::CdcNotEnabled,
                 err_msgs.join(";"),
-                self.is_source,
             ));
         }
 
@@ -170,14 +167,13 @@ impl Prechecker for PostgresqlPrechecker {
                 Ok(slots) => {
                     if max_replication_slots_i32 == (slots.len() as i32) {
                         check_error = Some(
-                            DtError::Unexpected(
+                            DtError::General(
                                 "All PostgreSQL replication slots are in use".to_string(),
                             )
                             .with_code(ErrorCode::ReplicationCapacityExhausted)
-                            .with_detail(format!(
+                            .context(format!(
                                 "configured replication slots: {max_replication_slots_i32}"
-                            ))
-                            .with_stage(Stage::Precheck),
+                            )),
                         );
                     }
                 }
@@ -218,7 +214,6 @@ impl Prechecker for PostgresqlPrechecker {
                 Some(precheck_failure(
                     ErrorCode::ObjectNotFound,
                     "structure existence precheck does not support pattern filters",
-                    self.is_source,
                 )),
             ));
         }
@@ -295,7 +290,6 @@ impl Prechecker for PostgresqlPrechecker {
             check_error = Some(precheck_failure(
                 ErrorCode::ObjectNotFound,
                 err_msgs.join("."),
-                self.is_source,
             ))
         }
 
@@ -334,7 +328,6 @@ impl Prechecker for PostgresqlPrechecker {
                 Some(precheck_failure(
                     ErrorCode::UnsupportedTableStructure,
                     "table structure precheck does not support pattern filters",
-                    self.is_source,
                 )),
             ));
         }
@@ -352,21 +345,18 @@ impl Prechecker for PostgresqlPrechecker {
             precheck_failure(
                 ErrorCode::InvariantViolated,
                 "missing PostgreSQL primary constraint code",
-                self.is_source,
             )
         })?;
         let unique = ConstraintTypeEnum::Unique.to_str().ok_or_else(|| {
             precheck_failure(
                 ErrorCode::InvariantViolated,
                 "missing PostgreSQL unique constraint code",
-                self.is_source,
             )
         })?;
         let foreign = ConstraintTypeEnum::Foreign.to_str().ok_or_else(|| {
             precheck_failure(
                 ErrorCode::InvariantViolated,
                 "missing PostgreSQL foreign constraint code",
-                self.is_source,
             )
         })?;
         let mut all_schemas = Vec::new();
@@ -441,14 +431,12 @@ impl Prechecker for PostgresqlPrechecker {
             check_error = Some(precheck_failure(
                 ErrorCode::UnsupportedTableStructure,
                 err_msgs.join(";"),
-                self.is_source,
             ))
         }
         if !warn_msgs.is_empty() {
             warn_error = Some(precheck_failure(
                 ErrorCode::UnsupportedTableStructure,
                 warn_msgs.join(";"),
-                self.is_source,
             ))
         }
 

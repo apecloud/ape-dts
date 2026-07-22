@@ -57,7 +57,7 @@ impl RdbMetaManager {
             return Ok(&tb_meta.basic);
         }
 
-        bail! {DtError::Unexpected("no available meta_manager in partitioner".to_string())
+        bail! {DtError::General("no available meta_manager in partitioner".to_string())
         .with_code(ErrorCode::InvariantViolated)}
     }
 
