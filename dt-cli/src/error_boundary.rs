@@ -1,6 +1,17 @@
-use std::error::Error as StdError;
+use std::{error::Error as StdError, io};
 
 use dt_common::error::{DtError, DtErrorContext, DtErrorContextExt, ErrorCode, Stage};
+
+pub(crate) trait CliIoResultExt<T> {
+    fn with_io_context(self, detail: impl Into<String>) -> anyhow::Result<T>;
+}
+
+impl<T> CliIoResultExt<T> for io::Result<T> {
+    fn with_io_context(self, detail: impl Into<String>) -> anyhow::Result<T> {
+        self.map_err(|error| task_source(ErrorCode::IoFailed, detail, error))
+    }
+}
+
 pub(crate) fn config_error(detail: impl Into<String>) -> anyhow::Error {
     DtError::ConfigError(detail.into())
         .with_code(ErrorCode::InvalidConfig)

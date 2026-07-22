@@ -147,6 +147,11 @@ define_error_codes! {
         message: "The task stopped unexpectedly",
         hint: "Retry once; if the error repeats, contact support with the task ID and error code.",
     }
+    OperationInterrupted {
+        code: "RT002",
+        message: "The requested operation was interrupted",
+        hint: "Run the command again when you are ready to continue.",
+    }
     InvariantViolated {
         code: "IN001",
         message: "The task encountered an internal error",

@@ -59,6 +59,7 @@ matches.
 | `ST001` | `CheckpointReadFailed` | Checkpoint state could not be read |
 | `IO001` | `IoFailed` | An I/O operation failed |
 | `RT001` | `WorkerFailed` | A task worker terminated unexpectedly |
+| `RT002` | `OperationInterrupted` | The requested operation was interrupted |
 | `IN001` | `InvariantViolated` | An internal invariant was violated |
 | `IN999` | `Unclassified` | No stable classification is available yet |
 
@@ -165,7 +166,11 @@ inference is used.
 Frames are immutable after attachment. `ErrorReport` starts at the outermost
 frame and recursively reads its metadata parents. For every field, the first
 non-empty outer value wins and a missing value is inherited from the inner
-frame. `DtErrorContext` has no detail field. Report construction derives
+frame. This is unconditional outer-wins semantics, not fill-if-absent mutation:
+for example, an outer `sinker/destination` scope intentionally replaces an
+inner stage or endpoint in the final report. A boundary that must preserve an
+inner scope must not attach a competing value. `DtErrorContext` has no detail
+field. Report construction derives
 `detail` from the redacted ordinary contexts and concrete causes in the error
 chain. Project-owned `DtError` values retain their variant-specific full
 `Display` text and typed payload, just as provider errors retain their own
@@ -278,12 +283,22 @@ Other initial provider mappings are:
 | Kafka timeout / broker transport failure | `CN002` / `CN001` |
 | HTTP request timeout / connection failure | `CN002` / `CN001` |
 | HTTP non-success response or invalid response body | `DB001` |
+| MySQL binlog I/O timeout / other transport failure | `CN002` / `CN001` |
+| MySQL binlog invalid GTID | `CF002` |
+| MySQL binlog error `1236` (requested binlog unavailable) | `ST001`, origin `mysql/1236` |
+| Other MySQL binlog decoding failures | `DB001` |
 
 Worker join failures are `RT001`. URL and YAML parsing errors classified at
 their component boundary are `CF002`. An unclassified raw error reaching
 `ErrorReport` is `IN999`. A local filesystem `std::io::Error` is `IO001`; network
 I/O must be classified at its provider boundary so that it becomes `CN001` or
-`CN002` instead.
+`CN002` instead. User-interrupted CLI operations are `RT002`.
+
+`mysql-binlog-connector-rust v0.3.4` discards the numeric code from MySQL error
+packets and exposes error `1236` as `ConnectError(String)`. Until the connector
+preserves that typed code, the MySQL extractor boundary recognizes only the
+known "requested binlog unavailable" messages and restores origin code `1236`.
+This narrow compatibility workaround is not a general provider classifier.
 
 A malformed database connection URL is configuration failure `CF002`. `CN001`
 is used only after a syntactically valid endpoint cannot be reached or an

@@ -54,6 +54,7 @@ HINT: Check object routing and create the required object or enable structure in
 | `ST001` | `CheckpointReadFailed` | 无法读取 checkpoint 状态 |
 | `IO001` | `IoFailed` | I/O 操作失败 |
 | `RT001` | `WorkerFailed` | 任务 worker 异常终止 |
+| `RT002` | `OperationInterrupted` | 请求的操作被中断 |
 | `IN001` | `InvariantViolated` | 内部不变量被破坏 |
 | `IN999` | `Unclassified` | 暂时无法进行稳定分类 |
 
@@ -138,8 +139,10 @@ Metadata 在错误跨越所有权边界时逐层挂载。叶子 frame 可以提�
 `destination`。普通任务的 task ID 只在任务入口挂载。报告阶段不做推导。
 
 Frame 挂载后不再修改。`ErrorReport` 从最外层 frame 开始递归读取 metadata 父链；每个
-字段使用第一个非空的外层值，外层为空时才继承内层值。`DtErrorContext` 不包含 detail
-字段；报告构建时从已脱敏的普通 context 和具体 cause 生成 detail。项目自有 `DtError`
+字段使用第一个非空的外层值，外层为空时才继承内层值。这是无条件的 outer-wins 语义，
+不是 fill-if-absent 修改：例如外层挂载的 `sinker/destination` 会在最终报告中覆盖内层的
+stage 或 endpoint。需要保留内层 scope 的边界不得再挂载竞争字段。`DtErrorContext` 不包含
+detail 字段；报告构建时从已脱敏的普通 context 和具体 cause 生成 detail。项目自有 `DtError`
 会保留 variant 对应的完整 `Display` 文本和类型化 payload，与 provider error 保留自身
 `Display`、source chain 和具体类型的方式一致。
 
@@ -234,11 +237,20 @@ provider 原始错误码、constraint/table 元数据和源错误链。
 | Kafka 超时 / broker 传输失败 | `CN002` / `CN001` |
 | HTTP 请求超时 / 连接失败 | `CN002` / `CN001` |
 | HTTP 非成功响应或响应体无效 | `DB001` |
+| MySQL binlog I/O 超时 / 其他传输失败 | `CN002` / `CN001` |
+| MySQL binlog GTID 无效 | `CF002` |
+| MySQL binlog 错误 `1236`（请求的 binlog 已不可用） | `ST001`，origin `mysql/1236` |
+| 其他 MySQL binlog 解码失败 | `DB001` |
 
 Worker join 失败使用 `RT001`。在组件边界分类的 URL 和 YAML 解析错误使用 `CF002`；
 未分类原始错误到达 `ErrorReport` 时使用 `IN999`。本地文件系统 `std::io::Error` 使用
 `IO001`；网络 I/O 必须在 provider 边界分类为
-`CN001` 或 `CN002`。
+`CN001` 或 `CN002`。用户主动中断的 CLI 操作使用 `RT002`。
+
+`mysql-binlog-connector-rust v0.3.4` 会丢弃 MySQL 错误包中的数值错误码，并将错误
+`1236` 暴露为 `ConnectError(String)`。在 connector 保留类型化错误码之前，MySQL
+extractor 边界只识别“请求的 binlog 已不可用”这一组已知消息，并恢复 origin code
+`1236`。该逻辑是窄范围兼容补偿，不属于通用 provider classifier。
 
 数据库连接 URL 格式错误属于配置错误，使用 `CF002`。只有格式正确的端点无法访问，
 或者已经建立的连接中断时，才使用 `CN001`。这一区分对应不同的用户处理方式：

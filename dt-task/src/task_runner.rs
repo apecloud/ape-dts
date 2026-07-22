@@ -802,8 +802,12 @@ impl TaskRunner {
             pipeline.stop().await
         };
 
-        start_result.context("pipeline.start failed")?;
-        stop_result.context("pipeline.stop failed")?;
+        start_result
+            .map_err(|error| error.with_stage(Stage::Pipeline))
+            .context("pipeline.start failed")?;
+        stop_result
+            .map_err(|error| error.with_stage(Stage::Pipeline))
+            .context("pipeline.stop failed")?;
         Ok(())
     }
 
@@ -1669,6 +1673,13 @@ impl TaskRunner {
 
 #[cfg(test)]
 mod tests {
+    use std::{fs, sync::Arc, time::SystemTime};
+
+    use async_trait::async_trait;
+    use dt_common::error::{AnyhowErrorExt, DtError, DtErrorContextExt, ErrorCode, Stage};
+    use dt_pipeline::Pipeline;
+    use tokio::sync::Mutex;
+
     use super::TaskRunner;
     use dt_common::config::{
         config_enums::{CheckMode, TaskKind, TaskType},
@@ -1676,7 +1687,15 @@ mod tests {
         extractor_config::ExtractorConfig,
     };
     use opendal::{services::Memory, Operator};
-    use std::{fs, time::SystemTime};
+
+    struct FailingPipeline;
+
+    #[async_trait]
+    impl Pipeline for FailingPipeline {
+        async fn start(&mut self) -> anyhow::Result<()> {
+            Err(DtError::General("pipeline failed".to_string()).with_code(ErrorCode::WorkerFailed))
+        }
+    }
 
     #[test]
     fn should_clear_task_type_none_by_default() {
@@ -1719,6 +1738,21 @@ mod tests {
             &extractor,
             "/tmp/ape-dts/other"
         ));
+    }
+
+    #[tokio::test]
+    async fn pipeline_worker_attaches_pipeline_stage() {
+        let pipeline: Arc<Mutex<Box<dyn Pipeline + Send>>> =
+            Arc::new(Mutex::new(Box::new(FailingPipeline)));
+
+        let error = TaskRunner::run_pipeline_worker(pipeline)
+            .await
+            .expect_err("pipeline start should fail");
+
+        assert_eq!(
+            error.dt_context().and_then(|context| context.stage_value()),
+            Some(Stage::Pipeline)
+        );
     }
 
     #[tokio::test]

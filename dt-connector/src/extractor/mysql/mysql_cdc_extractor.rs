@@ -25,7 +25,7 @@ use mysql_binlog_connector_rust::{
 
 use crate::{
     error_boundary::extractor_error::{
-        mysql_binlog, mysql_binlog_table_map_missing, provider_anyhow,
+        mysql_binlog, mysql_binlog_read, mysql_binlog_table_map_missing, provider_anyhow,
     },
     extractor::{
         base_extractor::{BaseExtractor, ExtractState},
@@ -195,10 +195,7 @@ impl MysqlCdcExtractor {
                 return Ok(());
             }
 
-            let (header, data) = stream
-                .read()
-                .await
-                .map_err(|error| mysql_binlog(error, ErrorCode::StatementFailed))?;
+            let (header, data) = stream.read().await.map_err(mysql_binlog_read)?;
             match data {
                 EventData::Rotate(r) => {
                     ctx.binlog_filename = r.binlog_filename;

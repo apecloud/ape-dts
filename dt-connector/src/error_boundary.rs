@@ -6,6 +6,7 @@ pub(crate) mod extractor_error {
         DtErrorContext, DtErrorContextExt, EndpointRole, ErrorCode, OriginError, SqlxProvider,
         Stage,
     };
+    use mysql_binlog_connector_rust::binlog_error::BinlogError;
     use rdkafka::error::KafkaError;
 
     pub(crate) fn mysql_sqlx(error: sqlx::Error, default_code: ErrorCode) -> anyhow::Error {
@@ -169,14 +170,56 @@ pub(crate) mod extractor_error {
             )
             .with_origin(OriginError::new("mysql", None::<String>))
     }
-    pub(crate) fn mysql_binlog(
-        error: mysql_binlog_connector_rust::binlog_error::BinlogError,
-        code: ErrorCode,
-    ) -> anyhow::Error {
+    pub(crate) fn mysql_binlog(error: BinlogError, code: ErrorCode) -> anyhow::Error {
         DtErrorContext::new()
             .code(code)
             .origin(OriginError::new("mysql", None::<String>))
             .attach(error)
+    }
+    pub(crate) fn mysql_binlog_read(error: BinlogError) -> anyhow::Error {
+        let context = match &error {
+            BinlogError::IoError(io_error) => {
+                let code = if matches!(
+                    io_error.kind(),
+                    std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+                ) {
+                    ErrorCode::ConnectionTimeout
+                } else {
+                    ErrorCode::ConnectionFailed
+                };
+                DtErrorContext::new()
+                    .code(code)
+                    .origin(OriginError::new("mysql", None::<String>))
+            }
+            BinlogError::ConnectError(message) if mysql_binlog_is_unavailable(message) => {
+                DtErrorContext::new()
+                    .code(ErrorCode::CheckpointReadFailed)
+                    .message("The requested MySQL binlog is no longer available")
+                    .hint(
+                        "Start from a retained binlog position or take a new snapshot, then increase the source binlog retention period.",
+                    )
+                    .origin(OriginError::new("mysql", Some("1236")))
+            }
+            BinlogError::ConnectError(_) => DtErrorContext::new()
+                .code(ErrorCode::ConnectionFailed)
+                .origin(OriginError::new("mysql", None::<String>)),
+            BinlogError::InvalidGtid(_) => DtErrorContext::new()
+                .code(ErrorCode::InvalidConfig)
+                .origin(OriginError::new("mysql", None::<String>)),
+            _ => DtErrorContext::new()
+                .code(ErrorCode::StatementFailed)
+                .origin(OriginError::new("mysql", None::<String>)),
+        };
+        context.attach(error)
+    }
+    fn mysql_binlog_is_unavailable(message: &str) -> bool {
+        // v0.3.4 discards ErrorPacket.error_code and exposes MySQL 1236 as ConnectError(String).
+        let message = message.to_ascii_lowercase();
+        message.contains("fatal error 1236")
+            || message.contains("could not find first log file name")
+            || message.contains("binlog has been purged")
+            || message.contains("not in binlog index")
+            || message.contains("start replication from impossible position")
     }
     pub(crate) fn postgres_tls(error: openssl::error::ErrorStack) -> anyhow::Error {
         DtErrorContext::new()
@@ -356,9 +399,12 @@ pub(crate) mod router {
 
 #[cfg(test)]
 mod tests {
+    use std::io;
+
     use dt_common::error::{
         AnyhowErrorExt, DtErrorContextExt, EndpointRole, ErrorCode, SqlxProvider, Stage,
     };
+    use mysql_binlog_connector_rust::binlog_error::BinlogError;
 
     use super::extractor_error;
 
@@ -384,5 +430,75 @@ mod tests {
         assert_eq!(context.stage_value(), Some(Stage::Resumer));
         assert_eq!(context.endpoint_role(), Some(EndpointRole::Metadata));
         assert_eq!(context.task_id_value(), Some("task-42"));
+    }
+
+    #[test]
+    fn mysql_binlog_read_classifies_transport_config_and_purged_errors() {
+        let timeout = extractor_error::mysql_binlog_read(BinlogError::IoError(io::Error::new(
+            io::ErrorKind::TimedOut,
+            "read timed out",
+        )));
+        assert_eq!(
+            timeout
+                .dt_context()
+                .and_then(|context| context.error_code()),
+            Some(ErrorCode::ConnectionTimeout)
+        );
+        assert!(matches!(
+            timeout.downcast_ref::<BinlogError>(),
+            Some(BinlogError::IoError(_))
+        ));
+
+        let reset = extractor_error::mysql_binlog_read(BinlogError::IoError(io::Error::new(
+            io::ErrorKind::ConnectionReset,
+            "connection reset",
+        )));
+        assert_eq!(
+            reset.dt_context().and_then(|context| context.error_code()),
+            Some(ErrorCode::ConnectionFailed)
+        );
+
+        let connect = extractor_error::mysql_binlog_read(BinlogError::ConnectError(
+            "connection closed".to_string(),
+        ));
+        assert_eq!(
+            connect
+                .dt_context()
+                .and_then(|context| context.error_code()),
+            Some(ErrorCode::ConnectionFailed)
+        );
+
+        let invalid_gtid =
+            extractor_error::mysql_binlog_read(BinlogError::InvalidGtid("bad-gtid".to_string()));
+        assert_eq!(
+            invalid_gtid
+                .dt_context()
+                .and_then(|context| context.error_code()),
+            Some(ErrorCode::InvalidConfig)
+        );
+
+        let decode = extractor_error::mysql_binlog_read(BinlogError::UnexpectedData(
+            "invalid event payload".to_string(),
+        ));
+        assert_eq!(
+            decode.dt_context().and_then(|context| context.error_code()),
+            Some(ErrorCode::StatementFailed)
+        );
+
+        let purged = extractor_error::mysql_binlog_read(BinlogError::ConnectError(
+            "connect mysql failed: Could not find first log file name in binary log index file"
+                .to_string(),
+        ));
+        let context = purged.dt_context().expect("structured error context");
+        assert_eq!(context.error_code(), Some(ErrorCode::CheckpointReadFailed));
+        assert_eq!(
+            context
+                .origin_error()
+                .and_then(|origin| origin.code.as_deref()),
+            Some("1236")
+        );
+        assert!(context
+            .hint_text()
+            .is_some_and(|hint| hint.contains("new snapshot")));
     }
 }
