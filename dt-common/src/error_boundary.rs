@@ -50,9 +50,7 @@ pub(crate) mod config {
             .message("Metrics configuration is invalid")
             .stage(Stage::Bootstrap)
             .attach(error)
-            .context(format!(
-                "Failed to initialize metric [{metrics_name}]: {error}"
-            ))
+            .context(format!("Failed to initialize metric [{metrics_name}]"))
     }
 }
 
