@@ -3,7 +3,7 @@ use std::{cmp, collections::HashMap};
 use anyhow::Context;
 use async_trait::async_trait;
 use mongodb::{
-    bson::{doc, Document},
+    bson::{doc, raw::RawDocumentBuf, Bson, Document},
     Client, Collection,
 };
 use tokio::time::Instant;
@@ -11,7 +11,7 @@ use tokio::time::Instant;
 use crate::sinker::checkable_sinker::CheckableSink;
 use crate::{call_batch_fn, rdb_router::RdbRouter, sinker::base_sinker::BaseSinker, Sinker};
 use dt_common::{
-    log_error,
+    log_error, log_warn,
     meta::{
         col_value::ColValue,
         ddl_meta::{ddl_data::DdlData, ddl_type::DdlType},
@@ -98,6 +98,53 @@ impl CheckableSink for MongoSinker {
         }
         Ok(())
     }
+
+    fn prepare_check_data(&self, data: Vec<RowData>) -> Vec<RowData> {
+        let mut utf8_skipped = 0usize;
+        let mut first_utf8_error = None;
+        let mut malformed_skipped = 0usize;
+        let mut first_malformed_error = None;
+        let mut result = Vec::with_capacity(data.len());
+        for mut row in data {
+            let converted = row
+                .before
+                .iter_mut()
+                .chain(row.after.iter_mut())
+                .try_for_each(Self::convert_raw_doc_for_check);
+            match converted {
+                Ok(()) => result.push(row),
+                Err(error)
+                    if matches!(
+                        &error.kind,
+                        mongodb::bson::raw::ErrorKind::Utf8EncodingError(_)
+                    ) =>
+                {
+                    utf8_skipped += 1;
+                    first_utf8_error.get_or_insert_with(|| error.to_string());
+                }
+                Err(error) => {
+                    malformed_skipped += 1;
+                    first_malformed_error.get_or_insert_with(|| error.to_string());
+                }
+            }
+        }
+
+        if utf8_skipped > 0 {
+            log_warn!(
+                "mongo checker skipped {} row(s) containing invalid UTF-8, first error: {}",
+                utf8_skipped,
+                first_utf8_error.unwrap_or_default()
+            );
+        }
+        if malformed_skipped > 0 {
+            log_error!(
+                "mongo checker skipped {} malformed raw BSON row(s), first error: {}",
+                malformed_skipped,
+                first_malformed_error.unwrap_or_default()
+            );
+        }
+        result
+    }
 }
 
 impl MongoSinker {
@@ -140,6 +187,80 @@ impl MongoSinker {
             Some(ColValue::MongoDoc(doc)) => Some(doc),
             _ => None,
         }
+    }
+
+    fn mongo_raw_doc<'a>(
+        fields: &'a HashMap<String, ColValue>,
+        key: &str,
+    ) -> Option<&'a RawDocumentBuf> {
+        match fields.get(key) {
+            Some(ColValue::MongoRawDoc(doc)) => Some(doc),
+            _ => None,
+        }
+    }
+
+    fn convert_raw_doc_for_check(
+        fields: &mut HashMap<String, ColValue>,
+    ) -> mongodb::bson::raw::Result<()> {
+        let Some(ColValue::MongoRawDoc(raw_doc)) = fields.get(MongoConstants::DOC) else {
+            return Ok(());
+        };
+        let doc = raw_doc.to_document()?;
+        fields.insert(MongoConstants::DOC.to_string(), ColValue::MongoDoc(doc));
+        Ok(())
+    }
+
+    async fn complete_raw_shard_filter(
+        &mut self,
+        row_data: &RowData,
+        raw_doc: &RawDocumentBuf,
+    ) -> anyhow::Result<Document> {
+        let shard_collection = self.target_shard_collection(row_data).await?;
+        let mut filter = Document::new();
+
+        // Snapshot batch inserts are routed by mongos without client-side shard-key decoding.
+        // This filter is only needed by the single-row fallback after a batch error, where MongoDB
+        // requires the shard key for a deterministic upsert. Invalid UTF-8 in `_id` or shard-key
+        // values is outside the supported raw snapshot scope and may therefore fail here.
+        if let Some(shard_collection) = &shard_collection {
+            for key in shard_collection.key.keys() {
+                if let Some(value) = raw_doc.get(key)? {
+                    filter.insert(key, Bson::try_from(value)?);
+                }
+            }
+        }
+
+        if let Some(value) = raw_doc.get(MongoConstants::ID)? {
+            filter.insert(MongoConstants::ID, Bson::try_from(value)?);
+        }
+
+        let Some(shard_collection) = shard_collection else {
+            if filter.contains_key(MongoConstants::ID) {
+                return Ok(filter);
+            }
+            anyhow::bail!("mongo raw doc missing `_id`");
+        };
+
+        let missing_keys: Vec<_> = shard_collection
+            .key
+            .keys()
+            .filter(|key| !filter.contains_key(*key))
+            .cloned()
+            .collect();
+        if self.require_shard_key_filter && !missing_keys.is_empty() {
+            anyhow::bail!(
+                "mongo target collection [{}] is sharded, but raw row filter is missing shard key field(s): {:?}",
+                shard_collection.ns,
+                missing_keys
+            );
+        }
+        if filter.is_empty() {
+            anyhow::bail!(
+                "mongo target collection [{}] is sharded, but raw row filter is empty",
+                shard_collection.ns
+            );
+        }
+        Ok(filter)
     }
 
     async fn complete_shard_filter(
@@ -402,7 +523,21 @@ impl MongoSinker {
             match row_data.row_type {
                 RowType::Insert => {
                     let after = row_data.require_after()?;
-                    if let Some(doc) = Self::mongo_doc(after, MongoConstants::DOC) {
+                    if let Some(raw_doc) = Self::mongo_raw_doc(after, MongoConstants::DOC) {
+                        let query_doc = self.complete_raw_shard_filter(row_data, raw_doc).await?;
+                        let raw_collection = self
+                            .mongo_client
+                            .database(&row_data.schema)
+                            .collection::<RawDocumentBuf>(&row_data.tb);
+                        // Snapshot represents the complete source document. Use replacement here
+                        // so duplicate-key fallback converges exactly instead of retaining stale
+                        // target-only fields as `$set` would.
+                        raw_collection
+                            .replace_one(query_doc, raw_doc)
+                            .upsert(true)
+                            .await?;
+                        rts.push((start_time.elapsed().as_millis() as u64, 1));
+                    } else if let Some(doc) = Self::mongo_doc(after, MongoConstants::DOC) {
                         let query_doc = self
                             .complete_shard_filter(
                                 row_data,
@@ -410,7 +545,7 @@ impl MongoSinker {
                                 Some(doc),
                             )
                             .await?;
-                        let update_doc = doc! {MongoConstants::SET: doc.clone()};
+                        let update_doc = doc! {MongoConstants::SET: doc};
                         self.upsert(&collection, query_doc, update_doc).await?;
                         rts.push((start_time.elapsed().as_millis() as u64, 1));
                     }
@@ -640,19 +775,40 @@ impl MongoSinker {
 
         let db = &data[0].schema;
         let tb = &data[0].tb;
-        let collection = self.mongo_client.database(db).collection::<Document>(tb);
-
         let mut docs = Vec::new();
+        let mut raw_docs = Vec::new();
         for rd in data.iter().skip(start_index).take(batch_size) {
             data_size += rd.get_data_size() as usize;
 
             let after = rd.require_after()?;
             if let Some(ColValue::MongoDoc(doc)) = after.get(MongoConstants::DOC) {
-                docs.push(doc.clone());
+                docs.push(doc);
+            } else if let Some(ColValue::MongoRawDoc(doc)) = after.get(MongoConstants::DOC) {
+                raw_docs.push(doc);
             }
         }
 
-        if let Err(error) = collection.insert_many(docs).await {
+        let insert_result = if !raw_docs.is_empty() {
+            if !docs.is_empty() || raw_docs.len() != batch_size {
+                anyhow::bail!("mongo insert batch contains mixed or missing document values");
+            }
+            self.mongo_client
+                .database(db)
+                .collection::<RawDocumentBuf>(tb)
+                .insert_many(raw_docs)
+                .await
+        } else {
+            if docs.len() != batch_size {
+                anyhow::bail!("mongo insert batch contains missing document values");
+            }
+            self.mongo_client
+                .database(db)
+                .collection::<Document>(tb)
+                .insert_many(docs)
+                .await
+        };
+
+        if let Err(error) = insert_result {
             log_error!(
                 "batch insert failed, will insert one by one, schema: {}, tb: {}, error: {}",
                 db,
@@ -770,5 +926,61 @@ impl MongoSinker {
     ) -> anyhow::Result<bool> {
         let result = collection.replace_one(query_doc, replacement_doc).await?;
         Ok(result.matched_count > 0)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use mongodb::bson::{doc, raw::RawDocumentBuf};
+
+    use super::*;
+
+    fn raw_doc_with_invalid_utf8() -> RawDocumentBuf {
+        let mut bytes = RawDocumentBuf::from_document(&doc! {
+            MongoConstants::ID: 1,
+            "invalid": "ok",
+        })
+        .unwrap()
+        .into_bytes();
+        let value_offset = bytes
+            .windows(3)
+            .position(|window| window == b"ok\0")
+            .unwrap();
+        bytes[value_offset] = 0xff;
+        RawDocumentBuf::from_bytes(bytes).unwrap()
+    }
+
+    #[test]
+    fn checker_conversion_rejects_invalid_utf8_without_changing_raw_doc() {
+        let raw_doc = raw_doc_with_invalid_utf8();
+        let mut fields = HashMap::from([(
+            MongoConstants::DOC.to_string(),
+            ColValue::MongoRawDoc(raw_doc.clone()),
+        )]);
+
+        assert!(MongoSinker::convert_raw_doc_for_check(&mut fields).is_err());
+        assert_eq!(
+            fields.get(MongoConstants::DOC),
+            Some(&ColValue::MongoRawDoc(raw_doc))
+        );
+    }
+
+    #[test]
+    fn checker_conversion_turns_valid_raw_doc_into_document() {
+        let raw_doc = RawDocumentBuf::from_document(&doc! {
+            MongoConstants::ID: 1,
+            "value": "valid",
+        })
+        .unwrap();
+        let mut fields = HashMap::from([(
+            MongoConstants::DOC.to_string(),
+            ColValue::MongoRawDoc(raw_doc),
+        )]);
+
+        MongoSinker::convert_raw_doc_for_check(&mut fields).unwrap();
+        assert!(matches!(
+            fields.get(MongoConstants::DOC),
+            Some(ColValue::MongoDoc(_))
+        ));
     }
 }

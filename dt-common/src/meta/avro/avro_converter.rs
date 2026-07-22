@@ -334,6 +334,7 @@ impl AvroConverter {
             ColValue::Json3(v) => Value::String(v.to_string()),
 
             ColValue::MongoDoc(v) => Value::String(v.to_string()),
+            ColValue::MongoRawDoc(v) => Value::Bytes(v.as_bytes().to_vec()),
 
             ColValue::Bool(v) => Value::Boolean(*v),
             ColValue::None | ColValue::UnchangedToast => Value::Null,

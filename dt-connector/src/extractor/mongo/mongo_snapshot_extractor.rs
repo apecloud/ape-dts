@@ -3,7 +3,7 @@ use std::{collections::HashMap, sync::Arc};
 use anyhow::{anyhow, bail};
 use async_trait::async_trait;
 use mongodb::{
-    bson::{doc, Document},
+    bson::{doc, raw::RawDocumentBuf, Document},
     options::FindOptions,
     Client,
 };
@@ -43,6 +43,7 @@ pub struct MongoSnapshotExtractor {
     pub sample_rate: Option<u8>,
     pub recovery: Option<Arc<dyn Recovery + Send + Sync>>,
     pub filter: RdbFilter,
+    pub use_raw_document: bool,
 }
 
 #[async_trait]
@@ -101,6 +102,7 @@ impl MongoSnapshotExtractor {
             sample_rate: self.sample_rate,
             recovery: self.recovery.clone(),
             filter: self.filter.clone(),
+            use_raw_document: self.use_raw_document,
         }
     }
 
@@ -170,19 +172,29 @@ impl MongoSnapshotExtractor {
         let mut cursor = find.await?;
         let mut chunk_id_generator = SnapshotChunkIdGenerator::new(self.batch_size as usize);
         while cursor.advance().await? {
-            let doc = cursor.deserialize_current().map_err(|e| {
-                log_error!("error deserializing {}.{} document: {}", db, tb, e);
-                e
-            })?;
-
-            let key = MongoKey::from_doc(&doc).ok_or(anyhow!(
-                "skip {}.{} document without `_id`: {:?}",
-                db,
-                tb,
-                doc
-            ))?;
-
-            let after = Self::build_after_cols(&doc);
+            let (key, after) = if self.use_raw_document {
+                let raw_doc = cursor.current().to_owned();
+                let key = MongoKey::from_raw_doc(&raw_doc)?.ok_or(anyhow!(
+                    "skip {}.{} document without `_id`",
+                    db,
+                    tb
+                ))?;
+                let after = Self::build_raw_after_cols(raw_doc, &key);
+                (key, after)
+            } else {
+                let doc = cursor.deserialize_current().map_err(|e| {
+                    log_error!("error deserializing {}.{} document: {}", db, tb, e);
+                    e
+                })?;
+                let key = MongoKey::from_doc(&doc).ok_or(anyhow!(
+                    "skip {}.{} document without `_id`: {:?}",
+                    db,
+                    tb,
+                    doc
+                ))?;
+                let after = Self::build_after_cols(doc, &key);
+                (key, after)
+            };
             let row_data = RowData::new(
                 db.clone(),
                 tb.clone(),
@@ -241,16 +253,23 @@ impl MongoSnapshotExtractor {
         }
     }
 
-    fn build_after_cols(doc: &Document) -> HashMap<String, ColValue> {
+    fn build_after_cols(doc: Document, key: &MongoKey) -> HashMap<String, ColValue> {
         let mut after = HashMap::new();
-        let id = MongoKey::from_doc(doc)
-            .map(|key| ColValue::String(key.to_string()))
-            .unwrap_or(ColValue::None);
-        after.insert(MongoConstants::ID.to_string(), id);
         after.insert(
-            MongoConstants::DOC.to_string(),
-            ColValue::MongoDoc(doc.clone()),
+            MongoConstants::ID.to_string(),
+            ColValue::String(key.to_string()),
         );
+        after.insert(MongoConstants::DOC.to_string(), ColValue::MongoDoc(doc));
+        after
+    }
+
+    fn build_raw_after_cols(doc: RawDocumentBuf, key: &MongoKey) -> HashMap<String, ColValue> {
+        let mut after = HashMap::new();
+        after.insert(
+            MongoConstants::ID.to_string(),
+            ColValue::String(key.to_string()),
+        );
+        after.insert(MongoConstants::DOC.to_string(), ColValue::MongoRawDoc(doc));
         after
     }
 

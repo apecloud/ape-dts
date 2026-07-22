@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use mongodb::bson::Document;
+use mongodb::bson::{raw::RawDocumentBuf, Document};
 use serde::{ser::SerializeMap, Deserialize, Deserializer, Serialize, Serializer};
 
 use super::col_value::ColValue;
@@ -41,6 +41,7 @@ pub enum TaggedColValueDef {
     Json2(String),
     Json3(serde_json::Value),
     MongoDoc(Document),
+    MongoRawDoc(RawDocumentBuf),
 }
 
 #[derive(Serialize)]

@@ -16,6 +16,10 @@ macro_rules! delegate_inner {
 #[async_trait]
 pub trait CheckableSink: Sinker {
     async fn sink_dml_borrowed(&mut self, data: &mut [RowData], batch: bool) -> anyhow::Result<()>;
+
+    fn prepare_check_data(&self, data: Vec<RowData>) -> Vec<RowData> {
+        data
+    }
 }
 
 pub struct SinkerWithChecker<S> {
@@ -44,6 +48,7 @@ pub fn wrap_sinker_with_checker<S: CheckableSink + Send + 'static>(
 impl<S: CheckableSink + Send> Sinker for SinkerWithChecker<S> {
     async fn sink_dml(&mut self, mut data: Vec<RowData>, batch: bool) -> anyhow::Result<()> {
         self.inner.sink_dml_borrowed(&mut data, batch).await?;
+        let data = self.inner.prepare_check_data(data);
         if let Err(err) = self.checker.enqueue_check(data).await {
             log_warn!("checker enqueue_check failed: {}", err);
         }

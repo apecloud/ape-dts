@@ -5,7 +5,7 @@ use std::{
 };
 
 use anyhow::bail;
-use mongodb::bson::{Bson, Document};
+use mongodb::bson::{raw::RawDocumentBuf, Bson, Document};
 use serde::{Deserialize, Serialize, Serializer};
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -42,6 +42,7 @@ pub enum ColValue {
     Json2(String),
     Json3(serde_json::Value),
     MongoDoc(Document),
+    MongoRawDoc(RawDocumentBuf),
 }
 
 impl std::fmt::Display for ColValue {
@@ -185,6 +186,12 @@ impl ColValue {
             }
         }
 
+        if let ColValue::MongoRawDoc(doc) = self {
+            let mut hasher = DefaultHasher::new();
+            doc.as_bytes().hash(&mut hasher);
+            return Ok(hasher.finish());
+        }
+
         let mut hasher = DefaultHasher::new();
         self.to_option_string().hash(&mut hasher);
         Ok(hasher.finish())
@@ -222,6 +229,7 @@ impl ColValue {
             ColValue::Json2(_) => "Json2",
             ColValue::Json3(_) => "Json3",
             ColValue::MongoDoc(_) => "MongoDoc",
+            ColValue::MongoRawDoc(_) => "MongoRawDoc",
             ColValue::UnchangedToast => "UnchangedToast",
         }
     }
@@ -256,6 +264,7 @@ impl ColValue {
             ColValue::Json3(v) => Some(v.to_string()),
             ColValue::Blob(v) => Some(hex::encode(v)),
             ColValue::MongoDoc(v) => Some(Self::mongo_doc_to_string(v)),
+            ColValue::MongoRawDoc(v) => Some(hex::encode(v.as_bytes())),
             ColValue::Bool(v) => Some(v.to_string()),
             ColValue::None | ColValue::UnchangedToast => Option::None,
         }
@@ -315,6 +324,7 @@ impl ColValue {
             ColValue::Json(v) | ColValue::Blob(v) | ColValue::RawString(v) => v.len(),
             ColValue::Json3(v) => v.to_string().len(),
             ColValue::MongoDoc(v) => Self::get_bson_size_doc(v),
+            ColValue::MongoRawDoc(v) => v.as_bytes().len(),
             ColValue::None | ColValue::UnchangedToast => 0,
         }
     }
@@ -399,6 +409,7 @@ impl Serialize for ColValue {
             ColValue::MongoDoc(v) => Bson::Document(v.clone())
                 .into_relaxed_extjson()
                 .serialize(serializer),
+            ColValue::MongoRawDoc(v) => serializer.serialize_bytes(v.as_bytes()),
             ColValue::None | ColValue::UnchangedToast => serializer.serialize_none(),
         }
     }
