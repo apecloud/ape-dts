@@ -487,12 +487,66 @@ fn randomish_u64() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use dt_common::config::task_config::TaskConfig;
 
     fn paths() -> (&'static Path, &'static Path) {
         (
             Path::new("/tmp/dts/logs/order_task"),
             Path::new("/opt/ape-dts/log4rs.yaml"),
         )
+    }
+
+    #[test]
+    fn default_snapshot_configs_load_for_all_cli_engines() {
+        let (log_dir, log4rs_file) = paths();
+        let cases = [
+            (
+                DbType::Mysql,
+                "mysql://127.0.0.1:3306",
+                "mysql://127.0.0.1:3307",
+            ),
+            (
+                DbType::Pg,
+                "postgres://127.0.0.1:5432/source",
+                "postgres://127.0.0.1:5433/target",
+            ),
+            (
+                DbType::Mongo,
+                "mongodb://127.0.0.1:27017",
+                "mongodb://127.0.0.1:27018",
+            ),
+            (
+                DbType::Redis,
+                "redis://127.0.0.1:6379",
+                "redis://127.0.0.1:6380",
+            ),
+        ];
+
+        for (db_type, source_url, target_url) in cases {
+            let create = CreateConfig {
+                task_name: format!("{}_default_snapshot", db_type.as_config_value()),
+                source_url: source_url.to_string(),
+                target_url: target_url.to_string(),
+                ..CreateConfig::default()
+            };
+            let config =
+                build_task_config(&create, &db_type, &db_type, log_dir, log4rs_file).unwrap();
+            let config_path = std::env::temp_dir().join(format!(
+                "dtscli-{}-{}-task-config.ini",
+                db_type.as_config_value(),
+                randomish_u64()
+            ));
+            std::fs::write(&config_path, config).unwrap();
+
+            let result = TaskConfig::new(config_path.to_str().unwrap());
+            let _ = std::fs::remove_file(&config_path);
+            if let Err(err) = result {
+                panic!(
+                    "default {} config should load without --set overrides: {err:#}",
+                    db_type.as_config_value()
+                );
+            }
+        }
     }
 
     #[test]

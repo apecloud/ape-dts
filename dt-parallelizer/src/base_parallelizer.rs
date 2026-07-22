@@ -266,60 +266,14 @@ impl BaseParallelizer {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::VecDeque, hint::black_box, sync::Arc, time::Instant};
+    use std::sync::Arc;
 
     use async_mutex::Mutex;
-    use dt_common::{
-        config::config_enums::{TaskKind, TaskType},
-        meta::dt_queue::DtQueue,
-        monitor::{
-            counter::Counter, monitor::Monitor, task_monitor::MonitorType,
-            task_monitor::TaskMonitor, task_monitor_handle::TaskMonitorHandle,
-        },
-    };
+
+    use dt_common::{meta::dt_queue::DtQueue, monitor::counter::Counter};
     use dt_connector::{sinker::dummy_sinker::DummySinker, Sinker};
-    use tokio::task::JoinSet;
 
     use super::BaseParallelizer;
-
-    async fn dispatch_without_worker_count(
-        sub_data_items: Vec<Vec<usize>>,
-        sinkers: &[Arc<Mutex<Box<dyn Sinker + Send>>>],
-        parallel_size: usize,
-    ) {
-        let mut pending = sub_data_items.into_iter();
-        let active_sinkers = parallel_size.min(sinkers.len());
-        let mut join_set = JoinSet::new();
-        let spawn_sink_task = |join_set: &mut JoinSet<usize>,
-                               sinker_index: usize,
-                               sinker: Arc<Mutex<Box<dyn Sinker + Send>>>,
-                               data: Vec<usize>| {
-            join_set.spawn(async move {
-                black_box(sinker);
-                black_box(data);
-                sinker_index
-            });
-        };
-
-        for (sinker_index, sinker) in sinkers.iter().enumerate().take(active_sinkers) {
-            let Some(data) = pending.next() else {
-                break;
-            };
-            spawn_sink_task(&mut join_set, sinker_index, sinker.clone(), data);
-        }
-
-        while let Some(result) = join_set.join_next().await {
-            let sinker_index = result.unwrap();
-            if let Some(data) = pending.next() {
-                spawn_sink_task(
-                    &mut join_set,
-                    sinker_index,
-                    sinkers[sinker_index].clone(),
-                    data,
-                );
-            }
-        }
-    }
 
     #[tokio::test]
     async fn pop_returns_none_when_queue_is_empty() {
