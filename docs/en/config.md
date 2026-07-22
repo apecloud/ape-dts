@@ -413,6 +413,11 @@ and `resume_config_file` are rejected; migrate them to `resume_type=from_log`, `
 | task_summary_mode | trace aggregation mode: `task` or `marker` | marker  | marker  |
 | output_format     | trace output format: `plain` or `json`     | json    | plain   |
 
+The runtime trace summary is dumped periodically (every `pipeline.checkpoint_interval_secs`)
+to the runtime trace log, including a final dump on task shutdown, so long-running CDC tasks
+get continuous diagnostics. When both `metrics` and `tracing` features are enabled, per-marker
+trace gauges (`runtime_trace_*`) are also exposed on the Prometheus `/metrics` endpoint.
+
 # [metacenter]
 
 This optional section is used by the MySQL `dbengine` metadata-center mode.

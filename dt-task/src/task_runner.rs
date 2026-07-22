@@ -38,9 +38,10 @@ use dt_common::{
     limiter::buffer_limiter::BufferLimiter,
     log_error,
     log_filter::{parse_size_limit, SizeLimitFilterDeserializer},
-    log_finished, log_info, log_runtime_trace, log_warn,
+    log_finished, log_info, log_warn,
     meta::{dt_queue::DtQueue, position::Position, row_type::RowType, syncer::Syncer},
     monitor::{
+        runtime_trace_monitor::RuntimeTraceMonitor,
         task_metrics::TaskMetricsType,
         task_monitor::{MonitorType, TaskMonitor},
         task_monitor_handle::TaskMonitorHandle,
@@ -259,9 +260,6 @@ impl TaskRunner {
         self.remove_empty_check_logs().await?;
         self.upload_check_logs_to_s3().await?;
         log_finished!("task finished");
-        if let Some(summary) = runtime_trace::dump_global_summary() {
-            log_runtime_trace!("{}", summary.trim_end());
-        }
         log::logger().flush();
         Ok(())
     }
@@ -637,8 +635,12 @@ impl TaskRunner {
         .await?;
 
         let interval_secs = self.config.pipeline.checkpoint_interval_secs;
+        #[cfg(all(feature = "metrics", feature = "tracing"))]
+        let runtime_trace_monitor = RuntimeTraceMonitor::new(self.prometheus_metrics.clone());
+        #[cfg(not(all(feature = "metrics", feature = "tracing")))]
+        let runtime_trace_monitor = RuntimeTraceMonitor::new();
         let task_flush_monitors: Vec<Arc<dyn FlushableMonitor + Send + Sync>> =
-            vec![self.task_monitor.clone()];
+            vec![self.task_monitor.clone(), Arc::new(runtime_trace_monitor)];
         let monitor_shutdown = CancellationToken::new();
         let monitor_task_shutdown = monitor_shutdown.clone();
         let monitor_task = tokio::spawn(async move {
