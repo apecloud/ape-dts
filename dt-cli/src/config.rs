@@ -202,6 +202,8 @@ pub fn build_task_config(
     ini.set("runtime", "log_dir", &runtime_log_dir.display().to_string());
 
     if create.preflight {
+        let do_cdc = matches!(create.mode, Mode::Cdc)
+            || (matches!(source_db, DbType::Redis) && matches!(create.mode, Mode::Snapshot));
         ini.set(
             "precheck",
             "do_struct_init",
@@ -211,15 +213,7 @@ pub fn build_task_config(
                 "false"
             },
         );
-        ini.set(
-            "precheck",
-            "do_cdc",
-            if matches!(create.mode, Mode::Cdc) {
-                "true"
-            } else {
-                "false"
-            },
-        );
+        ini.set("precheck", "do_cdc", if do_cdc { "true" } else { "false" });
     }
 
     for item in &create.set {
@@ -553,12 +547,13 @@ mod tests {
     fn preflight_flags_follow_task_mode() {
         let (log_dir, log4rs_file) = paths();
         let cases = [
-            (Mode::Struct, "true", "false"),
-            (Mode::Snapshot, "false", "false"),
-            (Mode::Cdc, "false", "true"),
+            (DbType::Mysql, Mode::Struct, "true", "false"),
+            (DbType::Mysql, Mode::Snapshot, "false", "false"),
+            (DbType::Mysql, Mode::Cdc, "false", "true"),
+            (DbType::Redis, Mode::Snapshot, "false", "true"),
         ];
 
-        for (mode, do_struct_init, do_cdc) in cases {
+        for (db_type, mode, do_struct_init, do_cdc) in cases {
             let create = CreateConfig {
                 task_name: "order_preflight".to_string(),
                 mode,
@@ -569,14 +564,8 @@ mod tests {
                 ..CreateConfig::default()
             };
 
-            let actual = build_task_config(
-                &create,
-                &DbType::Mysql,
-                &DbType::Mysql,
-                log_dir,
-                log4rs_file,
-            )
-            .unwrap();
+            let actual =
+                build_task_config(&create, &db_type, &db_type, log_dir, log4rs_file).unwrap();
 
             assert!(actual.contains(&format!(
                 "[precheck]\ndo_struct_init={do_struct_init}\ndo_cdc={do_cdc}\n"
