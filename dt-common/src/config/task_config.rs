@@ -1760,7 +1760,7 @@ sample_rate=
         for (config, expected_err) in [
             (
                 cdc_inline_check_config("serial", ""),
-                "config error: config [checker].enable=true with [extractor] extract_type=cdc and [sinker] sink_type=write currently supports only [parallelizer] parallel_type=rdb_merge",
+                "config [checker].enable=true with [extractor] extract_type=cdc and [sinker] sink_type=write currently supports only [parallelizer] parallel_type=rdb_merge",
             ),
             (
                 r#"[extractor]
@@ -1781,7 +1781,7 @@ batch_size=2
 parallel_type=rdb_merge
 "#
                 .to_string(),
-                "config error: config [checker].enable is required when [checker] section is present",
+                "config [checker].enable is required when [checker] section is present",
             ),
             (
                 r#"[extractor]
@@ -1793,7 +1793,7 @@ url=mysql://127.0.0.1:3306
 enable=false
 "#
                 .to_string(),
-                "config error: config [sinker] is required unless [checker].enable=true",
+                "config [sinker] is required unless [checker].enable=true",
             ),
             (
                 r#"[extractor]
@@ -1813,7 +1813,7 @@ s3_bucket=ape-dts
 parallel_type=rdb_merge
 "#
                 .to_string(),
-                "config error: config [checker].check_log_s3 only supports standalone snapshot check or inline cdc check",
+                "config [checker].check_log_s3 only supports standalone snapshot check or inline cdc check",
             ),
             (
                 r#"[extractor]
@@ -1835,15 +1835,15 @@ s3_bucket=ape-dts
 parallel_type=rdb_merge
 "#
                 .to_string(),
-                "config error: config [checker].check_log_s3 only supports standalone snapshot check or inline cdc check",
+                "config [checker].check_log_s3 only supports standalone snapshot check or inline cdc check",
             ),
             (
                 snapshot_check_config("check_log_s3=true"),
-                "config error: check_log_s3=true but checker s3 config is missing in [checker]",
+                "check_log_s3=true but checker s3 config is missing in [checker]",
             ),
             (
                 snapshot_check_config("sample_rate=0"),
-                "config error: config [checker].sample_rate must be between 1 and 100, got 0",
+                "config [checker].sample_rate must be between 1 and 100, got 0",
             ),
             (
                 r#"[extractor]
@@ -1861,7 +1861,7 @@ url=mysql://127.0.0.1:3307
 sample_rate=10
 "#
                 .to_string(),
-                "config error: config [checker].sample_rate only supports snapshot check or inline cdc check",
+                "config [checker].sample_rate only supports snapshot check or inline cdc check",
             ),
         ] {
             let error = load_temp_task_config(&config).err().unwrap();
@@ -1954,7 +1954,7 @@ url=mysql://127.0.0.1:3307
         assert_eq!(report.code, ErrorCode::InvalidConfig);
         assert_eq!(
             report.detail.as_deref(),
-            Some("config error: config [extractor].batch_size must be greater than 0")
+            Some("config [extractor].batch_size must be greater than 0")
         );
     }
 
@@ -2054,7 +2054,7 @@ rebalance_max_partitions_per_sinker=0
         assert_eq!(
             report.detail.as_deref(),
             Some(
-                "config error: config [parallelizer].rebalance_max_partitions_per_sinker must be greater than 0"
+                "config [parallelizer].rebalance_max_partitions_per_sinker must be greater than 0"
             )
         );
     }
@@ -2083,7 +2083,7 @@ batch_size=0
                 assert_eq!(report.code, ErrorCode::InvalidConfig);
                 assert_eq!(
                     report.detail.as_deref(),
-                    Some("config error: config [sinker].batch_size must be greater than 0")
+                    Some("config [sinker].batch_size must be greater than 0")
                 );
             }
             Ok(_) => panic!("expected config validation error"),

@@ -3,7 +3,7 @@ use std::{env, panic, process::ExitCode};
 use clap::Parser;
 
 use dt_common::{
-    error::{DtError, DtErrorContextExt, ErrorCode, ErrorReport, Stage},
+    error::{DtError, DtErrorContextExt, ErrorReport, Stage},
     log_error,
 };
 use dt_main::run_config;
@@ -63,8 +63,7 @@ async fn run(args: Args) -> anyhow::Result<()> {
     }
 
     let config = args.config_path().ok_or_else(|| {
-        DtError::ConfigError("no task config was provided".to_string())
-            .with_code(ErrorCode::MissingConfig)
+        DtError::MissingConfig("no task config was provided".to_string())
             .with_message("no task config was provided")
             .with_hint("pass --config <CONFIG> or a positional config path")
             .with_stage(Stage::Bootstrap)

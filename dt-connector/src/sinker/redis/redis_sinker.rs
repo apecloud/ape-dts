@@ -8,7 +8,7 @@ use redis::ConnectionLike;
 use redis::Value;
 use tokio::{sync::RwLock, time::Instant};
 
-use dt_common::error::ErrorCode;
+use dt_common::error::{DtError, ErrorCode};
 use dt_common::log_debug;
 use dt_common::meta::col_value::ColValue;
 use dt_common::meta::dt_data::DtData;
@@ -167,8 +167,9 @@ impl RedisSinker {
                             Ok(vec![cmd])
                         }
                         _ => bail! {redis_destination_error(
-                            ErrorCode::StatementFailed,
-                            "Redis object rewrite is not implemented",
+                            DtError::RedisResultError(
+                                "Redis object rewrite is not implemented".to_string()
+                            ),
                         )},
                     }?;
                     if let Some(expire_cmd) = EntryRewriter::rewrite_expire(entry)? {
@@ -355,11 +356,10 @@ impl RedisSinker {
                     match v {
                         Value::ServerError(e) => {
                             bail! {redis_destination_error(
-                                ErrorCode::StatementFailed,
-                                format!(
+                                DtError::RedisResultError(format!(
                                 "sink failed, server error: [{:?}], result: [{:?}], cmd: [{}]",
                                 e, v, cmd
-                                ),
+                                )),
                             )}
                         }
                         _ => {

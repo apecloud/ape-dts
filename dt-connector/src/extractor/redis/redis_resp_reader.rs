@@ -3,7 +3,7 @@ use async_recursion::async_recursion;
 use async_std::io::BufReader;
 use async_std::net::TcpStream;
 use async_std::prelude::*;
-use dt_common::error::ErrorCode;
+use dt_common::error::DtError;
 
 use super::redis_resp_types::Value;
 use crate::error_boundary::extractor_error::{redis_source_error, redis_source_error_with_cause};
@@ -30,14 +30,12 @@ impl RedisRespReader {
         }
         if len < 3 {
             bail! {redis_source_error(
-                ErrorCode::StatementFailed,
-                format!("Redis response line is too short: {len}"),
+                DtError::RedisResultError(format!("Redis response line is too short: {len}")),
             )}
         }
         if !is_crlf(res[len - 2], res[len - 1]) {
             bail! {redis_source_error(
-                ErrorCode::StatementFailed,
-                format!("Redis response has invalid CRLF: {res:?}"),
+                DtError::RedisResultError(format!("Redis response has invalid CRLF: {res:?}")),
             )}
         }
 
@@ -49,8 +47,9 @@ impl RedisRespReader {
                 bytes => Ok(Value::Status(String::from_utf8(bytes.to_vec()).map_err(
                     |error| {
                         redis_source_error_with_cause(
-                            ErrorCode::StatementFailed,
-                            "Redis status response is not valid UTF-8",
+                            DtError::RedisResultError(
+                                "Redis status response is not valid UTF-8".to_string(),
+                            ),
                             error,
                         )
                     },
@@ -60,8 +59,9 @@ impl RedisRespReader {
             b'-' => {
                 let message = String::from_utf8_lossy(bytes);
                 bail! {redis_source_error(
-                    ErrorCode::StatementFailed,
-                    format!("Redis server rejected the command: {message}"),
+                    DtError::RedisResultError(format!(
+                        "Redis server rejected the command: {message}"
+                    )),
                 )}
             }
             // Value::Integer
@@ -75,8 +75,9 @@ impl RedisRespReader {
                 }
                 if int < -1 || int >= RESP_MAX_SIZE {
                     bail! {redis_source_error(
-                        ErrorCode::StatementFailed,
-                        format!("Redis response has invalid bulk length: {int}"),
+                        DtError::RedisResultError(format!(
+                            "Redis response has invalid bulk length: {int}"
+                        )),
                     )}
                 }
 
@@ -85,8 +86,9 @@ impl RedisRespReader {
                 reader.read_exact(buf.as_mut_slice()).await?;
                 if !is_crlf(buf[int], buf[int + 1]) {
                     bail! {redis_source_error(
-                        ErrorCode::StatementFailed,
-                        format!("Redis response has invalid CRLF: {buf:?}"),
+                        DtError::RedisResultError(format!(
+                            "Redis response has invalid CRLF: {buf:?}"
+                        )),
                     )}
                 }
                 self.read_len += int + 2;
@@ -102,8 +104,9 @@ impl RedisRespReader {
                 }
                 if int < -1 || int >= RESP_MAX_SIZE {
                     bail! {redis_source_error(
-                        ErrorCode::StatementFailed,
-                        format!("Redis response has invalid array length: {int}"),
+                        DtError::RedisResultError(format!(
+                            "Redis response has invalid array length: {int}"
+                        )),
                     )}
                 }
 
@@ -114,10 +117,9 @@ impl RedisRespReader {
                 }
                 Ok(Value::Bulk(array))
             }
-            prefix => bail!(redis_source_error(
-                ErrorCode::StatementFailed,
-                format!("invalid Redis RESP type: {prefix:?}"),
-            )),
+            prefix => bail!(redis_source_error(DtError::RedisResultError(format!(
+                "invalid Redis RESP type: {prefix:?}"
+            )),)),
         }
     }
 }
@@ -131,15 +133,13 @@ fn is_crlf(a: u8, b: u8) -> bool {
 fn parse_integer(bytes: &[u8]) -> anyhow::Result<i64> {
     let value = String::from_utf8(bytes.to_vec()).map_err(|error| {
         redis_source_error_with_cause(
-            ErrorCode::StatementFailed,
-            "Redis integer response is not valid UTF-8",
+            DtError::RedisResultError("Redis integer response is not valid UTF-8".to_string()),
             error,
         )
     })?;
     value.parse::<i64>().map_err(|error| {
         redis_source_error_with_cause(
-            ErrorCode::StatementFailed,
-            "Redis integer response is invalid",
+            DtError::RedisResultError("Redis integer response is invalid".to_string()),
             error,
         )
     })

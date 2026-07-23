@@ -3,9 +3,7 @@ pub(crate) mod config {
 
     use crate::error::{DtError, DtErrorContext, DtErrorContextExt, ErrorCode, Stage};
     pub(crate) fn invalid_task_config(detail: impl Into<String>) -> anyhow::Error {
-        DtError::ConfigError(detail.into())
-            .with_code(ErrorCode::InvalidConfig)
-            .with_stage(Stage::Bootstrap)
+        DtError::InvalidConfig(detail.into()).with_stage(Stage::Bootstrap)
     }
     pub(crate) fn invalid_filter_source<E>(detail: impl Into<String>, error: E) -> anyhow::Error
     where
@@ -62,7 +60,7 @@ pub(crate) mod metadata {
         ErrorCode, ErrorObject, OriginError, SqlxProvider,
     };
     pub(crate) fn invariant(detail: impl Into<String>) -> anyhow::Error {
-        DtError::General(detail.into()).with_code(ErrorCode::InvariantViolated)
+        DtError::InvariantViolated(detail.into()).into()
     }
     pub(crate) fn mongodb_provider(
         error: mongodb::error::Error,
@@ -94,8 +92,7 @@ pub(crate) mod metadata {
             ))
     }
     pub(crate) fn mongo_ddl_error(detail: impl Into<String>) -> anyhow::Error {
-        DtError::MetadataError(detail.into())
-            .with_code(ErrorCode::StatementFailed)
+        DtError::StatementFailed(detail.into())
             .with_origin(OriginError::new("mongodb", None::<String>))
     }
     pub(crate) fn mongo_ddl_source<E>(detail: impl Into<String>, error: E) -> anyhow::Error
@@ -142,26 +139,29 @@ pub(crate) mod redis {
             .code(code)
             .origin(OriginError::new("redis", None::<String>))
     }
-    pub(crate) fn redis_error(code: ErrorCode) -> anyhow::Error {
-        DtError::General(code.default_message().to_string())
-            .with_code(code)
+    pub(crate) fn redis_version_error(detail: impl Into<String>) -> anyhow::Error {
+        DtError::UnsupportedDatabaseVersion(detail.into())
             .with_origin(OriginError::new("redis", None::<String>))
     }
-    pub(crate) fn redis_error_detail(code: ErrorCode, detail: impl Into<String>) -> anyhow::Error {
+    pub(crate) fn redis_result_error(detail: impl Into<String>) -> anyhow::Error {
         DtError::RedisResultError(detail.into())
-            .with_code(code)
             .with_origin(OriginError::new("redis", None::<String>))
     }
-    pub(crate) fn redis_source_error<E>(code: ErrorCode, error: E) -> anyhow::Error
+    pub(crate) fn redis_invariant(detail: impl Into<String>) -> anyhow::Error {
+        DtError::InvariantViolated(detail.into())
+            .with_origin(OriginError::new("redis", None::<String>))
+    }
+    pub(crate) fn redis_source_error<E>(error: DtError, source: E) -> anyhow::Error
     where
         E: StdError + Send + Sync + 'static,
     {
-        redis_context(code).attach(error)
+        anyhow::Error::new(source)
+            .with_origin(OriginError::new("redis", None::<String>))
+            .context(error)
     }
     pub(crate) fn redis_topology_error(detail: impl Into<String>) -> anyhow::Error {
         let detail = detail.into();
-        DtError::RedisResultError(detail.clone())
-            .with_code(ErrorCode::PrerequisiteNotMet)
+        DtError::PrerequisiteNotMet(detail.clone())
             .with_message("The Redis cluster topology is invalid or incomplete")
             .with_hint(
                 "Ensure all 16384 Redis cluster slots are assigned to stable master nodes, then retry.",
@@ -183,9 +183,7 @@ pub(crate) mod redis {
         context.attach(error).context(detail.into())
     }
     pub(crate) fn redis_command_error(detail: impl Into<String>) -> anyhow::Error {
-        DtError::RedisCmdError(detail.into())
-            .with_code(ErrorCode::StatementFailed)
-            .with_origin(OriginError::new("redis", None::<String>))
+        DtError::RedisCmdError(detail.into()).with_origin(OriginError::new("redis", None::<String>))
     }
     pub(crate) fn redis_command_source<E>(detail: impl Into<String>, error: E) -> anyhow::Error
     where

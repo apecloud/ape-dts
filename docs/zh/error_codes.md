@@ -122,27 +122,33 @@ origin 都是可选字段。它实现 `Display`，但刻意不实现
 错误链最内层始终是真正实现 `Error` 的 cause。Provider 失败直接保留原始 provider
 错误；应用主动产生的失败使用基于 `thiserror` 的 `DtError` 枚举。
 
-项目主动失败先创建根因，再通过 `DtErrorContextExt` 的 fluent 方法逐层挂载 metadata，
-例如 `DtError::ConfigError(detail).with_code(ErrorCode::InvalidConfig)`。同一 extension trait
-也为 `anyhow::Error` 和已支持的 provider 错误类型实现。未知的具体错误只允许在组件边界
-通过 `DtErrorContext::attach` 挂载。
+项目主动失败选择语义化的 `DtError` variant，并只挂载当前调用点真正掌握的 metadata。
+例如 `DtError::InvalidConfig(detail).with_stage(Stage::Bootstrap)` 创建根因并补充 stage，
+不再重复书写 `ErrorCode::InvalidConfig`。`classify_dt_error` 将每个 `DtError` variant 映射
+到稳定的默认错误码；新增 variant 时必须增加对应的 match 分支，无法静默落入兜底。
+`DtError::Unclassified` 只用于项目主动产生、但暂时没有稳定分类的失败。
 
-`DtError` variant 只描述项目自有的具体根因，不隐含也不分类 `ErrorCode`。同一个 variant
-可能对应多个错误码，因此失败点必须显式挂载业务错误码；禁止增加根据 variant 猜测
-错误码的 `DtError` classifier。
+同一 extension trait 也为 `anyhow::Error` 和已支持的 provider 错误类型实现。显式的
+`DtErrorContext.code` 优先于项目错误分类器，只用于有意的边界覆盖、provider 操作默认码
+和动态聚合结果。未知的具体错误只允许在组件边界通过 `DtErrorContext::attach` 挂载。
+如果项目语义分类同时存在更底层 source，则将语义化 `DtError` 作为 typed context 放在
+source 之上。这样 `DtError` 和原始 source 都可 downcast，报告可通过项目分类器取码，
+同时不会丢失底层诊断信息。
 
 Metadata 在错误跨越所有权边界时逐层挂载。叶子 frame 可以提供业务错误码、受影响对象
-和 provider origin。stage、endpoint 和 task ID 在仍然明确知道其含义的最高层边界显式
-挂载：例如 extractor worker 挂载 `extractor/source`，统一 sinker adapter 挂载
-`sinker/destination`，recovery 初始化边界挂载 `resumer/metadata`，precheck 入口挂载
-`precheck` 和 task ID，而 precheck builder 在各 checker 调用外层挂载 `source` 或
+和 provider origin。stage 和 endpoint 在拥有当前操作的最窄组件边界挂载，task ID 则在
+仍然明确知道它的最高层边界挂载：例如 extractor worker 挂载 `extractor/source`，统一
+sinker adapter 挂载 `sinker/destination`，recovery 初始化边界挂载 `resumer/metadata`，
+precheck 入口挂载 `precheck` 和 task ID，而 precheck builder 在各 checker 调用外层挂载 `source` 或
 `destination`。普通任务的 task ID 只在任务入口挂载。报告阶段不做推导。
 
-Frame 挂载后不再修改。`ErrorReport` 从最外层 frame 开始递归读取 metadata 父链；每个
-字段使用第一个非空的外层值，外层为空时才继承内层值。这是无条件的 outer-wins 语义，
-不是 fill-if-absent 修改：例如外层挂载的 `sinker/destination` 会在最终报告中覆盖内层的
-stage 或 endpoint。需要保留内层 scope 的边界不得再挂载竞争字段。`DtErrorContext` 不包含
-detail 字段；报告构建时从已脱敏的普通 context 和具体 cause 生成 detail。项目自有 `DtError`
+Frame 挂载后不再修改。`ErrorReport` 从最外层 frame 开始递归读取内层 metadata 链。
+scope 和根因字段使用最接近根因的内层值：错误经过其他组件传播时，stage、endpoint 和
+provider origin 不会仅因为外层再次设置而被替换。错误对象按字段合并，保留内层已有值，
+只从外层补充缺失字段。code、用户 message、hint 和 task ID 仍然采用显式的外层优先级。
+因此 sinker 错误经过 parallelizer 和 pipeline 传播后仍报告为 `sinker/destination`，任务入口
+仍可补充 task ID 和面向用户的上下文。`DtErrorContext` 不包含 detail 字段；报告构建时从
+已脱敏的普通 context 和具体 cause 生成 detail。项目自有 `DtError`
 会保留 variant 对应的完整 `Display` 文本和类型化 payload，与 provider error 保留自身
 `Display`、source chain 和具体类型的方式一致。
 
@@ -172,9 +178,10 @@ stage、endpoint 和 task ID 在 provider 分类之外、仍明确知道其语�
 边界，与 `dt-common::error` 中的公共错误契约相互独立。公共 provider 分类器仍统一
 位于 `dt-common::error::provider`。
 
-`ErrorReport` 只读取类型化 context 和错误链，不再尝试 provider 分类。没有
-`DtErrorContext` 的错误到达报告层时稳定输出 `IN999`。遗漏的分类位置通过失败路径测试
-和代码评审暴露。
+`ErrorReport` 读取类型化 context 和错误链。它先使用最外层显式 context code；没有时，
+从 cause chain downcast 到 `DtError` 并调用 `classify_dt_error`。报告层不会尝试 provider
+分类。既不是 `DtError`、又没有显式 context code 的错误稳定输出 `IN999`。遗漏的
+provider 边界通过失败路径测试和代码评审暴露。
 
 `MD099 MetadataReadFailed` 只作为读取或解析端点 catalog、控制面元数据失败时的
 默认码。Schema/结构本身是迁移对象，并不代表所有结构错误都是元数据读取错误。对象
@@ -243,9 +250,9 @@ provider 原始错误码、constraint/table 元数据和源错误链。
 | 其他 MySQL binlog 解码失败 | `DB001` |
 
 Worker join 失败使用 `RT001`。在组件边界分类的 URL 和 YAML 解析错误使用 `CF002`；
-未分类原始错误到达 `ErrorReport` 时使用 `IN999`。本地文件系统 `std::io::Error` 使用
-`IO001`；网络 I/O 必须在 provider 边界分类为
-`CN001` 或 `CN002`。用户主动中断的 CLI 操作使用 `RT002`。
+`DtError::Unclassified` 和未分类原始错误到达 `ErrorReport` 时都使用 `IN999`。本地文件
+系统 `std::io::Error` 使用 `IO001`；网络 I/O 必须在 provider 边界分类为 `CN001` 或
+`CN002`。用户主动中断的 CLI 操作使用 `RT002`。
 
 `mysql-binlog-connector-rust v0.3.4` 会丢弃 MySQL 错误包中的数值错误码，并将错误
 `1236` 暴露为 `ConnectError(String)`。在 connector 保留类型化错误码之前，MySQL

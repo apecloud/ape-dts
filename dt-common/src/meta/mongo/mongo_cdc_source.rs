@@ -1,4 +1,4 @@
-use crate::error::{DtError, DtErrorContextExt, ErrorCode, Stage};
+use crate::error::{DtError, DtErrorContextExt, Stage};
 use strum::IntoStaticStr;
 
 #[derive(Clone, IntoStaticStr, Debug)]
@@ -16,8 +16,7 @@ impl MongoCdcSource {
             "op_log" => Ok(Self::OpLog),
             "change_stream" => Ok(Self::ChangeStream),
             _ => Err(
-                DtError::ConfigError(format!("invalid MongoCdcSource: {}", str))
-                    .with_code(ErrorCode::InvalidConfig)
+                DtError::InvalidConfig(format!("invalid MongoCdcSource: {}", str))
                     .with_stage(Stage::Bootstrap),
             ),
         }

@@ -12,7 +12,7 @@ use crate::error_boundary::extractor_error::{
 };
 use dt_common::{
     config::connection_auth_config::ConnectionAuthConfig,
-    error::{DtError, DtErrorContextExt, ErrorCode},
+    error::DtError,
     meta::redis::{command::cmd_encoder::CmdEncoder, redis_object::RedisCmd},
 };
 
@@ -33,14 +33,12 @@ impl RedisClient {
     pub async fn new(url: &str, connection_auth: &ConnectionAuthConfig) -> anyhow::Result<Self> {
         let url_info = Url::parse(url).map_err(|error| {
             redis_source_error_with_cause(
-                ErrorCode::InvalidConfig,
-                "source Redis URL is invalid",
+                DtError::InvalidConfig("source Redis URL is invalid".to_string()),
                 error,
             )
         })?;
         let host = url_info.host_str().ok_or_else(|| {
-            DtError::ConfigError("the source Redis URL must include a host".to_string())
-                .with_code(ErrorCode::InvalidConfig)
+            DtError::InvalidConfig("the source Redis URL must include a host".to_string())
         })?;
         let port = url_info.port().unwrap_or(6379);
 
@@ -69,8 +67,7 @@ impl RedisClient {
                 return Ok(me);
             }
             return Err(
-                DtError::ExtractorError("Redis authentication failed".to_string())
-                    .with_code(ErrorCode::AuthenticationFailed),
+                DtError::AuthenticationFailed("Redis authentication failed".to_string()).into(),
             );
         }
 
@@ -103,8 +100,7 @@ impl RedisClient {
         match resp_reader.decode(&mut self.stream).await {
             Ok(value) => Ok(value),
             Err(error) => bail! {redis_source_error_with_anyhow(
-                ErrorCode::StatementFailed,
-                error.to_string(),
+                DtError::RedisResultError(error.to_string()),
                 error,
             )},
         }
@@ -147,8 +143,9 @@ impl RedisClient {
 
             _ => {
                 bail! {redis_source_error(
-                    ErrorCode::StatementFailed,
-                    "Redis response cannot be converted to strings",
+                    DtError::RedisResultError(
+                        "Redis response cannot be converted to strings".to_string()
+                    ),
                 )}
             }
         }

@@ -96,10 +96,9 @@ impl SinkerUtil {
         ExtractorUtil::get_extractor_meta_manager(config)
             .await?
             .ok_or_else(|| {
-                DtError::ConfigError(
+                DtError::InvalidConfig(
                     "the selected sinker requires relational source metadata".to_string(),
                 )
-                .with_code(ErrorCode::InvalidConfig)
                 .with_stage(Stage::Bootstrap)
             })
     }

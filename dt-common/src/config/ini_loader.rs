@@ -43,8 +43,7 @@ impl IniLoader {
         // E.g. do_dbs=`a;`,`bcd`
         ini.set_inline_comment_symbols(Some(&Vec::new()));
         ini.read(config_str).map_err(|_| {
-            DtError::ConfigError(format!("failed to parse config file: {ini_file}"))
-                .with_code(ErrorCode::InvalidConfig)
+            DtError::InvalidConfig(format!("failed to parse config file: {ini_file}"))
                 .with_message("failed to parse config file")
                 .with_stage(Stage::Bootstrap)
         })?;
@@ -60,10 +59,9 @@ impl IniLoader {
                 return Self::parse_value(section, key, &value);
             }
         }
-        Err(DtError::ConfigError(format!(
+        Err(DtError::MissingConfigItem(format!(
             "config [{section}].{key} does not exist or is empty"
         ))
-        .with_code(ErrorCode::MissingConfigItem)
         .with_message("required config value is missing")
         .with_stage(Stage::Bootstrap))
     }
@@ -102,11 +100,10 @@ impl IniLoader {
             } else {
                 value
             };
-            DtError::ConfigError(format!(
+            DtError::InvalidConfig(format!(
                 "config [{section}].{key}={rendered_value} can not be parsed as {}",
                 type_name::<T>()
             ))
-            .with_code(ErrorCode::InvalidConfig)
             .with_message("config value has an invalid type")
             .with_stage(Stage::Bootstrap)
         })

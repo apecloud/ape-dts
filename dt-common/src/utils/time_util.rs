@@ -2,7 +2,7 @@ use anyhow::{bail, Context};
 use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
 use tokio::{time::sleep, time::Duration};
 
-use crate::error::{DtError, DtErrorContextExt, ErrorCode};
+use crate::error::DtError;
 
 pub struct TimeUtil {}
 
@@ -37,10 +37,9 @@ impl TimeUtil {
         if let Some(datetime) = DateTime::from_timestamp(timestamp as i64, 0) {
             Ok(datetime.format(UTC_FORMAT).to_string())
         } else {
-            bail!(DtError::ConfigError(format!(
+            bail!(DtError::InvalidConfig(format!(
                 "timestamp is outside the supported range: {timestamp}"
-            ))
-            .with_code(ErrorCode::InvalidConfig))
+            )))
         }
     }
 }

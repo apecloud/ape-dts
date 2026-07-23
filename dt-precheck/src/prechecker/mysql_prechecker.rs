@@ -13,8 +13,7 @@ use crate::{
 };
 
 use super::traits::Prechecker;
-use crate::error_boundary::precheck_failure;
-use dt_common::error::ErrorCode;
+use dt_common::error::DtError;
 
 const MYSQL_SUPPORT_DB_VERSION_REGEX: &str = r"5\..*|8\..*";
 
@@ -46,17 +45,21 @@ impl Prechecker for MySqlPrechecker {
         match result {
             Ok(version) => {
                 if version.is_empty() {
-                    check_error = Some(precheck_failure(
-                        ErrorCode::UnsupportedDatabaseVersion,
-                        "MySQL returned no version information",
-                    ));
+                    check_error = Some(
+                        DtError::UnsupportedDatabaseVersion(
+                            "MySQL returned no version information".to_string(),
+                        )
+                        .into(),
+                    );
                 } else {
                     let re = Regex::new(MYSQL_SUPPORT_DB_VERSION_REGEX)?;
                     if !re.is_match(version.as_str()) {
-                        check_error = Some(precheck_failure(
-                            ErrorCode::UnsupportedDatabaseVersion,
-                            format!("MySQL version {version} is not supported"),
-                        ));
+                        check_error = Some(
+                            DtError::UnsupportedDatabaseVersion(format!(
+                                "MySQL version {version} is not supported"
+                            ))
+                            .into(),
+                        );
                     }
                 }
             }
@@ -137,7 +140,7 @@ impl Prechecker for MySqlPrechecker {
             Err(e) => bail! {e},
         }
         if !errs.is_empty() {
-            check_error = Some(precheck_failure(ErrorCode::CdcNotEnabled, errs.join(";")))
+            check_error = Some(DtError::CdcNotEnabled(errs.join(";")).into())
         }
 
         Ok(CheckResult::build_with_err(
@@ -171,10 +174,12 @@ impl Prechecker for MySqlPrechecker {
                 self.is_source,
                 DbType::Mysql,
                 check_error,
-                Some(precheck_failure(
-                    ErrorCode::ObjectNotFound,
-                    "structure existence precheck does not support pattern filters",
-                )),
+                Some(
+                    DtError::ObjectNotFound(
+                        "structure existence precheck does not support pattern filters".to_string(),
+                    )
+                    .into(),
+                ),
             ));
         }
 
@@ -247,10 +252,7 @@ impl Prechecker for MySqlPrechecker {
         }
 
         if !err_msgs.is_empty() {
-            check_error = Some(precheck_failure(
-                ErrorCode::ObjectNotFound,
-                err_msgs.join("."),
-            ))
+            check_error = Some(DtError::ObjectNotFound(err_msgs.join(".")).into())
         }
 
         Ok(CheckResult::build_with_err(
@@ -284,10 +286,12 @@ impl Prechecker for MySqlPrechecker {
                 self.is_source,
                 DbType::Mysql,
                 check_error,
-                Some(precheck_failure(
-                    ErrorCode::UnsupportedTableStructure,
-                    "table structure precheck does not support pattern filters",
-                )),
+                Some(
+                    DtError::UnsupportedTableStructure(
+                        "table structure precheck does not support pattern filters".to_string(),
+                    )
+                    .into(),
+                ),
             ));
         }
 
@@ -390,16 +394,10 @@ impl Prechecker for MySqlPrechecker {
             ))
         }
         if !err_msgs.is_empty() {
-            check_error = Some(precheck_failure(
-                ErrorCode::UnsupportedTableStructure,
-                err_msgs.join(";"),
-            ))
+            check_error = Some(DtError::UnsupportedTableStructure(err_msgs.join(";")).into())
         }
         if !warn_msgs.is_empty() {
-            warn_error = Some(precheck_failure(
-                ErrorCode::UnsupportedTableStructure,
-                warn_msgs.join(";"),
-            ))
+            warn_error = Some(DtError::UnsupportedTableStructure(warn_msgs.join(";")).into())
         }
 
         Ok(CheckResult::build_with_err(

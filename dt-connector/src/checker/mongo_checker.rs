@@ -11,7 +11,7 @@ use serde_json::Value as JsonValue;
 
 use crate::checker::base_checker::{Checker, CheckerTbMeta, CHECKER_MAX_QUERY_BATCH};
 use dt_common::{
-    error::{DtError, DtErrorContextExt, ErrorCode, ErrorObject, Stage},
+    error::{DtError, DtErrorContextExt, ErrorObject, Stage},
     meta::{
         col_value::ColValue,
         mongo::{mongo_constant::MongoConstants, mongo_key::MongoKey},
@@ -180,8 +180,7 @@ impl MongoChecker {
             }
         }
         anyhow::bail!(
-            DtError::General("MongoDB row data is missing _id".to_string())
-                .with_code(ErrorCode::StatementFailed)
+            DtError::StatementFailed("MongoDB row data is missing _id".to_string())
                 .with_stage(Stage::Checker)
                 .with_object(ErrorObject {
                     schema: Some(row.schema.clone()),

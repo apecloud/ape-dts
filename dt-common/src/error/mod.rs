@@ -7,7 +7,7 @@ mod report;
 
 pub use code::ErrorCode;
 pub use context::{EndpointRole, ErrorObject, OriginError, Stage};
-pub use dt_error::DtError;
+pub use dt_error::{classify_dt_error, DtError};
 pub use error_context::{AnyhowErrorExt, DtErrorContext, DtErrorContextExt};
 pub use provider::{
     classify_kafka_error, classify_mongodb_error, classify_rdkafka_error, classify_redis_error,

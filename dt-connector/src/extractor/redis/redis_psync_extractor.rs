@@ -27,7 +27,7 @@ use dt_common::{
         config_enums::{DbType, ExtractType},
         config_token_parser::{ConfigTokenParser, TokenEscapePair},
     },
-    error::ErrorCode,
+    error::DtError,
     log_debug, log_error, log_info, log_position, log_warn,
     meta::{
         dt_data::DtData,
@@ -141,8 +141,9 @@ impl RedisPsyncExtractor {
         if let Value::Okay = self.conn.read().await? {
         } else {
             bail! {redis_source_error(
-                ErrorCode::StatementFailed,
-                "REPLCONF listening-port response is not OK",
+                DtError::RedisResultError(
+                    "REPLCONF listening-port response is not OK".to_string()
+                ),
             )}
         }
 
@@ -169,8 +170,9 @@ impl RedisPsyncExtractor {
                 if response_type != Some("FULLRESYNC") || repl_id.is_none() || repl_offset.is_none()
                 {
                     bail! {redis_source_error(
-                        ErrorCode::StatementFailed,
-                        format!("invalid PSYNC full-resync response: {s}"),
+                        DtError::RedisResultError(format!(
+                            "invalid PSYNC full-resync response: {s}"
+                        )),
                     )}
                 }
                 self.repl_id = repl_id.unwrap_or_default().to_string();
@@ -180,21 +182,24 @@ impl RedisPsyncExtractor {
                         .parse::<u64>()
                         .map_err(|error| {
                             redis_source_error_with_cause(
-                                ErrorCode::StatementFailed,
-                                format!("invalid replication offset in PSYNC response: {s}"),
+                                DtError::RedisResultError(format!(
+                                    "invalid replication offset in PSYNC response: {s}"
+                                )),
                                 error,
                             )
                         })?;
             } else if s != "CONTINUE" {
                 bail! {redis_source_error(
-                    ErrorCode::StatementFailed,
-                    "PSYNC command response is not CONTINUE",
+                    DtError::RedisResultError(
+                        "PSYNC command response is not CONTINUE".to_string()
+                    ),
                 )}
             }
         } else {
             bail! {redis_source_error(
-                ErrorCode::StatementFailed,
-                "PSYNC command response is not a status response",
+                DtError::RedisResultError(
+                    "PSYNC command response is not a status response".to_string()
+                ),
             )}
         };
         Ok(full_sync)
@@ -215,11 +220,10 @@ impl RedisPsyncExtractor {
             }
             if buf[0] != b'$' {
                 bail! {redis_source_error(
-                    ErrorCode::StatementFailed,
-                    format!(
-                    "invalid rdb format, expected '$', got byte: {}",
-                    buf[0]
-                    ),
+                    DtError::RedisResultError(format!(
+                        "invalid rdb format, expected '$', got byte: {}",
+                        buf[0]
+                    )),
                 )}
             }
             break;
@@ -443,11 +447,10 @@ impl RedisPsyncExtractor {
             }
             v => {
                 bail! {redis_source_error(
-                    ErrorCode::StatementFailed,
-                    format!(
-                    "received unexpected aof value: {:?}",
-                    v
-                    ),
+                    DtError::RedisResultError(format!(
+                        "received unexpected aof value: {:?}",
+                        v
+                    )),
                 )}
             }
         }

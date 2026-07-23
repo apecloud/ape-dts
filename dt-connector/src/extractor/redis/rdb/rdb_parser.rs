@@ -7,7 +7,7 @@ use crate::error_boundary::extractor_error::{
 };
 use crate::extractor::redis::{rdb::entry_parser::module2_parser::ModuleParser, StreamReader};
 use dt_common::meta::redis::{redis_entry::RedisEntry, redis_object::RedisCmd};
-use dt_common::{error::ErrorCode, log_debug, log_info};
+use dt_common::{error::DtError, log_debug, log_info};
 
 const K_FLAG_SLOT_INFO: u8 = 0xf4; // (244) (Redis 7.4+) RDB_OPCODE_SLOT_INFO: slot info
 const _K_FLAG_FUNCTION2: u8 = 0xf5; // (245) function library data
@@ -127,8 +127,9 @@ impl RdbParser<'_> {
                         })?;
                         self.repl_stream_db_id = value.parse::<i64>().map_err(|error| {
                             redis_source_error_with_cause(
-                                ErrorCode::StatementFailed,
-                                "Redis RDB replication database value is invalid",
+                                DtError::RedisRdbError(
+                                    "replication database value is invalid".to_string(),
+                                ),
                                 error,
                             )
                         })?;
@@ -203,8 +204,7 @@ impl RdbParser<'_> {
 
                 let value = value.map_err(|error| {
                     redis_source_error_with_anyhow(
-                        ErrorCode::StatementFailed,
-                        "failed to parse Redis RDB entry",
+                        DtError::RedisRdbError("failed to parse Redis RDB entry".to_string()),
                         error,
                     )
                 })?;

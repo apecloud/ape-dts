@@ -1,9 +1,3 @@
-use dt_common::error::{DtError, DtErrorContextExt, ErrorCode};
-
-pub(crate) fn precheck_failure(code: ErrorCode, detail: impl Into<String>) -> anyhow::Error {
-    DtError::General(detail.into()).with_code(code)
-}
-
 pub(crate) mod report {
     use dt_common::error::{ErrorCode, ErrorReport};
 
@@ -53,8 +47,8 @@ pub(crate) mod mongodb {
     use dt_common::error::{classify_mongodb_error, DtError, DtErrorContextExt, ErrorCode};
 
     pub(crate) fn mongo_precheck_state_error() -> anyhow::Error {
-        DtError::General("the MongoDB precheck client is not initialized".to_string())
-            .with_code(ErrorCode::InvariantViolated)
+        DtError::InvariantViolated("the MongoDB precheck client is not initialized".to_string())
+            .into()
     }
     pub(crate) fn mongo_precheck_provider_error(error: mongodb::error::Error) -> anyhow::Error {
         let context = classify_mongodb_error(&error).into_context();

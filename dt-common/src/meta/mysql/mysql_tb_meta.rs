@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use serde::Serialize;
 use serde_json::json;
 
-use crate::error::{DtError, DtErrorContextExt, ErrorCode, ErrorObject, OriginError};
+use crate::error::{DtError, DtErrorContextExt, ErrorObject, OriginError};
 use crate::meta::rdb_tb_meta::RdbTbMeta;
 
 use super::mysql_col_type::MysqlColType;
@@ -24,11 +24,10 @@ impl MysqlTbMeta {
     #[inline(always)]
     pub fn get_col_type(&self, col: &str) -> anyhow::Result<&MysqlColType> {
         self.col_type_map.get(col).ok_or_else(|| {
-            DtError::MetadataError(format!(
+            DtError::ObjectNotFound(format!(
                 "column {col} is missing from the MySQL definition for {}.{}",
                 self.basic.schema, self.basic.tb
             ))
-                .with_code(ErrorCode::ObjectNotFound)
                 .with_message("A required source column was not found in the loaded table definition")
                 .with_hint(
                     "Check configured column names and whether the source table changed, then restart the task to reload its definition.",

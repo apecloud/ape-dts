@@ -5,7 +5,7 @@ use async_trait::async_trait;
 
 use dt_common::{
     config::{connection_auth_config::ConnectionAuthConfig, task_config::APE_DTS},
-    error::{DtError, DtErrorContextExt, ErrorCode},
+    error::DtError,
     meta::mongo::mongo_version::get_server_version,
     rdb_filter::RdbFilter,
 };
@@ -104,8 +104,8 @@ impl MongoFetcher {
             .await
             .map_err(mongo_precheck_provider_error)?;
         if dbs.is_empty() {
-            bail! {DtError::MetadataError("no database exists in MongoDB".to_string())
-            .with_code(ErrorCode::DatabaseNotFound)};
+            bail! {DtError::DatabaseNotFound("no database exists in MongoDB".to_string())
+            };
         }
 
         let doc_command = doc! {command: 1};

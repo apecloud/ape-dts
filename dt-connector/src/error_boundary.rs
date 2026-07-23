@@ -54,41 +54,27 @@ pub(crate) mod extractor_error {
             .with_origin(OriginError::new(provider, None::<String>))
             .context(detail.into())
     }
-    pub(crate) fn redis_source_error(code: ErrorCode, detail: impl Into<String>) -> anyhow::Error {
-        DtError::RedisResultError(detail.into())
-            .with_code(code)
-            .with_origin(OriginError::new("redis", None::<String>))
+    pub(crate) fn redis_source_error(error: DtError) -> anyhow::Error {
+        error.with_origin(OriginError::new("redis", None::<String>))
     }
-    pub(crate) fn redis_source_error_with_cause<E>(
-        code: ErrorCode,
-        detail: impl Into<String>,
-        error: E,
-    ) -> anyhow::Error
+    pub(crate) fn redis_source_error_with_cause<E>(error: DtError, source: E) -> anyhow::Error
     where
         E: StdError + Send + Sync + 'static,
     {
-        DtErrorContext::new()
-            .code(code)
-            .origin(OriginError::new("redis", None::<String>))
-            .attach(error)
-            .context(detail.into())
+        anyhow::Error::new(source)
+            .with_origin(OriginError::new("redis", None::<String>))
+            .context(error)
     }
     pub(crate) fn redis_source_error_with_anyhow(
-        code: ErrorCode,
-        detail: impl Into<String>,
-        error: anyhow::Error,
+        error: DtError,
+        source: anyhow::Error,
     ) -> anyhow::Error {
-        error
-            .with_context(
-                DtErrorContext::new()
-                    .code(code)
-                    .origin(OriginError::new("redis", None::<String>)),
-            )
-            .context(detail.into())
+        source
+            .with_origin(OriginError::new("redis", None::<String>))
+            .context(error)
     }
     pub(crate) fn invalid_redis_config(detail: impl Into<String>) -> anyhow::Error {
-        DtError::ConfigError(detail.into())
-            .with_code(ErrorCode::InvalidConfig)
+        DtError::InvalidConfig(detail.into())
             .with_stage(Stage::Bootstrap)
             .with_endpoint(EndpointRole::Source)
             .with_origin(OriginError::new("redis", None::<String>))
@@ -123,20 +109,17 @@ pub(crate) mod extractor_error {
             .attach(error)
     }
     pub(crate) fn rdb_error(detail: impl Into<String>) -> anyhow::Error {
-        DtError::RedisRdbError(detail.into())
-            .with_code(ErrorCode::StatementFailed)
-            .with_origin(OriginError::new("redis", None::<String>))
+        DtError::RedisRdbError(detail.into()).with_origin(OriginError::new("redis", None::<String>))
     }
     pub(crate) fn redis_rdb_source<E>(detail: impl Into<String>, error: E) -> anyhow::Error
     where
         E: StdError + Send + Sync + 'static,
     {
-        redis_source_error_with_cause(ErrorCode::StatementFailed, detail, error)
+        redis_source_error_with_cause(DtError::RedisRdbError(detail.into()), error)
     }
     pub(crate) fn redis_reshard_topology(detail: impl Into<String>) -> anyhow::Error {
         let detail = detail.into();
-        DtError::RedisResultError(detail.clone())
-            .with_code(ErrorCode::PrerequisiteNotMet)
+        DtError::PrerequisiteNotMet(detail.clone())
             .with_message("The Redis cluster topology is incomplete or changed")
             .with_hint(
                 "Ensure every Redis cluster slot has a stable master owner, then restart the task.",
@@ -151,8 +134,7 @@ pub(crate) mod extractor_error {
             .context("failed to read the configured Redis snapshot file")
     }
     pub(crate) fn mongodb_oplog(detail: impl Into<String>) -> anyhow::Error {
-        DtError::ExtractorError(detail.into())
-            .with_code(ErrorCode::StatementFailed)
+        DtError::StatementFailed(detail.into())
             .with_origin(OriginError::new("mongodb", None::<String>))
     }
     pub(crate) fn mysql_binlog_table_map_missing(
@@ -162,8 +144,7 @@ pub(crate) mod extractor_error {
         let detail = format!(
             "the {event_type} event for source table ID {table_id} arrived before Ape-DTS received its table definition"
         );
-        DtError::ExtractorError(detail.clone())
-            .with_code(ErrorCode::StatementFailed)
+        DtError::StatementFailed(detail.clone())
             .with_message("A MySQL row event could not be decoded")
             .with_hint(
                 "Restart from an earlier binlog position so Ape-DTS can reload the table definition. If it repeats, check binlog retention and the source database logs.",
@@ -228,14 +209,11 @@ pub(crate) mod extractor_error {
             .attach(error)
     }
     pub(crate) fn invalid_postgres_lsn() -> anyhow::Error {
-        DtError::ExtractorError("a PostgreSQL replication position is invalid".to_string())
-            .with_code(ErrorCode::CheckpointReadFailed)
+        DtError::CheckpointReadFailed("a PostgreSQL replication position is invalid".to_string())
             .with_origin(OriginError::new("postgres", None::<String>))
     }
     pub(crate) fn invalid_resumer_config(detail: impl Into<String>) -> anyhow::Error {
-        DtError::ConfigError(detail.into())
-            .with_code(ErrorCode::InvalidConfig)
-            .with_stage(Stage::Bootstrap)
+        DtError::InvalidConfig(detail.into()).with_stage(Stage::Bootstrap)
     }
     pub(crate) fn resumer_config_source<E>(detail: impl Into<String>, error: E) -> anyhow::Error
     where
@@ -256,7 +234,7 @@ pub(crate) mod extractor_error {
         let context = classify_sqlx_error(&error, provider)
             .into_context()
             .message("failed to query resume position from database");
-        let mut object = context.error_object().cloned().unwrap_or_default();
+        let mut object = context.error_object().unwrap_or_default();
         object.schema.get_or_insert_with(|| schema.to_string());
         object.table.get_or_insert_with(|| table.to_string());
         error
@@ -298,13 +276,11 @@ pub(crate) mod sinker_error {
             "the destination rejected the request with HTTP status {}",
             status.as_u16()
         );
-        DtError::HttpError(detail)
-            .with_code(ErrorCode::StatementFailed)
+        DtError::StatementFailed(detail)
             .with_origin(OriginError::new("http", Some(status.as_u16().to_string())))
     }
     pub(crate) fn http_rejected(status: reqwest::StatusCode) -> anyhow::Error {
-        DtError::HttpError("the destination rejected the data load request".to_string())
-            .with_code(ErrorCode::StatementFailed)
+        DtError::StatementFailed("the destination rejected the data load request".to_string())
             .with_origin(OriginError::new("http", Some(status.as_u16().to_string())))
     }
     pub(crate) fn http_invalid_response(error: serde_json::Error) -> anyhow::Error {
@@ -313,13 +289,8 @@ pub(crate) mod sinker_error {
             .origin(OriginError::new("http", None::<String>))
             .attach(error)
     }
-    pub(crate) fn redis_destination_error(
-        code: ErrorCode,
-        detail: impl Into<String>,
-    ) -> anyhow::Error {
-        DtError::RedisResultError(detail.into())
-            .with_code(code)
-            .with_origin(OriginError::new("redis", None::<String>))
+    pub(crate) fn redis_destination_error(error: DtError) -> anyhow::Error {
+        error.with_origin(OriginError::new("redis", None::<String>))
     }
     pub(crate) fn redis_driver_error(
         error: redis::RedisError,
@@ -330,8 +301,7 @@ pub(crate) mod sinker_error {
     }
     pub(crate) fn redis_slot_topology() -> anyhow::Error {
         let detail = "A required Redis cluster slot has no master owner in the loaded topology";
-        DtError::RedisResultError(detail.to_string())
-            .with_code(ErrorCode::PrerequisiteNotMet)
+        DtError::PrerequisiteNotMet(detail.to_string())
             .with_origin(OriginError::new("redis", None::<String>))
             .with_message("The Redis cluster slot map is incomplete or changed")
             .with_hint(
@@ -346,8 +316,7 @@ pub(crate) mod sinker_error {
     }
     pub(crate) fn clickhouse_source_metadata_missing() -> anyhow::Error {
         let detail = "Ape-DTS could not determine the source table definition needed to build the ClickHouse table";
-        DtError::SinkerError(detail.to_string())
-            .with_code(ErrorCode::ObjectNotFound)
+        DtError::ObjectNotFound(detail.to_string())
             .with_message(
                 "Source table metadata is unavailable for ClickHouse structure migration",
             )
@@ -369,9 +338,7 @@ pub(crate) mod sinker_error {
 pub(crate) mod checker {
     use dt_common::error::{DtError, DtErrorContextExt, ErrorCode, Stage};
     pub(crate) fn state_config(detail: impl Into<String>) -> anyhow::Error {
-        DtError::ConfigError(detail.into())
-            .with_code(ErrorCode::InvalidConfig)
-            .with_stage(Stage::Bootstrap)
+        DtError::InvalidConfig(detail.into()).with_stage(Stage::Bootstrap)
     }
     pub(crate) fn parse_source(error: anyhow::Error, detail: impl Into<String>) -> anyhow::Error {
         error

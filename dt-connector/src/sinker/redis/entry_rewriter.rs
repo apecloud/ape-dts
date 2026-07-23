@@ -1,5 +1,5 @@
 use anyhow::bail;
-use dt_common::error::ErrorCode;
+use dt_common::error::DtError;
 use dt_common::meta::redis::{
     redis_entry::RedisEntry,
     redis_object::{
@@ -309,8 +309,7 @@ impl EntryRewriter {
 
     pub fn rewrite_module(_obj: &mut ModuleObject) -> anyhow::Result<Vec<RedisCmd>> {
         bail! {redis_destination_error(
-            ErrorCode::StatementFailed,
-            "Redis module rewrite is not implemented",
+            DtError::RedisResultError("Redis module rewrite is not implemented".to_string()),
         )}
     }
 

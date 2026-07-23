@@ -246,10 +246,9 @@ impl PgCdcExtractor {
                 }
 
                 None => {
-                    return Err(DtError::ExtractorError(
+                    return Err(DtError::ConnectionFailed(
                         "PostgreSQL replication stream ended unexpectedly".to_string(),
                     )
-                    .with_code(ErrorCode::ConnectionFailed)
                     .with_origin(OriginError::new("postgres", None::<String>)));
                 }
             }
@@ -272,10 +271,9 @@ impl PgCdcExtractor {
                 start_lsn.to_string()
             };
         let lsn: PgLsn = lsn_value.parse().map_err(|_| {
-            DtError::ExtractorError(
+            DtError::CheckpointReadFailed(
                 "the saved PostgreSQL replication position is invalid".to_string(),
             )
-            .with_code(ErrorCode::CheckpointReadFailed)
             .with_origin(OriginError::new("postgres", None::<String>))
         })?;
         log_info!("confirmed flush lsn: {}", lsn.to_string());
@@ -323,11 +321,10 @@ impl PgCdcExtractor {
                 .oid_to_type
                 .get(&column.type_id())
                 .ok_or_else(|| {
-                    DtError::MetadataError(format!(
+                    DtError::UnsupportedTableStructure(format!(
                         "PostgreSQL type OID {} is not supported for column {col_name}",
                         column.type_id()
                     ))
-                    .with_code(ErrorCode::UnsupportedTableStructure)
                     .with_object(ErrorObject {
                         schema: Some(schema.to_string()),
                         table: Some(tb.to_string()),
@@ -411,8 +408,7 @@ impl PgCdcExtractor {
                     let detail = format!(
                         "PostgreSQL update does not contain key column {col}; check replica identity"
                     );
-                    DtError::ExtractorError(detail.clone())
-                        .with_code(ErrorCode::UnsupportedTableStructure)
+                    DtError::UnsupportedTableStructure(detail.clone())
                         .with_message(
                             "PostgreSQL update events do not contain the columns needed to identify rows",
                         )

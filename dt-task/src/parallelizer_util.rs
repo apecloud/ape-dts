@@ -3,7 +3,7 @@ use std::collections::{HashMap, VecDeque};
 use super::task_util::TaskUtil;
 use dt_common::{
     config::{config_enums::ParallelType, task_config::TaskConfig},
-    error::{DtError, DtErrorContextExt, ErrorCode, Stage},
+    error::{DtError, DtErrorContextExt, Stage},
     meta::redis::command::key_parser::KeyParser,
     monitor::task_monitor_handle::TaskMonitorHandle,
     utils::redis_util::RedisUtil,
@@ -38,10 +38,9 @@ impl ParallelizerUtil {
                     .parallelizer
                     .chunk_partitioner_rebalance()
                     .ok_or_else(|| {
-                        DtError::ConfigError(
+                        DtError::InvalidConfig(
                             "snapshot parallelizer rebalance configuration is missing".to_string(),
                         )
-                        .with_code(ErrorCode::InvalidConfig)
                         .with_stage(Stage::Bootstrap)
                     })?
                     .clone(),
@@ -101,10 +100,9 @@ impl ParallelizerUtil {
         let rdb_meta_manager = TaskUtil::create_rdb_meta_manager(config)
             .await?
             .ok_or_else(|| {
-                DtError::ConfigError(
+                DtError::InvalidConfig(
                     "the selected merger requires a relational database endpoint".to_string(),
                 )
-                .with_code(ErrorCode::InvalidConfig)
                 .with_stage(Stage::Bootstrap)
             })?;
 
@@ -116,10 +114,9 @@ impl ParallelizerUtil {
         let meta_manager = TaskUtil::create_rdb_meta_manager(config)
             .await?
             .ok_or_else(|| {
-                DtError::ConfigError(
+                DtError::InvalidConfig(
                     "the selected partitioner requires a relational database endpoint".to_string(),
                 )
-                .with_code(ErrorCode::InvalidConfig)
                 .with_stage(Stage::Bootstrap)
             })?;
         Ok(RdbPartitioner { meta_manager })

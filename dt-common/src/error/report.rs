@@ -3,8 +3,8 @@ use std::{backtrace::BacktraceStatus, fmt};
 use serde::Serialize;
 
 use super::{
-    error_context::DT_ERROR_CONTEXT_MARKER, DtErrorContext, EndpointRole, ErrorCode, ErrorObject,
-    OriginError, Stage,
+    error_context::DT_ERROR_CONTEXT_MARKER, AnyhowErrorExt, DtErrorContext, EndpointRole,
+    ErrorCode, ErrorObject, OriginError, Stage,
 };
 
 pub const ERROR_REPORT_SCHEMA_VERSION: u16 = 1;
@@ -42,53 +42,30 @@ impl ErrorReport {
         let (error_chain, context_count) = split_error_chain(error);
         let detail = detail_from_error_chain(&error_chain);
         let backtrace = captured_backtrace(error);
-
-        if let Some(context) = context {
-            return Self::from_context(context, detail, error_chain, context_count, backtrace);
-        }
-
-        Self {
-            schema_version: ERROR_REPORT_SCHEMA_VERSION,
-            code: ErrorCode::Unclassified,
-            message: ErrorCode::Unclassified.default_message().to_string(),
-            detail,
-            hint: Some(ErrorCode::Unclassified.default_hint().to_string()),
-            stage: Stage::Unknown,
-            task_id: None,
-            endpoint: None,
-            object: None,
-            origin: None,
-            error_chain,
-            context_count,
-            backtrace,
-        }
-    }
-
-    fn from_context(
-        context: &DtErrorContext,
-        detail: Option<String>,
-        error_chain: Vec<String>,
-        context_count: usize,
-        backtrace: Option<String>,
-    ) -> Self {
-        let code = context.error_code().unwrap_or(ErrorCode::Unclassified);
+        let code = error.error_code().unwrap_or(ErrorCode::Unclassified);
         Self {
             schema_version: ERROR_REPORT_SCHEMA_VERSION,
             code,
             message: sanitize_user_text(
                 context
-                    .message_text()
+                    .and_then(DtErrorContext::message_text)
                     .unwrap_or_else(|| code.default_message()),
             ),
             detail,
             hint: Some(sanitize_user_text(
-                context.hint_text().unwrap_or_else(|| code.default_hint()),
+                context
+                    .and_then(DtErrorContext::hint_text)
+                    .unwrap_or_else(|| code.default_hint()),
             )),
-            stage: context.stage_value().unwrap_or(Stage::Unknown),
-            task_id: context.task_id_value().map(str::to_string),
-            endpoint: context.endpoint_role(),
-            object: context.error_object().cloned(),
-            origin: context.origin_error().cloned(),
+            stage: context
+                .and_then(DtErrorContext::stage_value)
+                .unwrap_or(Stage::Unknown),
+            task_id: context
+                .and_then(DtErrorContext::task_id_value)
+                .map(str::to_string),
+            endpoint: context.and_then(DtErrorContext::endpoint_role),
+            object: context.and_then(DtErrorContext::error_object),
+            origin: context.and_then(DtErrorContext::origin_error).cloned(),
             error_chain,
             context_count,
             backtrace,
@@ -297,6 +274,25 @@ mod tests {
     }
 
     #[test]
+    fn classifies_project_errors_unless_context_overrides_the_code() {
+        let source = "invalid-port".parse::<u16>().unwrap_err();
+        let error = anyhow::Error::new(source)
+            .with_origin(OriginError::new("config-parser", None::<String>))
+            .context(DtError::InvalidConfig("invalid port".to_string()))
+            .context("loading source config");
+        let report = ErrorReport::from_anyhow(&error);
+        assert_eq!(report.code, ErrorCode::InvalidConfig);
+        assert_eq!(report.origin.unwrap().system, "config-parser");
+        assert!(error.downcast_ref::<std::num::ParseIntError>().is_some());
+
+        let error = error.with_code(ErrorCode::InvariantViolated);
+        assert_eq!(
+            ErrorReport::from_anyhow(&error).code,
+            ErrorCode::InvariantViolated
+        );
+    }
+
+    #[test]
     fn text_and_json_include_redacted_detail_while_json_excludes_diagnostics() {
         let error = anyhow::anyhow!("password=secret, sql=INSERT, row_data=private")
             .context("internal worker context");
@@ -331,8 +327,7 @@ mod tests {
 
     #[test]
     fn serializes_schema_version_and_redacts_user_text() {
-        let error = DtError::ConfigError("password=secret is invalid".to_string())
-            .with_code(ErrorCode::InvalidConfig)
+        let error = DtError::InvalidConfig("password=secret is invalid".to_string())
             .with_message("password=secret is invalid")
             .with_hint("set token=abc123 before retrying");
         let error = error.context("endpoint=mysql://user:hunter2@localhost:3306/db");

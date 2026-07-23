@@ -20,7 +20,7 @@ use crate::{
 };
 use dt_common::{
     config::config_enums::{DbType, RdbParallelType},
-    error::{DtError, DtErrorContextExt, ErrorCode, Stage},
+    error::{DtError, DtErrorContextExt, Stage},
     log_error, log_info,
     meta::{
         col_value::ColValue,
@@ -51,16 +51,14 @@ impl Extractor for MongoSnapshotExtractor {
     async fn extract(&mut self) -> anyhow::Result<()> {
         if self.parallel_size < 1 {
             bail!(
-                DtError::ConfigError("parallel_size must be greater than 0".to_string(),)
-                    .with_code(ErrorCode::InvalidConfig)
+                DtError::InvalidConfig("parallel_size must be greater than 0".to_string(),)
                     .with_stage(Stage::Bootstrap)
             );
         }
         if matches!(self.parallel_type, RdbParallelType::Chunk) {
-            bail!(DtError::ConfigError(
+            bail!(DtError::InvalidConfig(
                 "MongoDB snapshot extraction does not support parallel_type=chunk".to_string(),
             )
-            .with_code(ErrorCode::InvalidConfig)
             .with_stage(Stage::Bootstrap));
         }
 

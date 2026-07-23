@@ -6,8 +6,7 @@ pub(crate) fn worker(error: tokio::task::JoinError) -> anyhow::Error {
         .with_stage(Stage::Parallelizer)
 }
 pub(crate) fn invariant() -> anyhow::Error {
-    DtError::General("parallelizer invariant violated".to_string())
-        .with_code(ErrorCode::InvariantViolated)
+    DtError::InvariantViolated("parallelizer invariant violated".to_string())
         .with_stage(Stage::Parallelizer)
 }
 pub(crate) fn invariant_source(error: anyhow::Error) -> anyhow::Error {
@@ -16,13 +15,11 @@ pub(crate) fn invariant_source(error: anyhow::Error) -> anyhow::Error {
         .with_stage(Stage::Parallelizer)
 }
 pub(crate) fn invalid_config() -> anyhow::Error {
-    DtError::ConfigError("parallelizer configuration is invalid".to_string())
-        .with_code(ErrorCode::InvalidConfig)
+    DtError::InvalidConfig("parallelizer configuration is invalid".to_string())
         .with_stage(Stage::Parallelizer)
 }
 pub(crate) fn redis_command(detail: impl Into<String>) -> anyhow::Error {
     DtError::RedisCmdError(detail.into())
-        .with_code(ErrorCode::StatementFailed)
         .with_origin(OriginError::new("redis", None::<String>))
         .with_stage(Stage::Parallelizer)
 }

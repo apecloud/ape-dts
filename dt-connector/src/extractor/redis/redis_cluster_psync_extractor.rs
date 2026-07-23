@@ -22,7 +22,7 @@ use crate::{
 };
 use dt_common::{
     config::{config_enums::ExtractType, connection_auth_config::ConnectionAuthConfig},
-    error::ErrorCode,
+    error::DtError,
     log_info, log_warn,
     meta::{position::Position, redis::cluster_node::ClusterNode, syncer::Syncer},
     rdb_filter::RdbFilter,
@@ -89,10 +89,9 @@ impl RedisClusterPsyncExtractor {
         let mut conn = RedisUtil::create_redis_conn(&self.url, &self.connection_auth).await?;
         let nodes = RedisUtil::get_cluster_master_nodes(&mut conn)?;
         if nodes.is_empty() {
-            bail!(redis_source_error(
-                ErrorCode::PrerequisiteNotMet,
-                "source Redis cluster has no master nodes",
-            ));
+            bail!(redis_source_error(DtError::PrerequisiteNotMet(
+                "source Redis cluster has no master nodes".to_string()
+            ),));
         }
         Ok(nodes)
     }

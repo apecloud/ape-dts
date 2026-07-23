@@ -95,10 +95,9 @@ impl ConnectionAuthConfig {
                     parsed_url
                         .set_username(encode(username).into_owned().as_str())
                         .map_err(|_| {
-                            DtError::ConfigError(
+                            DtError::InvalidConfig(
                                 "database connection URL does not support a username".to_string(),
                             )
-                            .with_code(ErrorCode::InvalidConfig)
                             .with_stage(Stage::Bootstrap)
                         })?;
                 }
@@ -108,11 +107,10 @@ impl ConnectionAuthConfig {
                         parsed_url
                             .set_password(Some(encode(pwd).into_owned().as_str()))
                             .map_err(|_| {
-                                DtError::ConfigError(
+                                DtError::InvalidConfig(
                                     "database connection URL does not support a password"
                                         .to_string(),
                                 )
-                                .with_code(ErrorCode::InvalidConfig)
                                 .with_stage(Stage::Bootstrap)
                             })?;
                     }

@@ -140,22 +140,30 @@ The innermost cause is always a real error. Provider failures keep their
 original provider error type. Application-authored failures use the
 `thiserror`-based `DtError` enum.
 
-Project-owned failures construct the root cause first and add one immutable
-metadata frame per fluent `DtErrorContextExt` call. For example,
-`DtError::ConfigError(detail).with_code(ErrorCode::InvalidConfig).with_stage(Stage::Bootstrap)`.
-The same extension trait is implemented for `anyhow::Error` and the supported
-provider error types. Unknown concrete errors use `DtErrorContext::attach` at
-the component boundary.
+Project-owned failures select a semantic `DtError` variant and add only the
+metadata known at that call site. For example,
+`DtError::InvalidConfig(detail).with_stage(Stage::Bootstrap)` creates the root
+cause and adds its stage; it does not repeat `ErrorCode::InvalidConfig`.
+`classify_dt_error` maps every `DtError` variant to its stable default code.
+Adding a new variant therefore requires an explicit classifier arm and cannot
+silently fall through. `DtError::Unclassified` is reserved for a project-owned
+failure for which no stable classification is available.
 
-`DtError` variants describe the concrete project-owned root cause; they do not
-imply or classify an `ErrorCode`. A single variant can be used with several
-codes, so the failure site must attach the explicit business code. Do not add a
-`DtError` classifier that guesses the code from the variant.
+The same extension trait is implemented for `anyhow::Error` and the supported
+provider error types. An explicit `DtErrorContext.code` has higher priority
+than the project classifier and is limited to deliberate boundary overrides,
+operation-specific provider defaults, and dynamic aggregate results. Unknown
+concrete errors use `DtErrorContext::attach` at the component boundary.
+When a project-owned classification also has a lower-level source, put the
+semantic `DtError` in the `anyhow` context chain above that source. Both the
+`DtError` and the original source then remain downcastable, and the report uses
+the `DtError` classifier without discarding the source diagnostics.
 
 Metadata is added as the error crosses ownership boundaries. A leaf frame can
-contain the business code, affected object, and provider origin. Stage,
-endpoint, and task ID are attached explicitly at the highest boundary that
-still knows those values: for example, the extractor worker attaches
+contain the business code, affected object, and provider origin. Stage and
+endpoint are attached at the narrowest component boundary that owns the
+operation, while task ID is attached at the highest boundary that knows it:
+for example, the extractor worker attaches
 `extractor/source`, the common sinker adapter attaches `sinker/destination`,
 the recovery initialization boundary attaches `resumer/metadata`, and the
 precheck entry attaches `precheck` and the task ID while its builder attaches
@@ -164,13 +172,15 @@ the only production boundary that attaches its task ID. No report-time
 inference is used.
 
 Frames are immutable after attachment. `ErrorReport` starts at the outermost
-frame and recursively reads its metadata parents. For every field, the first
-non-empty outer value wins and a missing value is inherited from the inner
-frame. This is unconditional outer-wins semantics, not fill-if-absent mutation:
-for example, an outer `sinker/destination` scope intentionally replaces an
-inner stage or endpoint in the final report. A boundary that must preserve an
-inner scope must not attach a competing value. `DtErrorContext` has no detail
-field. Report construction derives
+frame and recursively reads the inner metadata chain. Scope and root-cause
+fields use the nearest inner value: stage, endpoint, and provider origin are
+not replaced merely because an error passes through another component. Error
+object fields are merged individually, preserving an inner value and filling
+only missing fields from outer frames. Code, user message, hint, and task ID
+retain explicit outer precedence. Consequently, a sinker failure propagated
+through the parallelizer and pipeline is reported as `sinker/destination`,
+while the task entry can still supply its task ID and user-facing context.
+`DtErrorContext` has no detail field. Report construction derives
 `detail` from the redacted ordinary contexts and concrete causes in the error
 chain. Project-owned `DtError` values retain their variant-specific full
 `Display` text and typed payload, just as provider errors retain their own
@@ -210,10 +220,12 @@ is classified or enriched for Ape-DTS; it is distinct from the public error
 contract in `dt-common::error`. Shared provider classifiers remain in
 `dt-common::error::provider`.
 
-`ErrorReport` only reads the typed context and error chain; it never attempts
-provider classification. An error that reaches the report without a
-`DtErrorContext` deterministically becomes `IN999`. Failure-path tests and the
-code review expose missed classification sites.
+`ErrorReport` reads the typed context and error chain. It first uses the
+outermost explicit context code; if none exists, it downcasts the cause chain
+to `DtError` and applies `classify_dt_error`. It never attempts provider
+classification. A non-`DtError` error that reaches the report without an
+explicit context code deterministically becomes `IN999`. Failure-path tests
+and code review expose missed provider boundaries.
 
 `MD099 MetadataReadFailed` is only the default for reading or decoding endpoint
 catalog and control metadata. A schema object being migrated does not make every
@@ -289,10 +301,11 @@ Other initial provider mappings are:
 | Other MySQL binlog decoding failures | `DB001` |
 
 Worker join failures are `RT001`. URL and YAML parsing errors classified at
-their component boundary are `CF002`. An unclassified raw error reaching
-`ErrorReport` is `IN999`. A local filesystem `std::io::Error` is `IO001`; network
-I/O must be classified at its provider boundary so that it becomes `CN001` or
-`CN002` instead. User-interrupted CLI operations are `RT002`.
+their component boundary are `CF002`. `DtError::Unclassified` and an
+unclassified raw error reaching `ErrorReport` are `IN999`. A local filesystem
+`std::io::Error` is `IO001`; network I/O must be classified at its provider
+boundary so that it becomes `CN001` or `CN002` instead. User-interrupted CLI
+operations are `RT002`.
 
 `mysql-binlog-connector-rust v0.3.4` discards the numeric code from MySQL error
 packets and exposes error `1236` as `ConnectError(String)`. Until the connector

@@ -11,7 +11,7 @@ use mysql_binlog_connector_rust::column::{
 
 use crate::{
     config::config_enums::DbType,
-    error::{DtError, DtErrorContextExt, ErrorCode},
+    error::DtError,
     meta::{
         col_value::ColValue, mysql::mysql_col_type::MysqlColType, time::dt_utc_time::DtNaiveTime,
     },
@@ -366,10 +366,10 @@ impl MysqlColValueConvertor {
                 | MysqlColType::Blob
                 | MysqlColType::LongBlob => ColValue::Blob(hex::decode(value_str)?),
                 MysqlColType::Unknown => {
-                    bail! {DtError::StructError(format!(
+                    bail! {DtError::UnsupportedTableStructure(format!(
                         "unsupported column type: {:?}",
                         col_type
-                    )).with_code(ErrorCode::UnsupportedTableStructure) }
+                    )) }
                 }
             };
 

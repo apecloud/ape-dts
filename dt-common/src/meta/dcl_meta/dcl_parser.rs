@@ -9,7 +9,7 @@ use std::borrow::Cow;
 
 use crate::{
     config::config_enums::DbType,
-    error::{DtError, DtErrorContextExt, ErrorCode},
+    error::DtError,
     meta::dcl_meta::{
         dcl_data::DclData,
         dcl_statement::{DclStatement, OriginStatement},
@@ -48,8 +48,7 @@ impl DclParser {
                         format!("code: {:?}, input: {}", e.code, to_string(e.input))
                     }
                 };
-                bail! {DtError::General(format!("failed to parse sql: {}, error: {}", sql, error))
-                .with_code(ErrorCode::StatementFailed)}
+                bail! {DtError::StatementFailed(format!("failed to parse sql: {}, error: {}", sql, error))}
             }
         }
     }

@@ -5,7 +5,7 @@ use sqlx::{mysql::MySqlArguments, postgres::PgArguments, query::Query, MySql, Po
 
 use dt_common::{
     config::config_enums::DbType,
-    error::{DtError, DtErrorContextExt, ErrorCode, ErrorObject},
+    error::{DtError, DtErrorContextExt, ErrorObject},
     log_warn,
     meta::{
         adaptor::{
@@ -34,10 +34,9 @@ impl RdbQueryInfo<'_> {
         if !self.binds.is_empty()
             && (self.cols.is_empty() || self.binds.len() % self.cols.len() != 0)
         {
-            bail!(DtError::General(
+            bail!(DtError::InvariantViolated(
                 "query bind column layout does not match bind values".to_string(),
-            )
-            .with_code(ErrorCode::InvariantViolated));
+            ));
         }
         Ok(())
     }
@@ -533,11 +532,10 @@ impl RdbQueryBuilder<'_> {
         }
 
         if set_pairs.is_empty() {
-            bail! {DtError::General(format!(
+            bail! {DtError::InvariantViolated(format!(
                 "schema: {}, tb: {}, no cols in after, which should not happen in update",
                 self.rdb_tb_meta.schema, self.rdb_tb_meta.tb
             ))
-            .with_code(ErrorCode::InvariantViolated)
             .with_object(ErrorObject {
                 schema: Some(self.rdb_tb_meta.schema.clone()),
                 table: Some(self.rdb_tb_meta.tb.clone()),
@@ -791,11 +789,10 @@ impl RdbQueryBuilder<'_> {
             return Ok("NULL".to_string());
         };
         if col_value.is_unchanged_toast() {
-            bail! {DtError::General(format!(
+            bail! {DtError::InvariantViolated(format!(
                 "schema: {}, tb: {}, col: {}, UnchangedToast should not be converted to sql value directly",
                 self.rdb_tb_meta.schema, self.rdb_tb_meta.tb, col
             ))
-            .with_code(ErrorCode::InvariantViolated)
             .with_object(ErrorObject {
                 schema: Some(self.rdb_tb_meta.schema.clone()),
                 table: Some(self.rdb_tb_meta.tb.clone()),

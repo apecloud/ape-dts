@@ -5,7 +5,7 @@ use tokio::sync::Mutex;
 use url::Url;
 
 use super::traits::Prechecker;
-use crate::error_boundary::{precheck_failure, redis::redis_source};
+use crate::error_boundary::redis::redis_source;
 use crate::{
     config::precheck_config::PrecheckConfig,
     fetcher::{redis::redis_fetcher::RedisFetcher, traits::Fetcher},
@@ -17,7 +17,7 @@ use dt_common::{
         extractor_config::ExtractorConfig,
         task_config::TaskConfig,
     },
-    error::ErrorCode,
+    error::{DtError, ErrorCode},
     meta::{dt_queue::DtQueue, redis::cluster_node::ClusterNode, syncer::Syncer},
     monitor::{task_monitor::MonitorType, task_monitor_handle::TaskMonitorHandle},
     rdb_filter::RdbFilter,
@@ -58,10 +58,7 @@ fn redis_cdc_precheck_mode(is_cluster: bool) -> RedisCdcPrecheckMode {
 
 fn redis_cluster_psync_url(base_url: &str, nodes: &[ClusterNode]) -> anyhow::Result<String> {
     let node = nodes.first().ok_or_else(|| {
-        precheck_failure(
-            ErrorCode::PrerequisiteNotMet,
-            "source Redis cluster has no master nodes",
-        )
+        DtError::PrerequisiteNotMet("source Redis cluster has no master nodes".to_string())
     })?;
 
     let mut url = Url::parse(base_url).map_err(|error| {
@@ -72,10 +69,7 @@ fn redis_cluster_psync_url(base_url: &str, nodes: &[ClusterNode]) -> anyhow::Res
         )
     })?;
     url.set_host(Some(&node.host)).map_err(|_| {
-        precheck_failure(
-            ErrorCode::InvalidConfig,
-            format!("invalid Redis cluster node host: {}", node.host),
-        )
+        DtError::InvalidConfig(format!("invalid Redis cluster node host: {}", node.host))
     })?;
     let port = node.port.parse().map_err(|error| {
         redis_source(
@@ -85,10 +79,7 @@ fn redis_cluster_psync_url(base_url: &str, nodes: &[ClusterNode]) -> anyhow::Res
         )
     })?;
     url.set_port(Some(port)).map_err(|_| {
-        precheck_failure(
-            ErrorCode::InvalidConfig,
-            format!("invalid Redis cluster node port: {}", node.port),
-        )
+        DtError::InvalidConfig(format!("invalid Redis cluster node port: {}", node.port))
     })?;
     Ok(url.to_string())
 }
@@ -109,12 +100,12 @@ impl Prechecker for RedisPrechecker {
     async fn check_database_version(&mut self) -> anyhow::Result<CheckResult> {
         let version = self.fetcher.fetch_version().await?;
         let check_error = match version.parse::<f32>() {
-            Ok(version) if version < MIN_SUPPORTED_VERSION => Some(precheck_failure(
-                ErrorCode::UnsupportedDatabaseVersion,
-                format!(
+            Ok(version) if version < MIN_SUPPORTED_VERSION => Some(
+                DtError::UnsupportedDatabaseVersion(format!(
                     "Redis version {version} is not supported; minimum version is {MIN_SUPPORTED_VERSION}"
-                ),
-            )),
+                ))
+                .into(),
+            ),
             Ok(_) => None,
             Err(error) => Some(redis_source(
                 error,
@@ -149,9 +140,8 @@ impl Prechecker for RedisPrechecker {
         };
         let precheck_mode = {
             let conn = self.fetcher.conn.as_mut().ok_or_else(|| {
-                precheck_failure(
-                    ErrorCode::InvariantViolated,
-                    "the Redis precheck connection is not initialized",
+                DtError::InvariantViolated(
+                    "the Redis precheck connection is not initialized".to_string(),
                 )
             })?;
             redis_cdc_precheck_mode(RedisUtil::is_redis_cluster(conn, is_cluster))
@@ -159,9 +149,8 @@ impl Prechecker for RedisPrechecker {
 
         let psync_url = if let RedisCdcPrecheckMode::ClusterNodePsync = precheck_mode {
             let conn = self.fetcher.conn.as_mut().ok_or_else(|| {
-                precheck_failure(
-                    ErrorCode::InvariantViolated,
-                    "the Redis precheck connection is not initialized",
+                DtError::InvariantViolated(
+                    "the Redis precheck connection is not initialized".to_string(),
                 )
             })?;
             match RedisUtil::get_cluster_master_nodes(conn)

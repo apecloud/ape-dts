@@ -18,7 +18,7 @@ use nom::{
 };
 use regex::Regex;
 
-use crate::error::{DtError, DtErrorContextExt, ErrorCode};
+use crate::error::DtError;
 
 use super::{
     ddl_data::DdlData,
@@ -71,8 +71,7 @@ impl DdlParser {
                         format!("code: {:?}, input: {}", e.code, to_string(e.input))
                     }
                 };
-                bail! {DtError::General(format!("failed to parse sql: {}, error: {}", sql, error))
-                .with_code(ErrorCode::StatementFailed)}
+                bail! {DtError::StatementFailed(format!("failed to parse sql: {}, error: {}", sql, error))}
             }
         }
     }

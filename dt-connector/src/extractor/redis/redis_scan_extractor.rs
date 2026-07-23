@@ -1,6 +1,6 @@
 use anyhow::bail;
 use async_trait::async_trait;
-use dt_common::{error::ErrorCode, log_info, rdb_filter::RdbFilter};
+use dt_common::{error::DtError, log_info, rdb_filter::RdbFilter};
 use dt_common::{
     meta::{
         dt_data::DtData,
@@ -39,11 +39,10 @@ impl Extractor for RedisScanExtractor {
             let maxmemory_policy = self.get_maxmemory_policy().await?;
             if maxmemory_policy != "allkeys-lfu" {
                 bail! {redis_source_error(
-                    ErrorCode::PrerequisiteNotMet,
-                    format!(
-                    "maxmemory_policy is {}, should be allkeys-lfu",
-                    maxmemory_policy
-                    ),
+                    DtError::PrerequisiteNotMet(format!(
+                        "maxmemory_policy is {}, should be allkeys-lfu",
+                        maxmemory_policy
+                    )),
                 )}
             }
         }
@@ -58,8 +57,7 @@ impl Extractor for RedisScanExtractor {
             let cmd = ["SELECT", &db];
             if Value::Okay != RedisUtil::send_cmd(&mut self.conn, &cmd)? {
                 bail! {redis_source_error(
-                    ErrorCode::StatementFailed,
-                    format!("SELECT {db} failed"),
+                    DtError::RedisResultError(format!("SELECT {db} failed")),
                 )}
             }
 

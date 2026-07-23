@@ -115,10 +115,7 @@ impl PrecheckerBuilder {
 
     pub async fn check(&self) -> anyhow::Result<Vec<anyhow::Result<CheckResult>>> {
         if !self.valid_config() {
-            return Err(
-                DtError::ConfigError("precheck config is invalid".to_string())
-                    .with_code(ErrorCode::InvalidConfig),
-            );
+            return Err(DtError::InvalidConfig("precheck config is invalid".to_string()).into());
         }
         let source_checker_option = self
             .build_checker(true)
@@ -129,10 +126,10 @@ impl PrecheckerBuilder {
         let (Some(mut source_checker), Some(mut sink_checker)) =
             (source_checker_option, sink_checker_option)
         else {
-            return Err(DtError::ConfigError(
+            return Err(DtError::InvalidConfig(
                 "failed to build precheck checker from database type".to_string(),
             )
-            .with_code(ErrorCode::InvalidConfig));
+            .into());
         };
 
         println!("[*]begin to check the connection");
@@ -164,11 +161,9 @@ impl PrecheckerBuilder {
             };
             check_source_connection.log();
             check_sink_connection.log();
-            return Err(
-                DtError::General("database connection precheck failed".to_string())
-                    .with_code(error_code)
-                    .with_endpoint(endpoint),
-            );
+            return Err(anyhow::anyhow!("database connection precheck failed")
+                .with_code(error_code)
+                .with_endpoint(endpoint));
         }
 
         let mut check_results: Vec<anyhow::Result<CheckResult>> = vec![];
@@ -257,9 +252,8 @@ impl PrecheckerBuilder {
                     }
                 }
                 if error_count > 0 {
-                    let mut error =
-                        DtError::General("one or more prerequisite checks failed".to_string())
-                            .with_code(first_error_code.unwrap_or(ErrorCode::PrerequisiteNotMet));
+                    let mut error = anyhow::anyhow!("one or more prerequisite checks failed")
+                        .with_code(first_error_code.unwrap_or(ErrorCode::PrerequisiteNotMet));
                     if let Some(endpoint) = first_error_endpoint {
                         error = error.with_endpoint(endpoint);
                     }

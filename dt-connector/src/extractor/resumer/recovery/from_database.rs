@@ -140,11 +140,10 @@ impl DatabaseRecovery {
                                     &self.schema,
                                     &self.table,
                                 );
-                                if error.dt_context().is_some_and(|context| {
-                                    context
-                                        .error_code()
-                                        .is_some_and(Self::is_missing_resume_store)
-                                }) {
+                                if error
+                                    .error_code()
+                                    .is_some_and(Self::is_missing_resume_store)
+                                {
                                     log::info!(
                                             "Resume table {}.{} does not exist, will start from beginning",
                                             self.schema, self.table
@@ -189,11 +188,10 @@ impl DatabaseRecovery {
                                     &self.schema,
                                     &self.table,
                                 );
-                                if error.dt_context().is_some_and(|context| {
-                                    context
-                                        .error_code()
-                                        .is_some_and(Self::is_missing_resume_store)
-                                }) {
+                                if error
+                                    .error_code()
+                                    .is_some_and(Self::is_missing_resume_store)
+                                {
                                     log::info!(
                                             "Resume table {}.{} does not exist, will start from beginning",
                                             self.schema, self.table

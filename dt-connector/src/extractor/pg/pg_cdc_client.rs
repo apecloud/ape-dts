@@ -108,20 +108,20 @@ impl PgCdcClient {
 
         match ssl_config.ssl_mode {
             SslMode::Disable => {
-                return Err(DtError::ConfigError(
+                return Err(DtError::InvalidConfig(
                     "TLS connector requested while PostgreSQL TLS is disabled".to_string(),
                 )
-                .with_code(ErrorCode::InvalidConfig));
+                .into());
             }
             SslMode::Require => {
                 builder.set_verify(SslVerifyMode::NONE);
             }
             SslMode::VerifyCa | SslMode::VerifyFull => {
                 if ssl_config.ssl_ca_path.is_empty() {
-                    return Err(DtError::ConfigError(
+                    return Err(DtError::InvalidConfig(
                         "a CA certificate path is required by the selected TLS mode".to_string(),
                     )
-                    .with_code(ErrorCode::InvalidConfig));
+                    .into());
                 }
                 builder
                     .set_ca_file(&ssl_config.ssl_ca_path)
@@ -181,10 +181,10 @@ impl PgCdcClient {
             "require" | "prefer" => Ok(SslMode::Require),
             "verify-ca" | "verify_ca" => Ok(SslMode::VerifyCa),
             "verify-full" | "verify_full" => Ok(SslMode::VerifyFull),
-            _ => Err(DtError::ConfigError(
+            _ => Err(DtError::InvalidConfig(
                 "the PostgreSQL CDC URL contains an unsupported TLS mode".to_string(),
             )
-            .with_code(ErrorCode::InvalidConfig)),
+            .into()),
         }
     }
 
@@ -272,11 +272,10 @@ impl PgCdcClient {
                     _ => None,
                 })
                 .ok_or_else(|| {
-                    DtError::ExtractorError(
+                    DtError::StatementFailed(
                         "the CREATE_REPLICATION_SLOT response is missing consistent_point"
                             .to_string(),
                     )
-                        .with_code(ErrorCode::StatementFailed)
                         .with_message(
                             "PostgreSQL did not return a start position for the new replication slot",
                         )

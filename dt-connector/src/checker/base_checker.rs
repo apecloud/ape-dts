@@ -33,7 +33,7 @@ use dt_common::meta::{
     struct_meta::struct_data::StructData,
 };
 use dt_common::{
-    error::{DtError, DtErrorContextExt, ErrorCode, Stage},
+    error::{DtError, DtErrorContextExt, Stage},
     log_error, log_info, log_summary, log_warn,
     monitor::task_monitor_handle::TaskMonitorHandle,
     utils::limit_queue::LimitedQueue,
@@ -583,8 +583,7 @@ impl RecheckKey {
                     .cloned()
                     .map(|value| (col.clone(), value))
                     .ok_or_else(|| {
-                        DtError::General(format!("missing ID column value: {col}"))
-                            .with_code(ErrorCode::StatementFailed)
+                        DtError::StatementFailed(format!("missing ID column value: {col}"))
                             .with_stage(Stage::Checker)
                     })
             })

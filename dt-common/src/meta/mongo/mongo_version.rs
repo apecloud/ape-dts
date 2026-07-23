@@ -63,17 +63,17 @@ pub async fn get_server_version(client: &Client) -> anyhow::Result<MongoServerVe
 
 fn parse_version_part(part: Option<&str>, original: &str, field: &str) -> anyhow::Result<u32> {
     let part = part.ok_or_else(|| {
-        DtError::MetadataError(format!("MongoDB version is missing {field}: {original}"))
-            .with_code(ErrorCode::UnsupportedDatabaseVersion)
-            .with_origin(OriginError::new("mongodb", None::<String>))
+        DtError::UnsupportedDatabaseVersion(format!(
+            "MongoDB version is missing {field}: {original}"
+        ))
+        .with_origin(OriginError::new("mongodb", None::<String>))
     })?;
     let digits: String = part.chars().take_while(|c| c.is_ascii_digit()).collect();
     if digits.is_empty() {
-        return Err(
-            DtError::MetadataError(format!("invalid MongoDB version {field}: {original}"))
-                .with_code(ErrorCode::UnsupportedDatabaseVersion)
-                .with_origin(OriginError::new("mongodb", None::<String>)),
-        );
+        return Err(DtError::UnsupportedDatabaseVersion(format!(
+            "invalid MongoDB version {field}: {original}"
+        ))
+        .with_origin(OriginError::new("mongodb", None::<String>)));
     }
     digits.parse().map_err(|error| {
         mongodb_version_source(
@@ -85,7 +85,7 @@ fn parse_version_part(part: Option<&str>, original: &str, field: &str) -> anyhow
 
 #[cfg(test)]
 mod tests {
-    use crate::error::DtErrorContext;
+    use crate::error::AnyhowErrorExt;
 
     use super::*;
 
@@ -117,9 +117,7 @@ mod tests {
     fn invalid_version_is_classified_as_unsupported() {
         let error = MongoServerVersion::parse("6.invalid").unwrap_err();
         assert_eq!(
-            error
-                .downcast_ref::<DtErrorContext>()
-                .and_then(DtErrorContext::error_code),
+            error.error_code(),
             Some(ErrorCode::UnsupportedDatabaseVersion)
         );
     }

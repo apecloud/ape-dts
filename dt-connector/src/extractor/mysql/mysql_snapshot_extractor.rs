@@ -25,7 +25,7 @@ use crate::{
 use dt_common::utils::sql_util::MYSQL_ESCAPE;
 use dt_common::{
     config::config_enums::{DbType, RdbParallelType},
-    error::{DtError, DtErrorContextExt, ErrorCode, Stage},
+    error::{DtError, DtErrorContextExt, Stage},
     log_debug, log_info,
     meta::{
         adaptor::{mysql_col_value_convertor::MysqlColValueConvertor, sqlx_ext::SqlxMysqlExt},
@@ -115,8 +115,7 @@ impl Extractor for MysqlSnapshotExtractor {
     async fn extract(&mut self) -> anyhow::Result<()> {
         if self.parallel_size < 1 {
             bail!(
-                DtError::ConfigError("parallel_size must be greater than 0".to_string(),)
-                    .with_code(ErrorCode::InvalidConfig)
+                DtError::InvalidConfig("parallel_size must be greater than 0".to_string(),)
                     .with_stage(Stage::Bootstrap)
             );
         }
@@ -312,8 +311,9 @@ impl MysqlSnapshotExtractor {
                     };
 
                     *running_chunks = running_chunks.checked_sub(1).ok_or_else(|| {
-                        DtError::General("MySQL split chunk running count underflow".to_string())
-                            .with_code(ErrorCode::InvariantViolated)
+                        DtError::InvariantViolated(
+                            "MySQL split chunk running count underflow".to_string(),
+                        )
                     })?;
 
                     if let Some(position) =
@@ -362,10 +362,9 @@ impl MysqlSnapshotExtractor {
                         )
                     })?;
                     let partition_col = finish_partition_col.clone().ok_or_else(|| {
-                        DtError::General(
+                        DtError::InvariantViolated(
                             "finished MySQL split is missing its partition column".to_string(),
                         )
-                        .with_code(ErrorCode::InvariantViolated)
                     })?;
                     if active_table.tb_meta.basic.is_col_nullable(&partition_col) {
                         state.pending_works.push_back(MysqlSnapshotWork::NullChunk {
@@ -644,8 +643,7 @@ impl MysqlSnapshotDispatchState {
         };
 
         let work = self.pending_works.remove(index).ok_or_else(|| {
-            DtError::General("pending MySQL snapshot work is missing".to_string())
-                .with_code(ErrorCode::InvariantViolated)
+            DtError::InvariantViolated("pending MySQL snapshot work is missing".to_string())
         })?;
         self.mark_work_started(&work)?;
         Ok(Some(work))
@@ -705,8 +703,7 @@ impl MysqlSnapshotDispatchState {
             }
         };
         *queued_chunks = queued_chunks.checked_sub(1).ok_or_else(|| {
-            DtError::General("MySQL split chunk queued count underflow".to_string())
-                .with_code(ErrorCode::InvariantViolated)
+            DtError::InvariantViolated("MySQL split chunk queued count underflow".to_string())
         })?;
         *running_chunks += 1;
         Ok(())

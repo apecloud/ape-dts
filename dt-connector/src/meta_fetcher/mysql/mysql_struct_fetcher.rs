@@ -124,11 +124,10 @@ impl MysqlStructFetcher {
             .cloned()
             .collect();
         if !filtered_dbs.is_empty() {
-            bail! {DtError::MetadataError(format!(
+            bail! {DtError::DatabaseNotFound(format!(
                 "dbs: {} not found",
                 filtered_dbs.join(",")
             ))
-            .with_code(ErrorCode::DatabaseNotFound)
             .with_origin(OriginError::new("mysql", None::<String>))}
         }
 

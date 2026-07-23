@@ -24,7 +24,7 @@ use dt_common::meta::struct_meta::{
 };
 use dt_common::{
     config::{config_enums::DbType, config_token_parser::ConfigTokenParser},
-    error::{DtError, DtErrorContextExt, ErrorCode, OriginError},
+    error::{DtError, DtErrorContextExt, OriginError},
     log_error, log_info, log_warn,
     rdb_filter::RdbFilter,
     utils::sql_util::SqlUtil,
@@ -197,11 +197,10 @@ impl PgStructFetcher {
             .cloned()
             .collect();
         if !filtered_schemas.is_empty() {
-            bail! {DtError::MetadataError(format!(
+            bail! {DtError::ObjectNotFound(format!(
                 "schemas: {} not found",
                 filtered_schemas.join(",")
             ))
-            .with_code(ErrorCode::ObjectNotFound)
             .with_origin(OriginError::new("postgres", None::<String>))}
         } else {
             Ok(schemas.into_iter().map(|s| Schema { name: s }).collect())
@@ -547,11 +546,10 @@ impl PgStructFetcher {
                 column.column_type = column_types
                     .get(&column.column_name)
                     .ok_or_else(|| {
-                        DtError::MetadataError(format!(
+                        DtError::UnsupportedTableStructure(format!(
                             "column type is missing for {table_schema}.{table_name}.{}",
                             column.column_name
                         ))
-                        .with_code(ErrorCode::UnsupportedTableStructure)
                         .with_origin(OriginError::new("postgres", None::<String>))
                     })?
                     .to_owned();

@@ -12,7 +12,7 @@ use anyhow::{bail, Result};
 use clap::{error::ErrorKind, Args, CommandFactory, Parser, Subcommand};
 use clap_complete::generate;
 use configparser::ini::Ini;
-use dt_common::error::{ErrorCode, ErrorReport};
+use dt_common::error::{DtError, ErrorCode, ErrorReport};
 use serde::{Deserialize, Serialize};
 
 mod config;
@@ -791,13 +791,10 @@ fn start_persistent_task(
 ) -> Result<()> {
     let task_dir = task_root()?.join(task_name);
     if task_dir.exists() {
-        bail!(task_error(
-            ErrorCode::PrerequisiteNotMet,
-            format!(
-                "Task [{task_name}] already exists at [{}]",
-                task_dir.display()
-            ),
-        ));
+        bail!(task_error(DtError::PrerequisiteNotMet(format!(
+            "Task [{task_name}] already exists at [{}]",
+            task_dir.display()
+        ))));
     }
     fs::create_dir_all(&task_dir)
         .with_io_context(format!("failed to create task dir {}", task_dir.display()))?;
@@ -845,13 +842,10 @@ fn reject_if_task_running(task_dir: &Path, metadata: &TaskMetadata) -> Result<()
         }
     }
     if let Some(pid) = pids.into_iter().find(|pid| process_exists(*pid)) {
-        bail!(task_error(
-            ErrorCode::PrerequisiteNotMet,
-            format!(
-                "Task [{}] is already running with pid [{pid}]",
-                metadata.task_name
-            ),
-        ));
+        bail!(task_error(DtError::PrerequisiteNotMet(format!(
+            "Task [{}] is already running with pid [{pid}]",
+            metadata.task_name
+        ))));
     }
     Ok(())
 }
@@ -971,16 +965,14 @@ fn run_preflight(
 
     let status = result?;
     if PREFLIGHT_INTERRUPTED.load(Ordering::SeqCst) {
-        bail!(task_error(
-            ErrorCode::OperationInterrupted,
-            "Preflight was interrupted",
-        ));
+        bail!(task_error(DtError::OperationInterrupted(
+            "Preflight was interrupted".to_string()
+        )));
     }
     if !status.success() {
-        bail!(task_error(
-            ErrorCode::PrerequisiteNotMet,
-            format!("Preflight failed with status [{status}]"),
-        ));
+        bail!(task_error(DtError::PrerequisiteNotMet(format!(
+            "Preflight failed with status [{status}]"
+        ))));
     }
     println!("preflight finished successfully");
     Ok(())
@@ -1138,10 +1130,10 @@ fn handle_logs(logs: LogsArgs) -> Result<()> {
 fn handle_stop(stop: StopArgs) -> Result<()> {
     let task_dir = task_root()?.join(&stop.task_name);
     let pid = read_pid(&task_dir).ok_or_else(|| {
-        task_error(
-            ErrorCode::PrerequisiteNotMet,
-            format!("PID was not found for task [{}]", stop.task_name),
-        )
+        task_error(DtError::PrerequisiteNotMet(format!(
+            "PID was not found for task [{}]",
+            stop.task_name
+        )))
     })?;
     if !process_exists(pid) {
         println!("task '{}' is already stopped", stop.task_name);
@@ -1158,13 +1150,10 @@ fn handle_delete(delete: DeleteArgs) -> Result<()> {
 
     if let Some(pid) = read_pid(&task_dir) {
         if process_exists(pid) && !delete.force {
-            bail!(task_error(
-                ErrorCode::PrerequisiteNotMet,
-                format!(
-                    "Task [{}] is still running with pid [{pid}]; stop it first or use --force",
-                    delete.task_name
-                ),
-            ));
+            bail!(task_error(DtError::PrerequisiteNotMet(format!(
+                "Task [{}] is still running with pid [{pid}]; stop it first or use --force",
+                delete.task_name
+            ))));
         }
     }
 
@@ -1302,10 +1291,9 @@ fn task_root() -> Result<PathBuf> {
 fn existing_task_dir(task_name: &str) -> Result<PathBuf> {
     let task_dir = task_root()?.join(task_name);
     if !task_dir.is_dir() {
-        bail!(task_error(
-            ErrorCode::ObjectNotFound,
-            format!("Task [{task_name}] does not exist"),
-        ));
+        bail!(task_error(DtError::ObjectNotFound(format!(
+            "Task [{task_name}] does not exist"
+        ))));
     }
     Ok(task_dir)
 }
@@ -1457,13 +1445,10 @@ fn resolve_dt_main(cfg: &CliConfig) -> Result<PathBuf> {
     if let Some(dt_main) = resolve_workspace_binaries(&workspace).dt_main {
         return Ok(dt_main);
     }
-    bail!(task_error(
-        ErrorCode::MissingConfig,
-        format!(
-            "dt-main was not found under workspace [{}]",
-            workspace.display()
-        ),
-    ))
+    bail!(task_error(DtError::MissingConfig(format!(
+        "dt-main was not found under workspace [{}]",
+        workspace.display()
+    ))))
 }
 
 fn dt_main_version(dt_main: &Path) -> Result<String> {
@@ -1473,10 +1458,10 @@ fn dt_main_version(dt_main: &Path) -> Result<String> {
         .with_io_context(format!("failed to run '{} --version'", dt_main.display()))?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        bail!(task_error(
-            ErrorCode::WorkerFailed,
-            format!("dt-main --version failed: {}", stderr.trim()),
-        ));
+        bail!(task_error(DtError::WorkerFailed(format!(
+            "dt-main --version failed: {}",
+            stderr.trim()
+        ))));
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -1486,10 +1471,9 @@ fn dt_main_version(dt_main: &Path) -> Result<String> {
         .unwrap_or(stdout.trim())
         .trim();
     if version.is_empty() {
-        bail!(task_error(
-            ErrorCode::InvariantViolated,
-            "dt-main returned an empty version",
-        ));
+        bail!(task_error(DtError::InvariantViolated(
+            "dt-main returned an empty version".to_string()
+        )));
     }
     Ok(version.to_string())
 }
@@ -1627,10 +1611,9 @@ fn send_signal(pid: u32, signal: &str) -> Result<()> {
         .status()
         .with_io_context(format!("failed to send SIG{signal} to pid {pid}"))?;
     if !status.success() {
-        bail!(task_error(
-            ErrorCode::WorkerFailed,
-            format!("Failed to send SIG{signal} to pid [{pid}]"),
-        ));
+        bail!(task_error(DtError::WorkerFailed(format!(
+            "Failed to send SIG{signal} to pid [{pid}]"
+        ))));
     }
     Ok(())
 }
@@ -1648,10 +1631,9 @@ fn stop_pid(task_name: &str, pid: u32, timeout_secs: u64, force: bool) -> Result
     }
 
     if process_exists(pid) {
-        bail!(task_error(
-            ErrorCode::WorkerFailed,
-            format!("Task [{task_name}] is still running with pid [{pid}]"),
-        ));
+        bail!(task_error(DtError::WorkerFailed(format!(
+            "Task [{task_name}] is still running with pid [{pid}]"
+        ))));
     }
     Ok(())
 }
@@ -1668,10 +1650,10 @@ fn wait_until_stopped(pid: u32, timeout_secs: u64) {
 
 fn print_tail(path: &Path, lines: usize) -> Result<bool> {
     if !path.exists() {
-        bail!(task_error(
-            ErrorCode::ObjectNotFound,
-            format!("Log file [{}] does not exist", path.display()),
-        ));
+        bail!(task_error(DtError::ObjectNotFound(format!(
+            "Log file [{}] does not exist",
+            path.display()
+        ))));
     }
     let file =
         File::open(path).with_io_context(format!("failed to open log file {}", path.display()))?;
@@ -1719,18 +1701,15 @@ fn select_default_log_file(metadata: &TaskMetadata) -> Result<PathBuf> {
         }
     }
 
-    bail!(task_error(
-        ErrorCode::ObjectNotFound,
-        format!(
-            "No log file was found for task [{}]; checked [{}]",
-            metadata.task_name,
-            candidates
-                .iter()
-                .map(|path| path.display().to_string())
-                .collect::<Vec<_>>()
-                .join(", ")
-        ),
-    ))
+    bail!(task_error(DtError::ObjectNotFound(format!(
+        "No log file was found for task [{}]; checked [{}]",
+        metadata.task_name,
+        candidates
+            .iter()
+            .map(|path| path.display().to_string())
+            .collect::<Vec<_>>()
+            .join(", ")
+    ))))
 }
 
 fn path_has_content(path: &Path) -> bool {
@@ -1775,7 +1754,7 @@ fn unix_nanos() -> u128 {
 
 #[cfg(test)]
 mod tests {
-    use dt_common::error::DtErrorContext;
+    use dt_common::error::AnyhowErrorExt;
 
     use super::*;
 
@@ -1855,11 +1834,7 @@ mod tests {
 
         let err = restart_persistent_task(&task_dir, &root, Path::new("/bin/sh"), &mut metadata)
             .unwrap_err();
-        assert_eq!(
-            err.downcast_ref::<DtErrorContext>()
-                .and_then(DtErrorContext::error_code),
-            Some(ErrorCode::PrerequisiteNotMet)
-        );
+        assert_eq!(err.error_code(), Some(ErrorCode::PrerequisiteNotMet));
 
         fs::remove_dir_all(root).unwrap();
     }
@@ -1903,22 +1878,12 @@ mod tests {
         let root = env::temp_dir().join(format!("dtscli-metadata-error-test-{}", unix_nanos()));
 
         let missing = read_metadata(&root).expect_err("metadata file should be missing");
-        assert_eq!(
-            missing
-                .downcast_ref::<DtErrorContext>()
-                .and_then(DtErrorContext::error_code),
-            Some(ErrorCode::IoFailed)
-        );
+        assert_eq!(missing.error_code(), Some(ErrorCode::IoFailed));
 
         fs::create_dir_all(&root).unwrap();
         fs::write(root.join("metadata.json"), "not-json").unwrap();
         let invalid = read_metadata(&root).expect_err("metadata should be invalid");
-        assert_eq!(
-            invalid
-                .downcast_ref::<DtErrorContext>()
-                .and_then(DtErrorContext::error_code),
-            Some(ErrorCode::InvalidConfig)
-        );
+        assert_eq!(invalid.error_code(), Some(ErrorCode::InvalidConfig));
 
         fs::remove_dir_all(root).unwrap();
     }

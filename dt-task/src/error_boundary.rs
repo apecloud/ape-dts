@@ -1,9 +1,7 @@
-use dt_common::error::{DtError, DtErrorContextExt, ErrorCode, Stage};
+use dt_common::error::{DtError, DtErrorContextExt, Stage};
 
 pub(crate) fn invalid_task_config(detail: impl Into<String>) -> anyhow::Error {
-    DtError::ConfigError(detail.into())
-        .with_code(ErrorCode::InvalidConfig)
-        .with_stage(Stage::Bootstrap)
+    DtError::InvalidConfig(detail.into()).with_stage(Stage::Bootstrap)
 }
 
 pub(crate) mod connection_error {
@@ -35,8 +33,7 @@ pub(crate) mod connection_error {
             .with_stage(Stage::Task)
     }
     pub(crate) fn missing_task_client(expected: &'static str) -> anyhow::Error {
-        DtError::General(format!("expected {expected} connection client is missing"))
-            .with_code(ErrorCode::InvariantViolated)
+        DtError::InvariantViolated(format!("expected {expected} connection client is missing"))
             .with_stage(Stage::Task)
     }
 }
@@ -46,8 +43,7 @@ pub(crate) mod extractor {
 
     use dt_common::error::{DtError, DtErrorContext, DtErrorContextExt, ErrorCode, Stage};
     pub(crate) fn missing_extractor_client() -> anyhow::Error {
-        DtError::ExtractorError("the configured source connection client is missing".to_string())
-            .with_code(ErrorCode::InvariantViolated)
+        DtError::InvariantViolated("the configured source connection client is missing".to_string())
             .with_stage(Stage::Task)
     }
     pub(crate) fn invalid_config_source<E>(detail: impl Into<String>, error: E) -> anyhow::Error
@@ -69,14 +65,13 @@ pub(crate) mod sinker {
         classify_kafka_error, DtError, DtErrorContext, DtErrorContextExt, ErrorCode, Stage,
     };
     pub(crate) fn missing_sinker_client() -> anyhow::Error {
-        DtError::SinkerError("the configured destination connection client is missing".to_string())
-            .with_code(ErrorCode::InvariantViolated)
-            .with_stage(Stage::Task)
+        DtError::InvariantViolated(
+            "the configured destination connection client is missing".to_string(),
+        )
+        .with_stage(Stage::Task)
     }
     pub(crate) fn invalid_http_endpoint(detail: impl Into<String>) -> anyhow::Error {
-        DtError::HttpError(detail.into())
-            .with_code(ErrorCode::InvalidConfig)
-            .with_stage(Stage::Bootstrap)
+        DtError::InvalidConfig(detail.into()).with_stage(Stage::Bootstrap)
     }
     pub(crate) fn invalid_http_cause<E>(error: E) -> anyhow::Error
     where

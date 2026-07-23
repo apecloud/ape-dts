@@ -7,7 +7,7 @@ use mongodb::{
 };
 
 use dt_common::{
-    error::{DtError, DtErrorContextExt, ErrorCode, OriginError},
+    error::{DtError, DtErrorContextExt, OriginError},
     meta::{
         mongo::mongo_shard::list_shard_collections,
         struct_meta::statement::{
@@ -189,10 +189,9 @@ impl MongoStructFetcher {
         if let Some(collection) = ns.strip_prefix(&prefix) {
             return Ok(collection);
         }
-        anyhow::bail!(DtError::MetadataError(format!(
+        anyhow::bail!(DtError::InvalidConfig(format!(
             "the returned MongoDB namespace does not belong to the configured database {db}"
         ))
-        .with_code(ErrorCode::InvalidConfig)
         .with_message("MongoDB returned data for a database other than the configured source")
         .with_hint(
             "Check the database name in the MongoDB source URL and task routing, then retry."

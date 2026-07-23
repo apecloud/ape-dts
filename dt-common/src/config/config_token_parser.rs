@@ -1,7 +1,7 @@
 use anyhow::bail;
 
 use crate::{
-    error::{DtError, DtErrorContextExt, ErrorCode, Stage},
+    error::{DtError, DtErrorContextExt, Stage},
     utils::sql_util::SqlUtil,
 };
 
@@ -87,11 +87,10 @@ impl ConfigTokenParser {
         let tokens = Self::parse(config_str, delimiters, &token_escape_pairs);
         for token in tokens.iter() {
             if !SqlUtil::is_valid_token(token, db_type, &escape_pairs) {
-                bail! {DtError::ConfigError(format!(
+                bail! {DtError::InvalidConfig(format!(
                     "config error near: {}, try enclose database/table/column with escapes if there are special characters other than letters and numbers",
                     token
                 ))
-                    .with_code(ErrorCode::InvalidConfig)
                     .with_stage(Stage::Bootstrap)}
             }
         }

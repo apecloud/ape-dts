@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::{
-    error::{DtError, DtErrorContextExt, ErrorCode, ErrorObject, OriginError},
+    error::{DtError, DtErrorContextExt, ErrorObject, OriginError},
     meta::{ddl_meta::ddl_data::DdlData, rdb_meta_manager::RDB_PRIMARY_KEY_FLAG},
 };
 use anyhow::bail;
@@ -47,10 +47,9 @@ impl PgMetaManager {
             .get(&oid)
             .cloned()
             .ok_or_else(|| {
-                DtError::StructError(format!(
+                DtError::UnsupportedTableStructure(format!(
                     "PostgreSQL type ID {oid} is not available in the source type catalog"
                 ))
-                    .with_code(ErrorCode::UnsupportedTableStructure)
                     .with_message("A PostgreSQL column type used by the source is not supported")
                     .with_hint(
                         "Check the reported source column type and exclude or convert unsupported columns before retrying.",
@@ -72,10 +71,9 @@ impl PgMetaManager {
             .get(&oid)
             .cloned()
             .ok_or_else(|| {
-                DtError::MetadataError(format!(
+                DtError::StatementFailed(format!(
                     "a change event for source relation ID {oid} arrived before Ape-DTS received its table definition"
                 ))
-                    .with_code(ErrorCode::StatementFailed)
                     .with_message("A PostgreSQL change event could not be decoded")
                     .with_hint(
                         "Restart from an earlier LSN so Ape-DTS can reload the relation definition. If it repeats, check the publication and PostgreSQL replication logs.",
@@ -137,10 +135,9 @@ impl PgMetaManager {
             self.name_to_tb_meta.insert(full_name.clone(), tb_meta);
         }
         self.name_to_tb_meta.get(&full_name).ok_or_else(|| {
-            DtError::MetadataError(format!(
+            DtError::ObjectNotFound(format!(
                 "Ape-DTS could not find the previously loaded definition for source table {full_name}"
             ))
-                .with_code(ErrorCode::ObjectNotFound)
                 .with_message("The source table definition could not be loaded")
                 .with_hint(
                     "Verify that the source table still exists and is readable, then restart the task.",
@@ -236,10 +233,9 @@ impl PgMetaManager {
                 .get(&col_type_oid)
                 .cloned()
                 .ok_or_else(|| {
-                    DtError::StructError(format!(
+                    DtError::UnsupportedTableStructure(format!(
                         "PostgreSQL type OID {col_type_oid} is missing from the type registry"
                     ))
-                    .with_code(ErrorCode::UnsupportedTableStructure)
                     .with_object(ErrorObject {
                         schema: Some(schema.to_string()),
                         table: Some(tb.to_string()),
@@ -347,8 +343,7 @@ impl PgMetaManager {
             return Ok(oid);
         }
 
-        bail! {DtError::MetadataError(format!("failed to get oid for: {} by query: {}", tb, sql))
-        .with_code(ErrorCode::ObjectNotFound)
+        bail! {DtError::ObjectNotFound(format!("failed to get oid for: {} by query: {}", tb, sql))
         .with_object(ErrorObject {
             schema: Some(schema.to_string()),
             table: Some(tb.to_string()),

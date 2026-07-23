@@ -393,8 +393,7 @@ impl MysqlCdcExtractor {
         if included_columns.len() != event.column_values.len() {
             let detail =
                 "the included-column bitmap does not match the values in the MySQL binlog event";
-            bail! {DtError::ExtractorError(detail.to_string())
-            .with_code(ErrorCode::StatementFailed)
+            bail! {DtError::StatementFailed(detail.to_string())
             .with_message("A MySQL row event could not be decoded")
             .with_hint("Restart from an earlier binlog position. If it repeats, check binlog integrity and the source database logs.")
             .with_origin(OriginError::new("mysql", None::<String>))}
@@ -404,10 +403,9 @@ impl MysqlCdcExtractor {
         let col_count = cmp::min(tb_meta.basic.cols.len(), included_columns.len());
         for i in (0..col_count).rev() {
             let col = tb_meta.basic.cols.get(i).ok_or_else(|| {
-                DtError::General(format!(
+                DtError::InvariantViolated(format!(
                     "column index {i} is missing from MySQL table metadata"
                 ))
-                .with_code(ErrorCode::InvariantViolated)
                 .with_origin(OriginError::new("mysql", None::<String>))
             })?;
             if ignore_cols.is_some_and(|cols| cols.contains(col)) {

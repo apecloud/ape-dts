@@ -10,8 +10,7 @@ use crate::{
 };
 
 use super::traits::Prechecker;
-use crate::error_boundary::precheck_failure;
-use dt_common::error::ErrorCode;
+use dt_common::error::DtError;
 
 const MONGO_SUPPORTED_VERSION_REGEX: &str = r"4.*|5.0.*|6.0.*|7.0.*";
 
@@ -41,10 +40,12 @@ impl Prechecker for MongoPrechecker {
         let version = self.fetcher.fetch_version().await?;
         let reg = Regex::new(MONGO_SUPPORTED_VERSION_REGEX)?;
         if !reg.is_match(version.as_str()) {
-            check_error = Some(precheck_failure(
-                ErrorCode::UnsupportedDatabaseVersion,
-                format!("MongoDB version {version} is not supported"),
-            ));
+            check_error = Some(
+                DtError::UnsupportedDatabaseVersion(format!(
+                    "MongoDB version {version} is not supported"
+                ))
+                .into(),
+            );
         }
 
         Ok(CheckResult::build_with_err(
@@ -104,7 +105,7 @@ impl Prechecker for MongoPrechecker {
         }
 
         if !err_msg.is_empty() {
-            check_error = Some(precheck_failure(ErrorCode::CdcNotEnabled, err_msg));
+            check_error = Some(DtError::CdcNotEnabled(err_msg.to_string()).into());
         }
 
         Ok(CheckResult::build_with_err(
@@ -132,10 +133,13 @@ impl Prechecker for MongoPrechecker {
         let invalid_dbs = vec!["admin", "local"];
         for db in invalid_dbs {
             if !self.fetcher.filter.filter_schema(db) {
-                check_error = Some(precheck_failure(
-                    ErrorCode::UnsupportedTableStructure,
-                    "MongoDB databases admin and local are not supported migration objects",
-                ));
+                check_error = Some(
+                    DtError::UnsupportedTableStructure(
+                        "MongoDB databases admin and local are not supported migration objects"
+                            .to_string(),
+                    )
+                    .into(),
+                );
                 break;
             }
         }

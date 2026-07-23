@@ -1,6 +1,6 @@
 use std::{error::Error as StdError, fmt, sync::Arc};
 
-use super::{DtError, EndpointRole, ErrorCode, ErrorObject, OriginError, Stage};
+use super::{classify_dt_error, DtError, EndpointRole, ErrorCode, ErrorObject, OriginError, Stage};
 
 pub(crate) const DT_ERROR_CONTEXT_MARKER: &str = "__APE_DTS_ERROR_CONTEXT__";
 
@@ -14,7 +14,7 @@ pub struct DtErrorContext {
     endpoint: Option<EndpointRole>,
     object: Option<ErrorObject>,
     origin: Option<OriginError>,
-    parent: Option<Arc<Self>>,
+    inner: Option<Arc<Self>>,
 }
 
 impl DtErrorContext {
@@ -71,51 +71,66 @@ impl DtErrorContext {
 
     pub fn error_code(&self) -> Option<ErrorCode> {
         self.code
-            .or_else(|| self.parent.as_deref().and_then(Self::error_code))
+            .or_else(|| self.inner.as_deref().and_then(Self::error_code))
     }
 
     pub fn message_text(&self) -> Option<&str> {
         self.message
             .as_deref()
-            .or_else(|| self.parent.as_deref().and_then(Self::message_text))
+            .or_else(|| self.inner.as_deref().and_then(Self::message_text))
     }
 
     pub fn hint_text(&self) -> Option<&str> {
         self.hint
             .as_deref()
-            .or_else(|| self.parent.as_deref().and_then(Self::hint_text))
+            .or_else(|| self.inner.as_deref().and_then(Self::hint_text))
     }
 
     pub fn stage_value(&self) -> Option<Stage> {
-        self.stage
-            .or_else(|| self.parent.as_deref().and_then(Self::stage_value))
+        self.inner
+            .as_deref()
+            .and_then(Self::stage_value)
+            .or(self.stage)
     }
 
     pub fn task_id_value(&self) -> Option<&str> {
         self.task_id
             .as_deref()
-            .or_else(|| self.parent.as_deref().and_then(Self::task_id_value))
+            .or_else(|| self.inner.as_deref().and_then(Self::task_id_value))
     }
 
     pub fn endpoint_role(&self) -> Option<EndpointRole> {
-        self.endpoint
-            .or_else(|| self.parent.as_deref().and_then(Self::endpoint_role))
+        self.inner
+            .as_deref()
+            .and_then(Self::endpoint_role)
+            .or(self.endpoint)
     }
 
-    pub fn error_object(&self) -> Option<&ErrorObject> {
-        self.object
-            .as_ref()
-            .or_else(|| self.parent.as_deref().and_then(Self::error_object))
+    pub fn error_object(&self) -> Option<ErrorObject> {
+        let inner = self.inner.as_deref().and_then(Self::error_object);
+        match (inner, self.object.as_ref()) {
+            (Some(mut inner), Some(outer)) => {
+                inner.schema = inner.schema.or_else(|| outer.schema.clone());
+                inner.table = inner.table.or_else(|| outer.table.clone());
+                inner.column = inner.column.or_else(|| outer.column.clone());
+                inner.constraint = inner.constraint.or_else(|| outer.constraint.clone());
+                Some(inner)
+            }
+            (Some(inner), None) => Some(inner),
+            (None, Some(outer)) => Some(outer.clone()),
+            (None, None) => None,
+        }
     }
 
     pub fn origin_error(&self) -> Option<&OriginError> {
-        self.origin
-            .as_ref()
-            .or_else(|| self.parent.as_deref().and_then(Self::origin_error))
+        self.inner
+            .as_deref()
+            .and_then(Self::origin_error)
+            .or(self.origin.as_ref())
     }
 
-    fn with_parent(mut self, parent: Option<&Self>) -> Self {
-        self.parent = parent.cloned().map(Arc::new);
+    fn with_inner(mut self, inner: Option<&Self>) -> Self {
+        self.inner = inner.cloned().map(Arc::new);
         self
     }
 }
@@ -128,11 +143,18 @@ impl fmt::Display for DtErrorContext {
 
 pub trait AnyhowErrorExt {
     fn dt_context(&self) -> Option<&DtErrorContext>;
+    fn error_code(&self) -> Option<ErrorCode>;
 }
 
 impl AnyhowErrorExt for anyhow::Error {
     fn dt_context(&self) -> Option<&DtErrorContext> {
         self.downcast_ref::<DtErrorContext>()
+    }
+
+    fn error_code(&self) -> Option<ErrorCode> {
+        self.dt_context()
+            .and_then(DtErrorContext::error_code)
+            .or_else(|| self.downcast_ref::<DtError>().map(classify_dt_error))
     }
 }
 
@@ -174,7 +196,7 @@ pub trait DtErrorContextExt: Sized {
 
 impl DtErrorContextExt for anyhow::Error {
     fn with_context(self, context: DtErrorContext) -> anyhow::Error {
-        let context = context.with_parent(self.dt_context());
+        let context = context.with_inner(self.dt_context());
         self.context(context)
     }
 }
@@ -207,30 +229,31 @@ mod tests {
     use super::*;
 
     #[test]
-    fn outer_context_fields_override_inner_fields() {
-        let error = DtError::General("inner application error".to_string())
-            .with_code(ErrorCode::ConnectionFailed)
+    fn context_fields_use_semantic_precedence() {
+        let error = DtError::ConnectionFailed("inner application error".to_string())
             .with_message("inner message")
             .with_hint("inner hint")
-            .with_stage(Stage::Extractor)
+            .with_stage(Stage::Sinker)
             .with_task_id("inner-task")
-            .with_endpoint(EndpointRole::Source)
+            .with_endpoint(EndpointRole::Destination)
             .with_object(ErrorObject {
                 table: Some("inner_table".to_string()),
                 ..Default::default()
             })
-            .with_origin(OriginError::new("mysql", Some("1146")))
-            .with_code(ErrorCode::StatementFailed)
+            .with_origin(OriginError::new("postgres", Some("42P01")))
+            .with_code(ErrorCode::ConnectionFailed)
             .with_message("outer message")
             .with_hint("outer hint")
-            .with_stage(Stage::Sinker)
-            .with_endpoint(EndpointRole::Destination)
+            .with_stage(Stage::Pipeline)
+            .with_endpoint(EndpointRole::Source)
             .with_task_id("outer-task")
             .with_object(ErrorObject {
+                schema: Some("outer_schema".to_string()),
                 table: Some("outer_table".to_string()),
                 ..Default::default()
             })
-            .with_origin(OriginError::new("postgres", Some("42P01")));
+            .with_origin(OriginError::new("pipeline", None::<String>))
+            .with_code(ErrorCode::StatementFailed);
         let context = error.dt_context().unwrap();
 
         assert_eq!(context.error_code(), Some(ErrorCode::StatementFailed));
@@ -239,12 +262,9 @@ mod tests {
         assert_eq!(context.stage_value(), Some(Stage::Sinker));
         assert_eq!(context.endpoint_role(), Some(EndpointRole::Destination));
         assert_eq!(context.task_id_value(), Some("outer-task"));
-        assert_eq!(
-            context
-                .error_object()
-                .and_then(|object| object.table.as_deref()),
-            Some("outer_table")
-        );
+        let object = context.error_object().unwrap();
+        assert_eq!(object.schema.as_deref(), Some("outer_schema"));
+        assert_eq!(object.table.as_deref(), Some("inner_table"));
         assert_eq!(
             context.origin_error(),
             Some(&OriginError::new("postgres", Some("42P01")))
@@ -253,13 +273,14 @@ mod tests {
 
     #[test]
     fn project_error_variant_can_be_the_root_cause() {
-        let cause = DtError::ConfigError("worker_threads is invalid".to_string());
-        assert_eq!(cause.to_string(), "config error: worker_threads is invalid");
-        let error = cause.with_code(ErrorCode::InvalidConfig);
+        let cause = DtError::InvalidConfig("worker_threads is invalid".to_string());
+        assert_eq!(cause.to_string(), "worker_threads is invalid");
+        let error = anyhow::Error::new(cause);
 
         assert!(matches!(
             error.downcast_ref::<DtError>(),
-            Some(DtError::ConfigError(message)) if message == "worker_threads is invalid"
+            Some(DtError::InvalidConfig(message)) if message == "worker_threads is invalid"
         ));
+        assert_eq!(error.error_code(), Some(ErrorCode::InvalidConfig));
     }
 }

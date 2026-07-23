@@ -33,7 +33,7 @@ use dt_common::{
         sinker_config::SinkerConfig,
         task_config::{TaskConfig, DEFAULT_CHECK_LOG_FILE_SIZE},
     },
-    error::{DtError, DtErrorContextExt, EndpointRole, ErrorCode, Stage},
+    error::{DtError, DtErrorContextExt, EndpointRole, Stage},
     limiter::buffer_limiter::BufferLimiter,
     log_error,
     log_filter::{parse_size_limit, SizeLimitFilterDeserializer},
@@ -1287,10 +1287,9 @@ impl TaskRunner {
         let (appenders, errors) = raw.appenders_lossy(&deserializers);
         if !errors.is_empty() {
             log_error!("errors deserializing log appenders: {:?}", errors);
-            return Err(DtError::ConfigError(
+            return Err(DtError::InvalidConfig(
                 "one or more logging appenders are invalid".to_string(),
             )
-            .with_code(ErrorCode::InvalidConfig)
             .with_stage(Stage::Bootstrap));
         }
 
@@ -1300,8 +1299,7 @@ impl TaskRunner {
             .build(raw.root())
             .map_err(invalid_task_config_source)?;
         let mut handle_guard = LOG_HANDLE.lock().map_err(|_| {
-            DtError::General("the logging configuration lock is poisoned".to_string())
-                .with_code(ErrorCode::InvariantViolated)
+            DtError::InvariantViolated("the logging configuration lock is poisoned".to_string())
                 .with_stage(Stage::Bootstrap)
         })?;
         if let Some(handle) = handle_guard.as_ref() {
@@ -1676,7 +1674,7 @@ mod tests {
     use std::{fs, sync::Arc, time::SystemTime};
 
     use async_trait::async_trait;
-    use dt_common::error::{AnyhowErrorExt, DtError, DtErrorContextExt, ErrorCode, Stage};
+    use dt_common::error::{AnyhowErrorExt, DtError, Stage};
     use dt_pipeline::Pipeline;
     use tokio::sync::Mutex;
 
@@ -1693,7 +1691,7 @@ mod tests {
     #[async_trait]
     impl Pipeline for FailingPipeline {
         async fn start(&mut self) -> anyhow::Result<()> {
-            Err(DtError::General("pipeline failed".to_string()).with_code(ErrorCode::WorkerFailed))
+            Err(DtError::WorkerFailed("pipeline failed".to_string()).into())
         }
     }
 
