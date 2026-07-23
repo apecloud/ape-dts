@@ -1,6 +1,5 @@
 pub mod base_parallelizer;
 pub mod chunk_partitioner;
-mod error_boundary;
 pub mod merge_parallelizer;
 pub mod mongo_merger;
 pub mod partition_parallelizer;

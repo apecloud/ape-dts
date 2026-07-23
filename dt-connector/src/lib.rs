@@ -5,7 +5,6 @@
 pub mod checker;
 pub mod conn_util;
 pub mod data_marker;
-mod error_boundary;
 pub mod extractor;
 pub mod meta_fetcher;
 pub mod rdb_query_builder;

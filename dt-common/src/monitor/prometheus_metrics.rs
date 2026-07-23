@@ -2,12 +2,13 @@
 use std::{collections::BTreeMap, sync::Arc};
 
 use actix_web::{middleware::Logger, web, App, HttpResponse, HttpServer, Responder, Result};
+use anyhow::Context;
 use dashmap::DashMap;
 use prometheus::{Gauge, Opts, Registry, TextEncoder};
 
 use crate::config::config_enums::{TaskKind, TaskType};
 use crate::config::metrics_config::MetricsConfig;
-use crate::error_boundary::config::metrics_initialization_error;
+use crate::error::DtError;
 use crate::monitor::task_metrics::TaskMetricsType;
 
 pub struct PrometheusMetrics {
@@ -36,11 +37,15 @@ impl PrometheusMetrics {
                 Opts::new(metrics_name, metrics_desc)
                     .const_labels(self.config.metrics_labels.to_owned()),
             )
-            .map_err(|error| metrics_initialization_error(error, metrics_name))?;
+            .context(DtError::MetricsInitializationFailed(format!(
+                "Failed to initialize metric [{metrics_name}]"
+            )))?;
 
-            self.registry
-                .register(Box::new(metrics.clone()))
-                .map_err(|error| metrics_initialization_error(error, metrics_name))?;
+            self.registry.register(Box::new(metrics.clone())).context(
+                DtError::MetricsInitializationFailed(format!(
+                    "Failed to initialize metric [{metrics_name}]"
+                )),
+            )?;
             self.metrics.insert(metrics_type, metrics);
             Ok(())
         };

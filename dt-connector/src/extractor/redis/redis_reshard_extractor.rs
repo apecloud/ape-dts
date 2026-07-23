@@ -4,12 +4,12 @@ use std::{cmp, collections::HashMap};
 use url::Url;
 
 use crate::{
-    error_boundary::extractor_error::redis_reshard_topology,
     extractor::base_extractor::{BaseExtractor, ExtractState},
     Extractor,
 };
 use dt_common::{
     config::connection_auth_config::ConnectionAuthConfig,
+    error::DtError,
     log_debug, log_info,
     meta::redis::{
         cluster_node::ClusterNode, command::cmd_encoder::CmdEncoder, redis_object::RedisCmd,
@@ -42,9 +42,10 @@ impl RedisReshardExtractor {
         let mut conn = RedisUtil::create_redis_conn(&self.url, &self.connection_auth).await?;
         let nodes = RedisUtil::get_cluster_master_nodes(&mut conn)?;
         if nodes.is_empty() {
-            return Err(redis_reshard_topology(
-                "the source Redis cluster has no master nodes",
-            ));
+            return Err(DtError::RedisTopology(
+                "the source Redis cluster has no master nodes".to_string(),
+            )
+            .into());
         }
         let slot_address_map = RedisUtil::get_slot_address_map(&nodes);
         let avg_slot_count = SLOTS_COUNT / nodes.len();
@@ -89,7 +90,7 @@ impl RedisReshardExtractor {
         for (dst_node_id, move_in_slots) in node_move_in_slots.iter() {
             // get dst_node by id
             let dst_node = nodes.iter().find(|i| i.id == *dst_node_id).ok_or_else(|| {
-                redis_reshard_topology(format!(
+                DtError::RedisTopology(format!(
                     "Redis master node {dst_node_id} is no longer in the topology"
                 ))
             })?;
@@ -102,7 +103,7 @@ impl RedisReshardExtractor {
                 let src_address = slot_address_map
                     .get(slot)
                     .ok_or_else(|| {
-                        redis_reshard_topology(format!("Redis slot {slot} has no master owner"))
+                        DtError::RedisTopology(format!("Redis slot {slot} has no master owner"))
                     })?
                     .to_string();
                 let src_node =
@@ -110,7 +111,7 @@ impl RedisReshardExtractor {
                         .iter()
                         .find(|i| i.address == src_address)
                         .ok_or_else(|| {
-                            redis_reshard_topology(format!(
+                            DtError::RedisTopology(format!(
                                 "Redis master node at {src_address} is no longer in the topology"
                             ))
                         })?;
@@ -129,7 +130,7 @@ impl RedisReshardExtractor {
                     src_node,
                     dst_node,
                     cur_src_conn.as_mut().ok_or_else(|| {
-                        redis_reshard_topology(format!(
+                        DtError::RedisTopology(format!(
                             "a connection to Redis master node {} was not available",
                             src_node.address
                         ))

@@ -26,7 +26,6 @@ use tokio::{sync::Mutex, time::Duration, time::Instant};
 use tokio_postgres::replication::LogicalReplicationStream;
 
 use crate::{
-    error_boundary::extractor_error::provider_source,
     extractor::{
         base_extractor::{BaseExtractor, ExtractState},
         pg::pg_cdc_client::PgCdcClient,
@@ -39,7 +38,7 @@ use dt_common::{
         config_enums::DbType, config_token_parser::ConfigTokenParser,
         connection_auth_config::ConnectionAuthConfig,
     },
-    error::{DtError, DtErrorContextExt, ErrorCode, ErrorObject, OriginError},
+    error::{DtError, DtErrorContext, DtErrorContextExt, ErrorCode, ErrorObject, OriginError},
     log_error, log_info, log_warn,
     meta::{
         adaptor::pg_col_value_convertor::PgColValueConvertor,
@@ -238,11 +237,10 @@ impl PgCdcExtractor {
                 }
 
                 Some(Err(error)) => {
-                    return Err(provider_source(
-                        error,
-                        ErrorCode::ConnectionFailed,
-                        "postgres",
-                    ));
+                    return Err(DtErrorContext::new()
+                        .code(ErrorCode::ConnectionFailed)
+                        .origin(OriginError::new("postgres", None::<String>))
+                        .attach(error));
                 }
 
                 None => {

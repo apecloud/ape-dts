@@ -1,5 +1,5 @@
-use crate::error_boundary::extractor_error::rdb_error;
 use anyhow::bail;
+use dt_common::error::DtError;
 use dt_common::meta::redis::redis_object::{ListObject, RedisString};
 
 use crate::extractor::redis::rdb::reader::rdb_reader::RdbReader;
@@ -24,7 +24,7 @@ impl ListParser {
             super::RDB_TYPE_LIST_QUICKLIST => Self::read_quick_list(&mut obj, reader).await?,
             super::RDB_TYPE_LIST_QUICKLIST_2 => Self::read_quick_list_2(&mut obj, reader).await?,
             _ => {
-                bail! {rdb_error(format!(
+                bail! {DtError::redis_rdb(format!(
                     "unknown list type {}",
                     type_byte
                 ))}
@@ -74,7 +74,7 @@ impl ListParser {
                 }
 
                 _ => {
-                    bail! {rdb_error(format!(
+                    bail! {DtError::redis_rdb(format!(
                         "unknown quicklist container {}",
                         container
                     ))}

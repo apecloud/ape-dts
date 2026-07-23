@@ -5,7 +5,7 @@ use async_trait::async_trait;
 
 use dt_common::{
     config::{connection_auth_config::ConnectionAuthConfig, task_config::APE_DTS},
-    error::DtError,
+    error::{DtError, DtErrorContextExt, ErrorCode},
     meta::mongo::mongo_version::get_server_version,
     rdb_filter::RdbFilter,
 };
@@ -16,7 +16,6 @@ use mongodb::{
 };
 
 use crate::{
-    error_boundary::mongodb::{mongo_precheck_provider_error, mongo_precheck_state_error},
     fetcher::traits::Fetcher,
     meta::database_mode::{Constraint, Database, Schema, Table},
 };
@@ -49,7 +48,9 @@ impl Fetcher for MongoFetcher {
     async fn fetch_version(&mut self) -> anyhow::Result<String> {
         let client = match &self.pool {
             Some(pool) => pool,
-            None => bail! {mongo_precheck_state_error()},
+            None => bail! {DtError::InvariantViolated(
+                "the MongoDB precheck client is not initialized".to_string()
+            )},
         };
         Ok(format!("{}", get_server_version(client).await?))
     }
@@ -82,7 +83,9 @@ impl MongoFetcher {
     pub async fn execute_for_admin(&self, command: &str) -> anyhow::Result<Document> {
         let client = match &self.pool {
             Some(pool) => pool,
-            None => bail! {mongo_precheck_state_error()},
+            None => bail! {DtError::InvariantViolated(
+                "the MongoDB precheck client is not initialized".to_string()
+            )},
         };
 
         let doc_command = doc! {command: 1};
@@ -90,19 +93,21 @@ impl MongoFetcher {
             .database("admin")
             .run_command(doc_command)
             .await
-            .map_err(mongo_precheck_provider_error)
+            .map_err(|error| error.with_code(ErrorCode::StatementFailed))
     }
 
     pub async fn execute_for_db(&self, command: &str) -> anyhow::Result<Document> {
         let client = match &self.pool {
             Some(pool) => pool,
-            None => bail! {mongo_precheck_state_error()},
+            None => bail! {DtError::InvariantViolated(
+                "the MongoDB precheck client is not initialized".to_string()
+            )},
         };
 
         let dbs = client
             .list_databases()
             .await
-            .map_err(mongo_precheck_provider_error)?;
+            .map_err(|error| error.with_code(ErrorCode::StatementFailed))?;
         if dbs.is_empty() {
             bail! {DtError::DatabaseNotFound("no database exists in MongoDB".to_string())
             };
@@ -113,7 +118,7 @@ impl MongoFetcher {
             .database(&dbs[0].name)
             .run_command(doc_command)
             .await
-            .map_err(mongo_precheck_provider_error)?;
+            .map_err(|error| error.with_code(ErrorCode::StatementFailed))?;
         Ok(doc)
     }
 }

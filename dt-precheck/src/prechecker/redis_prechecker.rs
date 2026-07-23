@@ -1,11 +1,11 @@
 use std::sync::{atomic::AtomicBool, Arc};
 
+use anyhow::Context;
 use async_trait::async_trait;
 use tokio::sync::Mutex;
 use url::Url;
 
 use super::traits::Prechecker;
-use crate::error_boundary::redis::redis_source;
 use crate::{
     config::precheck_config::PrecheckConfig,
     fetcher::{redis::redis_fetcher::RedisFetcher, traits::Fetcher},
@@ -17,7 +17,7 @@ use dt_common::{
         extractor_config::ExtractorConfig,
         task_config::TaskConfig,
     },
-    error::{DtError, ErrorCode},
+    error::{DtError, DtErrorContext, DtResultExt, ErrorCode, OriginError},
     meta::{dt_queue::DtQueue, redis::cluster_node::ClusterNode, syncer::Syncer},
     monitor::{task_monitor::MonitorType, task_monitor_handle::TaskMonitorHandle},
     rdb_filter::RdbFilter,
@@ -56,28 +56,28 @@ fn redis_cdc_precheck_mode(is_cluster: bool) -> RedisCdcPrecheckMode {
     }
 }
 
+fn redis_context(code: ErrorCode) -> DtErrorContext {
+    DtErrorContext::new()
+        .code(code)
+        .origin(OriginError::new("redis", None::<String>))
+}
+
 fn redis_cluster_psync_url(base_url: &str, nodes: &[ClusterNode]) -> anyhow::Result<String> {
     let node = nodes.first().ok_or_else(|| {
         DtError::PrerequisiteNotMet("source Redis cluster has no master nodes".to_string())
     })?;
 
-    let mut url = Url::parse(base_url).map_err(|error| {
-        redis_source(
-            error,
-            ErrorCode::InvalidConfig,
-            "source Redis URL is invalid",
-        )
-    })?;
+    let mut url = Url::parse(base_url)
+        .with_dt_context(redis_context(ErrorCode::InvalidConfig))
+        .context("source Redis URL is invalid")?;
     url.set_host(Some(&node.host)).map_err(|_| {
         DtError::InvalidConfig(format!("invalid Redis cluster node host: {}", node.host))
     })?;
-    let port = node.port.parse().map_err(|error| {
-        redis_source(
-            error,
-            ErrorCode::InvalidConfig,
-            format!("invalid Redis cluster node port: {}", node.port),
-        )
-    })?;
+    let port = node
+        .port
+        .parse()
+        .with_dt_context(redis_context(ErrorCode::InvalidConfig))
+        .with_context(|| format!("invalid Redis cluster node port: {}", node.port))?;
     url.set_port(Some(port)).map_err(|_| {
         DtError::InvalidConfig(format!("invalid Redis cluster node port: {}", node.port))
     })?;
@@ -107,11 +107,11 @@ impl Prechecker for RedisPrechecker {
                 .into(),
             ),
             Ok(_) => None,
-            Err(error) => Some(redis_source(
-                error,
-                ErrorCode::UnsupportedDatabaseVersion,
-                "Redis returned an invalid version",
-            )),
+            Err(error) => Some(
+                redis_context(ErrorCode::UnsupportedDatabaseVersion)
+                    .attach(error)
+                    .context("Redis returned an invalid version"),
+            ),
         };
 
         Ok(CheckResult::build_with_err(

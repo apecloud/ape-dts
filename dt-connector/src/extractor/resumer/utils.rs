@@ -10,15 +10,13 @@ use sqlx::{
 };
 use url::Url;
 
-use crate::{
-    error_boundary::extractor_error::{invalid_resumer_config, resumer_config_source},
-    extractor::resumer::{
-        RedisResumerConn, ResumerDbPool, ResumerType, DEFAULT_POSITION_KEY, DEFAULT_RESUMER_SCHEMA,
-        DEFAULT_RESUMER_TABLE,
-    },
+use crate::extractor::resumer::{
+    RedisResumerConn, ResumerDbPool, ResumerType, DEFAULT_POSITION_KEY, DEFAULT_RESUMER_SCHEMA,
+    DEFAULT_RESUMER_TABLE,
 };
 use dt_common::{
     config::{config_enums::DbType, connection_auth_config::ConnectionAuthConfig},
+    error::DtError,
     log_info,
     meta::position::Position,
     meta::redis::cluster_node::ClusterNode,
@@ -48,14 +46,14 @@ impl ResumerUtil {
 
         let parts = full_table_name.split('.').collect::<Vec<&str>>();
         if parts.len() != 2 {
-            bail!(invalid_resumer_config(format!(
+            bail!(DtError::invalid_config(format!(
                 "invalid checkpoint table name: {full_table_name}"
             ),))
         }
         let schema = parts[0];
         let table = parts[1];
         if schema.is_empty() || table.is_empty() {
-            bail!(invalid_resumer_config(format!(
+            bail!(DtError::invalid_config(format!(
                 "invalid checkpoint table name: {full_table_name}"
             ),))
         }
@@ -165,7 +163,7 @@ impl ResumerUtil {
                 }
             }
             _ => {
-                bail!(invalid_resumer_config(format!(
+                bail!(DtError::invalid_config(format!(
                     "checkpoint storage does not support database type: {db_type:?}"
                 ),))
             }
@@ -174,18 +172,16 @@ impl ResumerUtil {
 
     fn redis_node_url(base_url: &str, node: &ClusterNode) -> Result<String> {
         let mut url = Url::parse(base_url)
-            .map_err(|error| resumer_config_source("checkpoint Redis URL is invalid", error))?;
+            .context(DtError::invalid_config("checkpoint Redis URL is invalid"))?;
         url.set_host(Some(&node.host)).map_err(|_| {
-            invalid_resumer_config(format!("invalid Redis cluster node host: {}", node.host))
+            DtError::invalid_config(format!("invalid Redis cluster node host: {}", node.host))
         })?;
-        let port = node.port.parse().map_err(|error| {
-            resumer_config_source(
-                format!("invalid Redis cluster node port: {}", node.port),
-                error,
-            )
-        })?;
+        let port = node.port.parse().context(DtError::invalid_config(format!(
+            "invalid Redis cluster node port: {}",
+            node.port
+        )))?;
         url.set_port(Some(port)).map_err(|_| {
-            invalid_resumer_config(format!("invalid Redis cluster node port: {}", node.port))
+            DtError::invalid_config(format!("invalid Redis cluster node port: {}", node.port))
         })?;
         Ok(url.to_string())
     }

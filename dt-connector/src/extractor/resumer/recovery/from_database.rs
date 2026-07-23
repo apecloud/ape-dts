@@ -7,17 +7,17 @@ use futures::TryStreamExt;
 use mongodb::bson::doc;
 use sqlx::{query, Error as SqlxError, Row};
 
-use crate::{
-    error_boundary::extractor_error::{checkpoint_sqlx, invalid_resumer_config},
-    extractor::resumer::{
-        recovery::Recovery,
-        utils::{RedisResumerRecord, ResumerUtil},
-        ResumerDbPool, ResumerType,
-    },
+use crate::extractor::resumer::{
+    recovery::Recovery,
+    utils::{RedisResumerRecord, ResumerUtil},
+    ResumerDbPool, ResumerType,
 };
 use dt_common::{
     config::resumer_config::ResumerConfig,
-    error::{AnyhowErrorExt, DtErrorContextExt, EndpointRole, ErrorCode, SqlxProvider, Stage},
+    error::{
+        AnyhowErrorExt, DtError, DtErrorContextExt, EndpointRole, ErrorCode, ErrorObject,
+        SqlxErrorExt, SqlxProvider, Stage,
+    },
     log_info, log_warn,
     meta::position::Position,
     utils::redis_util::RedisUtil,
@@ -54,7 +54,7 @@ impl DatabaseRecovery {
                 }
             }
             _ => {
-                bail!(invalid_resumer_config(
+                bail!(DtError::invalid_config(
                     "database checkpoint recovery requires resume_type=from_db",
                 ))
             }
@@ -134,12 +134,15 @@ impl DatabaseRecovery {
                                 break;
                             }
                             _ => {
-                                let error = checkpoint_sqlx(
-                                    error,
-                                    SqlxProvider::MySql,
-                                    &self.schema,
-                                    &self.table,
-                                );
+                                let error = error
+                                    .with_code(ErrorCode::CheckpointReadFailed)
+                                    .with_sqlx_provider(SqlxProvider::MySql)
+                                    .with_message("failed to query resume position from database")
+                                    .with_object(ErrorObject {
+                                        schema: Some(self.schema.clone()),
+                                        table: Some(self.table.clone()),
+                                        ..Default::default()
+                                    });
                                 if error
                                     .error_code()
                                     .is_some_and(Self::is_missing_resume_store)
@@ -182,12 +185,15 @@ impl DatabaseRecovery {
                                 break;
                             }
                             _ => {
-                                let error = checkpoint_sqlx(
-                                    error,
-                                    SqlxProvider::Postgres,
-                                    &self.schema,
-                                    &self.table,
-                                );
+                                let error = error
+                                    .with_code(ErrorCode::CheckpointReadFailed)
+                                    .with_sqlx_provider(SqlxProvider::Postgres)
+                                    .with_message("failed to query resume position from database")
+                                    .with_object(ErrorObject {
+                                        schema: Some(self.schema.clone()),
+                                        table: Some(self.table.clone()),
+                                        ..Default::default()
+                                    });
                                 if error
                                     .error_code()
                                     .is_some_and(Self::is_missing_resume_store)

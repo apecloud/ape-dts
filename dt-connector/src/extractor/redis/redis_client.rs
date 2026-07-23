@@ -1,18 +1,14 @@
 use futures::executor::block_on;
 use url::Url;
 
-use anyhow::bail;
+use anyhow::{bail, Context};
 use async_std::{io::BufReader, net::TcpStream, prelude::*};
 use async_trait::async_trait;
 
 use super::{redis_resp_reader::RedisRespReader, redis_resp_types::Value, StreamReader};
-use crate::error_boundary::extractor_error::{
-    redis_invalid_config_source, redis_io, redis_source_error, redis_source_error_with_anyhow,
-    redis_source_error_with_cause,
-};
 use dt_common::{
     config::connection_auth_config::ConnectionAuthConfig,
-    error::DtError,
+    error::{DtError, DtErrorContextExt, ErrorCode, OriginError},
     meta::redis::{command::cmd_encoder::CmdEncoder, redis_object::RedisCmd},
 };
 
@@ -31,14 +27,11 @@ impl StreamReader for RedisClient {
 
 impl RedisClient {
     pub async fn new(url: &str, connection_auth: &ConnectionAuthConfig) -> anyhow::Result<Self> {
-        let url_info = Url::parse(url).map_err(|error| {
-            redis_source_error_with_cause(
-                DtError::InvalidConfig("source Redis URL is invalid".to_string()),
-                error,
-            )
-        })?;
+        let url_info = Url::parse(url).context(DtError::RedisInvalidConfig(
+            "source Redis URL is invalid".to_string(),
+        ))?;
         let host = url_info.host_str().ok_or_else(|| {
-            DtError::InvalidConfig("the source Redis URL must include a host".to_string())
+            DtError::RedisInvalidConfig("the source Redis URL must include a host".to_string())
         })?;
         let port = url_info.port().unwrap_or(6379);
 
@@ -47,7 +40,19 @@ impl RedisClient {
 
         let stream = TcpStream::connect(format!("{}:{}", host, port))
             .await
-            .map_err(redis_io)?;
+            .map_err(|error| {
+                let code = if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+                ) {
+                    ErrorCode::ConnectionTimeout
+                } else {
+                    ErrorCode::ConnectionFailed
+                };
+                error
+                    .with_code(code)
+                    .with_origin(OriginError::new("redis", None::<String>))
+            })?;
         let mut me = Self {
             url: url.into(),
             connection_auth: connection_auth.clone(),
@@ -66,9 +71,10 @@ impl RedisClient {
             if let Ok(Value::Okay) = me.read().await {
                 return Ok(me);
             }
-            return Err(
-                DtError::AuthenticationFailed("Redis authentication failed".to_string()).into(),
-            );
+            return Err(DtError::RedisAuthenticationFailed(
+                "Redis authentication failed".to_string(),
+            )
+            .into());
         }
 
         Ok(me)
@@ -78,7 +84,11 @@ impl RedisClient {
         self.stream
             .get_mut()
             .shutdown(std::net::Shutdown::Both)
-            .map_err(redis_io)?;
+            .map_err(|error| {
+                error
+                    .with_code(ErrorCode::ConnectionFailed)
+                    .with_origin(OriginError::new("redis", None::<String>))
+            })?;
         Ok(())
     }
 
@@ -87,7 +97,11 @@ impl RedisClient {
             .get_mut()
             .write_all(packed_cmd)
             .await
-            .map_err(redis_io)?;
+            .map_err(|error| {
+                error
+                    .with_code(ErrorCode::ConnectionFailed)
+                    .with_origin(OriginError::new("redis", None::<String>))
+            })?;
         Ok(())
     }
 
@@ -97,13 +111,7 @@ impl RedisClient {
 
     pub async fn read(&mut self) -> anyhow::Result<Value> {
         let mut resp_reader = RedisRespReader { read_len: 0 };
-        match resp_reader.decode(&mut self.stream).await {
-            Ok(value) => Ok(value),
-            Err(error) => bail! {redis_source_error_with_anyhow(
-                DtError::RedisResultError(error.to_string()),
-                error,
-            )},
-        }
+        resp_reader.decode(&mut self.stream).await
     }
 
     pub async fn read_as_string(&mut self) -> anyhow::Result<Vec<String>> {
@@ -119,7 +127,11 @@ impl RedisClient {
 
     pub async fn read_bytes(&mut self, length: usize) -> anyhow::Result<Vec<u8>> {
         let mut buf = vec![0; length];
-        self.stream.read_exact(&mut buf).await.map_err(redis_io)?;
+        self.stream.read_exact(&mut buf).await.map_err(|error| {
+            error
+                .with_code(ErrorCode::ConnectionFailed)
+                .with_origin(OriginError::new("redis", None::<String>))
+        })?;
         Ok(buf)
     }
 
@@ -142,11 +154,9 @@ impl RedisClient {
             Value::Status(data) => results.push(data),
 
             _ => {
-                bail! {redis_source_error(
-                    DtError::RedisResultError(
-                        "Redis response cannot be converted to strings".to_string()
-                    ),
-                )}
+                bail!(DtError::RedisResultError(
+                    "Redis response cannot be converted to strings".to_string()
+                ))
             }
         }
         Ok(results)
@@ -156,12 +166,9 @@ impl RedisClient {
         percent_encoding::percent_decode_str(component)
             .decode_utf8()
             .map(|s| s.to_string())
-            .map_err(|error| {
-                redis_invalid_config_source(
-                    format!("failed to decode Redis URL {field_name}: {error}"),
-                    error,
-                )
-            })
+            .context(DtError::RedisInvalidConfig(format!(
+                "failed to decode Redis URL {field_name}"
+            )))
     }
 
     fn extract_username<'a>(

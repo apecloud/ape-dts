@@ -201,8 +201,8 @@ pub(crate) fn resolve_dt_context(error: &anyhow::Error) -> DtErrorContext {
         stage: raw
             .as_ref()
             .and_then(DtErrorContext::stage_value)
-            .or_else(|| project.as_ref().and_then(DtErrorContext::stage_value))
-            .or_else(|| explicit.and_then(DtErrorContext::stage_value)),
+            .or_else(|| explicit.and_then(DtErrorContext::stage_value))
+            .or_else(|| project.as_ref().and_then(DtErrorContext::stage_value)),
         task_id: explicit
             .and_then(DtErrorContext::task_id_value)
             .or_else(|| project.as_ref().and_then(DtErrorContext::task_id_value))
@@ -281,6 +281,7 @@ macro_rules! impl_dt_error_context_ext {
     ($($error:ty),+ $(,)?) => {
         $(
             impl DtErrorContextExt for $error {
+                #[inline(always)]
                 fn with_context(self, context: DtErrorContext) -> anyhow::Error {
                     context.attach(self)
                 }
@@ -298,7 +299,24 @@ impl_dt_error_context_ext!(
     reqwest::Error,
     rdkafka::error::KafkaError,
     kafka::Error,
+    std::io::Error,
+    tokio::task::JoinError,
+    openssl::error::ErrorStack,
+    mysql_binlog_connector_rust::binlog_error::BinlogError,
 );
+
+pub trait DtResultExt<T> {
+    fn with_dt_context(self, context: DtErrorContext) -> anyhow::Result<T>;
+}
+
+impl<T, E> DtResultExt<T> for Result<T, E>
+where
+    E: StdError + Send + Sync + 'static,
+{
+    fn with_dt_context(self, context: DtErrorContext) -> anyhow::Result<T> {
+        self.map_err(|error| context.attach(error))
+    }
+}
 
 #[cfg(test)]
 mod tests {

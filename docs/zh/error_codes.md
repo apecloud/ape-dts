@@ -130,8 +130,9 @@ origin 都是可选字段。它实现 `Display`，但刻意不实现
 `DtError::Unclassified` 只用于项目主动产生、但暂时没有稳定分类的失败。
 
 同一 extension trait 也为 `anyhow::Error` 和已支持的 provider 错误类型实现。显式的
-`DtErrorContext.code` 优先于项目错误分类器，只用于有意的边界覆盖、provider 操作默认码
-和动态聚合结果。未知的具体错误只允许在组件边界通过 `DtErrorContext::attach` 挂载。
+`DtErrorContext.code` 优先于项目错误和 provider 分类器。仅当操作本身定义了错误条件，
+或者动态聚合结果无法用 `DtError` variant 表达时，才显式设置 code。未知的具体错误可以
+通过 `DtErrorContext::attach` 保留其 source 类型。
 如果项目语义分类同时存在更底层 source，则将语义化 `DtError` 作为 typed context 放在
 source 之上。这样 `DtError` 和原始 source 都可 downcast，报告可通过项目分类器取码，
 同时不会丢失底层诊断信息。
@@ -153,11 +154,10 @@ provider origin 不会仅因为外层再次设置而被替换。错误对象按�
 会保留 variant 对应的完整 `Display` 文本和类型化 payload，与 provider error 保留自身
 `Display`、source chain 和具体类型的方式一致。
 
-组件边界应先借用原始 provider 错误完成分类，再通过 `DtErrorContext::attach` 挂载。
-得到的 `anyhow::Error` 既能 downcast 到 `DtErrorContext`，也能 downcast 到原始
-provider 错误类型。如果受支持的 provider 错误越过边界时没有 typed metadata，统一的
-raw cause 分类器仍可从保留的具体错误类型恢复固有的 code、origin 和 object。它不会解析
-错误消息，也不会推断执行 scope。
+已支持的 provider 错误通常直接通过 `?` 或普通 `anyhow::Context` 传播。构建 report 时，
+共享 raw-cause registry 会按保留的具体类型分类，恢复 provider 固有的 code、origin 和
+object。只有 provider 无法知道的业务语义或执行 scope 才显式挂载 `DtErrorContext`。
+两条路径都不会在报告阶段推断 stage、endpoint 或 task ID。
 
 `ErrorReport` 是面向用户的边界表示。其文本格式使用 `ERROR`、`TASK`、`AFFECTED`、
 `DETAIL`、`HINT` 和 `DIAGNOSTIC` 等行。
@@ -166,28 +166,24 @@ Provider 分类器实现统一位于 `dt-common::error::provider`。它们通过
 provider 原始错误码、类型化错误种类和 Rust 错误变体进行判断，禁止解析 provider 错误
 消息。每个实现直接返回包含可选精确错误码、provider origin 和受影响对象的
 `DtErrorContext`。一个小型显式 registry 对 `anyhow::Error` 中保留的 provider cause 调用
-同一 trait。明确知道数据库类型的 SQLx 边界继续传入 `SqlxProvider`，保证 transport 错误的
-origin 精确；raw fallback 只使用 infer 分类。组件边界先挂载当前操作的默认错误码，再挂载 provider frame；
-因此精确的 provider 分类会覆盖默认码，未识别的 provider 错误会继承默认码。stage 和
-endpoint 位于这两层之外，原始 provider 错误保持不变。
+同一 trait。明确知道数据库类型的 SQLx 调用点继续传入 `SqlxProvider`，保证 transport 错误的
+origin 精确；raw fallback 只使用 infer 分类。`SqlxErrorExt::with_sqlx_provider` 挂载 provider
+frame，同时保留原始 SQLx error。操作同时提供 code 时，调用点先使用 `.with_code(...)`，
+再使用 `.with_sqlx_provider(...)`。已识别的 provider 条件因而成为更外层、更精确的 frame；
+无法识别时则保留操作 code。stage、endpoint 和 task ID 在仍明确知道其语义的最高层执行
+位置单独挂载。
 
-Provider 相关元数据应放在组件边界的小型 wrapper 中。组件边界负责设置操作默认错误
-码。Provider classifier 不接收业务默认码；无法识别时返回空 code 并继承边界默认码。
-stage、endpoint 和 task ID 在 provider 分类之外、仍明确知道其语义的最高层执行边界
-显式挂载。
-
-每个 crate 必须将组件 wrapper 统一放在唯一的 `src/error_boundary.rs` 中，并通过
-`extractor_error`、`sinker_error` 或 provider 等内部模块区分所有权。禁止继续在业务模块旁新增
-组件错误 helper 文件。`error_boundary` 表示将底层失败分类或补充为 Ape-DTS 错误的
-边界，与 `dt-common::error` 中的公共错误契约相互独立。公共 provider 分类器仍统一
-位于 `dt-common::error::provider`。
+Provider 分类统一位于 `dt-common::error::provider`，不再放入各 crate 的 wrapper。
+业务模块使用 `DtError` 表达项目主动失败，使用普通 `anyhow::Context` 添加诊断文字，只在
+需要显式 metadata 时调用 context extension。禁止新增仅转发这些共享机制参数的 crate
+专用 helper 模块。
 
 `ErrorReport` 读取类型化 context 和错误链。它先使用最外层显式 context code；没有时，
 从 cause chain downcast 到 `DtError` 并调用 `ClassifyError`；最后调用 registry 中的 raw
 provider 分类器。两条路径都返回 `DtErrorContext`，内部 resolver 使用相同优先级规则合并 metadata。
-显式业务 metadata 因此仍然具有最高优先级，已知 provider 错误也不会仅因为边界
+显式业务 metadata 因此仍然具有最高优先级，已知 provider 错误也不会仅因为调用者
 使用普通 `?` 而变成 `IN999`。不受支持或无法识别的 raw 错误仍输出 `IN999`。失败路径测试
-和代码评审仍需覆盖 raw provider 无法提供的操作默认码及调用点 metadata。
+和代码评审仍需覆盖 raw provider 无法提供的显式操作 code 及调用点 metadata。
 
 `MD099 MetadataReadFailed` 只作为读取或解析端点 catalog、控制面元数据失败时的
 默认码。Schema/结构本身是迁移对象，并不代表所有结构错误都是元数据读取错误。对象
@@ -223,12 +219,12 @@ Provider 错误码属于诊断信息，不是 Ape-DTS 错误码。只要能够�
 | SQLx worker 崩溃 | `RT001` |
 | SQLx 完整性错误种类 | `IC001` |
 
-每个 SQLx 边界还会提供与操作相关的默认错误码，例如 `CN001`、`DB001` 或 `ST001`。
-精确的 provider 分类会覆盖该默认码，无法识别时则继承默认码；两种情况下都必须保留
-provider 原始错误码、constraint/table 元数据和源错误链。
+SQLx 调用点可以显式提供与操作相关的错误码，例如 `CN001`、`DB001` 或 `ST001`。
+精确的 provider 分类优先，无法识别时保留操作 code；两种情况下都保留 provider 原始
+错误码、constraint/table 元数据和源错误链。
 
 `tokio-postgres` 复制适配器使用相同的 PostgreSQL SQLSTATE 规则。URL 解析错误使用
-`CF002`，连接建立失败使用 `CN001`，复制命令被拒绝时使用该操作的边界默认错误码。
+`CF002`，连接建立失败使用 `CN001`，复制命令被拒绝时使用该操作显式设置的错误码。
 
 其他首批 provider 映射如下：
 
@@ -243,7 +239,7 @@ provider 原始错误码、constraint/table 元数据和源错误链。
 | MongoDB 命令错误码 `13` | `AU002` |
 | MongoDB 命令错误码 `26` | `MD001` |
 | MongoDB 重复键错误码 `11000`/`11001`/`12582` | `IC001` |
-| MongoDB 客户端选项无效 / TLS 配置无效 | 边界默认码 `CF002` / `CN003` |
+| MongoDB 客户端选项无效 / TLS 配置无效 | 调用点显式 code `CF002` / `CN003` |
 | MongoDB DNS、I/O、连接池清空、server selection 或 shutdown | `CN001`；I/O 超时为 `CN002` |
 | Kafka 认证 / 授权错误 | `AU001` / `AU002` |
 | Kafka topic 或 partition 不存在 | `MD001` |
@@ -255,15 +251,16 @@ provider 原始错误码、constraint/table 元数据和源错误链。
 | MySQL binlog 错误 `1236`（请求的 binlog 已不可用） | `ST001`，origin `mysql/1236` |
 | 其他 MySQL binlog 解码失败 | `DB001` |
 
-Worker join 失败使用 `RT001`。在组件边界分类的 URL 和 YAML 解析错误使用 `CF002`；
+Worker join 失败使用 `RT001`。由调用者显式分类的 URL 和 YAML 解析错误使用 `CF002`；
 `DtError::Unclassified` 和不受支持或无法识别的原始错误到达 `ErrorReport` 时都使用 `IN999`。本地文件
-系统 `std::io::Error` 使用 `IO001`；网络 I/O 必须在 provider 边界分类为 `CN001` 或
+系统 `std::io::Error` 使用 `IO001`；网络 I/O 应保留 provider 错误类型，以分类为 `CN001` 或
 `CN002`。用户主动中断的 CLI 操作使用 `RT002`。
 
 `mysql-binlog-connector-rust v0.3.4` 会丢弃 MySQL 错误包中的数值错误码，并将错误
 `1236` 暴露为 `ConnectError(String)`。在 connector 保留类型化错误码之前，MySQL
-extractor 边界只识别“请求的 binlog 已不可用”这一组已知消息，并恢复 origin code
-`1236`。该逻辑是窄范围兼容补偿，不属于通用 provider classifier。
+binlog 分类器只识别“请求的 binlog 已不可用”这一组已知消息，并恢复 origin code
+`1236`。这是针对 provider 库丢失类型信息的窄范围消息匹配例外；其他 provider 分类仍
+基于类型和原始错误码。
 
 数据库连接 URL 格式错误属于配置错误，使用 `CF002`。只有格式正确的端点无法访问，
 或者已经建立的连接中断时，才使用 `CN001`。这一区分对应不同的用户处理方式：

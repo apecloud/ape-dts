@@ -1,8 +1,8 @@
 use anyhow::bail;
 
 use super::rdb_reader::RdbReader;
-use crate::error_boundary::extractor_error::rdb_error;
 use crate::extractor::redis::StreamReader;
+use dt_common::error::DtError;
 use dt_common::meta::redis::redis_object::RedisString;
 
 const RDB_ENC_INT8: u8 = 0;
@@ -29,7 +29,7 @@ impl RdbReader<'_> {
                 }
 
                 _ => {
-                    bail! {rdb_error(format!(
+                    bail! {DtError::redis_rdb(format!(
                         "Unknown string encode type {}",
                         len
                     ))}
@@ -74,7 +74,7 @@ impl RdbReader<'_> {
         }
 
         if o != out_len {
-            bail! {rdb_error(format!(
+            bail! {DtError::redis_rdb(format!(
                 "lzf decompress failed: out_len: {}, o: {}",
                 out_len, o
             ))}

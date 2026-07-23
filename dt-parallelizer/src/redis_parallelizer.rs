@@ -4,6 +4,7 @@ use anyhow::bail;
 use async_trait::async_trait;
 
 use dt_common::{
+    error::{DtError, DtErrorContextExt, Stage},
     log_warn,
     meta::{
         dt_data::{DtData, DtItem},
@@ -71,12 +72,13 @@ impl Parallelizer for RedisParallelizer {
                 let slots = entry.cal_slots(&self.key_parser)?;
                 for i in 1..slots.len() {
                     if slots[i] != slots[0] {
-                        bail! {crate::error_boundary::redis_command(
-                            format!(
+                        bail! {
+                            DtError::RedisCmdError(format!(
                             "multi keys don't hash to the same slot, cmd: {}",
                             entry.cmd
-                            ),
-                        )};
+                            ))
+                            .with_stage(Stage::Parallelizer)
+                        };
                     }
                 }
 
@@ -99,19 +101,24 @@ impl Parallelizer for RedisParallelizer {
             }
 
             // find the dst node for entry by slot
-            let node = self
-                .slot_node_map
-                .get(&slots[0])
-                .copied()
-                .ok_or_else(crate::error_boundary::invariant)?;
+            let node = self.slot_node_map.get(&slots[0]).copied().ok_or_else(|| {
+                DtError::InvariantViolated("parallelizer invariant violated".to_string())
+                    .with_stage(Stage::Parallelizer)
+            })?;
             let sinker_index = self
                 .node_sinker_index_map
                 .get(node)
                 .copied()
-                .ok_or_else(crate::error_boundary::invariant)?;
+                .ok_or_else(|| {
+                    DtError::InvariantViolated("parallelizer invariant violated".to_string())
+                        .with_stage(Stage::Parallelizer)
+                })?;
             node_data_items
                 .get_mut(sinker_index)
-                .ok_or_else(crate::error_boundary::invariant)?
+                .ok_or_else(|| {
+                    DtError::InvariantViolated("parallelizer invariant violated".to_string())
+                        .with_stage(Stage::Parallelizer)
+                })?
                 .push(dt_item);
         }
 
@@ -129,7 +136,9 @@ impl Parallelizer for RedisParallelizer {
         }
 
         for future in futures {
-            future.await.map_err(crate::error_boundary::worker)??;
+            future
+                .await
+                .map_err(|error| error.with_stage(Stage::Parallelizer))??;
         }
         self.base_parallelizer
             .record_workers_per_drain(workers_used)

@@ -15,7 +15,7 @@ use crate::{
     Extractor,
 };
 use dt_common::{
-    error::ErrorCode,
+    error::{DtErrorContextExt, ErrorCode},
     log_info, log_warn,
     meta::{avro::avro_converter::AvroConverter, position::Position, syncer::Syncer},
 };
@@ -65,9 +65,10 @@ impl Extractor for KafkaExtractor {
 impl KafkaExtractor {
     async fn extract_avro(&mut self, consumer: StreamConsumer) -> anyhow::Result<()> {
         loop {
-            let msg = consumer.recv().await.map_err(|error| {
-                crate::error_boundary::extractor_error::kafka(error, ErrorCode::StatementFailed)
-            })?;
+            let msg = consumer
+                .recv()
+                .await
+                .map_err(|error| error.with_code(ErrorCode::StatementFailed))?;
             if let Some(payload) = msg.payload() {
                 let dt_data = self
                     .avro_converter
@@ -91,22 +92,20 @@ impl KafkaExtractor {
         config.set("auto.offset.reset", "latest");
         config.set("session.timeout.ms", "10000");
 
-        let consumer: StreamConsumer = config.create().map_err(|error| {
-            crate::error_boundary::extractor_error::kafka(error, ErrorCode::InvalidConfig)
-        })?;
+        let consumer: StreamConsumer = config
+            .create()
+            .map_err(|error| error.with_code(ErrorCode::InvalidConfig))?;
         // only support extract data from one topic, one partition
         let mut tpl = TopicPartitionList::new();
         if self.offset >= 0 {
             tpl.add_partition_offset(&self.topic, self.partition, Offset::Offset(self.offset))
-                .map_err(|error| {
-                    crate::error_boundary::extractor_error::kafka(error, ErrorCode::InvalidConfig)
-                })?;
+                .map_err(|error| error.with_code(ErrorCode::InvalidConfig))?;
         } else {
             tpl.add_partition(&self.topic, self.partition);
         }
-        consumer.assign(&tpl).map_err(|error| {
-            crate::error_boundary::extractor_error::kafka(error, ErrorCode::InvalidConfig)
-        })?;
+        consumer
+            .assign(&tpl)
+            .map_err(|error| error.with_code(ErrorCode::InvalidConfig))?;
         Ok(consumer)
     }
 }

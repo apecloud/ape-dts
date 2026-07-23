@@ -1,11 +1,11 @@
 use std::{collections::HashMap, str::FromStr};
 
+use anyhow::Context;
 use apache_avro::{from_avro_datum, to_avro_datum, types::Value, Schema};
 
 use crate::{
     config::config_enums::DbType,
-    error::ErrorCode,
-    error_boundary::metadata::avro_source,
+    error::DtError,
     meta::{
         col_value::ColValue,
         ddl_meta::{ddl_data::DdlData, ddl_type::DdlType},
@@ -140,13 +140,9 @@ impl AvroConverter {
                     avro_type,
                 });
             }
-            let value = apache_avro::to_value(fields).map_err(|error| {
-                avro_source(
-                    error,
-                    ErrorCode::StatementFailed,
-                    "failed to encode Avro field definitions",
-                )
-            })?;
+            let value = apache_avro::to_value(fields).context(DtError::StatementFailed(
+                "failed to encode Avro field definitions".to_string(),
+            ))?;
             Value::Union(1, Box::new(value))
         };
 
@@ -249,13 +245,9 @@ impl AvroConverter {
 
     fn avro_to_fields(&self, value: Option<Value>) -> anyhow::Result<Vec<AvroFieldDef>> {
         if let Some(v) = value {
-            return apache_avro::from_value(&v).map_err(|error| {
-                avro_source(
-                    error,
-                    ErrorCode::StatementFailed,
-                    "failed to decode Avro field definitions",
-                )
-            });
+            return apache_avro::from_value(&v).context(DtError::StatementFailed(
+                "failed to decode Avro field definitions".to_string(),
+            ));
         }
         Ok(vec![])
     }

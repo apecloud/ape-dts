@@ -1,10 +1,7 @@
-use anyhow::bail;
+use anyhow::{bail, Context};
 use sqlx::types::chrono;
 
 use super::{entry_parser::entry_parser::EntryParser, reader::rdb_reader::RdbReader};
-use crate::error_boundary::extractor_error::{
-    rdb_error, redis_rdb_source, redis_source_error_with_anyhow, redis_source_error_with_cause,
-};
 use crate::extractor::redis::{rdb::entry_parser::module2_parser::ModuleParser, StreamReader};
 use dt_common::meta::redis::{redis_entry::RedisEntry, redis_object::RedisCmd};
 use dt_common::{error::DtError, log_debug, log_info};
@@ -44,9 +41,10 @@ impl RdbParser<'_> {
     pub async fn load_meta(&mut self) -> anyhow::Result<String> {
         // magic
         let mut buf = self.reader.read_bytes(5).await?;
-        let magic = String::from_utf8(buf)?;
+        let magic = String::from_utf8(buf)
+            .context(DtError::redis_rdb("Redis RDB header is not valid UTF-8"))?;
         if magic != "REDIS" {
-            bail! {rdb_error("invalid rdb format")}
+            bail! {DtError::redis_rdb("invalid rdb format")}
         }
 
         // version
@@ -92,7 +90,7 @@ impl RdbParser<'_> {
                             self.reader.read_string().await?;
                         }
                         _ => {
-                            bail! {rdb_error(format!(
+                            bail! {DtError::redis_rdb(format!(
                                 "module aux opcode not found. module_name=[{}], opcode=[{}]",
                                 module_name, opcode
                             ))}
@@ -113,26 +111,18 @@ impl RdbParser<'_> {
             }
 
             K_FLAG_AUX => {
-                let key = String::try_from(self.reader.read_string().await?).map_err(|error| {
-                    redis_rdb_source("Redis RDB metadata key is not valid UTF-8", error)
-                })?;
+                let key = String::try_from(self.reader.read_string().await?).context(
+                    DtError::redis_rdb("Redis RDB metadata key is not valid UTF-8"),
+                )?;
                 let value = self.reader.read_string().await?;
                 match key.as_str() {
                     "repl-stream-db" => {
-                        let value = String::try_from(value).map_err(|error| {
-                            redis_rdb_source(
-                                "Redis RDB replication database value is not valid UTF-8",
-                                error,
-                            )
-                        })?;
-                        self.repl_stream_db_id = value.parse::<i64>().map_err(|error| {
-                            redis_source_error_with_cause(
-                                DtError::RedisRdbError(
-                                    "replication database value is invalid".to_string(),
-                                ),
-                                error,
-                            )
-                        })?;
+                        let value = String::try_from(value).context(DtError::redis_rdb(
+                            "Redis RDB replication database value is not valid UTF-8",
+                        ))?;
+                        self.repl_stream_db_id = value
+                            .parse::<i64>()
+                            .context(DtError::redis_rdb("replication database value is invalid"))?;
                         log_info!("RDB repl-stream-db: {}", self.repl_stream_db_id);
                     }
 
@@ -202,12 +192,7 @@ impl RdbParser<'_> {
                     EntryParser::parse_object(&mut self.reader, type_byte, key.clone()).await;
                 self.reader.copy_raw = false;
 
-                let value = value.map_err(|error| {
-                    redis_source_error_with_anyhow(
-                        DtError::RedisRdbError("failed to parse Redis RDB entry".to_string()),
-                        error,
-                    )
-                })?;
+                let value = value.context(DtError::redis_rdb("failed to parse Redis RDB entry"))?;
                 let mut entry = RedisEntry::new();
                 entry.is_base = true;
                 entry.db_id = self.now_db_id;

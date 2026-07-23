@@ -5,6 +5,7 @@ use async_trait::async_trait;
 
 use dt_common::{
     config::sinker_config::BasicSinkerConfig,
+    error::{DtError, DtErrorContextExt, Stage},
     meta::{
         dcl_meta::dcl_data::DclData, ddl_meta::ddl_data::DdlData, dt_data::DtItem,
         dt_queue::DtQueue, rdb_meta_manager::RdbMetaManager, row_data::RowData, row_type::RowType,
@@ -177,10 +178,16 @@ impl MergeParallelizer {
         merge_type: MergeType,
     ) -> anyhow::Result<(DataSize, usize)> {
         if self.parallel_size == 0 {
-            return Err(crate::error_boundary::invalid_config());
+            return Err(
+                DtError::invalid_config("parallelizer configuration is invalid")
+                    .with_stage(Stage::Parallelizer),
+            );
         }
         if sinkers.is_empty() {
-            return Err(crate::error_boundary::invariant());
+            return Err(
+                DtError::InvariantViolated("parallelizer invariant violated".to_string())
+                    .with_stage(Stage::Parallelizer),
+            );
         }
         let mut futures = Vec::new();
         let mut data_size = DataSize::default();
@@ -233,7 +240,9 @@ impl MergeParallelizer {
 
         let workers_used = futures.len().min(self.parallel_size);
         for future in futures {
-            future.await.map_err(crate::error_boundary::worker)??;
+            future
+                .await
+                .map_err(|error| error.with_stage(Stage::Parallelizer))??;
         }
         Ok((data_size, workers_used))
     }

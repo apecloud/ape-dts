@@ -1,12 +1,10 @@
+use anyhow::Context;
 use mongodb::{
     bson::{doc, Document},
     Client,
 };
 
-use crate::{
-    error::{DtError, DtErrorContextExt, ErrorCode, OriginError},
-    error_boundary::metadata::{mongodb_provider, mongodb_version_source},
-};
+use crate::error::{DtError, DtErrorContextExt, ErrorCode};
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct MongoServerVersion {
@@ -51,36 +49,31 @@ pub async fn get_server_version(client: &Client) -> anyhow::Result<MongoServerVe
         .unwrap_or_else(|| client.database("admin"))
         .run_command(doc! { "buildInfo": 1 })
         .await
-        .map_err(|error| mongodb_provider(error, ErrorCode::MetadataReadFailed))?;
-    let version = build_info.get_str("version").map_err(|error| {
-        mongodb_version_source(
-            "MongoDB buildInfo response is missing a valid version",
-            error,
-        )
-    })?;
+        .map_err(|error| error.with_code(ErrorCode::MetadataReadFailed))?;
+    let version = build_info
+        .get_str("version")
+        .context(DtError::MongoUnsupportedVersion(
+            "MongoDB buildInfo response is missing a valid version".to_string(),
+        ))?;
     MongoServerVersion::parse(version)
 }
 
 fn parse_version_part(part: Option<&str>, original: &str, field: &str) -> anyhow::Result<u32> {
     let part = part.ok_or_else(|| {
-        DtError::UnsupportedDatabaseVersion(format!(
-            "MongoDB version is missing {field}: {original}"
-        ))
-        .with_origin(OriginError::new("mongodb", None::<String>))
+        DtError::MongoUnsupportedVersion(format!("MongoDB version is missing {field}: {original}"))
     })?;
     let digits: String = part.chars().take_while(|c| c.is_ascii_digit()).collect();
     if digits.is_empty() {
-        return Err(DtError::UnsupportedDatabaseVersion(format!(
+        return Err(DtError::MongoUnsupportedVersion(format!(
             "invalid MongoDB version {field}: {original}"
         ))
-        .with_origin(OriginError::new("mongodb", None::<String>)));
+        .into());
     }
-    digits.parse().map_err(|error| {
-        mongodb_version_source(
-            format!("invalid MongoDB version {field}: {original}"),
-            error,
-        )
-    })
+    digits
+        .parse()
+        .context(DtError::MongoUnsupportedVersion(format!(
+            "invalid MongoDB version {field}: {original}"
+        )))
 }
 
 #[cfg(test)]

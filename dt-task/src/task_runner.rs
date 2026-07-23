@@ -33,7 +33,9 @@ use dt_common::{
         sinker_config::SinkerConfig,
         task_config::{TaskConfig, DEFAULT_CHECK_LOG_FILE_SIZE},
     },
-    error::{DtError, DtErrorContextExt, EndpointRole, Stage},
+    error::{
+        DtError, DtErrorContext, DtErrorContextExt, DtResultExt, EndpointRole, ErrorCode, Stage,
+    },
     limiter::buffer_limiter::BufferLimiter,
     log_error,
     log_filter::{parse_size_limit, SizeLimitFilterDeserializer},
@@ -98,11 +100,6 @@ const RUNTIME_STDOUT_APPENDER_PLACEHOLDER: &str = "RUNTIME_STDOUT_APPENDER_PLACE
 const CHECK_RESULT_STDOUT_APPENDER_PLACEHOLDER: &str = "CHECK_RESULT_STDOUT_APPENDER_PLACEHOLDER";
 const DEFAULT_CHECK_LOG_DIR_PLACEHOLDER: &str = "LOG_DIR_PLACEHOLDER/check";
 const DEFAULT_STATISTIC_LOG_DIR_PLACEHOLDER: &str = "LOG_DIR_PLACEHOLDER/statistic";
-
-use crate::error_boundary::{
-    invalid_task_config,
-    runner::{invalid_task_config_source, task_io_error, task_worker_error},
-};
 
 fn init_task_check_summary() -> CheckSummaryLog {
     CheckSummaryLog {
@@ -194,7 +191,7 @@ impl TaskRunner {
             .is_some_and(|task_type| task_type.is_cdc_inline_check())
             && checker_state_store.is_none()
         {
-            bail!(invalid_task_config(
+            bail!(DtError::invalid_config(
                 "config [checker] with CDC tasks requires [resumer] resume_type=from_target or from_db to persist checker state"
             ));
         }
@@ -422,7 +419,9 @@ impl TaskRunner {
             return Ok(None);
         }
         let s3_cfg = cfg.s3_config.as_ref().ok_or_else(|| {
-            invalid_task_config("check_log_s3=true but checker s3 config is missing in [checker]")
+            DtError::invalid_config(
+                "check_log_s3=true but checker s3 config is missing in [checker]",
+            )
         })?;
         Ok(Some((
             TaskUtil::create_s3_client(s3_cfg)?,
@@ -653,7 +652,7 @@ impl TaskRunner {
         monitor_shutdown.cancel();
         let monitor_result = monitor_task
             .await
-            .map_err(task_worker_error)
+            .map_err(|error| error.with_stage(Stage::Task))
             .and_then(|result| result);
 
         let mut monitor_types = vec![MonitorType::Pipeline];
@@ -711,7 +710,7 @@ impl TaskRunner {
                     break;
                 }
                 Err(err) => {
-                    failure = Some((None, task_worker_error(err)));
+                    failure = Some((None, err.with_stage(Stage::Task)));
                     break;
                 }
             }
@@ -917,7 +916,7 @@ impl TaskRunner {
         let checker_task_id = task_id.to_string();
         let cdc_check_log_max_file_size =
             parse_size_limit(&cfg.check_log_file_size).map_err(|e| {
-                invalid_task_config(format!(
+                DtError::invalid_config(format!(
                     "invalid config [checker].check_log_file_size: {}, error: {}",
                     cfg.check_log_file_size, e
                 ))
@@ -943,7 +942,7 @@ impl TaskRunner {
         let checker_target = self
             .config
             .checker_target()
-            .ok_or_else(|| invalid_task_config("config [checker] target is missing"))?;
+            .ok_or_else(|| DtError::invalid_config("config [checker] target is missing"))?;
         let checker_db_type = checker_target.db_type.clone();
         let checker_url = checker_target.url.clone();
         let checker_auth = checker_target.connection_auth.clone();
@@ -1151,7 +1150,7 @@ impl TaskRunner {
                 );
                 Ok(Some(CheckerHandle::Data(checker)))
             }
-            _ => bail!(invalid_task_config(format!(
+            _ => bail!(DtError::invalid_config(format!(
                 "checker is not supported for database type: {checker_db_type}"
             ))),
         }
@@ -1218,15 +1217,17 @@ impl TaskRunner {
             Ok(_) => {}
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
             Err(error) => {
-                return Err(task_io_error(error));
+                return Err(error.with_stage(Stage::Bootstrap));
             }
         }
 
         let mut config_str = String::new();
-        let mut file = File::open(log4rs_file).await.map_err(task_io_error)?;
+        let mut file = File::open(log4rs_file)
+            .await
+            .map_err(|error| error.with_stage(Stage::Bootstrap))?;
         file.read_to_string(&mut config_str)
             .await
-            .map_err(task_io_error)?;
+            .map_err(|error| error.with_stage(Stage::Bootstrap))?;
 
         match &self.config.sinker {
             SinkerConfig::RedisStatistic {
@@ -1280,8 +1281,12 @@ impl TaskRunner {
                 );
         }
 
-        let raw: RawConfig =
-            serde_yaml::from_str(&config_str).map_err(invalid_task_config_source)?;
+        let config_context = || {
+            DtErrorContext::new()
+                .code(ErrorCode::InvalidConfig)
+                .stage(Stage::Bootstrap)
+        };
+        let raw: RawConfig = serde_yaml::from_str(&config_str).with_dt_context(config_context())?;
         let mut deserializers = Deserializers::default();
         deserializers.insert("size_limit", SizeLimitFilterDeserializer);
         let (appenders, errors) = raw.appenders_lossy(&deserializers);
@@ -1297,7 +1302,7 @@ impl TaskRunner {
             .appenders(appenders)
             .loggers(raw.loggers())
             .build(raw.root())
-            .map_err(invalid_task_config_source)?;
+            .with_dt_context(config_context())?;
         let mut handle_guard = LOG_HANDLE.lock().map_err(|_| {
             DtError::InvariantViolated("the logging configuration lock is poisoned".to_string())
                 .with_stage(Stage::Bootstrap)
@@ -1306,7 +1311,7 @@ impl TaskRunner {
             // refresh log4rs config in one process
             handle.set_config(config);
         } else {
-            let handle = log4rs::init_config(config).map_err(invalid_task_config_source)?;
+            let handle = log4rs::init_config(config).with_dt_context(config_context())?;
             *handle_guard = Some(handle);
         }
         Ok(())

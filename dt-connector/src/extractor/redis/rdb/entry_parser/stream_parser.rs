@@ -1,9 +1,11 @@
 use std::collections::HashMap;
 
-use crate::error_boundary::extractor_error::{rdb_error, redis_rdb_source};
-use anyhow::bail;
+use anyhow::{bail, Context};
 use byteorder::{BigEndian, ByteOrder};
-use dt_common::meta::redis::redis_object::{RedisCmd, RedisString, StreamObject};
+use dt_common::{
+    error::DtError,
+    meta::redis::redis_object::{RedisCmd, RedisString, StreamObject},
+};
 
 use crate::extractor::redis::rdb::reader::rdb_reader::RdbReader;
 
@@ -27,7 +29,7 @@ impl StreamParser {
             // key is streamId, like: 1612181627287-0
             let key = reader.read_string().await?;
             if key.as_bytes().len() != 16 {
-                bail! {rdb_error(format!(
+                bail! {DtError::redis_rdb(format!(
                     "invalid stream ID byte length: {}",
                     key.as_bytes().len()
                 ))}
@@ -45,18 +47,17 @@ impl StreamParser {
             let mut deleted = Self::next_integer(&mut inx, &elements)?; // deleted
             let num_fields = Self::next_integer(&mut inx, &elements)? as usize; // num-fields
 
-            let fields = elements
-                .get(3..3 + num_fields)
-                .ok_or_else(|| rdb_error("stream field definitions exceed the listpack length"))?; // fields
+            let fields = elements.get(3..3 + num_fields).ok_or_else(|| {
+                DtError::redis_rdb("stream field definitions exceed the listpack length")
+            })?; // fields
             inx = 3 + num_fields;
 
             // master entry end by zero
-            let last_entry =
-                String::try_from(Self::next(&mut inx, &elements)?.clone()).map_err(|error| {
-                    redis_rdb_source("stream listpack marker is not valid UTF-8", error)
-                })?;
+            let last_entry = String::try_from(Self::next(&mut inx, &elements)?.clone()).context(
+                DtError::redis_rdb("stream listpack marker is not valid UTF-8"),
+            )?;
             if last_entry != "0" {
-                bail! {rdb_error(format!(
+                bail! {DtError::redis_rdb(format!(
                     "master entry not ends by zero. lastEntry=[{}]",
                     last_entry
                 ))}
@@ -84,7 +85,7 @@ impl StreamParser {
                     // get field by lp.Next()
                     let num = Self::next_integer(&mut inx, &elements)? as usize;
                     let values = elements.get(inx..inx + num * 2).ok_or_else(|| {
-                        rdb_error("stream entry fields exceed the listpack length")
+                        DtError::redis_rdb("stream entry fields exceed the listpack length")
                     })?;
                     for ele in values {
                         cmd.add_redis_arg(ele);
@@ -228,14 +229,14 @@ impl StreamParser {
                     cmd.add_str_arg(&stream_id);
                     cmd.add_str_arg("TIME");
                     let Some(delivery_time) = map_id_to_time.get(&stream_id) else {
-                        bail! {rdb_error(format!(
+                        bail! {DtError::redis_rdb(format!(
                             "pending stream entry {stream_id} has no delivery time"
                         ))}
                     };
                     cmd.add_str_arg(delivery_time);
                     cmd.add_str_arg("RETRYCOUNT");
                     let Some(delivery_count) = map_id_to_count.get(&stream_id) else {
-                        bail! {rdb_error(format!(
+                        bail! {DtError::redis_rdb(format!(
                             "pending stream entry {stream_id} has no delivery count"
                         ))}
                     };
@@ -253,20 +254,20 @@ impl StreamParser {
     fn next_integer(inx: &mut usize, elements: &[RedisString]) -> anyhow::Result<i64> {
         let ele = elements
             .get(*inx)
-            .ok_or_else(|| rdb_error("unexpected end of stream listpack"))?;
+            .ok_or_else(|| DtError::redis_rdb("unexpected end of stream listpack"))?;
         *inx += 1;
-        let value = String::try_from(ele.clone()).map_err(|error| {
-            redis_rdb_source("stream listpack integer is not valid UTF-8", error)
-        })?;
+        let value = String::try_from(ele.clone()).context(DtError::redis_rdb(
+            "stream listpack integer is not valid UTF-8",
+        ))?;
         value
             .parse::<i64>()
-            .map_err(|error| redis_rdb_source("invalid integer in stream listpack", error))
+            .context(DtError::redis_rdb("invalid integer in stream listpack"))
     }
 
     fn next<'a>(inx: &mut usize, elements: &'a [RedisString]) -> anyhow::Result<&'a RedisString> {
         let ele = elements
             .get(*inx)
-            .ok_or_else(|| rdb_error("unexpected end of stream listpack"))?;
+            .ok_or_else(|| DtError::redis_rdb("unexpected end of stream listpack"))?;
         *inx += 1;
         Ok(ele)
     }

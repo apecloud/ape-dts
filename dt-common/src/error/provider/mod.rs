@@ -2,11 +2,13 @@ mod classification;
 mod http;
 mod kafka;
 mod mongodb;
+mod mysql_binlog;
 mod postgres;
 mod redis;
 mod sqlx;
+mod system;
 
-pub use sqlx::{classify_sqlx_error, SqlxProvider};
+pub use sqlx::{classify_sqlx_error, SqlxErrorExt, SqlxProvider};
 
 use std::error::Error as StdError;
 
@@ -22,6 +24,9 @@ const PROVIDER_CLASSIFIERS: &[RawClassifier] = &[
     classify_raw::<reqwest::Error>,
     classify_raw::<rdkafka::error::KafkaError>,
     classify_raw::<::kafka::Error>,
+    classify_raw::<std::io::Error>,
+    classify_raw::<tokio::task::JoinError>,
+    classify_raw::<mysql_binlog_connector_rust::binlog_error::BinlogError>,
 ];
 
 fn classify_raw<E>(error: &(dyn StdError + 'static)) -> Option<DtErrorContext>

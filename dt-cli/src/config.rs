@@ -1,10 +1,9 @@
 use std::{collections::BTreeMap, path::Path};
 
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use clap::ValueEnum;
+use dt_common::error::{DtError, DtErrorContext, DtResultExt, ErrorCode, Stage};
 use url::Url;
-
-use crate::error_boundary::{config_error, config_source};
 
 const SERVER_ID_MIN: u64 = 10001;
 const SERVER_ID_MAX: u64 = 4_294_836_224;
@@ -45,7 +44,7 @@ impl DbType {
             "mongo" | "mongodb" => Ok(Self::Mongo),
             "redis" => Ok(Self::Redis),
             "mongodb+srv" => Ok(Self::Mongo),
-            _ => bail!(config_error(
+            _ => bail!(DtError::invalid_config(
                 format!(
                     "Unsupported URL scheme [{scheme}]; expected mysql, pg, postgres, postgresql, mongo, mongodb, mongodb+srv, or redis"
                 ),
@@ -89,24 +88,28 @@ pub fn infer_db_type(url: &str, explicit: Option<DbType>) -> Result<DbType> {
         .split_once("://")
         .map(|(scheme, _)| scheme)
         .ok_or_else(|| {
-            config_error(format!(
+            DtError::invalid_config(format!(
                 "Invalid endpoint URL [{url}]; expected <scheme>://..."
             ))
         })?;
     let inferred = DbType::from_scheme(scheme)?;
     if let Some(value) = explicit {
         if value != inferred {
-            bail!(config_error(format!(
+            bail!(DtError::invalid_config(format!(
                 "Explicit database type [{}] does not match URL scheme [{scheme}]",
                 value.as_config_value()
             ),));
         }
     } else if matches!(inferred, DbType::Pg) {
-        let parsed = Url::parse(url).map_err(|error| {
-            config_source(format!("Invalid endpoint URL [{url}]: {error}"), error)
-        })?;
+        let parsed = Url::parse(url)
+            .with_dt_context(
+                DtErrorContext::new()
+                    .code(ErrorCode::InvalidConfig)
+                    .stage(Stage::Bootstrap),
+            )
+            .with_context(|| format!("Invalid endpoint URL [{url}]"))?;
         if parsed.path().trim_matches('/').is_empty() {
-            bail!(config_error(format!(
+            bail!(DtError::invalid_config(format!(
                 "Database is required in inferred {} URL [{url}]",
                 inferred.as_config_value()
             ),));
@@ -233,12 +236,12 @@ pub fn build_task_config(
 
     for item in &create.set {
         let (path, value) = item.split_once('=').ok_or_else(|| {
-            config_error(format!(
+            DtError::invalid_config(format!(
                 "--set must use section.key=value; received [{item}]"
             ))
         })?;
         let (section, key) = path.split_once('.').ok_or_else(|| {
-            config_error(format!(
+            DtError::invalid_config(format!(
                 "--set must use section.key=value; received [{item}]"
             ))
         })?;
@@ -273,7 +276,7 @@ fn split_filter_patterns(patterns: &str, db_type: &DbType) -> Result<FilterPatte
         match split_unescaped(pattern, '.', escape)?.len() {
             1 => dbs.push(pattern),
             2 => tbs.push(pattern),
-            _ => bail!(config_error(
+            _ => bail!(DtError::invalid_config(
                 format!(
                     "Invalid filter expression [{pattern}]; expected db or db.table and escaped identifiers containing '.' or ','"
                 ),
@@ -325,12 +328,12 @@ fn split_unescaped(value: &str, delimiter: char, escape: Option<char>) -> Result
         }
     }
     if in_escape {
-        bail!(config_error(format!(
+        bail!(DtError::invalid_config(format!(
             "Unclosed identifier escape in filter expression [{value}]"
         ),));
     }
     if in_regex {
-        bail!(config_error(format!(
+        bail!(DtError::invalid_config(format!(
             "Unclosed regex escape in filter expression [{value}]"
         ),));
     }
@@ -350,7 +353,7 @@ fn is_filter_token_start(value: &str, index: usize) -> bool {
 fn push_filter_token<'a>(tokens: &mut Vec<&'a str>, token: &'a str, value: &str) -> Result<()> {
     let token = token.trim();
     if token.is_empty() {
-        bail!(config_error(format!(
+        bail!(DtError::invalid_config(format!(
             "Empty filter expression in [{value}]"
         ),));
     }

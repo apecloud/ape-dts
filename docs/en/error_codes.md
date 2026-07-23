@@ -153,9 +153,10 @@ failure for which no stable classification is available.
 
 The same extension trait is implemented for `anyhow::Error` and the supported
 provider error types. An explicit `DtErrorContext.code` has higher priority
-than the project classifier and is limited to deliberate boundary overrides,
-operation-specific provider defaults, and dynamic aggregate results. Unknown
-concrete errors use `DtErrorContext::attach` at the component boundary.
+than the project and provider classifiers. Use it when the operation itself
+defines the error condition or when a dynamic aggregate result cannot be
+represented by a `DtError` variant. Unknown concrete errors can retain their
+source type through `DtErrorContext::attach`.
 When a project-owned classification also has a lower-level source, put the
 semantic `DtError` in the `anyhow` context chain above that source. Both the
 `DtError` and the original source then remain downcastable, and the report uses
@@ -188,13 +189,12 @@ chain. Project-owned `DtError` values retain their variant-specific full
 `Display` text and typed payload, just as provider errors retain their own
 `Display`, source chain, and concrete type.
 
-At a component boundary, a raw provider error should be classified by borrowing
-it, then attached with `DtErrorContext::attach`. The resulting `anyhow::Error`
-can be downcast both to `DtErrorContext` and to the original provider error
-type. If a supported provider error crosses a boundary without typed metadata,
-the shared raw-cause classifier can still recover intrinsic code, origin, and
-object fields from the preserved concrete error type. It never parses error
-messages or infers execution scope.
+Supported provider errors should normally be propagated unchanged with `?` or
+ordinary `anyhow::Context`. The shared raw-cause registry classifies their
+preserved concrete types when the report is built, recovering intrinsic code,
+origin, and object fields. Attach an explicit `DtErrorContext` only for business
+semantics or execution scope that the provider error cannot know. Neither path
+infers stage, endpoint, or task ID at report time.
 
 `ErrorReport` is the user-facing boundary representation. Its text form uses
 `ERROR`, `TASK`, `AFFECTED`, `DETAIL`, and `HINT` lines.
@@ -205,27 +205,21 @@ and Rust error variants; they must not parse provider messages. Each
 implementation returns a `DtErrorContext` containing an optional recognized
 code, provider origin, and affected object. A small explicit registry applies
 the same trait to supported provider causes preserved in `anyhow::Error`.
-SQLx boundaries that know the database family keep passing `SqlxProvider` so
+SQLx call sites that know the database family keep passing `SqlxProvider` so
 transport errors retain an exact origin; raw fallback uses infer-only
-classification. The component boundary first
-attaches its operation-specific default code, then attaches the provider frame
-so a recognized provider condition overrides that default. Stage and endpoint
-are added outside both frames, while the provider error itself remains unchanged.
+classification. `SqlxErrorExt::with_sqlx_provider` attaches that provider frame
+without erasing the original SQLx error. When the operation also supplies a
+code, the call site first uses `.with_code(...)` and then
+`.with_sqlx_provider(...)`. A recognized provider condition is therefore the
+outer, more precise frame; an unrecognized condition retains the operation
+code. Stage, endpoint, and task ID are attached separately at the highest
+execution layer that knows them.
 
-Provider-specific metadata belongs in a small wrapper at the component
-boundary. The component assigns the operation-specific default code. Provider
-classifiers never accept a business default: an unrecognized provider
-condition returns no code and inherits the boundary default. Stage, endpoint,
-and task ID are attached explicitly at their highest semantic execution
-boundaries, outside provider classification.
-
-Each crate keeps all of its component wrappers in one `src/error_boundary.rs`
-file and separates ownership with nested modules such as `extractor_error`, `sinker_error`,
-or provider-specific modules. Do not add component error helper files beside
-business modules. `error_boundary` means the point where a lower-level failure
-is classified or enriched for Ape-DTS; it is distinct from the public error
-contract in `dt-common::error`. Shared provider classifiers remain in
-`dt-common::error::provider`.
+Provider classification belongs in `dt-common::error::provider`, not in
+per-crate wrappers. Business modules use `DtError` for project-owned failures,
+ordinary `anyhow::Context` for diagnostic prose, and the context extension
+methods only for explicit metadata. Do not introduce per-crate helper modules
+that merely forward arguments to these shared mechanisms.
 
 `ErrorReport` reads the typed context and error chain. It first uses the
 outermost explicit context code; if none exists, it downcasts the cause chain
@@ -233,9 +227,9 @@ to `DtError` and applies `ClassifyError`; finally it applies the registered raw
 provider classifiers. Both paths return `DtErrorContext`, so the internal
 resolver merges their metadata using the same precedence rules. Explicit business
 metadata therefore remains authoritative,
-while a known provider error does not become `IN999` merely because a boundary
+while a known provider error does not become `IN999` merely because a caller
 used a plain `?`. Unsupported or unrecognized raw errors still become `IN999`.
-Failure-path tests and code review remain necessary for operation defaults and
+Failure-path tests and code review remain necessary for explicit operation codes and
 call-site metadata that no raw provider error can supply.
 
 `MD099 MetadataReadFailed` is only the default for reading or decoding endpoint
@@ -277,14 +271,14 @@ under `origin` whenever available. Initial SQLx mappings are:
 | SQLx worker crash | `RT001` |
 | SQLx integrity error kinds | `IC001` |
 
-Every SQLx boundary also supplies an operation-specific default such as
-`CN001`, `DB001`, or `ST001`. A recognized provider classification overrides
-that default; otherwise the error inherits it. The original provider code,
-constraint/table metadata, and source error chain are always preserved.
+SQLx call sites may explicitly supply an operation-specific code such as
+`CN001`, `DB001`, or `ST001`. A recognized provider classification takes
+precedence; otherwise the operation code is retained. The provider origin,
+constraint/table metadata, and source error chain are preserved in both cases.
 
 The `tokio-postgres` replication adapter uses the same PostgreSQL SQLSTATE
 rules. URL parsing uses `CF002`, connection establishment uses `CN001`, and
-rejected replication commands use the operation-specific boundary default.
+rejected replication commands use the operation-specific explicit code.
 
 Other initial provider mappings are:
 
@@ -299,7 +293,7 @@ Other initial provider mappings are:
 | MongoDB command code `13` | `AU002` |
 | MongoDB command code `26` | `MD001` |
 | MongoDB duplicate-key codes `11000`/`11001`/`12582` | `IC001` |
-| MongoDB invalid client options / invalid TLS configuration | boundary default `CF002` / `CN003` |
+| MongoDB invalid client options / invalid TLS configuration | explicit call-site code `CF002` / `CN003` |
 | MongoDB DNS, I/O, pool-cleared, server-selection, or shutdown | `CN001` or `CN002` for I/O timeout |
 | Kafka authentication / authorization | `AU001` / `AU002` |
 | Kafka unknown topic or partition | `MD001` |
@@ -311,18 +305,19 @@ Other initial provider mappings are:
 | MySQL binlog error `1236` (requested binlog unavailable) | `ST001`, origin `mysql/1236` |
 | Other MySQL binlog decoding failures | `DB001` |
 
-Worker join failures are `RT001`. URL and YAML parsing errors classified at
-their component boundary are `CF002`. `DtError::Unclassified` and an unsupported
+Worker join failures are `RT001`. URL and YAML parsing errors explicitly
+classified by their callers are `CF002`. `DtError::Unclassified` and an unsupported
 or unrecognized raw error reaching `ErrorReport` are `IN999`. A local filesystem
-`std::io::Error` is `IO001`; network I/O must be classified at its provider
-boundary so that it becomes `CN001` or `CN002` instead. User-interrupted CLI
+`std::io::Error` is `IO001`; network I/O should retain its provider error type
+so that it becomes `CN001` or `CN002` instead. User-interrupted CLI
 operations are `RT002`.
 
 `mysql-binlog-connector-rust v0.3.4` discards the numeric code from MySQL error
 packets and exposes error `1236` as `ConnectError(String)`. Until the connector
-preserves that typed code, the MySQL extractor boundary recognizes only the
+preserves that typed code, the MySQL binlog classifier recognizes only the
 known "requested binlog unavailable" messages and restores origin code `1236`.
-This narrow compatibility workaround is not a general provider classifier.
+This narrow message-based exception compensates for type information lost by
+the provider library; other provider classification remains type- and code-based.
 
 A malformed database connection URL is configuration failure `CF002`. `CN001`
 is used only after a syntactically valid endpoint cannot be reached or an

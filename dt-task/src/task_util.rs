@@ -22,7 +22,9 @@ use dt_common::{
         sinker_config::{BasicSinkerConfig, SinkerConfig},
         task_config::TaskConfig,
     },
-    error::{DtErrorContextExt, EndpointRole, SqlxProvider},
+    error::{
+        DtError, DtErrorContextExt, EndpointRole, ErrorCode, SqlxErrorExt, SqlxProvider, Stage,
+    },
     log_info, log_warn,
     meta::{
         mysql::{
@@ -45,11 +47,6 @@ use dt_connector::{
 };
 use tokio::select;
 use tokio_util::sync::CancellationToken;
-
-use crate::error_boundary::{
-    connection_error::{self, missing_task_client, task_sqlx_metadata_error},
-    invalid_task_config,
-};
 
 pub struct TaskUtil {}
 
@@ -94,8 +91,11 @@ impl TaskUtil {
     ) -> anyhow::Result<Pool<MySql>> {
         let final_url = ConnectionAuthConfig::merge_url_with_auth(url, connection_auth)?;
 
-        let mut conn_options = MySqlConnectOptions::from_str(&final_url)
-            .map_err(|error| connection_error::sqlx(error, SqlxProvider::MySql))?;
+        let mut conn_options = MySqlConnectOptions::from_str(&final_url).map_err(|error| {
+            error
+                .with_code(ErrorCode::ConnectionFailed)
+                .with_sqlx_provider(SqlxProvider::MySql)
+        })?;
         // The default character set is `utf8mb4`
         conn_options = conn_options
             .log_statements(log::LevelFilter::Debug)
@@ -136,10 +136,11 @@ impl TaskUtil {
             }
         }
 
-        conn_pool
-            .connect_with(conn_options)
-            .await
-            .map_err(|error| connection_error::sqlx(error, SqlxProvider::MySql))
+        conn_pool.connect_with(conn_options).await.map_err(|error| {
+            error
+                .with_code(ErrorCode::ConnectionFailed)
+                .with_sqlx_provider(SqlxProvider::MySql)
+        })
     }
 
     pub fn build_mysql_conn_settings(
@@ -182,8 +183,11 @@ impl TaskUtil {
     ) -> anyhow::Result<Pool<Postgres>> {
         let final_url = ConnectionAuthConfig::merge_url_with_auth(url, connection_auth)?;
 
-        let mut conn_options = PgConnectOptions::from_str(&final_url)
-            .map_err(|error| connection_error::sqlx(error, SqlxProvider::Postgres))?;
+        let mut conn_options = PgConnectOptions::from_str(&final_url).map_err(|error| {
+            error
+                .with_code(ErrorCode::ConnectionFailed)
+                .with_sqlx_provider(SqlxProvider::Postgres)
+        })?;
         conn_options = conn_options
             .log_statements(log::LevelFilter::Debug)
             .log_slow_statements(log::LevelFilter::Debug, Duration::from_secs(1));
@@ -216,7 +220,11 @@ impl TaskUtil {
         let conn_pool = pool_options
             .connect_with(conn_options)
             .await
-            .map_err(|error| connection_error::sqlx(error, SqlxProvider::Postgres))?;
+            .map_err(|error| {
+                error
+                    .with_code(ErrorCode::ConnectionFailed)
+                    .with_sqlx_provider(SqlxProvider::Postgres)
+            })?;
         Ok(conn_pool)
     }
 
@@ -381,9 +389,11 @@ impl TaskUtil {
     ) -> anyhow::Result<mongodb::Client> {
         let final_url = ConnectionAuthConfig::merge_url_with_auth(url, connection_auth)?;
 
-        let mut client_options = ClientOptions::parse(&final_url)
-            .await
-            .map_err(connection_error::mongodb_config)?;
+        let mut client_options = ClientOptions::parse(&final_url).await.map_err(|error| {
+            error
+                .with_code(ErrorCode::InvalidConfig)
+                .with_stage(Stage::Bootstrap)
+        })?;
         // app_name only for debug usage
         if let Some(app) = app_name {
             client_options.app_name = Some(app.to_string());
@@ -393,7 +403,11 @@ impl TaskUtil {
         }
         client_options.max_pool_size = max_pool_size;
 
-        mongodb::Client::with_options(client_options).map_err(connection_error::mongodb_config)
+        mongodb::Client::with_options(client_options).map_err(|error| {
+            error
+                .with_code(ErrorCode::InvalidConfig)
+                .with_stage(Stage::Bootstrap)
+        })
     }
 
     pub fn check_enable_sqlx_log(log_level: &str) -> bool {
@@ -454,7 +468,7 @@ impl TaskUtil {
         let conn_pool = match conn_pool {
             ConnClient::MySQL(conn_pool) => conn_pool,
             _ => {
-                bail!(missing_task_client("MySQL"))
+                bail!(DtError::MissingTaskClient("MySQL".to_string()))
             }
         };
 
@@ -475,11 +489,12 @@ impl TaskUtil {
 
         let mut total_records = 0;
         let mut rows = sqlx::query(&sql).fetch(conn_pool);
-        while let Some(row) = rows
-            .try_next()
-            .await
-            .map_err(|error| task_sqlx_metadata_error(error, SqlxProvider::MySql))?
-        {
+        while let Some(row) = rows.try_next().await.map_err(|error| {
+            error
+                .with_code(ErrorCode::MetadataReadFailed)
+                .with_sqlx_provider(SqlxProvider::MySql)
+                .with_stage(Stage::Task)
+        })? {
             let schema = SqlUtil::try_get_mysql_string(&row, 0)?;
             let tb = SqlUtil::try_get_mysql_string(&row, 1)?;
             let records: u64 = row.try_get(2)?;
@@ -500,7 +515,7 @@ impl TaskUtil {
         let conn_pool = match conn_pool {
             ConnClient::PostgreSQL(conn_pool) => conn_pool,
             _ => {
-                bail!(missing_task_client("PostgreSQL"))
+                bail!(DtError::MissingTaskClient("PostgreSQL".to_string()))
             }
         };
 
@@ -533,11 +548,12 @@ WHERE
 
         let mut total_length = 0;
         let mut rows = sqlx::query(&sql).fetch(conn_pool);
-        while let Some(row) = rows
-            .try_next()
-            .await
-            .map_err(|error| task_sqlx_metadata_error(error, SqlxProvider::Postgres))?
-        {
+        while let Some(row) = rows.try_next().await.map_err(|error| {
+            error
+                .with_code(ErrorCode::MetadataReadFailed)
+                .with_sqlx_provider(SqlxProvider::Postgres)
+                .with_stage(Stage::Task)
+        })? {
             let schema: String = row.try_get(0)?;
             let table_name: String = row.try_get(1)?;
             let row_count: i64 = row.try_get(2)?;
@@ -605,7 +621,7 @@ WHERE
         let conn_pool = match conn_client {
             ConnClient::PostgreSQL(conn_pool) => conn_pool,
             _ => {
-                bail!(missing_task_client("PostgreSQL"))
+                bail!(DtError::MissingTaskClient("PostgreSQL".to_string()))
             }
         };
 
@@ -613,11 +629,12 @@ WHERE
             FROM information_schema.schemata
             WHERE catalog_name = current_database()";
         let mut rows = sqlx::query(sql).fetch(conn_pool);
-        while let Some(row) = rows
-            .try_next()
-            .await
-            .map_err(|error| task_sqlx_metadata_error(error, SqlxProvider::Postgres))?
-        {
+        while let Some(row) = rows.try_next().await.map_err(|error| {
+            error
+                .with_code(ErrorCode::MetadataReadFailed)
+                .with_sqlx_provider(SqlxProvider::Postgres)
+                .with_stage(Stage::Task)
+        })? {
             let schema: String = row.try_get(0)?;
             if SystemDb::is_system_db(&schema, &DbType::Pg) {
                 continue;
@@ -633,7 +650,7 @@ WHERE
         let conn_pool = match conn_client {
             ConnClient::PostgreSQL(conn_pool) => conn_pool,
             _ => {
-                bail!(missing_task_client("PostgreSQL"))
+                bail!(DtError::MissingTaskClient("PostgreSQL".to_string()))
             }
         };
 
@@ -646,11 +663,12 @@ WHERE
             schema
         );
         let mut rows = sqlx::query(&sql).fetch(conn_pool);
-        while let Some(row) = rows
-            .try_next()
-            .await
-            .map_err(|error| task_sqlx_metadata_error(error, SqlxProvider::Postgres))?
-        {
+        while let Some(row) = rows.try_next().await.map_err(|error| {
+            error
+                .with_code(ErrorCode::MetadataReadFailed)
+                .with_sqlx_provider(SqlxProvider::Postgres)
+                .with_stage(Stage::Task)
+        })? {
             let tb: String = row.try_get(0)?;
             tbs.push(tb);
         }
@@ -663,17 +681,18 @@ WHERE
         let conn_pool = match conn_client {
             ConnClient::MySQL(conn_pool) => conn_pool,
             _ => {
-                bail!(missing_task_client("MySQL"))
+                bail!(DtError::MissingTaskClient("MySQL".to_string()))
             }
         };
 
         let sql = "SELECT schema_name FROM information_schema.schemata";
         let mut rows = sqlx::query(sql).fetch(conn_pool);
-        while let Some(row) = rows
-            .try_next()
-            .await
-            .map_err(|error| task_sqlx_metadata_error(error, SqlxProvider::MySql))?
-        {
+        while let Some(row) = rows.try_next().await.map_err(|error| {
+            error
+                .with_code(ErrorCode::MetadataReadFailed)
+                .with_sqlx_provider(SqlxProvider::MySql)
+                .with_stage(Stage::Task)
+        })? {
             let db = SqlUtil::try_get_mysql_string(&row, 0)?;
             if SystemDb::is_system_db(&db, &DbType::Mysql) {
                 continue;
@@ -689,7 +708,7 @@ WHERE
         let conn_pool = match conn_client {
             ConnClient::MySQL(conn_pool) => conn_pool,
             _ => {
-                bail!(missing_task_client("MySQL"))
+                bail!(DtError::MissingTaskClient("MySQL".to_string()))
             }
         };
 
@@ -698,11 +717,12 @@ WHERE
             WHERE table_schema = ? 
             AND table_type = 'BASE TABLE'";
         let mut rows = sqlx::query(sql).bind(db).fetch(conn_pool);
-        while let Some(row) = rows
-            .try_next()
-            .await
-            .map_err(|error| task_sqlx_metadata_error(error, SqlxProvider::MySql))?
-        {
+        while let Some(row) = rows.try_next().await.map_err(|error| {
+            error
+                .with_code(ErrorCode::MetadataReadFailed)
+                .with_sqlx_provider(SqlxProvider::MySql)
+                .with_stage(Stage::Task)
+        })? {
             let tb = SqlUtil::try_get_mysql_string(&row, 0)?;
             tbs.push(tb);
         }
@@ -714,7 +734,7 @@ WHERE
         let client = match conn_client {
             ConnClient::MongoDB(client) => client,
             _ => {
-                bail!(missing_task_client("MongoDB"))
+                bail!(DtError::MissingTaskClient("MongoDB".to_string()))
             }
         };
         let dbs = client
@@ -730,7 +750,7 @@ WHERE
         let client = match conn_client {
             ConnClient::MongoDB(client) => client,
             _ => {
-                bail!(missing_task_client("MongoDB"))
+                bail!(DtError::MissingTaskClient("MongoDB".to_string()))
             }
         };
         // filter views and system tables
@@ -861,13 +881,13 @@ impl ConnClient {
         let extractor_max_connections = task_config.extractor_basic.max_connections;
         let sinker_max_connections = task_config.sinker_basic.max_connections;
         if extractor_max_connections < 1 {
-            bail!(invalid_task_config(
+            bail!(DtError::invalid_config(
                 "`extractor.max_connections` must be greater than 0"
             ));
         }
         let sinker_exists = !matches!(task_config.sinker, SinkerConfig::Dummy);
         if sinker_exists && sinker_max_connections < 1 {
-            bail!(invalid_task_config(
+            bail!(DtError::invalid_config(
                 "`sinker.max_connections` must be greater than 0"
             ));
         }

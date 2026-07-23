@@ -1,6 +1,7 @@
+use anyhow::Context;
 use apache_avro::Schema;
 
-use crate::{error::ErrorCode, error_boundary::metadata::avro_source};
+use crate::error::DtError;
 
 pub struct AvroConverterSchema {}
 
@@ -129,13 +130,9 @@ const SCHEMA_STR: &str = r#"
 
 impl AvroConverterSchema {
     pub fn get_avro_schema() -> anyhow::Result<Schema> {
-        Schema::parse_str(SCHEMA_STR).map_err(|error| {
-            avro_source(
-                error,
-                ErrorCode::InvariantViolated,
-                "the embedded Avro converter schema is invalid",
-            )
-        })
+        Schema::parse_str(SCHEMA_STR).context(DtError::InvariantViolated(
+            "the embedded Avro converter schema is invalid".to_string(),
+        ))
     }
 }
 

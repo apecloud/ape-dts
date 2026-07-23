@@ -1,7 +1,9 @@
 use sqlx::error::ErrorKind;
 
 use super::{
-    super::{ClassifyError, DtErrorContext, ErrorCode, ErrorObject, OriginError},
+    super::{
+        ClassifyError, DtErrorContext, DtErrorContextExt, ErrorCode, ErrorObject, OriginError,
+    },
     classification::{classify_mysql_code, classify_postgres_code, provider_context},
 };
 
@@ -10,6 +12,31 @@ pub enum SqlxProvider {
     MySql,
     Postgres,
     Unknown,
+}
+
+pub trait SqlxErrorExt {
+    fn with_sqlx_provider(self, provider: SqlxProvider) -> anyhow::Error;
+}
+
+impl SqlxErrorExt for sqlx::Error {
+    #[inline(always)]
+    fn with_sqlx_provider(self, provider: SqlxProvider) -> anyhow::Error {
+        let context = classify_sqlx_error(&self, provider);
+        context.attach(self)
+    }
+}
+
+impl SqlxErrorExt for anyhow::Error {
+    #[inline(always)]
+    fn with_sqlx_provider(self, provider: SqlxProvider) -> anyhow::Error {
+        let context = self
+            .downcast_ref::<sqlx::Error>()
+            .map(|error| classify_sqlx_error(error, provider));
+        match context {
+            Some(context) => self.with_context(context),
+            None => self,
+        }
+    }
 }
 
 impl SqlxProvider {

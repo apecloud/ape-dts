@@ -7,11 +7,12 @@ use tokio::time::Instant;
 
 use dt_common::{
     config::config_enums::DbType,
+    error::{DtError, DtErrorContextExt, ErrorCode},
     meta::{col_value::ColValue, row_data::RowData, row_type::RowType},
     utils::{limit_queue::LimitedQueue, sql_util::SqlUtil},
 };
 
-use crate::{call_batch_fn, error_boundary::sinker_error, sinker::base_sinker::BaseSinker, Sinker};
+use crate::{call_batch_fn, sinker::base_sinker::BaseSinker, Sinker};
 
 const SIGN_COL_NAME: &str = "_ape_dts_is_deleted";
 const TIMESTAMP_COL_NAME: &str = "_ape_dts_timestamp";
@@ -101,7 +102,7 @@ impl ClickhouseSinker {
             .http_client
             .execute(request)
             .await
-            .map_err(sinker_error::reqwest)?;
+            .map_err(|error| error.with_code(ErrorCode::StatementFailed))?;
         rts.push((start_time.elapsed().as_millis() as u64, 1));
         let task_id = self
             .base_sinker
@@ -184,14 +185,25 @@ impl ClickhouseSinker {
             .request(Method::POST, url)
             .basic_auth(&self.username, password)
             .body(body);
-        post.build().map_err(sinker_error::reqwest)
+        post.build()
+            .map_err(|error| error.with_code(ErrorCode::StatementFailed))
     }
 
     async fn check_response(response: Response) -> anyhow::Result<()> {
         let status_code = response.status();
-        response.text().await.map_err(sinker_error::reqwest)?;
+        response
+            .text()
+            .await
+            .map_err(|error| error.with_code(ErrorCode::StatementFailed))?;
         if status_code != StatusCode::OK {
-            return Err(sinker_error::http_status(status_code));
+            return Err(DtError::HttpRejected {
+                status: status_code.as_u16(),
+                detail: format!(
+                    "the destination rejected the request with HTTP status {}",
+                    status_code.as_u16()
+                ),
+            }
+            .into());
         }
         Ok(())
     }

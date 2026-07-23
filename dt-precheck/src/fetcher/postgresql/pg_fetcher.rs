@@ -2,13 +2,16 @@ use std::collections::HashMap;
 
 use anyhow::bail;
 use async_trait::async_trait;
-use dt_common::{config::connection_auth_config::ConnectionAuthConfig, rdb_filter::RdbFilter};
+use dt_common::{
+    config::connection_auth_config::ConnectionAuthConfig,
+    error::{DtErrorContextExt, ErrorCode},
+    rdb_filter::RdbFilter,
+};
 use dt_task::task_util::TaskUtil;
 use futures::{Stream, TryStreamExt};
 use sqlx::{postgres::PgRow, query, Pool, Postgres, Row};
 
 use crate::{
-    error_boundary::postgres::postgres_precheck_error,
     fetcher::traits::Fetcher,
     meta::database_mode::{Constraint, Database, Schema, Table},
 };
@@ -207,7 +210,7 @@ impl PgFetcher {
     async fn fetch_all(&self, sql: String, mut sql_msg: &str) -> anyhow::Result<Vec<PgRow>> {
         let pg_pool = match &self.pool {
             Some(pool) => pool,
-            None => bail! {postgres_precheck_error(sqlx::Error::PoolClosed)},
+            None => bail! {sqlx::Error::PoolClosed.with_code(ErrorCode::StatementFailed)},
         };
 
         sql_msg = if sql_msg.is_empty() { "sql" } else { sql_msg };
@@ -216,7 +219,7 @@ impl PgFetcher {
         query(&sql)
             .fetch_all(pg_pool)
             .await
-            .map_err(postgres_precheck_error)
+            .map_err(|error| error.with_code(ErrorCode::StatementFailed))
     }
 
     fn fetch_row<'a>(
@@ -228,9 +231,11 @@ impl PgFetcher {
             Some(pool) => {
                 sql_msg = if sql_msg.is_empty() { "sql" } else { sql_msg };
                 println!("{}: {}", sql_msg, sql);
-                Ok(query(sql).fetch(pool).map_err(postgres_precheck_error))
+                Ok(query(sql)
+                    .fetch(pool)
+                    .map_err(|error| error.with_code(ErrorCode::StatementFailed)))
             }
-            None => bail! {postgres_precheck_error(sqlx::Error::PoolClosed)},
+            None => bail! {sqlx::Error::PoolClosed.with_code(ErrorCode::StatementFailed)},
         }
     }
 

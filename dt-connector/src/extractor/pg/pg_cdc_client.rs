@@ -1,5 +1,6 @@
 use std::str::FromStr;
 
+use anyhow::Context;
 use openssl::ssl::{SslConnector, SslMethod, SslVerifyMode};
 use postgres_openssl::MakeTlsConnector;
 use postgres_types::PgLsn;
@@ -9,7 +10,6 @@ use tokio_postgres::{
 };
 use url::Url;
 
-use crate::error_boundary::extractor_error;
 use dt_common::{
     config::{
         connection_auth_config::ConnectionAuthConfig,
@@ -33,9 +33,10 @@ impl PgCdcClient {
         let (config, ssl_config) = self.build_replication_config()?;
         let client = match ssl_config.ssl_mode {
             SslMode::Disable => {
-                let (client, connection) = config.connect(NoTls).await.map_err(|error| {
-                    extractor_error::postgres(error, ErrorCode::ConnectionFailed)
-                })?;
+                let (client, connection) = config
+                    .connect(NoTls)
+                    .await
+                    .map_err(|error| error.with_code(ErrorCode::ConnectionFailed))?;
                 tokio::spawn(async move {
                     log_info!("postgres replication connection starts",);
                     if let Err(e) = connection.await {
@@ -46,9 +47,10 @@ impl PgCdcClient {
             }
             _ => {
                 let connector = Self::build_tls_connector(&ssl_config)?;
-                let (client, connection) = config.connect(connector).await.map_err(|error| {
-                    extractor_error::postgres(error, ErrorCode::ConnectionFailed)
-                })?;
+                let (client, connection) = config
+                    .connect(connector)
+                    .await
+                    .map_err(|error| error.with_code(ErrorCode::ConnectionFailed))?;
                 tokio::spawn(async move {
                     log_info!("postgres replication connection starts",);
                     if let Err(e) = connection.await {
@@ -64,7 +66,7 @@ impl PgCdcClient {
     fn build_replication_config(&self) -> anyhow::Result<(Config, SslConfig)> {
         let (sanitized_url, url_ssl_config) = Self::parse_url_ssl_config(&self.url)?;
         let mut config: Config = Config::from_str(&sanitized_url)
-            .map_err(|error| extractor_error::postgres(error, ErrorCode::InvalidConfig))?;
+            .map_err(|error| error.with_code(ErrorCode::InvalidConfig))?;
         config.replication_mode(ReplicationMode::Logical);
 
         let mut effective_ssl_config = url_ssl_config.unwrap_or_else(Self::disabled_ssl_config);
@@ -103,8 +105,11 @@ impl PgCdcClient {
     }
 
     fn build_tls_connector(ssl_config: &SslConfig) -> anyhow::Result<MakeTlsConnector> {
-        let mut builder =
-            SslConnector::builder(SslMethod::tls()).map_err(extractor_error::postgres_tls)?;
+        let mut builder = SslConnector::builder(SslMethod::tls()).map_err(|error| {
+            error
+                .with_code(ErrorCode::TlsFailed)
+                .with_origin(OriginError::new("postgres", None::<String>))
+        })?;
 
         match ssl_config.ssl_mode {
             SslMode::Disable => {
@@ -125,7 +130,11 @@ impl PgCdcClient {
                 }
                 builder
                     .set_ca_file(&ssl_config.ssl_ca_path)
-                    .map_err(extractor_error::postgres_tls)?;
+                    .map_err(|error| {
+                        error
+                            .with_code(ErrorCode::TlsFailed)
+                            .with_origin(OriginError::new("postgres", None::<String>))
+                    })?;
                 builder.set_verify(SslVerifyMode::PEER);
             }
         }
@@ -142,9 +151,9 @@ impl PgCdcClient {
     }
 
     fn parse_url_ssl_config(url: &str) -> anyhow::Result<(String, Option<SslConfig>)> {
-        let mut parsed = Url::parse(url).map_err(|error| {
-            extractor_error::provider_source(error, ErrorCode::InvalidConfig, "postgres")
-        })?;
+        let mut parsed = Url::parse(url).context(DtError::PostgresInvalidConfig(
+            "the PostgreSQL CDC URL is invalid".to_string(),
+        ))?;
         let mut ssl_mode = None;
         let mut ssl_ca_path = None;
         let mut other_pairs = vec![];
@@ -204,7 +213,7 @@ impl PgCdcClient {
         let res = client
             .simple_query(&query)
             .await
-            .map_err(|error| extractor_error::postgres(error, ErrorCode::MetadataReadFailed))?;
+            .map_err(|error| error.with_code(ErrorCode::MetadataReadFailed))?;
         let pub_exists = res.len() > 1;
         log_info!("publication: {} exists: {}", pub_name, pub_exists);
 
@@ -214,7 +223,7 @@ impl PgCdcClient {
             client
                 .simple_query(&query)
                 .await
-                .map_err(|error| extractor_error::postgres(error, ErrorCode::StatementFailed))?;
+                .map_err(|error| error.with_code(ErrorCode::StatementFailed))?;
         }
 
         // check slot exists
@@ -249,9 +258,10 @@ impl PgCdcClient {
                     "pg_drop_replication_slot", self.slot_name
                 );
                 log_info!("execute: {}", query);
-                client.simple_query(&query).await.map_err(|error| {
-                    extractor_error::postgres(error, ErrorCode::StatementFailed)
-                })?;
+                client
+                    .simple_query(&query)
+                    .await
+                    .map_err(|error| error.with_code(ErrorCode::StatementFailed))?;
             }
 
             let query = format!(
@@ -263,7 +273,7 @@ impl PgCdcClient {
             let res = client
                 .simple_query(&query)
                 .await
-                .map_err(|error| extractor_error::postgres(error, ErrorCode::StatementFailed))?;
+                .map_err(|error| error.with_code(ErrorCode::StatementFailed))?;
             // get the lsn for the newly created slot
             start_lsn = res
                 .iter()
@@ -272,7 +282,7 @@ impl PgCdcClient {
                     _ => None,
                 })
                 .ok_or_else(|| {
-                    DtError::StatementFailed(
+                    DtError::PostgresStatementFailed(
                         "the CREATE_REPLICATION_SLOT response is missing consistent_point"
                             .to_string(),
                     )
@@ -282,7 +292,6 @@ impl PgCdcClient {
                         .with_hint(
                             "Remove the incomplete replication slot and restart the task. If it repeats, check PostgreSQL replication logs.",
                         )
-                        .with_origin(OriginError::new("postgres", None::<String>))
                 })?;
 
             log_info!(
@@ -303,7 +312,7 @@ impl PgCdcClient {
         let res = client
             .simple_query(&query)
             .await
-            .map_err(|error| extractor_error::postgres(error, ErrorCode::MetadataReadFailed))?;
+            .map_err(|error| error.with_code(ErrorCode::MetadataReadFailed))?;
         let slot_exists = res.len() > 1;
         log_info!("slot: {} exists: {}", self.slot_name, slot_exists);
 
@@ -331,11 +340,11 @@ impl PgCdcClient {
         client
             .simple_query("SET extra_float_digits=3")
             .await
-            .map_err(|error| extractor_error::postgres(error, ErrorCode::StatementFailed))?;
+            .map_err(|error| error.with_code(ErrorCode::StatementFailed))?;
         client
             .simple_query("SET TIME ZONE 'UTC'")
             .await
-            .map_err(|error| extractor_error::postgres(error, ErrorCode::StatementFailed))?;
+            .map_err(|error| error.with_code(ErrorCode::StatementFailed))?;
 
         // start replication slot
         let options = format!(
@@ -351,16 +360,19 @@ impl PgCdcClient {
         let copy_stream = client
             .copy_both_simple::<bytes::Bytes>(&query)
             .await
-            .map_err(|error| extractor_error::postgres(error, ErrorCode::StatementFailed))?;
+            .map_err(|error| error.with_code(ErrorCode::StatementFailed))?;
         let stream = LogicalReplicationStream::new(copy_stream);
         Ok((stream, start_lsn))
     }
 }
 
 fn parse_lsn(value: &str) -> anyhow::Result<PgLsn> {
-    value
-        .parse()
-        .map_err(|_| extractor_error::invalid_postgres_lsn())
+    value.parse().map_err(|_| {
+        DtError::PostgresCheckpointReadFailed(
+            "a PostgreSQL replication position is invalid".to_string(),
+        )
+        .into()
+    })
 }
 
 #[cfg(test)]

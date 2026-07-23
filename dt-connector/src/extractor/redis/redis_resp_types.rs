@@ -1,7 +1,5 @@
-use anyhow::bail;
+use anyhow::{bail, Context};
 use dt_common::error::DtError;
-
-use crate::error_boundary::extractor_error::{redis_source_error, redis_source_error_with_cause};
 
 /// Represents a redis RESP protocol response
 /// https://redis.io/topics/protocol#resp-protocol-description
@@ -37,9 +35,9 @@ impl ParseFrom<Value> for () {
     fn parse_from(value: Value) -> anyhow::Result<Self> {
         match value {
             Value::Okay => Ok(()),
-            v => bail! {redis_source_error(
-                DtError::RedisResultError(format!("failed to parse Redis response: {v:?}")),
-            )},
+            v => bail!(DtError::RedisResultError(format!(
+                "failed to parse Redis response: {v:?}"
+            ))),
         }
     }
 }
@@ -48,9 +46,9 @@ impl ParseFrom<Value> for i64 {
     fn parse_from(value: Value) -> anyhow::Result<Self> {
         match value {
             Value::Int(n) => Ok(n),
-            v => bail! {redis_source_error(
-                DtError::RedisResultError(format!("failed to parse Redis response: {v:?}")),
-            )},
+            v => bail!(DtError::RedisResultError(format!(
+                "failed to parse Redis response: {v:?}"
+            ))),
         }
     }
 }
@@ -59,9 +57,9 @@ impl ParseFrom<Value> for Vec<u8> {
     fn parse_from(value: Value) -> anyhow::Result<Self> {
         match value {
             Value::Data(bytes) => Ok(bytes),
-            v => bail! {redis_source_error(
-                DtError::RedisResultError(format!("failed to parse Redis response: {v:?}")),
-            )},
+            v => bail!(DtError::RedisResultError(format!(
+                "failed to parse Redis response: {v:?}"
+            ))),
         }
     }
 }
@@ -73,17 +71,12 @@ impl ParseFrom<Value> for String {
             Value::Nil => Ok(String::new()),
             Value::Int(n) => Ok(format!("{}", n)),
             Value::Status(s) => Ok(s),
-            Value::Data(bytes) => String::from_utf8(bytes).map_err(|error| {
-                redis_source_error_with_cause(
-                    DtError::RedisResultError(
-                        "Redis string response is not valid UTF-8".to_string(),
-                    ),
-                    error,
-                )
-            }),
-            v => bail! {redis_source_error(
-                DtError::RedisResultError(format!("failed to parse Redis response: {v:?}")),
-            )},
+            Value::Data(bytes) => String::from_utf8(bytes).context(DtError::RedisResultError(
+                "Redis string response is not valid UTF-8".to_string(),
+            )),
+            v => bail!(DtError::RedisResultError(format!(
+                "failed to parse Redis response: {v:?}"
+            ))),
         }
     }
 }
@@ -100,8 +93,8 @@ where
             }
             return Ok(result);
         }
-        bail! {redis_source_error(
-            DtError::RedisResultError(format!("failed to parse Redis response: {v:?}")),
-        )}
+        bail!(DtError::RedisResultError(format!(
+            "failed to parse Redis response: {v:?}"
+        )))
     }
 }

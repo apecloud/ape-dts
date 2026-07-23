@@ -1,10 +1,8 @@
 use std::collections::{HashMap, HashSet};
 
-use anyhow::bail;
+use anyhow::{bail, Context};
 
-use crate::error_boundary::redis::{
-    redis_command_catalog_error, redis_command_error, redis_command_source,
-};
+use crate::error::DtError;
 
 use super::{cmd_constants::CmdConstants, cmd_meta::CmdMeta};
 
@@ -16,9 +14,12 @@ pub struct KeyParser {
 impl KeyParser {
     pub fn new() -> anyhow::Result<Self> {
         let containers: HashSet<String> = serde_json::from_str(CmdConstants::CONTAINER_COMMANDS)
-            .map_err(redis_command_catalog_error)?;
-        let metas: Vec<CmdMeta> = serde_json::from_str(CmdConstants::COMMAND_METAS)
-            .map_err(redis_command_catalog_error)?;
+            .context(DtError::RedisInvariant(
+                "the embedded Redis command catalog is invalid".to_string(),
+            ))?;
+        let metas: Vec<CmdMeta> = serde_json::from_str(CmdConstants::COMMAND_METAS).context(
+            DtError::RedisInvariant("the embedded Redis command catalog is invalid".to_string()),
+        )?;
 
         let mut cmd_metas = HashMap::new();
         for cmd in metas {
@@ -38,11 +39,11 @@ impl KeyParser {
         // refer: https://github.com/tair-opensource/RedisShake/blob/v4/internal/commands/keys.go
         let mut cmd_name = argv
             .first()
-            .ok_or_else(|| redis_command_error("empty Redis command"))?
+            .ok_or_else(|| DtError::RedisCmdError("empty Redis command".to_string()))?
             .to_uppercase();
         if self.container_cmds.contains(&cmd_name) {
             let subcommand = argv.get(1).ok_or_else(|| {
-                redis_command_error(format!("missing subcommand for command: {cmd_name}"))
+                DtError::RedisCmdError(format!("missing subcommand for command: {cmd_name}"))
             })?;
             cmd_name = format!("{}-{}", cmd_name, subcommand.to_uppercase());
         }
@@ -50,7 +51,9 @@ impl KeyParser {
         let cmd = match self.cmd_metas.get(&cmd_name) {
             Some(cmd) => cmd,
             None => {
-                bail!(redis_command_error(format!("unknown command: {cmd_name}")))
+                bail!(DtError::RedisCmdError(format!(
+                    "unknown command: {cmd_name}"
+                )))
             }
         };
 
@@ -81,7 +84,7 @@ impl KeyParser {
 
                     loop {
                         if idx <= 0 || idx >= arg_cout {
-                            bail!(redis_command_error(format!(
+                            bail!(DtError::RedisCmdError(format!(
                                 "keyword not found: {cmd_name}"
                             )))
                         }
@@ -94,7 +97,7 @@ impl KeyParser {
                 }
 
                 _ => {
-                    bail! {redis_command_error(format!(
+                    bail! {DtError::RedisCmdError(format!(
                         "unsupported begin search type: {}",
                         spec.begin_search_type
                     ))}
@@ -124,7 +127,7 @@ impl KeyParser {
                     // after finding a key, to find the next one.
                     for idx in (begin..=last_key_idx).step_by(spec.find_keys_range_key_step) {
                         let key = argv.get(idx as usize).ok_or_else(|| {
-                            redis_command_error(format!(
+                            DtError::RedisCmdError(format!(
                                 "key index {idx} is out of range for command: {cmd_name}"
                             ))
                         })?;
@@ -141,21 +144,15 @@ impl KeyParser {
                     // keynumidx: the index, relative to begin_search, of the argument containing the number of keys.
                     let keynum_idx = begin + spec.find_keys_keynum_index;
                     if keynum_idx < 0 || keynum_idx >= arg_cout {
-                        bail! {redis_command_error(format!(
+                        bail! {DtError::RedisCmdError(format!(
                             "wrong keynumidx: {}",
                             keynum_idx
                         ))}
                     }
 
-                    let key_count =
-                        argv[keynum_idx as usize]
-                            .parse::<usize>()
-                            .map_err(|error| {
-                                redis_command_source(
-                                    format!("invalid key count for command {cmd_name}: {error}"),
-                                    error,
-                                )
-                            })?;
+                    let key_count = argv[keynum_idx as usize].parse::<usize>().context(
+                        DtError::RedisCmdError(format!("invalid key count for command {cmd_name}")),
+                    )?;
                     // firstkey: the index, relative to begin_search, of the first key.
                     // This is usually the next argument after keynumidx, and its value, in this case, is greater by one.
                     for idx in (begin + spec.find_keys_keynum_first_key..)
@@ -163,7 +160,7 @@ impl KeyParser {
                         .take(key_count)
                     {
                         let key = argv.get(idx as usize).ok_or_else(|| {
-                            redis_command_error(format!(
+                            DtError::RedisCmdError(format!(
                                 "key index {idx} is out of range for command: {cmd_name}"
                             ))
                         })?;
@@ -173,7 +170,7 @@ impl KeyParser {
                 }
 
                 _ => {
-                    bail! {redis_command_error(format!(
+                    bail! {DtError::RedisCmdError(format!(
                         "unsupported find keys type: {}",
                         spec.find_keys_type
                     ))}

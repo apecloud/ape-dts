@@ -14,6 +14,7 @@ use dt_common::{
         extractor_config::ExtractorConfig,
         task_config::TaskConfig,
     },
+    error::{DtError, DtErrorContext, DtResultExt, ErrorCode, Stage},
     meta::{
         avro::avro_converter::AvroConverter, dt_queue::DtQueue,
         mysql::mysql_meta_manager::MysqlMetaManager, pg::pg_meta_manager::PgMetaManager,
@@ -61,10 +62,7 @@ use dt_connector::{
     Extractor,
 };
 
-use crate::{
-    error_boundary::extractor::{invalid_config_source, missing_extractor_client},
-    task_util::ConnClient,
-};
+use crate::task_util::ConnClient;
 
 use super::task_util::TaskUtil;
 
@@ -137,7 +135,7 @@ impl ExtractorUtil {
                 let conn_pool = match extractor_client {
                     ConnClient::MySQL(conn_pool) => conn_pool,
                     _ => {
-                        bail!(missing_extractor_client());
+                        bail!(DtError::MissingSourceClient);
                     }
                 };
                 let meta_manager = TaskUtil::create_mysql_meta_manager(
@@ -177,7 +175,7 @@ impl ExtractorUtil {
                 let conn_pool = match extractor_client {
                     ConnClient::MySQL(conn_pool) => conn_pool,
                     _ => {
-                        bail!(missing_extractor_client());
+                        bail!(DtError::MissingSourceClient);
                     }
                 };
                 let meta_manager = TaskUtil::create_mysql_meta_manager(
@@ -221,7 +219,7 @@ impl ExtractorUtil {
             } => {
                 let conn_pool = match extractor_client {
                     ConnClient::MySQL(conn_pool) => conn_pool,
-                    _ => bail!(missing_extractor_client()),
+                    _ => bail!(DtError::MissingSourceClient),
                 };
                 let meta_manager = TaskUtil::create_mysql_meta_manager(
                     &url,
@@ -269,7 +267,7 @@ impl ExtractorUtil {
                 let conn_pool = match extractor_client {
                     ConnClient::PostgreSQL(conn_pool) => conn_pool,
                     _ => {
-                        bail!(missing_extractor_client());
+                        bail!(DtError::MissingSourceClient);
                     }
                 };
                 let meta_manager = PgMetaManager::new(conn_pool.clone()).await?;
@@ -300,7 +298,7 @@ impl ExtractorUtil {
                 let conn_pool = match extractor_client {
                     ConnClient::PostgreSQL(conn_pool) => conn_pool,
                     _ => {
-                        bail!(missing_extractor_client());
+                        bail!(DtError::MissingSourceClient);
                     }
                 };
                 let meta_manager = PgMetaManager::new(conn_pool.clone()).await?;
@@ -333,7 +331,7 @@ impl ExtractorUtil {
             } => {
                 let conn_pool = match extractor_client {
                     ConnClient::PostgreSQL(conn_pool) => conn_pool,
-                    _ => bail!(missing_extractor_client()),
+                    _ => bail!(DtError::MissingSourceClient),
                 };
                 let meta_manager = PgMetaManager::new(conn_pool.clone()).await?;
                 extract_state.time_filter = TimeFilter::new(&start_time_utc, &end_time_utc)?;
@@ -368,7 +366,7 @@ impl ExtractorUtil {
             } => {
                 let mongo_client = match extractor_client {
                     ConnClient::MongoDB(mongo_client) => mongo_client,
-                    _ => bail!(missing_extractor_client()),
+                    _ => bail!(DtError::MissingSourceClient),
                 };
                 let extractor = MongoSnapshotExtractor {
                     db_tbs,
@@ -396,7 +394,7 @@ impl ExtractorUtil {
             } => {
                 let mongo_client = match extractor_client {
                     ConnClient::MongoDB(mongo_client) => mongo_client,
-                    _ => bail!(missing_extractor_client()),
+                    _ => bail!(DtError::MissingSourceClient),
                 };
                 let extractor = MongoCdcExtractor {
                     filter,
@@ -422,7 +420,7 @@ impl ExtractorUtil {
             } => {
                 let mongo_client = match extractor_client {
                     ConnClient::MongoDB(mongo_client) => mongo_client,
-                    _ => bail!(missing_extractor_client()),
+                    _ => bail!(DtError::MissingSourceClient),
                 };
                 let extractor = MongoCheckExtractor {
                     mongo_client,
@@ -439,7 +437,7 @@ impl ExtractorUtil {
             } => {
                 let mongo_client = match extractor_client {
                     ConnClient::MongoDB(mongo_client) => mongo_client,
-                    _ => bail!(missing_extractor_client()),
+                    _ => bail!(DtError::MissingSourceClient),
                 };
                 let db_batch_size_validated =
                     MongoStructExtractor::validate_db_batch_size(db_batch_size)?;
@@ -460,7 +458,7 @@ impl ExtractorUtil {
                 let conn_pool = match extractor_client {
                     ConnClient::MySQL(conn_pool) => conn_pool,
                     _ => {
-                        bail!(missing_extractor_client());
+                        bail!(DtError::MissingSourceClient);
                     }
                 };
                 let db_batch_size_validated =
@@ -485,7 +483,7 @@ impl ExtractorUtil {
                 let conn_pool = match extractor_client {
                     ConnClient::PostgreSQL(conn_pool) => conn_pool,
                     _ => {
-                        bail!(missing_extractor_client());
+                        bail!(DtError::MissingSourceClient);
                     }
                 };
                 let db_batch_size_validated =
@@ -776,9 +774,13 @@ impl ExtractorUtil {
             partition_col: String,
         }
         let config: Vec<PartitionColsType> =
-            serde_json::from_str(config_str.trim_start_matches(JSON_PREFIX)).map_err(|error| {
-                invalid_config_source("config [extractor].partition_cols is invalid JSON", error)
-            })?;
+            serde_json::from_str(config_str.trim_start_matches(JSON_PREFIX))
+                .with_dt_context(
+                    DtErrorContext::new()
+                        .code(ErrorCode::InvalidConfig)
+                        .stage(Stage::Bootstrap),
+                )
+                .context("config [extractor].partition_cols is invalid JSON")?;
         for i in config {
             results.insert((i.db, i.tb), i.partition_col);
         }

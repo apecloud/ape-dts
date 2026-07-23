@@ -1,8 +1,7 @@
 use dt_common::config::config_enums::DbType;
-use dt_common::error::ErrorCode;
+use dt_common::error::{ErrorCode, ErrorReport};
 
 use super::check_item::CheckItem;
-use crate::error_boundary::report;
 
 #[derive(Debug, Clone)]
 pub struct CheckResult {
@@ -106,8 +105,8 @@ impl CheckResult {
                 advise_msg = format!("{} wait for the next release.", advise_version);
             }
         }
-        let (warn_code, warn_msg) = report::classify(warn_option.as_ref(), fallback_code);
-        let (error_code, error_msg) = report::classify(err_option.as_ref(), fallback_code);
+        let (warn_code, warn_msg) = Self::classify(warn_option.as_ref(), fallback_code);
+        let (error_code, error_msg) = Self::classify(err_option.as_ref(), fallback_code);
         match err_option {
             Some(_) => Self {
                 check_type_name: check_item.to_string(),
@@ -135,6 +134,18 @@ impl CheckResult {
                     String::new()
                 },
             },
+        }
+    }
+
+    fn classify(error: Option<&anyhow::Error>, fallback: ErrorCode) -> (Option<ErrorCode>, String) {
+        let Some(error) = error else {
+            return (None, String::new());
+        };
+        let report = ErrorReport::from_anyhow(error);
+        if report.code == ErrorCode::Unclassified {
+            (Some(fallback), fallback.default_message().to_string())
+        } else {
+            (Some(report.code), report.message)
         }
     }
 

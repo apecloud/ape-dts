@@ -1,9 +1,9 @@
 use crate::extractor::redis::StreamReader;
 
 use super::rdb_reader::RdbReader;
-use crate::error_boundary::extractor_error::rdb_error;
 use anyhow::bail;
 use byteorder::{BigEndian, ByteOrder};
+use dt_common::error::DtError;
 
 const RDB_6_BIT_LEN: u8 = 0;
 const RDB_14_BIT_LEN: u8 = 1;
@@ -16,7 +16,7 @@ impl RdbReader<'_> {
     pub async fn read_length(&mut self) -> anyhow::Result<u64> {
         let (len, special) = self.read_encoded_length().await?;
         if special {
-            bail! {rdb_error("illegal length special=true")}
+            bail! {DtError::redis_rdb("illegal length special=true")}
         } else {
             Ok(len)
         }
@@ -50,7 +50,7 @@ impl RdbReader<'_> {
                     Ok((len, false))
                 }
 
-                _ => bail! {rdb_error(format!(
+                _ => bail! {DtError::redis_rdb(format!(
                     "illegal length encoding: {:x}",
                     first_byte
                 ))},
@@ -61,7 +61,7 @@ impl RdbReader<'_> {
                 Ok((len, true))
             }
 
-            _ => bail! {rdb_error(format!(
+            _ => bail! {DtError::redis_rdb(format!(
                 "illegal length encoding: {:x}",
                 first_byte
             ))},

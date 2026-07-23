@@ -8,7 +8,7 @@ use redis::ConnectionLike;
 use redis::Value;
 use tokio::{sync::RwLock, time::Instant};
 
-use dt_common::error::{DtError, ErrorCode};
+use dt_common::error::{DtError, DtErrorContextExt, ErrorCode};
 use dt_common::log_debug;
 use dt_common::meta::col_value::ColValue;
 use dt_common::meta::dt_data::DtData;
@@ -25,13 +25,7 @@ use dt_common::meta::row_type::RowType;
 
 use super::entry_rewriter::EntryRewriter;
 use crate::{
-    call_batch_fn,
-    data_marker::DataMarker,
-    error_boundary::sinker_error::{
-        redis_destination_error, redis_driver_error, redis_slot_topology,
-    },
-    rdb_router::RdbRouter,
-    sinker::base_sinker::BaseSinker,
+    call_batch_fn, data_marker::DataMarker, rdb_router::RdbRouter, sinker::base_sinker::BaseSinker,
     Sinker,
 };
 
@@ -166,11 +160,9 @@ impl RedisSinker {
                             let cmd = EntryRewriter::rewrite_as_restore(entry, self.version)?;
                             Ok(vec![cmd])
                         }
-                        _ => bail! {redis_destination_error(
-                            DtError::RedisResultError(
-                                "Redis object rewrite is not implemented".to_string()
-                            ),
-                        )},
+                        _ => bail!(DtError::RedisResultError(
+                            "Redis object rewrite is not implemented".to_string()
+                        )),
                     }?;
                     if let Some(expire_cmd) = EntryRewriter::rewrite_expire(entry)? {
                         rewrite_cmds.push(expire_cmd)
@@ -330,10 +322,7 @@ impl RedisSinker {
 
         match result {
             Err(error) => {
-                bail! {redis_driver_error(
-                    error,
-                    ErrorCode::StatementFailed,
-                )}
+                bail!(error.with_code(ErrorCode::StatementFailed))
             }
 
             Ok(values) => {
@@ -355,12 +344,10 @@ impl RedisSinker {
 
                     match v {
                         Value::ServerError(e) => {
-                            bail! {redis_destination_error(
-                                DtError::RedisResultError(format!(
+                            bail!(DtError::RedisResultError(format!(
                                 "sink failed, server error: [{:?}], result: [{:?}], cmd: [{}]",
                                 e, v, cmd
-                                )),
-                            )}
+                            )))
                         }
                         _ => {
                             log_debug!("sink result: [{:?}], cmd: [{}]", v, cmd)
@@ -384,14 +371,24 @@ impl RedisSinker {
                     let slot = KeyParser::calc_slot(cmd.keys[0].as_bytes());
                     node.slot_hash_tag_map
                         .get(&slot)
-                        .ok_or_else(redis_slot_topology)?
+                        .ok_or_else(|| {
+                            DtError::RedisTopology(
+                                "A required Redis cluster slot has no master owner in the loaded topology"
+                                    .to_string(),
+                            )
+                        })?
                 } else {
                     // if the redis cmd has no key, find a hash_tag for any slot in current node
                     let (_, hash_tag) = node
                         .slot_hash_tag_map
                         .iter()
                         .next()
-                        .ok_or_else(redis_slot_topology)?;
+                        .ok_or_else(|| {
+                            DtError::RedisTopology(
+                                "A required Redis cluster slot has no master owner in the loaded topology"
+                                    .to_string(),
+                            )
+                        })?;
                     hash_tag
                 };
                 &format!("{}{{{}}}", data_marker.marker, hash_tag)

@@ -7,8 +7,6 @@ use dt_common::meta::redis::{
     },
 };
 
-use crate::error_boundary::sinker_error::redis_destination_error;
-
 const CRC64_TABLE: [u64; 256] = [
     0x0000000000000000,
     0x7ad870c830358979,
@@ -308,9 +306,9 @@ impl EntryRewriter {
     }
 
     pub fn rewrite_module(_obj: &mut ModuleObject) -> anyhow::Result<Vec<RedisCmd>> {
-        bail! {redis_destination_error(
-            DtError::RedisResultError("Redis module rewrite is not implemented".to_string()),
-        )}
+        bail!(DtError::RedisResultError(
+            "Redis module rewrite is not implemented".to_string()
+        ))
     }
 
     pub fn rewrite_set(obj: &mut SetObject) -> anyhow::Result<Vec<RedisCmd>> {

@@ -4,20 +4,17 @@ use async_trait::async_trait;
 use dashmap::DashMap;
 use tokio::{fs::File, io::AsyncBufReadExt, io::BufReader};
 
-use crate::{
-    error_boundary::extractor_error::invalid_resumer_config,
-    extractor::resumer::{
-        recovery::{Recovery, RecoverySnapshotCache},
-        utils::ResumerUtil,
-        CURRENT_POSITION_LOG_FLAG, TAIL_POSITION_COUNT,
-    },
+use crate::extractor::resumer::{
+    recovery::{Recovery, RecoverySnapshotCache},
+    utils::ResumerUtil,
+    CURRENT_POSITION_LOG_FLAG, TAIL_POSITION_COUNT,
 };
 use dt_common::{
     config::{
         config_enums::{TaskKind, TaskType},
         resumer_config::ResumerConfig,
     },
-    error::{DtErrorContextExt, EndpointRole, Stage},
+    error::{DtError, DtErrorContextExt, EndpointRole, Stage},
     log_warn,
     meta::position::Position,
     utils::file_util::FileUtil,
@@ -54,7 +51,7 @@ impl LogRecovery {
                 cdc_cache: DashMap::new(),
             },
             _ => {
-                bail!(invalid_resumer_config(
+                bail!(DtError::invalid_config(
                     "log checkpoint recovery requires resume_type=from_log",
                 ));
             }
@@ -217,7 +214,7 @@ impl LogRecovery {
                     .await?;
                 }
             }
-            _ => bail!(invalid_resumer_config(format!(
+            _ => bail!(DtError::invalid_config(format!(
                 "log checkpoint recovery does not support task type: {:?}",
                 self.task_type
             ),)),

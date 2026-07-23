@@ -4,10 +4,13 @@ use anyhow::bail;
 use sqlx::{query, MySql, Pool, Postgres};
 use tokio::time::Instant;
 
-use crate::{error_boundary::sinker_error, sinker::base_sinker::BaseSinker};
+use crate::sinker::base_sinker::BaseSinker;
 use dt_common::{
-    config::config_enums::ConflictPolicyEnum, error::ErrorCode, log_error, log_info,
-    meta::struct_meta::struct_data::StructData, rdb_filter::RdbFilter,
+    config::config_enums::ConflictPolicyEnum,
+    error::{DtErrorContextExt, ErrorCode, SqlxErrorExt, SqlxProvider},
+    log_error, log_info,
+    meta::struct_meta::struct_data::StructData,
+    rdb_filter::RdbFilter,
     utils::limit_queue::LimitedQueue,
 };
 
@@ -75,17 +78,15 @@ impl BaseStructSinker {
         match pool {
             DBConnPool::MySQL(pool) => match query(sql).execute(pool).await {
                 Ok(_) => Ok(()),
-                Err(error) => bail! {sinker_error::mysql(
-                    error,
-                    ErrorCode::StatementFailed,
-                )},
+                Err(error) => {
+                    bail! {error.with_code(ErrorCode::StatementFailed).with_sqlx_provider(SqlxProvider::MySql)}
+                }
             },
             DBConnPool::PostgreSQL(pool) => match query(sql).execute(pool).await {
                 Ok(_) => Ok(()),
-                Err(error) => bail! {sinker_error::postgres(
-                    error,
-                    ErrorCode::StatementFailed,
-                )},
+                Err(error) => {
+                    bail! {error.with_code(ErrorCode::StatementFailed).with_sqlx_provider(SqlxProvider::Postgres)}
+                }
             },
         }
     }

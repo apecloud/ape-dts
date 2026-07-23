@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
+use anyhow::Context;
 use dashmap::DashMap;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -11,7 +12,7 @@ use crate::{
         config_token_parser::{ConfigTokenParser, TokenEscapePair},
         filter_config::FilterConfig,
     },
-    error_boundary::config::invalid_filter_source,
+    error::DtError,
     meta::{
         ddl_meta::ddl_type::DdlType, row_type::RowType,
         struct_meta::structure::structure_type::StructureType,
@@ -256,9 +257,9 @@ impl RdbFilter {
         for token in &tokens {
             if token.starts_with(REGEX_ESCAPE_PAIR.0) && token.ends_with(REGEX_ESCAPE_PAIR.1) {
                 let pattern = &token[REGEX_ESCAPE_PAIR.0.len()..token.len() - 1];
-                Regex::new(pattern).map_err(|error| {
-                    invalid_filter_source(format!("invalid filter regex {token}: {error}"), error)
-                })?;
+                Regex::new(pattern).context(DtError::invalid_config(format!(
+                    "invalid filter regex {token}"
+                )))?;
             }
         }
         Ok(tokens)
@@ -277,9 +278,9 @@ impl RdbFilter {
             ignore_cols: HashSet<String>,
         }
         let config: Vec<IgnoreColsType> =
-            serde_json::from_str(config_str.trim_start_matches(JSON_PREFIX)).map_err(|error| {
-                invalid_filter_source("config [filter].ignore_cols is invalid JSON", error)
-            })?;
+            serde_json::from_str(config_str.trim_start_matches(JSON_PREFIX)).context(
+                DtError::invalid_config("config [filter].ignore_cols is invalid JSON"),
+            )?;
         for i in config {
             results.insert((i.db, i.tb), i.ignore_cols);
         }
@@ -299,9 +300,9 @@ impl RdbFilter {
             condition: String,
         }
         let config: Vec<Condition> =
-            serde_json::from_str(config_str.trim_start_matches(JSON_PREFIX)).map_err(|error| {
-                invalid_filter_source("config [filter].where_conditions is invalid JSON", error)
-            })?;
+            serde_json::from_str(config_str.trim_start_matches(JSON_PREFIX)).context(
+                DtError::invalid_config("config [filter].where_conditions is invalid JSON"),
+            )?;
         for i in config {
             results.insert((i.db, i.tb), i.condition);
         }

@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use dt_common::{
-    error::ErrorCode,
+    error::{DtErrorContextExt, ErrorCode, SqlxErrorExt, SqlxProvider},
     meta::{
         adaptor::pg_col_value_convertor::PgColValueConvertor,
         col_value::ColValue,
@@ -231,10 +231,9 @@ impl PgStructCheckFetcher {
         let mut results = Vec::new();
         let mut rows = sqlx::query(sql).fetch(&self.conn_pool);
         while let Some(row) = rows.try_next().await.map_err(|error| {
-            crate::error_boundary::extractor_error::postgres_sqlx(
-                error,
-                ErrorCode::MetadataReadFailed,
-            )
+            error
+                .with_code(ErrorCode::MetadataReadFailed)
+                .with_sqlx_provider(SqlxProvider::Postgres)
         })? {
             let res = Self::parse_row(&row, col_names, col_types)?;
             results.push(res);

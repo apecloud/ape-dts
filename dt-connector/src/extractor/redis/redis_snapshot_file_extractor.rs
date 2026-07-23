@@ -2,12 +2,12 @@ use async_trait::async_trait;
 use tokio::{fs::metadata, fs::File, io::AsyncReadExt};
 
 use super::StreamReader;
-use crate::error_boundary::extractor_error::redis_snapshot_file;
 use crate::extractor::base_extractor::{BaseExtractor, ExtractState};
 use crate::extractor::redis::rdb::rdb_parser::RdbParser;
 use crate::extractor::redis::rdb::reader::rdb_reader::RdbReader;
 use crate::extractor::redis::redis_psync_extractor::RedisPsyncExtractor;
 use crate::Extractor;
+use dt_common::error::{DtErrorContextExt, ErrorCode, OriginError};
 use dt_common::log_info;
 use dt_common::meta::position::Position;
 use dt_common::rdb_filter::RdbFilter;
@@ -26,12 +26,18 @@ struct RdbFileReader {
 #[async_trait]
 impl Extractor for RedisSnapshotFileExtractor {
     async fn extract(&mut self) -> anyhow::Result<()> {
-        let file = File::open(&self.file_path)
-            .await
-            .map_err(redis_snapshot_file)?;
-        let metadata = metadata(&self.file_path)
-            .await
-            .map_err(redis_snapshot_file)?;
+        let file = File::open(&self.file_path).await.map_err(|error| {
+            error
+                .with_code(ErrorCode::IoFailed)
+                .with_origin(OriginError::new("redis", None::<String>))
+                .context("failed to read the configured Redis snapshot file")
+        })?;
+        let metadata = metadata(&self.file_path).await.map_err(|error| {
+            error
+                .with_code(ErrorCode::IoFailed)
+                .with_origin(OriginError::new("redis", None::<String>))
+                .context("failed to read the configured Redis snapshot file")
+        })?;
         let mut file_reader = RdbFileReader { file };
         let mut stream_reader: Box<&mut (dyn StreamReader + Send)> = Box::new(&mut file_reader);
 

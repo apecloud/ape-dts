@@ -4,8 +4,7 @@ use urlencoding::encode;
 
 use crate::{
     config::ini_loader::IniLoader,
-    error::{DtError, DtErrorContextExt, ErrorCode, Stage},
-    error_boundary::config::source,
+    error::{DtError, DtErrorContextExt, Stage},
 };
 
 use super::ssl_config::SslConfig;
@@ -76,12 +75,11 @@ impl ConnectionAuthConfig {
 
     pub fn merge_url_with_auth(original_url: &str, connection_auth: &Self) -> Result<String> {
         let mut parsed_url = Url::parse(original_url).map_err(|error| {
-            source(
-                error,
-                ErrorCode::InvalidConfig,
-                "database connection URL is invalid",
-                "the configured database connection URL could not be parsed",
-            )
+            anyhow::Error::new(error)
+                .context(DtError::invalid_config(
+                    "the configured database connection URL could not be parsed",
+                ))
+                .with_message("database connection URL is invalid")
         })?;
 
         match connection_auth {

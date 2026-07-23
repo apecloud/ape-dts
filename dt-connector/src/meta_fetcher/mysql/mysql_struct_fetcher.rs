@@ -9,7 +9,7 @@ use sqlx::{mysql::MySqlRow, MySql, Pool, Row};
 
 use dt_common::{
     config::config_enums::DbType,
-    error::{DtError, DtErrorContextExt, ErrorCode, OriginError},
+    error::{DtError, DtErrorContextExt, ErrorCode, OriginError, SqlxErrorExt, SqlxProvider},
     meta::{
         mysql::{mysql_col_type::MysqlColType, mysql_meta_manager::MysqlMetaManager},
         struct_meta::{
@@ -602,10 +602,7 @@ impl MysqlStructFetcher {
                 }
             }
             Err(error) => {
-                bail! {crate::error_boundary::extractor_error::mysql_sqlx(
-                    error,
-                    ErrorCode::StatementFailed,
-                )}
+                bail! {error.with_code(ErrorCode::StatementFailed).with_sqlx_provider(SqlxProvider::MySql)}
             }
         }
         Ok(text)

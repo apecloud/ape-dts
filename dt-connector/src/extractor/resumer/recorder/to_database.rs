@@ -7,16 +7,13 @@ use mongodb::{
 };
 use sqlx::query;
 
-use crate::{
-    error_boundary::extractor_error::invalid_resumer_config,
-    extractor::resumer::{
-        recorder::Recorder,
-        utils::{RedisResumerRecord, ResumerUtil},
-        ResumerDbPool, ResumerType,
-    },
+use crate::extractor::resumer::{
+    recorder::Recorder,
+    utils::{RedisResumerRecord, ResumerUtil},
+    ResumerDbPool, ResumerType,
 };
 use dt_common::{
-    config::resumer_config::ResumerConfig, log_info, meta::position::Position,
+    config::resumer_config::ResumerConfig, error::DtError, log_info, meta::position::Position,
     utils::redis_util::RedisUtil,
 };
 
@@ -47,7 +44,7 @@ impl DatabaseRecorder {
                 }
             }
             _ => {
-                bail!(invalid_resumer_config(
+                bail!(DtError::invalid_config(
                     "database checkpoint recording requires resume_type=from_db",
                 ))
             }

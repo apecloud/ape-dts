@@ -1,6 +1,5 @@
 #![allow(clippy::too_many_arguments)]
 
-mod error_boundary;
 pub mod extractor_util;
 pub mod parallelizer_util;
 pub mod sinker_util;

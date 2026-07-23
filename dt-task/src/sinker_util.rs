@@ -8,7 +8,7 @@ use tokio::sync::RwLock;
 
 use dt_common::{
     config::{config_enums::DbType, sinker_config::SinkerConfig, task_config::TaskConfig},
-    error::{DtError, DtErrorContextExt, ErrorCode, Stage},
+    error::{DtError, DtErrorContext, DtErrorContextExt, DtResultExt, ErrorCode, Stage},
     meta::{
         avro::avro_converter::AvroConverter,
         mongo::mongo_shard::{is_mongos, list_shard_collections},
@@ -25,13 +25,7 @@ use dt_common::{
 };
 
 use super::task_util::TaskUtil;
-use crate::{
-    error_boundary::sinker::{
-        invalid_http_cause, invalid_http_endpoint, kafka_error, missing_sinker_client,
-    },
-    extractor_util::ExtractorUtil,
-    task_util::ConnClient,
-};
+use crate::{extractor_util::ExtractorUtil, task_util::ConnClient};
 use dt_connector::{
     checker::DataCheckerHandle,
     data_marker::DataMarker,
@@ -70,14 +64,17 @@ macro_rules! create_filter {
 
 impl SinkerUtil {
     fn parse_http_endpoint(value: &str) -> anyhow::Result<(Url, String, String)> {
-        let url = Url::parse(value).map_err(invalid_http_cause)?;
-        let host = url
-            .host_str()
-            .map(str::to_string)
-            .ok_or_else(|| invalid_http_endpoint("the destination HTTP URL must include a host"))?;
-        let port = url
-            .port_or_known_default()
-            .ok_or_else(|| invalid_http_endpoint("the destination HTTP URL must include a port"))?;
+        let url = Url::parse(value).with_dt_context(
+            DtErrorContext::new()
+                .code(ErrorCode::InvalidConfig)
+                .stage(Stage::Bootstrap),
+        )?;
+        let host = url.host_str().map(str::to_string).ok_or_else(|| {
+            DtError::invalid_config("the destination HTTP URL must include a host")
+        })?;
+        let port = url.port_or_known_default().ok_or_else(|| {
+            DtError::invalid_config("the destination HTTP URL must include a port")
+        })?;
         Ok((url, host, port.to_string()))
     }
 
@@ -153,7 +150,7 @@ impl SinkerUtil {
                 let conn_pool = match client {
                     ConnClient::MySQL(conn_pool) => conn_pool,
                     _ => {
-                        bail!(missing_sinker_client());
+                        bail!(DtError::MissingDestinationClient);
                     }
                 };
                 let meta_manager = MysqlMetaManager::new(conn_pool.clone()).await?;
@@ -190,7 +187,7 @@ impl SinkerUtil {
                 let conn_pool = match client {
                     ConnClient::PostgreSQL(conn_pool) => conn_pool,
                     _ => {
-                        bail!(missing_sinker_client());
+                        bail!(DtError::MissingDestinationClient);
                     }
                 };
                 let meta_manager = PgMetaManager::new(conn_pool.clone()).await?;
@@ -225,7 +222,7 @@ impl SinkerUtil {
                 let mongo_client = match client {
                     ConnClient::MongoDB(mongo_client) => mongo_client,
                     _ => {
-                        bail!(missing_sinker_client());
+                        bail!(DtError::MissingDestinationClient);
                     }
                 };
                 let is_target_mongos = is_mongos(&mongo_client).await?;
@@ -255,7 +252,7 @@ impl SinkerUtil {
                 let mongo_client = match client {
                     ConnClient::MongoDB(mongo_client) => mongo_client,
                     _ => {
-                        bail!(missing_sinker_client());
+                        bail!(DtError::MissingDestinationClient);
                     }
                 };
                 let (is_target_mongos, target_shard_collections) =
@@ -300,7 +297,7 @@ impl SinkerUtil {
                         .with_ack_timeout(std::time::Duration::from_secs(ack_timeout_secs))
                         .with_required_acks(acks)
                         .create()
-                        .map_err(|error| kafka_error(error, ErrorCode::ConnectionFailed))?;
+                        .map_err(|error| error.with_code(ErrorCode::ConnectionFailed))?;
                     // the sending performance of RdkafkaSinker is much worse than KafkaSinker
                     let sinker = KafkaSinker {
                         batch_size,
@@ -322,7 +319,7 @@ impl SinkerUtil {
                 let conn_pool = match client {
                     ConnClient::MySQL(conn_pool) => conn_pool,
                     _ => {
-                        bail!(missing_sinker_client());
+                        bail!(DtError::MissingDestinationClient);
                     }
                 };
                 let sinker = MysqlStructSinker {
@@ -344,7 +341,7 @@ impl SinkerUtil {
                 let conn_pool = match client {
                     ConnClient::PostgreSQL(conn_pool) => conn_pool,
                     _ => {
-                        bail!(missing_sinker_client());
+                        bail!(DtError::MissingDestinationClient);
                     }
                 };
                 let sinker = PgStructSinker {
@@ -466,7 +463,11 @@ impl SinkerUtil {
                         .http1_title_case_headers()
                         .redirect(custom)
                         .build()
-                        .map_err(invalid_http_cause)?;
+                        .map_err(|error| {
+                            error
+                                .with_code(ErrorCode::InvalidConfig)
+                                .with_stage(Stage::Bootstrap)
+                        })?;
                     let conn_pool = TaskUtil::create_mysql_conn_pool(
                         &url,
                         &DbType::StarRocks,
@@ -547,7 +548,11 @@ impl SinkerUtil {
                         .http1_title_case_headers()
                         .redirect(custom)
                         .build()
-                        .map_err(invalid_http_cause)?;
+                        .map_err(|error| {
+                            error
+                                .with_code(ErrorCode::InvalidConfig)
+                                .with_stage(Stage::Bootstrap)
+                        })?;
                     let sinker = ClickhouseSinker {
                         http_client,
                         host,

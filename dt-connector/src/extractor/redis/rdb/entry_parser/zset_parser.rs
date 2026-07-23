@@ -1,5 +1,5 @@
-use crate::error_boundary::extractor_error::rdb_error;
 use anyhow::bail;
+use dt_common::error::DtError;
 use dt_common::meta::redis::redis_object::{RedisString, ZSetEntry, ZsetObject};
 
 use crate::extractor::redis::rdb::reader::rdb_reader::RdbReader;
@@ -21,7 +21,7 @@ impl ZsetParser {
             super::RDB_TYPE_ZSET_ZIPLIST => Self::read_zset_zip_list(&mut obj, reader).await?,
             super::RDB_TYPE_ZSET_LISTPACK => Self::read_zset_list_pack(&mut obj, reader).await?,
             _ => {
-                bail! {rdb_error(format!(
+                bail! {DtError::redis_rdb(format!(
                     "unknown zset type. type_byte=[{}]",
                     type_byte
                 ))}
@@ -72,7 +72,7 @@ impl ZsetParser {
     fn parse_zset_result(obj: &mut ZsetObject, list: Vec<RedisString>) -> anyhow::Result<()> {
         let size = list.len();
         if size % 2 != 0 {
-            bail! {rdb_error(format!(
+            bail! {DtError::redis_rdb(format!(
                 "zset list pack size is not even. size=[{}]",
                 size
             ))}

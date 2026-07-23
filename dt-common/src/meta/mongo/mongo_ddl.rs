@@ -1,8 +1,9 @@
+use anyhow::Context;
 use mongodb::bson::{doc, Bson, Document};
 
 use crate::{
     config::config_enums::DbType,
-    error_boundary::metadata::{mongo_ddl_error, mongo_ddl_source},
+    error::DtError,
     meta::ddl_meta::{
         ddl_data::DdlData,
         ddl_statement::{DdlStatement, MongoCommandStatement},
@@ -24,13 +25,14 @@ pub fn command_to_query(command: Document) -> String {
 }
 
 pub fn query_to_command(query: &str) -> anyhow::Result<Document> {
-    let value: serde_json::Value = serde_json::from_str(query)
-        .map_err(|error| mongo_ddl_source("MongoDB DDL payload is not valid JSON", error))?;
-    match Bson::try_from(value)
-        .map_err(|error| mongo_ddl_source("MongoDB DDL payload is not valid BSON", error))?
-    {
+    let value: serde_json::Value = serde_json::from_str(query).context(
+        DtError::MongoStatementFailed("MongoDB DDL payload is not valid JSON".to_string()),
+    )?;
+    match Bson::try_from(value).context(DtError::MongoStatementFailed(
+        "MongoDB DDL payload is not valid BSON".to_string(),
+    ))? {
         Bson::Document(command) => Ok(command),
-        other => anyhow::bail!(mongo_ddl_error(format!(
+        other => anyhow::bail!(DtError::MongoStatementFailed(format!(
             "MongoDB DDL payload is not a document: {other:?}"
         ))),
     }

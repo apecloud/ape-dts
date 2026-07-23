@@ -18,7 +18,6 @@ use serde_json::json;
 use tokio::{sync::Mutex, time::Instant};
 
 use crate::{
-    error_boundary::extractor_error::mongodb_oplog,
     extractor::{
         base_extractor::{BaseExtractor, ExtractState},
         resumer::recovery::Recovery,
@@ -27,6 +26,7 @@ use crate::{
 };
 use dt_common::{
     config::config_enums::DbType,
+    error::DtError,
     log_error, log_info, log_warn,
     meta::{
         col_value::ColValue,
@@ -519,17 +519,17 @@ impl MongoCdcExtractor {
         before: HashMap<String, ColValue>,
         after: HashMap<String, ColValue>,
     ) -> anyhow::Result<(RowData, Position)> {
-        let ts = ts
-            .and_then(Bson::as_timestamp)
-            .ok_or_else(|| mongodb_oplog("oplog field ts is missing or is not a timestamp"))?;
-        let ns = ns
-            .and_then(Bson::as_str)
-            .ok_or_else(|| mongodb_oplog("oplog field ns is missing or is not a string"))?;
+        let ts = ts.and_then(Bson::as_timestamp).ok_or_else(|| {
+            DtError::mongo_statement("oplog field ts is missing or is not a timestamp")
+        })?;
+        let ns = ns.and_then(Bson::as_str).ok_or_else(|| {
+            DtError::mongo_statement("oplog field ns is missing or is not a string")
+        })?;
 
         // get db & tb
         let (db, tb) = ns
             .split_once('.')
-            .ok_or_else(|| mongodb_oplog(format!("invalid oplog namespace: {ns}")))?;
+            .ok_or_else(|| DtError::mongo_statement(format!("invalid oplog namespace: {ns}")))?;
         let before = if before.is_empty() {
             None
         } else {
@@ -548,11 +548,11 @@ impl MongoCdcExtractor {
     }
 
     fn oplog_document<'a>(value: Option<&'a Bson>, field: &str) -> anyhow::Result<&'a Document> {
-        value.and_then(Bson::as_document).ok_or_else(|| {
-            mongodb_oplog(format!(
+        Ok(value.and_then(Bson::as_document).ok_or_else(|| {
+            DtError::mongo_statement(format!(
                 "oplog field {field} is missing or is not a document"
             ))
-        })
+        })?)
     }
 
     // Event example:

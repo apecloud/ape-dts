@@ -8,14 +8,14 @@ use sqlx::{
 };
 use tokio::{sync::RwLock, time::Instant};
 
+use crate::sinker::checkable_sinker::CheckableSink;
 use crate::{
     call_batch_fn, data_marker::DataMarker, rdb_query_builder::RdbQueryBuilder,
     rdb_router::RdbRouter, sinker::base_sinker::BaseSinker, Sinker,
 };
-use crate::{error_boundary::sinker_error, sinker::checkable_sinker::CheckableSink};
 use dt_common::{
     config::connection_auth_config::ConnectionAuthConfig,
-    error::ErrorCode,
+    error::{DtErrorContextExt, ErrorCode, SqlxErrorExt, SqlxProvider},
     log_error, log_info,
     meta::{
         ddl_meta::{ddl_data::DdlData, ddl_type::DdlType},
@@ -84,8 +84,12 @@ impl Sinker for PgSinker {
                 self.url.as_str(),
                 &self.connection_auth,
             )?;
-            let mut conn_options = PgConnectOptions::from_str(final_url.as_str())
-                .map_err(|error| sinker_error::postgres(error, ErrorCode::ConnectionFailed))?;
+            let mut conn_options =
+                PgConnectOptions::from_str(final_url.as_str()).map_err(|error| {
+                    error
+                        .with_code(ErrorCode::ConnectionFailed)
+                        .with_sqlx_provider(SqlxProvider::Postgres)
+                })?;
             let mut pool_options = PgPoolOptions::new().max_connections(1);
             if let Some(ssl) = self.connection_auth.ssl_config() {
                 conn_options = ssl.apply_pg(conn_options);
@@ -116,12 +120,17 @@ impl Sinker for PgSinker {
             let conn_pool = pool_options
                 .connect_with(conn_options)
                 .await
-                .map_err(|error| sinker_error::postgres(error, ErrorCode::ConnectionFailed))?;
+                .map_err(|error| {
+                    error
+                        .with_code(ErrorCode::ConnectionFailed)
+                        .with_sqlx_provider(SqlxProvider::Postgres)
+                })?;
             let query = sqlx::query(&sql);
-            query
-                .execute(&conn_pool)
-                .await
-                .map_err(|error| sinker_error::postgres(error, ErrorCode::StatementFailed))?;
+            query.execute(&conn_pool).await.map_err(|error| {
+                error
+                    .with_code(ErrorCode::StatementFailed)
+                    .with_sqlx_provider(SqlxProvider::Postgres)
+            })?;
 
             rts.push((start_time.elapsed().as_millis() as u64, 1));
             conn_pool.close().await;
@@ -209,16 +218,20 @@ impl PgSinker {
         let mut data_len = 0;
         let mut last_monitor_time = Instant::now();
 
-        let mut tx = self
-            .conn_pool
-            .begin()
-            .await
-            .map_err(|error| sinker_error::postgres(error, ErrorCode::StatementFailed))?;
+        let mut tx = self.conn_pool.begin().await.map_err(|error| {
+            error
+                .with_code(ErrorCode::StatementFailed)
+                .with_sqlx_provider(SqlxProvider::Postgres)
+        })?;
         if let Some(sql) = self.get_data_marker_sql().await {
             sqlx::query(&sql)
                 .execute(&mut *tx)
                 .await
-                .map_err(|error| sinker_error::postgres(error, ErrorCode::StatementFailed))
+                .map_err(|error| {
+                    error
+                        .with_code(ErrorCode::StatementFailed)
+                        .with_sqlx_provider(SqlxProvider::Postgres)
+                })
                 .with_context(|| format!("failed to execute data marker sql: [{}]", sql))?;
         }
         let mut rts = LimitedQueue::new(cmp::min(100, data.len()));
@@ -236,7 +249,11 @@ impl PgSinker {
             query
                 .execute(&mut *tx)
                 .await
-                .map_err(|error| sinker_error::postgres(error, ErrorCode::StatementFailed))
+                .map_err(|error| {
+                    error
+                        .with_code(ErrorCode::StatementFailed)
+                        .with_sqlx_provider(SqlxProvider::Postgres)
+                })
                 .with_context(|| {
                     format!(
                         "serial sink failed, sql: [{}], row_data: [{}]",
@@ -258,9 +275,11 @@ impl PgSinker {
                 last_monitor_time = Instant::now();
             }
         }
-        tx.commit()
-            .await
-            .map_err(|error| sinker_error::postgres(error, ErrorCode::StatementFailed))?;
+        tx.commit().await.map_err(|error| {
+            error
+                .with_code(ErrorCode::StatementFailed)
+                .with_sqlx_provider(SqlxProvider::Postgres)
+        })?;
 
         if data_len > 0 || data_size > 0 {
             self.base_sinker
@@ -293,27 +312,32 @@ impl PgSinker {
         let start_time = Instant::now();
         let mut rts = LimitedQueue::new(1);
         if let Some(sql) = self.get_data_marker_sql().await {
-            let mut tx = self
-                .conn_pool
-                .begin()
-                .await
-                .map_err(|error| sinker_error::postgres(error, ErrorCode::StatementFailed))?;
-            sqlx::query(&sql)
-                .execute(&mut *tx)
-                .await
-                .map_err(|error| sinker_error::postgres(error, ErrorCode::StatementFailed))?;
-            query
-                .execute(&mut *tx)
-                .await
-                .map_err(|error| sinker_error::postgres(error, ErrorCode::StatementFailed))?;
-            tx.commit()
-                .await
-                .map_err(|error| sinker_error::postgres(error, ErrorCode::StatementFailed))?;
+            let mut tx = self.conn_pool.begin().await.map_err(|error| {
+                error
+                    .with_code(ErrorCode::StatementFailed)
+                    .with_sqlx_provider(SqlxProvider::Postgres)
+            })?;
+            sqlx::query(&sql).execute(&mut *tx).await.map_err(|error| {
+                error
+                    .with_code(ErrorCode::StatementFailed)
+                    .with_sqlx_provider(SqlxProvider::Postgres)
+            })?;
+            query.execute(&mut *tx).await.map_err(|error| {
+                error
+                    .with_code(ErrorCode::StatementFailed)
+                    .with_sqlx_provider(SqlxProvider::Postgres)
+            })?;
+            tx.commit().await.map_err(|error| {
+                error
+                    .with_code(ErrorCode::StatementFailed)
+                    .with_sqlx_provider(SqlxProvider::Postgres)
+            })?;
         } else {
-            query
-                .execute(&self.conn_pool)
-                .await
-                .map_err(|error| sinker_error::postgres(error, ErrorCode::StatementFailed))?;
+            query.execute(&self.conn_pool).await.map_err(|error| {
+                error
+                    .with_code(ErrorCode::StatementFailed)
+                    .with_sqlx_provider(SqlxProvider::Postgres)
+            })?;
         }
         rts.push((start_time.elapsed().as_millis() as u64, 1));
 
@@ -347,19 +371,21 @@ impl PgSinker {
         let start_time = Instant::now();
         let mut rts = LimitedQueue::new(1);
         let exec_error = if let Some(sql) = self.get_data_marker_sql().await {
-            let mut tx = self
-                .conn_pool
-                .begin()
-                .await
-                .map_err(|error| sinker_error::postgres(error, ErrorCode::StatementFailed))?;
-            sqlx::query(&sql)
-                .execute(&mut *tx)
-                .await
-                .map_err(|error| sinker_error::postgres(error, ErrorCode::StatementFailed))?;
-            query
-                .execute(&mut *tx)
-                .await
-                .map_err(|error| sinker_error::postgres(error, ErrorCode::StatementFailed))?;
+            let mut tx = self.conn_pool.begin().await.map_err(|error| {
+                error
+                    .with_code(ErrorCode::StatementFailed)
+                    .with_sqlx_provider(SqlxProvider::Postgres)
+            })?;
+            sqlx::query(&sql).execute(&mut *tx).await.map_err(|error| {
+                error
+                    .with_code(ErrorCode::StatementFailed)
+                    .with_sqlx_provider(SqlxProvider::Postgres)
+            })?;
+            query.execute(&mut *tx).await.map_err(|error| {
+                error
+                    .with_code(ErrorCode::StatementFailed)
+                    .with_sqlx_provider(SqlxProvider::Postgres)
+            })?;
             tx.commit().await
         } else {
             match query.execute(&self.conn_pool).await {

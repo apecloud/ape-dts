@@ -1,11 +1,9 @@
 use std::{any::type_name, fs::File, io::Read, str::FromStr};
 
+use anyhow::Context;
 use configparser::ini::Ini;
 
-use crate::{
-    error::{DtError, DtErrorContextExt, ErrorCode, Stage},
-    error_boundary::config::source,
-};
+use crate::error::{DtError, DtErrorContextExt, Stage};
 
 #[derive(Debug)]
 pub struct IniLoader {
@@ -17,27 +15,17 @@ impl IniLoader {
         let mut config_str = String::new();
         File::open(ini_file)
             .map_err(|error| {
-                let code = if error.kind() == std::io::ErrorKind::NotFound {
-                    ErrorCode::MissingConfig
+                let context = if error.kind() == std::io::ErrorKind::NotFound {
+                    DtError::MissingConfig(format!("path: {ini_file}"))
                 } else {
-                    ErrorCode::IoFailed
+                    DtError::IoFailed(format!("failed to open config file: {ini_file}"))
                 };
-                source(
-                    error,
-                    code,
-                    "failed to open config file",
-                    format!("path: {ini_file}"),
-                )
+                anyhow::Error::new(error).context(context)
             })?
             .read_to_string(&mut config_str)
-            .map_err(|error| {
-                source(
-                    error,
-                    ErrorCode::IoFailed,
-                    "failed to read config file",
-                    format!("path: {ini_file}"),
-                )
-            })?;
+            .context(DtError::IoFailed(format!(
+                "failed to read config file: {ini_file}"
+            )))?;
         let mut ini = Ini::new();
         // allow using comment symbols(; and #) in value
         // E.g. do_dbs=`a;`,`bcd`

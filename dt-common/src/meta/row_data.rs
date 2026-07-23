@@ -11,7 +11,7 @@ use super::{
 };
 use crate::{
     config::config_enums::DbType,
-    error_boundary::metadata::row_conversion_error,
+    error::{DtError, DtErrorContextExt, ErrorObject},
     meta::adaptor::{
         mysql_col_value_convertor::MysqlColValueConvertor,
         pg_col_value_convertor::PgColValueConvertor,
@@ -139,7 +139,17 @@ impl RowData {
             let col_val =
                 MysqlColValueConvertor::from_query_mysql_compatible(row, col, col_type, db_type)
                     .map_err(|error| {
-                        row_conversion_error(error, &tb_meta.basic.schema, &tb_meta.basic.tb, col)
+                        error
+                            .context(DtError::StatementFailed(format!(
+                                "failed to convert column {}.{}.{}",
+                                tb_meta.basic.schema, tb_meta.basic.tb, col
+                            )))
+                            .with_object(ErrorObject {
+                                schema: Some(tb_meta.basic.schema.clone()),
+                                table: Some(tb_meta.basic.tb.clone()),
+                                column: Some(col.clone()),
+                                ..Default::default()
+                            })
                     })?;
             after.insert(col.to_string(), col_val);
         }
@@ -160,7 +170,17 @@ impl RowData {
 
             let col_value =
                 PgColValueConvertor::from_query(row, col, col_type).map_err(|error| {
-                    row_conversion_error(error, &tb_meta.basic.schema, &tb_meta.basic.tb, col)
+                    error
+                        .context(DtError::StatementFailed(format!(
+                            "failed to convert column {}.{}.{}",
+                            tb_meta.basic.schema, tb_meta.basic.tb, col
+                        )))
+                        .with_object(ErrorObject {
+                            schema: Some(tb_meta.basic.schema.clone()),
+                            table: Some(tb_meta.basic.tb.clone()),
+                            column: Some(col.clone()),
+                            ..Default::default()
+                        })
                 })?;
             after.insert(col.to_string(), col_value);
         }

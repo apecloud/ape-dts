@@ -1,7 +1,7 @@
 use anyhow::bail;
 
-use crate::error_boundary::extractor_error::rdb_error;
 use crate::extractor::redis::rdb::reader::rdb_reader::RdbReader;
+use dt_common::error::DtError;
 use dt_common::meta::redis::redis_object::{HashObject, RedisString};
 
 pub struct HashParser {}
@@ -31,7 +31,7 @@ impl HashParser {
                 Self::read_hash_list_pack_ttl(&mut obj, reader, false).await?
             }
             _ => {
-                bail! {rdb_error(format!(
+                bail! {DtError::redis_rdb(format!(
                     "unknown hash type. type_byte=[{}]",
                     type_byte
                 ))}
@@ -54,7 +54,7 @@ impl HashParser {
         _obj: &mut HashObject,
         _reader: &mut RdbReader<'_>,
     ) -> anyhow::Result<()> {
-        bail! {rdb_error("not implemented rdb_type_zip_map")}
+        bail! {DtError::redis_rdb("not implemented rdb_type_zip_map")}
     }
 
     async fn read_hash_zip_list(

@@ -1,11 +1,10 @@
-use crate::{
-    error_boundary::sinker_error::clickhouse_source_metadata_missing, rdb_router::RdbRouter, Sinker,
-};
+use crate::{rdb_router::RdbRouter, Sinker};
 
 use anyhow::bail;
 use clickhouse::Client;
 use dt_common::{
     config::config_enums::ConflictPolicyEnum,
+    error::DtError,
     log_error, log_info,
     meta::{
         mysql::{mysql_col_type::MysqlColType, mysql_tb_meta::MysqlTbMeta},
@@ -120,7 +119,11 @@ impl ClickhouseStructSinker {
             &tb_meta.basic
         } else {
             &mysql_tb_meta
-                .ok_or_else(clickhouse_source_metadata_missing)?
+                .ok_or_else(|| {
+                    DtError::ClickHouseSourceMetadataMissing(
+                        "Ape-DTS could not determine the source table definition needed to build the ClickHouse table".to_string(),
+                    )
+                })?
                 .basic
         };
 
@@ -170,7 +173,11 @@ impl ClickhouseStructSinker {
         } else {
             Self::get_dst_col_type_from_pg(
                 col,
-                pg_tb_meta.ok_or_else(clickhouse_source_metadata_missing)?,
+                pg_tb_meta.ok_or_else(|| {
+                    DtError::ClickHouseSourceMetadataMissing(
+                        "Ape-DTS could not determine the source table definition needed to build the ClickHouse table".to_string(),
+                    )
+                })?,
             )
         }?;
 

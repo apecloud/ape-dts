@@ -1,5 +1,6 @@
 use std::{cmp, collections::HashMap, str::FromStr};
 
+use anyhow::Context;
 use async_trait::async_trait;
 use chrono::Utc;
 use reqwest::{header, Client, Method, Response, StatusCode};
@@ -8,6 +9,7 @@ use tokio::time::Instant;
 
 use dt_common::{
     config::config_enums::DbType,
+    error::{DtError, DtErrorContextExt, ErrorCode},
     log_error,
     meta::{
         col_value::ColValue,
@@ -21,7 +23,7 @@ use dt_common::{
     utils::{limit_queue::LimitedQueue, sql_util::SqlUtil},
 };
 
-use crate::{call_batch_fn, error_boundary::sinker_error, sinker::base_sinker::BaseSinker, Sinker};
+use crate::{call_batch_fn, sinker::base_sinker::BaseSinker, Sinker};
 
 const SIGN_COL_NAME: &str = "_ape_dts_is_deleted";
 const TIMESTAMP_COL_NAME: &str = "_ape_dts_timestamp";
@@ -157,7 +159,7 @@ impl StarRocksSinker {
             .http_client
             .execute(request)
             .await
-            .map_err(sinker_error::reqwest)?;
+            .map_err(|error| error.with_code(ErrorCode::StatementFailed))?;
         rts.push((start_time.elapsed().as_millis() as u64, 1));
         let task_id = self.base_sinker.task_id_for_schema_tb(&db, &tb);
         self.base_sinker.ensure_monitor_for(&task_id);
@@ -276,14 +278,25 @@ impl StarRocksSinker {
                 _ => {}
             }
         }
-        put.build().map_err(sinker_error::reqwest)
+        put.build()
+            .map_err(|error| error.with_code(ErrorCode::StatementFailed))
     }
 
     async fn check_response(response: Response) -> anyhow::Result<()> {
         let status_code = response.status();
-        let response_text = &response.text().await.map_err(sinker_error::reqwest)?;
+        let response_text = &response
+            .text()
+            .await
+            .map_err(|error| error.with_code(ErrorCode::StatementFailed))?;
         if status_code != StatusCode::OK {
-            return Err(sinker_error::http_status(status_code));
+            return Err(DtError::HttpRejected {
+                status: status_code.as_u16(),
+                detail: format!(
+                    "the destination rejected the request with HTTP status {}",
+                    status_code.as_u16()
+                ),
+            }
+            .into());
         }
 
         // response example:
@@ -305,14 +318,21 @@ impl StarRocksSinker {
         //     "CommitAndPublishTimeMs": 36
         // }
         let json_value: Value =
-            serde_json::from_str(response_text).map_err(sinker_error::http_invalid_response)?;
+            serde_json::from_str(response_text).context(DtError::HttpRejected {
+                status: status_code.as_u16(),
+                detail: "the destination returned an invalid JSON response".to_string(),
+            })?;
         if json_value["Status"] != "Success" {
             let err = format!(
                 "stream load request failed, status_code: {}, load_result: {}",
                 status_code, response_text,
             );
             log_error!("{}", err);
-            return Err(sinker_error::http_rejected(status_code));
+            return Err(DtError::HttpRejected {
+                status: status_code.as_u16(),
+                detail: "the destination rejected the data load request".to_string(),
+            }
+            .into());
         }
         Ok(())
     }

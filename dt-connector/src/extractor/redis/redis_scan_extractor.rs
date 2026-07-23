@@ -16,7 +16,6 @@ use dt_common::{
 use redis::{Connection, Value};
 
 use crate::{
-    error_boundary::extractor_error::redis_source_error,
     extractor::base_extractor::{BaseExtractor, ExtractState},
     Extractor,
 };
@@ -38,12 +37,10 @@ impl Extractor for RedisScanExtractor {
         if let RedisStatisticType::HotKey = self.statistic_type {
             let maxmemory_policy = self.get_maxmemory_policy().await?;
             if maxmemory_policy != "allkeys-lfu" {
-                bail! {redis_source_error(
-                    DtError::PrerequisiteNotMet(format!(
-                        "maxmemory_policy is {}, should be allkeys-lfu",
-                        maxmemory_policy
-                    )),
-                )}
+                bail!(DtError::RedisPrerequisiteNotMet(format!(
+                    "maxmemory_policy is {}, should be allkeys-lfu",
+                    maxmemory_policy
+                )))
             }
         }
 
@@ -56,9 +53,7 @@ impl Extractor for RedisScanExtractor {
             // select db
             let cmd = ["SELECT", &db];
             if Value::Okay != RedisUtil::send_cmd(&mut self.conn, &cmd)? {
-                bail! {redis_source_error(
-                    DtError::RedisResultError(format!("SELECT {db} failed")),
-                )}
+                bail!(DtError::RedisResultError(format!("SELECT {db} failed")))
             }
 
             // scan

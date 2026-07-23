@@ -2,9 +2,11 @@ use std::{collections::VecDeque, future::Future, sync::Arc};
 
 use tokio::task::JoinSet;
 
-use dt_common::{error::DtError, monitor::task_monitor_handle::TaskMonitorHandle, runtime_trace};
-
-use crate::error_boundary::extractor_error::worker;
+use dt_common::{
+    error::{DtError, DtErrorContextExt, ErrorCode},
+    monitor::task_monitor_handle::TaskMonitorHandle,
+    runtime_trace,
+};
 
 use super::{
     base_extractor::ExtractState,
@@ -75,7 +77,7 @@ impl SnapshotDispatcher {
         }
 
         while let Some(result) = join_set.join_next().await {
-            let result = result.map_err(worker)??;
+            let result = result.map_err(|error| error.with_code(ErrorCode::WorkerFailed))??;
             state = on_done(state, result).await?;
 
             while join_set.len() < parallel_size {

@@ -9,7 +9,6 @@ use crate::{
 
 pub mod builder;
 pub mod config;
-mod error_boundary;
 pub mod fetcher;
 pub mod meta;
 pub mod prechecker;
