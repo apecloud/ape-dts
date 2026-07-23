@@ -119,10 +119,10 @@ impl PrecheckerBuilder {
         }
         let source_checker_option = self
             .build_checker(true)
-            .map_err(|error| error.with_endpoint(EndpointRole::Source))?;
+            .map_err(|error| error.endpoint(EndpointRole::Source))?;
         let sink_checker_option = self
             .build_checker(false)
-            .map_err(|error| error.with_endpoint(EndpointRole::Destination))?;
+            .map_err(|error| error.endpoint(EndpointRole::Destination))?;
         let (Some(mut source_checker), Some(mut sink_checker)) =
             (source_checker_option, sink_checker_option)
         else {
@@ -136,11 +136,11 @@ impl PrecheckerBuilder {
         let check_source_connection = source_checker
             .build_connection()
             .await
-            .map_err(|error| error.with_endpoint(EndpointRole::Source))?;
+            .map_err(|error| error.endpoint(EndpointRole::Source))?;
         let check_sink_connection = sink_checker
             .build_connection()
             .await
-            .map_err(|error| error.with_endpoint(EndpointRole::Destination))?;
+            .map_err(|error| error.endpoint(EndpointRole::Destination))?;
 
         // if connection failed, no need to do other check
         if !check_source_connection.is_validate || !check_sink_connection.is_validate {
@@ -162,8 +162,8 @@ impl PrecheckerBuilder {
             check_source_connection.log();
             check_sink_connection.log();
             return Err(anyhow::anyhow!("database connection precheck failed")
-                .with_code(error_code)
-                .with_endpoint(endpoint));
+                .code(error_code)
+                .endpoint(endpoint));
         }
 
         let mut check_results: Vec<anyhow::Result<CheckResult>> = vec![];
@@ -175,13 +175,13 @@ impl PrecheckerBuilder {
             source_checker
                 .check_database_version()
                 .await
-                .map_err(|error| error.with_endpoint(EndpointRole::Source)),
+                .map_err(|error| error.endpoint(EndpointRole::Source)),
         );
         check_results.push(
             sink_checker
                 .check_database_version()
                 .await
-                .map_err(|error| error.with_endpoint(EndpointRole::Destination)),
+                .map_err(|error| error.endpoint(EndpointRole::Destination)),
         );
 
         if self.precheck_config.do_cdc {
@@ -190,7 +190,7 @@ impl PrecheckerBuilder {
                 source_checker
                     .check_cdc_supported()
                     .await
-                    .map_err(|error| error.with_endpoint(EndpointRole::Source)),
+                    .map_err(|error| error.endpoint(EndpointRole::Source)),
             );
         }
 
@@ -199,13 +199,13 @@ impl PrecheckerBuilder {
             source_checker
                 .check_struct_existed_or_not()
                 .await
-                .map_err(|error| error.with_endpoint(EndpointRole::Source)),
+                .map_err(|error| error.endpoint(EndpointRole::Source)),
         );
         check_results.push(
             sink_checker
                 .check_struct_existed_or_not()
                 .await
-                .map_err(|error| error.with_endpoint(EndpointRole::Destination)),
+                .map_err(|error| error.endpoint(EndpointRole::Destination)),
         );
 
         println!("[*]begin to check the database structs");
@@ -213,13 +213,13 @@ impl PrecheckerBuilder {
             source_checker
                 .check_table_structs()
                 .await
-                .map_err(|error| error.with_endpoint(EndpointRole::Source)),
+                .map_err(|error| error.endpoint(EndpointRole::Source)),
         );
         check_results.push(
             sink_checker
                 .check_table_structs()
                 .await
-                .map_err(|error| error.with_endpoint(EndpointRole::Destination)),
+                .map_err(|error| error.endpoint(EndpointRole::Destination)),
         );
 
         Ok(check_results)
@@ -253,9 +253,9 @@ impl PrecheckerBuilder {
                 }
                 if error_count > 0 {
                     let mut error = anyhow::anyhow!("one or more prerequisite checks failed")
-                        .with_code(first_error_code.unwrap_or(ErrorCode::PrerequisiteNotMet));
+                        .code(first_error_code.unwrap_or(ErrorCode::PrerequisiteNotMet));
                     if let Some(endpoint) = first_error_endpoint {
-                        error = error.with_endpoint(endpoint);
+                        error = error.endpoint(endpoint);
                     }
                     Err(error)
                 } else {

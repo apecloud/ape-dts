@@ -224,7 +224,7 @@ impl MysqlFetcher {
     async fn fetch_all(&self, sql: String, mut sql_msg: &str) -> anyhow::Result<Vec<MySqlRow>> {
         let mysql_pool = match &self.pool {
             Some(pool) => pool,
-            None => return Err(sqlx::Error::PoolClosed.with_code(ErrorCode::StatementFailed)),
+            None => return Err(sqlx::Error::PoolClosed.code(ErrorCode::StatementFailed)),
         };
 
         sql_msg = if sql_msg.is_empty() { "sql" } else { sql_msg };
@@ -233,7 +233,7 @@ impl MysqlFetcher {
         query(&sql)
             .fetch_all(mysql_pool)
             .await
-            .map_err(|error| error.with_code(ErrorCode::StatementFailed))
+            .map_err(|error| error.code(ErrorCode::StatementFailed))
     }
 
     fn fetch_row<'a>(
@@ -247,9 +247,9 @@ impl MysqlFetcher {
                 println!("{}: {}", sql_msg, sql);
                 Ok(query(sql)
                     .fetch(pool)
-                    .map_err(|error| error.with_code(ErrorCode::StatementFailed)))
+                    .map_err(|error| error.code(ErrorCode::StatementFailed)))
             }
-            None => bail! {sqlx::Error::PoolClosed.with_code(ErrorCode::StatementFailed)},
+            None => bail! {sqlx::Error::PoolClosed.code(ErrorCode::StatementFailed)},
         }
     }
 

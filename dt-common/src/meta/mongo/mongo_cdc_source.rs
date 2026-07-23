@@ -17,7 +17,7 @@ impl MongoCdcSource {
             "change_stream" => Ok(Self::ChangeStream),
             _ => Err(
                 DtError::InvalidConfig(format!("invalid MongoCdcSource: {}", str))
-                    .with_stage(Stage::Bootstrap),
+                    .stage(Stage::Bootstrap),
             ),
         }
     }

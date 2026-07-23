@@ -28,7 +28,7 @@ impl Fetcher for RedisFetcher {
             DtError::InvariantViolated(
                 "the Redis precheck connection is not initialized".to_string(),
             )
-            .with_origin(OriginError::new("redis", None::<String>))
+            .origin(OriginError::new("redis", None::<String>))
         })?;
         let version = RedisUtil::get_redis_version(conn)?;
         Ok(version.to_string())

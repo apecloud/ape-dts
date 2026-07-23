@@ -56,11 +56,10 @@ impl LogRecovery {
                 ));
             }
         };
-        recovery.initialization().await.map_err(|error| {
-            error
-                .with_stage(Stage::Resumer)
-                .with_endpoint(EndpointRole::Metadata)
-        })?;
+        recovery
+            .initialization()
+            .await
+            .map_err(|error| error.stage(Stage::Resumer).endpoint(EndpointRole::Metadata))?;
         Ok(recovery)
     }
 

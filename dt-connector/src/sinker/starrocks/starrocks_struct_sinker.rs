@@ -134,8 +134,8 @@ impl StarrocksStructSinker {
             return Err(DtError::ObjectNotFound(
                 "source table metadata is missing while building StarRocks DDL".to_string(),
             )
-                .with_message("Source table metadata is unavailable for StarRocks structure migration")
-                .with_hint(
+                .message("Source table metadata is unavailable for StarRocks structure migration")
+                .hint(
                     "Verify that the source table still exists and rerun structure migration. If it repeats, contact support with the task ID and error code.",
                 )
                 );
@@ -227,8 +227,8 @@ impl StarrocksStructSinker {
                 rdb_tb_meta.schema, rdb_tb_meta.tb, col
             );
             return Err(DtError::ObjectNotFound(detail.clone())
-                .with_message("Source column metadata is unavailable for StarRocks structure migration")
-                .with_hint(
+                .message("Source column metadata is unavailable for StarRocks structure migration")
+                .hint(
                     "Check whether the source table changed, then restart structure migration to reload its definition.",
                 )
                 );

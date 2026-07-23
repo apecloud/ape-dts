@@ -43,7 +43,7 @@ impl Sinker for KafkaSinker {
         }
         self.producer
             .send_all(&messages)
-            .map_err(|error| error.with_code(ErrorCode::StatementFailed))?;
+            .map_err(|error| error.code(ErrorCode::StatementFailed))?;
         Ok(())
     }
 
@@ -88,7 +88,7 @@ impl KafkaSinker {
         let mut rts = LimitedQueue::new(1);
         self.producer
             .send_all(&messages)
-            .map_err(|error| error.with_code(ErrorCode::StatementFailed))?;
+            .map_err(|error| error.code(ErrorCode::StatementFailed))?;
         rts.push((
             start_time.elapsed().as_millis() as u64,
             messages.len() as u64,

@@ -51,7 +51,7 @@ impl RdbRedisTestRunner {
                 .unwrap(),
             _ => {
                 bail! {DtError::InvalidConfig("unsupported sinker config".to_string())
-                .with_stage(Stage::Bootstrap)};
+                .stage(Stage::Bootstrap)};
             }
         };
         let redis_util = RedisTestUtil::new_default();

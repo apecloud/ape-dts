@@ -36,7 +36,7 @@ impl PgCdcClient {
                 let (client, connection) = config
                     .connect(NoTls)
                     .await
-                    .map_err(|error| error.with_code(ErrorCode::ConnectionFailed))?;
+                    .map_err(|error| error.code(ErrorCode::ConnectionFailed))?;
                 tokio::spawn(async move {
                     log_info!("postgres replication connection starts",);
                     if let Err(e) = connection.await {
@@ -50,7 +50,7 @@ impl PgCdcClient {
                 let (client, connection) = config
                     .connect(connector)
                     .await
-                    .map_err(|error| error.with_code(ErrorCode::ConnectionFailed))?;
+                    .map_err(|error| error.code(ErrorCode::ConnectionFailed))?;
                 tokio::spawn(async move {
                     log_info!("postgres replication connection starts",);
                     if let Err(e) = connection.await {
@@ -66,7 +66,7 @@ impl PgCdcClient {
     fn build_replication_config(&self) -> anyhow::Result<(Config, SslConfig)> {
         let (sanitized_url, url_ssl_config) = Self::parse_url_ssl_config(&self.url)?;
         let mut config: Config = Config::from_str(&sanitized_url)
-            .map_err(|error| error.with_code(ErrorCode::InvalidConfig))?;
+            .map_err(|error| error.code(ErrorCode::InvalidConfig))?;
         config.replication_mode(ReplicationMode::Logical);
 
         let mut effective_ssl_config = url_ssl_config.unwrap_or_else(Self::disabled_ssl_config);
@@ -107,8 +107,8 @@ impl PgCdcClient {
     fn build_tls_connector(ssl_config: &SslConfig) -> anyhow::Result<MakeTlsConnector> {
         let mut builder = SslConnector::builder(SslMethod::tls()).map_err(|error| {
             error
-                .with_code(ErrorCode::TlsFailed)
-                .with_origin(OriginError::new("postgres", None::<String>))
+                .code(ErrorCode::TlsFailed)
+                .origin(OriginError::new("postgres", None::<String>))
         })?;
 
         match ssl_config.ssl_mode {
@@ -132,8 +132,8 @@ impl PgCdcClient {
                     .set_ca_file(&ssl_config.ssl_ca_path)
                     .map_err(|error| {
                         error
-                            .with_code(ErrorCode::TlsFailed)
-                            .with_origin(OriginError::new("postgres", None::<String>))
+                            .code(ErrorCode::TlsFailed)
+                            .origin(OriginError::new("postgres", None::<String>))
                     })?;
                 builder.set_verify(SslVerifyMode::PEER);
             }
@@ -213,7 +213,7 @@ impl PgCdcClient {
         let res = client
             .simple_query(&query)
             .await
-            .map_err(|error| error.with_code(ErrorCode::MetadataReadFailed))?;
+            .map_err(|error| error.code(ErrorCode::MetadataReadFailed))?;
         let pub_exists = res.len() > 1;
         log_info!("publication: {} exists: {}", pub_name, pub_exists);
 
@@ -223,7 +223,7 @@ impl PgCdcClient {
             client
                 .simple_query(&query)
                 .await
-                .map_err(|error| error.with_code(ErrorCode::StatementFailed))?;
+                .map_err(|error| error.code(ErrorCode::StatementFailed))?;
         }
 
         // check slot exists
@@ -261,7 +261,7 @@ impl PgCdcClient {
                 client
                     .simple_query(&query)
                     .await
-                    .map_err(|error| error.with_code(ErrorCode::StatementFailed))?;
+                    .map_err(|error| error.code(ErrorCode::StatementFailed))?;
             }
 
             let query = format!(
@@ -273,7 +273,7 @@ impl PgCdcClient {
             let res = client
                 .simple_query(&query)
                 .await
-                .map_err(|error| error.with_code(ErrorCode::StatementFailed))?;
+                .map_err(|error| error.code(ErrorCode::StatementFailed))?;
             // get the lsn for the newly created slot
             start_lsn = res
                 .iter()
@@ -286,10 +286,10 @@ impl PgCdcClient {
                         "the CREATE_REPLICATION_SLOT response is missing consistent_point"
                             .to_string(),
                     )
-                        .with_message(
+                        .message(
                             "PostgreSQL did not return a start position for the new replication slot",
                         )
-                        .with_hint(
+                        .hint(
                             "Remove the incomplete replication slot and restart the task. If it repeats, check PostgreSQL replication logs.",
                         )
                 })?;
@@ -312,7 +312,7 @@ impl PgCdcClient {
         let res = client
             .simple_query(&query)
             .await
-            .map_err(|error| error.with_code(ErrorCode::MetadataReadFailed))?;
+            .map_err(|error| error.code(ErrorCode::MetadataReadFailed))?;
         let slot_exists = res.len() > 1;
         log_info!("slot: {} exists: {}", self.slot_name, slot_exists);
 
@@ -340,11 +340,11 @@ impl PgCdcClient {
         client
             .simple_query("SET extra_float_digits=3")
             .await
-            .map_err(|error| error.with_code(ErrorCode::StatementFailed))?;
+            .map_err(|error| error.code(ErrorCode::StatementFailed))?;
         client
             .simple_query("SET TIME ZONE 'UTC'")
             .await
-            .map_err(|error| error.with_code(ErrorCode::StatementFailed))?;
+            .map_err(|error| error.code(ErrorCode::StatementFailed))?;
 
         // start replication slot
         let options = format!(
@@ -360,7 +360,7 @@ impl PgCdcClient {
         let copy_stream = client
             .copy_both_simple::<bytes::Bytes>(&query)
             .await
-            .map_err(|error| error.with_code(ErrorCode::StatementFailed))?;
+            .map_err(|error| error.code(ErrorCode::StatementFailed))?;
         let stream = LogicalReplicationStream::new(copy_stream);
         Ok((stream, start_lsn))
     }

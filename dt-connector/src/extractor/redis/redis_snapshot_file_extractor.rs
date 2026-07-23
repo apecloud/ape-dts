@@ -28,14 +28,14 @@ impl Extractor for RedisSnapshotFileExtractor {
     async fn extract(&mut self) -> anyhow::Result<()> {
         let file = File::open(&self.file_path).await.map_err(|error| {
             error
-                .with_code(ErrorCode::IoFailed)
-                .with_origin(OriginError::new("redis", None::<String>))
+                .code(ErrorCode::IoFailed)
+                .origin(OriginError::new("redis", None::<String>))
                 .context("failed to read the configured Redis snapshot file")
         })?;
         let metadata = metadata(&self.file_path).await.map_err(|error| {
             error
-                .with_code(ErrorCode::IoFailed)
-                .with_origin(OriginError::new("redis", None::<String>))
+                .code(ErrorCode::IoFailed)
+                .origin(OriginError::new("redis", None::<String>))
                 .context("failed to read the configured Redis snapshot file")
         })?;
         let mut file_reader = RdbFileReader { file };

@@ -150,8 +150,8 @@ impl MysqlCdcExtractor {
         let url = ConnectionAuthConfig::merge_url_with_auth(&self.url, &self.connection_auth)
             .map_err(|error| {
                 error
-                    .with_code(ErrorCode::InvalidConfig)
-                    .with_origin(OriginError::new("mysql", None::<String>))
+                    .code(ErrorCode::InvalidConfig)
+                    .origin(OriginError::new("mysql", None::<String>))
                     .context("failed to merge the MySQL URL with connection authentication")
             })?;
 
@@ -164,7 +164,7 @@ impl MysqlCdcExtractor {
             )
             .connect()
             .await
-            .map_err(|error| error.with_code(ErrorCode::ConnectionFailed))?;
+            .map_err(|error| error.code(ErrorCode::ConnectionFailed))?;
 
         let mut ctx = Context {
             binlog_filename: self.binlog_filename.clone(),
@@ -174,7 +174,7 @@ impl MysqlCdcExtractor {
         if self.gtid_enabled {
             ctx.gtid_set = Some(
                 GtidSet::new(self.gtid_set.as_str())
-                    .map_err(|error| error.with_code(ErrorCode::InvalidConfig))?,
+                    .map_err(|error| error.code(ErrorCode::InvalidConfig))?,
             );
         }
 
@@ -186,7 +186,7 @@ impl MysqlCdcExtractor {
                 stream
                     .close()
                     .await
-                    .map_err(|error| error.with_code(ErrorCode::ConnectionFailed))?;
+                    .map_err(|error| error.code(ErrorCode::ConnectionFailed))?;
                 return Ok(());
             }
 

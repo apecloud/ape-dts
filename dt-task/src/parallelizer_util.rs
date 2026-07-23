@@ -41,7 +41,7 @@ impl ParallelizerUtil {
                         DtError::InvalidConfig(
                             "snapshot parallelizer rebalance configuration is missing".to_string(),
                         )
-                        .with_stage(Stage::Bootstrap)
+                        .stage(Stage::Bootstrap)
                     })?
                     .clone(),
             }),
@@ -103,7 +103,7 @@ impl ParallelizerUtil {
                 DtError::InvalidConfig(
                     "the selected merger requires a relational database endpoint".to_string(),
                 )
-                .with_stage(Stage::Bootstrap)
+                .stage(Stage::Bootstrap)
             })?;
 
         let rdb_merger = RdbMerger { rdb_meta_manager };
@@ -117,7 +117,7 @@ impl ParallelizerUtil {
                 DtError::InvalidConfig(
                     "the selected partitioner requires a relational database endpoint".to_string(),
                 )
-                .with_stage(Stage::Bootstrap)
+                .stage(Stage::Bootstrap)
             })?;
         Ok(RdbPartitioner { meta_manager })
     }

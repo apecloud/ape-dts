@@ -1,5 +1,5 @@
 use dt_common::{
-    error::{DtErrorContextExt, ErrorCode, SqlxErrorExt, SqlxProvider},
+    error::{DtResultExt, ErrorCode},
     log_info,
     utils::sql_util::SqlUtil,
     utils::time_util::TimeUtil,
@@ -84,11 +84,7 @@ impl BinlogUtil {
         let sql = "SHOW BINARY LOGS";
 
         let mut rows = sqlx::raw_sql(sql).fetch(conn_pool);
-        while let Some(row) = rows.try_next().await.map_err(|error| {
-            error
-                .with_code(ErrorCode::MetadataReadFailed)
-                .with_sqlx_provider(SqlxProvider::MySql)
-        })? {
+        while let Some(row) = rows.try_next().await.code(ErrorCode::MetadataReadFailed)? {
             let log_name = SqlUtil::try_get_mysql_string(&row, 0)?;
             binlogs.push(log_name)
         }

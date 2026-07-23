@@ -50,8 +50,8 @@ impl RedisClient {
                     ErrorCode::ConnectionFailed
                 };
                 error
-                    .with_code(code)
-                    .with_origin(OriginError::new("redis", None::<String>))
+                    .code(code)
+                    .origin(OriginError::new("redis", None::<String>))
             })?;
         let mut me = Self {
             url: url.into(),
@@ -86,8 +86,8 @@ impl RedisClient {
             .shutdown(std::net::Shutdown::Both)
             .map_err(|error| {
                 error
-                    .with_code(ErrorCode::ConnectionFailed)
-                    .with_origin(OriginError::new("redis", None::<String>))
+                    .code(ErrorCode::ConnectionFailed)
+                    .origin(OriginError::new("redis", None::<String>))
             })?;
         Ok(())
     }
@@ -99,8 +99,8 @@ impl RedisClient {
             .await
             .map_err(|error| {
                 error
-                    .with_code(ErrorCode::ConnectionFailed)
-                    .with_origin(OriginError::new("redis", None::<String>))
+                    .code(ErrorCode::ConnectionFailed)
+                    .origin(OriginError::new("redis", None::<String>))
             })?;
         Ok(())
     }
@@ -129,8 +129,8 @@ impl RedisClient {
         let mut buf = vec![0; length];
         self.stream.read_exact(&mut buf).await.map_err(|error| {
             error
-                .with_code(ErrorCode::ConnectionFailed)
-                .with_origin(OriginError::new("redis", None::<String>))
+                .code(ErrorCode::ConnectionFailed)
+                .origin(OriginError::new("redis", None::<String>))
         })?;
         Ok(buf)
     }

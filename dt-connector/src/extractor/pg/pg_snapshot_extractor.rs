@@ -113,7 +113,7 @@ impl Extractor for PgSnapshotExtractor {
         if self.parallel_size < 1 {
             bail!(
                 DtError::InvalidConfig("parallel_size must be greater than 0".to_string(),)
-                    .with_stage(Stage::Bootstrap)
+                    .stage(Stage::Bootstrap)
             );
         }
 

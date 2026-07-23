@@ -66,7 +66,7 @@ impl Extractor for RedisClusterPsyncExtractor {
                 }
                 Err(err) => {
                     self.base_extractor.shut_down.store(true, Ordering::Release);
-                    return Err(err.with_code(ErrorCode::WorkerFailed));
+                    return Err(err.code(ErrorCode::WorkerFailed));
                 }
             }
         }

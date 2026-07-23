@@ -21,7 +21,7 @@ pub async fn do_precheck(config: &str, precheck_config: PrecheckTaskConfig) -> a
     if let Err(error) = checker_connector
         .verify_check_result()
         .await
-        .map_err(|error| error.with_stage(Stage::Precheck).with_task_id(task_id))
+        .map_err(|error| error.stage(Stage::Precheck).task_id(task_id))
     {
         println!("precheck not passed.");
         return Err(error);

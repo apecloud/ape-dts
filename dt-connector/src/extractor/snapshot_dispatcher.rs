@@ -77,7 +77,7 @@ impl SnapshotDispatcher {
         }
 
         while let Some(result) = join_set.join_next().await {
-            let result = result.map_err(|error| error.with_code(ErrorCode::WorkerFailed))??;
+            let result = result.map_err(|error| error.code(ErrorCode::WorkerFailed))??;
             state = on_done(state, result).await?;
 
             while join_set.len() < parallel_size {

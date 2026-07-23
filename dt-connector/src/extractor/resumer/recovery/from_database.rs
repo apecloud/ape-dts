@@ -15,8 +15,8 @@ use crate::extractor::resumer::{
 use dt_common::{
     config::resumer_config::ResumerConfig,
     error::{
-        AnyhowErrorExt, DtError, DtErrorContextExt, EndpointRole, ErrorCode, ErrorObject,
-        SqlxErrorExt, SqlxProvider, Stage,
+        classify_sqlx_error, DtError, DtErrorContextExt, EndpointRole, ErrorCode, ErrorObject,
+        Stage,
     },
     log_info, log_warn,
     meta::position::Position,
@@ -59,11 +59,10 @@ impl DatabaseRecovery {
                 ))
             }
         };
-        recovery.initialization().await.map_err(|error| {
-            error
-                .with_stage(Stage::Resumer)
-                .with_endpoint(EndpointRole::Metadata)
-        })?;
+        recovery
+            .initialization()
+            .await
+            .map_err(|error| error.stage(Stage::Resumer).endpoint(EndpointRole::Metadata))?;
         Ok(recovery)
     }
 
@@ -134,19 +133,18 @@ impl DatabaseRecovery {
                                 break;
                             }
                             _ => {
+                                let is_missing_resume_store = classify_sqlx_error(&error)
+                                    .error_code()
+                                    .is_some_and(Self::is_missing_resume_store);
                                 let error = error
-                                    .with_code(ErrorCode::CheckpointReadFailed)
-                                    .with_sqlx_provider(SqlxProvider::MySql)
-                                    .with_message("failed to query resume position from database")
-                                    .with_object(ErrorObject {
+                                    .code(ErrorCode::CheckpointReadFailed)
+                                    .message("failed to query resume position from database")
+                                    .object(ErrorObject {
                                         schema: Some(self.schema.clone()),
                                         table: Some(self.table.clone()),
                                         ..Default::default()
                                     });
-                                if error
-                                    .error_code()
-                                    .is_some_and(Self::is_missing_resume_store)
-                                {
+                                if is_missing_resume_store {
                                     log::info!(
                                             "Resume table {}.{} does not exist, will start from beginning",
                                             self.schema, self.table
@@ -185,19 +183,18 @@ impl DatabaseRecovery {
                                 break;
                             }
                             _ => {
+                                let is_missing_resume_store = classify_sqlx_error(&error)
+                                    .error_code()
+                                    .is_some_and(Self::is_missing_resume_store);
                                 let error = error
-                                    .with_code(ErrorCode::CheckpointReadFailed)
-                                    .with_sqlx_provider(SqlxProvider::Postgres)
-                                    .with_message("failed to query resume position from database")
-                                    .with_object(ErrorObject {
+                                    .code(ErrorCode::CheckpointReadFailed)
+                                    .message("failed to query resume position from database")
+                                    .object(ErrorObject {
                                         schema: Some(self.schema.clone()),
                                         table: Some(self.table.clone()),
                                         ..Default::default()
                                     });
-                                if error
-                                    .error_code()
-                                    .is_some_and(Self::is_missing_resume_store)
-                                {
+                                if is_missing_resume_store {
                                     log::info!(
                                             "Resume table {}.{} does not exist, will start from beginning",
                                             self.schema, self.table

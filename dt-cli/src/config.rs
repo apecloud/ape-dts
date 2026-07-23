@@ -2,7 +2,7 @@ use std::{collections::BTreeMap, path::Path};
 
 use anyhow::{bail, Context, Result};
 use clap::ValueEnum;
-use dt_common::error::{DtError, DtErrorContext, DtResultExt, ErrorCode, Stage};
+use dt_common::error::{DtError, DtResultExt, ErrorCode, Stage};
 use url::Url;
 
 const SERVER_ID_MIN: u64 = 10001;
@@ -102,11 +102,8 @@ pub fn infer_db_type(url: &str, explicit: Option<DbType>) -> Result<DbType> {
         }
     } else if matches!(inferred, DbType::Pg) {
         let parsed = Url::parse(url)
-            .with_dt_context(
-                DtErrorContext::new()
-                    .code(ErrorCode::InvalidConfig)
-                    .stage(Stage::Bootstrap),
-            )
+            .code(ErrorCode::InvalidConfig)
+            .stage(Stage::Bootstrap)
             .with_context(|| format!("Invalid endpoint URL [{url}]"))?;
         if parsed.path().trim_matches('/').is_empty() {
             bail!(DtError::invalid_config(format!(

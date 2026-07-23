@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use dt_common::{
-    error::{DtErrorContextExt, ErrorCode, SqlxErrorExt, SqlxProvider},
+    error::{DtResultExt, ErrorCode},
     meta::{
         adaptor::pg_col_value_convertor::PgColValueConvertor,
         col_value::ColValue,
@@ -230,11 +230,7 @@ impl PgStructCheckFetcher {
     ) -> anyhow::Result<Vec<HashMap<String, String>>> {
         let mut results = Vec::new();
         let mut rows = sqlx::query(sql).fetch(&self.conn_pool);
-        while let Some(row) = rows.try_next().await.map_err(|error| {
-            error
-                .with_code(ErrorCode::MetadataReadFailed)
-                .with_sqlx_provider(SqlxProvider::Postgres)
-        })? {
+        while let Some(row) = rows.try_next().await.code(ErrorCode::MetadataReadFailed)? {
             let res = Self::parse_row(&row, col_names, col_types)?;
             results.push(res);
         }

@@ -79,7 +79,7 @@ impl ConnectionAuthConfig {
                 .context(DtError::invalid_config(
                     "the configured database connection URL could not be parsed",
                 ))
-                .with_message("database connection URL is invalid")
+                .message("database connection URL is invalid")
         })?;
 
         match connection_auth {
@@ -96,7 +96,7 @@ impl ConnectionAuthConfig {
                             DtError::InvalidConfig(
                                 "database connection URL does not support a username".to_string(),
                             )
-                            .with_stage(Stage::Bootstrap)
+                            .stage(Stage::Bootstrap)
                         })?;
                 }
 
@@ -109,7 +109,7 @@ impl ConnectionAuthConfig {
                                     "database connection URL does not support a password"
                                         .to_string(),
                                 )
-                                .with_stage(Stage::Bootstrap)
+                                .stage(Stage::Bootstrap)
                             })?;
                     }
                 }

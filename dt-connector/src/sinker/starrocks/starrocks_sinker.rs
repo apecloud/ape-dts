@@ -159,7 +159,7 @@ impl StarRocksSinker {
             .http_client
             .execute(request)
             .await
-            .map_err(|error| error.with_code(ErrorCode::StatementFailed))?;
+            .map_err(|error| error.code(ErrorCode::StatementFailed))?;
         rts.push((start_time.elapsed().as_millis() as u64, 1));
         let task_id = self.base_sinker.task_id_for_schema_tb(&db, &tb);
         self.base_sinker.ensure_monitor_for(&task_id);
@@ -279,7 +279,7 @@ impl StarRocksSinker {
             }
         }
         put.build()
-            .map_err(|error| error.with_code(ErrorCode::StatementFailed))
+            .map_err(|error| error.code(ErrorCode::StatementFailed))
     }
 
     async fn check_response(response: Response) -> anyhow::Result<()> {
@@ -287,7 +287,7 @@ impl StarRocksSinker {
         let response_text = &response
             .text()
             .await
-            .map_err(|error| error.with_code(ErrorCode::StatementFailed))?;
+            .map_err(|error| error.code(ErrorCode::StatementFailed))?;
         if status_code != StatusCode::OK {
             return Err(DtError::HttpRejected {
                 status: status_code.as_u16(),

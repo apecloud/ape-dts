@@ -223,81 +223,81 @@ impl ClassifyError for DtError {
             DtError::ClickHouseSourceMetadataMissing(_) => ErrorCode::ObjectNotFound,
             DtError::Unclassified(_) => ErrorCode::Unclassified,
         };
-        let context = DtErrorContext::new().code(code);
+        let context = DtErrorContext::new().with_code(code);
         match self {
             DtError::MissingConfig(_)
             | DtError::MissingConfigItem(_)
-            | DtError::InvalidConfig(_) => context.stage(Stage::Bootstrap),
+            | DtError::InvalidConfig(_) => context.with_stage(Stage::Bootstrap),
             DtError::RedisInvalidConfig(_) => context
-                .stage(Stage::Bootstrap)
-                .endpoint(super::EndpointRole::Source)
-                .origin(OriginError::new("redis", None::<String>)),
+                .with_stage(Stage::Bootstrap)
+                .with_endpoint(super::EndpointRole::Source)
+                .with_origin(OriginError::new("redis", None::<String>)),
             DtError::PostgresInvalidConfig(_) => context
-                .stage(Stage::Bootstrap)
-                .origin(OriginError::new("postgres", None::<String>)),
+                .with_stage(Stage::Bootstrap)
+                .with_origin(OriginError::new("postgres", None::<String>)),
             DtError::MetricsInitializationFailed(_) => context
-                .message("Metrics configuration is invalid")
-                .stage(Stage::Bootstrap),
+                .with_message("Metrics configuration is invalid")
+                .with_stage(Stage::Bootstrap),
             DtError::MissingSourceClient
             | DtError::MissingDestinationClient
-            | DtError::MissingTaskClient(_) => context.stage(Stage::Task),
+            | DtError::MissingTaskClient(_) => context.with_stage(Stage::Task),
             DtError::RedisRdbError(_)
             | DtError::RedisCmdError(_)
             | DtError::RedisResultError(_)
             | DtError::RedisUnsupportedVersion(_)
             | DtError::RedisInvariant(_) => {
-                context.origin(OriginError::new("redis", None::<String>))
+                context.with_origin(OriginError::new("redis", None::<String>))
             }
             DtError::RedisAuthenticationFailed(_) => {
-                context.origin(OriginError::new("redis", None::<String>))
+                context.with_origin(OriginError::new("redis", None::<String>))
             }
             DtError::RedisTopology(_) => context
-                .message("The Redis cluster topology is invalid or incomplete")
-                .hint(
+                .with_message("The Redis cluster topology is invalid or incomplete")
+                .with_hint(
                     "Ensure all 16384 Redis cluster slots are assigned to stable master nodes, then retry.",
                 )
-                .origin(OriginError::new("redis", None::<String>)),
+                .with_origin(OriginError::new("redis", None::<String>)),
             DtError::RedisPrerequisiteNotMet(_) => {
-                context.origin(OriginError::new("redis", None::<String>))
+                context.with_origin(OriginError::new("redis", None::<String>))
             }
             DtError::MySqlBinlogUnavailable(_) => context
-                .message("The requested MySQL binlog is no longer available")
-                .hint(
+                .with_message("The requested MySQL binlog is no longer available")
+                .with_hint(
                     "Start from a retained binlog position or take a new snapshot, then increase the source binlog retention period.",
                 )
-                .origin(OriginError::new("mysql", Some("1236"))),
+                .with_origin(OriginError::new("mysql", Some("1236"))),
             DtError::MySqlBinlogTableMapMissing(_) => context
-                .message("A MySQL row event could not be decoded")
-                .hint(
+                .with_message("A MySQL row event could not be decoded")
+                .with_hint(
                     "Restart from an earlier binlog position so Ape-DTS can reload the table definition. If it repeats, check binlog retention and the source database logs.",
                 )
-                .origin(OriginError::new("mysql", None::<String>)),
+                .with_origin(OriginError::new("mysql", None::<String>)),
             DtError::MySqlBinlogDecode(_) => context
-                .message("A MySQL row event could not be decoded")
-                .hint(
+                .with_message("A MySQL row event could not be decoded")
+                .with_hint(
                     "Restart from an earlier binlog position. If it repeats, check binlog integrity and the source database logs.",
                 )
-                .origin(OriginError::new("mysql", None::<String>)),
+                .with_origin(OriginError::new("mysql", None::<String>)),
             DtError::MySqlInvariant(_) => {
-                context.origin(OriginError::new("mysql", None::<String>))
+                context.with_origin(OriginError::new("mysql", None::<String>))
             }
-            DtError::HttpRejected { status, .. } => context.origin(OriginError::new(
+            DtError::HttpRejected { status, .. } => context.with_origin(OriginError::new(
                 "http",
                 Some(status.to_string()),
             )),
             DtError::ClickHouseSourceMetadataMissing(_) => context
-                .message(
+                .with_message(
                     "Source table metadata is unavailable for ClickHouse structure migration",
                 )
-                .hint(
+                .with_hint(
                     "Verify that the source table still exists and rerun structure migration. If it repeats, contact support with the task ID and error code.",
                 )
-                .origin(OriginError::new("clickhouse", None::<String>)),
+                .with_origin(OriginError::new("clickhouse", None::<String>)),
             DtError::MongoStatementFailed(_) | DtError::MongoUnsupportedVersion(_) => {
-                context.origin(OriginError::new("mongodb", None::<String>))
+                context.with_origin(OriginError::new("mongodb", None::<String>))
             }
             DtError::PostgresStatementFailed(_) | DtError::PostgresCheckpointReadFailed(_) => {
-                context.origin(OriginError::new("postgres", None::<String>))
+                context.with_origin(OriginError::new("postgres", None::<String>))
             }
             _ => context,
         }

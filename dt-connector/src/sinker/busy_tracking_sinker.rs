@@ -29,8 +29,8 @@ impl Sinker for BusyTrackingSinker {
         let _guard = self.recorder.enter();
         self.inner.sink_dml(data, batch).await.map_err(|error| {
             error
-                .with_stage(Stage::Sinker)
-                .with_endpoint(EndpointRole::Destination)
+                .stage(Stage::Sinker)
+                .endpoint(EndpointRole::Destination)
         })
     }
 
@@ -38,8 +38,8 @@ impl Sinker for BusyTrackingSinker {
         let _guard = self.recorder.enter();
         self.inner.sink_ddl(data, batch).await.map_err(|error| {
             error
-                .with_stage(Stage::Sinker)
-                .with_endpoint(EndpointRole::Destination)
+                .stage(Stage::Sinker)
+                .endpoint(EndpointRole::Destination)
         })
     }
 
@@ -47,8 +47,8 @@ impl Sinker for BusyTrackingSinker {
         let _guard = self.recorder.enter();
         self.inner.sink_dcl(data, batch).await.map_err(|error| {
             error
-                .with_stage(Stage::Sinker)
-                .with_endpoint(EndpointRole::Destination)
+                .stage(Stage::Sinker)
+                .endpoint(EndpointRole::Destination)
         })
     }
 
@@ -56,8 +56,8 @@ impl Sinker for BusyTrackingSinker {
         let _guard = self.recorder.enter();
         self.inner.sink_raw(data, batch).await.map_err(|error| {
             error
-                .with_stage(Stage::Sinker)
-                .with_endpoint(EndpointRole::Destination)
+                .stage(Stage::Sinker)
+                .endpoint(EndpointRole::Destination)
         })
     }
 
@@ -65,8 +65,8 @@ impl Sinker for BusyTrackingSinker {
         let _guard = self.recorder.enter();
         self.inner.sink_struct(data).await.map_err(|error| {
             error
-                .with_stage(Stage::Sinker)
-                .with_endpoint(EndpointRole::Destination)
+                .stage(Stage::Sinker)
+                .endpoint(EndpointRole::Destination)
         })
     }
 
@@ -74,8 +74,8 @@ impl Sinker for BusyTrackingSinker {
         let _guard = self.recorder.enter();
         self.inner.refresh_meta(data).await.map_err(|error| {
             error
-                .with_stage(Stage::Sinker)
-                .with_endpoint(EndpointRole::Destination)
+                .stage(Stage::Sinker)
+                .endpoint(EndpointRole::Destination)
         })
     }
 
@@ -83,16 +83,16 @@ impl Sinker for BusyTrackingSinker {
         let _guard = self.recorder.enter();
         self.inner.handle_control_item(item).await.map_err(|error| {
             error
-                .with_stage(Stage::Sinker)
-                .with_endpoint(EndpointRole::Destination)
+                .stage(Stage::Sinker)
+                .endpoint(EndpointRole::Destination)
         })
     }
 
     async fn close(&mut self) -> anyhow::Result<()> {
         self.inner.close().await.map_err(|error| {
             error
-                .with_stage(Stage::Sinker)
-                .with_endpoint(EndpointRole::Destination)
+                .stage(Stage::Sinker)
+                .endpoint(EndpointRole::Destination)
         })
     }
 
@@ -116,7 +116,7 @@ mod tests {
     use anyhow::bail;
     use async_trait::async_trait;
     use dt_common::{
-        error::{AnyhowErrorExt, EndpointRole, Stage},
+        error::{EndpointRole, ErrorReport, Stage},
         meta::{
             dcl_meta::dcl_data::DclData,
             ddl_meta::ddl_data::DdlData,
@@ -215,9 +215,9 @@ mod tests {
 
         fail.store(true, Ordering::Relaxed);
         let error = sinker.sink_dml(Vec::new(), false).await.unwrap_err();
-        let context = error.dt_context().unwrap();
-        assert_eq!(context.stage_value(), Some(Stage::Sinker));
-        assert_eq!(context.endpoint_role(), Some(EndpointRole::Destination));
+        let report = ErrorReport::from_anyhow(&error);
+        assert_eq!(report.stage, Stage::Sinker);
+        assert_eq!(report.endpoint, Some(EndpointRole::Destination));
         assert_eq!(metrics.snapshot().busy, 0);
     }
 

@@ -1,9 +1,9 @@
 use super::super::{DtErrorContext, ErrorCode, OriginError};
 
 pub(super) fn provider_context(code: Option<ErrorCode>, origin: OriginError) -> DtErrorContext {
-    let context = DtErrorContext::new().origin(origin);
+    let context = DtErrorContext::new().with_origin(origin);
     match code {
-        Some(code) => context.code(code),
+        Some(code) => context.with_code(code),
         None => context,
     }
 }

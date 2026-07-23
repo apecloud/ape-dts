@@ -130,11 +130,10 @@ printed and only the `BACKTRACE` block is omitted.
 
 `anyhow::Error` is the only error transport container. `DtErrorContext` is a
 typed metadata frame whose code, message, hint, stage, task ID, endpoint role,
-database object, and provider origin are all optional. It
-implements `Display` but intentionally does not implement
-`std::error::Error`. The endpoint role is `source`, `destination`, or
-`metadata`. Database objects may include schema, table, column, and constraint
-names.
+database object, and provider origin are all optional. It is a plain data
+object and implements neither `Display` nor `std::error::Error`. The endpoint
+role is `source`, `destination`, or `metadata`. Database objects may include
+schema, table, column, and constraint names.
 
 The innermost cause is always a real error. Provider failures keep their
 original provider error type. Application-authored failures use the
@@ -142,7 +141,7 @@ original provider error type. Application-authored failures use the
 
 Project-owned failures select a semantic `DtError` variant and add only the
 metadata known at that call site. For example,
-`DtError::InvalidConfig(detail).with_stage(Stage::Bootstrap)` creates the root
+`DtError::InvalidConfig(detail).stage(Stage::Bootstrap)` creates the root
 cause and adds its stage; it does not repeat `ErrorCode::InvalidConfig`.
 The `ClassifyError` implementation maps every `DtError` variant to a
 `DtErrorContext` containing its stable default code and any metadata intrinsic
@@ -151,16 +150,19 @@ Adding a new variant therefore requires an explicit classifier arm and cannot
 silently fall through. `DtError::Unclassified` is reserved for a project-owned
 failure for which no stable classification is available.
 
-The same extension trait is implemented for `anyhow::Error` and the supported
-provider error types. An explicit `DtErrorContext.code` has higher priority
-than the project and provider classifiers. Use it when the operation itself
-defines the error condition or when a dynamic aggregate result cannot be
-represented by a `DtError` variant. Unknown concrete errors can retain their
-source type through `DtErrorContext::attach`.
+The error extension trait is implemented for `anyhow::Error` and the supported
+provider error types. `DtResultExt` provides the same `code`, `message`, `hint`,
+`stage`, `task_id`, `endpoint`, `object`, and `origin` methods directly on
+`Result`. Its `dt_context` method accepts a closure, so metadata is not built on
+the successful path. A code attached to a provider result is an operation
+fallback: a recognized provider code takes priority, while an unrecognized
+provider condition retains the operation code. Project-owned failures should
+normally use a semantic `DtError` variant. Unknown concrete errors retain their
+source type when converted to `anyhow::Error`.
 When a project-owned classification also has a lower-level source, put the
 semantic `DtError` in the `anyhow` context chain above that source. Both the
-`DtError` and the original source then remain downcastable, and the report uses
-the `DtError` classifier without discarding the source diagnostics.
+`DtError` and the original source then remain downcastable, and the report can
+classify both without discarding the source diagnostics.
 
 Metadata is added as the error crosses ownership boundaries. A leaf frame can
 contain the business code, affected object, and provider origin. Stage and
@@ -174,15 +176,20 @@ precheck entry attaches `precheck` and the task ID while its builder attaches
 the only production boundary that attaches its task ID. No report-time
 inference is used.
 
-Frames are immutable after attachment. `ErrorReport` starts at the outermost
-frame and recursively reads the inner metadata chain. Scope and root-cause
-fields use the nearest inner value: stage, endpoint, and provider origin are
-not replaced merely because an error passes through another component. Error
-object fields are merged individually, preserving an inner value and filling
-only missing fields from outer frames. Code, user message, hint, and task ID
-retain explicit outer precedence. Consequently, a sinker failure propagated
-through the parallelizer and pipeline is reported as `sinker/destination`,
-while the task entry can still supply its task ID and user-facing context.
+Each frame is flat and immutable. The context extension appends frames to an
+internal ordered list carried by `anyhow::Error`; `DtErrorContext` itself has
+no parent link and no field-resolution methods. `ErrorReport` collects every
+field into ordered arrays from explicit frames, project errors, and all known
+provider causes, then applies display-specific precedence. Scope and
+root-cause fields use the nearest inner value: stage, endpoint, and provider
+origin are not replaced merely because an error passes through another
+component. Error object fields are merged individually, preserving an inner
+value and filling only missing fields from outer frames. Recognized provider
+codes precede operation fallback codes; user message, hint, and task ID retain
+explicit outer precedence. Consequently, a sinker
+failure propagated through the parallelizer and pipeline is reported as
+`sinker/destination`, while the task entry can still supply its task ID and
+user-facing context.
 `DtErrorContext` has no detail field. Report construction derives
 `detail` from the redacted ordinary contexts and concrete causes in the error
 chain. Project-owned `DtError` values retain their variant-specific full
@@ -205,15 +212,11 @@ and Rust error variants; they must not parse provider messages. Each
 implementation returns a `DtErrorContext` containing an optional recognized
 code, provider origin, and affected object. A small explicit registry applies
 the same trait to supported provider causes preserved in `anyhow::Error`.
-SQLx call sites that know the database family keep passing `SqlxProvider` so
-transport errors retain an exact origin; raw fallback uses infer-only
-classification. `SqlxErrorExt::with_sqlx_provider` attaches that provider frame
-without erasing the original SQLx error. When the operation also supplies a
-code, the call site first uses `.with_code(...)` and then
-`.with_sqlx_provider(...)`. A recognized provider condition is therefore the
-outer, more precise frame; an unrecognized condition retains the operation
-code. Stage, endpoint, and task ID are attached separately at the highest
-execution layer that knows them.
+The SQLx classifier infers MySQL or PostgreSQL from the concrete database error;
+transport errors use the generic `sqlx` origin. Call sites do not pass a
+database-family hint or attach a separate provider frame. A recognized provider
+condition takes priority over an operation fallback code. Stage, endpoint, and
+task ID are attached separately at the highest execution layer that knows them.
 
 Provider classification belongs in `dt-common::error::provider`, not in
 per-crate wrappers. Business modules use `DtError` for project-owned failures,
@@ -221,16 +224,15 @@ ordinary `anyhow::Context` for diagnostic prose, and the context extension
 methods only for explicit metadata. Do not introduce per-crate helper modules
 that merely forward arguments to these shared mechanisms.
 
-`ErrorReport` reads the typed context and error chain. It first uses the
-outermost explicit context code; if none exists, it downcasts the cause chain
-to `DtError` and applies `ClassifyError`; finally it applies the registered raw
-provider classifiers. Both paths return `DtErrorContext`, so the internal
-resolver merges their metadata using the same precedence rules. Explicit business
-metadata therefore remains authoritative,
-while a known provider error does not become `IN999` merely because a caller
-used a plain `?`. Unsupported or unrecognized raw errors still become `IN999`.
-Failure-path tests and code review remain necessary for explicit operation codes and
-call-site metadata that no raw provider error can supply.
+`ErrorReport` reads the typed frame list and error chain. It appends values from
+the explicit frames, a project `DtError`, and every registered raw provider
+cause to separate per-field arrays. Field-specific selection and merge rules
+exist only in the report layer. A known provider error therefore does not become
+`IN999` or lose its precise code merely because a caller used a plain `?` or an
+operation fallback, while explicit user-facing and scope metadata remains
+available. Unsupported or unrecognized raw errors still become `IN999`.
+Failure-path tests and code review remain necessary for explicit operation
+codes and call-site metadata that no raw provider error can supply.
 
 `MD099 MetadataReadFailed` is only the default for reading or decoding endpoint
 catalog and control metadata. A schema object being migrated does not make every

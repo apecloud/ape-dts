@@ -192,11 +192,9 @@ impl MongoStructFetcher {
         anyhow::bail!(DtError::InvalidConfig(format!(
             "the returned MongoDB namespace does not belong to the configured database {db}"
         ))
-        .with_message("MongoDB returned data for a database other than the configured source")
-        .with_hint(
-            "Check the database name in the MongoDB source URL and task routing, then retry."
-        )
-        .with_origin(OriginError::new("mongodb", None::<String>)))
+        .message("MongoDB returned data for a database other than the configured source")
+        .hint("Check the database name in the MongoDB source URL and task routing, then retry.")
+        .origin(OriginError::new("mongodb", None::<String>)))
     }
 
     fn is_system_collection(collection: &str) -> bool {

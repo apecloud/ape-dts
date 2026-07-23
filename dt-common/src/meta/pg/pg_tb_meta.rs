@@ -29,17 +29,17 @@ impl PgTbMeta {
                 "column {col} is missing from the PostgreSQL definition for {}.{}",
                 self.basic.schema, self.basic.tb
             ))
-                .with_message("A required source column was not found in the loaded table definition")
-                .with_hint(
+                .message("A required source column was not found in the loaded table definition")
+                .hint(
                     "Check configured column names and whether the source table changed, then restart the task to reload its definition.",
                 )
-                .with_object(ErrorObject {
+                .object(ErrorObject {
                     schema: Some(self.basic.schema.clone()),
                     table: Some(self.basic.tb.clone()),
                     column: Some(col.to_string()),
                     ..Default::default()
                 })
-                .with_origin(OriginError::new("postgres", None::<String>))
+                .origin(OriginError::new("postgres", None::<String>))
         })
     }
 }

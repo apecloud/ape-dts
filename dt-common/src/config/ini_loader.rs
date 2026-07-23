@@ -32,8 +32,8 @@ impl IniLoader {
         ini.set_inline_comment_symbols(Some(&Vec::new()));
         ini.read(config_str).map_err(|_| {
             DtError::InvalidConfig(format!("failed to parse config file: {ini_file}"))
-                .with_message("failed to parse config file")
-                .with_stage(Stage::Bootstrap)
+                .message("failed to parse config file")
+                .stage(Stage::Bootstrap)
         })?;
         Ok(Self { ini })
     }
@@ -50,8 +50,8 @@ impl IniLoader {
         Err(DtError::MissingConfigItem(format!(
             "config [{section}].{key} does not exist or is empty"
         ))
-        .with_message("required config value is missing")
-        .with_stage(Stage::Bootstrap))
+        .message("required config value is missing")
+        .stage(Stage::Bootstrap))
     }
 
     pub fn get_optional<T>(&self, section: &str, key: &str) -> anyhow::Result<T>
@@ -92,8 +92,8 @@ impl IniLoader {
                 "config [{section}].{key}={rendered_value} can not be parsed as {}",
                 type_name::<T>()
             ))
-            .with_message("config value has an invalid type")
-            .with_stage(Stage::Bootstrap)
+            .message("config value has an invalid type")
+            .stage(Stage::Bootstrap)
         })
     }
 

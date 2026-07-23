@@ -102,7 +102,7 @@ impl ClickhouseSinker {
             .http_client
             .execute(request)
             .await
-            .map_err(|error| error.with_code(ErrorCode::StatementFailed))?;
+            .map_err(|error| error.code(ErrorCode::StatementFailed))?;
         rts.push((start_time.elapsed().as_millis() as u64, 1));
         let task_id = self
             .base_sinker
@@ -186,7 +186,7 @@ impl ClickhouseSinker {
             .basic_auth(&self.username, password)
             .body(body);
         post.build()
-            .map_err(|error| error.with_code(ErrorCode::StatementFailed))
+            .map_err(|error| error.code(ErrorCode::StatementFailed))
     }
 
     async fn check_response(response: Response) -> anyhow::Result<()> {
@@ -194,7 +194,7 @@ impl ClickhouseSinker {
         response
             .text()
             .await
-            .map_err(|error| error.with_code(ErrorCode::StatementFailed))?;
+            .map_err(|error| error.code(ErrorCode::StatementFailed))?;
         if status_code != StatusCode::OK {
             return Err(DtError::HttpRejected {
                 status: status_code.as_u16(),

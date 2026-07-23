@@ -93,7 +93,7 @@ impl MongoFetcher {
             .database("admin")
             .run_command(doc_command)
             .await
-            .map_err(|error| error.with_code(ErrorCode::StatementFailed))
+            .map_err(|error| error.code(ErrorCode::StatementFailed))
     }
 
     pub async fn execute_for_db(&self, command: &str) -> anyhow::Result<Document> {
@@ -107,7 +107,7 @@ impl MongoFetcher {
         let dbs = client
             .list_databases()
             .await
-            .map_err(|error| error.with_code(ErrorCode::StatementFailed))?;
+            .map_err(|error| error.code(ErrorCode::StatementFailed))?;
         if dbs.is_empty() {
             bail! {DtError::DatabaseNotFound("no database exists in MongoDB".to_string())
             };
@@ -118,7 +118,7 @@ impl MongoFetcher {
             .database(&dbs[0].name)
             .run_command(doc_command)
             .await
-            .map_err(|error| error.with_code(ErrorCode::StatementFailed))?;
+            .map_err(|error| error.code(ErrorCode::StatementFailed))?;
         Ok(doc)
     }
 }

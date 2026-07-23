@@ -49,7 +49,7 @@ pub async fn get_server_version(client: &Client) -> anyhow::Result<MongoServerVe
         .unwrap_or_else(|| client.database("admin"))
         .run_command(doc! { "buildInfo": 1 })
         .await
-        .map_err(|error| error.with_code(ErrorCode::MetadataReadFailed))?;
+        .map_err(|error| error.code(ErrorCode::MetadataReadFailed))?;
     let version = build_info
         .get_str("version")
         .context(DtError::MongoUnsupportedVersion(

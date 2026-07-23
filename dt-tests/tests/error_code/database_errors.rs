@@ -5,7 +5,7 @@ use super::{assert_error_identity, config_path, error_report};
 
 #[tokio::test]
 #[serial]
-async fn invalid_mysql_url_report_identifies_source_and_provider() {
+async fn invalid_mysql_url_report_identifies_source_and_sqlx() {
     let report = error_report(&config_path("mysql_invalid_url.ini")).await;
 
     assert_error_identity(&report, ErrorCode::InvalidConfig);
@@ -13,13 +13,13 @@ async fn invalid_mysql_url_report_identifies_source_and_provider() {
     assert_eq!(report.endpoint, Some(EndpointRole::Source));
     assert_eq!(
         report.origin.as_ref().map(|origin| origin.system.as_str()),
-        Some("mysql")
+        Some("sqlx")
     );
 }
 
 #[tokio::test]
 #[serial]
-async fn invalid_postgres_url_report_identifies_source_and_provider() {
+async fn invalid_postgres_url_report_identifies_source_and_sqlx() {
     let report = error_report(&config_path("pg_invalid_url.ini")).await;
 
     assert_error_identity(&report, ErrorCode::InvalidConfig);
@@ -27,7 +27,7 @@ async fn invalid_postgres_url_report_identifies_source_and_provider() {
     assert_eq!(report.endpoint, Some(EndpointRole::Source));
     assert_eq!(
         report.origin.as_ref().map(|origin| origin.system.as_str()),
-        Some("postgres")
+        Some("sqlx")
     );
 }
 

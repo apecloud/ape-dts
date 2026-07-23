@@ -201,7 +201,7 @@ impl PgStructFetcher {
                 "schemas: {} not found",
                 filtered_schemas.join(",")
             ))
-            .with_origin(OriginError::new("postgres", None::<String>))}
+            .origin(OriginError::new("postgres", None::<String>))}
         } else {
             Ok(schemas.into_iter().map(|s| Schema { name: s }).collect())
         }
@@ -550,7 +550,7 @@ impl PgStructFetcher {
                             "column type is missing for {table_schema}.{table_name}.{}",
                             column.column_name
                         ))
-                        .with_origin(OriginError::new("postgres", None::<String>))
+                        .origin(OriginError::new("postgres", None::<String>))
                     })?
                     .to_owned();
             }

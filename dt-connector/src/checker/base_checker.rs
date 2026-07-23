@@ -584,7 +584,7 @@ impl RecheckKey {
                     .map(|value| (col.clone(), value))
                     .ok_or_else(|| {
                         DtError::StatementFailed(format!("missing ID column value: {col}"))
-                            .with_stage(Stage::Checker)
+                            .stage(Stage::Checker)
                     })
             })
             .collect::<anyhow::Result<BTreeMap<_, _>>>()?;

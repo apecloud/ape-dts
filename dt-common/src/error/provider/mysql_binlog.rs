@@ -18,11 +18,11 @@ impl ClassifyError for BinlogError {
             }
             Self::ConnectError(message) if binlog_is_unavailable(message) => {
                 mysql_context(ErrorCode::CheckpointReadFailed)
-                    .message("The requested MySQL binlog is no longer available")
-                    .hint(
+                    .with_message("The requested MySQL binlog is no longer available")
+                    .with_hint(
                         "Start from a retained binlog position or take a new snapshot, then increase the source binlog retention period.",
                     )
-                    .origin(OriginError::new("mysql", Some("1236")))
+                    .with_origin(OriginError::new("mysql", Some("1236")))
             }
             Self::ConnectError(_) => mysql_context(ErrorCode::ConnectionFailed),
             Self::InvalidGtid(_) => mysql_context(ErrorCode::InvalidConfig),
@@ -33,8 +33,8 @@ impl ClassifyError for BinlogError {
 
 fn mysql_context(code: ErrorCode) -> DtErrorContext {
     DtErrorContext::new()
-        .code(code)
-        .origin(OriginError::new("mysql", None::<String>))
+        .with_code(code)
+        .with_origin(OriginError::new("mysql", None::<String>))
 }
 
 fn binlog_is_unavailable(message: &str) -> bool {
@@ -84,7 +84,8 @@ mod tests {
         assert_eq!(purged.error_code(), Some(ErrorCode::CheckpointReadFailed));
         assert_eq!(
             purged
-                .origin_error()
+                .origin
+                .as_ref()
                 .and_then(|origin| origin.code.as_deref()),
             Some("1236")
         );

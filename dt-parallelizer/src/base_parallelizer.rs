@@ -195,13 +195,13 @@ impl BaseParallelizer {
         if parallel_size < 1 {
             return Err(
                 DtError::invalid_config("parallelizer configuration is invalid")
-                    .with_stage(Stage::Parallelizer),
+                    .stage(Stage::Parallelizer),
             );
         }
         if sinkers.is_empty() {
             return Err(
                 DtError::InvariantViolated("parallelizer invariant violated".to_string())
-                    .with_stage(Stage::Parallelizer),
+                    .stage(Stage::Parallelizer),
             );
         }
 
@@ -237,7 +237,7 @@ impl BaseParallelizer {
         let mut workers_used_count = 0;
         while let Some(result) = join_set.join_next().await {
             let (sinker_index, worker_used) =
-                result.map_err(|error| error.with_stage(Stage::Parallelizer))??;
+                result.map_err(|error| error.stage(Stage::Parallelizer))??;
             if let Some(data) = pending.next() {
                 let worker_used = worker_used || !data.is_empty();
                 spawn_sink_task(

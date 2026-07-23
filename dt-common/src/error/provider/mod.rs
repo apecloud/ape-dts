@@ -8,7 +8,7 @@ mod redis;
 mod sqlx;
 mod system;
 
-pub use sqlx::{classify_sqlx_error, SqlxErrorExt, SqlxProvider};
+pub use sqlx::classify_sqlx_error;
 
 use std::error::Error as StdError;
 
@@ -36,10 +36,13 @@ where
     error.downcast_ref::<E>().map(ClassifyError::classify)
 }
 
-pub(crate) fn classify_raw_error(error: &anyhow::Error) -> Option<DtErrorContext> {
-    error.chain().find_map(|cause| {
-        PROVIDER_CLASSIFIERS
-            .iter()
-            .find_map(|classify| classify(cause))
-    })
+pub(crate) fn classify_raw_errors(error: &anyhow::Error) -> Vec<DtErrorContext> {
+    error
+        .chain()
+        .filter_map(|cause| {
+            PROVIDER_CLASSIFIERS
+                .iter()
+                .find_map(|classify| classify(cause))
+        })
+        .collect()
 }

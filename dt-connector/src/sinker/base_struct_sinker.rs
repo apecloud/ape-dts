@@ -7,7 +7,7 @@ use tokio::time::Instant;
 use crate::sinker::base_sinker::BaseSinker;
 use dt_common::{
     config::config_enums::ConflictPolicyEnum,
-    error::{DtErrorContextExt, ErrorCode, SqlxErrorExt, SqlxProvider},
+    error::{DtErrorContextExt, ErrorCode},
     log_error, log_info,
     meta::struct_meta::struct_data::StructData,
     rdb_filter::RdbFilter,
@@ -79,13 +79,13 @@ impl BaseStructSinker {
             DBConnPool::MySQL(pool) => match query(sql).execute(pool).await {
                 Ok(_) => Ok(()),
                 Err(error) => {
-                    bail! {error.with_code(ErrorCode::StatementFailed).with_sqlx_provider(SqlxProvider::MySql)}
+                    bail! {error.code(ErrorCode::StatementFailed)}
                 }
             },
             DBConnPool::PostgreSQL(pool) => match query(sql).execute(pool).await {
                 Ok(_) => Ok(()),
                 Err(error) => {
-                    bail! {error.with_code(ErrorCode::StatementFailed).with_sqlx_provider(SqlxProvider::Postgres)}
+                    bail! {error.code(ErrorCode::StatementFailed)}
                 }
             },
         }

@@ -52,14 +52,14 @@ impl Extractor for MongoSnapshotExtractor {
         if self.parallel_size < 1 {
             bail!(
                 DtError::InvalidConfig("parallel_size must be greater than 0".to_string(),)
-                    .with_stage(Stage::Bootstrap)
+                    .stage(Stage::Bootstrap)
             );
         }
         if matches!(self.parallel_type, RdbParallelType::Chunk) {
             bail!(DtError::InvalidConfig(
                 "MongoDB snapshot extraction does not support parallel_type=chunk".to_string(),
             )
-            .with_stage(Stage::Bootstrap));
+            .stage(Stage::Bootstrap));
         }
 
         let tables = self.collect_tables();

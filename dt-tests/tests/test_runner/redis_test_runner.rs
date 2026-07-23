@@ -68,7 +68,7 @@ impl RedisTestRunner {
                 .unwrap(),
             _ => {
                 bail! {DtError::InvalidConfig("unsupported extractor config".to_string())
-                .with_stage(Stage::Bootstrap)};
+                .stage(Stage::Bootstrap)};
             }
         };
 
@@ -83,7 +83,7 @@ impl RedisTestRunner {
                 .unwrap(),
             _ => {
                 bail! {DtError::InvalidConfig("unsupported sinker config".to_string())
-                .with_stage(Stage::Bootstrap)};
+                .stage(Stage::Bootstrap)};
             }
         };
 

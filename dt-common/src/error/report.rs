@@ -3,8 +3,10 @@ use std::{backtrace::BacktraceStatus, fmt};
 use serde::Serialize;
 
 use super::{
-    error_context::{resolve_dt_context, DT_ERROR_CONTEXT_MARKER},
-    EndpointRole, ErrorCode, ErrorObject, OriginError, Stage,
+    error_context::{DtErrorContexts, DT_ERROR_CONTEXT_MARKER},
+    provider::classify_raw_errors,
+    ClassifyError, DtError, DtErrorContext, EndpointRole, ErrorCode, ErrorObject, OriginError,
+    Stage,
 };
 
 pub const ERROR_REPORT_SCHEMA_VERSION: u16 = 1;
@@ -38,28 +40,26 @@ pub struct ErrorReport {
 
 impl ErrorReport {
     pub fn from_anyhow(error: &anyhow::Error) -> Self {
-        let context = resolve_dt_context(error);
+        let metadata = CollectedMetadata::from_anyhow(error);
         let (error_chain, context_count) = split_error_chain(error);
         let detail = detail_from_error_chain(&error_chain);
         let backtrace = captured_backtrace(error);
-        let code = context.error_code().unwrap_or(ErrorCode::Unclassified);
+        let code = metadata.code().unwrap_or(ErrorCode::Unclassified);
         Self {
             schema_version: ERROR_REPORT_SCHEMA_VERSION,
             code,
             message: sanitize_user_text(
-                context
-                    .message_text()
-                    .unwrap_or_else(|| code.default_message()),
+                metadata.message().unwrap_or_else(|| code.default_message()),
             ),
             detail,
             hint: Some(sanitize_user_text(
-                context.hint_text().unwrap_or_else(|| code.default_hint()),
+                metadata.hint().unwrap_or_else(|| code.default_hint()),
             )),
-            stage: context.stage_value().unwrap_or(Stage::Unknown),
-            task_id: context.task_id_value().map(str::to_string),
-            endpoint: context.endpoint_role(),
-            object: context.error_object(),
-            origin: context.origin_error().cloned(),
+            stage: metadata.stage().unwrap_or(Stage::Unknown),
+            task_id: metadata.task_id().map(str::to_string),
+            endpoint: metadata.endpoint(),
+            object: metadata.object(),
+            origin: metadata.origin(),
             error_chain,
             context_count,
             backtrace,
@@ -82,6 +82,159 @@ impl ErrorReport {
             }
         }
         (!parts.is_empty()).then(|| parts.join(" "))
+    }
+}
+
+#[derive(Default)]
+struct CollectedMetadata {
+    explicit: MetadataValues,
+    project: MetadataValues,
+    provider: MetadataValues,
+    identified_provider_codes: Vec<ErrorCode>,
+    fallback_provider_codes: Vec<ErrorCode>,
+}
+
+impl CollectedMetadata {
+    fn from_anyhow(error: &anyhow::Error) -> Self {
+        let mut metadata = Self::default();
+        if let Some(contexts) = error.downcast_ref::<DtErrorContexts>() {
+            for context in contexts.iter_outer_to_inner() {
+                metadata.explicit.push(context);
+            }
+        }
+        if let Some(error) = error.downcast_ref::<DtError>() {
+            metadata.project.push(&error.classify());
+        }
+        for context in classify_raw_errors(error) {
+            let target = if context.origin.is_some() {
+                &mut metadata.identified_provider_codes
+            } else {
+                &mut metadata.fallback_provider_codes
+            };
+            target.extend(context.code);
+            metadata.provider.push(&context);
+        }
+        metadata
+    }
+
+    fn code(&self) -> Option<ErrorCode> {
+        self.identified_provider_codes
+            .first()
+            .or_else(|| self.explicit.codes.first())
+            .or_else(|| self.project.codes.first())
+            .or_else(|| self.fallback_provider_codes.first())
+            .copied()
+    }
+
+    fn message(&self) -> Option<&str> {
+        self.explicit
+            .messages
+            .first()
+            .or_else(|| self.project.messages.first())
+            .or_else(|| self.provider.messages.first())
+            .map(String::as_str)
+    }
+
+    fn hint(&self) -> Option<&str> {
+        self.explicit
+            .hints
+            .first()
+            .or_else(|| self.project.hints.first())
+            .or_else(|| self.provider.hints.first())
+            .map(String::as_str)
+    }
+
+    fn stage(&self) -> Option<Stage> {
+        self.provider
+            .stages
+            .first()
+            .or_else(|| self.explicit.stages.last())
+            .or_else(|| self.project.stages.first())
+            .copied()
+    }
+
+    fn task_id(&self) -> Option<&str> {
+        self.explicit
+            .task_ids
+            .first()
+            .or_else(|| self.project.task_ids.first())
+            .or_else(|| self.provider.task_ids.first())
+            .map(String::as_str)
+    }
+
+    fn endpoint(&self) -> Option<EndpointRole> {
+        self.provider
+            .endpoints
+            .first()
+            .or_else(|| self.project.endpoints.first())
+            .or_else(|| self.explicit.endpoints.last())
+            .copied()
+    }
+
+    fn object(&self) -> Option<ErrorObject> {
+        let mut merged: Option<ErrorObject> = None;
+        for object in self
+            .provider
+            .objects
+            .iter()
+            .chain(&self.project.objects)
+            .chain(self.explicit.objects.iter().rev())
+        {
+            match &mut merged {
+                Some(merged) => merged.fill_missing_from(object),
+                None => merged = Some(object.clone()),
+            }
+        }
+        merged
+    }
+
+    fn origin(&self) -> Option<OriginError> {
+        self.provider
+            .origins
+            .iter()
+            .find(|origin| origin.code.is_some())
+            .or_else(|| {
+                self.project
+                    .origins
+                    .iter()
+                    .find(|origin| origin.code.is_some())
+            })
+            .or_else(|| {
+                self.explicit
+                    .origins
+                    .iter()
+                    .rev()
+                    .find(|origin| origin.code.is_some())
+            })
+            .or_else(|| self.project.origins.first())
+            .or_else(|| self.explicit.origins.last())
+            .or_else(|| self.provider.origins.first())
+            .cloned()
+    }
+}
+
+#[derive(Default)]
+struct MetadataValues {
+    codes: Vec<ErrorCode>,
+    messages: Vec<String>,
+    hints: Vec<String>,
+    stages: Vec<Stage>,
+    task_ids: Vec<String>,
+    endpoints: Vec<EndpointRole>,
+    objects: Vec<ErrorObject>,
+    origins: Vec<OriginError>,
+}
+
+impl MetadataValues {
+    fn push(&mut self, context: &DtErrorContext) {
+        self.codes.extend(context.code);
+        self.messages.extend(context.message.clone());
+        self.hints.extend(context.hint.clone());
+        self.stages.extend(context.stage);
+        self.task_ids.extend(context.task_id.clone());
+        self.endpoints.extend(context.endpoint);
+        self.objects.extend(context.object.clone());
+        self.origins.extend(context.origin.clone());
     }
 }
 
@@ -191,31 +344,32 @@ impl fmt::Display for ErrorReport {
 
 #[cfg(test)]
 mod tests {
-    use std::io;
-
     use crate::error::{DtError, DtErrorContext, DtErrorContextExt};
 
     use super::*;
 
     #[test]
     fn preserves_structured_error_through_anyhow_context() {
-        let error = DtErrorContext::new()
-            .code(ErrorCode::ObjectNotFound)
-            .message("inner message")
-            .hint("inner hint")
-            .object(ErrorObject {
-                schema: Some("ape_dts".to_string()),
-                table: Some("resume_position".to_string()),
-                ..Default::default()
-            })
-            .origin(OriginError::new("postgres", Some("42P01")))
-            .attach(io::Error::new(io::ErrorKind::NotFound, "relation missing")) // error-boundary-audit: allow-test
+        let source = "relation missing".parse::<u64>().unwrap_err();
+        let error = anyhow::Error::new(source)
+            .dt_context(
+                DtErrorContext::new()
+                    .with_code(ErrorCode::ObjectNotFound)
+                    .with_message("inner message")
+                    .with_hint("inner hint")
+                    .with_object(ErrorObject {
+                        schema: Some("ape_dts".to_string()),
+                        table: Some("resume_position".to_string()),
+                        ..Default::default()
+                    })
+                    .with_origin(OriginError::new("postgres", Some("42P01"))),
+            ) // error-boundary-audit: allow-test
             .context("loading task state")
-            .with_message("outer message")
-            .with_stage(Stage::Resumer)
-            .with_endpoint(EndpointRole::Metadata)
-            .with_hint("outer hint")
-            .with_task_id("task-42")
+            .message("outer message")
+            .stage(Stage::Resumer)
+            .endpoint(EndpointRole::Metadata)
+            .hint("outer hint")
+            .task_id("task-42")
             .context("starting task");
 
         let report = ErrorReport::from_anyhow(&error);
@@ -223,7 +377,7 @@ mod tests {
         assert_eq!(report.message, "outer message");
         assert_eq!(
             report.detail.as_deref(),
-            Some("starting task: loading task state: relation missing")
+            Some("starting task: loading task state: invalid digit found in string")
         );
         assert_eq!(report.hint.as_deref(), Some("outer hint"));
         assert_eq!(report.stage, Stage::Resumer);
@@ -237,13 +391,14 @@ mod tests {
             report.object.as_ref().unwrap().table.as_deref(),
             Some("resume_position")
         );
-        assert_eq!(
-            error.downcast_ref::<io::Error>().map(io::Error::kind),
-            Some(io::ErrorKind::NotFound)
-        );
+        assert!(error.downcast_ref::<std::num::ParseIntError>().is_some());
         assert_eq!(
             report.error_chain,
-            ["starting task", "loading task state", "relation missing"]
+            [
+                "starting task",
+                "loading task state",
+                "invalid digit found in string"
+            ]
         );
         assert_eq!(report.context_count, 2);
         let rendered = report.to_string();
@@ -256,14 +411,15 @@ mod tests {
         assert!(rendered.contains("AFFECTED: metadata store postgres ape_dts.resume_position"));
         assert!(rendered.contains("ORIGIN: postgres/42P01"));
         assert!(rendered.contains("CONTEXT 1: starting task"));
-        assert!(rendered.contains("CAUSE 1: relation missing"));
+        assert!(rendered.contains("CAUSE 1: invalid digit found in string"));
     }
 
     #[test]
     fn classifies_raw_supported_provider_errors() {
         let error = anyhow::Error::new(sqlx::Error::PoolTimedOut)
-            .with_stage(Stage::Sinker)
-            .with_endpoint(EndpointRole::Destination)
+            .code(ErrorCode::StatementFailed)
+            .stage(Stage::Sinker)
+            .endpoint(EndpointRole::Destination)
             .context("pipeline.start failed");
 
         let report = ErrorReport::from_anyhow(&error);
@@ -275,17 +431,17 @@ mod tests {
 
     #[test]
     fn classifies_project_errors_unless_context_overrides_the_code() {
-        let source = "invalid-port".parse::<u16>().unwrap_err();
+        let source = std::io::Error::other("invalid port");
         let error = anyhow::Error::new(source)
-            .with_origin(OriginError::new("config-parser", None::<String>))
+            .origin(OriginError::new("config-parser", None::<String>))
             .context(DtError::InvalidConfig("invalid port".to_string()))
             .context("loading source config");
         let report = ErrorReport::from_anyhow(&error);
         assert_eq!(report.code, ErrorCode::InvalidConfig);
         assert_eq!(report.origin.unwrap().system, "config-parser");
-        assert!(error.downcast_ref::<std::num::ParseIntError>().is_some());
+        assert!(error.downcast_ref::<std::io::Error>().is_some());
 
-        let error = error.with_code(ErrorCode::InvariantViolated);
+        let error = error.code(ErrorCode::InvariantViolated);
         assert_eq!(
             ErrorReport::from_anyhow(&error).code,
             ErrorCode::InvariantViolated
@@ -302,8 +458,8 @@ mod tests {
     #[test]
     fn text_and_json_include_redacted_detail_while_json_excludes_diagnostics() {
         let error = anyhow::anyhow!("password=secret, sql=INSERT, row_data=private")
-            .with_message("password=secret is invalid")
-            .with_hint("set token=abc123 before retrying")
+            .message("password=secret is invalid")
+            .hint("set token=abc123 before retrying")
             .context("internal worker context");
         let report = ErrorReport::from_anyhow(&error);
         let rendered = report.to_string();

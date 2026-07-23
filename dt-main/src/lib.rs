@@ -11,7 +11,7 @@ pub async fn run_config(config: &str, init: bool) -> anyhow::Result<()> {
             runner
                 .start_task(init)
                 .await
-                .map_err(|error| error.with_task_id(task_id))?;
+                .map_err(|error| error.task_id(task_id))?;
         }
     }
     Ok(())

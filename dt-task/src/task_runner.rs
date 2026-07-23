@@ -652,7 +652,7 @@ impl TaskRunner {
         monitor_shutdown.cancel();
         let monitor_result = monitor_task
             .await
-            .map_err(|error| error.with_stage(Stage::Task))
+            .map_err(|error| error.stage(Stage::Task))
             .and_then(|result| result);
 
         let mut monitor_types = vec![MonitorType::Pipeline];
@@ -710,7 +710,7 @@ impl TaskRunner {
                     break;
                 }
                 Err(err) => {
-                    failure = Some((None, err.with_stage(Stage::Task)));
+                    failure = Some((None, err.stage(Stage::Task)));
                     break;
                 }
             }
@@ -773,18 +773,10 @@ impl TaskRunner {
         };
 
         extract_result
-            .map_err(|error| {
-                error
-                    .with_stage(Stage::Extractor)
-                    .with_endpoint(EndpointRole::Source)
-            })
+            .map_err(|error| error.stage(Stage::Extractor).endpoint(EndpointRole::Source))
             .context("extractor.extract failed")?;
         close_result
-            .map_err(|error| {
-                error
-                    .with_stage(Stage::Extractor)
-                    .with_endpoint(EndpointRole::Source)
-            })
+            .map_err(|error| error.stage(Stage::Extractor).endpoint(EndpointRole::Source))
             .context("extractor.close failed")?;
         Ok(())
     }
@@ -802,10 +794,10 @@ impl TaskRunner {
         };
 
         start_result
-            .map_err(|error| error.with_stage(Stage::Pipeline))
+            .map_err(|error| error.stage(Stage::Pipeline))
             .context("pipeline.start failed")?;
         stop_result
-            .map_err(|error| error.with_stage(Stage::Pipeline))
+            .map_err(|error| error.stage(Stage::Pipeline))
             .context("pipeline.stop failed")?;
         Ok(())
     }
@@ -1217,17 +1209,17 @@ impl TaskRunner {
             Ok(_) => {}
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
             Err(error) => {
-                return Err(error.with_stage(Stage::Bootstrap));
+                return Err(error.stage(Stage::Bootstrap));
             }
         }
 
         let mut config_str = String::new();
         let mut file = File::open(log4rs_file)
             .await
-            .map_err(|error| error.with_stage(Stage::Bootstrap))?;
+            .map_err(|error| error.stage(Stage::Bootstrap))?;
         file.read_to_string(&mut config_str)
             .await
-            .map_err(|error| error.with_stage(Stage::Bootstrap))?;
+            .map_err(|error| error.stage(Stage::Bootstrap))?;
 
         match &self.config.sinker {
             SinkerConfig::RedisStatistic {
@@ -1283,10 +1275,10 @@ impl TaskRunner {
 
         let config_context = || {
             DtErrorContext::new()
-                .code(ErrorCode::InvalidConfig)
-                .stage(Stage::Bootstrap)
+                .with_code(ErrorCode::InvalidConfig)
+                .with_stage(Stage::Bootstrap)
         };
-        let raw: RawConfig = serde_yaml::from_str(&config_str).with_dt_context(config_context())?;
+        let raw: RawConfig = serde_yaml::from_str(&config_str).dt_context(config_context)?;
         let mut deserializers = Deserializers::default();
         deserializers.insert("size_limit", SizeLimitFilterDeserializer);
         let (appenders, errors) = raw.appenders_lossy(&deserializers);
@@ -1295,23 +1287,23 @@ impl TaskRunner {
             return Err(DtError::InvalidConfig(
                 "one or more logging appenders are invalid".to_string(),
             )
-            .with_stage(Stage::Bootstrap));
+            .stage(Stage::Bootstrap));
         }
 
         let config = Config::builder()
             .appenders(appenders)
             .loggers(raw.loggers())
             .build(raw.root())
-            .with_dt_context(config_context())?;
+            .dt_context(config_context)?;
         let mut handle_guard = LOG_HANDLE.lock().map_err(|_| {
             DtError::InvariantViolated("the logging configuration lock is poisoned".to_string())
-                .with_stage(Stage::Bootstrap)
+                .stage(Stage::Bootstrap)
         })?;
         if let Some(handle) = handle_guard.as_ref() {
             // refresh log4rs config in one process
             handle.set_config(config);
         } else {
-            let handle = log4rs::init_config(config).with_dt_context(config_context())?;
+            let handle = log4rs::init_config(config).dt_context(config_context)?;
             *handle_guard = Some(handle);
         }
         Ok(())
@@ -1679,7 +1671,7 @@ mod tests {
     use std::{fs, sync::Arc, time::SystemTime};
 
     use async_trait::async_trait;
-    use dt_common::error::{AnyhowErrorExt, DtError, Stage};
+    use dt_common::error::{DtError, ErrorReport, Stage};
     use dt_pipeline::Pipeline;
     use tokio::sync::Mutex;
 
@@ -1752,10 +1744,7 @@ mod tests {
             .await
             .expect_err("pipeline start should fail");
 
-        assert_eq!(
-            error.dt_context().and_then(|context| context.stage_value()),
-            Some(Stage::Pipeline)
-        );
+        assert_eq!(ErrorReport::from_anyhow(&error).stage, Stage::Pipeline);
     }
 
     #[tokio::test]

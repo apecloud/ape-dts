@@ -318,7 +318,7 @@ impl RedisUtil {
 
 #[cfg(test)]
 mod tests {
-    use crate::error::{AnyhowErrorExt, ErrorCode};
+    use crate::error::{ErrorCode, ErrorReport};
 
     use super::*;
 
@@ -361,8 +361,8 @@ mod tests {
             Ok(_) => panic!("invalid cluster topology should be rejected"),
             Err(error) => error,
         };
-        assert_eq!(error.error_code(), Some(ErrorCode::PrerequisiteNotMet));
-        let report = crate::error::ErrorReport::from_anyhow(&error);
+        let report = ErrorReport::from_anyhow(&error);
+        assert_eq!(report.code, ErrorCode::PrerequisiteNotMet);
         assert_eq!(
             report.message,
             "The Redis cluster topology is invalid or incomplete"

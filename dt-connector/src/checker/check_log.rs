@@ -187,8 +187,8 @@ impl FromStr for CheckLog {
             .map_err(|error| {
                 let detail = error.to_string();
                 error
-                    .with_code(ErrorCode::StatementFailed)
-                    .with_stage(Stage::Checker)
+                    .code(ErrorCode::StatementFailed)
+                    .stage(Stage::Checker)
                     .context(detail)
             })
     }

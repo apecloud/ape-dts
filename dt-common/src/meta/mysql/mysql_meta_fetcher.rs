@@ -118,16 +118,16 @@ impl MysqlMetaFetcher {
             DtError::ObjectNotFound(format!(
                 "Ape-DTS could not find the previously loaded definition for source table {full_name}"
             ))
-                .with_message("The source table definition could not be loaded")
-                .with_hint(
+                .message("The source table definition could not be loaded")
+                .hint(
                     "Verify that the source table still exists and is readable, then restart the task.",
                 )
-                .with_object(ErrorObject {
+                .object(ErrorObject {
                     schema: Some(schema.to_string()),
                     table: Some(tb.to_string()),
                     ..Default::default()
                 })
-                .with_origin(OriginError::new("mysql", None::<String>))
+                .origin(OriginError::new("mysql", None::<String>))
         })
     }
 
@@ -186,12 +186,12 @@ impl MysqlMetaFetcher {
                 "failed to get table metadata for: `{}`.`{}`",
                 schema, tb
             ))
-            .with_object(ErrorObject {
+            .object(ErrorObject {
                 schema: Some(schema.to_string()),
                 table: Some(tb.to_string()),
                 ..Default::default()
             })
-            .with_origin(OriginError::new("mysql", None::<String>)) }
+            .origin(OriginError::new("mysql", None::<String>)) }
         }
         Ok((cols, col_origin_type_map, col_type_map, nullable_cols))
     }
@@ -461,6 +461,6 @@ impl MysqlMetaFetcher {
             return Ok(());
         }
         bail! {DtError::UnsupportedDatabaseVersion("failed to init mysql version".to_string())
-        .with_origin(OriginError::new("mysql", None::<String>))}
+        .origin(OriginError::new("mysql", None::<String>))}
     }
 }

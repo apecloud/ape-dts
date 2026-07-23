@@ -180,13 +180,13 @@ impl MergeParallelizer {
         if self.parallel_size == 0 {
             return Err(
                 DtError::invalid_config("parallelizer configuration is invalid")
-                    .with_stage(Stage::Parallelizer),
+                    .stage(Stage::Parallelizer),
             );
         }
         if sinkers.is_empty() {
             return Err(
                 DtError::InvariantViolated("parallelizer invariant violated".to_string())
-                    .with_stage(Stage::Parallelizer),
+                    .stage(Stage::Parallelizer),
             );
         }
         let mut futures = Vec::new();
@@ -242,7 +242,7 @@ impl MergeParallelizer {
         for future in futures {
             future
                 .await
-                .map_err(|error| error.with_stage(Stage::Parallelizer))??;
+                .map_err(|error| error.stage(Stage::Parallelizer))??;
         }
         Ok((data_size, workers_used))
     }

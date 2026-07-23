@@ -128,7 +128,7 @@ impl MongoStructSinker {
         database
             .run_command(command)
             .await
-            .map_err(|error| error.with_code(ErrorCode::StatementFailed))?;
+            .map_err(|error| error.code(ErrorCode::StatementFailed))?;
         log_info!("mongo create collection succeed");
         Ok(())
     }
@@ -154,7 +154,7 @@ impl MongoStructSinker {
             .database(&statement.database_name)
             .run_command(command)
             .await
-            .map_err(|error| error.with_code(ErrorCode::StatementFailed))?;
+            .map_err(|error| error.code(ErrorCode::StatementFailed))?;
         log_info!("mongo create indexes succeed");
         Ok(())
     }
@@ -195,7 +195,7 @@ impl MongoStructSinker {
             .database("admin")
             .run_command(doc! { "enableSharding": db })
             .await
-            .map_err(|error| error.with_code(ErrorCode::StatementFailed))?;
+            .map_err(|error| error.code(ErrorCode::StatementFailed))?;
 
         let command = doc! {
             "shardCollection": shard_collection.ns.clone(),
@@ -207,7 +207,7 @@ impl MongoStructSinker {
             .database("admin")
             .run_command(command)
             .await
-            .map_err(|error| error.with_code(ErrorCode::StatementFailed))?;
+            .map_err(|error| error.code(ErrorCode::StatementFailed))?;
         log_info!("mongo shard collection succeed");
         Ok(())
     }

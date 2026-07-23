@@ -115,7 +115,7 @@ impl RdbPartitioner {
     ) -> anyhow::Result<Vec<Vec<RowData>>> {
         Err(
             DtError::InvariantViolated("parallelizer invariant violated".to_string())
-                .with_stage(Stage::Parallelizer),
+                .stage(Stage::Parallelizer),
         )
     }
 

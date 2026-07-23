@@ -68,7 +68,7 @@ impl KafkaExtractor {
             let msg = consumer
                 .recv()
                 .await
-                .map_err(|error| error.with_code(ErrorCode::StatementFailed))?;
+                .map_err(|error| error.code(ErrorCode::StatementFailed))?;
             if let Some(payload) = msg.payload() {
                 let dt_data = self
                     .avro_converter
@@ -94,18 +94,18 @@ impl KafkaExtractor {
 
         let consumer: StreamConsumer = config
             .create()
-            .map_err(|error| error.with_code(ErrorCode::InvalidConfig))?;
+            .map_err(|error| error.code(ErrorCode::InvalidConfig))?;
         // only support extract data from one topic, one partition
         let mut tpl = TopicPartitionList::new();
         if self.offset >= 0 {
             tpl.add_partition_offset(&self.topic, self.partition, Offset::Offset(self.offset))
-                .map_err(|error| error.with_code(ErrorCode::InvalidConfig))?;
+                .map_err(|error| error.code(ErrorCode::InvalidConfig))?;
         } else {
             tpl.add_partition(&self.topic, self.partition);
         }
         consumer
             .assign(&tpl)
-            .map_err(|error| error.with_code(ErrorCode::InvalidConfig))?;
+            .map_err(|error| error.code(ErrorCode::InvalidConfig))?;
         Ok(consumer)
     }
 }

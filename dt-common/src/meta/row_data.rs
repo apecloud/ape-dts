@@ -144,7 +144,7 @@ impl RowData {
                                 "failed to convert column {}.{}.{}",
                                 tb_meta.basic.schema, tb_meta.basic.tb, col
                             )))
-                            .with_object(ErrorObject {
+                            .object(ErrorObject {
                                 schema: Some(tb_meta.basic.schema.clone()),
                                 table: Some(tb_meta.basic.tb.clone()),
                                 column: Some(col.clone()),
@@ -175,7 +175,7 @@ impl RowData {
                             "failed to convert column {}.{}.{}",
                             tb_meta.basic.schema, tb_meta.basic.tb, col
                         )))
-                        .with_object(ErrorObject {
+                        .object(ErrorObject {
                             schema: Some(tb_meta.basic.schema.clone()),
                             table: Some(tb_meta.basic.tb.clone()),
                             column: Some(col.clone()),

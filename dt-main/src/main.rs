@@ -64,9 +64,9 @@ async fn run(args: Args) -> anyhow::Result<()> {
 
     let config = args.config_path().ok_or_else(|| {
         DtError::MissingConfig("no task config was provided".to_string())
-            .with_message("no task config was provided")
-            .with_hint("pass --config <CONFIG> or a positional config path")
-            .with_stage(Stage::Bootstrap)
+            .message("no task config was provided")
+            .hint("pass --config <CONFIG> or a positional config path")
+            .stage(Stage::Bootstrap)
     })?;
 
     tokio::spawn(async {

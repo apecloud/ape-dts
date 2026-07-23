@@ -116,26 +116,28 @@ BACKTRACE:
 
 `anyhow::Error` 是唯一的错误传输容器。`DtErrorContext` 是类型化 metadata frame，
 其中的错误码、消息、处理建议、阶段、任务 ID、端点角色、数据库对象和 provider
-origin 都是可选字段。它实现 `Display`，但刻意不实现
-`std::error::Error`。端点角色包括 `source`、`destination` 和 `metadata`。
+origin 都是可选字段。它只是数据对象，不实现 `Display` 或 `std::error::Error`。
+端点角色包括 `source`、`destination` 和 `metadata`。
 
 错误链最内层始终是真正实现 `Error` 的 cause。Provider 失败直接保留原始 provider
 错误；应用主动产生的失败使用基于 `thiserror` 的 `DtError` 枚举。
 
 项目主动失败选择语义化的 `DtError` variant，并只挂载当前调用点真正掌握的 metadata。
-例如 `DtError::InvalidConfig(detail).with_stage(Stage::Bootstrap)` 创建根因并补充 stage，
+例如 `DtError::InvalidConfig(detail).stage(Stage::Bootstrap)` 创建根因并补充 stage，
 不再重复书写 `ErrorCode::InvalidConfig`。`ClassifyError` 实现将每个 `DtError` variant 映射
 为 `DtErrorContext`，其中包含稳定的默认错误码和该 variant 固有的 metadata；新增 variant
 时必须增加对应的 match 分支，无法静默落入兜底。
 `DtError::Unclassified` 只用于项目主动产生、但暂时没有稳定分类的失败。
 
-同一 extension trait 也为 `anyhow::Error` 和已支持的 provider 错误类型实现。显式的
-`DtErrorContext.code` 优先于项目错误和 provider 分类器。仅当操作本身定义了错误条件，
-或者动态聚合结果无法用 `DtError` variant 表达时，才显式设置 code。未知的具体错误可以
-通过 `DtErrorContext::attach` 保留其 source 类型。
+error extension trait 为 `anyhow::Error` 和已支持的 provider 错误类型实现。
+`DtResultExt` 在 `Result` 上提供相同的 `code`、`message`、`hint`、`stage`、`task_id`、
+`endpoint`、`object` 和 `origin` 方法；它的 `dt_context` 接收闭包，成功路径不会构造
+metadata。provider result 上挂载的 code 是操作 fallback：provider 能识别时精确 code
+优先，无法识别时保留操作 code。项目主动失败通常应使用语义化 `DtError` variant。
+未知的具体错误转换为 `anyhow::Error` 后仍保留 source 类型。
 如果项目语义分类同时存在更底层 source，则将语义化 `DtError` 作为 typed context 放在
-source 之上。这样 `DtError` 和原始 source 都可 downcast，报告可通过项目分类器取码，
-同时不会丢失底层诊断信息。
+source 之上。这样 `DtError` 和原始 source 都可 downcast，报告可以同时分类，且不会丢失
+底层诊断信息。
 
 Metadata 在错误跨越所有权边界时逐层挂载。叶子 frame 可以提供业务错误码、受影响对象
 和 provider origin。stage 和 endpoint 在拥有当前操作的最窄组件边界挂载，task ID 则在
@@ -144,12 +146,16 @@ sinker adapter 挂载 `sinker/destination`，recovery 初始化边界挂载 `res
 precheck 入口挂载 `precheck` 和 task ID，而 precheck builder 在各 checker 调用外层挂载 `source` 或
 `destination`。普通任务的 task ID 只在任务入口挂载。报告阶段不做推导。
 
-Frame 挂载后不再修改。`ErrorReport` 从最外层 frame 开始递归读取内层 metadata 链。
-scope 和根因字段使用最接近根因的内层值：错误经过其他组件传播时，stage、endpoint 和
-provider origin 不会仅因为外层再次设置而被替换。错误对象按字段合并，保留内层已有值，
-只从外层补充缺失字段。code、用户 message、hint 和 task ID 仍然采用显式的外层优先级。
-因此 sinker 错误经过 parallelizer 和 pipeline 传播后仍报告为 `sinker/destination`，任务入口
-仍可补充 task ID 和面向用户的上下文。`DtErrorContext` 不包含 detail 字段；报告构建时从
+每个 frame 都是扁平且不可变的数据。context extension 只把 frame 追加到
+`anyhow::Error` 携带的内部有序列表；`DtErrorContext` 自身不再保存 parent，也不负责字段
+解析。`ErrorReport` 构建时把显式 frame、项目错误和所有已知 provider cause 的各字段分别
+追加到有序数组，再按展示字段应用不同优先级。scope 和根因字段使用最接近根因的内层值：
+错误经过其他组件传播时，stage、endpoint 和 provider origin 不会仅因为外层再次设置而被
+替换。错误对象按字段合并，保留内层已有值，只从外层补充缺失字段。已识别的 provider
+code 优先于操作 fallback code；用户 message、hint 和 task ID 仍采用显式外层优先级。
+因此 sinker 错误经过 parallelizer 和 pipeline
+传播后仍报告为 `sinker/destination`，任务入口仍可补充 task ID 和面向用户的上下文。
+`DtErrorContext` 不包含 detail 字段；报告构建时从
 已脱敏的普通 context 和具体 cause 生成 detail。项目自有 `DtError`
 会保留 variant 对应的完整 `Display` 文本和类型化 payload，与 provider error 保留自身
 `Display`、source chain 和具体类型的方式一致。
@@ -166,23 +172,21 @@ Provider 分类器实现统一位于 `dt-common::error::provider`。它们通过
 provider 原始错误码、类型化错误种类和 Rust 错误变体进行判断，禁止解析 provider 错误
 消息。每个实现直接返回包含可选精确错误码、provider origin 和受影响对象的
 `DtErrorContext`。一个小型显式 registry 对 `anyhow::Error` 中保留的 provider cause 调用
-同一 trait。明确知道数据库类型的 SQLx 调用点继续传入 `SqlxProvider`，保证 transport 错误的
-origin 精确；raw fallback 只使用 infer 分类。`SqlxErrorExt::with_sqlx_provider` 挂载 provider
-frame，同时保留原始 SQLx error。操作同时提供 code 时，调用点先使用 `.with_code(...)`，
-再使用 `.with_sqlx_provider(...)`。已识别的 provider 条件因而成为更外层、更精确的 frame；
-无法识别时则保留操作 code。stage、endpoint 和 task ID 在仍明确知道其语义的最高层执行
-位置单独挂载。
+同一 trait。SQLx 分类器从具体 database error 推断 MySQL 或 PostgreSQL；transport error
+使用通用 `sqlx` origin。调用点不再传数据库类型，也不再额外挂 provider frame。已识别的
+provider 条件优先于操作 fallback code；无法识别时保留操作 code。stage、endpoint 和
+task ID 在仍明确知道其语义的最高层执行位置单独挂载。
 
 Provider 分类统一位于 `dt-common::error::provider`，不再放入各 crate 的 wrapper。
 业务模块使用 `DtError` 表达项目主动失败，使用普通 `anyhow::Context` 添加诊断文字，只在
 需要显式 metadata 时调用 context extension。禁止新增仅转发这些共享机制参数的 crate
 专用 helper 模块。
 
-`ErrorReport` 读取类型化 context 和错误链。它先使用最外层显式 context code；没有时，
-从 cause chain downcast 到 `DtError` 并调用 `ClassifyError`；最后调用 registry 中的 raw
-provider 分类器。两条路径都返回 `DtErrorContext`，内部 resolver 使用相同优先级规则合并 metadata。
-显式业务 metadata 因此仍然具有最高优先级，已知 provider 错误也不会仅因为调用者
-使用普通 `?` 而变成 `IN999`。不受支持或无法识别的 raw 错误仍输出 `IN999`。失败路径测试
+`ErrorReport` 读取类型化 frame 列表和错误链，把显式 frame、项目 `DtError` 和 registry
+识别出的每个 raw provider cause 分别追加到逐字段数组。字段选择和合并规则只存在于 report
+层。已知 provider 错误不会仅因为调用者使用普通 `?` 或操作 fallback 而变成 `IN999` 或
+丢失精确 code；显式的用户信息和 scope metadata 仍会保留。不受支持或无法识别的 raw
+错误仍输出 `IN999`。失败路径测试
 和代码评审仍需覆盖 raw provider 无法提供的显式操作 code 及调用点 metadata。
 
 `MD099 MetadataReadFailed` 只作为读取或解析端点 catalog、控制面元数据失败时的

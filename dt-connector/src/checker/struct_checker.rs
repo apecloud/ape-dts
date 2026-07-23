@@ -214,7 +214,7 @@ impl StructCheckerHandle {
                 "structure checking is not supported for database type: {}",
                 self.db_type
             ))
-            .with_stage(Stage::Bootstrap)),
+            .stage(Stage::Bootstrap)),
         }
         Ok(dst_map)
     }

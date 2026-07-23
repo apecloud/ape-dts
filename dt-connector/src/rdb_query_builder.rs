@@ -536,7 +536,7 @@ impl RdbQueryBuilder<'_> {
                 "schema: {}, tb: {}, no cols in after, which should not happen in update",
                 self.rdb_tb_meta.schema, self.rdb_tb_meta.tb
             ))
-            .with_object(ErrorObject {
+            .object(ErrorObject {
                 schema: Some(self.rdb_tb_meta.schema.clone()),
                 table: Some(self.rdb_tb_meta.tb.clone()),
                 ..Default::default()
@@ -793,7 +793,7 @@ impl RdbQueryBuilder<'_> {
                 "schema: {}, tb: {}, col: {}, UnchangedToast should not be converted to sql value directly",
                 self.rdb_tb_meta.schema, self.rdb_tb_meta.tb, col
             ))
-            .with_object(ErrorObject {
+            .object(ErrorObject {
                 schema: Some(self.rdb_tb_meta.schema.clone()),
                 table: Some(self.rdb_tb_meta.tb.clone()),
                 column: Some(col.to_string()),

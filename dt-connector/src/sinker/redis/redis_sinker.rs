@@ -322,7 +322,7 @@ impl RedisSinker {
 
         match result {
             Err(error) => {
-                bail!(error.with_code(ErrorCode::StatementFailed))
+                bail!(error.code(ErrorCode::StatementFailed))
             }
 
             Ok(values) => {

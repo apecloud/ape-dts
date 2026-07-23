@@ -50,11 +50,11 @@ impl PgMetaManager {
                 DtError::UnsupportedTableStructure(format!(
                     "PostgreSQL type ID {oid} is not available in the source type catalog"
                 ))
-                    .with_message("A PostgreSQL column type used by the source is not supported")
-                    .with_hint(
+                    .message("A PostgreSQL column type used by the source is not supported")
+                    .hint(
                         "Check the reported source column type and exclude or convert unsupported columns before retrying.",
                     )
-                    .with_origin(OriginError::new("postgres", None::<String>))
+                    .origin(OriginError::new("postgres", None::<String>))
             })
     }
 
@@ -74,11 +74,11 @@ impl PgMetaManager {
                 DtError::StatementFailed(format!(
                     "a change event for source relation ID {oid} arrived before Ape-DTS received its table definition"
                 ))
-                    .with_message("A PostgreSQL change event could not be decoded")
-                    .with_hint(
+                    .message("A PostgreSQL change event could not be decoded")
+                    .hint(
                         "Restart from an earlier LSN so Ape-DTS can reload the relation definition. If it repeats, check the publication and PostgreSQL replication logs.",
                     )
-                    .with_origin(OriginError::new("postgres", None::<String>))
+                    .origin(OriginError::new("postgres", None::<String>))
             })
     }
 
@@ -138,16 +138,16 @@ impl PgMetaManager {
             DtError::ObjectNotFound(format!(
                 "Ape-DTS could not find the previously loaded definition for source table {full_name}"
             ))
-                .with_message("The source table definition could not be loaded")
-                .with_hint(
+                .message("The source table definition could not be loaded")
+                .hint(
                     "Verify that the source table still exists and is readable, then restart the task.",
                 )
-                .with_object(ErrorObject {
+                .object(ErrorObject {
                     schema: Some(schema.to_string()),
                     table: Some(tb.to_string()),
                     ..Default::default()
                 })
-                .with_origin(OriginError::new("postgres", None::<String>))
+                .origin(OriginError::new("postgres", None::<String>))
         })
     }
 
@@ -236,13 +236,13 @@ impl PgMetaManager {
                     DtError::UnsupportedTableStructure(format!(
                         "PostgreSQL type OID {col_type_oid} is missing from the type registry"
                     ))
-                    .with_object(ErrorObject {
+                    .object(ErrorObject {
                         schema: Some(schema.to_string()),
                         table: Some(tb.to_string()),
                         column: Some(col.clone()),
                         ..Default::default()
                     })
-                    .with_origin(OriginError::new("postgres", Some(col_type_oid.to_string())))
+                    .origin(OriginError::new("postgres", Some(col_type_oid.to_string())))
                 })?;
             col_type.typmod = col_type_mod;
             col_origin_type_map.insert(col.clone(), col_type.get_alias());
@@ -344,12 +344,12 @@ impl PgMetaManager {
         }
 
         bail! {DtError::ObjectNotFound(format!("failed to get oid for: {} by query: {}", tb, sql))
-        .with_object(ErrorObject {
+        .object(ErrorObject {
             schema: Some(schema.to_string()),
             table: Some(tb.to_string()),
             ..Default::default()
         })
-        .with_origin(OriginError::new("postgres", None::<String>))}
+        .origin(OriginError::new("postgres", None::<String>))}
     }
 
     #[allow(dead_code)]

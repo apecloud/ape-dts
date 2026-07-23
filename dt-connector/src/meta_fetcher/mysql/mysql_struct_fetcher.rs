@@ -9,7 +9,7 @@ use sqlx::{mysql::MySqlRow, MySql, Pool, Row};
 
 use dt_common::{
     config::config_enums::DbType,
-    error::{DtError, DtErrorContextExt, ErrorCode, OriginError, SqlxErrorExt, SqlxProvider},
+    error::{DtError, DtErrorContextExt, ErrorCode, OriginError},
     meta::{
         mysql::{mysql_col_type::MysqlColType, mysql_meta_manager::MysqlMetaManager},
         struct_meta::{
@@ -128,7 +128,7 @@ impl MysqlStructFetcher {
                 "dbs: {} not found",
                 filtered_dbs.join(",")
             ))
-            .with_origin(OriginError::new("mysql", None::<String>))}
+            .origin(OriginError::new("mysql", None::<String>))}
         }
 
         Ok(dbs.into_values().collect())
@@ -602,7 +602,7 @@ impl MysqlStructFetcher {
                 }
             }
             Err(error) => {
-                bail! {error.with_code(ErrorCode::StatementFailed).with_sqlx_provider(SqlxProvider::MySql)}
+                bail! {error.code(ErrorCode::StatementFailed)}
             }
         }
         Ok(text)

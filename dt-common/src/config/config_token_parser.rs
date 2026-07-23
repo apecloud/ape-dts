@@ -91,7 +91,7 @@ impl ConfigTokenParser {
                     "config error near: {}, try enclose database/table/column with escapes if there are special characters other than letters and numbers",
                     token
                 ))
-                    .with_stage(Stage::Bootstrap)}
+                    .stage(Stage::Bootstrap)}
             }
         }
         Ok(tokens)
