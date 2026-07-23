@@ -1835,6 +1835,7 @@ dependencies = [
  "clap",
  "clap_complete",
  "configparser",
+ "dt-common",
  "libc",
  "serde",
  "serde_json",

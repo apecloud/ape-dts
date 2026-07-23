@@ -6,10 +6,11 @@ use std::{
     },
 };
 
+use anyhow::Context;
 use async_trait::async_trait;
 use chrono::Utc;
 use mongodb::{
-    bson::{doc, Bson, Document, Timestamp},
+    bson::{doc, raw::RawDocument, raw::RawDocumentBuf, Bson, Document, Timestamp},
     change_stream::event::ResumeToken,
     options::{FullDocumentBeforeChangeType, FullDocumentType},
     Client,
@@ -18,6 +19,7 @@ use serde_json::json;
 use tokio::{sync::Mutex, time::Instant};
 
 use crate::{
+    common::mongo::{changestream_parser, oplog_parser},
     extractor::{
         base_extractor::{BaseExtractor, ExtractState},
         resumer::recovery::Recovery,
@@ -29,12 +31,12 @@ use dt_common::{
     log_error, log_info, log_warn,
     meta::{
         col_value::ColValue,
-        ddl_meta::ddl_type::DdlType,
+        ddl_meta::{ddl_data::DdlData, ddl_type::DdlType},
         dt_data::DtData,
         mongo::{
             mongo_cdc_source::MongoCdcSource,
             mongo_constant::MongoConstants,
-            mongo_ddl::change_stream_event_to_ddl,
+            mongo_ddl::{change_stream_event_to_ddl, raw_change_stream_event_to_ddl},
             mongo_key::MongoKey,
             mongo_version::{get_server_version, MongoServerVersion},
         },
@@ -59,228 +61,9 @@ pub struct MongoCdcExtractor {
     pub app_name: String,
     pub heartbeat_interval_secs: u64,
     pub heartbeat_tb: String,
+    pub use_raw_document: bool,
     pub syncer: Arc<Mutex<Syncer>>,
     pub recovery: Option<Arc<dyn Recovery + Send + Sync>>,
-}
-
-impl MongoCdcExtractor {
-    fn supports_change_stream_6_0_features(version: &MongoServerVersion) -> bool {
-        version >= &MongoServerVersion::new(6, 0, 0)
-    }
-
-    fn insert_id_from_doc(target: &mut HashMap<String, ColValue>, doc: &Document) {
-        if let Some(key) = MongoKey::from_doc(doc) {
-            target.insert(
-                MongoConstants::ID.to_string(),
-                ColValue::String(key.to_string()),
-            );
-        }
-    }
-
-    fn insert_document_key(target: &mut HashMap<String, ColValue>, document_key: &Document) {
-        target.insert(
-            MongoConstants::DOCUMENT_KEY.to_string(),
-            ColValue::MongoDoc(document_key.clone()),
-        );
-    }
-
-    fn append_oplog_diff_path(prefix: &str, field: &str) -> String {
-        if prefix.is_empty() {
-            field.to_string()
-        } else {
-            format!("{}.{}", prefix, field)
-        }
-    }
-
-    fn flatten_oplog_diff(
-        diff: &Document,
-        prefix: &str,
-        set_doc: &mut Document,
-        unset_doc: &mut Document,
-    ) {
-        if let Some(inserted) = diff.get("i").and_then(|value| value.as_document()) {
-            for (field, value) in inserted {
-                set_doc.insert(Self::append_oplog_diff_path(prefix, field), value.clone());
-            }
-        }
-
-        if let Some(updated) = diff.get("u").and_then(|value| value.as_document()) {
-            for (field, value) in updated {
-                set_doc.insert(Self::append_oplog_diff_path(prefix, field), value.clone());
-            }
-        }
-
-        if let Some(deleted) = diff.get("d").and_then(|value| value.as_document()) {
-            for (field, value) in deleted {
-                unset_doc.insert(Self::append_oplog_diff_path(prefix, field), value.clone());
-            }
-        }
-
-        for (field, value) in diff {
-            if matches!(field.as_str(), "i" | "u" | "d" | "a") {
-                continue;
-            }
-
-            let Some(nested_field) = field.strip_prefix('s') else {
-                continue;
-            };
-            if nested_field.is_empty() {
-                continue;
-            }
-            if let Some(nested_diff) = value.as_document() {
-                let nested_prefix = Self::append_oplog_diff_path(prefix, nested_field);
-                Self::flatten_oplog_diff(nested_diff, &nested_prefix, set_doc, unset_doc);
-            }
-        }
-    }
-
-    fn build_oplog_update_doc(after_doc: &Document) -> Document {
-        let mut set_doc = Document::new();
-        let mut unset_doc = Document::new();
-
-        if let Some(diff) = after_doc.get("diff").and_then(|value| value.as_document()) {
-            Self::flatten_oplog_diff(diff, "", &mut set_doc, &mut unset_doc);
-        } else {
-            if let Some(doc) = after_doc
-                .get(MongoConstants::SET)
-                .and_then(|value| value.as_document())
-            {
-                set_doc.extend(doc.clone());
-            }
-            if let Some(doc) = after_doc
-                .get(MongoConstants::UNSET)
-                .and_then(|value| value.as_document())
-            {
-                unset_doc.extend(doc.clone());
-            }
-        }
-
-        let mut update_doc = Document::new();
-        if !set_doc.is_empty() {
-            update_doc.insert(MongoConstants::SET, set_doc);
-        }
-        if !unset_doc.is_empty() {
-            update_doc.insert(MongoConstants::UNSET, unset_doc);
-        }
-        update_doc
-    }
-
-    fn get_path_value<'a>(doc: &'a Document, path: &str) -> Option<&'a Bson> {
-        let mut current = doc;
-        let mut fields = path.split('.').peekable();
-        while let Some(field) = fields.next() {
-            let value = current.get(field)?;
-            if fields.peek().is_none() {
-                return Some(value);
-            }
-            current = value.as_document()?;
-        }
-        None
-    }
-
-    fn build_change_stream_update_doc(
-        update_description: &Document,
-        full_document: Option<&Document>,
-    ) -> Document {
-        let mut set_doc = Document::new();
-        let mut unset_doc = Document::new();
-
-        if let Some(updated_fields) = update_description
-            .get("updatedFields")
-            .and_then(|value| value.as_document())
-        {
-            set_doc.extend(updated_fields.clone());
-        }
-
-        if let Some(removed_fields) = update_description
-            .get("removedFields")
-            .and_then(|value| value.as_array())
-        {
-            for field in removed_fields {
-                if let Some(field) = field.as_str() {
-                    unset_doc.insert(field, "");
-                }
-            }
-        }
-
-        if let Some(truncated_arrays) = update_description
-            .get("truncatedArrays")
-            .and_then(|value| value.as_array())
-        {
-            for truncated_array in truncated_arrays {
-                let Some(truncated_array) = truncated_array.as_document() else {
-                    continue;
-                };
-                let Ok(field) = truncated_array.get_str("field") else {
-                    continue;
-                };
-                if let Some(value) = full_document.and_then(|doc| Self::get_path_value(doc, field))
-                {
-                    set_doc.insert(field, value.clone());
-                }
-            }
-        }
-
-        let mut update_doc = Document::new();
-        if !set_doc.is_empty() {
-            update_doc.insert(MongoConstants::SET, set_doc);
-        }
-        if !unset_doc.is_empty() {
-            update_doc.insert(MongoConstants::UNSET, unset_doc);
-        }
-        update_doc
-    }
-
-    fn change_stream_update_requires_full_document(update_description: &Document) -> bool {
-        update_description
-            .get("disambiguatedPaths")
-            .and_then(|value| value.as_document())
-            .map(|doc| {
-                doc.values()
-                    .any(Self::disambiguated_path_requires_full_document)
-            })
-            .unwrap_or(false)
-    }
-
-    fn disambiguated_path_requires_full_document(path: &Bson) -> bool {
-        let Some(components) = path.as_array() else {
-            return true;
-        };
-        if components.is_empty() {
-            return true;
-        }
-
-        components.iter().any(|component| match component {
-            Bson::String(field) => field.contains('.'),
-            Bson::Int32(_) | Bson::Int64(_) => false,
-            _ => true,
-        })
-    }
-
-    fn parse_change_stream_ns(event: &Document) -> Option<(String, String)> {
-        let ns = event.get_document("ns").ok()?;
-        let db = ns.get_str("db").ok()?.to_string();
-        let tb = ns.get_str("coll").unwrap_or("").to_string();
-        Some((db, tb))
-    }
-
-    fn filter_requests_change_stream_ddl(&self) -> bool {
-        if self.filter.do_ddls.contains("*") {
-            return true;
-        }
-
-        [
-            DdlType::MongoCreateCollection,
-            DdlType::MongoCreateIndex,
-            DdlType::MongoDropIndex,
-            DdlType::MongoCollMod,
-            DdlType::MongoShardCollection,
-            DdlType::MongoReshardCollection,
-            DdlType::MongoRefineCollectionShardKey,
-        ]
-        .iter()
-        .any(|ddl_type| self.filter.do_ddls.contains(&ddl_type.to_string()))
-    }
 }
 
 #[async_trait]
@@ -339,6 +122,14 @@ impl Extractor for MongoCdcExtractor {
 
 impl MongoCdcExtractor {
     async fn extract_oplog(&mut self) -> anyhow::Result<()> {
+        if self.use_raw_document {
+            self.extract_raw_oplog().await
+        } else {
+            self.extract_document_oplog().await
+        }
+    }
+
+    async fn extract_document_oplog(&mut self) -> anyhow::Result<()> {
         let start_timestamp = self.parse_start_timestamp();
         let filter = doc! {
             "ts": { "$gte": start_timestamp }
@@ -443,6 +234,96 @@ impl MongoCdcExtractor {
         Ok(())
     }
 
+    fn raw_document_key(doc: &RawDocument) -> anyhow::Result<Option<Document>> {
+        let Some(id) = doc.get(MongoConstants::ID)? else {
+            return Ok(None);
+        };
+        Ok(Some(doc! { MongoConstants::ID: Bson::try_from(id)? }))
+    }
+
+    async fn extract_raw_oplog(&mut self) -> anyhow::Result<()> {
+        let filter = doc! {
+            "ts": { "$gte": self.parse_start_timestamp() }
+        };
+        let oplog = self
+            .mongo_client
+            .database("local")
+            .collection::<RawDocumentBuf>("oplog.rs");
+        let mut cursor = oplog
+            .find(filter)
+            .cursor_type(mongodb::options::CursorType::TailableAwait)
+            .await?;
+
+        while cursor.advance().await? {
+            let event = cursor.current();
+            let op = event.get_str("op").unwrap_or_default();
+
+            if matches!(op, "c" | "xi" | "xd") {
+                // Keep the uncommon applyOps/command path unchanged. Normal Oplog DML stays raw.
+                let event_doc = Document::try_from(event)?;
+                for (row_data, position) in Self::extract_oplog_delete_many(&event_doc) {
+                    self.push_row_to_buf(row_data, position).await?;
+                }
+                continue;
+            }
+            if op == "n" || !matches!(op, "i" | "u" | "d") {
+                continue;
+            }
+
+            let ns = event.get_str("ns")?;
+            let ts = event.get_timestamp("ts")?;
+            let oplog_doc = event.get_document("o")?;
+            let mut before = HashMap::new();
+            let mut after = HashMap::new();
+            let row_type = match op {
+                "i" => {
+                    Self::insert_id_from_raw_doc(&mut after, oplog_doc)?;
+                    if let Some(document_key) = Self::raw_document_key(oplog_doc)? {
+                        Self::insert_document_key(&mut after, &document_key);
+                    }
+                    after.insert(
+                        MongoConstants::DOC.to_string(),
+                        ColValue::MongoRawDoc(oplog_doc.to_raw_document_buf()),
+                    );
+                    RowType::Insert
+                }
+                "u" => {
+                    let document_key = event
+                        .get("o2")?
+                        .and_then(|value| value.as_document())
+                        .context("mongo update oplog entry missing document o2")?;
+                    Self::insert_id_from_raw_doc(&mut after, document_key)?;
+                    before.insert(
+                        MongoConstants::DOC.to_string(),
+                        ColValue::MongoDoc(Document::try_from(document_key)?),
+                    );
+                    after.insert(
+                        MongoConstants::OPLOG_DIFF_DOC.to_string(),
+                        ColValue::MongoRawDoc(oplog_doc.to_raw_document_buf()),
+                    );
+                    RowType::Update
+                }
+                "d" => {
+                    Self::insert_id_from_raw_doc(&mut before, oplog_doc)?;
+                    if let Some(document_key) = Self::raw_document_key(oplog_doc)? {
+                        Self::insert_document_key(&mut before, &document_key);
+                    }
+                    before.insert(
+                        MongoConstants::DOC.to_string(),
+                        ColValue::MongoRawDoc(oplog_doc.to_raw_document_buf()),
+                    );
+                    RowType::Delete
+                }
+                _ => unreachable!(),
+            };
+
+            let (row_data, position) =
+                Self::build_oplog_row_data_from_parts(ns, ts, row_type, before, after);
+            self.push_row_to_buf(row_data, position).await?;
+        }
+        Ok(())
+    }
+
     fn get_op(doc: &Document) -> String {
         if doc.get("op").is_none() || doc.get("op").unwrap().as_str().is_none() {
             return String::new();
@@ -535,10 +416,17 @@ impl MongoCdcExtractor {
         let ts = ts.unwrap().as_timestamp().unwrap();
         let ns = ns.unwrap().as_str().unwrap();
 
-        // get db & tb
-        let tokens: Vec<&str> = ns.split('.').collect();
-        let db: String = tokens[0].into();
-        let tb: String = ns[db.len() + 1..].into();
+        Self::build_oplog_row_data_from_parts(ns, ts, row_type, before, after)
+    }
+
+    fn build_oplog_row_data_from_parts(
+        ns: &str,
+        ts: Timestamp,
+        row_type: RowType,
+        before: HashMap<String, ColValue>,
+        after: HashMap<String, ColValue>,
+    ) -> (RowData, Position) {
+        let (db, tb) = ns.split_once('.').unwrap();
         let before = if before.is_empty() {
             None
         } else {
@@ -552,7 +440,7 @@ impl MongoCdcExtractor {
             operation_time: ts.time,
             timestamp: Position::format_timestamp_millis(ts.time as i64 * 1000),
         };
-        let row_data = RowData::new(db, tb, 0, row_type, before, after);
+        let row_data = RowData::new(db.to_string(), tb.to_string(), 0, row_type, before, after);
         (row_data, position)
     }
 
@@ -637,13 +525,13 @@ impl MongoCdcExtractor {
         } else if let Some(start_time) = start_timestamp {
             watch = watch.start_at_operation_time(start_time);
         }
-        let mut change_stream = watch.await?.with_type::<Document>();
+        let mut change_stream = watch.await?.with_type::<RawDocumentBuf>();
 
         loop {
             let result = change_stream.next_if_any().await?;
-            if let Some(event) = result {
+            if let Some(raw_event) = result {
                 let resume_token = change_stream.resume_token();
-                let position = if let Ok(operation_time) = event.get_timestamp("clusterTime") {
+                let position = if let Ok(operation_time) = raw_event.get_timestamp("clusterTime") {
                     Position::MongoCdc {
                         resume_token: resume_token
                             .map(|token| json!(token).to_string())
@@ -663,164 +551,184 @@ impl MongoCdcExtractor {
                     }
                 };
 
-                let (db, tb) = Self::parse_change_stream_ns(&event).unwrap_or_default();
-                let operation_type = event.get_str("operationType").unwrap_or("");
-                let mut row_type = RowType::Insert;
-                let mut before = HashMap::new();
-                let mut after = HashMap::new();
-
-                match operation_type {
-                    "insert" => {
-                        let document = match event.get_document("fullDocument") {
-                            Ok(document) => document.clone(),
-                            Err(_) => continue,
-                        };
-                        if let Ok(document_key) = event.get_document("documentKey") {
-                            Self::insert_id_from_doc(&mut after, document_key);
-                            Self::insert_document_key(&mut after, document_key);
+                let (db, tb) = Self::parse_raw_change_stream_ns(&raw_event).unwrap_or_default();
+                if self.use_raw_document {
+                    match Self::build_raw_change_stream_row(&raw_event, db.clone(), tb.clone()) {
+                        Ok(Some(row_data)) => {
+                            self.push_row_to_buf(row_data, position).await?;
                         }
-                        Self::insert_id_from_doc(&mut after, &document);
-                        after.insert(
-                            MongoConstants::DOC.to_string(),
-                            ColValue::MongoDoc(document),
-                        );
-                    }
-
-                    "delete" => {
-                        row_type = RowType::Delete;
-                        let document_key = match event.get_document("documentKey") {
-                            Ok(document_key) => document_key.clone(),
-                            Err(_) => continue,
-                        };
-                        Self::insert_id_from_doc(&mut before, &document_key);
-                        Self::insert_document_key(&mut before, &document_key);
-                        before.insert(
-                            MongoConstants::DOC.to_string(),
-                            ColValue::MongoDoc(document_key),
-                        );
-                    }
-
-                    "update" => {
-                        row_type = RowType::Update;
-                        let document = event.get_document("fullDocument").ok().cloned();
-                        let document_key = match event.get_document("documentKey") {
-                            Ok(document_key) => document_key.clone(),
-                            Err(_) => continue,
-                        };
-                        Self::insert_id_from_doc(&mut before, &document_key);
-                        Self::insert_document_key(&mut before, &document_key);
-                        Self::insert_id_from_doc(&mut after, &document_key);
-                        Self::insert_document_key(&mut after, &document_key);
-                        if let Some(document) = &document {
-                            Self::insert_id_from_doc(&mut after, document);
+                        Ok(None) if enable_change_stream_ddl => {
+                            if let Some(ddl_data) = raw_change_stream_event_to_ddl(&raw_event) {
+                                self.push_change_stream_ddl(ddl_data, position).await?;
+                            }
                         }
-                        if let Ok(pre_image) = event.get_document("fullDocumentBeforeChange") {
-                            before.insert(
-                                MongoConstants::PRE_IMAGE.to_string(),
-                                ColValue::MongoDoc(pre_image.clone()),
-                            );
-                            before.insert(
-                                MongoConstants::DOC.to_string(),
-                                ColValue::MongoDoc(pre_image.clone()),
+                        Ok(None) => {}
+                        Err(err) => {
+                            log_error!(
+                                "failed to build raw change stream row, db: {}, table: {}, error: {}",
+                                db,
+                                tb,
+                                err
                             );
                         }
-                        let update_description = match event.get_document("updateDescription") {
-                            Ok(update_description) => update_description,
-                            Err(_) => continue,
-                        };
-                        if Self::change_stream_update_requires_full_document(update_description) {
-                            // Ambiguous paths may refer to literal dotted field names, so a normal
-                            // $set/$unset dotted path can update the wrong shape.
-                            let Some(document) = document else {
-                                log_error!(
-                                    "change stream updateDescription has disambiguatedPaths, but fullDocument is missing, ignore, event: {:?}",
-                                    event
-                                );
-                                continue;
+                    }
+                    continue;
+                } else {
+                    let event = raw_event.to_document()?;
+                    let operation_type = event.get_str("operationType").unwrap_or("");
+                    let mut row_type = RowType::Insert;
+                    let mut before = HashMap::new();
+                    let mut after = HashMap::new();
+
+                    match operation_type {
+                        "insert" => {
+                            let document = match event.get_document("fullDocument") {
+                                Ok(document) => document.clone(),
+                                Err(_) => continue,
                             };
+                            if let Ok(document_key) = event.get_document("documentKey") {
+                                Self::insert_id_from_doc(&mut after, document_key);
+                                Self::insert_document_key(&mut after, document_key);
+                            }
+                            Self::insert_id_from_doc(&mut after, &document);
                             after.insert(
                                 MongoConstants::DOC.to_string(),
                                 ColValue::MongoDoc(document),
                             );
-                        } else {
-                            let update_doc = Self::build_change_stream_update_doc(
-                                update_description,
-                                document.as_ref(),
+                        }
+
+                        "delete" => {
+                            row_type = RowType::Delete;
+                            let document_key = match event.get_document("documentKey") {
+                                Ok(document_key) => document_key.clone(),
+                                Err(_) => continue,
+                            };
+                            Self::insert_id_from_doc(&mut before, &document_key);
+                            Self::insert_document_key(&mut before, &document_key);
+                            before.insert(
+                                MongoConstants::DOC.to_string(),
+                                ColValue::MongoDoc(document_key),
                             );
-                            if update_doc.is_empty() {
-                                log_error!(
-                                "change stream updateDescription is empty or unsupported, ignore, event: {:?}",
-                                event
-                            );
-                                continue;
+                        }
+
+                        "update" => {
+                            row_type = RowType::Update;
+                            let document = event.get_document("fullDocument").ok().cloned();
+                            let document_key = match event.get_document("documentKey") {
+                                Ok(document_key) => document_key.clone(),
+                                Err(_) => continue,
+                            };
+                            Self::insert_id_from_doc(&mut before, &document_key);
+                            Self::insert_document_key(&mut before, &document_key);
+                            Self::insert_id_from_doc(&mut after, &document_key);
+                            Self::insert_document_key(&mut after, &document_key);
+                            if let Some(document) = &document {
+                                Self::insert_id_from_doc(&mut after, document);
                             }
-                            after.insert(
-                                MongoConstants::DIFF_DOC.to_string(),
-                                ColValue::MongoDoc(update_doc),
-                            );
-                            if let Some(document) = document {
+                            if let Ok(pre_image) = event.get_document("fullDocumentBeforeChange") {
+                                before.insert(
+                                    MongoConstants::PRE_IMAGE.to_string(),
+                                    ColValue::MongoDoc(pre_image.clone()),
+                                );
+                                before.insert(
+                                    MongoConstants::DOC.to_string(),
+                                    ColValue::MongoDoc(pre_image.clone()),
+                                );
+                            }
+                            let update_description = match event.get_document("updateDescription") {
+                                Ok(update_description) => update_description,
+                                Err(_) => continue,
+                            };
+                            if Self::change_stream_update_requires_full_document(update_description)
+                            {
+                                // Ambiguous paths may refer to literal dotted field names, so a normal
+                                // $set/$unset dotted path can update the wrong shape.
+                                let Some(document) = document else {
+                                    log_error!(
+                                    "change stream updateDescription has disambiguatedPaths, but fullDocument is missing, ignore, event: {:?}",
+                                    event
+                                );
+                                    continue;
+                                };
                                 after.insert(
                                     MongoConstants::DOC.to_string(),
                                     ColValue::MongoDoc(document),
                                 );
+                            } else {
+                                let update_doc = Self::build_change_stream_update_doc(
+                                    update_description,
+                                    document.as_ref(),
+                                );
+                                if update_doc.is_empty() {
+                                    log_error!(
+                                "change stream updateDescription is empty or unsupported, ignore, event: {:?}",
+                                event
+                            );
+                                    continue;
+                                }
+                                after.insert(
+                                    MongoConstants::DIFF_DOC.to_string(),
+                                    ColValue::MongoDoc(update_doc),
+                                );
+                                if let Some(document) = document {
+                                    after.insert(
+                                        MongoConstants::DOC.to_string(),
+                                        ColValue::MongoDoc(document),
+                                    );
+                                }
                             }
                         }
-                    }
 
-                    "replace" => {
-                        row_type = RowType::Update;
-                        let document = match event.get_document("fullDocument") {
-                            Ok(document) => document.clone(),
-                            Err(_) => continue,
-                        };
-                        let document_key = match event.get_document("documentKey") {
-                            Ok(document_key) => document_key.clone(),
-                            Err(_) => continue,
-                        };
-                        Self::insert_id_from_doc(&mut before, &document_key);
-                        Self::insert_document_key(&mut before, &document_key);
-                        Self::insert_id_from_doc(&mut after, &document_key);
-                        Self::insert_document_key(&mut after, &document_key);
-                        Self::insert_id_from_doc(&mut after, &document);
-                        if let Ok(pre_image) = event.get_document("fullDocumentBeforeChange") {
-                            before.insert(
-                                MongoConstants::PRE_IMAGE.to_string(),
-                                ColValue::MongoDoc(pre_image.clone()),
-                            );
-                            before.insert(
+                        "replace" => {
+                            row_type = RowType::Update;
+                            let document = match event.get_document("fullDocument") {
+                                Ok(document) => document.clone(),
+                                Err(_) => continue,
+                            };
+                            let document_key = match event.get_document("documentKey") {
+                                Ok(document_key) => document_key.clone(),
+                                Err(_) => continue,
+                            };
+                            Self::insert_id_from_doc(&mut before, &document_key);
+                            Self::insert_document_key(&mut before, &document_key);
+                            Self::insert_id_from_doc(&mut after, &document_key);
+                            Self::insert_document_key(&mut after, &document_key);
+                            Self::insert_id_from_doc(&mut after, &document);
+                            if let Ok(pre_image) = event.get_document("fullDocumentBeforeChange") {
+                                before.insert(
+                                    MongoConstants::PRE_IMAGE.to_string(),
+                                    ColValue::MongoDoc(pre_image.clone()),
+                                );
+                                before.insert(
+                                    MongoConstants::DOC.to_string(),
+                                    ColValue::MongoDoc(pre_image.clone()),
+                                );
+                            }
+                            after.insert(
                                 MongoConstants::DOC.to_string(),
-                                ColValue::MongoDoc(pre_image.clone()),
+                                ColValue::MongoDoc(document),
                             );
                         }
-                        after.insert(
-                            MongoConstants::DOC.to_string(),
-                            ColValue::MongoDoc(document),
-                        );
-                    }
-                    _ => {
-                        if !enable_change_stream_ddl {
+                        _ => {
+                            if !enable_change_stream_ddl {
+                                continue;
+                            }
+                            if let Some(ddl_data) = change_stream_event_to_ddl(&event) {
+                                self.push_change_stream_ddl(ddl_data, position).await?;
+                            }
                             continue;
                         }
-                        if let Some(ddl_data) = change_stream_event_to_ddl(&event) {
-                            let (ddl_db, ddl_tb) = ddl_data.get_schema_tb();
-                            if !self.filter.filter_ddl(&ddl_db, &ddl_tb, &ddl_data.ddl_type) {
-                                self.base_extractor
-                                    .push_ddl(&mut self.extract_state, ddl_data, position)
-                                    .await?;
-                            }
-                        };
-                        continue;
                     }
-                }
 
-                let before = if before.is_empty() {
-                    None
-                } else {
-                    Some(before)
-                };
-                let after = if after.is_empty() { None } else { Some(after) };
-                let row_data = RowData::new(db, tb, 0, row_type, before, after);
-                self.push_row_to_buf(row_data, position).await?;
+                    let before = if before.is_empty() {
+                        None
+                    } else {
+                        Some(before)
+                    };
+                    let after = if after.is_empty() { None } else { Some(after) };
+                    let row_data = RowData::new(db, tb, 0, row_type, before, after);
+                    self.push_row_to_buf(row_data, position).await?;
+                }
             }
         }
     }
@@ -949,6 +857,216 @@ impl MongoCdcExtractor {
             .await
         {
             log_error!("heartbeat failed: {:?}", err);
+        }
+        Ok(())
+    }
+}
+
+impl MongoCdcExtractor {
+    fn supports_change_stream_6_0_features(version: &MongoServerVersion) -> bool {
+        version >= &MongoServerVersion::new(6, 0, 0)
+    }
+
+    fn insert_id_from_doc(target: &mut HashMap<String, ColValue>, doc: &Document) {
+        if let Some(key) = MongoKey::from_doc(doc) {
+            target.insert(
+                MongoConstants::ID.to_string(),
+                ColValue::String(key.to_string()),
+            );
+        }
+    }
+
+    fn insert_id_from_raw_doc(
+        target: &mut HashMap<String, ColValue>,
+        doc: &RawDocument,
+    ) -> anyhow::Result<()> {
+        if let Some(key) = MongoKey::from_raw_doc(doc)? {
+            target.insert(
+                MongoConstants::ID.to_string(),
+                ColValue::String(key.to_string()),
+            );
+        }
+        Ok(())
+    }
+
+    fn insert_document_key(target: &mut HashMap<String, ColValue>, document_key: &Document) {
+        target.insert(
+            MongoConstants::DOCUMENT_KEY.to_string(),
+            ColValue::MongoDoc(document_key.clone()),
+        );
+    }
+
+    fn build_oplog_update_doc(after_doc: &Document) -> Document {
+        oplog_parser::build_update_doc(after_doc)
+    }
+
+    fn build_change_stream_update_doc(
+        update_description: &Document,
+        full_document: Option<&Document>,
+    ) -> Document {
+        changestream_parser::build_update_doc(update_description, full_document)
+    }
+
+    fn change_stream_update_requires_full_document(update_description: &Document) -> bool {
+        changestream_parser::requires_full_document(update_description)
+    }
+
+    fn parse_raw_change_stream_ns(event: &RawDocument) -> Option<(String, String)> {
+        let ns = event.get_document("ns").ok()?;
+        let db = ns.get_str("db").ok()?.to_string();
+        let tb = ns.get_str("coll").unwrap_or("").to_string();
+        Some((db, tb))
+    }
+
+    fn build_raw_change_stream_row(
+        event: &RawDocument,
+        db: String,
+        tb: String,
+    ) -> anyhow::Result<Option<RowData>> {
+        let operation_type = event.get_str("operationType").unwrap_or("");
+        let mut before = HashMap::new();
+        let mut after = HashMap::new();
+
+        let document_key = || -> anyhow::Result<Document> {
+            let document_key = event.get_document("documentKey")?;
+            Ok(mongodb::bson::from_slice(document_key.as_bytes())?)
+        };
+
+        match operation_type {
+            "insert" => {
+                let document = event.get_document("fullDocument")?;
+                if let Ok(document_key) = document_key() {
+                    Self::insert_id_from_doc(&mut after, &document_key);
+                    Self::insert_document_key(&mut after, &document_key);
+                }
+                Self::insert_id_from_raw_doc(&mut after, document)?;
+                after.insert(
+                    MongoConstants::DOC.to_string(),
+                    ColValue::MongoRawDoc(document.to_raw_document_buf()),
+                );
+                Ok(Some(RowData::new(
+                    db,
+                    tb,
+                    0,
+                    RowType::Insert,
+                    None,
+                    Some(after),
+                )))
+            }
+            "delete" => {
+                let document_key = document_key()?;
+                Self::insert_id_from_doc(&mut before, &document_key);
+                Self::insert_document_key(&mut before, &document_key);
+                before.insert(
+                    MongoConstants::DOC.to_string(),
+                    ColValue::MongoDoc(document_key),
+                );
+                Ok(Some(RowData::new(
+                    db,
+                    tb,
+                    0,
+                    RowType::Delete,
+                    Some(before),
+                    None,
+                )))
+            }
+            "update" => {
+                let document = event.get_document("fullDocument").ok();
+                let document_key = document_key()?;
+                Self::insert_id_from_doc(&mut before, &document_key);
+                Self::insert_document_key(&mut before, &document_key);
+                Self::insert_id_from_doc(&mut after, &document_key);
+                Self::insert_document_key(&mut after, &document_key);
+                if let Some(document) = document {
+                    Self::insert_id_from_raw_doc(&mut after, document)?;
+                }
+
+                if let Ok(pre_image) = event.get_document("fullDocumentBeforeChange") {
+                    before.insert(
+                        MongoConstants::PRE_IMAGE.to_string(),
+                        ColValue::MongoRawDoc(pre_image.to_raw_document_buf()),
+                    );
+                }
+                if let Some(document) = document {
+                    after.insert(
+                        MongoConstants::DOC.to_string(),
+                        ColValue::MongoRawDoc(document.to_raw_document_buf()),
+                    );
+                }
+                let update_description = event.get_document("updateDescription")?;
+                after.insert(
+                    MongoConstants::DIFF_DOC.to_string(),
+                    ColValue::MongoRawDoc(update_description.to_raw_document_buf()),
+                );
+                Ok(Some(RowData::new(
+                    db,
+                    tb,
+                    0,
+                    RowType::Update,
+                    Some(before),
+                    Some(after),
+                )))
+            }
+            "replace" => {
+                let document = event.get_document("fullDocument")?;
+                let document_key = document_key()?;
+                Self::insert_id_from_doc(&mut before, &document_key);
+                Self::insert_document_key(&mut before, &document_key);
+                Self::insert_id_from_doc(&mut after, &document_key);
+                Self::insert_document_key(&mut after, &document_key);
+                Self::insert_id_from_raw_doc(&mut after, document)?;
+
+                if let Ok(pre_image) = event.get_document("fullDocumentBeforeChange") {
+                    before.insert(
+                        MongoConstants::PRE_IMAGE.to_string(),
+                        ColValue::MongoRawDoc(pre_image.to_raw_document_buf()),
+                    );
+                }
+                after.insert(
+                    MongoConstants::DOC.to_string(),
+                    ColValue::MongoRawDoc(document.to_raw_document_buf()),
+                );
+                Ok(Some(RowData::new(
+                    db,
+                    tb,
+                    0,
+                    RowType::Update,
+                    Some(before),
+                    Some(after),
+                )))
+            }
+            _ => Ok(None),
+        }
+    }
+
+    fn filter_requests_change_stream_ddl(&self) -> bool {
+        if self.filter.do_ddls.contains("*") {
+            return true;
+        }
+
+        [
+            DdlType::MongoCreateCollection,
+            DdlType::MongoCreateIndex,
+            DdlType::MongoDropIndex,
+            DdlType::MongoCollMod,
+            DdlType::MongoShardCollection,
+            DdlType::MongoReshardCollection,
+            DdlType::MongoRefineCollectionShardKey,
+        ]
+        .iter()
+        .any(|ddl_type| self.filter.do_ddls.contains(&ddl_type.to_string()))
+    }
+
+    async fn push_change_stream_ddl(
+        &mut self,
+        ddl_data: DdlData,
+        position: Position,
+    ) -> anyhow::Result<()> {
+        let (ddl_db, ddl_tb) = ddl_data.get_schema_tb();
+        if !self.filter.filter_ddl(&ddl_db, &ddl_tb, &ddl_data.ddl_type) {
+            self.base_extractor
+                .push_ddl(&mut self.extract_state, ddl_data, position)
+                .await?;
         }
         Ok(())
     }
@@ -1215,5 +1333,60 @@ mod tests {
                 update_description
             );
         }
+    }
+
+    #[test]
+    fn raw_change_stream_row_keeps_invalid_full_document_and_valid_diff_separate() {
+        let mut bytes = RawDocumentBuf::from_document(&doc! {
+            "operationType": "update",
+            "ns": { "db": "test_db", "coll": "test_tb" },
+            "documentKey": { "_id": 1 },
+            "fullDocument": {
+                "_id": 1,
+                "invalid": "invalid_full_document_marker",
+            },
+            "updateDescription": {
+                "updatedFields": { "status": "updated" },
+                "removedFields": [],
+                "truncatedArrays": [],
+            },
+        })
+        .unwrap()
+        .into_bytes();
+        let marker = b"invalid_full_document_marker\0";
+        let value_offset = bytes
+            .windows(marker.len())
+            .position(|window| window == marker)
+            .unwrap();
+        bytes[value_offset] = 0xff;
+        let raw_event = RawDocumentBuf::from_bytes(bytes).unwrap();
+
+        assert!(raw_event.to_document().is_err());
+        let row = MongoCdcExtractor::build_raw_change_stream_row(
+            &raw_event,
+            "test_db".to_string(),
+            "test_tb".to_string(),
+        )
+        .unwrap()
+        .unwrap();
+        let after = row.after.unwrap();
+        let ColValue::MongoRawDoc(full_doc) = after.get(MongoConstants::DOC).unwrap() else {
+            panic!("fullDocument should remain raw");
+        };
+        let ColValue::MongoRawDoc(update_description) =
+            after.get(MongoConstants::DIFF_DOC).unwrap()
+        else {
+            panic!("updateDescription should remain raw");
+        };
+
+        assert!(full_doc.to_document().is_err());
+        assert_eq!(
+            update_description
+                .to_document()
+                .unwrap()
+                .get_document("updatedFields")
+                .unwrap(),
+            &doc! { "status": "updated" }
+        );
     }
 }

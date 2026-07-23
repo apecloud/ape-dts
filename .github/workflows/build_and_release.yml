@@ -56,22 +56,32 @@ jobs:
       - name: Cross build
         if: matrix.target == 'x86_64-unknown-linux-gnu' || matrix.target == 'aarch64-unknown-linux-gnu' || matrix.target == 'x86_64-pc-windows-gnu'
         run: |
-          cross build --release --target=${{ matrix.target }} --features metrics
+          cross build --release --target=${{ matrix.target }} --package dt-main --package dts-cli --features dt-main/metrics
 
       - name: Local build
         if: matrix.target == 'x86_64-apple-darwin' || matrix.target == 'aarch64-apple-darwin'
         run: |
           rustup target add ${{ matrix.target }}
-          cargo build --release --target=${{ matrix.target }} --features metrics
+          cargo build --release --target=${{ matrix.target }} --package dt-main --package dts-cli --features dt-main/metrics
 
       - name: Create release artifact
         run: |
           mkdir -p artifacts
           cp target/${{ matrix.target }}/release/dt-main artifacts/dt-main
-          cp target/${{ matrix.target }}/release/dtscli artifacts/dtscli
           cp log4rs.yaml artifacts/log4rs.yaml
-          tar -czvf ape-dts-${{ github.run_id }}-${{ matrix.target }}.tar.gz -C artifacts .
-          cp target/${{ matrix.target }}/release/dtscli dtscli-${{ matrix.target }}
+          tar -czvf ape-dts-${{ inputs.tag_name }}-${{ matrix.target }}.tar.gz -C artifacts .
+
+      - name: Collect dtscli binary
+        run: |
+          mkdir -p dtscli-artifact
+          cp target/${{ matrix.target }}/release/dtscli dtscli-artifact/dtscli-${{ matrix.target }}
+
+      - name: Upload dtscli build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dtscli-${{ matrix.target }}
+          path: dtscli-artifact/dtscli-${{ matrix.target }}
+          if-no-files-found: error
 
       - name: Upload Release Asset
         id: upload_release_asset
@@ -84,38 +94,6 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Upload dtscli Asset
-        uses: actions/upload-release-asset@v1
-        with:
-          upload_url: ${{ env.UPLOAD_URL }}
-          asset_path: dtscli-${{ matrix.target }}
-          asset_name: dtscli-${{ matrix.target }}
-          asset_content_type: application/octet-stream
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Upload install_cli.sh
-        if: matrix.target == 'x86_64-unknown-linux-gnu'
-        uses: actions/upload-release-asset@v1
-        with:
-          upload_url: ${{ env.UPLOAD_URL }}
-          asset_path: dt-cli/scripts/install.sh
-          asset_name: install_cli.sh
-          asset_content_type: text/x-shellscript
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Upload install_cli.sh
-        if: matrix.target == 'x86_64-unknown-linux-gnu'
-        uses: actions/upload-release-asset@v1
-        with:
-          upload_url: ${{ env.UPLOAD_URL }}
-          asset_path: dt-cli/scripts/uninstall.sh
-          asset_name: uninstall_cli.sh
-          asset_content_type: text/x-shellscript
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
       - name: Upload CHANGELOG
         if: matrix.target == 'x86_64-unknown-linux-gnu'
         uses: actions/upload-release-asset@v1
@@ -124,5 +102,56 @@ jobs:
           asset_path: CHANGELOG.md
           asset_name: CHANGELOG.md
           asset_content_type: text/markdown
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  package-dtscli:
+    name: Package dtscli
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Get Release Upload URL
+        run: |
+          tag_info=$(curl -H "Authorization: token ${{ env.GITHUB_TOKEN }}" \
+            "https://api.github.com/repos/${{ github.repository }}/releases/tags/${{ inputs.tag_name }}")
+          upload_url=$(echo "$tag_info" | jq -r '.upload_url')
+          if [ -z "$upload_url" ] || [ "$upload_url" == "null" ]; then
+            echo "Upload URL is null or empty. Exiting workflow."
+            exit 1
+          fi
+          echo "UPLOAD_URL=${upload_url}" >> "$GITHUB_ENV"
+
+      - name: Download dtscli binaries
+        uses: actions/download-artifact@v4
+        with:
+          pattern: dtscli-*
+          path: dtscli-binaries
+          merge-multiple: true
+
+      - name: Create dtscli release artifact
+        run: |
+          mkdir -p dtscli packages
+          for binary in dtscli-binaries/dtscli-*; do
+            target=${binary##*/dtscli-}
+            mkdir -p "packages/${target}"
+            cp "$binary" "packages/${target}/dtscli"
+            chmod +x "packages/${target}/dtscli"
+            tar -czf "dtscli/dtscli-${target}.tar.gz" -C "packages/${target}" dtscli
+          done
+          cp dt-cli/scripts/install.sh dtscli/install.sh
+          cp dt-cli/scripts/uninstall.sh dtscli/uninstall.sh
+          tar -czvf dtscli-${{ inputs.tag_name }}.tar.gz dtscli
+
+      - name: Upload dtscli release asset
+        uses: actions/upload-release-asset@v1
+        with:
+          upload_url: ${{ env.UPLOAD_URL }}
+          asset_path: dtscli-${{ inputs.tag_name }}.tar.gz
+          asset_name: dtscli-${{ inputs.tag_name }}.tar.gz
+          asset_content_type: application/gzip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
