@@ -1,19 +1,162 @@
 use async_trait::async_trait;
 
 #[cfg(all(feature = "metrics", feature = "tracing"))]
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+
+#[cfg(all(feature = "metrics", feature = "tracing"))]
+use prometheus::{CounterVec, IntCounterVec, Opts, Registry};
 
 use super::FlushableMonitor;
 #[cfg(all(feature = "metrics", feature = "tracing"))]
+use crate::config::metrics_config::MetricsConfig;
+#[cfg(all(feature = "metrics", feature = "tracing"))]
 use crate::monitor::prometheus_metrics::PrometheusMetrics;
+#[cfg(all(feature = "metrics", feature = "tracing"))]
+use crate::runtime_trace::RuntimeTraceMetricsSnapshot;
 use crate::{log_runtime_trace, runtime_trace};
 
-/// Periodically dumps the tokio runtime trace summary so that long-running
-/// tasks (e.g. CDC, which normally never reaches the finish-time dump) get
-/// continuous runtime diagnostics. With both `metrics` and `tracing` features
-/// enabled, the structured snapshot is also exported via Prometheus.
-///
-/// Without the `tracing` feature this monitor is a no-op.
+#[cfg(all(feature = "metrics", feature = "tracing"))]
+pub(super) struct RuntimeTraceMetrics {
+    tasks_created: IntCounterVec,
+    task_polls: IntCounterVec,
+    task_schedules: IntCounterVec,
+    task_busy_seconds: CounterVec,
+    task_attributed_waker_calls: IntCounterVec,
+    wait_point_waker_calls: IntCounterVec,
+    previous_snapshot: Mutex<RuntimeTraceMetricsSnapshot>,
+}
+
+#[cfg(all(feature = "metrics", feature = "tracing"))]
+impl RuntimeTraceMetrics {
+    const MARKER_LABEL: &'static str = "marker";
+    const WAIT_POINT_LABEL: &'static str = "wait_point";
+
+    pub(super) fn new(config: &MetricsConfig) -> Self {
+        let int_counter_vec = |name: &str, desc: &str, labels: &[&str]| {
+            IntCounterVec::new(
+                Opts::new(name, desc).const_labels(config.metrics_labels.to_owned()),
+                labels,
+            )
+            .unwrap()
+        };
+
+        Self {
+            tasks_created: int_counter_vec(
+                "runtime_trace_tasks_created_total",
+                "traced tokio tasks created per marker",
+                &[Self::MARKER_LABEL],
+            ),
+            task_polls: int_counter_vec(
+                "runtime_trace_task_polls_total",
+                "tokio task polls per marker",
+                &[Self::MARKER_LABEL],
+            ),
+            task_schedules: int_counter_vec(
+                "runtime_trace_task_schedules_total",
+                "tokio task schedules per marker",
+                &[Self::MARKER_LABEL],
+            ),
+            task_busy_seconds: CounterVec::new(
+                Opts::new(
+                    "runtime_trace_task_busy_seconds_total",
+                    "tokio task busy seconds per marker",
+                )
+                .const_labels(config.metrics_labels.to_owned()),
+                &[Self::MARKER_LABEL],
+            )
+            .unwrap(),
+            task_attributed_waker_calls: int_counter_vec(
+                "runtime_trace_task_attributed_waker_calls_total",
+                "attributed waker calls per marker",
+                &[Self::MARKER_LABEL],
+            ),
+            wait_point_waker_calls: int_counter_vec(
+                "runtime_trace_wait_point_waker_calls_total",
+                "attributed waker calls per marker and wait point",
+                &[Self::MARKER_LABEL, Self::WAIT_POINT_LABEL],
+            ),
+            previous_snapshot: Mutex::new(RuntimeTraceMetricsSnapshot::default()),
+        }
+    }
+
+    pub(super) fn register(&self, registry: &Registry) {
+        registry
+            .register(Box::new(self.tasks_created.clone()))
+            .unwrap();
+        registry
+            .register(Box::new(self.task_polls.clone()))
+            .unwrap();
+        registry
+            .register(Box::new(self.task_schedules.clone()))
+            .unwrap();
+        registry
+            .register(Box::new(self.task_busy_seconds.clone()))
+            .unwrap();
+        registry
+            .register(Box::new(self.task_attributed_waker_calls.clone()))
+            .unwrap();
+        registry
+            .register(Box::new(self.wait_point_waker_calls.clone()))
+            .unwrap();
+    }
+
+    fn update_snapshot(&self, snapshot: &RuntimeTraceMetricsSnapshot) {
+        let mut previous_snapshot = self.previous_snapshot.lock().unwrap();
+        for marker in &snapshot.markers {
+            let previous_marker = previous_snapshot
+                .markers
+                .iter()
+                .find(|previous| previous.marker == marker.marker);
+            let marker_labels = &[marker.marker.as_str()];
+
+            self.tasks_created.with_label_values(marker_labels).inc_by(
+                marker
+                    .tasks_created
+                    .saturating_sub(previous_marker.map_or(0, |previous| previous.tasks_created)),
+            );
+            self.task_polls.with_label_values(marker_labels).inc_by(
+                marker
+                    .poll_count
+                    .saturating_sub(previous_marker.map_or(0, |previous| previous.poll_count)),
+            );
+            self.task_schedules.with_label_values(marker_labels).inc_by(
+                marker
+                    .scheduled_count
+                    .saturating_sub(previous_marker.map_or(0, |previous| previous.scheduled_count)),
+            );
+            self.task_busy_seconds
+                .with_label_values(marker_labels)
+                .inc_by(
+                    (marker.busy_seconds
+                        - previous_marker.map_or(0.0, |previous| previous.busy_seconds))
+                    .max(0.0),
+                );
+            self.task_attributed_waker_calls
+                .with_label_values(marker_labels)
+                .inc_by(marker.attributed_waker_calls.saturating_sub(
+                    previous_marker.map_or(0, |previous| previous.attributed_waker_calls),
+                ));
+
+            for wait_point in &marker.wait_points {
+                let previous_waker_calls = previous_marker
+                    .and_then(|previous| {
+                        previous
+                            .wait_points
+                            .iter()
+                            .find(|previous| previous.wait_point == wait_point.wait_point)
+                    })
+                    .map_or(0, |previous| previous.waker_calls);
+                self.wait_point_waker_calls
+                    .with_label_values(&[marker.marker.as_str(), wait_point.wait_point.as_str()])
+                    .inc_by(wait_point.waker_calls.saturating_sub(previous_waker_calls));
+            }
+        }
+        *previous_snapshot = snapshot.clone();
+    }
+}
+
+/// Flushes runtime trace summaries periodically and on shutdown.
+/// With metrics enabled, it also exports a Prometheus snapshot.
 pub struct RuntimeTraceMonitor {
     #[cfg(all(feature = "metrics", feature = "tracing"))]
     prometheus_metrics: Arc<PrometheusMetrics>,
@@ -47,8 +190,88 @@ impl FlushableMonitor for RuntimeTraceMonitor {
         log_runtime_trace!("{}", summary.trim_end());
 
         #[cfg(all(feature = "metrics", feature = "tracing"))]
-        if let Some(snapshot) = runtime_trace::snapshot_global() {
-            self.prometheus_metrics.set_runtime_trace_metrics(&snapshot);
+        if let Some(snapshot) = runtime_trace::snapshot_metrics() {
+            self.prometheus_metrics
+                .runtime_trace_metrics()
+                .update_snapshot(&snapshot);
         }
+    }
+}
+
+#[cfg(all(test, feature = "metrics", feature = "tracing"))]
+mod tests {
+    use std::collections::HashMap;
+
+    use prometheus::TextEncoder;
+
+    use super::*;
+    use crate::runtime_trace::{
+        MarkerMetricsSnapshot, RuntimeTraceMetricsSnapshot, WaitPointMetricsSnapshot,
+    };
+
+    #[test]
+    fn exports_runtime_trace_metrics_by_marker_and_wait_point() {
+        let config = MetricsConfig {
+            http_host: "127.0.0.1".to_owned(),
+            http_port: 0,
+            workers: 1,
+            metrics_labels: HashMap::new(),
+        };
+        let registry = Registry::new();
+        let metrics = RuntimeTraceMetrics::new(&config);
+        metrics.register(&registry);
+        let first_snapshot = RuntimeTraceMetricsSnapshot {
+            markers: vec![MarkerMetricsSnapshot {
+                marker: "task.extractor_worker".to_owned(),
+                tasks_created: 1,
+                poll_count: 1084,
+                scheduled_count: 1083,
+                busy_seconds: 0.125,
+                attributed_waker_calls: 7,
+                wait_points: vec![WaitPointMetricsSnapshot {
+                    wait_point: "dtqueue.not_empty.wait".to_owned(),
+                    waker_calls: 7,
+                }],
+            }],
+        };
+        metrics.update_snapshot(&first_snapshot);
+        metrics.update_snapshot(&first_snapshot);
+        metrics.update_snapshot(&RuntimeTraceMetricsSnapshot {
+            markers: vec![MarkerMetricsSnapshot {
+                marker: "task.extractor_worker".to_owned(),
+                tasks_created: 2,
+                poll_count: 1090,
+                scheduled_count: 1089,
+                busy_seconds: 0.25,
+                attributed_waker_calls: 9,
+                wait_points: vec![WaitPointMetricsSnapshot {
+                    wait_point: "dtqueue.not_empty.wait".to_owned(),
+                    waker_calls: 9,
+                }],
+            }],
+        });
+
+        let mut output = String::new();
+        TextEncoder::new()
+            .encode_utf8(&registry.gather(), &mut output)
+            .unwrap();
+
+        assert!(output
+            .contains("runtime_trace_tasks_created_total{marker=\"task.extractor_worker\"} 2"));
+        assert!(output
+            .contains("runtime_trace_task_polls_total{marker=\"task.extractor_worker\"} 1090"));
+        assert!(output
+            .contains("runtime_trace_task_schedules_total{marker=\"task.extractor_worker\"} 1089"));
+        assert!(output.contains(
+            "runtime_trace_task_busy_seconds_total{marker=\"task.extractor_worker\"} 0.25"
+        ));
+        assert!(output.contains(
+            "runtime_trace_task_attributed_waker_calls_total{marker=\"task.extractor_worker\"} 9"
+        ));
+        assert!(output.contains(
+            "runtime_trace_wait_point_waker_calls_total{marker=\"task.extractor_worker\",wait_point=\"dtqueue.not_empty.wait\"} 9"
+        ));
+        assert!(!output.contains("task_name="));
+        assert!(!output.contains("task.extractor_worker@"));
     }
 }

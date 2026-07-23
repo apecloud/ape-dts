@@ -19,7 +19,10 @@ use serde_json::{json, Value};
 use tokio_metrics::TaskMonitor;
 use tracing_subscriber::filter::Targets;
 
-use super::{GlobalTraceSnapshot, MarkerTraceSnapshot, TaskSummaryMode, TraceOutputFormat};
+use super::{
+    MarkerMetricsSnapshot, RuntimeTraceMetricsSnapshot, TaskSummaryMode, TraceOutputFormat,
+    WaitPointMetricsSnapshot,
+};
 
 impl TraceOutputFormat {
     fn from_u8(value: u8) -> Self {
@@ -209,33 +212,69 @@ pub fn dump_global_summary() -> Option<String> {
     Some(summary)
 }
 
-/// Machine-readable counterpart of [`dump_global_summary`] for periodic
-/// metric exports. Always aggregates by task marker, independent of the
-/// configured summary mode and output format.
-pub fn snapshot_global() -> Option<GlobalTraceSnapshot> {
+/// Returns cumulative marker and wait-point values for metric export.
+pub fn snapshot_metrics() -> Option<RuntimeTraceMetricsSnapshot> {
     if !is_enabled() {
         return None;
     }
 
-    let generated_at = Utc::now().to_rfc3339_opts(SecondsFormat::Micros, true);
-    let total_waker_calls = wait_point_total(&collect_global_wait_point_counts());
-    let markers = collect_sorted_marker_snapshots()
-        .into_iter()
-        .map(|marker| MarkerTraceSnapshot {
-            marker: marker.marker.display(),
-            task_count: marker.task_count,
-            poll_count: marker.poll_count,
-            scheduled_count: marker.scheduled_count,
-            busy_ms: marker.busy_ns as f64 / 1_000_000.0,
-            waker_calls: wait_point_total(&marker.wait_point_waker_calls),
-        })
-        .collect();
+    let mut markers_by_name = HashMap::<&'static str, MarkerMetricsSnapshot>::new();
+    let mut busy_ns_by_name = HashMap::<&'static str, u64>::new();
+    for marker in collect_marker_snapshots() {
+        let snapshot = markers_by_name
+            .entry(marker.marker.name)
+            .or_insert_with(|| MarkerMetricsSnapshot {
+                marker: marker.marker.name.to_owned(),
+                ..Default::default()
+            });
+        snapshot.tasks_created = snapshot.tasks_created.saturating_add(marker.task_count);
+        snapshot.poll_count = snapshot.poll_count.saturating_add(marker.poll_count);
+        snapshot.scheduled_count = snapshot
+            .scheduled_count
+            .saturating_add(marker.scheduled_count);
+        busy_ns_by_name
+            .entry(marker.marker.name)
+            .and_modify(|busy_ns| *busy_ns = busy_ns.saturating_add(marker.busy_ns))
+            .or_insert(marker.busy_ns);
 
-    Some(GlobalTraceSnapshot {
-        generated_at,
-        total_waker_calls,
-        markers,
-    })
+        for (wait_point, count) in marker.wait_point_waker_calls {
+            snapshot.attributed_waker_calls = snapshot.attributed_waker_calls.saturating_add(count);
+            if let Some(existing) = snapshot
+                .wait_points
+                .iter_mut()
+                .find(|existing| existing.wait_point == wait_point.name)
+            {
+                existing.waker_calls = existing.waker_calls.saturating_add(count);
+            } else {
+                snapshot.wait_points.push(WaitPointMetricsSnapshot {
+                    wait_point: wait_point.name.to_owned(),
+                    waker_calls: count,
+                });
+            }
+        }
+    }
+
+    let mut markers = markers_by_name.into_values().collect::<Vec<_>>();
+    for marker in &mut markers {
+        marker.busy_seconds = busy_ns_by_name
+            .get(marker.marker.as_str())
+            .copied()
+            .unwrap_or_default() as f64
+            / 1_000_000_000.0;
+        marker.wait_points.sort_by(|a, b| {
+            b.waker_calls
+                .cmp(&a.waker_calls)
+                .then_with(|| a.wait_point.cmp(&b.wait_point))
+        });
+    }
+    markers.sort_by(|a, b| {
+        b.poll_count
+            .cmp(&a.poll_count)
+            .then_with(|| b.scheduled_count.cmp(&a.scheduled_count))
+            .then_with(|| a.marker.cmp(&b.marker))
+    });
+
+    Some(RuntimeTraceMetricsSnapshot { markers })
 }
 
 #[track_caller]
@@ -775,7 +814,7 @@ mod tests {
     }
 
     #[test]
-    fn trace_task_future_registers_marker_and_task_metrics() {
+    fn snapshot_metrics_aggregates_markers_and_wait_points_by_name() {
         let marker = test_marker("test.monitored_task");
         let mut future = Box::pin(trace_task_future_at(marker, YieldOnce(false)));
         let waker = noop_waker();
@@ -787,11 +826,46 @@ mod tests {
         let task = tasks()
             .iter()
             .find(|task| task.marker == marker)
+            .map(|task| Arc::clone(task.value()))
             .expect("traced task should be registered");
         let snapshot = task.snapshot();
         assert_eq!(snapshot.marker, marker);
         assert_eq!(snapshot.poll_count, 2);
         assert_eq!(snapshot.scheduled_count, 1);
+        let first_wait_point = test_wait_point("wait.shared");
+        task.record_wait_point_wake(first_wait_point);
+
+        let second_marker = test_marker("test.monitored_task");
+        assert_ne!(second_marker, marker);
+        let mut second_future = Box::pin(trace_task_future_at(second_marker, YieldOnce(false)));
+        assert_eq!(second_future.as_mut().poll(&mut cx), Poll::Pending);
+        assert_eq!(second_future.as_mut().poll(&mut cx), Poll::Ready(()));
+        let second_task = tasks()
+            .iter()
+            .find(|task| task.marker == second_marker)
+            .map(|task| Arc::clone(task.value()))
+            .expect("second traced task should be registered");
+        let second_wait_point = test_wait_point("wait.shared");
+        assert_ne!(second_wait_point, first_wait_point);
+        second_task.record_wait_point_wake(second_wait_point);
+
+        enable();
+        let metrics_snapshot = snapshot_metrics().expect("runtime trace should be enabled");
+        let marker_snapshots = metrics_snapshot
+            .markers
+            .iter()
+            .filter(|snapshot| snapshot.marker == marker.name)
+            .collect::<Vec<_>>();
+        assert_eq!(marker_snapshots.len(), 1);
+        assert_eq!(marker_snapshots[0].tasks_created, 2);
+        assert_eq!(marker_snapshots[0].poll_count, 4);
+        assert_eq!(marker_snapshots[0].scheduled_count, 2);
+        assert_eq!(marker_snapshots[0].attributed_waker_calls, 2);
+        assert_eq!(marker_snapshots[0].wait_points.len(), 1);
+        assert_eq!(marker_snapshots[0].wait_points[0].wait_point, "wait.shared");
+        assert_eq!(marker_snapshots[0].wait_points[0].waker_calls, 2);
+        assert!(!marker_snapshots[0].marker.contains('@'));
+        assert!(!marker_snapshots[0].wait_points[0].wait_point.contains('@'));
     }
 
     #[test]

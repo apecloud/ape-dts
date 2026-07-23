@@ -3,15 +3,13 @@ use std::{collections::BTreeMap, sync::Arc};
 
 use actix_web::{middleware::Logger, web, App, HttpResponse, HttpServer, Responder, Result};
 use dashmap::DashMap;
-#[cfg(feature = "tracing")]
-use prometheus::GaugeVec;
 use prometheus::{Gauge, Opts, Registry, TextEncoder};
 
+#[cfg(feature = "tracing")]
+use super::runtime_trace_monitor::RuntimeTraceMetrics;
 use crate::config::config_enums::{TaskKind, TaskType};
 use crate::config::metrics_config::MetricsConfig;
 use crate::monitor::task_metrics::TaskMetricsType;
-#[cfg(feature = "tracing")]
-use crate::runtime_trace::GlobalTraceSnapshot;
 
 pub struct PrometheusMetrics {
     registry: Arc<Registry>,
@@ -19,110 +17,7 @@ pub struct PrometheusMetrics {
     task_type: Option<TaskType>,
     config: MetricsConfig,
     #[cfg(feature = "tracing")]
-    runtime_trace_metrics: RuntimeTraceGauges,
-}
-
-/// Prometheus gauges for the tokio runtime trace, labeled by task marker
-/// (`name@file:line`). Markers are compile-time constants, so the label set
-/// is bounded and static per binary.
-#[cfg(feature = "tracing")]
-struct RuntimeTraceGauges {
-    waker_calls_total: Gauge,
-    marker_task_count: GaugeVec,
-    marker_poll_count: GaugeVec,
-    marker_scheduled_count: GaugeVec,
-    marker_busy_ms: GaugeVec,
-    marker_waker_calls: GaugeVec,
-}
-
-#[cfg(feature = "tracing")]
-impl RuntimeTraceGauges {
-    const MARKER_LABEL: &'static str = "marker";
-
-    fn new(config: &MetricsConfig) -> Self {
-        let gauge_vec = |name: &str, desc: &str| {
-            GaugeVec::new(
-                Opts::new(name, desc).const_labels(config.metrics_labels.to_owned()),
-                &[Self::MARKER_LABEL],
-            )
-            .unwrap()
-        };
-
-        Self {
-            waker_calls_total: Gauge::with_opts(
-                Opts::new(
-                    "runtime_trace_waker_calls_total",
-                    "total attributed waker calls across all traced wait points",
-                )
-                .const_labels(config.metrics_labels.to_owned()),
-            )
-            .unwrap(),
-            marker_task_count: gauge_vec(
-                "runtime_trace_marker_task_count",
-                "traced tokio task count per marker",
-            ),
-            marker_poll_count: gauge_vec(
-                "runtime_trace_marker_poll_count",
-                "cumulative poll count of traced tasks per marker",
-            ),
-            marker_scheduled_count: gauge_vec(
-                "runtime_trace_marker_scheduled_count",
-                "cumulative scheduled count of traced tasks per marker",
-            ),
-            marker_busy_ms: gauge_vec(
-                "runtime_trace_marker_busy_ms",
-                "cumulative busy milliseconds of traced tasks per marker",
-            ),
-            marker_waker_calls: gauge_vec(
-                "runtime_trace_marker_waker_calls",
-                "cumulative attributed waker calls per marker",
-            ),
-        }
-    }
-
-    fn register(&self, registry: &Registry) {
-        registry
-            .register(Box::new(self.waker_calls_total.clone()))
-            .unwrap();
-        registry
-            .register(Box::new(self.marker_task_count.clone()))
-            .unwrap();
-        registry
-            .register(Box::new(self.marker_poll_count.clone()))
-            .unwrap();
-        registry
-            .register(Box::new(self.marker_scheduled_count.clone()))
-            .unwrap();
-        registry
-            .register(Box::new(self.marker_busy_ms.clone()))
-            .unwrap();
-        registry
-            .register(Box::new(self.marker_waker_calls.clone()))
-            .unwrap();
-    }
-
-    fn set_snapshot(&self, snapshot: &GlobalTraceSnapshot) {
-        self.waker_calls_total
-            .set(snapshot.total_waker_calls as f64);
-        for marker in &snapshot.markers {
-            let labels = &[marker.marker.as_str()];
-            self.marker_task_count
-                .with_label_values(labels)
-                .set(marker.task_count as f64);
-            self.marker_poll_count
-                .with_label_values(labels)
-                .set(marker.poll_count as f64);
-            self.marker_scheduled_count
-                .with_label_values(labels)
-                .set(marker.scheduled_count as f64);
-            self.marker_busy_ms
-                .with_label_values(labels)
-                .set(marker.busy_ms);
-            self.marker_waker_calls
-                .with_label_values(labels)
-                .set(marker.waker_calls as f64);
-        }
-    }
+    runtime_trace_metrics: RuntimeTraceMetrics,
 }
 
 impl PrometheusMetrics {
@@ -132,14 +27,14 @@ impl PrometheusMetrics {
             metrics: DashMap::new(),
             task_type,
             #[cfg(feature = "tracing")]
-            runtime_trace_metrics: RuntimeTraceGauges::new(&config),
+            runtime_trace_metrics: RuntimeTraceMetrics::new(&config),
             config,
         }
     }
 
     #[cfg(feature = "tracing")]
-    pub fn set_runtime_trace_metrics(&self, snapshot: &GlobalTraceSnapshot) {
-        self.runtime_trace_metrics.set_snapshot(snapshot);
+    pub(super) fn runtime_trace_metrics(&self) -> &RuntimeTraceMetrics {
+        &self.runtime_trace_metrics
     }
 
     pub fn initialization(&self) -> &Self {
@@ -503,57 +398,5 @@ mod tests {
         assert!(output.contains("sinker_workers_busy 4"));
         assert!(output.contains("sinker_workers_per_drain_max 8"));
         assert!(output.contains("sinker_workers_per_drain_avg 6"));
-    }
-
-    #[cfg(feature = "tracing")]
-    #[test]
-    fn exports_runtime_trace_metrics_per_marker() {
-        use crate::runtime_trace::{GlobalTraceSnapshot, MarkerTraceSnapshot};
-
-        let prometheus = PrometheusMetrics::new(
-            None,
-            MetricsConfig {
-                http_host: "127.0.0.1".to_owned(),
-                http_port: 0,
-                workers: 1,
-                metrics_labels: HashMap::new(),
-            },
-        );
-        prometheus.initialization();
-
-        prometheus.set_runtime_trace_metrics(&GlobalTraceSnapshot {
-            generated_at: "2026-07-22T00:00:00Z".to_owned(),
-            total_waker_calls: 7,
-            markers: vec![MarkerTraceSnapshot {
-                marker: "task.extractor_worker@dt-task/src/task_runner.rs:682".to_owned(),
-                task_count: 1,
-                poll_count: 1084,
-                scheduled_count: 1083,
-                busy_ms: 144.096,
-                waker_calls: 7,
-            }],
-        });
-
-        let mut output = String::new();
-        TextEncoder::new()
-            .encode_utf8(&prometheus.registry.gather(), &mut output)
-            .unwrap();
-
-        assert!(output.contains("runtime_trace_waker_calls_total 7"));
-        assert!(output.contains(
-            "runtime_trace_marker_task_count{marker=\"task.extractor_worker@dt-task/src/task_runner.rs:682\"} 1"
-        ));
-        assert!(output.contains(
-            "runtime_trace_marker_poll_count{marker=\"task.extractor_worker@dt-task/src/task_runner.rs:682\"} 1084"
-        ));
-        assert!(output.contains(
-            "runtime_trace_marker_scheduled_count{marker=\"task.extractor_worker@dt-task/src/task_runner.rs:682\"} 1083"
-        ));
-        assert!(output.contains(
-            "runtime_trace_marker_busy_ms{marker=\"task.extractor_worker@dt-task/src/task_runner.rs:682\"} 144.096"
-        ));
-        assert!(output.contains(
-            "runtime_trace_marker_waker_calls{marker=\"task.extractor_worker@dt-task/src/task_runner.rs:682\"} 7"
-        ));
     }
 }

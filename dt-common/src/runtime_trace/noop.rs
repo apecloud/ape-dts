@@ -1,6 +1,6 @@
 //! Zero-cost passthroughs, compiled only without `feature = "tracing"`.
 
-use super::{GlobalTraceSnapshot, TaskSummaryMode, TraceOutputFormat};
+use super::{RuntimeTraceMetricsSnapshot, TaskSummaryMode, TraceOutputFormat};
 
 #[inline(always)]
 pub fn enable() {}
@@ -14,7 +14,7 @@ pub fn dump_global_summary() -> Option<String> {
 }
 
 #[inline(always)]
-pub fn snapshot_global() -> Option<GlobalTraceSnapshot> {
+pub fn snapshot_metrics() -> Option<RuntimeTraceMetricsSnapshot> {
     None
 }
 

@@ -415,8 +415,8 @@ and `resume_config_file` are rejected; migrate them to `resume_type=from_log`, `
 
 The runtime trace summary is dumped periodically (every `pipeline.checkpoint_interval_secs`)
 to the runtime trace log, including a final dump on task shutdown, so long-running CDC tasks
-get continuous diagnostics. When both `metrics` and `tracing` features are enabled, per-marker
-trace gauges (`runtime_trace_*`) are also exposed on the Prometheus `/metrics` endpoint.
+get continuous diagnostics. When both `metrics` and `tracing` features are enabled, per-marker and
+per-wait-point trace counters (`runtime_trace_*`) are also exposed on the Prometheus `/metrics` endpoint.
 
 # [metacenter]
 

@@ -62,34 +62,31 @@ impl FromStr for TaskSummaryMode {
     }
 }
 
-/// Structured, machine-readable view of the aggregated runtime trace state.
-///
-/// Unlike [`dump_global_summary`], which renders a human-oriented report
-/// honoring the configured summary mode and output format, the snapshot API
-/// always aggregates by task marker and is meant for periodic metric exports
-/// (e.g. Prometheus). All counters are cumulative since process start.
+/// Marker-aggregated runtime trace snapshot for metric export.
+/// Values are cumulative since process start and omit source locations.
 #[derive(Clone, Debug, Default)]
-pub struct GlobalTraceSnapshot {
-    pub generated_at: String,
-    pub total_waker_calls: u64,
-    pub markers: Vec<MarkerTraceSnapshot>,
+pub struct RuntimeTraceMetricsSnapshot {
+    pub markers: Vec<MarkerMetricsSnapshot>,
 }
 
 #[derive(Clone, Debug, Default)]
-pub struct MarkerTraceSnapshot {
-    /// `name@file:line` of the traced task marker.
+pub struct MarkerMetricsSnapshot {
     pub marker: String,
-    pub task_count: u64,
+    pub tasks_created: u64,
     pub poll_count: u64,
     pub scheduled_count: u64,
-    pub busy_ms: f64,
+    pub busy_seconds: f64,
+    pub attributed_waker_calls: u64,
+    pub wait_points: Vec<WaitPointMetricsSnapshot>,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct WaitPointMetricsSnapshot {
+    pub wait_point: String,
     pub waker_calls: u64,
 }
 
-// The whole implementation is selected at module level: `traced` compiles the
-// real instrumentation, `noop` compiles zero-cost passthroughs. Callers stay
-// free of `#[cfg]` noise; each implementation method is defined exactly once
-// per module instead of interleaving feature/not(feature) variants.
+// Select one implementation here to keep feature branches out of callers.
 #[cfg(not(feature = "tracing"))]
 mod noop;
 #[cfg(feature = "tracing")]
@@ -98,11 +95,11 @@ mod traced;
 #[cfg(feature = "tracing")]
 pub use traced::{
     dump_global_summary, enable, init_tracing, instrument_wait, set_output_format,
-    set_task_summary_mode, snapshot_global, trace_task_future,
+    set_task_summary_mode, snapshot_metrics, trace_task_future,
 };
 
 #[cfg(not(feature = "tracing"))]
 pub use noop::{
     dump_global_summary, enable, init_tracing, instrument_wait, set_output_format,
-    set_task_summary_mode, snapshot_global, trace_task_future,
+    set_task_summary_mode, snapshot_metrics, trace_task_future,
 };
