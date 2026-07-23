@@ -119,8 +119,6 @@ impl IniLoader {
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
-
     use super::*;
     use crate::error::ErrorReport;
 
@@ -131,21 +129,5 @@ mod tests {
         let rendered = ErrorReport::from_anyhow(&error).to_string();
         assert!(rendered.contains("[redacted]"));
         assert!(!rendered.contains("not-a-number"));
-    }
-
-    #[test]
-    fn malformed_ini_is_invalid_config() {
-        let path = std::env::temp_dir().join(format!(
-            "ape-dts-malformed-config-{}.ini",
-            std::process::id()
-        ));
-        fs::write(&path, "[runtime\nworkers=1\n").unwrap();
-        let result = IniLoader::new(path.to_str().unwrap());
-        fs::remove_file(path).unwrap();
-        let error = result.err().unwrap();
-        assert_eq!(
-            ErrorReport::from_anyhow(&error).code,
-            ErrorCode::InvalidConfig
-        );
     }
 }

@@ -1,9 +1,8 @@
 use sqlx::error::ErrorKind;
 
 use super::{
-    super::{ErrorCode, ErrorObject, OriginError},
-    classification::{classify_mysql_code, classify_postgres_code},
-    ProviderErrorClassification,
+    super::{ClassifyError, DtErrorContext, ErrorCode, ErrorObject, OriginError},
+    classification::{classify_mysql_code, classify_postgres_code, provider_context},
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -23,10 +22,7 @@ impl SqlxProvider {
     }
 }
 
-pub fn classify_sqlx_error(
-    error: &sqlx::Error,
-    provider: SqlxProvider,
-) -> ProviderErrorClassification {
+pub fn classify_sqlx_error(error: &sqlx::Error, provider: SqlxProvider) -> DtErrorContext {
     let provider = infer_provider(error, provider);
     let mut code = None;
     let mut origin_code = None;
@@ -62,8 +58,17 @@ pub fn classify_sqlx_error(
         _ => {}
     }
 
-    ProviderErrorClassification::new(code, OriginError::new(provider.as_str(), origin_code))
-        .object(object)
+    let context = provider_context(code, OriginError::new(provider.as_str(), origin_code));
+    match object {
+        Some(object) => context.object(object),
+        None => context,
+    }
+}
+
+impl ClassifyError for sqlx::Error {
+    fn classify(&self) -> DtErrorContext {
+        classify_sqlx_error(self, SqlxProvider::Unknown)
+    }
 }
 
 fn infer_provider(error: &sqlx::Error, provider: SqlxProvider) -> SqlxProvider {
@@ -125,59 +130,28 @@ mod tests {
     }
 
     #[test]
-    fn classifies_provider_codes() {
-        assert_eq!(
-            classify(SqlxProvider::Postgres, "42P01"),
-            Some(ErrorCode::ObjectNotFound)
-        );
-        assert_eq!(
-            classify(SqlxProvider::MySql, "1146"),
-            Some(ErrorCode::ObjectNotFound)
-        );
-        assert_eq!(
-            classify(SqlxProvider::Postgres, "3D000"),
-            Some(ErrorCode::DatabaseNotFound)
-        );
-        assert_eq!(
-            classify(SqlxProvider::MySql, "1049"),
-            Some(ErrorCode::DatabaseNotFound)
-        );
-        assert_eq!(
-            classify(SqlxProvider::Postgres, "28P01"),
-            Some(ErrorCode::AuthenticationFailed)
-        );
-        assert_eq!(
-            classify(SqlxProvider::MySql, "1045"),
-            Some(ErrorCode::AuthenticationFailed)
-        );
-        assert_eq!(
-            classify(SqlxProvider::Postgres, "42501"),
-            Some(ErrorCode::PermissionDenied)
-        );
-        assert_eq!(
-            classify(SqlxProvider::MySql, "1142"),
-            Some(ErrorCode::PermissionDenied)
-        );
-        assert_eq!(
-            classify(SqlxProvider::Postgres, "08006"),
-            Some(ErrorCode::ConnectionFailed)
-        );
-        assert_eq!(
-            classify(SqlxProvider::Postgres, "42703"),
-            Some(ErrorCode::ObjectNotFound)
-        );
-        assert_eq!(
-            classify(SqlxProvider::MySql, "2003"),
-            Some(ErrorCode::ConnectionFailed)
-        );
-        assert_eq!(
-            classify(SqlxProvider::MySql, "1227"),
-            Some(ErrorCode::PermissionDenied)
-        );
-    }
+    fn classifies_database_errors() {
+        for (provider, provider_code, expected) in [
+            (SqlxProvider::Postgres, "42P01", ErrorCode::ObjectNotFound),
+            (SqlxProvider::MySql, "1146", ErrorCode::ObjectNotFound),
+            (SqlxProvider::Postgres, "3D000", ErrorCode::DatabaseNotFound),
+            (SqlxProvider::MySql, "1049", ErrorCode::DatabaseNotFound),
+            (
+                SqlxProvider::Postgres,
+                "28P01",
+                ErrorCode::AuthenticationFailed,
+            ),
+            (SqlxProvider::MySql, "1045", ErrorCode::AuthenticationFailed),
+            (SqlxProvider::Postgres, "42501", ErrorCode::PermissionDenied),
+            (SqlxProvider::MySql, "1142", ErrorCode::PermissionDenied),
+            (SqlxProvider::Postgres, "08006", ErrorCode::ConnectionFailed),
+            (SqlxProvider::Postgres, "42703", ErrorCode::ObjectNotFound),
+            (SqlxProvider::MySql, "2003", ErrorCode::ConnectionFailed),
+            (SqlxProvider::MySql, "1227", ErrorCode::PermissionDenied),
+        ] {
+            assert_eq!(classify(provider, provider_code), Some(expected));
+        }
 
-    #[test]
-    fn classifies_integrity_and_leaves_unknown_codes_unclassified() {
         assert_eq!(
             classify_database_error(
                 SqlxProvider::Postgres,
@@ -191,36 +165,27 @@ mod tests {
 
     #[test]
     fn classifies_sqlx_transport_errors() {
-        assert_eq!(
-            classify_sqlx_error(&sqlx::Error::PoolTimedOut, SqlxProvider::Postgres).code,
-            Some(ErrorCode::ConnectionTimeout)
-        );
-        assert_eq!(
-            classify_sqlx_error(&sqlx::Error::PoolClosed, SqlxProvider::Postgres).code,
-            Some(ErrorCode::ConnectionFailed)
-        );
-        assert_eq!(
-            classify_sqlx_error(
-                &sqlx::Error::Tls(Box::new(std::io::Error::other("invalid certificate"))),
-                SqlxProvider::Postgres,
-            )
-            .code,
-            Some(ErrorCode::TlsFailed)
-        );
-        assert_eq!(
-            classify_sqlx_error(&sqlx::Error::WorkerCrashed, SqlxProvider::Postgres).code,
-            Some(ErrorCode::WorkerFailed)
-        );
-
-        let configuration =
-            sqlx::Error::Configuration(Box::new(std::io::Error::other("invalid database URL")));
-        assert_eq!(
-            classify_sqlx_error(&configuration, SqlxProvider::Postgres).code,
-            Some(ErrorCode::InvalidConfig)
-        );
-        assert_eq!(
-            classify_sqlx_error(&sqlx::Error::RowNotFound, SqlxProvider::Postgres).code,
-            None
-        );
+        for (error, expected) in [
+            (
+                sqlx::Error::PoolTimedOut,
+                Some(ErrorCode::ConnectionTimeout),
+            ),
+            (sqlx::Error::PoolClosed, Some(ErrorCode::ConnectionFailed)),
+            (
+                sqlx::Error::Tls(Box::new(std::io::Error::other("invalid certificate"))),
+                Some(ErrorCode::TlsFailed),
+            ),
+            (sqlx::Error::WorkerCrashed, Some(ErrorCode::WorkerFailed)),
+            (
+                sqlx::Error::Configuration(Box::new(std::io::Error::other("invalid database URL"))),
+                Some(ErrorCode::InvalidConfig),
+            ),
+            (sqlx::Error::RowNotFound, None),
+        ] {
+            assert_eq!(
+                classify_sqlx_error(&error, SqlxProvider::Postgres).error_code(),
+                expected
+            );
+        }
     }
 }

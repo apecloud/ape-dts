@@ -56,8 +56,8 @@ pub(crate) mod metadata {
     use std::error::Error as StdError;
 
     use crate::error::{
-        classify_mongodb_error, classify_sqlx_error, DtError, DtErrorContext, DtErrorContextExt,
-        ErrorCode, ErrorObject, OriginError, SqlxProvider,
+        classify_sqlx_error, ClassifyError, DtError, DtErrorContext, DtErrorContextExt, ErrorCode,
+        ErrorObject, OriginError, SqlxProvider,
     };
     pub(crate) fn invariant(detail: impl Into<String>) -> anyhow::Error {
         DtError::InvariantViolated(detail.into()).into()
@@ -66,11 +66,11 @@ pub(crate) mod metadata {
         error: mongodb::error::Error,
         default_code: ErrorCode,
     ) -> anyhow::Error {
-        let context = classify_mongodb_error(&error).into_context();
+        let context = error.classify();
         error.with_code(default_code).with_context(context)
     }
     pub(crate) fn postgres_sqlx(error: sqlx::Error, default_code: ErrorCode) -> anyhow::Error {
-        let context = classify_sqlx_error(&error, SqlxProvider::Postgres).into_context();
+        let context = classify_sqlx_error(&error, SqlxProvider::Postgres);
         error.with_code(default_code).with_context(context)
     }
     pub(crate) fn row_conversion_error(

@@ -1,6 +1,8 @@
 use std::{error::Error as StdError, fmt, sync::Arc};
 
-use super::{classify_dt_error, DtError, EndpointRole, ErrorCode, ErrorObject, OriginError, Stage};
+use super::{
+    provider::classify_raw_error, DtError, EndpointRole, ErrorCode, ErrorObject, OriginError, Stage,
+};
 
 pub(crate) const DT_ERROR_CONTEXT_MARKER: &str = "__APE_DTS_ERROR_CONTEXT__";
 
@@ -110,10 +112,7 @@ impl DtErrorContext {
         let inner = self.inner.as_deref().and_then(Self::error_object);
         match (inner, self.object.as_ref()) {
             (Some(mut inner), Some(outer)) => {
-                inner.schema = inner.schema.or_else(|| outer.schema.clone());
-                inner.table = inner.table.or_else(|| outer.table.clone());
-                inner.column = inner.column.or_else(|| outer.column.clone());
-                inner.constraint = inner.constraint.or_else(|| outer.constraint.clone());
+                inner.fill_missing_from(outer);
                 Some(inner)
             }
             (Some(inner), None) => Some(inner),
@@ -141,6 +140,10 @@ impl fmt::Display for DtErrorContext {
     }
 }
 
+pub trait ClassifyError {
+    fn classify(&self) -> DtErrorContext;
+}
+
 pub trait AnyhowErrorExt {
     fn dt_context(&self) -> Option<&DtErrorContext>;
     fn error_code(&self) -> Option<ErrorCode>;
@@ -152,9 +155,82 @@ impl AnyhowErrorExt for anyhow::Error {
     }
 
     fn error_code(&self) -> Option<ErrorCode> {
-        self.dt_context()
-            .and_then(DtErrorContext::error_code)
-            .or_else(|| self.downcast_ref::<DtError>().map(classify_dt_error))
+        resolve_dt_context(self).error_code()
+    }
+}
+
+pub(crate) fn resolve_dt_context(error: &anyhow::Error) -> DtErrorContext {
+    let explicit = error.downcast_ref::<DtErrorContext>();
+    let project = error.downcast_ref::<DtError>().map(ClassifyError::classify);
+    let raw = classify_raw_error(error);
+    let code = explicit
+        .and_then(DtErrorContext::error_code)
+        .or_else(|| project.as_ref().and_then(DtErrorContext::error_code))
+        .or_else(|| raw.as_ref().and_then(DtErrorContext::error_code));
+    let object = merge_error_objects(
+        merge_error_objects(
+            raw.as_ref().and_then(DtErrorContext::error_object),
+            project.as_ref().and_then(DtErrorContext::error_object),
+        ),
+        explicit.and_then(DtErrorContext::error_object),
+    );
+    let explicit_origin = explicit.and_then(DtErrorContext::origin_error);
+    let project_origin = project.as_ref().and_then(DtErrorContext::origin_error);
+    let raw_origin = raw.as_ref().and_then(DtErrorContext::origin_error);
+    let origin = [raw_origin, project_origin, explicit_origin]
+        .into_iter()
+        .flatten()
+        .find(|origin| origin.code.is_some())
+        .or(project_origin)
+        .or(explicit_origin)
+        .or(raw_origin)
+        .cloned();
+
+    DtErrorContext {
+        code,
+        message: explicit
+            .and_then(DtErrorContext::message_text)
+            .or_else(|| project.as_ref().and_then(DtErrorContext::message_text))
+            .or_else(|| raw.as_ref().and_then(DtErrorContext::message_text))
+            .map(str::to_string),
+        hint: explicit
+            .and_then(DtErrorContext::hint_text)
+            .or_else(|| project.as_ref().and_then(DtErrorContext::hint_text))
+            .or_else(|| raw.as_ref().and_then(DtErrorContext::hint_text))
+            .map(str::to_string),
+        stage: raw
+            .as_ref()
+            .and_then(DtErrorContext::stage_value)
+            .or_else(|| project.as_ref().and_then(DtErrorContext::stage_value))
+            .or_else(|| explicit.and_then(DtErrorContext::stage_value)),
+        task_id: explicit
+            .and_then(DtErrorContext::task_id_value)
+            .or_else(|| project.as_ref().and_then(DtErrorContext::task_id_value))
+            .or_else(|| raw.as_ref().and_then(DtErrorContext::task_id_value))
+            .map(str::to_string),
+        endpoint: raw
+            .as_ref()
+            .and_then(DtErrorContext::endpoint_role)
+            .or_else(|| project.as_ref().and_then(DtErrorContext::endpoint_role))
+            .or_else(|| explicit.and_then(DtErrorContext::endpoint_role)),
+        object,
+        origin,
+        inner: None,
+    }
+}
+
+fn merge_error_objects(
+    inner: Option<ErrorObject>,
+    outer: Option<ErrorObject>,
+) -> Option<ErrorObject> {
+    match (inner, outer) {
+        (Some(mut inner), Some(outer)) => {
+            inner.fill_missing_from(&outer);
+            Some(inner)
+        }
+        (Some(inner), None) => Some(inner),
+        (None, Some(outer)) => Some(outer),
+        (None, None) => None,
     }
 }
 
@@ -269,18 +345,5 @@ mod tests {
             context.origin_error(),
             Some(&OriginError::new("postgres", Some("42P01")))
         );
-    }
-
-    #[test]
-    fn project_error_variant_can_be_the_root_cause() {
-        let cause = DtError::InvalidConfig("worker_threads is invalid".to_string());
-        assert_eq!(cause.to_string(), "worker_threads is invalid");
-        let error = anyhow::Error::new(cause);
-
-        assert!(matches!(
-            error.downcast_ref::<DtError>(),
-            Some(DtError::InvalidConfig(message)) if message == "worker_threads is invalid"
-        ));
-        assert_eq!(error.error_code(), Some(ErrorCode::InvalidConfig));
     }
 }

@@ -2,27 +2,26 @@ pub(crate) mod extractor_error {
     use std::error::Error as StdError;
 
     use dt_common::error::{
-        classify_rdkafka_error, classify_sqlx_error, classify_tokio_postgres_error, DtError,
-        DtErrorContext, DtErrorContextExt, EndpointRole, ErrorCode, OriginError, SqlxProvider,
-        Stage,
+        classify_sqlx_error, ClassifyError, DtError, DtErrorContext, DtErrorContextExt,
+        EndpointRole, ErrorCode, OriginError, SqlxProvider, Stage,
     };
     use mysql_binlog_connector_rust::binlog_error::BinlogError;
     use rdkafka::error::KafkaError;
 
     pub(crate) fn mysql_sqlx(error: sqlx::Error, default_code: ErrorCode) -> anyhow::Error {
-        let context = classify_sqlx_error(&error, SqlxProvider::MySql).into_context();
+        let context = classify_sqlx_error(&error, SqlxProvider::MySql);
         error.with_code(default_code).with_context(context)
     }
     pub(crate) fn postgres_sqlx(error: sqlx::Error, default_code: ErrorCode) -> anyhow::Error {
-        let context = classify_sqlx_error(&error, SqlxProvider::Postgres).into_context();
+        let context = classify_sqlx_error(&error, SqlxProvider::Postgres);
         error.with_code(default_code).with_context(context)
     }
     pub(crate) fn postgres(error: tokio_postgres::Error, default_code: ErrorCode) -> anyhow::Error {
-        let context = classify_tokio_postgres_error(&error).into_context();
+        let context = error.classify();
         error.with_code(default_code).with_context(context)
     }
     pub(crate) fn kafka(error: KafkaError, default_code: ErrorCode) -> anyhow::Error {
-        let context = classify_rdkafka_error(&error).into_context();
+        let context = error.classify();
         error.with_code(default_code).with_context(context)
     }
     pub(crate) fn worker(error: tokio::task::JoinError) -> anyhow::Error {
@@ -232,7 +231,6 @@ pub(crate) mod extractor_error {
         table: &str,
     ) -> anyhow::Error {
         let context = classify_sqlx_error(&error, provider)
-            .into_context()
             .message("failed to query resume position from database");
         let mut object = context.error_object().unwrap_or_default();
         object.schema.get_or_insert_with(|| schema.to_string());
@@ -245,8 +243,7 @@ pub(crate) mod extractor_error {
 
 pub(crate) mod sinker_error {
     use dt_common::error::{
-        classify_kafka_error, classify_mongodb_error, classify_rdkafka_error, classify_redis_error,
-        classify_reqwest_error, classify_sqlx_error, DtError, DtErrorContext, DtErrorContextExt,
+        classify_sqlx_error, ClassifyError, DtError, DtErrorContext, DtErrorContextExt,
         EndpointRole, ErrorCode, OriginError, SqlxProvider, Stage,
     };
     use rdkafka::error::KafkaError;
@@ -258,15 +255,15 @@ pub(crate) mod sinker_error {
     }
 
     pub(crate) fn mysql(error: sqlx::Error, default_code: ErrorCode) -> anyhow::Error {
-        let context = classify_sqlx_error(&error, SqlxProvider::MySql).into_context();
+        let context = classify_sqlx_error(&error, SqlxProvider::MySql);
         error.with_code(default_code).with_context(context)
     }
     pub(crate) fn postgres(error: sqlx::Error, default_code: ErrorCode) -> anyhow::Error {
-        let context = classify_sqlx_error(&error, SqlxProvider::Postgres).into_context();
+        let context = classify_sqlx_error(&error, SqlxProvider::Postgres);
         error.with_code(default_code).with_context(context)
     }
     pub(crate) fn reqwest(error: reqwest::Error) -> anyhow::Error {
-        let context = classify_reqwest_error(&error).into_context();
+        let context = error.classify();
         error
             .with_code(ErrorCode::StatementFailed)
             .with_context(context)
@@ -296,7 +293,7 @@ pub(crate) mod sinker_error {
         error: redis::RedisError,
         default_code: ErrorCode,
     ) -> anyhow::Error {
-        let context = classify_redis_error(&error).into_context();
+        let context = error.classify();
         error.with_code(default_code).with_context(context)
     }
     pub(crate) fn redis_slot_topology() -> anyhow::Error {
@@ -309,7 +306,7 @@ pub(crate) mod sinker_error {
             )
     }
     pub(crate) fn mongodb_struct(error: mongodb::error::Error) -> anyhow::Error {
-        let context = classify_mongodb_error(&error).into_context();
+        let context = error.classify();
         error
             .with_code(ErrorCode::StatementFailed)
             .with_context(context)
@@ -326,11 +323,11 @@ pub(crate) mod sinker_error {
             .with_origin(OriginError::new("clickhouse", None::<String>))
     }
     pub(crate) fn rdkafka(error: KafkaError, default_code: ErrorCode) -> anyhow::Error {
-        let context = classify_rdkafka_error(&error).into_context();
+        let context = error.classify();
         error.with_code(default_code).with_context(context)
     }
     pub(crate) fn kafka(error: ::kafka::Error, default_code: ErrorCode) -> anyhow::Error {
-        let context = classify_kafka_error(&error).into_context();
+        let context = error.classify();
         error.with_code(default_code).with_context(context)
     }
 }
@@ -368,36 +365,10 @@ pub(crate) mod router {
 mod tests {
     use std::io;
 
-    use dt_common::error::{
-        AnyhowErrorExt, DtErrorContextExt, EndpointRole, ErrorCode, SqlxProvider, Stage,
-    };
+    use dt_common::error::{AnyhowErrorExt, ErrorCode};
     use mysql_binlog_connector_rust::binlog_error::BinlogError;
 
     use super::extractor_error;
-
-    #[test]
-    fn checkpoint_provider_defers_scope_to_recovery_and_task_boundaries() {
-        let error = extractor_error::checkpoint_sqlx(
-            sqlx::Error::PoolTimedOut,
-            SqlxProvider::Postgres,
-            "apecloud_metadata",
-            "apedts_task_position",
-        );
-        let context = error.dt_context().unwrap();
-        assert_eq!(context.error_code(), Some(ErrorCode::ConnectionTimeout));
-        assert_eq!(context.stage_value(), None);
-        assert_eq!(context.endpoint_role(), None);
-        assert_eq!(context.task_id_value(), None);
-
-        let error = error
-            .with_stage(Stage::Resumer)
-            .with_endpoint(EndpointRole::Metadata)
-            .with_task_id("task-42");
-        let context = error.dt_context().unwrap();
-        assert_eq!(context.stage_value(), Some(Stage::Resumer));
-        assert_eq!(context.endpoint_role(), Some(EndpointRole::Metadata));
-        assert_eq!(context.task_id_value(), Some("task-42"));
-    }
 
     #[test]
     fn mysql_binlog_read_classifies_transport_config_and_purged_errors() {

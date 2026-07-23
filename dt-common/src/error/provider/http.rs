@@ -1,18 +1,20 @@
 use super::{
-    super::{ErrorCode, OriginError},
-    ProviderErrorClassification,
+    super::{ClassifyError, DtErrorContext, ErrorCode, OriginError},
+    classification::provider_context,
 };
 
-pub fn classify_reqwest_error(error: &reqwest::Error) -> ProviderErrorClassification {
-    let code = if error.is_builder() {
-        Some(ErrorCode::InvalidConfig)
-    } else if error.is_timeout() {
-        Some(ErrorCode::ConnectionTimeout)
-    } else if error.is_connect() || error.is_request() {
-        Some(ErrorCode::ConnectionFailed)
-    } else {
-        None
-    };
-    let status = error.status().map(|status| status.as_u16().to_string());
-    ProviderErrorClassification::new(code, OriginError::new("http", status))
+impl ClassifyError for reqwest::Error {
+    fn classify(&self) -> DtErrorContext {
+        let code = if self.is_builder() {
+            Some(ErrorCode::InvalidConfig)
+        } else if self.is_timeout() {
+            Some(ErrorCode::ConnectionTimeout)
+        } else if self.is_connect() || self.is_request() {
+            Some(ErrorCode::ConnectionFailed)
+        } else {
+            None
+        };
+        let status = self.status().map(|status| status.as_u16().to_string());
+        provider_context(code, OriginError::new("http", status))
+    }
 }

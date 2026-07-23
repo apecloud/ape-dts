@@ -124,8 +124,9 @@ origin 都是可选字段。它实现 `Display`，但刻意不实现
 
 项目主动失败选择语义化的 `DtError` variant，并只挂载当前调用点真正掌握的 metadata。
 例如 `DtError::InvalidConfig(detail).with_stage(Stage::Bootstrap)` 创建根因并补充 stage，
-不再重复书写 `ErrorCode::InvalidConfig`。`classify_dt_error` 将每个 `DtError` variant 映射
-到稳定的默认错误码；新增 variant 时必须增加对应的 match 分支，无法静默落入兜底。
+不再重复书写 `ErrorCode::InvalidConfig`。`ClassifyError` 实现将每个 `DtError` variant 映射
+为 `DtErrorContext`，其中包含稳定的默认错误码和该 variant 固有的 metadata；新增 variant
+时必须增加对应的 match 分支，无法静默落入兜底。
 `DtError::Unclassified` 只用于项目主动产生、但暂时没有稳定分类的失败。
 
 同一 extension trait 也为 `anyhow::Error` 和已支持的 provider 错误类型实现。显式的
@@ -152,18 +153,21 @@ provider origin 不会仅因为外层再次设置而被替换。错误对象按�
 会保留 variant 对应的完整 `Display` 文本和类型化 payload，与 provider error 保留自身
 `Display`、source chain 和具体类型的方式一致。
 
-组件边界先借用原始 provider 错误完成分类，再通过 `DtErrorContext::attach` 挂载。
+组件边界应先借用原始 provider 错误完成分类，再通过 `DtErrorContext::attach` 挂载。
 得到的 `anyhow::Error` 既能 downcast 到 `DtErrorContext`，也能 downcast 到原始
-provider 错误类型。provider 错误一旦擦除为 `anyhow::Error` 就不得再次分类；分类必须
-发生在仍持有具体 provider 类型的第一个边界。
+provider 错误类型。如果受支持的 provider 错误越过边界时没有 typed metadata，统一的
+raw cause 分类器仍可从保留的具体错误类型恢复固有的 code、origin 和 object。它不会解析
+错误消息，也不会推断执行 scope。
 
 `ErrorReport` 是面向用户的边界表示。其文本格式使用 `ERROR`、`TASK`、`AFFECTED`、
 `DETAIL`、`HINT` 和 `DIAGNOSTIC` 等行。
 
-Provider 分类器统一位于 `dt-common::error::provider`。分类器根据 provider 原始错误码、
-类型化错误种类和 Rust 错误变体进行判断，禁止解析 provider 错误消息。
-`ProviderErrorClassification::into_context` 生成包含可选精确错误码、provider origin 和
-受影响对象的 frame。组件边界先挂载当前操作的默认错误码，再挂载 provider frame；
+Provider 分类器实现统一位于 `dt-common::error::provider`。它们通过 `ClassifyError` 根据
+provider 原始错误码、类型化错误种类和 Rust 错误变体进行判断，禁止解析 provider 错误
+消息。每个实现直接返回包含可选精确错误码、provider origin 和受影响对象的
+`DtErrorContext`。一个小型显式 registry 对 `anyhow::Error` 中保留的 provider cause 调用
+同一 trait。明确知道数据库类型的 SQLx 边界继续传入 `SqlxProvider`，保证 transport 错误的
+origin 精确；raw fallback 只使用 infer 分类。组件边界先挂载当前操作的默认错误码，再挂载 provider frame；
 因此精确的 provider 分类会覆盖默认码，未识别的 provider 错误会继承默认码。stage 和
 endpoint 位于这两层之外，原始 provider 错误保持不变。
 
@@ -179,9 +183,11 @@ stage、endpoint 和 task ID 在 provider 分类之外、仍明确知道其语�
 位于 `dt-common::error::provider`。
 
 `ErrorReport` 读取类型化 context 和错误链。它先使用最外层显式 context code；没有时，
-从 cause chain downcast 到 `DtError` 并调用 `classify_dt_error`。报告层不会尝试 provider
-分类。既不是 `DtError`、又没有显式 context code 的错误稳定输出 `IN999`。遗漏的
-provider 边界通过失败路径测试和代码评审暴露。
+从 cause chain downcast 到 `DtError` 并调用 `ClassifyError`；最后调用 registry 中的 raw
+provider 分类器。两条路径都返回 `DtErrorContext`，内部 resolver 使用相同优先级规则合并 metadata。
+显式业务 metadata 因此仍然具有最高优先级，已知 provider 错误也不会仅因为边界
+使用普通 `?` 而变成 `IN999`。不受支持或无法识别的 raw 错误仍输出 `IN999`。失败路径测试
+和代码评审仍需覆盖 raw provider 无法提供的操作默认码及调用点 metadata。
 
 `MD099 MetadataReadFailed` 只作为读取或解析端点 catalog、控制面元数据失败时的
 默认码。Schema/结构本身是迁移对象，并不代表所有结构错误都是元数据读取错误。对象
@@ -250,7 +256,7 @@ provider 原始错误码、constraint/table 元数据和源错误链。
 | 其他 MySQL binlog 解码失败 | `DB001` |
 
 Worker join 失败使用 `RT001`。在组件边界分类的 URL 和 YAML 解析错误使用 `CF002`；
-`DtError::Unclassified` 和未分类原始错误到达 `ErrorReport` 时都使用 `IN999`。本地文件
+`DtError::Unclassified` 和不受支持或无法识别的原始错误到达 `ErrorReport` 时都使用 `IN999`。本地文件
 系统 `std::io::Error` 使用 `IO001`；网络 I/O 必须在 provider 边界分类为 `CN001` 或
 `CN002`。用户主动中断的 CLI 操作使用 `RT002`。
 

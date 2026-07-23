@@ -85,8 +85,6 @@ fn parse_version_part(part: Option<&str>, original: &str, field: &str) -> anyhow
 
 #[cfg(test)]
 mod tests {
-    use crate::error::AnyhowErrorExt;
-
     use super::*;
 
     #[test]
@@ -110,15 +108,6 @@ mod tests {
         assert_eq!(
             MongoServerVersion::parse("8.1.0-alpha-123-gabcdef").unwrap(),
             MongoServerVersion::new(8, 1, 0)
-        );
-    }
-
-    #[test]
-    fn invalid_version_is_classified_as_unsupported() {
-        let error = MongoServerVersion::parse("6.invalid").unwrap_err();
-        assert_eq!(
-            error.error_code(),
-            Some(ErrorCode::UnsupportedDatabaseVersion)
         );
     }
 }

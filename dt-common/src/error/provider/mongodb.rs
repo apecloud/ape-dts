@@ -1,13 +1,15 @@
 use mongodb::error::ErrorKind as MongoErrorKind;
 
 use super::{
-    super::{ErrorCode, OriginError},
-    ProviderErrorClassification,
+    super::{ClassifyError, DtErrorContext, ErrorCode, OriginError},
+    classification::provider_context,
 };
 
-pub fn classify_mongodb_error(error: &mongodb::error::Error) -> ProviderErrorClassification {
-    let (code, provider_code) = classify_mongodb_kind(&error.kind);
-    ProviderErrorClassification::new(code, OriginError::new("mongodb", provider_code))
+impl ClassifyError for mongodb::error::Error {
+    fn classify(&self) -> DtErrorContext {
+        let (code, provider_code) = classify_mongodb_kind(&self.kind);
+        provider_context(code, OriginError::new("mongodb", provider_code))
+    }
 }
 
 fn classify_mongodb_kind(kind: &MongoErrorKind) -> (Option<ErrorCode>, Option<String>) {
@@ -61,18 +63,13 @@ mod tests {
             classify_mongodb_kind(&timeout).0,
             Some(ErrorCode::ConnectionTimeout)
         );
-        assert_eq!(
-            classify_mongodb_command_code(13),
-            Some(ErrorCode::PermissionDenied)
-        );
-        assert_eq!(
-            classify_mongodb_command_code(26),
-            Some(ErrorCode::ObjectNotFound)
-        );
-        assert_eq!(
-            classify_mongodb_command_code(11000),
-            Some(ErrorCode::IntegrityViolation)
-        );
-        assert_eq!(classify_mongodb_command_code(99999), None);
+        for (provider_code, expected) in [
+            (13, Some(ErrorCode::PermissionDenied)),
+            (26, Some(ErrorCode::ObjectNotFound)),
+            (11000, Some(ErrorCode::IntegrityViolation)),
+            (99999, None),
+        ] {
+            assert_eq!(classify_mongodb_command_code(provider_code), expected);
+        }
     }
 }

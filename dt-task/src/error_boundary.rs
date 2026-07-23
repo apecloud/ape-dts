@@ -6,17 +6,17 @@ pub(crate) fn invalid_task_config(detail: impl Into<String>) -> anyhow::Error {
 
 pub(crate) mod connection_error {
     use dt_common::error::{
-        classify_mongodb_error, classify_sqlx_error, DtError, DtErrorContextExt, ErrorCode,
-        SqlxProvider, Stage,
+        classify_sqlx_error, ClassifyError, DtError, DtErrorContextExt, ErrorCode, SqlxProvider,
+        Stage,
     };
     pub(crate) fn sqlx(error: sqlx::Error, provider: SqlxProvider) -> anyhow::Error {
-        let context = classify_sqlx_error(&error, provider).into_context();
+        let context = classify_sqlx_error(&error, provider);
         error
             .with_code(ErrorCode::ConnectionFailed)
             .with_context(context)
     }
     pub(crate) fn mongodb_config(error: mongodb::error::Error) -> anyhow::Error {
-        let context = classify_mongodb_error(&error).into_context();
+        let context = error.classify();
         error
             .with_code(ErrorCode::InvalidConfig)
             .with_context(context)
@@ -26,7 +26,7 @@ pub(crate) mod connection_error {
         error: sqlx::Error,
         provider: SqlxProvider,
     ) -> anyhow::Error {
-        let context = classify_sqlx_error(&error, provider).into_context();
+        let context = classify_sqlx_error(&error, provider);
         error
             .with_code(ErrorCode::MetadataReadFailed)
             .with_context(context)
@@ -62,7 +62,7 @@ pub(crate) mod sinker {
     use std::error::Error as StdError;
 
     use dt_common::error::{
-        classify_kafka_error, DtError, DtErrorContext, DtErrorContextExt, ErrorCode, Stage,
+        ClassifyError, DtError, DtErrorContext, DtErrorContextExt, ErrorCode, Stage,
     };
     pub(crate) fn missing_sinker_client() -> anyhow::Error {
         DtError::InvariantViolated(
@@ -83,7 +83,7 @@ pub(crate) mod sinker {
             .with_stage(Stage::Bootstrap)
     }
     pub(crate) fn kafka_error(error: kafka::Error, default_code: ErrorCode) -> anyhow::Error {
-        let context = classify_kafka_error(&error).into_context();
+        let context = error.classify();
         error.with_code(default_code).with_context(context)
     }
 }

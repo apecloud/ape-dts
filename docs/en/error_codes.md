@@ -144,7 +144,9 @@ Project-owned failures select a semantic `DtError` variant and add only the
 metadata known at that call site. For example,
 `DtError::InvalidConfig(detail).with_stage(Stage::Bootstrap)` creates the root
 cause and adds its stage; it does not repeat `ErrorCode::InvalidConfig`.
-`classify_dt_error` maps every `DtError` variant to its stable default code.
+The `ClassifyError` implementation maps every `DtError` variant to a
+`DtErrorContext` containing its stable default code and any metadata intrinsic
+to that variant.
 Adding a new variant therefore requires an explicit classifier arm and cannot
 silently fall through. `DtError::Unclassified` is reserved for a project-owned
 failure for which no stable classification is available.
@@ -186,24 +188,29 @@ chain. Project-owned `DtError` values retain their variant-specific full
 `Display` text and typed payload, just as provider errors retain their own
 `Display`, source chain, and concrete type.
 
-At a component boundary, a raw provider error is first classified by borrowing
+At a component boundary, a raw provider error should be classified by borrowing
 it, then attached with `DtErrorContext::attach`. The resulting `anyhow::Error`
 can be downcast both to `DtErrorContext` and to the original provider error
-type. Once a provider error has been erased to `anyhow::Error`, it must not be
-classified again; classification belongs at the first boundary that still has
-the concrete provider type.
+type. If a supported provider error crosses a boundary without typed metadata,
+the shared raw-cause classifier can still recover intrinsic code, origin, and
+object fields from the preserved concrete error type. It never parses error
+messages or infers execution scope.
 
 `ErrorReport` is the user-facing boundary representation. Its text form uses
 `ERROR`, `TASK`, `AFFECTED`, `DETAIL`, and `HINT` lines.
 
-Provider classifiers live under `dt-common::error::provider`. A classifier
-uses provider-native codes, typed error kinds, and Rust error variants; it must
-not parse provider messages. `ProviderErrorClassification::into_context`
-creates a metadata frame containing an optional recognized code, provider
-origin, and affected object. The component boundary first attaches its
-operation-specific default code, then attaches the provider frame so a
-recognized provider condition overrides that default. Stage and endpoint are
-added outside both frames, while the provider error itself remains unchanged.
+Provider classifier implementations live under `dt-common::error::provider`.
+They implement `ClassifyError` using provider-native codes, typed error kinds,
+and Rust error variants; they must not parse provider messages. Each
+implementation returns a `DtErrorContext` containing an optional recognized
+code, provider origin, and affected object. A small explicit registry applies
+the same trait to supported provider causes preserved in `anyhow::Error`.
+SQLx boundaries that know the database family keep passing `SqlxProvider` so
+transport errors retain an exact origin; raw fallback uses infer-only
+classification. The component boundary first
+attaches its operation-specific default code, then attaches the provider frame
+so a recognized provider condition overrides that default. Stage and endpoint
+are added outside both frames, while the provider error itself remains unchanged.
 
 Provider-specific metadata belongs in a small wrapper at the component
 boundary. The component assigns the operation-specific default code. Provider
@@ -222,10 +229,14 @@ contract in `dt-common::error`. Shared provider classifiers remain in
 
 `ErrorReport` reads the typed context and error chain. It first uses the
 outermost explicit context code; if none exists, it downcasts the cause chain
-to `DtError` and applies `classify_dt_error`. It never attempts provider
-classification. A non-`DtError` error that reaches the report without an
-explicit context code deterministically becomes `IN999`. Failure-path tests
-and code review expose missed provider boundaries.
+to `DtError` and applies `ClassifyError`; finally it applies the registered raw
+provider classifiers. Both paths return `DtErrorContext`, so the internal
+resolver merges their metadata using the same precedence rules. Explicit business
+metadata therefore remains authoritative,
+while a known provider error does not become `IN999` merely because a boundary
+used a plain `?`. Unsupported or unrecognized raw errors still become `IN999`.
+Failure-path tests and code review remain necessary for operation defaults and
+call-site metadata that no raw provider error can supply.
 
 `MD099 MetadataReadFailed` is only the default for reading or decoding endpoint
 catalog and control metadata. A schema object being migrated does not make every
@@ -301,8 +312,8 @@ Other initial provider mappings are:
 | Other MySQL binlog decoding failures | `DB001` |
 
 Worker join failures are `RT001`. URL and YAML parsing errors classified at
-their component boundary are `CF002`. `DtError::Unclassified` and an
-unclassified raw error reaching `ErrorReport` are `IN999`. A local filesystem
+their component boundary are `CF002`. `DtError::Unclassified` and an unsupported
+or unrecognized raw error reaching `ErrorReport` are `IN999`. A local filesystem
 `std::io::Error` is `IO001`; network I/O must be classified at its provider
 boundary so that it becomes `CN001` or `CN002` instead. User-interrupted CLI
 operations are `RT002`.

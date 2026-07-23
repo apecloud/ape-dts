@@ -26,7 +26,7 @@ pub(crate) mod report {
 pub(crate) mod mysql {
     use dt_common::error::{classify_sqlx_error, DtErrorContextExt, ErrorCode, SqlxProvider};
     pub(crate) fn mysql_precheck_error(error: sqlx::Error) -> anyhow::Error {
-        let context = classify_sqlx_error(&error, SqlxProvider::MySql).into_context();
+        let context = classify_sqlx_error(&error, SqlxProvider::MySql);
         error
             .with_code(ErrorCode::StatementFailed)
             .with_context(context)
@@ -36,7 +36,7 @@ pub(crate) mod mysql {
 pub(crate) mod postgres {
     use dt_common::error::{classify_sqlx_error, DtErrorContextExt, ErrorCode, SqlxProvider};
     pub(crate) fn postgres_precheck_error(error: sqlx::Error) -> anyhow::Error {
-        let context = classify_sqlx_error(&error, SqlxProvider::Postgres).into_context();
+        let context = classify_sqlx_error(&error, SqlxProvider::Postgres);
         error
             .with_code(ErrorCode::StatementFailed)
             .with_context(context)
@@ -44,14 +44,14 @@ pub(crate) mod postgres {
 }
 
 pub(crate) mod mongodb {
-    use dt_common::error::{classify_mongodb_error, DtError, DtErrorContextExt, ErrorCode};
+    use dt_common::error::{ClassifyError, DtError, DtErrorContextExt, ErrorCode};
 
     pub(crate) fn mongo_precheck_state_error() -> anyhow::Error {
         DtError::InvariantViolated("the MongoDB precheck client is not initialized".to_string())
             .into()
     }
     pub(crate) fn mongo_precheck_provider_error(error: mongodb::error::Error) -> anyhow::Error {
-        let context = classify_mongodb_error(&error).into_context();
+        let context = error.classify();
         error
             .with_code(ErrorCode::StatementFailed)
             .with_context(context)

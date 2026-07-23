@@ -1,34 +1,10 @@
-use super::super::{DtErrorContext, ErrorCode, ErrorObject, OriginError};
+use super::super::{DtErrorContext, ErrorCode, OriginError};
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ProviderErrorClassification {
-    pub code: Option<ErrorCode>,
-    pub origin: OriginError,
-    pub object: Option<ErrorObject>,
-}
-
-impl ProviderErrorClassification {
-    pub fn new(code: Option<ErrorCode>, origin: OriginError) -> Self {
-        Self {
-            code,
-            origin,
-            object: None,
-        }
-    }
-
-    pub fn object(mut self, object: Option<ErrorObject>) -> Self {
-        self.object = object;
-        self
-    }
-    pub fn into_context(self) -> DtErrorContext {
-        let mut context = DtErrorContext::new().origin(self.origin);
-        if let Some(code) = self.code {
-            context = context.code(code);
-        }
-        if let Some(object) = self.object {
-            context = context.object(object);
-        }
-        context
+pub(super) fn provider_context(code: Option<ErrorCode>, origin: OriginError) -> DtErrorContext {
+    let context = DtErrorContext::new().origin(origin);
+    match code {
+        Some(code) => context.code(code),
+        None => context,
     }
 }
 

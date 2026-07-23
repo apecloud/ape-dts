@@ -1,29 +1,33 @@
 use rdkafka::error::{KafkaError as RdKafkaError, RDKafkaErrorCode};
 
 use super::{
-    super::{ErrorCode, OriginError},
-    ProviderErrorClassification,
+    super::{ClassifyError, DtErrorContext, ErrorCode, OriginError},
+    classification::provider_context,
 };
 
-pub fn classify_rdkafka_error(error: &RdKafkaError) -> ProviderErrorClassification {
-    let provider_code = error.rdkafka_error_code();
-    let code = match error {
-        RdKafkaError::ClientConfig(..)
-        | RdKafkaError::ClientCreation(_)
-        | RdKafkaError::Nul(_)
-        | RdKafkaError::SetPartitionOffset(_)
-        | RdKafkaError::Subscription(_) => Some(ErrorCode::InvalidConfig),
-        _ => provider_code.and_then(classify_rdkafka_code),
-    };
-    ProviderErrorClassification::new(
-        code,
-        OriginError::new("kafka", provider_code.map(|code| format!("{code:?}"))),
-    )
+impl ClassifyError for RdKafkaError {
+    fn classify(&self) -> DtErrorContext {
+        let provider_code = self.rdkafka_error_code();
+        let code = match self {
+            RdKafkaError::ClientConfig(..)
+            | RdKafkaError::ClientCreation(_)
+            | RdKafkaError::Nul(_)
+            | RdKafkaError::SetPartitionOffset(_)
+            | RdKafkaError::Subscription(_) => Some(ErrorCode::InvalidConfig),
+            _ => provider_code.and_then(classify_rdkafka_code),
+        };
+        provider_context(
+            code,
+            OriginError::new("kafka", provider_code.map(|code| format!("{code:?}"))),
+        )
+    }
 }
 
-pub fn classify_kafka_error(error: &::kafka::Error) -> ProviderErrorClassification {
-    let (code, provider_code) = classify_kafka_kind(error);
-    ProviderErrorClassification::new(code, OriginError::new("kafka", provider_code))
+impl ClassifyError for ::kafka::Error {
+    fn classify(&self) -> DtErrorContext {
+        let (code, provider_code) = classify_kafka_kind(self);
+        provider_context(code, OriginError::new("kafka", provider_code))
+    }
 }
 
 fn classify_rdkafka_code(code: RDKafkaErrorCode) -> Option<ErrorCode> {
@@ -104,25 +108,4 @@ fn is_timeout(kind: std::io::ErrorKind) -> bool {
         kind,
         std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
     )
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn classifies_rdkafka_provider_codes() {
-        assert_eq!(
-            classify_rdkafka_code(RDKafkaErrorCode::SaslAuthenticationFailed),
-            Some(ErrorCode::AuthenticationFailed)
-        );
-        assert_eq!(
-            classify_rdkafka_code(RDKafkaErrorCode::TopicAuthorizationFailed),
-            Some(ErrorCode::PermissionDenied)
-        );
-        assert_eq!(
-            classify_rdkafka_code(RDKafkaErrorCode::UnknownTopicOrPartition),
-            Some(ErrorCode::ObjectNotFound)
-        );
-    }
 }

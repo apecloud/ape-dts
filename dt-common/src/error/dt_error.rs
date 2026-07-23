@@ -1,4 +1,4 @@
-use super::ErrorCode;
+use super::{ClassifyError, DtErrorContext, ErrorCode, OriginError};
 
 #[derive(Debug, thiserror::Error)]
 pub enum DtError {
@@ -84,34 +84,45 @@ pub enum DtError {
     Unclassified(String),
 }
 
-pub fn classify_dt_error(error: &DtError) -> ErrorCode {
-    match error {
-        DtError::MissingConfig(_) => ErrorCode::MissingConfig,
-        DtError::MissingConfigItem(_) => ErrorCode::MissingConfigItem,
-        DtError::InvalidConfig(_) => ErrorCode::InvalidConfig,
-        DtError::ConnectionFailed(_) => ErrorCode::ConnectionFailed,
-        DtError::ConnectionTimeout(_) => ErrorCode::ConnectionTimeout,
-        DtError::TlsFailed(_) => ErrorCode::TlsFailed,
-        DtError::AuthenticationFailed(_) => ErrorCode::AuthenticationFailed,
-        DtError::PermissionDenied(_) => ErrorCode::PermissionDenied,
-        DtError::PrerequisiteNotMet(_) => ErrorCode::PrerequisiteNotMet,
-        DtError::UnsupportedDatabaseVersion(_) => ErrorCode::UnsupportedDatabaseVersion,
-        DtError::CdcNotEnabled(_) => ErrorCode::CdcNotEnabled,
-        DtError::ReplicationCapacityExhausted(_) => ErrorCode::ReplicationCapacityExhausted,
-        DtError::UnsupportedTableStructure(_) => ErrorCode::UnsupportedTableStructure,
-        DtError::ObjectNotFound(_) => ErrorCode::ObjectNotFound,
-        DtError::DatabaseNotFound(_) => ErrorCode::DatabaseNotFound,
-        DtError::MetadataReadFailed(_) => ErrorCode::MetadataReadFailed,
-        DtError::StatementFailed(_)
-        | DtError::RedisRdbError(_)
-        | DtError::RedisCmdError(_)
-        | DtError::RedisResultError(_) => ErrorCode::StatementFailed,
-        DtError::IntegrityViolation(_) => ErrorCode::IntegrityViolation,
-        DtError::CheckpointReadFailed(_) => ErrorCode::CheckpointReadFailed,
-        DtError::IoFailed(_) => ErrorCode::IoFailed,
-        DtError::WorkerFailed(_) => ErrorCode::WorkerFailed,
-        DtError::OperationInterrupted(_) => ErrorCode::OperationInterrupted,
-        DtError::InvariantViolated(_) => ErrorCode::InvariantViolated,
-        DtError::Unclassified(_) => ErrorCode::Unclassified,
+impl ClassifyError for DtError {
+    fn classify(&self) -> DtErrorContext {
+        let code = match self {
+            DtError::MissingConfig(_) => ErrorCode::MissingConfig,
+            DtError::MissingConfigItem(_) => ErrorCode::MissingConfigItem,
+            DtError::InvalidConfig(_) => ErrorCode::InvalidConfig,
+            DtError::ConnectionFailed(_) => ErrorCode::ConnectionFailed,
+            DtError::ConnectionTimeout(_) => ErrorCode::ConnectionTimeout,
+            DtError::TlsFailed(_) => ErrorCode::TlsFailed,
+            DtError::AuthenticationFailed(_) => ErrorCode::AuthenticationFailed,
+            DtError::PermissionDenied(_) => ErrorCode::PermissionDenied,
+            DtError::PrerequisiteNotMet(_) => ErrorCode::PrerequisiteNotMet,
+            DtError::UnsupportedDatabaseVersion(_) => ErrorCode::UnsupportedDatabaseVersion,
+            DtError::CdcNotEnabled(_) => ErrorCode::CdcNotEnabled,
+            DtError::ReplicationCapacityExhausted(_) => ErrorCode::ReplicationCapacityExhausted,
+            DtError::UnsupportedTableStructure(_) => ErrorCode::UnsupportedTableStructure,
+            DtError::ObjectNotFound(_) => ErrorCode::ObjectNotFound,
+            DtError::DatabaseNotFound(_) => ErrorCode::DatabaseNotFound,
+            DtError::MetadataReadFailed(_) => ErrorCode::MetadataReadFailed,
+            DtError::StatementFailed(_)
+            | DtError::RedisRdbError(_)
+            | DtError::RedisCmdError(_)
+            | DtError::RedisResultError(_) => ErrorCode::StatementFailed,
+            DtError::IntegrityViolation(_) => ErrorCode::IntegrityViolation,
+            DtError::CheckpointReadFailed(_) => ErrorCode::CheckpointReadFailed,
+            DtError::IoFailed(_) => ErrorCode::IoFailed,
+            DtError::WorkerFailed(_) => ErrorCode::WorkerFailed,
+            DtError::OperationInterrupted(_) => ErrorCode::OperationInterrupted,
+            DtError::InvariantViolated(_) => ErrorCode::InvariantViolated,
+            DtError::Unclassified(_) => ErrorCode::Unclassified,
+        };
+        let context = DtErrorContext::new().code(code);
+        match self {
+            DtError::RedisRdbError(_)
+            | DtError::RedisCmdError(_)
+            | DtError::RedisResultError(_) => {
+                context.origin(OriginError::new("redis", None::<String>))
+            }
+            _ => context,
+        }
     }
 }

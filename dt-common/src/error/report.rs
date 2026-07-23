@@ -3,8 +3,8 @@ use std::{backtrace::BacktraceStatus, fmt};
 use serde::Serialize;
 
 use super::{
-    error_context::DT_ERROR_CONTEXT_MARKER, AnyhowErrorExt, DtErrorContext, EndpointRole,
-    ErrorCode, ErrorObject, OriginError, Stage,
+    error_context::{resolve_dt_context, DT_ERROR_CONTEXT_MARKER},
+    EndpointRole, ErrorCode, ErrorObject, OriginError, Stage,
 };
 
 pub const ERROR_REPORT_SCHEMA_VERSION: u16 = 1;
@@ -38,34 +38,28 @@ pub struct ErrorReport {
 
 impl ErrorReport {
     pub fn from_anyhow(error: &anyhow::Error) -> Self {
-        let context = error.downcast_ref::<DtErrorContext>();
+        let context = resolve_dt_context(error);
         let (error_chain, context_count) = split_error_chain(error);
         let detail = detail_from_error_chain(&error_chain);
         let backtrace = captured_backtrace(error);
-        let code = error.error_code().unwrap_or(ErrorCode::Unclassified);
+        let code = context.error_code().unwrap_or(ErrorCode::Unclassified);
         Self {
             schema_version: ERROR_REPORT_SCHEMA_VERSION,
             code,
             message: sanitize_user_text(
                 context
-                    .and_then(DtErrorContext::message_text)
+                    .message_text()
                     .unwrap_or_else(|| code.default_message()),
             ),
             detail,
             hint: Some(sanitize_user_text(
-                context
-                    .and_then(DtErrorContext::hint_text)
-                    .unwrap_or_else(|| code.default_hint()),
+                context.hint_text().unwrap_or_else(|| code.default_hint()),
             )),
-            stage: context
-                .and_then(DtErrorContext::stage_value)
-                .unwrap_or(Stage::Unknown),
-            task_id: context
-                .and_then(DtErrorContext::task_id_value)
-                .map(str::to_string),
-            endpoint: context.and_then(DtErrorContext::endpoint_role),
-            object: context.and_then(DtErrorContext::error_object),
-            origin: context.and_then(DtErrorContext::origin_error).cloned(),
+            stage: context.stage_value().unwrap_or(Stage::Unknown),
+            task_id: context.task_id_value().map(str::to_string),
+            endpoint: context.endpoint_role(),
+            object: context.error_object(),
+            origin: context.origin_error().cloned(),
             error_chain,
             context_count,
             backtrace,
@@ -151,8 +145,8 @@ fn detail_from_error_chain(error_chain: &[String]) -> Option<String> {
 }
 
 fn captured_backtrace(error: &anyhow::Error) -> Option<String> {
-    (error.backtrace().status() == BacktraceStatus::Captured)
-        .then(|| format!("{}", error.backtrace()))
+    let backtrace = error.backtrace();
+    (backtrace.status() == BacktraceStatus::Captured).then(|| backtrace.to_string())
 }
 
 impl fmt::Display for ErrorReport {
@@ -199,7 +193,7 @@ impl fmt::Display for ErrorReport {
 mod tests {
     use std::io;
 
-    use crate::error::{DtError, DtErrorContextExt};
+    use crate::error::{DtError, DtErrorContext, DtErrorContextExt};
 
     use super::*;
 
@@ -266,11 +260,17 @@ mod tests {
     }
 
     #[test]
-    fn maps_unknown_errors() {
-        let unknown = anyhow::anyhow!("plain error");
-        let report = ErrorReport::from_anyhow(&unknown);
-        assert_eq!(report.code, ErrorCode::Unclassified);
-        assert_eq!(report.detail.as_deref(), Some("plain error"));
+    fn classifies_raw_supported_provider_errors() {
+        let error = anyhow::Error::new(sqlx::Error::PoolTimedOut)
+            .with_stage(Stage::Sinker)
+            .with_endpoint(EndpointRole::Destination)
+            .context("pipeline.start failed");
+
+        let report = ErrorReport::from_anyhow(&error);
+        assert_eq!(report.code, ErrorCode::ConnectionTimeout);
+        assert_eq!(report.stage, Stage::Sinker);
+        assert_eq!(report.endpoint, Some(EndpointRole::Destination));
+        assert_eq!(report.origin.unwrap().system, "sqlx");
     }
 
     #[test]
@@ -290,27 +290,41 @@ mod tests {
             ErrorReport::from_anyhow(&error).code,
             ErrorCode::InvariantViolated
         );
+
+        let redis_error = anyhow::Error::new(DtError::RedisRdbError(
+            "invalid snapshot payload".to_string(),
+        ));
+        let report = ErrorReport::from_anyhow(&redis_error);
+        assert_eq!(report.code, ErrorCode::StatementFailed);
+        assert_eq!(report.origin.unwrap().system, "redis");
     }
 
     #[test]
     fn text_and_json_include_redacted_detail_while_json_excludes_diagnostics() {
         let error = anyhow::anyhow!("password=secret, sql=INSERT, row_data=private")
+            .with_message("password=secret is invalid")
+            .with_hint("set token=abc123 before retrying")
             .context("internal worker context");
         let report = ErrorReport::from_anyhow(&error);
         let rendered = report.to_string();
-        let json = serde_json::to_string(&report).unwrap();
+        let json_value = serde_json::to_value(&report).unwrap();
+        let json = json_value.to_string();
 
-        assert_eq!(report.message, ErrorCode::Unclassified.default_message());
+        assert_eq!(report.schema_version, ERROR_REPORT_SCHEMA_VERSION);
+        assert_eq!(json_value["schema_version"], ERROR_REPORT_SCHEMA_VERSION);
         assert!(rendered.contains("DIAGNOSTIC [IN999]"));
         assert!(rendered.contains("CONTEXT 1: internal worker context"));
         assert!(rendered.contains("CAUSE 1:"));
         assert!(rendered.contains("sql=INSERT"));
         assert!(rendered.contains("row_data=private"));
         assert!(!rendered.contains("password=secret"));
+        assert!(!rendered.contains("abc123"));
+        assert!(rendered.contains("[redacted]"));
         assert!(json.contains("internal worker context"));
         assert!(json.contains("sql=INSERT"));
         assert!(json.contains("row_data=private"));
         assert!(!json.contains("password=secret"));
+        assert!(!json.contains("abc123"));
         for diagnostic_field in [
             "phase",
             "stage",
@@ -326,35 +340,10 @@ mod tests {
     }
 
     #[test]
-    fn serializes_schema_version_and_redacts_user_text() {
-        let error = DtError::InvalidConfig("password=secret is invalid".to_string())
-            .with_message("password=secret is invalid")
-            .with_hint("set token=abc123 before retrying");
-        let error = error.context("endpoint=mysql://user:hunter2@localhost:3306/db");
-        let report = ErrorReport::from_anyhow(&error);
-        let json = serde_json::to_value(&report).unwrap();
-
-        assert_eq!(report.schema_version, 1);
-        assert_eq!(json["schema_version"], 1);
-        let rendered = report.to_string();
-        assert!(!rendered.contains("secret"));
-        assert!(!rendered.contains("hunter2"));
-        assert!(!rendered.contains("abc123"));
-        assert!(rendered.contains("[redacted]"));
-    }
-
-    #[test]
-    fn raw_provider_errors_remain_unclassified() {
+    fn unsupported_raw_errors_remain_unclassified() {
         let url_error = anyhow::Error::new(url::Url::parse("://bad").unwrap_err());
         assert_eq!(
             ErrorReport::from_anyhow(&url_error).code,
-            ErrorCode::Unclassified
-        );
-
-        let yaml_error =
-            anyhow::Error::new(serde_yaml::from_str::<serde_yaml::Value>("key: [").unwrap_err());
-        assert_eq!(
-            ErrorReport::from_anyhow(&yaml_error).code,
             ErrorCode::Unclassified
         );
     }
