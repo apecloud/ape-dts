@@ -1023,6 +1023,28 @@ impl MongoTestRunner {
         );
     }
 
+    pub async fn assert_dst_index_option_doc_contains(
+        &self,
+        db: &str,
+        tb: &str,
+        index_name: &str,
+        option: &str,
+        expected: Document,
+    ) {
+        let index = self.dst_index_doc(db, tb, index_name).await;
+        let value = index.get_document(option).unwrap();
+        assert!(
+            Self::document_contains(value, &expected),
+            "dst index option [{}] for {}.{} index {} should contain {:?}, actual: {:?}",
+            option,
+            db,
+            tb,
+            index_name,
+            expected,
+            value
+        );
+    }
+
     pub async fn assert_dst_collection_option_bool(
         &self,
         db: &str,

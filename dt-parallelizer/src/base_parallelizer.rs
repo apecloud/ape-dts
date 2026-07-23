@@ -270,9 +270,10 @@ mod tests {
 
     use async_mutex::Mutex;
 
-    use super::BaseParallelizer;
     use dt_common::{meta::dt_queue::DtQueue, monitor::counter::Counter};
     use dt_connector::{sinker::dummy_sinker::DummySinker, Sinker};
+
+    use super::BaseParallelizer;
 
     #[tokio::test]
     async fn pop_returns_none_when_queue_is_empty() {

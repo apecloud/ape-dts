@@ -202,6 +202,8 @@ pub fn build_task_config(
     ini.set("runtime", "log_dir", &runtime_log_dir.display().to_string());
 
     if create.preflight {
+        let do_cdc = matches!(create.mode, Mode::Cdc)
+            || (matches!(source_db, DbType::Redis) && matches!(create.mode, Mode::Snapshot));
         ini.set(
             "precheck",
             "do_struct_init",
@@ -211,15 +213,7 @@ pub fn build_task_config(
                 "false"
             },
         );
-        ini.set(
-            "precheck",
-            "do_cdc",
-            if matches!(create.mode, Mode::Cdc) {
-                "true"
-            } else {
-                "false"
-            },
-        );
+        ini.set("precheck", "do_cdc", if do_cdc { "true" } else { "false" });
     }
 
     for item in &create.set {
@@ -487,6 +481,7 @@ fn randomish_u64() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use dt_common::config::task_config::TaskConfig;
 
     fn paths() -> (&'static Path, &'static Path) {
         (
@@ -496,15 +491,69 @@ mod tests {
     }
 
     #[test]
+    fn default_snapshot_configs_load_for_all_cli_engines() {
+        let (log_dir, log4rs_file) = paths();
+        let cases = [
+            (
+                DbType::Mysql,
+                "mysql://127.0.0.1:3306",
+                "mysql://127.0.0.1:3307",
+            ),
+            (
+                DbType::Pg,
+                "postgres://127.0.0.1:5432/source",
+                "postgres://127.0.0.1:5433/target",
+            ),
+            (
+                DbType::Mongo,
+                "mongodb://127.0.0.1:27017",
+                "mongodb://127.0.0.1:27018",
+            ),
+            (
+                DbType::Redis,
+                "redis://127.0.0.1:6379",
+                "redis://127.0.0.1:6380",
+            ),
+        ];
+
+        for (db_type, source_url, target_url) in cases {
+            let create = CreateConfig {
+                task_name: format!("{}_default_snapshot", db_type.as_config_value()),
+                source_url: source_url.to_string(),
+                target_url: target_url.to_string(),
+                ..CreateConfig::default()
+            };
+            let config =
+                build_task_config(&create, &db_type, &db_type, log_dir, log4rs_file).unwrap();
+            let config_path = std::env::temp_dir().join(format!(
+                "dtscli-{}-{}-task-config.ini",
+                db_type.as_config_value(),
+                randomish_u64()
+            ));
+            std::fs::write(&config_path, config).unwrap();
+
+            let result = TaskConfig::new(config_path.to_str().unwrap());
+            let _ = std::fs::remove_file(&config_path);
+            if let Err(err) = result {
+                panic!(
+                    "default {} config should load without --set overrides: {err:#}",
+                    db_type.as_config_value()
+                );
+            }
+        }
+    }
+
+    #[test]
     fn preflight_flags_follow_task_mode() {
         let (log_dir, log4rs_file) = paths();
         let cases = [
-            (Mode::Struct, "true", "false"),
-            (Mode::Snapshot, "false", "false"),
-            (Mode::Cdc, "false", "true"),
+            (DbType::Mysql, Mode::Struct, "true", "false"),
+            (DbType::Mysql, Mode::Snapshot, "false", "false"),
+            (DbType::Mysql, Mode::Cdc, "false", "true"),
+            (DbType::Redis, Mode::Snapshot, "false", "true"),
         ];
 
-        for (mode, do_struct_init, do_cdc) in cases {
+        for (db_type, mode, do_struct_init, do_cdc) in cases {
             let create = CreateConfig {
                 task_name: "order_preflight".to_string(),
                 mode,
@@ -515,14 +564,8 @@ mod tests {
                 ..CreateConfig::default()
             };
 
-            let actual = build_task_config(
-                &create,
-                &DbType::Mysql,
-                &DbType::Mysql,
-                log_dir,
-                log4rs_file,
-            )
-            .unwrap();
+            let actual =
+                build_task_config(&create, &db_type, &db_type, log_dir, log4rs_file).unwrap();
 
             assert!(actual.contains(&format!(
                 "[precheck]\ndo_struct_init={do_struct_init}\ndo_cdc={do_cdc}\n"

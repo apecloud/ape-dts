@@ -92,6 +92,12 @@ impl MongoMerger {
             if let Some(ColValue::MongoDoc(doc)) = fields.get(MongoConstants::DOC) {
                 return MongoKey::from_doc(doc).map(|key| format!("id:{}", key));
             }
+            if let Some(ColValue::MongoRawDoc(doc)) = fields.get(MongoConstants::DOC) {
+                return MongoKey::from_raw_doc(doc)
+                    .ok()
+                    .flatten()
+                    .map(|key| format!("id:{}", key));
+            }
             None
         }
 
