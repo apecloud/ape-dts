@@ -8,16 +8,6 @@ mod test {
     use crate::test_runner::mongo_test_runner::MongoTestRunner;
     use crate::test_runner::test_base::TestBase;
 
-    fn invalid_utf8_raw_document(id_last_byte: u8) -> RawDocumentBuf {
-        let mut bytes = vec![
-            0x23, 0x00, 0x00, 0x00, 0x07, b'_', b'i', b'd', 0x00, 0x65, 0x73, 0x3a, 0x82, 0xfb,
-            0x2c, 0xe9, 0x83, 0x67, 0x45, 0xde, 0x01, 0x02, b'v', b'a', b'l', b'u', b'e', 0x00,
-            0x02, 0x00, 0x00, 0x00, 0xff, 0x00, 0x00,
-        ];
-        bytes[20] = id_last_byte;
-        RawDocumentBuf::from_bytes(bytes).unwrap()
-    }
-
     #[tokio::test]
     #[serial]
     async fn snapshot_basic_test() {
@@ -204,5 +194,15 @@ mod test {
         dst_expected_counts.insert(("test_db_1", "resume_document_tb_1"), 1);
         dst_expected_counts.insert(("test_db_1", "resume_minmax_in_log_tb_1"), 1);
         dst_expected_counts
+    }
+
+    fn invalid_utf8_raw_document(id_last_byte: u8) -> RawDocumentBuf {
+        let mut bytes = vec![
+            0x23, 0x00, 0x00, 0x00, 0x07, b'_', b'i', b'd', 0x00, 0x65, 0x73, 0x3a, 0x82, 0xfb,
+            0x2c, 0xe9, 0x83, 0x67, 0x45, 0xde, 0x01, 0x02, b'v', b'a', b'l', b'u', b'e', 0x00,
+            0x02, 0x00, 0x00, 0x00, 0xff, 0x00, 0x00,
+        ];
+        bytes[20] = id_last_byte;
+        RawDocumentBuf::from_bytes(bytes).unwrap()
     }
 }

@@ -8,8 +8,13 @@ use mongodb::{
 };
 use tokio::time::Instant;
 
-use crate::sinker::checkable_sinker::CheckableSink;
-use crate::{call_batch_fn, rdb_router::RdbRouter, sinker::base_sinker::BaseSinker, Sinker};
+use crate::{
+    call_batch_fn,
+    common::mongo::{changestream_parser, oplog_parser},
+    rdb_router::RdbRouter,
+    sinker::{base_sinker::BaseSinker, checkable_sinker::CheckableSink},
+    Sinker,
+};
 use dt_common::{
     log_error, log_warn,
     meta::{
@@ -218,10 +223,8 @@ impl MongoSinker {
         let shard_collection = self.target_shard_collection(row_data).await?;
         let mut filter = Document::new();
 
-        // Snapshot batch inserts are routed by mongos without client-side shard-key decoding.
-        // This filter is only needed by the single-row fallback after a batch error, where MongoDB
-        // requires the shard key for a deterministic upsert. Invalid UTF-8 in `_id` or shard-key
-        // values is outside the supported raw snapshot scope and may therefore fail here.
+        // Raw rows keep non-routing fields opaque. Invalid UTF-8 in `_id` or shard-key values is
+        // outside the supported scope and may therefore fail while building this filter.
         if let Some(shard_collection) = &shard_collection {
             for key in shard_collection.key.keys() {
                 if let Some(value) = raw_doc.get(key)? {
@@ -392,6 +395,125 @@ impl MongoSinker {
         Some(doc! { MongoConstants::ID: id.clone() })
     }
 
+    fn raw_value(doc: &RawDocumentBuf, key: &str) -> anyhow::Result<Option<Bson>> {
+        doc.get(key)?
+            .map(Bson::try_from)
+            .transpose()
+            .map_err(Into::into)
+    }
+
+    fn raw_id_filter(
+        document_key: Option<&Document>,
+        full_doc: Option<&RawDocumentBuf>,
+    ) -> anyhow::Result<Option<Document>> {
+        let id = if let Some(id) = document_key.and_then(|doc| doc.get(MongoConstants::ID)) {
+            Some(id.clone())
+        } else if let Some(full_doc) = full_doc {
+            Self::raw_value(full_doc, MongoConstants::ID)?
+        } else {
+            None
+        };
+        Ok(id.map(|id| doc! { MongoConstants::ID: id }))
+    }
+
+    async fn complete_shard_filter_with_raw_doc(
+        &mut self,
+        row_data: &RowData,
+        document_key: Option<&Document>,
+        full_doc: Option<&RawDocumentBuf>,
+        prefer_full_doc_shard_keys: bool,
+    ) -> anyhow::Result<Document> {
+        let Some(shard_collection) = self.target_shard_collection(row_data).await? else {
+            return Self::raw_id_filter(document_key, full_doc)?
+                .context("mongo raw doc missing `_id`");
+        };
+
+        let mut filter = Document::new();
+        if prefer_full_doc_shard_keys {
+            if let Some(full_doc) = full_doc {
+                for key in shard_collection.key.keys() {
+                    if let Some(value) = Self::raw_value(full_doc, key)? {
+                        filter.insert(key, value);
+                    }
+                }
+            }
+        }
+
+        if let Some(document_key) = document_key {
+            for (key, value) in document_key {
+                if !filter.contains_key(key) {
+                    filter.insert(key, value.clone());
+                }
+            }
+        }
+
+        if let Some(full_doc) = full_doc {
+            for key in shard_collection.key.keys() {
+                if !filter.contains_key(key) {
+                    if let Some(value) = Self::raw_value(full_doc, key)? {
+                        filter.insert(key, value);
+                    }
+                }
+            }
+            if !filter.contains_key(MongoConstants::ID) {
+                if let Some(value) = Self::raw_value(full_doc, MongoConstants::ID)? {
+                    filter.insert(MongoConstants::ID, value);
+                }
+            }
+        }
+
+        let missing_keys: Vec<_> = shard_collection
+            .key
+            .keys()
+            .filter(|key| !filter.contains_key(*key))
+            .cloned()
+            .collect();
+        if self.require_shard_key_filter && !missing_keys.is_empty() {
+            anyhow::bail!(
+                "mongo target collection [{}] is sharded, but raw row filter is missing shard key field(s): {:?}",
+                shard_collection.ns,
+                missing_keys
+            );
+        }
+        if filter.is_empty() {
+            anyhow::bail!(
+                "mongo target collection [{}] is sharded, but raw row filter is empty",
+                shard_collection.ns
+            );
+        }
+        Ok(filter)
+    }
+
+    async fn raw_shard_key_changed(
+        &mut self,
+        row_data: &RowData,
+        document_key: Option<&Document>,
+        pre_image: Option<&RawDocumentBuf>,
+        full_doc: Option<&RawDocumentBuf>,
+    ) -> anyhow::Result<bool> {
+        let Some(shard_collection) = self.target_shard_collection(row_data).await? else {
+            return Ok(false);
+        };
+        let Some(full_doc) = full_doc else {
+            return Ok(false);
+        };
+
+        for key in shard_collection.key.keys() {
+            let old_value = if let Some(pre_image) = pre_image {
+                Self::raw_value(pre_image, key)?
+            } else {
+                document_key.and_then(|doc| doc.get(key)).cloned()
+            };
+            let new_value = Self::raw_value(full_doc, key)?;
+            if (pre_image.is_some() && old_value != new_value)
+                || (pre_image.is_none() && old_value.is_some() && old_value != new_value)
+            {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
     async fn run_ddl(&mut self, ddl_data: &DdlData) -> anyhow::Result<()> {
         let mut command = query_to_command(&ddl_data.query)?;
         self.rewrite_ddl_command_namespace(ddl_data, &mut command);
@@ -524,18 +646,57 @@ impl MongoSinker {
                 RowType::Insert => {
                     let after = row_data.require_after()?;
                     if let Some(raw_doc) = Self::mongo_raw_doc(after, MongoConstants::DOC) {
-                        let query_doc = self.complete_raw_shard_filter(row_data, raw_doc).await?;
-                        let raw_collection = self
-                            .mongo_client
-                            .database(&row_data.schema)
-                            .collection::<RawDocumentBuf>(&row_data.tb);
-                        // Snapshot represents the complete source document. Use replacement here
-                        // so duplicate-key fallback converges exactly instead of retaining stale
-                        // target-only fields as `$set` would.
-                        raw_collection
-                            .replace_one(query_doc, raw_doc)
-                            .upsert(true)
-                            .await?;
+                        if let Some(document_key) =
+                            Self::mongo_doc(after, MongoConstants::DOCUMENT_KEY)
+                        {
+                            let raw_collection = self
+                                .mongo_client
+                                .database(&row_data.schema)
+                                .collection::<RawDocumentBuf>(&row_data.tb);
+                            if let Err(insert_error) = raw_collection.insert_one(raw_doc).await {
+                                match raw_doc.to_document() {
+                                    Ok(doc) => {
+                                        // Preserve the previous CDC duplicate-insert fallback:
+                                        // valid documents merge with `$set`, retaining target-only
+                                        // fields. Parsing only happens after the raw insert fails.
+                                        let query_doc = self
+                                            .complete_shard_filter(
+                                                row_data,
+                                                Some(document_key),
+                                                Some(&doc),
+                                            )
+                                            .await?;
+                                        let update_doc = doc! {MongoConstants::SET: doc};
+                                        self.upsert(&collection, query_doc, update_doc).await?;
+                                    }
+                                    Err(parse_error) => {
+                                        log_warn!(
+                                            "mongo CDC raw insert failed and cannot be converted to Document, use raw full-document replacement, schema: {}, table: {}, insert error: {}, parse error: {}",
+                                            row_data.schema,
+                                            row_data.tb,
+                                            insert_error,
+                                            parse_error
+                                        );
+                                        let query_doc = self
+                                            .complete_raw_shard_filter(row_data, raw_doc)
+                                            .await?;
+                                        self.replace_raw(&raw_collection, query_doc, raw_doc)
+                                            .await?;
+                                    }
+                                }
+                            }
+                        } else {
+                            // Snapshot rows have no documentKey marker and represent complete source
+                            // state, so duplicate fallback replaces stale target-only fields.
+                            let query_doc =
+                                self.complete_raw_shard_filter(row_data, raw_doc).await?;
+                            let raw_collection = self
+                                .mongo_client
+                                .database(&row_data.schema)
+                                .collection::<RawDocumentBuf>(&row_data.tb);
+                            self.replace_raw(&raw_collection, query_doc, raw_doc)
+                                .await?;
+                        }
                         rts.push((start_time.elapsed().as_millis() as u64, 1));
                     } else if let Some(doc) = Self::mongo_doc(after, MongoConstants::DOC) {
                         let query_doc = self
@@ -563,11 +724,257 @@ impl MongoSinker {
                             .await?;
                         collection.delete_one(query_doc).await?;
                         rts.push((start_time.elapsed().as_millis() as u64, 1));
+                    } else if let Some(raw_doc) = Self::mongo_raw_doc(before, MongoConstants::DOC) {
+                        let query_doc = self
+                            .complete_shard_filter_with_raw_doc(
+                                row_data,
+                                Self::mongo_doc(before, MongoConstants::DOCUMENT_KEY),
+                                Some(raw_doc),
+                                false,
+                            )
+                            .await?;
+                        collection.delete_one(query_doc).await?;
+                        rts.push((start_time.elapsed().as_millis() as u64, 1));
+                    }
+                }
+
+                RowType::Update
+                    if row_data
+                        .after
+                        .as_ref()
+                        .and_then(|after| {
+                            Self::mongo_raw_doc(after, MongoConstants::OPLOG_DIFF_DOC)
+                        })
+                        .is_some() =>
+                {
+                    let before = row_data.require_before()?;
+                    let after = row_data.require_after()?;
+                    let raw_oplog_diff = Self::mongo_raw_doc(after, MongoConstants::OPLOG_DIFF_DOC)
+                        .expect("raw Oplog update match guard checked the diff");
+                    let oplog_doc = raw_oplog_diff.to_document().with_context(|| {
+                        format!(
+                            "mongo oplog update cannot be converted to Document, schema: {}, table: {}",
+                            row_data.schema, row_data.tb
+                        )
+                    })?;
+                    let update_doc = oplog_parser::build_update_doc(&oplog_doc);
+                    if update_doc.is_empty() {
+                        log_error!(
+                            "update op_log is neither $set nor $unset, ignore, schema: {}, table: {}",
+                            row_data.schema,
+                            row_data.tb
+                        );
+                    } else {
+                        let before_doc = Self::mongo_doc(before, MongoConstants::DOC)
+                            .context("mongo raw oplog update missing document o2")?;
+                        let query_doc = self
+                            .complete_shard_filter(row_data, Some(before_doc), None)
+                            .await?;
+                        self.upsert(&collection, query_doc, update_doc).await?;
+                        rts.push((start_time.elapsed().as_millis() as u64, 1));
                     }
                 }
 
                 RowType::Update => {
                     let before = row_data.require_before()?;
+                    let after = row_data.require_after()?;
+                    let raw_full_doc = Self::mongo_raw_doc(after, MongoConstants::DOC);
+                    let raw_update_description =
+                        Self::mongo_raw_doc(after, MongoConstants::DIFF_DOC);
+                    if raw_full_doc.is_some() || raw_update_description.is_some() {
+                        let raw_collection = self
+                            .mongo_client
+                            .database(&row_data.schema)
+                            .collection::<RawDocumentBuf>(&row_data.tb);
+                        let document_key = Self::mongo_doc(before, MongoConstants::DOCUMENT_KEY);
+                        let pre_image = Self::mongo_raw_doc(before, MongoConstants::PRE_IMAGE);
+
+                        if let Some(raw_update_description) = raw_update_description {
+                            let update_description = match raw_update_description.to_document() {
+                                Ok(update_description) => update_description,
+                                Err(error) => {
+                                    let full_doc = raw_full_doc.context(
+                                        "mongo raw updateDescription cannot be parsed and fullDocument is missing",
+                                    )?;
+                                    log_warn!(
+                                        "mongo updateDescription cannot be converted to Document, use raw full-document replacement, schema: {}, table: {}, error: {}",
+                                        row_data.schema,
+                                        row_data.tb,
+                                        error
+                                    );
+                                    self.replace_raw_update(
+                                        &raw_collection,
+                                        row_data,
+                                        document_key,
+                                        pre_image,
+                                        full_doc,
+                                    )
+                                    .await?;
+                                    rts.push((start_time.elapsed().as_millis() as u64, 1));
+                                    continue;
+                                }
+                            };
+
+                            if changestream_parser::requires_full_document(&update_description) {
+                                if let Some(full_doc) = raw_full_doc {
+                                    self.replace_raw_update(
+                                        &raw_collection,
+                                        row_data,
+                                        document_key,
+                                        pre_image,
+                                        full_doc,
+                                    )
+                                    .await?;
+                                    rts.push((start_time.elapsed().as_millis() as u64, 1));
+                                } else {
+                                    log_error!(
+                                        "mongo updateDescription has ambiguous disambiguatedPaths, but fullDocument is missing, ignore, schema: {}, table: {}",
+                                        row_data.schema,
+                                        row_data.tb
+                                    );
+                                }
+                                continue;
+                            }
+
+                            let needs_full_document = update_description
+                                .get_array("truncatedArrays")
+                                .map(|arrays| !arrays.is_empty())
+                                .unwrap_or(false);
+                            let parsed_full_doc = if needs_full_document {
+                                match raw_full_doc.map(RawDocumentBuf::to_document).transpose() {
+                                    Ok(full_doc) => full_doc,
+                                    Err(error) => {
+                                        let full_doc = raw_full_doc.expect(
+                                            "raw fullDocument exists when its conversion fails",
+                                        );
+                                        log_warn!(
+                                            "mongo fullDocument cannot be converted for truncatedArrays, use raw full-document replacement, schema: {}, table: {}, error: {}",
+                                            row_data.schema,
+                                            row_data.tb,
+                                            error
+                                        );
+                                        self.replace_raw_update(
+                                            &raw_collection,
+                                            row_data,
+                                            document_key,
+                                            pre_image,
+                                            full_doc,
+                                        )
+                                        .await?;
+                                        rts.push((start_time.elapsed().as_millis() as u64, 1));
+                                        continue;
+                                    }
+                                }
+                            } else {
+                                None
+                            };
+
+                            let update_doc = changestream_parser::build_update_doc(
+                                &update_description,
+                                parsed_full_doc.as_ref(),
+                            );
+                            if update_doc.is_empty() {
+                                if let Some(full_doc) = raw_full_doc {
+                                    log_warn!(
+                                        "mongo updateDescription is empty or unsupported, use raw full-document replacement, schema: {}, table: {}",
+                                        row_data.schema,
+                                        row_data.tb
+                                    );
+                                    self.replace_raw_update(
+                                        &raw_collection,
+                                        row_data,
+                                        document_key,
+                                        pre_image,
+                                        full_doc,
+                                    )
+                                    .await?;
+                                    rts.push((start_time.elapsed().as_millis() as u64, 1));
+                                } else {
+                                    log_error!(
+                                        "mongo updateDescription is empty or unsupported and fullDocument is missing, ignore, schema: {}, table: {}",
+                                        row_data.schema,
+                                        row_data.tb
+                                    );
+                                }
+                                continue;
+                            }
+
+                            if self
+                                .raw_shard_key_changed(
+                                    row_data,
+                                    document_key,
+                                    pre_image,
+                                    raw_full_doc,
+                                )
+                                .await?
+                            {
+                                let full_doc = raw_full_doc.context(
+                                    "mongo shard key update requires full document after image",
+                                )?;
+                                self.replace_raw_update(
+                                    &raw_collection,
+                                    row_data,
+                                    document_key,
+                                    pre_image,
+                                    full_doc,
+                                )
+                                .await?;
+                                rts.push((start_time.elapsed().as_millis() as u64, 1));
+                                continue;
+                            }
+
+                            let query_doc = if let Some(pre_image) = pre_image {
+                                Some(self.complete_raw_shard_filter(row_data, pre_image).await?)
+                            } else if document_key.is_some() {
+                                Some(
+                                    self.complete_shard_filter_with_raw_doc(
+                                        row_data,
+                                        document_key,
+                                        raw_full_doc,
+                                        false,
+                                    )
+                                    .await?,
+                                )
+                            } else {
+                                None
+                            };
+
+                            if let Some(query_doc) = query_doc {
+                                if let Some(full_doc) = raw_full_doc {
+                                    self.update_existing_with_raw_fallback(
+                                        row_data,
+                                        query_doc,
+                                        update_doc,
+                                        document_key,
+                                        full_doc,
+                                    )
+                                    .await?;
+                                } else {
+                                    self.upsert(&collection, query_doc, update_doc).await?;
+                                }
+                                rts.push((start_time.elapsed().as_millis() as u64, 1));
+                            }
+                            continue;
+                        }
+
+                        if let Some(full_doc) = raw_full_doc {
+                            self.replace_raw_update(
+                                &raw_collection,
+                                row_data,
+                                document_key,
+                                pre_image,
+                                full_doc,
+                            )
+                            .await?;
+                            rts.push((start_time.elapsed().as_millis() as u64, 1));
+                            continue;
+                        }
+
+                        anyhow::bail!(
+                            "mongo raw update row missing both updateDescription and fullDocument"
+                        );
+                    }
+
                     let before_doc =
                         before
                             .get(MongoConstants::DOC)
@@ -732,7 +1139,7 @@ impl MongoSinker {
             }
         }
 
-        let mut ids = Vec::new();
+        let mut ids: Vec<Bson> = Vec::new();
         for rd in data.iter().skip(start_index).take(batch_size) {
             data_size += rd.get_data_size() as usize;
 
@@ -741,7 +1148,13 @@ impl MongoSinker {
                 let id = doc
                     .get(MongoConstants::ID)
                     .context("mongo doc missing `_id`")?;
+                ids.push(id.clone());
+            } else if let Some(ColValue::MongoRawDoc(doc)) = before.get(MongoConstants::DOC) {
+                let id = Self::raw_value(doc, MongoConstants::ID)?
+                    .context("mongo raw doc missing `_id`")?;
                 ids.push(id);
+            } else {
+                anyhow::bail!("mongo delete row missing document");
             }
         }
 
@@ -905,6 +1318,102 @@ impl MongoSinker {
         Ok(())
     }
 
+    async fn update_existing_with_raw_fallback(
+        &mut self,
+        row_data: &RowData,
+        query_doc: Document,
+        update_doc: Document,
+        document_key: Option<&Document>,
+        full_doc: &RawDocumentBuf,
+    ) -> anyhow::Result<()> {
+        let database = self.mongo_client.database(&row_data.schema);
+        let collection = database.collection::<Document>(&row_data.tb);
+        let raw_collection = database.collection::<RawDocumentBuf>(&row_data.tb);
+        if self
+            .update_existing(&collection, query_doc, update_doc.clone())
+            .await?
+        {
+            return Ok(());
+        }
+
+        if self.is_target_sharded(row_data).await? {
+            if let Some(id_filter) = Self::raw_id_filter(document_key, Some(full_doc))? {
+                if let Some(target_doc) = raw_collection.find_one(id_filter).await? {
+                    let retry_filter = self
+                        .complete_raw_shard_filter(row_data, &target_doc)
+                        .await?;
+                    if self
+                        .update_existing(&collection, retry_filter, update_doc.clone())
+                        .await?
+                    {
+                        return Ok(());
+                    }
+                }
+            }
+
+            let new_filter = self.complete_raw_shard_filter(row_data, full_doc).await?;
+            if self
+                .update_existing(&collection, new_filter, update_doc)
+                .await?
+            {
+                return Ok(());
+            }
+
+            anyhow::bail!(
+                "mongo update matched no target document for sharded collection [{}]",
+                self.target_ns(row_data)
+            );
+        }
+
+        if let Some(id_filter) = Self::raw_id_filter(document_key, Some(full_doc))? {
+            self.replace_raw(&raw_collection, id_filter, full_doc)
+                .await?;
+        }
+        Ok(())
+    }
+
+    async fn replace_raw_update(
+        &mut self,
+        raw_collection: &Collection<RawDocumentBuf>,
+        row_data: &RowData,
+        document_key: Option<&Document>,
+        pre_image: Option<&RawDocumentBuf>,
+        full_doc: &RawDocumentBuf,
+    ) -> anyhow::Result<()> {
+        let old_filter = if let Some(pre_image) = pre_image {
+            self.complete_raw_shard_filter(row_data, pre_image).await?
+        } else {
+            self.complete_shard_filter_with_raw_doc(row_data, document_key, Some(full_doc), false)
+                .await?
+        };
+
+        if self
+            .replace_raw_existing(raw_collection, old_filter, full_doc)
+            .await?
+        {
+            return Ok(());
+        }
+
+        if self.is_target_sharded(row_data).await? {
+            if let Some(id_filter) = Self::raw_id_filter(document_key, Some(full_doc))? {
+                if let Some(target_doc) = raw_collection.find_one(id_filter).await? {
+                    let retry_filter = self
+                        .complete_raw_shard_filter(row_data, &target_doc)
+                        .await?;
+                    if self
+                        .replace_raw_existing(raw_collection, retry_filter, full_doc)
+                        .await?
+                    {
+                        return Ok(());
+                    }
+                }
+            }
+        }
+
+        let new_filter = self.complete_raw_shard_filter(row_data, full_doc).await?;
+        self.replace_raw(raw_collection, new_filter, full_doc).await
+    }
+
     async fn replace(
         &mut self,
         collection: &Collection<Document>,
@@ -923,6 +1432,29 @@ impl MongoSinker {
         collection: &Collection<Document>,
         query_doc: Document,
         replacement_doc: Document,
+    ) -> anyhow::Result<bool> {
+        let result = collection.replace_one(query_doc, replacement_doc).await?;
+        Ok(result.matched_count > 0)
+    }
+
+    async fn replace_raw(
+        &mut self,
+        collection: &Collection<RawDocumentBuf>,
+        query_doc: Document,
+        replacement_doc: &RawDocumentBuf,
+    ) -> anyhow::Result<()> {
+        collection
+            .replace_one(query_doc, replacement_doc)
+            .upsert(true)
+            .await?;
+        Ok(())
+    }
+
+    async fn replace_raw_existing(
+        &mut self,
+        collection: &Collection<RawDocumentBuf>,
+        query_doc: Document,
+        replacement_doc: &RawDocumentBuf,
     ) -> anyhow::Result<bool> {
         let result = collection.replace_one(query_doc, replacement_doc).await?;
         Ok(result.matched_count > 0)

@@ -408,6 +408,7 @@ impl ExtractorUtil {
                     extract_state,
                     heartbeat_interval_secs,
                     heartbeat_tb,
+                    use_raw_document: matches!(config.sinker, SinkerConfig::Mongo { .. }),
                     syncer,
                     recovery,
                 };

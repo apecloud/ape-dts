@@ -1,4 +1,4 @@
-use mongodb::bson::{doc, Bson, Document};
+use mongodb::bson::{doc, raw::RawDocument, Bson, Document};
 
 use crate::{
     config::config_enums::DbType,
@@ -152,6 +152,10 @@ pub fn change_stream_event_to_ddl(event: &Document) -> Option<DdlData> {
     }
 }
 
+pub fn raw_change_stream_event_to_ddl(event: &RawDocument) -> Option<DdlData> {
+    change_stream_event_to_ddl(&Document::try_from(event).ok()?)
+}
+
 fn sharding_event_to_ddl(
     operation_type: &str,
     db: String,
@@ -250,7 +254,7 @@ fn index_name_from_bson(index: &Bson) -> Option<Bson> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mongodb::bson::doc;
+    use mongodb::bson::{doc, raw::RawDocumentBuf};
 
     #[test]
     fn shard_collection_ddl_round_trips_command() {
@@ -318,5 +322,18 @@ mod tests {
         let command = query_to_command(&ddl.query).unwrap();
         assert_eq!(command.get_str("createIndexes").unwrap(), "tb1");
         assert!(matches!(command.get("indexes"), Some(Bson::Array(indexes)) if indexes.len() == 1));
+    }
+
+    #[test]
+    fn raw_change_stream_event_is_parsed_only_for_ddl_conversion() {
+        let event = RawDocumentBuf::from_document(&doc! {
+            "operationType": "drop",
+            "ns": { "db": "db1", "coll": "tb1" },
+        })
+        .unwrap();
+
+        let ddl = raw_change_stream_event_to_ddl(&event).unwrap();
+        assert_eq!(ddl.ddl_type, DdlType::MongoDropCollection);
+        assert_eq!(ddl.get_schema_tb(), ("db1".into(), "tb1".into()));
     }
 }
