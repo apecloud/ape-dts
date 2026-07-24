@@ -129,7 +129,7 @@ impl RdbUtil {
     ) -> anyhow::Result<()> {
         for sql in sqls.iter() {
             println!("executing sql: {}", sql);
-            let query = sqlx::query(sql);
+            let query = sqlx::raw_sql(sql);
             query.execute(conn_pool).await.unwrap();
         }
         Ok(())
