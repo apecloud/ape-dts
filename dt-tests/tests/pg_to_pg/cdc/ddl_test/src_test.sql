@@ -15,6 +15,7 @@ INSERT INTO test_db_1.tb_1 VALUES (3,3,3);
 -- truncate table
 TRUNCATE test_db_1.truncate_tb_1;
 TRUNCATE TABLE test_db_1.truncate_tb_2;
+TRUNCATE test_db_1.truncate_parent;
 
 -- rename table
 ALTER TABLE test_db_1.rename_tb_1 RENAME TO dst_rename_tb_1;
