@@ -3,7 +3,10 @@ mod test {
 
     use serial_test::serial;
 
-    use crate::test_runner::{rdb_cycle_test_runner::RdbCycleTestRunner, test_base::TestBase};
+    use crate::test_runner::{
+        rdb_cycle_test_runner::RdbCycleTestRunner, rdb_test_runner::RdbTestRunner,
+        test_base::TestBase,
+    };
 
     #[tokio::test]
     #[serial]

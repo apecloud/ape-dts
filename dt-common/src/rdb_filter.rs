@@ -107,8 +107,12 @@ impl RdbFilter {
         self.do_ddls.is_empty()
     }
 
+    pub fn filter_spec_ddl(&self, ddl_type: &DdlType) -> bool {
+        !Self::match_all(&self.do_ddls) && !self.do_ddls.contains(&ddl_type.to_string())
+    }
+
     pub fn filter_ddl(&self, schema: &str, tb: &str, ddl_type: &DdlType) -> bool {
-        if !Self::match_all(&self.do_ddls) && !self.do_ddls.contains(&ddl_type.to_string()) {
+        if self.filter_spec_ddl(ddl_type) {
             return true;
         }
 

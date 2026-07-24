@@ -18,7 +18,7 @@ use postgres_protocol::message::backend::{
     },
     RelationBody,
     ReplicationMessage::*,
-    TupleData, UpdateBody,
+    TruncateBody, TupleData, UpdateBody,
 };
 use postgres_types::PgLsn;
 use sqlx::{postgres::PgArguments, query::Query, Pool, Postgres};
@@ -42,6 +42,11 @@ use dt_common::{
     meta::{
         adaptor::pg_col_value_convertor::PgColValueConvertor,
         col_value::ColValue,
+        ddl_meta::{
+            ddl_data::DdlData,
+            ddl_statement::{DdlStatement, PgTruncateTableStatement},
+            ddl_type::DdlType,
+        },
         dt_data::DtData,
         pg::{pg_meta_manager::PgMetaManager, pg_tb_meta::PgTbMeta},
         position::Position,
@@ -197,7 +202,11 @@ impl PgCdcExtractor {
 
                         Origin(_origin) => {}
 
-                        Truncate(_truncate) => {}
+                        Truncate(truncate) => {
+                            if self.extract_state.time_filter.started {
+                                self.decode_ddl_truncate(&truncate, &position).await?;
+                            }
+                        }
 
                         Type(_typee) => {}
 
@@ -476,6 +485,43 @@ impl PgCdcExtractor {
                         .await?;
                 }
             }
+        }
+        Ok(())
+    }
+
+    async fn decode_ddl_truncate(
+        &mut self,
+        truncate_body: &TruncateBody,
+        position: &Position,
+    ) -> anyhow::Result<()> {
+        if self.filter.filter_all_ddl() || self.filter.filter_spec_ddl(&DdlType::TruncateTable) {
+            return Ok(());
+        }
+
+        for rel_id in truncate_body.rel_ids() {
+            let tb_meta = self.meta_manager.get_tb_meta_by_oid(*rel_id as i32)?;
+            let schema = tb_meta.basic.schema;
+            let tb = tb_meta.basic.tb;
+            if self.filter.filter_tb(&schema, &tb) {
+                continue;
+            }
+
+            let statement = DdlStatement::PgTruncateTable(PgTruncateTableStatement {
+                schema: schema.clone(),
+                tb,
+                is_only: true,
+                unparsed: String::new(),
+            });
+            let ddl_data = DdlData {
+                default_schema: schema,
+                query: statement.to_sql(&DbType::Pg),
+                ddl_type: DdlType::TruncateTable,
+                db_type: DbType::Pg,
+                statement,
+            };
+            self.base_extractor
+                .push_ddl(&mut self.extract_state, ddl_data, position.clone())
+                .await?;
         }
         Ok(())
     }
