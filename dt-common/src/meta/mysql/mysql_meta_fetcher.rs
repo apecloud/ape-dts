@@ -7,7 +7,7 @@ use sqlx::{mysql::MySqlRow, MySql, Pool, Row};
 use super::{mysql_col_type::MysqlColType, mysql_tb_meta::MysqlTbMeta};
 use crate::{
     config::config_enums::DbType,
-    error::{DtError, DtErrorContextExt, ErrorObject, OriginError},
+    error::{DtError, DtErrorContextExt, ErrorObject},
     meta::{
         ddl_meta::ddl_data::DdlData, foreign_key::ForeignKey, rdb_meta_manager::RdbMetaManager,
         rdb_meta_manager::RDB_PRIMARY_KEY_FLAG, rdb_tb_meta::RdbTbMeta, row_data::RowData,
@@ -115,7 +115,7 @@ impl MysqlMetaFetcher {
             self.cache.insert(full_name.clone(), tb_meta);
         }
         self.cache.get(&full_name).ok_or_else(|| {
-            DtError::ObjectNotFound(format!(
+            DtError::DatabaseObjectNotFound(self.db_type.clone(), format!(
                 "Ape-DTS could not find the previously loaded definition for source table {full_name}"
             ))
                 .message("The source table definition could not be loaded")
@@ -127,7 +127,6 @@ impl MysqlMetaFetcher {
                     table: Some(tb.to_string()),
                     ..Default::default()
                 })
-                .origin(OriginError::new("mysql", None::<String>))
         })
     }
 
@@ -182,7 +181,7 @@ impl MysqlMetaFetcher {
         }
 
         if cols.is_empty() {
-            bail! {DtError::ObjectNotFound(format!(
+            bail! {DtError::DatabaseObjectNotFound(db_type.clone(), format!(
                 "failed to get table metadata for: `{}`.`{}`",
                 schema, tb
             ))
@@ -190,8 +189,7 @@ impl MysqlMetaFetcher {
                 schema: Some(schema.to_string()),
                 table: Some(tb.to_string()),
                 ..Default::default()
-            })
-            .origin(OriginError::new("mysql", None::<String>)) }
+            }) }
         }
         Ok((cols, col_origin_type_map, col_type_map, nullable_cols))
     }
@@ -460,7 +458,9 @@ impl MysqlMetaFetcher {
             self.version = version.trim().into();
             return Ok(());
         }
-        bail! {DtError::UnsupportedDatabaseVersion("failed to init mysql version".to_string())
-        .origin(OriginError::new("mysql", None::<String>))}
+        bail! {DtError::UnsupportedDatabaseVersion(
+            self.db_type.clone(),
+            "failed to initialize the database version".to_string(),
+        )}
     }
 }

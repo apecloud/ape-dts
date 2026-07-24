@@ -3,7 +3,7 @@ use crate::{rdb_router::RdbRouter, Sinker};
 use anyhow::bail;
 use clickhouse::Client;
 use dt_common::{
-    config::config_enums::ConflictPolicyEnum,
+    config::config_enums::{ConflictPolicyEnum, DbType},
     error::DtError,
     log_error, log_info,
     meta::{
@@ -120,7 +120,8 @@ impl ClickhouseStructSinker {
         } else {
             &mysql_tb_meta
                 .ok_or_else(|| {
-                    DtError::ClickHouseSourceMetadataMissing(
+                    DtError::DatabaseMetadataNotFound(
+                        DbType::ClickHouse,
                         "Ape-DTS could not determine the source table definition needed to build the ClickHouse table".to_string(),
                     )
                 })?
@@ -174,7 +175,8 @@ impl ClickhouseStructSinker {
             Self::get_dst_col_type_from_pg(
                 col,
                 pg_tb_meta.ok_or_else(|| {
-                    DtError::ClickHouseSourceMetadataMissing(
+                    DtError::DatabaseMetadataNotFound(
+                        DbType::ClickHouse,
                         "Ape-DTS could not determine the source table definition needed to build the ClickHouse table".to_string(),
                     )
                 })?,

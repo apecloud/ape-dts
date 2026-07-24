@@ -1240,7 +1240,7 @@ LIMIT 1";
             return Ok(None);
         };
 
-        row.try_get(0).map_err(Into::into)
+        Ok(row.try_get(0)?)
     }
 
     async fn estimate_filtered_sample_row_count(

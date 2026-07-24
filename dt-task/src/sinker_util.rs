@@ -8,7 +8,7 @@ use tokio::sync::RwLock;
 
 use dt_common::{
     config::{config_enums::DbType, sinker_config::SinkerConfig, task_config::TaskConfig},
-    error::{DtError, DtErrorContextExt, DtResultExt, ErrorCode, Stage},
+    error::{DtError, DtResultExt, ErrorCode},
     meta::{
         avro::avro_converter::AvroConverter,
         mongo::mongo_shard::{is_mongos, list_shard_collections},
@@ -64,9 +64,7 @@ macro_rules! create_filter {
 
 impl SinkerUtil {
     fn parse_http_endpoint(value: &str) -> anyhow::Result<(Url, String, String)> {
-        let url = Url::parse(value)
-            .code(ErrorCode::InvalidConfig)
-            .stage(Stage::Bootstrap)?;
+        let url = Url::parse(value).code(ErrorCode::InvalidConfig)?;
         let host = url.host_str().map(str::to_string).ok_or_else(|| {
             DtError::invalid_config("the destination HTTP URL must include a host")
         })?;
@@ -88,14 +86,13 @@ impl SinkerUtil {
     async fn require_extractor_meta_manager(
         config: &TaskConfig,
     ) -> anyhow::Result<dt_common::meta::rdb_meta_manager::RdbMetaManager> {
-        ExtractorUtil::get_extractor_meta_manager(config)
+        Ok(ExtractorUtil::get_extractor_meta_manager(config)
             .await?
             .ok_or_else(|| {
                 DtError::InvalidConfig(
                     "the selected sinker requires relational source metadata".to_string(),
                 )
-                .stage(Stage::Bootstrap)
-            })
+            })?)
     }
 
     fn push_checkable_sinker<S: CheckableSink + Send + 'static>(
@@ -295,7 +292,7 @@ impl SinkerUtil {
                         .with_ack_timeout(std::time::Duration::from_secs(ack_timeout_secs))
                         .with_required_acks(acks)
                         .create()
-                        .map_err(|error| error.code(ErrorCode::ConnectionFailed))?;
+                        .code(ErrorCode::ConnectionFailed)?;
                     // the sending performance of RdkafkaSinker is much worse than KafkaSinker
                     let sinker = KafkaSinker {
                         batch_size,
@@ -461,9 +458,7 @@ impl SinkerUtil {
                         .http1_title_case_headers()
                         .redirect(custom)
                         .build()
-                        .map_err(|error| {
-                            error.code(ErrorCode::InvalidConfig).stage(Stage::Bootstrap)
-                        })?;
+                        .code(ErrorCode::InvalidConfig)?;
                     let conn_pool = TaskUtil::create_mysql_conn_pool(
                         &url,
                         &DbType::StarRocks,
@@ -544,9 +539,7 @@ impl SinkerUtil {
                         .http1_title_case_headers()
                         .redirect(custom)
                         .build()
-                        .map_err(|error| {
-                            error.code(ErrorCode::InvalidConfig).stage(Stage::Bootstrap)
-                        })?;
+                        .code(ErrorCode::InvalidConfig)?;
                     let sinker = ClickhouseSinker {
                         http_client,
                         host,

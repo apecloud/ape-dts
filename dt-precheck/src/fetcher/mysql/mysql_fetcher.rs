@@ -11,7 +11,6 @@ use crate::{
 };
 use dt_common::{
     config::{config_enums::DbType, connection_auth_config::ConnectionAuthConfig},
-    error::{DtErrorContextExt, ErrorCode},
     rdb_filter::RdbFilter,
     utils::sql_util::SqlUtil,
 };
@@ -224,16 +223,13 @@ impl MysqlFetcher {
     async fn fetch_all(&self, sql: String, mut sql_msg: &str) -> anyhow::Result<Vec<MySqlRow>> {
         let mysql_pool = match &self.pool {
             Some(pool) => pool,
-            None => return Err(sqlx::Error::PoolClosed.code(ErrorCode::StatementFailed)),
+            None => return Err(sqlx::Error::PoolClosed.into()),
         };
 
         sql_msg = if sql_msg.is_empty() { "sql" } else { sql_msg };
         println!("{}: {}", sql_msg, sql);
 
-        query(&sql)
-            .fetch_all(mysql_pool)
-            .await
-            .map_err(|error| error.code(ErrorCode::StatementFailed))
+        Ok(query(&sql).fetch_all(mysql_pool).await?)
     }
 
     fn fetch_row<'a>(
@@ -245,11 +241,9 @@ impl MysqlFetcher {
             Some(pool) => {
                 sql_msg = if sql_msg.is_empty() { "sql" } else { sql_msg };
                 println!("{}: {}", sql_msg, sql);
-                Ok(query(sql)
-                    .fetch(pool)
-                    .map_err(|error| error.code(ErrorCode::StatementFailed)))
+                Ok(query(sql).fetch(pool).err_into::<anyhow::Error>())
             }
-            None => bail! {sqlx::Error::PoolClosed.code(ErrorCode::StatementFailed)},
+            None => bail! {sqlx::Error::PoolClosed},
         }
     }
 

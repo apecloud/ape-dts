@@ -47,6 +47,7 @@ impl Prechecker for MySqlPrechecker {
                 if version.is_empty() {
                     check_error = Some(
                         DtError::UnsupportedDatabaseVersion(
+                            DbType::Mysql,
                             "MySQL returned no version information".to_string(),
                         )
                         .into(),
@@ -55,9 +56,10 @@ impl Prechecker for MySqlPrechecker {
                     let re = Regex::new(MYSQL_SUPPORT_DB_VERSION_REGEX)?;
                     if !re.is_match(version.as_str()) {
                         check_error = Some(
-                            DtError::UnsupportedDatabaseVersion(format!(
-                                "MySQL version {version} is not supported"
-                            ))
+                            DtError::UnsupportedDatabaseVersion(
+                                DbType::Mysql,
+                                format!("MySQL version {version} is not supported"),
+                            )
                             .into(),
                         );
                     }

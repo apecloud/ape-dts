@@ -1,7 +1,7 @@
 use rdkafka::error::{KafkaError as RdKafkaError, RDKafkaErrorCode};
 
 use super::{
-    super::{ClassifyError, DtErrorContext, ErrorCode, OriginError},
+    super::{ClassifyError, DtErrorContext, ErrorCode},
     classification::provider_context,
 };
 
@@ -16,17 +16,13 @@ impl ClassifyError for RdKafkaError {
             | RdKafkaError::Subscription(_) => Some(ErrorCode::InvalidConfig),
             _ => provider_code.and_then(classify_rdkafka_code),
         };
-        provider_context(
-            code,
-            OriginError::new("kafka", provider_code.map(|code| format!("{code:?}"))),
-        )
+        provider_context(code)
     }
 }
 
 impl ClassifyError for ::kafka::Error {
     fn classify(&self) -> DtErrorContext {
-        let (code, provider_code) = classify_kafka_kind(self);
-        provider_context(code, OriginError::new("kafka", provider_code))
+        provider_context(classify_kafka_kind(self))
     }
 }
 
@@ -61,25 +57,20 @@ fn classify_rdkafka_code(code: RDKafkaErrorCode) -> Option<ErrorCode> {
     }
 }
 
-fn classify_kafka_kind(error: &::kafka::Error) -> (Option<ErrorCode>, Option<String>) {
+fn classify_kafka_kind(error: &::kafka::Error) -> Option<ErrorCode> {
     match error {
-        ::kafka::Error::Io(error) if is_timeout(error.kind()) => {
-            (Some(ErrorCode::ConnectionTimeout), None)
-        }
+        ::kafka::Error::Io(error) if is_timeout(error.kind()) => Some(ErrorCode::ConnectionTimeout),
         ::kafka::Error::Io(_) | ::kafka::Error::NoHostReachable => {
-            (Some(ErrorCode::ConnectionFailed), None)
+            Some(ErrorCode::ConnectionFailed)
         }
         ::kafka::Error::NoTopicsAssigned
         | ::kafka::Error::InvalidDuration
         | ::kafka::Error::UnsetOffsetStorage
-        | ::kafka::Error::UnsetGroupId => (Some(ErrorCode::InvalidConfig), None),
-        ::kafka::Error::Kafka(code) => (classify_kafka_code(*code), Some(format!("{code:?}"))),
-        ::kafka::Error::TopicPartitionError { error_code, .. } => (
-            classify_kafka_code(*error_code),
-            Some(format!("{error_code:?}")),
-        ),
+        | ::kafka::Error::UnsetGroupId => Some(ErrorCode::InvalidConfig),
+        ::kafka::Error::Kafka(code) => classify_kafka_code(*code),
+        ::kafka::Error::TopicPartitionError { error_code, .. } => classify_kafka_code(*error_code),
         ::kafka::Error::ArcSelf(error) => classify_kafka_kind(error),
-        _ => (None, None),
+        _ => None,
     }
 }
 

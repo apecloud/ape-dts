@@ -33,7 +33,7 @@ use crate::{
 };
 use dt_common::{
     config::{config_enums::DbType, connection_auth_config::ConnectionAuthConfig},
-    error::{DtError, DtErrorContextExt, ErrorCode, OriginError},
+    error::{DtError, DtResultExt, ErrorCode},
     log_debug, log_error, log_info, log_warn,
     meta::{
         adaptor::mysql_col_value_convertor::MysqlColValueConvertor, col_value::ColValue,
@@ -148,12 +148,10 @@ impl MysqlCdcExtractor {
         };
 
         let url = ConnectionAuthConfig::merge_url_with_auth(&self.url, &self.connection_auth)
-            .map_err(|error| {
-                error
-                    .code(ErrorCode::InvalidConfig)
-                    .origin(OriginError::new("mysql", None::<String>))
-                    .context("failed to merge the MySQL URL with connection authentication")
-            })?;
+            .context(DtError::DatabaseInvalidConfig(
+                DbType::Mysql,
+                "failed to merge the MySQL URL with connection authentication".to_string(),
+            ))?;
 
         let mut stream = BinlogClient::new(&url, self.server_id, start_position)
             .with_master_heartbeat(Duration::from_secs(self.binlog_heartbeat_interval_secs))
@@ -164,7 +162,7 @@ impl MysqlCdcExtractor {
             )
             .connect()
             .await
-            .map_err(|error| error.code(ErrorCode::ConnectionFailed))?;
+            .code(ErrorCode::ConnectionFailed)?;
 
         let mut ctx = Context {
             binlog_filename: self.binlog_filename.clone(),
@@ -172,10 +170,8 @@ impl MysqlCdcExtractor {
             gtid_set: None,
         };
         if self.gtid_enabled {
-            ctx.gtid_set = Some(
-                GtidSet::new(self.gtid_set.as_str())
-                    .map_err(|error| error.code(ErrorCode::InvalidConfig))?,
-            );
+            ctx.gtid_set =
+                Some(GtidSet::new(self.gtid_set.as_str()).code(ErrorCode::InvalidConfig)?);
         }
 
         // start heartbeat
@@ -183,10 +179,7 @@ impl MysqlCdcExtractor {
 
         loop {
             if self.extract_state.time_filter.ended {
-                stream
-                    .close()
-                    .await
-                    .map_err(|error| error.code(ErrorCode::ConnectionFailed))?;
+                stream.close().await.code(ErrorCode::ConnectionFailed)?;
                 return Ok(());
             }
 
@@ -398,9 +391,10 @@ impl MysqlCdcExtractor {
         let col_count = cmp::min(tb_meta.basic.cols.len(), included_columns.len());
         for i in (0..col_count).rev() {
             let col = tb_meta.basic.cols.get(i).ok_or_else(|| {
-                DtError::MySqlInvariant(format!(
-                    "column index {i} is missing from MySQL table metadata"
-                ))
+                DtError::DatabaseInvariant(
+                    DbType::Mysql,
+                    format!("column index {i} is missing from MySQL table metadata"),
+                )
             })?;
             if ignore_cols.is_some_and(|cols| cols.contains(col)) {
                 continue;

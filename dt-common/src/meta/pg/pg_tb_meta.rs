@@ -3,8 +3,11 @@ use std::collections::HashMap;
 use serde::Serialize;
 use serde_json::json;
 
-use crate::error::{DtError, DtErrorContextExt, ErrorObject, OriginError};
 use crate::meta::rdb_tb_meta::RdbTbMeta;
+use crate::{
+    config::config_enums::DbType,
+    error::{DtError, DtErrorContextExt, ErrorObject},
+};
 
 use super::pg_col_type::PgColType;
 
@@ -25,7 +28,7 @@ impl PgTbMeta {
     #[inline(always)]
     pub fn get_col_type(&self, col: &str) -> anyhow::Result<&PgColType> {
         self.col_type_map.get(col).ok_or_else(|| {
-            DtError::ObjectNotFound(format!(
+            DtError::DatabaseObjectNotFound(DbType::Pg, format!(
                 "column {col} is missing from the PostgreSQL definition for {}.{}",
                 self.basic.schema, self.basic.tb
             ))
@@ -39,7 +42,6 @@ impl PgTbMeta {
                     column: Some(col.to_string()),
                     ..Default::default()
                 })
-                .origin(OriginError::new("postgres", None::<String>))
         })
     }
 }

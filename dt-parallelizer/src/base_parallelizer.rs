@@ -5,7 +5,7 @@ use concurrent_queue::PopError;
 use tokio::task::JoinSet;
 
 use dt_common::{
-    error::{DtError, DtErrorContextExt, Stage},
+    error::DtError,
     meta::{
         dcl_meta::dcl_data::DclData,
         ddl_meta::ddl_data::DdlData,
@@ -193,15 +193,11 @@ impl BaseParallelizer {
             return Ok(0);
         }
         if parallel_size < 1 {
-            return Err(
-                DtError::invalid_config("parallelizer configuration is invalid")
-                    .stage(Stage::Parallelizer),
-            );
+            return Err(DtError::invalid_config("parallelizer configuration is invalid").into());
         }
         if sinkers.is_empty() {
             return Err(
-                DtError::InvariantViolated("parallelizer invariant violated".to_string())
-                    .stage(Stage::Parallelizer),
+                DtError::InvariantViolated("parallelizer invariant violated".to_string()).into(),
             );
         }
 
@@ -236,8 +232,7 @@ impl BaseParallelizer {
 
         let mut workers_used_count = 0;
         while let Some(result) = join_set.join_next().await {
-            let (sinker_index, worker_used) =
-                result.map_err(|error| error.stage(Stage::Parallelizer))??;
+            let (sinker_index, worker_used) = result??;
             if let Some(data) = pending.next() {
                 let worker_used = worker_used || !data.is_empty();
                 spawn_sink_task(

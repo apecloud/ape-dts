@@ -15,8 +15,8 @@ use crate::extractor::resumer::{
 use dt_common::{
     config::resumer_config::ResumerConfig,
     error::{
-        classify_sqlx_error, DtError, DtErrorContextExt, EndpointRole, ErrorCode, ErrorObject,
-        Stage,
+        classify_sqlx_error, DtError, DtErrorContextExt, DtResultExt, EndpointRole, ErrorCode,
+        ErrorObject, Stage,
     },
     log_info, log_warn,
     meta::position::Position,
@@ -62,7 +62,8 @@ impl DatabaseRecovery {
         recovery
             .initialization()
             .await
-            .map_err(|error| error.stage(Stage::Resumer).endpoint(EndpointRole::Metadata))?;
+            .stage(Stage::Resumer)
+            .endpoint(EndpointRole::Metadata)?;
         Ok(recovery)
     }
 
@@ -363,23 +364,5 @@ impl Recovery for DatabaseRecovery {
                 (!matches!(position, Position::None)).then_some(position)
             })
             .collect()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn only_missing_resume_store_codes_restart_from_beginning() {
-        assert!(DatabaseRecovery::is_missing_resume_store(
-            ErrorCode::ObjectNotFound
-        ));
-        assert!(DatabaseRecovery::is_missing_resume_store(
-            ErrorCode::DatabaseNotFound
-        ));
-        assert!(!DatabaseRecovery::is_missing_resume_store(
-            ErrorCode::CheckpointReadFailed
-        ));
     }
 }

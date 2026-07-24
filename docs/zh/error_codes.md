@@ -82,8 +82,8 @@ HINT: Check object routing and create the required object or enable structure in
 `ErrorReport` JSON 视图只包含面向用户的字段：稳定错误码、用户消息、详细信息、处理
 建议、任务 ID、端点角色和受影响对象。文本视图先输出这些字段，然后输出诊断部分。
 
-内存中的报告还包含 `stage`、`origin`、脱敏后的 `error_chain`、`context_count`，以及
-可选的已捕获 `backtrace`。这些字段不会写入 JSON。
+内存中的报告还包含 `stage`、脱敏后的 `error_chain`、`context_count`，以及可选的已捕获
+`backtrace`。这些字段不会写入 JSON。
 `ErrorReport` 的文本输出始终在用户信息后输出全部可用诊断字段。API 使用方必须使用
 带版本的 JSON 视图，不得解析 CLI 文本。
 
@@ -98,7 +98,6 @@ CLI 错误默认包含诊断部分：
 DIAGNOSTIC [MD001]
 STAGE: sinker
 ENDPOINT: destination
-ORIGIN: postgres/42P01
 CONTEXT 1: starting task
 CAUSE 1: relation missing
 BACKTRACE:
@@ -115,8 +114,8 @@ BACKTRACE:
 ## 结构化错误
 
 `anyhow::Error` 是唯一的错误传输容器。`DtErrorContext` 是类型化 metadata frame，
-其中的错误码、消息、处理建议、阶段、任务 ID、端点角色、数据库对象和 provider
-origin 都是可选字段。它只是数据对象，不实现 `Display` 或 `std::error::Error`。
+其中的错误码、消息、处理建议、阶段、任务 ID、端点角色和数据库对象都是可选字段。
+它只是数据对象，不实现 `Display` 或 `std::error::Error`。
 端点角色包括 `source`、`destination` 和 `metadata`。
 
 错误链最内层始终是真正实现 `Error` 的 cause。Provider 失败直接保留原始 provider
@@ -131,7 +130,7 @@ origin 都是可选字段。它只是数据对象，不实现 `Display` 或 `std
 
 error extension trait 为 `anyhow::Error` 和已支持的 provider 错误类型实现。
 `DtResultExt` 在 `Result` 上提供相同的 `code`、`message`、`hint`、`stage`、`task_id`、
-`endpoint`、`object` 和 `origin` 方法；它的 `dt_context` 接收闭包，成功路径不会构造
+`endpoint` 和 `object` 方法；它的 `dt_context` 接收闭包，成功路径不会构造
 metadata。provider result 上挂载的 code 是操作 fallback：provider 能识别时精确 code
 优先，无法识别时保留操作 code。项目主动失败通常应使用语义化 `DtError` variant。
 未知的具体错误转换为 `anyhow::Error` 后仍保留 source 类型。
@@ -139,8 +138,8 @@ metadata。provider result 上挂载的 code 是操作 fallback：provider 能�
 source 之上。这样 `DtError` 和原始 source 都可 downcast，报告可以同时分类，且不会丢失
 底层诊断信息。
 
-Metadata 在错误跨越所有权边界时逐层挂载。叶子 frame 可以提供业务错误码、受影响对象
-和 provider origin。stage 和 endpoint 在拥有当前操作的最窄组件边界挂载，task ID 则在
+Metadata 在错误跨越所有权边界时逐层挂载。叶子 frame 可以提供业务错误码和受影响对象。
+stage 和 endpoint 在拥有当前操作的最窄组件边界挂载，task ID 则在
 仍然明确知道它的最高层边界挂载：例如 extractor worker 挂载 `extractor/source`，统一
 sinker adapter 挂载 `sinker/destination`，recovery 初始化边界挂载 `resumer/metadata`，
 precheck 入口挂载 `precheck` 和 task ID，而 precheck builder 在各 checker 调用外层挂载 `source` 或
@@ -150,8 +149,8 @@ precheck 入口挂载 `precheck` 和 task ID，而 precheck builder 在各 check
 `anyhow::Error` 携带的内部有序列表；`DtErrorContext` 自身不再保存 parent，也不负责字段
 解析。`ErrorReport` 构建时把显式 frame、项目错误和所有已知 provider cause 的各字段分别
 追加到有序数组，再按展示字段应用不同优先级。scope 和根因字段使用最接近根因的内层值：
-错误经过其他组件传播时，stage、endpoint 和 provider origin 不会仅因为外层再次设置而被
-替换。错误对象按字段合并，保留内层已有值，只从外层补充缺失字段。已识别的 provider
+错误经过其他组件传播时，stage 和 endpoint 不会仅因为外层再次设置而被替换。错误对象按
+字段合并，保留内层已有值，只从外层补充缺失字段。已识别的 provider
 code 优先于操作 fallback code；用户 message、hint 和 task ID 仍采用显式外层优先级。
 因此 sinker 错误经过 parallelizer 和 pipeline
 传播后仍报告为 `sinker/destination`，任务入口仍可补充 task ID 和面向用户的上下文。
@@ -161,8 +160,8 @@ code 优先于操作 fallback code；用户 message、hint 和 task ID 仍采用
 `Display`、source chain 和具体类型的方式一致。
 
 已支持的 provider 错误通常直接通过 `?` 或普通 `anyhow::Context` 传播。构建 report 时，
-共享 raw-cause registry 会按保留的具体类型分类，恢复 provider 固有的 code、origin 和
-object。只有 provider 无法知道的业务语义或执行 scope 才显式挂载 `DtErrorContext`。
+共享 raw-cause registry 会按保留的具体类型分类，恢复 provider 固有的 code 和 object。
+只有 provider 无法知道的业务语义或执行 scope 才显式挂载 `DtErrorContext`。
 两条路径都不会在报告阶段推断 stage、endpoint 或 task ID。
 
 `ErrorReport` 是面向用户的边界表示。其文本格式使用 `ERROR`、`TASK`、`AFFECTED`、
@@ -170,10 +169,10 @@ object。只有 provider 无法知道的业务语义或执行 scope 才显式挂
 
 Provider 分类器实现统一位于 `dt-common::error::provider`。它们通过 `ClassifyError` 根据
 provider 原始错误码、类型化错误种类和 Rust 错误变体进行判断，禁止解析 provider 错误
-消息。每个实现直接返回包含可选精确错误码、provider origin 和受影响对象的
+消息。每个实现直接返回包含可选精确错误码和受影响对象的
 `DtErrorContext`。一个小型显式 registry 对 `anyhow::Error` 中保留的 provider cause 调用
-同一 trait。SQLx 分类器从具体 database error 推断 MySQL 或 PostgreSQL；transport error
-使用通用 `sqlx` origin。调用点不再传数据库类型，也不再额外挂 provider frame。已识别的
+同一 trait。SQLx 分类器从具体 database error 推断 MySQL 或 PostgreSQL。调用点不再传
+数据库类型，也不再额外挂 provider frame。已识别的
 provider 条件优先于操作 fallback code；无法识别时保留操作 code。stage、endpoint 和
 task ID 在仍明确知道其语义的最高层执行位置单独挂载。
 
@@ -204,8 +203,9 @@ Redis slot map 不完整时使用 `PR001`，并提示先稳定集群拓扑。只
 
 ## Provider 原始错误保留
 
-Provider 错误码属于诊断信息，不是 Ape-DTS 错误码。只要能够获取，就应保存在
-`origin` 中。首批 SQLx 映射如下：
+Provider 错误码属于诊断信息，不是 Ape-DTS 错误码。原始的类型化 provider error 会保留在
+source chain 中，其脱敏后的 `Display` 和 source 文本会进入 `DETAIL`，不再单独维护 provider
+origin 字段。错误码同时用于以下首批 SQLx 分类映射：
 
 | Provider 错误 | Ape-DTS 错误码 |
 |---|---|
@@ -224,8 +224,8 @@ Provider 错误码属于诊断信息，不是 Ape-DTS 错误码。只要能够�
 | SQLx 完整性错误种类 | `IC001` |
 
 SQLx 调用点可以显式提供与操作相关的错误码，例如 `CN001`、`DB001` 或 `ST001`。
-精确的 provider 分类优先，无法识别时保留操作 code；两种情况下都保留 provider 原始
-错误码、constraint/table 元数据和源错误链。
+精确的 provider 分类优先，无法识别时保留操作 code；两种情况下都保留
+constraint/table 元数据和源错误链。
 
 `tokio-postgres` 复制适配器使用相同的 PostgreSQL SQLSTATE 规则。URL 解析错误使用
 `CF002`，连接建立失败使用 `CN001`，复制命令被拒绝时使用该操作显式设置的错误码。
@@ -252,7 +252,7 @@ SQLx 调用点可以显式提供与操作相关的错误码，例如 `CN001`、`
 | HTTP 非成功响应或响应体无效 | `DB001` |
 | MySQL binlog I/O 超时 / 其他传输失败 | `CN002` / `CN001` |
 | MySQL binlog GTID 无效 | `CF002` |
-| MySQL binlog 错误 `1236`（请求的 binlog 已不可用） | `ST001`，origin `mysql/1236` |
+| MySQL binlog 错误 `1236`（请求的 binlog 已不可用） | `ST001` |
 | 其他 MySQL binlog 解码失败 | `DB001` |
 
 Worker join 失败使用 `RT001`。由调用者显式分类的 URL 和 YAML 解析错误使用 `CF002`；
@@ -262,9 +262,9 @@ Worker join 失败使用 `RT001`。由调用者显式分类的 URL 和 YAML 解�
 
 `mysql-binlog-connector-rust v0.3.4` 会丢弃 MySQL 错误包中的数值错误码，并将错误
 `1236` 暴露为 `ConnectError(String)`。在 connector 保留类型化错误码之前，MySQL
-binlog 分类器只识别“请求的 binlog 已不可用”这一组已知消息，并恢复 origin code
-`1236`。这是针对 provider 库丢失类型信息的窄范围消息匹配例外；其他 provider 分类仍
-基于类型和原始错误码。
+binlog 分类器只识别“请求的 binlog 已不可用”这一组已知消息，并分类为 `ST001`；原始
+`ConnectError` 文本仍进入 `DETAIL`。这是针对 provider 库丢失类型信息的窄范围消息匹配
+例外；其他 provider 分类仍基于类型和原始错误码。
 
 数据库连接 URL 格式错误属于配置错误，使用 `CF002`。只有格式正确的端点无法访问，
 或者已经建立的连接中断时，才使用 `CN001`。这一区分对应不同的用户处理方式：

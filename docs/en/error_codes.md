@@ -89,9 +89,9 @@ The `ErrorReport` JSON view contains only user-facing fields: the stable code,
 user message, detail, hint, task ID, endpoint role, and affected object. The
 text view includes these fields before the diagnostic section.
 
-Internal diagnostics are available on the in-memory report as `stage`,
-`origin`, the redacted `error_chain`, its `context_count`, and an optional
-captured `backtrace`. These fields are excluded from JSON.
+Internal diagnostics are available on the in-memory report as `stage`, the
+redacted `error_chain`, its `context_count`, and an optional captured
+`backtrace`. These fields are excluded from JSON.
 `ErrorReport` text rendering always includes all available diagnostics after
 the user-facing section. API consumers must use the versioned JSON view rather
 than parse CLI text.
@@ -109,7 +109,6 @@ CLI failures include a diagnostic section by default:
 DIAGNOSTIC [MD001]
 STAGE: sinker
 ENDPOINT: destination
-ORIGIN: postgres/42P01
 CONTEXT 1: starting task
 CAUSE 1: relation missing
 BACKTRACE:
@@ -130,7 +129,7 @@ printed and only the `BACKTRACE` block is omitted.
 
 `anyhow::Error` is the only error transport container. `DtErrorContext` is a
 typed metadata frame whose code, message, hint, stage, task ID, endpoint role,
-database object, and provider origin are all optional. It is a plain data
+and database object are all optional. It is a plain data
 object and implements neither `Display` nor `std::error::Error`. The endpoint
 role is `source`, `destination`, or `metadata`. Database objects may include
 schema, table, column, and constraint names.
@@ -152,7 +151,7 @@ failure for which no stable classification is available.
 
 The error extension trait is implemented for `anyhow::Error` and the supported
 provider error types. `DtResultExt` provides the same `code`, `message`, `hint`,
-`stage`, `task_id`, `endpoint`, `object`, and `origin` methods directly on
+`stage`, `task_id`, `endpoint`, and `object` methods directly on
 `Result`. Its `dt_context` method accepts a closure, so metadata is not built on
 the successful path. A code attached to a provider result is an operation
 fallback: a recognized provider code takes priority, while an unrecognized
@@ -165,7 +164,7 @@ semantic `DtError` in the `anyhow` context chain above that source. Both the
 classify both without discarding the source diagnostics.
 
 Metadata is added as the error crosses ownership boundaries. A leaf frame can
-contain the business code, affected object, and provider origin. Stage and
+contain the business code and affected object. Stage and
 endpoint are attached at the narrowest component boundary that owns the
 operation, while task ID is attached at the highest boundary that knows it:
 for example, the extractor worker attaches
@@ -181,9 +180,9 @@ internal ordered list carried by `anyhow::Error`; `DtErrorContext` itself has
 no parent link and no field-resolution methods. `ErrorReport` collects every
 field into ordered arrays from explicit frames, project errors, and all known
 provider causes, then applies display-specific precedence. Scope and
-root-cause fields use the nearest inner value: stage, endpoint, and provider
-origin are not replaced merely because an error passes through another
-component. Error object fields are merged individually, preserving an inner
+root-cause fields use the nearest inner value: stage and endpoint are not
+replaced merely because an error passes through another component. Error object
+fields are merged individually, preserving an inner
 value and filling only missing fields from outer frames. Recognized provider
 codes precede operation fallback codes; user message, hint, and task ID retain
 explicit outer precedence. Consequently, a sinker
@@ -198,8 +197,8 @@ chain. Project-owned `DtError` values retain their variant-specific full
 
 Supported provider errors should normally be propagated unchanged with `?` or
 ordinary `anyhow::Context`. The shared raw-cause registry classifies their
-preserved concrete types when the report is built, recovering intrinsic code,
-origin, and object fields. Attach an explicit `DtErrorContext` only for business
+preserved concrete types when the report is built, recovering intrinsic code
+and object fields. Attach an explicit `DtErrorContext` only for business
 semantics or execution scope that the provider error cannot know. Neither path
 infers stage, endpoint, or task ID at report time.
 
@@ -210,11 +209,11 @@ Provider classifier implementations live under `dt-common::error::provider`.
 They implement `ClassifyError` using provider-native codes, typed error kinds,
 and Rust error variants; they must not parse provider messages. Each
 implementation returns a `DtErrorContext` containing an optional recognized
-code, provider origin, and affected object. A small explicit registry applies
+code and affected object. A small explicit registry applies
 the same trait to supported provider causes preserved in `anyhow::Error`.
-The SQLx classifier infers MySQL or PostgreSQL from the concrete database error;
-transport errors use the generic `sqlx` origin. Call sites do not pass a
-database-family hint or attach a separate provider frame. A recognized provider
+The SQLx classifier infers MySQL or PostgreSQL from the concrete database error.
+Call sites do not pass a database-family hint or attach a separate provider
+frame. A recognized provider
 condition takes priority over an operation fallback code. Stage, endpoint, and
 task ID are attached separately at the highest execution layer that knows them.
 
@@ -254,8 +253,10 @@ relation ID when it helps correlate the failure with provider logs.
 
 ## Provider error preservation
 
-Provider codes are diagnostic data, not Ape-DTS error codes. They are retained
-under `origin` whenever available. Initial SQLx mappings are:
+Provider codes are diagnostic data, not Ape-DTS error codes. The original typed
+provider error remains in the source chain, and its redacted display and source
+text contribute to `DETAIL`; there is no separate provider-origin field. The
+codes are also used internally for these initial SQLx mappings:
 
 | Provider error | Ape-DTS code |
 |---|---|
@@ -275,8 +276,8 @@ under `origin` whenever available. Initial SQLx mappings are:
 
 SQLx call sites may explicitly supply an operation-specific code such as
 `CN001`, `DB001`, or `ST001`. A recognized provider classification takes
-precedence; otherwise the operation code is retained. The provider origin,
-constraint/table metadata, and source error chain are preserved in both cases.
+precedence; otherwise the operation code is retained. Constraint/table metadata
+and the source error chain are preserved in both cases.
 
 The `tokio-postgres` replication adapter uses the same PostgreSQL SQLSTATE
 rules. URL parsing uses `CF002`, connection establishment uses `CN001`, and
@@ -304,7 +305,7 @@ Other initial provider mappings are:
 | HTTP non-success response or invalid response body | `DB001` |
 | MySQL binlog I/O timeout / other transport failure | `CN002` / `CN001` |
 | MySQL binlog invalid GTID | `CF002` |
-| MySQL binlog error `1236` (requested binlog unavailable) | `ST001`, origin `mysql/1236` |
+| MySQL binlog error `1236` (requested binlog unavailable) | `ST001` |
 | Other MySQL binlog decoding failures | `DB001` |
 
 Worker join failures are `RT001`. URL and YAML parsing errors explicitly
@@ -317,9 +318,10 @@ operations are `RT002`.
 `mysql-binlog-connector-rust v0.3.4` discards the numeric code from MySQL error
 packets and exposes error `1236` as `ConnectError(String)`. Until the connector
 preserves that typed code, the MySQL binlog classifier recognizes only the
-known "requested binlog unavailable" messages and restores origin code `1236`.
-This narrow message-based exception compensates for type information lost by
-the provider library; other provider classification remains type- and code-based.
+known "requested binlog unavailable" messages and classifies them as `ST001`.
+The raw `ConnectError` text remains in `DETAIL`. This narrow message-based
+exception compensates for type information lost by the provider library; other
+provider classification remains type- and code-based.
 
 A malformed database connection URL is configuration failure `CF002`. `CN001`
 is used only after a syntactically valid endpoint cannot be reached or an

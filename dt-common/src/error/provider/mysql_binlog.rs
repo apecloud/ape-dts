@@ -1,6 +1,6 @@
 use mysql_binlog_connector_rust::binlog_error::BinlogError;
 
-use super::super::{ClassifyError, DtErrorContext, ErrorCode, OriginError};
+use super::super::{ClassifyError, DtErrorContext, ErrorCode};
 
 impl ClassifyError for BinlogError {
     fn classify(&self) -> DtErrorContext {
@@ -22,7 +22,6 @@ impl ClassifyError for BinlogError {
                     .with_hint(
                         "Start from a retained binlog position or take a new snapshot, then increase the source binlog retention period.",
                     )
-                    .with_origin(OriginError::new("mysql", Some("1236")))
             }
             Self::ConnectError(_) => mysql_context(ErrorCode::ConnectionFailed),
             Self::InvalidGtid(_) => mysql_context(ErrorCode::InvalidConfig),
@@ -32,9 +31,7 @@ impl ClassifyError for BinlogError {
 }
 
 fn mysql_context(code: ErrorCode) -> DtErrorContext {
-    DtErrorContext::new()
-        .with_code(code)
-        .with_origin(OriginError::new("mysql", None::<String>))
+    DtErrorContext::new().with_code(code)
 }
 
 fn binlog_is_unavailable(message: &str) -> bool {
@@ -45,6 +42,13 @@ fn binlog_is_unavailable(message: &str) -> bool {
         || message.contains("binlog has been purged")
         || message.contains("not in binlog index")
         || message.contains("start replication from impossible position")
+}
+
+pub(super) fn diagnostic_code(error: &BinlogError) -> Option<&'static str> {
+    match error {
+        BinlogError::ConnectError(message) if binlog_is_unavailable(message) => Some("1236"),
+        _ => None,
+    }
 }
 
 #[cfg(test)]
@@ -82,12 +86,5 @@ mod tests {
         )
         .classify();
         assert_eq!(purged.error_code(), Some(ErrorCode::CheckpointReadFailed));
-        assert_eq!(
-            purged
-                .origin
-                .as_ref()
-                .and_then(|origin| origin.code.as_deref()),
-            Some("1236")
-        );
     }
 }

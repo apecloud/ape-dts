@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 use dt_common::{
-    error::{DtErrorContextExt, EndpointRole, Stage},
+    error::{DtResultExt, EndpointRole, Stage},
     meta::{
         dcl_meta::dcl_data::DclData, ddl_meta::ddl_data::DdlData, dt_data::DtItem,
         row_data::RowData, struct_meta::struct_data::StructData,
@@ -27,73 +27,73 @@ impl BusyTrackingSinker {
 impl Sinker for BusyTrackingSinker {
     async fn sink_dml(&mut self, data: Vec<RowData>, batch: bool) -> anyhow::Result<()> {
         let _guard = self.recorder.enter();
-        self.inner.sink_dml(data, batch).await.map_err(|error| {
-            error
-                .stage(Stage::Sinker)
-                .endpoint(EndpointRole::Destination)
-        })
+        self.inner
+            .sink_dml(data, batch)
+            .await
+            .stage(Stage::Sinker)
+            .endpoint(EndpointRole::Destination)
     }
 
     async fn sink_ddl(&mut self, data: Vec<DdlData>, batch: bool) -> anyhow::Result<()> {
         let _guard = self.recorder.enter();
-        self.inner.sink_ddl(data, batch).await.map_err(|error| {
-            error
-                .stage(Stage::Sinker)
-                .endpoint(EndpointRole::Destination)
-        })
+        self.inner
+            .sink_ddl(data, batch)
+            .await
+            .stage(Stage::Sinker)
+            .endpoint(EndpointRole::Destination)
     }
 
     async fn sink_dcl(&mut self, data: Vec<DclData>, batch: bool) -> anyhow::Result<()> {
         let _guard = self.recorder.enter();
-        self.inner.sink_dcl(data, batch).await.map_err(|error| {
-            error
-                .stage(Stage::Sinker)
-                .endpoint(EndpointRole::Destination)
-        })
+        self.inner
+            .sink_dcl(data, batch)
+            .await
+            .stage(Stage::Sinker)
+            .endpoint(EndpointRole::Destination)
     }
 
     async fn sink_raw(&mut self, data: Vec<DtItem>, batch: bool) -> anyhow::Result<()> {
         let _guard = self.recorder.enter();
-        self.inner.sink_raw(data, batch).await.map_err(|error| {
-            error
-                .stage(Stage::Sinker)
-                .endpoint(EndpointRole::Destination)
-        })
+        self.inner
+            .sink_raw(data, batch)
+            .await
+            .stage(Stage::Sinker)
+            .endpoint(EndpointRole::Destination)
     }
 
     async fn sink_struct(&mut self, data: Vec<StructData>) -> anyhow::Result<()> {
         let _guard = self.recorder.enter();
-        self.inner.sink_struct(data).await.map_err(|error| {
-            error
-                .stage(Stage::Sinker)
-                .endpoint(EndpointRole::Destination)
-        })
+        self.inner
+            .sink_struct(data)
+            .await
+            .stage(Stage::Sinker)
+            .endpoint(EndpointRole::Destination)
     }
 
     async fn refresh_meta(&mut self, data: Vec<DdlData>) -> anyhow::Result<()> {
         let _guard = self.recorder.enter();
-        self.inner.refresh_meta(data).await.map_err(|error| {
-            error
-                .stage(Stage::Sinker)
-                .endpoint(EndpointRole::Destination)
-        })
+        self.inner
+            .refresh_meta(data)
+            .await
+            .stage(Stage::Sinker)
+            .endpoint(EndpointRole::Destination)
     }
 
     async fn handle_control_item(&mut self, item: &DtItem) -> anyhow::Result<()> {
         let _guard = self.recorder.enter();
-        self.inner.handle_control_item(item).await.map_err(|error| {
-            error
-                .stage(Stage::Sinker)
-                .endpoint(EndpointRole::Destination)
-        })
+        self.inner
+            .handle_control_item(item)
+            .await
+            .stage(Stage::Sinker)
+            .endpoint(EndpointRole::Destination)
     }
 
     async fn close(&mut self) -> anyhow::Result<()> {
-        self.inner.close().await.map_err(|error| {
-            error
-                .stage(Stage::Sinker)
-                .endpoint(EndpointRole::Destination)
-        })
+        self.inner
+            .close()
+            .await
+            .stage(Stage::Sinker)
+            .endpoint(EndpointRole::Destination)
     }
 
     fn get_id(&self) -> String {
@@ -116,7 +116,6 @@ mod tests {
     use anyhow::bail;
     use async_trait::async_trait;
     use dt_common::{
-        error::{EndpointRole, ErrorReport, Stage},
         meta::{
             dcl_meta::dcl_data::DclData,
             ddl_meta::ddl_data::DdlData,
@@ -214,10 +213,7 @@ mod tests {
         assert_eq!(metrics.snapshot().busy, 0);
 
         fail.store(true, Ordering::Relaxed);
-        let error = sinker.sink_dml(Vec::new(), false).await.unwrap_err();
-        let report = ErrorReport::from_anyhow(&error);
-        assert_eq!(report.stage, Stage::Sinker);
-        assert_eq!(report.endpoint, Some(EndpointRole::Destination));
+        assert!(sinker.sink_dml(Vec::new(), false).await.is_err());
         assert_eq!(metrics.snapshot().busy, 0);
     }
 

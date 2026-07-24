@@ -4,9 +4,8 @@ use serde::Serialize;
 
 use super::{
     error_context::{DtErrorContexts, DT_ERROR_CONTEXT_MARKER},
-    provider::classify_raw_errors,
-    ClassifyError, DtError, DtErrorContext, EndpointRole, ErrorCode, ErrorObject, OriginError,
-    Stage,
+    provider::{classify_raw_errors, provider_error_detail},
+    ClassifyError, DtError, DtErrorContext, EndpointRole, ErrorCode, ErrorObject, Stage,
 };
 
 pub const ERROR_REPORT_SCHEMA_VERSION: u16 = 1;
@@ -28,8 +27,6 @@ pub struct ErrorReport {
     pub endpoint: Option<EndpointRole>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub object: Option<ErrorObject>,
-    #[serde(skip_serializing)]
-    pub origin: Option<OriginError>,
     #[serde(skip_serializing)]
     pub error_chain: Vec<String>,
     #[serde(skip_serializing)]
@@ -59,7 +56,6 @@ impl ErrorReport {
             task_id: metadata.task_id().map(str::to_string),
             endpoint: metadata.endpoint(),
             object: metadata.object(),
-            origin: metadata.origin(),
             error_chain,
             context_count,
             backtrace,
@@ -70,11 +66,6 @@ impl ErrorReport {
         let mut parts = Vec::new();
         if let Some(endpoint) = self.endpoint {
             parts.push(endpoint.user_description().to_string());
-        }
-        if let Some(origin) = &self.origin {
-            if origin.system != "sqlx" {
-                parts.push(origin.system.clone());
-            }
         }
         if let Some(object) = &self.object {
             if let Some(name) = format_object(object) {
@@ -90,8 +81,7 @@ struct CollectedMetadata {
     explicit: MetadataValues,
     project: MetadataValues,
     provider: MetadataValues,
-    identified_provider_codes: Vec<ErrorCode>,
-    fallback_provider_codes: Vec<ErrorCode>,
+    system: MetadataValues,
 }
 
 impl CollectedMetadata {
@@ -105,24 +95,23 @@ impl CollectedMetadata {
         if let Some(error) = error.downcast_ref::<DtError>() {
             metadata.project.push(&error.classify());
         }
-        for context in classify_raw_errors(error) {
-            let target = if context.origin.is_some() {
-                &mut metadata.identified_provider_codes
-            } else {
-                &mut metadata.fallback_provider_codes
-            };
-            target.extend(context.code);
+        let (provider_contexts, system_contexts) = classify_raw_errors(error);
+        for context in provider_contexts {
             metadata.provider.push(&context);
+        }
+        for context in system_contexts {
+            metadata.system.push(&context);
         }
         metadata
     }
 
     fn code(&self) -> Option<ErrorCode> {
-        self.identified_provider_codes
+        self.provider
+            .codes
             .first()
             .or_else(|| self.explicit.codes.first())
             .or_else(|| self.project.codes.first())
-            .or_else(|| self.fallback_provider_codes.first())
+            .or_else(|| self.system.codes.first())
             .copied()
     }
 
@@ -132,6 +121,7 @@ impl CollectedMetadata {
             .first()
             .or_else(|| self.project.messages.first())
             .or_else(|| self.provider.messages.first())
+            .or_else(|| self.system.messages.first())
             .map(String::as_str)
     }
 
@@ -141,6 +131,7 @@ impl CollectedMetadata {
             .first()
             .or_else(|| self.project.hints.first())
             .or_else(|| self.provider.hints.first())
+            .or_else(|| self.system.hints.first())
             .map(String::as_str)
     }
 
@@ -150,6 +141,7 @@ impl CollectedMetadata {
             .first()
             .or_else(|| self.explicit.stages.last())
             .or_else(|| self.project.stages.first())
+            .or_else(|| self.system.stages.first())
             .copied()
     }
 
@@ -159,6 +151,7 @@ impl CollectedMetadata {
             .first()
             .or_else(|| self.project.task_ids.first())
             .or_else(|| self.provider.task_ids.first())
+            .or_else(|| self.system.task_ids.first())
             .map(String::as_str)
     }
 
@@ -168,6 +161,7 @@ impl CollectedMetadata {
             .first()
             .or_else(|| self.project.endpoints.first())
             .or_else(|| self.explicit.endpoints.last())
+            .or_else(|| self.system.endpoints.first())
             .copied()
     }
 
@@ -179,6 +173,7 @@ impl CollectedMetadata {
             .iter()
             .chain(&self.project.objects)
             .chain(self.explicit.objects.iter().rev())
+            .chain(&self.system.objects)
         {
             match &mut merged {
                 Some(merged) => merged.fill_missing_from(object),
@@ -186,30 +181,6 @@ impl CollectedMetadata {
             }
         }
         merged
-    }
-
-    fn origin(&self) -> Option<OriginError> {
-        self.provider
-            .origins
-            .iter()
-            .find(|origin| origin.code.is_some())
-            .or_else(|| {
-                self.project
-                    .origins
-                    .iter()
-                    .find(|origin| origin.code.is_some())
-            })
-            .or_else(|| {
-                self.explicit
-                    .origins
-                    .iter()
-                    .rev()
-                    .find(|origin| origin.code.is_some())
-            })
-            .or_else(|| self.project.origins.first())
-            .or_else(|| self.explicit.origins.last())
-            .or_else(|| self.provider.origins.first())
-            .cloned()
     }
 }
 
@@ -222,7 +193,6 @@ struct MetadataValues {
     task_ids: Vec<String>,
     endpoints: Vec<EndpointRole>,
     objects: Vec<ErrorObject>,
-    origins: Vec<OriginError>,
 }
 
 impl MetadataValues {
@@ -234,7 +204,6 @@ impl MetadataValues {
         self.task_ids.extend(context.task_id.clone());
         self.endpoints.extend(context.endpoint);
         self.objects.extend(context.object.clone());
-        self.origins.extend(context.origin.clone());
     }
 }
 
@@ -265,7 +234,14 @@ fn format_object(object: &ErrorObject) -> Option<String> {
 fn split_error_chain(error: &anyhow::Error) -> (Vec<String>, usize) {
     let raw_chain: Vec<_> = error
         .chain()
-        .map(|cause| sanitize_user_text(&cause.to_string()))
+        .map(|cause| {
+            let display = cause.to_string();
+            let detail = match provider_error_detail(cause) {
+                Some(provider) => format!("{provider}: {display}"),
+                None => display,
+            };
+            sanitize_user_text(&detail)
+        })
         .collect();
     let marker = sanitize_user_text(DT_ERROR_CONTEXT_MARKER);
     let Some(root_context_index) = raw_chain.iter().rposition(|item| item == &marker) else {
@@ -322,12 +298,6 @@ impl fmt::Display for ErrorReport {
         if let Some(endpoint) = self.endpoint {
             write!(f, "\nENDPOINT: {}", endpoint.user_description())?;
         }
-        if let Some(origin) = &self.origin {
-            write!(f, "\nORIGIN: {}", origin.system)?;
-            if let Some(code) = &origin.code {
-                write!(f, "/{code}")?;
-            }
-        }
         for (index, item) in self.error_chain.iter().enumerate() {
             if index < self.context_count {
                 write!(f, "\nCONTEXT {}: {item}", index + 1)?;
@@ -361,8 +331,7 @@ mod tests {
                         schema: Some("ape_dts".to_string()),
                         table: Some("resume_position".to_string()),
                         ..Default::default()
-                    })
-                    .with_origin(OriginError::new("postgres", Some("42P01"))),
+                    }),
             ) // error-boundary-audit: allow-test
             .context("loading task state")
             .message("outer message")
@@ -384,10 +353,6 @@ mod tests {
         assert_eq!(report.task_id.as_deref(), Some("task-42"));
         assert_eq!(report.endpoint, Some(EndpointRole::Metadata));
         assert_eq!(
-            report.origin.as_ref().unwrap().code.as_deref(),
-            Some("42P01")
-        );
-        assert_eq!(
             report.object.as_ref().unwrap().table.as_deref(),
             Some("resume_position")
         );
@@ -408,8 +373,8 @@ mod tests {
         assert!(!rendered.contains("OPERATION:"));
         assert!(rendered.contains("TASK: task-42"));
         assert!(rendered.contains("ENDPOINT: metadata"));
-        assert!(rendered.contains("AFFECTED: metadata store postgres ape_dts.resume_position"));
-        assert!(rendered.contains("ORIGIN: postgres/42P01"));
+        assert!(rendered.contains("AFFECTED: metadata store ape_dts.resume_position"));
+        assert!(!rendered.contains("ORIGIN:"));
         assert!(rendered.contains("CONTEXT 1: starting task"));
         assert!(rendered.contains("CAUSE 1: invalid digit found in string"));
     }
@@ -426,19 +391,16 @@ mod tests {
         assert_eq!(report.code, ErrorCode::ConnectionTimeout);
         assert_eq!(report.stage, Stage::Sinker);
         assert_eq!(report.endpoint, Some(EndpointRole::Destination));
-        assert_eq!(report.origin.unwrap().system, "sqlx");
     }
 
     #[test]
     fn classifies_project_errors_unless_context_overrides_the_code() {
         let source = std::io::Error::other("invalid port");
         let error = anyhow::Error::new(source)
-            .origin(OriginError::new("config-parser", None::<String>))
             .context(DtError::InvalidConfig("invalid port".to_string()))
             .context("loading source config");
         let report = ErrorReport::from_anyhow(&error);
         assert_eq!(report.code, ErrorCode::InvalidConfig);
-        assert_eq!(report.origin.unwrap().system, "config-parser");
         assert!(error.downcast_ref::<std::io::Error>().is_some());
 
         let error = error.code(ErrorCode::InvariantViolated);
@@ -452,7 +414,6 @@ mod tests {
         ));
         let report = ErrorReport::from_anyhow(&redis_error);
         assert_eq!(report.code, ErrorCode::StatementFailed);
-        assert_eq!(report.origin.unwrap().system, "redis");
     }
 
     #[test]
@@ -484,7 +445,6 @@ mod tests {
         for diagnostic_field in [
             "phase",
             "stage",
-            "origin",
             "error_chain",
             "context_count",
             "backtrace",

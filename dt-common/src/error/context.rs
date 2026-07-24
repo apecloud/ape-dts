@@ -70,19 +70,3 @@ impl ErrorObject {
         self.constraint = self.constraint.take().or_else(|| outer.constraint.clone());
     }
 }
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-pub struct OriginError {
-    pub system: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub code: Option<String>,
-}
-
-impl OriginError {
-    pub fn new(system: impl Into<String>, code: Option<impl Into<String>>) -> Self {
-        Self {
-            system: system.into(),
-            code: code.map(Into::into),
-        }
-    }
-}

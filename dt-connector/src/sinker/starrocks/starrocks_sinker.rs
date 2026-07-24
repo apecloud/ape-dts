@@ -9,7 +9,7 @@ use tokio::time::Instant;
 
 use dt_common::{
     config::config_enums::DbType,
-    error::{DtError, DtErrorContextExt, ErrorCode},
+    error::{DtError, DtResultExt, ErrorCode},
     log_error,
     meta::{
         col_value::ColValue,
@@ -159,7 +159,7 @@ impl StarRocksSinker {
             .http_client
             .execute(request)
             .await
-            .map_err(|error| error.code(ErrorCode::StatementFailed))?;
+            .code(ErrorCode::StatementFailed)?;
         rts.push((start_time.elapsed().as_millis() as u64, 1));
         let task_id = self.base_sinker.task_id_for_schema_tb(&db, &tb);
         self.base_sinker.ensure_monitor_for(&task_id);
@@ -278,16 +278,12 @@ impl StarRocksSinker {
                 _ => {}
             }
         }
-        put.build()
-            .map_err(|error| error.code(ErrorCode::StatementFailed))
+        put.build().code(ErrorCode::StatementFailed)
     }
 
     async fn check_response(response: Response) -> anyhow::Result<()> {
         let status_code = response.status();
-        let response_text = &response
-            .text()
-            .await
-            .map_err(|error| error.code(ErrorCode::StatementFailed))?;
+        let response_text = &response.text().await.code(ErrorCode::StatementFailed)?;
         if status_code != StatusCode::OK {
             return Err(DtError::HttpRejected {
                 status: status_code.as_u16(),

@@ -18,7 +18,10 @@ use crate::{
     Extractor,
 };
 use dt_common::{
-    config::{config_enums::ExtractType, connection_auth_config::ConnectionAuthConfig},
+    config::{
+        config_enums::{DbType, ExtractType},
+        connection_auth_config::ConnectionAuthConfig,
+    },
     error::{DtError, DtErrorContextExt, ErrorCode},
     log_info, log_warn,
     meta::{position::Position, redis::cluster_node::ClusterNode, syncer::Syncer},
@@ -237,21 +240,25 @@ impl RedisClusterPsyncExtractor {
     }
 
     fn node_url(base_url: &str, node: &ClusterNode) -> anyhow::Result<String> {
-        let mut url = Url::parse(base_url).context(DtError::RedisInvalidConfig(
+        let mut url = Url::parse(base_url).context(DtError::DatabaseInvalidConfig(
+            DbType::Redis,
             "invalid source Redis URL".to_string(),
         ))?;
         url.set_host(Some(&node.host)).map_err(|_| {
-            DtError::RedisInvalidConfig(format!("invalid Redis cluster node host: {}", node.host))
+            DtError::DatabaseInvalidConfig(
+                DbType::Redis,
+                format!("invalid Redis cluster node host: {}", node.host),
+            )
         })?;
-        let port = node
-            .port
-            .parse()
-            .context(DtError::RedisInvalidConfig(format!(
-                "invalid Redis cluster node port: {}",
-                node.port
-            )))?;
+        let port = node.port.parse().context(DtError::DatabaseInvalidConfig(
+            DbType::Redis,
+            format!("invalid Redis cluster node port: {}", node.port),
+        ))?;
         url.set_port(Some(port)).map_err(|_| {
-            DtError::RedisInvalidConfig(format!("invalid Redis cluster node port: {}", node.port))
+            DtError::DatabaseInvalidConfig(
+                DbType::Redis,
+                format!("invalid Redis cluster node port: {}", node.port),
+            )
         })?;
         Ok(url.to_string())
     }

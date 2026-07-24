@@ -1,6 +1,8 @@
-use super::{ClassifyError, DtErrorContext, ErrorCode, OriginError, Stage};
+use crate::config::config_enums::DbType;
 
-#[derive(Debug, thiserror::Error)]
+use super::{ClassifyError, DtErrorContext, ErrorCode, Stage};
+
+#[derive(Clone, Debug, thiserror::Error)]
 pub enum DtError {
     #[error("{0}")]
     MissingConfig(String),
@@ -11,11 +13,8 @@ pub enum DtError {
     #[error("{0}")]
     InvalidConfig(String),
 
-    #[error("{0}")]
-    RedisInvalidConfig(String),
-
-    #[error("{0}")]
-    PostgresInvalidConfig(String),
+    #[error("{} invalid configuration: {1}", .0.diagnostic_name())]
+    DatabaseInvalidConfig(DbType, String),
 
     #[error("{0}")]
     MetricsInitializationFailed(String),
@@ -23,17 +22,26 @@ pub enum DtError {
     #[error("{0}")]
     ConnectionFailed(String),
 
+    #[error("{} connection failed: {1}", .0.diagnostic_name())]
+    DatabaseConnectionFailed(DbType, String),
+
     #[error("{0}")]
     ConnectionTimeout(String),
+
+    #[error("{} connection timed out: {1}", .0.diagnostic_name())]
+    DatabaseConnectionTimeout(DbType, String),
 
     #[error("{0}")]
     TlsFailed(String),
 
+    #[error("{} TLS setup failed: {1}", .0.diagnostic_name())]
+    DatabaseTlsFailed(DbType, String),
+
     #[error("{0}")]
     AuthenticationFailed(String),
 
-    #[error("{0}")]
-    RedisAuthenticationFailed(String),
+    #[error("{} authentication failed: {1}", .0.diagnostic_name())]
+    DatabaseAuthenticationFailed(DbType, String),
 
     #[error("{0}")]
     PermissionDenied(String),
@@ -41,23 +49,17 @@ pub enum DtError {
     #[error("{0}")]
     PrerequisiteNotMet(String),
 
-    #[error("{0}")]
+    #[error("Redis cluster topology is invalid: {0}")]
     RedisTopology(String),
 
-    #[error("{0}")]
+    #[error("Redis prerequisite is not met: {0}")]
     RedisPrerequisiteNotMet(String),
 
-    #[error("{0}")]
-    RedisUnsupportedVersion(String),
+    #[error("{} database version is unsupported: {1}", .0.diagnostic_name())]
+    UnsupportedDatabaseVersion(DbType, String),
 
-    #[error("{0}")]
-    RedisInvariant(String),
-
-    #[error("{0}")]
-    UnsupportedDatabaseVersion(String),
-
-    #[error("{0}")]
-    MongoUnsupportedVersion(String),
+    #[error("{} invariant was violated: {1}", .0.diagnostic_name())]
+    DatabaseInvariant(DbType, String),
 
     #[error("{0}")]
     CdcNotEnabled(String),
@@ -68,11 +70,17 @@ pub enum DtError {
     #[error("{0}")]
     UnsupportedTableStructure(String),
 
+    #[error("{} table structure is unsupported: {1}", .0.diagnostic_name())]
+    DatabaseUnsupportedTableStructure(DbType, String),
+
     #[error("{0}")]
     ObjectNotFound(String),
 
-    #[error("{0}")]
-    DatabaseNotFound(String),
+    #[error("{} object was not found: {1}", .0.diagnostic_name())]
+    DatabaseObjectNotFound(DbType, String),
+
+    #[error("{} database was not found: {1}", .0.diagnostic_name())]
+    DatabaseNotFound(DbType, String),
 
     #[error("{0}")]
     MetadataReadFailed(String),
@@ -80,11 +88,8 @@ pub enum DtError {
     #[error("{0}")]
     StatementFailed(String),
 
-    #[error("{0}")]
-    MongoStatementFailed(String),
-
-    #[error("{0}")]
-    PostgresStatementFailed(String),
+    #[error("{} statement execution failed: {1}", .0.diagnostic_name())]
+    DatabaseStatementFailed(DbType, String),
 
     #[error("{0}")]
     IntegrityViolation(String),
@@ -92,20 +97,17 @@ pub enum DtError {
     #[error("{0}")]
     CheckpointReadFailed(String),
 
-    #[error("{0}")]
-    PostgresCheckpointReadFailed(String),
+    #[error("{} checkpoint read failed: {1}", .0.diagnostic_name())]
+    DatabaseCheckpointReadFailed(DbType, String),
 
-    #[error("{0}")]
+    #[error("MySQL binlog is unavailable: {0}")]
     MySqlBinlogUnavailable(String),
 
-    #[error("{0}")]
+    #[error("MySQL binlog table map is missing: {0}")]
     MySqlBinlogTableMapMissing(String),
 
-    #[error("{0}")]
+    #[error("MySQL binlog event decoding failed: {0}")]
     MySqlBinlogDecode(String),
-
-    #[error("{0}")]
-    MySqlInvariant(String),
 
     #[error("{0}")]
     IoFailed(String),
@@ -125,14 +127,14 @@ pub enum DtError {
     #[error("the configured destination connection client is missing")]
     MissingDestinationClient,
 
-    #[error("expected {0} connection client is missing")]
-    MissingTaskClient(String),
+    #[error("expected {} connection client is missing", .0.diagnostic_name())]
+    MissingTaskClient(DbType),
 
-    #[error("{detail}")]
+    #[error("HTTP request was rejected with status {status}: {detail}")]
     HttpRejected { status: u16, detail: String },
 
-    #[error("{0}")]
-    ClickHouseSourceMetadataMissing(String),
+    #[error("{} source metadata was not found: {1}", .0.diagnostic_name())]
+    DatabaseMetadataNotFound(DbType, String),
 
     #[error("parse Redis RDB error: {0}")]
     RedisRdbError(String),
@@ -157,7 +159,7 @@ impl DtError {
     }
 
     pub fn mongo_statement(detail: impl Into<String>) -> Self {
-        Self::MongoStatementFailed(detail.into())
+        Self::DatabaseStatementFailed(DbType::Mongo, detail.into())
     }
 
     pub fn mysql_binlog_table_map_missing(table_id: u64, event_type: &'static str) -> Self {
@@ -172,14 +174,18 @@ impl ClassifyError for DtError {
         let code = match self {
             DtError::MissingConfig(_) => ErrorCode::MissingConfig,
             DtError::MissingConfigItem(_) => ErrorCode::MissingConfigItem,
-            DtError::InvalidConfig(_)
-            | DtError::RedisInvalidConfig(_)
-            | DtError::PostgresInvalidConfig(_) => ErrorCode::InvalidConfig,
+            DtError::InvalidConfig(_) | DtError::DatabaseInvalidConfig(_, _) => {
+                ErrorCode::InvalidConfig
+            }
             DtError::MetricsInitializationFailed(_) => ErrorCode::InvalidConfig,
-            DtError::ConnectionFailed(_) => ErrorCode::ConnectionFailed,
-            DtError::ConnectionTimeout(_) => ErrorCode::ConnectionTimeout,
-            DtError::TlsFailed(_) => ErrorCode::TlsFailed,
-            DtError::AuthenticationFailed(_) | DtError::RedisAuthenticationFailed(_) => {
+            DtError::ConnectionFailed(_) | DtError::DatabaseConnectionFailed(_, _) => {
+                ErrorCode::ConnectionFailed
+            }
+            DtError::ConnectionTimeout(_) | DtError::DatabaseConnectionTimeout(_, _) => {
+                ErrorCode::ConnectionTimeout
+            }
+            DtError::TlsFailed(_) | DtError::DatabaseTlsFailed(_, _) => ErrorCode::TlsFailed,
+            DtError::AuthenticationFailed(_) | DtError::DatabaseAuthenticationFailed(_, _) => {
                 ErrorCode::AuthenticationFailed
             }
             DtError::PermissionDenied(_) => ErrorCode::PermissionDenied,
@@ -187,23 +193,25 @@ impl ClassifyError for DtError {
             DtError::RedisTopology(_) | DtError::RedisPrerequisiteNotMet(_) => {
                 ErrorCode::PrerequisiteNotMet
             }
-            DtError::RedisUnsupportedVersion(_)
-            | DtError::UnsupportedDatabaseVersion(_)
-            | DtError::MongoUnsupportedVersion(_) => ErrorCode::UnsupportedDatabaseVersion,
+            DtError::UnsupportedDatabaseVersion(_, _) => ErrorCode::UnsupportedDatabaseVersion,
             DtError::CdcNotEnabled(_) => ErrorCode::CdcNotEnabled,
             DtError::ReplicationCapacityExhausted(_) => ErrorCode::ReplicationCapacityExhausted,
-            DtError::UnsupportedTableStructure(_) => ErrorCode::UnsupportedTableStructure,
-            DtError::ObjectNotFound(_) => ErrorCode::ObjectNotFound,
-            DtError::DatabaseNotFound(_) => ErrorCode::DatabaseNotFound,
+            DtError::UnsupportedTableStructure(_)
+            | DtError::DatabaseUnsupportedTableStructure(_, _) => {
+                ErrorCode::UnsupportedTableStructure
+            }
+            DtError::ObjectNotFound(_)
+            | DtError::DatabaseObjectNotFound(_, _)
+            | DtError::DatabaseMetadataNotFound(_, _) => ErrorCode::ObjectNotFound,
+            DtError::DatabaseNotFound(_, _) => ErrorCode::DatabaseNotFound,
             DtError::MetadataReadFailed(_) => ErrorCode::MetadataReadFailed,
             DtError::StatementFailed(_)
-            | DtError::MongoStatementFailed(_)
-            | DtError::PostgresStatementFailed(_)
+            | DtError::DatabaseStatementFailed(_, _)
             | DtError::RedisRdbError(_)
             | DtError::RedisCmdError(_)
             | DtError::RedisResultError(_) => ErrorCode::StatementFailed,
             DtError::IntegrityViolation(_) => ErrorCode::IntegrityViolation,
-            DtError::CheckpointReadFailed(_) | DtError::PostgresCheckpointReadFailed(_) => {
+            DtError::CheckpointReadFailed(_) | DtError::DatabaseCheckpointReadFailed(_, _) => {
                 ErrorCode::CheckpointReadFailed
             }
             DtError::MySqlBinlogUnavailable(_) => ErrorCode::CheckpointReadFailed,
@@ -213,14 +221,13 @@ impl ClassifyError for DtError {
             DtError::IoFailed(_) => ErrorCode::IoFailed,
             DtError::WorkerFailed(_) => ErrorCode::WorkerFailed,
             DtError::OperationInterrupted(_) => ErrorCode::OperationInterrupted,
-            DtError::InvariantViolated(_)
-            | DtError::RedisInvariant(_)
-            | DtError::MySqlInvariant(_) => ErrorCode::InvariantViolated,
+            DtError::InvariantViolated(_) | DtError::DatabaseInvariant(_, _) => {
+                ErrorCode::InvariantViolated
+            }
             DtError::MissingSourceClient
             | DtError::MissingDestinationClient
             | DtError::MissingTaskClient(_) => ErrorCode::InvariantViolated,
             DtError::HttpRejected { .. } => ErrorCode::StatementFailed,
-            DtError::ClickHouseSourceMetadataMissing(_) => ErrorCode::ObjectNotFound,
             DtError::Unclassified(_) => ErrorCode::Unclassified,
         };
         let context = DtErrorContext::new().with_code(code);
@@ -228,13 +235,7 @@ impl ClassifyError for DtError {
             DtError::MissingConfig(_)
             | DtError::MissingConfigItem(_)
             | DtError::InvalidConfig(_) => context.with_stage(Stage::Bootstrap),
-            DtError::RedisInvalidConfig(_) => context
-                .with_stage(Stage::Bootstrap)
-                .with_endpoint(super::EndpointRole::Source)
-                .with_origin(OriginError::new("redis", None::<String>)),
-            DtError::PostgresInvalidConfig(_) => context
-                .with_stage(Stage::Bootstrap)
-                .with_origin(OriginError::new("postgres", None::<String>)),
+            DtError::DatabaseInvalidConfig(_, _) => context.with_stage(Stage::Bootstrap),
             DtError::MetricsInitializationFailed(_) => context
                 .with_message("Metrics configuration is invalid")
                 .with_stage(Stage::Bootstrap),
@@ -244,61 +245,35 @@ impl ClassifyError for DtError {
             DtError::RedisRdbError(_)
             | DtError::RedisCmdError(_)
             | DtError::RedisResultError(_)
-            | DtError::RedisUnsupportedVersion(_)
-            | DtError::RedisInvariant(_) => {
-                context.with_origin(OriginError::new("redis", None::<String>))
-            }
-            DtError::RedisAuthenticationFailed(_) => {
-                context.with_origin(OriginError::new("redis", None::<String>))
-            }
+            | DtError::RedisPrerequisiteNotMet(_) => context,
             DtError::RedisTopology(_) => context
                 .with_message("The Redis cluster topology is invalid or incomplete")
                 .with_hint(
                     "Ensure all 16384 Redis cluster slots are assigned to stable master nodes, then retry.",
-                )
-                .with_origin(OriginError::new("redis", None::<String>)),
-            DtError::RedisPrerequisiteNotMet(_) => {
-                context.with_origin(OriginError::new("redis", None::<String>))
-            }
+                ),
             DtError::MySqlBinlogUnavailable(_) => context
                 .with_message("The requested MySQL binlog is no longer available")
                 .with_hint(
                     "Start from a retained binlog position or take a new snapshot, then increase the source binlog retention period.",
-                )
-                .with_origin(OriginError::new("mysql", Some("1236"))),
+                ),
             DtError::MySqlBinlogTableMapMissing(_) => context
                 .with_message("A MySQL row event could not be decoded")
                 .with_hint(
                     "Restart from an earlier binlog position so Ape-DTS can reload the table definition. If it repeats, check binlog retention and the source database logs.",
-                )
-                .with_origin(OriginError::new("mysql", None::<String>)),
+                ),
             DtError::MySqlBinlogDecode(_) => context
                 .with_message("A MySQL row event could not be decoded")
                 .with_hint(
                     "Restart from an earlier binlog position. If it repeats, check binlog integrity and the source database logs.",
-                )
-                .with_origin(OriginError::new("mysql", None::<String>)),
-            DtError::MySqlInvariant(_) => {
-                context.with_origin(OriginError::new("mysql", None::<String>))
-            }
-            DtError::HttpRejected { status, .. } => context.with_origin(OriginError::new(
-                "http",
-                Some(status.to_string()),
-            )),
-            DtError::ClickHouseSourceMetadataMissing(_) => context
-                .with_message(
-                    "Source table metadata is unavailable for ClickHouse structure migration",
-                )
+                ),
+            DtError::DatabaseMetadataNotFound(db_type, _) => context
+                .with_message(format!(
+                    "Source table metadata is unavailable for {} structure migration",
+                    db_type.diagnostic_name()
+                ))
                 .with_hint(
                     "Verify that the source table still exists and rerun structure migration. If it repeats, contact support with the task ID and error code.",
-                )
-                .with_origin(OriginError::new("clickhouse", None::<String>)),
-            DtError::MongoStatementFailed(_) | DtError::MongoUnsupportedVersion(_) => {
-                context.with_origin(OriginError::new("mongodb", None::<String>))
-            }
-            DtError::PostgresStatementFailed(_) | DtError::PostgresCheckpointReadFailed(_) => {
-                context.with_origin(OriginError::new("postgres", None::<String>))
-            }
+                ),
             _ => context,
         }
     }

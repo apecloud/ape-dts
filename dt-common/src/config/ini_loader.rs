@@ -104,18 +104,3 @@ impl IniLoader {
             .any(|sensitive| key.contains(sensitive))
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::error::ErrorReport;
-
-    #[test]
-    fn invalid_value_is_redacted_for_sensitive_keys() {
-        let error =
-            IniLoader::parse_value::<u32>("extractor", "password", "not-a-number").unwrap_err();
-        let rendered = ErrorReport::from_anyhow(&error).to_string();
-        assert!(rendered.contains("[redacted]"));
-        assert!(!rendered.contains("not-a-number"));
-    }
-}

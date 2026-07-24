@@ -1,6 +1,6 @@
 use dt_common::{
     config::task_config::TaskConfig,
-    error::{DtErrorContextExt, Stage},
+    error::{DtResultExt, Stage},
 };
 
 use crate::{
@@ -21,7 +21,8 @@ pub async fn do_precheck(config: &str, precheck_config: PrecheckTaskConfig) -> a
     if let Err(error) = checker_connector
         .verify_check_result()
         .await
-        .map_err(|error| error.stage(Stage::Precheck).task_id(task_id))
+        .stage(Stage::Precheck)
+        .task_id(task_id)
     {
         println!("precheck not passed.");
         return Err(error);

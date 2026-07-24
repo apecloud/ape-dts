@@ -3,7 +3,7 @@ use kafka::producer::{Producer, Record};
 use tokio::time::Instant;
 
 use dt_common::{
-    error::{DtErrorContextExt, ErrorCode},
+    error::{DtResultExt, ErrorCode},
     meta::{avro::avro_converter::AvroConverter, ddl_meta::ddl_data::DdlData, row_data::RowData},
     utils::limit_queue::LimitedQueue,
 };
@@ -43,7 +43,7 @@ impl Sinker for KafkaSinker {
         }
         self.producer
             .send_all(&messages)
-            .map_err(|error| error.code(ErrorCode::StatementFailed))?;
+            .code(ErrorCode::StatementFailed)?;
         Ok(())
     }
 
@@ -88,7 +88,7 @@ impl KafkaSinker {
         let mut rts = LimitedQueue::new(1);
         self.producer
             .send_all(&messages)
-            .map_err(|error| error.code(ErrorCode::StatementFailed))?;
+            .code(ErrorCode::StatementFailed)?;
         rts.push((
             start_time.elapsed().as_millis() as u64,
             messages.len() as u64,

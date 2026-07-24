@@ -1,6 +1,6 @@
 use std::{error::Error as StdError, fmt};
 
-use super::{DtError, EndpointRole, ErrorCode, ErrorObject, OriginError, Stage};
+use super::{DtError, EndpointRole, ErrorCode, ErrorObject, Stage};
 
 pub(crate) const DT_ERROR_CONTEXT_MARKER: &str = "__APE_DTS_ERROR_CONTEXT__";
 
@@ -13,7 +13,6 @@ pub struct DtErrorContext {
     pub(crate) task_id: Option<String>,
     pub(crate) endpoint: Option<EndpointRole>,
     pub(crate) object: Option<ErrorObject>,
-    pub(crate) origin: Option<OriginError>,
 }
 
 impl DtErrorContext {
@@ -53,11 +52,6 @@ impl DtErrorContext {
 
     pub fn with_object(mut self, object: ErrorObject) -> Self {
         self.object = Some(object);
-        self
-    }
-
-    pub fn with_origin(mut self, origin: OriginError) -> Self {
-        self.origin = Some(origin);
         self
     }
 
@@ -127,10 +121,6 @@ pub trait DtErrorContextExt: Sized {
     fn object(self, object: ErrorObject) -> anyhow::Error {
         self.dt_context(DtErrorContext::new().with_object(object))
     }
-
-    fn origin(self, origin: OriginError) -> anyhow::Error {
-        self.dt_context(DtErrorContext::new().with_origin(origin))
-    }
 }
 
 impl DtErrorContextExt for anyhow::Error {
@@ -180,6 +170,8 @@ impl_dt_error_context_ext!(
 );
 
 pub trait DtResultExt<T>: Sized {
+    fn dt_error(self, error: DtError) -> anyhow::Result<T>;
+
     fn dt_context<F>(self, make_context: F) -> anyhow::Result<T>
     where
         F: FnOnce() -> DtErrorContext;
@@ -211,16 +203,16 @@ pub trait DtResultExt<T>: Sized {
     fn object(self, object: ErrorObject) -> anyhow::Result<T> {
         self.dt_context(|| DtErrorContext::new().with_object(object))
     }
-
-    fn origin(self, origin: OriginError) -> anyhow::Result<T> {
-        self.dt_context(|| DtErrorContext::new().with_origin(origin))
-    }
 }
 
 impl<T, E> DtResultExt<T> for Result<T, E>
 where
     E: Into<anyhow::Error>,
 {
+    fn dt_error(self, error: DtError) -> anyhow::Result<T> {
+        self.map_err(|e| e.into().context(error))
+    }
+
     fn dt_context<F>(self, make_context: F) -> anyhow::Result<T>
     where
         F: FnOnce() -> DtErrorContext,
@@ -229,5 +221,52 @@ where
             let error: anyhow::Error = error.into();
             error.dt_context(make_context())
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::error::ErrorReport;
+    use anyhow::Context;
+
+    #[test]
+    fn result_dt_error_preserves_source_and_metadata() {
+        let result: Result<(), std::io::Error> =
+            Err(std::io::Error::new(std::io::ErrorKind::Other, "test error"));
+        let anyhow_result = result
+            .dt_error(DtError::Unclassified("e1".into()))
+            .dt_error(DtError::Unclassified("e2".into()))
+            .stage(Stage::Bootstrap)
+            .endpoint(EndpointRole::Source);
+        let err = anyhow_result.unwrap_err();
+        assert!(err.downcast_ref::<DtError>().is_some());
+        assert!(err.downcast_ref::<std::io::Error>().is_some());
+        let report = ErrorReport::from_anyhow(&err);
+        assert_eq!(report.stage, Stage::Bootstrap);
+        assert_eq!(report.endpoint, Some(EndpointRole::Source));
+    }
+
+    #[test]
+    fn anyhow_result_dt_error_preserves_existing_chain() {
+        let result: Result<(), anyhow::Error> = Err(anyhow::Error::from(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            "test error",
+        )));
+        let anyhow_result = result
+            .dt_error(DtError::Unclassified("e1".into()))
+            .dt_error(DtError::Unclassified("e2".into()))
+            .context(DtError::Unclassified("e3".into()))
+            .stage(Stage::Bootstrap)
+            .endpoint(EndpointRole::Source);
+        let err = anyhow_result.unwrap_err();
+        assert!(err.downcast_ref::<DtError>().is_some());
+        assert!(err.downcast_ref::<std::io::Error>().is_some());
+        assert!(err.downcast_ref::<DtErrorContexts>().is_some());
+        let chain: Vec<_> = err.chain().map(ToString::to_string).collect();
+        assert_eq!(
+            chain,
+            [DT_ERROR_CONTEXT_MARKER, "e3", "e2", "e1", "test error"]
+        );
     }
 }

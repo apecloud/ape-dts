@@ -1,7 +1,8 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::{
-    error::{DtError, DtErrorContextExt, ErrorObject, OriginError},
+    config::config_enums::DbType,
+    error::{DtError, DtErrorContextExt, ErrorObject},
     meta::{ddl_meta::ddl_data::DdlData, rdb_meta_manager::RDB_PRIMARY_KEY_FLAG},
 };
 use anyhow::bail;
@@ -47,14 +48,13 @@ impl PgMetaManager {
             .get(&oid)
             .cloned()
             .ok_or_else(|| {
-                DtError::UnsupportedTableStructure(format!(
+                DtError::DatabaseUnsupportedTableStructure(DbType::Pg, format!(
                     "PostgreSQL type ID {oid} is not available in the source type catalog"
                 ))
                     .message("A PostgreSQL column type used by the source is not supported")
                     .hint(
                         "Check the reported source column type and exclude or convert unsupported columns before retrying.",
                     )
-                    .origin(OriginError::new("postgres", None::<String>))
             })
     }
 
@@ -71,14 +71,13 @@ impl PgMetaManager {
             .get(&oid)
             .cloned()
             .ok_or_else(|| {
-                DtError::StatementFailed(format!(
+                DtError::DatabaseStatementFailed(DbType::Pg, format!(
                     "a change event for source relation ID {oid} arrived before Ape-DTS received its table definition"
                 ))
                     .message("A PostgreSQL change event could not be decoded")
                     .hint(
                         "Restart from an earlier LSN so Ape-DTS can reload the relation definition. If it repeats, check the publication and PostgreSQL replication logs.",
                     )
-                    .origin(OriginError::new("postgres", None::<String>))
             })
     }
 
@@ -135,7 +134,7 @@ impl PgMetaManager {
             self.name_to_tb_meta.insert(full_name.clone(), tb_meta);
         }
         self.name_to_tb_meta.get(&full_name).ok_or_else(|| {
-            DtError::ObjectNotFound(format!(
+            DtError::DatabaseObjectNotFound(DbType::Pg, format!(
                 "Ape-DTS could not find the previously loaded definition for source table {full_name}"
             ))
                 .message("The source table definition could not be loaded")
@@ -147,7 +146,6 @@ impl PgMetaManager {
                     table: Some(tb.to_string()),
                     ..Default::default()
                 })
-                .origin(OriginError::new("postgres", None::<String>))
         })
     }
 
@@ -233,16 +231,18 @@ impl PgMetaManager {
                 .get(&col_type_oid)
                 .cloned()
                 .ok_or_else(|| {
-                    DtError::UnsupportedTableStructure(format!(
-                        "PostgreSQL type OID {col_type_oid} is missing from the type registry"
-                    ))
+                    DtError::DatabaseUnsupportedTableStructure(
+                        DbType::Pg,
+                        format!(
+                            "PostgreSQL type OID {col_type_oid} is missing from the type registry"
+                        ),
+                    )
                     .object(ErrorObject {
                         schema: Some(schema.to_string()),
                         table: Some(tb.to_string()),
                         column: Some(col.clone()),
                         ..Default::default()
                     })
-                    .origin(OriginError::new("postgres", Some(col_type_oid.to_string())))
                 })?;
             col_type.typmod = col_type_mod;
             col_origin_type_map.insert(col.clone(), col_type.get_alias());
@@ -343,13 +343,12 @@ impl PgMetaManager {
             return Ok(oid);
         }
 
-        bail! {DtError::ObjectNotFound(format!("failed to get oid for: {} by query: {}", tb, sql))
+        bail! {DtError::DatabaseObjectNotFound(DbType::Pg, format!("failed to get oid for: {} by query: {}", tb, sql))
         .object(ErrorObject {
             schema: Some(schema.to_string()),
             table: Some(tb.to_string()),
             ..Default::default()
-        })
-        .origin(OriginError::new("postgres", None::<String>))}
+        })}
     }
 
     #[allow(dead_code)]

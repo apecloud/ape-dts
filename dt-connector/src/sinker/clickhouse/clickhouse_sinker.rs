@@ -7,7 +7,7 @@ use tokio::time::Instant;
 
 use dt_common::{
     config::config_enums::DbType,
-    error::{DtError, DtErrorContextExt, ErrorCode},
+    error::{DtError, DtResultExt, ErrorCode},
     meta::{col_value::ColValue, row_data::RowData, row_type::RowType},
     utils::{limit_queue::LimitedQueue, sql_util::SqlUtil},
 };
@@ -102,7 +102,7 @@ impl ClickhouseSinker {
             .http_client
             .execute(request)
             .await
-            .map_err(|error| error.code(ErrorCode::StatementFailed))?;
+            .code(ErrorCode::StatementFailed)?;
         rts.push((start_time.elapsed().as_millis() as u64, 1));
         let task_id = self
             .base_sinker
@@ -185,16 +185,12 @@ impl ClickhouseSinker {
             .request(Method::POST, url)
             .basic_auth(&self.username, password)
             .body(body);
-        post.build()
-            .map_err(|error| error.code(ErrorCode::StatementFailed))
+        post.build().code(ErrorCode::StatementFailed)
     }
 
     async fn check_response(response: Response) -> anyhow::Result<()> {
         let status_code = response.status();
-        response
-            .text()
-            .await
-            .map_err(|error| error.code(ErrorCode::StatementFailed))?;
+        response.text().await.code(ErrorCode::StatementFailed)?;
         if status_code != StatusCode::OK {
             return Err(DtError::HttpRejected {
                 status: status_code.as_u16(),

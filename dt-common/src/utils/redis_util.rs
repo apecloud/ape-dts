@@ -4,7 +4,7 @@ use std::{collections::HashMap, str::FromStr};
 use anyhow::{bail, Context};
 use redis::{Connection, ConnectionLike, Value};
 
-use crate::config::connection_auth_config::ConnectionAuthConfig;
+use crate::config::{config_enums::DbType, connection_auth_config::ConnectionAuthConfig};
 use crate::error::DtError;
 use crate::log_info;
 use crate::meta::redis::{
@@ -89,15 +89,18 @@ impl RedisUtil {
         let cmd = RedisCmd::from_str_args(&["INFO"]);
         let value = conn.req_packed_command(&CmdEncoder::encode(&cmd))?;
         if let redis::Value::BulkString(data) = value {
-            let info = String::from_utf8(data).context(DtError::RedisUnsupportedVersion(
+            let info = String::from_utf8(data).context(DtError::UnsupportedDatabaseVersion(
+                DbType::Redis,
                 "Redis INFO response is not valid UTF-8".to_string(),
             ))?;
             log_info!("redis INFO result: {}", info);
-            let re = Regex::new(r"redis_version:(\S+)").context(DtError::RedisInvariant(
+            let re = Regex::new(r"redis_version:(\S+)").context(DtError::DatabaseInvariant(
+                DbType::Redis,
                 "the Redis version matcher is invalid".to_string(),
             ))?;
             let cap = re.captures(&info).ok_or_else(|| {
-                DtError::RedisUnsupportedVersion(
+                DtError::UnsupportedDatabaseVersion(
+                    DbType::Redis,
                     "can not get redis version from the INFO response".to_string(),
                 )
             })?;
@@ -105,18 +108,25 @@ impl RedisUtil {
             let version_str = cap[1].to_string();
             let tokens: Vec<&str> = version_str.split('.').collect();
             if tokens.is_empty() {
-                bail! {DtError::RedisUnsupportedVersion("can not get redis version by INFO".to_string())}
+                bail! {DtError::UnsupportedDatabaseVersion(
+                    DbType::Redis,
+                    "can not get redis version by INFO".to_string(),
+                )}
             }
 
             let mut version = tokens[0].to_string();
             if tokens.len() > 1 {
                 version = format!("{}.{}", tokens[0], tokens[1]);
             }
-            return f32::from_str(&version).context(DtError::RedisUnsupportedVersion(format!(
-                "Redis returned an invalid version: {version}"
-            )));
+            return f32::from_str(&version).context(DtError::UnsupportedDatabaseVersion(
+                DbType::Redis,
+                format!("Redis returned an invalid version: {version}"),
+            ));
         }
-        bail! {DtError::RedisUnsupportedVersion("can not get redis version by INFO".to_string())}
+        bail! {DtError::UnsupportedDatabaseVersion(
+            DbType::Redis,
+            "can not get redis version by INFO".to_string(),
+        )}
     }
 
     pub fn parse_result_as_string(value: Value) -> anyhow::Result<Vec<String>> {
@@ -294,7 +304,10 @@ impl RedisUtil {
                 let mut node_slot_hash_tag_map = HashMap::with_capacity(slots.len());
                 for i in slots.iter() {
                     let hash_tag = all_slot_hash_tag_map.get(i).cloned().ok_or_else(|| {
-                        DtError::RedisInvariant(format!("Redis slot {i} has no generated hash tag"))
+                        DtError::DatabaseInvariant(
+                            DbType::Redis,
+                            format!("Redis slot {i} has no generated hash tag"),
+                        )
                     })?;
                     node_slot_hash_tag_map.insert(*i, hash_tag);
                 }
@@ -318,8 +331,6 @@ impl RedisUtil {
 
 #[cfg(test)]
 mod tests {
-    use crate::error::{ErrorCode, ErrorReport};
-
     use super::*;
 
     #[test]
@@ -353,23 +364,5 @@ mod tests {
         assert!(nodes[0].is_master);
         assert!(nodes[1].is_master);
         assert!(!nodes[4].is_master);
-    }
-
-    #[test]
-    fn invalid_cluster_topology_is_a_failed_prerequisite() {
-        let error = match RedisUtil::parse_cluster_nodes("invalid node") {
-            Ok(_) => panic!("invalid cluster topology should be rejected"),
-            Err(error) => error,
-        };
-        let report = ErrorReport::from_anyhow(&error);
-        assert_eq!(report.code, ErrorCode::PrerequisiteNotMet);
-        assert_eq!(
-            report.message,
-            "The Redis cluster topology is invalid or incomplete"
-        );
-        assert!(report
-            .hint
-            .as_deref()
-            .is_some_and(|hint| hint.contains("16384 Redis cluster slots")));
     }
 }

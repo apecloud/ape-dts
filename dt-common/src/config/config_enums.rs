@@ -36,6 +36,22 @@ pub enum DbType {
     Tidb,
 }
 
+impl DbType {
+    pub const fn diagnostic_name(&self) -> &'static str {
+        match self {
+            Self::Mysql => "MySQL",
+            Self::Pg => "PostgreSQL",
+            Self::Kafka => "Kafka",
+            Self::Mongo => "MongoDB",
+            Self::Redis => "Redis",
+            Self::ClickHouse => "ClickHouse",
+            Self::StarRocks => "StarRocks",
+            Self::Doris => "Doris",
+            Self::Tidb => "TiDB",
+        }
+    }
+}
+
 #[derive(Display, EnumString, IntoStaticStr, Debug, Clone, Hash, PartialEq, Eq)]
 pub enum ExtractType {
     #[strum(serialize = "snapshot")]

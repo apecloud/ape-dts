@@ -33,9 +33,7 @@ use dt_common::{
         sinker_config::SinkerConfig,
         task_config::{TaskConfig, DEFAULT_CHECK_LOG_FILE_SIZE},
     },
-    error::{
-        DtError, DtErrorContext, DtErrorContextExt, DtResultExt, EndpointRole, ErrorCode, Stage,
-    },
+    error::{DtError, DtErrorContext, DtResultExt, EndpointRole, ErrorCode, Stage},
     limiter::buffer_limiter::BufferLimiter,
     log_error,
     log_filter::{parse_size_limit, SizeLimitFilterDeserializer},
@@ -154,8 +152,8 @@ impl TaskRunner {
     }
 
     pub async fn start_task(&self, is_init: bool) -> anyhow::Result<()> {
-        self.clear_check_logs().await?;
-        self.init_log4rs().await?;
+        self.clear_check_logs().await.stage(Stage::Bootstrap)?;
+        self.init_log4rs().await.stage(Stage::Bootstrap)?;
         runtime_trace::init_tracing();
         runtime_trace::set_task_summary_mode(self.config.tracing.task_summary_mode);
         runtime_trace::set_output_format(self.config.tracing.output_format);
@@ -173,17 +171,17 @@ impl TaskRunner {
         );
 
         let db_type = &self.config.extractor_basic.db_type;
-        let router = Arc::new(RdbRouter::from_config(&self.config.router, db_type)?);
+        let router =
+            Arc::new(RdbRouter::from_config(&self.config.router, db_type).stage(Stage::Bootstrap)?);
         let (recorder, recovery, checker_state_store) = match &self.task_type {
-            Some(task_type) => {
-                TaskUtil::build_resumer(
-                    task_type.to_owned(),
-                    &self.config.global,
-                    &self.config.resumer,
-                    is_init,
-                )
-                .await?
-            }
+            Some(task_type) => TaskUtil::build_resumer(
+                task_type.to_owned(),
+                &self.config.global,
+                &self.config.resumer,
+                is_init,
+            )
+            .await
+            .stage(Stage::Bootstrap)?,
             None => (None, None, None),
         };
         if self
@@ -195,7 +193,9 @@ impl TaskRunner {
                 "config [checker] with CDC tasks requires [resumer] resume_type=from_target or from_db to persist checker state"
             ));
         }
-        let (extractor_client, sinker_client) = ConnClient::from_config(&self.config).await?;
+        let (extractor_client, sinker_client) = ConnClient::from_config(&self.config)
+            .await
+            .stage(Stage::Bootstrap)?;
 
         let check_summary = self
             .config
@@ -205,13 +205,15 @@ impl TaskRunner {
 
         #[cfg(feature = "metrics")]
         self.prometheus_metrics
-            .initialization()?
+            .initialization()
+            .stage(Stage::Bootstrap)?
             .start_metrics()
             .await;
 
         let task_info = self
             .get_task_info(extractor_client.clone(), recovery.clone())
-            .await?;
+            .await
+            .stage(Stage::Bootstrap)?;
         let should_skip_task = self
             .task_type
             .as_ref()
@@ -549,7 +551,8 @@ impl TaskRunner {
             (*router).clone(),
             recovery.clone(),
         )
-        .await?;
+        .await
+        .stage(Stage::Bootstrap)?;
         let extractor = Arc::new(Mutex::new(extractor));
 
         let checker_monitor_handle = TaskMonitorHandle::new(
@@ -571,7 +574,8 @@ impl TaskRunner {
                 recovery.as_ref(),
                 checker_state_store.clone(),
             )
-            .await?;
+            .await
+            .stage(Stage::Bootstrap)?;
 
         let sinker_monitor_handle = TaskMonitorHandle::new(
             self.task_monitor.clone(),
@@ -592,7 +596,8 @@ impl TaskRunner {
                 CheckerHandle::Struct(_) => None,
             }),
         )
-        .await?;
+        .await
+        .stage(Stage::Bootstrap)?;
 
         let pipeline_monitor_handle = TaskMonitorHandle::new(
             self.task_monitor.clone(),
@@ -613,7 +618,8 @@ impl TaskRunner {
                 recorder.clone(),
                 checker,
             )
-            .await?;
+            .await
+            .stage(Stage::Bootstrap)?;
         let pipeline = Arc::new(Mutex::new(pipeline));
 
         let mut monitors = vec![(
@@ -633,7 +639,8 @@ impl TaskRunner {
             sinker_client.clone(),
             sinker_data_marker,
         )
-        .await?;
+        .await
+        .stage(Stage::Bootstrap)?;
 
         let interval_secs = self.config.pipeline.checkpoint_interval_secs;
         let task_flush_monitors: Vec<Arc<dyn FlushableMonitor + Send + Sync>> =
@@ -652,7 +659,7 @@ impl TaskRunner {
         monitor_shutdown.cancel();
         let monitor_result = monitor_task
             .await
-            .map_err(|error| error.stage(Stage::Task))
+            .context("monitor task failed")
             .and_then(|result| result);
 
         let mut monitor_types = vec![MonitorType::Pipeline];
@@ -710,7 +717,7 @@ impl TaskRunner {
                     break;
                 }
                 Err(err) => {
-                    failure = Some((None, err.stage(Stage::Task)));
+                    failure = Some((None, err.into()));
                     break;
                 }
             }
@@ -773,10 +780,12 @@ impl TaskRunner {
         };
 
         extract_result
-            .map_err(|error| error.stage(Stage::Extractor).endpoint(EndpointRole::Source))
+            .stage(Stage::Extractor)
+            .endpoint(EndpointRole::Source)
             .context("extractor.extract failed")?;
         close_result
-            .map_err(|error| error.stage(Stage::Extractor).endpoint(EndpointRole::Source))
+            .stage(Stage::Extractor)
+            .endpoint(EndpointRole::Source)
             .context("extractor.close failed")?;
         Ok(())
     }
@@ -794,10 +803,10 @@ impl TaskRunner {
         };
 
         start_result
-            .map_err(|error| error.stage(Stage::Pipeline))
+            .stage(Stage::Pipeline)
             .context("pipeline.start failed")?;
         stop_result
-            .map_err(|error| error.stage(Stage::Pipeline))
+            .stage(Stage::Pipeline)
             .context("pipeline.stop failed")?;
         Ok(())
     }
@@ -906,13 +915,14 @@ impl TaskRunner {
         }
         let check_log_dir_base = self.check_log_dir(cfg);
         let checker_task_id = task_id.to_string();
-        let cdc_check_log_max_file_size =
-            parse_size_limit(&cfg.check_log_file_size).map_err(|e| {
-                DtError::invalid_config(format!(
-                    "invalid config [checker].check_log_file_size: {}, error: {}",
-                    cfg.check_log_file_size, e
-                ))
-            })?;
+        let cdc_check_log_max_file_size = parse_size_limit(&cfg.check_log_file_size)
+            .with_context(|| {
+                format!(
+                    "invalid config [checker].check_log_file_size: {}",
+                    cfg.check_log_file_size
+                )
+            })
+            .code(ErrorCode::InvalidConfig)?;
         let cdc_check_log_max_rows = if cfg.check_log_max_rows == 0 {
             log_warn!("checker.check_log_max_rows=0 is invalid. Using 1.");
             1
@@ -1209,17 +1219,13 @@ impl TaskRunner {
             Ok(_) => {}
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
             Err(error) => {
-                return Err(error.stage(Stage::Bootstrap));
+                return Err(error.into());
             }
         }
 
         let mut config_str = String::new();
-        let mut file = File::open(log4rs_file)
-            .await
-            .map_err(|error| error.stage(Stage::Bootstrap))?;
-        file.read_to_string(&mut config_str)
-            .await
-            .map_err(|error| error.stage(Stage::Bootstrap))?;
+        let mut file = File::open(log4rs_file).await?;
+        file.read_to_string(&mut config_str).await?;
 
         match &self.config.sinker {
             SinkerConfig::RedisStatistic {
@@ -1273,11 +1279,7 @@ impl TaskRunner {
                 );
         }
 
-        let config_context = || {
-            DtErrorContext::new()
-                .with_code(ErrorCode::InvalidConfig)
-                .with_stage(Stage::Bootstrap)
-        };
+        let config_context = || DtErrorContext::new().with_code(ErrorCode::InvalidConfig);
         let raw: RawConfig = serde_yaml::from_str(&config_str).dt_context(config_context)?;
         let mut deserializers = Deserializers::default();
         deserializers.insert("size_limit", SizeLimitFilterDeserializer);
@@ -1287,7 +1289,7 @@ impl TaskRunner {
             return Err(DtError::InvalidConfig(
                 "one or more logging appenders are invalid".to_string(),
             )
-            .stage(Stage::Bootstrap));
+            .into());
         }
 
         let config = Config::builder()
@@ -1297,7 +1299,6 @@ impl TaskRunner {
             .dt_context(config_context)?;
         let mut handle_guard = LOG_HANDLE.lock().map_err(|_| {
             DtError::InvariantViolated("the logging configuration lock is poisoned".to_string())
-                .stage(Stage::Bootstrap)
         })?;
         if let Some(handle) = handle_guard.as_ref() {
             // refresh log4rs config in one process
@@ -1668,12 +1669,7 @@ impl TaskRunner {
 
 #[cfg(test)]
 mod tests {
-    use std::{fs, sync::Arc, time::SystemTime};
-
-    use async_trait::async_trait;
-    use dt_common::error::{DtError, ErrorReport, Stage};
-    use dt_pipeline::Pipeline;
-    use tokio::sync::Mutex;
+    use std::{fs, time::SystemTime};
 
     use super::TaskRunner;
     use dt_common::config::{
@@ -1682,15 +1678,6 @@ mod tests {
         extractor_config::ExtractorConfig,
     };
     use opendal::{services::Memory, Operator};
-
-    struct FailingPipeline;
-
-    #[async_trait]
-    impl Pipeline for FailingPipeline {
-        async fn start(&mut self) -> anyhow::Result<()> {
-            Err(DtError::WorkerFailed("pipeline failed".to_string()).into())
-        }
-    }
 
     #[test]
     fn should_clear_task_type_none_by_default() {
@@ -1733,18 +1720,6 @@ mod tests {
             &extractor,
             "/tmp/ape-dts/other"
         ));
-    }
-
-    #[tokio::test]
-    async fn pipeline_worker_attaches_pipeline_stage() {
-        let pipeline: Arc<Mutex<Box<dyn Pipeline + Send>>> =
-            Arc::new(Mutex::new(Box::new(FailingPipeline)));
-
-        let error = TaskRunner::run_pipeline_worker(pipeline)
-            .await
-            .expect_err("pipeline start should fail");
-
-        assert_eq!(ErrorReport::from_anyhow(&error).stage, Stage::Pipeline);
     }
 
     #[tokio::test]

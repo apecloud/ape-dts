@@ -3,7 +3,7 @@ use std::collections::{HashMap, VecDeque};
 use super::task_util::TaskUtil;
 use dt_common::{
     config::{config_enums::ParallelType, task_config::TaskConfig},
-    error::{DtError, DtErrorContextExt, Stage},
+    error::DtError,
     meta::redis::command::key_parser::KeyParser,
     monitor::task_monitor_handle::TaskMonitorHandle,
     utils::redis_util::RedisUtil,
@@ -41,7 +41,6 @@ impl ParallelizerUtil {
                         DtError::InvalidConfig(
                             "snapshot parallelizer rebalance configuration is missing".to_string(),
                         )
-                        .stage(Stage::Bootstrap)
                     })?
                     .clone(),
             }),
@@ -103,7 +102,6 @@ impl ParallelizerUtil {
                 DtError::InvalidConfig(
                     "the selected merger requires a relational database endpoint".to_string(),
                 )
-                .stage(Stage::Bootstrap)
             })?;
 
         let rdb_merger = RdbMerger { rdb_meta_manager };
@@ -117,7 +115,6 @@ impl ParallelizerUtil {
                 DtError::InvalidConfig(
                     "the selected partitioner requires a relational database endpoint".to_string(),
                 )
-                .stage(Stage::Bootstrap)
             })?;
         Ok(RdbPartitioner { meta_manager })
     }

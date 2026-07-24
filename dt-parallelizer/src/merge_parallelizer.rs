@@ -5,7 +5,7 @@ use async_trait::async_trait;
 
 use dt_common::{
     config::sinker_config::BasicSinkerConfig,
-    error::{DtError, DtErrorContextExt, Stage},
+    error::DtError,
     meta::{
         dcl_meta::dcl_data::DclData, ddl_meta::ddl_data::DdlData, dt_data::DtItem,
         dt_queue::DtQueue, rdb_meta_manager::RdbMetaManager, row_data::RowData, row_type::RowType,
@@ -178,15 +178,11 @@ impl MergeParallelizer {
         merge_type: MergeType,
     ) -> anyhow::Result<(DataSize, usize)> {
         if self.parallel_size == 0 {
-            return Err(
-                DtError::invalid_config("parallelizer configuration is invalid")
-                    .stage(Stage::Parallelizer),
-            );
+            return Err(DtError::invalid_config("parallelizer configuration is invalid").into());
         }
         if sinkers.is_empty() {
             return Err(
-                DtError::InvariantViolated("parallelizer invariant violated".to_string())
-                    .stage(Stage::Parallelizer),
+                DtError::InvariantViolated("parallelizer invariant violated".to_string()).into(),
             );
         }
         let mut futures = Vec::new();
@@ -240,9 +236,7 @@ impl MergeParallelizer {
 
         let workers_used = futures.len().min(self.parallel_size);
         for future in futures {
-            future
-                .await
-                .map_err(|error| error.stage(Stage::Parallelizer))??;
+            future.await??;
         }
         Ok((data_size, workers_used))
     }

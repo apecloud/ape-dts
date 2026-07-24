@@ -11,7 +11,7 @@ use super::{
 };
 use crate::{
     config::config_enums::DbType,
-    error::{DtError, DtErrorContextExt, ErrorObject},
+    error::{DtError, DtResultExt, ErrorObject},
     meta::adaptor::{
         mysql_col_value_convertor::MysqlColValueConvertor,
         pg_col_value_convertor::PgColValueConvertor,
@@ -138,18 +138,15 @@ impl RowData {
             }
             let col_val =
                 MysqlColValueConvertor::from_query_mysql_compatible(row, col, col_type, db_type)
-                    .map_err(|error| {
-                        error
-                            .context(DtError::StatementFailed(format!(
-                                "failed to convert column {}.{}.{}",
-                                tb_meta.basic.schema, tb_meta.basic.tb, col
-                            )))
-                            .object(ErrorObject {
-                                schema: Some(tb_meta.basic.schema.clone()),
-                                table: Some(tb_meta.basic.tb.clone()),
-                                column: Some(col.clone()),
-                                ..Default::default()
-                            })
+                    .context(DtError::StatementFailed(format!(
+                        "failed to convert column {}.{}.{}",
+                        tb_meta.basic.schema, tb_meta.basic.tb, col
+                    )))
+                    .object(ErrorObject {
+                        schema: Some(tb_meta.basic.schema.clone()),
+                        table: Some(tb_meta.basic.tb.clone()),
+                        column: Some(col.clone()),
+                        ..Default::default()
                     })?;
             after.insert(col.to_string(), col_val);
         }
@@ -168,19 +165,16 @@ impl RowData {
                 continue;
             }
 
-            let col_value =
-                PgColValueConvertor::from_query(row, col, col_type).map_err(|error| {
-                    error
-                        .context(DtError::StatementFailed(format!(
-                            "failed to convert column {}.{}.{}",
-                            tb_meta.basic.schema, tb_meta.basic.tb, col
-                        )))
-                        .object(ErrorObject {
-                            schema: Some(tb_meta.basic.schema.clone()),
-                            table: Some(tb_meta.basic.tb.clone()),
-                            column: Some(col.clone()),
-                            ..Default::default()
-                        })
+            let col_value = PgColValueConvertor::from_query(row, col, col_type)
+                .context(DtError::StatementFailed(format!(
+                    "failed to convert column {}.{}.{}",
+                    tb_meta.basic.schema, tb_meta.basic.tb, col
+                )))
+                .object(ErrorObject {
+                    schema: Some(tb_meta.basic.schema.clone()),
+                    table: Some(tb_meta.basic.tb.clone()),
+                    column: Some(col.clone()),
+                    ..Default::default()
                 })?;
             after.insert(col.to_string(), col_value);
         }

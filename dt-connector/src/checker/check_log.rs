@@ -2,7 +2,7 @@ use std::{collections::HashMap, str::FromStr};
 
 use anyhow::Context;
 use dt_common::{
-    error::{DtErrorContextExt, ErrorCode, Stage},
+    error::{DtResultExt, ErrorCode, Stage},
     meta::col_value::ColValue,
     utils::serialize_util::SerializeUtil,
 };
@@ -151,7 +151,7 @@ impl CheckSummaryLog {
 
 pub fn to_json_line<T: Serialize>(value: &T) -> Option<String> {
     serde_json::to_string(value)
-        .map_err(|e| {
+        .inspect_err(|e| {
             log::warn!(
                 "Skipping checker log output because serialization failed: {}",
                 e
@@ -184,13 +184,8 @@ impl FromStr for CheckLog {
     fn from_str(str: &str) -> Result<Self, Self::Err> {
         serde_json::from_str(str)
             .with_context(|| format!("invalid check log: [{}]", str))
-            .map_err(|error| {
-                let detail = error.to_string();
-                error
-                    .code(ErrorCode::StatementFailed)
-                    .stage(Stage::Checker)
-                    .context(detail)
-            })
+            .code(ErrorCode::StatementFailed)
+            .stage(Stage::Checker)
     }
 }
 

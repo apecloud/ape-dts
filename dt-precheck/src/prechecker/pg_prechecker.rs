@@ -55,6 +55,7 @@ impl Prechecker for PostgresqlPrechecker {
                 if version.is_empty() {
                     check_error = Some(
                         DtError::UnsupportedDatabaseVersion(
+                            DbType::Pg,
                             "PostgreSQL returned no version information".to_string(),
                         )
                         .into(),
@@ -63,9 +64,10 @@ impl Prechecker for PostgresqlPrechecker {
                     match version.parse::<i32>() {
                         Ok(version_i32) if version_i32 < PG_SUPPORT_DB_VERSION_NUM_MIN => {
                             check_error = Some(
-                                DtError::UnsupportedDatabaseVersion(format!(
-                                    "PostgreSQL version {version_i32} is not supported"
-                                ))
+                                DtError::UnsupportedDatabaseVersion(
+                                    DbType::Pg,
+                                    format!("PostgreSQL version {version_i32} is not supported"),
+                                )
                                 .into(),
                             );
                         }

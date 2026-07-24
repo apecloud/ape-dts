@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::fs;
 
-use anyhow::{bail, Ok};
+use anyhow::{bail, Context, Ok};
 
 #[cfg(feature = "metrics")]
 use crate::config::metrics_config::MetricsConfig;
@@ -1130,12 +1130,12 @@ impl TaskConfig {
         let default = CheckerConfig::default();
         let sample_rate = match loader.ini.get(CHECKER, SAMPLE_RATE) {
             Some(raw) if !raw.is_empty() => {
-                let sample_rate = raw.parse::<usize>().map_err(|_| {
-                    DtError::invalid_config(format!(
-                        "config [checker].{}={}, can not be parsed as usize",
-                        SAMPLE_RATE, raw
-                    ))
-                })?;
+                let sample_rate =
+                    raw.parse::<usize>()
+                        .context(DtError::invalid_config(format!(
+                            "config [checker].{}={}, can not be parsed as usize",
+                            SAMPLE_RATE, raw
+                        )))?;
                 if !(1..=100).contains(&sample_rate) {
                     bail!(DtError::invalid_config(format!(
                         "config [checker].sample_rate must be between 1 and 100, got {}",
@@ -1502,7 +1502,6 @@ mod tests {
     use crate::config::parallelizer_config::{
         ChunkPartitionerRebalanceCost, ChunkPartitionerRebalanceStrategy,
     };
-    use crate::error::{ErrorCode, ErrorReport};
     use crate::runtime_trace::{TaskSummaryMode, TraceOutputFormat};
 
     use super::{
@@ -1860,9 +1859,7 @@ sample_rate=10
             ),
         ] {
             let error = load_temp_task_config(&config).err().unwrap();
-            let report = ErrorReport::from_anyhow(&error);
-            assert_eq!(report.code, ErrorCode::InvalidConfig);
-            assert_eq!(report.detail.as_deref(), Some(expected_err));
+            assert_eq!(error.root_cause().to_string(), expected_err);
         }
     }
 
@@ -1945,11 +1942,9 @@ url=mysql://127.0.0.1:3307
         );
 
         let error = result.err().unwrap();
-        let report = ErrorReport::from_anyhow(&error);
-        assert_eq!(report.code, ErrorCode::InvalidConfig);
         assert_eq!(
-            report.detail.as_deref(),
-            Some("config [extractor].batch_size must be greater than 0")
+            error.root_cause().to_string(),
+            "config [extractor].batch_size must be greater than 0"
         );
     }
 
@@ -2044,13 +2039,9 @@ rebalance_max_partitions_per_sinker=0
             .unwrap();
         fs::remove_file(config_path).unwrap();
 
-        let report = ErrorReport::from_anyhow(&err);
-        assert_eq!(report.code, ErrorCode::InvalidConfig);
         assert_eq!(
-            report.detail.as_deref(),
-            Some(
-                "config [parallelizer].rebalance_max_partitions_per_sinker must be greater than 0"
-            )
+            err.root_cause().to_string(),
+            "config [parallelizer].rebalance_max_partitions_per_sinker must be greater than 0"
         );
     }
 
@@ -2074,11 +2065,9 @@ batch_size=0
 
         match result {
             Err(err) => {
-                let report = ErrorReport::from_anyhow(&err);
-                assert_eq!(report.code, ErrorCode::InvalidConfig);
                 assert_eq!(
-                    report.detail.as_deref(),
-                    Some("config [sinker].batch_size must be greater than 0")
+                    err.root_cause().to_string(),
+                    "config [sinker].batch_size must be greater than 0"
                 );
             }
             Ok(_) => panic!("expected config validation error"),

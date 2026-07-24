@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use anyhow::{bail, Context};
 
-use crate::error::DtError;
+use crate::{config::config_enums::DbType, error::DtError};
 
 use super::{cmd_constants::CmdConstants, cmd_meta::CmdMeta};
 
@@ -14,11 +14,15 @@ pub struct KeyParser {
 impl KeyParser {
     pub fn new() -> anyhow::Result<Self> {
         let containers: HashSet<String> = serde_json::from_str(CmdConstants::CONTAINER_COMMANDS)
-            .context(DtError::RedisInvariant(
+            .context(DtError::DatabaseInvariant(
+                DbType::Redis,
                 "the embedded Redis command catalog is invalid".to_string(),
             ))?;
         let metas: Vec<CmdMeta> = serde_json::from_str(CmdConstants::COMMAND_METAS).context(
-            DtError::RedisInvariant("the embedded Redis command catalog is invalid".to_string()),
+            DtError::DatabaseInvariant(
+                DbType::Redis,
+                "the embedded Redis command catalog is invalid".to_string(),
+            ),
         )?;
 
         let mut cmd_metas = HashMap::new();

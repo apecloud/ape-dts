@@ -177,9 +177,8 @@ impl MongoSnapshotExtractor {
         let mut cursor = find.await?;
         let mut chunk_id_generator = SnapshotChunkIdGenerator::new(self.batch_size as usize);
         while cursor.advance().await? {
-            let doc = cursor.deserialize_current().map_err(|e| {
+            let doc = cursor.deserialize_current().inspect_err(|e| {
                 log_error!("error deserializing {}.{} document: {}", db, tb, e);
-                e
             })?;
 
             let key = MongoKey::from_doc(&doc).ok_or(anyhow!(
@@ -262,10 +261,11 @@ impl MongoSnapshotExtractor {
     }
 
     fn parse_resume_key(value: &str) -> anyhow::Result<MongoKey> {
-        serde_json::from_str::<MongoKey>(value).or_else(|_| {
-            mongodb::bson::oid::ObjectId::parse_str(value)
-                .map(MongoKey::ObjectId)
-                .map_err(Into::into)
-        })
+        if let Ok(key) = serde_json::from_str::<MongoKey>(value) {
+            return Ok(key);
+        }
+        Ok(MongoKey::ObjectId(mongodb::bson::oid::ObjectId::parse_str(
+            value,
+        )?))
     }
 }

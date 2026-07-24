@@ -14,7 +14,7 @@ use dt_common::{
         extractor_config::ExtractorConfig,
         task_config::TaskConfig,
     },
-    error::{DtError, DtResultExt, ErrorCode, Stage},
+    error::{DtError, DtResultExt, ErrorCode},
     meta::{
         avro::avro_converter::AvroConverter, dt_queue::DtQueue,
         mysql::mysql_meta_manager::MysqlMetaManager, pg::pg_meta_manager::PgMetaManager,
@@ -776,7 +776,6 @@ impl ExtractorUtil {
         let config: Vec<PartitionColsType> =
             serde_json::from_str(config_str.trim_start_matches(JSON_PREFIX))
                 .code(ErrorCode::InvalidConfig)
-                .stage(Stage::Bootstrap)
                 .context("config [extractor].partition_cols is invalid JSON")?;
         for i in config {
             results.insert((i.db, i.tb), i.partition_col);

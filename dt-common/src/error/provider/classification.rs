@@ -1,7 +1,7 @@
-use super::super::{DtErrorContext, ErrorCode, OriginError};
+use super::super::{DtErrorContext, ErrorCode};
 
-pub(super) fn provider_context(code: Option<ErrorCode>, origin: OriginError) -> DtErrorContext {
-    let context = DtErrorContext::new().with_origin(origin);
+pub(super) fn provider_context(code: Option<ErrorCode>) -> DtErrorContext {
+    let context = DtErrorContext::new();
     match code {
         Some(code) => context.with_code(code),
         None => context,

@@ -1,35 +1,31 @@
 use mongodb::error::ErrorKind as MongoErrorKind;
 
 use super::{
-    super::{ClassifyError, DtErrorContext, ErrorCode, OriginError},
+    super::{ClassifyError, DtErrorContext, ErrorCode},
     classification::provider_context,
 };
 
 impl ClassifyError for mongodb::error::Error {
     fn classify(&self) -> DtErrorContext {
-        let (code, provider_code) = classify_mongodb_kind(&self.kind);
-        provider_context(code, OriginError::new("mongodb", provider_code))
+        provider_context(classify_mongodb_kind(&self.kind))
     }
 }
 
-fn classify_mongodb_kind(kind: &MongoErrorKind) -> (Option<ErrorCode>, Option<String>) {
+fn classify_mongodb_kind(kind: &MongoErrorKind) -> Option<ErrorCode> {
     match kind {
-        MongoErrorKind::InvalidArgument { .. } => (None, None),
-        MongoErrorKind::Authentication { .. } => (Some(ErrorCode::AuthenticationFailed), None),
-        MongoErrorKind::InvalidTlsConfig { .. } => (Some(ErrorCode::TlsFailed), None),
+        MongoErrorKind::InvalidArgument { .. } => None,
+        MongoErrorKind::Authentication { .. } => Some(ErrorCode::AuthenticationFailed),
+        MongoErrorKind::InvalidTlsConfig { .. } => Some(ErrorCode::TlsFailed),
         MongoErrorKind::Io(error) if is_timeout_kind(error.kind()) => {
-            (Some(ErrorCode::ConnectionTimeout), None)
+            Some(ErrorCode::ConnectionTimeout)
         }
         MongoErrorKind::Io(_)
         | MongoErrorKind::DnsResolve { .. }
         | MongoErrorKind::ConnectionPoolCleared { .. }
         | MongoErrorKind::ServerSelection { .. }
-        | MongoErrorKind::Shutdown => (Some(ErrorCode::ConnectionFailed), None),
-        MongoErrorKind::Command(error) => (
-            classify_mongodb_command_code(error.code),
-            Some(error.code.to_string()),
-        ),
-        _ => (None, None),
+        | MongoErrorKind::Shutdown => Some(ErrorCode::ConnectionFailed),
+        MongoErrorKind::Command(error) => classify_mongodb_command_code(error.code),
+        _ => None,
     }
 }
 
@@ -60,7 +56,7 @@ mod tests {
     fn classifies_mongodb_transport_and_command_codes() {
         let timeout = MongoErrorKind::Io(Arc::new(io::Error::from(io::ErrorKind::TimedOut)));
         assert_eq!(
-            classify_mongodb_kind(&timeout).0,
+            classify_mongodb_kind(&timeout),
             Some(ErrorCode::ConnectionTimeout)
         );
         for (provider_code, expected) in [

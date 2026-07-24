@@ -38,7 +38,7 @@ use dt_common::{
         config_enums::DbType, config_token_parser::ConfigTokenParser,
         connection_auth_config::ConnectionAuthConfig,
     },
-    error::{DtError, DtErrorContext, DtErrorContextExt, ErrorCode, ErrorObject, OriginError},
+    error::{DtError, DtErrorContextExt, ErrorObject},
     log_error, log_info, log_warn,
     meta::{
         adaptor::pg_col_value_convertor::PgColValueConvertor,
@@ -237,18 +237,20 @@ impl PgCdcExtractor {
                 }
 
                 Some(Err(error)) => {
-                    return Err(error.dt_context(
-                        DtErrorContext::new()
-                            .with_code(ErrorCode::ConnectionFailed)
-                            .with_origin(OriginError::new("postgres", None::<String>)),
+                    return Err(anyhow::Error::new(error).context(
+                        DtError::DatabaseConnectionFailed(
+                            DbType::Pg,
+                            "the PostgreSQL replication stream failed".to_string(),
+                        ),
                     ));
                 }
 
                 None => {
-                    return Err(DtError::ConnectionFailed(
+                    return Err(DtError::DatabaseConnectionFailed(
+                        DbType::Pg,
                         "PostgreSQL replication stream ended unexpectedly".to_string(),
                     )
-                    .origin(OriginError::new("postgres", None::<String>)));
+                    .into());
                 }
             }
         }
@@ -270,10 +272,10 @@ impl PgCdcExtractor {
                 start_lsn.to_string()
             };
         let lsn: PgLsn = lsn_value.parse().map_err(|_| {
-            DtError::CheckpointReadFailed(
+            DtError::DatabaseCheckpointReadFailed(
+                DbType::Pg,
                 "the saved PostgreSQL replication position is invalid".to_string(),
             )
-            .origin(OriginError::new("postgres", None::<String>))
         })?;
         log_info!("confirmed flush lsn: {}", lsn.to_string());
 
@@ -320,10 +322,13 @@ impl PgCdcExtractor {
                 .oid_to_type
                 .get(&column.type_id())
                 .ok_or_else(|| {
-                    DtError::UnsupportedTableStructure(format!(
-                        "PostgreSQL type OID {} is not supported for column {col_name}",
-                        column.type_id()
-                    ))
+                    DtError::DatabaseUnsupportedTableStructure(
+                        DbType::Pg,
+                        format!(
+                            "PostgreSQL type OID {} is not supported for column {col_name}",
+                            column.type_id()
+                        ),
+                    )
                     .object(ErrorObject {
                         schema: Some(schema.to_string()),
                         table: Some(tb.to_string()),
@@ -407,7 +412,7 @@ impl PgCdcExtractor {
                     let detail = format!(
                         "PostgreSQL update does not contain key column {col}; check replica identity"
                     );
-                    DtError::UnsupportedTableStructure(detail.clone())
+                    DtError::DatabaseUnsupportedTableStructure(DbType::Pg, detail.clone())
                         .message(
                             "PostgreSQL update events do not contain the columns needed to identify rows",
                         )

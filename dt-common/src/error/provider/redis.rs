@@ -1,13 +1,12 @@
 use redis::ErrorKind as RedisErrorKind;
 
 use super::{
-    super::{ClassifyError, DtErrorContext, ErrorCode, OriginError},
+    super::{ClassifyError, DtErrorContext, ErrorCode},
     classification::provider_context,
 };
 
 impl ClassifyError for redis::RedisError {
     fn classify(&self) -> DtErrorContext {
-        let provider_code = self.code().map(str::to_string);
         let code = if self.is_timeout() {
             Some(ErrorCode::ConnectionTimeout)
         } else {
@@ -31,7 +30,7 @@ impl ClassifyError for redis::RedisError {
             }
         };
 
-        provider_context(code, OriginError::new("redis", provider_code))
+        provider_context(code)
     }
 }
 

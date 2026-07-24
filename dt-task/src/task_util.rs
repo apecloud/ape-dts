@@ -22,7 +22,7 @@ use dt_common::{
         sinker_config::{BasicSinkerConfig, SinkerConfig},
         task_config::TaskConfig,
     },
-    error::{DtError, DtResultExt, EndpointRole, ErrorCode, Stage},
+    error::{DtError, DtResultExt, EndpointRole, ErrorCode},
     log_info, log_warn,
     meta::{
         mysql::{
@@ -378,8 +378,7 @@ impl TaskUtil {
 
         let mut client_options = ClientOptions::parse(&final_url)
             .await
-            .code(ErrorCode::InvalidConfig)
-            .stage(Stage::Bootstrap)?;
+            .code(ErrorCode::InvalidConfig)?;
         // app_name only for debug usage
         if let Some(app) = app_name {
             client_options.app_name = Some(app.to_string());
@@ -389,9 +388,7 @@ impl TaskUtil {
         }
         client_options.max_pool_size = max_pool_size;
 
-        mongodb::Client::with_options(client_options)
-            .code(ErrorCode::InvalidConfig)
-            .stage(Stage::Bootstrap)
+        mongodb::Client::with_options(client_options).code(ErrorCode::InvalidConfig)
     }
 
     pub fn check_enable_sqlx_log(log_level: &str) -> bool {
@@ -452,7 +449,7 @@ impl TaskUtil {
         let conn_pool = match conn_pool {
             ConnClient::MySQL(conn_pool) => conn_pool,
             _ => {
-                bail!(DtError::MissingTaskClient("MySQL".to_string()))
+                bail!(DtError::MissingTaskClient(DbType::Mysql))
             }
         };
 
@@ -473,12 +470,7 @@ impl TaskUtil {
 
         let mut total_records = 0;
         let mut rows = sqlx::query(&sql).fetch(conn_pool);
-        while let Some(row) = rows
-            .try_next()
-            .await
-            .code(ErrorCode::MetadataReadFailed)
-            .stage(Stage::Task)?
-        {
+        while let Some(row) = rows.try_next().await.code(ErrorCode::MetadataReadFailed)? {
             let schema = SqlUtil::try_get_mysql_string(&row, 0)?;
             let tb = SqlUtil::try_get_mysql_string(&row, 1)?;
             let records: u64 = row.try_get(2)?;
@@ -499,7 +491,7 @@ impl TaskUtil {
         let conn_pool = match conn_pool {
             ConnClient::PostgreSQL(conn_pool) => conn_pool,
             _ => {
-                bail!(DtError::MissingTaskClient("PostgreSQL".to_string()))
+                bail!(DtError::MissingTaskClient(DbType::Pg))
             }
         };
 
@@ -532,12 +524,7 @@ WHERE
 
         let mut total_length = 0;
         let mut rows = sqlx::query(&sql).fetch(conn_pool);
-        while let Some(row) = rows
-            .try_next()
-            .await
-            .code(ErrorCode::MetadataReadFailed)
-            .stage(Stage::Task)?
-        {
+        while let Some(row) = rows.try_next().await.code(ErrorCode::MetadataReadFailed)? {
             let schema: String = row.try_get(0)?;
             let table_name: String = row.try_get(1)?;
             let row_count: i64 = row.try_get(2)?;
@@ -605,7 +592,7 @@ WHERE
         let conn_pool = match conn_client {
             ConnClient::PostgreSQL(conn_pool) => conn_pool,
             _ => {
-                bail!(DtError::MissingTaskClient("PostgreSQL".to_string()))
+                bail!(DtError::MissingTaskClient(DbType::Pg))
             }
         };
 
@@ -613,12 +600,7 @@ WHERE
             FROM information_schema.schemata
             WHERE catalog_name = current_database()";
         let mut rows = sqlx::query(sql).fetch(conn_pool);
-        while let Some(row) = rows
-            .try_next()
-            .await
-            .code(ErrorCode::MetadataReadFailed)
-            .stage(Stage::Task)?
-        {
+        while let Some(row) = rows.try_next().await.code(ErrorCode::MetadataReadFailed)? {
             let schema: String = row.try_get(0)?;
             if SystemDb::is_system_db(&schema, &DbType::Pg) {
                 continue;
@@ -634,7 +616,7 @@ WHERE
         let conn_pool = match conn_client {
             ConnClient::PostgreSQL(conn_pool) => conn_pool,
             _ => {
-                bail!(DtError::MissingTaskClient("PostgreSQL".to_string()))
+                bail!(DtError::MissingTaskClient(DbType::Pg))
             }
         };
 
@@ -647,12 +629,7 @@ WHERE
             schema
         );
         let mut rows = sqlx::query(&sql).fetch(conn_pool);
-        while let Some(row) = rows
-            .try_next()
-            .await
-            .code(ErrorCode::MetadataReadFailed)
-            .stage(Stage::Task)?
-        {
+        while let Some(row) = rows.try_next().await.code(ErrorCode::MetadataReadFailed)? {
             let tb: String = row.try_get(0)?;
             tbs.push(tb);
         }
@@ -665,18 +642,13 @@ WHERE
         let conn_pool = match conn_client {
             ConnClient::MySQL(conn_pool) => conn_pool,
             _ => {
-                bail!(DtError::MissingTaskClient("MySQL".to_string()))
+                bail!(DtError::MissingTaskClient(DbType::Mysql))
             }
         };
 
         let sql = "SELECT schema_name FROM information_schema.schemata";
         let mut rows = sqlx::query(sql).fetch(conn_pool);
-        while let Some(row) = rows
-            .try_next()
-            .await
-            .code(ErrorCode::MetadataReadFailed)
-            .stage(Stage::Task)?
-        {
+        while let Some(row) = rows.try_next().await.code(ErrorCode::MetadataReadFailed)? {
             let db = SqlUtil::try_get_mysql_string(&row, 0)?;
             if SystemDb::is_system_db(&db, &DbType::Mysql) {
                 continue;
@@ -692,7 +664,7 @@ WHERE
         let conn_pool = match conn_client {
             ConnClient::MySQL(conn_pool) => conn_pool,
             _ => {
-                bail!(DtError::MissingTaskClient("MySQL".to_string()))
+                bail!(DtError::MissingTaskClient(DbType::Mysql))
             }
         };
 
@@ -701,12 +673,7 @@ WHERE
             WHERE table_schema = ? 
             AND table_type = 'BASE TABLE'";
         let mut rows = sqlx::query(sql).bind(db).fetch(conn_pool);
-        while let Some(row) = rows
-            .try_next()
-            .await
-            .code(ErrorCode::MetadataReadFailed)
-            .stage(Stage::Task)?
-        {
+        while let Some(row) = rows.try_next().await.code(ErrorCode::MetadataReadFailed)? {
             let tb = SqlUtil::try_get_mysql_string(&row, 0)?;
             tbs.push(tb);
         }
@@ -718,7 +685,7 @@ WHERE
         let client = match conn_client {
             ConnClient::MongoDB(client) => client,
             _ => {
-                bail!(DtError::MissingTaskClient("MongoDB".to_string()))
+                bail!(DtError::MissingTaskClient(DbType::Mongo))
             }
         };
         let dbs = client
@@ -734,7 +701,7 @@ WHERE
         let client = match conn_client {
             ConnClient::MongoDB(client) => client,
             _ => {
-                bail!(DtError::MissingTaskClient("MongoDB".to_string()))
+                bail!(DtError::MissingTaskClient(DbType::Mongo))
             }
         };
         // filter views and system tables
@@ -896,18 +863,16 @@ impl ConnClient {
                 url,
                 connection_auth,
                 ..
-            } => ConnClient::MySQL(
-                TaskUtil::create_mysql_conn_pool(
-                    url,
-                    &DbType::Mysql,
-                    connection_auth,
-                    extractor_max_connections,
-                    enable_sqlx_log,
-                    None,
-                )
-                .await
-                .endpoint(EndpointRole::Source)?,
-            ),
+            } => TaskUtil::create_mysql_conn_pool(
+                url,
+                &DbType::Mysql,
+                connection_auth,
+                extractor_max_connections,
+                enable_sqlx_log,
+                None,
+            )
+            .await
+            .map(ConnClient::MySQL),
             ExtractorConfig::PgSnapshot {
                 url,
                 connection_auth,
@@ -927,17 +892,15 @@ impl ConnClient {
                 url,
                 connection_auth,
                 ..
-            } => ConnClient::PostgreSQL(
-                TaskUtil::create_pg_conn_pool(
-                    url,
-                    connection_auth,
-                    extractor_max_connections,
-                    enable_sqlx_log,
-                    false,
-                )
-                .await
-                .endpoint(EndpointRole::Source)?,
-            ),
+            } => TaskUtil::create_pg_conn_pool(
+                url,
+                connection_auth,
+                extractor_max_connections,
+                enable_sqlx_log,
+                false,
+            )
+            .await
+            .map(ConnClient::PostgreSQL),
             ExtractorConfig::MongoSnapshot {
                 url,
                 connection_auth,
@@ -965,19 +928,18 @@ impl ConnClient {
                 is_direct_connection,
                 app_name,
                 ..
-            } => ConnClient::MongoDB(
-                TaskUtil::create_mongo_client(
-                    url,
-                    connection_auth,
-                    *is_direct_connection,
-                    Some(app_name.to_string()),
-                    Some(extractor_max_connections),
-                )
-                .await
-                .endpoint(EndpointRole::Source)?,
-            ),
-            _ => ConnClient::None,
-        };
+            } => TaskUtil::create_mongo_client(
+                url,
+                connection_auth,
+                *is_direct_connection,
+                Some(app_name.to_string()),
+                Some(extractor_max_connections),
+            )
+            .await
+            .map(ConnClient::MongoDB),
+            _ => Ok(ConnClient::None),
+        }
+        .endpoint(EndpointRole::Source)?;
         let sinker_client = match &task_config.sinker {
             SinkerConfig::Mysql {
                 url,
@@ -990,66 +952,58 @@ impl ConnClient {
                     *disable_foreign_key_checks,
                     transaction_isolation,
                 );
-                ConnClient::MySQL(
-                    TaskUtil::create_mysql_conn_pool(
-                        url,
-                        &DbType::Mysql,
-                        connection_auth,
-                        sinker_max_connections,
-                        enable_sqlx_log,
-                        conn_settings,
-                    )
-                    .await
-                    .endpoint(EndpointRole::Destination)?,
-                )
-            }
-            SinkerConfig::MysqlStruct {
-                url,
-                connection_auth,
-                ..
-            } => ConnClient::MySQL(
                 TaskUtil::create_mysql_conn_pool(
                     url,
                     &DbType::Mysql,
                     connection_auth,
                     sinker_max_connections,
                     enable_sqlx_log,
-                    None,
+                    conn_settings,
                 )
                 .await
-                .endpoint(EndpointRole::Destination)?,
-            ),
+                .map(ConnClient::MySQL)
+            }
+            SinkerConfig::MysqlStruct {
+                url,
+                connection_auth,
+                ..
+            } => TaskUtil::create_mysql_conn_pool(
+                url,
+                &DbType::Mysql,
+                connection_auth,
+                sinker_max_connections,
+                enable_sqlx_log,
+                None,
+            )
+            .await
+            .map(ConnClient::MySQL),
             SinkerConfig::Pg {
                 url,
                 connection_auth,
                 disable_foreign_key_checks,
                 ..
-            } => ConnClient::PostgreSQL(
-                TaskUtil::create_pg_conn_pool(
-                    url,
-                    connection_auth,
-                    sinker_max_connections,
-                    enable_sqlx_log,
-                    *disable_foreign_key_checks,
-                )
-                .await
-                .endpoint(EndpointRole::Destination)?,
-            ),
+            } => TaskUtil::create_pg_conn_pool(
+                url,
+                connection_auth,
+                sinker_max_connections,
+                enable_sqlx_log,
+                *disable_foreign_key_checks,
+            )
+            .await
+            .map(ConnClient::PostgreSQL),
             SinkerConfig::PgStruct {
                 url,
                 connection_auth,
                 ..
-            } => ConnClient::PostgreSQL(
-                TaskUtil::create_pg_conn_pool(
-                    url,
-                    connection_auth,
-                    sinker_max_connections,
-                    enable_sqlx_log,
-                    false,
-                )
-                .await
-                .endpoint(EndpointRole::Destination)?,
-            ),
+            } => TaskUtil::create_pg_conn_pool(
+                url,
+                connection_auth,
+                sinker_max_connections,
+                enable_sqlx_log,
+                false,
+            )
+            .await
+            .map(ConnClient::PostgreSQL),
             SinkerConfig::Mongo {
                 url,
                 connection_auth,
@@ -1063,19 +1017,18 @@ impl ConnClient {
                 is_direct_connection,
                 app_name,
                 ..
-            } => ConnClient::MongoDB(
-                TaskUtil::create_mongo_client(
-                    url,
-                    connection_auth,
-                    *is_direct_connection,
-                    Some(app_name.to_string()),
-                    Some(sinker_max_connections),
-                )
-                .await
-                .endpoint(EndpointRole::Destination)?,
-            ),
-            _ => ConnClient::None,
-        };
+            } => TaskUtil::create_mongo_client(
+                url,
+                connection_auth,
+                *is_direct_connection,
+                Some(app_name.to_string()),
+                Some(sinker_max_connections),
+            )
+            .await
+            .map(ConnClient::MongoDB),
+            _ => Ok(ConnClient::None),
+        }
+        .endpoint(EndpointRole::Destination)?;
         Ok((extractor_client, sinker_client))
     }
 

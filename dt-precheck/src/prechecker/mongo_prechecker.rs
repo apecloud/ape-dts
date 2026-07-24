@@ -41,9 +41,10 @@ impl Prechecker for MongoPrechecker {
         let reg = Regex::new(MONGO_SUPPORTED_VERSION_REGEX)?;
         if !reg.is_match(version.as_str()) {
             check_error = Some(
-                DtError::UnsupportedDatabaseVersion(format!(
-                    "MongoDB version {version} is not supported"
-                ))
+                DtError::UnsupportedDatabaseVersion(
+                    DbType::Mongo,
+                    format!("MongoDB version {version} is not supported"),
+                )
                 .into(),
             );
         }

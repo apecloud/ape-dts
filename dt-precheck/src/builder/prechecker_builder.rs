@@ -2,7 +2,7 @@ use std::vec;
 
 use dt_common::{
     config::{config_enums::DbType, task_config::TaskConfig},
-    error::{DtError, DtErrorContextExt, EndpointRole, ErrorCode},
+    error::{DtError, DtErrorContextExt, DtResultExt, EndpointRole, ErrorCode},
     rdb_filter::RdbFilter,
 };
 
@@ -117,12 +117,10 @@ impl PrecheckerBuilder {
         if !self.valid_config() {
             return Err(DtError::InvalidConfig("precheck config is invalid".to_string()).into());
         }
-        let source_checker_option = self
-            .build_checker(true)
-            .map_err(|error| error.endpoint(EndpointRole::Source))?;
+        let source_checker_option = self.build_checker(true).endpoint(EndpointRole::Source)?;
         let sink_checker_option = self
             .build_checker(false)
-            .map_err(|error| error.endpoint(EndpointRole::Destination))?;
+            .endpoint(EndpointRole::Destination)?;
         let (Some(mut source_checker), Some(mut sink_checker)) =
             (source_checker_option, sink_checker_option)
         else {
@@ -136,11 +134,11 @@ impl PrecheckerBuilder {
         let check_source_connection = source_checker
             .build_connection()
             .await
-            .map_err(|error| error.endpoint(EndpointRole::Source))?;
+            .endpoint(EndpointRole::Source)?;
         let check_sink_connection = sink_checker
             .build_connection()
             .await
-            .map_err(|error| error.endpoint(EndpointRole::Destination))?;
+            .endpoint(EndpointRole::Destination)?;
 
         // if connection failed, no need to do other check
         if !check_source_connection.is_validate || !check_sink_connection.is_validate {
@@ -175,13 +173,13 @@ impl PrecheckerBuilder {
             source_checker
                 .check_database_version()
                 .await
-                .map_err(|error| error.endpoint(EndpointRole::Source)),
+                .endpoint(EndpointRole::Source),
         );
         check_results.push(
             sink_checker
                 .check_database_version()
                 .await
-                .map_err(|error| error.endpoint(EndpointRole::Destination)),
+                .endpoint(EndpointRole::Destination),
         );
 
         if self.precheck_config.do_cdc {
@@ -190,7 +188,7 @@ impl PrecheckerBuilder {
                 source_checker
                     .check_cdc_supported()
                     .await
-                    .map_err(|error| error.endpoint(EndpointRole::Source)),
+                    .endpoint(EndpointRole::Source),
             );
         }
 
@@ -199,13 +197,13 @@ impl PrecheckerBuilder {
             source_checker
                 .check_struct_existed_or_not()
                 .await
-                .map_err(|error| error.endpoint(EndpointRole::Source)),
+                .endpoint(EndpointRole::Source),
         );
         check_results.push(
             sink_checker
                 .check_struct_existed_or_not()
                 .await
-                .map_err(|error| error.endpoint(EndpointRole::Destination)),
+                .endpoint(EndpointRole::Destination),
         );
 
         println!("[*]begin to check the database structs");
@@ -213,13 +211,13 @@ impl PrecheckerBuilder {
             source_checker
                 .check_table_structs()
                 .await
-                .map_err(|error| error.endpoint(EndpointRole::Source)),
+                .endpoint(EndpointRole::Source),
         );
         check_results.push(
             sink_checker
                 .check_table_structs()
                 .await
-                .map_err(|error| error.endpoint(EndpointRole::Destination)),
+                .endpoint(EndpointRole::Destination),
         );
 
         Ok(check_results)

@@ -1,10 +1,10 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use url::Url;
 use urlencoding::encode;
 
 use crate::{
     config::ini_loader::IniLoader,
-    error::{DtError, DtErrorContextExt, Stage},
+    error::{DtError, DtErrorContextExt, DtResultExt, Stage},
 };
 
 use super::ssl_config::SslConfig;
@@ -74,13 +74,11 @@ impl ConnectionAuthConfig {
     }
 
     pub fn merge_url_with_auth(original_url: &str, connection_auth: &Self) -> Result<String> {
-        let mut parsed_url = Url::parse(original_url).map_err(|error| {
-            anyhow::Error::new(error)
-                .context(DtError::invalid_config(
-                    "the configured database connection URL could not be parsed",
-                ))
-                .message("database connection URL is invalid")
-        })?;
+        let mut parsed_url = Url::parse(original_url)
+            .context(DtError::invalid_config(
+                "the configured database connection URL could not be parsed",
+            ))
+            .message("database connection URL is invalid")?;
 
         match connection_auth {
             ConnectionAuthConfig::Basic { username, password }

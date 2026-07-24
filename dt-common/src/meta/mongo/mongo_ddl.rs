@@ -25,16 +25,20 @@ pub fn command_to_query(command: Document) -> String {
 }
 
 pub fn query_to_command(query: &str) -> anyhow::Result<Document> {
-    let value: serde_json::Value = serde_json::from_str(query).context(
-        DtError::MongoStatementFailed("MongoDB DDL payload is not valid JSON".to_string()),
-    )?;
-    match Bson::try_from(value).context(DtError::MongoStatementFailed(
+    let value: serde_json::Value =
+        serde_json::from_str(query).context(DtError::DatabaseStatementFailed(
+            DbType::Mongo,
+            "MongoDB DDL payload is not valid JSON".to_string(),
+        ))?;
+    match Bson::try_from(value).context(DtError::DatabaseStatementFailed(
+        DbType::Mongo,
         "MongoDB DDL payload is not valid BSON".to_string(),
     ))? {
         Bson::Document(command) => Ok(command),
-        other => anyhow::bail!(DtError::MongoStatementFailed(format!(
-            "MongoDB DDL payload is not a document: {other:?}"
-        ))),
+        other => anyhow::bail!(DtError::DatabaseStatementFailed(
+            DbType::Mongo,
+            format!("MongoDB DDL payload is not a document: {other:?}")
+        )),
     }
 }
 
