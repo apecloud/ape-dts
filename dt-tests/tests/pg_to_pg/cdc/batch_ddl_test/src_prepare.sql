@@ -35,7 +35,6 @@ AS $BODY$
   declare pg_version_10 int := 100000;
   declare current_version int;
   declare object_id varchar;
-  declare alter_table varchar;
   declare record_object record;
   declare message text;
   declare pub RECORD;
@@ -43,7 +42,7 @@ begin
 
   select current_query() into ddl_text;
 
-  if TG_TAG = 'CREATE TABLE' then -- ALTER TABLE schema.TABLE REPLICA IDENTITY FULL;
+  if TG_TAG = 'CREATE TABLE' then
     show server_version_num into current_version;
     if current_version >= pg_version_95 then
       for record_object in (select * from pg_event_trigger_ddl_commands()) loop
@@ -51,15 +50,12 @@ begin
           object_id := record_object.object_identity;
         end if;
       end loop;
-    else
-      select btrim(substring(ddl_text from '[ \t\r\n\v\f]*[c|C][r|R][e|E][a|A][t|T][e|E][ \t\r\n\v\f]*.*[ \t\r\n\v\f]*[t|T][a|A][b|B][l|L][e|E][ \t\r\n\v\f]+(.*)\(.*'),' \t\r\n\v\f') into object_id;
     end if;
     if object_id = '' or object_id is null then
       message := 'CREATE TABLE, but ddl_text=' || ddl_text || ', current_query=' || current_query();
     end if;
     if current_version >= pg_version_10 then
       for pub in (select * from pg_publication where pubname like 'ape_dts_%') loop
-        raise notice 'pubname=%',pub.pubname;
         BEGIN
           execute 'alter publication ' || pub.pubname || ' add table ' || object_id;
         EXCEPTION WHEN OTHERS THEN
@@ -85,34 +81,5 @@ EXECUTE PROCEDURE public.ape_dts_capture_ddl();
 
 ALTER EVENT TRIGGER ape_dts_intercept_ddl ENABLE ALWAYS;
 
-
--- create test schemas and tables
 DROP SCHEMA IF EXISTS test_db_1 CASCADE;
-DROP SCHEMA IF EXISTS test_db_2 CASCADE;
-DROP SCHEMA IF EXISTS test_db_3 CASCADE;
-DROP SCHEMA IF EXISTS test_db_4 CASCADE;
-DROP SCHEMA IF EXISTS "中文database!@$%^&*()_+" CASCADE;
 CREATE SCHEMA test_db_1;
-CREATE SCHEMA test_db_2;
-CREATE SCHEMA test_db_3;
-
-CREATE TABLE test_db_1.tb_1 ( f_0 int, f_1 int DEFAULT NULL, PRIMARY KEY (f_0) ) ; 
-
-CREATE TABLE test_db_1.rename_tb_1 ( f_0 int, f_1 int DEFAULT NULL, PRIMARY KEY (f_0) );
-
-CREATE TABLE test_db_1.rename_tb_2 ( f_0 int, f_1 int DEFAULT NULL, PRIMARY KEY (f_0) );
-
-CREATE TABLE test_db_1.drop_tb_1 ( f_0 int, f_1 int DEFAULT NULL, PRIMARY KEY (f_0) ) ; 
-
-CREATE TABLE test_db_1.truncate_tb_1 ( f_0 int, f_1 int DEFAULT NULL, PRIMARY KEY (f_0) ) ; 
-INSERT INTO test_db_1.truncate_tb_1 VALUES (1, 1);
-
-CREATE TABLE test_db_1.truncate_tb_2 ( f_0 int, f_1 int DEFAULT NULL, PRIMARY KEY (f_0) ) ; 
-INSERT INTO test_db_1.truncate_tb_2 VALUES (1, 1);
-
-CREATE TABLE test_db_1.truncate_parent ( f_0 int, f_1 int DEFAULT NULL, PRIMARY KEY (f_0) );
-CREATE TABLE test_db_1.truncate_child () INHERITS (test_db_1.truncate_parent);
-INSERT INTO test_db_1.truncate_parent VALUES (1, 1);
-INSERT INTO test_db_1.truncate_child VALUES (2, 2);
-
-CREATE TABLE test_db_2.truncate_tb_1 ( f_0 int, f_1 int DEFAULT NULL, PRIMARY KEY (f_0) ) ; 
