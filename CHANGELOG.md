@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- [Redis] Propagate reshard command failures and verify converged slot ownership.
+- [Redis] Propagate reshard command failures, authenticate MIGRATE targets, and verify converged slot ownership.
 
 ## [2.0.25] - 2025-12-11
 
