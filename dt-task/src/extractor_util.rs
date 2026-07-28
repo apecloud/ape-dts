@@ -12,6 +12,7 @@ use dt_common::{
     config::{
         config_enums::{CheckMode, DbType, ExtractType, TaskKind},
         extractor_config::ExtractorConfig,
+        sinker_config::SinkerConfig,
         task_config::TaskConfig,
     },
     error::{DtError, DtResultExt, ErrorCode},
@@ -379,6 +380,7 @@ impl ExtractorUtil {
                     extract_state,
                     recovery,
                     filter: filter.clone(),
+                    use_raw_document: matches!(config.sinker, SinkerConfig::Mongo { .. }),
                 };
                 Box::new(extractor)
             }
@@ -407,6 +409,7 @@ impl ExtractorUtil {
                     extract_state,
                     heartbeat_interval_secs,
                     heartbeat_tb,
+                    use_raw_document: matches!(config.sinker, SinkerConfig::Mongo { .. }),
                     syncer,
                     recovery,
                 };

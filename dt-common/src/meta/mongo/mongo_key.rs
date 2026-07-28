@@ -1,4 +1,4 @@
-use mongodb::bson::{oid::ObjectId, Bson, DateTime, Document, Timestamp};
+use mongodb::bson::{oid::ObjectId, raw::RawDocument, Bson, DateTime, Document, Timestamp};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
@@ -22,7 +22,19 @@ pub enum MongoKey {
 
 impl MongoKey {
     pub fn from_doc(doc: &Document) -> Option<MongoKey> {
-        doc.get(MongoConstants::ID).map(|id| match id {
+        doc.get(MongoConstants::ID).map(Self::from_bson)
+    }
+
+    pub fn from_raw_doc(doc: &RawDocument) -> anyhow::Result<Option<MongoKey>> {
+        doc.get(MongoConstants::ID)?
+            .map(Bson::try_from)
+            .transpose()
+            .map(|id| id.as_ref().map(Self::from_bson))
+            .map_err(Into::into)
+    }
+
+    pub fn from_bson(id: &Bson) -> MongoKey {
+        match id {
             Bson::ObjectId(v) => MongoKey::ObjectId(*v),
             Bson::String(v) => MongoKey::String(v.clone()),
             Bson::Int32(v) => MongoKey::Int32(*v),
@@ -32,7 +44,7 @@ impl MongoKey {
             Bson::DateTime(v) => MongoKey::DateTime(*v),
             Bson::Symbol(v) => MongoKey::Symbol(v.clone()),
             _ => MongoKey::CanonicalExtJson(id.clone().into_canonical_extjson()),
-        })
+        }
     }
 
     pub fn to_mongo_id(&self) -> Bson {
@@ -61,7 +73,7 @@ impl std::fmt::Display for MongoKey {
 
 #[cfg(test)]
 mod tests {
-    use mongodb::bson::{doc, spec::BinarySubtype, Binary};
+    use mongodb::bson::{doc, raw::RawDocumentBuf, spec::BinarySubtype, Binary};
 
     use super::*;
 
@@ -82,5 +94,27 @@ mod tests {
         let serialized = key.to_string();
         let deserialized: MongoKey = serde_json::from_str(&serialized).unwrap();
         assert_eq!(deserialized.to_mongo_id(), id);
+    }
+
+    #[test]
+    fn raw_key_ignores_invalid_utf8_in_non_id_field() {
+        let mut bytes = RawDocumentBuf::from_document(&doc! {
+            "invalid": "ok",
+            MongoConstants::ID: 42,
+        })
+        .unwrap()
+        .into_bytes();
+        let value_offset = bytes
+            .windows(3)
+            .position(|window| window == b"ok\0")
+            .unwrap();
+        bytes[value_offset] = 0xff;
+        let raw_doc = RawDocumentBuf::from_bytes(bytes).unwrap();
+
+        assert_eq!(
+            MongoKey::from_raw_doc(&raw_doc).unwrap(),
+            Some(MongoKey::Int32(42))
+        );
+        assert!(raw_doc.to_document().is_err());
     }
 }

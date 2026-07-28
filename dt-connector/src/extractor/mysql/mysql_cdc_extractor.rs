@@ -191,7 +191,6 @@ impl MysqlCdcExtractor {
                 EventData::Rotate(r) => {
                     ctx.binlog_filename = r.binlog_filename;
                 }
-
                 _ => self.parse_events(header, data, &mut ctx).await?,
             }
         }
@@ -210,15 +209,13 @@ impl MysqlCdcExtractor {
             data
         );
 
-        // TODO, get server_id from source mysql
-        let server_id = String::new();
         let timestamp = Position::format_timestamp_millis(header.timestamp as i64 * 1000);
         let mut gtid_set_str = String::new();
         if let Some(gtid_set) = &ctx.gtid_set {
             gtid_set_str = gtid_set.to_string();
         }
         let position = Position::MysqlCdc {
-            server_id,
+            server_id: self.server_id.to_string(),
             binlog_filename: ctx.binlog_filename.clone(),
             next_event_position: header.next_event_position,
             gtid_set: gtid_set_str,
