@@ -8,7 +8,9 @@ Ape-DTS 任务运行时错误使用稳定的五位条件码。错误码用于说
 
 ```text
 ERROR REPORT
-  [MD001]:
+  [MD001]: A required source or destination object was not found
+  AFFECTED OBJECT: schema=public, table=orders
+  CAUSED BY:
     0: postgres/42P01: relation does not exist
 ```
 
@@ -79,7 +81,8 @@ ERROR REPORT
 任务 ID 和端点角色是单值；用户消息、详细信息、处理建议和受影响对象是数组。最外层
 显式 `DtErrorContext` 决定单值字段，具体 error 的 classifier 只补充仍缺失的字段。数组
 保持首次出现顺序并去除完全相同的值。文本输出始终使用从 `0` 开始的 detail index。
-CLI 文本格式不是稳定的机器接口。
+CLI 文本格式不是稳定的机器接口。message 位于带中括号的错误码之后，多个 message 使用
+分号分隔；单个受影响对象的字段使用逗号分隔，多个受影响对象使用分号分隔。
 
 序列化后的 `ErrorReport` 不再保存 `error_chain` 或 `context_count`，除了面向用户的
 字段外，还包含 UTC 创建时间 `timestamp` 和可选的已捕获 `backtrace`。`details` 按从外到内的顺序收集普通
@@ -87,11 +90,14 @@ CLI 文本格式不是稳定的机器接口。
 `rtb-redact` 对凭据、带认证信息的 URL、authorization 值、provider token、JWT、长随机
 token 和私钥进行脱敏，之后这些内容才能进入用户视图。
 
-文本输出只保留错误码、details 和 backtrace：
+文本输出包含错误码和 message、可选的受影响对象、位于 `CAUSED BY` 下的 details，以及
+可选的 backtrace：
 
 ```text
 ERROR REPORT
-  [DB001]:
+  [DB001]: A source or destination operation failed
+  AFFECTED OBJECT: schema=public, table=orders, constraint=orders_pkey
+  CAUSED BY:
     0: starting task
     1: postgres/42P01: relation does not exist
   BACKTRACE:
@@ -156,9 +162,10 @@ chain；其中的 chain registry 按保留的具体类型调用 provider classif
 固有的 code 和 object。只有 provider 无法知道的业务语义或执行 scope 才显式挂载
 `DtErrorContext`。两条路径都不会在报告阶段推断 stage、endpoint 或 task ID。
 
-`ErrorReport` 是面向用户的边界表示。其文本格式使用带中括号的错误码作为 detail 标题，
-detail 始终从 `0:` 开始编号，并可选追加 `BACKTRACE` 块；完整结构化字段仍保留在 JSON
-格式中。
+`ErrorReport` 是面向用户的边界表示。其文本格式先输出带中括号的错误码，随后输出以分号
+分隔的 message。存在受影响对象时在一行内输出：单个对象的字段使用逗号分隔，多个对象
+使用分号分隔。details 保持原有顺序，在 `CAUSED BY` 下从 `0:` 开始编号；已捕获的
+backtrace 作为 `BACKTRACE` 块追加。完整结构化字段仍保留在 JSON 格式中。
 
 Provider 分类器实现统一位于 `dt-common::error::provider`。它们通过 `ClassifyError` 根据
 provider 原始错误码、类型化错误种类和 Rust 错误变体进行判断，禁止根据 provider 错误

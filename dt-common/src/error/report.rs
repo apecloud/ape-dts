@@ -120,9 +120,40 @@ fn sanitize_user_text(value: &str) -> String {
 
 impl fmt::Display for ErrorReport {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "ERROR REPORT\n  [{}]:", self.code)?;
-        for (index, detail) in self.details.iter().enumerate() {
-            write!(f, "\n    {index}: {detail}")?;
+        write!(
+            f,
+            "ERROR REPORT\n  [{}]: {}",
+            self.code,
+            self.messages.join("; ")
+        )?;
+        if !self.objects.is_empty() {
+            write!(f, "\n  AFFECTED OBJECT: ")?;
+            for (object_index, object) in self.objects.iter().enumerate() {
+                if object_index > 0 {
+                    write!(f, "; ")?;
+                }
+                let mut field_index = 0;
+                for (name, value) in [
+                    ("schema", object.schema.as_deref()),
+                    ("table", object.table.as_deref()),
+                    ("column", object.column.as_deref()),
+                    ("constraint", object.constraint.as_deref()),
+                ] {
+                    if let Some(value) = value {
+                        if field_index > 0 {
+                            write!(f, ", ")?;
+                        }
+                        write!(f, "{name}={value}")?;
+                        field_index += 1;
+                    }
+                }
+            }
+        }
+        if !self.details.is_empty() {
+            write!(f, "\n  CAUSED BY:")?;
+            for (index, detail) in self.details.iter().enumerate() {
+                write!(f, "\n    {index}: {detail}")?;
+            }
         }
         if let Some(backtrace) = &self.backtrace {
             write!(f, "\n  BACKTRACE:")?;
@@ -189,10 +220,12 @@ mod tests {
             ]
         );
         let rendered = report.to_string();
-        assert!(rendered.starts_with("ERROR REPORT\n  [MD001]:"));
+        assert!(rendered.starts_with(
+            "ERROR REPORT\n  [MD001]: outer message; inner message\n  AFFECTED OBJECT: schema=ape_dts, table=resume_position\n  CAUSED BY:"
+        ));
         assert!(rendered.contains("    0: starting task"));
         assert!(rendered.contains("    2: invalid digit found in string"));
-        for omitted_label in ["MESSAGE", "HINT", "STAGE", "TASK", "ENDPOINT", "AFFECTED"] {
+        for omitted_label in ["MESSAGE", "HINT", "STAGE", "TASK", "ENDPOINT"] {
             assert!(!rendered.contains(omitted_label));
         }
     }
@@ -290,6 +323,7 @@ mod tests {
             assert!(json_value[array_field].is_array());
         }
         assert!(rendered.starts_with("ERROR REPORT\n  [IN999]:"));
+        assert!(rendered.contains("  CAUSED BY:\n    0: internal worker context"));
         assert!(rendered.contains("    0: internal worker context"));
         assert!(rendered.contains("sql=INSERT"));
         assert!(rendered.contains("row_data=private"));
@@ -360,11 +394,10 @@ mod tests {
         assert_eq!(report.task_id.as_deref(), Some("outer-task"));
         assert_eq!(report.endpoint, Some(EndpointRole::Destination));
         assert_eq!(report.details, ["same detail"]);
-        assert_eq!(
-            report.to_string(),
-            "ERROR REPORT\n  [DB001]:\n    0: same detail"
-        );
         let rendered = report.to_string();
+        assert!(rendered.starts_with(
+            "ERROR REPORT\n  [DB001]: same message\n  CAUSED BY:\n    0: same detail"
+        ));
         assert!(!rendered.contains("MESSAGE"));
         assert!(!rendered.contains("HINT"));
     }
@@ -373,18 +406,28 @@ mod tests {
     fn affected_objects_remain_independent_array_items() {
         let error = anyhow::anyhow!("object failure")
             .object(ErrorObject {
-                schema: Some("sales".to_string()),
+                schema: Some("archive".to_string()),
+                table: Some("orders".to_string()),
                 ..Default::default()
             })
             .object(ErrorObject {
+                schema: Some("sales".to_string()),
                 table: Some("orders".to_string()),
+                constraint: Some("orders_pkey".to_string()),
                 ..Default::default()
-            });
+            })
+            .message("Data violates a destination constraint")
+            .message("The destination rejected the row")
+            .context("insert operation failed");
 
-        let report = ErrorReport::from_anyhow(&error);
+        let mut report = ErrorReport::from_anyhow(&error);
         assert_eq!(report.objects.len(), 2);
-        assert_eq!(report.objects[0].table.as_deref(), Some("orders"));
-        assert_eq!(report.objects[1].schema.as_deref(), Some("sales"));
-        assert!(!report.to_string().contains("AFFECTED"));
+        assert_eq!(report.objects[0].schema.as_deref(), Some("sales"));
+        assert_eq!(report.objects[1].schema.as_deref(), Some("archive"));
+        report.backtrace = None;
+        assert_eq!(
+            report.to_string(),
+            "ERROR REPORT\n  [IN999]: The destination rejected the row; Data violates a destination constraint\n  AFFECTED OBJECT: schema=sales, table=orders, constraint=orders_pkey; schema=archive, table=orders\n  CAUSED BY:\n    0: insert operation failed\n    1: object failure"
+        );
     }
 }

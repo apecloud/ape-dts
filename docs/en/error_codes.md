@@ -9,7 +9,9 @@ For example:
 
 ```text
 ERROR REPORT
-  [MD001]:
+  [MD001]: A required source or destination object was not found
+  AFFECTED OBJECT: schema=public, table=orders
+  CAUSED BY:
     0: postgres/42P01: relation does not exist
 ```
 
@@ -86,7 +88,10 @@ User messages, details, hints, and affected objects are arrays. The outermost
 explicit `DtErrorContext` owns scalar fields, while a concrete error classifier
 fills only missing values. Arrays preserve first-seen order and remove exact
 duplicates. Text rendering always uses zero-based detail indexes. CLI text
-layout is not a stable machine interface.
+layout is not a stable machine interface. Messages appear after the bracketed
+code and are separated by semicolons. Fields within one affected object are
+separated by commas, while multiple affected objects are separated by
+semicolons.
 
 The serialized `ErrorReport` no longer stores `error_chain` or `context_count`.
 It includes its UTC creation `timestamp` and an optional captured `backtrace` in
@@ -97,11 +102,14 @@ boundary uses `rtb-redact` to remove credentials, authenticated URL
 userinfo, authorization values, provider tokens, JWTs, long opaque tokens, and
 private keys before any of these values enter the user view.
 
-Text output is intentionally limited to the code, details, and backtrace:
+Text output shows the code and messages, optional affected objects, details
+under `CAUSED BY`, and an optional backtrace:
 
 ```text
 ERROR REPORT
-  [DB001]:
+  [DB001]: A source or destination operation failed
+  AFFECTED OBJECT: schema=public, table=orders, constraint=orders_pkey
+  CAUSED BY:
     0: starting task
     1: postgres/42P01: relation does not exist
   BACKTRACE:
@@ -191,9 +199,12 @@ that the provider error cannot know. Neither path infers stage, endpoint, or
 task ID at report time.
 
 `ErrorReport` is the user-facing boundary representation. Its text form uses
-the bracketed error code as the detail heading, always numbers details from
-`0:`, and optionally appends a `BACKTRACE` block. The complete structured
-fields remain available in its JSON form.
+the bracketed error code followed by semicolon-separated messages. When
+present, affected objects are rendered on one line: fields within an object use
+commas and multiple objects use semicolons. Details remain ordered and
+zero-based under `CAUSED BY`, and a captured backtrace is appended as a
+`BACKTRACE` block. The complete structured fields remain available in its JSON
+form.
 
 Provider classifier implementations live under `dt-common::error::provider`.
 They implement `ClassifyError` using provider-native codes, typed error kinds,
