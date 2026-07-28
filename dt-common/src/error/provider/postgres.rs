@@ -2,7 +2,7 @@ use std::error::Error as StdError;
 
 use super::{
     super::{ClassifyError, DtErrorContext, ErrorCode},
-    classification::{classify_postgres_code, provider_context},
+    classification::{classify_postgres_code, provider_context, provider_detail},
 };
 
 impl ClassifyError for tokio_postgres::Error {
@@ -25,7 +25,7 @@ impl ClassifyError for tokio_postgres::Error {
             None
         };
 
-        provider_context(code)
+        provider_context(code, provider_detail("postgres", provider_code, self))
     }
 }
 

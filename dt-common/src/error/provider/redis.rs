@@ -2,7 +2,7 @@ use redis::ErrorKind as RedisErrorKind;
 
 use super::{
     super::{ClassifyError, DtErrorContext, ErrorCode},
-    classification::provider_context,
+    classification::{provider_context, provider_detail},
 };
 
 impl ClassifyError for redis::RedisError {
@@ -30,7 +30,10 @@ impl ClassifyError for redis::RedisError {
             }
         };
 
-        provider_context(code)
+        provider_context(
+            code,
+            provider_detail("redis", self.code().map(str::to_string), self),
+        )
     }
 }
 

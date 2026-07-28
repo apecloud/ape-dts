@@ -1,6 +1,6 @@
 use super::{
     super::{ClassifyError, DtErrorContext, ErrorCode},
-    classification::provider_context,
+    classification::{provider_context, provider_detail},
 };
 
 impl ClassifyError for reqwest::Error {
@@ -14,6 +14,7 @@ impl ClassifyError for reqwest::Error {
         } else {
             None
         };
-        provider_context(code)
+        let provider_code = self.status().map(|status| status.as_u16().to_string());
+        provider_context(code, provider_detail("http", provider_code, self))
     }
 }

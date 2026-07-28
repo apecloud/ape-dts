@@ -2,12 +2,19 @@ use mongodb::error::ErrorKind as MongoErrorKind;
 
 use super::{
     super::{ClassifyError, DtErrorContext, ErrorCode},
-    classification::provider_context,
+    classification::{provider_context, provider_detail},
 };
 
 impl ClassifyError for mongodb::error::Error {
     fn classify(&self) -> DtErrorContext {
-        provider_context(classify_mongodb_kind(&self.kind))
+        let provider_code = match self.kind.as_ref() {
+            MongoErrorKind::Command(command) => Some(command.code.to_string()),
+            _ => None,
+        };
+        provider_context(
+            classify_mongodb_kind(&self.kind),
+            provider_detail("mongodb", provider_code, self),
+        )
     }
 }
 

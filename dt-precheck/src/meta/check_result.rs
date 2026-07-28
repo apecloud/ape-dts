@@ -1,5 +1,4 @@
 use dt_common::config::config_enums::DbType;
-use dt_common::error::{ErrorCode, ErrorReport};
 
 use super::check_item::CheckItem;
 
@@ -8,9 +7,7 @@ pub struct CheckResult {
     pub check_type_name: String,
     pub check_desc: String,
     pub is_validate: bool,
-    pub error_code: Option<ErrorCode>,
     pub error_msg: String,
-    pub warn_code: Option<ErrorCode>,
     pub warn_msg: String,
     pub is_source: bool,
     pub advise_msg: String,
@@ -22,9 +19,7 @@ impl CheckResult {
             check_type_name: check_item.to_string(),
             check_desc: String::from(""),
             is_validate: true,
-            error_code: None,
             error_msg: String::from(""),
-            warn_code: None,
             warn_msg: String::from(""),
             is_source,
             advise_msg: String::from(""),
@@ -38,14 +33,6 @@ impl CheckResult {
         err_option: Option<anyhow::Error>,
         warn_option: Option<anyhow::Error>,
     ) -> Self {
-        let fallback_code = match check_item {
-            CheckItem::CheckDatabaseConnection => ErrorCode::ConnectionFailed,
-            CheckItem::CheckIfStructExisted => ErrorCode::ObjectNotFound,
-            CheckItem::CheckDatabaseVersionSupported => ErrorCode::UnsupportedDatabaseVersion,
-            CheckItem::CheckIfDatabaseSupportCdc => ErrorCode::CdcNotEnabled,
-            CheckItem::CheckIfTableStructSupported => ErrorCode::UnsupportedTableStructure,
-            CheckItem::CheckAccountPermission => ErrorCode::PrerequisiteNotMet,
-        };
         let check_desc;
         let mut advise_msg = String::new();
         let mut source_or_sink = String::from("source");
@@ -105,16 +92,16 @@ impl CheckResult {
                 advise_msg = format!("{} wait for the next release.", advise_version);
             }
         }
-        let (warn_code, warn_msg) = Self::classify(warn_option.as_ref(), fallback_code);
-        let (error_code, error_msg) = Self::classify(err_option.as_ref(), fallback_code);
+        let warn_msg = warn_option
+            .map(|error| error.to_string())
+            .unwrap_or_default();
+        let has_warning = !warn_msg.is_empty();
         match err_option {
-            Some(_) => Self {
+            Some(error) => Self {
                 check_type_name: check_item.to_string(),
                 check_desc,
                 is_validate: false,
-                error_code,
-                error_msg,
-                warn_code,
+                error_msg: error.to_string(),
                 warn_msg,
                 is_source,
                 advise_msg,
@@ -123,12 +110,10 @@ impl CheckResult {
                 check_type_name: check_item.to_string(),
                 check_desc,
                 is_validate: true,
-                error_code: None,
                 error_msg: String::from(""),
-                warn_code,
                 warn_msg,
                 is_source,
-                advise_msg: if warn_code.is_some() {
+                advise_msg: if has_warning {
                     advise_msg
                 } else {
                     String::new()
@@ -137,20 +122,8 @@ impl CheckResult {
         }
     }
 
-    fn classify(error: Option<&anyhow::Error>, fallback: ErrorCode) -> (Option<ErrorCode>, String) {
-        let Some(error) = error else {
-            return (None, String::new());
-        };
-        let report = ErrorReport::from_anyhow(error);
-        if report.code == ErrorCode::Unclassified {
-            (Some(fallback), fallback.default_message().to_string())
-        } else {
-            (Some(report.code), report.message)
-        }
-    }
-
     pub fn log(&self) {
         println!("======================================");
-        println!("[check_type_name]:{} \n[is_validate]:{} \n[check_desc]:{} \n[error_code]:{} \n[error_message]:{} \n[warn_code]:{} \n[warn_message]:{} \n[advise_message]:{}\n", self.check_type_name, self.is_validate, self.check_desc, self.error_code.map(|code| code.to_string()).unwrap_or_default(), self.error_msg, self.warn_code.map(|code| code.to_string()).unwrap_or_default(), self.warn_msg, self.advise_msg);
+        println!("[check_type_name]:{} \n[is_validate]:{} \n[check_desc]:{} \n[error_message]:{} \n[warn_message]:{} \n[advise_message]:{}\n", self.check_type_name, self.is_validate, self.check_desc, self.error_msg, self.warn_msg, self.advise_msg);
     }
 }

@@ -1,9 +1,13 @@
 use mysql_binlog_connector_rust::binlog_error::BinlogError;
 
-use super::super::{ClassifyError, DtErrorContext, ErrorCode};
+use super::{
+    super::{ClassifyError, DtErrorContext, ErrorCode},
+    classification::provider_detail,
+};
 
 impl ClassifyError for BinlogError {
     fn classify(&self) -> DtErrorContext {
+        let detail = provider_detail("mysql", diagnostic_code(self).map(str::to_string), self);
         match self {
             Self::IoError(error) => {
                 let code = if matches!(
@@ -14,24 +18,24 @@ impl ClassifyError for BinlogError {
                 } else {
                     ErrorCode::ConnectionFailed
                 };
-                mysql_context(code)
+                mysql_context(code, detail)
             }
             Self::ConnectError(message) if binlog_is_unavailable(message) => {
-                mysql_context(ErrorCode::CheckpointReadFailed)
+                mysql_context(ErrorCode::CheckpointReadFailed, detail)
                     .with_message("The requested MySQL binlog is no longer available")
                     .with_hint(
                         "Start from a retained binlog position or take a new snapshot, then increase the source binlog retention period.",
                     )
             }
-            Self::ConnectError(_) => mysql_context(ErrorCode::ConnectionFailed),
-            Self::InvalidGtid(_) => mysql_context(ErrorCode::InvalidConfig),
-            _ => mysql_context(ErrorCode::StatementFailed),
+            Self::ConnectError(_) => mysql_context(ErrorCode::ConnectionFailed, detail),
+            Self::InvalidGtid(_) => mysql_context(ErrorCode::InvalidConfig, detail),
+            _ => mysql_context(ErrorCode::StatementFailed, detail),
         }
     }
 }
 
-fn mysql_context(code: ErrorCode) -> DtErrorContext {
-    DtErrorContext::new().with_code(code)
+fn mysql_context(code: ErrorCode, detail: String) -> DtErrorContext {
+    DtErrorContext::new().with_code(code).with_detail(detail)
 }
 
 fn binlog_is_unavailable(message: &str) -> bool {

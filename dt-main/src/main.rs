@@ -1,12 +1,11 @@
 use std::{env, panic, process::ExitCode};
 
-use anyhow::Context;
 use clap::Parser;
 
 use dt_common::{
     config::{ini_loader::IniLoader, task_config::TaskConfig},
     error::{DtResultExt, ErrorReport},
-    log_error,
+    log_error, log_error_report,
     logger::TaskLogger,
 };
 use dt_main::run_config;
@@ -50,24 +49,15 @@ async fn main() -> ExitCode {
         return ExitCode::SUCCESS;
     }
 
-    let config = args
-        .config_path()
-        .context("no task config was provided")
-        .unwrap();
-    let loader = IniLoader::new(config)
-        .with_context(|| format!("failed to load task config from [{config}]"))
-        .unwrap();
-    let task_config = TaskConfig::from_loader(&loader)
-        .with_context(|| format!("invalid task config in [{config}]"))
-        .unwrap();
-    let precheck_config = PrecheckTaskConfig::load_if_present(&loader)
-        .with_context(|| format!("invalid precheck config in [{config}]"))
-        .unwrap();
+    let config = args.config_path().expect("task config path is required");
+    let loader = IniLoader::new(config).expect("failed to load task config");
+    let task_config = TaskConfig::from_loader(&loader).expect("failed to parse task config");
+    let precheck_config =
+        PrecheckTaskConfig::load_if_present(&loader).expect("failed to parse precheck config");
     TaskLogger::new(&task_config)
         .init(precheck_config.is_some())
         .await
-        .context("failed to initialize task logger")
-        .unwrap();
+        .expect("failed to initialize task logger");
 
     install_panic_hook();
 
@@ -76,6 +66,7 @@ async fn main() -> ExitCode {
         Err(error) => {
             let report = ErrorReport::from_anyhow(&error);
             log_error!("{report}");
+            log_error_report!("{}", report.to_log_json());
             log::logger().flush();
             ExitCode::FAILURE
         }

@@ -1,11 +1,10 @@
 use std::{backtrace::BacktraceStatus, fmt};
 
+use chrono::{SecondsFormat, Utc};
 use serde::Serialize;
 
 use super::{
-    error_context::{DtErrorContexts, DT_ERROR_CONTEXT_MARKER},
-    provider::{classify_raw_errors, provider_error_detail},
-    ClassifyError, DtError, DtErrorContext, EndpointRole, ErrorCode, ErrorObject, Stage,
+    classifier::collect_contexts, DtErrorContext, EndpointRole, ErrorCode, ErrorObject, Stage,
 };
 
 pub const ERROR_REPORT_SCHEMA_VERSION: u16 = 1;
@@ -14,263 +13,94 @@ pub const ERROR_REPORT_SCHEMA_VERSION: u16 = 1;
 pub struct ErrorReport {
     pub schema_version: u16,
     pub code: ErrorCode,
-    pub message: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub detail: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub hint: Option<String>,
-    #[serde(skip_serializing)]
+    pub messages: Vec<String>,
+    pub details: Vec<String>,
+    pub hints: Vec<String>,
     pub stage: Stage,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub task_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub endpoint: Option<EndpointRole>,
+    pub objects: Vec<ErrorObject>,
+    timestamp: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub object: Option<ErrorObject>,
-    #[serde(skip_serializing)]
-    pub error_chain: Vec<String>,
-    #[serde(skip_serializing)]
-    pub context_count: usize,
-    #[serde(skip_serializing)]
-    pub backtrace: Option<String>,
+    backtrace: Option<String>,
 }
 
 impl ErrorReport {
     pub fn from_anyhow(error: &anyhow::Error) -> Self {
-        let metadata = CollectedMetadata::from_anyhow(error);
-        let (error_chain, context_count) = split_error_chain(error);
-        let detail = detail_from_error_chain(&error_chain);
-        let backtrace = captured_backtrace(error);
-        let code = metadata.code().unwrap_or(ErrorCode::Unclassified);
-        Self {
+        let mut report = Self {
             schema_version: ERROR_REPORT_SCHEMA_VERSION,
-            code,
-            message: sanitize_user_text(
-                metadata.message().unwrap_or_else(|| code.default_message()),
-            ),
-            detail,
-            hint: Some(sanitize_user_text(
-                metadata.hint().unwrap_or_else(|| code.default_hint()),
-            )),
-            stage: metadata.stage().unwrap_or(Stage::Unknown),
-            task_id: metadata.task_id().map(str::to_string),
-            endpoint: metadata.endpoint(),
-            object: metadata.object(),
-            error_chain,
-            context_count,
-            backtrace,
+            code: ErrorCode::Unclassified,
+            messages: Vec::new(),
+            details: Vec::new(),
+            hints: Vec::new(),
+            stage: Stage::Unknown,
+            task_id: None,
+            endpoint: None,
+            objects: Vec::new(),
+            timestamp: Utc::now().to_rfc3339_opts(SecondsFormat::Micros, true),
+            backtrace: captured_backtrace(error),
+        };
+
+        for context in collect_contexts(error) {
+            report.push_context(&context);
         }
+
+        if report.messages.is_empty() {
+            report
+                .messages
+                .push(sanitize_user_text(report.code.default_message()));
+        }
+        if report.hints.is_empty() {
+            report
+                .hints
+                .push(sanitize_user_text(report.code.default_hint()));
+        }
+        report
     }
 
-    fn affected_resource(&self) -> Option<String> {
-        let mut parts = Vec::new();
-        if let Some(endpoint) = self.endpoint {
-            parts.push(endpoint.user_description().to_string());
-        }
-        if let Some(object) = &self.object {
-            if let Some(name) = format_object(object) {
-                parts.push(name);
+    pub fn to_log_json(&self) -> String {
+        serde_json::to_string(self).expect("ErrorReport fields should always serialize to JSON")
+    }
+
+    fn push_context(&mut self, context: &DtErrorContext) {
+        if self.code == ErrorCode::Unclassified {
+            if let Some(code) = context.code {
+                self.code = code;
             }
         }
-        (!parts.is_empty()).then(|| parts.join(" "))
-    }
-}
-
-#[derive(Default)]
-struct CollectedMetadata {
-    explicit: MetadataValues,
-    project: MetadataValues,
-    provider: MetadataValues,
-    system: MetadataValues,
-}
-
-impl CollectedMetadata {
-    fn from_anyhow(error: &anyhow::Error) -> Self {
-        let mut metadata = Self::default();
-        if let Some(contexts) = error.downcast_ref::<DtErrorContexts>() {
-            for context in contexts.iter_outer_to_inner() {
-                metadata.explicit.push(context);
+        if let Some(message) = &context.message {
+            push_unique(&mut self.messages, sanitize_user_text(message));
+        }
+        if let Some(detail) = &context.detail {
+            self.push_detail(detail);
+        }
+        if let Some(hint) = &context.hint {
+            push_unique(&mut self.hints, sanitize_user_text(hint));
+        }
+        if self.stage == Stage::Unknown {
+            if let Some(stage) = context.stage {
+                self.stage = stage;
             }
         }
-        if let Some(error) = error.downcast_ref::<DtError>() {
-            metadata.project.push(&error.classify());
+        if self.task_id.is_none() {
+            self.task_id.clone_from(&context.task_id);
         }
-        let (provider_contexts, system_contexts) = classify_raw_errors(error);
-        for context in provider_contexts {
-            metadata.provider.push(&context);
+        if self.endpoint.is_none() {
+            self.endpoint = context.endpoint;
         }
-        for context in system_contexts {
-            metadata.system.push(&context);
-        }
-        metadata
-    }
-
-    fn code(&self) -> Option<ErrorCode> {
-        self.provider
-            .codes
-            .first()
-            .or_else(|| self.explicit.codes.first())
-            .or_else(|| self.project.codes.first())
-            .or_else(|| self.system.codes.first())
-            .copied()
-    }
-
-    fn message(&self) -> Option<&str> {
-        self.explicit
-            .messages
-            .first()
-            .or_else(|| self.project.messages.first())
-            .or_else(|| self.provider.messages.first())
-            .or_else(|| self.system.messages.first())
-            .map(String::as_str)
-    }
-
-    fn hint(&self) -> Option<&str> {
-        self.explicit
-            .hints
-            .first()
-            .or_else(|| self.project.hints.first())
-            .or_else(|| self.provider.hints.first())
-            .or_else(|| self.system.hints.first())
-            .map(String::as_str)
-    }
-
-    fn stage(&self) -> Option<Stage> {
-        self.provider
-            .stages
-            .first()
-            .or_else(|| self.explicit.stages.last())
-            .or_else(|| self.project.stages.first())
-            .or_else(|| self.system.stages.first())
-            .copied()
-    }
-
-    fn task_id(&self) -> Option<&str> {
-        self.explicit
-            .task_ids
-            .first()
-            .or_else(|| self.project.task_ids.first())
-            .or_else(|| self.provider.task_ids.first())
-            .or_else(|| self.system.task_ids.first())
-            .map(String::as_str)
-    }
-
-    fn endpoint(&self) -> Option<EndpointRole> {
-        self.provider
-            .endpoints
-            .first()
-            .or_else(|| self.project.endpoints.first())
-            .or_else(|| self.explicit.endpoints.last())
-            .or_else(|| self.system.endpoints.first())
-            .copied()
-    }
-
-    fn object(&self) -> Option<ErrorObject> {
-        let mut merged: Option<ErrorObject> = None;
-        for object in self
-            .provider
-            .objects
-            .iter()
-            .chain(&self.project.objects)
-            .chain(self.explicit.objects.iter().rev())
-            .chain(&self.system.objects)
-        {
-            match &mut merged {
-                Some(merged) => merged.fill_missing_from(object),
-                None => merged = Some(object.clone()),
-            }
-        }
-        merged
-    }
-}
-
-#[derive(Default)]
-struct MetadataValues {
-    codes: Vec<ErrorCode>,
-    messages: Vec<String>,
-    hints: Vec<String>,
-    stages: Vec<Stage>,
-    task_ids: Vec<String>,
-    endpoints: Vec<EndpointRole>,
-    objects: Vec<ErrorObject>,
-}
-
-impl MetadataValues {
-    fn push(&mut self, context: &DtErrorContext) {
-        self.codes.extend(context.code);
-        self.messages.extend(context.message.clone());
-        self.hints.extend(context.hint.clone());
-        self.stages.extend(context.stage);
-        self.task_ids.extend(context.task_id.clone());
-        self.endpoints.extend(context.endpoint);
-        self.objects.extend(context.object.clone());
-    }
-}
-
-fn sanitize_user_text(value: &str) -> String {
-    rtb_redact::string(value).into_owned()
-}
-
-fn format_object(object: &ErrorObject) -> Option<String> {
-    let qualified_name = match (&object.schema, &object.table) {
-        (Some(schema), Some(table)) => Some(format!("{schema}.{table}")),
-        (Some(schema), None) => Some(schema.clone()),
-        (None, Some(table)) => Some(table.clone()),
-        (None, None) => None,
-    };
-    let mut parts = Vec::new();
-    if let Some(name) = qualified_name {
-        parts.push(name);
-    }
-    if let Some(column) = &object.column {
-        parts.push(format!("column {column}"));
-    }
-    if let Some(constraint) = &object.constraint {
-        parts.push(format!("constraint {constraint}"));
-    }
-    (!parts.is_empty()).then(|| parts.join(", "))
-}
-
-fn split_error_chain(error: &anyhow::Error) -> (Vec<String>, usize) {
-    let raw_chain: Vec<_> = error
-        .chain()
-        .map(|cause| {
-            let display = cause.to_string();
-            let detail = match provider_error_detail(cause) {
-                Some(provider) => format!("{provider}: {display}"),
-                None => display,
-            };
-            sanitize_user_text(&detail)
-        })
-        .collect();
-    let marker = sanitize_user_text(DT_ERROR_CONTEXT_MARKER);
-    let Some(root_context_index) = raw_chain.iter().rposition(|item| item == &marker) else {
-        let context_count = raw_chain.len().saturating_sub(1);
-        return (raw_chain, context_count);
-    };
-
-    let mut chain = Vec::with_capacity(raw_chain.len());
-    let mut context_count = 0;
-    for (index, item) in raw_chain.into_iter().enumerate() {
-        if item == marker {
-            continue;
-        }
-        if index < root_context_index {
-            context_count += 1;
-        }
-        chain.push(item);
-    }
-    (chain, context_count)
-}
-
-fn detail_from_error_chain(error_chain: &[String]) -> Option<String> {
-    let mut parts = Vec::new();
-    for item in error_chain {
-        if !item.is_empty() && !parts.contains(item) {
-            parts.push(item.clone());
+        if let Some(object) = &context.object {
+            push_unique(&mut self.objects, object.clone());
         }
     }
-    (!parts.is_empty()).then(|| parts.join(": "))
+
+    fn push_detail(&mut self, detail: impl AsRef<str>) {
+        let detail = sanitize_user_text(detail.as_ref());
+        if !detail.is_empty() {
+            push_unique(&mut self.details, detail);
+        }
+    }
 }
 
 fn captured_backtrace(error: &anyhow::Error) -> Option<String> {
@@ -278,33 +108,34 @@ fn captured_backtrace(error: &anyhow::Error) -> Option<String> {
     (backtrace.status() == BacktraceStatus::Captured).then(|| backtrace.to_string())
 }
 
+fn push_unique<T: PartialEq>(values: &mut Vec<T>, value: T) {
+    if !values.contains(&value) {
+        values.push(value);
+    }
+}
+
+fn sanitize_user_text(value: &str) -> String {
+    rtb_redact::string(value).into_owned()
+}
+
+fn write_items<T: fmt::Display>(
+    f: &mut fmt::Formatter<'_>,
+    label: &str,
+    values: &[T],
+) -> fmt::Result {
+    if let [value] = values {
+        return write!(f, "\n{label}: {value}");
+    }
+    for (index, value) in values.iter().enumerate() {
+        write!(f, "\n{label} {index}: {value}")?;
+    }
+    Ok(())
+}
+
 impl fmt::Display for ErrorReport {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "ERROR [{}]: {}", self.code, self.message)?;
-        if let Some(task_id) = &self.task_id {
-            write!(f, "\nTASK: {task_id}")?;
-        }
-        if let Some(affected) = self.affected_resource() {
-            write!(f, "\nAFFECTED: {affected}")?;
-        }
-        if let Some(detail) = &self.detail {
-            write!(f, "\nDETAIL: {detail}")?;
-        }
-        if let Some(hint) = &self.hint {
-            write!(f, "\nHINT: {hint}")?;
-        }
-        write!(f, "\n\nDIAGNOSTIC [{}]", self.code)?;
-        write!(f, "\nSTAGE: {}", self.stage.diagnostic_name())?;
-        if let Some(endpoint) = self.endpoint {
-            write!(f, "\nENDPOINT: {}", endpoint.user_description())?;
-        }
-        for (index, item) in self.error_chain.iter().enumerate() {
-            if index < self.context_count {
-                write!(f, "\nCONTEXT {}: {item}", index + 1)?;
-            } else {
-                write!(f, "\nCAUSE {}: {item}", index - self.context_count + 1)?;
-            }
-        }
+        write!(f, "ERROR CODE: {}", self.code)?;
+        write_items(f, "DETAIL", &self.details)?;
         if let Some(backtrace) = &self.backtrace {
             write!(f, "\nBACKTRACE:\n{backtrace}")?;
         }
@@ -343,44 +174,40 @@ mod tests {
 
         let report = ErrorReport::from_anyhow(&error);
         assert_eq!(report.code, ErrorCode::ObjectNotFound);
-        assert_eq!(report.message, "outer message");
-        assert_eq!(
-            report.detail.as_deref(),
-            Some("starting task: loading task state: invalid digit found in string")
-        );
-        assert_eq!(report.hint.as_deref(), Some("outer hint"));
+        assert_eq!(report.messages, ["outer message", "inner message"]);
+        assert_eq!(report.hints, ["outer hint", "inner hint"]);
         assert_eq!(report.stage, Stage::Resumer);
         assert_eq!(report.task_id.as_deref(), Some("task-42"));
         assert_eq!(report.endpoint, Some(EndpointRole::Metadata));
-        assert_eq!(
-            report.object.as_ref().unwrap().table.as_deref(),
-            Some("resume_position")
-        );
+        assert_eq!(report.objects[0].table.as_deref(), Some("resume_position"));
+        let json = serde_json::to_value(&report).unwrap();
+        assert_eq!(json["code"], "MD001");
+        assert_eq!(json["stage"], "resumer");
+        assert_eq!(json["task_id"], "task-42");
+        assert_eq!(json["endpoint"], "metadata");
+        for scalar_field in ["code", "stage", "task_id", "endpoint"] {
+            assert!(!json[scalar_field].is_array());
+        }
         assert!(error.downcast_ref::<std::num::ParseIntError>().is_some());
         assert_eq!(
-            report.error_chain,
+            report.details,
             [
                 "starting task",
                 "loading task state",
                 "invalid digit found in string"
             ]
         );
-        assert_eq!(report.context_count, 2);
         let rendered = report.to_string();
-        assert!(rendered.contains("DIAGNOSTIC [MD001]"));
-        assert!(!rendered.contains("LOCATION:"));
-        assert!(rendered.contains("STAGE: resumer"));
-        assert!(!rendered.contains("OPERATION:"));
-        assert!(rendered.contains("TASK: task-42"));
-        assert!(rendered.contains("ENDPOINT: metadata"));
-        assert!(rendered.contains("AFFECTED: metadata store ape_dts.resume_position"));
-        assert!(!rendered.contains("ORIGIN:"));
-        assert!(rendered.contains("CONTEXT 1: starting task"));
-        assert!(rendered.contains("CAUSE 1: invalid digit found in string"));
+        assert!(rendered.contains("ERROR CODE: MD001"));
+        assert!(rendered.contains("DETAIL 0: starting task"));
+        assert!(rendered.contains("DETAIL 2: invalid digit found in string"));
+        for omitted_label in ["MESSAGE", "HINT", "STAGE", "TASK", "ENDPOINT", "AFFECTED"] {
+            assert!(!rendered.contains(omitted_label));
+        }
     }
 
     #[test]
-    fn classifies_raw_supported_provider_errors() {
+    fn explicit_context_owns_scalars_and_provider_enriches_detail() {
         let error = anyhow::Error::new(sqlx::Error::PoolTimedOut)
             .code(ErrorCode::StatementFailed)
             .stage(Stage::Sinker)
@@ -388,13 +215,24 @@ mod tests {
             .context("pipeline.start failed");
 
         let report = ErrorReport::from_anyhow(&error);
-        assert_eq!(report.code, ErrorCode::ConnectionTimeout);
+        assert_eq!(report.code, ErrorCode::StatementFailed);
         assert_eq!(report.stage, Stage::Sinker);
         assert_eq!(report.endpoint, Some(EndpointRole::Destination));
+        assert_eq!(
+            report.messages,
+            [ErrorCode::StatementFailed.default_message()]
+        );
+        assert_eq!(
+            report.details,
+            [
+                "pipeline.start failed",
+                "sqlx: pool timed out while waiting for an open connection"
+            ]
+        );
     }
 
     #[test]
-    fn classifies_project_errors_unless_context_overrides_the_code() {
+    fn collects_project_and_source_error_contexts() {
         let source = std::io::Error::other("invalid port");
         let error = anyhow::Error::new(source)
             .context(DtError::InvalidConfig("invalid port".to_string()))
@@ -417,50 +255,119 @@ mod tests {
     }
 
     #[test]
-    fn text_and_json_include_redacted_detail_while_json_excludes_diagnostics() {
+    fn json_includes_internal_fields_while_text_stays_minimal() {
         let error = anyhow::anyhow!("password=secret, sql=INSERT, row_data=private")
             .message("password=secret is invalid")
             .hint("set token=abc123 before retrying")
             .context("internal worker context");
-        let report = ErrorReport::from_anyhow(&error);
+        let mut report = ErrorReport::from_anyhow(&error);
+        report.timestamp = "2026-07-28T10:20:30.123456Z".to_string();
+        report.backtrace = Some("internal backtrace".to_string());
         let rendered = report.to_string();
         let json_value = serde_json::to_value(&report).unwrap();
         let json = json_value.to_string();
+        let log_json = report.to_log_json();
+        let log_json_value: serde_json::Value = serde_json::from_str(&log_json).unwrap();
 
         assert_eq!(report.schema_version, ERROR_REPORT_SCHEMA_VERSION);
         assert_eq!(json_value["schema_version"], ERROR_REPORT_SCHEMA_VERSION);
-        assert!(rendered.contains("DIAGNOSTIC [IN999]"));
-        assert!(rendered.contains("CONTEXT 1: internal worker context"));
-        assert!(rendered.contains("CAUSE 1:"));
+        assert_eq!(json_value["code"], serde_json::json!("IN999"));
+        for scalar_field in ["code", "stage"] {
+            assert!(!json_value[scalar_field].is_array());
+        }
+        assert!(json_value.get("task_id").is_none());
+        assert!(json_value.get("endpoint").is_none());
+        for array_field in ["messages", "details", "hints", "objects"] {
+            assert!(json_value[array_field].is_array());
+        }
+        assert!(rendered.contains("ERROR CODE: IN999"));
+        assert!(rendered.contains("DETAIL 0: internal worker context"));
         assert!(rendered.contains("sql=INSERT"));
         assert!(rendered.contains("row_data=private"));
         assert!(!rendered.contains("password=secret"));
         assert!(!rendered.contains("abc123"));
-        assert!(rendered.contains("[redacted]"));
+        assert!(rendered.contains("BACKTRACE:\ninternal backtrace"));
+        assert!(!rendered.contains("MESSAGE"));
+        assert!(!rendered.contains("HINT"));
         assert!(json.contains("internal worker context"));
         assert!(json.contains("sql=INSERT"));
         assert!(json.contains("row_data=private"));
         assert!(!json.contains("password=secret"));
         assert!(!json.contains("abc123"));
-        for diagnostic_field in [
-            "phase",
-            "stage",
-            "error_chain",
-            "context_count",
-            "backtrace",
-        ] {
-            assert!(!json.contains(diagnostic_field));
-        }
-        assert_eq!(report.context_count, 1);
-        assert_eq!(report.error_chain.len(), 2);
+        assert!(!json.contains("error_chain"));
+        assert!(!json.contains("context_count"));
+        assert_eq!(json_value["timestamp"], "2026-07-28T10:20:30.123456Z");
+        assert_eq!(json_value["backtrace"], "internal backtrace");
+        assert_eq!(log_json_value["timestamp"], "2026-07-28T10:20:30.123456Z");
+        assert_eq!(log_json_value["backtrace"], "internal backtrace");
+        assert_eq!(log_json_value["code"], "IN999");
+        assert!(log_json_value["messages"].is_array());
+        assert!(!log_json.contains('\n'));
+        assert_eq!(report.details.len(), 2);
     }
 
     #[test]
-    fn unsupported_raw_errors_remain_unclassified() {
+    fn report_timestamp_is_utc_rfc3339() {
+        let report = ErrorReport::from_anyhow(&anyhow::anyhow!("failed"));
+        let timestamp = chrono::DateTime::parse_from_rfc3339(&report.timestamp).unwrap();
+
+        assert_eq!(timestamp.offset().local_minus_utc(), 0);
+    }
+
+    #[test]
+    fn unsupported_raw_errors_use_unclassified_fallback() {
         let url_error = anyhow::Error::new(url::Url::parse("://bad").unwrap_err());
         assert_eq!(
             ErrorReport::from_anyhow(&url_error).code,
             ErrorCode::Unclassified
         );
+    }
+
+    #[test]
+    fn outermost_context_owns_scalars_and_arrays_remove_duplicates() {
+        let error = anyhow::anyhow!("same detail")
+            .code(ErrorCode::ConnectionTimeout)
+            .code(ErrorCode::StatementFailed)
+            .message("same message")
+            .message("same message")
+            .stage(Stage::Extractor)
+            .stage(Stage::Sinker)
+            .task_id("inner-task")
+            .task_id("outer-task")
+            .endpoint(EndpointRole::Source)
+            .endpoint(EndpointRole::Destination)
+            .context("same detail");
+
+        let report = ErrorReport::from_anyhow(&error);
+        assert_eq!(report.code, ErrorCode::StatementFailed);
+        assert_eq!(report.messages, ["same message"]);
+        assert_eq!(report.stage, Stage::Sinker);
+        assert_eq!(report.task_id.as_deref(), Some("outer-task"));
+        assert_eq!(report.endpoint, Some(EndpointRole::Destination));
+        assert_eq!(report.details, ["same detail"]);
+        let rendered = report.to_string();
+        assert!(rendered.contains("DETAIL: same detail"));
+        assert!(!rendered.contains("DETAIL 0:"));
+        assert!(!rendered.contains("MESSAGE"));
+        assert!(!rendered.contains("HINT"));
+    }
+
+    #[test]
+    fn affected_objects_remain_independent_array_items() {
+        let error = anyhow::anyhow!("object failure")
+            .object(ErrorObject {
+                schema: Some("sales".to_string()),
+                ..Default::default()
+            })
+            .object(ErrorObject {
+                table: Some("orders".to_string()),
+                ..Default::default()
+            });
+
+        let report = ErrorReport::from_anyhow(&error);
+        assert_eq!(report.objects.len(), 2);
+        assert_eq!(report.objects[0].table.as_deref(), Some("orders"));
+        assert_eq!(report.objects[1].schema.as_deref(), Some("sales"));
+        assert!(!report.to_string().contains("AFFECTED"));
     }
 }

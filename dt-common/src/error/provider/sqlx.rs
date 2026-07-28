@@ -2,7 +2,9 @@ use sqlx::error::ErrorKind;
 
 use super::{
     super::{ClassifyError, DtErrorContext, ErrorCode, ErrorObject},
-    classification::{classify_mysql_code, classify_postgres_code, provider_context},
+    classification::{
+        classify_mysql_code, classify_postgres_code, provider_context, provider_detail,
+    },
 };
 
 pub fn classify_sqlx_error(error: &sqlx::Error) -> DtErrorContext {
@@ -37,10 +39,36 @@ pub fn classify_sqlx_error(error: &sqlx::Error) -> DtErrorContext {
         _ => {}
     }
 
-    let context = provider_context(code);
+    let context = provider_context(code, sqlx_detail(error));
     match object {
         Some(object) => context.with_object(object),
         None => context,
+    }
+}
+
+fn sqlx_detail(error: &sqlx::Error) -> String {
+    let sqlx::Error::Database(database_error) = error else {
+        return provider_detail("sqlx", None, error);
+    };
+    if database_error
+        .try_downcast_ref::<sqlx::postgres::PgDatabaseError>()
+        .is_some()
+    {
+        provider_detail(
+            "postgres",
+            database_error.code().map(|code| code.into_owned()),
+            error,
+        )
+    } else if let Some(mysql_error) =
+        database_error.try_downcast_ref::<sqlx::mysql::MySqlDatabaseError>()
+    {
+        provider_detail("mysql", Some(mysql_error.number().to_string()), error)
+    } else {
+        provider_detail(
+            "sqlx",
+            database_error.code().map(|code| code.into_owned()),
+            error,
+        )
     }
 }
 

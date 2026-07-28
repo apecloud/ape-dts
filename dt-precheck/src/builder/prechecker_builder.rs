@@ -142,25 +142,15 @@ impl PrecheckerBuilder {
 
         // if connection failed, no need to do other check
         if !check_source_connection.is_validate || !check_sink_connection.is_validate {
-            let (error_code, endpoint) = if !check_source_connection.is_validate {
-                (
-                    check_source_connection
-                        .error_code
-                        .unwrap_or(ErrorCode::ConnectionFailed),
-                    EndpointRole::Source,
-                )
+            let endpoint = if !check_source_connection.is_validate {
+                EndpointRole::Source
             } else {
-                (
-                    check_sink_connection
-                        .error_code
-                        .unwrap_or(ErrorCode::ConnectionFailed),
-                    EndpointRole::Destination,
-                )
+                EndpointRole::Destination
             };
             check_source_connection.log();
             check_sink_connection.log();
             return Err(anyhow::anyhow!("database connection precheck failed")
-                .code(error_code)
+                .code(ErrorCode::ConnectionFailed)
                 .endpoint(endpoint));
         }
 
@@ -229,7 +219,6 @@ impl PrecheckerBuilder {
             Ok(results) => {
                 println!("check result:");
                 let mut error_count = 0;
-                let mut first_error_code = None;
                 let mut first_error_endpoint = None;
                 for check_result in results {
                     match check_result {
@@ -237,7 +226,6 @@ impl PrecheckerBuilder {
                             result.log();
                             if !result.is_validate {
                                 error_count += 1;
-                                first_error_code = first_error_code.or(result.error_code);
                                 first_error_endpoint =
                                     first_error_endpoint.or(Some(if result.is_source {
                                         EndpointRole::Source
@@ -251,7 +239,7 @@ impl PrecheckerBuilder {
                 }
                 if error_count > 0 {
                     let mut error = anyhow::anyhow!("one or more prerequisite checks failed")
-                        .code(first_error_code.unwrap_or(ErrorCode::PrerequisiteNotMet));
+                        .code(ErrorCode::PrerequisiteNotMet);
                     if let Some(endpoint) = first_error_endpoint {
                         error = error.endpoint(endpoint);
                     }

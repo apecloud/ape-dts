@@ -1,9 +1,6 @@
 use anyhow::bail;
 
-use crate::{
-    error::{DtError, DtErrorContextExt, Stage},
-    utils::sql_util::SqlUtil,
-};
+use crate::{error::DtError, utils::sql_util::SqlUtil};
 
 use super::config_enums::DbType;
 
@@ -90,8 +87,7 @@ impl ConfigTokenParser {
                 bail! {DtError::InvalidConfig(format!(
                     "config error near: {}, try enclose database/table/column with escapes if there are special characters other than letters and numbers",
                     token
-                ))
-                    .stage(Stage::Bootstrap)}
+                ))}
             }
         }
         Ok(tokens)

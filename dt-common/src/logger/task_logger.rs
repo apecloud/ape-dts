@@ -16,7 +16,7 @@ use crate::{
         sinker_config::SinkerConfig,
         task_config::{TaskConfig, DEFAULT_CHECK_LOG_FILE_SIZE},
     },
-    error::{DtError, DtErrorContext, DtResultExt, ErrorCode},
+    error::DtError,
     log_filter::SizeLimitFilterDeserializer,
 };
 
@@ -179,8 +179,7 @@ impl<'a> TaskLogger<'a> {
                 );
         }
 
-        let config_context = || DtErrorContext::new().with_code(ErrorCode::InvalidConfig);
-        let raw: RawConfig = serde_yaml::from_str(&config_str).dt_context(config_context)?;
+        let raw: RawConfig = serde_yaml::from_str(&config_str)?;
         let mut deserializers = Deserializers::default();
         deserializers.insert("size_limit", SizeLimitFilterDeserializer);
         let (appenders, errors) = raw.appenders_lossy(&deserializers);
@@ -195,15 +194,14 @@ impl<'a> TaskLogger<'a> {
         let config = Config::builder()
             .appenders(appenders)
             .loggers(raw.loggers())
-            .build(raw.root())
-            .dt_context(config_context)?;
+            .build(raw.root())?;
         let mut handle_guard = LOG_HANDLE.lock().map_err(|_| {
             DtError::InvariantViolated("the logging configuration lock is poisoned".to_string())
         })?;
         if let Some(handle) = handle_guard.as_ref() {
             handle.set_config(config);
         } else {
-            let handle = log4rs::init_config(config).dt_context(config_context)?;
+            let handle = log4rs::init_config(config)?;
             *handle_guard = Some(handle);
         }
         Ok(())

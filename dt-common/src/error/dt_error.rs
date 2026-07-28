@@ -230,7 +230,9 @@ impl ClassifyError for DtError {
             DtError::HttpRejected { .. } => ErrorCode::StatementFailed,
             DtError::Unclassified(_) => ErrorCode::Unclassified,
         };
-        let context = DtErrorContext::new().with_code(code);
+        let context = DtErrorContext::new()
+            .with_code(code)
+            .with_detail(self.to_string());
         match self {
             DtError::MissingConfig(_)
             | DtError::MissingConfigItem(_)
@@ -276,5 +278,24 @@ impl ClassifyError for DtError {
                 ),
             _ => context,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn classification_includes_full_display_as_detail() {
+        let error = DtError::HttpRejected {
+            status: 403,
+            detail: "request is not authorized".to_string(),
+        };
+
+        let context = error.classify();
+        let expected_detail = error.to_string();
+
+        assert_eq!(context.code, Some(ErrorCode::StatementFailed));
+        assert_eq!(context.detail.as_deref(), Some(expected_detail.as_str()));
     }
 }

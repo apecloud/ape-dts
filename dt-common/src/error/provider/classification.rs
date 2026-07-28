@@ -1,11 +1,28 @@
+use std::fmt::Display;
+
 use super::super::{DtErrorContext, ErrorCode};
 
-pub(super) fn provider_context(code: Option<ErrorCode>) -> DtErrorContext {
-    let context = DtErrorContext::new();
+pub(super) fn provider_context(
+    code: Option<ErrorCode>,
+    detail: impl Into<String>,
+) -> DtErrorContext {
+    let context = DtErrorContext::new().with_detail(detail);
     match code {
         Some(code) => context.with_code(code),
         None => context,
     }
+}
+
+pub(super) fn provider_detail(
+    provider: &str,
+    provider_code: Option<String>,
+    error: impl Display,
+) -> String {
+    let provider = match provider_code {
+        Some(code) => format!("{provider}/{code}"),
+        None => provider.to_string(),
+    };
+    format!("{provider}: {error}")
 }
 
 pub(super) fn classify_postgres_code(code: &str) -> Option<ErrorCode> {

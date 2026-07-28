@@ -2,10 +2,7 @@ use anyhow::{Context, Result};
 use url::Url;
 use urlencoding::encode;
 
-use crate::{
-    config::ini_loader::IniLoader,
-    error::{DtError, DtErrorContextExt, DtResultExt, Stage},
-};
+use crate::{config::ini_loader::IniLoader, error::DtError};
 
 use super::ssl_config::SslConfig;
 
@@ -74,11 +71,9 @@ impl ConnectionAuthConfig {
     }
 
     pub fn merge_url_with_auth(original_url: &str, connection_auth: &Self) -> Result<String> {
-        let mut parsed_url = Url::parse(original_url)
-            .context(DtError::invalid_config(
-                "the configured database connection URL could not be parsed",
-            ))
-            .message("database connection URL is invalid")?;
+        let mut parsed_url = Url::parse(original_url).context(DtError::invalid_config(
+            "the configured database connection URL could not be parsed",
+        ))?;
 
         match connection_auth {
             ConnectionAuthConfig::Basic { username, password }
@@ -94,7 +89,6 @@ impl ConnectionAuthConfig {
                             DtError::InvalidConfig(
                                 "database connection URL does not support a username".to_string(),
                             )
-                            .stage(Stage::Bootstrap)
                         })?;
                 }
 
@@ -107,7 +101,6 @@ impl ConnectionAuthConfig {
                                     "database connection URL does not support a password"
                                         .to_string(),
                                 )
-                                .stage(Stage::Bootstrap)
                             })?;
                     }
                 }

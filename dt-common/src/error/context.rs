@@ -61,12 +61,3 @@ pub struct ErrorObject {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub constraint: Option<String>,
 }
-
-impl ErrorObject {
-    pub(crate) fn fill_missing_from(&mut self, outer: &Self) {
-        self.schema = self.schema.take().or_else(|| outer.schema.clone());
-        self.table = self.table.take().or_else(|| outer.table.clone());
-        self.column = self.column.take().or_else(|| outer.column.clone());
-        self.constraint = self.constraint.take().or_else(|| outer.constraint.clone());
-    }
-}

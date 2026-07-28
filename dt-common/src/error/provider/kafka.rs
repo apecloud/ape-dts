@@ -2,7 +2,7 @@ use rdkafka::error::{KafkaError as RdKafkaError, RDKafkaErrorCode};
 
 use super::{
     super::{ClassifyError, DtErrorContext, ErrorCode},
-    classification::provider_context,
+    classification::{provider_context, provider_detail},
 };
 
 impl ClassifyError for RdKafkaError {
@@ -16,13 +16,26 @@ impl ClassifyError for RdKafkaError {
             | RdKafkaError::Subscription(_) => Some(ErrorCode::InvalidConfig),
             _ => provider_code.and_then(classify_rdkafka_code),
         };
-        provider_context(code)
+        let detail_code = provider_code.map(|code| format!("{code:?}"));
+        provider_context(code, provider_detail("kafka", detail_code, self))
     }
 }
 
 impl ClassifyError for ::kafka::Error {
     fn classify(&self) -> DtErrorContext {
-        provider_context(classify_kafka_kind(self))
+        provider_context(
+            classify_kafka_kind(self),
+            provider_detail("kafka", kafka_provider_code(self), self),
+        )
+    }
+}
+
+fn kafka_provider_code(error: &::kafka::Error) -> Option<String> {
+    match error {
+        ::kafka::Error::Kafka(code) => Some(format!("{code:?}")),
+        ::kafka::Error::TopicPartitionError { error_code, .. } => Some(format!("{error_code:?}")),
+        ::kafka::Error::ArcSelf(error) => kafka_provider_code(error),
+        _ => None,
     }
 }
 

@@ -8,6 +8,7 @@ pub(crate) const DT_ERROR_CONTEXT_MARKER: &str = "__APE_DTS_ERROR_CONTEXT__";
 pub struct DtErrorContext {
     pub(crate) code: Option<ErrorCode>,
     pub(crate) message: Option<String>,
+    pub(crate) detail: Option<String>,
     pub(crate) hint: Option<String>,
     pub(crate) stage: Option<Stage>,
     pub(crate) task_id: Option<String>,
@@ -27,6 +28,11 @@ impl DtErrorContext {
 
     pub fn with_message(mut self, message: impl Into<String>) -> Self {
         self.message = Some(message.into());
+        self
+    }
+
+    pub fn with_detail(mut self, detail: impl Into<String>) -> Self {
+        self.detail = Some(detail.into());
         self
     }
 
@@ -85,10 +91,6 @@ impl fmt::Display for DtErrorContexts {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(DT_ERROR_CONTEXT_MARKER)
     }
-}
-
-pub trait ClassifyError {
-    fn classify(&self) -> DtErrorContext;
 }
 
 pub trait DtErrorContextExt: Sized {

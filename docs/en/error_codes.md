@@ -2,21 +2,20 @@
 
 Ape-DTS task-runtime errors have a stable five-character condition code. The
 code identifies what happened; runtime location is recorded separately as a
-stage. In v1, both `dt-main` and `dtscli` render failures through the same
+stage. In schema v1, both `dt-main` and `dtscli` render failures through the same
 user-facing error report boundary.
 
 For example:
 
 ```text
-ERROR [MD001]: A required database object was not found
-TASK: sync-orders-01
-AFFECTED: destination postgres sales.orders
-HINT: Check object routing and create the required object or enable structure initialization.
+ERROR CODE: MD001
+DETAIL: postgres/42P01: relation does not exist
 ```
 
-`MD001` is the only error identity. Stage is independent diagnostic metadata.
-Application logic must compare the typed `ErrorCode`; it must not parse
-messages or combine code and stage into another identifier.
+Each code is a stable condition identity, and one report contains one final
+code. Stage is independent metadata. Application logic must inspect the typed
+`ErrorCode`; it must not parse
+messages or combine a code and stage into another identifier.
 
 ## Compatibility rules
 
@@ -81,55 +80,47 @@ matches.
 ## User and diagnostic views
 
 `ErrorReport` JSON is a versioned machine interface. The current
-`schema_version` is `1`. Adding optional fields is compatible; removing,
-renaming, or changing the meaning of an existing user-facing field requires a
-new schema version. CLI text layout is not a stable machine interface.
+`schema_version` is `1`. Code, stage, task ID, and endpoint role are scalar.
+User messages, details, hints, and affected objects are arrays. The outermost
+explicit `DtErrorContext` owns scalar fields, while a concrete error classifier
+fills only missing values. Arrays preserve first-seen order and remove exact
+duplicates. Text rendering omits the index for a single item and uses zero-based
+indexes for multiple items. CLI text layout is not a stable machine interface.
 
-The `ErrorReport` JSON view contains only user-facing fields: the stable code,
-user message, detail, hint, task ID, endpoint role, and affected object. The
-text view includes these fields before the diagnostic section.
-
-Internal diagnostics are available on the in-memory report as `stage`, the
-redacted `error_chain`, its `context_count`, and an optional captured
-`backtrace`. These fields are excluded from JSON.
-`ErrorReport` text rendering always includes all available diagnostics after
-the user-facing section. API consumers must use the versioned JSON view rather
-than parse CLI text.
-
-Component-authored `message` and `hint` values remain free text. `detail` is
-assembled by `ErrorReport` from ordinary `anyhow::Context` values and the
-concrete cause chain, from outermost to innermost, with duplicate text removed.
-The report boundary uses `rtb-redact` to remove credentials, authenticated URL
+The serialized `ErrorReport` no longer stores `error_chain` or `context_count`.
+It includes its UTC creation `timestamp` and an optional captured `backtrace` in
+addition to the user-facing fields.
+`details` collects ordinary `anyhow::Context` values and concrete causes from
+outermost to innermost; the internal metadata marker is omitted. The report
+boundary uses `rtb-redact` to remove credentials, authenticated URL
 userinfo, authorization values, provider tokens, JWTs, long opaque tokens, and
 private keys before any of these values enter the user view.
 
-CLI failures include a diagnostic section by default:
+Text output is intentionally limited to the code, details, and backtrace:
 
 ```text
-DIAGNOSTIC [MD001]
-STAGE: sinker
-ENDPOINT: destination
-CONTEXT 1: starting task
-CAUSE 1: relation missing
+ERROR CODE: DB001
+DETAIL 0: starting task
+DETAIL 1: postgres/42P01: relation does not exist
 BACKTRACE:
 ...
 ```
 
-Diagnostics can include SQL, row data, object names, provider messages, and
+Details can include SQL, row data, object names, provider messages, and
 `anyhow::Context` values. Credential-shaped values and authenticated URLs are
 redacted, but stderr and captured logs must still be treated as sensitive data.
-The process never enables backtraces itself. `RUST_LIB_BACKTRACE=0` disables
-error backtraces; any other configured value enables them. When that variable
-is unset, `RUST_BACKTRACE` is interpreted by the same rule. The current error
-report renders captured backtraces in the short format. Without a captured
-backtrace, the complete structured diagnostic and error chain are still
-printed and only the `BACKTRACE` block is omitted.
+`dt-main` writes the text form to `default.log` and additionally appends the
+complete JSON form to `error_report.log`. Each `error_report.log` record starts
+with a UTC logger timestamp followed by ` | ` and the JSON string. The JSON also
+contains the report creation timestamp; JSON escaping keeps a multi-line
+backtrace within the same log record. This dedicated logger accepts every log
+level and is independent of the task's configured runtime log level.
 
 ## Structured errors
 
 `anyhow::Error` is the only error transport container. `DtErrorContext` is a
-typed metadata frame whose code, message, hint, stage, task ID, endpoint role,
-and database object are all optional. It is a plain data
+typed metadata frame whose code, message, detail, hint, stage, task ID,
+endpoint role, and database object are all optional. It is a plain data
 object and implements neither `Display` nor `std::error::Error`. The endpoint
 role is `source`, `destination`, or `metadata`. Database objects may include
 schema, table, column, and constraint names.
@@ -140,8 +131,8 @@ original provider error type. Application-authored failures use the
 
 Project-owned failures select a semantic `DtError` variant and add only the
 metadata known at that call site. For example,
-`DtError::InvalidConfig(detail).stage(Stage::Bootstrap)` creates the root
-cause and adds its stage; it does not repeat `ErrorCode::InvalidConfig`.
+`DtError::InvalidConfig(detail)` creates the root cause; its classifier supplies
+`ErrorCode::InvalidConfig`, the detail, and `Stage::Bootstrap`.
 The `ClassifyError` implementation maps every `DtError` variant to a
 `DtErrorContext` containing its stable default code and any metadata intrinsic
 to that variant.
@@ -153,9 +144,10 @@ The error extension trait is implemented for `anyhow::Error` and the supported
 provider error types. `DtResultExt` provides the same `code`, `message`, `hint`,
 `stage`, `task_id`, `endpoint`, and `object` methods directly on
 `Result`. Its `dt_context` method accepts a closure, so metadata is not built on
-the successful path. A code attached to a provider result is an operation
-fallback: a recognized provider code takes priority, while an unrecognized
-provider condition retains the operation code. Project-owned failures should
+the successful path. A code attached to a provider result expresses operation
+semantics known at the call site and owns the final report code. When no code is
+attached, the provider classifier supplies one. The original provider code is
+always retained in detail. Project-owned failures should
 normally use a semantic `DtError` variant. Unknown concrete errors retain their
 source type when converted to `anyhow::Error`.
 When a project-owned classification also has a lower-level source, put the
@@ -177,45 +169,42 @@ inference is used.
 
 Each frame is flat and immutable. The context extension appends frames to an
 internal ordered list carried by `anyhow::Error`; `DtErrorContext` itself has
-no parent link and no field-resolution methods. `ErrorReport` collects every
-field into ordered arrays from explicit frames, project errors, and all known
-provider causes, then applies display-specific precedence. Scope and
-root-cause fields use the nearest inner value: stage and endpoint are not
-replaced merely because an error passes through another component. Error object
-fields are merged individually, preserving an inner
-value and filling only missing fields from outer frames. Recognized provider
-codes precede operation fallback codes; user message, hint, and task ID retain
-explicit outer precedence. Consequently, a sinker
-failure propagated through the parallelizer and pipeline is reported as
-`sinker/destination`, while the task entry can still supply its task ID and
-user-facing context.
-`DtErrorContext` has no detail field. Report construction derives
-`detail` from the redacted ordinary contexts and concrete causes in the error
-chain. Project-owned `DtError` values retain their variant-specific full
+no parent link. `ErrorReport` uses the first non-default code, stage, task ID,
+and endpoint. Explicit frames are processed outermost first, so the outer call
+boundary owns those fields. Messages, details, hints, and affected objects are
+appended in first-seen order with exact duplicates removed.
+Classifiers primarily populate `DtErrorContext.detail`; ordinary contexts and
+unclassified concrete causes also contribute redacted `details`.
+Project-owned `DtError` values retain their variant-specific full
 `Display` text and typed payload, just as provider errors retain their own
 `Display`, source chain, and concrete type.
 
 Supported provider errors should normally be propagated unchanged with `?` or
-ordinary `anyhow::Context`. The shared raw-cause registry classifies their
-preserved concrete types when the report is built, recovering intrinsic code
-and object fields. Attach an explicit `DtErrorContext` only for business
-semantics or execution scope that the provider error cannot know. Neither path
-infers stage, endpoint, or task ID at report time.
+ordinary `anyhow::Context`. When a report is built, the parent-level
+`dt-common::error::classifier` reads typed `DtError` contexts and traverses the
+ordinary source chain. Its chain registry invokes provider classifiers for
+preserved concrete types, recovering intrinsic code and object fields. Attach
+an explicit `DtErrorContext` only for business semantics or execution scope
+that the provider error cannot know. Neither path infers stage, endpoint, or
+task ID at report time.
 
 `ErrorReport` is the user-facing boundary representation. Its text form uses
-`ERROR`, `TASK`, `AFFECTED`, `DETAIL`, and `HINT` lines.
+only `ERROR CODE`, `DETAIL`, and optional `BACKTRACE` lines. The complete
+structured fields remain available in its JSON form.
 
 Provider classifier implementations live under `dt-common::error::provider`.
 They implement `ClassifyError` using provider-native codes, typed error kinds,
 and Rust error variants; they must not parse provider messages. Each
 implementation returns a `DtErrorContext` containing an optional recognized
-code and affected object. A small explicit registry applies
-the same trait to supported provider causes preserved in `anyhow::Error`.
+code, affected object, and complete provider detail. A small chain registry in
+the parent-level `dt-common::error::classifier` applies the same trait to
+supported provider causes preserved in the source chain.
 The SQLx classifier infers MySQL or PostgreSQL from the concrete database error.
 Call sites do not pass a database-family hint or attach a separate provider
-frame. A recognized provider
-condition takes priority over an operation fallback code. Stage, endpoint, and
-task ID are attached separately at the highest execution layer that knows them.
+frame. An explicit operation code owns the final identity; otherwise the
+recognized provider condition supplies it. Provider name, original code, and
+concrete error text are stored in `details`. Stage, endpoint, and task ID are
+attached separately at the execution layer that knows them.
 
 Provider classification belongs in `dt-common::error::provider`, not in
 per-crate wrappers. Business modules use `DtError` for project-owned failures,
@@ -223,15 +212,14 @@ ordinary `anyhow::Context` for diagnostic prose, and the context extension
 methods only for explicit metadata. Do not introduce per-crate helper modules
 that merely forward arguments to these shared mechanisms.
 
-`ErrorReport` reads the typed frame list and error chain. It appends values from
-the explicit frames, a project `DtError`, and every registered raw provider
-cause to separate per-field arrays. Field-specific selection and merge rules
-exist only in the report layer. A known provider error therefore does not become
-`IN999` or lose its precise code merely because a caller used a plain `?` or an
-operation fallback, while explicit user-facing and scope metadata remains
-available. Unsupported or unrecognized raw errors still become `IN999`.
-Failure-path tests and code review remain necessary for explicit operation
-codes and call-site metadata that no raw provider error can supply.
+`dt-common::error::classifier` first collects typed frames, recognizes a typed
+`DtError` through `anyhow::Error::downcast_ref`, and then traverses the source
+chain to classify concrete causes. A classifier supplies provider detail
+directly; an unclassified non-marker error uses its redacted `Display` as
+detail. `ErrorReport` only applies the returned `DtErrorContext` values in
+order. `IN999` is used when no code is available. Failure-path tests and code
+review remain necessary for explicit operation codes and call-site metadata
+that no raw provider error can supply.
 
 `MD099 MetadataReadFailed` is only the default for reading or decoding endpoint
 catalog and control metadata. A schema object being migrated does not make every
@@ -275,9 +263,10 @@ codes are also used internally for these initial SQLx mappings:
 | SQLx integrity error kinds | `IC001` |
 
 SQLx call sites may explicitly supply an operation-specific code such as
-`CN001`, `DB001`, or `ST001`. A recognized provider classification takes
-precedence; otherwise the operation code is retained. Constraint/table metadata
-and the source error chain are preserved in both cases.
+`CN001`, `DB001`, or `ST001`. An explicit code owns the report identity;
+otherwise the recognized provider classification supplies it. The original
+provider code, constraint/table metadata, and source error information remain
+available through detail and object fields.
 
 The `tokio-postgres` replication adapter uses the same PostgreSQL SQLSTATE
 rules. URL parsing uses `CF002`, connection establishment uses `CN001`, and
@@ -308,12 +297,14 @@ Other initial provider mappings are:
 | MySQL binlog error `1236` (requested binlog unavailable) | `ST001` |
 | Other MySQL binlog decoding failures | `DB001` |
 
-Worker join failures are `RT001`. URL and YAML parsing errors explicitly
-classified by their callers are `CF002`. `DtError::Unclassified` and an unsupported
-or unrecognized raw error reaching `ErrorReport` are `IN999`. A local filesystem
-`std::io::Error` is `IO001`; network I/O should retain its provider error type
-so that it becomes `CN001` or `CN002` instead. User-interrupted CLI
-operations are `RT002`.
+Worker join failures are `RT001`. URL parsing errors explicitly classified by
+their callers are `CF002`. Logger YAML errors occur during startup and are
+surfaced directly by the `dt-main` `expect` boundary. `DtError::Unclassified`
+is `IN999`; an
+unsupported or unrecognized raw error adds `IN999` only when the report contains
+no other code. A local filesystem `std::io::Error` is `IO001`; network I/O should
+retain its provider error type so that it becomes `CN001` or `CN002` instead.
+User-interrupted CLI operations are `RT002`.
 
 `mysql-binlog-connector-rust v0.3.4` discards the numeric code from MySQL error
 packets and exposes error `1236` as `ConnectError(String)`. Until the connector

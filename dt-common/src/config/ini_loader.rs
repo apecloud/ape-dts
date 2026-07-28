@@ -3,7 +3,7 @@ use std::{any::type_name, fs::File, io::Read, str::FromStr};
 use anyhow::Context;
 use configparser::ini::Ini;
 
-use crate::error::{DtError, DtErrorContextExt, Stage};
+use crate::error::DtError;
 
 #[derive(Debug)]
 pub struct IniLoader {
@@ -32,8 +32,6 @@ impl IniLoader {
         ini.set_inline_comment_symbols(Some(&Vec::new()));
         ini.read(config_str).map_err(|_| {
             DtError::InvalidConfig(format!("failed to parse config file: {ini_file}"))
-                .message("failed to parse config file")
-                .stage(Stage::Bootstrap)
         })?;
         Ok(Self { ini })
     }
@@ -50,8 +48,7 @@ impl IniLoader {
         Err(DtError::MissingConfigItem(format!(
             "config [{section}].{key} does not exist or is empty"
         ))
-        .message("required config value is missing")
-        .stage(Stage::Bootstrap))
+        .into())
     }
 
     pub fn get_optional<T>(&self, section: &str, key: &str) -> anyhow::Result<T>
@@ -82,7 +79,7 @@ impl IniLoader {
     where
         T: FromStr,
     {
-        value.parse::<T>().map_err(|_| {
+        let value = value.parse::<T>().map_err(|_| {
             let rendered_value = if Self::is_sensitive_key(key) {
                 "[redacted]"
             } else {
@@ -92,9 +89,8 @@ impl IniLoader {
                 "config [{section}].{key}={rendered_value} can not be parsed as {}",
                 type_name::<T>()
             ))
-            .message("config value has an invalid type")
-            .stage(Stage::Bootstrap)
-        })
+        })?;
+        Ok(value)
     }
 
     fn is_sensitive_key(key: &str) -> bool {
@@ -102,5 +98,28 @@ impl IniLoader {
         ["password", "secret", "token"]
             .iter()
             .any(|sensitive| key.contains(sensitive))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::error::{ErrorCode, ErrorReport, Stage};
+
+    #[test]
+    fn config_errors_do_not_add_metadata_context_to_the_debug_chain() {
+        let loader = IniLoader { ini: Ini::new() };
+        let error = loader
+            .get_required::<usize>("runtime", "worker_threads")
+            .unwrap_err();
+
+        assert!(!format!("{error:?}").contains("__APE_DTS_ERROR_CONTEXT__"));
+        let report = ErrorReport::from_anyhow(&error);
+        assert_eq!(report.code, ErrorCode::MissingConfigItem);
+        assert_eq!(report.stage, Stage::Bootstrap);
+        assert_eq!(
+            report.details,
+            ["config [runtime].worker_threads does not exist or is empty"]
+        );
     }
 }

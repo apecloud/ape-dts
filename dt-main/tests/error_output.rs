@@ -14,6 +14,7 @@ fn missing_config_panics_before_logger_initialization() {
     let output = run(&[]);
     assert_eq!(output.status.code(), Some(101));
     let stderr = String::from_utf8(output.stderr).unwrap();
-    assert!(stderr.contains("no task config was provided"), "{stderr}");
+    assert!(stderr.contains("task config path is required"), "{stderr}");
+    assert!(!stderr.contains("__APE_DTS_ERROR_CONTEXT__"), "{stderr}");
     assert!(!stderr.contains("DIAGNOSTIC"), "{stderr}");
 }
