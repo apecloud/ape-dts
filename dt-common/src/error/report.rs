@@ -118,26 +118,17 @@ fn sanitize_user_text(value: &str) -> String {
     rtb_redact::string(value).into_owned()
 }
 
-fn write_items<T: fmt::Display>(
-    f: &mut fmt::Formatter<'_>,
-    label: &str,
-    values: &[T],
-) -> fmt::Result {
-    if let [value] = values {
-        return write!(f, "\n{label}: {value}");
-    }
-    for (index, value) in values.iter().enumerate() {
-        write!(f, "\n{label} {index}: {value}")?;
-    }
-    Ok(())
-}
-
 impl fmt::Display for ErrorReport {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "ERROR CODE: {}", self.code)?;
-        write_items(f, "DETAIL", &self.details)?;
+        write!(f, "ERROR REPORT\n  [{}]:", self.code)?;
+        for (index, detail) in self.details.iter().enumerate() {
+            write!(f, "\n    {index}: {detail}")?;
+        }
         if let Some(backtrace) = &self.backtrace {
-            write!(f, "\nBACKTRACE:\n{backtrace}")?;
+            write!(f, "\n  BACKTRACE:")?;
+            for line in backtrace.lines() {
+                write!(f, "\n    {}", line.trim_start())?;
+            }
         }
         Ok(())
     }
@@ -198,9 +189,9 @@ mod tests {
             ]
         );
         let rendered = report.to_string();
-        assert!(rendered.contains("ERROR CODE: MD001"));
-        assert!(rendered.contains("DETAIL 0: starting task"));
-        assert!(rendered.contains("DETAIL 2: invalid digit found in string"));
+        assert!(rendered.starts_with("ERROR REPORT\n  [MD001]:"));
+        assert!(rendered.contains("    0: starting task"));
+        assert!(rendered.contains("    2: invalid digit found in string"));
         for omitted_label in ["MESSAGE", "HINT", "STAGE", "TASK", "ENDPOINT", "AFFECTED"] {
             assert!(!rendered.contains(omitted_label));
         }
@@ -227,6 +218,24 @@ mod tests {
             [
                 "pipeline.start failed",
                 "sqlx: pool timed out while waiting for an open connection"
+            ]
+        );
+    }
+
+    #[test]
+    fn sqlx_wrapper_and_source_are_distinct_details() {
+        let error = anyhow::Error::new(sqlx::Error::Io(std::io::Error::other(
+            "could not resolve database address",
+        )));
+
+        let report = ErrorReport::from_anyhow(&error);
+
+        assert_eq!(report.code, ErrorCode::ConnectionFailed);
+        assert_eq!(
+            report.details,
+            [
+                "sqlx: error communicating with database",
+                "could not resolve database address"
             ]
         );
     }
@@ -262,7 +271,7 @@ mod tests {
             .context("internal worker context");
         let mut report = ErrorReport::from_anyhow(&error);
         report.timestamp = "2026-07-28T10:20:30.123456Z".to_string();
-        report.backtrace = Some("internal backtrace".to_string());
+        report.backtrace = Some("   0: internal frame\n   1: caller frame".to_string());
         let rendered = report.to_string();
         let json_value = serde_json::to_value(&report).unwrap();
         let json = json_value.to_string();
@@ -280,13 +289,13 @@ mod tests {
         for array_field in ["messages", "details", "hints", "objects"] {
             assert!(json_value[array_field].is_array());
         }
-        assert!(rendered.contains("ERROR CODE: IN999"));
-        assert!(rendered.contains("DETAIL 0: internal worker context"));
+        assert!(rendered.starts_with("ERROR REPORT\n  [IN999]:"));
+        assert!(rendered.contains("    0: internal worker context"));
         assert!(rendered.contains("sql=INSERT"));
         assert!(rendered.contains("row_data=private"));
         assert!(!rendered.contains("password=secret"));
         assert!(!rendered.contains("abc123"));
-        assert!(rendered.contains("BACKTRACE:\ninternal backtrace"));
+        assert!(rendered.contains("  BACKTRACE:\n    0: internal frame\n    1: caller frame"));
         assert!(!rendered.contains("MESSAGE"));
         assert!(!rendered.contains("HINT"));
         assert!(json.contains("internal worker context"));
@@ -297,9 +306,15 @@ mod tests {
         assert!(!json.contains("error_chain"));
         assert!(!json.contains("context_count"));
         assert_eq!(json_value["timestamp"], "2026-07-28T10:20:30.123456Z");
-        assert_eq!(json_value["backtrace"], "internal backtrace");
+        assert_eq!(
+            json_value["backtrace"],
+            "   0: internal frame\n   1: caller frame"
+        );
         assert_eq!(log_json_value["timestamp"], "2026-07-28T10:20:30.123456Z");
-        assert_eq!(log_json_value["backtrace"], "internal backtrace");
+        assert_eq!(
+            log_json_value["backtrace"],
+            "   0: internal frame\n   1: caller frame"
+        );
         assert_eq!(log_json_value["code"], "IN999");
         assert!(log_json_value["messages"].is_array());
         assert!(!log_json.contains('\n'));
@@ -345,9 +360,11 @@ mod tests {
         assert_eq!(report.task_id.as_deref(), Some("outer-task"));
         assert_eq!(report.endpoint, Some(EndpointRole::Destination));
         assert_eq!(report.details, ["same detail"]);
+        assert_eq!(
+            report.to_string(),
+            "ERROR REPORT\n  [DB001]:\n    0: same detail"
+        );
         let rendered = report.to_string();
-        assert!(rendered.contains("DETAIL: same detail"));
-        assert!(!rendered.contains("DETAIL 0:"));
         assert!(!rendered.contains("MESSAGE"));
         assert!(!rendered.contains("HINT"));
     }

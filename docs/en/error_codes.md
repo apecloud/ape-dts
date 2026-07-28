@@ -8,8 +8,9 @@ user-facing error report boundary.
 For example:
 
 ```text
-ERROR CODE: MD001
-DETAIL: postgres/42P01: relation does not exist
+ERROR REPORT
+  [MD001]:
+    0: postgres/42P01: relation does not exist
 ```
 
 Each code is a stable condition identity, and one report contains one final
@@ -84,8 +85,8 @@ matches.
 User messages, details, hints, and affected objects are arrays. The outermost
 explicit `DtErrorContext` owns scalar fields, while a concrete error classifier
 fills only missing values. Arrays preserve first-seen order and remove exact
-duplicates. Text rendering omits the index for a single item and uses zero-based
-indexes for multiple items. CLI text layout is not a stable machine interface.
+duplicates. Text rendering always uses zero-based detail indexes. CLI text
+layout is not a stable machine interface.
 
 The serialized `ErrorReport` no longer stores `error_chain` or `context_count`.
 It includes its UTC creation `timestamp` and an optional captured `backtrace` in
@@ -99,11 +100,12 @@ private keys before any of these values enter the user view.
 Text output is intentionally limited to the code, details, and backtrace:
 
 ```text
-ERROR CODE: DB001
-DETAIL 0: starting task
-DETAIL 1: postgres/42P01: relation does not exist
-BACKTRACE:
-...
+ERROR REPORT
+  [DB001]:
+    0: starting task
+    1: postgres/42P01: relation does not exist
+  BACKTRACE:
+    0: dt_task::task_runner::TaskRunner::start_task
 ```
 
 Details can include SQL, row data, object names, provider messages, and
@@ -189,8 +191,9 @@ that the provider error cannot know. Neither path infers stage, endpoint, or
 task ID at report time.
 
 `ErrorReport` is the user-facing boundary representation. Its text form uses
-only `ERROR CODE`, `DETAIL`, and optional `BACKTRACE` lines. The complete
-structured fields remain available in its JSON form.
+the bracketed error code as the detail heading, always numbers details from
+`0:`, and optionally appends a `BACKTRACE` block. The complete structured
+fields remain available in its JSON form.
 
 Provider classifier implementations live under `dt-common::error::provider`.
 They implement `ClassifyError` using provider-native codes, typed error kinds,

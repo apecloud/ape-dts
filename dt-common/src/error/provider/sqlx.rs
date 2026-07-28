@@ -47,8 +47,12 @@ pub fn classify_sqlx_error(error: &sqlx::Error) -> DtErrorContext {
 }
 
 fn sqlx_detail(error: &sqlx::Error) -> String {
-    let sqlx::Error::Database(database_error) = error else {
-        return provider_detail("sqlx", None, error);
+    let database_error = match error {
+        sqlx::Error::Configuration(_) => return "sqlx: invalid configuration".to_string(),
+        sqlx::Error::Io(_) => return "sqlx: error communicating with database".to_string(),
+        sqlx::Error::Tls(_) => return "sqlx: error establishing a TLS connection".to_string(),
+        sqlx::Error::Database(database_error) => database_error,
+        _ => return provider_detail("sqlx", None, error),
     };
     if database_error
         .try_downcast_ref::<sqlx::postgres::PgDatabaseError>()
@@ -123,6 +127,29 @@ mod tests {
             (sqlx::Error::RowNotFound, None),
         ] {
             assert_eq!(classify_sqlx_error(&error).error_code(), expected);
+        }
+    }
+
+    #[test]
+    fn source_wrappers_only_describe_the_sqlx_layer() {
+        for (error, expected) in [
+            (
+                sqlx::Error::Configuration(Box::new(std::io::Error::other("invalid URL"))),
+                "sqlx: invalid configuration",
+            ),
+            (
+                sqlx::Error::Io(std::io::Error::other("connection reset")),
+                "sqlx: error communicating with database",
+            ),
+            (
+                sqlx::Error::Tls(Box::new(std::io::Error::other("invalid certificate"))),
+                "sqlx: error establishing a TLS connection",
+            ),
+        ] {
+            assert_eq!(
+                classify_sqlx_error(&error).detail.as_deref(),
+                Some(expected)
+            );
         }
     }
 }

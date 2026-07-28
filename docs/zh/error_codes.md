@@ -7,8 +7,9 @@ Ape-DTS 任务运行时错误使用稳定的五位条件码。错误码用于说
 例如：
 
 ```text
-ERROR CODE: MD001
-DETAIL: postgres/42P01: relation does not exist
+ERROR REPORT
+  [MD001]:
+    0: postgres/42P01: relation does not exist
 ```
 
 每个错误码都是稳定的条件标识，一个报告只包含一个最终错误码。阶段是独立
@@ -77,8 +78,8 @@ DETAIL: postgres/42P01: relation does not exist
 `ErrorReport` JSON 是带版本的机器接口，当前 `schema_version` 为 `1`。错误码、阶段、
 任务 ID 和端点角色是单值；用户消息、详细信息、处理建议和受影响对象是数组。最外层
 显式 `DtErrorContext` 决定单值字段，具体 error 的 classifier 只补充仍缺失的字段。数组
-保持首次出现顺序并去除完全相同的值。文本输出只有一个成员时省略 index，多个成员时
-使用从 `0` 开始的 index。CLI 文本格式不是稳定的机器接口。
+保持首次出现顺序并去除完全相同的值。文本输出始终使用从 `0` 开始的 detail index。
+CLI 文本格式不是稳定的机器接口。
 
 序列化后的 `ErrorReport` 不再保存 `error_chain` 或 `context_count`，除了面向用户的
 字段外，还包含 UTC 创建时间 `timestamp` 和可选的已捕获 `backtrace`。`details` 按从外到内的顺序收集普通
@@ -89,11 +90,12 @@ token 和私钥进行脱敏，之后这些内容才能进入用户视图。
 文本输出只保留错误码、details 和 backtrace：
 
 ```text
-ERROR CODE: DB001
-DETAIL 0: starting task
-DETAIL 1: postgres/42P01: relation does not exist
-BACKTRACE:
-...
+ERROR REPORT
+  [DB001]:
+    0: starting task
+    1: postgres/42P01: relation does not exist
+  BACKTRACE:
+    0: dt_task::task_runner::TaskRunner::start_task
 ```
 
 详细信息可能包含 SQL、行数据、对象名、provider 消息和 `anyhow::Context`。符合凭据
@@ -154,8 +156,9 @@ chain；其中的 chain registry 按保留的具体类型调用 provider classif
 固有的 code 和 object。只有 provider 无法知道的业务语义或执行 scope 才显式挂载
 `DtErrorContext`。两条路径都不会在报告阶段推断 stage、endpoint 或 task ID。
 
-`ErrorReport` 是面向用户的边界表示。其文本格式只使用 `ERROR CODE`、`DETAIL` 和可选的
-`BACKTRACE` 行；完整结构化字段仍保留在 JSON 格式中。
+`ErrorReport` 是面向用户的边界表示。其文本格式使用带中括号的错误码作为 detail 标题，
+detail 始终从 `0:` 开始编号，并可选追加 `BACKTRACE` 块；完整结构化字段仍保留在 JSON
+格式中。
 
 Provider 分类器实现统一位于 `dt-common::error::provider`。它们通过 `ClassifyError` 根据
 provider 原始错误码、类型化错误种类和 Rust 错误变体进行判断，禁止根据 provider 错误
