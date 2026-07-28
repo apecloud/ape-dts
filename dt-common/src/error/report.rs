@@ -43,9 +43,24 @@ impl ErrorReport {
             backtrace: captured_backtrace(error),
         };
 
-        for context in collect_contexts(error) {
-            report.push_context(&context);
+        let contexts = collect_contexts(error);
+        for context in &contexts {
+            report.push_context(context);
         }
+
+        report.code = contexts
+            .iter()
+            .rev()
+            .filter_map(|context| context.code)
+            .find(|code| *code != ErrorCode::Unclassified)
+            .unwrap_or(ErrorCode::Unclassified);
+        report.stage = contexts
+            .iter()
+            .rev()
+            .filter_map(|context| context.stage)
+            .find(|stage| *stage != Stage::Unknown)
+            .unwrap_or(Stage::Unknown);
+        report.endpoint = contexts.iter().rev().find_map(|context| context.endpoint);
 
         if report.messages.is_empty() {
             report
@@ -65,11 +80,6 @@ impl ErrorReport {
     }
 
     fn push_context(&mut self, context: &DtErrorContext) {
-        if self.code == ErrorCode::Unclassified {
-            if let Some(code) = context.code {
-                self.code = code;
-            }
-        }
         if let Some(message) = &context.message {
             push_unique(&mut self.messages, sanitize_user_text(message));
         }
@@ -79,16 +89,8 @@ impl ErrorReport {
         if let Some(hint) = &context.hint {
             push_unique(&mut self.hints, sanitize_user_text(hint));
         }
-        if self.stage == Stage::Unknown {
-            if let Some(stage) = context.stage {
-                self.stage = stage;
-            }
-        }
         if self.task_id.is_none() {
             self.task_id.clone_from(&context.task_id);
-        }
-        if self.endpoint.is_none() {
-            self.endpoint = context.endpoint;
         }
         if let Some(object) = &context.object {
             push_unique(&mut self.objects, object.clone());
@@ -231,7 +233,7 @@ mod tests {
     }
 
     #[test]
-    fn explicit_context_owns_scalars_and_provider_enriches_detail() {
+    fn provider_code_owns_identity_while_context_supplies_scope() {
         let error = anyhow::Error::new(sqlx::Error::PoolTimedOut)
             .code(ErrorCode::StatementFailed)
             .stage(Stage::Sinker)
@@ -239,12 +241,12 @@ mod tests {
             .context("pipeline.start failed");
 
         let report = ErrorReport::from_anyhow(&error);
-        assert_eq!(report.code, ErrorCode::StatementFailed);
+        assert_eq!(report.code, ErrorCode::ConnectionTimeout);
         assert_eq!(report.stage, Stage::Sinker);
         assert_eq!(report.endpoint, Some(EndpointRole::Destination));
         assert_eq!(
             report.messages,
-            [ErrorCode::StatementFailed.default_message()]
+            [ErrorCode::ConnectionTimeout.default_message()]
         );
         assert_eq!(
             report.details,
@@ -252,6 +254,19 @@ mod tests {
                 "pipeline.start failed",
                 "sqlx: pool timed out while waiting for an open connection"
             ]
+        );
+    }
+
+    #[test]
+    fn explicit_code_is_fallback_for_unclassified_provider_error() {
+        let error = sqlx::Error::RowNotFound.code(ErrorCode::StatementFailed);
+
+        let report = ErrorReport::from_anyhow(&error);
+
+        assert_eq!(report.code, ErrorCode::StatementFailed);
+        assert_eq!(
+            report.details,
+            ["sqlx: no rows returned by a query that expected to return at least one row"]
         );
     }
 
@@ -286,7 +301,7 @@ mod tests {
         let error = error.code(ErrorCode::InvariantViolated);
         assert_eq!(
             ErrorReport::from_anyhow(&error).code,
-            ErrorCode::InvariantViolated
+            ErrorCode::InvalidConfig
         );
 
         let redis_error = anyhow::Error::new(DtError::RedisRdbError(
@@ -373,7 +388,7 @@ mod tests {
     }
 
     #[test]
-    fn outermost_context_owns_scalars_and_arrays_remove_duplicates() {
+    fn scalar_directions_are_field_specific_and_arrays_remove_duplicates() {
         let error = anyhow::anyhow!("same detail")
             .code(ErrorCode::ConnectionTimeout)
             .code(ErrorCode::StatementFailed)
@@ -388,18 +403,30 @@ mod tests {
             .context("same detail");
 
         let report = ErrorReport::from_anyhow(&error);
-        assert_eq!(report.code, ErrorCode::StatementFailed);
+        assert_eq!(report.code, ErrorCode::ConnectionTimeout);
         assert_eq!(report.messages, ["same message"]);
-        assert_eq!(report.stage, Stage::Sinker);
+        assert_eq!(report.stage, Stage::Extractor);
         assert_eq!(report.task_id.as_deref(), Some("outer-task"));
-        assert_eq!(report.endpoint, Some(EndpointRole::Destination));
+        assert_eq!(report.endpoint, Some(EndpointRole::Source));
         assert_eq!(report.details, ["same detail"]);
         let rendered = report.to_string();
         assert!(rendered.starts_with(
-            "ERROR REPORT\n  [DB001]: same message\n  CAUSED BY:\n    0: same detail"
+            "ERROR REPORT\n  [CN002]: same message\n  CAUSED BY:\n    0: same detail"
         ));
         assert!(!rendered.contains("MESSAGE"));
         assert!(!rendered.contains("HINT"));
+    }
+
+    #[test]
+    fn innermost_stage_wins_over_pipeline_and_task() {
+        let error = anyhow::anyhow!("sink failed")
+            .stage(Stage::Sinker)
+            .stage(Stage::Pipeline)
+            .stage(Stage::Task);
+
+        let report = ErrorReport::from_anyhow(&error);
+
+        assert_eq!(report.stage, Stage::Sinker);
     }
 
     #[test]

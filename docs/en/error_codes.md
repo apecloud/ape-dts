@@ -84,9 +84,11 @@ matches.
 
 `ErrorReport` JSON is a versioned machine interface. The current
 `schema_version` is `1`. Code, stage, task ID, and endpoint role are scalar.
-User messages, details, hints, and affected objects are arrays. The outermost
-explicit `DtErrorContext` owns scalar fields, while a concrete error classifier
-fills only missing values. Arrays preserve first-seen order and remove exact
+User messages, details, hints, and affected objects are arrays. Code, stage,
+and endpoint are resolved from innermost to outermost; task ID is resolved from
+outermost to innermost. A recognized concrete error owns the code, and an
+explicit context code is a fallback when the concrete error is unclassified.
+Arrays preserve outermost-to-innermost first-seen order and remove exact
 duplicates. Text rendering always uses zero-based detail indexes. CLI text
 layout is not a stable machine interface. Messages appear after the bracketed
 code and are separated by semicolons. Fields within one affected object are
@@ -179,10 +181,10 @@ inference is used.
 
 Each frame is flat and immutable. The context extension appends frames to an
 internal ordered list carried by `anyhow::Error`; `DtErrorContext` itself has
-no parent link. `ErrorReport` uses the first non-default code, stage, task ID,
-and endpoint. Explicit frames are processed outermost first, so the outer call
-boundary owns those fields. Messages, details, hints, and affected objects are
-appended in first-seen order with exact duplicates removed.
+no parent link. `ErrorReport` resolves code, stage, and endpoint from innermost
+to outermost, while task ID is resolved from outermost to innermost. Messages,
+details, hints, and affected objects are appended in outermost-to-innermost
+first-seen order with exact duplicates removed.
 Classifiers primarily populate `DtErrorContext.detail`; ordinary contexts and
 unclassified concrete causes also contribute redacted `details`.
 Project-owned `DtError` values retain their variant-specific full
@@ -193,10 +195,12 @@ Supported provider errors should normally be propagated unchanged with `?` or
 ordinary `anyhow::Context`. When a report is built, the parent-level
 `dt-common::error::classifier` reads typed `DtError` contexts and traverses the
 ordinary source chain. Its chain registry invokes provider classifiers for
-preserved concrete types, recovering intrinsic code and object fields. Attach
-an explicit `DtErrorContext` only for business semantics or execution scope
-that the provider error cannot know. Neither path infers stage, endpoint, or
-task ID at report time.
+preserved concrete types, recovering intrinsic code and object fields. The
+first classified concrete wrapper owns the code; its nested sources continue to
+enrich details and objects without replacing that code. Attach an explicit
+`DtErrorContext` only for business semantics or execution scope that the
+provider error cannot know. Neither path infers stage, endpoint, or task ID at
+report time.
 
 `ErrorReport` is the user-facing boundary representation. Its text form uses
 the bracketed error code followed by semicolon-separated messages. When
@@ -215,10 +219,11 @@ the parent-level `dt-common::error::classifier` applies the same trait to
 supported provider causes preserved in the source chain.
 The SQLx classifier infers MySQL or PostgreSQL from the concrete database error.
 Call sites do not pass a database-family hint or attach a separate provider
-frame. An explicit operation code owns the final identity; otherwise the
-recognized provider condition supplies it. Provider name, original code, and
-concrete error text are stored in `details`. Stage, endpoint, and task ID are
-attached separately at the execution layer that knows them.
+frame. A recognized provider condition owns the identity; an explicit
+operation code is used only as a fallback for an unclassified provider error.
+Provider name, original code, and concrete error text are stored in `details`.
+Stage, endpoint, and task ID are attached separately at the execution layer
+that knows them.
 
 Provider classification belongs in `dt-common::error::provider`, not in
 per-crate wrappers. Business modules use `DtError` for project-owned failures,
@@ -276,11 +281,11 @@ codes are also used internally for these initial SQLx mappings:
 | SQLx worker crash | `RT001` |
 | SQLx integrity error kinds | `IC001` |
 
-SQLx call sites may explicitly supply an operation-specific code such as
-`CN001`, `DB001`, or `ST001`. An explicit code owns the report identity;
-otherwise the recognized provider classification supplies it. The original
-provider code, constraint/table metadata, and source error information remain
-available through detail and object fields.
+SQLx call sites may explicitly supply an operation-specific fallback code such
+as `DB001` or `ST001`. A recognized provider classification owns the report
+identity; the explicit code is used only when the provider error is
+unclassified. The original provider code, constraint/table metadata, and source
+error information remain available through detail and object fields.
 
 The `tokio-postgres` replication adapter uses the same PostgreSQL SQLSTATE
 rules. URL parsing uses `CF002`, connection establishment uses `CN001`, and

@@ -33,7 +33,7 @@ use crate::{
 };
 use dt_common::{
     config::{config_enums::DbType, connection_auth_config::ConnectionAuthConfig},
-    error::{DtError, DtResultExt, ErrorCode},
+    error::DtError,
     log_debug, log_error, log_info, log_warn,
     meta::{
         adaptor::mysql_col_value_convertor::MysqlColValueConvertor, col_value::ColValue,
@@ -161,8 +161,7 @@ impl MysqlCdcExtractor {
                 Duration::from_secs(self.keepalive_interval_secs),
             )
             .connect()
-            .await
-            .code(ErrorCode::ConnectionFailed)?;
+            .await?;
 
         let mut ctx = Context {
             binlog_filename: self.binlog_filename.clone(),
@@ -170,8 +169,7 @@ impl MysqlCdcExtractor {
             gtid_set: None,
         };
         if self.gtid_enabled {
-            ctx.gtid_set =
-                Some(GtidSet::new(self.gtid_set.as_str()).code(ErrorCode::InvalidConfig)?);
+            ctx.gtid_set = Some(GtidSet::new(self.gtid_set.as_str())?);
         }
 
         // start heartbeat
@@ -179,7 +177,7 @@ impl MysqlCdcExtractor {
 
         loop {
             if self.extract_state.time_filter.ended {
-                stream.close().await.code(ErrorCode::ConnectionFailed)?;
+                stream.close().await?;
                 return Ok(());
             }
 

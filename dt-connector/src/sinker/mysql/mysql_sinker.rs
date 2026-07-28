@@ -86,8 +86,7 @@ impl Sinker for MysqlSinker {
                 self.url.as_str(),
                 &self.connection_auth,
             )?;
-            let mut conn_options = MySqlConnectOptions::from_str(final_url.as_str())
-                .code(ErrorCode::ConnectionFailed)?;
+            let mut conn_options = MySqlConnectOptions::from_str(final_url.as_str())?;
             if !db.is_empty() {
                 match ddl_data.ddl_type {
                     DdlType::CreateDatabase | DdlType::DropDatabase | DdlType::AlterDatabase => {}

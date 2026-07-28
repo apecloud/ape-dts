@@ -2,7 +2,7 @@ use std::error::Error as StdError;
 
 use super::{
     error_context::{DtErrorContexts, DT_ERROR_CONTEXT_MARKER},
-    DtError, DtErrorContext,
+    DtError, DtErrorContext, ErrorCode,
 };
 
 pub trait ClassifyError {
@@ -39,13 +39,20 @@ fn classify_chain_error(error: &(dyn StdError + 'static)) -> Option<DtErrorConte
 
 pub(crate) fn collect_contexts(error: &anyhow::Error) -> Vec<DtErrorContext> {
     let mut result = Vec::new();
+    let mut concrete_code_found = false;
 
     if let Some(contexts) = error.downcast_ref::<DtErrorContexts>() {
         result.extend(contexts.iter_outer_to_inner().cloned());
     }
 
     if let Some(error) = error.downcast_ref::<DtError>() {
-        result.push(error.classify());
+        let mut context = error.classify();
+        if context.code == Some(ErrorCode::Unclassified) {
+            context.code = None;
+        } else if context.code.is_some() {
+            concrete_code_found = true;
+        }
+        result.push(context);
     }
 
     for cause in error.chain() {
@@ -53,7 +60,13 @@ pub(crate) fn collect_contexts(error: &anyhow::Error) -> Vec<DtErrorContext> {
         if detail == DT_ERROR_CONTEXT_MARKER {
             continue;
         }
-        if let Some(context) = classify_chain_error(cause) {
+        if let Some(mut context) = classify_chain_error(cause) {
+            // A classified wrapper owns the condition; nested sources still enrich diagnostics.
+            if context.code == Some(ErrorCode::Unclassified) || concrete_code_found {
+                context.code = None;
+            } else if context.code.is_some() {
+                concrete_code_found = true;
+            }
             result.push(context);
         } else if !result
             .iter()
@@ -91,8 +104,29 @@ mod tests {
             .filter_map(|context| context.detail.as_deref())
             .collect();
 
-        assert_eq!(codes, [ErrorCode::InvalidConfig, ErrorCode::IoFailed]);
+        assert_eq!(codes, [ErrorCode::InvalidConfig]);
         assert_eq!(details, ["invalid endpoint", "source failure"]);
+    }
+
+    #[test]
+    fn provider_wrapper_owns_code_while_source_enriches_detail() {
+        let error = anyhow::Error::new(sqlx::Error::Io(std::io::Error::other("connection reset")));
+
+        let contexts = collect_contexts(&error);
+        let codes: Vec<_> = contexts.iter().filter_map(|context| context.code).collect();
+        let details: Vec<_> = contexts
+            .iter()
+            .filter_map(|context| context.detail.as_deref())
+            .collect();
+
+        assert_eq!(codes, [ErrorCode::ConnectionFailed]);
+        assert_eq!(
+            details,
+            [
+                "sqlx: error communicating with database",
+                "connection reset"
+            ]
+        );
     }
 
     #[test]

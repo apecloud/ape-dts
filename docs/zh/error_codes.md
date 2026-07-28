@@ -78,11 +78,12 @@ ERROR REPORT
 ## 用户视图和诊断视图
 
 `ErrorReport` JSON 是带版本的机器接口，当前 `schema_version` 为 `1`。错误码、阶段、
-任务 ID 和端点角色是单值；用户消息、详细信息、处理建议和受影响对象是数组。最外层
-显式 `DtErrorContext` 决定单值字段，具体 error 的 classifier 只补充仍缺失的字段。数组
-保持首次出现顺序并去除完全相同的值。文本输出始终使用从 `0` 开始的 detail index。
-CLI 文本格式不是稳定的机器接口。message 位于带中括号的错误码之后，多个 message 使用
-分号分隔；单个受影响对象的字段使用逗号分隔，多个受影响对象使用分号分隔。
+任务 ID 和端点角色是单值；用户消息、详细信息、处理建议和受影响对象是数组。code、stage
+和 endpoint 按从内到外解析，task ID 按从外到内解析。已识别的具体 error 决定 code；仅当
+具体 error 无法分类时，才使用显式 context code 兜底。数组按从外到内保持首次出现顺序并
+去除完全相同的值。文本输出始终使用从 `0` 开始的 detail index。CLI 文本格式不是稳定的
+机器接口。message 位于带中括号的错误码之后，多个 message 使用分号分隔；单个受影响对象
+的字段使用逗号分隔，多个受影响对象使用分号分隔。
 
 序列化后的 `ErrorReport` 不再保存 `error_chain` 或 `context_count`，除了面向用户的
 字段外，还包含 UTC 创建时间 `timestamp` 和可选的已捕获 `backtrace`。`details` 按从外到内的顺序收集普通
@@ -149,9 +150,9 @@ precheck 入口挂载 `precheck` 和 task ID，而 precheck builder 在各 check
 
 每个 frame 都是扁平且不可变的数据。context extension 只把 frame 追加到
 `anyhow::Error` 携带的内部有序列表；`DtErrorContext` 自身不再保存 parent，也不负责字段
-解析。`ErrorReport` 对 code、stage、task ID 和 endpoint 使用第一个非默认值；显式 frame
-按从外到内处理，因此最外层调用边界拥有这些字段。消息、detail、处理建议和受影响对象
-按首次出现顺序追加并去重。`DtErrorContext.detail` 主要由 classifier 填充；普通
+解析。`ErrorReport` 对 code、stage 和 endpoint 按从内到外解析，对 task ID 按从外到内
+解析。消息、detail、处理建议和受影响对象按从外到内的首次出现顺序追加并去重。
+`DtErrorContext.detail` 主要由 classifier 填充；普通
 `anyhow::Context` 和无法分类的具体 cause 也会生成已脱敏的 `details`。项目自有 `DtError`
 会保留 variant 对应的完整 `Display` 文本和类型化 payload，与 provider error 保留自身
 `Display`、source chain 和具体类型的方式一致。
@@ -159,8 +160,10 @@ precheck 入口挂载 `precheck` 和 task ID，而 precheck builder 在各 check
 已支持的 provider 错误通常直接通过 `?` 或普通 `anyhow::Context` 传播。构建 report 时，
 父级 `dt-common::error::classifier` 统一读取 typed `DtError` context 并遍历普通 source
 chain；其中的 chain registry 按保留的具体类型调用 provider classifier，恢复 provider
-固有的 code 和 object。只有 provider 无法知道的业务语义或执行 scope 才显式挂载
-`DtErrorContext`。两条路径都不会在报告阶段推断 stage、endpoint 或 task ID。
+固有的 code 和 object。第一个已分类的具体 error wrapper 决定 code；更深层 source 继续
+补充 details 和 objects，但不再替换该 code。只有 provider 无法知道的业务语义或执行
+scope 才显式挂载 `DtErrorContext`。两条路径都不会在报告阶段推断 stage、endpoint 或
+task ID。
 
 `ErrorReport` 是面向用户的边界表示。其文本格式先输出带中括号的错误码，随后输出以分号
 分隔的 message。存在受影响对象时在一行内输出：单个对象的字段使用逗号分隔，多个对象
@@ -172,9 +175,10 @@ provider 原始错误码、类型化错误种类和 Rust 错误变体进行判�
 消息推断分类。每个实现直接返回包含可选精确错误码、受影响对象和完整 provider detail 的
 `DtErrorContext`。父级 `dt-common::error::classifier` 中的小型 chain registry 对 source
 chain 中保留的 provider cause 调用同一 trait。SQLx 分类器从具体 database error 推断
-MySQL 或 PostgreSQL。调用点不再传数据库类型，也不再额外挂 provider frame。显式调用点
-code 决定最终错误身份，classifier 只在 code 缺失时补充；provider 名称、原始码和具体
-错误文本进入 `details`。stage、endpoint 和 task ID 在仍明确知道其语义的执行位置单独挂载。
+MySQL 或 PostgreSQL。调用点不再传数据库类型，也不再额外挂 provider frame。已识别的
+provider condition 决定最终错误身份；显式操作 code 仅在 provider error 无法分类时兜底。
+provider 名称、原始码和具体错误文本进入 `details`。stage、endpoint 和 task ID 在仍明确
+知道其语义的执行位置单独挂载。
 
 Provider 分类统一位于 `dt-common::error::provider`，不再放入各 crate 的 wrapper。
 业务模块使用 `DtError` 表达项目主动失败，使用普通 `anyhow::Context` 添加诊断文字，只在
@@ -223,9 +227,9 @@ origin 字段。错误码同时用于以下首批 SQLx 分类映射：
 | SQLx worker 崩溃 | `RT001` |
 | SQLx 完整性错误种类 | `IC001` |
 
-SQLx 调用点可以显式提供与操作相关的错误码，例如 `CN001`、`DB001` 或 `ST001`。
-显式 code 决定报告错误码；未提供时使用精确的 provider 分类。Provider 原始码、
-constraint/table 元数据和源错误链信息仍保留在 detail 和 object 中。
+SQLx 调用点可以显式提供与操作相关的兜底错误码，例如 `DB001` 或 `ST001`。已识别的
+provider 分类决定报告错误码；仅当 provider error 无法分类时才使用显式 code。Provider
+原始码、constraint/table 元数据和源错误链信息仍保留在 detail 和 object 中。
 
 `tokio-postgres` 复制适配器使用相同的 PostgreSQL SQLSTATE 规则。URL 解析错误使用
 `CF002`，连接建立失败使用 `CN001`，复制命令被拒绝时使用该操作显式设置的错误码。

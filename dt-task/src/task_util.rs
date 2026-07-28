@@ -89,8 +89,7 @@ impl TaskUtil {
     ) -> anyhow::Result<Pool<MySql>> {
         let final_url = ConnectionAuthConfig::merge_url_with_auth(url, connection_auth)?;
 
-        let mut conn_options =
-            MySqlConnectOptions::from_str(&final_url).code(ErrorCode::ConnectionFailed)?;
+        let mut conn_options = MySqlConnectOptions::from_str(&final_url)?;
         // The default character set is `utf8mb4`
         conn_options = conn_options
             .log_statements(log::LevelFilter::Debug)
@@ -177,8 +176,7 @@ impl TaskUtil {
     ) -> anyhow::Result<Pool<Postgres>> {
         let final_url = ConnectionAuthConfig::merge_url_with_auth(url, connection_auth)?;
 
-        let mut conn_options =
-            PgConnectOptions::from_str(&final_url).code(ErrorCode::ConnectionFailed)?;
+        let mut conn_options = PgConnectOptions::from_str(&final_url)?;
         conn_options = conn_options
             .log_statements(log::LevelFilter::Debug)
             .log_slow_statements(log::LevelFilter::Debug, Duration::from_secs(1));
