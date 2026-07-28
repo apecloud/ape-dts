@@ -14,8 +14,7 @@ impl PrecheckTaskConfig {
         Self::from_loader(&loader)
     }
 
-    pub fn load_if_present(task_config_file: &str) -> anyhow::Result<Option<Self>> {
-        let loader = IniLoader::new(task_config_file)?;
+    pub fn load_if_present(loader: &IniLoader) -> anyhow::Result<Option<Self>> {
         if !loader
             .ini
             .sections()
@@ -24,7 +23,7 @@ impl PrecheckTaskConfig {
         {
             return Ok(None);
         }
-        Self::from_loader(&loader).map(Some)
+        Self::from_loader(loader).map(Some)
     }
 
     fn from_loader(loader: &IniLoader) -> anyhow::Result<Self> {

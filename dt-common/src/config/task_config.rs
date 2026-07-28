@@ -135,15 +135,18 @@ const RESUMER_CONNECTION_LIMIT_DEFAULT: usize = 5;
 impl TaskConfig {
     pub fn new(task_config_file: &str) -> anyhow::Result<Self> {
         let loader = IniLoader::new(task_config_file)?;
+        Self::from_loader(&loader)
+    }
 
-        let pipeline = Self::load_pipeline_config(&loader)?;
-        let runtime = Self::load_runtime_config(&loader)?;
-        let (sinker_basic, sinker) = Self::load_sinker_config(&loader)?;
-        let (extractor_basic, extractor) = Self::load_extractor_config(&loader, &pipeline)?;
-        let filter = Self::load_filter_config(&loader)?;
-        let router = Self::load_router_config(&loader)?;
-        let parallelizer = Self::load_parallelizer_config(&loader, &sinker_basic, &pipeline)?;
-        let checker = Self::load_checker_config(&loader)?;
+    pub fn from_loader(loader: &IniLoader) -> anyhow::Result<Self> {
+        let pipeline = Self::load_pipeline_config(loader)?;
+        let runtime = Self::load_runtime_config(loader)?;
+        let (sinker_basic, sinker) = Self::load_sinker_config(loader)?;
+        let (extractor_basic, extractor) = Self::load_extractor_config(loader, &pipeline)?;
+        let filter = Self::load_filter_config(loader)?;
+        let router = Self::load_router_config(loader)?;
+        let parallelizer = Self::load_parallelizer_config(loader, &sinker_basic, &pipeline)?;
+        let checker = Self::load_checker_config(loader)?;
         if let Some(checker_cfg) = checker.as_ref() {
             if matches!(extractor_basic.extract_type, ExtractType::Cdc)
                 && !matches!(sinker_basic.sink_type, SinkType::Write)
@@ -228,15 +231,14 @@ impl TaskConfig {
             }
 
             Self::validate_checker_target_config(
-                &loader,
+                loader,
                 task_type.is_some_and(|task_type| task_type.is_inline_check()),
             )?;
         }
-        let resumer =
-            Self::load_resumer_config(&loader, &runtime, &sinker_basic, checker.as_ref())?;
+        let resumer = Self::load_resumer_config(loader, &runtime, &sinker_basic, checker.as_ref())?;
         Ok(Self {
             global: Self::load_global_config(
-                &loader,
+                loader,
                 &extractor_basic,
                 &sinker_basic,
                 checker.as_ref(),
@@ -254,12 +256,12 @@ impl TaskConfig {
             router,
             resumer,
             checker,
-            data_marker: Self::load_data_marker_config(&loader)?,
-            processor: Self::load_processor_config(&loader)?,
-            meta_center: Self::load_meta_center_config(&loader)?,
-            tracing: Self::load_tracing_config(&loader)?,
+            data_marker: Self::load_data_marker_config(loader)?,
+            processor: Self::load_processor_config(loader)?,
+            meta_center: Self::load_meta_center_config(loader)?,
+            tracing: Self::load_tracing_config(loader)?,
             #[cfg(feature = "metrics")]
-            metrics: Self::load_metrics_config(&loader)?,
+            metrics: Self::load_metrics_config(loader)?,
         })
     }
 

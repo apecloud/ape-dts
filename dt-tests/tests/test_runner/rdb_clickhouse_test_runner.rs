@@ -1,11 +1,11 @@
 use clickhouse::{Client, Row};
 use dt_common::{meta::col_value::ColValue, utils::time_util::TimeUtil};
-use dt_task::task_runner::TaskRunner;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use url::Url;
 
 use super::{
+    base_test_runner::BaseTestRunner,
     rdb_struct_test_runner::RdbStructTestRunner,
     rdb_test_runner::{RdbTestRunner, SRC},
 };
@@ -123,9 +123,7 @@ impl RdbClickHouseTestRunner {
 
         // migrate database/table structures to target if needed
         if !basic.struct_task_config_file.is_empty() {
-            TaskRunner::new(&basic.struct_task_config_file)?
-                .start_task(false)
-                .await?;
+            BaseTestRunner::start_task_with_config_file(&basic.struct_task_config_file).await?;
         }
         Ok(())
     }

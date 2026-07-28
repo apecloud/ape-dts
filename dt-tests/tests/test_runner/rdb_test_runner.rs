@@ -26,7 +26,7 @@ use dt_common::meta::{
 use dt_connector::{
     meta_fetcher::mysql::mysql_struct_check_fetcher::MysqlStructCheckFetcher, rdb_router::RdbRouter,
 };
-use dt_task::{task_runner::TaskRunner, task_util::TaskUtil};
+use dt_task::task_util::TaskUtil;
 
 use sqlx::{query, types::BigDecimal, MySql, Pool, Postgres, Row};
 use tokio::{sync::Semaphore, task::JoinHandle};
@@ -724,9 +724,7 @@ impl RdbTestRunner {
 
         // migrate database/table structures to target if needed
         if !self.base.struct_task_config_file.is_empty() {
-            TaskRunner::new(&self.base.struct_task_config_file)?
-                .start_task(false)
-                .await?;
+            BaseTestRunner::start_task_with_config_file(&self.base.struct_task_config_file).await?;
         }
         Ok(())
     }

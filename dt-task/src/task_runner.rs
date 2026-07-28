@@ -1,6 +1,5 @@
 use std::{
     collections::HashMap,
-    path::{Component, Path},
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
@@ -11,12 +10,9 @@ use crate::task_util::{ConnClient, TaskUtil};
 use anyhow::{bail, Context};
 use async_mutex::Mutex as AsyncMutex;
 use chrono::Local;
-use log4rs::config::{Config, Deserializers, RawConfig};
 use opendal::Operator;
-use std::sync::Mutex as StdMutex;
 use tokio::{
-    fs::{self as tokio_fs, metadata, File},
-    io::AsyncReadExt,
+    fs::{self as tokio_fs, metadata},
     runtime::Handle,
     sync::{Mutex, RwLock},
     task::JoinSet,
@@ -31,12 +27,12 @@ use dt_common::{
         extractor_config::ExtractorConfig,
         limiter_config::CapacityLimiterConfig,
         sinker_config::SinkerConfig,
-        task_config::{TaskConfig, DEFAULT_CHECK_LOG_FILE_SIZE},
+        task_config::TaskConfig,
     },
-    error::{DtError, DtErrorContext, DtResultExt, EndpointRole, ErrorCode, Stage},
+    error::{DtError, DtResultExt, EndpointRole, ErrorCode, Stage},
     limiter::buffer_limiter::BufferLimiter,
     log_error,
-    log_filter::{parse_size_limit, SizeLimitFilterDeserializer},
+    log_filter::parse_size_limit,
     log_finished, log_info, log_runtime_trace, log_warn,
     meta::{dt_queue::DtQueue, position::Position, row_type::RowType, syncer::Syncer},
     monitor::{
@@ -71,8 +67,6 @@ use super::{
 #[cfg(feature = "metrics")]
 use dt_common::monitor::prometheus_metrics::PrometheusMetrics;
 
-static LOG_HANDLE: StdMutex<Option<log4rs::Handle>> = StdMutex::new(None);
-
 #[derive(Clone)]
 pub struct TaskInfo {
     pub extractor_config: ExtractorConfig,
@@ -88,16 +82,6 @@ pub struct TaskRunner {
     #[cfg(feature = "metrics")]
     prometheus_metrics: Arc<PrometheusMetrics>,
 }
-
-const CHECK_LOG_DIR_PLACEHOLDER: &str = "CHECK_LOG_DIR_PLACEHOLDER";
-const STATISTIC_LOG_DIR_PLACEHOLDER: &str = "STATISTIC_LOG_DIR_PLACEHOLDER";
-const LOG_LEVEL_PLACEHOLDER: &str = "LOG_LEVEL_PLACEHOLDER";
-const LOG_DIR_PLACEHOLDER: &str = "LOG_DIR_PLACEHOLDER";
-const CHECK_LOG_FILE_SIZE_PLACEHOLDER: &str = "CHECK_LOG_FILE_SIZE_PLACEHOLDER";
-const RUNTIME_STDOUT_APPENDER_PLACEHOLDER: &str = "RUNTIME_STDOUT_APPENDER_PLACEHOLDER";
-const CHECK_RESULT_STDOUT_APPENDER_PLACEHOLDER: &str = "CHECK_RESULT_STDOUT_APPENDER_PLACEHOLDER";
-const DEFAULT_CHECK_LOG_DIR_PLACEHOLDER: &str = "LOG_DIR_PLACEHOLDER/check";
-const DEFAULT_STATISTIC_LOG_DIR_PLACEHOLDER: &str = "LOG_DIR_PLACEHOLDER/statistic";
 
 fn init_task_check_summary() -> CheckSummaryLog {
     CheckSummaryLog {
@@ -123,9 +107,7 @@ impl SingleTaskWorker {
 }
 
 impl TaskRunner {
-    pub fn new(task_config_file: &str) -> anyhow::Result<Self> {
-        let config = TaskConfig::new(task_config_file)
-            .with_context(|| format!("invalid configs in [{}]", task_config_file))?;
+    pub fn new(config: TaskConfig) -> anyhow::Result<Self> {
         let task_type = config.task_type();
         #[cfg(not(feature = "metrics"))]
         let task_monitor = Arc::new(TaskMonitor::new(task_type));
@@ -147,13 +129,7 @@ impl TaskRunner {
         })
     }
 
-    pub fn task_id(&self) -> &str {
-        &self.config.global.task_id
-    }
-
     pub async fn start_task(&self, is_init: bool) -> anyhow::Result<()> {
-        self.clear_check_logs().await.stage(Stage::Bootstrap)?;
-        self.init_log4rs().await.stage(Stage::Bootstrap)?;
         runtime_trace::init_tracing();
         runtime_trace::set_task_summary_mode(self.config.tracing.task_summary_mode);
         runtime_trace::set_output_format(self.config.tracing.output_format);
@@ -265,63 +241,6 @@ impl TaskRunner {
         }
         log::logger().flush();
         Ok(())
-    }
-
-    async fn clear_check_logs(&self) -> anyhow::Result<()> {
-        let Some(cfg) = self.config.checker.as_ref() else {
-            return Ok(());
-        };
-        let check_log_dir = self.check_log_dir(cfg);
-        if Self::check_log_replay_reads_from_dir(&self.config.extractor, &check_log_dir) {
-            return Ok(());
-        }
-        if !Self::should_clear_check_logs_before_log4rs(self.task_type) {
-            return Ok(());
-        }
-
-        tokio_fs::create_dir_all(&check_log_dir).await?;
-        for file_name in ["miss.log", "diff.log", "summary.log", "sql.log"] {
-            Self::remove_file_if_exists(&format!("{check_log_dir}/{file_name}")).await?;
-        }
-        Ok(())
-    }
-
-    fn should_clear_check_logs_before_log4rs(task_type: Option<TaskType>) -> bool {
-        match task_type {
-            Some(task_type) => task_type.has_check() && !task_type.is_cdc_inline_check(),
-            None => true,
-        }
-    }
-
-    fn check_log_replay_reads_from_dir(extractor: &ExtractorConfig, check_log_dir: &str) -> bool {
-        let replay_dir = match extractor {
-            ExtractorConfig::MysqlCheck { check_log_dir, .. }
-            | ExtractorConfig::PgCheck { check_log_dir, .. }
-            | ExtractorConfig::MongoCheck { check_log_dir, .. } => check_log_dir,
-            _ => return false,
-        };
-        Self::same_check_log_dir(replay_dir, check_log_dir)
-    }
-
-    fn same_check_log_dir(left: &str, right: &str) -> bool {
-        let normalize = |path: &str| {
-            std::fs::canonicalize(path).unwrap_or_else(|_| {
-                let path = std::env::current_dir()
-                    .unwrap_or_default()
-                    .join(Path::new(path));
-                path.components().fold(Path::new("").into(), |mut acc, c| {
-                    match c {
-                        Component::CurDir => {}
-                        Component::ParentDir => {
-                            acc.pop();
-                        }
-                        _ => acc.push(c.as_os_str()),
-                    }
-                    acc
-                })
-            })
-        };
-        normalize(left) == normalize(right)
     }
 
     async fn remove_empty_check_logs(&self) -> anyhow::Result<()> {
@@ -1213,103 +1132,6 @@ impl TaskRunner {
         Ok(Some(Arc::new(AsyncMutex::new(checker))))
     }
 
-    async fn init_log4rs(&self) -> anyhow::Result<()> {
-        let log4rs_file = &self.config.runtime.log4rs_file;
-        match metadata(log4rs_file).await {
-            Ok(_) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-            Err(error) => {
-                return Err(error.into());
-            }
-        }
-
-        let mut config_str = String::new();
-        let mut file = File::open(log4rs_file).await?;
-        file.read_to_string(&mut config_str).await?;
-
-        match &self.config.sinker {
-            SinkerConfig::RedisStatistic {
-                statistic_log_dir, ..
-            } => {
-                if !statistic_log_dir.is_empty() {
-                    config_str =
-                        config_str.replace(STATISTIC_LOG_DIR_PLACEHOLDER, statistic_log_dir);
-                }
-            }
-
-            _ => {
-                if let Some(cfg) = self.config.checker.as_ref() {
-                    let check_log_dir = &cfg.check_log_dir;
-                    let check_log_file_size = &cfg.check_log_file_size;
-                    if !check_log_dir.is_empty() {
-                        config_str = config_str.replace(CHECK_LOG_DIR_PLACEHOLDER, check_log_dir);
-                    }
-                    config_str =
-                        config_str.replace(CHECK_LOG_FILE_SIZE_PLACEHOLDER, check_log_file_size);
-                }
-            }
-        }
-
-        config_str = config_str
-            .replace(CHECK_LOG_DIR_PLACEHOLDER, DEFAULT_CHECK_LOG_DIR_PLACEHOLDER)
-            .replace(
-                STATISTIC_LOG_DIR_PLACEHOLDER,
-                DEFAULT_STATISTIC_LOG_DIR_PLACEHOLDER,
-            )
-            .replace(CHECK_LOG_FILE_SIZE_PLACEHOLDER, DEFAULT_CHECK_LOG_FILE_SIZE)
-            .replace(LOG_DIR_PLACEHOLDER, &self.config.runtime.log_dir)
-            .replace(LOG_LEVEL_PLACEHOLDER, &self.config.runtime.log_level);
-
-        if self.config.runtime.check_result_stdout_only {
-            config_str = config_str
-                .replace(
-                    RUNTIME_STDOUT_APPENDER_PLACEHOLDER,
-                    "silent_stdout_appender",
-                )
-                .replace(
-                    CHECK_RESULT_STDOUT_APPENDER_PLACEHOLDER,
-                    "check_stdout_appender",
-                );
-        } else {
-            config_str = config_str
-                .replace(RUNTIME_STDOUT_APPENDER_PLACEHOLDER, "stdout")
-                .replace(
-                    CHECK_RESULT_STDOUT_APPENDER_PLACEHOLDER,
-                    "silent_stdout_appender",
-                );
-        }
-
-        let config_context = || DtErrorContext::new().with_code(ErrorCode::InvalidConfig);
-        let raw: RawConfig = serde_yaml::from_str(&config_str).dt_context(config_context)?;
-        let mut deserializers = Deserializers::default();
-        deserializers.insert("size_limit", SizeLimitFilterDeserializer);
-        let (appenders, errors) = raw.appenders_lossy(&deserializers);
-        if !errors.is_empty() {
-            log_error!("errors deserializing log appenders: {:?}", errors);
-            return Err(DtError::InvalidConfig(
-                "one or more logging appenders are invalid".to_string(),
-            )
-            .into());
-        }
-
-        let config = Config::builder()
-            .appenders(appenders)
-            .loggers(raw.loggers())
-            .build(raw.root())
-            .dt_context(config_context)?;
-        let mut handle_guard = LOG_HANDLE.lock().map_err(|_| {
-            DtError::InvariantViolated("the logging configuration lock is poisoned".to_string())
-        })?;
-        if let Some(handle) = handle_guard.as_ref() {
-            // refresh log4rs config in one process
-            handle.set_config(config);
-        } else {
-            let handle = log4rs::init_config(config).dt_context(config_context)?;
-            *handle_guard = Some(handle);
-        }
-        Ok(())
-    }
-
     async fn create_task_tables(
         &self,
         extractor_client: ConnClient,
@@ -1672,55 +1494,7 @@ mod tests {
     use std::{fs, time::SystemTime};
 
     use super::TaskRunner;
-    use dt_common::config::{
-        config_enums::{CheckMode, TaskKind, TaskType},
-        connection_auth_config::ConnectionAuthConfig,
-        extractor_config::ExtractorConfig,
-    };
     use opendal::{services::Memory, Operator};
-
-    #[test]
-    fn should_clear_task_type_none_by_default() {
-        assert!(TaskRunner::should_clear_check_logs_before_log4rs(None));
-    }
-
-    #[test]
-    fn should_clear_standalone_snapshot_check_logs() {
-        let task_type = TaskType::new(TaskKind::Snapshot, Some(CheckMode::Standalone));
-        assert!(TaskRunner::should_clear_check_logs_before_log4rs(Some(
-            task_type
-        )));
-    }
-
-    #[test]
-    fn check_log_replay_input_output_same_dir_is_detected() {
-        let extractor = ExtractorConfig::MysqlCheck {
-            url: String::new(),
-            connection_auth: ConnectionAuthConfig::NoAuth,
-            check_log_dir: "/tmp/ape-dts/check/".to_string(),
-            batch_size: 1,
-        };
-
-        assert!(TaskRunner::check_log_replay_reads_from_dir(
-            &extractor,
-            "/tmp/ape-dts/check"
-        ));
-        assert!(TaskRunner::check_log_replay_reads_from_dir(
-            &extractor,
-            "/tmp/ape-dts/./check"
-        ));
-        assert!(TaskRunner::same_check_log_dir(
-            "logs/check",
-            &std::env::current_dir()
-                .unwrap()
-                .join("logs/check")
-                .to_string_lossy()
-        ));
-        assert!(!TaskRunner::check_log_replay_reads_from_dir(
-            &extractor,
-            "/tmp/ape-dts/other"
-        ));
-    }
 
     #[tokio::test]
     async fn upload_local_check_logs_to_s3_deletes_empty_optional_logs() {

@@ -1,4 +1,3 @@
-mod error_code;
 mod log_reader;
 mod mock_test;
 mod mongo_to_mongo;
