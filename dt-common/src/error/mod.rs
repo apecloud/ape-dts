@@ -6,7 +6,7 @@ mod error_context;
 pub mod provider;
 mod report;
 
-pub use classifier::ClassifyError;
+pub(crate) use classifier::ClassifyError;
 pub use code::ErrorCode;
 pub use context::{EndpointRole, ErrorObject, Stage};
 pub use dt_error::DtError;

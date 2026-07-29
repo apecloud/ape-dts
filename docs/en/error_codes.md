@@ -152,16 +152,13 @@ Adding a new variant therefore requires an explicit classifier arm and cannot
 silently fall through. `DtError::Unclassified` is reserved for a project-owned
 failure for which no stable classification is available.
 
-The error extension trait is implemented for `anyhow::Error` and the supported
-provider error types. `DtResultExt` provides the same `code`, `message`, `hint`,
-`stage`, `task_id`, `endpoint`, and `object` methods directly on
-`Result`. Its `dt_context` method accepts a closure, so metadata is not built on
-the successful path. A code attached to a provider result expresses operation
-semantics known at the call site and owns the final report code. When no code is
-attached, the provider classifier supplies one. The original provider code is
-always retained in detail. Project-owned failures should
-normally use a semantic `DtError` variant. Unknown concrete errors retain their
-source type when converted to `anyhow::Error`.
+The error extension trait is implemented for every error type that can convert
+into `anyhow::Error`. `DtResultExt` provides the same `code`, `message`, `hint`,
+`stage`, `task_id`, `endpoint`, and `object` methods directly on `Result`. Its
+`dt_context` method accepts a closure, so metadata is not built on the successful
+path. Project-owned failures should normally use a semantic `DtError` variant.
+Unknown concrete errors retain their source type when converted to
+`anyhow::Error`.
 When a project-owned classification also has a lower-level source, put the
 semantic `DtError` in the `anyhow` context chain above that source. Both the
 `DtError` and the original source then remain downcastable, and the report can
@@ -190,17 +187,6 @@ unclassified concrete causes also contribute redacted `details`.
 Project-owned `DtError` values retain their variant-specific full
 `Display` text and typed payload, just as provider errors retain their own
 `Display`, source chain, and concrete type.
-
-Supported provider errors should normally be propagated unchanged with `?` or
-ordinary `anyhow::Context`. When a report is built, the parent-level
-`dt-common::error::classifier` reads typed `DtError` contexts and traverses the
-ordinary source chain. Its chain registry invokes provider classifiers for
-preserved concrete types, recovering intrinsic code and object fields. The
-first classified concrete wrapper owns the code; its nested sources continue to
-enrich details and objects without replacing that code. Attach an explicit
-`DtErrorContext` only for business semantics or execution scope that the
-provider error cannot know. Neither path infers stage, endpoint, or task ID at
-report time.
 
 `ErrorReport` is the user-facing boundary representation. Its text form uses
 the bracketed error code followed by semicolon-separated messages. When

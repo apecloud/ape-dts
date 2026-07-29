@@ -130,12 +130,10 @@ ERROR REPORT
 时必须增加对应的 match 分支，无法静默落入兜底。
 `DtError::Unclassified` 只用于项目主动产生、但暂时没有稳定分类的失败。
 
-error extension trait 为 `anyhow::Error` 和已支持的 provider 错误类型实现。
+error extension trait 为所有能够转换为 `anyhow::Error` 的错误类型实现。
 `DtResultExt` 在 `Result` 上提供相同的 `code`、`message`、`hint`、`stage`、`task_id`、
 `endpoint` 和 `object` 方法；它的 `dt_context` 接收闭包，成功路径不会构造
-metadata。provider result 上挂载的 code 表达调用点已知的操作语义，并决定最终报告错误码；
-未显式挂载时，provider classifier 才补充错误码。provider 原始码始终保存在 detail 中。
-项目主动失败通常应使用语义化 `DtError` variant。
+metadata。项目主动失败通常应使用语义化 `DtError` variant。
 未知的具体错误转换为 `anyhow::Error` 后仍保留 source 类型。
 如果项目语义分类同时存在更底层 source，则将语义化 `DtError` 作为 typed context 放在
 source 之上。这样 `DtError` 和原始 source 都可 downcast，报告可以同时分类，且不会丢失
@@ -156,14 +154,6 @@ precheck 入口挂载 `precheck` 和 task ID，而 precheck builder 在各 check
 `anyhow::Context` 和无法分类的具体 cause 也会生成已脱敏的 `details`。项目自有 `DtError`
 会保留 variant 对应的完整 `Display` 文本和类型化 payload，与 provider error 保留自身
 `Display`、source chain 和具体类型的方式一致。
-
-已支持的 provider 错误通常直接通过 `?` 或普通 `anyhow::Context` 传播。构建 report 时，
-父级 `dt-common::error::classifier` 统一读取 typed `DtError` context 并遍历普通 source
-chain；其中的 chain registry 按保留的具体类型调用 provider classifier，恢复 provider
-固有的 code 和 object。第一个已分类的具体 error wrapper 决定 code；更深层 source 继续
-补充 details 和 objects，但不再替换该 code。只有 provider 无法知道的业务语义或执行
-scope 才显式挂载 `DtErrorContext`。两条路径都不会在报告阶段推断 stage、endpoint 或
-task ID。
 
 `ErrorReport` 是面向用户的边界表示。其文本格式先输出带中括号的错误码，随后输出以分号
 分隔的 message。存在受影响对象时在一行内输出：单个对象的字段使用逗号分隔，多个对象

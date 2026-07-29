@@ -15,39 +15,12 @@ pub enum Stage {
     Unknown,
 }
 
-impl Stage {
-    pub const fn diagnostic_name(self) -> &'static str {
-        match self {
-            Self::Bootstrap => "bootstrap",
-            Self::Precheck => "precheck",
-            Self::Extractor => "extractor",
-            Self::Parallelizer => "parallelizer",
-            Self::Pipeline => "pipeline",
-            Self::Sinker => "sinker",
-            Self::Checker => "checker",
-            Self::Resumer => "resumer",
-            Self::Task => "task",
-            Self::Unknown => "unknown",
-        }
-    }
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EndpointRole {
     Source,
     Destination,
     Metadata,
-}
-
-impl EndpointRole {
-    pub const fn user_description(self) -> &'static str {
-        match self {
-            Self::Source => "source",
-            Self::Destination => "destination",
-            Self::Metadata => "metadata store",
-        }
-    }
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]

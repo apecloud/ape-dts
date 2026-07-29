@@ -1,10 +1,4 @@
-use std::io::Error;
-use std::{error::Error as StdError, fmt};
-
-use mysql_binlog_connector_rust::binlog_error::BinlogError;
-use openssl::error::ErrorStack;
-use redis::RedisError;
-use tokio::task::JoinError;
+use std::fmt;
 
 use super::{DtError, EndpointRole, ErrorCode, ErrorObject, Stage};
 
@@ -131,51 +125,20 @@ pub trait DtErrorContextExt: Sized {
     }
 }
 
-impl DtErrorContextExt for anyhow::Error {
-    fn dt_context(mut self, context: DtErrorContext) -> anyhow::Error {
-        if let Some(contexts) = self.downcast_mut::<DtErrorContexts>() {
+impl<E> DtErrorContextExt for E
+where
+    E: Into<anyhow::Error>,
+{
+    fn dt_context(self, context: DtErrorContext) -> anyhow::Error {
+        let mut error = self.into();
+        if let Some(contexts) = error.downcast_mut::<DtErrorContexts>() {
             contexts.push(context);
-            self
+            error
         } else {
-            self.context(DtErrorContexts::new(context))
+            error.context(DtErrorContexts::new(context))
         }
     }
 }
-
-fn attach_dt_context<E>(error: E, context: DtErrorContext) -> anyhow::Error
-where
-    E: StdError + Send + Sync + 'static,
-{
-    anyhow::Error::new(error).context(DtErrorContexts::new(context))
-}
-
-macro_rules! impl_dt_error_context_ext {
-    ($($error:ty),+ $(,)?) => {
-        $(
-            impl DtErrorContextExt for $error {
-                #[inline(always)]
-                fn dt_context(self, context: DtErrorContext) -> anyhow::Error {
-                    attach_dt_context(self, context)
-                }
-            }
-        )+
-    };
-}
-
-impl_dt_error_context_ext!(
-    DtError,
-    sqlx::Error,
-    tokio_postgres::Error,
-    mongodb::error::Error,
-    RedisError,
-    reqwest::Error,
-    rdkafka::error::KafkaError,
-    kafka::Error,
-    Error,
-    JoinError,
-    ErrorStack,
-    BinlogError,
-);
 
 pub trait DtResultExt<T>: Sized {
     fn dt_error(self, error: DtError) -> anyhow::Result<T>;
@@ -237,7 +200,7 @@ mod tests {
     use super::*;
     use crate::error::ErrorReport;
     use anyhow::Context;
-    use std::io::ErrorKind;
+    use std::io::{Error, ErrorKind};
 
     #[test]
     fn result_dt_error_preserves_source_and_metadata() {

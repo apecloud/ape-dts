@@ -1802,7 +1802,6 @@ dependencies = [
  "dotenv",
  "dt-common",
  "dt-connector",
- "dt-main",
  "dt-parallelizer",
  "dt-precheck",
  "dt-task",

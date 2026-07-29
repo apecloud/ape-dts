@@ -10,7 +10,7 @@ use super::{
     DtError, DtErrorContext, ErrorCode,
 };
 
-pub trait ClassifyError {
+pub(crate) trait ClassifyError {
     fn classify(&self) -> DtErrorContext;
 }
 
