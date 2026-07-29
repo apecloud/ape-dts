@@ -89,7 +89,7 @@ impl ExtractorUtil {
             config
                 .checker
                 .as_ref()
-                .and_then(|checker| checker.sample_rate)
+                .and_then(|checker| checker.sample_percent)
         } else {
             None
         }

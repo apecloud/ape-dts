@@ -103,7 +103,7 @@ SET search_path TO test_db;
 
 # Migrate snapshot data
 
-- To turn this into **inline snapshot check**, keep `[sinker] sink_type=write` and add a `[checker]` section without target connection fields.
+- To turn this into **inline snapshot check**, keep `[sinker] sink_type=write` and add an empty `[checker]` section or configure its common check options.
 - See [Data Check](../snapshot/check.md#inline-snapshot-check) and the Postgres template for the exact config shape.
 
 ## Prepare data
@@ -184,15 +184,19 @@ UPDATE test_db.tb_1 SET value=1 WHERE id=2;
 
 ```
 cat <<EOL > /tmp/ape_dts/task_config.ini
+
 [extractor]
 db_type=pg
 extract_type=snapshot
 url=postgres://postgres:postgres@127.0.0.1:5433/postgres?options[statement_timeout]=10s
 
-[checker]
-enable=true
+[sinker]
 db_type=pg
+sink_type=check
 url=postgres://postgres:postgres@127.0.0.1:5434/postgres?options[statement_timeout]=10s
+
+[checker]
+
 
 [filter]
 do_dbs=test_db
@@ -293,16 +297,20 @@ SELECT * FROM test_db.tb_1 ORDER BY id;
 
 ```
 cat <<EOL > /tmp/ape_dts/task_config.ini
+
 [extractor]
 db_type=pg
 extract_type=check_log
 url=postgres://postgres:postgres@127.0.0.1:5433/postgres?options[statement_timeout]=10s
 check_log_dir=./check_data_task_log
 
-[checker]
-enable=true
+[sinker]
 db_type=pg
+sink_type=check
 url=postgres://postgres:postgres@127.0.0.1:5434/postgres?options[statement_timeout]=10s
+
+[checker]
+
 
 [filter]
 do_events=*
@@ -331,9 +339,8 @@ docker run --rm --network host \
 
 # CDC task
 
-- To turn this into **inline cdc check**, add `[checker] enable=true` plus `[resumer]`, keep
-  `[sinker] sink_type=write`, use `[parallelizer] parallel_type=rdb_merge`, and do not configure
-  checker target fields. See [Data Check](../snapshot/check.md#inline-cdc-check) and the Postgres
+- To turn this into **inline cdc check**, add `[checker_cdc] is_enabled=true` plus `[resumer]`, keep
+  `[sinker] sink_type=write`, use `[parallelizer] parallel_type=rdb_merge`, and configure common check options under `[checker]`. See [Data Check](../snapshot/check.md#inline-cdc-check) and the Postgres
   template.
 
 ## Drop replication slot if exists

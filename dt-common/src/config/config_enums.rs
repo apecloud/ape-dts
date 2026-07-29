@@ -63,6 +63,8 @@ pub enum SinkType {
     Dummy,
     #[strum(serialize = "write")]
     Write,
+    #[strum(serialize = "check")]
+    Check,
     #[strum(serialize = "struct")]
     Struct,
     #[strum(serialize = "statistic")]

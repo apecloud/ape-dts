@@ -1,22 +1,23 @@
+use std::{borrow::Cow, collections::{BTreeSet, HashMap}};
+
 use anyhow::Context;
 use mongodb::bson::Document;
-use std::borrow::Cow;
-use std::collections::{BTreeSet, HashMap};
 use tokio::time::{sleep, Duration, Instant};
 
-use super::cdc_state::build_identity_key;
 use super::{
-    CheckContext, CheckEntry, CheckInconsistency, Checker, CheckerStoreKey, CheckerTbMeta,
-    DataChecker, RecheckKey, RetryItem,
+    cdc_state::build_identity_key, retry_buffer::RetryItem, CheckContext, CheckEntry,
+    CheckInconsistency, Checker, CheckerStoreKey, CheckerTbMeta, DataChecker, RecheckKey,
 };
-use crate::checker::check_log::{to_json_line, CheckLog, DiffColValue};
-use crate::sinker::mongo::mongo_cmd;
-use dt_common::meta::{
-    col_value::ColValue, mongo::mongo_constant::MongoConstants, pg::pg_value_type::PgValueType,
-    rdb_tb_meta::RdbTbMeta, row_data::RowData, row_type::RowType,
+use crate::{
+    checker::check_log::{to_json_line, CheckLog, DiffColValue},
+    sinker::mongo::mongo_cmd,
 };
 use dt_common::{
     log_diff, log_miss, log_sql, log_warn,
+    meta::{
+        col_value::ColValue, mongo::mongo_constant::MongoConstants, pg::pg_value_type::PgValueType,
+        rdb_tb_meta::RdbTbMeta, row_data::RowData, row_type::RowType,
+    },
     monitor::{
         counter_type::CounterType, task_metrics::TaskMetricsType,
         task_monitor_handle::TaskMonitorHandle,
@@ -152,29 +153,63 @@ impl<C: Checker> DataChecker<C> {
 
     async fn check_rows(
         &mut self,
-        src_data: &[(&RowData, u128)],
+        src_data: Vec<(RowData, u128)>,
         mut dst_row_data_map: HashMap<u128, RowData>,
         tb_meta: &CheckerTbMeta,
-    ) -> anyhow::Result<(usize, Vec<RowData>)> {
+    ) -> anyhow::Result<usize> {
         let mut checked_count = 0;
-        let mut retry_rows = Vec::new();
 
         for (src_row_data, key) in src_data {
-            let src_row_data = *src_row_data;
-            let key = *key;
             checked_count += 1;
             let dst_row_data = dst_row_data_map.remove(&key);
 
             if self.ctx.is_cdc || self.ctx.max_retries == 0 {
-                self.reconcile_row_inconsistency(key, src_row_data, dst_row_data.as_ref(), tb_meta)
-                    .await?;
-            } else if Self::compare_src_dst(src_row_data, dst_row_data.as_ref(), tb_meta)?.is_some()
+                self.reconcile_row_inconsistency(
+                    key,
+                    &src_row_data,
+                    dst_row_data.as_ref(),
+                    tb_meta,
+                )
+                .await?;
+            } else if Self::compare_src_dst(&src_row_data, dst_row_data.as_ref(), tb_meta)?
+                .is_some()
             {
-                retry_rows.push((*src_row_data).clone());
+                let retry_at = Instant::now() + Duration::from_secs(self.ctx.retry_interval_secs);
+                let item = RetryItem {
+                    row: src_row_data,
+                    retries_left: self.ctx.max_retries,
+                    next_retry_at: retry_at,
+                };
+                match self.retry_buffer.try_push(item) {
+                    Ok(()) => {
+                        if self.retry_next_at.is_none_or(|current| retry_at < current) {
+                            self.retry_next_at = Some(retry_at);
+                        }
+                    }
+                    Err((item, reason)) => {
+                        let overflow_count = self.retry_buffer.overflow_count();
+                        if overflow_count == 1 || overflow_count % 100 == 0 {
+                            log_warn!(
+                                "checker retry buffer is full ({:?}); finalizing current inconsistency without retry, pending rows: {}, pending bytes: {}, total overflowed rows: {}",
+                                reason,
+                                self.retry_buffer.len(),
+                                self.retry_buffer.pending_bytes(),
+                                overflow_count
+                            );
+                        }
+                        self.reconcile_row_inconsistency(
+                            key,
+                            &item.row,
+                            dst_row_data.as_ref(),
+                            tb_meta,
+                        )
+                        .await?;
+                    }
+                }
             }
         }
 
-        Ok((checked_count, retry_rows))
+        Ok(checked_count)
     }
 
     pub fn compare_src_dst(
@@ -320,18 +355,17 @@ impl<C: Checker> DataChecker<C> {
         row_key % 100 < u128::from(sample_rate)
     }
 
-    fn prepare_rows_for_fetch<'a>(
+    fn prepare_rows_for_fetch(
         &mut self,
-        rows: &[&'a RowData],
+        rows: Vec<RowData>,
         tb_meta: &CheckerTbMeta,
-    ) -> Vec<(&'a RowData, u128)> {
+    ) -> Vec<(RowData, u128)> {
         let mut prepared_rows = Vec::with_capacity(rows.len());
         for row in rows {
-            let row = *row;
-            match Self::lookup_match_key(row, tb_meta.basic()) {
+            match Self::lookup_match_key(&row, tb_meta.basic()) {
                 Ok(Some(key)) => {
                     if self.ctx.is_cdc {
-                        self.cleanup_stale_update_key(row, tb_meta.basic(), Some(key));
+                        self.cleanup_stale_update_key(&row, tb_meta.basic(), Some(key));
                     }
                     if Self::should_sample_key(self.ctx.sample_rate, key) {
                         prepared_rows.push((row, key));
@@ -339,19 +373,19 @@ impl<C: Checker> DataChecker<C> {
                 }
                 Ok(None) => {
                     if self.ctx.is_cdc {
-                        self.cleanup_stale_update_key(row, tb_meta.basic(), None);
+                        self.cleanup_stale_update_key(&row, tb_meta.basic(), None);
                     }
                     log_warn!(
                         "Skipping row with NULL key component in {}.{}.",
                         row.schema,
                         row.tb
                     );
-                    self.ctx.record_row_table_counts(row, 0, 1);
+                    self.ctx.record_row_table_counts(&row, 0, 1);
                     self.ctx.summary.skip_count += 1;
                 }
                 Err(e) => {
                     if self.ctx.is_cdc {
-                        self.cleanup_stale_update_key(row, tb_meta.basic(), None);
+                        self.cleanup_stale_update_key(&row, tb_meta.basic(), None);
                     }
                     log_warn!(
                         "Skipping unhashable row in {}.{}: {}",
@@ -359,7 +393,7 @@ impl<C: Checker> DataChecker<C> {
                         row.tb,
                         e
                     );
-                    self.ctx.record_row_table_counts(row, 0, 1);
+                    self.ctx.record_row_table_counts(&row, 0, 1);
                     self.ctx.summary.skip_count += 1;
                 }
             }
@@ -711,25 +745,8 @@ impl<C: Checker> DataChecker<C> {
         diff_col_values
     }
 
-    fn enqueue_retry_rows(&mut self, rows: Vec<RowData>) {
-        if rows.is_empty() {
-            return;
-        }
-
-        let retry_at = Instant::now() + Duration::from_secs(self.ctx.retry_interval_secs);
-        if self.retry_next_at.is_none_or(|current| retry_at < current) {
-            self.retry_next_at = Some(retry_at);
-        }
-        self.retry_queue
-            .extend(rows.into_iter().map(|row| RetryItem {
-                row,
-                retries_left: self.ctx.max_retries,
-                next_retry_at: retry_at,
-            }));
-    }
-
     pub async fn process_due_retries(&mut self) -> anyhow::Result<()> {
-        if self.retry_queue.is_empty() {
+        if self.retry_buffer.is_empty() {
             return Ok(());
         }
         let now = Instant::now();
@@ -738,9 +755,10 @@ impl<C: Checker> DataChecker<C> {
         }
 
         let mut next_retry_at: Option<Instant> = None;
-        let pending_len = self.retry_queue.len();
+        let mut first_error = None;
+        let pending_len = self.retry_buffer.len();
         for _ in 0..pending_len {
-            let Some(item) = self.retry_queue.pop_front() else {
+            let Some(mut item) = self.retry_buffer.pop_front() else {
                 break;
             };
 
@@ -749,24 +767,50 @@ impl<C: Checker> DataChecker<C> {
                     next_retry_at
                         .map_or(item.next_retry_at, |c: Instant| c.min(item.next_retry_at)),
                 );
-                self.retry_queue.push_back(item);
+                self.retry_buffer.push_existing(item);
                 continue;
             }
 
-            if let Some(rescheduled) = self.retry_check_item(item).await? {
-                next_retry_at = Some(
-                    next_retry_at.map_or(rescheduled.next_retry_at, |c: Instant| {
-                        c.min(rescheduled.next_retry_at)
-                    }),
-                );
-                self.retry_queue.push_back(rescheduled);
+            match self.retry_check_item(&mut item).await {
+                Ok(true) => {
+                    next_retry_at = Some(next_retry_at.map_or(item.next_retry_at, |current| {
+                        current.min(item.next_retry_at)
+                    }));
+                    self.retry_buffer.push_existing(item);
+                }
+                Ok(false) => {}
+                Err(err) => {
+                    if first_error.is_none() {
+                        first_error = Some(err);
+                    }
+                    if item.retries_left > 1 {
+                        item.retries_left -= 1;
+                        item.next_retry_at =
+                            Instant::now() + Duration::from_secs(self.ctx.retry_interval_secs);
+                        next_retry_at = Some(next_retry_at.map_or(item.next_retry_at, |current| {
+                            current.min(item.next_retry_at)
+                        }));
+                        self.retry_buffer.push_existing(item);
+                    } else {
+                        log_warn!(
+                            "checker retry query failed after all attempts for {}.{}; recording the row as skipped",
+                            item.row.schema,
+                            item.row.tb
+                        );
+                        self.ctx.summary.skip_count += 1;
+                        self.ctx.record_row_table_counts(&item.row, 0, 1);
+                    }
+                }
             }
         }
         self.retry_next_at = next_retry_at;
-        Ok(())
+        match first_error {
+            Some(err) => Err(err),
+            None => Ok(()),
+        }
     }
 
-    async fn retry_check_item(&mut self, mut item: RetryItem) -> anyhow::Result<Option<RetryItem>> {
+    async fn retry_check_item(&mut self, item: &mut RetryItem) -> anyhow::Result<bool> {
         let row_ref = &item.row;
         let tb_meta = self.checker.load_table_meta(row_ref).await?;
         let Some(key) = Self::lookup_match_key(&item.row, tb_meta.basic())? else {
@@ -777,7 +821,7 @@ impl<C: Checker> DataChecker<C> {
             );
             self.ctx.summary.skip_count += 1;
             self.ctx.record_row_table_counts(&item.row, 0, 1);
-            return Ok(None);
+            return Ok(false);
         };
         let dst_rows = self
             .checker
@@ -787,23 +831,23 @@ impl<C: Checker> DataChecker<C> {
 
         if item.retries_left > 1 {
             if Self::compare_src_dst(&item.row, dst_row.as_ref(), tb_meta.as_ref())?.is_none() {
-                return Ok(None);
+                return Ok(false);
             }
             item.retries_left -= 1;
             item.next_retry_at = Instant::now() + Duration::from_secs(self.ctx.retry_interval_secs);
-            return Ok(Some(item));
+            return Ok(true);
         }
 
         self.cleanup_stale_update_key(&item.row, tb_meta.basic(), Some(key));
         self.reconcile_row_inconsistency(key, &item.row, dst_row.as_ref(), tb_meta.as_ref())
             .await?;
-        Ok(None)
+        Ok(false)
     }
 
     pub async fn drain_retries(&mut self) -> anyhow::Result<()> {
-        while !self.retry_queue.is_empty() {
+        while !self.retry_buffer.is_empty() {
             let next_retry_at = self
-                .retry_queue
+                .retry_buffer
                 .iter()
                 .map(|item| item.next_retry_at)
                 .min()
@@ -812,13 +856,15 @@ impl<C: Checker> DataChecker<C> {
             if next_retry_at > now {
                 sleep(next_retry_at.duration_since(now)).await;
             }
-            self.process_due_retries().await?;
+            if let Err(err) = self.process_due_retries().await {
+                log_warn!("checker retry drain attempt failed: {}", err);
+            }
         }
         self.retry_next_at = None;
         Ok(())
     }
 
-    pub async fn check_batch(&mut self, data: &[RowData], batch: bool) -> anyhow::Result<()> {
+    pub async fn check_batch(&mut self, data: Vec<RowData>, batch: bool) -> anyhow::Result<()> {
         if data.is_empty() {
             return Ok(());
         }
@@ -826,7 +872,12 @@ impl<C: Checker> DataChecker<C> {
             return self.process_batch(data, true).await;
         }
         let batch_size = self.ctx.batch_size.max(1);
-        for chunk in data.chunks(batch_size) {
+        let mut rows = data.into_iter();
+        loop {
+            let chunk = rows.by_ref().take(batch_size).collect::<Vec<_>>();
+            if chunk.is_empty() {
+                break;
+            }
             self.process_batch(chunk, false).await?;
         }
         Ok(())
@@ -834,7 +885,7 @@ impl<C: Checker> DataChecker<C> {
 
     pub async fn process_batch(
         &mut self,
-        data: &[RowData],
+        mut data: Vec<RowData>,
         is_serial_mode: bool,
     ) -> anyhow::Result<()> {
         if data.is_empty() {
@@ -842,31 +893,32 @@ impl<C: Checker> DataChecker<C> {
         }
 
         let start_time = tokio::time::Instant::now();
-        let mut grouped: HashMap<(&str, &str), Vec<&RowData>> = HashMap::new();
+        data.sort_by(|left, right| (&left.schema, &left.tb).cmp(&(&right.schema, &right.tb)));
+        let mut grouped: Vec<Vec<RowData>> = Vec::new();
         for row in data {
-            grouped
-                .entry((row.schema.as_str(), row.tb.as_str()))
-                .or_default()
-                .push(row);
+            if let Some(group) = grouped.last_mut() {
+                let first = &group[0];
+                if first.schema == row.schema && first.tb == row.tb {
+                    group.push(row);
+                    continue;
+                }
+            }
+            grouped.push(vec![row]);
         }
 
         let mut total_checked = 0usize;
-        let mut retry_rows = Vec::new();
         let mut monitor_task_id = None;
-        let mut groups = grouped.into_iter().collect::<Vec<_>>();
-        groups.sort_by(|(a, _), (b, _)| a.cmp(b));
-        for (_, rows) in groups {
+        for rows in grouped {
             let first_row = rows.first().context("checker group is empty")?;
             let tb_meta = self.checker.load_table_meta(first_row).await?;
-            let prepared_rows = self.prepare_rows_for_fetch(&rows, tb_meta.as_ref());
+            let prepared_rows = self.prepare_rows_for_fetch(rows, tb_meta.as_ref());
             if prepared_rows.is_empty() {
                 continue;
             }
-            let rows_to_fetch = prepared_rows
-                .iter()
-                .map(|(row, _)| *row)
-                .collect::<Vec<_>>();
+            let rows_to_fetch = prepared_rows.iter().map(|(row, _)| row).collect::<Vec<_>>();
             let first_row = rows_to_fetch.first().context("checker group is empty")?;
+            let table_schema = first_row.schema.clone();
+            let table_tb = first_row.tb.clone();
             if monitor_task_id.is_none() {
                 let (schema, tb) = match &self.ctx.router {
                     Some(router) => router.reverse_get_tb_map(&first_row.schema, &first_row.tb),
@@ -887,13 +939,12 @@ impl<C: Checker> DataChecker<C> {
                 }
             }
 
-            let (checked_count, table_retry_rows) = self
-                .check_rows(&prepared_rows, dst_row_data_map, tb_meta.as_ref())
+            let checked_count = self
+                .check_rows(prepared_rows, dst_row_data_map, tb_meta.as_ref())
                 .await?;
             self.ctx
-                .record_row_table_counts(first_row, checked_count, 0);
+                .record_table_counts(&table_schema, &table_tb, checked_count, 0);
             total_checked += checked_count;
-            retry_rows.extend(table_retry_rows);
         }
         if total_checked == 0 {
             return Ok(());
@@ -902,8 +953,6 @@ impl<C: Checker> DataChecker<C> {
         let mut rts = LimitedQueue::new(1);
         let elapsed_millis = u64::try_from(start_time.elapsed().as_millis()).unwrap_or(u64::MAX);
         rts.push((elapsed_millis, 1));
-        self.enqueue_retry_rows(retry_rows);
-
         let task_id =
             monitor_task_id.unwrap_or_else(|| self.ctx.monitor.default_task_id().to_string());
         self.ctx.monitor.ensure_monitor(&task_id);
@@ -986,6 +1035,10 @@ mod tests {
         tb_meta: Arc<CheckerTbMeta>,
     }
 
+    struct MissingChecker {
+        tb_meta: Arc<CheckerTbMeta>,
+    }
+
     #[async_trait]
     impl Checker for ConsistentChecker {
         async fn load_table_meta(
@@ -1001,6 +1054,24 @@ mod tests {
             lookup_rows: &[&RowData],
         ) -> anyhow::Result<Vec<RowData>> {
             Ok(lookup_rows.iter().map(|row| (*row).clone()).collect())
+        }
+    }
+
+    #[async_trait]
+    impl Checker for MissingChecker {
+        async fn load_table_meta(
+            &mut self,
+            _lookup_row: &RowData,
+        ) -> anyhow::Result<Arc<CheckerTbMeta>> {
+            Ok(self.tb_meta.clone())
+        }
+
+        async fn fetch_rows_by_keys(
+            &mut self,
+            _table_meta: Arc<CheckerTbMeta>,
+            _lookup_rows: &[&RowData],
+        ) -> anyhow::Result<Vec<RowData>> {
+            Ok(Vec::new())
         }
     }
 
@@ -1072,12 +1143,12 @@ mod tests {
             checker,
             "unit-test".to_string(),
             ctx,
-            CheckerIo {
+            Some(CheckerIo {
                 batch_queue: Arc::new(StdMutex::new(LimitedQueue::new(1))),
                 batch_notify: Arc::new(tokio::sync::Notify::new()),
                 dropped_items: Arc::new(AtomicU64::new(0)),
                 control_rx,
-            },
+            }),
             "unit-test",
         )
     }
@@ -1157,7 +1228,7 @@ mod tests {
         );
 
         checker
-            .process_batch(&[build_insert_row(1, "not-sampled")], false)
+            .process_batch(vec![build_insert_row(1, "not-sampled")], false)
             .await
             .unwrap();
 
@@ -1172,7 +1243,7 @@ mod tests {
         );
 
         checker
-            .process_batch(&[build_null_key_row()], false)
+            .process_batch(vec![build_null_key_row()], false)
             .await
             .unwrap();
 
@@ -1189,12 +1260,43 @@ mod tests {
         checker.optional_logs_dirty = false;
 
         checker
-            .process_batch(&[build_insert_row(1, "consistent")], false)
+            .process_batch(vec![build_insert_row(1, "consistent")], false)
             .await
             .unwrap();
 
         assert_eq!(checker.ctx.summary.checked_count, 1);
         assert_eq!(checker.ctx.summary.tables[0].checked_count, 1);
         assert!(!checker.optional_logs_dirty);
+    }
+
+    #[tokio::test]
+    async fn retry_buffer_overflow_finalizes_inconsistency_without_dropping_row() {
+        let mut ctx = build_ctx(false);
+        ctx.max_retries = 1;
+        ctx.retry_interval_secs = 60;
+        ctx.retry_buffer_max_rows = 1;
+        ctx.retry_buffer_max_bytes = usize::MAX;
+        let mut checker = build_checker_with(
+            MissingChecker {
+                tb_meta: Arc::new(build_mysql_tb_meta()),
+            },
+            ctx,
+        );
+
+        checker
+            .process_batch(
+                vec![
+                    build_insert_row(1, "queued"),
+                    build_insert_row(2, "overflow"),
+                ],
+                false,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(checker.retry_buffer.len(), 1);
+        assert_eq!(checker.retry_buffer.overflow_count(), 1);
+        assert_eq!(checker.ctx.summary.checked_count, 2);
+        assert_eq!(checker.ctx.summary.miss_count, 1);
     }
 }
