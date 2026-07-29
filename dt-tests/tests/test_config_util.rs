@@ -246,7 +246,10 @@ impl TestConfigUtil {
 
 #[cfg(test)]
 mod tests {
-    use std::time::{SystemTime, UNIX_EPOCH};
+    use std::{
+        process,
+        time::{SystemTime, UNIX_EPOCH},
+    };
 
     use super::*;
 
@@ -256,10 +259,8 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let project_root = env::temp_dir().join(format!(
-            "ape-dts-test-config-{}-{unique}",
-            std::process::id()
-        ));
+        let project_root =
+            env::temp_dir().join(format!("ape-dts-test-config-{}-{unique}", process::id()));
         let lua_code_file = project_root.join("fixtures/lua_code.lua");
         let src_config_file = project_root.join("task_config.ini");
         let dst_config_file = project_root.join("tmp/task_config.ini");

@@ -169,6 +169,12 @@ impl fmt::Display for ErrorReport {
 
 #[cfg(test)]
 mod tests {
+    use std::{io, num::ParseIntError};
+
+    use anyhow::anyhow;
+    use chrono::DateTime;
+    use url::Url;
+
     use crate::error::{DtError, DtErrorContext, DtErrorContextExt};
 
     use super::*;
@@ -212,7 +218,7 @@ mod tests {
         for scalar_field in ["code", "stage", "task_id", "endpoint"] {
             assert!(!json[scalar_field].is_array());
         }
-        assert!(error.downcast_ref::<std::num::ParseIntError>().is_some());
+        assert!(error.downcast_ref::<ParseIntError>().is_some());
         assert_eq!(
             report.details,
             [
@@ -272,7 +278,7 @@ mod tests {
 
     #[test]
     fn sqlx_wrapper_and_source_are_distinct_details() {
-        let error = anyhow::Error::new(sqlx::Error::Io(std::io::Error::other(
+        let error = anyhow::Error::new(sqlx::Error::Io(io::Error::other(
             "could not resolve database address",
         )));
 
@@ -290,13 +296,13 @@ mod tests {
 
     #[test]
     fn collects_project_and_source_error_contexts() {
-        let source = std::io::Error::other("invalid port");
+        let source = io::Error::other("invalid port");
         let error = anyhow::Error::new(source)
             .context(DtError::InvalidConfig("invalid port".to_string()))
             .context("loading source config");
         let report = ErrorReport::from_anyhow(&error);
         assert_eq!(report.code, ErrorCode::InvalidConfig);
-        assert!(error.downcast_ref::<std::io::Error>().is_some());
+        assert!(error.downcast_ref::<io::Error>().is_some());
 
         let error = error.code(ErrorCode::InvariantViolated);
         assert_eq!(
@@ -313,7 +319,7 @@ mod tests {
 
     #[test]
     fn json_includes_internal_fields_while_text_stays_minimal() {
-        let error = anyhow::anyhow!("password=secret, sql=INSERT, row_data=private")
+        let error = anyhow!("password=secret, sql=INSERT, row_data=private")
             .message("password=secret is invalid")
             .hint("set token=abc123 before retrying")
             .context("internal worker context");
@@ -372,15 +378,15 @@ mod tests {
 
     #[test]
     fn report_timestamp_is_utc_rfc3339() {
-        let report = ErrorReport::from_anyhow(&anyhow::anyhow!("failed"));
-        let timestamp = chrono::DateTime::parse_from_rfc3339(&report.timestamp).unwrap();
+        let report = ErrorReport::from_anyhow(&anyhow!("failed"));
+        let timestamp = DateTime::parse_from_rfc3339(&report.timestamp).unwrap();
 
         assert_eq!(timestamp.offset().local_minus_utc(), 0);
     }
 
     #[test]
     fn unsupported_raw_errors_use_unclassified_fallback() {
-        let url_error = anyhow::Error::new(url::Url::parse("://bad").unwrap_err());
+        let url_error = anyhow::Error::new(Url::parse("://bad").unwrap_err());
         assert_eq!(
             ErrorReport::from_anyhow(&url_error).code,
             ErrorCode::Unclassified
@@ -389,7 +395,7 @@ mod tests {
 
     #[test]
     fn scalar_directions_are_field_specific_and_arrays_remove_duplicates() {
-        let error = anyhow::anyhow!("same detail")
+        let error = anyhow!("same detail")
             .code(ErrorCode::ConnectionTimeout)
             .code(ErrorCode::StatementFailed)
             .message("same message")
@@ -419,7 +425,7 @@ mod tests {
 
     #[test]
     fn innermost_stage_wins_over_pipeline_and_task() {
-        let error = anyhow::anyhow!("sink failed")
+        let error = anyhow!("sink failed")
             .stage(Stage::Sinker)
             .stage(Stage::Pipeline)
             .stage(Stage::Task);
@@ -431,7 +437,7 @@ mod tests {
 
     #[test]
     fn affected_objects_remain_independent_array_items() {
-        let error = anyhow::anyhow!("object failure")
+        let error = anyhow!("object failure")
             .object(ErrorObject {
                 schema: Some("archive".to_string()),
                 table: Some("orders".to_string()),

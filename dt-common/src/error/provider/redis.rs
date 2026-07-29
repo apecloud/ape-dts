@@ -1,11 +1,12 @@
 use redis::ErrorKind as RedisErrorKind;
+use redis::RedisError;
 
 use super::{
     super::{ClassifyError, DtErrorContext, ErrorCode},
     classification::{provider_context, provider_detail},
 };
 
-impl ClassifyError for redis::RedisError {
+impl ClassifyError for RedisError {
     fn classify(&self) -> DtErrorContext {
         let code = if self.is_timeout() {
             Some(ErrorCode::ConnectionTimeout)
@@ -47,25 +48,22 @@ mod tests {
     fn classifies_redis_errors() {
         for (error, expected) in [
             (
-                redis::RedisError::from((
+                RedisError::from((
                     RedisErrorKind::AuthenticationFailed,
                     "authentication failed",
                 )),
                 ErrorCode::AuthenticationFailed,
             ),
             (
-                redis::RedisError::from((
-                    RedisErrorKind::InvalidClientConfig,
-                    "invalid client config",
-                )),
+                RedisError::from((RedisErrorKind::InvalidClientConfig, "invalid client config")),
                 ErrorCode::InvalidConfig,
             ),
             (
-                redis::RedisError::from(io::Error::from(io::ErrorKind::TimedOut)),
+                RedisError::from(io::Error::from(io::ErrorKind::TimedOut)),
                 ErrorCode::ConnectionTimeout,
             ),
             (
-                redis::RedisError::from(io::Error::from(io::ErrorKind::ConnectionRefused)),
+                RedisError::from(io::Error::from(io::ErrorKind::ConnectionRefused)),
                 ErrorCode::ConnectionFailed,
             ),
         ] {

@@ -1,4 +1,7 @@
 use std::{
+    env::current_dir,
+    fs::canonicalize,
+    io::ErrorKind,
     path::{Component, Path},
     sync::Mutex,
 };
@@ -89,10 +92,8 @@ impl<'a> TaskLogger<'a> {
 
     fn same_check_log_dir(left: &str, right: &str) -> bool {
         let normalize = |path: &str| {
-            std::fs::canonicalize(path).unwrap_or_else(|_| {
-                let path = std::env::current_dir()
-                    .unwrap_or_default()
-                    .join(Path::new(path));
+            canonicalize(path).unwrap_or_else(|_| {
+                let path = current_dir().unwrap_or_default().join(Path::new(path));
                 path.components()
                     .fold(Path::new("").into(), |mut acc, component| {
                         match component {
@@ -112,7 +113,7 @@ impl<'a> TaskLogger<'a> {
     async fn remove_file_if_exists(path: &str) -> anyhow::Result<()> {
         match fs::remove_file(path).await {
             Ok(_) => Ok(()),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
             Err(error) => Err(error.into()),
         }
     }
@@ -121,7 +122,7 @@ impl<'a> TaskLogger<'a> {
         let log4rs_file = &self.task_config.runtime.log4rs_file;
         match metadata(log4rs_file).await {
             Ok(_) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(error) if error.kind() == ErrorKind::NotFound => return Ok(()),
             Err(error) => return Err(error.into()),
         }
 
@@ -210,6 +211,8 @@ impl<'a> TaskLogger<'a> {
 
 #[cfg(test)]
 mod tests {
+    use std::env::current_dir;
+
     use super::TaskLogger;
     use crate::config::{
         config_enums::{CheckMode, TaskKind, TaskType},
@@ -244,10 +247,7 @@ mod tests {
         ));
         assert!(TaskLogger::same_check_log_dir(
             "logs/check",
-            &std::env::current_dir()
-                .unwrap()
-                .join("logs/check")
-                .to_string_lossy()
+            &current_dir().unwrap().join("logs/check").to_string_lossy()
         ));
         assert!(!TaskLogger::check_log_replay_reads_from_dir(
             &extractor,

@@ -1,4 +1,5 @@
 use anyhow::Context;
+use openssl::sha::sha256;
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
@@ -32,9 +33,7 @@ pub(super) fn build_identity_json(entry: &CheckEntry) -> anyhow::Result<String> 
 }
 
 pub(super) fn build_identity_key(entry: &CheckEntry) -> anyhow::Result<String> {
-    Ok(hex::encode(openssl::sha::sha256(
-        build_identity_json(entry)?.as_bytes(),
-    )))
+    Ok(hex::encode(sha256(build_identity_json(entry)?.as_bytes())))
 }
 
 fn build_state_row(

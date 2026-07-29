@@ -1,4 +1,10 @@
+use std::io::Error;
 use std::{error::Error as StdError, fmt};
+
+use mysql_binlog_connector_rust::binlog_error::BinlogError;
+use openssl::error::ErrorStack;
+use redis::RedisError;
+use tokio::task::JoinError;
 
 use super::{DtError, EndpointRole, ErrorCode, ErrorObject, Stage};
 
@@ -161,14 +167,14 @@ impl_dt_error_context_ext!(
     sqlx::Error,
     tokio_postgres::Error,
     mongodb::error::Error,
-    redis::RedisError,
+    RedisError,
     reqwest::Error,
     rdkafka::error::KafkaError,
     kafka::Error,
-    std::io::Error,
-    tokio::task::JoinError,
-    openssl::error::ErrorStack,
-    mysql_binlog_connector_rust::binlog_error::BinlogError,
+    Error,
+    JoinError,
+    ErrorStack,
+    BinlogError,
 );
 
 pub trait DtResultExt<T>: Sized {
@@ -231,11 +237,11 @@ mod tests {
     use super::*;
     use crate::error::ErrorReport;
     use anyhow::Context;
+    use std::io::ErrorKind;
 
     #[test]
     fn result_dt_error_preserves_source_and_metadata() {
-        let result: Result<(), std::io::Error> =
-            Err(std::io::Error::new(std::io::ErrorKind::Other, "test error"));
+        let result: Result<(), Error> = Err(Error::new(ErrorKind::Other, "test error"));
         let anyhow_result = result
             .dt_error(DtError::Unclassified("e1".into()))
             .dt_error(DtError::Unclassified("e2".into()))
@@ -243,7 +249,7 @@ mod tests {
             .endpoint(EndpointRole::Source);
         let err = anyhow_result.unwrap_err();
         assert!(err.downcast_ref::<DtError>().is_some());
-        assert!(err.downcast_ref::<std::io::Error>().is_some());
+        assert!(err.downcast_ref::<Error>().is_some());
         let report = ErrorReport::from_anyhow(&err);
         assert_eq!(report.stage, Stage::Bootstrap);
         assert_eq!(report.endpoint, Some(EndpointRole::Source));
@@ -251,8 +257,8 @@ mod tests {
 
     #[test]
     fn anyhow_result_dt_error_preserves_existing_chain() {
-        let result: Result<(), anyhow::Error> = Err(anyhow::Error::from(std::io::Error::new(
-            std::io::ErrorKind::Other,
+        let result: Result<(), anyhow::Error> = Err(anyhow::Error::from(Error::new(
+            ErrorKind::Other,
             "test error",
         )));
         let anyhow_result = result
@@ -263,7 +269,7 @@ mod tests {
             .endpoint(EndpointRole::Source);
         let err = anyhow_result.unwrap_err();
         assert!(err.downcast_ref::<DtError>().is_some());
-        assert!(err.downcast_ref::<std::io::Error>().is_some());
+        assert!(err.downcast_ref::<Error>().is_some());
         assert!(err.downcast_ref::<DtErrorContexts>().is_some());
         let chain: Vec<_> = err.chain().map(ToString::to_string).collect();
         assert_eq!(

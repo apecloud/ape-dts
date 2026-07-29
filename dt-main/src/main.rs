@@ -1,6 +1,12 @@
-use std::{env, panic, process::ExitCode};
+use std::{
+    backtrace::Backtrace,
+    env, panic,
+    process::{exit, ExitCode},
+    time::Duration,
+};
 
 use clap::Parser;
+use tokio::{signal::ctrl_c, spawn, time::sleep};
 
 use dt_common::{
     config::{ini_loader::IniLoader, task_config::TaskConfig},
@@ -80,18 +86,18 @@ async fn run(
 ) -> anyhow::Result<()> {
     let task_id = task_config.global.task_id.clone();
 
-    tokio::spawn(async {
-        if tokio::signal::ctrl_c().await.is_err() {
+    spawn(async {
+        if ctrl_c().await.is_err() {
             return;
         }
-        tokio::time::sleep(std::time::Duration::from_secs(
-            std::env::var(ENV_SHUTDOWN_TIMEOUT_SECS)
+        sleep(Duration::from_secs(
+            env::var(ENV_SHUTDOWN_TIMEOUT_SECS)
                 .ok()
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(3),
         ))
         .await;
-        std::process::exit(0);
+        exit(0);
     });
 
     run_config(task_config, precheck_config, init)
@@ -101,7 +107,7 @@ async fn run(
 
 fn install_panic_hook() {
     panic::set_hook(Box::new(|panic_info| {
-        let backtrace = std::backtrace::Backtrace::capture();
+        let backtrace = Backtrace::capture();
         log_error!("panic: {}\nbacktrace:\n{}", panic_info, backtrace);
         log::logger().flush();
     }));

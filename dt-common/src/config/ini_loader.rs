@@ -1,6 +1,11 @@
-use std::{any::type_name, fs::File, io::Read, str::FromStr};
+use std::{
+    any::type_name,
+    fs::File,
+    io::{ErrorKind, Read},
+    str::FromStr,
+};
 
-use anyhow::Context;
+use anyhow::{Context, Error};
 use configparser::ini::Ini;
 
 use crate::error::DtError;
@@ -15,12 +20,12 @@ impl IniLoader {
         let mut config_str = String::new();
         File::open(ini_file)
             .map_err(|error| {
-                let context = if error.kind() == std::io::ErrorKind::NotFound {
+                let context = if error.kind() == ErrorKind::NotFound {
                     DtError::MissingConfig(format!("path: {ini_file}"))
                 } else {
                     DtError::IoFailed(format!("failed to open config file: {ini_file}"))
                 };
-                anyhow::Error::new(error).context(context)
+                Error::new(error).context(context)
             })?
             .read_to_string(&mut config_str)
             .context(DtError::IoFailed(format!(

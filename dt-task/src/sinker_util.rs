@@ -1,4 +1,4 @@
-use std::{collections::HashMap, str::FromStr, sync::Arc};
+use std::{collections::HashMap, str::FromStr, sync::Arc, time::Duration};
 
 use anyhow::{bail, Context};
 use kafka::producer::{Producer, RequiredAcks};
@@ -14,6 +14,7 @@ use dt_common::{
         mongo::mongo_shard::{is_mongos, list_shard_collections},
         mysql::mysql_meta_manager::MysqlMetaManager,
         pg::pg_meta_manager::PgMetaManager,
+        rdb_meta_manager::RdbMetaManager,
         redis::{
             command::key_parser::KeyParser, redis_statistic_type::RedisStatisticType,
             redis_write_method::RedisWriteMethod,
@@ -83,9 +84,7 @@ impl SinkerUtil {
         sub_sinkers.push(Arc::new(async_mutex::Mutex::new(Box::new(sinker))));
     }
 
-    async fn require_extractor_meta_manager(
-        config: &TaskConfig,
-    ) -> anyhow::Result<dt_common::meta::rdb_meta_manager::RdbMetaManager> {
+    async fn require_extractor_meta_manager(config: &TaskConfig) -> anyhow::Result<RdbMetaManager> {
         Ok(ExtractorUtil::get_extractor_meta_manager(config)
             .await?
             .ok_or_else(|| {
@@ -289,7 +288,7 @@ impl SinkerUtil {
                 for _ in 0..parallel_size {
                     // TODO, authentication, https://github.com/kafka-rust/kafka-rust/blob/master/examples/example-ssl.rs
                     let producer = Producer::from_hosts(brokers.clone())
-                        .with_ack_timeout(std::time::Duration::from_secs(ack_timeout_secs))
+                        .with_ack_timeout(Duration::from_secs(ack_timeout_secs))
                         .with_required_acks(acks)
                         .create()
                         .code(ErrorCode::ConnectionFailed)?;

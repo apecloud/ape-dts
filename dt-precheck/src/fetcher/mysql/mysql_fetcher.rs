@@ -3,7 +3,7 @@ use std::collections::HashMap;
 
 use anyhow::bail;
 use async_trait::async_trait;
-use sqlx::{mysql::MySqlRow, query, MySql, Pool};
+use sqlx::{mysql::MySqlRow, query, Error, MySql, Pool};
 
 use crate::{
     fetcher::traits::Fetcher,
@@ -223,7 +223,7 @@ impl MysqlFetcher {
     async fn fetch_all(&self, sql: String, mut sql_msg: &str) -> anyhow::Result<Vec<MySqlRow>> {
         let mysql_pool = match &self.pool {
             Some(pool) => pool,
-            None => return Err(sqlx::Error::PoolClosed.into()),
+            None => return Err(Error::PoolClosed.into()),
         };
 
         sql_msg = if sql_msg.is_empty() { "sql" } else { sql_msg };
@@ -243,7 +243,7 @@ impl MysqlFetcher {
                 println!("{}: {}", sql_msg, sql);
                 Ok(query(sql).fetch(pool).err_into::<anyhow::Error>())
             }
-            None => bail! {sqlx::Error::PoolClosed},
+            None => bail! {Error::PoolClosed},
         }
     }
 

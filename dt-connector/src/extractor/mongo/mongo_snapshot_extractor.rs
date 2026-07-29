@@ -3,7 +3,7 @@ use std::{collections::HashMap, sync::Arc};
 use anyhow::{anyhow, bail};
 use async_trait::async_trait;
 use mongodb::{
-    bson::{doc, raw::RawDocumentBuf, Document},
+    bson::{doc, oid::ObjectId, raw::RawDocumentBuf, Document},
     options::FindOptions,
     Client,
 };
@@ -283,8 +283,6 @@ impl MongoSnapshotExtractor {
         if let Ok(key) = serde_json::from_str::<MongoKey>(value) {
             return Ok(key);
         }
-        Ok(MongoKey::ObjectId(mongodb::bson::oid::ObjectId::parse_str(
-            value,
-        )?))
+        Ok(MongoKey::ObjectId(ObjectId::parse_str(value)?))
     }
 }

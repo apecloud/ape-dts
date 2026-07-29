@@ -1,4 +1,8 @@
-use sqlx::error::ErrorKind;
+use sqlx::{
+    error::{DatabaseError, ErrorKind},
+    mysql::MySqlDatabaseError,
+    postgres::PgDatabaseError,
+};
 
 use super::{
     super::{ClassifyError, DtErrorContext, ErrorCode, ErrorObject},
@@ -19,9 +23,7 @@ pub fn classify_sqlx_error(error: &sqlx::Error) -> DtErrorContext {
                 constraint: database_error.constraint().map(str::to_string),
                 ..Default::default()
             };
-            if let Some(pg_error) =
-                database_error.try_downcast_ref::<sqlx::postgres::PgDatabaseError>()
-            {
+            if let Some(pg_error) = database_error.try_downcast_ref::<PgDatabaseError>() {
                 error_object.schema = pg_error.schema().map(str::to_string);
                 error_object.column = pg_error.column().map(str::to_string);
             }
@@ -55,7 +57,7 @@ fn sqlx_detail(error: &sqlx::Error) -> String {
         _ => return provider_detail("sqlx", None, error),
     };
     if database_error
-        .try_downcast_ref::<sqlx::postgres::PgDatabaseError>()
+        .try_downcast_ref::<PgDatabaseError>()
         .is_some()
     {
         provider_detail(
@@ -63,9 +65,7 @@ fn sqlx_detail(error: &sqlx::Error) -> String {
             database_error.code().map(|code| code.into_owned()),
             error,
         )
-    } else if let Some(mysql_error) =
-        database_error.try_downcast_ref::<sqlx::mysql::MySqlDatabaseError>()
-    {
+    } else if let Some(mysql_error) = database_error.try_downcast_ref::<MySqlDatabaseError>() {
         provider_detail("mysql", Some(mysql_error.number().to_string()), error)
     } else {
         provider_detail(
@@ -82,20 +82,15 @@ impl ClassifyError for sqlx::Error {
     }
 }
 
-fn classify_database_error(
-    error: &(dyn sqlx::error::DatabaseError + 'static),
-) -> Option<ErrorCode> {
-    let classified_code =
-        if let Some(mysql_error) = error.try_downcast_ref::<sqlx::mysql::MySqlDatabaseError>() {
-            classify_mysql_code(&mysql_error.number().to_string())
-        } else if error
-            .try_downcast_ref::<sqlx::postgres::PgDatabaseError>()
-            .is_some()
-        {
-            error.code().as_deref().and_then(classify_postgres_code)
-        } else {
-            None
-        };
+fn classify_database_error(error: &(dyn DatabaseError + 'static)) -> Option<ErrorCode> {
+    let classified_code = if let Some(mysql_error) = error.try_downcast_ref::<MySqlDatabaseError>()
+    {
+        classify_mysql_code(&mysql_error.number().to_string())
+    } else if error.try_downcast_ref::<PgDatabaseError>().is_some() {
+        error.code().as_deref().and_then(classify_postgres_code)
+    } else {
+        None
+    };
     if matches!(error.kind(), ErrorKind::Other) {
         classified_code
     } else {
@@ -105,6 +100,8 @@ fn classify_database_error(
 
 #[cfg(test)]
 mod tests {
+    use std::io::Error;
+
     use super::*;
 
     #[test]
@@ -116,12 +113,12 @@ mod tests {
             ),
             (sqlx::Error::PoolClosed, Some(ErrorCode::ConnectionFailed)),
             (
-                sqlx::Error::Tls(Box::new(std::io::Error::other("invalid certificate"))),
+                sqlx::Error::Tls(Box::new(Error::other("invalid certificate"))),
                 Some(ErrorCode::TlsFailed),
             ),
             (sqlx::Error::WorkerCrashed, Some(ErrorCode::WorkerFailed)),
             (
-                sqlx::Error::Configuration(Box::new(std::io::Error::other("invalid database URL"))),
+                sqlx::Error::Configuration(Box::new(Error::other("invalid database URL"))),
                 Some(ErrorCode::InvalidConfig),
             ),
             (sqlx::Error::RowNotFound, None),
@@ -134,15 +131,15 @@ mod tests {
     fn source_wrappers_only_describe_the_sqlx_layer() {
         for (error, expected) in [
             (
-                sqlx::Error::Configuration(Box::new(std::io::Error::other("invalid URL"))),
+                sqlx::Error::Configuration(Box::new(Error::other("invalid URL"))),
                 "sqlx: invalid configuration",
             ),
             (
-                sqlx::Error::Io(std::io::Error::other("connection reset")),
+                sqlx::Error::Io(Error::other("connection reset")),
                 "sqlx: error communicating with database",
             ),
             (
-                sqlx::Error::Tls(Box::new(std::io::Error::other("invalid certificate"))),
+                sqlx::Error::Tls(Box::new(Error::other("invalid certificate"))),
                 "sqlx: error establishing a TLS connection",
             ),
         ] {

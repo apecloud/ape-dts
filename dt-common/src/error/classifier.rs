@@ -1,4 +1,9 @@
 use std::error::Error as StdError;
+use std::io::Error;
+
+use mysql_binlog_connector_rust::binlog_error::BinlogError;
+use redis::RedisError;
+use tokio::task::JoinError;
 
 use super::{
     error_context::{DtErrorContexts, DT_ERROR_CONTEXT_MARKER},
@@ -12,16 +17,16 @@ pub trait ClassifyError {
 type ChainClassifier = fn(&(dyn StdError + 'static)) -> Option<DtErrorContext>;
 
 const CHAIN_CLASSIFIERS: &[ChainClassifier] = &[
-    classify_chain::<::sqlx::Error>,
+    classify_chain::<sqlx::Error>,
     classify_chain::<tokio_postgres::Error>,
-    classify_chain::<::mongodb::error::Error>,
-    classify_chain::<::redis::RedisError>,
+    classify_chain::<mongodb::error::Error>,
+    classify_chain::<RedisError>,
     classify_chain::<reqwest::Error>,
     classify_chain::<rdkafka::error::KafkaError>,
-    classify_chain::<::kafka::Error>,
-    classify_chain::<mysql_binlog_connector_rust::binlog_error::BinlogError>,
-    classify_chain::<std::io::Error>,
-    classify_chain::<tokio::task::JoinError>,
+    classify_chain::<kafka::Error>,
+    classify_chain::<BinlogError>,
+    classify_chain::<Error>,
+    classify_chain::<JoinError>,
 ];
 
 fn classify_chain<E>(error: &(dyn StdError + 'static)) -> Option<DtErrorContext>
@@ -88,12 +93,12 @@ mod tests {
     #[error("outer source wrapper")]
     struct SourceWrapper {
         #[source]
-        source: std::io::Error,
+        source: Error,
     }
 
     #[test]
     fn collects_typed_dt_error_and_its_source_chain() {
-        let error = anyhow::Error::new(std::io::Error::other("source failure"))
+        let error = anyhow::Error::new(Error::other("source failure"))
             .context(DtError::InvalidConfig("invalid endpoint".to_string()));
 
         assert!(error.downcast_ref::<DtError>().is_some());
@@ -110,7 +115,7 @@ mod tests {
 
     #[test]
     fn provider_wrapper_owns_code_while_source_enriches_detail() {
-        let error = anyhow::Error::new(sqlx::Error::Io(std::io::Error::other("connection reset")));
+        let error = anyhow::Error::new(sqlx::Error::Io(Error::other("connection reset")));
 
         let contexts = collect_contexts(&error);
         let codes: Vec<_> = contexts.iter().filter_map(|context| context.code).collect();
@@ -132,10 +137,10 @@ mod tests {
     #[test]
     fn traverses_sources_that_anyhow_downcast_does_not_search() {
         let error = anyhow::Error::new(SourceWrapper {
-            source: std::io::Error::other("source failure"),
+            source: Error::other("source failure"),
         });
 
-        assert!(error.downcast_ref::<std::io::Error>().is_none());
+        assert!(error.downcast_ref::<Error>().is_none());
         let contexts = collect_contexts(&error);
         let codes: Vec<_> = contexts.iter().filter_map(|context| context.code).collect();
         let details: Vec<_> = contexts

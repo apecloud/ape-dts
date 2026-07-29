@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 
-use anyhow::bail;
+use anyhow::{bail, Error};
 use async_trait::async_trait;
 use dt_common::{
     config::{config_enums::DbType, filter_config::FilterConfig},
@@ -169,7 +169,7 @@ impl Prechecker for PostgresqlPrechecker {
                 Ok(slots) => {
                     if max_replication_slots_i32 == (slots.len() as i32) {
                         check_error = Some(
-                            anyhow::Error::new(DtError::ReplicationCapacityExhausted(
+                            Error::new(DtError::ReplicationCapacityExhausted(
                                 "All PostgreSQL replication slots are in use".to_string(),
                             ))
                             .context(format!(

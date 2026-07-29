@@ -1,3 +1,5 @@
+use std::io::ErrorKind;
+
 use mongodb::error::ErrorKind as MongoErrorKind;
 
 use super::{
@@ -46,11 +48,8 @@ fn classify_mongodb_command_code(code: i32) -> Option<ErrorCode> {
     }
 }
 
-fn is_timeout_kind(kind: std::io::ErrorKind) -> bool {
-    matches!(
-        kind,
-        std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
-    )
+fn is_timeout_kind(kind: ErrorKind) -> bool {
+    matches!(kind, ErrorKind::TimedOut | ErrorKind::WouldBlock)
 }
 
 #[cfg(test)]

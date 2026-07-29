@@ -1,6 +1,6 @@
-use std::process::Command;
+use std::process::{Command, Output};
 
-fn run(args: &[&str]) -> std::process::Output {
+fn run(args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_dt-main"))
         .args(args)
         .env_remove("RUST_BACKTRACE")

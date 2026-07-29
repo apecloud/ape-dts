@@ -1,6 +1,10 @@
+use std::io::Error;
+
+use tokio::task::JoinError;
+
 use super::super::{ClassifyError, DtErrorContext, ErrorCode};
 
-impl ClassifyError for std::io::Error {
+impl ClassifyError for Error {
     fn classify(&self) -> DtErrorContext {
         DtErrorContext::new()
             .with_code(ErrorCode::IoFailed)
@@ -8,7 +12,7 @@ impl ClassifyError for std::io::Error {
     }
 }
 
-impl ClassifyError for tokio::task::JoinError {
+impl ClassifyError for JoinError {
     fn classify(&self) -> DtErrorContext {
         DtErrorContext::new()
             .with_code(ErrorCode::WorkerFailed)

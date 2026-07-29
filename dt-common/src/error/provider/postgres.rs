@@ -1,4 +1,5 @@
 use std::error::Error as StdError;
+use std::io::{Error, ErrorKind};
 
 use super::{
     super::{ClassifyError, DtErrorContext, ErrorCode},
@@ -13,10 +14,7 @@ impl ClassifyError for tokio_postgres::Error {
         let code = if let Some(provider_code) = provider_code.as_deref() {
             classify_postgres_code(provider_code)
         } else if let Some(kind) = find_io_kind(self) {
-            if matches!(
-                kind,
-                std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
-            ) {
+            if matches!(kind, ErrorKind::TimedOut | ErrorKind::WouldBlock) {
                 Some(ErrorCode::ConnectionTimeout)
             } else {
                 Some(ErrorCode::ConnectionFailed)
@@ -29,10 +27,10 @@ impl ClassifyError for tokio_postgres::Error {
     }
 }
 
-fn find_io_kind(error: &tokio_postgres::Error) -> Option<std::io::ErrorKind> {
+fn find_io_kind(error: &tokio_postgres::Error) -> Option<ErrorKind> {
     let mut cause: Option<&(dyn StdError + 'static)> = Some(error);
     while let Some(current) = cause {
-        if let Some(io_error) = current.downcast_ref::<std::io::Error>() {
+        if let Some(io_error) = current.downcast_ref::<Error>() {
             return Some(io_error.kind());
         }
         cause = current.source();

@@ -1,9 +1,10 @@
-use futures::executor::block_on;
-use url::Url;
+use std::{io::ErrorKind, net::Shutdown};
 
-use anyhow::{bail, Context};
+use anyhow::{bail, Context, Error};
 use async_std::{io::BufReader, net::TcpStream, prelude::*};
 use async_trait::async_trait;
+use futures::executor::block_on;
+use url::Url;
 
 use super::{redis_resp_reader::RedisRespReader, redis_resp_types::Value, StreamReader};
 use dt_common::{
@@ -45,10 +46,8 @@ impl RedisClient {
         let stream = TcpStream::connect(format!("{}:{}", host, port))
             .await
             .map_err(|error| {
-                let context = if matches!(
-                    error.kind(),
-                    std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
-                ) {
+                let context = if matches!(error.kind(), ErrorKind::TimedOut | ErrorKind::WouldBlock)
+                {
                     DtError::DatabaseConnectionTimeout(
                         DbType::Redis,
                         "failed to connect to Redis".to_string(),
@@ -59,7 +58,7 @@ impl RedisClient {
                         "failed to connect to Redis".to_string(),
                     )
                 };
-                anyhow::Error::new(error).context(context)
+                Error::new(error).context(context)
             })?;
         let mut me = Self {
             url: url.into(),
@@ -90,13 +89,12 @@ impl RedisClient {
     }
 
     pub async fn close(&mut self) -> anyhow::Result<()> {
-        self.stream
-            .get_mut()
-            .shutdown(std::net::Shutdown::Both)
-            .context(DtError::DatabaseConnectionFailed(
+        self.stream.get_mut().shutdown(Shutdown::Both).context(
+            DtError::DatabaseConnectionFailed(
                 DbType::Redis,
                 "failed to close the Redis connection".to_string(),
-            ))?;
+            ),
+        )?;
         Ok(())
     }
 

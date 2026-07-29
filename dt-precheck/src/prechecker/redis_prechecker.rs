@@ -1,6 +1,6 @@
 use std::sync::{atomic::AtomicBool, Arc};
 
-use anyhow::Context;
+use anyhow::{Context, Error};
 use async_trait::async_trait;
 use tokio::sync::Mutex;
 use url::Url;
@@ -111,7 +111,7 @@ impl Prechecker for RedisPrechecker {
             ),
             Ok(_) => None,
             Err(error) => Some(
-                anyhow::Error::new(error).context(DtError::UnsupportedDatabaseVersion(
+                Error::new(error).context(DtError::UnsupportedDatabaseVersion(
                     DbType::Redis,
                     "Redis returned an invalid version".to_string(),
                 )),

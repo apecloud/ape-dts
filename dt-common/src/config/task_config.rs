@@ -1,7 +1,6 @@
-use std::collections::HashMap;
-use std::fs;
+use std::{collections::HashMap, fs, io::ErrorKind};
 
-use anyhow::{bail, Context, Ok};
+use anyhow::{bail, Context, Error, Ok};
 
 #[cfg(feature = "metrics")]
 use crate::config::metrics_config::MetricsConfig;
@@ -1406,14 +1405,14 @@ impl TaskConfig {
 
         if !lua_code_file.is_empty() {
             lua_code = fs::read_to_string(&lua_code_file).map_err(|error| {
-                let context = if error.kind() == std::io::ErrorKind::NotFound {
+                let context = if error.kind() == ErrorKind::NotFound {
                     DtError::MissingConfig(format!("path: {lua_code_file}"))
                 } else {
                     DtError::IoFailed(format!(
                         "failed to read processor Lua file: {lua_code_file}"
                     ))
                 };
-                anyhow::Error::new(error).context(context)
+                Error::new(error).context(context)
             })?;
         }
 
@@ -1496,8 +1495,10 @@ impl TaskConfig {
 #[cfg(test)]
 mod tests {
     use std::{
+        env::temp_dir,
         fs,
         path::PathBuf,
+        process,
         sync::atomic::{AtomicU64, Ordering},
     };
 
@@ -1538,9 +1539,9 @@ parallel_type={parallel_type}
 
     fn write_temp_task_config(contents: &str) -> PathBuf {
         let unique_id = NEXT_CONFIG_ID.fetch_add(1, Ordering::Relaxed);
-        let path = std::env::temp_dir().join(format!(
+        let path = temp_dir().join(format!(
             "ape_dts_task_config_{}_{}.ini",
-            std::process::id(),
+            process::id(),
             unique_id
         ));
         fs::write(&path, contents).unwrap();

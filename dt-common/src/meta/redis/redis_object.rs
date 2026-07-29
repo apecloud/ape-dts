@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, string::FromUtf8Error};
 
 use super::command::key_parser::KeyParser;
 
@@ -194,7 +194,7 @@ impl From<String> for RedisString {
 }
 
 impl TryFrom<RedisString> for String {
-    type Error = std::string::FromUtf8Error;
+    type Error = FromUtf8Error;
 
     fn try_from(redis_string: RedisString) -> Result<Self, Self::Error> {
         String::from_utf8(redis_string.bytes)

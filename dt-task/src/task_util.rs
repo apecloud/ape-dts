@@ -2,7 +2,7 @@ use std::{str::FromStr, sync::Arc, time::Duration};
 
 use anyhow::bail;
 use futures::{future::join_all, TryStreamExt};
-use mongodb::{bson::doc, options::ClientOptions};
+use mongodb::{bson::doc, options::ClientOptions, Client};
 use opendal::Operator;
 use sqlx::{
     mysql::{MySqlConnectOptions, MySqlPoolOptions},
@@ -386,7 +386,7 @@ impl TaskUtil {
         }
         client_options.max_pool_size = max_pool_size;
 
-        mongodb::Client::with_options(client_options).code(ErrorCode::InvalidConfig)
+        Client::with_options(client_options).code(ErrorCode::InvalidConfig)
     }
 
     pub fn check_enable_sqlx_log(log_level: &str) -> bool {

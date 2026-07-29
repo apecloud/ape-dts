@@ -1,3 +1,6 @@
+use std::io::ErrorKind;
+
+use ::kafka::error::KafkaCode;
 use rdkafka::error::{KafkaError as RdKafkaError, RDKafkaErrorCode};
 
 use super::{
@@ -87,9 +90,7 @@ fn classify_kafka_kind(error: &::kafka::Error) -> Option<ErrorCode> {
     }
 }
 
-fn classify_kafka_code(code: ::kafka::error::KafkaCode) -> Option<ErrorCode> {
-    use ::kafka::error::KafkaCode;
-
+fn classify_kafka_code(code: KafkaCode) -> Option<ErrorCode> {
     match code {
         KafkaCode::TopicAuthorizationFailed
         | KafkaCode::GroupAuthorizationFailed
@@ -107,9 +108,6 @@ fn classify_kafka_code(code: ::kafka::error::KafkaCode) -> Option<ErrorCode> {
     }
 }
 
-fn is_timeout(kind: std::io::ErrorKind) -> bool {
-    matches!(
-        kind,
-        std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
-    )
+fn is_timeout(kind: ErrorKind) -> bool {
+    matches!(kind, ErrorKind::TimedOut | ErrorKind::WouldBlock)
 }

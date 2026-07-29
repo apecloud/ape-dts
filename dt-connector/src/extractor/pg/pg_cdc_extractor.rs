@@ -9,6 +9,7 @@ use std::{
     time::UNIX_EPOCH,
 };
 
+use anyhow::Error;
 use async_trait::async_trait;
 use futures::StreamExt;
 use postgres_protocol::message::backend::{
@@ -246,12 +247,10 @@ impl PgCdcExtractor {
                 }
 
                 Some(Err(error)) => {
-                    return Err(anyhow::Error::new(error).context(
-                        DtError::DatabaseConnectionFailed(
-                            DbType::Pg,
-                            "the PostgreSQL replication stream failed".to_string(),
-                        ),
-                    ));
+                    return Err(Error::new(error).context(DtError::DatabaseConnectionFailed(
+                        DbType::Pg,
+                        "the PostgreSQL replication stream failed".to_string(),
+                    )));
                 }
 
                 None => {

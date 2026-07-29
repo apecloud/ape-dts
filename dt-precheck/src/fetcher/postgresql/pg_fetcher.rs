@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use dt_common::{config::connection_auth_config::ConnectionAuthConfig, rdb_filter::RdbFilter};
 use dt_task::task_util::TaskUtil;
 use futures::{Stream, TryStreamExt};
-use sqlx::{postgres::PgRow, query, Pool, Postgres, Row};
+use sqlx::{postgres::PgRow, query, Error, Pool, Postgres, Row};
 
 use crate::{
     fetcher::traits::Fetcher,
@@ -206,7 +206,7 @@ impl PgFetcher {
     async fn fetch_all(&self, sql: String, mut sql_msg: &str) -> anyhow::Result<Vec<PgRow>> {
         let pg_pool = match &self.pool {
             Some(pool) => pool,
-            None => bail! {sqlx::Error::PoolClosed},
+            None => bail! {Error::PoolClosed},
         };
 
         sql_msg = if sql_msg.is_empty() { "sql" } else { sql_msg };
@@ -226,7 +226,7 @@ impl PgFetcher {
                 println!("{}: {}", sql_msg, sql);
                 Ok(query(sql).fetch(pool).err_into::<anyhow::Error>())
             }
-            None => bail! {sqlx::Error::PoolClosed},
+            None => bail! {Error::PoolClosed},
         }
     }
 

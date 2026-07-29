@@ -1,3 +1,5 @@
+use std::io::ErrorKind;
+
 use mysql_binlog_connector_rust::binlog_error::BinlogError;
 
 use super::{
@@ -12,7 +14,7 @@ impl ClassifyError for BinlogError {
             Self::IoError(error) => {
                 let code = if matches!(
                     error.kind(),
-                    std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+                    ErrorKind::TimedOut | ErrorKind::WouldBlock
                 ) {
                     ErrorCode::ConnectionTimeout
                 } else {
@@ -57,16 +59,15 @@ pub(super) fn diagnostic_code(error: &BinlogError) -> Option<&'static str> {
 
 #[cfg(test)]
 mod tests {
+    use std::io::Error;
+
     use super::*;
 
     #[test]
     fn classifies_binlog_failures() {
         for (error, expected) in [
             (
-                BinlogError::IoError(std::io::Error::new(
-                    std::io::ErrorKind::TimedOut,
-                    "timed out",
-                )),
+                BinlogError::IoError(Error::new(ErrorKind::TimedOut, "timed out")),
                 ErrorCode::ConnectionTimeout,
             ),
             (
