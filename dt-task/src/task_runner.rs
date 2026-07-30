@@ -4,17 +4,15 @@ use std::{
     path::{Component, Path},
     sync::{
         atomic::{AtomicBool, Ordering},
-        Arc,
+        Arc, Mutex as StdMutex,
     },
 };
 
-use crate::task_util::{ConnClient, TaskUtil};
 use anyhow::{bail, Context};
 use async_mutex::Mutex as AsyncMutex;
 use chrono::Local;
 use log4rs::config::{Config, Deserializers, RawConfig};
 use opendal::Operator;
-use std::sync::Mutex as StdMutex;
 use tokio::{
     fs::{self as tokio_fs, metadata, File},
     io::AsyncReadExt,
@@ -27,7 +25,7 @@ use tokio_util::sync::CancellationToken;
 use dt_common::{
     config::{
         checker_config::{CheckerConfig, DEFAULT_CHECK_LOG_FILE_SIZE},
-        config_enums::{DbType, ExtractType, PipelineType, SinkType, TaskKind, TaskType},
+        config_enums::{DbType, ExtractType, SinkType, TaskKind, TaskType},
         config_token_parser::{ConfigTokenParser, TokenEscapePair},
         extractor_config::ExtractorConfig,
         limiter_config::CapacityLimiterConfig,
@@ -71,6 +69,7 @@ use dt_pipeline::{
 use super::{
     extractor_util::ExtractorUtil, parallelizer_util::ParallelizerUtil, sinker_util::SinkerUtil,
 };
+use crate::task_util::{ConnClient, TaskUtil};
 
 #[cfg(feature = "metrics")]
 use dt_common::monitor::prometheus_metrics::PrometheusMetrics;
@@ -833,51 +832,44 @@ impl TaskRunner {
         recorder: Option<Arc<dyn Recorder + Send + Sync>>,
         checker: Option<CheckerHandle>,
     ) -> anyhow::Result<Box<dyn Pipeline + Send>> {
-        match self.config.pipeline.pipeline_type {
-            PipelineType::Basic => {
-                let lua_processor =
-                    self.config
-                        .processor
-                        .as_ref()
-                        .map(|processor_config| LuaProcessor {
-                            lua_code: processor_config.lua_code.clone(),
-                        });
+        let lua_processor = self
+            .config
+            .processor
+            .as_ref()
+            .map(|processor_config| LuaProcessor {
+                lua_code: processor_config.lua_code.clone(),
+            });
 
-                let parallelizer =
-                    ParallelizerUtil::create_parallelizer(&self.config, monitor.clone()).await?;
+        let parallelizer =
+            ParallelizerUtil::create_parallelizer(&self.config, monitor.clone()).await?;
 
-                let propagate_checkpoint_to_sinker = checker.is_some();
-                let pipeline = BasePipeline {
-                    buffer,
-                    parallelizer,
-                    sinker_config: self.config.sinker.clone(),
-                    sinkers,
-                    shut_down,
-                    checkpoint_interval_secs: self.config.pipeline.checkpoint_interval_secs,
-                    batch_sink_interval_secs: self.config.pipeline.batch_sink_interval_secs,
-                    syncer,
-                    monitor,
-                    pending_snapshot_finished: HashMap::new(),
-                    data_marker,
-                    lua_processor,
-                    recorder,
-                    propagate_checkpoint_to_sinker,
-                };
-                if matches!(self.config.sinker_basic.sink_type, SinkType::Check) {
-                    let checker = checker.ok_or_else(|| {
-                        Error::ConfigError(
-                            "standalone check requires a direct checker runtime".into(),
-                        )
-                    })?;
-                    if checker.is_async() {
-                        bail!("standalone check must not use async checker runtime");
-                    }
-                    Ok(Box::new(CheckerPipeline::new(pipeline, checker))
-                        as Box<dyn Pipeline + Send>)
-                } else {
-                    Ok(Box::new(pipeline) as Box<dyn Pipeline + Send>)
-                }
+        let propagate_checkpoint_to_sinker = checker.is_some();
+        let pipeline = BasePipeline {
+            buffer,
+            parallelizer,
+            sinker_config: self.config.sinker.clone(),
+            sinkers,
+            shut_down,
+            checkpoint_interval_secs: self.config.pipeline.checkpoint_interval_secs,
+            batch_sink_interval_secs: self.config.pipeline.batch_sink_interval_secs,
+            syncer,
+            monitor,
+            pending_snapshot_finished: HashMap::new(),
+            data_marker,
+            lua_processor,
+            recorder,
+            propagate_checkpoint_to_sinker,
+        };
+        if matches!(self.config.sinker_basic.sink_type, SinkType::Check) {
+            let checker = checker.ok_or_else(|| {
+                Error::ConfigError("standalone check requires a direct checker runtime".into())
+            })?;
+            if checker.is_async() {
+                bail!("standalone check must not use async checker runtime");
             }
+            Ok(Box::new(CheckerPipeline::new(pipeline, checker)) as Box<dyn Pipeline + Send>)
+        } else {
+            Ok(Box::new(pipeline) as Box<dyn Pipeline + Send>)
         }
     }
 
@@ -891,10 +883,6 @@ impl TaskRunner {
         recovery: Option<&Arc<dyn Recovery + Send + Sync>>,
         checker_state_store: Option<Arc<CheckerStateStore>>,
     ) -> anyhow::Result<Option<CheckerHandle>> {
-        if !matches!(self.config.pipeline.pipeline_type, PipelineType::Basic) {
-            return Ok(None);
-        }
-
         let cfg = match checker_config {
             Some(cfg) => cfg,
             None => return Ok(None),

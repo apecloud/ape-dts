@@ -1,4 +1,7 @@
-use std::{borrow::Cow, collections::{BTreeSet, HashMap}};
+use std::{
+    borrow::Cow,
+    collections::{BTreeSet, HashMap},
+};
 
 use anyhow::Context;
 use mongodb::bson::Document;

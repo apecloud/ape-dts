@@ -26,8 +26,8 @@ use super::{
         DEFAULT_CHECK_LOG_FILE_SIZE,
     },
     config_enums::{
-        CheckMode, ConflictPolicyEnum, DbType, ExtractType, MetaCenterType, ParallelType,
-        PipelineType, SinkType, TaskKind, TaskType,
+        CheckMode, ConflictPolicyEnum, DbType, ExtractType, MetaCenterType, ParallelType, SinkType,
+        TaskKind, TaskType,
     },
     data_marker_config::DataMarkerConfig,
     extractor_config::{BasicExtractorConfig, ExtractorConfig},
@@ -91,18 +91,6 @@ const CHECKER_CDC: &str = "checker_cdc";
 const META_CENTER: &str = "metacenter";
 const TRACING: &str = "tracing";
 // keys
-const CHECK_LOG_DIR: &str = "check_log_dir";
-const CHECK_LOG_FILE_SIZE: &str = "check_log_file_size";
-const CHECK_LOG_MAX_ROWS: &str = "check_log_max_rows";
-const OUTPUT_FULL_ROW: &str = "output_full_row";
-const OUTPUT_REVISE_SQL: &str = "output_revise_sql";
-const REVISE_MATCH_FULL_ROW: &str = "revise_match_full_row";
-const RECHECK_INTERVAL_SECS: &str = "recheck_interval_secs";
-const RECHECK_COUNT: &str = "recheck_count";
-const RECHECK_QUEUE_SIZE: &str = "recheck_queue_size";
-const RECHECK_QUEUE_MEMORY_MB: &str = "recheck_queue_memory_mb";
-const IS_ENABLED: &str = "is_enabled";
-const LEGACY_CHECKER_ENABLE: &str = "enable";
 const DB_TYPE: &str = "db_type";
 const URL: &str = "url";
 const BATCH_SIZE: &str = "batch_size";
@@ -133,6 +121,19 @@ const IS_DIRECT_CONNECTION: &str = "is_direct_connection";
 const MONGO_REQUIRE_SHARD_KEY_FILTER: &str = "mongo_require_shard_key_filter";
 const TASK_SUMMARY_MODE: &str = "task_summary_mode";
 const OUTPUT_FORMAT: &str = "output_format";
+// keys, checker
+const CHECK_LOG_DIR: &str = "check_log_dir";
+const CHECK_LOG_FILE_SIZE: &str = "check_log_file_size";
+const CHECK_LOG_MAX_ROWS: &str = "check_log_max_rows";
+const OUTPUT_FULL_ROW: &str = "output_full_row";
+const OUTPUT_REVISE_SQL: &str = "output_revise_sql";
+const REVISE_MATCH_FULL_ROW: &str = "revise_match_full_row";
+const RECHECK_INTERVAL_SECS: &str = "recheck_interval_secs";
+const RECHECK_COUNT: &str = "recheck_count";
+const RECHECK_QUEUE_SIZE: &str = "recheck_queue_size";
+const RECHECK_QUEUE_MEMORY_MB: &str = "recheck_queue_memory_mb";
+const IS_ENABLED: &str = "is_enabled";
+const LEGACY_CHECKER_ENABLE: &str = "enable";
 
 // default values
 pub const APE_DTS: &str = "APE_DTS";
@@ -153,12 +154,6 @@ impl TaskConfig {
         let checker =
             Self::load_checker_config(&loader, &extractor_basic.extract_type, &sinker_basic)?;
         if let Some(checker_cfg) = checker.as_ref() {
-            if !matches!(pipeline.pipeline_type, PipelineType::Basic) {
-                bail!(Error::ConfigError(
-                    "config [checker] only supports [pipeline] pipeline_type=basic".into(),
-                ));
-            }
-
             let task_type = if matches!(extractor_basic.extract_type, ExtractType::CheckLog)
                 && matches!(sinker_basic.sink_type, SinkType::Check)
                 && matches!(
@@ -189,9 +184,10 @@ impl TaskConfig {
                 task_type.is_cdc_inline_check() || task_type.is_standalone_snapshot_check()
             });
             if is_s3_output && !s3_supported {
-                bail!(Error::ConfigError(format!(
+                bail!(Error::ConfigError(
                     "config [checker_output].output_type=s3 only supports standalone snapshot check or inline cdc check"
-                )));
+                        .to_string()
+                ));
             }
 
             if checker_cfg.sample_percent.is_some()
@@ -992,7 +988,6 @@ impl TaskConfig {
             batch_sink_interval_secs: loader.get_optional(PIPELINE, "batch_sink_interval_secs"),
             counter_time_window_secs: loader.get_optional(PIPELINE, "counter_time_window_secs"),
             counter_max_sub_count: loader.get_with_default(PIPELINE, "counter_max_sub_count", 1000),
-            pipeline_type: loader.get_with_default(PIPELINE, "pipeline_type", PipelineType::Basic),
         };
 
         if config.counter_time_window_secs == 0 {

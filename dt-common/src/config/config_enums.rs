@@ -95,12 +95,6 @@ pub enum ParallelType {
     Redis,
 }
 
-#[derive(EnumString, IntoStaticStr, Clone, Display)]
-pub enum PipelineType {
-    #[strum(serialize = "basic")]
-    Basic,
-}
-
 #[derive(Clone, Debug, EnumString, IntoStaticStr, PartialEq, Default)]
 pub enum ConflictPolicyEnum {
     #[strum(serialize = "ignore")]

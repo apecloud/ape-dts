@@ -1,4 +1,6 @@
 use async_trait::async_trait;
+
+use crate::{base_pipeline::BasePipeline, Pipeline};
 use dt_common::{
     log_warn,
     meta::{position::Position, row_data::RowData, struct_meta::struct_data::StructData},
@@ -7,8 +9,6 @@ use dt_connector::{
     checker::CheckerHandle, sinker::busy_tracking_sinker::BusyTrackingSinker, Sinker,
 };
 
-use crate::{base_pipeline::BasePipeline, Pipeline};
-
 pub struct CheckerPipeline {
     inner: BasePipeline,
 }
@@ -16,10 +16,11 @@ pub struct CheckerPipeline {
 impl CheckerPipeline {
     pub fn new(mut inner: BasePipeline, checker: CheckerHandle) -> Self {
         let metrics = inner.monitor.sinker_worker_metrics();
-        let sinker = CheckerSinker { checker };
-        let sinker = BusyTrackingSinker::new(Box::new(sinker), metrics.register_worker());
+        let check_sinker = CheckerSinker { checker };
+        let sinker_with_wrap =
+            BusyTrackingSinker::new(Box::new(check_sinker), metrics.register_worker());
         inner.sinkers = vec![std::sync::Arc::new(async_mutex::Mutex::new(
-            Box::new(sinker) as Box<dyn Sinker + Send>,
+            Box::new(sinker_with_wrap) as Box<dyn Sinker + Send>,
         ))];
         Self { inner }
     }
