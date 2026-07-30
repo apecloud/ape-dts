@@ -7,7 +7,9 @@ pub mod pg_checker;
 pub mod state_store;
 pub mod struct_checker;
 
-pub use base_checker::{CheckContext, Checker, CheckerHandle, CheckerTbMeta, DataCheckerHandle};
+pub use base_checker::{
+    CheckContext, Checker, CheckerHandle, CheckerTbMeta, DataCheckerHandle, DirectCheckerHandle,
+};
 pub use mongo_checker::MongoChecker;
 pub use mysql_checker::MysqlChecker;
 pub use pg_checker::PgChecker;

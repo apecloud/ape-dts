@@ -14,16 +14,16 @@ If you need validation in the CDC pipeline, use the [inline cdc check flow](../s
 
 Compared with the default CDC-only sync path, inline cdc check requires:
 - keep `[sinker] sink_type=write`
-- add `[checker] enable=true`
+- add `[checker_cdc] is_enabled=true`
 - add `[resumer] resume_type=from_target` or `from_db`
 - use `[parallelizer] parallel_type=rdb_merge`
 
-The checker reuses the parsed `[sinker]` target directly, so `[checker]` must not set `db_type`, `url`, `username`, or `password`.
+The checker reuses the parsed `[sinker]` target directly, so the checker target comes from `[sinker]`; common check options remain under `[checker]`.
 
 This flow is currently supported only for MySQL and PostgreSQL write sinkers.
 
 Inline cdc check is best-effort: CDC writes stay on the main path. If the checker queue reaches
-`[checker].queue_size`, the oldest pending checker batch is dropped instead of blocking new writes.
+`[checker_cdc].queue_size`, the oldest pending checker batch is dropped instead of blocking new writes.
 Checker-side runtime errors are logged, but they do not block CDC writes, checkpoint persistence,
 or metadata refresh delivery on the main path.
 
@@ -38,7 +38,7 @@ Notes:
 - `check off` means CDC only: `[extractor] extract_type=cdc`, `[sinker] sink_type=write`,
   `[parallelizer] parallel_type=rdb_merge`.
 - `check on` means the same CDC path plus inline cdc check:
-  `[checker] enable=true`, `[checker] batch_size=200`, and
+  `[checker_cdc] is_enabled=true`, `[checker] batch_size=200`, and
   `[resumer] resume_type=from_target`.
 - The shared task-side tuning in these reruns is:
   `[sinker] batch_size=200`, `[parallelizer] parallel_size=8`,

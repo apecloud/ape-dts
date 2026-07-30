@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use dt_common::{
     meta::{
         dcl_meta::dcl_data::DclData, ddl_meta::ddl_data::DdlData, dt_data::DtItem,
-        row_data::RowData, struct_meta::struct_data::StructData,
+        position::Position, row_data::RowData, struct_meta::struct_data::StructData,
     },
     monitor::sinker_worker_metrics::SinkerWorkerRecorder,
 };
@@ -61,6 +61,14 @@ impl Sinker for BusyTrackingSinker {
 
     async fn close(&mut self) -> anyhow::Result<()> {
         self.inner.close().await
+    }
+
+    async fn close_with_position(&mut self, position: Option<&Position>) -> anyhow::Result<()> {
+        self.inner.close_with_position(position).await
+    }
+
+    async fn record_checkpoint(&mut self, position: &Position) -> anyhow::Result<()> {
+        self.inner.record_checkpoint(position).await
     }
 
     fn get_id(&self) -> String {

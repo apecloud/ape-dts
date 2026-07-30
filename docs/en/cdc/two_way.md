@@ -8,14 +8,14 @@ To enable two-way data sync, we need to configure CDC tasks for both "source -> 
 
 If you also want validation in each CDC direction, use the [inline cdc check flow](../snapshot/check.md#inline-cdc-check).
 
-For each task, keep `[sinker] sink_type=write`, add `[checker] enable=true`, add `[resumer] resume_type=from_target` or `from_db`, and use `[parallelizer] parallel_type=rdb_merge`.
+For each task, keep `[sinker] sink_type=write`, add `[checker_cdc] is_enabled=true`, add `[resumer] resume_type=from_target` or `from_db`, and use `[parallelizer] parallel_type=rdb_merge`.
 
-The checker reuses the parsed `[sinker]` target directly, so `[checker]` must not set `db_type`, `url`, `username`, or `password`.
+The checker reuses the parsed `[sinker]` target directly, so the checker target comes from `[sinker]`; common check options remain under `[checker]`.
 
 This flow is currently supported only for MySQL and PostgreSQL write sinkers.
 
 Inline cdc check is best-effort here as well: writes stay on the main path. If the checker queue
-reaches `[checker].queue_size`, the oldest pending checker batch is dropped instead of blocking new
+reaches `[checker_cdc].queue_size`, the oldest pending checker batch is dropped instead of blocking new
 writes. Checker-side runtime errors are logged, but they do not block CDC writes, checkpoint
 persistence, or metadata refresh on the main path.
 

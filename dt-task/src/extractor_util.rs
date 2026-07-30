@@ -10,7 +10,7 @@ use tokio::sync::Mutex;
 
 use dt_common::{
     config::{
-        config_enums::{CheckMode, DbType, ExtractType, TaskKind},
+        config_enums::{CheckMode, DbType, ExtractType, SinkType, TaskKind},
         extractor_config::ExtractorConfig,
         sinker_config::SinkerConfig,
         task_config::TaskConfig,
@@ -73,6 +73,10 @@ const JSON_PREFIX: &str = "json:";
 pub struct ExtractorUtil {}
 
 impl ExtractorUtil {
+    fn use_mongo_raw_document(sinker: &SinkerConfig, sink_type: &SinkType) -> bool {
+        matches!(sinker, SinkerConfig::Mongo { .. }) && matches!(sink_type, SinkType::Write)
+    }
+
     fn sample_rate(config: &TaskConfig, extractor_config: &ExtractorConfig) -> Option<u8> {
         let standalone_snapshot_check = config.task_type().is_some_and(|task_type| {
             matches!(task_type.kind, TaskKind::Snapshot)
@@ -89,7 +93,7 @@ impl ExtractorUtil {
             config
                 .checker
                 .as_ref()
-                .and_then(|checker| checker.sample_rate)
+                .and_then(|checker| checker.sample_percent)
         } else {
             None
         }
@@ -379,7 +383,10 @@ impl ExtractorUtil {
                     extract_state,
                     recovery,
                     filter: filter.clone(),
-                    use_raw_document: matches!(config.sinker, SinkerConfig::Mongo { .. }),
+                    use_raw_document: Self::use_mongo_raw_document(
+                        &config.sinker,
+                        &config.sinker_basic.sink_type,
+                    ),
                 };
                 Box::new(extractor)
             }
@@ -781,5 +788,39 @@ impl ExtractorUtil {
             results.insert((i.db, i.tb), i.partition_col);
         }
         Ok(results)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use dt_common::config::connection_auth_config::ConnectionAuthConfig;
+
+    use super::*;
+
+    fn mongo_sinker() -> SinkerConfig {
+        SinkerConfig::Mongo {
+            url: String::new(),
+            connection_auth: ConnectionAuthConfig::default(),
+            is_direct_connection: None,
+            app_name: String::new(),
+            batch_size: 1,
+            require_shard_key_filter: false,
+        }
+    }
+
+    #[test]
+    fn mongo_standalone_check_does_not_use_raw_documents() {
+        assert!(!ExtractorUtil::use_mongo_raw_document(
+            &mongo_sinker(),
+            &SinkType::Check,
+        ));
+    }
+
+    #[test]
+    fn mongo_write_sinker_keeps_using_raw_documents() {
+        assert!(ExtractorUtil::use_mongo_raw_document(
+            &mongo_sinker(),
+            &SinkType::Write,
+        ));
     }
 }

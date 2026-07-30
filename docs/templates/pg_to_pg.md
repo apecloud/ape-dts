@@ -215,10 +215,13 @@ db_type=pg
 extract_type=struct
 url=postgres://postgres:postgres@127.0.0.1:5433/postgres?options[statement_timeout]=10s
 
-[checker]
-enable=true
+[sinker]
 db_type=pg
+sink_type=check
 url=postgres://postgres:postgres@127.0.0.1:5434/postgres?options[statement_timeout]=10s
+
+[checker]
+
 
 [filter]
 do_dbs=
@@ -256,10 +259,12 @@ extract_type=snapshot
 url=postgres://postgres:postgres@127.0.0.1:5433/postgres?options[statement_timeout]=10s
 batch_size=10000
 
-[checker]
-enable=true
+[sinker]
 db_type=pg
+sink_type=check
 url=postgres://postgres:postgres@127.0.0.1:5434/postgres?options[statement_timeout]=10s
+
+[checker]
 batch_size=100
 
 [filter]
@@ -307,7 +312,6 @@ batch_size=200
 replace=true
 
 [checker]
-enable=true
 batch_size=200
 
 [filter]
@@ -353,8 +357,10 @@ heartbeat_interval_secs=1
 heartbeat_tb=heartbeat_db.ape_dts_heartbeat
 
 [checker]
-enable=true
 batch_size=200
+
+[checker_cdc]
+is_enabled=true
 
 [resumer]
 resume_type=from_target
@@ -394,7 +400,9 @@ log_dir=./logs
 ```
 
 - the output will be in {log_dir}/check/
-- `[checker]` intentionally omits `db_type` / `url` / `username` / `password`; inline cdc check reuses the parsed `[sinker]` target, requires `[checker].enable=true` plus `[resumer]`, and uses `[parallelizer] parallel_type=rdb_merge`.
+- Inline CDC check reuses the parsed `[sinker]` target, is enabled by
+  `[checker_cdc].is_enabled=true`, requires `[resumer]`, and uses
+  `[parallelizer].parallel_type=rdb_merge`. Common check options remain under `[checker]`.
 
 # Data revise
 
@@ -454,10 +462,12 @@ url=postgres://postgres:postgres@127.0.0.1:5433/postgres?options[statement_timeo
 check_log_dir=./logs/origin_check_log
 batch_size=200
 
-[checker]
-enable=true
+[sinker]
 db_type=pg
+sink_type=check
 url=postgres://postgres:postgres@127.0.0.1:5434/postgres?options[statement_timeout]=10s
+
+[checker]
 batch_size=100
 
 [filter]

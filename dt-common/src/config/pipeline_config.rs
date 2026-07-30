@@ -1,10 +1,7 @@
 use crate::config::limiter_config::CapacityLimiterConfig;
 
-use super::config_enums::PipelineType;
-
 #[derive(Clone)]
 pub struct PipelineConfig {
-    pub pipeline_type: PipelineType,
     pub capacity_limiter: CapacityLimiterConfig,
     pub checkpoint_interval_secs: u64,
     pub batch_sink_interval_secs: u64,
