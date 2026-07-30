@@ -152,15 +152,15 @@ impl fmt::Display for ErrorReport {
             }
         }
         if !self.details.is_empty() {
-            write!(f, "\n  CAUSED BY:")?;
+            write!(f, "\n\n  CAUSED BY:")?;
             for (index, detail) in self.details.iter().enumerate() {
                 write!(f, "\n    {index}: {detail}")?;
             }
         }
         if let Some(backtrace) = &self.backtrace {
-            write!(f, "\n  BACKTRACE:")?;
+            write!(f, "\n\n  BACKTRACE:")?;
             for line in backtrace.lines() {
-                write!(f, "\n    {}", line.trim_start())?;
+                write!(f, "\n    {}", line.trim_end())?;
             }
         }
         Ok(())
