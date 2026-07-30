@@ -15,8 +15,8 @@ pub mod sinker;
 use async_trait::async_trait;
 use checker::check_log::CheckLog;
 use dt_common::meta::{
-    dcl_meta::dcl_data::DclData, ddl_meta::ddl_data::DdlData, dt_data::DtItem, row_data::RowData,
-    struct_meta::struct_data::StructData,
+    dcl_meta::dcl_data::DclData, ddl_meta::ddl_data::DdlData, dt_data::DtItem, position::Position,
+    row_data::RowData, struct_meta::struct_data::StructData,
 };
 #[async_trait]
 pub trait Sinker {
@@ -33,6 +33,14 @@ pub trait Sinker {
     }
 
     async fn close(&mut self) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    async fn close_with_position(&mut self, _position: Option<&Position>) -> anyhow::Result<()> {
+        self.close().await
+    }
+
+    async fn record_checkpoint(&mut self, _position: &Position) -> anyhow::Result<()> {
         Ok(())
     }
 

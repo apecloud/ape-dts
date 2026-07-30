@@ -194,15 +194,19 @@ db.tb_1.updateOne({ "_id" : "2" }, { "$set": { "age" : 200000 } });
 
 ```
 cat <<EOL > /tmp/ape_dts/task_config.ini
+
 [extractor]
 db_type=mongo
 extract_type=snapshot
 url=mongodb://127.0.0.1:27017
 
-[checker]
-enable=true
+[sinker]
 db_type=mongo
+sink_type=check
 url=mongodb://ape_dts:123456@127.0.0.1:27018
+
+[checker]
+
 
 [filter]
 do_dbs=test_db
@@ -303,16 +307,20 @@ docker exec -it dst-mongo mongosh \
 
 ```
 cat <<EOL > /tmp/ape_dts/task_config.ini
+
 [extractor]
 db_type=mongo
 extract_type=check_log
 url=mongodb://127.0.0.1:27017
 check_log_dir=./check_data_task_log
 
-[checker]
-enable=true
+[sinker]
 db_type=mongo
+sink_type=check
 url=mongodb://ape_dts:123456@127.0.0.1:27018
+
+[checker]
+
 
 [filter]
 do_events=*

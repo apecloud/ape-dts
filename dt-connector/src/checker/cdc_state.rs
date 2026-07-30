@@ -629,12 +629,12 @@ mod tests {
                 s3_output,
                 ..Default::default()
             },
-            CheckerIo {
+            Some(CheckerIo {
                 batch_queue: Arc::new(std::sync::Mutex::new(LimitedQueue::new(1))),
                 batch_notify: Arc::new(tokio::sync::Notify::new()),
                 dropped_items: Arc::new(std::sync::atomic::AtomicU64::new(0)),
                 control_rx,
-            },
+            }),
             "unit-test",
         )
     }

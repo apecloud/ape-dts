@@ -5,6 +5,10 @@
 结构校验与 CDC 无直接关系。这里的 `inline cdc check` 指行级数据校验
 （见 [数据校验文档](../snapshot/check.md)）。
 
+内置结构校验是 standalone 任务：使用 `extract_type=struct`，在 `[sinker]` 中按普通数据库
+配置目标端，并设置 `[sinker].sink_type=check`。通用校验参数放在 `[checker]`，结果格式和
+日志路径放在 `[checker_output]`。结构校验不会创建或消费 CDC checker 的异步队列。
+
 ## 示例: MySQL -> MySQL
 
 参考 [任务模版](../../templates/mysql_to_mysql.md)

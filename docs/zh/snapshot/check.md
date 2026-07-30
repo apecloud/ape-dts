@@ -4,10 +4,10 @@
 
 支持对 MySQL、PostgreSQL、MongoDB 进行比对。
 
-全量校验和 inline CDC check 支持通过 `[checker].sample_rate` 进行抽样。
+全量校验和 inline CDC check 支持通过 `[checker].sample_percent` 进行抽样。
 Standalone MySQL/PostgreSQL/MongoDB snapshot check 会在抽取阶段、进入后续 checker 前应用
-`sample_rate`。当表/collection 的统计行数可用时，源端查询会加上
-`LIMIT ceil(estimated_rows * sample_rate / 100)`。如果拿不到有效估算值，则读取完整源端
+`sample_percent`。当表/collection 的统计行数可用时，源端查询会加上
+`LIMIT ceil(estimated_rows * sample_percent / 100)`。如果拿不到有效估算值，则读取完整源端
 stream。该抽样是源端 Top-N limit，不是 key hash 抽样，也不是随机抽样。Inline snapshot check
 和 inline CDC check 会先完整写入行/变更，然后在 checker 目标端 fetch 前进行确定性的 key hash
 抽样；相同 key 的行/变更会保持一致的抽样结果。
@@ -19,8 +19,8 @@ stream。该抽样是源端 Top-N limit，不是 key hash 抽样，也不是随�
 ### Standalone snapshot check
 
 - 使用 `extract_type=snapshot`。
-- 设置 `sink_type=dummy`，或直接省略 `[sinker]`。
-- 在 `[checker]` 中显式配置校验目标，并设置 `[checker].enable=true`。
+- 在 `[sinker]` 中配置目标并设置 `[sinker].sink_type=check`。
+- 连接、认证、TLS 及数据库专属目标参数均使用普通 `[sinker]` 字段。
 - Standalone snapshot checker target 支持 MySQL、PostgreSQL 和 MongoDB。
 - MySQL/PostgreSQL checker target 使用 `parallel_type=rdb_merge`；MongoDB checker target
   使用 `parallel_type=mongo`。
@@ -75,8 +75,8 @@ stream。该抽样是源端 Top-N limit，不是 key hash 抽样，也不是随�
 - 使用 `extract_type=cdc` 且 `[sinker] sink_type=write`。
 - checker 会在变更写入目标端后校验 CDC 已落库数据。
 - checker 直接复用 `[sinker]` 已解析的目标端配置。
-- 设置 `[checker].enable=true`。
-- `[checker]` 不接受 `db_type`、`url`、`username`、`password`。
+- 设置 `[checker_cdc].is_enabled=true`。
+- 在 `[checker_cdc]` 中配置 `queue_size` 和 `check_log_interval_secs`。
 - 必须通过 `[resumer] resume_type=from_target` 或 `from_db` 持久化 checker 状态。
 - 当前仅支持 `[sinker].db_type` 为 `mysql` 或 `pg`。
 - 使用 `parallel_type=rdb_merge`。
@@ -118,11 +118,11 @@ stream。该抽样是源端 Top-N limit，不是 key hash 抽样，也不是随�
 
 ### 抽样校验
 
-全量校验和 inline CDC check 可在 `[checker]` 中添加 `sample_rate`。对于 standalone
+全量校验和 inline CDC check 可在 `[checker]` 中添加 `sample_percent`。对于 standalone
 MySQL/PostgreSQL/MongoDB snapshot check，抽样发生在抽取阶段。存在行数估算时，extractor
-会把源端读取限制到大约 `row_count * sample_rate / 100`；`row_count` 基于表估算，表配置了
+会把源端读取限制到大约 `row_count * sample_percent / 100`；`row_count` 基于表估算，表配置了
 `where_conditions` 时基于该过滤条件估算。如果估算缺失或为 0，则读取完整源端 stream。对于
-inline snapshot check 和 inline CDC check，`sample_rate=25` 仍会完整写入所有行/变更，然后在目标端 fetch/compare 前只检查 key
+inline snapshot check 和 inline CDC check，`sample_percent=25` 仍会完整写入所有行/变更，然后在目标端 fetch/compare 前只检查 key
 hash 落入抽样百分比的行/变更。
 
 Standalone snapshot check 使用源端 limit，因此恢复运行后的抽样行集合可能不同于一次不中断运行。
@@ -131,8 +131,7 @@ Inline snapshot check 和 inline CDC check 使用 key hash 抽样，相同 key �
 
 ```
 [checker]
-enable=true
-sample_rate=25
+sample_percent=25
 ```
 
 ## 限制
@@ -153,7 +152,7 @@ sample_rate=25
 JSON 对象。`summary.log` 只包含一行总体 summary JSON。`sql.log` 是纯 SQL 文件，每行一条生成的
 修复语句，不包含 JSON 包装，也不携带 schema/table/id metadata。`sql.log` 仅在
 `output_revise_sql=true` 且存在修复 SQL 时生成或写入。默认写入 `runtime.log_dir/check`；若配置了
-`[checker].check_log_dir`，则写入该目录。
+`[checker_output].check_log_dir`，则写入该目录。
 
 默认情况下，stdout 仍遵循普通运行日志配置。若编排系统需要 stdout 只包含校验结果，请只给该
 check 任务设置 `[runtime].check_result_stdout_only=true`。在该模式下，上述文件仍是校验
@@ -198,13 +197,11 @@ payload 与 `sql.log` 中的纯 SQL 语句一致。
 
 ## 输出完整行
 
-当需要完整行内容用于排查问题时，可在 `[checker]` 中开启全行日志。对于 standalone
-snapshot check，需要在 `[checker]` 中显式配置校验目标；对于 inline snapshot check 与
-inline cdc check，checker 会直接复用 `[sinker]` 已解析的目标端配置：
+当需要完整行内容用于排查问题时，在 `[checker_output]` 中开启全行日志。所有模式的目标端
+均通过 `[sinker]` 配置：
 
 ```
-[checker]
-enable=true
+[checker_output]
 output_full_row=true
 ```
 
@@ -242,13 +239,11 @@ output_full_row=true
 
 ## 输出修复 SQL
 
-如需人工修复差异数据，可在 `[checker]` 中开启 SQL 输出。对于 standalone snapshot
-check，需要在 `[checker]` 中显式配置校验目标；对于 inline snapshot check 与 inline cdc
-check，checker 会直接复用 `[sinker]` 已解析的目标端配置：
+如需人工修复差异数据，在 `[checker_output]` 中开启 SQL 输出。所有模式的目标端均通过
+`[sinker]` 配置：
 
 ```
-[checker]
-enable=true
+[checker_output]
 output_revise_sql=true
 # 可选：强制使用全字段匹配 WHERE 条件
 revise_match_full_row=true
@@ -320,14 +315,19 @@ INSERT INTO `test_db_1`.`test_table`(`id`,`name`,`age`,`email`) VALUES(3,'Charli
 ```
 # 原始：源端=A，目标端=B
 # 反向：源端=B，目标端=A
+
 [extractor]
-db_type=<原 checker 的 db_type>
-url=<原 checker 的 url>
+db_type=<原 sinker 的 db_type>
+extract_type=snapshot
+url=<原 sinker 的 url>
+
+[sinker]
+db_type=<原 extractor 的 db_type>
+sink_type=check
+url=<原 extractor 的 url>
 
 [checker]
-enable=true
-db_type=<原 extractor 的 db_type>
-url=<原 extractor 的 url>
+batch_size=200
 ```
 
 # 配置
@@ -336,14 +336,18 @@ url=<原 extractor 的 url>
 
 ## 重试机制
 
-当 `max_retries > 0` 时，checker 会在检测到不一致时自动重试：
+当 `recheck_count > 0` 时，checker 会在检测到不一致时自动重试：
 - 重试期间不记录日志，避免噪音
 - 仅在最后一次检查时记录详细的 miss/diff 日志
 - 适用于目标端数据尚未完全同步的场景
 
+待重试数据由有界 retry buffer 保存，可通过 `recheck_queue_size` 和
+`recheck_queue_memory_mb` 限制行数及估算数据大小。达到任一上限时，新发现的不一致不会被
+丢弃，而是跳过重试并立即按本次检查结果输出。
+
 > **注意：** inline cdc check 下不支持重试。CDC 事件是流式到达的，后续的 DELETE
-> 事件可能会移除已正确写入的数据，导致重试队列中出现误报。即使配置了 `max_retries`
-> 和 `retry_interval_secs`，CDC 模式下也会被强制忽略（设为 0），并输出警告日志。
+> 事件可能会移除已正确写入的数据，导致重试队列中出现误报。即使配置了 `recheck_count`
+> 和 `recheck_interval_secs`，CDC 模式下也会被强制忽略（设为 0），并输出警告日志。
 
 
 ## 集成测试参考
