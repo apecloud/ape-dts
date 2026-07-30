@@ -36,6 +36,10 @@ impl RetryBuffer {
         }
     }
 
+    #[allow(
+        clippy::result_large_err,
+        reason = "the rejected RetryItem must be returned without cloning or allocating"
+    )]
     pub fn try_push(&mut self, item: RetryItem) -> Result<(), (RetryItem, RetryBufferFull)> {
         if self.queue.len() >= self.max_rows {
             self.overflow_count = self.overflow_count.saturating_add(1);
