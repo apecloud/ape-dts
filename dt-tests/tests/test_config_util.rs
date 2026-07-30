@@ -13,7 +13,7 @@ pub struct TestConfigUtil {}
 
 const EXTRACTOR: &str = "extractor";
 const SINKER: &str = "sinker";
-const CHECKER: &str = "checker";
+const CHECKER_OUTPUT: &str = "checker_output";
 const RUNTIME: &str = "runtime";
 const RESUMER: &str = "resumer";
 const TEST_PROJECT: &str = "dt-tests";
@@ -143,13 +143,13 @@ impl TestConfigUtil {
         }
 
         if let Some(checker) = &config.checker {
-            let checker_check_log_dir = if !checker.check_log_dir.is_empty() {
-                format!("{}/{}", project_root, checker.check_log_dir)
+            let checker_check_log_dir = if !checker.log_dir().is_empty() {
+                format!("{}/{}", project_root, checker.log_dir())
             } else {
                 format!("{}/check", log_dir)
             };
             update_configs.push((
-                CHECKER.to_string(),
+                CHECKER_OUTPUT.to_string(),
                 "check_log_dir".to_string(),
                 checker_check_log_dir,
             ));

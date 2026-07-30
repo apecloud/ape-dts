@@ -4,10 +4,10 @@ After data migration, you may want to compare the source and target data row by 
 
 Supports comparison for MySQL, PostgreSQL, and MongoDB.
 
-Snapshot and inline CDC checks support sampling via `[checker].sample_rate`.
-For standalone MySQL/PostgreSQL/MongoDB snapshot check, `sample_rate` is applied during extraction
+Snapshot and inline CDC checks support sampling via `[checker].sample_percent`.
+For standalone MySQL/PostgreSQL/MongoDB snapshot check, `sample_percent` is applied during extraction
 before rows enter later checker work. When table/collection row estimates are available, the source
-query is capped with `LIMIT ceil(estimated_rows * sample_rate / 100)`. If no useful estimate is
+query is capped with `LIMIT ceil(estimated_rows * sample_percent / 100)`. If no useful estimate is
 available, extraction reads the full source stream. This sampling is source-side Top-N limiting, not
 key-hash based or random. Inline snapshot check and inline CDC check write all rows/changes first,
 then apply deterministic checker-side key-hash sampling before target fetch. Rows/changes with the
@@ -20,8 +20,8 @@ Data check is documented in three flows:
 ### Standalone snapshot check
 
 - Use `extract_type=snapshot`.
-- Set `sink_type=dummy` or omit `[sinker]`.
-- Configure the checker target explicitly in `[checker]`, and set `[checker].enable=true`.
+- Configure the target in `[sinker]` and set `[sinker].sink_type=check`.
+- Connection, authentication, TLS, and database-specific target options use the normal `[sinker]` fields.
 - Standalone snapshot checker targets support MySQL, PostgreSQL, and MongoDB.
 - Use `parallel_type=rdb_merge` for MySQL/PostgreSQL checker targets, and `parallel_type=mongo`
   for MongoDB checker targets.
@@ -76,8 +76,8 @@ source rows
 - Use `extract_type=cdc` and `[sinker] sink_type=write`.
 - The checker validates applied CDC changes after they are written to the target.
 - The checker reuses the parsed `[sinker]` target directly.
-- Set `[checker].enable=true`.
-- `[checker]` must not set `db_type`, `url`, `username`, or `password`.
+- Set `[checker_cdc].is_enabled=true`.
+- Configure `queue_size` and `check_log_interval_secs` in `[checker_cdc]`.
 - `[resumer] resume_type=from_target` or `from_db` is required to persist checker state.
 - Currently supported only when `[sinker].db_type` is `mysql` or `pg`.
 - Use `parallel_type=rdb_merge`.
@@ -118,12 +118,12 @@ templates now separate standalone snapshot check, inline snapshot check, and inl
 
 ### Sampling Check
 
-For snapshot and inline CDC checks, add `sample_rate` to the `[checker]` section. For standalone
+For snapshot and inline CDC checks, add `sample_percent` to the `[checker]` section. For standalone
 MySQL/PostgreSQL/MongoDB snapshot check, sampling is applied during extraction. With row estimates,
-the extractor limits source reads to roughly `row_count * sample_rate / 100`; `row_count` is
+the extractor limits source reads to roughly `row_count * sample_percent / 100`; `row_count` is
 estimated from the table, or from the table's configured `where_conditions` when present. If the
 estimate is missing or zero, extraction reads the full source stream. For inline
-snapshot check and inline CDC check, `sample_rate=25` still writes all
+snapshot check and inline CDC check, `sample_percent=25` still writes all
 rows/changes, then checks rows/changes whose key hash falls into the sampled percentage before target
 fetch/compare.
 
@@ -133,8 +133,7 @@ decision across resumes.
 
 ```
 [checker]
-enable=true
-sample_rate=25
+sample_percent=25
 ```
 
 ## Limitations
@@ -158,7 +157,7 @@ entries; each non-empty line is one JSON object. `summary.log` contains exactly 
 overall summary. `sql.log` is a plain SQL file, one generated repair statement per line, and contains
 no JSON wrapper or schema/table/id metadata. `sql.log` is generated or written only when
 `output_revise_sql=true` and repair SQL exists. By default, these logs are stored in
-`runtime.log_dir/check`; if `[checker].check_log_dir` is set, that directory is used instead.
+`runtime.log_dir/check`; if `[checker_output].check_log_dir` is set, that directory is used instead.
 
 By default, stdout follows the normal runtime logging configuration. For orchestration paths that
 need stdout to contain only check results, set `[runtime].check_result_stdout_only=true` for that
@@ -204,13 +203,11 @@ embedded in `miss.log`; repair SQL, if enabled, is written only to `sql.log`.
 
 ## Output Full Row
 
-When you need full row content for troubleshooting, enable full row logging in `[checker]`. In
-standalone snapshot check, configure the checker target explicitly in `[checker]`; in inline
-snapshot check and inline cdc check, the checker reuses the parsed `[sinker]` target:
+When you need full row content for troubleshooting, configure it in `[checker_output]`. All modes
+configure the target through `[sinker]`:
 
 ```
-[checker]
-enable=true
+[checker_output]
 output_full_row=true
 ```
 
@@ -248,13 +245,11 @@ After enabling, all `diff.log` entries append `src_row` and `dst_row`, and all `
 
 ## Output Revise SQL
 
-If you need to manually repair inconsistent data, enable SQL output in `[checker]`. In standalone
-snapshot check, configure the checker target explicitly in `[checker]`; in inline snapshot check
-and inline cdc check, the checker reuses the parsed `[sinker]` target:
+If you need to manually repair inconsistent data, enable SQL output in `[checker_output]`. All
+modes configure the target through `[sinker]`:
 
 ```
-[checker]
-enable=true
+[checker_output]
 output_revise_sql=true
 # Optional: force WHERE clause to match the whole row
 revise_match_full_row=true
@@ -329,14 +324,19 @@ source/target roles swapped:
 ```
 # Original: source=A, target=B
 # Reverse: source=B, target=A
+
 [extractor]
-db_type=<original checker db_type>
-url=<original checker url>
+db_type=<original sinker db_type>
+extract_type=snapshot
+url=<original sinker url>
+
+[sinker]
+db_type=<original extractor db_type>
+sink_type=check
+url=<original extractor url>
 
 [checker]
-enable=true
-db_type=<original extractor db_type>
-url=<original extractor url>
+batch_size=200
 ```
 
 # Configuration
@@ -345,7 +345,7 @@ See [config.md](../config.md) for the full `[checker]` configuration list and ta
 
 ## Retry Mechanism
 
-When `max_retries > 0`, the checker automatically retries on inconsistency:
+When `recheck_count > 0`, the checker automatically retries on inconsistency:
 - No logs are written during retry attempts to reduce noise
 - Detailed miss/diff logs are only written on the final check
 - Useful when target data synchronization is not yet complete
@@ -353,9 +353,14 @@ When `max_retries > 0`, the checker automatically retries on inconsistency:
 This retry behavior is the main fit for standalone snapshot check and inline snapshot check. It is
 designed for short-term convergence waiting after write, not for long-running reconciliation state.
 
+Pending rows are held by a bounded retry buffer. `recheck_queue_size` and
+`recheck_queue_memory_mb` limit its row count and estimated data size. When either limit is reached,
+a newly found inconsistency is not dropped; it skips retry and is finalized immediately using the
+current check result.
+
 > **Note:** Retries are not supported in inline cdc check. CDC events arrive as a stream, and
 > subsequent DELETE events may remove data that was correctly written, causing false misses in the
-> retry queue. Even if `max_retries` and `retry_interval_secs` are configured, they are forcibly
+> retry queue. Even if `recheck_count` and `recheck_interval_secs` are configured, they are forcibly
 > ignored (set to 0) in CDC mode, and a warning is logged.
 
 

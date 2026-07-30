@@ -176,6 +176,11 @@ impl MergeParallelizer {
         sinkers: &[Arc<async_mutex::Mutex<Box<dyn Sinker + Send>>>],
         merge_type: MergeType,
     ) -> anyhow::Result<(DataSize, usize)> {
+        let active_sinkers = self.parallel_size.min(sinkers.len());
+        if active_sinkers == 0 {
+            anyhow::bail!("parallel_size and sinkers must not be empty");
+        }
+
         let mut futures = Vec::new();
         let mut data_size = DataSize::default();
         for tb_merged_data in tb_merged_data_items.iter_mut() {
@@ -194,7 +199,7 @@ impl MergeParallelizer {
 
             // make sure NO too much threads generated
             let batch_size = cmp::max(
-                data.len() / self.parallel_size,
+                data.len() / active_sinkers,
                 cmp::max(self.sinker_basic_config.batch_size, 1),
             );
 
@@ -208,7 +213,7 @@ impl MergeParallelizer {
                             Vec::new()
                         };
                         let sub_data = std::mem::replace(&mut remaining, tail);
-                        let sinker = sinkers[futures.len() % self.parallel_size].clone();
+                        let sinker = sinkers[futures.len() % active_sinkers].clone();
                         let future = tokio::spawn(async move {
                             sinker.lock().await.sink_dml(sub_data, true).await
                         });
@@ -217,7 +222,7 @@ impl MergeParallelizer {
                 }
 
                 MergeType::Unmerged => {
-                    let sinker = sinkers[futures.len() % self.parallel_size].clone();
+                    let sinker = sinkers[futures.len() % active_sinkers].clone();
                     let future =
                         tokio::spawn(async move { Self::sink_unmerged_rows(sinker, data).await });
                     futures.push(future);
@@ -225,7 +230,7 @@ impl MergeParallelizer {
             }
         }
 
-        let workers_used = futures.len().min(self.parallel_size);
+        let workers_used = futures.len().min(active_sinkers);
         for future in futures {
             future.await??;
         }
@@ -252,5 +257,53 @@ impl MergeParallelizer {
                 .await?;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use async_mutex::Mutex;
+    use dt_common::{
+        config::sinker_config::BasicSinkerConfig,
+        meta::{row_data::RowData, row_type::RowType},
+    };
+    use dt_connector::{sinker::dummy_sinker::DummySinker, Sinker};
+
+    use super::{MergeParallelizer, MergeType, TbMergedData};
+    use crate::base_parallelizer::BaseParallelizer;
+
+    #[tokio::test]
+    async fn sink_dml_adaptive_caps_parallelism_to_available_sinkers() {
+        let mut sinker_basic_config = BasicSinkerConfig::default();
+        sinker_basic_config.batch_size = 1;
+        let mut parallelizer =
+            MergeParallelizer::for_mongo(BaseParallelizer::default(), 2, sinker_basic_config);
+        let row = || {
+            RowData::new(
+                "schema".to_string(),
+                "table".to_string(),
+                0,
+                RowType::Insert,
+                None,
+                None,
+            )
+        };
+        let mut merged_data = vec![TbMergedData {
+            delete_rows: Vec::new(),
+            insert_rows: vec![row(), row()],
+            unmerged_rows: Vec::new(),
+        }];
+        let sinkers = vec![Arc::new(Mutex::new(
+            Box::new(DummySinker {}) as Box<dyn Sinker + Send>
+        ))];
+
+        let (_, workers_used) = parallelizer
+            .sink_dml_adaptive(&mut merged_data, &sinkers, MergeType::Insert)
+            .await
+            .unwrap();
+
+        assert_eq!(workers_used, 1);
     }
 }
