@@ -12,7 +12,7 @@ use sqlx::{
 
 use dt_common::{
     config::{
-        config_enums::{DbType, RdbTransactionIsolation, TaskKind, TaskType},
+        config_enums::{DbType, RdbTransactionIsolation, SinkType, TaskKind, TaskType},
         connection_auth_config::ConnectionAuthConfig,
         extractor_config::ExtractorConfig,
         global_config::GlobalConfig,
@@ -938,93 +938,97 @@ impl ConnClient {
             _ => Ok(ConnClient::None),
         }
         .endpoint(EndpointRole::Source)?;
-        let sinker_client = match &task_config.sinker {
-            SinkerConfig::Mysql {
-                url,
-                connection_auth,
-                disable_foreign_key_checks,
-                transaction_isolation,
-                ..
-            } => {
-                let conn_settings = TaskUtil::build_mysql_conn_settings(
-                    *disable_foreign_key_checks,
+        let sinker_client = if matches!(task_config.sinker_basic.sink_type, SinkType::Check) {
+            Ok(ConnClient::None)
+        } else {
+            match &task_config.sinker {
+                SinkerConfig::Mysql {
+                    url,
+                    connection_auth,
+                    disable_foreign_key_checks,
                     transaction_isolation,
-                );
-                TaskUtil::create_mysql_conn_pool(
+                    ..
+                } => {
+                    let conn_settings = TaskUtil::build_mysql_conn_settings(
+                        *disable_foreign_key_checks,
+                        transaction_isolation,
+                    );
+                    TaskUtil::create_mysql_conn_pool(
+                        url,
+                        &DbType::Mysql,
+                        connection_auth,
+                        sinker_max_connections,
+                        enable_sqlx_log,
+                        conn_settings,
+                    )
+                    .await
+                    .map(ConnClient::MySQL)
+                }
+                SinkerConfig::MysqlStruct {
+                    url,
+                    connection_auth,
+                    ..
+                } => TaskUtil::create_mysql_conn_pool(
                     url,
                     &DbType::Mysql,
                     connection_auth,
                     sinker_max_connections,
                     enable_sqlx_log,
-                    conn_settings,
+                    None,
                 )
                 .await
-                .map(ConnClient::MySQL)
+                .map(ConnClient::MySQL),
+                SinkerConfig::Pg {
+                    url,
+                    connection_auth,
+                    disable_foreign_key_checks,
+                    ..
+                } => TaskUtil::create_pg_conn_pool(
+                    url,
+                    connection_auth,
+                    sinker_max_connections,
+                    enable_sqlx_log,
+                    *disable_foreign_key_checks,
+                )
+                .await
+                .map(ConnClient::PostgreSQL),
+                SinkerConfig::PgStruct {
+                    url,
+                    connection_auth,
+                    ..
+                } => TaskUtil::create_pg_conn_pool(
+                    url,
+                    connection_auth,
+                    sinker_max_connections,
+                    enable_sqlx_log,
+                    false,
+                )
+                .await
+                .map(ConnClient::PostgreSQL),
+                SinkerConfig::Mongo {
+                    url,
+                    connection_auth,
+                    is_direct_connection,
+                    app_name,
+                    ..
+                }
+                | SinkerConfig::MongoStruct {
+                    url,
+                    connection_auth,
+                    is_direct_connection,
+                    app_name,
+                    ..
+                } => TaskUtil::create_mongo_client(
+                    url,
+                    connection_auth,
+                    *is_direct_connection,
+                    Some(app_name.to_string()),
+                    Some(sinker_max_connections),
+                )
+                .await
+                .map(ConnClient::MongoDB),
+                _ => Ok(ConnClient::None),
             }
-            SinkerConfig::MysqlStruct {
-                url,
-                connection_auth,
-                ..
-            } => TaskUtil::create_mysql_conn_pool(
-                url,
-                &DbType::Mysql,
-                connection_auth,
-                sinker_max_connections,
-                enable_sqlx_log,
-                None,
-            )
-            .await
-            .map(ConnClient::MySQL),
-            SinkerConfig::Pg {
-                url,
-                connection_auth,
-                disable_foreign_key_checks,
-                ..
-            } => TaskUtil::create_pg_conn_pool(
-                url,
-                connection_auth,
-                sinker_max_connections,
-                enable_sqlx_log,
-                *disable_foreign_key_checks,
-            )
-            .await
-            .map(ConnClient::PostgreSQL),
-            SinkerConfig::PgStruct {
-                url,
-                connection_auth,
-                ..
-            } => TaskUtil::create_pg_conn_pool(
-                url,
-                connection_auth,
-                sinker_max_connections,
-                enable_sqlx_log,
-                false,
-            )
-            .await
-            .map(ConnClient::PostgreSQL),
-            SinkerConfig::Mongo {
-                url,
-                connection_auth,
-                is_direct_connection,
-                app_name,
-                ..
-            }
-            | SinkerConfig::MongoStruct {
-                url,
-                connection_auth,
-                is_direct_connection,
-                app_name,
-                ..
-            } => TaskUtil::create_mongo_client(
-                url,
-                connection_auth,
-                *is_direct_connection,
-                Some(app_name.to_string()),
-                Some(sinker_max_connections),
-            )
-            .await
-            .map(ConnClient::MongoDB),
-            _ => Ok(ConnClient::None),
         }
         .endpoint(EndpointRole::Destination)?;
         Ok((extractor_client, sinker_client))

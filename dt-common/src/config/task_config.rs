@@ -1,6 +1,6 @@
 use std::{collections::HashMap, fs, io::ErrorKind};
 
-use anyhow::{bail, Context, Error, Ok};
+use anyhow::{bail, Error, Ok};
 
 #[cfg(feature = "metrics")]
 use crate::config::metrics_config::MetricsConfig;
@@ -17,10 +17,13 @@ use crate::{
 };
 
 use super::{
-    checker_config::CheckerConfig,
+    checker_config::{
+        CheckerConfig, CheckerOutputConfig, CheckerOutputType, InlineCheckConfig,
+        DEFAULT_CHECK_LOG_FILE_SIZE,
+    },
     config_enums::{
-        CheckMode, ConflictPolicyEnum, DbType, ExtractType, MetaCenterType, ParallelType,
-        PipelineType, SinkType, TaskKind, TaskType,
+        CheckMode, ConflictPolicyEnum, DbType, ExtractType, MetaCenterType, ParallelType, SinkType,
+        TaskKind, TaskType,
     },
     data_marker_config::DataMarkerConfig,
     extractor_config::{BasicExtractorConfig, ExtractorConfig},
@@ -65,7 +68,6 @@ pub struct TaskConfig {
 
 pub const DEFAULT_DB_BATCH_SIZE: usize = 100;
 pub const DEFAULT_MAX_CONNECTIONS: u32 = 10;
-pub const DEFAULT_CHECK_LOG_FILE_SIZE: &str = "100mb";
 
 // sections
 const GLOBAL: &str = "global";
@@ -80,22 +82,13 @@ const RESUMER: &str = "resumer";
 const DATA_MARKER: &str = "data_marker";
 const PROCESSOR: &str = "processor";
 const CHECKER: &str = "checker";
+const CHECKER_OUTPUT: &str = "checker_output";
+const CHECKER_CDC: &str = "checker_cdc";
 const META_CENTER: &str = "metacenter";
 const TRACING: &str = "tracing";
 // keys
-const CHECK_LOG_DIR: &str = "check_log_dir";
-const CHECK_LOG_FILE_SIZE: &str = "check_log_file_size";
-const CHECK_LOG_MAX_ROWS: &str = "check_log_max_rows";
-const OUTPUT_FULL_ROW: &str = "output_full_row";
-const OUTPUT_REVISE_SQL: &str = "output_revise_sql";
-const REVISE_MATCH_FULL_ROW: &str = "revise_match_full_row";
-const RETRY_INTERVAL_SECS: &str = "retry_interval_secs";
-const MAX_RETRIES: &str = "max_retries";
-const ENABLE: &str = "enable";
 const DB_TYPE: &str = "db_type";
 const URL: &str = "url";
-const USERNAME: &str = "username";
-const PASSWORD: &str = "password";
 const BATCH_SIZE: &str = "batch_size";
 const MAX_CONNECTIONS: &str = "max_connections";
 const PARTITION_COLS: &str = "partition_cols";
@@ -117,14 +110,26 @@ const REPLACE: &str = "replace";
 const DISABLE_FOREIGN_KEY_CHECKS: &str = "disable_foreign_key_checks";
 const RESUME_TYPE: &str = "resume_type";
 const CHECKER_QUEUE_SIZE: &str = "queue_size";
-const CHECK_LOG_S3: &str = "check_log_s3";
 const S3_KEY_PREFIX: &str = "s3_key_prefix";
-const CDC_CHECK_LOG_INTERVAL_SECS: &str = "cdc_check_log_interval_secs";
-const SAMPLE_RATE: &str = "sample_rate";
+const CHECK_LOG_INTERVAL_SECS: &str = "check_log_interval_secs";
+const SAMPLE_PERCENT: &str = "sample_percent";
 const IS_DIRECT_CONNECTION: &str = "is_direct_connection";
 const MONGO_REQUIRE_SHARD_KEY_FILTER: &str = "mongo_require_shard_key_filter";
 const TASK_SUMMARY_MODE: &str = "task_summary_mode";
 const OUTPUT_FORMAT: &str = "output_format";
+// keys, checker
+const CHECK_LOG_DIR: &str = "check_log_dir";
+const CHECK_LOG_FILE_SIZE: &str = "check_log_file_size";
+const CHECK_LOG_MAX_ROWS: &str = "check_log_max_rows";
+const OUTPUT_FULL_ROW: &str = "output_full_row";
+const OUTPUT_REVISE_SQL: &str = "output_revise_sql";
+const REVISE_MATCH_FULL_ROW: &str = "revise_match_full_row";
+const RECHECK_INTERVAL_SECS: &str = "recheck_interval_secs";
+const RECHECK_COUNT: &str = "recheck_count";
+const RECHECK_QUEUE_SIZE: &str = "recheck_queue_size";
+const RECHECK_QUEUE_MEMORY_MB: &str = "recheck_queue_memory_mb";
+const IS_ENABLED: &str = "is_enabled";
+const LEGACY_CHECKER_ENABLE: &str = "enable";
 
 // default values
 pub const APE_DTS: &str = "APE_DTS";
@@ -145,33 +150,13 @@ impl TaskConfig {
         let filter = Self::load_filter_config(loader)?;
         let router = Self::load_router_config(loader)?;
         let parallelizer = Self::load_parallelizer_config(loader, &sinker_basic, &pipeline)?;
-        let checker = Self::load_checker_config(loader)?;
+        let checker =
+            Self::load_checker_config(loader, &extractor_basic.extract_type, &sinker_basic)?;
         if let Some(checker_cfg) = checker.as_ref() {
-            if matches!(extractor_basic.extract_type, ExtractType::Cdc)
-                && !matches!(sinker_basic.sink_type, SinkType::Write)
-            {
-                bail!(DtError::invalid_config(
-                    "config [checker] with [extractor] extract_type=cdc requires [sinker] sink_type=write",
-                ));
-            }
-            if matches!(extractor_basic.extract_type, ExtractType::Cdc)
-                && !matches!(parallelizer.parallel_type(), ParallelType::RdbMerge)
-            {
-                bail!(DtError::invalid_config(
-                    "config [checker].enable=true with [extractor] extract_type=cdc and [sinker] sink_type=write currently supports only [parallelizer] parallel_type=rdb_merge",
-                ));
-            }
-
-            if !matches!(pipeline.pipeline_type, PipelineType::Basic) {
-                bail!(DtError::invalid_config(
-                    "config [checker] only supports [pipeline] pipeline_type=basic",
-                ));
-            }
-
             let task_type = if matches!(extractor_basic.extract_type, ExtractType::CheckLog)
-                && matches!(sinker_basic.sink_type, SinkType::Dummy)
+                && matches!(sinker_basic.sink_type, SinkType::Check)
                 && matches!(
-                    checker_cfg.db_type,
+                    sinker_basic.db_type,
                     DbType::Mysql | DbType::Pg | DbType::Mongo
                 ) {
                 None
@@ -180,38 +165,31 @@ impl TaskConfig {
                     Self::build_task_type(
                         &extractor_basic.extract_type,
                         &sinker_basic.sink_type,
-                        Self::checker_target_db_type(
-                            &extractor_basic.extract_type,
-                            &sinker_basic,
-                            checker_cfg,
-                        ),
+                        &sinker_basic.db_type,
                         true,
                     )
                     .ok_or_else(|| {
                         DtError::invalid_config(format!(
-                            "config [checker] is not supported for [checker] db_type={} with [extractor] extract_type={} and [sinker] sink_type={}",
-                            checker_cfg.db_type, extractor_basic.extract_type, sinker_basic.sink_type
+                            "checker is not supported for [sinker] db_type={} with [extractor] extract_type={} and [sinker] sink_type={}",
+                            sinker_basic.db_type, extractor_basic.extract_type, sinker_basic.sink_type
                         ))
                     })?,
                 )
             };
 
-            let check_log_s3_supported = task_type.is_some_and(|task_type| {
+            let is_s3_output =
+                matches!(checker_cfg.output.output_type, CheckerOutputType::S3 { .. });
+            let s3_supported = task_type.is_some_and(|task_type| {
                 task_type.is_cdc_inline_check() || task_type.is_standalone_snapshot_check()
             });
-            if checker_cfg.check_log_s3 && !check_log_s3_supported {
-                bail!(DtError::invalid_config(format!(
-                    "config [checker].{} only supports standalone snapshot check or inline cdc check",
-                    CHECK_LOG_S3
-                )));
-            }
-            if checker_cfg.check_log_s3 && checker_cfg.s3_config.is_none() {
+            if is_s3_output && !s3_supported {
                 bail!(DtError::invalid_config(
-                    "check_log_s3=true but checker s3 config is missing in [checker]",
+                    "config [checker_output].output_type=s3 only supports standalone snapshot check or inline cdc check"
+                        .to_string()
                 ));
             }
 
-            if checker_cfg.sample_rate.is_some()
+            if checker_cfg.sample_percent.is_some()
                 && !matches!(
                     task_type,
                     Some(TaskType {
@@ -225,22 +203,29 @@ impl TaskConfig {
             {
                 bail!(DtError::invalid_config(format!(
                     "config [checker].{} only supports snapshot check or inline cdc check",
-                    SAMPLE_RATE
+                    SAMPLE_PERCENT
                 )));
             }
 
-            Self::validate_checker_target_config(
-                loader,
-                task_type.is_some_and(|task_type| task_type.is_inline_check()),
-            )?;
+            if task_type.is_some_and(|task_type| task_type.is_cdc_inline_check()) {
+                if !matches!(parallelizer.parallel_type(), ParallelType::RdbMerge) {
+                    bail!(DtError::invalid_config(
+                        "inline cdc check currently supports only [parallelizer] parallel_type=rdb_merge",
+                    ));
+                }
+                if checker_cfg.inline_check.is_none() {
+                    bail!(DtError::invalid_config(
+                        "inline cdc check requires [checker_cdc].is_enabled=true",
+                    ));
+                }
+            }
         }
-        let resumer = Self::load_resumer_config(loader, &runtime, &sinker_basic, checker.as_ref())?;
+        let resumer = Self::load_resumer_config(loader, &runtime, &sinker_basic)?;
         Ok(Self {
             global: Self::load_global_config(
                 loader,
                 &extractor_basic,
                 &sinker_basic,
-                checker.as_ref(),
                 &filter,
                 &router,
             )?,
@@ -269,15 +254,8 @@ impl TaskConfig {
     }
 
     pub fn checker_target(&self) -> Option<BasicSinkerConfig> {
-        let checker = self.checker.as_ref()?;
-        if self
-            .task_type()
-            .is_some_and(|task_type| task_type.is_inline_check())
-        {
-            self.sink_target()
-        } else {
-            Some(Self::checker_as_basic_sinker(checker))
-        }
+        self.checker.as_ref()?;
+        self.sink_target()
     }
 
     pub fn destination_target(&self) -> Option<BasicSinkerConfig> {
@@ -293,68 +271,12 @@ impl TaskConfig {
             // recorder/recovery/checker-store initialization.
             return None;
         }
-        let target_db_type = self
-            .checker
-            .as_ref()
-            .map(|checker| {
-                Self::checker_target_db_type(
-                    &self.extractor_basic.extract_type,
-                    &self.sinker_basic,
-                    checker,
-                )
-            })
-            .unwrap_or(&self.sinker_basic.db_type);
         Self::build_task_type(
             &self.extractor_basic.extract_type,
             &self.sinker_basic.sink_type,
-            target_db_type,
+            &self.sinker_basic.db_type,
             self.checker.is_some(),
         )
-    }
-
-    fn checker_uses_inline_target(extract_type: &ExtractType, sink_type: &SinkType) -> bool {
-        matches!(sink_type, SinkType::Write)
-            && matches!(extract_type, ExtractType::Snapshot | ExtractType::Cdc)
-    }
-
-    fn checker_target_db_type<'a>(
-        extract_type: &ExtractType,
-        sinker_basic: &'a BasicSinkerConfig,
-        checker: &'a CheckerConfig,
-    ) -> &'a DbType {
-        if Self::checker_uses_inline_target(extract_type, &sinker_basic.sink_type) {
-            &sinker_basic.db_type
-        } else {
-            &checker.db_type
-        }
-    }
-
-    fn validate_checker_target_config(
-        loader: &IniLoader,
-        inline_check: bool,
-    ) -> anyhow::Result<()> {
-        if inline_check
-            && [DB_TYPE, URL, USERNAME, PASSWORD]
-                .iter()
-                .any(|key| loader.contains(CHECKER, key))
-        {
-            bail!(DtError::invalid_config(
-                "inline check does not accept [checker] target fields; configure them via [sinker]",
-            ));
-        }
-        if !inline_check
-            && [DB_TYPE, URL].iter().any(|key| {
-                loader
-                    .ini
-                    .get(CHECKER, key)
-                    .is_none_or(|value| value.is_empty())
-            })
-        {
-            bail!(DtError::invalid_config(
-                "config [checker] standalone target requires non-empty db_type and url",
-            ));
-        }
-        Ok(())
     }
 
     fn write_sink_supports_inline_checker(target_db_type: &DbType) -> bool {
@@ -386,12 +308,12 @@ impl TaskConfig {
             }
         } else {
             match (kind, sink_type, target_db_type) {
-                (TaskKind::Struct, SinkType::Dummy, DbType::Mysql | DbType::Pg) => {
+                (TaskKind::Struct, SinkType::Check, DbType::Mysql | DbType::Pg) => {
                     Some(CheckMode::Standalone)
                 }
                 (
                     TaskKind::Snapshot,
-                    SinkType::Dummy,
+                    SinkType::Check,
                     DbType::Mysql | DbType::Pg | DbType::Mongo,
                 ) => Some(CheckMode::Standalone),
                 (TaskKind::Snapshot, SinkType::Write, db_type)
@@ -413,22 +335,14 @@ impl TaskConfig {
         loader: &IniLoader,
         extractor_basic: &BasicExtractorConfig,
         sinker_basic: &BasicSinkerConfig,
-        checker: Option<&CheckerConfig>,
         filter: &FilterConfig,
         router: &RouterConfig,
     ) -> anyhow::Result<GlobalConfig> {
-        let identity_sinker_basic = if matches!(sinker_basic.sink_type, SinkType::Dummy) {
-            checker
-                .map(Self::checker_as_basic_sinker)
-                .unwrap_or_else(|| sinker_basic.clone())
-        } else {
-            sinker_basic.clone()
-        };
         Ok(GlobalConfig {
             task_id: loader.get_with_default(
                 GLOBAL,
                 "task_id",
-                TaskUtil::generate_task_id(extractor_basic, &identity_sinker_basic, filter, router),
+                TaskUtil::generate_task_id(extractor_basic, sinker_basic, filter, router),
             )?,
         })
     }
@@ -769,40 +683,13 @@ impl TaskConfig {
         Ok((basic, extractor))
     }
 
-    fn is_checker_enabled(loader: &IniLoader) -> anyhow::Result<bool> {
-        if !loader.ini.sections().contains(&CHECKER.to_string()) {
-            return Ok(false);
-        }
-        if !loader.contains(CHECKER, ENABLE) {
-            bail!(DtError::invalid_config(
-                "config [checker].enable is required when [checker] section is present",
-            ));
-        }
-        Ok(loader.get_with_default(CHECKER, ENABLE, false)?)
-    }
-
     fn load_sinker_config(loader: &IniLoader) -> anyhow::Result<(BasicSinkerConfig, SinkerConfig)> {
         let has_sinker = loader.ini.sections().contains(&SINKER.to_string());
-        let has_checker = loader.ini.sections().contains(&CHECKER.to_string());
-
         if !has_sinker {
-            if !has_checker {
-                bail!(DtError::invalid_config(
-                    "config [sinker] is required when [checker] is not set"
-                ));
-            }
-            if !Self::is_checker_enabled(loader)? {
-                bail!(DtError::invalid_config(
-                    "config [sinker] is required unless [checker].enable=true"
-                ));
-            }
+            bail!(DtError::invalid_config("config [sinker] is required"));
         }
 
-        let sink_type = if has_sinker {
-            loader.get_with_default(SINKER, "sink_type", SinkType::Write)?
-        } else {
-            SinkType::Dummy
-        };
+        let sink_type = loader.get_with_default(SINKER, "sink_type", SinkType::Write)?;
 
         if let SinkType::Dummy = sink_type {
             return Ok((BasicSinkerConfig::default(), SinkerConfig::Dummy));
@@ -852,7 +739,7 @@ impl TaskConfig {
 
         let sinker = match db_type {
             DbType::Mysql | DbType::Tidb => match sink_type {
-                SinkType::Write => SinkerConfig::Mysql {
+                SinkType::Write | SinkType::Check => SinkerConfig::Mysql {
                     url,
                     connection_auth,
                     batch_size,
@@ -879,7 +766,7 @@ impl TaskConfig {
             },
 
             DbType::Pg => match sink_type {
-                SinkType::Write => SinkerConfig::Pg {
+                SinkType::Write | SinkType::Check => SinkerConfig::Pg {
                     url,
                     connection_auth,
                     batch_size,
@@ -905,7 +792,7 @@ impl TaskConfig {
             },
 
             DbType::Mongo => match sink_type {
-                SinkType::Write => SinkerConfig::Mongo {
+                SinkType::Write | SinkType::Check => SinkerConfig::Mongo {
                     url,
                     connection_auth,
                     is_direct_connection,
@@ -1110,11 +997,6 @@ impl TaskConfig {
                 "counter_max_sub_count",
                 1000,
             )?,
-            pipeline_type: loader.get_with_default(
-                PIPELINE,
-                "pipeline_type",
-                PipelineType::Basic,
-            )?,
         };
 
         if config.counter_time_window_secs == 0 {
@@ -1123,123 +1005,183 @@ impl TaskConfig {
         Ok(config)
     }
 
-    fn load_checker_config(loader: &IniLoader) -> anyhow::Result<Option<CheckerConfig>> {
-        if !Self::is_checker_enabled(loader)? {
+    fn load_checker_config(
+        loader: &IniLoader,
+        extract_type: &ExtractType,
+        sinker_basic: &BasicSinkerConfig,
+    ) -> anyhow::Result<Option<CheckerConfig>> {
+        if loader.contains(CHECKER, LEGACY_CHECKER_ENABLE) {
+            bail!(DtError::invalid_config(
+                "config [checker].enable is no longer supported; use [sinker].sink_type=check for standalone check, [checker] for snapshot inline check, or [checker_cdc].is_enabled=true for CDC inline check",
+            ));
+        }
+        let has_checker = loader.ini.sections().contains(&CHECKER.to_string());
+        let cdc_enabled = loader.ini.sections().contains(&CHECKER_CDC.to_string())
+            && loader.get_with_default(CHECKER_CDC, IS_ENABLED, false)?;
+        let standalone = matches!(sinker_basic.sink_type, SinkType::Check);
+        let snapshot_inline = has_checker
+            && matches!(extract_type, ExtractType::Snapshot)
+            && matches!(sinker_basic.sink_type, SinkType::Write);
+
+        if !standalone && !snapshot_inline && !cdc_enabled {
             return Ok(None);
         }
 
+        if cdc_enabled
+            && (!matches!(extract_type, ExtractType::Cdc)
+                || !matches!(sinker_basic.sink_type, SinkType::Write))
+        {
+            bail!(DtError::invalid_config(
+                "config [checker_cdc].is_enabled=true requires [extractor] extract_type=cdc and [sinker] sink_type=write",
+            ));
+        }
+        if matches!(extract_type, ExtractType::Cdc) && !cdc_enabled {
+            return Ok(None);
+        }
+        if sinker_basic.url.is_empty() {
+            bail!(DtError::invalid_config(
+                "checker target requires non-empty [sinker].url",
+            ));
+        }
+
         let default = CheckerConfig::default();
-        let sample_rate = match loader.ini.get(CHECKER, SAMPLE_RATE) {
+        let sample_percent = match loader.ini.get(CHECKER, SAMPLE_PERCENT) {
             Some(raw) if !raw.is_empty() => {
-                let sample_rate =
-                    raw.parse::<usize>()
-                        .context(DtError::invalid_config(format!(
-                            "config [checker].{}={}, can not be parsed as usize",
-                            SAMPLE_RATE, raw
-                        )))?;
-                if !(1..=100).contains(&sample_rate) {
+                let sample_percent = raw.parse::<usize>().map_err(|_| {
+                    DtError::invalid_config(format!(
+                        "config [checker].{}={}, can not be parsed as usize",
+                        SAMPLE_PERCENT, raw
+                    ))
+                })?;
+                if !(1..=100).contains(&sample_percent) {
                     bail!(DtError::invalid_config(format!(
-                        "config [checker].sample_rate must be between 1 and 100, got {}",
-                        sample_rate
+                        "config [checker].sample_percent must be between 1 and 100, got {}",
+                        sample_percent
                     )));
                 }
-                Some(sample_rate as u8)
+                Some(sample_percent as u8)
             }
             _ => None,
         };
-        let config = CheckerConfig {
-            queue_size: loader.get_with_default(CHECKER, CHECKER_QUEUE_SIZE, default.queue_size)?,
-            max_connections: loader.get_with_default(
-                CHECKER,
-                MAX_CONNECTIONS,
-                default.max_connections,
-            )?,
-            batch_size: loader.get_with_default(CHECKER, BATCH_SIZE, default.batch_size)?,
-            sample_rate,
-            output_full_row: loader.get_with_default(
-                CHECKER,
-                OUTPUT_FULL_ROW,
-                default.output_full_row,
-            )?,
-            output_revise_sql: loader.get_with_default(
-                CHECKER,
-                OUTPUT_REVISE_SQL,
-                default.output_revise_sql,
-            )?,
-            revise_match_full_row: loader.get_with_default(
-                CHECKER,
-                REVISE_MATCH_FULL_ROW,
-                default.revise_match_full_row,
-            )?,
-            retry_interval_secs: loader.get_with_default(
-                CHECKER,
-                RETRY_INTERVAL_SECS,
-                default.retry_interval_secs,
-            )?,
-            max_retries: loader.get_with_default(CHECKER, MAX_RETRIES, default.max_retries)?,
-            check_log_dir: loader.get_with_default(
-                CHECKER,
-                CHECK_LOG_DIR,
-                default.check_log_dir,
-            )?,
-            check_log_file_size: loader.get_with_default(
-                CHECKER,
-                CHECK_LOG_FILE_SIZE,
-                default.check_log_file_size,
-            )?,
-            check_log_max_rows: loader.get_with_default(
-                CHECKER,
-                CHECK_LOG_MAX_ROWS,
-                default.check_log_max_rows,
-            )?,
-            check_log_s3: loader.get_with_default(CHECKER, CHECK_LOG_S3, default.check_log_s3)?,
-            s3_config: {
-                let bucket: String = loader.get_optional(CHECKER, "s3_bucket")?;
-                if bucket.is_empty() {
-                    None
-                } else {
-                    Some(S3Config {
-                        bucket,
-                        access_key: loader.get_optional(CHECKER, "s3_access_key_id")?,
-                        secret_key: loader.get_optional(CHECKER, "s3_secret_access_key")?,
-                        region: loader.get_optional(CHECKER, "s3_region")?,
-                        endpoint: loader.get_optional(CHECKER, "s3_endpoint")?,
-                        root_dir: loader.get_optional(CHECKER, "s3_root_dir")?,
-                        root_url: loader.get_optional(CHECKER, "s3_root_url")?,
-                    })
-                }
-            },
-            s3_key_prefix: loader.get_with_default(
-                CHECKER,
-                S3_KEY_PREFIX,
-                default.s3_key_prefix,
-            )?,
-            cdc_check_log_interval_secs: loader.get_with_default(
-                CHECKER,
-                CDC_CHECK_LOG_INTERVAL_SECS,
-                default.cdc_check_log_interval_secs,
-            )?,
-            db_type: loader.get_optional(CHECKER, DB_TYPE)?,
-            url: loader.get_optional(CHECKER, URL)?,
-            connection_auth: ConnectionAuthConfig::from(loader, CHECKER)?,
-        };
-        Ok(Some(config))
-    }
 
-    // TODO: checker support mongo & redis special configs
-    fn checker_as_basic_sinker(checker: &CheckerConfig) -> BasicSinkerConfig {
-        BasicSinkerConfig {
-            sink_type: SinkType::Dummy,
-            db_type: checker.db_type.clone(),
-            url: checker.url.clone(),
-            connection_auth: checker.connection_auth.clone(),
-            batch_size: checker.batch_size,
-            max_connections: checker.max_connections,
-            rate_limiter: RateLimiterConfig::default(),
-            app_name: Some(APP_NAME.to_string()),
-            is_direct_connection: None,
-            is_cluster: None,
+        let output_default = CheckerOutputConfig::default();
+        let output_type: String =
+            loader.get_with_default(CHECKER_OUTPUT, "output_type", "logs".to_string())?;
+        let output_type = match output_type.as_str() {
+            "logs" => CheckerOutputType::Logs,
+            "s3" => {
+                let bucket = loader
+                    .ini
+                    .get(CHECKER_OUTPUT, "s3_bucket")
+                    .filter(|value| !value.is_empty())
+                    .ok_or_else(|| {
+                        DtError::invalid_config(
+                            "config [checker_output].s3_bucket is required when output_type=s3",
+                        )
+                    })?;
+                CheckerOutputType::S3 {
+                    key_prefix: loader.get_optional(CHECKER_OUTPUT, S3_KEY_PREFIX)?,
+                    config: S3Config {
+                        bucket,
+                        access_key: loader.get_optional(CHECKER_OUTPUT, "s3_access_key_id")?,
+                        secret_key: loader.get_optional(CHECKER_OUTPUT, "s3_secret_access_key")?,
+                        region: loader.get_optional(CHECKER_OUTPUT, "s3_region")?,
+                        endpoint: loader.get_optional(CHECKER_OUTPUT, "s3_endpoint")?,
+                        root_dir: loader.get_optional(CHECKER_OUTPUT, "s3_root_dir")?,
+                        root_url: loader.get_optional(CHECKER_OUTPUT, "s3_root_url")?,
+                    },
+                }
+            }
+            _ => {
+                bail!(DtError::invalid_config(format!(
+                    "config [checker_output].output_type must be logs or s3, got {}",
+                    output_type
+                )))
+            }
+        };
+
+        let recheck_queue_size =
+            loader.get_with_default(CHECKER, RECHECK_QUEUE_SIZE, default.recheck_queue_size)?;
+        if recheck_queue_size == 0 {
+            bail!(DtError::invalid_config(
+                "config [checker].recheck_queue_size must be greater than 0",
+            ));
         }
+        let recheck_queue_memory_mb = loader.get_with_default(
+            CHECKER,
+            RECHECK_QUEUE_MEMORY_MB,
+            default.recheck_queue_memory_mb,
+        )?;
+        if recheck_queue_memory_mb == 0 {
+            bail!(DtError::invalid_config(
+                "config [checker].recheck_queue_memory_mb must be greater than 0",
+            ));
+        }
+
+        let inline_check = if cdc_enabled {
+            let inline_default = InlineCheckConfig::default();
+            Some(InlineCheckConfig {
+                queue_size: loader.get_with_default(
+                    CHECKER_CDC,
+                    CHECKER_QUEUE_SIZE,
+                    inline_default.queue_size,
+                )?,
+                check_log_interval_secs: loader.get_with_default(
+                    CHECKER_CDC,
+                    CHECK_LOG_INTERVAL_SECS,
+                    inline_default.check_log_interval_secs,
+                )?,
+            })
+        } else {
+            None
+        };
+
+        Ok(Some(CheckerConfig {
+            batch_size: loader.get_with_default(CHECKER, BATCH_SIZE, default.batch_size)?,
+            sample_percent,
+            recheck_count: loader.get_with_default(
+                CHECKER,
+                RECHECK_COUNT,
+                default.recheck_count,
+            )?,
+            recheck_interval_secs: loader.get_with_default(
+                CHECKER,
+                RECHECK_INTERVAL_SECS,
+                default.recheck_interval_secs,
+            )?,
+            recheck_queue_size,
+            recheck_queue_memory_mb,
+            output: CheckerOutputConfig {
+                output_full_row: loader.get_with_default(
+                    CHECKER_OUTPUT,
+                    OUTPUT_FULL_ROW,
+                    output_default.output_full_row,
+                )?,
+                output_revise_sql: loader.get_with_default(
+                    CHECKER_OUTPUT,
+                    OUTPUT_REVISE_SQL,
+                    output_default.output_revise_sql,
+                )?,
+                revise_match_full_row: loader.get_with_default(
+                    CHECKER_OUTPUT,
+                    REVISE_MATCH_FULL_ROW,
+                    output_default.revise_match_full_row,
+                )?,
+                log_dir: loader.get_optional(CHECKER_OUTPUT, CHECK_LOG_DIR)?,
+                log_file_size: loader.get_with_default(
+                    CHECKER_OUTPUT,
+                    CHECK_LOG_FILE_SIZE,
+                    DEFAULT_CHECK_LOG_FILE_SIZE.to_string(),
+                )?,
+                log_max_rows: loader.get_with_default(
+                    CHECKER_OUTPUT,
+                    CHECK_LOG_MAX_ROWS,
+                    super::checker_config::DEFAULT_CHECK_LOG_MAX_ROWS,
+                )?,
+                output_type,
+            },
+            inline_check,
+        }))
     }
 
     fn load_runtime_config(loader: &IniLoader) -> anyhow::Result<RuntimeConfig> {
@@ -1312,7 +1254,6 @@ impl TaskConfig {
         loader: &IniLoader,
         runtime: &RuntimeConfig,
         sinker_basic: &BasicSinkerConfig,
-        checker: Option<&CheckerConfig>,
     ) -> anyhow::Result<ResumerConfig> {
         let legacy_keys = ["resume_from_log", "resume_log_dir", "resume_config_file"]
             .into_iter()
@@ -1332,30 +1273,18 @@ impl TaskConfig {
                 log_dir: loader.get_with_default(RESUMER, "log_dir", runtime.log_dir.clone())?,
                 config_file: loader.get_optional(RESUMER, "config_file")?,
             }),
-            ResumeType::FromTarget => {
-                let target = if matches!(sinker_basic.sink_type, SinkType::Dummy) {
-                    let Some(checker) = checker else {
-                        bail!(DtError::invalid_config(
-                            "config [checker] target is required when [resumer] resume_type=from_target"
-                        ));
-                    };
-                    Self::checker_as_basic_sinker(checker)
-                } else {
-                    sinker_basic.clone()
-                };
-                Ok(ResumerConfig::FromDB {
-                    url: target.url.clone(),
-                    connection_auth: target.connection_auth.clone(),
-                    db_type: target.db_type.clone(),
-                    table_full_name: loader.get_optional(RESUMER, "table_full_name")?,
-                    max_connections: loader.get_with_default(
-                        RESUMER,
-                        MAX_CONNECTIONS,
-                        RESUMER_CONNECTION_LIMIT_DEFAULT,
-                    )?,
-                    is_direct_connection: target.is_direct_connection,
-                })
-            }
+            ResumeType::FromTarget => Ok(ResumerConfig::FromDB {
+                url: sinker_basic.url.clone(),
+                connection_auth: sinker_basic.connection_auth.clone(),
+                db_type: sinker_basic.db_type.clone(),
+                table_full_name: loader.get_optional(RESUMER, "table_full_name")?,
+                max_connections: loader.get_with_default(
+                    RESUMER,
+                    MAX_CONNECTIONS,
+                    RESUMER_CONNECTION_LIMIT_DEFAULT,
+                )?,
+                is_direct_connection: sinker_basic.is_direct_connection,
+            }),
             ResumeType::FromDB => {
                 let is_direct_connection = if loader.contains(RESUMER, IS_DIRECT_CONNECTION) {
                     Some(loader.get_optional(RESUMER, IS_DIRECT_CONNECTION)?)
@@ -1505,15 +1434,22 @@ mod tests {
     use crate::config::parallelizer_config::{
         ChunkPartitionerRebalanceCost, ChunkPartitionerRebalanceStrategy,
     };
+    use crate::error::{ErrorCode, ErrorReport};
     use crate::runtime_trace::{TaskSummaryMode, TraceOutputFormat};
 
     use super::{
-        CheckMode, ExtractorConfig, ParallelType, SinkerConfig, TaskConfig, TaskKind, TaskType,
+        CheckMode, CheckerOutputType, ExtractorConfig, ParallelType, SinkerConfig, TaskConfig,
+        TaskKind, TaskType,
     };
 
     static NEXT_CONFIG_ID: AtomicU64 = AtomicU64::new(0);
 
-    fn cdc_inline_check_config(parallel_type: &str, extra_checker: &str) -> String {
+    fn cdc_inline_check_config(
+        parallel_type: &str,
+        extra_checker: &str,
+        extra_cdc: &str,
+        extra_output: &str,
+    ) -> String {
         format!(
             r#"[extractor]
 db_type=mysql
@@ -1527,9 +1463,15 @@ sink_type=write
 url=mysql://127.0.0.1:3307
 
 [checker]
-enable=true
 batch_size=2
 {extra_checker}
+
+[checker_cdc]
+is_enabled=true
+{extra_cdc}
+
+[checker_output]
+{extra_output}
 
 [parallelizer]
 parallel_type={parallel_type}
@@ -1562,10 +1504,13 @@ db_type=mysql
 extract_type=snapshot
 url=mysql://127.0.0.1:3306
 
-[checker]
-enable=true
+[sinker]
 db_type=mysql
+sink_type=check
 url=mysql://127.0.0.1:3307
+max_connections=3
+
+[checker]
 {extra_checker}
 
 [parallelizer]
@@ -1650,11 +1595,25 @@ parallel_type=redis
 
     #[test]
     fn checker_accepts_supported_configs() {
-        let config = load_temp_task_config(&cdc_inline_check_config("rdb_merge", ""))
-            .expect("cdc inline checker config should be valid");
+        let config = load_temp_task_config(&cdc_inline_check_config(
+            "rdb_merge",
+            "",
+            "queue_size=16",
+            "",
+        ))
+        .expect("cdc inline checker config should be valid");
         assert_eq!(
             config.task_type(),
             Some(TaskType::new(TaskKind::Cdc, Some(CheckMode::Inline)))
+        );
+        assert_eq!(
+            config
+                .checker
+                .as_ref()
+                .and_then(|checker| checker.inline_check.as_ref())
+                .expect("cdc inline config should exist")
+                .queue_size,
+            16
         );
 
         let config = load_temp_task_config(
@@ -1663,10 +1622,13 @@ db_type=mongo
 extract_type=snapshot
 url=mongodb://127.0.0.1:27017
 
-[checker]
-enable=true
+[sinker]
 db_type=mongo
+sink_type=check
 url=mongodb://127.0.0.1:27018
+
+[checker]
+batch_size=20
 
 [parallelizer]
 parallel_type=mongo
@@ -1680,22 +1642,32 @@ parallel_type=mongo
                 Some(CheckMode::Standalone)
             ))
         );
+        assert_eq!(
+            config.checker_target().expect("checker target").url,
+            "mongodb://127.0.0.1:27018"
+        );
 
-        for (config, sample_rate) in [
-            (snapshot_check_config("sample_rate=25"), 25),
-            (cdc_inline_check_config("rdb_merge", "sample_rate=10"), 10),
+        for (config, sample_percent) in [
+            (snapshot_check_config("sample_percent=25"), 25),
+            (
+                cdc_inline_check_config("rdb_merge", "sample_percent=10", "", ""),
+                10,
+            ),
         ] {
             let checker = load_temp_task_config(&config)
                 .expect("sampled checker config should be valid")
                 .checker
                 .expect("checker should exist");
-            assert_eq!(checker.sample_rate, Some(sample_rate));
+            assert_eq!(checker.sample_percent, Some(sample_percent));
         }
 
         let checker = load_temp_task_config(&cdc_inline_check_config(
             "rdb_merge",
-            r#"
-check_log_s3=true
+            "",
+            "check_log_interval_secs=12",
+            r#"output_type=s3
+check_log_file_size=10mb
+check_log_max_rows=123
 s3_bucket=ape-dts
 s3_access_key_id=ak
 s3_secret_access_key=sk
@@ -1707,28 +1679,47 @@ s3_key_prefix=check/10001
         .expect("cdc checker s3 config should be valid")
         .checker
         .expect("checker should exist");
-        assert!(checker.check_log_s3);
-        assert_eq!(checker.s3_key_prefix, "check/10001");
         assert_eq!(
-            checker.s3_config.expect("s3 config should exist").bucket,
-            "ape-dts"
+            checker
+                .inline_check
+                .as_ref()
+                .expect("cdc inline config")
+                .check_log_interval_secs,
+            12
         );
+        assert_eq!(checker.log_file_size(), "10mb");
+        assert_eq!(checker.log_max_rows(), 123);
+        match checker.output.output_type {
+            CheckerOutputType::S3 { key_prefix, config } => {
+                assert_eq!(key_prefix, "check/10001");
+                assert_eq!(config.bucket, "ape-dts");
+            }
+            _ => panic!("expected s3 checker output"),
+        }
 
-        let checker = load_temp_task_config(&snapshot_check_config(
-            r#"
-check_log_s3=true
+        let checker = load_temp_task_config(&format!(
+            r#"{}
+
+[checker_output]
+output_type=s3
 s3_bucket=ape-dts
-s3_access_key_id=ak
-s3_secret_access_key=sk
-s3_region=us-east-1
-s3_endpoint=http://127.0.0.1:9000
 s3_key_prefix=check/10001
 "#,
+            snapshot_check_config(
+                "recheck_count=4\nrecheck_interval_secs=5\nrecheck_queue_size=123\nrecheck_queue_memory_mb=64",
+            )
         ))
         .expect("standalone snapshot checker s3 config should be valid")
         .checker
         .expect("checker should exist");
-        assert!(checker.check_log_s3);
+        assert!(matches!(
+            checker.output.output_type,
+            CheckerOutputType::S3 { .. }
+        ));
+        assert_eq!(checker.recheck_count, 4);
+        assert_eq!(checker.recheck_interval_secs, 5);
+        assert_eq!(checker.recheck_queue_size, 123);
+        assert_eq!(checker.recheck_queue_memory_mb, 64);
 
         let checker = load_temp_task_config(
             r#"[extractor]
@@ -1737,48 +1728,62 @@ extract_type=struct
 url=mysql://127.0.0.1:3306
 
 [sinker]
-sink_type=dummy
+db_type=mysql
+sink_type=check
+url=mysql://127.0.0.1:3307
 
 [checker]
-enable=true
-db_type=mysql
-url=mysql://127.0.0.1:3307
-sample_rate=
+sample_percent=
 "#,
         )
-        .expect("empty sample_rate should be ignored")
+        .expect("empty sample_percent should be ignored")
         .checker
         .expect("checker should exist");
-        assert_eq!(checker.sample_rate, None);
+        assert_eq!(checker.sample_percent, None);
+
+        let config = load_temp_task_config(&basic_snapshot_config(
+            r#"[checker]
+batch_size=10
+
+[checker_output]
+output_type=logs
+check_log_dir=/tmp/ape-dts-check
+output_full_row=true
+"#,
+        ))
+        .expect("inline snapshot checker config should be valid");
+        assert_eq!(
+            config.task_type(),
+            Some(TaskType::new(TaskKind::Snapshot, Some(CheckMode::Inline)))
+        );
+        let checker = config.checker.expect("checker should exist");
+        assert_eq!(checker.log_dir(), "/tmp/ape-dts-check");
+        assert!(checker.output.output_full_row);
     }
 
     #[test]
     fn checker_rejects_invalid_configs() {
         for (config, expected_err) in [
             (
-                cdc_inline_check_config("serial", ""),
-                "config [checker].enable=true with [extractor] extract_type=cdc and [sinker] sink_type=write currently supports only [parallelizer] parallel_type=rdb_merge",
+                cdc_inline_check_config("serial", "", "", ""),
+                "inline cdc check currently supports only [parallelizer] parallel_type=rdb_merge",
             ),
             (
                 r#"[extractor]
 db_type=mysql
-extract_type=cdc
+extract_type=snapshot
 url=mysql://127.0.0.1:3306
-server_id=1
 
 [sinker]
 db_type=mysql
 sink_type=write
 url=mysql://127.0.0.1:3307
 
-[checker]
-batch_size=2
-
-[parallelizer]
-parallel_type=rdb_merge
+[checker_cdc]
+is_enabled=true
 "#
                 .to_string(),
-                "config [checker].enable is required when [checker] section is present",
+                "config [checker_cdc].is_enabled=true requires [extractor] extract_type=cdc and [sinker] sink_type=write",
             ),
             (
                 r#"[extractor]
@@ -1787,10 +1792,38 @@ extract_type=snapshot
 url=mysql://127.0.0.1:3306
 
 [checker]
-enable=false
+batch_size=2
 "#
                 .to_string(),
-                "config [sinker] is required unless [checker].enable=true",
+                "config [sinker] is required",
+            ),
+            (
+                r#"[extractor]
+db_type=mysql
+extract_type=snapshot
+url=mysql://127.0.0.1:3306
+
+[sinker]
+db_type=mysql
+sink_type=write
+url=mysql://127.0.0.1:3307
+
+[checker]
+enable=true
+"#
+                .to_string(),
+                "config [checker].enable is no longer supported; use [sinker].sink_type=check for standalone check, [checker] for snapshot inline check, or [checker_cdc].is_enabled=true for CDC inline check",
+            ),
+            (
+                format!(
+                    r#"{}
+
+[checker_output]
+output_type=s3
+"#,
+                    snapshot_check_config("")
+                ),
+                "config [checker_output].s3_bucket is required when output_type=s3",
             ),
             (
                 r#"[extractor]
@@ -1799,18 +1832,22 @@ extract_type=check_log
 url=mysql://127.0.0.1:3306
 check_log_dir=/tmp/ape-dts-check-log
 
-[checker]
-enable=true
+[sinker]
 db_type=mysql
+sink_type=check
 url=mysql://127.0.0.1:3307
-check_log_s3=true
+
+[checker]
+
+[checker_output]
+output_type=s3
 s3_bucket=ape-dts
 
 [parallelizer]
 parallel_type=rdb_merge
 "#
                 .to_string(),
-                "config [checker].check_log_s3 only supports standalone snapshot check or inline cdc check",
+                "config [checker_output].output_type=s3 only supports standalone snapshot check or inline cdc check",
             ),
             (
                 r#"[extractor]
@@ -1824,23 +1861,28 @@ sink_type=write
 url=mysql://127.0.0.1:3307
 
 [checker]
-enable=true
-check_log_s3=true
+
+[checker_output]
+output_type=s3
 s3_bucket=ape-dts
 
 [parallelizer]
 parallel_type=rdb_merge
 "#
                 .to_string(),
-                "config [checker].check_log_s3 only supports standalone snapshot check or inline cdc check",
+                "config [checker_output].output_type=s3 only supports standalone snapshot check or inline cdc check",
             ),
             (
-                snapshot_check_config("check_log_s3=true"),
-                "check_log_s3=true but checker s3 config is missing in [checker]",
+                snapshot_check_config("sample_percent=0"),
+                "config [checker].sample_percent must be between 1 and 100, got 0",
             ),
             (
-                snapshot_check_config("sample_rate=0"),
-                "config [checker].sample_rate must be between 1 and 100, got 0",
+                snapshot_check_config("recheck_queue_size=0"),
+                "config [checker].recheck_queue_size must be greater than 0",
+            ),
+            (
+                snapshot_check_config("recheck_queue_memory_mb=0"),
+                "config [checker].recheck_queue_memory_mb must be greater than 0",
             ),
             (
                 r#"[extractor]
@@ -1849,19 +1891,30 @@ extract_type=struct
 url=mysql://127.0.0.1:3306
 
 [sinker]
-sink_type=dummy
+db_type=mysql
+sink_type=check
+url=mysql://127.0.0.1:3307
 
 [checker]
-enable=true
-db_type=mysql
-url=mysql://127.0.0.1:3307
-sample_rate=10
+sample_percent=10
 "#
                 .to_string(),
-                "config [checker].sample_rate only supports snapshot check or inline cdc check",
+                "config [checker].sample_percent only supports snapshot check or inline cdc check",
+            ),
+            (
+                format!(
+                    r#"{}
+
+[checker_output]
+output_type=db
+"#,
+                    snapshot_check_config("")
+                ),
+                "config [checker_output].output_type must be logs or s3, got db",
             ),
         ] {
             let error = load_temp_task_config(&config).err().unwrap();
+            assert_eq!(ErrorReport::from_anyhow(&error).code, ErrorCode::InvalidConfig);
             assert_eq!(error.root_cause().to_string(), expected_err);
         }
     }

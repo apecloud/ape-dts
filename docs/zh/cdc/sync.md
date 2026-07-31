@@ -14,16 +14,16 @@
 
 相较默认的纯 CDC 同步链路，inline cdc check 还要求：
 - 保持 `[sinker] sink_type=write`
-- 增加 `[checker] enable=true`
+- 增加 `[checker_cdc] is_enabled=true`
 - 增加 `[resumer] resume_type=from_target` 或 `from_db`
 - 使用 `[parallelizer] parallel_type=rdb_merge`
 
-在该模式下，checker 会直接复用 `[sinker]` 已解析的目标端配置，因此 `[checker]` 不接受单独设置 `db_type`、`url`、`username`、`password`。
+在该模式下，checker 会直接复用 `[sinker]` 已解析的目标端配置，因此 checker 目标直接使用 `[sinker]` 配置；公共校验参数仍放在 `[checker]`。
 
 当前该模式仅支持 MySQL / PostgreSQL 的 write sinker。
 
 inline cdc check 是 best-effort 的：CDC 写入仍走主路径。若 checker 队列达到
-`[checker].queue_size`，会淘汰最旧的待校验 batch，而不是阻塞新的写入。
+`[checker_cdc].queue_size`，会淘汰最旧的待校验 batch，而不是阻塞新的写入。
 checker 侧的运行时错误会被记录日志，但不会阻塞主路径上的 CDC 写入、checkpoint 持久化
 或元数据刷新投递。
 
@@ -37,7 +37,7 @@ checker 侧的运行时错误会被记录日志，但不会阻塞主路径上的
 - `check off` 表示纯 CDC 路径：`[extractor] extract_type=cdc`、`[sinker] sink_type=write`、
   `[parallelizer] parallel_type=rdb_merge`。
 - `check on` 表示在相同 CDC 路径上启用 inline cdc check：
-  `[checker] enable=true`、`[checker] batch_size=200`、
+  `[checker_cdc] is_enabled=true`、`[checker] batch_size=200`、
   `[resumer] resume_type=from_target`。
 - 这组复测共用的任务侧调优参数为：
   `[sinker] batch_size=200`、`[parallelizer] parallel_size=8`、

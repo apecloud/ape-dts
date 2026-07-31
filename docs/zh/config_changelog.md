@@ -8,10 +8,13 @@
 
 | 2.0.26 已移除 | 替代方式 |
 | ------------- | -------- |
-| `[sinker].sink_type=check` | 增加 `[checker] enable=true`。Standalone check：目标配置放入 `[checker]`；inline check：保留 `sink_type=write`。 |
+| `[checker].enable` | Standalone check 使用 `[sinker].sink_type=check`；inline snapshot 增加 `[checker]`；inline CDC 使用 `[checker_cdc].is_enabled=true`。 |
 | `[parallelizer].parallel_type=rdb_check` | RDB check/review/revise、inline CDC 使用 `rdb_merge`；inline snapshot 使用正常写入 parallelizer。 |
-| `[extractor].sample_interval` | 使用 `[checker].sample_rate=1..100`；空值表示全量校验。 |
-| `[sinker]` 下的 check 目标配置，包括 `check_log_dir` | Standalone check 移到 `[checker]`；inline check 复用 `[sinker]`。 |
+| `[extractor].sample_interval`、`[checker].sample_rate` | 使用 `[checker].sample_percent=1..100`；空值表示全量校验。 |
+| `[checker]` 下的 checker 目标字段 | 使用 `[sinker]` 的普通数据库字段；standalone check 设置 `sink_type=check`。 |
+| `[checker]` 下的输出字段，包括 `check_log_s3` | 移到 `[checker_output]`；通过 `output_type=logs` 或 `s3` 选择介质。 |
+| `[checker].retry_interval_secs`、`[checker].max_retries` | 使用 `recheck_interval_secs`、`recheck_count`。 |
+| `[checker].queue_size`、`[checker].cdc_check_log_interval_secs` | 使用 `[checker_cdc].queue_size`、`check_log_interval_secs`。 |
 | `[pipeline].max_rps` | 使用 `[extractor].max_rps` 和/或 `[sinker].max_rps`。 |
 | `[resumer].resume_from_log`、`resume_log_dir`、`resume_config_file` | 使用 `resume_type=from_log`、`log_dir`、`config_file`；旧配置返回错误码 `CF002`。 |
 | `[pipeline].pipeline_type=http_server`、`http_host`、`http_port`、pipeline `with_field_defs` | 已删除，仅保留 `pipeline_type=basic`。Kafka `[sinker].with_field_defs` 不受影响。 |
@@ -30,11 +33,10 @@
 | Redis extractor/sinker | `is_cluster` | 自动探测 | `true`：集群；`false`：单节点；空：自动。 |
 | MongoDB sinker | `mongo_require_shard_key_filter` | `true` | 写入 filter 必须包含完整目标 shard key。 |
 | MongoDB struct 任务 | `extract_type=struct`、`sink_type=struct` | — | 迁移 collection 和 shard key。 |
-| `[checker]` | `enable`、`queue_size`、`max_connections`、`batch_size`、`sample_rate` | 必填、`200`、`8`、`200`、空 | 启用 checker 及容量设置。 |
-| `[checker]` | `output_full_row`、`output_revise_sql`、`revise_match_full_row` | 全部 `false` | 控制 diff 和修复 SQL 输出。 |
-| `[checker]` | `retry_interval_secs`、`max_retries` | `0`、`0` | Checker 重试策略。 |
-| `[checker]` | `check_log_dir`、`check_log_file_size`、`check_log_max_rows` | 空、`100mb`、`1000` | 本地校验日志及限制。 |
-| `[checker]` | `check_log_s3`、`s3_*`、`cdc_check_log_interval_secs` | `false`、空、`30` | S3 上传和 CDC 校验日志间隔。 |
+| `[checker]` | `batch_size`、`sample_percent`、`recheck_count`、`recheck_interval_secs`、`recheck_queue_size`、`recheck_queue_memory_mb` | `200`、空、`0`、`0`、`10000`、`256` | 通用校验行为和有界重试缓冲。 |
+| `[checker_output]` | `output_type`、`output_full_row`、`output_revise_sql`、`revise_match_full_row` | `logs`、全部 `false` | 选择输出介质和内容。 |
+| `[checker_output]` | `check_log_dir`、`check_log_file_size`、`check_log_max_rows`、`s3_*` | 空、`100mb`、`1000`、空 | 本地滚动日志和可选 S3 上传。 |
+| `[checker_cdc]` | `is_enabled`、`queue_size`、`check_log_interval_secs` | `false`、`200`、`30` | 启用和配置异步 inline CDC check。 |
 | Snapshot `[parallelizer]` | `rebalance_strategy`、`rebalance_cost`、`rebalance_max_partitions_per_sinker`、`rebalance_min_partition_rows`、`rebalance_split_skew_ratio` | `none`、`rows`、`2`、sinker batch size、`1.0` | 目标端 partition rebalance。 |
 | `[runtime]` | `check_result_stdout_only` | `false` | stdout 只输出校验结果。 |
 | `[tracing]` | `task_summary_mode`、`output_format` | `marker`、`plain` | Trace 聚合和输出格式。 |
@@ -51,7 +53,6 @@
 | MongoDB snapshot `batch_size` | Snapshot 配置不使用 | 作为 cursor batch size，且必须能用 `u32` 表示 |
 | `[sinker].batch_size=0` | 配置加载允许 | 非 dummy sinker 拒绝 |
 | MongoDB shard-key filter | 配置层不强制 | 默认强制；`mongo_require_shard_key_filter=false` 可关闭 |
-| Standalone check | 目标端配置为 check sinker | 可省略 `[sinker]`；目标配置放入 `[checker]` |
-| Inline check | 使用 check 专用 sinker/parallelizer | 保留 `sink_type=write`；checker 复用 sinker 目标 |
-| Inline CDC check | 不支持 | 仅 MySQL/PostgreSQL；要求 `rdb_merge` 和 resumer `from_target`/`from_db` |
-| Dummy sinker 下的 `resumer=from_target` | 使用 sinker 目标 | 使用 standalone checker 目标 |
+| Standalone check | 目标端配置为 check sinker | 保持 `[sinker].sink_type=check`，目标沿用普通 sinker 数据库配置 |
+| Inline snapshot check | 使用 check 专用 sinker/parallelizer | 保留 `sink_type=write`；增加 `[checker]` 后同步执行写后校验 |
+| Inline CDC check | 不支持 | 仅 MySQL/PostgreSQL；使用 `[checker_cdc]` 启用，要求 `rdb_merge` 和 resumer `from_target`/`from_db` |

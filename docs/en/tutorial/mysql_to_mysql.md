@@ -107,7 +107,7 @@ SHOW TABLES IN test_db;
 ```
 
 # Migrate snapshot data
-- To turn this into **inline snapshot check**, keep `[sinker] sink_type=write` and add a `[checker]` section without target connection fields.
+- To turn this into **inline snapshot check**, keep `[sinker] sink_type=write` and add an empty `[checker]` section or configure its common check options.
 - See [Data Check](../snapshot/check.md#inline-snapshot-check) and the MySQL template for the exact config shape.
 ## Prepare data
 ```
@@ -182,15 +182,19 @@ UPDATE test_db.tb_1 SET value=1 WHERE id=2;
 ## Start task
 ```
 cat <<EOL > /tmp/ape_dts/task_config.ini
+
 [extractor]
 db_type=mysql
 extract_type=snapshot
 url=mysql://root:123456@127.0.0.1:3307?ssl-mode=disabled
 
-[checker]
-enable=true
+[sinker]
 db_type=mysql
+sink_type=check
 url=mysql://root:123456@127.0.0.1:3308?ssl-mode=disabled
+
+[checker]
+
 
 [filter]
 do_dbs=test_db
@@ -284,16 +288,20 @@ SELECT * FROM test_db.tb_1;
 ## Start task
 ```
 cat <<EOL > /tmp/ape_dts/task_config.ini
+
 [extractor]
 db_type=mysql
 extract_type=check_log
 url=mysql://root:123456@127.0.0.1:3307?ssl-mode=disabled
 check_log_dir=./check_data_task_log
 
-[checker]
-enable=true
+[sinker]
 db_type=mysql
+sink_type=check
 url=mysql://root:123456@127.0.0.1:3308?ssl-mode=disabled
+
+[checker]
+
 
 [filter]
 do_events=*
@@ -321,9 +329,8 @@ docker run --rm --network host \
 
 # Cdc task
 
-- To turn this into **inline cdc check**, add `[checker] enable=true` plus `[resumer]`, keep
-  `[sinker] sink_type=write`, use `[parallelizer] parallel_type=rdb_merge`, and do not configure
-  checker target fields. See [Data Check](../snapshot/check.md#inline-cdc-check) and the MySQL
+- To turn this into **inline cdc check**, add `[checker_cdc] is_enabled=true` plus `[resumer]`, keep
+  `[sinker] sink_type=write`, use `[parallelizer] parallel_type=rdb_merge`, and configure common check options under `[checker]`. See [Data Check](../snapshot/check.md#inline-cdc-check) and the MySQL
   template.
 
 ## Start task

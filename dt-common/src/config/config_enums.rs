@@ -79,6 +79,8 @@ pub enum SinkType {
     Dummy,
     #[strum(serialize = "write")]
     Write,
+    #[strum(serialize = "check")]
+    Check,
     #[strum(serialize = "struct")]
     Struct,
     #[strum(serialize = "statistic")]
@@ -107,12 +109,6 @@ pub enum ParallelType {
     Mongo,
     #[strum(serialize = "redis")]
     Redis,
-}
-
-#[derive(EnumString, IntoStaticStr, Clone, Display)]
-pub enum PipelineType {
-    #[strum(serialize = "basic")]
-    Basic,
 }
 
 #[derive(Clone, Debug, EnumString, IntoStaticStr, PartialEq, Default)]

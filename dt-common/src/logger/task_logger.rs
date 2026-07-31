@@ -14,10 +14,8 @@ use tokio::{
 
 use crate::{
     config::{
-        config_enums::TaskType,
-        extractor_config::ExtractorConfig,
-        sinker_config::SinkerConfig,
-        task_config::{TaskConfig, DEFAULT_CHECK_LOG_FILE_SIZE},
+        checker_config::DEFAULT_CHECK_LOG_FILE_SIZE, config_enums::TaskType,
+        extractor_config::ExtractorConfig, sinker_config::SinkerConfig, task_config::TaskConfig,
     },
     error::DtError,
     log_filter::SizeLimitFilterDeserializer,
@@ -55,10 +53,10 @@ impl<'a> TaskLogger<'a> {
         let Some(cfg) = self.task_config.checker.as_ref() else {
             return Ok(());
         };
-        let check_log_dir = if cfg.check_log_dir.is_empty() {
+        let check_log_dir = if cfg.log_dir().is_empty() {
             format!("{}/check", self.task_config.runtime.log_dir)
         } else {
-            cfg.check_log_dir.clone()
+            cfg.log_dir().to_string()
         };
         if Self::check_log_replay_reads_from_dir(&self.task_config.extractor, &check_log_dir)
             || !Self::should_clear_check_logs_before_log4rs(self.task_config.task_type())
@@ -141,12 +139,11 @@ impl<'a> TaskLogger<'a> {
             }
             _ => {
                 if let Some(cfg) = self.task_config.checker.as_ref() {
-                    if !cfg.check_log_dir.is_empty() {
-                        config_str =
-                            config_str.replace(CHECK_LOG_DIR_PLACEHOLDER, &cfg.check_log_dir);
+                    if !cfg.log_dir().is_empty() {
+                        config_str = config_str.replace(CHECK_LOG_DIR_PLACEHOLDER, cfg.log_dir());
                     }
-                    config_str = config_str
-                        .replace(CHECK_LOG_FILE_SIZE_PLACEHOLDER, &cfg.check_log_file_size);
+                    config_str =
+                        config_str.replace(CHECK_LOG_FILE_SIZE_PLACEHOLDER, cfg.log_file_size());
                 }
             }
         }

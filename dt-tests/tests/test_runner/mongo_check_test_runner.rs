@@ -44,7 +44,7 @@ impl MongoCheckTestRunner {
             .get_config()
             .checker
             .as_ref()
-            .map(|checker| checker.retry_interval_secs)
+            .map(|checker| checker.recheck_interval_secs)
             .unwrap_or(0);
         let delay_secs = std::cmp::max(1, retry_interval_secs / 2);
 

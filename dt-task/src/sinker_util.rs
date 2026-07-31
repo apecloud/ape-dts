@@ -28,7 +28,7 @@ use dt_common::{
 use super::task_util::TaskUtil;
 use crate::{extractor_util::ExtractorUtil, task_util::ConnClient};
 use dt_connector::{
-    checker::DataCheckerHandle,
+    checker::CheckerHandle,
     data_marker::DataMarker,
     rdb_router::RdbRouter,
     sinker::{
@@ -97,10 +97,11 @@ impl SinkerUtil {
     fn push_checkable_sinker<S: CheckableSink + Send + 'static>(
         sub_sinkers: &mut Sinkers,
         sinker: S,
-        checker: &Option<DataCheckerHandle>,
+        checker: &Option<CheckerHandle>,
+        lifecycle_owner: bool,
         metrics: &Arc<SinkerWorkerMetrics>,
     ) {
-        let sinker = wrap_sinker_with_checker(sinker, checker.clone());
+        let sinker = wrap_sinker_with_checker(sinker, checker.clone(), lifecycle_owner);
         let sinker = BusyTrackingSinker::new(sinker, metrics.register_worker());
         sub_sinkers.push(Arc::new(async_mutex::Mutex::new(Box::new(sinker))));
     }
@@ -110,7 +111,7 @@ impl SinkerUtil {
         client: ConnClient,
         monitor: TaskMonitorHandle,
         data_marker: Option<Arc<RwLock<DataMarker>>>,
-        checker: Option<DataCheckerHandle>,
+        checker: Option<CheckerHandle>,
     ) -> anyhow::Result<Sinkers> {
         let log_level = &config.runtime.log_level;
         let enable_sqlx_log = TaskUtil::check_enable_sqlx_log(log_level);
@@ -121,12 +122,13 @@ impl SinkerUtil {
         let mut sub_sinkers: Sinkers = Vec::new();
         match config.sinker.clone() {
             SinkerConfig::Dummy => {
-                for _ in 0..parallel_size {
+                for index in 0..parallel_size {
                     let sinker = DummySinker {};
                     Self::push_checkable_sinker(
                         &mut sub_sinkers,
                         sinker,
                         &checker,
+                        index + 1 == parallel_size,
                         &sinker_worker_metrics,
                     );
                 }
@@ -149,7 +151,7 @@ impl SinkerUtil {
                 };
                 let meta_manager = MysqlMetaManager::new(conn_pool.clone()).await?;
 
-                for _ in 0..parallel_size {
+                for index in 0..parallel_size {
                     let sinker = MysqlSinker {
                         url: url.to_string(),
                         connection_auth: connection_auth.clone(),
@@ -165,6 +167,7 @@ impl SinkerUtil {
                         &mut sub_sinkers,
                         sinker,
                         &checker,
+                        index + 1 == parallel_size,
                         &sinker_worker_metrics,
                     );
                 }
@@ -186,7 +189,7 @@ impl SinkerUtil {
                 };
                 let meta_manager = PgMetaManager::new(conn_pool.clone()).await?;
 
-                for _ in 0..parallel_size {
+                for index in 0..parallel_size {
                     let sinker = PgSinker {
                         url: url.to_string(),
                         connection_auth: connection_auth.clone(),
@@ -202,6 +205,7 @@ impl SinkerUtil {
                         &mut sub_sinkers,
                         sinker,
                         &checker,
+                        index + 1 == parallel_size,
                         &sinker_worker_metrics,
                     );
                 }
@@ -220,7 +224,7 @@ impl SinkerUtil {
                     }
                 };
                 let is_target_mongos = is_mongos(&mongo_client).await?;
-                for _ in 0..parallel_size {
+                for index in 0..parallel_size {
                     let sinker = MongoSinker {
                         batch_size,
                         router: router.clone(),
@@ -234,6 +238,7 @@ impl SinkerUtil {
                         &mut sub_sinkers,
                         sinker,
                         &checker,
+                        index + 1 == parallel_size,
                         &sinker_worker_metrics,
                     );
                 }
@@ -612,7 +617,7 @@ mod tests {
         let mut sinkers = Sinkers::new();
 
         SinkerUtil::push_sinker(&mut sinkers, DummySinker {}, &metrics);
-        SinkerUtil::push_checkable_sinker(&mut sinkers, DummySinker {}, &None, &metrics);
+        SinkerUtil::push_checkable_sinker(&mut sinkers, DummySinker {}, &None, true, &metrics);
 
         assert_eq!(sinkers.len(), 2);
         assert_eq!(metrics.snapshot().configured, 2);

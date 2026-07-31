@@ -338,13 +338,14 @@ impl CheckTestRunner {
         // start task
         self.base.base.start_task().await?;
 
-        let default_check_log_file_size = CheckerConfig::default().check_log_file_size;
+        let default_checker = CheckerConfig::default();
+        let default_check_log_file_size = default_checker.log_file_size().to_string();
         let check_log_file_size = self
             .base
             .config
             .checker
             .as_ref()
-            .map(|cfg| cfg.check_log_file_size.clone())
+            .map(|cfg| cfg.log_file_size().to_string())
             .unwrap_or(default_check_log_file_size.clone());
         if check_log_file_size == default_check_log_file_size {
             CheckUtil::validate_check_log(&self.expect_check_log_dir, &self.dst_check_log_dir)?;
@@ -487,7 +488,7 @@ impl CheckTestRunner {
             .get_config()
             .checker
             .as_ref()
-            .map(|checker| checker.retry_interval_secs)
+            .map(|checker| checker.recheck_interval_secs)
             .unwrap_or(0);
         let delay_secs = std::cmp::max(1, retry_interval_secs / 2);
 
