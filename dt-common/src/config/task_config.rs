@@ -39,7 +39,6 @@ use super::{
     resumer_config::ResumerConfig,
     router_config::RouterConfig,
     runtime_config::RuntimeConfig,
-    s3_config::S3Config,
     sinker_config::{BasicSinkerConfig, SinkerConfig},
     tracing_config::TracingConfig,
 };
@@ -110,7 +109,6 @@ const REPLACE: &str = "replace";
 const DISABLE_FOREIGN_KEY_CHECKS: &str = "disable_foreign_key_checks";
 const RESUME_TYPE: &str = "resume_type";
 const CHECKER_QUEUE_SIZE: &str = "queue_size";
-const S3_KEY_PREFIX: &str = "s3_key_prefix";
 const CHECK_LOG_INTERVAL_SECS: &str = "check_log_interval_secs";
 const SAMPLE_PERCENT: &str = "sample_percent";
 const IS_DIRECT_CONNECTION: &str = "is_direct_connection";
@@ -176,18 +174,6 @@ impl TaskConfig {
                     })?,
                 )
             };
-
-            let is_s3_output =
-                matches!(checker_cfg.output.output_type, CheckerOutputType::S3 { .. });
-            let s3_supported = task_type.is_some_and(|task_type| {
-                task_type.is_cdc_inline_check() || task_type.is_standalone_snapshot_check()
-            });
-            if is_s3_output && !s3_supported {
-                bail!(DtError::invalid_config(
-                    "config [checker_output].output_type=s3 only supports standalone snapshot check or inline cdc check"
-                        .to_string()
-                ));
-            }
 
             if checker_cfg.sample_percent.is_some()
                 && !matches!(
@@ -1067,38 +1053,6 @@ impl TaskConfig {
         let output_default = CheckerOutputConfig::default();
         let output_type: String =
             loader.get_with_default(CHECKER_OUTPUT, "output_type", "logs".to_string())?;
-        let output_type = match output_type.as_str() {
-            "logs" => CheckerOutputType::Logs,
-            "s3" => {
-                let bucket = loader
-                    .ini
-                    .get(CHECKER_OUTPUT, "s3_bucket")
-                    .filter(|value| !value.is_empty())
-                    .ok_or_else(|| {
-                        DtError::invalid_config(
-                            "config [checker_output].s3_bucket is required when output_type=s3",
-                        )
-                    })?;
-                CheckerOutputType::S3 {
-                    key_prefix: loader.get_optional(CHECKER_OUTPUT, S3_KEY_PREFIX)?,
-                    config: S3Config {
-                        bucket,
-                        access_key: loader.get_optional(CHECKER_OUTPUT, "s3_access_key_id")?,
-                        secret_key: loader.get_optional(CHECKER_OUTPUT, "s3_secret_access_key")?,
-                        region: loader.get_optional(CHECKER_OUTPUT, "s3_region")?,
-                        endpoint: loader.get_optional(CHECKER_OUTPUT, "s3_endpoint")?,
-                        root_dir: loader.get_optional(CHECKER_OUTPUT, "s3_root_dir")?,
-                        root_url: loader.get_optional(CHECKER_OUTPUT, "s3_root_url")?,
-                    },
-                }
-            }
-            _ => {
-                bail!(DtError::invalid_config(format!(
-                    "config [checker_output].output_type must be logs or s3, got {}",
-                    output_type
-                )))
-            }
-        };
 
         let recheck_queue_size =
             loader.get_with_default(CHECKER, RECHECK_QUEUE_SIZE, default.recheck_queue_size)?;
@@ -1178,7 +1132,7 @@ impl TaskConfig {
                     CHECK_LOG_MAX_ROWS,
                     super::checker_config::DEFAULT_CHECK_LOG_MAX_ROWS,
                 )?,
-                output_type,
+                output_type: CheckerOutputType::Logs,
             },
             inline_check,
         }))
@@ -1661,66 +1615,6 @@ parallel_type=mongo
             assert_eq!(checker.sample_percent, Some(sample_percent));
         }
 
-        let checker = load_temp_task_config(&cdc_inline_check_config(
-            "rdb_merge",
-            "",
-            "check_log_interval_secs=12",
-            r#"output_type=s3
-check_log_file_size=10mb
-check_log_max_rows=123
-s3_bucket=ape-dts
-s3_access_key_id=ak
-s3_secret_access_key=sk
-s3_region=us-east-1
-s3_endpoint=http://127.0.0.1:9000
-s3_key_prefix=check/10001
-"#,
-        ))
-        .expect("cdc checker s3 config should be valid")
-        .checker
-        .expect("checker should exist");
-        assert_eq!(
-            checker
-                .inline_check
-                .as_ref()
-                .expect("cdc inline config")
-                .check_log_interval_secs,
-            12
-        );
-        assert_eq!(checker.log_file_size(), "10mb");
-        assert_eq!(checker.log_max_rows(), 123);
-        match checker.output.output_type {
-            CheckerOutputType::S3 { key_prefix, config } => {
-                assert_eq!(key_prefix, "check/10001");
-                assert_eq!(config.bucket, "ape-dts");
-            }
-            _ => panic!("expected s3 checker output"),
-        }
-
-        let checker = load_temp_task_config(&format!(
-            r#"{}
-
-[checker_output]
-output_type=s3
-s3_bucket=ape-dts
-s3_key_prefix=check/10001
-"#,
-            snapshot_check_config(
-                "recheck_count=4\nrecheck_interval_secs=5\nrecheck_queue_size=123\nrecheck_queue_memory_mb=64",
-            )
-        ))
-        .expect("standalone snapshot checker s3 config should be valid")
-        .checker
-        .expect("checker should exist");
-        assert!(matches!(
-            checker.output.output_type,
-            CheckerOutputType::S3 { .. }
-        ));
-        assert_eq!(checker.recheck_count, 4);
-        assert_eq!(checker.recheck_interval_secs, 5);
-        assert_eq!(checker.recheck_queue_size, 123);
-        assert_eq!(checker.recheck_queue_memory_mb, 64);
-
         let checker = load_temp_task_config(
             r#"[extractor]
 db_type=mysql
@@ -1815,64 +1709,6 @@ enable=true
                 "config [checker].enable is no longer supported; use [sinker].sink_type=check for standalone check, [checker] for snapshot inline check, or [checker_cdc].is_enabled=true for CDC inline check",
             ),
             (
-                format!(
-                    r#"{}
-
-[checker_output]
-output_type=s3
-"#,
-                    snapshot_check_config("")
-                ),
-                "config [checker_output].s3_bucket is required when output_type=s3",
-            ),
-            (
-                r#"[extractor]
-db_type=mysql
-extract_type=check_log
-url=mysql://127.0.0.1:3306
-check_log_dir=/tmp/ape-dts-check-log
-
-[sinker]
-db_type=mysql
-sink_type=check
-url=mysql://127.0.0.1:3307
-
-[checker]
-
-[checker_output]
-output_type=s3
-s3_bucket=ape-dts
-
-[parallelizer]
-parallel_type=rdb_merge
-"#
-                .to_string(),
-                "config [checker_output].output_type=s3 only supports standalone snapshot check or inline cdc check",
-            ),
-            (
-                r#"[extractor]
-db_type=mysql
-extract_type=snapshot
-url=mysql://127.0.0.1:3306
-
-[sinker]
-db_type=mysql
-sink_type=write
-url=mysql://127.0.0.1:3307
-
-[checker]
-
-[checker_output]
-output_type=s3
-s3_bucket=ape-dts
-
-[parallelizer]
-parallel_type=rdb_merge
-"#
-                .to_string(),
-                "config [checker_output].output_type=s3 only supports standalone snapshot check or inline cdc check",
-            ),
-            (
                 snapshot_check_config("sample_percent=0"),
                 "config [checker].sample_percent must be between 1 and 100, got 0",
             ),
@@ -1900,17 +1736,6 @@ sample_percent=10
 "#
                 .to_string(),
                 "config [checker].sample_percent only supports snapshot check or inline cdc check",
-            ),
-            (
-                format!(
-                    r#"{}
-
-[checker_output]
-output_type=db
-"#,
-                    snapshot_check_config("")
-                ),
-                "config [checker_output].output_type must be logs or s3, got db",
             ),
         ] {
             let error = load_temp_task_config(&config).err().unwrap();
