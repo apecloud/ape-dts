@@ -5,6 +5,11 @@ After structure migration, you can choose from two verification methods. One is 
 Structure check is independent of CDC. Here, `inline cdc check` refers to row-level data check
 (see [data check docs](../snapshot/check.md)).
 
+Built-in structure check is a standalone task: use `extract_type=struct`, configure the target with
+the normal database fields under `[sinker]`, and set `[sinker].sink_type=check`. Common options
+belong to `[checker]`; result formatting and log paths belong to `[checker_output]`. Structure
+check does not create or consume the asynchronous CDC checker queue.
+
 ## Example: MySQL -> MySQL
 
 Refer to [task templates](../../templates/mysql_to_mysql.md)

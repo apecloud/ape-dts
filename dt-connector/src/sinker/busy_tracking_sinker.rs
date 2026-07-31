@@ -1,8 +1,9 @@
 use async_trait::async_trait;
 use dt_common::{
+    error::{DtResultExt, EndpointRole, Stage},
     meta::{
         dcl_meta::dcl_data::DclData, ddl_meta::ddl_data::DdlData, dt_data::DtItem,
-        row_data::RowData, struct_meta::struct_data::StructData,
+        position::Position, row_data::RowData, struct_meta::struct_data::StructData,
     },
     monitor::sinker_worker_metrics::SinkerWorkerRecorder,
 };
@@ -26,41 +27,81 @@ impl BusyTrackingSinker {
 impl Sinker for BusyTrackingSinker {
     async fn sink_dml(&mut self, data: Vec<RowData>, batch: bool) -> anyhow::Result<()> {
         let _guard = self.recorder.enter();
-        self.inner.sink_dml(data, batch).await
+        self.inner
+            .sink_dml(data, batch)
+            .await
+            .stage(Stage::Sinker)
+            .endpoint(EndpointRole::Destination)
     }
 
     async fn sink_ddl(&mut self, data: Vec<DdlData>, batch: bool) -> anyhow::Result<()> {
         let _guard = self.recorder.enter();
-        self.inner.sink_ddl(data, batch).await
+        self.inner
+            .sink_ddl(data, batch)
+            .await
+            .stage(Stage::Sinker)
+            .endpoint(EndpointRole::Destination)
     }
 
     async fn sink_dcl(&mut self, data: Vec<DclData>, batch: bool) -> anyhow::Result<()> {
         let _guard = self.recorder.enter();
-        self.inner.sink_dcl(data, batch).await
+        self.inner
+            .sink_dcl(data, batch)
+            .await
+            .stage(Stage::Sinker)
+            .endpoint(EndpointRole::Destination)
     }
 
     async fn sink_raw(&mut self, data: Vec<DtItem>, batch: bool) -> anyhow::Result<()> {
         let _guard = self.recorder.enter();
-        self.inner.sink_raw(data, batch).await
+        self.inner
+            .sink_raw(data, batch)
+            .await
+            .stage(Stage::Sinker)
+            .endpoint(EndpointRole::Destination)
     }
 
     async fn sink_struct(&mut self, data: Vec<StructData>) -> anyhow::Result<()> {
         let _guard = self.recorder.enter();
-        self.inner.sink_struct(data).await
+        self.inner
+            .sink_struct(data)
+            .await
+            .stage(Stage::Sinker)
+            .endpoint(EndpointRole::Destination)
     }
 
     async fn refresh_meta(&mut self, data: Vec<DdlData>) -> anyhow::Result<()> {
         let _guard = self.recorder.enter();
-        self.inner.refresh_meta(data).await
+        self.inner
+            .refresh_meta(data)
+            .await
+            .stage(Stage::Sinker)
+            .endpoint(EndpointRole::Destination)
     }
 
     async fn handle_control_item(&mut self, item: &DtItem) -> anyhow::Result<()> {
         let _guard = self.recorder.enter();
-        self.inner.handle_control_item(item).await
+        self.inner
+            .handle_control_item(item)
+            .await
+            .stage(Stage::Sinker)
+            .endpoint(EndpointRole::Destination)
     }
 
     async fn close(&mut self) -> anyhow::Result<()> {
-        self.inner.close().await
+        self.inner
+            .close()
+            .await
+            .stage(Stage::Sinker)
+            .endpoint(EndpointRole::Destination)
+    }
+
+    async fn close_with_position(&mut self, position: Option<&Position>) -> anyhow::Result<()> {
+        self.inner.close_with_position(position).await
+    }
+
+    async fn record_checkpoint(&mut self, position: &Position) -> anyhow::Result<()> {
+        self.inner.record_checkpoint(position).await
     }
 
     fn get_id(&self) -> String {

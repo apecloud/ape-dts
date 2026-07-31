@@ -12,6 +12,7 @@ use crate::{
         config_token_parser::{ConfigTokenParser, TokenEscapePair},
         filter_config::FilterConfig,
     },
+    error::DtError,
     meta::{
         ddl_meta::ddl_type::DdlType, row_type::RowType,
         struct_meta::structure::structure_type::StructureType,
@@ -107,8 +108,12 @@ impl RdbFilter {
         self.do_ddls.is_empty()
     }
 
+    pub fn filter_spec_ddl(&self, ddl_type: &DdlType) -> bool {
+        !Self::match_all(&self.do_ddls) && !self.do_ddls.contains(&ddl_type.to_string())
+    }
+
     pub fn filter_ddl(&self, schema: &str, tb: &str, ddl_type: &DdlType) -> bool {
-        if !Self::match_all(&self.do_ddls) && !self.do_ddls.contains(&ddl_type.to_string()) {
+        if self.filter_spec_ddl(ddl_type) {
             return true;
         }
 
@@ -218,10 +223,7 @@ impl RdbFilter {
         }
         pattern = format!(r"^{}$", pattern);
 
-        Regex::new(&pattern)
-            .with_context(|| format!("invalid filter pattern: [{}]", pattern))
-            .unwrap()
-            .is_match(item)
+        Regex::new(&pattern).is_ok_and(|regex| regex.is_match(item))
     }
 
     fn parse_pair_tokens(
@@ -250,12 +252,21 @@ impl RdbFilter {
             REGEX_ESCAPE_PAIR.0.to_string(),
             REGEX_ESCAPE_PAIR.1.to_string(),
         ))];
-        ConfigTokenParser::parse_config(
+        let tokens = ConfigTokenParser::parse_config(
             config_str,
             db_type,
             &delimiters,
             Some(&custom_escape_pairs),
-        )
+        )?;
+        for token in &tokens {
+            if token.starts_with(REGEX_ESCAPE_PAIR.0) && token.ends_with(REGEX_ESCAPE_PAIR.1) {
+                let pattern = &token[REGEX_ESCAPE_PAIR.0.len()..token.len() - 1];
+                Regex::new(pattern).context(DtError::invalid_config(format!(
+                    "invalid filter regex {token}"
+                )))?;
+            }
+        }
+        Ok(tokens)
     }
 
     fn parse_ignore_cols(config_str: &str) -> anyhow::Result<IgnoreCols> {
@@ -271,7 +282,9 @@ impl RdbFilter {
             ignore_cols: HashSet<String>,
         }
         let config: Vec<IgnoreColsType> =
-            serde_json::from_str(config_str.trim_start_matches(JSON_PREFIX))?;
+            serde_json::from_str(config_str.trim_start_matches(JSON_PREFIX)).context(
+                DtError::invalid_config("config [filter].ignore_cols is invalid JSON"),
+            )?;
         for i in config {
             results.insert((i.db, i.tb), i.ignore_cols);
         }
@@ -291,7 +304,9 @@ impl RdbFilter {
             condition: String,
         }
         let config: Vec<Condition> =
-            serde_json::from_str(config_str.trim_start_matches(JSON_PREFIX))?;
+            serde_json::from_str(config_str.trim_start_matches(JSON_PREFIX)).context(
+                DtError::invalid_config("config [filter].where_conditions is invalid JSON"),
+            )?;
         for i in config {
             results.insert((i.db, i.tb), i.condition);
         }

@@ -16,7 +16,7 @@ use dt_common::{log_debug, log_info};
 use futures::TryStreamExt;
 use sqlx::{MySql, Pool, Row};
 
-use crate::extractor::base_splitter::{self, BaseSplitter, ChunkRange, Error::*, SnapshotChunk};
+use crate::extractor::base_splitter::{BaseSplitter, ChunkRange, EvenSplitOutcome, SnapshotChunk};
 
 use quote_mysql as quote;
 
@@ -99,21 +99,14 @@ impl MySqlSnapshotSplitter {
                 .gen_next_chunk((ColValue::None, ColValue::None))]);
         }
         if !self.basic.has_no_even_chunks() && partition_col_type.is_integer() {
-            let chunks = self.get_evenly_sized_chunks(&mysql_tb_meta).await;
-            if let Err(e) = chunks {
-                match e.downcast_ref::<base_splitter::Error>() {
-                    Some(BadSplitColumnError { .. }) => {
-                        return Ok(vec![self
-                            .basic
-                            .gen_next_chunk((ColValue::None, ColValue::None))]);
-                    }
-                    Some(OutOfDistributionFactorRangeError { .. }) => {
-                        // fallback to get_next_unevenly_sized_chunk
-                    }
-                    _ => return Err(e),
+            match self.get_evenly_sized_chunks(&mysql_tb_meta).await? {
+                EvenSplitOutcome::Chunks(chunks) => return Ok(chunks),
+                EvenSplitOutcome::NoSplit => {
+                    return Ok(vec![self
+                        .basic
+                        .gen_next_chunk((ColValue::None, ColValue::None))]);
                 }
-            } else {
-                return chunks;
+                EvenSplitOutcome::UseUnevenSplit => {}
             }
         }
         if let Some(chunk) = self.get_next_unevenly_sized_chunk(&mysql_tb_meta).await? {
@@ -205,9 +198,9 @@ FROM
     async fn get_evenly_sized_chunks(
         &mut self,
         tb_meta: &MysqlTbMeta,
-    ) -> anyhow::Result<Vec<SnapshotChunk>> {
+    ) -> anyhow::Result<EvenSplitOutcome> {
         if self.basic.has_no_even_chunks() | self.basic.has_no_next_chunks() {
-            return Ok(Vec::new());
+            return Ok(EvenSplitOutcome::Chunks(Vec::new()));
         }
         self.basic.mark_no_even_chunks();
         let (min_value, max_value) = if let Some(range) = &self.snapshot_range {
@@ -215,14 +208,14 @@ FROM
         } else {
             let range = self.get_partition_col_range(tb_meta).await?;
             if range.0.is_same_value(&range.1) {
-                let err = BadSplitColumnError(range.0.to_string(), range.1.to_string());
                 log_info!(
-                    "splitting {}.{} gets: {:?}",
+                    "table {}.{} has no usable split range: min={}, max={}",
                     quote!(tb_meta.basic.schema),
                     quote!(tb_meta.basic.tb),
-                    err.to_string()
+                    range.0,
+                    range.1,
                 );
-                return Err(err.into());
+                return Ok(EvenSplitOutcome::NoSplit);
             }
             self.snapshot_range = Some(range.clone());
             range

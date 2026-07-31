@@ -273,10 +273,10 @@ impl CheckUtil {
             .checker
             .as_ref()
             .map(|checker| {
-                if checker.check_log_dir.is_empty() {
+                if checker.log_dir().is_empty() {
                     format!("{}/check", config.runtime.log_dir)
                 } else {
-                    checker.check_log_dir.clone()
+                    checker.log_dir().to_string()
                 }
             })
             .unwrap_or_default();

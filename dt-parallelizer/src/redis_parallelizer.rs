@@ -4,7 +4,7 @@ use anyhow::bail;
 use async_trait::async_trait;
 
 use dt_common::{
-    error::Error,
+    error::DtError,
     log_warn,
     meta::{
         dt_data::{DtData, DtItem},
@@ -72,10 +72,12 @@ impl Parallelizer for RedisParallelizer {
                 let slots = entry.cal_slots(&self.key_parser)?;
                 for i in 1..slots.len() {
                     if slots[i] != slots[0] {
-                        bail! {Error::RedisCmdError(format!(
+                        bail! {
+                            DtError::RedisCmdError(format!(
                             "multi keys don't hash to the same slot, cmd: {}",
                             entry.cmd
-                        ))};
+                            ))
+                        };
                     }
                 }
 
@@ -98,9 +100,22 @@ impl Parallelizer for RedisParallelizer {
             }
 
             // find the dst node for entry by slot
-            let node = *self.slot_node_map.get(&slots[0]).unwrap();
-            let sinker_index = *self.node_sinker_index_map.get(node).unwrap();
-            node_data_items[sinker_index].push(dt_item);
+            let node = self.slot_node_map.get(&slots[0]).copied().ok_or_else(|| {
+                DtError::InvariantViolated("parallelizer invariant violated".to_string())
+            })?;
+            let sinker_index = self
+                .node_sinker_index_map
+                .get(node)
+                .copied()
+                .ok_or_else(|| {
+                    DtError::InvariantViolated("parallelizer invariant violated".to_string())
+                })?;
+            node_data_items
+                .get_mut(sinker_index)
+                .ok_or_else(|| {
+                    DtError::InvariantViolated("parallelizer invariant violated".to_string())
+                })?
+                .push(dt_item);
         }
 
         let workers_used = node_data_items
@@ -111,19 +126,13 @@ impl Parallelizer for RedisParallelizer {
         for sinker in sinkers.iter().take(node_data_items.len()) {
             let node_data = node_data_items.remove(0);
             let sinker = sinker.clone();
-            let future = tokio::spawn(async move {
-                sinker
-                    .lock()
-                    .await
-                    .sink_raw(node_data, false)
-                    .await
-                    .unwrap()
-            });
+            let future =
+                tokio::spawn(async move { sinker.lock().await.sink_raw(node_data, false).await });
             futures.push(future);
         }
 
         for future in futures {
-            future.await.unwrap();
+            future.await??;
         }
         self.base_parallelizer
             .record_workers_per_drain(workers_used)

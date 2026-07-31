@@ -10,6 +10,7 @@ use tokio::time::sleep;
 
 use dt_common::{
     config::config_enums::DbType,
+    error::{DtError, DtErrorContextExt, Stage},
     log_diff, log_info, log_miss, log_sql, log_summary,
     meta::struct_meta::{struct_data::StructData, structure::structure_type::StructureType},
     monitor::{
@@ -209,7 +210,11 @@ impl StructCheckerHandle {
                     }
                 }
             }
-            _ => bail!("struct check not supported for db_type: {}", self.db_type),
+            _ => bail!(DtError::InvalidConfig(format!(
+                "structure checking is not supported for database type: {}",
+                self.db_type
+            ))
+            .stage(Stage::Bootstrap)),
         }
         Ok(dst_map)
     }

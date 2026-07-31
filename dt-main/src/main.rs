@@ -1,7 +1,19 @@
-use std::env;
+use std::{
+    backtrace::Backtrace,
+    env, panic,
+    process::{exit, ExitCode},
+    time::Duration,
+};
 
 use clap::Parser;
+use tokio::{signal::ctrl_c, spawn, time::sleep};
 
+use dt_common::{
+    config::{ini_loader::IniLoader, task_config::TaskConfig},
+    error::{DtResultExt, ErrorReport, Stage},
+    log_error, log_error_report,
+    logger::TaskLogger,
+};
 use dt_precheck::{config::task_config::PrecheckTaskConfig, do_precheck};
 use dt_task::task_runner::TaskRunner;
 
@@ -32,7 +44,7 @@ impl Args {
 }
 
 #[tokio::main]
-async fn main() {
+async fn main() -> ExitCode {
     unsafe {
         env::set_var("RUST_BACKTRACE", "1");
     }
@@ -40,31 +52,85 @@ async fn main() {
     let args = Args::parse();
     if args.version || matches!(args.legacy_config.as_deref(), Some("version")) {
         println!("dt-main {}", env!("CARGO_PKG_VERSION"));
-        return;
+        return ExitCode::SUCCESS;
     }
 
-    let config = args
-        .config_path()
-        .unwrap_or_else(|| panic!("no task_config provided in args"));
+    let config = args.config_path().expect("task config path is required");
+    let loader = IniLoader::new(config).expect("failed to load task config");
+    let task_config = TaskConfig::from_loader(&loader).expect("failed to parse task config");
+    let precheck_config =
+        PrecheckTaskConfig::load_if_present(&loader).expect("failed to parse precheck config");
+    TaskLogger::new(&task_config)
+        .init(precheck_config.is_some())
+        .await
+        .expect("failed to initialize task logger");
 
-    tokio::spawn(async {
-        tokio::signal::ctrl_c().await.unwrap();
-        tokio::time::sleep(std::time::Duration::from_secs(
-            std::env::var(ENV_SHUTDOWN_TIMEOUT_SECS)
+    install_panic_hook();
+
+    match run(task_config, precheck_config, args.init).await {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            let report = ErrorReport::from_anyhow(&error);
+            log_error!("{report}");
+            log_error_report!("{}", report.to_log_json());
+            log::logger().flush();
+            ExitCode::FAILURE
+        }
+    }
+}
+
+async fn run(
+    task_config: TaskConfig,
+    precheck_config: Option<PrecheckTaskConfig>,
+    init: bool,
+) -> anyhow::Result<()> {
+    let task_id = task_config.global.task_id.clone();
+
+    spawn(async {
+        if ctrl_c().await.is_err() {
+            return;
+        }
+        sleep(Duration::from_secs(
+            env::var(ENV_SHUTDOWN_TIMEOUT_SECS)
                 .ok()
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(3),
         ))
         .await;
-        std::process::exit(0);
+        exit(0);
     });
 
-    if PrecheckTaskConfig::new(config).is_ok() {
-        do_precheck(config).await;
-    } else {
-        let runner = TaskRunner::new(config).unwrap();
-        runner.start_task(args.init).await.unwrap();
+    run_config(task_config, precheck_config, init)
+        .await
+        .task_id(task_id)
+}
+
+async fn run_config(
+    task_config: TaskConfig,
+    precheck_config: Option<PrecheckTaskConfig>,
+    init: bool,
+) -> anyhow::Result<()> {
+    match precheck_config {
+        Some(precheck_config) => do_precheck(task_config, precheck_config)
+            .await
+            .stage(Stage::Precheck)?,
+        None => {
+            TaskRunner::new(task_config)
+                .stage(Stage::Bootstrap)?
+                .start_task(init)
+                .await
+                .stage(Stage::Task)?;
+        }
     }
+    Ok(())
+}
+
+fn install_panic_hook() {
+    panic::set_hook(Box::new(|panic_info| {
+        let backtrace = Backtrace::capture();
+        log_error!("panic: {}\nbacktrace:\n{}", panic_info, backtrace);
+        log::logger().flush();
+    }));
 }
 
 #[cfg(test)]

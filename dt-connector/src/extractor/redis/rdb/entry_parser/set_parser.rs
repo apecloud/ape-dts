@@ -2,7 +2,7 @@ use std::io::Cursor;
 
 use anyhow::bail;
 use byteorder::{ByteOrder, LittleEndian, ReadBytesExt};
-use dt_common::error::Error;
+use dt_common::error::DtError;
 use dt_common::meta::redis::redis_object::{RedisString, SetObject};
 
 use crate::extractor::redis::{rdb::reader::rdb_reader::RdbReader, StreamReader};
@@ -23,7 +23,7 @@ impl SetParser {
             super::RDB_TYPE_SET_INTSET => Self::read_int_set(&mut obj, reader).await?,
             super::RDB_TYPE_SET_LISTPACK => obj.elements = reader.read_list_pack().await?,
             _ => {
-                bail! {Error::RedisRdbError(format!(
+                bail! {DtError::redis_rdb(format!(
                     "unknown set type. type_byte=[{}]",
                     type_byte
                 ))}
@@ -59,7 +59,7 @@ impl SetParser {
                 4 => LittleEndian::read_i32(&buf).to_string(),
                 8 => LittleEndian::read_i64(&buf).to_string(),
                 _ => {
-                    bail! {Error::RedisRdbError(format!(
+                    bail! {DtError::redis_rdb(format!(
                         "unknown int encoding type: {:x}",
                         encoding_type
                     ))}

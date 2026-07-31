@@ -4,7 +4,10 @@ use anyhow::bail;
 use async_trait::async_trait;
 
 use dt_common::{
-    config::{connection_auth_config::ConnectionAuthConfig, task_config::APE_DTS},
+    config::{
+        config_enums::DbType, connection_auth_config::ConnectionAuthConfig, task_config::APE_DTS,
+    },
+    error::{DtError, DtResultExt, ErrorCode},
     meta::mongo::mongo_version::get_server_version,
     rdb_filter::RdbFilter,
 };
@@ -47,7 +50,9 @@ impl Fetcher for MongoFetcher {
     async fn fetch_version(&mut self) -> anyhow::Result<String> {
         let client = match &self.pool {
             Some(pool) => pool,
-            None => bail! {"client is closed."},
+            None => bail! {DtError::InvariantViolated(
+                "the MongoDB precheck client is not initialized".to_string()
+            )},
         };
         Ok(format!("{}", get_server_version(client).await?))
     }
@@ -80,29 +85,45 @@ impl MongoFetcher {
     pub async fn execute_for_admin(&self, command: &str) -> anyhow::Result<Document> {
         let client = match &self.pool {
             Some(pool) => pool,
-            None => bail! {"client is closed."},
+            None => bail! {DtError::InvariantViolated(
+                "the MongoDB precheck client is not initialized".to_string()
+            )},
         };
 
         let doc_command = doc! {command: 1};
-        Ok(client.database("admin").run_command(doc_command).await?)
+        client
+            .database("admin")
+            .run_command(doc_command)
+            .await
+            .code(ErrorCode::StatementFailed)
     }
 
     pub async fn execute_for_db(&self, command: &str) -> anyhow::Result<Document> {
         let client = match &self.pool {
             Some(pool) => pool,
-            None => bail! {"client is closed."},
+            None => bail! {DtError::InvariantViolated(
+                "the MongoDB precheck client is not initialized".to_string()
+            )},
         };
 
-        let dbs = client.list_databases().await?;
+        let dbs = client
+            .list_databases()
+            .await
+            .code(ErrorCode::StatementFailed)?;
         if dbs.is_empty() {
-            bail! {"no db exists in mongo."};
+            bail! {DtError::DatabaseNotFound(
+                DbType::Mongo,
+                "no database exists in MongoDB".to_string(),
+            )
+            };
         }
 
         let doc_command = doc! {command: 1};
         let doc = client
             .database(&dbs[0].name)
             .run_command(doc_command)
-            .await?;
+            .await
+            .code(ErrorCode::StatementFailed)?;
         Ok(doc)
     }
 }

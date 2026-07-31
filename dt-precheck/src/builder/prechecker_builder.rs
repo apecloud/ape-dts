@@ -1,8 +1,8 @@
 use std::vec;
 
-use anyhow::bail;
 use dt_common::{
     config::{config_enums::DbType, task_config::TaskConfig},
+    error::{DtError, DtErrorContextExt, DtResultExt, EndpointRole, ErrorCode},
     rdb_filter::RdbFilter,
 };
 
@@ -37,7 +37,10 @@ impl PrecheckerBuilder {
             && !self.task_config.sinker_basic.url.is_empty()
     }
 
-    pub fn build_checker(&self, is_source: bool) -> Option<Box<dyn Prechecker + Send>> {
+    pub fn build_checker(
+        &self,
+        is_source: bool,
+    ) -> anyhow::Result<Option<Box<dyn Prechecker + Send>>> {
         let (db_type, url, connection_auth, is_direct_connection) = if is_source {
             (
                 self.task_config.extractor_basic.db_type.clone(),
@@ -54,7 +57,7 @@ impl PrecheckerBuilder {
             )
         };
 
-        let filter = RdbFilter::from_config(&self.task_config.filter, &db_type).unwrap();
+        let filter = RdbFilter::from_config(&self.task_config.filter, &db_type)?;
         let checker: Option<Box<dyn Prechecker + Send>> = match db_type {
             DbType::Mysql => Some(Box::new(MySqlPrechecker {
                 filter_config: self.task_config.filter.clone(),
@@ -107,34 +110,48 @@ impl PrecheckerBuilder {
             })),
             _ => None,
         };
-        checker
+        Ok(checker)
     }
 
     pub async fn check(&self) -> anyhow::Result<Vec<anyhow::Result<CheckResult>>> {
         if !self.valid_config() {
-            bail! {"config is invalid."};
+            return Err(DtError::InvalidConfig("precheck config is invalid".to_string()).into());
         }
-        let (source_checker_option, sink_checker_option) =
-            (self.build_checker(true), self.build_checker(false));
-        if source_checker_option.is_none() || sink_checker_option.is_none() {
-            bail! {
-                "config is invalid when build checker.maybe db_type is wrong."
-            };
-        }
-        let (mut source_checker, mut sink_checker) =
-            (source_checker_option.unwrap(), sink_checker_option.unwrap());
+        let source_checker_option = self.build_checker(true).endpoint(EndpointRole::Source)?;
+        let sink_checker_option = self
+            .build_checker(false)
+            .endpoint(EndpointRole::Destination)?;
+        let (Some(mut source_checker), Some(mut sink_checker)) =
+            (source_checker_option, sink_checker_option)
+        else {
+            return Err(DtError::InvalidConfig(
+                "failed to build precheck checker from database type".to_string(),
+            )
+            .into());
+        };
 
         println!("[*]begin to check the connection");
-        let check_source_connection = source_checker.build_connection().await?;
-        let check_sink_connection = sink_checker.build_connection().await?;
+        let check_source_connection = source_checker
+            .build_connection()
+            .await
+            .endpoint(EndpointRole::Source)?;
+        let check_sink_connection = sink_checker
+            .build_connection()
+            .await
+            .endpoint(EndpointRole::Destination)?;
 
         // if connection failed, no need to do other check
         if !check_source_connection.is_validate || !check_sink_connection.is_validate {
+            let endpoint = if !check_source_connection.is_validate {
+                EndpointRole::Source
+            } else {
+                EndpointRole::Destination
+            };
             check_source_connection.log();
             check_sink_connection.log();
-            bail! {
-                "connection failed, precheck not passed."
-            };
+            return Err(anyhow::anyhow!("database connection precheck failed")
+                .code(ErrorCode::ConnectionFailed)
+                .endpoint(endpoint));
         }
 
         let mut check_results: Vec<anyhow::Result<CheckResult>> = vec![];
@@ -142,21 +159,56 @@ impl PrecheckerBuilder {
         check_results.push(Ok(check_sink_connection));
 
         println!("[*]begin to check the database version");
-        check_results.push(source_checker.check_database_version().await);
-        check_results.push(sink_checker.check_database_version().await);
+        check_results.push(
+            source_checker
+                .check_database_version()
+                .await
+                .endpoint(EndpointRole::Source),
+        );
+        check_results.push(
+            sink_checker
+                .check_database_version()
+                .await
+                .endpoint(EndpointRole::Destination),
+        );
 
         if self.precheck_config.do_cdc {
             println!("[*]begin to check the cdc setting");
-            check_results.push(source_checker.check_cdc_supported().await);
+            check_results.push(
+                source_checker
+                    .check_cdc_supported()
+                    .await
+                    .endpoint(EndpointRole::Source),
+            );
         }
 
         println!("[*]begin to check the if the structs is existed or not");
-        check_results.push(source_checker.check_struct_existed_or_not().await);
-        check_results.push(sink_checker.check_struct_existed_or_not().await);
+        check_results.push(
+            source_checker
+                .check_struct_existed_or_not()
+                .await
+                .endpoint(EndpointRole::Source),
+        );
+        check_results.push(
+            sink_checker
+                .check_struct_existed_or_not()
+                .await
+                .endpoint(EndpointRole::Destination),
+        );
 
         println!("[*]begin to check the database structs");
-        check_results.push(source_checker.check_table_structs().await);
-        check_results.push(sink_checker.check_table_structs().await);
+        check_results.push(
+            source_checker
+                .check_table_structs()
+                .await
+                .endpoint(EndpointRole::Source),
+        );
+        check_results.push(
+            sink_checker
+                .check_table_structs()
+                .await
+                .endpoint(EndpointRole::Destination),
+        );
 
         Ok(check_results)
     }
@@ -167,19 +219,31 @@ impl PrecheckerBuilder {
             Ok(results) => {
                 println!("check result:");
                 let mut error_count = 0;
+                let mut first_error_endpoint = None;
                 for check_result in results {
                     match check_result {
                         Ok(result) => {
                             result.log();
                             if !result.is_validate {
                                 error_count += 1;
+                                first_error_endpoint =
+                                    first_error_endpoint.or(Some(if result.is_source {
+                                        EndpointRole::Source
+                                    } else {
+                                        EndpointRole::Destination
+                                    }));
                             }
                         }
-                        Err(e) => bail! {e},
+                        Err(error) => return Err(error),
                     }
                 }
                 if error_count > 0 {
-                    bail! {"precheck not passed."}
+                    let mut error = anyhow::anyhow!("one or more prerequisite checks failed")
+                        .code(ErrorCode::PrerequisiteNotMet);
+                    if let Some(endpoint) = first_error_endpoint {
+                        error = error.endpoint(endpoint);
+                    }
+                    Err(error)
                 } else {
                     Ok(())
                 }

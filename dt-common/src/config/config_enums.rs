@@ -36,6 +36,22 @@ pub enum DbType {
     Tidb,
 }
 
+impl DbType {
+    pub const fn diagnostic_name(&self) -> &'static str {
+        match self {
+            Self::Mysql => "mysql",
+            Self::Pg => "postgresql",
+            Self::Kafka => "kafka",
+            Self::Mongo => "mongodb",
+            Self::Redis => "redis",
+            Self::ClickHouse => "clickhouse",
+            Self::StarRocks => "starrocks",
+            Self::Doris => "doris",
+            Self::Tidb => "tidb",
+        }
+    }
+}
+
 #[derive(Display, EnumString, IntoStaticStr, Debug, Clone, Hash, PartialEq, Eq)]
 pub enum ExtractType {
     #[strum(serialize = "snapshot")]
@@ -63,6 +79,8 @@ pub enum SinkType {
     Dummy,
     #[strum(serialize = "write")]
     Write,
+    #[strum(serialize = "check")]
+    Check,
     #[strum(serialize = "struct")]
     Struct,
     #[strum(serialize = "statistic")]
@@ -91,12 +109,6 @@ pub enum ParallelType {
     Mongo,
     #[strum(serialize = "redis")]
     Redis,
-}
-
-#[derive(EnumString, IntoStaticStr, Clone, Display)]
-pub enum PipelineType {
-    #[strum(serialize = "basic")]
-    Basic,
 }
 
 #[derive(Clone, Debug, EnumString, IntoStaticStr, PartialEq, Default)]

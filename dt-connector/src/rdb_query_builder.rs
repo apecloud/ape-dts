@@ -5,7 +5,7 @@ use sqlx::{mysql::MySqlArguments, postgres::PgArguments, query::Query, MySql, Po
 
 use dt_common::{
     config::config_enums::DbType,
-    error::Error,
+    error::{DtError, DtErrorContextExt, ErrorObject},
     log_warn,
     meta::{
         adaptor::{
@@ -34,7 +34,9 @@ impl RdbQueryInfo<'_> {
         if !self.binds.is_empty()
             && (self.cols.is_empty() || self.binds.len() % self.cols.len() != 0)
         {
-            bail!("query bind column layout does not match bind values");
+            bail!(DtError::InvariantViolated(
+                "query bind column layout does not match bind values".to_string(),
+            ));
         }
         Ok(())
     }
@@ -209,7 +211,7 @@ impl RdbQueryBuilder<'_> {
                 if replace
                     && self.db_type == DbType::Pg
                     && !row_data.contains_unchanged_toast()
-                    && self.check_primary_key_changed(row_data)
+                    && self.check_primary_key_changed(row_data)?
                 {
                     self.get_pg_pk_changed_update_replace_query(row_data, placeholder)
                 } else {
@@ -380,7 +382,9 @@ impl RdbQueryBuilder<'_> {
             query_info.sql = format!("{} ON CONFLICT DO NOTHING", query_info.sql);
             return Ok(query_info);
         }
-        let primary_key_cols = primary_key_cols.unwrap();
+        let Some(primary_key_cols) = primary_key_cols else {
+            return Ok(query_info);
+        };
 
         if self.rdb_tb_meta.id_cols.len() != primary_key_cols.len()
             || self
@@ -528,10 +532,15 @@ impl RdbQueryBuilder<'_> {
         }
 
         if set_pairs.is_empty() {
-            bail! {Error::Unexpected(format!(
+            bail! {DtError::InvariantViolated(format!(
                 "schema: {}, tb: {}, no cols in after, which should not happen in update",
                 self.rdb_tb_meta.schema, self.rdb_tb_meta.tb
-            ))}
+            ))
+            .object(ErrorObject {
+                schema: Some(self.rdb_tb_meta.schema.clone()),
+                table: Some(self.rdb_tb_meta.tb.clone()),
+                ..Default::default()
+            })}
         }
 
         let (where_sql, not_null_cols) = self.get_where_info(index, before, placeholder)?;
@@ -575,8 +584,8 @@ impl RdbQueryBuilder<'_> {
         row_data: &'a RowData,
         placeholder: bool,
     ) -> anyhow::Result<RdbQueryInfo<'a>> {
-        let before = row_data.before.as_ref().unwrap();
-        let after = row_data.after.as_ref().unwrap();
+        let before = row_data.require_before()?;
+        let after = row_data.require_after()?;
 
         let mut delete_where = Vec::new();
         let mut cols = Vec::new();
@@ -776,21 +785,27 @@ impl RdbQueryBuilder<'_> {
             return self.get_placeholder(index, col);
         }
 
-        if col_value.is_none() {
+        let Some(col_value) = col_value else {
             return Ok("NULL".to_string());
-        }
-        if col_value.unwrap().is_unchanged_toast() {
-            bail! {Error::Unexpected(format!(
+        };
+        if col_value.is_unchanged_toast() {
+            bail! {DtError::InvariantViolated(format!(
                 "schema: {}, tb: {}, col: {}, UnchangedToast should not be converted to sql value directly",
                 self.rdb_tb_meta.schema, self.rdb_tb_meta.tb, col
-            ))}
+            ))
+            .object(ErrorObject {
+                schema: Some(self.rdb_tb_meta.schema.clone()),
+                table: Some(self.rdb_tb_meta.tb.clone()),
+                column: Some(col.to_string()),
+                ..Default::default()
+            })}
         }
 
         if self.mysql_tb_meta.is_some() {
-            return self.get_mysql_sql_value(col, col_value.unwrap());
+            return self.get_mysql_sql_value(col, col_value);
         }
 
-        Ok(self.get_pg_sql_value(col_value.unwrap()))
+        Ok(self.get_pg_sql_value(col_value))
     }
 
     fn get_pg_sql_value(&self, col_value: &ColValue) -> String {
@@ -925,9 +940,9 @@ impl RdbQueryBuilder<'_> {
         SqlUtil::escape_cols(cols, &self.db_type)
     }
 
-    fn check_primary_key_changed(&self, row_data: &RowData) -> bool {
+    fn check_primary_key_changed(&self, row_data: &RowData) -> anyhow::Result<bool> {
         let Some(primary_key_cols) = self.rdb_tb_meta.key_map.get("primary") else {
-            return false;
+            return Ok(false);
         };
         if self.rdb_tb_meta.id_cols.len() != primary_key_cols.len()
             || self
@@ -937,14 +952,14 @@ impl RdbQueryBuilder<'_> {
                 .zip(primary_key_cols.iter())
                 .any(|(id_col, primary_col)| id_col != primary_col)
         {
-            return false;
+            return Ok(false);
         }
 
-        let before = row_data.before.as_ref().unwrap();
-        let after = row_data.after.as_ref().unwrap();
-        primary_key_cols
+        let before = row_data.require_before()?;
+        let after = row_data.require_after()?;
+        Ok(primary_key_cols
             .iter()
-            .any(|col| before.get(col) != after.get(col))
+            .any(|col| before.get(col) != after.get(col)))
     }
 }
 

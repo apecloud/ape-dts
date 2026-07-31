@@ -159,6 +159,109 @@ mod test {
 
     #[tokio::test]
     #[serial]
+    async fn struct_advanced_options_and_indexes_test() {
+        let runner =
+            MongoTestRunner::new("mongo_to_mongo/struct/advanced_options_and_indexes_test")
+                .await
+                .unwrap();
+        runner.run_struct_test().await.unwrap();
+
+        runner
+            .assert_dst_collection_option_doc_contains(
+                "mongo_struct_advanced_db",
+                "advanced_accounts",
+                "validator",
+                doc! { "$jsonSchema": { "bsonType": "object", "required": ["tenant_id", "email"] } },
+            )
+            .await;
+        runner
+            .assert_dst_index_exists(
+                "mongo_struct_advanced_db",
+                "advanced_accounts",
+                "tenant_hashed_idx",
+                doc! { "tenant_id": "hashed" },
+            )
+            .await;
+        runner
+            .assert_dst_index_exists(
+                "mongo_struct_advanced_db",
+                "advanced_accounts",
+                "profile_text_idx",
+                doc! { "_fts": "text", "_ftsx": 1 },
+            )
+            .await;
+        runner
+            .assert_dst_index_option_doc(
+                "mongo_struct_advanced_db",
+                "advanced_accounts",
+                "profile_text_idx",
+                "weights",
+                doc! { "bio": 10, "notes": 2 },
+            )
+            .await;
+        runner
+            .assert_dst_index_exists(
+                "mongo_struct_advanced_db",
+                "advanced_accounts",
+                "attributes_wildcard_idx",
+                doc! { "$**": 1 },
+            )
+            .await;
+        runner
+            .assert_dst_index_option_doc(
+                "mongo_struct_advanced_db",
+                "advanced_accounts",
+                "attributes_wildcard_idx",
+                "wildcardProjection",
+                doc! { "attributes.secret": 0 },
+            )
+            .await;
+        runner
+            .assert_dst_index_exists(
+                "mongo_struct_advanced_db",
+                "advanced_accounts",
+                "location_2dsphere_idx",
+                doc! { "location": "2dsphere" },
+            )
+            .await;
+        runner
+            .assert_dst_index_exists(
+                "mongo_struct_advanced_db",
+                "advanced_accounts",
+                "archived_hidden_idx",
+                doc! { "archived_at": 1 },
+            )
+            .await;
+        runner
+            .assert_dst_index_option_bool(
+                "mongo_struct_advanced_db",
+                "advanced_accounts",
+                "archived_hidden_idx",
+                "hidden",
+                true,
+            )
+            .await;
+        runner
+            .assert_dst_index_exists(
+                "mongo_struct_advanced_db",
+                "advanced_accounts",
+                "last_name_fr_idx",
+                doc! { "last_name": 1 },
+            )
+            .await;
+        runner
+            .assert_dst_index_option_doc_contains(
+                "mongo_struct_advanced_db",
+                "advanced_accounts",
+                "last_name_fr_idx",
+                "collation",
+                doc! { "locale": "fr", "strength": 1 },
+            )
+            .await;
+    }
+
+    #[tokio::test]
+    #[serial]
     async fn struct_special_names_test() {
         let runner = MongoTestRunner::new("mongo_to_mongo/struct/special_names_test")
             .await

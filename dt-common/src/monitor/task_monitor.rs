@@ -68,7 +68,9 @@ impl FlushableMonitor for TaskMonitor {
 
         self.reset_before_calc();
         if let Some(metrics) = self.calc().await {
-            log_task!("{}", serde_json::to_string(&metrics).unwrap());
+            if let Ok(serialized) = serde_json::to_string(&metrics) {
+                log_task!("{}", serialized);
+            }
             #[cfg(feature = "metrics")]
             self.prometheus_metrics.set_metrics(&metrics);
         }

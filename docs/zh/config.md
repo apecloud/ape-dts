@@ -106,106 +106,106 @@ url=mysql://user1:abc%25%24%23%3F%40@127.0.0.1:3307?ssl-mode=disabled
 
 # [checker]
 
-`[checker]` 对应三种已文档化的数据校验形态：
+通用的数据/结构校验参数。该 section 对应以下模式：
 
-- standalone snapshot check：只运行 snapshot 校验任务，不执行写入。设置 `sink_type=dummy`
-  或直接省略 `[sinker]`，并在 `[checker]` 中显式配置校验目标。Standalone snapshot checker
-  target 支持 MySQL、PostgreSQL 和 MongoDB。该形态只做数据校验，不会自动执行结构校验。
-- inline snapshot check：用于 `sink_type=write` 的 snapshot 任务，checker 会在写入后执行，
-  并直接复用 `[sinker]` 已解析的目标端配置。
-- inline cdc check：用于 `extract_type=cdc` 且 `sink_type=write` 的 CDC 任务，checker 会在
-  写入后校验已落库变更，直接复用 `[sinker]` 目标，并要求持久化 checker 状态。
+- standalone snapshot/struct/check-log：设置 `[sinker].sink_type=check`。目标连接、认证、TLS、
+  连接数以及数据库专属参数全部沿用 `[sinker]` 配置。
+- inline snapshot：使用 `extract_type=snapshot`、`[sinker].sink_type=write`，并增加
+  `[checker]` section。每次 sink 成功后同步执行校验。
+- inline CDC：使用 `extract_type=cdc`、`[sinker].sink_type=write`，并设置
+  `[checker_cdc].is_enabled=true`。写入后通过 CDC checker queue 异步校验。
 
-struct check 仅支持 standalone MySQL/PostgreSQL checker target。
-
-| 配置                        | 作用                                                            | 示例        | 默认                             |
-| :-------------------------- | :-------------------------------------------------------------- | :---------- | :------------------------------- |
-| enable                      | `[checker]` section 出现时是否启用 checker                      | true        | 必填                             |
-| queue_size                  | checker 队列容量，按待处理批次/消息数计数                       | 200         | 200                              |
-| max_connections             | checker 连接池最大连接数                                        | 8           | 8                                |
-| batch_size                  | checker 的分块大小；inline cdc check 下也用于控制 checker 分块  | 200         | 200                              |
-| sample_rate                 | snapshot 与 CDC check 的百分比抽样率                            | 25          | 空（校验全部行/变更）            |
-| output_full_row             | diff 日志是否输出全量行                                         | false       | false                            |
-| output_revise_sql           | 是否将生成的修复 SQL 写入 `sql.log`                             | false       | false                            |
-| revise_match_full_row       | 生成修复 SQL 时是否按全量行匹配                                 | false       | false                            |
-| retry_interval_secs         | 重试间隔（秒），inline cdc check 下强制为 0                     | 0           | 0                                |
-| max_retries                 | 重试次数，inline cdc check 下强制为 0                           | 0           | 0                                |
-| check_log_dir               | 校验日志目录                                                    | /tmp/check  | 空（默认 runtime.log_dir/check） |
-| check_log_file_size         | 本地单类日志文件大小上限（`diff.log` / `miss.log` / `sql.log`） | 100mb       | 100mb                            |
-| check_log_max_rows          | CDC 校验快照最大行数（`diff.log` / `miss.log`）                 | 1000        | 1000                             |
-| db_type                     | 校验目标库类型（仅 standalone 目标配置）                        | mysql       | -                                |
-| url                         | 校验目标 URL（仅 standalone 目标配置）                          | mysql://... | -                                |
-| username                    | 校验目标用户名（仅 standalone 目标配置）                        | root        | 空                               |
-| password                    | 校验目标密码（仅 standalone 目标配置）                          | password    | 空                               |
-| ssl_mode                    | 校验目标 TLS 模式（仅 standalone 目标配置）                     | verify_full | 不设置                           |
-| ssl_ca_path                 | 校验目标 CA 证书路径（仅 standalone 目标配置）                  | /ca.pem     | 空                               |
-| check_log_s3                | standalone snapshot 或 inline CDC check 上传校验日志到 S3       | false       | false                            |
-| cdc_check_log_interval_secs | CDC 校验快照输出间隔（秒）                                      | 30          | 30                               |
-| s3_bucket                   | 校验日志上传的 S3 存储桶                                        | my-bucket   | -                                |
-| s3_access_key_id            | S3 访问密钥 ID                                                  | AKIA...     | -                                |
-| s3_secret_access_key        | S3 秘密访问密钥                                                 | \*\*\*\*    | -                                |
-| s3_region                   | S3 区域                                                         | us-east-1   | -                                |
-| s3_endpoint                 | S3 端点                                                         | https://... | -                                |
-| s3_root_dir                 | S3 helper 使用的本地或挂载根目录                                | /tmp/check  | 空                               |
-| s3_root_url                 | S3 helper 使用的根 URL                                          | s3://bucket | 空                               |
-| s3_key_prefix               | 校验日志的 S3 键前缀                                            | task1/check | 空                               |
+| 配置                  | 作用                           | 示例 | 默认                  |
+| :-------------------- | :----------------------------- | :--- | :-------------------- |
+| batch_size            | 单次 checker 查询的最大行数    | 200  | 200                   |
+| sample_percent        | snapshot/CDC 校验的百分比抽样  | 25   | 空（校验全部行/变更） |
+| recheck_count         | 临时不一致的重试次数           | 4    | 0                     |
+| recheck_interval_secs | 重试间隔（秒）                 | 5    | 0                     |
+| recheck_queue_size    | 待重试行数上限                 | 10000 | 10000                |
+| recheck_queue_memory_mb | 待重试数据内存上限（MiB）    | 256  | 256                   |
 
 说明：
 
-**通用行为**
+- checker 仅支持 `[pipeline].pipeline_type=basic`。
+- `sample_percent` 有效范围为 `1..=100`，只适用于 snapshot check 和 inline CDC check。
+  Standalone snapshot 在抽取阶段采样；inline snapshot/CDC 会完整写入，再在 fetch 目标数据前按
+  key hash 确定性采样。
+- Standalone snapshot check 支持 MySQL、PostgreSQL、MongoDB；standalone struct check
+  支持 MySQL、PostgreSQL。
+- Inline snapshot check 支持 MySQL、PostgreSQL、MongoDB 写入目标。
+- inline CDC reconciliation 不使用 `recheck_count` 和 `recheck_interval_secs`。
+- Retry buffer 达到行数或内存上限时，不会丢弃检查结果；新发现的不一致会跳过重试并立即输出。
 
-- checker 仅支持 `[pipeline] pipeline_type=basic`。
-- `sample_rate` 仅支持 snapshot check 和 inline CDC check。有效范围是 `1..=100`；空值表示
-  校验全部行/变更。Standalone MySQL/PostgreSQL/MongoDB snapshot check 会在 snapshot 抽取阶段
-  应用该比例，减少后续 checker 工作量。存在行数估算时，extractor 会把源端读取限制到
-  大约 `row_count * sample_rate / 100`。`row_count` 基于表估算；表配置了 `where_conditions`
-  时基于该过滤条件估算。如果没有有效估算，则读取完整源端 stream。该抽样
-  是源端 Top-N limit，不是 key hash 抽样，也不是随机抽样。Inline snapshot check 和 inline CDC
-  check 会先完整写入所有行/变更，然后在 checker 目标端 fetch 前进行确定性的 key hash 抽样；
-- `queue_size` 统计的是 checker DML 队列中的待处理批次数，不是行数。checkpoint、`refresh_meta`
-  这类控制信号会绕过这条队列。
-- 在 inline 写后校验链路里，如果 checker DML 队列已满，会丢弃最旧的待校验批次并记录 warning
-  日志，而不是阻塞写入路径。
-- checker 运行时错误（批次校验失败、checkpoint 失败、输出失败）只会记录日志，不影响主 CDC
-  写入链路；checkpoint 和元数据刷新投递仍按 best-effort 处理。
+## Standalone 目标示例
 
-**目标选择与适用形态**
+```ini
+[extractor]
+db_type=mysql
+extract_type=snapshot
+url=mysql://source-host:3306
 
-- 对 inline 写后校验链路来说，一个排队批次通常接近实际写入批大小；实践中多数情况下约等于
-  `[sinker].batch_size` 行，但最后一个批次可能更小，上游分片策略也会影响实际条数。
-- 对 standalone / dummy-sinker 校验链路来说，进入队列的单批大小由上游 parallelizer 决定；
-  出队后，checker 会再按 `[checker].batch_size` 对非 CDC 数据做内部切块处理。
-- struct 任务只支持 standalone MySQL/PostgreSQL checker target。若为 struct 任务启用
-  `[checker]`，请使用 `sink_type=dummy` 或直接省略 `[sinker]`。需要结构校验时请显式运行
-  struct check；standalone snapshot check 不会自动启动结构校验。
-- inline snapshot check 仅支持 `[extractor] extract_type=snapshot`、`[sinker] sink_type=write`，
-  且 `[sinker].db_type` 为 `mysql`、`pg`、`mongo` 的写入链路。
-- inline cdc check 当前仅支持 `[extractor] extract_type=cdc`、`[sinker] sink_type=write`，
-  `[checker].enable=true`、`[parallelizer].parallel_type=rdb_merge`，且 `[sinker].db_type`
-  为 `mysql` 或 `pg` 的场景。
-- 在 inline cdc check 中，checker 使用 `[checker].batch_size`，不会 fallback 到
-  `[sinker].batch_size`。例如 `[checker].batch_size=100`、`queue_size=200` 时，队列最多可积压 200 个待处理批次；若这些批次都打满，大约就是 20,000 行待校验数据。
-- 在 inline snapshot check 与 inline cdc check 中，`[checker]` 不接受 `db_type`、`url`、
-  `username`、`password`；checker 会直接复用 `[sinker]` 已解析的目标端配置。
-- 在 inline cdc check 中，必须配置 `[resumer] resume_type=from_target` 或 `from_db` 来持久化
-  checker 状态。
-- 对 inline cdc check，下面这些组合会直接报 `ConfigError`：出现 `[checker]` section 但缺少
-  `enable`；`[pipeline].pipeline_type != basic`；`[sinker].sink_type != write`；
-  `[parallelizer].parallel_type != rdb_merge`；`[sinker].db_type` 不属于 `mysql` / `pg`；
-  以及在 `[checker]` 中显式填写目标端字段 `db_type` / `url` / `username` / `password`。
+[sinker]
+db_type=mysql
+sink_type=check
+url=mysql://target-host:3306
+username=root
+password=target-password
+max_connections=8
 
-**inline cdc check 的日志 / 重试行为**
+[checker]
+batch_size=200
+sample_percent=25
+recheck_count=4
+recheck_interval_secs=5
+recheck_queue_size=10000
+recheck_queue_memory_mb=256
+```
 
-- 对 inline cdc check，`max_retries` 与 `retry_interval_secs` 会强制按 0 处理。
-- 当 `check_log_dir` 为空时，统一使用 `runtime.log_dir/check` 作为 checker 日志目录（包含 CDC 校验输出）。
-- standalone snapshot check 先输出本地校验日志；如果 `check_log_s3=true`，任务结束后会将最终的
-  `summary.log` 以及非空的 `miss.log`、`diff.log`、`sql.log` 上传到 S3。
-- 在 inline cdc check 下，会始终先在 `check_log_dir` 本地落盘周期性校验快照；
-  `check_log_s3` 仅控制是否上传 S3。除 inline cdc check 外，S3 上传只支持 standalone
-  snapshot check。
-- `check_log_file_size` 限制本地 `diff.log` / `miss.log` / `sql.log` 的大小，`summary.log`
-  不受该限制。
-- `check_log_max_rows` 仅对 CDC 校验快照的 `diff.log` / `miss.log` 生效；命中任一阈值时仅保留最新记录。
+# [checker_output]
+
+校验结果输出配置。省略该 section 时，默认写入 `runtime.log_dir/check` 下的本地日志。
+
+| 配置                 | 作用                                                         | 示例          | 默认 |
+| :------------------- | :----------------------------------------------------------- | :------------ | :--- |
+| output_type          | 输出介质：`logs` 或 `s3`                                | logs          | logs |
+| output_full_row      | diff 日志是否包含完整源端/目标端行                           | false         | false |
+| output_revise_sql    | 是否生成修复语句到 `sql.log`                               | true          | false |
+| revise_match_full_row| 生成修复语句时是否用完整行作为匹配条件                       | false         | false |
+| check_log_dir        | 本地校验日志目录                                             | /tmp/check    | 空（使用 `runtime.log_dir/check`） |
+| check_log_file_size  | `diff.log`、`miss.log`、`sql.log` 单文件大小上限       | 100mb         | 100mb |
+| check_log_max_rows   | CDC `diff.log`/`miss.log` 快照最大行数                   | 1000          | 1000 |
+| s3_bucket            | S3 bucket，`output_type=s3` 时必填                          | my-bucket     | - |
+| s3_access_key_id     | S3 access key                                                | AKIA...       | 空 |
+| s3_secret_access_key | S3 secret key                                                | ****          | 空 |
+| s3_region            | S3 region                                                    | us-east-1     | 空 |
+| s3_endpoint          | 自定义 S3 endpoint                                           | https://...   | 空 |
+| s3_root_dir          | S3 helper 使用的本地/挂载根目录                              | /tmp/check    | 空 |
+| s3_root_url          | S3 helper 使用的根 URL                                       | s3://bucket   | 空 |
+| s3_key_prefix        | 上传日志的 key prefix                                        | task1/check   | 空 |
+
+`output_type=s3` 仅支持 standalone snapshot check 和 inline CDC check。S3 模式仍会使用配置的
+本地滚动日志目录和限制，再执行上传。Struct check、check-log review 和 inline snapshot check
+只支持 `output_type=logs`。
+
+# [checker_cdc]
+
+仅用于 CDC 异步校验的配置。
+
+| 配置                    | 作用                         | 示例 | 默认 |
+| :---------------------- | :--------------------------- | :--- | :--- |
+| is_enabled              | 启用 inline CDC check        | true | false |
+| queue_size              | 待处理 CDC checker batch 数  | 200  | 200 |
+| check_log_interval_secs | CDC 校验结果周期输出间隔（秒）| 30   | 30 |
+
+Inline CDC check 还要求：
+
+- `[extractor].extract_type=cdc`
+- `[sinker].sink_type=write`，目标为 MySQL/PostgreSQL
+- `[parallelizer].parallel_type=rdb_merge`
+- `[resumer].resume_type=from_target` 或 `from_db`
+
+CDC checker queue 用于主动与迁移 pipeline 解耦；队列满时淘汰最旧的待处理 batch，不阻塞写入。
+Checker 处理/输出失败只记录日志，不让主 CDC 写入链路失败。Snapshot 和 struct check 不使用该队列。
 
 # [filter]
 
@@ -325,8 +325,8 @@ struct check 仅支持 standalone MySQL/PostgreSQL checker target。
 | :-------- | :----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :---------------------------------- | :--- | :------------------------------------------- |
 | snapshot  | 缓存中的数据分成 parallel_size 份，多线程并行，且批量写入目标                                                                                                                        | mysql/pg/mongo 全量                 | 快   |                                              |
 | serial    | 单线程，依次单条写入目标                                                                                                                                                             | 所有                                |      | 慢                                           |
-| rdb_merge | 将缓存中的行级变更整合成适合写入的 insert + delete 批次，再按 parallel_size 并行下发。`[checker].enable=true` 时，MySQL/PG 的 checker 相关链路会在内部复用它并切换到 check sink mode | mysql/pg 增量、校验、review、revise | 快   | 最终一致性，破坏源端事务在目标端重放的完整性 |
-| mongo     | merge parallelizer 的 Mongo 版。`[checker].enable=true` 时，Mongo 的 checker 相关链路也会在内部复用它并切换到 check sink mode                                                        | mongo 增量、校验、review            |      |                                              |
+| rdb_merge | 将缓存中的行级变更整合成适合写入的 insert + delete 批次，再按 parallel_size 并行下发；用于 MySQL/PG CDC、check、review、revise 链路 | mysql/pg 增量、校验、review、revise | 快   | 最终一致性，破坏源端事务在目标端重放的完整性 |
+| mongo     | merge parallelizer 的 Mongo 版，也用于 standalone MongoDB check 和 review 链路                                                        | mongo 增量、校验、review            |      |                                              |
 | redis     | 单线程，批量/串行（由 sinker 的 batch_size 决定）写入                                                                                                                                | redis 全量/增量                     |      |                                              |
 
 ## snapshot chunk rebalance

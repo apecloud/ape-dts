@@ -3,15 +3,16 @@ use std::{
     fs::{self, File, OpenOptions},
     io::{self, BufRead, BufReader, Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
-    process::{Command, Stdio},
+    process::{Command, ExitCode, Stdio},
     sync::atomic::{AtomicBool, Ordering},
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{bail, Context, Result};
 use clap::{error::ErrorKind, Args, CommandFactory, Parser, Subcommand};
 use clap_complete::generate;
 use configparser::ini::Ini;
+use dt_common::error::{DtError, DtResultExt, ErrorCode, ErrorReport, Stage};
 use serde::{Deserialize, Serialize};
 
 mod config;
@@ -107,11 +108,12 @@ const CREATE_AFTER_HELP: &str = r#"Examples:
       --set runtime.log_level=debug \
       --dry-run"#;
 
-fn main() {
+fn main() -> ExitCode {
     if let Err(err) = run(env::args().skip(1).collect()) {
-        eprintln!("{err:#}");
-        std::process::exit(1);
+        eprintln!("{}", ErrorReport::from_anyhow(&err));
+        return ExitCode::FAILURE;
     }
+    ExitCode::SUCCESS
 }
 
 fn run(args: Vec<String>) -> Result<()> {
@@ -132,7 +134,7 @@ fn run(args: Vec<String>) -> Result<()> {
             if matches!(kind, ErrorKind::MissingRequiredArgument) {
                 eprint!("{}", clap_message(&err));
             } else {
-                err.print()?;
+                err.print().context("failed to print command-line error")?;
             }
             if matches!(kind, ErrorKind::DisplayHelp | ErrorKind::DisplayVersion) {
                 return Ok(());
@@ -143,19 +145,22 @@ fn run(args: Vec<String>) -> Result<()> {
     if command_should_warn_workspace_binaries(&cli.command) {
         warn_if_workspace_binaries_missing_from_config();
     }
-    match cli.command {
-        Commands::Config(command) => handle_config(command)?,
-        Commands::Create(create) => handle_create(create)?,
-        Commands::Start(start) => handle_start(start)?,
-        Commands::List => handle_list()?,
-        Commands::Show(show) => handle_show(show)?,
-        Commands::Logs(logs) => handle_logs(logs)?,
-        Commands::Stop(stop) => handle_stop(stop)?,
-        Commands::Delete(delete) => handle_delete(delete)?,
-        Commands::Completion(args) => handle_completion(args),
-        Commands::Version => print_version()?,
-    }
-    Ok(())
+    let result = match cli.command {
+        Commands::Config(command) => handle_config(command),
+        Commands::Create(create) => handle_create(create),
+        Commands::Start(start) => handle_start(start),
+        Commands::List => handle_list(),
+        Commands::Show(show) => handle_show(show),
+        Commands::Logs(logs) => handle_logs(logs),
+        Commands::Stop(stop) => handle_stop(stop),
+        Commands::Delete(delete) => handle_delete(delete),
+        Commands::Completion(args) => {
+            handle_completion(args);
+            Ok(())
+        }
+        Commands::Version => print_version(),
+    };
+    result.stage(Stage::Task)
 }
 
 fn clap_message(err: &clap::Error) -> String {
@@ -453,16 +458,16 @@ impl CreateArgs {
     fn into_config(self) -> Result<CreateConfig> {
         Ok(CreateConfig {
             task_name: self.task_name,
-            mode: self
-                .mode
-                .context("--mode is required unless --file is provided")?,
+            mode: self.mode.ok_or_else(|| {
+                DtError::invalid_config("--mode is required unless --file is provided")
+            })?,
             preflight: self.preflight,
-            source_url: self
-                .source_url
-                .context("--source is required unless --file is provided")?,
-            target_url: self
-                .target_url
-                .context("--target is required unless --file is provided")?,
+            source_url: self.source_url.ok_or_else(|| {
+                DtError::invalid_config("--source is required unless --file is provided")
+            })?,
+            target_url: self.target_url.ok_or_else(|| {
+                DtError::invalid_config("--target is required unless --file is provided")
+            })?,
             source_db: self.source_db,
             target_db: self.target_db,
             source_user: self.source_user,
@@ -550,7 +555,10 @@ fn handle_config(command: ConfigCommand) -> Result<()> {
     match command.command {
         ConfigSubcommand::Get => {
             let cfg = load_cli_config()?;
-            println!("{}", serde_json::to_string_pretty(&cfg)?);
+            let output = serde_json::to_string_pretty(&cfg)
+                .code(ErrorCode::InvariantViolated)
+                .context("Failed to serialize dtscli configuration")?;
+            println!("{output}");
         }
         ConfigSubcommand::Set(args) => {
             let mut cfg = load_cli_config()?;
@@ -561,7 +569,10 @@ fn handle_config(command: ConfigCommand) -> Result<()> {
                 cfg.log_dir = log_dir;
             }
             save_cli_config(&cfg)?;
-            println!("{}", serde_json::to_string_pretty(&cfg)?);
+            let output = serde_json::to_string_pretty(&cfg)
+                .code(ErrorCode::InvariantViolated)
+                .context("Failed to serialize dtscli configuration")?;
+            println!("{output}");
             warn_if_workspace_binaries_missing(&cfg);
         }
     }
@@ -607,7 +618,7 @@ fn handle_create(create: CreateArgs) -> Result<()> {
     if let Some(file) = create.file.as_deref() {
         let config_file = resolve_path(file)?;
         let ini = fs::read_to_string(&config_file)
-            .with_context(|| format!("failed to read {}", config_file.display()))?;
+            .context(format!("failed to read {}", config_file.display()))?;
         if create.dry_run {
             print!("{ini}");
             return Ok(());
@@ -643,11 +654,11 @@ fn handle_create(create: CreateArgs) -> Result<()> {
     let source_db = infer_db_type(source_url, create.source_db.clone())?;
     let target_db = infer_db_type(target_url, create.target_db.clone())?;
     if source_db != target_db {
-        bail!(
-            "v1 only supports same-engine tasks, got source={} target={}",
+        bail!(DtError::invalid_config(format!(
+            "This release only supports same-engine tasks; source is [{}] and destination is [{}]",
             source_db.as_config_value(),
             target_db.as_config_value()
-        );
+        ),));
     }
 
     let preflight_dir = create.preflight.then(|| preflight_temp_dir(task_name));
@@ -677,10 +688,12 @@ fn handle_create(create: CreateArgs) -> Result<()> {
     let dt_main = resolve_dt_main(&cfg)?;
     warn_if_dt_main_version_unsupported(&dt_main);
     if let Some(preflight_dir) = preflight_dir {
-        fs::create_dir_all(&runtime_log_dir)
-            .with_context(|| format!("failed to create log dir {}", runtime_log_dir.display()))?;
+        fs::create_dir_all(&runtime_log_dir).context(format!(
+            "failed to create log dir {}",
+            runtime_log_dir.display()
+        ))?;
         fs::write(&config_file, ini)
-            .with_context(|| format!("failed to write {}", config_file.display()))?;
+            .context(format!("failed to write {}", config_file.display()))?;
         return run_preflight(&dt_main, &workspace, &config_file, Some(&preflight_dir));
     }
 
@@ -715,7 +728,12 @@ struct TaskConfigDetails {
 fn inspect_task_config(config_file: &Path, workspace: &Path) -> Result<TaskConfigDetails> {
     let mut ini = Ini::new();
     ini.load(config_file.display().to_string())
-        .map_err(|err| anyhow!("failed to parse {}: {err}", config_file.display()))?;
+        .map_err(|error| {
+            DtError::invalid_config(format!(
+                "Failed to parse [{}]: {error}",
+                config_file.display()
+            ))
+        })?;
 
     let runtime_log_dir = resolve_workspace_path(
         workspace,
@@ -765,16 +783,16 @@ fn start_persistent_task(
 ) -> Result<()> {
     let task_dir = task_root()?.join(task_name);
     if task_dir.exists() {
-        bail!(
-            "task '{task_name}' already exists at {}",
+        bail!(DtError::PrerequisiteNotMet(format!(
+            "Task [{task_name}] already exists at [{}]",
             task_dir.display()
-        );
+        )));
     }
     fs::create_dir_all(&task_dir)
-        .with_context(|| format!("failed to create task dir {}", task_dir.display()))?;
+        .context(format!("failed to create task dir {}", task_dir.display()))?;
     if let Some(content) = config_content {
         fs::write(config_file, content)
-            .with_context(|| format!("failed to write {}", config_file.display()))?;
+            .context(format!("failed to write {}", config_file.display()))?;
     }
 
     let mut metadata = TaskMetadata {
@@ -816,11 +834,10 @@ fn reject_if_task_running(task_dir: &Path, metadata: &TaskMetadata) -> Result<()
         }
     }
     if let Some(pid) = pids.into_iter().find(|pid| process_exists(*pid)) {
-        bail!(
-            "task '{}' is already running with pid {}",
-            metadata.task_name,
-            pid
-        );
+        bail!(DtError::PrerequisiteNotMet(format!(
+            "Task [{}] is already running with pid [{pid}]",
+            metadata.task_name
+        )));
     }
     Ok(())
 }
@@ -835,18 +852,28 @@ fn launch_persistent_task(
     let config_file = PathBuf::from(&metadata.config_file);
     let runtime_log_dir = PathBuf::from(&metadata.log_dir);
     let runtime_log4rs_file = PathBuf::from(&metadata.runtime_log4rs_file);
-    fs::create_dir_all(&runtime_log_dir)
-        .with_context(|| format!("failed to create log dir {}", runtime_log_dir.display()))?;
+    fs::create_dir_all(&runtime_log_dir).context(format!(
+        "failed to create log dir {}",
+        runtime_log_dir.display()
+    ))?;
     warn_if_runtime_log4rs_missing(&runtime_log4rs_file);
 
     let stdout = OpenOptions::new()
         .create(true)
         .append(true)
-        .open(task_dir.join("stdout.log"))?;
+        .open(task_dir.join("stdout.log"))
+        .context(format!(
+            "failed to open {}",
+            task_dir.join("stdout.log").display()
+        ))?;
     let stderr = OpenOptions::new()
         .create(true)
         .append(true)
-        .open(task_dir.join("stderr.log"))?;
+        .open(task_dir.join("stderr.log"))
+        .context(format!(
+            "failed to open {}",
+            task_dir.join("stderr.log").display()
+        ))?;
     let mut command = Command::new(dt_main);
     command.arg("--config").arg(&config_file);
     if init {
@@ -858,16 +885,22 @@ fn launch_persistent_task(
         .stdout(Stdio::from(stdout))
         .stderr(Stdio::from(stderr))
         .spawn()
-        .with_context(|| format!("failed to start {}", dt_main.display()))?;
+        .context(format!("failed to start {}", dt_main.display()))?;
     let pid = child.id();
-    fs::write(task_dir.join("pid"), pid.to_string())?;
+    fs::write(task_dir.join("pid"), pid.to_string()).context(format!(
+        "failed to write {}",
+        task_dir.join("pid").display()
+    ))?;
 
     metadata.dt_main = dt_main.display().to_string();
     metadata.pid = Some(pid);
-    fs::write(
-        task_dir.join("metadata.json"),
-        serde_json::to_string_pretty(&metadata)?,
-    )?;
+    let metadata_json = serde_json::to_string_pretty(&metadata)
+        .code(ErrorCode::InvariantViolated)
+        .context("Failed to serialize task metadata")?;
+    fs::write(task_dir.join("metadata.json"), metadata_json).context(format!(
+        "failed to write {}",
+        task_dir.join("metadata.json").display()
+    ))?;
 
     report_task_start(
         &metadata.task_name,
@@ -906,7 +939,7 @@ fn run_preflight(
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
         .spawn()
-        .with_context(|| format!("failed to start {}", dt_main.display()))
+        .context(format!("failed to start {}", dt_main.display()))
         .and_then(|mut child| wait_for_preflight(&mut child));
 
     if let Some(temp_dir) = temp_dir {
@@ -920,10 +953,14 @@ fn run_preflight(
 
     let status = result?;
     if PREFLIGHT_INTERRUPTED.load(Ordering::SeqCst) {
-        bail!("preflight interrupted");
+        bail!(DtError::OperationInterrupted(
+            "Preflight was interrupted".to_string()
+        ));
     }
     if !status.success() {
-        bail!("preflight failed with status {status}");
+        bail!(DtError::PrerequisiteNotMet(format!(
+            "Preflight failed with status [{status}]"
+        )));
     }
     println!("preflight finished successfully");
     Ok(())
@@ -932,7 +969,10 @@ fn run_preflight(
 fn wait_for_preflight(child: &mut std::process::Child) -> Result<std::process::ExitStatus> {
     let mut signal_forwarded = false;
     loop {
-        if let Some(status) = child.try_wait()? {
+        if let Some(status) = child
+            .try_wait()
+            .context(format!("failed to check preflight process {}", child.id()))?
+        {
             return Ok(status);
         }
         if PREFLIGHT_INTERRUPTED.load(Ordering::SeqCst) && !signal_forwarded {
@@ -989,9 +1029,18 @@ fn handle_list() -> Result<()> {
         return Ok(());
     }
 
-    for entry in fs::read_dir(root)? {
-        let entry = entry?;
-        if !entry.file_type()?.is_dir() {
+    for entry in
+        fs::read_dir(&root).context(format!("failed to read task directory {}", root.display()))?
+    {
+        let entry = entry.context(format!(
+            "failed to read an entry in task directory {}",
+            root.display()
+        ))?;
+        if !entry
+            .file_type()
+            .context(format!("failed to inspect {}", entry.path().display()))?
+            .is_dir()
+        {
             continue;
         }
         let task_dir = entry.path();
@@ -1033,7 +1082,10 @@ fn handle_start(start: StartArgs) -> Result<()> {
 fn handle_show(args: ShowArgs) -> Result<()> {
     let task_dir = existing_task_dir(&args.task_name)?;
     let metadata = read_metadata(&task_dir)?;
-    println!("{}", serde_json::to_string_pretty(&metadata)?);
+    let output = serde_json::to_string_pretty(&metadata)
+        .code(ErrorCode::InvariantViolated)
+        .context("Failed to serialize task metadata")?;
+    println!("{output}");
     Ok(())
 }
 
@@ -1061,8 +1113,9 @@ fn handle_logs(logs: LogsArgs) -> Result<()> {
 
 fn handle_stop(stop: StopArgs) -> Result<()> {
     let task_dir = task_root()?.join(&stop.task_name);
-    let pid = read_pid(&task_dir)
-        .ok_or_else(|| anyhow!("pid not found for task '{}'", stop.task_name))?;
+    let pid = read_pid(&task_dir).ok_or_else(|| {
+        DtError::PrerequisiteNotMet(format!("PID was not found for task [{}]", stop.task_name))
+    })?;
     if !process_exists(pid) {
         println!("task '{}' is already stopped", stop.task_name);
         return Ok(());
@@ -1078,11 +1131,10 @@ fn handle_delete(delete: DeleteArgs) -> Result<()> {
 
     if let Some(pid) = read_pid(&task_dir) {
         if process_exists(pid) && !delete.force {
-            bail!(
-                "task '{}' is still running with pid {}; stop it first or use --force",
-                delete.task_name,
-                pid
-            );
+            bail!(DtError::PrerequisiteNotMet(format!(
+                "Task [{}] is still running with pid [{pid}]; stop it first or use --force",
+                delete.task_name
+            )));
         }
     }
 
@@ -1117,8 +1169,7 @@ fn delete_task_files(task_dir: &Path, metadata: Option<&TaskMetadata>) -> Result
     }
 
     if task_dir.exists() {
-        fs::remove_dir_all(task_dir)
-            .with_context(|| format!("failed to delete {}", task_dir.display()))?;
+        fs::remove_dir_all(task_dir).context(format!("failed to delete {}", task_dir.display()))?;
     }
     Ok(())
 }
@@ -1136,24 +1187,32 @@ fn delete_runtime_log_dir(metadata: &TaskMetadata) -> Result<()> {
         );
         return Ok(());
     }
-    fs::remove_dir_all(&log_dir)
-        .with_context(|| format!("failed to delete runtime log dir {}", log_dir.display()))?;
+    fs::remove_dir_all(&log_dir).context(format!(
+        "failed to delete runtime log dir {}",
+        log_dir.display()
+    ))?;
     Ok(())
 }
 
 fn validate_task_name(task_name: &str) -> Result<()> {
     let mut chars = task_name.chars();
     let Some(first) = chars.next() else {
-        bail!("task_name must not be empty");
+        bail!(DtError::invalid_config("task_name must not be empty",));
     };
     if task_name.len() > 128 {
-        bail!("task_name must be at most 128 bytes");
+        bail!(DtError::invalid_config(
+            "task_name must be at most 128 bytes",
+        ));
     }
     if !first.is_ascii_alphanumeric() {
-        bail!("task_name must start with an ASCII letter or digit");
+        bail!(DtError::invalid_config(
+            "task_name must start with an ASCII letter or digit",
+        ));
     }
     if !chars.all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '.')) {
-        bail!("task_name can only contain ASCII letters, digits, '_', '-', and '.'");
+        bail!(DtError::invalid_config(
+            "task_name can only contain ASCII letters, digits, '_', '-', and '.'",
+        ));
     }
     Ok(())
 }
@@ -1164,16 +1223,22 @@ fn load_cli_config() -> Result<CliConfig> {
         return Ok(CliConfig::default_effective());
     }
     let content =
-        fs::read_to_string(&path).with_context(|| format!("failed to read {}", path.display()))?;
-    Ok(serde_json::from_str(&content)?)
+        fs::read_to_string(&path).context(format!("failed to read {}", path.display()))?;
+    serde_json::from_str(&content)
+        .code(ErrorCode::InvalidConfig)
+        .stage(Stage::Bootstrap)
+        .with_context(|| format!("Failed to parse dtscli configuration [{}]", path.display()))
 }
 
 fn save_cli_config(cfg: &CliConfig) -> Result<()> {
     let path = cli_config_path()?;
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
+        fs::create_dir_all(parent).context(format!("failed to create {}", parent.display()))?;
     }
-    fs::write(&path, serde_json::to_string_pretty(cfg)?)?;
+    let content = serde_json::to_string_pretty(cfg)
+        .code(ErrorCode::InvariantViolated)
+        .context("Failed to serialize dtscli configuration")?;
+    fs::write(&path, content).context(format!("failed to write {}", path.display()))?;
     Ok(())
 }
 
@@ -1181,7 +1246,10 @@ fn cli_home() -> Result<PathBuf> {
     if let Ok(home) = env::var("APE_DTS_HOME") {
         return Ok(PathBuf::from(home));
     }
-    let home = env::var("HOME").context("HOME is not set and APE_DTS_HOME is not configured")?;
+    let home = env::var("HOME")
+        .code(ErrorCode::InvalidConfig)
+        .stage(Stage::Bootstrap)
+        .context("HOME is not set and APE_DTS_HOME is not configured")?;
     Ok(PathBuf::from(home).join(".ape-dts"))
 }
 
@@ -1196,7 +1264,9 @@ fn task_root() -> Result<PathBuf> {
 fn existing_task_dir(task_name: &str) -> Result<PathBuf> {
     let task_dir = task_root()?.join(task_name);
     if !task_dir.is_dir() {
-        bail!("task '{task_name}' does not exist");
+        bail!(DtError::ObjectNotFound(format!(
+            "Task [{task_name}] does not exist"
+        )));
     }
     Ok(task_dir)
 }
@@ -1211,11 +1281,18 @@ fn confirm_delete(
             output,
             "type task name '{}' to confirm deletion: ",
             task_name
-        )?;
-        output.flush()?;
+        )
+        .context("failed to write the delete confirmation prompt")?;
+        output
+            .flush()
+            .context("failed to flush the delete confirmation prompt")?;
 
         let mut confirmation = String::new();
-        if input.read_line(&mut confirmation)? == 0 {
+        if input
+            .read_line(&mut confirmation)
+            .context("failed to read the delete confirmation")?
+            == 0
+        {
             return Ok(false);
         }
         let confirmation = confirmation.trim_end_matches(['\r', '\n']);
@@ -1226,7 +1303,8 @@ fn confirm_delete(
             output,
             ">> typed \"{}\" does not match \"{}\"",
             confirmation, task_name
-        )?;
+        )
+        .context("failed to write the delete confirmation result")?;
     }
 }
 
@@ -1249,7 +1327,9 @@ fn resolve_path(path: &str) -> Result<PathBuf> {
     if raw.is_absolute() {
         Ok(clean_path(raw))
     } else {
-        Ok(clean_path(env::current_dir()?.join(raw)))
+        let current_dir =
+            env::current_dir().context("failed to determine the current working directory")?;
+        Ok(clean_path(current_dir.join(raw)))
     }
 }
 
@@ -1338,20 +1418,23 @@ fn resolve_dt_main(cfg: &CliConfig) -> Result<PathBuf> {
     if let Some(dt_main) = resolve_workspace_binaries(&workspace).dt_main {
         return Ok(dt_main);
     }
-    bail!(
-        "dt-main binary not found under workspace {}; put dt-main at ./dt-main or ./bin/dt-main, or run `dtscli config set --workspace /path/to/release-dir`",
+    bail!(DtError::MissingConfig(format!(
+        "dt-main was not found under workspace [{}]",
         workspace.display()
-    )
+    )))
 }
 
 fn dt_main_version(dt_main: &Path) -> Result<String> {
     let output = Command::new(dt_main)
         .arg("--version")
         .output()
-        .with_context(|| format!("failed to run '{} --version'", dt_main.display()))?;
+        .context(format!("failed to run '{} --version'", dt_main.display()))?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        bail!("{}", stderr.trim());
+        bail!(DtError::WorkerFailed(format!(
+            "dt-main --version failed: {}",
+            stderr.trim()
+        )));
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -1361,7 +1444,9 @@ fn dt_main_version(dt_main: &Path) -> Result<String> {
         .unwrap_or(stdout.trim())
         .trim();
     if version.is_empty() {
-        bail!("empty version output");
+        bail!(DtError::InvariantViolated(
+            "dt-main returned an empty version".to_string()
+        ));
     }
     Ok(version.to_string())
 }
@@ -1414,13 +1499,17 @@ fn parse_version(version: &str) -> Option<[u64; 3]> {
 }
 
 fn read_metadata(task_dir: &Path) -> Result<TaskMetadata> {
-    let content = fs::read_to_string(task_dir.join("metadata.json")).with_context(|| {
-        format!(
-            "failed to read {}",
-            task_dir.join("metadata.json").display()
-        )
-    })?;
-    Ok(serde_json::from_str(&content)?)
+    let metadata_path = task_dir.join("metadata.json");
+    let content = fs::read_to_string(&metadata_path)
+        .context(format!("failed to read {}", metadata_path.display()))?;
+    serde_json::from_str(&content)
+        .code(ErrorCode::InvalidConfig)
+        .with_context(|| {
+            format!(
+                "Failed to parse task metadata [{}]",
+                task_dir.join("metadata.json").display()
+            )
+        })
 }
 
 fn read_pid(task_dir: &Path) -> Option<u32> {
@@ -1439,7 +1528,7 @@ fn report_task_start(
     std::thread::sleep(std::time::Duration::from_millis(500));
     if let Some(status) = child
         .try_wait()
-        .with_context(|| format!("failed to check task process {pid}"))?
+        .context(format!("failed to check task process {pid}"))?
     {
         if status.success() {
             println!(
@@ -1491,9 +1580,11 @@ fn send_signal(pid: u32, signal: &str) -> Result<()> {
         .arg(format!("-{signal}"))
         .arg(pid.to_string())
         .status()
-        .with_context(|| format!("failed to send SIG{signal} to pid {pid}"))?;
+        .context(format!("failed to send SIG{signal} to pid {pid}"))?;
     if !status.success() {
-        bail!("failed to send SIG{signal} to pid {pid}");
+        bail!(DtError::WorkerFailed(format!(
+            "Failed to send SIG{signal} to pid [{pid}]"
+        )));
     }
     Ok(())
 }
@@ -1511,7 +1602,9 @@ fn stop_pid(task_name: &str, pid: u32, timeout_secs: u64, force: bool) -> Result
     }
 
     if process_exists(pid) {
-        bail!("task '{}' is still running with pid {}", task_name, pid);
+        bail!(DtError::WorkerFailed(format!(
+            "Task [{task_name}] is still running with pid [{pid}]"
+        )));
     }
     Ok(())
 }
@@ -1528,13 +1621,16 @@ fn wait_until_stopped(pid: u32, timeout_secs: u64) {
 
 fn print_tail(path: &Path, lines: usize) -> Result<bool> {
     if !path.exists() {
-        bail!("log file does not exist: {}", path.display());
+        bail!(DtError::ObjectNotFound(format!(
+            "Log file [{}] does not exist",
+            path.display()
+        )));
     }
-    let file = File::open(path)?;
+    let file = File::open(path).context(format!("failed to open log file {}", path.display()))?;
     let reader = BufReader::new(file);
     let mut ring = Vec::new();
     for line in reader.lines() {
-        ring.push(line?);
+        ring.push(line.context(format!("failed to read log file {}", path.display()))?);
         if ring.len() > lines {
             ring.remove(0);
         }
@@ -1553,7 +1649,9 @@ fn resolve_log_file(metadata: &TaskMetadata, file: &str) -> Result<PathBuf> {
         "default" | "monitor" | "commit" | "position" | "finished" => {
             Ok(PathBuf::from(&metadata.log_dir).join(format!("{file}.log")))
         }
-        other => bail!("unsupported log file '{other}'"),
+        other => bail!(DtError::invalid_config(format!(
+            "Unsupported log file [{other}]"
+        ),)),
     }
 }
 
@@ -1575,15 +1673,15 @@ fn select_default_log_file(metadata: &TaskMetadata) -> Result<PathBuf> {
         }
     }
 
-    bail!(
-        "no log file found for task '{}'. Checked: {}",
+    bail!(DtError::ObjectNotFound(format!(
+        "No log file was found for task [{}]; checked [{}]",
         metadata.task_name,
         candidates
             .iter()
             .map(|path| path.display().to_string())
             .collect::<Vec<_>>()
             .join(", ")
-    )
+    )))
 }
 
 fn path_has_content(path: &Path) -> bool {
@@ -1591,14 +1689,20 @@ fn path_has_content(path: &Path) -> bool {
 }
 
 fn follow_file(path: &Path) -> Result<()> {
-    let mut file = OpenOptions::new().read(true).open(path)?;
-    file.seek(SeekFrom::End(0))?;
+    let mut file = OpenOptions::new()
+        .read(true)
+        .open(path)
+        .context(format!("failed to open log file {}", path.display()))?;
+    file.seek(SeekFrom::End(0))
+        .context(format!("failed to seek log file {}", path.display()))?;
     loop {
         let mut buf = String::new();
-        let bytes = file.read_to_string(&mut buf)?;
+        let bytes = file
+            .read_to_string(&mut buf)
+            .context(format!("failed to follow log file {}", path.display()))?;
         if bytes > 0 {
             print!("{buf}");
-            io::stdout().flush()?;
+            io::stdout().flush().context("failed to flush log output")?;
         }
         std::thread::sleep(std::time::Duration::from_secs(1));
     }
@@ -1698,7 +1802,10 @@ mod tests {
 
         let err = restart_persistent_task(&task_dir, &root, Path::new("/bin/sh"), &mut metadata)
             .unwrap_err();
-        assert!(err.to_string().contains("already running with pid"));
+        assert!(err
+            .root_cause()
+            .to_string()
+            .contains("already running with pid"));
 
         fs::remove_dir_all(root).unwrap();
     }

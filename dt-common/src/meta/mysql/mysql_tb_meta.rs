@@ -1,10 +1,13 @@
 use std::collections::HashMap;
 
-use anyhow::Context;
 use serde::Serialize;
 use serde_json::json;
 
 use crate::meta::rdb_tb_meta::RdbTbMeta;
+use crate::{
+    config::config_enums::DbType,
+    error::{DtError, DtErrorContextExt, ErrorObject},
+};
 
 use super::mysql_col_type::MysqlColType;
 
@@ -23,11 +26,21 @@ impl std::fmt::Display for MysqlTbMeta {
 impl MysqlTbMeta {
     #[inline(always)]
     pub fn get_col_type(&self, col: &str) -> anyhow::Result<&MysqlColType> {
-        let col_type = self
-            .col_type_map
-            .get(col)
-            .with_context(|| format!("col: [{}] not exists in tb_meta: [{}]", col, self))
-            .unwrap();
-        Ok(col_type)
+        self.col_type_map.get(col).ok_or_else(|| {
+            DtError::DatabaseObjectNotFound(DbType::Mysql, format!(
+                "column {col} is missing from the MySQL definition for {}.{}",
+                self.basic.schema, self.basic.tb
+            ))
+                .message("A required source column was not found in the loaded table definition")
+                .hint(
+                    "Check configured column names and whether the source table changed, then restart the task to reload its definition.",
+                )
+                .object(ErrorObject {
+                    schema: Some(self.basic.schema.clone()),
+                    table: Some(self.basic.tb.clone()),
+                    column: Some(col.to_string()),
+                    ..Default::default()
+                })
+        })
     }
 }

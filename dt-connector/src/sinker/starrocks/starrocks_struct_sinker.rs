@@ -5,6 +5,7 @@ use crate::{close_conn_pool, rdb_router::RdbRouter, Sinker};
 use anyhow::bail;
 use dt_common::{
     config::config_enums::{ConflictPolicyEnum, DbType},
+    error::{DtError, DtErrorContextExt},
     log_error, log_info,
     meta::{
         mysql::{mysql_col_type::MysqlColType, mysql_tb_meta::MysqlTbMeta},
@@ -127,8 +128,17 @@ impl StarrocksStructSinker {
     ) -> anyhow::Result<String> {
         let rdb_tb_meta = if let Some(tb_meta) = pg_tb_meta {
             &tb_meta.basic
+        } else if let Some(tb_meta) = mysql_tb_meta {
+            &tb_meta.basic
         } else {
-            &mysql_tb_meta.as_ref().unwrap().basic
+            return Err(DtError::ObjectNotFound(
+                "source table metadata is missing while building StarRocks DDL".to_string(),
+            )
+                .message("Source table metadata is unavailable for StarRocks structure migration")
+                .hint(
+                    "Verify that the source table still exists and rerun structure migration. If it repeats, contact support with the task ID and error code.",
+                )
+                );
         };
 
         let mut dst_cols = vec![];
@@ -209,8 +219,19 @@ impl StarrocksStructSinker {
         let col = &column.column_name;
         let dst_col_type = if let Some(tb_meta) = mysql_tb_meta {
             self.get_dst_col_type_from_mysql(col, tb_meta)
+        } else if let Some(tb_meta) = pg_tb_meta {
+            self.get_dst_col_type_from_pg(col, tb_meta)
         } else {
-            self.get_dst_col_type_from_pg(col, pg_tb_meta.unwrap())
+            let detail = format!(
+                "source column metadata is missing for {}.{}.{}",
+                rdb_tb_meta.schema, rdb_tb_meta.tb, col
+            );
+            return Err(DtError::ObjectNotFound(detail.clone())
+                .message("Source column metadata is unavailable for StarRocks structure migration")
+                .hint(
+                    "Check whether the source table changed, then restart structure migration to reload its definition.",
+                )
+                );
         }?;
 
         // The delete operation in Doris (-H "merge_type: delete") is implemented by inserting a record marked for deletion,

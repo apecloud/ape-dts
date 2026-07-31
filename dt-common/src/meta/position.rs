@@ -92,10 +92,8 @@ impl Position {
             return Position::None;
         }
 
-        let left = log.find('{');
-        let right = log.rfind('}');
-        if left.is_some() && right.is_some() {
-            let position_log = &log[left.unwrap()..=right.unwrap()];
+        if let (Some(left), Some(right)) = (log.find('{'), log.rfind('}')) {
+            let position_log = &log[left..=right];
             if let Ok(position) = Position::from_str(position_log) {
                 return position;
             }

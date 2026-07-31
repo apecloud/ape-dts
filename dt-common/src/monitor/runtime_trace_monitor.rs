@@ -4,11 +4,15 @@ use async_trait::async_trait;
 use std::sync::{Arc, Mutex};
 
 #[cfg(all(feature = "metrics", feature = "tracing"))]
-use prometheus::{CounterVec, IntCounterVec, Opts, Registry};
+use anyhow::Context;
+#[cfg(all(feature = "metrics", feature = "tracing"))]
+use prometheus::{core::Collector, CounterVec, IntCounterVec, Opts, Registry};
 
 use super::FlushableMonitor;
 #[cfg(all(feature = "metrics", feature = "tracing"))]
 use crate::config::metrics_config::MetricsConfig;
+#[cfg(all(feature = "metrics", feature = "tracing"))]
+use crate::error::DtError;
 #[cfg(all(feature = "metrics", feature = "tracing"))]
 use crate::monitor::prometheus_metrics::PrometheusMetrics;
 #[cfg(all(feature = "metrics", feature = "tracing"))]
@@ -79,25 +83,41 @@ impl RuntimeTraceMetrics {
         }
     }
 
-    pub(super) fn register(&self, registry: &Registry) {
-        registry
-            .register(Box::new(self.tasks_created.clone()))
-            .unwrap();
-        registry
-            .register(Box::new(self.task_polls.clone()))
-            .unwrap();
-        registry
-            .register(Box::new(self.task_schedules.clone()))
-            .unwrap();
-        registry
-            .register(Box::new(self.task_busy_seconds.clone()))
-            .unwrap();
-        registry
-            .register(Box::new(self.task_attributed_waker_calls.clone()))
-            .unwrap();
-        registry
-            .register(Box::new(self.wait_point_waker_calls.clone()))
-            .unwrap();
+    pub(super) fn register(&self, registry: &Registry) -> anyhow::Result<()> {
+        let register_metric = |name: &str, collector: Box<dyn Collector>| -> anyhow::Result<()> {
+            registry
+                .register(collector)
+                .context(DtError::MetricsInitializationFailed(format!(
+                    "Failed to initialize metric [{name}]"
+                )))?;
+            Ok(())
+        };
+
+        register_metric(
+            "runtime_trace_tasks_created_total",
+            Box::new(self.tasks_created.clone()),
+        )?;
+        register_metric(
+            "runtime_trace_task_polls_total",
+            Box::new(self.task_polls.clone()),
+        )?;
+        register_metric(
+            "runtime_trace_task_schedules_total",
+            Box::new(self.task_schedules.clone()),
+        )?;
+        register_metric(
+            "runtime_trace_task_busy_seconds_total",
+            Box::new(self.task_busy_seconds.clone()),
+        )?;
+        register_metric(
+            "runtime_trace_task_attributed_waker_calls_total",
+            Box::new(self.task_attributed_waker_calls.clone()),
+        )?;
+        register_metric(
+            "runtime_trace_wait_point_waker_calls_total",
+            Box::new(self.wait_point_waker_calls.clone()),
+        )?;
+        Ok(())
     }
 
     fn update_snapshot(&self, snapshot: &RuntimeTraceMetricsSnapshot) {
@@ -210,7 +230,7 @@ mod tests {
     };
 
     #[test]
-    fn exports_runtime_trace_metrics_by_marker_and_wait_point() {
+    fn exports_runtime_trace_metrics_by_marker_and_wait_point() -> anyhow::Result<()> {
         let config = MetricsConfig {
             http_host: "127.0.0.1".to_owned(),
             http_port: 0,
@@ -219,7 +239,7 @@ mod tests {
         };
         let registry = Registry::new();
         let metrics = RuntimeTraceMetrics::new(&config);
-        metrics.register(&registry);
+        metrics.register(&registry)?;
         let first_snapshot = RuntimeTraceMetricsSnapshot {
             markers: vec![MarkerMetricsSnapshot {
                 marker: "task.extractor_worker".to_owned(),
@@ -273,5 +293,6 @@ mod tests {
         ));
         assert!(!output.contains("task_name="));
         assert!(!output.contains("task.extractor_worker@"));
+        Ok(())
     }
 }

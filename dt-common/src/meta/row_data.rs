@@ -11,6 +11,7 @@ use super::{
 };
 use crate::{
     config::config_enums::DbType,
+    error::{DtError, DtResultExt, ErrorObject},
     meta::adaptor::{
         mysql_col_value_convertor::MysqlColValueConvertor,
         pg_col_value_convertor::PgColValueConvertor,
@@ -119,7 +120,7 @@ impl RowData {
         tb_meta: &MysqlTbMeta,
         ignore_cols: &Option<&HashSet<String>>,
         chunk_id: Option<u64>,
-    ) -> Self {
+    ) -> anyhow::Result<Self> {
         Self::from_mysql_compatible_row(row, tb_meta, ignore_cols, &DbType::Mysql, chunk_id)
     }
 
@@ -129,7 +130,7 @@ impl RowData {
         ignore_cols: &Option<&HashSet<String>>,
         db_type: &DbType,
         chunk_id: Option<u64>,
-    ) -> Self {
+    ) -> anyhow::Result<Self> {
         let mut after = HashMap::new();
         for (col, col_type) in &tb_meta.col_type_map {
             if ignore_cols.as_ref().is_some_and(|cols| cols.contains(col)) {
@@ -137,16 +138,19 @@ impl RowData {
             }
             let col_val =
                 MysqlColValueConvertor::from_query_mysql_compatible(row, col, col_type, db_type)
-                    .with_context(|| {
-                        format!(
-                            "schema: {}, tb: {}, col: {}, col_type: {}",
-                            tb_meta.basic.schema, tb_meta.basic.tb, col, col_type
-                        )
-                    })
-                    .unwrap();
+                    .context(DtError::StatementFailed(format!(
+                        "failed to convert column {}.{}.{}",
+                        tb_meta.basic.schema, tb_meta.basic.tb, col
+                    )))
+                    .object(ErrorObject {
+                        schema: Some(tb_meta.basic.schema.clone()),
+                        table: Some(tb_meta.basic.tb.clone()),
+                        column: Some(col.clone()),
+                        ..Default::default()
+                    })?;
             after.insert(col.to_string(), col_val);
         }
-        Self::build_insert_row_data(after, &tb_meta.basic, chunk_id)
+        Ok(Self::build_insert_row_data(after, &tb_meta.basic, chunk_id))
     }
 
     pub fn from_pg_row(
@@ -154,7 +158,7 @@ impl RowData {
         tb_meta: &PgTbMeta,
         ignore_cols: &Option<&HashSet<String>>,
         chunk_id: Option<u64>,
-    ) -> Self {
+    ) -> anyhow::Result<Self> {
         let mut after = HashMap::new();
         for (col, col_type) in &tb_meta.col_type_map {
             if ignore_cols.as_ref().is_some_and(|cols| cols.contains(col)) {
@@ -162,16 +166,19 @@ impl RowData {
             }
 
             let col_value = PgColValueConvertor::from_query(row, col, col_type)
-                .with_context(|| {
-                    format!(
-                        "schema: {}, tb: {}, col: {}, col_type: {}",
-                        tb_meta.basic.schema, tb_meta.basic.tb, col, col_type
-                    )
-                })
-                .unwrap();
+                .context(DtError::StatementFailed(format!(
+                    "failed to convert column {}.{}.{}",
+                    tb_meta.basic.schema, tb_meta.basic.tb, col
+                )))
+                .object(ErrorObject {
+                    schema: Some(tb_meta.basic.schema.clone()),
+                    table: Some(tb_meta.basic.tb.clone()),
+                    column: Some(col.clone()),
+                    ..Default::default()
+                })?;
             after.insert(col.to_string(), col_value);
         }
-        Self::build_insert_row_data(after, &tb_meta.basic, chunk_id)
+        Ok(Self::build_insert_row_data(after, &tb_meta.basic, chunk_id))
     }
 
     pub fn build_insert_row_data(

@@ -7,7 +7,7 @@ use sqlx::{mysql::MySqlRow, MySql, Pool, Row};
 use super::{mysql_col_type::MysqlColType, mysql_tb_meta::MysqlTbMeta};
 use crate::{
     config::config_enums::DbType,
-    error::Error,
+    error::{DtError, DtErrorContextExt, ErrorObject},
     meta::{
         ddl_meta::ddl_data::DdlData, foreign_key::ForeignKey, rdb_meta_manager::RdbMetaManager,
         rdb_meta_manager::RDB_PRIMARY_KEY_FLAG, rdb_tb_meta::RdbTbMeta, row_data::RowData,
@@ -114,7 +114,20 @@ impl MysqlMetaFetcher {
             };
             self.cache.insert(full_name.clone(), tb_meta);
         }
-        Ok(self.cache.get(&full_name).unwrap())
+        self.cache.get(&full_name).ok_or_else(|| {
+            DtError::DatabaseObjectNotFound(self.db_type.clone(), format!(
+                "Ape-DTS could not find the previously loaded definition for source table {full_name}"
+            ))
+                .message("The source table definition could not be loaded")
+                .hint(
+                    "Verify that the source table still exists and is readable, then restart the task.",
+                )
+                .object(ErrorObject {
+                    schema: Some(schema.to_string()),
+                    table: Some(tb.to_string()),
+                    ..Default::default()
+                })
+        })
     }
 
     async fn parse_cols(
@@ -168,10 +181,15 @@ impl MysqlMetaFetcher {
         }
 
         if cols.is_empty() {
-            bail! {Error::MetadataError(format!(
-                    "failed to get table metadata for: `{}`.`{}`",
-                    schema, tb
-            )) }
+            bail! {DtError::DatabaseObjectNotFound(db_type.clone(), format!(
+                "failed to get table metadata for: `{}`.`{}`",
+                schema, tb
+            ))
+            .object(ErrorObject {
+                schema: Some(schema.to_string()),
+                table: Some(tb.to_string()),
+                ..Default::default()
+            }) }
         }
         Ok((cols, col_origin_type_map, col_type_map, nullable_cols))
     }
@@ -440,6 +458,9 @@ impl MysqlMetaFetcher {
             self.version = version.trim().into();
             return Ok(());
         }
-        bail! {Error::MetadataError("failed to init mysql version".into())}
+        bail! {DtError::UnsupportedDatabaseVersion(
+            self.db_type.clone(),
+            "failed to initialize the database version".to_string(),
+        )}
     }
 }

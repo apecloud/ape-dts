@@ -5,8 +5,10 @@ use std::{
 };
 
 use anyhow::bail;
-use mongodb::bson::{Bson, Document};
+use mongodb::bson::{raw::RawDocumentBuf, Bson, Document};
 use serde::{Deserialize, Serialize, Serializer};
+
+use crate::error::DtError;
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[allow(dead_code)]
@@ -42,6 +44,7 @@ pub enum ColValue {
     Json2(String),
     Json3(serde_json::Value),
     MongoDoc(Document),
+    MongoRawDoc(RawDocumentBuf),
 }
 
 impl std::fmt::Display for ColValue {
@@ -91,7 +94,9 @@ impl ColValue {
             Self::UnsignedLong(v) => Ok(*v as i128),
             Self::LongLong(v) => Ok(*v as i128),
             Self::UnsignedLongLong(v) => Ok(*v as i128),
-            _ => bail!("can not convert {:?} into 128-bit integer", self),
+            _ => bail!(DtError::InvariantViolated(format!(
+                "cannot convert {self:?} into a 128-bit integer"
+            ))),
         }
     }
 
@@ -120,7 +125,9 @@ impl ColValue {
                 *v as i128 + t,
                 i64::MAX as i128,
             ) as u64)),
-            _ => bail!("{} can not add 128-bit integer", self),
+            _ => bail!(DtError::InvariantViolated(format!(
+                "cannot add a 128-bit integer to {self}"
+            ))),
         }
     }
 
@@ -128,7 +135,9 @@ impl ColValue {
         match self {
             Self::Float(v) => Ok(*v as f64),
             Self::Double(v) => Ok(*v),
-            _ => bail!("can not convert {:?} into double", self),
+            _ => bail!(DtError::InvariantViolated(format!(
+                "cannot convert {self:?} into a double"
+            ))),
         }
     }
 
@@ -185,6 +194,12 @@ impl ColValue {
             }
         }
 
+        if let ColValue::MongoRawDoc(doc) = self {
+            let mut hasher = DefaultHasher::new();
+            doc.as_bytes().hash(&mut hasher);
+            return Ok(hasher.finish());
+        }
+
         let mut hasher = DefaultHasher::new();
         self.to_option_string().hash(&mut hasher);
         Ok(hasher.finish())
@@ -222,6 +237,7 @@ impl ColValue {
             ColValue::Json2(_) => "Json2",
             ColValue::Json3(_) => "Json3",
             ColValue::MongoDoc(_) => "MongoDoc",
+            ColValue::MongoRawDoc(_) => "MongoRawDoc",
             ColValue::UnchangedToast => "UnchangedToast",
         }
     }
@@ -256,6 +272,7 @@ impl ColValue {
             ColValue::Json3(v) => Some(v.to_string()),
             ColValue::Blob(v) => Some(hex::encode(v)),
             ColValue::MongoDoc(v) => Some(Self::mongo_doc_to_string(v)),
+            ColValue::MongoRawDoc(v) => Some(hex::encode(v.as_bytes())),
             ColValue::Bool(v) => Some(v.to_string()),
             ColValue::None | ColValue::UnchangedToast => Option::None,
         }
@@ -315,6 +332,7 @@ impl ColValue {
             ColValue::Json(v) | ColValue::Blob(v) | ColValue::RawString(v) => v.len(),
             ColValue::Json3(v) => v.to_string().len(),
             ColValue::MongoDoc(v) => Self::get_bson_size_doc(v),
+            ColValue::MongoRawDoc(v) => v.as_bytes().len(),
             ColValue::None | ColValue::UnchangedToast => 0,
         }
     }
@@ -399,6 +417,7 @@ impl Serialize for ColValue {
             ColValue::MongoDoc(v) => Bson::Document(v.clone())
                 .into_relaxed_extjson()
                 .serialize(serializer),
+            ColValue::MongoRawDoc(v) => serializer.serialize_bytes(v.as_bytes()),
             ColValue::None | ColValue::UnchangedToast => serializer.serialize_none(),
         }
     }

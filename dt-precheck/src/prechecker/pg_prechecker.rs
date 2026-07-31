@@ -1,8 +1,11 @@
 use std::collections::HashSet;
 
-use anyhow::bail;
+use anyhow::{bail, Error};
 use async_trait::async_trait;
-use dt_common::config::{config_enums::DbType, filter_config::FilterConfig};
+use dt_common::{
+    config::{config_enums::DbType, filter_config::FilterConfig},
+    error::DtError,
+};
 
 use crate::{
     config::precheck_config::PrecheckConfig,
@@ -50,14 +53,26 @@ impl Prechecker for PostgresqlPrechecker {
         match result {
             Ok(version) => {
                 if version.is_empty() {
-                    check_error = Some(anyhow::Error::msg("found no version info"));
+                    check_error = Some(
+                        DtError::UnsupportedDatabaseVersion(
+                            DbType::Pg,
+                            "PostgreSQL returned no version information".to_string(),
+                        )
+                        .into(),
+                    );
                 } else {
-                    let version_i32: i32 = version.parse().unwrap();
-                    if version_i32 < PG_SUPPORT_DB_VERSION_NUM_MIN {
-                        check_error = Some(anyhow::Error::msg(format!(
-                            "version:{} is not supported yet",
-                            version_i32
-                        )));
+                    match version.parse::<i32>() {
+                        Ok(version_i32) if version_i32 < PG_SUPPORT_DB_VERSION_NUM_MIN => {
+                            check_error = Some(
+                                DtError::UnsupportedDatabaseVersion(
+                                    DbType::Pg,
+                                    format!("PostgreSQL version {version_i32} is not supported"),
+                                )
+                                .into(),
+                            );
+                        }
+                        Ok(_) => {}
+                        Err(error) => check_error = Some(error.into()),
                     }
                 }
             }
@@ -113,24 +128,30 @@ impl Prechecker for PostgresqlPrechecker {
                                 ))
                             }
                         }
-                        "max_replication_slots" => {
-                            max_replication_slots_i32 = v.parse().unwrap();
-                            if max_replication_slots_i32 < 1 {
-                                err_msgs.push(format!(
-                                    "max_replication_slots needs to be greater than 0. current is '{}'",
-                                    max_replication_slots_i32
-                                ))
+                        "max_replication_slots" => match v.parse::<i32>() {
+                            Ok(value) => {
+                                max_replication_slots_i32 = value;
+                                if value < 1 {
+                                    err_msgs.push(format!(
+                                            "max_replication_slots needs to be greater than 0. current is '{}'",
+                                            value
+                                        ));
+                                }
                             }
-                        }
-                        "max_wal_senders" => {
-                            let sender_i32: i32 = v.parse().unwrap();
-                            if sender_i32 < 1 {
-                                err_msgs.push(format!(
-                                    "max_wel_senders needs to be greater than 0, current is '{}'",
-                                    sender_i32
-                                ))
-                            }
-                        }
+                            Err(_) => err_msgs.push(format!(
+                                "max_replication_slots is not a valid integer: '{}'",
+                                v
+                            )),
+                        },
+                        "max_wal_senders" => match v.parse::<i32>() {
+                            Ok(value) if value < 1 => err_msgs.push(format!(
+                                "max_wel_senders needs to be greater than 0, current is '{}'",
+                                value
+                            )),
+                            Ok(_) => {}
+                            Err(_) => err_msgs
+                                .push(format!("max_wal_senders is not a valid integer: '{}'", v)),
+                        },
                         _ => {}
                     }
                 }
@@ -138,7 +159,7 @@ impl Prechecker for PostgresqlPrechecker {
             Err(e) => bail! {e},
         }
         if !err_msgs.is_empty() {
-            check_error = Some(anyhow::Error::msg(err_msgs.join(";")));
+            check_error = Some(DtError::CdcNotEnabled(err_msgs.join(";")).into());
         }
 
         if check_error.is_none() {
@@ -147,7 +168,14 @@ impl Prechecker for PostgresqlPrechecker {
             match slot_result {
                 Ok(slots) => {
                     if max_replication_slots_i32 == (slots.len() as i32) {
-                        check_error = Some(anyhow::Error::msg(  format!("the current number of slots:[{}] has reached max_replication_slots, and new slots cannot be created", max_replication_slots_i32) ));
+                        check_error = Some(
+                            Error::new(DtError::ReplicationCapacityExhausted(
+                                "All PostgreSQL replication slots are in use".to_string(),
+                            ))
+                            .context(format!(
+                                "configured replication slots: {max_replication_slots_i32}"
+                            )),
+                        );
                     }
                 }
                 Err(e) => check_error = Some(e),
@@ -184,9 +212,12 @@ impl Prechecker for PostgresqlPrechecker {
                 self.is_source,
                 DbType::Pg,
                 check_error,
-                Some(anyhow::Error::msg(
-                    "CheckIfStructExisted with filter in pattern is not supported.",
-                )),
+                Some(
+                    DtError::ObjectNotFound(
+                        "structure existence precheck does not support pattern filters".to_string(),
+                    )
+                    .into(),
+                ),
             ));
         }
 
@@ -197,7 +228,7 @@ impl Prechecker for PostgresqlPrechecker {
             DbTable::from_str(&self.filter_config.do_schemas, &mut db_tables)
         }
 
-        let (schemas, tb_schemas, tbs) = DbTable::get_config_maps(&db_tables).unwrap();
+        let (schemas, tb_schemas, tbs) = DbTable::get_config_maps(&db_tables)?;
         let mut all_schemas = Vec::new();
         all_schemas.extend(&schemas);
         all_schemas.extend(&tb_schemas);
@@ -259,7 +290,7 @@ impl Prechecker for PostgresqlPrechecker {
         }
 
         if !err_msgs.is_empty() {
-            check_error = Some(anyhow::Error::msg(err_msgs.join(".")))
+            check_error = Some(DtError::ObjectNotFound(err_msgs.join(".")).into())
         }
 
         Ok(CheckResult::build_with_err(
@@ -294,9 +325,12 @@ impl Prechecker for PostgresqlPrechecker {
                 self.is_source,
                 DbType::Pg,
                 check_error,
-                Some(anyhow::Error::msg(
-                    "CheckIfTableStructSupported with filter in pattern is not supported.",
-                )),
+                Some(
+                    DtError::UnsupportedTableStructure(
+                        "table structure precheck does not support pattern filters".to_string(),
+                    )
+                    .into(),
+                ),
             ));
         }
 
@@ -308,7 +342,16 @@ impl Prechecker for PostgresqlPrechecker {
             DbTable::from_str(&self.filter_config.do_schemas, &mut db_tables)
         }
 
-        let (schemas, tb_schemas, _) = DbTable::get_config_maps(&db_tables).unwrap();
+        let (schemas, tb_schemas, _) = DbTable::get_config_maps(&db_tables)?;
+        let primary = ConstraintTypeEnum::Primary.to_str().ok_or_else(|| {
+            DtError::InvariantViolated("missing PostgreSQL primary constraint code".to_string())
+        })?;
+        let unique = ConstraintTypeEnum::Unique.to_str().ok_or_else(|| {
+            DtError::InvariantViolated("missing PostgreSQL unique constraint code".to_string())
+        })?;
+        let foreign = ConstraintTypeEnum::Foreign.to_str().ok_or_else(|| {
+            DtError::InvariantViolated("missing PostgreSQL foreign constraint code".to_string())
+        })?;
         let mut all_schemas = Vec::new();
         all_schemas.extend(&schemas);
         all_schemas.extend(&tb_schemas);
@@ -335,11 +378,9 @@ impl Prechecker for PostgresqlPrechecker {
             Ok(constraints) => {
                 for c in constraints {
                     let schema_table_name = format!("{}.{}", c.schema_name, c.table_name);
-                    if c.constraint_type == ConstraintTypeEnum::Primary.to_str().unwrap()
-                        || c.constraint_type == ConstraintTypeEnum::Unique.to_str().unwrap()
-                    {
+                    if c.constraint_type == primary || c.constraint_type == unique {
                         has_pkuk_tables.insert(schema_table_name);
-                    } else if c.constraint_type == ConstraintTypeEnum::Foreign.to_str().unwrap()
+                    } else if c.constraint_type == foreign
                         && self
                             .fetcher
                             .filter
@@ -380,10 +421,10 @@ impl Prechecker for PostgresqlPrechecker {
             ));
         }
         if !err_msgs.is_empty() {
-            check_error = Some(anyhow::Error::msg(err_msgs.join(";")))
+            check_error = Some(DtError::UnsupportedTableStructure(err_msgs.join(";")).into())
         }
         if !warn_msgs.is_empty() {
-            warn_error = Some(anyhow::Error::msg(warn_msgs.join(";")))
+            warn_error = Some(DtError::UnsupportedTableStructure(warn_msgs.join(";")).into())
         }
 
         Ok(CheckResult::build_with_err(

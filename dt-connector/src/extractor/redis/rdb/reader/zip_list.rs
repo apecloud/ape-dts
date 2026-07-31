@@ -2,7 +2,7 @@ use std::io::Cursor;
 
 use anyhow::bail;
 use byteorder::{BigEndian, ByteOrder, LittleEndian, ReadBytesExt};
-use dt_common::error::Error;
+use dt_common::error::DtError;
 use dt_common::meta::redis::redis_object::RedisString;
 
 use crate::extractor::redis::StreamReader;
@@ -53,7 +53,7 @@ impl RdbReader<'_> {
 
             let last_byte = reader.read_u8()?;
             if last_byte != 0xFF {
-                bail! {Error::RedisRdbError(format!(
+                bail! {DtError::redis_rdb(format!(
                     "invalid zipList lastByte encoding: {}",
                     last_byte
                 ))}
@@ -131,7 +131,7 @@ impl RdbReader<'_> {
         if first_byte >> 4 == ZIP_INT_04B {
             let v = (first_byte & 0x0f) as i8 - 1;
             if v < 0 || v > 12 {
-                bail! {Error::RedisRdbError(format!(
+                bail! {DtError::redis_rdb(format!(
                     "invalid zipInt04B encoding: {}",
                     v
                 ))}
@@ -139,7 +139,7 @@ impl RdbReader<'_> {
             return Ok(RedisString::from(v.to_string()));
         }
 
-        bail! {Error::RedisRdbError(format!(
+        bail! {DtError::redis_rdb(format!(
             "invalid encoding: {}",
             first_byte
         ))}

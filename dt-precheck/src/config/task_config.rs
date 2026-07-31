@@ -1,6 +1,4 @@
-use anyhow::bail;
-use configparser::ini::Ini;
-use dt_common::{config::ini_loader::IniLoader, error::Error};
+use dt_common::config::ini_loader::IniLoader;
 
 use super::precheck_config::PrecheckConfig;
 
@@ -12,27 +10,33 @@ pub struct PrecheckTaskConfig {
 
 impl PrecheckTaskConfig {
     pub fn new(task_config_file: &str) -> anyhow::Result<Self> {
-        let ini = IniLoader::new(task_config_file).ini;
-        let precheck_config = Self::load_precheck_config(&ini)?;
+        let loader = IniLoader::new(task_config_file)?;
+        Self::from_loader(&loader)
+    }
+
+    pub fn load_if_present(loader: &IniLoader) -> anyhow::Result<Option<Self>> {
+        if !loader
+            .ini
+            .sections()
+            .iter()
+            .any(|section| section == PRECHECK)
+        {
+            return Ok(None);
+        }
+        Self::from_loader(loader).map(Some)
+    }
+
+    fn from_loader(loader: &IniLoader) -> anyhow::Result<Self> {
+        let precheck_config = Self::load_precheck_config(loader)?;
         Ok(Self {
             precheck: precheck_config,
         })
     }
 
-    fn load_precheck_config(ini: &Ini) -> anyhow::Result<PrecheckConfig> {
-        let (do_struct_opt, do_cdc_opt): (Option<String>, Option<String>) = (
-            ini.get(PRECHECK, "do_struct_init"),
-            ini.get(PRECHECK, "do_cdc"),
-        );
-        if let (Some(do_struct), Some(do_cdc)) = (do_struct_opt, do_cdc_opt) {
-            Ok(PrecheckConfig {
-                do_struct_init: do_struct.parse().unwrap(),
-                do_cdc: do_cdc.parse().unwrap(),
-            })
-        } else {
-            bail! {Error::ConfigError(
-                "config is not valid for precheck.".into(),
-            )}
-        }
+    fn load_precheck_config(loader: &IniLoader) -> anyhow::Result<PrecheckConfig> {
+        Ok(PrecheckConfig {
+            do_struct_init: loader.get_required(PRECHECK, "do_struct_init")?,
+            do_cdc: loader.get_required(PRECHECK, "do_cdc")?,
+        })
     }
 }

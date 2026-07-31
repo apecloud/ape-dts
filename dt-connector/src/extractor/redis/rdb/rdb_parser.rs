@@ -1,10 +1,10 @@
-use anyhow::bail;
+use anyhow::{bail, Context};
 use sqlx::types::chrono;
 
 use super::{entry_parser::entry_parser::EntryParser, reader::rdb_reader::RdbReader};
 use crate::extractor::redis::{rdb::entry_parser::module2_parser::ModuleParser, StreamReader};
 use dt_common::meta::redis::{redis_entry::RedisEntry, redis_object::RedisCmd};
-use dt_common::{error::Error, log_debug, log_info};
+use dt_common::{error::DtError, log_debug, log_info};
 
 const K_FLAG_SLOT_INFO: u8 = 0xf4; // (244) (Redis 7.4+) RDB_OPCODE_SLOT_INFO: slot info
 const _K_FLAG_FUNCTION2: u8 = 0xf5; // (245) function library data
@@ -41,9 +41,10 @@ impl RdbParser<'_> {
     pub async fn load_meta(&mut self) -> anyhow::Result<String> {
         // magic
         let mut buf = self.reader.read_bytes(5).await?;
-        let magic = String::from_utf8(buf)?;
+        let magic = String::from_utf8(buf)
+            .context(DtError::redis_rdb("Redis RDB header is not valid UTF-8"))?;
         if magic != "REDIS" {
-            bail! {Error::RedisRdbError("invalid rdb format".to_string())}
+            bail! {DtError::redis_rdb("invalid rdb format")}
         }
 
         // version
@@ -89,7 +90,7 @@ impl RdbParser<'_> {
                             self.reader.read_string().await?;
                         }
                         _ => {
-                            bail! {Error::RedisRdbError(format!(
+                            bail! {DtError::redis_rdb(format!(
                                 "module aux opcode not found. module_name=[{}], opcode=[{}]",
                                 module_name, opcode
                             ))}
@@ -110,12 +111,18 @@ impl RdbParser<'_> {
             }
 
             K_FLAG_AUX => {
-                let key = String::from(self.reader.read_string().await?);
+                let key = String::try_from(self.reader.read_string().await?).context(
+                    DtError::redis_rdb("Redis RDB metadata key is not valid UTF-8"),
+                )?;
                 let value = self.reader.read_string().await?;
                 match key.as_str() {
                     "repl-stream-db" => {
-                        let value = String::from(value);
-                        self.repl_stream_db_id = value.parse::<i64>().unwrap();
+                        let value = String::try_from(value).context(DtError::redis_rdb(
+                            "Redis RDB replication database value is not valid UTF-8",
+                        ))?;
+                        self.repl_stream_db_id = value
+                            .parse::<i64>()
+                            .context(DtError::redis_rdb("replication database value is invalid"))?;
                         log_info!("RDB repl-stream-db: {}", self.repl_stream_db_id);
                     }
 
@@ -185,26 +192,18 @@ impl RdbParser<'_> {
                     EntryParser::parse_object(&mut self.reader, type_byte, key.clone()).await;
                 self.reader.copy_raw = false;
 
-                if let Err(error) = value {
-                    bail! {Error::RedisRdbError(format!(
-                        "parsing rdb failed, type_byte: {}, key: {}, error: {:?}",
-                        type_byte,
-                        String::from(key),
-                        error
-                    ))}
-                } else {
-                    let mut entry = RedisEntry::new();
-                    entry.is_base = true;
-                    entry.db_id = self.now_db_id;
-                    entry.raw_bytes = self.reader.drain_raw_bytes();
-                    entry.key = key;
-                    entry.value = value.unwrap();
-                    entry.value_type_byte = type_byte;
-                    entry.expire_ms = self.expire_ms;
-                    // reset expire_ms
-                    self.expire_ms = 0;
-                    return Ok(Some(entry));
-                }
+                let value = value.context(DtError::redis_rdb("failed to parse Redis RDB entry"))?;
+                let mut entry = RedisEntry::new();
+                entry.is_base = true;
+                entry.db_id = self.now_db_id;
+                entry.raw_bytes = self.reader.drain_raw_bytes();
+                entry.key = key;
+                entry.value = value;
+                entry.value_type_byte = type_byte;
+                entry.expire_ms = self.expire_ms;
+                // reset expire_ms
+                self.expire_ms = 0;
+                return Ok(Some(entry));
             }
         }
 

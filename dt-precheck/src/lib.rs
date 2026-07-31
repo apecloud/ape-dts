@@ -10,16 +10,16 @@ pub mod fetcher;
 pub mod meta;
 pub mod prechecker;
 
-pub async fn do_precheck(config: &str) {
-    let task_config = TaskConfig::new(config).unwrap();
-    let precheck_config = PrecheckTaskConfig::new(config).unwrap();
-
+pub async fn do_precheck(
+    task_config: TaskConfig,
+    precheck_config: PrecheckTaskConfig,
+) -> anyhow::Result<()> {
     let checker_connector = PrecheckerBuilder::build(precheck_config.precheck, task_config);
-    let result: Result<(), anyhow::Error> = checker_connector.verify_check_result().await;
-    if let Err(e) = result {
+    if let Err(error) = checker_connector.verify_check_result().await {
         println!("precheck not passed.");
-        panic!("precheck meet error: {}", e);
+        return Err(error);
     }
 
     println!("precheck passed.");
+    Ok(())
 }

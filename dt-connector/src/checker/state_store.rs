@@ -4,7 +4,7 @@ use anyhow::{Context, Result};
 use chrono::Utc;
 use sqlx::{query, ColumnIndex, Database, Decode, MySql, Pool, Postgres, QueryBuilder, Row, Type};
 
-use dt_common::{config::resumer_config::ResumerConfig, meta::position::Position};
+use dt_common::{config::resumer_config::ResumerConfig, error::DtError, meta::position::Position};
 
 use crate::extractor::resumer::{utils::ResumerUtil, ResumerDbPool, ResumerType};
 
@@ -66,17 +66,23 @@ impl CheckerStateStore {
             ResumerConfig::FromDB {
                 table_full_name, ..
             } => ResumerUtil::get_full_table_name(table_full_name)?,
-            _ => anyhow::bail!("checker state store only supports ResumerConfig::FromDB"),
+            _ => anyhow::bail!(DtError::invalid_config(
+                "checker state persistence requires resume_type=from_db"
+            )),
         };
 
         let backend = match pool {
             ResumerDbPool::MySql(pool) => CheckerStateStoreBackend::MySql(pool),
             ResumerDbPool::Postgres(pool) => CheckerStateStoreBackend::Postgres(pool),
             ResumerDbPool::Mongo(_) => {
-                anyhow::bail!("checker state store does not support MongoDB resumer backend")
+                anyhow::bail!(DtError::invalid_config(
+                    "checker state persistence does not support a MongoDB metadata backend"
+                ))
             }
             ResumerDbPool::Redis(_) => {
-                anyhow::bail!("checker state store only supports MySQL/Postgres")
+                anyhow::bail!(DtError::invalid_config(
+                    "checker state persistence requires a MySQL or PostgreSQL metadata backend"
+                ))
             }
         };
 

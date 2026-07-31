@@ -7,7 +7,7 @@ use dt_common::{
         sinker_config::SinkerConfig,
         task_config::TaskConfig,
     },
-    error::Error,
+    error::{DtError, DtErrorContextExt, Stage},
     rdb_filter::RdbFilter,
     utils::{redis_util::RedisUtil, sql_util::SqlUtil, time_util::TimeUtil},
 };
@@ -67,7 +67,8 @@ impl RedisTestRunner {
                 .await
                 .unwrap(),
             _ => {
-                bail! {Error::ConfigError("unsupported extractor config".into())};
+                bail! {DtError::InvalidConfig("unsupported extractor config".to_string())
+                .stage(Stage::Bootstrap)};
             }
         };
 
@@ -81,7 +82,8 @@ impl RedisTestRunner {
                 .await
                 .unwrap(),
             _ => {
-                bail! {Error::ConfigError("unsupported sinker config".into())};
+                bail! {DtError::InvalidConfig("unsupported sinker config".to_string())
+                .stage(Stage::Bootstrap)};
             }
         };
 

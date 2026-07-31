@@ -17,7 +17,7 @@ use dashmap::DashMap;
 use futures::future::poll_fn;
 use serde_json::{json, Value};
 use tokio_metrics::TaskMonitor;
-use tracing_subscriber::filter::Targets;
+use tracing_subscriber::filter::{LevelFilter, Targets};
 
 use super::{
     MarkerMetricsSnapshot, RuntimeTraceMetricsSnapshot, TaskSummaryMode, TraceOutputFormat,
@@ -150,7 +150,7 @@ pub fn init_tracing() {
                     None
                 }
             })
-            .unwrap_or_else(|| "error".parse().expect("error filter should parse"));
+            .unwrap_or_else(|| Targets::default().with_default(LevelFilter::ERROR));
 
         use tracing_subscriber::prelude::*;
 
@@ -317,12 +317,12 @@ where
             });
         }
 
-        let attributed = &cached_waker
-            .as_ref()
-            .expect("attributed waker should be initialized")
-            .attributed;
-        let mut attributed_cx = Context::from_waker(attributed);
-        future.as_mut().poll(&mut attributed_cx)
+        if let Some(cached) = cached_waker.as_ref() {
+            let mut attributed_cx = Context::from_waker(&cached.attributed);
+            future.as_mut().poll(&mut attributed_cx)
+        } else {
+            future.as_mut().poll(cx)
+        }
     })
     .await
 }

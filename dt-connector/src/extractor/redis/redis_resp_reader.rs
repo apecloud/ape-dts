@@ -1,8 +1,9 @@
-use anyhow::{bail, Ok};
+use anyhow::{bail, Context, Ok};
 use async_recursion::async_recursion;
 use async_std::io::BufReader;
 use async_std::net::TcpStream;
 use async_std::prelude::*;
+use dt_common::error::DtError;
 
 use super::redis_resp_types::Value;
 
@@ -27,10 +28,14 @@ impl RedisRespReader {
             return Ok(Value::Nil);
         }
         if len < 3 {
-            bail! {format!("too short: {}", len)}
+            bail!(DtError::RedisResultError(format!(
+                "Redis response line is too short: {len}"
+            )))
         }
         if !is_crlf(res[len - 2], res[len - 1]) {
-            bail! {format!("invalid CRLF: {:?}", res)}
+            bail!(DtError::RedisResultError(format!(
+                "Redis response has invalid CRLF: {res:?}"
+            )))
         }
 
         let bytes = res[1..len - 2].as_ref();
@@ -38,10 +43,19 @@ impl RedisRespReader {
             // Value::String
             b'+' => match bytes {
                 OK_RESPONSE => Ok(Value::Okay),
-                bytes => Ok(Value::Status(String::from_utf8(bytes.to_vec())?)),
+                bytes => Ok(Value::Status(String::from_utf8(bytes.to_vec()).context(
+                    DtError::RedisResultError(
+                        "Redis status response is not valid UTF-8".to_string(),
+                    ),
+                )?)),
             },
             // Value::Error
-            b'-' => bail! {String::from_utf8(bytes.to_vec())?},
+            b'-' => {
+                let message = String::from_utf8_lossy(bytes);
+                bail!(DtError::RedisResultError(format!(
+                    "Redis server rejected the command: {message}"
+                )))
+            }
             // Value::Integer
             b':' => parse_integer(bytes).map(Value::Int),
             // Value::Bulk
@@ -52,14 +66,18 @@ impl RedisRespReader {
                     return Ok(Value::Nil);
                 }
                 if int < -1 || int >= RESP_MAX_SIZE {
-                    bail! {format!("invalid bulk length: {}", int)}
+                    bail!(DtError::RedisResultError(format!(
+                        "Redis response has invalid bulk length: {int}"
+                    )))
                 }
 
                 let int = int as usize;
                 let mut buf: Vec<u8> = vec![0; int + 2];
                 reader.read_exact(buf.as_mut_slice()).await?;
                 if !is_crlf(buf[int], buf[int + 1]) {
-                    bail! {format!("invalid CRLF: {:?}", buf)}
+                    bail!(DtError::RedisResultError(format!(
+                        "Redis response has invalid CRLF: {buf:?}"
+                    )))
                 }
                 self.read_len += int + 2;
                 buf.truncate(int);
@@ -73,7 +91,9 @@ impl RedisRespReader {
                     return Ok(Value::Nil);
                 }
                 if int < -1 || int >= RESP_MAX_SIZE {
-                    bail! {format!("invalid array length: {}", int)}
+                    bail!(DtError::RedisResultError(format!(
+                        "Redis response has invalid array length: {int}"
+                    )))
                 }
 
                 let mut array: Vec<Value> = Vec::with_capacity(int as usize);
@@ -83,7 +103,9 @@ impl RedisRespReader {
                 }
                 Ok(Value::Bulk(array))
             }
-            prefix => bail!(format!("invalid RESP type: {:?}", prefix)),
+            prefix => bail!(DtError::RedisResultError(format!(
+                "invalid Redis RESP type: {prefix:?}"
+            ))),
         }
     }
 }
@@ -95,6 +117,10 @@ fn is_crlf(a: u8, b: u8) -> bool {
 
 #[inline]
 fn parse_integer(bytes: &[u8]) -> anyhow::Result<i64> {
-    let str = String::from_utf8(bytes.to_vec())?;
-    Ok(str.parse::<i64>()?)
+    let value = String::from_utf8(bytes.to_vec()).context(DtError::RedisResultError(
+        "Redis integer response is not valid UTF-8".to_string(),
+    ))?;
+    value.parse::<i64>().context(DtError::RedisResultError(
+        "Redis integer response is invalid".to_string(),
+    ))
 }

@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use anyhow::bail;
 
-use crate::error::Error;
+use crate::error::DtError;
 
 use super::{
     ddl_meta::ddl_data::DdlData, mysql::mysql_meta_manager::MysqlMetaManager,
@@ -57,9 +57,8 @@ impl RdbMetaManager {
             return Ok(&tb_meta.basic);
         }
 
-        bail! {Error::Unexpected(
-            "no available meta_manager in partitioner".into(),
-        )}
+        bail! {DtError::InvariantViolated("no available meta_manager in partitioner".to_string())
+        }
     }
 
     pub fn invalidate_cache_by_ddl_data(&mut self, ddl_data: &DdlData) {

@@ -36,7 +36,6 @@ url = { workspace = true }
 log = { workspace = true }
 log4rs = { workspace = true }
 redis = { workspace = true }
-thiserror = { workspace = true }
 async-std = { workspace = true }
 chrono =  { workspace = true }
 apache-avro = {workspace = true}

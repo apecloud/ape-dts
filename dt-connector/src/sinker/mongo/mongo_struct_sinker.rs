@@ -8,7 +8,7 @@ use tokio::time::Instant;
 use crate::{sinker::base_sinker::BaseSinker, Sinker};
 use dt_common::{
     config::config_enums::ConflictPolicyEnum,
-    error::Error,
+    error::{DtResultExt, ErrorCode},
     log_error, log_info,
     meta::{
         mongo::mongo_shard::{list_shard_collections, MongoShardCollection},
@@ -128,7 +128,7 @@ impl MongoStructSinker {
         database
             .run_command(command)
             .await
-            .map_err(Error::MongodbError)?;
+            .code(ErrorCode::StatementFailed)?;
         log_info!("mongo create collection succeed");
         Ok(())
     }
@@ -154,7 +154,7 @@ impl MongoStructSinker {
             .database(&statement.database_name)
             .run_command(command)
             .await
-            .map_err(Error::MongodbError)?;
+            .code(ErrorCode::StatementFailed)?;
         log_info!("mongo create indexes succeed");
         Ok(())
     }
@@ -195,7 +195,7 @@ impl MongoStructSinker {
             .database("admin")
             .run_command(doc! { "enableSharding": db })
             .await
-            .map_err(Error::MongodbError)?;
+            .code(ErrorCode::StatementFailed)?;
 
         let command = doc! {
             "shardCollection": shard_collection.ns.clone(),
@@ -207,7 +207,7 @@ impl MongoStructSinker {
             .database("admin")
             .run_command(command)
             .await
-            .map_err(Error::MongodbError)?;
+            .code(ErrorCode::StatementFailed)?;
         log_info!("mongo shard collection succeed");
         Ok(())
     }

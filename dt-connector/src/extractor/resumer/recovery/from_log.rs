@@ -14,6 +14,7 @@ use dt_common::{
         config_enums::{TaskKind, TaskType},
         resumer_config::ResumerConfig,
     },
+    error::{DtError, DtResultExt, EndpointRole, Stage},
     log_warn,
     meta::position::Position,
     utils::file_util::FileUtil,
@@ -50,10 +51,16 @@ impl LogRecovery {
                 cdc_cache: DashMap::new(),
             },
             _ => {
-                bail!("logRecovery only supports ResumerConfig::FromLog");
+                bail!(DtError::invalid_config(
+                    "log checkpoint recovery requires resume_type=from_log",
+                ));
             }
         };
-        recovery.initialization().await?;
+        recovery
+            .initialization()
+            .await
+            .stage(Stage::Resumer)
+            .endpoint(EndpointRole::Metadata)?;
         Ok(recovery)
     }
 
@@ -207,7 +214,10 @@ impl LogRecovery {
                     .await?;
                 }
             }
-            _ => bail!("logRecovery not supports TaskType: {:?}", self.task_type),
+            _ => bail!(DtError::invalid_config(format!(
+                "log checkpoint recovery does not support task type: {:?}",
+                self.task_type
+            ),)),
         }
         Ok(())
     }

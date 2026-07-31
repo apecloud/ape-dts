@@ -1,7 +1,8 @@
 use std::{collections::BTreeMap, path::Path};
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::{bail, Context, Result};
 use clap::ValueEnum;
+use dt_common::error::{DtError, DtResultExt, ErrorCode, Stage};
 use url::Url;
 
 const SERVER_ID_MIN: u64 = 10001;
@@ -43,9 +44,11 @@ impl DbType {
             "mongo" | "mongodb" => Ok(Self::Mongo),
             "redis" => Ok(Self::Redis),
             "mongodb+srv" => Ok(Self::Mongo),
-            _ => bail!(
-                "unsupported URL scheme '{scheme}', expected mysql/pg/postgres/postgresql/mongo/mongodb/mongodb+srv/redis"
-            ),
+            _ => bail!(DtError::invalid_config(
+                format!(
+                    "Unsupported URL scheme [{scheme}]; expected mysql, pg, postgres, postgresql, mongo, mongodb, mongodb+srv, or redis"
+                ),
+            )),
         }
     }
 
@@ -84,23 +87,29 @@ pub fn infer_db_type(url: &str, explicit: Option<DbType>) -> Result<DbType> {
     let scheme = url
         .split_once("://")
         .map(|(scheme, _)| scheme)
-        .ok_or_else(|| anyhow!("invalid url '{url}', expected '<scheme>://...'"))?;
+        .ok_or_else(|| {
+            DtError::invalid_config(format!(
+                "Invalid endpoint URL [{url}]; expected <scheme>://..."
+            ))
+        })?;
     let inferred = DbType::from_scheme(scheme)?;
     if let Some(value) = explicit {
         if value != inferred {
-            bail!(
-                "explicit db type '{}' does not match url scheme '{}'",
-                value.as_config_value(),
-                scheme
-            );
+            bail!(DtError::invalid_config(format!(
+                "Explicit database type [{}] does not match URL scheme [{scheme}]",
+                value.as_config_value()
+            ),));
         }
     } else if matches!(inferred, DbType::Pg) {
-        let parsed = Url::parse(url).map_err(|err| anyhow!("invalid url '{url}': {err}"))?;
+        let parsed = Url::parse(url)
+            .code(ErrorCode::InvalidConfig)
+            .stage(Stage::Bootstrap)
+            .with_context(|| format!("Invalid endpoint URL [{url}]"))?;
         if parsed.path().trim_matches('/').is_empty() {
-            bail!(
-                "invalid {} url '{url}', database is required when db type is inferred",
+            bail!(DtError::invalid_config(format!(
+                "Database is required in inferred {} URL [{url}]",
                 inferred.as_config_value()
-            );
+            ),));
         }
     }
     Ok(inferred)
@@ -202,6 +211,8 @@ pub fn build_task_config(
     ini.set("runtime", "log_dir", &runtime_log_dir.display().to_string());
 
     if create.preflight {
+        let do_cdc = matches!(create.mode, Mode::Cdc)
+            || (matches!(source_db, DbType::Redis) && matches!(create.mode, Mode::Snapshot));
         ini.set(
             "precheck",
             "do_struct_init",
@@ -211,24 +222,20 @@ pub fn build_task_config(
                 "false"
             },
         );
-        ini.set(
-            "precheck",
-            "do_cdc",
-            if matches!(create.mode, Mode::Cdc) {
-                "true"
-            } else {
-                "false"
-            },
-        );
+        ini.set("precheck", "do_cdc", if do_cdc { "true" } else { "false" });
     }
 
     for item in &create.set {
-        let (path, value) = item
-            .split_once('=')
-            .ok_or_else(|| anyhow!("--set must use section.key=value, got '{item}'"))?;
-        let (section, key) = path
-            .split_once('.')
-            .ok_or_else(|| anyhow!("--set must use section.key=value, got '{item}'"))?;
+        let (path, value) = item.split_once('=').ok_or_else(|| {
+            DtError::invalid_config(format!(
+                "--set must use section.key=value; received [{item}]"
+            ))
+        })?;
+        let (section, key) = path.split_once('.').ok_or_else(|| {
+            DtError::invalid_config(format!(
+                "--set must use section.key=value; received [{item}]"
+            ))
+        })?;
         ini.set(section, key, value);
     }
 
@@ -260,9 +267,11 @@ fn split_filter_patterns(patterns: &str, db_type: &DbType) -> Result<FilterPatte
         match split_unescaped(pattern, '.', escape)?.len() {
             1 => dbs.push(pattern),
             2 => tbs.push(pattern),
-            _ => bail!(
-                "invalid filter expression '{pattern}', expected db or db.table; enclose names containing '.' or ',' with the database identifier escape"
-            ),
+            _ => bail!(DtError::invalid_config(
+                format!(
+                    "Invalid filter expression [{pattern}]; expected db or db.table and escaped identifiers containing '.' or ','"
+                ),
+            )),
         }
     }
 
@@ -310,10 +319,14 @@ fn split_unescaped(value: &str, delimiter: char, escape: Option<char>) -> Result
         }
     }
     if in_escape {
-        bail!("unclosed identifier escape in filter expression '{value}'");
+        bail!(DtError::invalid_config(format!(
+            "Unclosed identifier escape in filter expression [{value}]"
+        ),));
     }
     if in_regex {
-        bail!("unclosed regex escape in filter expression '{value}'");
+        bail!(DtError::invalid_config(format!(
+            "Unclosed regex escape in filter expression [{value}]"
+        ),));
     }
     push_filter_token(&mut tokens, &value[start..], value)?;
     Ok(tokens)
@@ -331,7 +344,9 @@ fn is_filter_token_start(value: &str, index: usize) -> bool {
 fn push_filter_token<'a>(tokens: &mut Vec<&'a str>, token: &'a str, value: &str) -> Result<()> {
     let token = token.trim();
     if token.is_empty() {
-        bail!("empty filter expression in '{value}'");
+        bail!(DtError::invalid_config(format!(
+            "Empty filter expression in [{value}]"
+        ),));
     }
     tokens.push(token);
     Ok(())
@@ -412,9 +427,8 @@ impl IniDoc {
     fn set(&mut self, section: &str, key: &str, value: &str) {
         if !self.values.contains_key(section) {
             self.sections.push(section.to_string());
-            self.values.insert(section.to_string(), Vec::new());
         }
-        let entries = self.values.get_mut(section).expect("section exists");
+        let entries = self.values.entry(section.to_string()).or_default();
         if let Some((_, old)) = entries.iter_mut().find(|(item_key, _)| item_key == key) {
             *old = value.to_string();
         } else {
@@ -487,6 +501,7 @@ fn randomish_u64() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use dt_common::config::task_config::TaskConfig;
 
     fn paths() -> (&'static Path, &'static Path) {
         (
@@ -496,15 +511,69 @@ mod tests {
     }
 
     #[test]
+    fn default_snapshot_configs_load_for_all_cli_engines() {
+        let (log_dir, log4rs_file) = paths();
+        let cases = [
+            (
+                DbType::Mysql,
+                "mysql://127.0.0.1:3306",
+                "mysql://127.0.0.1:3307",
+            ),
+            (
+                DbType::Pg,
+                "postgres://127.0.0.1:5432/source",
+                "postgres://127.0.0.1:5433/target",
+            ),
+            (
+                DbType::Mongo,
+                "mongodb://127.0.0.1:27017",
+                "mongodb://127.0.0.1:27018",
+            ),
+            (
+                DbType::Redis,
+                "redis://127.0.0.1:6379",
+                "redis://127.0.0.1:6380",
+            ),
+        ];
+
+        for (db_type, source_url, target_url) in cases {
+            let create = CreateConfig {
+                task_name: format!("{}_default_snapshot", db_type.as_config_value()),
+                source_url: source_url.to_string(),
+                target_url: target_url.to_string(),
+                ..CreateConfig::default()
+            };
+            let config =
+                build_task_config(&create, &db_type, &db_type, log_dir, log4rs_file).unwrap();
+            let config_path = std::env::temp_dir().join(format!(
+                "dtscli-{}-{}-task-config.ini",
+                db_type.as_config_value(),
+                randomish_u64()
+            ));
+            std::fs::write(&config_path, config).unwrap();
+
+            let result = TaskConfig::new(config_path.to_str().unwrap());
+            let _ = std::fs::remove_file(&config_path);
+            if let Err(err) = result {
+                panic!(
+                    "default {} config should load without --set overrides: {err:#}",
+                    db_type.as_config_value()
+                );
+            }
+        }
+    }
+
+    #[test]
     fn preflight_flags_follow_task_mode() {
         let (log_dir, log4rs_file) = paths();
         let cases = [
-            (Mode::Struct, "true", "false"),
-            (Mode::Snapshot, "false", "false"),
-            (Mode::Cdc, "false", "true"),
+            (DbType::Mysql, Mode::Struct, "true", "false"),
+            (DbType::Mysql, Mode::Snapshot, "false", "false"),
+            (DbType::Mysql, Mode::Cdc, "false", "true"),
+            (DbType::Redis, Mode::Snapshot, "false", "true"),
         ];
 
-        for (mode, do_struct_init, do_cdc) in cases {
+        for (db_type, mode, do_struct_init, do_cdc) in cases {
             let create = CreateConfig {
                 task_name: "order_preflight".to_string(),
                 mode,
@@ -515,14 +584,8 @@ mod tests {
                 ..CreateConfig::default()
             };
 
-            let actual = build_task_config(
-                &create,
-                &DbType::Mysql,
-                &DbType::Mysql,
-                log_dir,
-                log4rs_file,
-            )
-            .unwrap();
+            let actual =
+                build_task_config(&create, &db_type, &db_type, log_dir, log4rs_file).unwrap();
 
             assert!(actual.contains(&format!(
                 "[precheck]\ndo_struct_init={do_struct_init}\ndo_cdc={do_cdc}\n"

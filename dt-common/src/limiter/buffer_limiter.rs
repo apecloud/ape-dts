@@ -170,7 +170,7 @@ mod tests {
                         "c1".to_string(),
                         ColValue::RawString(b"ij".to_vec()),
                     )])),
-                    data_size: data_size,
+                    data_size,
                     is_not_origin: false,
                 },
             },

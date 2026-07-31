@@ -3,7 +3,10 @@ mod test {
 
     use serial_test::serial;
 
-    use crate::test_runner::{rdb_cycle_test_runner::RdbCycleTestRunner, test_base::TestBase};
+    use crate::test_runner::{
+        rdb_cycle_test_runner::RdbCycleTestRunner, rdb_test_runner::RdbTestRunner,
+        test_base::TestBase,
+    };
 
     #[tokio::test]
     #[serial]
@@ -87,6 +90,31 @@ mod test {
     #[serial]
     async fn cdc_ddl_test() {
         TestBase::run_ddl_test("pg_to_pg/cdc/ddl_test", 3000, 5000).await;
+    }
+
+    #[tokio::test]
+    #[serial]
+    #[ignore = "known bug: PostgreSQL trigger rows contain the complete batch DDL query"]
+    async fn cdc_batch_ddl_test() {
+        let runner = RdbTestRunner::new("pg_to_pg/cdc/batch_ddl_test")
+            .await
+            .unwrap();
+        runner.run_ddl_test(3000, 5000).await.unwrap();
+
+        for table in ["batch_ddl_a", "batch_ddl_b"] {
+            let target_table: Option<String> =
+                sqlx::query_scalar(&format!("SELECT to_regclass('test_db_1.{table}')::text"))
+                    .fetch_one(runner.dst_conn_pool_pg.as_ref().unwrap())
+                    .await
+                    .unwrap();
+            assert_eq!(
+                target_table.as_deref(),
+                Some(format!("test_db_1.{table}").as_str()),
+                "table created by batched DDL was not applied to the target"
+            );
+        }
+
+        runner.close().await.unwrap();
     }
 
     #[tokio::test]

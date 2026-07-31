@@ -37,7 +37,7 @@ impl CheckResult {
         let mut advise_msg = String::new();
         let mut source_or_sink = String::from("source");
         if !is_source {
-            source_or_sink = String::from("sink");
+            source_or_sink = String::from("destination");
         }
 
         match check_item {
@@ -92,16 +92,16 @@ impl CheckResult {
                 advise_msg = format!("{} wait for the next release.", advise_version);
             }
         }
-        let mut warn_msg = String::new();
-        if let Some(err) = warn_option {
-            warn_msg = err.to_string();
-        }
+        let warn_msg = warn_option
+            .map(|error| error.to_string())
+            .unwrap_or_default();
+        let has_warning = !warn_msg.is_empty();
         match err_option {
-            Some(err) => Self {
+            Some(error) => Self {
                 check_type_name: check_item.to_string(),
                 check_desc,
                 is_validate: false,
-                error_msg: err.to_string(),
+                error_msg: error.to_string(),
                 warn_msg,
                 is_source,
                 advise_msg,
@@ -113,13 +113,17 @@ impl CheckResult {
                 error_msg: String::from(""),
                 warn_msg,
                 is_source,
-                advise_msg: String::from(""),
+                advise_msg: if has_warning {
+                    advise_msg
+                } else {
+                    String::new()
+                },
             },
         }
     }
 
     pub fn log(&self) {
         println!("======================================");
-        println!("[check_type_name]:{} \n[is_validate]:{} \n[check_desc]:{} \n[error_messaeg]:{} \n[warn_message]:{} \n[advise_message]:{}\n", self.check_type_name, self.is_validate, self.check_desc, self.error_msg, self.warn_msg, self.advise_msg);
+        println!("[check_type_name]:{} \n[is_validate]:{} \n[check_desc]:{} \n[error_message]:{} \n[warn_message]:{} \n[advise_message]:{}\n", self.check_type_name, self.is_validate, self.check_desc, self.error_msg, self.warn_msg, self.advise_msg);
     }
 }

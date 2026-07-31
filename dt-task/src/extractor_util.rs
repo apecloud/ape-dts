@@ -10,10 +10,12 @@ use tokio::sync::Mutex;
 
 use dt_common::{
     config::{
-        config_enums::{CheckMode, DbType, ExtractType, TaskKind},
+        config_enums::{CheckMode, DbType, ExtractType, SinkType, TaskKind},
         extractor_config::ExtractorConfig,
+        sinker_config::SinkerConfig,
         task_config::TaskConfig,
     },
+    error::{DtError, DtResultExt, ErrorCode},
     meta::{
         avro::avro_converter::AvroConverter, dt_queue::DtQueue,
         mysql::mysql_meta_manager::MysqlMetaManager, pg::pg_meta_manager::PgMetaManager,
@@ -72,6 +74,10 @@ const JSON_PREFIX: &str = "json:";
 pub struct ExtractorUtil {}
 
 impl ExtractorUtil {
+    fn use_mongo_raw_document(sinker: &SinkerConfig, sink_type: &SinkType) -> bool {
+        matches!(sinker, SinkerConfig::Mongo { .. }) && matches!(sink_type, SinkType::Write)
+    }
+
     fn sample_rate(config: &TaskConfig, extractor_config: &ExtractorConfig) -> Option<u8> {
         let standalone_snapshot_check = config.task_type().is_some_and(|task_type| {
             matches!(task_type.kind, TaskKind::Snapshot)
@@ -88,7 +94,7 @@ impl ExtractorUtil {
             config
                 .checker
                 .as_ref()
-                .and_then(|checker| checker.sample_rate)
+                .and_then(|checker| checker.sample_percent)
         } else {
             None
         }
@@ -134,7 +140,7 @@ impl ExtractorUtil {
                 let conn_pool = match extractor_client {
                     ConnClient::MySQL(conn_pool) => conn_pool,
                     _ => {
-                        bail!("connection pool not found");
+                        bail!(DtError::MissingSourceClient);
                     }
                 };
                 let meta_manager = TaskUtil::create_mysql_meta_manager(
@@ -174,7 +180,7 @@ impl ExtractorUtil {
                 let conn_pool = match extractor_client {
                     ConnClient::MySQL(conn_pool) => conn_pool,
                     _ => {
-                        bail!("connection pool not found");
+                        bail!(DtError::MissingSourceClient);
                     }
                 };
                 let meta_manager = TaskUtil::create_mysql_meta_manager(
@@ -218,7 +224,7 @@ impl ExtractorUtil {
             } => {
                 let conn_pool = match extractor_client {
                     ConnClient::MySQL(conn_pool) => conn_pool,
-                    _ => bail!("connection pool not found"),
+                    _ => bail!(DtError::MissingSourceClient),
                 };
                 let meta_manager = TaskUtil::create_mysql_meta_manager(
                     &url,
@@ -266,7 +272,7 @@ impl ExtractorUtil {
                 let conn_pool = match extractor_client {
                     ConnClient::PostgreSQL(conn_pool) => conn_pool,
                     _ => {
-                        bail!("connection pool not found");
+                        bail!(DtError::MissingSourceClient);
                     }
                 };
                 let meta_manager = PgMetaManager::new(conn_pool.clone()).await?;
@@ -297,7 +303,7 @@ impl ExtractorUtil {
                 let conn_pool = match extractor_client {
                     ConnClient::PostgreSQL(conn_pool) => conn_pool,
                     _ => {
-                        bail!("connection pool not found");
+                        bail!(DtError::MissingSourceClient);
                     }
                 };
                 let meta_manager = PgMetaManager::new(conn_pool.clone()).await?;
@@ -330,7 +336,7 @@ impl ExtractorUtil {
             } => {
                 let conn_pool = match extractor_client {
                     ConnClient::PostgreSQL(conn_pool) => conn_pool,
-                    _ => bail!("connection pool not found"),
+                    _ => bail!(DtError::MissingSourceClient),
                 };
                 let meta_manager = PgMetaManager::new(conn_pool.clone()).await?;
                 extract_state.time_filter = TimeFilter::new(&start_time_utc, &end_time_utc)?;
@@ -365,7 +371,7 @@ impl ExtractorUtil {
             } => {
                 let mongo_client = match extractor_client {
                     ConnClient::MongoDB(mongo_client) => mongo_client,
-                    _ => bail!("connection pool not found"),
+                    _ => bail!(DtError::MissingSourceClient),
                 };
                 let extractor = MongoSnapshotExtractor {
                     db_tbs,
@@ -378,6 +384,10 @@ impl ExtractorUtil {
                     extract_state,
                     recovery,
                     filter: filter.clone(),
+                    use_raw_document: Self::use_mongo_raw_document(
+                        &config.sinker,
+                        &config.sinker_basic.sink_type,
+                    ),
                 };
                 Box::new(extractor)
             }
@@ -393,7 +403,7 @@ impl ExtractorUtil {
             } => {
                 let mongo_client = match extractor_client {
                     ConnClient::MongoDB(mongo_client) => mongo_client,
-                    _ => bail!("connection pool not found"),
+                    _ => bail!(DtError::MissingSourceClient),
                 };
                 let extractor = MongoCdcExtractor {
                     filter,
@@ -406,6 +416,7 @@ impl ExtractorUtil {
                     extract_state,
                     heartbeat_interval_secs,
                     heartbeat_tb,
+                    use_raw_document: matches!(config.sinker, SinkerConfig::Mongo { .. }),
                     syncer,
                     recovery,
                 };
@@ -419,7 +430,7 @@ impl ExtractorUtil {
             } => {
                 let mongo_client = match extractor_client {
                     ConnClient::MongoDB(mongo_client) => mongo_client,
-                    _ => bail!("connection pool not found"),
+                    _ => bail!(DtError::MissingSourceClient),
                 };
                 let extractor = MongoCheckExtractor {
                     mongo_client,
@@ -436,7 +447,7 @@ impl ExtractorUtil {
             } => {
                 let mongo_client = match extractor_client {
                     ConnClient::MongoDB(mongo_client) => mongo_client,
-                    _ => bail!("connection pool not found"),
+                    _ => bail!(DtError::MissingSourceClient),
                 };
                 let db_batch_size_validated =
                     MongoStructExtractor::validate_db_batch_size(db_batch_size)?;
@@ -457,7 +468,7 @@ impl ExtractorUtil {
                 let conn_pool = match extractor_client {
                     ConnClient::MySQL(conn_pool) => conn_pool,
                     _ => {
-                        bail!("connection pool not found");
+                        bail!(DtError::MissingSourceClient);
                     }
                 };
                 let db_batch_size_validated =
@@ -482,7 +493,7 @@ impl ExtractorUtil {
                 let conn_pool = match extractor_client {
                     ConnClient::PostgreSQL(conn_pool) => conn_pool,
                     _ => {
-                        bail!("connection pool not found");
+                        bail!(DtError::MissingSourceClient);
                     }
                 };
                 let db_batch_size_validated =
@@ -708,7 +719,7 @@ impl ExtractorUtil {
                 ack_interval_secs,
             } => {
                 let meta_manager = TaskUtil::create_rdb_meta_manager(config).await?;
-                let avro_converter = AvroConverter::new(meta_manager, false);
+                let avro_converter = AvroConverter::new(meta_manager, false)?;
                 let extractor = KafkaExtractor {
                     url,
                     group,
@@ -773,10 +784,46 @@ impl ExtractorUtil {
             partition_col: String,
         }
         let config: Vec<PartitionColsType> =
-            serde_json::from_str(config_str.trim_start_matches(JSON_PREFIX))?;
+            serde_json::from_str(config_str.trim_start_matches(JSON_PREFIX))
+                .code(ErrorCode::InvalidConfig)
+                .context("config [extractor].partition_cols is invalid JSON")?;
         for i in config {
             results.insert((i.db, i.tb), i.partition_col);
         }
         Ok(results)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use dt_common::config::connection_auth_config::ConnectionAuthConfig;
+
+    use super::*;
+
+    fn mongo_sinker() -> SinkerConfig {
+        SinkerConfig::Mongo {
+            url: String::new(),
+            connection_auth: ConnectionAuthConfig::default(),
+            is_direct_connection: None,
+            app_name: String::new(),
+            batch_size: 1,
+            require_shard_key_filter: false,
+        }
+    }
+
+    #[test]
+    fn mongo_standalone_check_does_not_use_raw_documents() {
+        assert!(!ExtractorUtil::use_mongo_raw_document(
+            &mongo_sinker(),
+            &SinkType::Check,
+        ));
+    }
+
+    #[test]
+    fn mongo_write_sinker_keeps_using_raw_documents() {
+        assert!(ExtractorUtil::use_mongo_raw_document(
+            &mongo_sinker(),
+            &SinkType::Write,
+        ));
     }
 }

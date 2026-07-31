@@ -120,7 +120,7 @@ does not create persistent CLI task metadata. Press `Ctrl-C` to stop it.
 Preflight generates mode-specific checks:
 
 - `struct`: `do_struct_init=true`, `do_cdc=false`
-- `snapshot`: `do_struct_init=false`, `do_cdc=false`
+- `snapshot`: `do_struct_init=false`, `do_cdc=false` (`do_cdc=true` for Redis because snapshot uses PSYNC)
 - `cdc`: `do_struct_init=false`, `do_cdc=true`
 
 Supported database URL schemes:

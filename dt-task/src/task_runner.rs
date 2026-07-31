@@ -1,23 +1,17 @@
 use std::{
     collections::HashMap,
-    panic,
-    path::{Component, Path},
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
     },
 };
 
-use crate::task_util::{ConnClient, TaskUtil};
 use anyhow::{bail, Context};
 use async_mutex::Mutex as AsyncMutex;
 use chrono::Local;
-use log4rs::config::{Config, Deserializers, RawConfig};
 use opendal::Operator;
-use std::sync::Mutex as StdMutex;
 use tokio::{
-    fs::{self as tokio_fs, metadata, File},
-    io::AsyncReadExt,
+    fs::{self as tokio_fs, metadata},
     runtime::Handle,
     sync::{Mutex, RwLock},
     task::JoinSet,
@@ -27,17 +21,17 @@ use tokio_util::sync::CancellationToken;
 use dt_common::{
     config::{
         checker_config::CheckerConfig,
-        config_enums::{DbType, ExtractType, PipelineType, SinkType, TaskKind, TaskType},
+        config_enums::{DbType, ExtractType, SinkType, TaskKind, TaskType},
         config_token_parser::{ConfigTokenParser, TokenEscapePair},
         extractor_config::ExtractorConfig,
         limiter_config::CapacityLimiterConfig,
         sinker_config::SinkerConfig,
-        task_config::{TaskConfig, DEFAULT_CHECK_LOG_FILE_SIZE},
+        task_config::TaskConfig,
     },
-    error::Error,
+    error::{DtError, DtResultExt, EndpointRole, ErrorCode, Stage},
     limiter::buffer_limiter::BufferLimiter,
     log_error,
-    log_filter::{parse_size_limit, SizeLimitFilterDeserializer},
+    log_filter::parse_size_limit,
     log_finished, log_info, log_warn,
     meta::{dt_queue::DtQueue, position::Position, row_type::RowType, syncer::Syncer},
     monitor::{
@@ -55,8 +49,8 @@ use dt_connector::{
     checker::base_checker::CheckContext,
     checker::check_log::{to_json_line, CheckSummaryLog},
     checker::{
-        Checker, CheckerHandle, CheckerStateStore, DataCheckerHandle, MongoChecker, MysqlChecker,
-        PgChecker, StructCheckerHandle,
+        Checker, CheckerHandle, CheckerStateStore, DataCheckerHandle, DirectCheckerHandle,
+        MongoChecker, MysqlChecker, PgChecker, StructCheckerHandle,
     },
     data_marker::DataMarker,
     extractor::resumer::{recorder::Recorder, recovery::Recovery},
@@ -64,16 +58,18 @@ use dt_connector::{
     sinker::base_sinker::BaseSinker,
     Extractor, Sinker,
 };
-use dt_pipeline::{base_pipeline::BasePipeline, lua_processor::LuaProcessor, Pipeline};
+use dt_pipeline::{
+    base_pipeline::BasePipeline, checker_pipeline::CheckerPipeline, lua_processor::LuaProcessor,
+    Pipeline,
+};
 
 use super::{
     extractor_util::ExtractorUtil, parallelizer_util::ParallelizerUtil, sinker_util::SinkerUtil,
 };
+use crate::task_util::{ConnClient, TaskUtil};
 
 #[cfg(feature = "metrics")]
 use dt_common::monitor::prometheus_metrics::PrometheusMetrics;
-
-static LOG_HANDLE: StdMutex<Option<log4rs::Handle>> = StdMutex::new(None);
 
 #[derive(Clone)]
 pub struct TaskInfo {
@@ -90,16 +86,6 @@ pub struct TaskRunner {
     #[cfg(feature = "metrics")]
     prometheus_metrics: Arc<PrometheusMetrics>,
 }
-
-const CHECK_LOG_DIR_PLACEHOLDER: &str = "CHECK_LOG_DIR_PLACEHOLDER";
-const STATISTIC_LOG_DIR_PLACEHOLDER: &str = "STATISTIC_LOG_DIR_PLACEHOLDER";
-const LOG_LEVEL_PLACEHOLDER: &str = "LOG_LEVEL_PLACEHOLDER";
-const LOG_DIR_PLACEHOLDER: &str = "LOG_DIR_PLACEHOLDER";
-const CHECK_LOG_FILE_SIZE_PLACEHOLDER: &str = "CHECK_LOG_FILE_SIZE_PLACEHOLDER";
-const RUNTIME_STDOUT_APPENDER_PLACEHOLDER: &str = "RUNTIME_STDOUT_APPENDER_PLACEHOLDER";
-const CHECK_RESULT_STDOUT_APPENDER_PLACEHOLDER: &str = "CHECK_RESULT_STDOUT_APPENDER_PLACEHOLDER";
-const DEFAULT_CHECK_LOG_DIR_PLACEHOLDER: &str = "LOG_DIR_PLACEHOLDER/check";
-const DEFAULT_STATISTIC_LOG_DIR_PLACEHOLDER: &str = "LOG_DIR_PLACEHOLDER/statistic";
 
 fn init_task_check_summary() -> CheckSummaryLog {
     CheckSummaryLog {
@@ -125,9 +111,7 @@ impl SingleTaskWorker {
 }
 
 impl TaskRunner {
-    pub fn new(task_config_file: &str) -> anyhow::Result<Self> {
-        let config = TaskConfig::new(task_config_file)
-            .with_context(|| format!("invalid configs in [{}]", task_config_file))?;
+    pub fn new(config: TaskConfig) -> anyhow::Result<Self> {
         let task_type = config.task_type();
         #[cfg(not(feature = "metrics"))]
         let task_monitor = Arc::new(TaskMonitor::new(task_type));
@@ -150,8 +134,6 @@ impl TaskRunner {
     }
 
     pub async fn start_task(&self, is_init: bool) -> anyhow::Result<()> {
-        self.clear_check_logs().await?;
-        self.init_log4rs().await?;
         runtime_trace::init_tracing();
         runtime_trace::set_task_summary_mode(self.config.tracing.task_summary_mode);
         runtime_trace::set_output_format(self.config.tracing.output_format);
@@ -162,11 +144,6 @@ impl TaskRunner {
             worker_thread_cnt
         );
 
-        panic::set_hook(Box::new(|panic_info| {
-            let backtrace = std::backtrace::Backtrace::capture();
-            log_error!("panic: {}\nbacktrace:\n{}", panic_info, backtrace);
-        }));
-
         log_info!(
             "start task: [taskID: {}, taskType: {:?}]",
             &self.config.global.task_id,
@@ -174,17 +151,17 @@ impl TaskRunner {
         );
 
         let db_type = &self.config.extractor_basic.db_type;
-        let router = Arc::new(RdbRouter::from_config(&self.config.router, db_type)?);
+        let router =
+            Arc::new(RdbRouter::from_config(&self.config.router, db_type).stage(Stage::Bootstrap)?);
         let (recorder, recovery, checker_state_store) = match &self.task_type {
-            Some(task_type) => {
-                TaskUtil::build_resumer(
-                    task_type.to_owned(),
-                    &self.config.global,
-                    &self.config.resumer,
-                    is_init,
-                )
-                .await?
-            }
+            Some(task_type) => TaskUtil::build_resumer(
+                task_type.to_owned(),
+                &self.config.global,
+                &self.config.resumer,
+                is_init,
+            )
+            .await
+            .stage(Stage::Bootstrap)?,
             None => (None, None, None),
         };
         if self
@@ -192,12 +169,13 @@ impl TaskRunner {
             .is_some_and(|task_type| task_type.is_cdc_inline_check())
             && checker_state_store.is_none()
         {
-            bail!(Error::ConfigError(
+            bail!(DtError::invalid_config(
                 "config [checker] with CDC tasks requires [resumer] resume_type=from_target or from_db to persist checker state"
-                    .into(),
             ));
         }
-        let (extractor_client, sinker_client) = ConnClient::from_config(&self.config).await?;
+        let (extractor_client, sinker_client) = ConnClient::from_config(&self.config)
+            .await
+            .stage(Stage::Bootstrap)?;
 
         let check_summary = self
             .config
@@ -208,12 +186,14 @@ impl TaskRunner {
         #[cfg(feature = "metrics")]
         self.prometheus_metrics
             .initialization()
+            .stage(Stage::Bootstrap)?
             .start_metrics()
             .await;
 
         let task_info = self
             .get_task_info(extractor_client.clone(), recovery.clone())
-            .await?;
+            .await
+            .stage(Stage::Bootstrap)?;
         let should_skip_task = self
             .task_type
             .as_ref()
@@ -262,63 +242,6 @@ impl TaskRunner {
         log_finished!("task finished");
         log::logger().flush();
         Ok(())
-    }
-
-    async fn clear_check_logs(&self) -> anyhow::Result<()> {
-        let Some(cfg) = self.config.checker.as_ref() else {
-            return Ok(());
-        };
-        let check_log_dir = self.check_log_dir(cfg);
-        if Self::check_log_replay_reads_from_dir(&self.config.extractor, &check_log_dir) {
-            return Ok(());
-        }
-        if !Self::should_clear_check_logs_before_log4rs(self.task_type) {
-            return Ok(());
-        }
-
-        tokio_fs::create_dir_all(&check_log_dir).await?;
-        for file_name in ["miss.log", "diff.log", "summary.log", "sql.log"] {
-            Self::remove_file_if_exists(&format!("{check_log_dir}/{file_name}")).await?;
-        }
-        Ok(())
-    }
-
-    fn should_clear_check_logs_before_log4rs(task_type: Option<TaskType>) -> bool {
-        match task_type {
-            Some(task_type) => task_type.has_check() && !task_type.is_cdc_inline_check(),
-            None => true,
-        }
-    }
-
-    fn check_log_replay_reads_from_dir(extractor: &ExtractorConfig, check_log_dir: &str) -> bool {
-        let replay_dir = match extractor {
-            ExtractorConfig::MysqlCheck { check_log_dir, .. }
-            | ExtractorConfig::PgCheck { check_log_dir, .. }
-            | ExtractorConfig::MongoCheck { check_log_dir, .. } => check_log_dir,
-            _ => return false,
-        };
-        Self::same_check_log_dir(replay_dir, check_log_dir)
-    }
-
-    fn same_check_log_dir(left: &str, right: &str) -> bool {
-        let normalize = |path: &str| {
-            std::fs::canonicalize(path).unwrap_or_else(|_| {
-                let path = std::env::current_dir()
-                    .unwrap_or_default()
-                    .join(Path::new(path));
-                path.components().fold(Path::new("").into(), |mut acc, c| {
-                    match c {
-                        Component::CurDir => {}
-                        Component::ParentDir => {
-                            acc.pop();
-                        }
-                        _ => acc.push(c.as_os_str()),
-                    }
-                    acc
-                })
-            })
-        };
-        normalize(left) == normalize(right)
     }
 
     async fn remove_empty_check_logs(&self) -> anyhow::Result<()> {
@@ -414,14 +337,9 @@ impl TaskRunner {
         cfg: &CheckerConfig,
         task_id: &str,
     ) -> anyhow::Result<Option<(Operator, String)>> {
-        if !cfg.check_log_s3 {
+        let Some((s3_cfg, _)) = cfg.s3_output() else {
             return Ok(None);
-        }
-        let s3_cfg = cfg.s3_config.as_ref().ok_or_else(|| {
-            Error::ConfigError(
-                "check_log_s3=true but checker s3 config is missing in [checker]".into(),
-            )
-        })?;
+        };
         Ok(Some((
             TaskUtil::create_s3_client(s3_cfg)?,
             self.check_log_s3_key_prefix(cfg, task_id),
@@ -429,18 +347,22 @@ impl TaskRunner {
     }
 
     fn check_log_dir(&self, cfg: &CheckerConfig) -> String {
-        if cfg.check_log_dir.is_empty() {
+        if cfg.log_dir().is_empty() {
             format!("{}/check", self.config.runtime.log_dir)
         } else {
-            cfg.check_log_dir.clone()
+            cfg.log_dir().to_string()
         }
     }
 
     fn check_log_s3_key_prefix(&self, checker: &CheckerConfig, task_id: &str) -> String {
-        let base = if checker.s3_key_prefix.is_empty() {
+        let configured_prefix = checker
+            .s3_output()
+            .map(|(_, key_prefix)| key_prefix)
+            .unwrap_or("");
+        let base = if configured_prefix.is_empty() {
             format!("{}/check", self.config.global.task_id)
         } else {
-            checker.s3_key_prefix.clone()
+            configured_prefix.to_string()
         };
         let base = base.trim_end_matches('/');
         if task_id.is_empty() || task_id == self.config.global.task_id {
@@ -548,7 +470,8 @@ impl TaskRunner {
             (*router).clone(),
             recovery.clone(),
         )
-        .await?;
+        .await
+        .stage(Stage::Bootstrap)?;
         let extractor = Arc::new(Mutex::new(extractor));
 
         let checker_monitor_handle = TaskMonitorHandle::new(
@@ -570,7 +493,8 @@ impl TaskRunner {
                 recovery.as_ref(),
                 checker_state_store.clone(),
             )
-            .await?;
+            .await
+            .stage(Stage::Bootstrap)?;
 
         let sinker_monitor_handle = TaskMonitorHandle::new(
             self.task_monitor.clone(),
@@ -581,17 +505,20 @@ impl TaskRunner {
             monitor_count_window,
         );
         let sinker_monitor = sinker_monitor_handle.build_monitor("sinker", &task_id);
-        let sinkers = SinkerUtil::create_sinkers(
-            &self.config,
-            sinker_client.clone(),
-            sinker_monitor_handle,
-            rw_sinker_data_marker.clone(),
-            checker.as_ref().and_then(|handle| match handle {
-                CheckerHandle::Data(handle) => Some(handle.clone()),
-                CheckerHandle::Struct(_) => None,
-            }),
-        )
-        .await?;
+        let standalone_check = matches!(self.config.sinker_basic.sink_type, SinkType::Check);
+        let sinkers = if standalone_check {
+            Vec::new()
+        } else {
+            SinkerUtil::create_sinkers(
+                &self.config,
+                sinker_client.clone(),
+                sinker_monitor_handle,
+                rw_sinker_data_marker.clone(),
+                checker.clone(),
+            )
+            .await
+            .stage(Stage::Bootstrap)?
+        };
 
         let pipeline_monitor_handle = TaskMonitorHandle::new(
             self.task_monitor.clone(),
@@ -612,7 +539,8 @@ impl TaskRunner {
                 recorder.clone(),
                 checker,
             )
-            .await?;
+            .await
+            .stage(Stage::Bootstrap)?;
         let pipeline = Arc::new(Mutex::new(pipeline));
 
         let mut monitors = vec![(
@@ -632,7 +560,8 @@ impl TaskRunner {
             sinker_client.clone(),
             sinker_data_marker,
         )
-        .await?;
+        .await
+        .stage(Stage::Bootstrap)?;
 
         let interval_secs = self.config.pipeline.checkpoint_interval_secs;
         #[cfg(all(feature = "metrics", feature = "tracing"))]
@@ -655,7 +584,7 @@ impl TaskRunner {
         monitor_shutdown.cancel();
         let monitor_result = monitor_task
             .await
-            .context("monitor task exit error")
+            .context("monitor task failed")
             .and_then(|result| result);
 
         let mut monitor_types = vec![MonitorType::Pipeline];
@@ -713,10 +642,7 @@ impl TaskRunner {
                     break;
                 }
                 Err(err) => {
-                    failure = Some((
-                        None,
-                        anyhow::anyhow!("single task worker join error: {}", err),
-                    ));
+                    failure = Some((None, err.into()));
                     break;
                 }
             }
@@ -778,8 +704,14 @@ impl TaskRunner {
             extractor.close().await
         };
 
-        extract_result.context("extractor.extract failed")?;
-        close_result.context("extractor.close failed")?;
+        extract_result
+            .stage(Stage::Extractor)
+            .endpoint(EndpointRole::Source)
+            .context("extractor.extract failed")?;
+        close_result
+            .stage(Stage::Extractor)
+            .endpoint(EndpointRole::Source)
+            .context("extractor.close failed")?;
         Ok(())
     }
 
@@ -795,8 +727,12 @@ impl TaskRunner {
             pipeline.stop().await
         };
 
-        start_result.context("pipeline.start failed")?;
-        stop_result.context("pipeline.stop failed")?;
+        start_result
+            .stage(Stage::Pipeline)
+            .context("pipeline.start failed")?;
+        stop_result
+            .stage(Stage::Pipeline)
+            .context("pipeline.stop failed")?;
         Ok(())
     }
 
@@ -831,37 +767,44 @@ impl TaskRunner {
         recorder: Option<Arc<dyn Recorder + Send + Sync>>,
         checker: Option<CheckerHandle>,
     ) -> anyhow::Result<Box<dyn Pipeline + Send>> {
-        match self.config.pipeline.pipeline_type {
-            PipelineType::Basic => {
-                let lua_processor =
-                    self.config
-                        .processor
-                        .as_ref()
-                        .map(|processor_config| LuaProcessor {
-                            lua_code: processor_config.lua_code.clone(),
-                        });
+        let lua_processor = self
+            .config
+            .processor
+            .as_ref()
+            .map(|processor_config| LuaProcessor {
+                lua_code: processor_config.lua_code.clone(),
+            });
 
-                let parallelizer =
-                    ParallelizerUtil::create_parallelizer(&self.config, monitor.clone()).await?;
+        let parallelizer =
+            ParallelizerUtil::create_parallelizer(&self.config, monitor.clone()).await?;
 
-                let pipeline = BasePipeline {
-                    buffer,
-                    parallelizer,
-                    sinker_config: self.config.sinker.clone(),
-                    sinkers,
-                    shut_down,
-                    checkpoint_interval_secs: self.config.pipeline.checkpoint_interval_secs,
-                    batch_sink_interval_secs: self.config.pipeline.batch_sink_interval_secs,
-                    syncer,
-                    monitor,
-                    pending_snapshot_finished: HashMap::new(),
-                    data_marker,
-                    lua_processor,
-                    recorder,
-                    checker,
-                };
-                Ok(Box::new(pipeline) as Box<dyn Pipeline + Send>)
+        let propagate_checkpoint_to_sinker = checker.is_some();
+        let pipeline = BasePipeline {
+            buffer,
+            parallelizer,
+            sinker_config: self.config.sinker.clone(),
+            sinkers,
+            shut_down,
+            checkpoint_interval_secs: self.config.pipeline.checkpoint_interval_secs,
+            batch_sink_interval_secs: self.config.pipeline.batch_sink_interval_secs,
+            syncer,
+            monitor,
+            pending_snapshot_finished: HashMap::new(),
+            data_marker,
+            lua_processor,
+            recorder,
+            propagate_checkpoint_to_sinker,
+        };
+        if matches!(self.config.sinker_basic.sink_type, SinkType::Check) {
+            let checker = checker.ok_or_else(|| {
+                DtError::invalid_config("standalone check requires a direct checker runtime")
+            })?;
+            if checker.is_async() {
+                bail!("standalone check must not use async checker runtime");
             }
+            Ok(Box::new(CheckerPipeline::new(pipeline, checker)) as Box<dyn Pipeline + Send>)
+        } else {
+            Ok(Box::new(pipeline) as Box<dyn Pipeline + Send>)
         }
     }
 
@@ -875,16 +818,10 @@ impl TaskRunner {
         recovery: Option<&Arc<dyn Recovery + Send + Sync>>,
         checker_state_store: Option<Arc<CheckerStateStore>>,
     ) -> anyhow::Result<Option<CheckerHandle>> {
-        if !matches!(self.config.pipeline.pipeline_type, PipelineType::Basic) {
-            return Ok(None);
-        }
-
         let cfg = match checker_config {
             Some(cfg) => cfg,
             None => return Ok(None),
         };
-        let max_connections = cfg.max_connections.max(1);
-        let queue_size = cfg.queue_size.max(1);
         let log_level = &self.config.runtime.log_level;
         let enable_sqlx_log = TaskUtil::check_enable_sqlx_log(log_level);
         let is_cdc_task = matches!(self.config.extractor_basic.extract_type, ExtractType::Cdc)
@@ -904,35 +841,43 @@ impl TaskRunner {
         }
         let check_log_dir_base = self.check_log_dir(cfg);
         let checker_task_id = task_id.to_string();
-        let cdc_check_log_max_file_size =
-            parse_size_limit(&cfg.check_log_file_size).map_err(|e| {
-                Error::ConfigError(format!(
-                    "invalid config [checker].check_log_file_size: {}, error: {}",
-                    cfg.check_log_file_size, e
-                ))
-            })?;
-        let cdc_check_log_max_rows = if cfg.check_log_max_rows == 0 {
-            log_warn!("checker.check_log_max_rows=0 is invalid. Using 1.");
+        let cdc_check_log_max_file_size = parse_size_limit(cfg.log_file_size())
+            .with_context(|| {
+                format!(
+                    "invalid config [checker_output].check_log_file_size: {}",
+                    cfg.log_file_size()
+                )
+            })
+            .code(ErrorCode::InvalidConfig)?;
+        let cdc_check_log_max_rows = if cfg.log_max_rows() == 0 {
+            log_warn!("checker_output.check_log_max_rows=0 is invalid. Using 1.");
             1
         } else {
-            cfg.check_log_max_rows
+            cfg.log_max_rows()
         };
         let (max_retries, retry_interval_secs) = if is_cdc_task {
-            if cfg.max_retries > 0 || cfg.retry_interval_secs > 0 {
+            if cfg.recheck_count > 0 || cfg.recheck_interval_secs > 0 {
                 log_warn!(
-                    "CDC+check mode does not support retries. Ignoring max_retries={} and retry_interval_secs={} from config.",
-                    cfg.max_retries,
-                    cfg.retry_interval_secs
+                    "CDC+check mode does not support retries. Ignoring recheck_count={} and recheck_interval_secs={} from config.",
+                    cfg.recheck_count,
+                    cfg.recheck_interval_secs
                 );
             }
             (0, 0)
         } else {
-            (cfg.max_retries, cfg.retry_interval_secs)
+            (cfg.recheck_count, cfg.recheck_interval_secs)
         };
         let checker_target = self
             .config
             .checker_target()
-            .ok_or_else(|| Error::ConfigError("config [checker] target is missing".into()))?;
+            .ok_or_else(|| DtError::invalid_config("config [checker] target is missing"))?;
+        let max_connections = checker_target.max_connections.max(1);
+        let queue_size = cfg
+            .inline_check
+            .as_ref()
+            .map(|inline| inline.queue_size)
+            .unwrap_or(1)
+            .max(1);
         let checker_db_type = checker_target.db_type.clone();
         let checker_url = checker_target.url.clone();
         let checker_auth = checker_target.connection_auth.clone();
@@ -942,7 +887,7 @@ impl TaskRunner {
         let checker_sample_rate = if standalone_snapshot_check {
             None
         } else {
-            cfg.sample_rate
+            cfg.sample_percent
         };
 
         let is_struct_task = matches!(
@@ -972,7 +917,7 @@ impl TaskRunner {
                         None,
                         filter,
                         router,
-                        cfg.output_revise_sql,
+                        cfg.output.output_revise_sql,
                         retry_interval_secs,
                         max_retries,
                         check_summary,
@@ -995,7 +940,7 @@ impl TaskRunner {
                         Some(conn_pool),
                         filter,
                         router,
-                        cfg.output_revise_sql,
+                        cfg.output.output_revise_sql,
                         retry_interval_secs,
                         max_retries,
                         check_summary,
@@ -1008,7 +953,9 @@ impl TaskRunner {
                     checker_db_type
                 ),
             };
-            return Ok(Some(CheckerHandle::Struct(checker)));
+            return Ok(Some(CheckerHandle::Direct(DirectCheckerHandle::structure(
+                checker,
+            ))));
         }
 
         let s3_output = if is_cdc_task {
@@ -1031,11 +978,13 @@ impl TaskRunner {
                     monitor.clone(),
                     self.config.pipeline.checkpoint_interval_secs,
                 ),
-                output_full_row: cfg.output_full_row,
-                output_revise_sql: cfg.output_revise_sql,
+                output_full_row: cfg.output.output_full_row,
+                output_revise_sql: cfg.output.output_revise_sql,
                 revise_match_full_row,
                 retry_interval_secs,
                 max_retries,
+                retry_buffer_max_rows: cfg.recheck_queue_size,
+                retry_buffer_max_bytes: cfg.recheck_queue_memory_mb.saturating_mul(1024 * 1024),
                 is_cdc: is_cdc_task,
                 sample_rate: checker_sample_rate,
                 summary: CheckSummaryLog::default(),
@@ -1044,7 +993,11 @@ impl TaskRunner {
                 cdc_check_log_max_file_size,
                 cdc_check_log_max_rows,
                 s3_output: s3_output.clone(),
-                cdc_check_log_interval_secs: cfg.cdc_check_log_interval_secs,
+                cdc_check_log_interval_secs: cfg
+                    .inline_check
+                    .as_ref()
+                    .map(|inline| inline.check_log_interval_secs)
+                    .unwrap_or(30),
                 state_store: state_store.clone(),
                 source_checker,
                 expected_resume_position: expected_resume_position.clone(),
@@ -1072,19 +1025,29 @@ impl TaskRunner {
                         conn_pool.clone(),
                     )
                     .await?;
-                let checker = DataCheckerHandle::spawn(
-                    MysqlChecker::new(conn_pool, meta_manager),
-                    checker_task_id.clone(),
-                    build_check_context(
-                        extractor_meta_manager,
-                        router,
-                        source_checker,
-                        cfg.revise_match_full_row,
-                    ),
-                    queue_size,
-                    "MysqlChecker",
+                let checker = MysqlChecker::new(conn_pool, meta_manager);
+                let ctx = build_check_context(
+                    extractor_meta_manager,
+                    router,
+                    source_checker,
+                    cfg.output.revise_match_full_row,
                 );
-                Ok(Some(CheckerHandle::Data(checker)))
+                if is_cdc_task {
+                    Ok(Some(CheckerHandle::Async(DataCheckerHandle::spawn(
+                        checker,
+                        checker_task_id.clone(),
+                        ctx,
+                        queue_size,
+                        "MysqlChecker",
+                    ))))
+                } else {
+                    Ok(Some(CheckerHandle::Direct(DirectCheckerHandle::data(
+                        checker,
+                        checker_task_id.clone(),
+                        ctx,
+                        "MysqlChecker",
+                    ))))
+                }
             }
             DbType::Pg => {
                 let router = RdbRouter::from_config(&self.config.router, &DbType::Pg)?;
@@ -1104,19 +1067,29 @@ impl TaskRunner {
                 let meta_manager =
                     dt_common::meta::pg::pg_meta_manager::PgMetaManager::new(conn_pool.clone())
                         .await?;
-                let checker = DataCheckerHandle::spawn(
-                    PgChecker::new(conn_pool, meta_manager),
-                    checker_task_id.clone(),
-                    build_check_context(
-                        extractor_meta_manager,
-                        router,
-                        source_checker,
-                        cfg.revise_match_full_row,
-                    ),
-                    queue_size,
-                    "PgChecker",
+                let checker = PgChecker::new(conn_pool, meta_manager);
+                let ctx = build_check_context(
+                    extractor_meta_manager,
+                    router,
+                    source_checker,
+                    cfg.output.revise_match_full_row,
                 );
-                Ok(Some(CheckerHandle::Data(checker)))
+                if is_cdc_task {
+                    Ok(Some(CheckerHandle::Async(DataCheckerHandle::spawn(
+                        checker,
+                        checker_task_id.clone(),
+                        ctx,
+                        queue_size,
+                        "PgChecker",
+                    ))))
+                } else {
+                    Ok(Some(CheckerHandle::Direct(DirectCheckerHandle::data(
+                        checker,
+                        checker_task_id.clone(),
+                        ctx,
+                        "PgChecker",
+                    ))))
+                }
             }
             DbType::Mongo => {
                 let router = RdbRouter::from_config(&self.config.router, &DbType::Mongo)?;
@@ -1131,16 +1104,28 @@ impl TaskRunner {
                     Some(max_connections),
                 )
                 .await?;
-                let checker = DataCheckerHandle::spawn(
-                    MongoChecker::new(mongo_client),
-                    checker_task_id.clone(),
-                    build_check_context(None, router, source_checker, false),
-                    queue_size,
-                    "MongoChecker",
-                );
-                Ok(Some(CheckerHandle::Data(checker)))
+                let checker = MongoChecker::new(mongo_client);
+                let ctx = build_check_context(None, router, source_checker, false);
+                if is_cdc_task {
+                    Ok(Some(CheckerHandle::Async(DataCheckerHandle::spawn(
+                        checker,
+                        checker_task_id.clone(),
+                        ctx,
+                        queue_size,
+                        "MongoChecker",
+                    ))))
+                } else {
+                    Ok(Some(CheckerHandle::Direct(DirectCheckerHandle::data(
+                        checker,
+                        checker_task_id.clone(),
+                        ctx,
+                        "MongoChecker",
+                    ))))
+                }
             }
-            _ => bail!("checker not supported for db_type: {}", checker_db_type),
+            _ => bail!(DtError::invalid_config(format!(
+                "checker is not supported for database type: {checker_db_type}"
+            ))),
         }
     }
 
@@ -1197,91 +1182,6 @@ impl TaskRunner {
         };
 
         Ok(Some(Arc::new(AsyncMutex::new(checker))))
-    }
-
-    async fn init_log4rs(&self) -> anyhow::Result<()> {
-        let log4rs_file = &self.config.runtime.log4rs_file;
-        if metadata(log4rs_file).await.is_err() {
-            return Ok(());
-        }
-
-        let mut config_str = String::new();
-        let mut file = File::open(log4rs_file).await?;
-        file.read_to_string(&mut config_str).await?;
-
-        match &self.config.sinker {
-            SinkerConfig::RedisStatistic {
-                statistic_log_dir, ..
-            } => {
-                if !statistic_log_dir.is_empty() {
-                    config_str =
-                        config_str.replace(STATISTIC_LOG_DIR_PLACEHOLDER, statistic_log_dir);
-                }
-            }
-
-            _ => {
-                if let Some(cfg) = self.config.checker.as_ref() {
-                    let check_log_dir = &cfg.check_log_dir;
-                    let check_log_file_size = &cfg.check_log_file_size;
-                    if !check_log_dir.is_empty() {
-                        config_str = config_str.replace(CHECK_LOG_DIR_PLACEHOLDER, check_log_dir);
-                    }
-                    config_str =
-                        config_str.replace(CHECK_LOG_FILE_SIZE_PLACEHOLDER, check_log_file_size);
-                }
-            }
-        }
-
-        config_str = config_str
-            .replace(CHECK_LOG_DIR_PLACEHOLDER, DEFAULT_CHECK_LOG_DIR_PLACEHOLDER)
-            .replace(
-                STATISTIC_LOG_DIR_PLACEHOLDER,
-                DEFAULT_STATISTIC_LOG_DIR_PLACEHOLDER,
-            )
-            .replace(CHECK_LOG_FILE_SIZE_PLACEHOLDER, DEFAULT_CHECK_LOG_FILE_SIZE)
-            .replace(LOG_DIR_PLACEHOLDER, &self.config.runtime.log_dir)
-            .replace(LOG_LEVEL_PLACEHOLDER, &self.config.runtime.log_level);
-
-        if self.config.runtime.check_result_stdout_only {
-            config_str = config_str
-                .replace(
-                    RUNTIME_STDOUT_APPENDER_PLACEHOLDER,
-                    "silent_stdout_appender",
-                )
-                .replace(
-                    CHECK_RESULT_STDOUT_APPENDER_PLACEHOLDER,
-                    "check_stdout_appender",
-                );
-        } else {
-            config_str = config_str
-                .replace(RUNTIME_STDOUT_APPENDER_PLACEHOLDER, "stdout")
-                .replace(
-                    CHECK_RESULT_STDOUT_APPENDER_PLACEHOLDER,
-                    "silent_stdout_appender",
-                );
-        }
-
-        let raw: RawConfig = serde_yaml::from_str(&config_str)?;
-        let mut deserializers = Deserializers::default();
-        deserializers.insert("size_limit", SizeLimitFilterDeserializer);
-        let (appenders, errors) = raw.appenders_lossy(&deserializers);
-        if !errors.is_empty() {
-            bail!("errors deserializing appenders: {:?}", errors);
-        }
-
-        let config = Config::builder()
-            .appenders(appenders)
-            .loggers(raw.loggers())
-            .build(raw.root())?;
-        let mut handle_guard = LOG_HANDLE.lock().unwrap();
-        if let Some(handle) = handle_guard.as_ref() {
-            // refresh log4rs config in one process
-            handle.set_config(config);
-        } else {
-            let handle = log4rs::init_config(config)?;
-            *handle_guard = Some(handle);
-        }
-        Ok(())
     }
 
     async fn create_task_tables(
@@ -1643,57 +1543,10 @@ impl TaskRunner {
 
 #[cfg(test)]
 mod tests {
-    use super::TaskRunner;
-    use dt_common::config::{
-        config_enums::{CheckMode, TaskKind, TaskType},
-        connection_auth_config::ConnectionAuthConfig,
-        extractor_config::ExtractorConfig,
-    };
-    use opendal::{services::Memory, Operator};
     use std::{fs, time::SystemTime};
 
-    #[test]
-    fn should_clear_task_type_none_by_default() {
-        assert!(TaskRunner::should_clear_check_logs_before_log4rs(None));
-    }
-
-    #[test]
-    fn should_clear_standalone_snapshot_check_logs() {
-        let task_type = TaskType::new(TaskKind::Snapshot, Some(CheckMode::Standalone));
-        assert!(TaskRunner::should_clear_check_logs_before_log4rs(Some(
-            task_type
-        )));
-    }
-
-    #[test]
-    fn check_log_replay_input_output_same_dir_is_detected() {
-        let extractor = ExtractorConfig::MysqlCheck {
-            url: String::new(),
-            connection_auth: ConnectionAuthConfig::NoAuth,
-            check_log_dir: "/tmp/ape-dts/check/".to_string(),
-            batch_size: 1,
-        };
-
-        assert!(TaskRunner::check_log_replay_reads_from_dir(
-            &extractor,
-            "/tmp/ape-dts/check"
-        ));
-        assert!(TaskRunner::check_log_replay_reads_from_dir(
-            &extractor,
-            "/tmp/ape-dts/./check"
-        ));
-        assert!(TaskRunner::same_check_log_dir(
-            "logs/check",
-            &std::env::current_dir()
-                .unwrap()
-                .join("logs/check")
-                .to_string_lossy()
-        ));
-        assert!(!TaskRunner::check_log_replay_reads_from_dir(
-            &extractor,
-            "/tmp/ape-dts/other"
-        ));
-    }
+    use super::TaskRunner;
+    use opendal::{services::Memory, Operator};
 
     #[tokio::test]
     async fn upload_local_check_logs_to_s3_deletes_empty_optional_logs() {

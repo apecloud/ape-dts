@@ -6,7 +6,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use anyhow::bail;
+use anyhow::{bail, Context};
 use async_trait::async_trait;
 use tokio::{sync::Mutex, time::Instant};
 
@@ -26,7 +26,7 @@ use dt_common::{
         config_enums::{DbType, ExtractType},
         config_token_parser::{ConfigTokenParser, TokenEscapePair},
     },
-    error::Error,
+    error::DtError,
     log_debug, log_error, log_info, log_position, log_warn,
     meta::{
         dt_data::DtData,
@@ -139,9 +139,9 @@ impl RedisPsyncExtractor {
         self.conn.send(&repl_cmd).await?;
         if let Value::Okay = self.conn.read().await? {
         } else {
-            bail! {Error::ExtractorError(
-                "replconf listening-port response is not Ok".into(),
-            )}
+            bail!(DtError::RedisResultError(
+                "REPLCONF listening-port response is not OK".to_string()
+            ))
         }
 
         let full_sync = self.repl_id.is_empty() && self.repl_offset == 0;
@@ -160,18 +160,31 @@ impl RedisPsyncExtractor {
         if let Value::Status(s) = value {
             log_info!("PSYNC command response status: {:?}", s);
             if full_sync {
-                let tokens: Vec<&str> = s.split_whitespace().collect();
-                self.repl_id = tokens[1].to_string();
-                self.repl_offset = tokens[2].parse::<u64>()?;
+                let mut tokens = s.split_whitespace();
+                let response_type = tokens.next();
+                let repl_id = tokens.next();
+                let repl_offset = tokens.next();
+                if response_type != Some("FULLRESYNC") || repl_id.is_none() || repl_offset.is_none()
+                {
+                    bail!(DtError::RedisResultError(format!(
+                        "invalid PSYNC full-resync response: {s}"
+                    )))
+                }
+                self.repl_id = repl_id.unwrap_or_default().to_string();
+                self.repl_offset = repl_offset.unwrap_or_default().parse::<u64>().context(
+                    DtError::RedisResultError(format!(
+                        "invalid replication offset in PSYNC response: {s}"
+                    )),
+                )?;
             } else if s != "CONTINUE" {
-                bail! {Error::ExtractorError(
-                    "PSYNC command response is NOT CONTINUE".into(),
-                )}
+                bail!(DtError::RedisResultError(
+                    "PSYNC command response is not CONTINUE".to_string()
+                ))
             }
         } else {
-            bail! {Error::ExtractorError(
-                "PSYNC command response is NOT status".into(),
-            )}
+            bail!(DtError::RedisResultError(
+                "PSYNC command response is not a status response".to_string()
+            ))
         };
         Ok(full_sync)
     }
@@ -190,10 +203,10 @@ impl RedisPsyncExtractor {
                 continue;
             }
             if buf[0] != b'$' {
-                bail! {Error::ExtractorError(format!(
+                bail!(DtError::RedisResultError(format!(
                     "invalid rdb format, expected '$', got byte: {}",
                     buf[0]
-                ))}
+                )))
             }
             break;
         }
@@ -415,10 +428,10 @@ impl RedisPsyncExtractor {
                 }
             }
             v => {
-                bail! {Error::RedisRdbError(format!(
+                bail!(DtError::RedisResultError(format!(
                     "received unexpected aof value: {:?}",
                     v
-                ))}
+                )))
             }
         }
         Ok(cmd)
@@ -577,7 +590,10 @@ impl RedisPsyncExtractor {
             let mut start_time = Instant::now();
             while !shut_down.load(Ordering::Acquire) {
                 if start_time.elapsed().as_secs() >= heartbeat_interval_secs {
-                    Self::heartbeat(&key, &mut conn).await.unwrap();
+                    if let Err(error) = Self::heartbeat(&key, &mut conn).await {
+                        log_error!("heartbeat failed: {error:#}");
+                        break;
+                    }
                     start_time = Instant::now();
                 }
                 TimeUtil::sleep_millis(1000 * heartbeat_interval_secs).await;
