@@ -229,7 +229,7 @@ mod tests {
         );
         let rendered = report.to_string();
         assert!(rendered.starts_with(
-            "ERROR REPORT\n  [MD001]: outer message; inner message\n  AFFECTED OBJECT: schema=ape_dts, table=resume_position\n  CAUSED BY:"
+            "ERROR REPORT\n  [MD001]: outer message; inner message\n  AFFECTED OBJECT: schema=ape_dts, table=resume_position\n\n  CAUSED BY:"
         ));
         assert!(rendered.contains("    0: starting task"));
         assert!(rendered.contains("    2: invalid digit found in string"));
@@ -350,7 +350,7 @@ mod tests {
         assert!(rendered.contains("row_data=private"));
         assert!(!rendered.contains("password=secret"));
         assert!(!rendered.contains("abc123"));
-        assert!(rendered.contains("  BACKTRACE:\n    0: internal frame\n    1: caller frame"));
+        assert!(rendered.contains("  BACKTRACE:\n       0: internal frame\n       1: caller frame"));
         assert!(!rendered.contains("MESSAGE"));
         assert!(!rendered.contains("HINT"));
         assert!(json.contains("internal worker context"));
@@ -417,7 +417,7 @@ mod tests {
         assert_eq!(report.details, ["same detail"]);
         let rendered = report.to_string();
         assert!(rendered.starts_with(
-            "ERROR REPORT\n  [CN002]: same message\n  CAUSED BY:\n    0: same detail"
+            "ERROR REPORT\n  [CN002]: same message\n\n  CAUSED BY:\n    0: same detail"
         ));
         assert!(!rendered.contains("MESSAGE"));
         assert!(!rendered.contains("HINT"));
@@ -460,7 +460,7 @@ mod tests {
         report.backtrace = None;
         assert_eq!(
             report.to_string(),
-            "ERROR REPORT\n  [IN999]: The destination rejected the row; Data violates a destination constraint\n  AFFECTED OBJECT: schema=sales, table=orders, constraint=orders_pkey; schema=archive, table=orders\n  CAUSED BY:\n    0: insert operation failed\n    1: object failure"
+            "ERROR REPORT\n  [IN999]: The destination rejected the row; Data violates a destination constraint\n  AFFECTED OBJECT: schema=sales, table=orders, constraint=orders_pkey; schema=archive, table=orders\n\n  CAUSED BY:\n    0: insert operation failed\n    1: object failure"
         );
     }
 }
