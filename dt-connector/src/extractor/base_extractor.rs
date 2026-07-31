@@ -11,7 +11,7 @@ use dt_common::{
         config_enums::DbType,
         config_token_parser::{ConfigTokenParser, TokenEscapePair},
     },
-    error::Error,
+    error::DtError,
     log_debug, log_error, log_info,
     meta::{
         dcl_meta::{dcl_data::DclData, dcl_parser::DclParser},
@@ -242,7 +242,9 @@ impl BaseExtractor {
         if let Err(err) = parse_result {
             let error = format!("failed to parse ddl, will try ignore it, please execute the ddl manually in target, sql: {}, error: {}", query, err);
             log_error!("{}", error);
-            bail! {Error::Unexpected(error)}
+            bail! {DtError::StatementFailed(error)
+
+            }
         }
 
         // case 1, execute: use db_1; create table tb_1(id int);
@@ -274,7 +276,9 @@ impl BaseExtractor {
                 "failed to parse dcl, will try ignore it, sql: {}, error: {}",
                 query, err
             );
-            bail! {Error::Unexpected(error)}
+            bail! {DtError::StatementFailed(error)
+
+            }
         }
 
         if let Some(dcl_data) = parse_result? {

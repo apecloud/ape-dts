@@ -33,7 +33,9 @@ use dt_common::meta::{
     struct_meta::struct_data::StructData,
 };
 use dt_common::{
-    log_error, log_info, log_summary, log_warn, monitor::task_monitor_handle::TaskMonitorHandle,
+    error::{DtError, DtErrorContextExt, Stage},
+    log_error, log_info, log_summary, log_warn,
+    monitor::task_monitor_handle::TaskMonitorHandle,
     utils::limit_queue::LimitedQueue,
 };
 
@@ -451,7 +453,11 @@ impl DataCheckerHandle {
             return Ok(());
         }
         let dropped = {
-            let mut queue = self.shared.batch_queue.lock().unwrap();
+            let mut queue = self
+                .shared
+                .batch_queue
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             queue.push_with_eviction(data)
         };
         if let Some(dropped) = dropped {
@@ -693,7 +699,10 @@ impl RecheckKey {
                     .get(col)
                     .cloned()
                     .map(|value| (col.clone(), value))
-                    .ok_or_else(|| anyhow::anyhow!("missing id col value: {col}"))
+                    .ok_or_else(|| {
+                        DtError::StatementFailed(format!("missing ID column value: {col}"))
+                            .stage(Stage::Checker)
+                    })
             })
             .collect::<anyhow::Result<BTreeMap<_, _>>>()?;
         Ok(Self {
@@ -1018,7 +1027,7 @@ impl<C: Checker> DataChecker<C> {
                     .as_ref()
                     .expect("worker batch queue")
                     .lock()
-                    .unwrap();
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
                 queue.pop()
             };
             let Some(batch) = batch else {

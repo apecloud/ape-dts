@@ -1,6 +1,6 @@
 use std::str::FromStr;
 
-use crate::error::Error;
+use crate::error::DtError;
 
 #[derive(Default, PartialEq, Eq)]
 pub struct DtNaiveTime {
@@ -25,7 +25,7 @@ impl std::fmt::Display for DtNaiveTime {
 }
 
 impl FromStr for DtNaiveTime {
-    type Err = Error;
+    type Err = anyhow::Error;
     fn from_str(str: &str) -> Result<Self, Self::Err> {
         let is_negative = str.starts_with('-');
         let time_str = if is_negative { &str[1..] } else { str };
@@ -34,10 +34,8 @@ impl FromStr for DtNaiveTime {
             is_negative,
             ..Default::default()
         };
-        let err = Err(Error::Unexpected(format!(
-            "failed to parse str: [{}] to DtUtcTime",
-            str,
-        )));
+        let parse_error =
+            || DtError::StatementFailed(format!("failed to parse str: [{}] to DtUtcTime", str));
 
         let parts: Vec<&str> = time_str.split('.').collect();
         if !parts.is_empty() {
@@ -51,7 +49,7 @@ impl FromStr for DtNaiveTime {
                     time.minute = m;
                     time.second = s;
                 }
-                _ => return err,
+                _ => return Err(parse_error().into()),
             }
         }
 
@@ -59,7 +57,7 @@ impl FromStr for DtNaiveTime {
             let microsecond = format!("{:0<width$}", parts[1], width = 6);
             match microsecond.parse::<u32>() {
                 Ok(ms) => time.microsecond = ms,
-                _ => return err,
+                _ => return Err(parse_error().into()),
             }
         }
 

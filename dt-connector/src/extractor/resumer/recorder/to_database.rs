@@ -13,7 +13,7 @@ use crate::extractor::resumer::{
     ResumerDbPool, ResumerType,
 };
 use dt_common::{
-    config::resumer_config::ResumerConfig, log_info, meta::position::Position,
+    config::resumer_config::ResumerConfig, error::DtError, log_info, meta::position::Position,
     utils::redis_util::RedisUtil,
 };
 
@@ -44,7 +44,9 @@ impl DatabaseRecorder {
                 }
             }
             _ => {
-                bail!("databaseRecorder only supports ResumerConfig::FromDB")
+                bail!(DtError::invalid_config(
+                    "database checkpoint recording requires resume_type=from_db",
+                ))
             }
         };
         recorder.initialization(is_init, task_id).await?;

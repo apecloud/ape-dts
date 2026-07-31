@@ -16,7 +16,7 @@
 | `[checker].retry_interval_secs`、`[checker].max_retries` | 使用 `recheck_interval_secs`、`recheck_count`。 |
 | `[checker].queue_size`、`[checker].cdc_check_log_interval_secs` | 使用 `[checker_cdc].queue_size`、`check_log_interval_secs`。 |
 | `[pipeline].max_rps` | 使用 `[extractor].max_rps` 和/或 `[sinker].max_rps`。 |
-| `[resumer].resume_from_log`、`resume_log_dir`、`resume_config_file` | 使用 `resume_type=from_log`、`log_dir`、`config_file`；旧配置返回 `ConfigError`。 |
+| `[resumer].resume_from_log`、`resume_log_dir`、`resume_config_file` | 使用 `resume_type=from_log`、`log_dir`、`config_file`；旧配置返回错误码 `CF002`。 |
 | `[pipeline].pipeline_type=http_server`、`http_host`、`http_port`、pipeline `with_field_defs` | 已删除，仅保留 `pipeline_type=basic`。Kafka `[sinker].with_field_defs` 不受影响。 |
 | `db_type=foxlake`、`extract_type=foxlake_s3` 及 Foxlake 专用字段 | 不再支持 Foxlake 任务。 |
 

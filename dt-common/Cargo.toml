@@ -28,16 +28,19 @@ bytes = { workspace = true }
 futures = { workspace = true }
 serde_yaml = { workspace = true }
 regex = { workspace = true }
+rtb-redact = { workspace = true }
 nom = { workspace = true }
 tokio = { workspace = true }
+tokio-postgres = { workspace = true }
 tokio-metrics = { workspace = true, optional = true }
 thiserror = { workspace = true }
 kafka = { workspace = true }
+rdkafka = { workspace = true }
 apache-avro = {workspace = true}
 log = { workspace = true }
 log4rs = { workspace = true }
 redis = { workspace = true }
-mlua = { workspace = true }
+reqwest = { workspace = true }
 anyhow = { workspace = true }
 url = { workspace = true }
 concurrent-queue = { workspace = true }

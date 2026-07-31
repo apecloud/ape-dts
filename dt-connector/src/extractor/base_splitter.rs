@@ -5,7 +5,6 @@ use dt_common::config::config_enums::DbType;
 use dt_common::meta::position::Position;
 use dt_common::meta::rdb_tb_meta::RdbTbMeta;
 use dt_common::{log_info, meta::col_value::ColValue};
-use thiserror::Error;
 
 use crate::extractor::snapshot_chunk_id_generator::SnapshotChunkIdGenerator;
 
@@ -23,15 +22,13 @@ const DISTRIBUTION_FACTOR_UPPER: f64 = 1000.0;
 const NO_NEXT_CHUNKS: u8 = 0b01;
 const NO_EVEN_CHUNKS: u8 = 0b10;
 
-#[derive(Error, Debug)]
-pub enum Error {
-    #[error("bad split column, min value:{0}, max value:{1}")]
-    BadSplitColumnError(String, String),
-    #[error("{0} out of distribution factor range [{1},{2}]")]
-    OutOfDistributionFactorRangeError(f64, f64, f64),
-}
-
 pub type ChunkRange = (ColValue, ColValue);
+
+pub enum EvenSplitOutcome {
+    Chunks(Vec<SnapshotChunk>),
+    NoSplit,
+    UseUnevenSplit,
+}
 
 #[derive(Debug, Clone)]
 pub struct SnapshotChunk {
@@ -73,7 +70,7 @@ impl BaseSplitter {
         batch_size: u64,
         row_cnt: u64,
         resume_value: &Option<ColValue>,
-    ) -> anyhow::Result<Vec<SnapshotChunk>> {
+    ) -> anyhow::Result<EvenSplitOutcome> {
         let (min_value, max_value) = range;
         let (min_value_i128, max_value_i128) = (
             min_value.convert_into_integer_128()?,
@@ -84,13 +81,13 @@ impl BaseSplitter {
         if distribution_factor < DISTRIBUTION_FACTOR_LOWER
             || distribution_factor > DISTRIBUTION_FACTOR_UPPER
         {
-            let err = Error::OutOfDistributionFactorRangeError(
+            log_info!(
+                "distribution factor {} is outside supported range [{},{}]; using uneven snapshot splits",
                 distribution_factor,
                 DISTRIBUTION_FACTOR_LOWER,
-                DISTRIBUTION_FACTOR_UPPER,
+                DISTRIBUTION_FACTOR_UPPER
             );
-            log_info!("{}", err.to_string());
-            return Err(err.into());
+            return Ok(EvenSplitOutcome::UseUnevenSplit);
         }
         let step_size = cmp::max((distribution_factor * batch_size as f64) as i128, 1i128);
         let mut chunks = Vec::new();
@@ -98,7 +95,7 @@ impl BaseSplitter {
             Some(ColValue::None) => {
                 // unexpected or all data have been extracted.
                 self.mark_no_next_chunks();
-                return Ok(chunks);
+                return Ok(EvenSplitOutcome::Chunks(chunks));
             }
             Some(current_col_value) => {
                 // from resume value
@@ -132,7 +129,7 @@ impl BaseSplitter {
             cur_value = t_value;
         }
         self.mark_no_next_chunks();
-        Ok(chunks)
+        Ok(EvenSplitOutcome::Chunks(chunks))
     }
 
     /// Returns the position of the highest contiguously-completed chunk.

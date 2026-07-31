@@ -1,4 +1,4 @@
-use dt_common::{config::task_config::TaskConfig, utils::time_util::TimeUtil};
+use dt_common::{config::task_config::TaskConfig, logger::TaskLogger, utils::time_util::TimeUtil};
 use dt_connector::data_marker::DataMarker;
 use dt_task::task_runner::TaskRunner;
 use std::{
@@ -102,15 +102,21 @@ impl BaseTestRunner {
     }
 
     pub async fn start_task(&self) -> anyhow::Result<()> {
-        TaskRunner::new(&self.task_config_file)?
-            .start_task(false)
-            .await
+        Self::start_task_with_config_file(&self.task_config_file).await
     }
 
     pub async fn spawn_task(&self) -> anyhow::Result<JoinHandle<()>> {
-        let task_runner = TaskRunner::new(&self.task_config_file)?;
+        let task_config = TaskConfig::new(&self.task_config_file)?;
+        TaskLogger::new(&task_config).init(false).await?;
+        let task_runner = TaskRunner::new(task_config)?;
         let task = tokio::spawn(async move { task_runner.start_task(false).await.unwrap() });
         Ok(task)
+    }
+
+    pub async fn start_task_with_config_file(task_config_file: &str) -> anyhow::Result<()> {
+        let task_config = TaskConfig::new(task_config_file)?;
+        TaskLogger::new(&task_config).init(false).await?;
+        TaskRunner::new(task_config)?.start_task(false).await
     }
 
     pub async fn abort_task(&self, task: &JoinHandle<()>) -> anyhow::Result<()> {

@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use dashmap::DashMap;
 use futures::TryStreamExt;
 use mongodb::bson::doc;
-use sqlx::{query, Error, Row};
+use sqlx::{query, Error as SqlxError, Row};
 
 use crate::extractor::resumer::{
     recovery::Recovery,
@@ -13,7 +13,13 @@ use crate::extractor::resumer::{
     ResumerDbPool, ResumerType,
 };
 use dt_common::{
-    config::resumer_config::ResumerConfig, log_info, log_warn, meta::position::Position,
+    config::resumer_config::ResumerConfig,
+    error::{
+        classify_sqlx_error, DtError, DtErrorContextExt, DtResultExt, EndpointRole, ErrorCode,
+        ErrorObject, Stage,
+    },
+    log_info, log_warn,
+    meta::position::Position,
     utils::redis_util::RedisUtil,
 };
 
@@ -48,10 +54,16 @@ impl DatabaseRecovery {
                 }
             }
             _ => {
-                bail!("databaseRecovery only supports ResumerConfig::FromDB")
+                bail!(DtError::invalid_config(
+                    "database checkpoint recovery requires resume_type=from_db",
+                ))
             }
         };
-        recovery.initialization().await?;
+        recovery
+            .initialization()
+            .await
+            .stage(Stage::Resumer)
+            .endpoint(EndpointRole::Metadata)?;
         Ok(recovery)
     }
 
@@ -113,37 +125,36 @@ impl DatabaseRecovery {
                         Ok(None) => {
                             break;
                         }
-                        Err(e) => {
-                            match &e {
-                                Error::RowNotFound => {
-                                    log::info!(
+                        Err(error) => match error {
+                            SqlxError::RowNotFound => {
+                                log::info!(
                                         "No resume position data found for task_id: {}, will start from beginning",
                                         self.task_id
                                     );
-                                    break;
-                                }
-                                Error::Database(db_err) => {
-                                    // MySQL error code 1146: Table doesn't exist, 1049: Unknown database
-                                    if db_err.code().as_deref() == Some("1146")
-                                        || db_err.code().as_deref() == Some("1049")
-                                    {
-                                        log::info!(
+                                break;
+                            }
+                            _ => {
+                                let is_missing_resume_store = classify_sqlx_error(&error)
+                                    .error_code()
+                                    .is_some_and(Self::is_missing_resume_store);
+                                let error = error
+                                    .code(ErrorCode::CheckpointReadFailed)
+                                    .message("failed to query resume position from database")
+                                    .object(ErrorObject {
+                                        schema: Some(self.schema.clone()),
+                                        table: Some(self.table.clone()),
+                                        ..Default::default()
+                                    });
+                                if is_missing_resume_store {
+                                    log::info!(
                                             "Resume table {}.{} does not exist, will start from beginning",
                                             self.schema, self.table
                                         );
-                                        break;
-                                    } else {
-                                        bail!(
-                                            "Failed to query resume position from database: {:?}",
-                                            e
-                                        );
-                                    }
+                                    break;
                                 }
-                                _ => {
-                                    bail!("Failed to query resume position from database: {:?}", e);
-                                }
+                                return Err(error);
                             }
-                        }
+                        },
                     }
                 }
             }
@@ -164,35 +175,36 @@ impl DatabaseRecovery {
                         Ok(None) => {
                             break;
                         }
-                        Err(e) => {
-                            match &e {
-                                Error::RowNotFound => {
-                                    log::info!(
+                        Err(error) => match error {
+                            SqlxError::RowNotFound => {
+                                log::info!(
                                         "No resume position data found for task_id: {}, will start from beginning",
                                         self.task_id
                                     );
-                                    break;
-                                }
-                                Error::Database(db_err) => {
-                                    // // PostgreSQL error code 42P01: undefined_table
-                                    if db_err.code().as_deref() == Some("42P01") {
-                                        log::info!(
+                                break;
+                            }
+                            _ => {
+                                let is_missing_resume_store = classify_sqlx_error(&error)
+                                    .error_code()
+                                    .is_some_and(Self::is_missing_resume_store);
+                                let error = error
+                                    .code(ErrorCode::CheckpointReadFailed)
+                                    .message("failed to query resume position from database")
+                                    .object(ErrorObject {
+                                        schema: Some(self.schema.clone()),
+                                        table: Some(self.table.clone()),
+                                        ..Default::default()
+                                    });
+                                if is_missing_resume_store {
+                                    log::info!(
                                             "Resume table {}.{} does not exist, will start from beginning",
                                             self.schema, self.table
                                         );
-                                        break;
-                                    } else {
-                                        bail!(
-                                            "Failed to query resume position from database: {:?}",
-                                            e
-                                        );
-                                    }
+                                    break;
                                 }
-                                _ => {
-                                    bail!("Failed to query resume position from database: {:?}", e);
-                                }
+                                return Err(error);
                             }
-                        }
+                        },
                     }
                 }
             }
@@ -260,6 +272,13 @@ impl DatabaseRecovery {
             }
         }
         Ok(())
+    }
+
+    fn is_missing_resume_store(code: ErrorCode) -> bool {
+        matches!(
+            code,
+            ErrorCode::ObjectNotFound | ErrorCode::DatabaseNotFound
+        )
     }
 
     fn cache_resumer_record(

@@ -154,7 +154,7 @@ impl SqlUtil {
             match db_type {
                 DbType::Mysql | DbType::Pg => {
                     let pattern = format!(r"^[a-zA-Z0-9_\?\*\-]{{1,{}}}$", max_token_len);
-                    Regex::new(&pattern).unwrap().is_match(token)
+                    Regex::new(&pattern).is_ok_and(|regex| regex.is_match(token))
                 }
                 // TODO
                 _ => true,

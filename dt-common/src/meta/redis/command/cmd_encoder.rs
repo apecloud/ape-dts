@@ -1,6 +1,4 @@
 use crate::meta::redis::redis_object::RedisCmd;
-use byteorder::WriteBytesExt;
-use std::io::Write;
 
 /// redis resp protocol data type
 pub const RESP_STATUS: u8 = b'+'; // +<string>\r\n
@@ -25,7 +23,7 @@ impl CmdEncoder {
     pub fn encode(cmd: &RedisCmd) -> Vec<u8> {
         let mut buf = Vec::new();
 
-        buf.write_u8(RESP_ARRAY).unwrap();
+        buf.push(RESP_ARRAY);
         // write array length
         Self::write_length(&mut buf, cmd.args.len());
 
@@ -36,21 +34,21 @@ impl CmdEncoder {
     }
 
     pub fn write_arg(buf: &mut Vec<u8>, arg: &[u8]) {
-        buf.write_u8(RESP_STRING).unwrap();
+        buf.push(RESP_STRING);
         // write arg length
         Self::write_length(buf, arg.len());
         // write arg data
-        buf.write_all(arg).unwrap();
+        buf.extend_from_slice(arg);
         // write crlf
         Self::write_crlf(buf);
     }
 
     fn write_length(buf: &mut Vec<u8>, len: usize) {
-        buf.write_all(len.to_string().as_bytes()).unwrap();
+        buf.extend_from_slice(len.to_string().as_bytes());
         Self::write_crlf(buf);
     }
 
     fn write_crlf(buf: &mut Vec<u8>) {
-        buf.write_all(b"\r\n").unwrap();
+        buf.extend_from_slice(b"\r\n");
     }
 }

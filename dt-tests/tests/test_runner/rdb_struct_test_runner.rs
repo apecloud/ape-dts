@@ -57,13 +57,13 @@ impl RdbStructTestRunner {
             if let Some(src_check_fetcher) = &src_check_fetcher {
                 let src_ddl_sql = src_check_fetcher
                     .fetch_table(&src_db_tbs[i].0, &src_db_tbs[i].1)
-                    .await;
+                    .await?;
                 println!("src_ddl_sql: {}\n", src_ddl_sql);
             }
 
             let dst_ddl_sql = dst_check_fetcher
                 .fetch_table(&dst_db_tbs[i].0, &dst_db_tbs[i].1)
-                .await;
+                .await?;
             let key = format!("{}.{}", &dst_db_tbs[i].0, &dst_db_tbs[i].1);
             let expect_ddl_sql = expect_ddl_sqls.get(&key).unwrap().to_owned();
 
@@ -92,11 +92,11 @@ impl RdbStructTestRunner {
             }
 
             if let Some(src_check_fetcher) = &src_check_fetcher {
-                let src_ddl_sql = src_check_fetcher.fetch_database(&src_db_tbs[i].0).await;
+                let src_ddl_sql = src_check_fetcher.fetch_database(&src_db_tbs[i].0).await?;
                 println!("src_ddl_sql: {}\n", src_ddl_sql);
             }
 
-            let dst_ddl_sql = dst_check_fetcher.fetch_database(&dst_db_tbs[i].0).await;
+            let dst_ddl_sql = dst_check_fetcher.fetch_database(&dst_db_tbs[i].0).await?;
             let key = dst_db_tbs[i].0.to_string();
             let expect_ddl_sql = expect_ddl_sqls.get(&key).unwrap().to_owned();
 
@@ -229,10 +229,10 @@ impl RdbStructTestRunner {
         for i in 0..src_db_tbs.len() {
             let src_ddl_sql = src_check_fetcher
                 .fetch_table(&src_db_tbs[i].0, &src_db_tbs[i].1)
-                .await;
+                .await?;
             let dst_ddl_sql = dst_check_fetcher
                 .fetch_table(&dst_db_tbs[i].0, &dst_db_tbs[i].1)
-                .await;
+                .await?;
 
             println!(
                 "comparing src table: {:?} with dst table: {:?}\n",

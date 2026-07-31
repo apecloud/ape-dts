@@ -1,3 +1,4 @@
+use anyhow::Context;
 use async_trait::async_trait;
 use tokio::{fs::metadata, fs::File, io::AsyncReadExt};
 
@@ -27,10 +28,10 @@ impl Extractor for RedisSnapshotFileExtractor {
     async fn extract(&mut self) -> anyhow::Result<()> {
         let file = File::open(&self.file_path)
             .await
-            .expect("rdb file not found");
+            .context("failed to read the configured Redis snapshot file")?;
         let metadata = metadata(&self.file_path)
             .await
-            .expect("rdb file with wrong meta");
+            .context("failed to read the configured Redis snapshot file")?;
         let mut file_reader = RdbFileReader { file };
         let mut stream_reader: Box<&mut (dyn StreamReader + Send)> = Box::new(&mut file_reader);
 

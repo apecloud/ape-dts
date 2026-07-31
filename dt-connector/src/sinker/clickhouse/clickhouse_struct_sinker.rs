@@ -3,7 +3,8 @@ use crate::{rdb_router::RdbRouter, Sinker};
 use anyhow::bail;
 use clickhouse::Client;
 use dt_common::{
-    config::config_enums::ConflictPolicyEnum,
+    config::config_enums::{ConflictPolicyEnum, DbType},
+    error::DtError,
     log_error, log_info,
     meta::{
         mysql::{mysql_col_type::MysqlColType, mysql_tb_meta::MysqlTbMeta},
@@ -117,7 +118,14 @@ impl ClickhouseStructSinker {
         let rdb_tb_meta = if let Some(tb_meta) = pg_tb_meta {
             &tb_meta.basic
         } else {
-            &mysql_tb_meta.as_ref().unwrap().basic
+            &mysql_tb_meta
+                .ok_or_else(|| {
+                    DtError::DatabaseMetadataNotFound(
+                        DbType::ClickHouse,
+                        "Ape-DTS could not determine the source table definition needed to build the ClickHouse table".to_string(),
+                    )
+                })?
+                .basic
         };
 
         let mut dst_cols = vec![];
@@ -164,7 +172,15 @@ impl ClickhouseStructSinker {
         let dst_col_type = if let Some(tb_meta) = mysql_tb_meta {
             Self::get_dst_col_type_from_mysql(col, tb_meta)
         } else {
-            Self::get_dst_col_type_from_pg(col, pg_tb_meta.unwrap())
+            Self::get_dst_col_type_from_pg(
+                col,
+                pg_tb_meta.ok_or_else(|| {
+                    DtError::DatabaseMetadataNotFound(
+                        DbType::ClickHouse,
+                        "Ape-DTS could not determine the source table definition needed to build the ClickHouse table".to_string(),
+                    )
+                })?,
+            )
         }?;
 
         // Nested type Array() cannot be inside Nullable type

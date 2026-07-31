@@ -46,7 +46,7 @@ impl RedisClusterConnection {
             slot_node_map,
             node_conn_map,
             default_conn: conn,
-            key_parser: KeyParser::new(),
+            key_parser: KeyParser::new()?,
         })
     }
 

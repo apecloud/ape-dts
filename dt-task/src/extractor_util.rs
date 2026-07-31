@@ -15,6 +15,7 @@ use dt_common::{
         sinker_config::SinkerConfig,
         task_config::TaskConfig,
     },
+    error::{DtError, DtResultExt, ErrorCode},
     meta::{
         avro::avro_converter::AvroConverter, dt_queue::DtQueue,
         mysql::mysql_meta_manager::MysqlMetaManager, pg::pg_meta_manager::PgMetaManager,
@@ -139,7 +140,7 @@ impl ExtractorUtil {
                 let conn_pool = match extractor_client {
                     ConnClient::MySQL(conn_pool) => conn_pool,
                     _ => {
-                        bail!("connection pool not found");
+                        bail!(DtError::MissingSourceClient);
                     }
                 };
                 let meta_manager = TaskUtil::create_mysql_meta_manager(
@@ -179,7 +180,7 @@ impl ExtractorUtil {
                 let conn_pool = match extractor_client {
                     ConnClient::MySQL(conn_pool) => conn_pool,
                     _ => {
-                        bail!("connection pool not found");
+                        bail!(DtError::MissingSourceClient);
                     }
                 };
                 let meta_manager = TaskUtil::create_mysql_meta_manager(
@@ -223,7 +224,7 @@ impl ExtractorUtil {
             } => {
                 let conn_pool = match extractor_client {
                     ConnClient::MySQL(conn_pool) => conn_pool,
-                    _ => bail!("connection pool not found"),
+                    _ => bail!(DtError::MissingSourceClient),
                 };
                 let meta_manager = TaskUtil::create_mysql_meta_manager(
                     &url,
@@ -271,7 +272,7 @@ impl ExtractorUtil {
                 let conn_pool = match extractor_client {
                     ConnClient::PostgreSQL(conn_pool) => conn_pool,
                     _ => {
-                        bail!("connection pool not found");
+                        bail!(DtError::MissingSourceClient);
                     }
                 };
                 let meta_manager = PgMetaManager::new(conn_pool.clone()).await?;
@@ -302,7 +303,7 @@ impl ExtractorUtil {
                 let conn_pool = match extractor_client {
                     ConnClient::PostgreSQL(conn_pool) => conn_pool,
                     _ => {
-                        bail!("connection pool not found");
+                        bail!(DtError::MissingSourceClient);
                     }
                 };
                 let meta_manager = PgMetaManager::new(conn_pool.clone()).await?;
@@ -335,7 +336,7 @@ impl ExtractorUtil {
             } => {
                 let conn_pool = match extractor_client {
                     ConnClient::PostgreSQL(conn_pool) => conn_pool,
-                    _ => bail!("connection pool not found"),
+                    _ => bail!(DtError::MissingSourceClient),
                 };
                 let meta_manager = PgMetaManager::new(conn_pool.clone()).await?;
                 extract_state.time_filter = TimeFilter::new(&start_time_utc, &end_time_utc)?;
@@ -370,7 +371,7 @@ impl ExtractorUtil {
             } => {
                 let mongo_client = match extractor_client {
                     ConnClient::MongoDB(mongo_client) => mongo_client,
-                    _ => bail!("connection pool not found"),
+                    _ => bail!(DtError::MissingSourceClient),
                 };
                 let extractor = MongoSnapshotExtractor {
                     db_tbs,
@@ -402,7 +403,7 @@ impl ExtractorUtil {
             } => {
                 let mongo_client = match extractor_client {
                     ConnClient::MongoDB(mongo_client) => mongo_client,
-                    _ => bail!("connection pool not found"),
+                    _ => bail!(DtError::MissingSourceClient),
                 };
                 let extractor = MongoCdcExtractor {
                     filter,
@@ -429,7 +430,7 @@ impl ExtractorUtil {
             } => {
                 let mongo_client = match extractor_client {
                     ConnClient::MongoDB(mongo_client) => mongo_client,
-                    _ => bail!("connection pool not found"),
+                    _ => bail!(DtError::MissingSourceClient),
                 };
                 let extractor = MongoCheckExtractor {
                     mongo_client,
@@ -446,7 +447,7 @@ impl ExtractorUtil {
             } => {
                 let mongo_client = match extractor_client {
                     ConnClient::MongoDB(mongo_client) => mongo_client,
-                    _ => bail!("connection pool not found"),
+                    _ => bail!(DtError::MissingSourceClient),
                 };
                 let db_batch_size_validated =
                     MongoStructExtractor::validate_db_batch_size(db_batch_size)?;
@@ -467,7 +468,7 @@ impl ExtractorUtil {
                 let conn_pool = match extractor_client {
                     ConnClient::MySQL(conn_pool) => conn_pool,
                     _ => {
-                        bail!("connection pool not found");
+                        bail!(DtError::MissingSourceClient);
                     }
                 };
                 let db_batch_size_validated =
@@ -492,7 +493,7 @@ impl ExtractorUtil {
                 let conn_pool = match extractor_client {
                     ConnClient::PostgreSQL(conn_pool) => conn_pool,
                     _ => {
-                        bail!("connection pool not found");
+                        bail!(DtError::MissingSourceClient);
                     }
                 };
                 let db_batch_size_validated =
@@ -718,7 +719,7 @@ impl ExtractorUtil {
                 ack_interval_secs,
             } => {
                 let meta_manager = TaskUtil::create_rdb_meta_manager(config).await?;
-                let avro_converter = AvroConverter::new(meta_manager, false);
+                let avro_converter = AvroConverter::new(meta_manager, false)?;
                 let extractor = KafkaExtractor {
                     url,
                     group,
@@ -783,7 +784,9 @@ impl ExtractorUtil {
             partition_col: String,
         }
         let config: Vec<PartitionColsType> =
-            serde_json::from_str(config_str.trim_start_matches(JSON_PREFIX))?;
+            serde_json::from_str(config_str.trim_start_matches(JSON_PREFIX))
+                .code(ErrorCode::InvalidConfig)
+                .context("config [extractor].partition_cols is invalid JSON")?;
         for i in config {
             results.insert((i.db, i.tb), i.partition_col);
         }

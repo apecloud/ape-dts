@@ -8,6 +8,8 @@ use anyhow::bail;
 use mongodb::bson::{raw::RawDocumentBuf, Bson, Document};
 use serde::{Deserialize, Serialize, Serializer};
 
+use crate::error::DtError;
+
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[allow(dead_code)]
 pub enum ColValue {
@@ -92,7 +94,9 @@ impl ColValue {
             Self::UnsignedLong(v) => Ok(*v as i128),
             Self::LongLong(v) => Ok(*v as i128),
             Self::UnsignedLongLong(v) => Ok(*v as i128),
-            _ => bail!("can not convert {:?} into 128-bit integer", self),
+            _ => bail!(DtError::InvariantViolated(format!(
+                "cannot convert {self:?} into a 128-bit integer"
+            ))),
         }
     }
 
@@ -121,7 +125,9 @@ impl ColValue {
                 *v as i128 + t,
                 i64::MAX as i128,
             ) as u64)),
-            _ => bail!("{} can not add 128-bit integer", self),
+            _ => bail!(DtError::InvariantViolated(format!(
+                "cannot add a 128-bit integer to {self}"
+            ))),
         }
     }
 
@@ -129,7 +135,9 @@ impl ColValue {
         match self {
             Self::Float(v) => Ok(*v as f64),
             Self::Double(v) => Ok(*v),
-            _ => bail!("can not convert {:?} into double", self),
+            _ => bail!(DtError::InvariantViolated(format!(
+                "cannot convert {self:?} into a double"
+            ))),
         }
     }
 

@@ -3,7 +3,7 @@ use std::{collections::HashMap, sync::Arc};
 use anyhow::{anyhow, bail};
 use async_trait::async_trait;
 use mongodb::{
-    bson::{doc, raw::RawDocumentBuf, Document},
+    bson::{doc, oid::ObjectId, raw::RawDocumentBuf, Document},
     options::FindOptions,
     Client,
 };
@@ -20,6 +20,7 @@ use crate::{
 };
 use dt_common::{
     config::config_enums::{DbType, RdbParallelType},
+    error::{DtError, DtErrorContextExt, Stage},
     log_error, log_info,
     meta::{
         col_value::ColValue,
@@ -50,10 +51,16 @@ pub struct MongoSnapshotExtractor {
 impl Extractor for MongoSnapshotExtractor {
     async fn extract(&mut self) -> anyhow::Result<()> {
         if self.parallel_size < 1 {
-            bail!("parallel_size must be greater than 0");
+            bail!(
+                DtError::InvalidConfig("parallel_size must be greater than 0".to_string(),)
+                    .stage(Stage::Bootstrap)
+            );
         }
         if matches!(self.parallel_type, RdbParallelType::Chunk) {
-            bail!("mongo snapshot extractor does not support parallel_type=chunk");
+            bail!(DtError::InvalidConfig(
+                "MongoDB snapshot extraction does not support parallel_type=chunk".to_string(),
+            )
+            .stage(Stage::Bootstrap));
         }
 
         let tables = self.collect_tables();
@@ -182,9 +189,8 @@ impl MongoSnapshotExtractor {
                 let after = Self::build_raw_after_cols(raw_doc, &key);
                 (key, after)
             } else {
-                let doc = cursor.deserialize_current().map_err(|e| {
+                let doc = cursor.deserialize_current().inspect_err(|e| {
                     log_error!("error deserializing {}.{} document: {}", db, tb, e);
-                    e
                 })?;
                 let key = MongoKey::from_doc(&doc).ok_or(anyhow!(
                     "skip {}.{} document without `_id`: {:?}",
@@ -274,10 +280,9 @@ impl MongoSnapshotExtractor {
     }
 
     fn parse_resume_key(value: &str) -> anyhow::Result<MongoKey> {
-        serde_json::from_str::<MongoKey>(value).or_else(|_| {
-            mongodb::bson::oid::ObjectId::parse_str(value)
-                .map(MongoKey::ObjectId)
-                .map_err(Into::into)
-        })
+        if let Ok(key) = serde_json::from_str::<MongoKey>(value) {
+            return Ok(key);
+        }
+        Ok(MongoKey::ObjectId(ObjectId::parse_str(value)?))
     }
 }

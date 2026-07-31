@@ -24,7 +24,7 @@ use dt_common::meta::struct_meta::{
 };
 use dt_common::{
     config::{config_enums::DbType, config_token_parser::ConfigTokenParser},
-    error::Error,
+    error::DtError,
     log_error, log_info, log_warn,
     rdb_filter::RdbFilter,
     utils::sql_util::SqlUtil,
@@ -197,7 +197,7 @@ impl PgStructFetcher {
             .cloned()
             .collect();
         if !filtered_schemas.is_empty() {
-            bail! {Error::StructError(format!(
+            bail! {DtError::DatabaseObjectNotFound(DbType::Pg, format!(
                 "schemas: {} not found",
                 filtered_schemas.join(",")
             ))}
@@ -542,7 +542,18 @@ impl PgStructFetcher {
         for ((table_schema, table_name), table) in results.iter_mut() {
             let column_types = self.get_column_types(table_schema, table_name).await?;
             for column in table.columns.iter_mut() {
-                column.column_type = column_types.get(&column.column_name).unwrap().to_owned();
+                column.column_type = column_types
+                    .get(&column.column_name)
+                    .ok_or_else(|| {
+                        DtError::DatabaseUnsupportedTableStructure(
+                            DbType::Pg,
+                            format!(
+                                "column type is missing for {table_schema}.{table_name}.{}",
+                                column.column_name
+                            ),
+                        )
+                    })?
+                    .to_owned();
             }
         }
 

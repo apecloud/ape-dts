@@ -1,3 +1,4 @@
+use anyhow::Context;
 use async_trait::async_trait;
 use sqlx::{Pool, Postgres};
 
@@ -34,6 +35,7 @@ impl Sinker for PgStructSinker {
             &self.base_sinker,
         )
         .await
+        .context("sink_struct")
     }
 
     async fn close(&mut self) -> anyhow::Result<()> {

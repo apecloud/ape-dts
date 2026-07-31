@@ -12,6 +12,7 @@ use tokio::{
 use crate::{lua_processor::LuaProcessor, Pipeline};
 use dt_common::{
     config::sinker_config::SinkerConfig,
+    error::{DtResultExt, Stage},
     log_error, log_finished, log_info, log_position, log_warn,
     meta::{
         dcl_meta::dcl_data::DclData,
@@ -74,7 +75,7 @@ impl Pipeline for BasePipeline {
                 .close_with_position(final_position.as_ref())
                 .await?;
         }
-        self.parallelizer.close().await
+        self.parallelizer.close().await.stage(Stage::Parallelizer)
     }
 
     async fn start(&mut self) -> anyhow::Result<()> {
@@ -138,7 +139,10 @@ impl Pipeline for BasePipeline {
                 Vec::new()
             } else {
                 last_sink_time = Instant::now();
-                self.parallelizer.drain(self.buffer.as_ref()).await?
+                self.parallelizer
+                    .drain(self.buffer.as_ref())
+                    .await
+                    .stage(Stage::Parallelizer)?
             };
 
             if let Some(data_marker) = &mut self.data_marker {
@@ -213,7 +217,11 @@ impl BasePipeline {
         let (data_count, last_received_position, commit_positions) =
             Self::fetch_raw(&all_data, &mut self.pending_snapshot_finished);
         if data_count > 0 {
-            let data_size = self.parallelizer.sink_raw(all_data, &self.sinkers).await?;
+            let data_size = self
+                .parallelizer
+                .sink_raw(all_data, &self.sinkers)
+                .await
+                .stage(Stage::Parallelizer)?;
             Ok((data_size, last_received_position, commit_positions))
         } else {
             Ok((
@@ -238,7 +246,11 @@ impl BasePipeline {
             return Ok((DataSize::default(), None, Vec::new()));
         }
 
-        let data_size = self.parallelizer.sink_struct(data, &self.sinkers).await?;
+        let data_size = self
+            .parallelizer
+            .sink_struct(data, &self.sinkers)
+            .await
+            .stage(Stage::Parallelizer)?;
 
         Ok((data_size, None, Vec::new()))
     }
@@ -263,7 +275,11 @@ impl BasePipeline {
             data = lua_processor.process(data)?;
         }
 
-        let data_size = self.parallelizer.sink_dml(data, &self.sinkers).await?;
+        let data_size = self
+            .parallelizer
+            .sink_dml(data, &self.sinkers)
+            .await
+            .stage(Stage::Parallelizer)?;
         Ok((data_size, last_received_position, commit_positions))
     }
 
@@ -278,7 +294,8 @@ impl BasePipeline {
             let data_size = self
                 .parallelizer
                 .sink_ddl(data.clone(), &self.sinkers)
-                .await?;
+                .await
+                .stage(Stage::Parallelizer)?;
             // only part of sinkers will execute sink_ddl, but all sinkers should refresh metadata
             for sinker in self.sinkers.iter_mut() {
                 sinker.lock().await.refresh_meta(data.clone()).await?;
@@ -312,7 +329,10 @@ impl BasePipeline {
             bytes: 0,
         };
         if data_size.count > 0 {
-            self.parallelizer.sink_dcl(data, &self.sinkers).await?;
+            self.parallelizer
+                .sink_dcl(data, &self.sinkers)
+                .await
+                .stage(Stage::Parallelizer)?;
         }
         Ok((data_size, last_received_position, commit_positions))
     }

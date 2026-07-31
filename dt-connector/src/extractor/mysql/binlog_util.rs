@@ -1,4 +1,9 @@
-use dt_common::{log_info, utils::sql_util::SqlUtil, utils::time_util::TimeUtil};
+use dt_common::{
+    error::{DtResultExt, ErrorCode},
+    log_info,
+    utils::sql_util::SqlUtil,
+    utils::time_util::TimeUtil,
+};
 use futures::TryStreamExt;
 use mysql_binlog_connector_rust::{binlog_client::BinlogClient, event::event_data::EventData};
 use sqlx::{MySql, Pool};
@@ -79,7 +84,7 @@ impl BinlogUtil {
         let sql = "SHOW BINARY LOGS";
 
         let mut rows = sqlx::raw_sql(sql).fetch(conn_pool);
-        while let Some(row) = rows.try_next().await.unwrap() {
+        while let Some(row) = rows.try_next().await.code(ErrorCode::MetadataReadFailed)? {
             let log_name = SqlUtil::try_get_mysql_string(&row, 0)?;
             binlogs.push(log_name)
         }

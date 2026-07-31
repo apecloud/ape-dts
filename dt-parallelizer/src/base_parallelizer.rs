@@ -1,11 +1,11 @@
 use std::{collections::VecDeque, future::Future, sync::Arc};
 
-use anyhow::bail;
 use async_mutex::Mutex;
 use concurrent_queue::PopError;
 use tokio::task::JoinSet;
 
 use dt_common::{
+    error::DtError,
     meta::{
         dcl_meta::dcl_data::DclData,
         ddl_meta::ddl_data::DdlData,
@@ -193,10 +193,12 @@ impl BaseParallelizer {
             return Ok(0);
         }
         if parallel_size < 1 {
-            bail!("parallel_size must be greater than 0");
+            return Err(DtError::invalid_config("parallelizer configuration is invalid").into());
         }
         if sinkers.is_empty() {
-            bail!("sinkers must not be empty");
+            return Err(
+                DtError::InvariantViolated("parallelizer invariant violated".to_string()).into(),
+            );
         }
 
         let mut pending = sub_data_items.into_iter();
@@ -269,7 +271,6 @@ mod tests {
     use std::sync::Arc;
 
     use async_mutex::Mutex;
-
     use dt_common::{meta::dt_queue::DtQueue, monitor::counter::Counter};
     use dt_connector::{sinker::dummy_sinker::DummySinker, Sinker};
 

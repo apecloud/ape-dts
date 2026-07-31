@@ -25,11 +25,11 @@ pub struct SslConfig {
 }
 
 impl SslConfig {
-    pub fn from(loader: &IniLoader, section: &str) -> Self {
-        SslConfig {
-            ssl_mode: loader.get_required(section, "ssl_mode"),
-            ssl_ca_path: loader.get_optional(section, "ssl_ca_path"),
-        }
+    pub fn from(loader: &IniLoader, section: &str) -> anyhow::Result<Self> {
+        Ok(SslConfig {
+            ssl_mode: loader.get_required(section, "ssl_mode")?,
+            ssl_ca_path: loader.get_optional(section, "ssl_ca_path")?,
+        })
     }
 
     pub fn apply_mysql(&self, mut options: MySqlConnectOptions) -> MySqlConnectOptions {

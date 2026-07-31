@@ -89,6 +89,8 @@ dt-main crate 提供了几个可选组件，可以通过 `Cargo [features]` 启�
 
 - 配置
   - [配置详解](./docs/zh/config.md)
+- 错误处理
+  - [错误码](./docs/zh/error_codes.md)
 - 库表结构任务
   - [结构迁移](./docs/zh/structure/migration.md)
   - [结构校验](./docs/zh/structure/check.md)

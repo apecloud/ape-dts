@@ -13,15 +13,14 @@ pub struct LogReader {
 }
 
 impl LogReader {
-    pub fn new(dir_path: &str) -> Self {
+    pub fn new(dir_path: &str) -> anyhow::Result<Self> {
         let files = Self::list_files(dir_path)
-            .with_context(|| format!("failed to list files in dir: [{}]", dir_path))
-            .unwrap();
-        Self {
+            .with_context(|| format!("failed to list files in dir: [{}]", dir_path))?;
+        Ok(Self {
             files,
             file_index: 0,
             lines: Option::None,
-        }
+        })
     }
 
     pub fn nextval(&mut self) -> anyhow::Result<Option<String>> {

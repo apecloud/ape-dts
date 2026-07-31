@@ -16,46 +16,46 @@ pub struct MockData<T: MockColType> {
 }
 
 impl<T: MockColType + DeserializeOwned> MockData<T> {
-    pub fn new(config_file: &str, db_context: MockDbContext) -> Option<Self> {
-        let loader = IniLoader::new(config_file);
+    pub fn new(config_file: &str, db_context: MockDbContext) -> anyhow::Result<Option<Self>> {
+        let loader = IniLoader::new(config_file)?;
         let key_prefix = T::config_key_prefix();
-        let col_types = if let Some(config_map) =
-            loader.ini.get_map().unwrap_or_default().get("mock")
-        {
-            // Sort entries by key to ensure deterministic iteration order.
-            // HashMap iteration is non-deterministic, which would cause
-            // the RNG to be consumed in different orders across runs,
-            // producing different INSERT values even with the same seed.
-            let mut sorted_entries: Vec<_> = config_map.iter().collect();
-            sorted_entries.sort_by_key(|(k, _)| *k);
-            let col_types = sorted_entries
-                .into_iter()
-                .filter(|(k, _v)| k.starts_with(key_prefix))
-                .map(|(_, v)| {
-                    serde_json::from_str::<Vec<T>>(v.clone().unwrap_or_default().as_str()).unwrap()
-                })
-                .filter(|v| !v.is_empty())
-                .collect::<Vec<Vec<T>>>();
-            if col_types.is_empty() {
-                return None;
-            }
-            col_types
-        } else {
-            return None;
-        };
-        let db_str = loader.get_with_default("mock", "db", "mock_db_1".to_string());
-        let insert_rows = loader.get_with_default("mock", "insert_rows_each_table", 30);
-        let seed = loader.get_with_default("mock", "seed", 777);
-        let mock_strategy = loader.get_with_default("mock", "strategy", "multi".to_string());
+        let col_types =
+            if let Some(config_map) = loader.ini.get_map().unwrap_or_default().get("mock") {
+                // Sort entries by key to ensure deterministic iteration order.
+                // HashMap iteration is non-deterministic, which would cause
+                // the RNG to be consumed in different orders across runs,
+                // producing different INSERT values even with the same seed.
+                let mut sorted_entries: Vec<_> = config_map.iter().collect();
+                sorted_entries.sort_by_key(|(k, _)| *k);
+                let col_types = sorted_entries
+                    .into_iter()
+                    .filter(|(k, _v)| k.starts_with(key_prefix))
+                    .map(|(_, v)| serde_json::from_str::<Vec<T>>(v.as_deref().unwrap_or_default()))
+                    .collect::<Result<Vec<Vec<T>>, _>>()?
+                    .into_iter()
+                    .filter(|v| !v.is_empty())
+                    .collect::<Vec<Vec<T>>>();
+                if col_types.is_empty() {
+                    return Ok(None);
+                }
+                col_types
+            } else {
+                return Ok(None);
+            };
+        let db_str = loader.get_with_default("mock", "db", "mock_db_1".to_string())?;
+        let insert_rows = loader.get_with_default("mock", "insert_rows_each_table", 30)?;
+        let seed = loader.get_with_default("mock", "seed", 777)?;
+        let mock_strategy = loader.get_with_default("mock", "strategy", "multi".to_string())?;
         let custom_type_ddl_stmts = T::custom_type_ddl_stmts(&col_types, &db_str, &db_context);
         let mut tb_suffix = 0usize;
         let mut mock_stmts = Vec::new();
         if mock_strategy == "single" {
-            let constraints_str = loader.get_with_default("mock", "constraints", "[]".to_string());
+            let constraints_str =
+                loader.get_with_default("mock", "constraints", "[]".to_string())?;
             let nullable_cols_str =
-                loader.get_with_default("mock", "nullable_cols", "[]".to_string());
-            let constraints: Vec<Constraint> = serde_json::from_str(&constraints_str).unwrap();
-            let nullable_cols: Vec<usize> = serde_json::from_str(&nullable_cols_str).unwrap();
+                loader.get_with_default("mock", "nullable_cols", "[]".to_string())?;
+            let constraints: Vec<Constraint> = serde_json::from_str(&constraints_str)?;
+            let nullable_cols: Vec<usize> = serde_json::from_str(&nullable_cols_str)?;
             let all_types = col_types
                 .iter()
                 .flat_map(|types| types.iter().cloned())
@@ -67,13 +67,13 @@ impl<T: MockColType + DeserializeOwned> MockData<T> {
                 mock_stmt = mock_stmt.with_index(constraint, &db_context);
             }
             mock_stmts.push(mock_stmt);
-            return Some(MockData {
+            return Ok(Some(MockData {
                 db_context,
                 mock_stmts,
                 custom_type_ddl_stmts,
                 insert_rows,
                 seed,
-            });
+            }));
         }
         // no index, all non-nullable
         mock_stmts.extend(
@@ -170,13 +170,13 @@ impl<T: MockColType + DeserializeOwned> MockData<T> {
                 .filter(|s| !s.indexs.is_empty())
                 .collect::<Vec<_>>()
         }));
-        Some(MockData {
+        Ok(Some(MockData {
             db_context,
             mock_stmts,
             custom_type_ddl_stmts,
             insert_rows,
             seed,
-        })
+        }))
     }
 
     pub fn mock_schema_stmts(&self) -> Vec<String> {
@@ -403,7 +403,9 @@ pg_types_custom=["int4",{"custom":{"kind":"enum","name":"mock_mood","labels":["s
         .unwrap();
         let config_file = config_file.to_string_lossy().to_string();
         let mock_data =
-            MockData::<PgType>::new(&config_file, MockDbContext::new(DbType::Pg, "17.0")).unwrap();
+            MockData::<PgType>::new(&config_file, MockDbContext::new(DbType::Pg, "17.0"))
+                .unwrap()
+                .unwrap();
 
         let src_prepare = mock_data.mock_src_prepare_stmts();
         let dst_struct_prepare = mock_data.mock_dst_prepare_stmts_for_struct_task();
@@ -447,6 +449,7 @@ mysql_types_c=["geometry"]
         let config_file = config_file.to_string_lossy().to_string();
         let mock_data =
             MockData::<MysqlType>::new(&config_file, MockDbContext::new(DbType::Mysql, "8.0.39"))
+                .unwrap()
                 .unwrap();
 
         assert_eq!(mock_data.mock_stmts.len(), 1);
@@ -488,6 +491,7 @@ mysql_types_c=["geometry"]
             let config_file = format!("{}/{}", env!("CARGO_MANIFEST_DIR"), relative_config);
             let mock_data =
                 MockData::<MysqlType>::new(&config_file, MockDbContext::new(DbType::Mysql, version))
+                    .unwrap()
                     .unwrap();
             let type_names = mock_data
                 .mock_stmts
@@ -548,7 +552,9 @@ mysql_types_c=["geometry"]
         ] {
             let config_file = format!("{}/{}", env!("CARGO_MANIFEST_DIR"), relative_config);
             let ctx = MockDbContext::new(DbType::Pg, version);
-            let mock_data = MockData::<PgType>::new(&config_file, ctx).unwrap();
+            let mock_data = MockData::<PgType>::new(&config_file, ctx)
+                .unwrap()
+                .unwrap();
             let custom_types_enabled = std::fs::read_to_string(&config_file)
                 .unwrap()
                 .lines()

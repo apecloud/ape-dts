@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use url::Url;
 use urlencoding::encode;
 
-use crate::config::ini_loader::IniLoader;
+use crate::{config::ini_loader::IniLoader, error::DtError};
 
 use super::ssl_config::SslConfig;
 
@@ -28,37 +28,39 @@ pub enum ConnectionAuthConfig {
 }
 
 impl ConnectionAuthConfig {
-    pub fn from(loader: &IniLoader, section: &str) -> Self {
+    pub fn from(loader: &IniLoader, section: &str) -> Result<Self> {
         let username = || loader.get_optional(section, BASIC_AUTH_USERNAME_KEY);
         let password = || {
             if loader.contains(section, BASIC_AUTH_PASSWORD_KEY) {
-                Some(loader.get_optional(section, BASIC_AUTH_PASSWORD_KEY))
+                loader
+                    .get_optional(section, BASIC_AUTH_PASSWORD_KEY)
+                    .map(Some)
             } else {
-                None
+                Ok(None)
             }
         };
 
         if loader.contains(section, SSL_MODE_KEY) {
             let username = if loader.contains(section, BASIC_AUTH_USERNAME_KEY) {
-                Some(username())
+                Some(username()?)
             } else {
                 None
             };
-            return ConnectionAuthConfig::BasicSsl {
+            return Ok(ConnectionAuthConfig::BasicSsl {
                 username,
-                password: password(),
-                ssl_config: SslConfig::from(loader, section),
-            };
+                password: password()?,
+                ssl_config: SslConfig::from(loader, section)?,
+            });
         }
 
         if loader.contains(section, BASIC_AUTH_USERNAME_KEY) {
-            return ConnectionAuthConfig::Basic {
-                username: username(),
-                password: password(),
-            };
+            return Ok(ConnectionAuthConfig::Basic {
+                username: username()?,
+                password: password()?,
+            });
         }
 
-        ConnectionAuthConfig::NoAuth
+        Ok(ConnectionAuthConfig::NoAuth)
     }
 
     pub fn ssl_config(&self) -> Option<&SslConfig> {
@@ -69,8 +71,9 @@ impl ConnectionAuthConfig {
     }
 
     pub fn merge_url_with_auth(original_url: &str, connection_auth: &Self) -> Result<String> {
-        let mut parsed_url = Url::parse(original_url)
-            .with_context(|| format!("failed to parse URL: {}", original_url))?;
+        let mut parsed_url = Url::parse(original_url).context(DtError::invalid_config(
+            "the configured database connection URL could not be parsed",
+        ))?;
 
         match connection_auth {
             ConnectionAuthConfig::Basic { username, password }
@@ -82,14 +85,23 @@ impl ConnectionAuthConfig {
                 if !username.is_empty() {
                     parsed_url
                         .set_username(encode(username).into_owned().as_str())
-                        .map_err(|_| anyhow::anyhow!("failed to set username in URL"))?;
+                        .map_err(|_| {
+                            DtError::InvalidConfig(
+                                "database connection URL does not support a username".to_string(),
+                            )
+                        })?;
                 }
 
                 if let Some(pwd) = password {
                     if !pwd.is_empty() {
                         parsed_url
                             .set_password(Some(encode(pwd).into_owned().as_str()))
-                            .map_err(|_| anyhow::anyhow!("failed to set password in URL"))?;
+                            .map_err(|_| {
+                                DtError::InvalidConfig(
+                                    "database connection URL does not support a password"
+                                        .to_string(),
+                                )
+                            })?;
                     }
                 }
             }

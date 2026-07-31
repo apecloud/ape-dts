@@ -11,7 +11,10 @@ metrics = ["dt-task/metrics"]
 tracing = ["dt-task/tracing"]
 
 [dependencies]
+anyhow = { workspace = true }
+dt-common = {path = "../dt-common", version = "0.1.0"}
 dt-task = {path = "../dt-task", version = "0.1.0"}
 dt-precheck = {path = "../dt-precheck", version = "0.1.0"}
 clap = { workspace = true }
+log = { workspace = true }
 tokio = { workspace = true }

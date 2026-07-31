@@ -61,11 +61,7 @@ impl EntryParser {
             }
 
             _ => {
-                log::error!(
-                    "unknown type byte: {}, key: {}",
-                    type_byte,
-                    String::from(key)
-                );
+                log::error!("unknown type byte: {}, key: {}", type_byte, key);
                 RedisObject::Unknown
             }
         };

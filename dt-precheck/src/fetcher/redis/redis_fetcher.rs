@@ -1,6 +1,8 @@
 use async_trait::async_trait;
 use dt_common::{
-    config::connection_auth_config::ConnectionAuthConfig, rdb_filter::RdbFilter,
+    config::{config_enums::DbType, connection_auth_config::ConnectionAuthConfig},
+    error::DtError,
+    rdb_filter::RdbFilter,
     utils::redis_util::RedisUtil,
 };
 
@@ -22,7 +24,12 @@ impl Fetcher for RedisFetcher {
     }
 
     async fn fetch_version(&mut self) -> anyhow::Result<String> {
-        let conn = self.conn.as_mut().unwrap();
+        let conn = self.conn.as_mut().ok_or_else(|| {
+            DtError::DatabaseInvariant(
+                DbType::Redis,
+                "the Redis precheck connection is not initialized".to_string(),
+            )
+        })?;
         let version = RedisUtil::get_redis_version(conn)?;
         Ok(version.to_string())
     }

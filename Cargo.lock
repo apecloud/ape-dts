@@ -1608,7 +1608,6 @@ dependencies = [
  "kafka",
  "log",
  "log4rs",
- "mlua",
  "mongodb",
  "mysql-binlog-connector-rust",
  "nom",
@@ -1616,8 +1615,11 @@ dependencies = [
  "openssl-sys",
  "project-root",
  "prometheus",
+ "rdkafka",
  "redis",
  "regex",
+ "reqwest 0.11.22",
+ "rtb-redact",
  "serde",
  "serde_json",
  "serde_yaml",
@@ -1626,6 +1628,7 @@ dependencies = [
  "thiserror 1.0.69",
  "tokio",
  "tokio-metrics",
+ "tokio-postgres",
  "tonic",
  "tonic-prost",
  "tracing-subscriber",
@@ -1673,7 +1676,6 @@ dependencies = [
  "serde_json",
  "sqlx",
  "strum",
- "thiserror 1.0.69",
  "tokio",
  "tokio-postgres",
  "url",
@@ -1684,9 +1686,12 @@ dependencies = [
 name = "dt-main"
 version = "2.0.26"
 dependencies = [
+ "anyhow",
  "clap",
+ "dt-common",
  "dt-precheck",
  "dt-task",
+ "log",
  "tokio",
 ]
 
@@ -1768,7 +1773,6 @@ dependencies = [
  "futures",
  "kafka",
  "log",
- "log4rs",
  "mongodb",
  "opendal",
  "project-root",
@@ -1779,7 +1783,6 @@ dependencies = [
  "reqwest 0.11.22",
  "serde",
  "serde_json",
- "serde_yaml",
  "serial_test",
  "sqlx",
  "strum",
@@ -3912,7 +3915,40 @@ version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3dfb61232e34fcb633f43d12c58f83c1df82962dcdfa565a4e866ffc17dafe12"
 dependencies = [
- "phf_shared",
+ "phf_shared 0.8.0",
+]
+
+[[package]]
+name = "phf"
+version = "0.11.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1fd6780a80ae0c52cc120a26a1a42c1ae51b247a253e4e06113d23d2c2edd078"
+dependencies = [
+ "phf_macros",
+ "phf_shared 0.11.3",
+]
+
+[[package]]
+name = "phf_generator"
+version = "0.11.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3c80231409c20246a13fddb31776fb942c38553c51e871f8cbd687a4cfb5843d"
+dependencies = [
+ "phf_shared 0.11.3",
+ "rand 0.8.6",
+]
+
+[[package]]
+name = "phf_macros"
+version = "0.11.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f84ac04429c13a7ff43785d75ad27569f2951ce0ffd30a3321230db2fc727216"
+dependencies = [
+ "phf_generator",
+ "phf_shared 0.11.3",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.117",
 ]
 
 [[package]]
@@ -3921,7 +3957,16 @@ version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c00cf8b9eafe68dde5e9eaa2cef8ee84a9336a47d566ec55ca16589633b65af7"
 dependencies = [
- "siphasher",
+ "siphasher 0.3.11",
+]
+
+[[package]]
+name = "phf_shared"
+version = "0.11.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "67eabc2ef2a60eb7faa00097bd1ffdb5bd28e62bf39990626a582201b7a754e5"
+dependencies = [
+ "siphasher 1.0.3",
 ]
 
 [[package]]
@@ -4724,6 +4769,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "rtb-redact"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ede1ac127c19286dcf62d624ed8a967bcf8942247f3b03bc6118c55057e0d583"
+dependencies = [
+ "once_cell",
+ "phf 0.11.3",
+ "regex",
+]
+
+[[package]]
 name = "rust-ini"
 version = "0.21.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5169,6 +5225,12 @@ name = "siphasher"
 version = "0.3.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "38b58827f4464d87d377d175e90bf58eb00fd8716ff0a62f80356b5e61555d0d"
+
+[[package]]
+name = "siphasher"
+version = "1.0.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8ee5873ec9cce0195efcb7a4e9507a04cd49aec9c83d0389df45b1ef7ba2e649"
 
 [[package]]
 name = "slab"
@@ -5829,7 +5891,7 @@ dependencies = [
  "log",
  "parking_lot 0.11.2",
  "percent-encoding",
- "phf",
+ "phf 0.8.0",
  "pin-project-lite",
  "postgres-protocol",
  "postgres-types",

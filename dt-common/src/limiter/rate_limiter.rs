@@ -1,13 +1,16 @@
+use std::num::NonZeroU32;
+
 use async_trait::async_trait;
-use governor;
+use governor::{DefaultDirectRateLimiter, Quota};
 
 use crate::{
+    error::DtError,
     limiter::base_limiter::{Limiter, UnitType},
     log_error, log_warn,
 };
 
 pub struct RateLimiter {
-    limiter: governor::DefaultDirectRateLimiter,
+    limiter: DefaultDirectRateLimiter,
     capacity: u32,
     unit_type: UnitType,
 }
@@ -20,11 +23,12 @@ impl RateLimiter {
                 "Rate limiter is set to 0, which means no limit. Using max u32 value as the rate."
             );
         }
-        let quota = governor::Quota::per_second(std::num::NonZeroU32::new(rate).unwrap());
+        let rate = NonZeroU32::new(rate).unwrap_or(NonZeroU32::MAX);
+        let quota = Quota::per_second(rate);
         let limiter = governor::RateLimiter::direct(quota);
         Self {
             limiter,
-            capacity: rate,
+            capacity: rate.get(),
             unit_type,
         }
     }
@@ -33,7 +37,7 @@ impl RateLimiter {
 #[async_trait]
 impl Limiter for RateLimiter {
     async fn acquire(&self, n: u32) -> anyhow::Result<()> {
-        let num = if let Some(num) = std::num::NonZeroU32::new(n) {
+        let num = if let Some(num) = NonZeroU32::new(n) {
             num
         } else {
             log_warn!("Trying to acquire 0 from rate limiter, which means no acquire. Ignoring.");
@@ -47,7 +51,7 @@ impl Limiter for RateLimiter {
                     n, self.capacity, e
                 );
                 log_error!("{}", error_msg);
-                return Err(anyhow::anyhow!(error_msg));
+                return Err(DtError::InvalidConfig(error_msg).into());
             }
         }
         Ok(())

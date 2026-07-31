@@ -1,10 +1,11 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::{
-    error::Error,
+    config::config_enums::DbType,
+    error::{DtError, DtErrorContextExt, ErrorObject},
     meta::{ddl_meta::ddl_data::DdlData, rdb_meta_manager::RDB_PRIMARY_KEY_FLAG},
 };
-use anyhow::{bail, Context};
+use anyhow::bail;
 use futures::TryStreamExt;
 use sqlx::{Pool, Postgres, Row};
 
@@ -41,12 +42,20 @@ impl PgMetaManager {
     }
 
     pub fn get_col_type_by_oid(&mut self, oid: i32) -> anyhow::Result<PgColType> {
-        Ok(self
+        self
             .type_registry
             .oid_to_type
             .get(&oid)
-            .with_context(|| format!("no type found for oid: [{}]", oid))?
-            .clone())
+            .cloned()
+            .ok_or_else(|| {
+                DtError::DatabaseUnsupportedTableStructure(DbType::Pg, format!(
+                    "PostgreSQL type ID {oid} is not available in the source type catalog"
+                ))
+                    .message("A PostgreSQL column type used by the source is not supported")
+                    .hint(
+                        "Check the reported source column type and exclude or convert unsupported columns before retrying.",
+                    )
+            })
     }
 
     pub fn update_tb_meta_by_oid(&mut self, oid: i32, tb_meta: PgTbMeta) -> anyhow::Result<()> {
@@ -57,11 +66,19 @@ impl PgMetaManager {
     }
 
     pub fn get_tb_meta_by_oid(&mut self, oid: i32) -> anyhow::Result<PgTbMeta> {
-        Ok(self
+        self
             .oid_to_tb_meta
             .get(&oid)
-            .with_context(|| format!("no tb_meta found for oid: [{}]", oid))?
-            .clone())
+            .cloned()
+            .ok_or_else(|| {
+                DtError::DatabaseStatementFailed(DbType::Pg, format!(
+                    "a change event for source relation ID {oid} arrived before Ape-DTS received its table definition"
+                ))
+                    .message("A PostgreSQL change event could not be decoded")
+                    .hint(
+                        "Restart from an earlier LSN so Ape-DTS can reload the relation definition. If it repeats, check the publication and PostgreSQL replication logs.",
+                    )
+            })
     }
 
     pub async fn get_tb_meta_by_row_data<'a>(
@@ -116,7 +133,20 @@ impl PgMetaManager {
             self.oid_to_tb_meta.insert(oid, tb_meta.clone());
             self.name_to_tb_meta.insert(full_name.clone(), tb_meta);
         }
-        Ok(self.name_to_tb_meta.get(&full_name).unwrap())
+        self.name_to_tb_meta.get(&full_name).ok_or_else(|| {
+            DtError::DatabaseObjectNotFound(DbType::Pg, format!(
+                "Ape-DTS could not find the previously loaded definition for source table {full_name}"
+            ))
+                .message("The source table definition could not be loaded")
+                .hint(
+                    "Verify that the source table still exists and is readable, then restart the task.",
+                )
+                .object(ErrorObject {
+                    schema: Some(schema.to_string()),
+                    table: Some(tb.to_string()),
+                    ..Default::default()
+                })
+        })
     }
 
     pub fn invalidate_cache_for_table(&mut self, schema: &str, tb: &str) {
@@ -199,8 +229,21 @@ impl PgMetaManager {
             let mut col_type = type_registry
                 .oid_to_type
                 .get(&col_type_oid)
-                .unwrap()
-                .clone();
+                .cloned()
+                .ok_or_else(|| {
+                    DtError::DatabaseUnsupportedTableStructure(
+                        DbType::Pg,
+                        format!(
+                            "PostgreSQL type OID {col_type_oid} is missing from the type registry"
+                        ),
+                    )
+                    .object(ErrorObject {
+                        schema: Some(schema.to_string()),
+                        table: Some(tb.to_string()),
+                        column: Some(col.clone()),
+                        ..Default::default()
+                    })
+                })?;
             col_type.typmod = col_type_mod;
             col_origin_type_map.insert(col.clone(), col_type.get_alias());
             col_type_map.insert(col, col_type);
@@ -300,10 +343,12 @@ impl PgMetaManager {
             return Ok(oid);
         }
 
-        bail! {Error::MetadataError(format!(
-            "failed to get oid for: {} by query: {}",
-            tb, sql
-        ))}
+        bail! {DtError::DatabaseObjectNotFound(DbType::Pg, format!("failed to get oid for: {} by query: {}", tb, sql))
+        .object(ErrorObject {
+            schema: Some(schema.to_string()),
+            table: Some(tb.to_string()),
+            ..Default::default()
+        })}
     }
 
     #[allow(dead_code)]

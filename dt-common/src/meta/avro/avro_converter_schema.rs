@@ -1,4 +1,7 @@
+use anyhow::Context;
 use apache_avro::Schema;
+
+use crate::error::DtError;
 
 pub struct AvroConverterSchema {}
 
@@ -126,8 +129,10 @@ const SCHEMA_STR: &str = r#"
 }"#;
 
 impl AvroConverterSchema {
-    pub fn get_avro_schema() -> Schema {
-        Schema::parse_str(SCHEMA_STR).unwrap()
+    pub fn get_avro_schema() -> anyhow::Result<Schema> {
+        Schema::parse_str(SCHEMA_STR).context(DtError::InvariantViolated(
+            "the embedded Avro converter schema is invalid".to_string(),
+        ))
     }
 }
 

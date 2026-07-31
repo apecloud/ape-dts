@@ -16,7 +16,7 @@ Current reference: [Config details](/docs/en/config.md).
 | `[checker].retry_interval_secs`, `[checker].max_retries` | Use `recheck_interval_secs`, `recheck_count`. |
 | `[checker].queue_size`, `[checker].cdc_check_log_interval_secs` | Use `[checker_cdc].queue_size`, `check_log_interval_secs`. |
 | `[pipeline].max_rps` | Use `[extractor].max_rps` and/or `[sinker].max_rps`. |
-| `[resumer].resume_from_log`, `resume_log_dir`, `resume_config_file` | Use `resume_type=from_log`, `log_dir`, `config_file`. Old keys return `ConfigError`. |
+| `[resumer].resume_from_log`, `resume_log_dir`, `resume_config_file` | Use `resume_type=from_log`, `log_dir`, `config_file`. Old keys return error code `CF002`. |
 | `[pipeline].pipeline_type=http_server`, `http_host`, `http_port`, pipeline `with_field_defs` | Removed. Only `pipeline_type=basic` remains. Kafka `[sinker].with_field_defs` is unchanged. |
 | `db_type=foxlake`, `extract_type=foxlake_s3`, and Foxlake-only fields | Foxlake tasks are no longer supported. |
 

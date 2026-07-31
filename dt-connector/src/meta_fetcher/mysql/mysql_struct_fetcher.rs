@@ -9,7 +9,7 @@ use sqlx::{mysql::MySqlRow, MySql, Pool, Row};
 
 use dt_common::{
     config::config_enums::DbType,
-    error::Error,
+    error::{DtError, DtErrorContextExt, ErrorCode},
     meta::{
         mysql::{mysql_col_type::MysqlColType, mysql_meta_manager::MysqlMetaManager},
         struct_meta::{
@@ -124,7 +124,7 @@ impl MysqlStructFetcher {
             .cloned()
             .collect();
         if !filtered_dbs.is_empty() {
-            bail! {Error::StructError(format!(
+            bail! {DtError::DatabaseNotFound(DbType::Mysql, format!(
                 "dbs: {} not found",
                 filtered_dbs.join(",")
             ))}
@@ -595,13 +595,13 @@ impl MysqlStructFetcher {
         let sql = format!("select '{}' as result", text);
         match sqlx::query(&sql).fetch_all(&self.conn_pool).await {
             Ok(rows) => {
-                if !rows.is_empty() {
-                    let result: String = rows.first().unwrap().get("result");
+                if let Some(row) = rows.first() {
+                    let result: String = row.get("result");
                     return Ok(result);
                 }
             }
             Err(error) => {
-                bail! {Error::SqlxError(error)}
+                bail! {error.code(ErrorCode::StatementFailed)}
             }
         }
         Ok(text)

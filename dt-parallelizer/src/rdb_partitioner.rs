@@ -1,5 +1,5 @@
-use dt_common::log_debug;
 use dt_common::meta::{rdb_meta_manager::RdbMetaManager, row_data::RowData, row_type::RowType};
+use dt_common::{error::DtError, log_debug};
 
 pub struct RdbPartitioner {
     pub meta_manager: RdbMetaManager,
@@ -110,7 +110,7 @@ impl RdbPartitioner {
         &mut self,
         _data: Vec<RowData>,
     ) -> anyhow::Result<Vec<Vec<RowData>>> {
-        todo!()
+        Err(DtError::InvariantViolated("parallelizer invariant violated".to_string()).into())
     }
 
     pub async fn close(&mut self) -> anyhow::Result<()> {

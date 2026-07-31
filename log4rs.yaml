@@ -30,6 +30,23 @@ appenders:
         count: 1
         pattern: "LOG_DIR_PLACEHOLDER/default{}.log"
 
+  error_report_appender:
+    kind: rolling_file
+    append: true
+    path: "LOG_DIR_PLACEHOLDER/error_report.log"
+    encoder:
+      pattern: "{d(%Y-%m-%d %H:%M:%S.%6f)(utc)} | {m}{n}"
+    policy:
+      kind: compound
+      trigger:
+        kind: size
+        limit: 100mb
+      roller:
+        kind: fixed_window
+        base: 1
+        count: 1
+        pattern: "LOG_DIR_PLACEHOLDER/error_report{}.log"
+
   commit_appender:
     kind: rolling_file
     append: true
@@ -218,6 +235,12 @@ loggers:
     level: LOG_LEVEL_PLACEHOLDER
     appenders:
       - default_appender
+
+  error_report_logger:
+    level: trace
+    appenders:
+      - error_report_appender
+    additive: false
 
   commit_logger:
     level: LOG_LEVEL_PLACEHOLDER

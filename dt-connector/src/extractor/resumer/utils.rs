@@ -16,6 +16,7 @@ use crate::extractor::resumer::{
 };
 use dt_common::{
     config::{config_enums::DbType, connection_auth_config::ConnectionAuthConfig},
+    error::DtError,
     log_info,
     meta::position::Position,
     meta::redis::cluster_node::ClusterNode,
@@ -45,12 +46,16 @@ impl ResumerUtil {
 
         let parts = full_table_name.split('.').collect::<Vec<&str>>();
         if parts.len() != 2 {
-            bail!("invalid full table name: {}", full_table_name)
+            bail!(DtError::invalid_config(format!(
+                "invalid checkpoint table name: {full_table_name}"
+            ),))
         }
         let schema = parts[0];
         let table = parts[1];
         if schema.is_empty() || table.is_empty() {
-            bail!("invalid full table name: {}", full_table_name)
+            bail!(DtError::invalid_config(format!(
+                "invalid checkpoint table name: {full_table_name}"
+            ),))
         }
         Ok((schema.to_string(), table.to_string()))
     }
@@ -158,23 +163,26 @@ impl ResumerUtil {
                 }
             }
             _ => {
-                bail!(
-                    "unsupported database type for DatabaseRecorder: {:?}",
-                    db_type
-                )
+                bail!(DtError::invalid_config(format!(
+                    "checkpoint storage does not support database type: {db_type:?}"
+                ),))
             }
         }
     }
 
     fn redis_node_url(base_url: &str, node: &ClusterNode) -> Result<String> {
         let mut url = Url::parse(base_url)
-            .with_context(|| format!("failed to parse Redis URL: {}", base_url))?;
-        url.set_host(Some(&node.host))
-            .map_err(|_| anyhow::anyhow!("invalid Redis cluster node host: {}", node.host))?;
-        url.set_port(Some(node.port.parse().with_context(|| {
-            format!("invalid Redis cluster node port: {}", node.port)
-        })?))
-        .map_err(|_| anyhow::anyhow!("invalid Redis cluster node port: {}", node.port))?;
+            .context(DtError::invalid_config("checkpoint Redis URL is invalid"))?;
+        url.set_host(Some(&node.host)).map_err(|_| {
+            DtError::invalid_config(format!("invalid Redis cluster node host: {}", node.host))
+        })?;
+        let port = node.port.parse().context(DtError::invalid_config(format!(
+            "invalid Redis cluster node port: {}",
+            node.port
+        )))?;
+        url.set_port(Some(port)).map_err(|_| {
+            DtError::invalid_config(format!("invalid Redis cluster node port: {}", node.port))
+        })?;
         Ok(url.to_string())
     }
 
