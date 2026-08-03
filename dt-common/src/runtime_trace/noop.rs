@@ -14,7 +14,7 @@ pub fn dump_global_summary() -> Option<String> {
 }
 
 #[inline(always)]
-pub fn snapshot_metrics() -> Option<RuntimeTraceMetricsSnapshot> {
+pub(crate) fn snapshot_global() -> Option<(String, RuntimeTraceMetricsSnapshot)> {
     None
 }
 

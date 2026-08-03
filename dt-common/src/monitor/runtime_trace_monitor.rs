@@ -23,7 +23,6 @@ use crate::{log_runtime_trace, runtime_trace};
 pub(super) struct RuntimeTraceMetrics {
     tasks_created: IntCounterVec,
     task_polls: IntCounterVec,
-    task_schedules: IntCounterVec,
     task_busy_seconds: CounterVec,
     task_attributed_waker_calls: IntCounterVec,
     wait_point_waker_calls: IntCounterVec,
@@ -35,31 +34,40 @@ impl RuntimeTraceMetrics {
     const MARKER_LABEL: &'static str = "marker";
     const WAIT_POINT_LABEL: &'static str = "wait_point";
 
-    pub(super) fn new(config: &MetricsConfig) -> Self {
-        let int_counter_vec = |name: &str, desc: &str, labels: &[&str]| {
+    pub(super) fn initialization(
+        config: &MetricsConfig,
+        registry: &Registry,
+    ) -> anyhow::Result<Self> {
+        for label in [Self::MARKER_LABEL, Self::WAIT_POINT_LABEL] {
+            if config.metrics_labels.contains_key(label) {
+                return Err(DtError::MetricsInitializationFailed(format!(
+                    "metrics label [{label}] is reserved by runtime trace"
+                ))
+                .into());
+            }
+        }
+
+        let int_counter_vec = |name: &str, desc: &str, labels: &[&str]| -> anyhow::Result<_> {
             IntCounterVec::new(
                 Opts::new(name, desc).const_labels(config.metrics_labels.to_owned()),
                 labels,
             )
-            .unwrap()
+            .context(DtError::MetricsInitializationFailed(format!(
+                "Failed to initialize metric [{name}]"
+            )))
         };
 
-        Self {
+        let metrics = Self {
             tasks_created: int_counter_vec(
                 "runtime_trace_tasks_created_total",
                 "traced tokio tasks created per marker",
                 &[Self::MARKER_LABEL],
-            ),
+            )?,
             task_polls: int_counter_vec(
                 "runtime_trace_task_polls_total",
                 "tokio task polls per marker",
                 &[Self::MARKER_LABEL],
-            ),
-            task_schedules: int_counter_vec(
-                "runtime_trace_task_schedules_total",
-                "tokio task schedules per marker",
-                &[Self::MARKER_LABEL],
-            ),
+            )?,
             task_busy_seconds: CounterVec::new(
                 Opts::new(
                     "runtime_trace_task_busy_seconds_total",
@@ -68,22 +76,26 @@ impl RuntimeTraceMetrics {
                 .const_labels(config.metrics_labels.to_owned()),
                 &[Self::MARKER_LABEL],
             )
-            .unwrap(),
+            .context(DtError::MetricsInitializationFailed(
+                "Failed to initialize metric [runtime_trace_task_busy_seconds_total]".to_owned(),
+            ))?,
             task_attributed_waker_calls: int_counter_vec(
                 "runtime_trace_task_attributed_waker_calls_total",
                 "attributed waker calls per marker",
                 &[Self::MARKER_LABEL],
-            ),
+            )?,
             wait_point_waker_calls: int_counter_vec(
                 "runtime_trace_wait_point_waker_calls_total",
-                "attributed waker calls per marker and wait point",
-                &[Self::MARKER_LABEL, Self::WAIT_POINT_LABEL],
-            ),
+                "attributed waker calls per wait point across all markers",
+                &[Self::WAIT_POINT_LABEL],
+            )?,
             previous_snapshot: Mutex::new(RuntimeTraceMetricsSnapshot::default()),
-        }
+        };
+        metrics.register(registry)?;
+        Ok(metrics)
     }
 
-    pub(super) fn register(&self, registry: &Registry) -> anyhow::Result<()> {
+    fn register(&self, registry: &Registry) -> anyhow::Result<()> {
         let register_metric = |name: &str, collector: Box<dyn Collector>| -> anyhow::Result<()> {
             registry
                 .register(collector)
@@ -100,10 +112,6 @@ impl RuntimeTraceMetrics {
         register_metric(
             "runtime_trace_task_polls_total",
             Box::new(self.task_polls.clone()),
-        )?;
-        register_metric(
-            "runtime_trace_task_schedules_total",
-            Box::new(self.task_schedules.clone()),
         )?;
         register_metric(
             "runtime_trace_task_busy_seconds_total",
@@ -139,11 +147,6 @@ impl RuntimeTraceMetrics {
                     .poll_count
                     .saturating_sub(previous_marker.map_or(0, |previous| previous.poll_count)),
             );
-            self.task_schedules.with_label_values(marker_labels).inc_by(
-                marker
-                    .scheduled_count
-                    .saturating_sub(previous_marker.map_or(0, |previous| previous.scheduled_count)),
-            );
             self.task_busy_seconds
                 .with_label_values(marker_labels)
                 .inc_by(
@@ -167,7 +170,7 @@ impl RuntimeTraceMetrics {
                     })
                     .map_or(0, |previous| previous.waker_calls);
                 self.wait_point_waker_calls
-                    .with_label_values(&[marker.marker.as_str(), wait_point.wait_point.as_str()])
+                    .with_label_values(&[wait_point.wait_point.as_str()])
                     .inc_by(wait_point.waker_calls.saturating_sub(previous_waker_calls));
             }
         }
@@ -204,17 +207,15 @@ impl Default for RuntimeTraceMonitor {
 #[async_trait]
 impl FlushableMonitor for RuntimeTraceMonitor {
     async fn flush(&self) {
-        let Some(summary) = runtime_trace::dump_global_summary() else {
+        let Some((summary, _snapshot)) = runtime_trace::snapshot_global() else {
             return;
         };
         log_runtime_trace!("{}", summary.trim_end());
 
         #[cfg(all(feature = "metrics", feature = "tracing"))]
-        if let Some(snapshot) = runtime_trace::snapshot_metrics() {
-            self.prometheus_metrics
-                .runtime_trace_metrics()
-                .update_snapshot(&snapshot);
-        }
+        self.prometheus_metrics
+            .runtime_trace_metrics()
+            .update_snapshot(&_snapshot);
     }
 }
 
@@ -230,7 +231,7 @@ mod tests {
     };
 
     #[test]
-    fn exports_runtime_trace_metrics_by_marker_and_wait_point() -> anyhow::Result<()> {
+    fn exports_runtime_trace_metrics_by_marker_and_global_wait_point() -> anyhow::Result<()> {
         let config = MetricsConfig {
             http_host: "127.0.0.1".to_owned(),
             http_port: 0,
@@ -238,37 +239,56 @@ mod tests {
             metrics_labels: HashMap::new(),
         };
         let registry = Registry::new();
-        let metrics = RuntimeTraceMetrics::new(&config);
-        metrics.register(&registry)?;
+        let metrics = RuntimeTraceMetrics::initialization(&config, &registry)?;
         let first_snapshot = RuntimeTraceMetricsSnapshot {
-            markers: vec![MarkerMetricsSnapshot {
-                marker: "task.extractor_worker".to_owned(),
-                tasks_created: 1,
-                poll_count: 1084,
-                scheduled_count: 1083,
-                busy_seconds: 0.125,
-                attributed_waker_calls: 7,
-                wait_points: vec![WaitPointMetricsSnapshot {
-                    wait_point: "dtqueue.not_empty.wait".to_owned(),
-                    waker_calls: 7,
-                }],
-            }],
+            markers: vec![
+                MarkerMetricsSnapshot {
+                    marker: "task.extractor_worker".to_owned(),
+                    tasks_created: 1,
+                    poll_count: 1084,
+                    busy_seconds: 0.125,
+                    attributed_waker_calls: 7,
+                    wait_points: vec![WaitPointMetricsSnapshot {
+                        wait_point: "dtqueue.not_empty.wait".to_owned(),
+                        waker_calls: 7,
+                    }],
+                },
+                MarkerMetricsSnapshot {
+                    marker: "task.sinker_worker".to_owned(),
+                    attributed_waker_calls: 3,
+                    wait_points: vec![WaitPointMetricsSnapshot {
+                        wait_point: "dtqueue.not_empty.wait".to_owned(),
+                        waker_calls: 3,
+                    }],
+                    ..Default::default()
+                },
+            ],
         };
         metrics.update_snapshot(&first_snapshot);
         metrics.update_snapshot(&first_snapshot);
         metrics.update_snapshot(&RuntimeTraceMetricsSnapshot {
-            markers: vec![MarkerMetricsSnapshot {
-                marker: "task.extractor_worker".to_owned(),
-                tasks_created: 2,
-                poll_count: 1090,
-                scheduled_count: 1089,
-                busy_seconds: 0.25,
-                attributed_waker_calls: 9,
-                wait_points: vec![WaitPointMetricsSnapshot {
-                    wait_point: "dtqueue.not_empty.wait".to_owned(),
-                    waker_calls: 9,
-                }],
-            }],
+            markers: vec![
+                MarkerMetricsSnapshot {
+                    marker: "task.extractor_worker".to_owned(),
+                    tasks_created: 2,
+                    poll_count: 1090,
+                    busy_seconds: 0.25,
+                    attributed_waker_calls: 9,
+                    wait_points: vec![WaitPointMetricsSnapshot {
+                        wait_point: "dtqueue.not_empty.wait".to_owned(),
+                        waker_calls: 9,
+                    }],
+                },
+                MarkerMetricsSnapshot {
+                    marker: "task.sinker_worker".to_owned(),
+                    attributed_waker_calls: 4,
+                    wait_points: vec![WaitPointMetricsSnapshot {
+                        wait_point: "dtqueue.not_empty.wait".to_owned(),
+                        waker_calls: 4,
+                    }],
+                    ..Default::default()
+                },
+            ],
         });
 
         let mut output = String::new();
@@ -280,8 +300,7 @@ mod tests {
             .contains("runtime_trace_tasks_created_total{marker=\"task.extractor_worker\"} 2"));
         assert!(output
             .contains("runtime_trace_task_polls_total{marker=\"task.extractor_worker\"} 1090"));
-        assert!(output
-            .contains("runtime_trace_task_schedules_total{marker=\"task.extractor_worker\"} 1089"));
+        assert!(!output.contains("runtime_trace_task_schedules_total"));
         assert!(output.contains(
             "runtime_trace_task_busy_seconds_total{marker=\"task.extractor_worker\"} 0.25"
         ));
@@ -289,8 +308,9 @@ mod tests {
             "runtime_trace_task_attributed_waker_calls_total{marker=\"task.extractor_worker\"} 9"
         ));
         assert!(output.contains(
-            "runtime_trace_wait_point_waker_calls_total{marker=\"task.extractor_worker\",wait_point=\"dtqueue.not_empty.wait\"} 9"
+            "runtime_trace_wait_point_waker_calls_total{wait_point=\"dtqueue.not_empty.wait\"} 13"
         ));
+        assert!(!output.contains("runtime_trace_wait_point_waker_calls_total{marker="));
         assert!(!output.contains("task_name="));
         assert!(!output.contains("task.extractor_worker@"));
         Ok(())

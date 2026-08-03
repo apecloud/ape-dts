@@ -1,3 +1,5 @@
+#[cfg(feature = "tracing")]
+use std::sync::OnceLock;
 #[cfg(feature = "metrics")]
 use std::{collections::BTreeMap, sync::Arc};
 
@@ -19,7 +21,7 @@ pub struct PrometheusMetrics {
     task_type: Option<TaskType>,
     config: MetricsConfig,
     #[cfg(feature = "tracing")]
-    runtime_trace_metrics: RuntimeTraceMetrics,
+    runtime_trace_metrics: OnceLock<RuntimeTraceMetrics>,
 }
 
 impl PrometheusMetrics {
@@ -29,14 +31,16 @@ impl PrometheusMetrics {
             metrics: DashMap::new(),
             task_type,
             #[cfg(feature = "tracing")]
-            runtime_trace_metrics: RuntimeTraceMetrics::new(&config),
+            runtime_trace_metrics: OnceLock::new(),
             config,
         }
     }
 
     #[cfg(feature = "tracing")]
     pub(super) fn runtime_trace_metrics(&self) -> &RuntimeTraceMetrics {
-        &self.runtime_trace_metrics
+        self.runtime_trace_metrics
+            .get()
+            .expect("runtime trace metrics should be initialized")
     }
 
     pub fn initialization(&self) -> anyhow::Result<&Self> {
@@ -62,7 +66,16 @@ impl PrometheusMetrics {
         };
 
         #[cfg(feature = "tracing")]
-        self.runtime_trace_metrics.register(&self.registry)?;
+        self.runtime_trace_metrics
+            .set(RuntimeTraceMetrics::initialization(
+                &self.config,
+                &self.registry,
+            )?)
+            .map_err(|_| {
+                DtError::MetricsInitializationFailed(
+                    "runtime trace metrics already initialized".to_owned(),
+                )
+            })?;
 
         register_handler(
             "extractor_rps_max",
@@ -410,5 +423,23 @@ mod tests {
         assert!(output.contains("sinker_workers_per_drain_max 8"));
         assert!(output.contains("sinker_workers_per_drain_avg 6"));
         Ok(())
+    }
+
+    #[cfg(feature = "tracing")]
+    #[test]
+    fn validates_runtime_trace_labels_during_initialization() {
+        for label in ["bad-label", "marker", "wait_point"] {
+            let prometheus = PrometheusMetrics::new(
+                None,
+                MetricsConfig {
+                    http_host: "127.0.0.1".to_owned(),
+                    http_port: 0,
+                    workers: 1,
+                    metrics_labels: HashMap::from([(label.to_owned(), "value".to_owned())]),
+                },
+            );
+
+            assert!(prometheus.initialization().is_err(), "label: {label}");
+        }
     }
 }

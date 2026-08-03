@@ -7,7 +7,7 @@ use std::{
     panic::Location,
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
-        Arc, OnceLock,
+        Arc, Mutex, OnceLock,
     },
     task::{Context, Wake, Waker},
 };
@@ -90,6 +90,7 @@ static TRACE_OUTPUT_FORMAT: AtomicU64 = AtomicU64::new(TraceOutputFormat::Plain 
 static INIT_TRACING: OnceLock<()> = OnceLock::new();
 static NEXT_TASK_ID: AtomicU64 = AtomicU64::new(1);
 static TASKS: OnceLock<DashMap<u64, Arc<TaskTrace>>> = OnceLock::new();
+static COMPLETED_MARKERS: OnceLock<Mutex<HashMap<TaskMarker, MarkerSnapshot>>> = OnceLock::new();
 
 tokio::task_local! {
     static TRACE_TASK: Arc<TaskTrace>;
@@ -100,6 +101,7 @@ struct TaskTrace {
     marker: TaskMarker,
     monitor: TaskMonitor,
     wait_point_waker_calls: DashMap<WaitPoint, AtomicU64>,
+    finished: AtomicBool,
 }
 
 struct TaskSnapshot {
@@ -110,8 +112,10 @@ struct TaskSnapshot {
     busy_ns: u64,
     // Raw attributed Waker calls are not equivalent to TaskMonitor scheduling cycles.
     wait_point_waker_calls: Vec<(WaitPoint, u64)>,
+    finished: bool,
 }
 
+#[derive(Clone)]
 struct MarkerSnapshot {
     marker: TaskMarker,
     task_count: u64,
@@ -131,6 +135,16 @@ struct AttributedWaker {
     task: Arc<TaskTrace>,
     wait_point: WaitPoint,
     inner: Waker,
+}
+
+struct TaskTraceGuard {
+    task: Arc<TaskTrace>,
+}
+
+impl Drop for TaskTraceGuard {
+    fn drop(&mut self) {
+        self.task.finished.store(true, Ordering::Release);
+    }
 }
 
 pub fn enable() {
@@ -170,18 +184,37 @@ pub fn set_output_format(format: TraceOutputFormat) {
     TRACE_OUTPUT_FORMAT.store(format as u64, Ordering::Release);
 }
 
-pub fn dump_global_summary() -> Option<String> {
+/// Captures log and metrics data from the same task snapshots.
+pub(crate) fn snapshot_global() -> Option<(String, RuntimeTraceMetricsSnapshot)> {
     if !is_enabled() {
         return None;
     }
 
+    let (task_snapshots, marker_snapshots) = collect_global_snapshots();
     let generated_at = Utc::now().to_rfc3339_opts(SecondsFormat::Micros, true);
-    if trace_output_format() == TraceOutputFormat::Json {
-        return Some(dump_json_summary(&generated_at));
-    }
+    let summary = match trace_output_format() {
+        TraceOutputFormat::Json => {
+            dump_json_summary(&generated_at, &task_snapshots, &marker_snapshots)
+        }
+        TraceOutputFormat::Plain => {
+            dump_plain_summary(&generated_at, &task_snapshots, &marker_snapshots)
+        }
+    };
+    let metrics = build_metrics_snapshot(&marker_snapshots);
+    Some((summary, metrics))
+}
 
+pub fn dump_global_summary() -> Option<String> {
+    snapshot_global().map(|(summary, _)| summary)
+}
+
+fn dump_plain_summary(
+    generated_at: &str,
+    task_snapshots: &[TaskSnapshot],
+    marker_snapshots: &[MarkerSnapshot],
+) -> String {
     let mut summary = String::new();
-    let wait_point_counts = collect_global_wait_point_counts();
+    let wait_point_counts = collect_global_wait_point_counts(marker_snapshots);
     let attributed_call_count = wait_point_total(&wait_point_counts);
 
     let _ = writeln!(
@@ -206,21 +239,16 @@ pub fn dump_global_summary() -> Option<String> {
     }
 
     match task_summary_mode() {
-        TaskSummaryMode::Task => dump_task_summary(&mut summary),
-        TaskSummaryMode::Marker => dump_marker_summary(&mut summary),
+        TaskSummaryMode::Task => dump_task_summary(&mut summary, task_snapshots),
+        TaskSummaryMode::Marker => dump_marker_summary(&mut summary, marker_snapshots),
     }
-    Some(summary)
+    summary
 }
 
-/// Returns cumulative marker and wait-point values for metric export.
-pub fn snapshot_metrics() -> Option<RuntimeTraceMetricsSnapshot> {
-    if !is_enabled() {
-        return None;
-    }
-
+fn build_metrics_snapshot(marker_snapshots: &[MarkerSnapshot]) -> RuntimeTraceMetricsSnapshot {
     let mut markers_by_name = HashMap::<&'static str, MarkerMetricsSnapshot>::new();
     let mut busy_ns_by_name = HashMap::<&'static str, u64>::new();
-    for marker in collect_marker_snapshots() {
+    for marker in marker_snapshots {
         let snapshot = markers_by_name
             .entry(marker.marker.name)
             .or_insert_with(|| MarkerMetricsSnapshot {
@@ -229,26 +257,24 @@ pub fn snapshot_metrics() -> Option<RuntimeTraceMetricsSnapshot> {
             });
         snapshot.tasks_created = snapshot.tasks_created.saturating_add(marker.task_count);
         snapshot.poll_count = snapshot.poll_count.saturating_add(marker.poll_count);
-        snapshot.scheduled_count = snapshot
-            .scheduled_count
-            .saturating_add(marker.scheduled_count);
         busy_ns_by_name
             .entry(marker.marker.name)
             .and_modify(|busy_ns| *busy_ns = busy_ns.saturating_add(marker.busy_ns))
             .or_insert(marker.busy_ns);
 
-        for (wait_point, count) in marker.wait_point_waker_calls {
-            snapshot.attributed_waker_calls = snapshot.attributed_waker_calls.saturating_add(count);
+        for (wait_point, count) in &marker.wait_point_waker_calls {
+            snapshot.attributed_waker_calls =
+                snapshot.attributed_waker_calls.saturating_add(*count);
             if let Some(existing) = snapshot
                 .wait_points
                 .iter_mut()
                 .find(|existing| existing.wait_point == wait_point.name)
             {
-                existing.waker_calls = existing.waker_calls.saturating_add(count);
+                existing.waker_calls = existing.waker_calls.saturating_add(*count);
             } else {
                 snapshot.wait_points.push(WaitPointMetricsSnapshot {
                     wait_point: wait_point.name.to_owned(),
-                    waker_calls: count,
+                    waker_calls: *count,
                 });
             }
         }
@@ -270,11 +296,10 @@ pub fn snapshot_metrics() -> Option<RuntimeTraceMetricsSnapshot> {
     markers.sort_by(|a, b| {
         b.poll_count
             .cmp(&a.poll_count)
-            .then_with(|| b.scheduled_count.cmp(&a.scheduled_count))
             .then_with(|| a.marker.cmp(&b.marker))
     });
 
-    Some(RuntimeTraceMetricsSnapshot { markers })
+    RuntimeTraceMetricsSnapshot { markers }
 }
 
 #[track_caller]
@@ -345,9 +370,14 @@ where
         marker,
     ));
     tasks().insert(task.id, Arc::clone(&task));
+    let guard = TaskTraceGuard {
+        task: Arc::clone(&task),
+    };
 
     let instrumented = task.monitor.instrument(future);
-    TRACE_TASK.scope(task, instrumented).await
+    let output = TRACE_TASK.scope(task, instrumented).await;
+    drop(guard);
+    output
 }
 
 impl Wake for AttributedWaker {
@@ -369,6 +399,7 @@ impl TaskTrace {
             marker,
             monitor: TaskMonitor::new(),
             wait_point_waker_calls: DashMap::new(),
+            finished: AtomicBool::new(false),
         }
     }
 
@@ -392,12 +423,17 @@ impl TaskTrace {
             scheduled_count: metrics.total_scheduled_count,
             busy_ns: duration_ns(metrics.total_poll_duration),
             wait_point_waker_calls,
+            finished: self.finished.load(Ordering::Acquire),
         }
     }
 }
 
-fn dump_json_summary(generated_at: &str) -> String {
-    let wait_point_counts = collect_global_wait_point_counts();
+fn dump_json_summary(
+    generated_at: &str,
+    task_snapshots: &[TaskSnapshot],
+    marker_snapshots: &[MarkerSnapshot],
+) -> String {
+    let wait_point_counts = collect_global_wait_point_counts(marker_snapshots);
     let attributed_call_count = wait_point_total(&wait_point_counts);
     let mode = task_summary_mode();
     let mut summary = json!({
@@ -417,20 +453,12 @@ fn dump_json_summary(generated_at: &str) -> String {
 
     match mode {
         TaskSummaryMode::Task => {
-            summary["tasks"] = Value::Array(
-                collect_sorted_task_snapshots()
-                    .into_iter()
-                    .map(task_snapshot_json)
-                    .collect(),
-            );
+            summary["tasks"] =
+                Value::Array(task_snapshots.iter().map(task_snapshot_json).collect());
         }
         TaskSummaryMode::Marker => {
-            summary["markers"] = Value::Array(
-                collect_sorted_marker_snapshots()
-                    .into_iter()
-                    .map(marker_snapshot_json)
-                    .collect(),
-            );
+            summary["markers"] =
+                Value::Array(marker_snapshots.iter().map(marker_snapshot_json).collect());
         }
     }
 
@@ -443,8 +471,7 @@ fn dump_json_summary(generated_at: &str) -> String {
     })
 }
 
-fn dump_task_summary(summary: &mut String) {
-    let task_snapshots = collect_sorted_task_snapshots();
+fn dump_task_summary(summary: &mut String, task_snapshots: &[TaskSnapshot]) {
     if task_snapshots.is_empty() {
         let _ = writeln!(summary, "traced tokio tasks: none");
         return;
@@ -469,15 +496,14 @@ fn dump_task_summary(summary: &mut String) {
         );
         write_wait_point_counts(
             summary,
-            task.wait_point_waker_calls,
+            &task.wait_point_waker_calls,
             attributed_call_count,
             "percent_of_task_attributed_calls",
         );
     }
 }
 
-fn dump_marker_summary(summary: &mut String) {
-    let marker_snapshots = collect_sorted_marker_snapshots();
+fn dump_marker_summary(summary: &mut String, marker_snapshots: &[MarkerSnapshot]) {
     if marker_snapshots.is_empty() {
         let _ = writeln!(summary, "traced tokio task markers: none");
         return;
@@ -502,7 +528,7 @@ fn dump_marker_summary(summary: &mut String) {
         );
         write_wait_point_counts(
             summary,
-            marker.wait_point_waker_calls,
+            &marker.wait_point_waker_calls,
             attributed_call_count,
             "percent_of_marker_attributed_calls",
         );
@@ -511,7 +537,7 @@ fn dump_marker_summary(summary: &mut String) {
 
 fn write_wait_point_counts(
     summary: &mut String,
-    wait_point_counts: Vec<(WaitPoint, u64)>,
+    wait_point_counts: &[(WaitPoint, u64)],
     attributed_call_count: u64,
     percent_field: &str,
 ) {
@@ -519,7 +545,7 @@ fn write_wait_point_counts(
         let _ = writeln!(
             summary,
             "    count={count} {percent_field}={:.2}% wait_point={}",
-            percent(count, attributed_call_count),
+            percent(*count, attributed_call_count),
             wait_point.display()
         );
     }
@@ -541,6 +567,10 @@ fn tasks() -> &'static DashMap<u64, Arc<TaskTrace>> {
     TASKS.get_or_init(DashMap::new)
 }
 
+fn completed_markers() -> &'static Mutex<HashMap<TaskMarker, MarkerSnapshot>> {
+    COMPLETED_MARKERS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
 fn increment_wait_point(counts: &DashMap<WaitPoint, AtomicU64>, wait_point: WaitPoint, count: u64) {
     counts
         .entry(wait_point)
@@ -548,15 +578,14 @@ fn increment_wait_point(counts: &DashMap<WaitPoint, AtomicU64>, wait_point: Wait
         .fetch_add(count, Ordering::Release);
 }
 
-fn collect_global_wait_point_counts() -> Vec<(WaitPoint, u64)> {
+fn collect_global_wait_point_counts(marker_snapshots: &[MarkerSnapshot]) -> Vec<(WaitPoint, u64)> {
     let mut counts = HashMap::<WaitPoint, u64>::new();
-    for task in tasks().iter() {
-        for wait_point in task.wait_point_waker_calls.iter() {
-            let count = wait_point.value().load(Ordering::Acquire);
+    for marker in marker_snapshots {
+        for (wait_point, count) in &marker.wait_point_waker_calls {
             counts
-                .entry(*wait_point.key())
-                .and_modify(|total| *total = total.saturating_add(count))
-                .or_insert(count);
+                .entry(*wait_point)
+                .and_modify(|total| *total = total.saturating_add(*count))
+                .or_insert(*count);
         }
     }
 
@@ -572,62 +601,37 @@ fn collect_task_snapshots() -> Vec<TaskSnapshot> {
         .collect()
 }
 
-fn collect_marker_snapshots() -> Vec<MarkerSnapshot> {
-    let mut marker_snapshots = HashMap::<TaskMarker, MarkerSnapshot>::new();
-    for task in collect_task_snapshots() {
-        let marker_snapshot =
-            marker_snapshots
-                .entry(task.marker)
-                .or_insert_with(|| MarkerSnapshot {
-                    marker: task.marker,
-                    task_count: 0,
-                    poll_count: 0,
-                    scheduled_count: 0,
-                    busy_ns: 0,
-                    wait_point_waker_calls: Vec::new(),
-                });
-        marker_snapshot.task_count = marker_snapshot.task_count.saturating_add(1);
-        marker_snapshot.poll_count = marker_snapshot.poll_count.saturating_add(task.poll_count);
-        marker_snapshot.scheduled_count = marker_snapshot
-            .scheduled_count
-            .saturating_add(task.scheduled_count);
-        marker_snapshot.busy_ns = marker_snapshot.busy_ns.saturating_add(task.busy_ns);
-
-        for (wait_point, count) in task.wait_point_waker_calls {
-            if let Some((_, existing_count)) = marker_snapshot
-                .wait_point_waker_calls
-                .iter_mut()
-                .find(|(existing_wait_point, _)| *existing_wait_point == wait_point)
-            {
-                *existing_count = existing_count.saturating_add(count);
-            } else {
-                marker_snapshot
-                    .wait_point_waker_calls
-                    .push((wait_point, count));
-            }
-        }
-    }
-
-    let mut snapshots = marker_snapshots.into_values().collect::<Vec<_>>();
-    for snapshot in &mut snapshots {
-        sort_wait_point_counts(&mut snapshot.wait_point_waker_calls);
-    }
-    snapshots
-}
-
-fn collect_sorted_task_snapshots() -> Vec<TaskSnapshot> {
+fn collect_global_snapshots() -> (Vec<TaskSnapshot>, Vec<MarkerSnapshot>) {
+    let mut completed = completed_markers().lock().unwrap();
     let mut task_snapshots = collect_task_snapshots();
+    let mut markers = completed.clone();
+    for task in &task_snapshots {
+        merge_task_snapshot(&mut markers, task);
+    }
+
+    let finished_task_ids = task_snapshots
+        .iter()
+        .filter(|task| task.finished)
+        .map(|task| {
+            merge_task_snapshot(&mut completed, task);
+            task.id
+        })
+        .collect::<Vec<_>>();
+    for task_id in finished_task_ids {
+        tasks().remove(&task_id);
+    }
+
     task_snapshots.sort_by(|a, b| {
         b.poll_count
             .cmp(&a.poll_count)
             .then_with(|| b.scheduled_count.cmp(&a.scheduled_count))
             .then_with(|| a.id.cmp(&b.id))
     });
-    task_snapshots
-}
 
-fn collect_sorted_marker_snapshots() -> Vec<MarkerSnapshot> {
-    let mut marker_snapshots = collect_marker_snapshots();
+    let mut marker_snapshots = markers.into_values().collect::<Vec<_>>();
+    for snapshot in &mut marker_snapshots {
+        sort_wait_point_counts(&mut snapshot.wait_point_waker_calls);
+    }
     marker_snapshots.sort_by(|a, b| {
         b.poll_count
             .cmp(&a.poll_count)
@@ -636,7 +640,43 @@ fn collect_sorted_marker_snapshots() -> Vec<MarkerSnapshot> {
             .then_with(|| a.marker.file.cmp(b.marker.file))
             .then_with(|| a.marker.line.cmp(&b.marker.line))
     });
-    marker_snapshots
+    (task_snapshots, marker_snapshots)
+}
+
+fn merge_task_snapshot(
+    marker_snapshots: &mut HashMap<TaskMarker, MarkerSnapshot>,
+    task: &TaskSnapshot,
+) {
+    let marker_snapshot = marker_snapshots
+        .entry(task.marker)
+        .or_insert_with(|| MarkerSnapshot {
+            marker: task.marker,
+            task_count: 0,
+            poll_count: 0,
+            scheduled_count: 0,
+            busy_ns: 0,
+            wait_point_waker_calls: Vec::new(),
+        });
+    marker_snapshot.task_count = marker_snapshot.task_count.saturating_add(1);
+    marker_snapshot.poll_count = marker_snapshot.poll_count.saturating_add(task.poll_count);
+    marker_snapshot.scheduled_count = marker_snapshot
+        .scheduled_count
+        .saturating_add(task.scheduled_count);
+    marker_snapshot.busy_ns = marker_snapshot.busy_ns.saturating_add(task.busy_ns);
+
+    for (wait_point, count) in &task.wait_point_waker_calls {
+        if let Some((_, existing_count)) = marker_snapshot
+            .wait_point_waker_calls
+            .iter_mut()
+            .find(|(existing_wait_point, _)| *existing_wait_point == *wait_point)
+        {
+            *existing_count = existing_count.saturating_add(*count);
+        } else {
+            marker_snapshot
+                .wait_point_waker_calls
+                .push((*wait_point, *count));
+        }
+    }
 }
 
 fn wait_point_json(wait_point: WaitPoint) -> Value {
@@ -665,7 +705,7 @@ fn wait_point_count_json(wait_point: WaitPoint, count: u64, total: u64) -> Value
     })
 }
 
-fn task_snapshot_json(task: TaskSnapshot) -> Value {
+fn task_snapshot_json(task: &TaskSnapshot) -> Value {
     let attributed_call_count = wait_point_total(&task.wait_point_waker_calls);
     json!({
         "task_id": task.id,
@@ -676,16 +716,16 @@ fn task_snapshot_json(task: TaskSnapshot) -> Value {
         "attributed_waker_calls": {
             "total": attributed_call_count,
             "attributions": task.wait_point_waker_calls
-                .into_iter()
+                .iter()
                 .map(|(wait_point, count)| {
-                    wait_point_count_json(wait_point, count, attributed_call_count)
+                    wait_point_count_json(*wait_point, *count, attributed_call_count)
                 })
                 .collect::<Vec<_>>(),
         },
     })
 }
 
-fn marker_snapshot_json(marker: MarkerSnapshot) -> Value {
+fn marker_snapshot_json(marker: &MarkerSnapshot) -> Value {
     let attributed_call_count = wait_point_total(&marker.wait_point_waker_calls);
     json!({
         "marker": marker_json(marker.marker),
@@ -696,9 +736,9 @@ fn marker_snapshot_json(marker: MarkerSnapshot) -> Value {
         "attributed_waker_calls": {
             "total": attributed_call_count,
             "attributions": marker.wait_point_waker_calls
-                .into_iter()
+                .iter()
                 .map(|(wait_point, count)| {
-                    wait_point_count_json(wait_point, count, attributed_call_count)
+                    wait_point_count_json(*wait_point, *count, attributed_call_count)
                 })
                 .collect::<Vec<_>>(),
         },
@@ -747,6 +787,8 @@ mod tests {
     use futures::task::noop_waker;
 
     use super::*;
+
+    static SNAPSHOT_TEST_LOCK: Mutex<()> = Mutex::new(());
 
     struct CapturePendingWaker {
         captured: Arc<Mutex<Option<Waker>>>,
@@ -815,6 +857,7 @@ mod tests {
 
     #[test]
     fn snapshot_metrics_aggregates_markers_and_wait_points_by_name() {
+        let _test_guard = SNAPSHOT_TEST_LOCK.lock().unwrap();
         let marker = test_marker("test.monitored_task");
         let mut future = Box::pin(trace_task_future_at(marker, YieldOnce(false)));
         let waker = noop_waker();
@@ -828,6 +871,7 @@ mod tests {
             .find(|task| task.marker == marker)
             .map(|task| Arc::clone(task.value()))
             .expect("traced task should be registered");
+        let task_id = task.id;
         let snapshot = task.snapshot();
         assert_eq!(snapshot.marker, marker);
         assert_eq!(snapshot.poll_count, 2);
@@ -845,12 +889,16 @@ mod tests {
             .find(|task| task.marker == second_marker)
             .map(|task| Arc::clone(task.value()))
             .expect("second traced task should be registered");
+        let second_task_id = second_task.id;
         let second_wait_point = test_wait_point("wait.shared");
         assert_ne!(second_wait_point, first_wait_point);
         second_task.record_wait_point_wake(second_wait_point);
 
         enable();
-        let metrics_snapshot = snapshot_metrics().expect("runtime trace should be enabled");
+        set_task_summary_mode(TaskSummaryMode::Marker);
+        set_output_format(TraceOutputFormat::Plain);
+        let (summary, metrics_snapshot) =
+            snapshot_global().expect("runtime trace should be enabled");
         let marker_snapshots = metrics_snapshot
             .markers
             .iter()
@@ -859,13 +907,84 @@ mod tests {
         assert_eq!(marker_snapshots.len(), 1);
         assert_eq!(marker_snapshots[0].tasks_created, 2);
         assert_eq!(marker_snapshots[0].poll_count, 4);
-        assert_eq!(marker_snapshots[0].scheduled_count, 2);
         assert_eq!(marker_snapshots[0].attributed_waker_calls, 2);
         assert_eq!(marker_snapshots[0].wait_points.len(), 1);
         assert_eq!(marker_snapshots[0].wait_points[0].wait_point, "wait.shared");
         assert_eq!(marker_snapshots[0].wait_points[0].waker_calls, 2);
         assert!(!marker_snapshots[0].marker.contains('@'));
         assert!(!marker_snapshots[0].wait_points[0].wait_point.contains('@'));
+        assert!(summary.contains(&marker.display()));
+        assert!(summary.contains(&second_marker.display()));
+        assert!(tasks().get(&task_id).is_none());
+        assert!(tasks().get(&second_task_id).is_none());
+
+        let (_, next_metrics_snapshot) =
+            snapshot_global().expect("runtime trace should remain enabled");
+        let next_marker = next_metrics_snapshot
+            .markers
+            .iter()
+            .find(|snapshot| snapshot.marker == marker.name)
+            .expect("completed marker metrics should be retained");
+        assert_eq!(next_marker.tasks_created, 2);
+        assert_eq!(next_marker.poll_count, 4);
+        assert_eq!(next_marker.attributed_waker_calls, 2);
+    }
+
+    #[test]
+    fn dropped_trace_task_is_removed_after_snapshot() {
+        let _test_guard = SNAPSHOT_TEST_LOCK.lock().unwrap();
+        let marker = test_marker("test.dropped_task");
+        let captured = Arc::new(Mutex::new(None));
+        let mut future = Box::pin(trace_task_future_at(
+            marker,
+            CapturePendingWaker { captured },
+        ));
+        let waker = noop_waker();
+        let mut cx = Context::from_waker(&waker);
+
+        assert_eq!(future.as_mut().poll(&mut cx), Poll::Pending);
+        let task_id = tasks()
+            .iter()
+            .find(|task| task.marker == marker)
+            .map(|task| task.id)
+            .expect("pending task should be registered");
+        drop(future);
+
+        enable();
+        let (_, metrics_snapshot) = snapshot_global().expect("runtime trace should be enabled");
+        assert!(tasks().get(&task_id).is_none());
+        let marker_snapshot = metrics_snapshot
+            .markers
+            .iter()
+            .find(|snapshot| snapshot.marker == marker.name)
+            .expect("dropped task metrics should be retained");
+        assert_eq!(marker_snapshot.tasks_created, 1);
+    }
+
+    #[test]
+    fn task_summary_releases_completed_details_but_keeps_metrics() {
+        let _test_guard = SNAPSHOT_TEST_LOCK.lock().unwrap();
+        let marker = test_marker("test.completed_task_detail");
+        let mut future = Box::pin(trace_task_future_at(marker, YieldOnce(false)));
+        let waker = noop_waker();
+        let mut cx = Context::from_waker(&waker);
+
+        assert_eq!(future.as_mut().poll(&mut cx), Poll::Pending);
+        assert_eq!(future.as_mut().poll(&mut cx), Poll::Ready(()));
+        enable();
+        set_task_summary_mode(TaskSummaryMode::Task);
+        set_output_format(TraceOutputFormat::Plain);
+
+        let (first_summary, _) = snapshot_global().expect("runtime trace should be enabled");
+        assert!(first_summary.contains(&marker.display()));
+
+        let (next_summary, next_metrics) =
+            snapshot_global().expect("runtime trace should remain enabled");
+        assert!(!next_summary.contains(&marker.display()));
+        assert!(next_metrics
+            .markers
+            .iter()
+            .any(|snapshot| snapshot.marker == marker.name && snapshot.tasks_created == 1));
     }
 
     #[test]
