@@ -398,6 +398,13 @@ sinker 时，会复用 checker 目标。旧配置 `resume_from_log`、`resume_lo
 | task_summary_mode | trace 聚合模式：`task` 或 `marker` | marker | marker |
 | output_format     | trace 输出格式：`plain` 或 `json`  | json   | plain  |
 
+runtime trace 摘要会按 `pipeline.checkpoint_interval_secs` 周期输出到 runtime trace 日志，
+并在任务结束时做最后一次输出，因此长时间运行的 CDC 任务也能持续获得诊断信息。同时开启
+`metrics` 和 `tracing` feature 时，还会在 Prometheus `/metrics` 端点暴露按 marker 聚合的
+task counter，以及跨所有 marker 聚合的 wait point counter（`runtime_trace_*`）。
+在 `task` 汇总模式下，已完成 task 的明细会在下一次输出后释放；marker 汇总和
+Prometheus counter 仍保持累计语义。
+
 # [metacenter]
 
 该可选 section 用于 MySQL `dbengine` 元数据中心模式。
