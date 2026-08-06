@@ -3,7 +3,7 @@ use std::collections::{HashMap, VecDeque};
 use super::task_util::TaskUtil;
 use dt_common::{
     config::{config_enums::ParallelType, task_config::TaskConfig},
-    error::DtError,
+    error::{DtError, DtOptionExt},
     meta::redis::command::key_parser::KeyParser,
     monitor::task_monitor_handle::TaskMonitorHandle,
     utils::redis_util::RedisUtil,
@@ -37,11 +37,9 @@ impl ParallelizerUtil {
                 chunk_partitioner_rebalance: config
                     .parallelizer
                     .chunk_partitioner_rebalance()
-                    .ok_or_else(|| {
-                        DtError::InvalidConfig(
-                            "snapshot parallelizer rebalance configuration is missing".to_string(),
-                        )
-                    })?
+                    .or_dt_error(DtError::InvalidConfig(
+                        "snapshot parallelizer rebalance configuration is missing".to_string(),
+                    ))?
                     .clone(),
             }),
 
@@ -98,11 +96,9 @@ impl ParallelizerUtil {
     ) -> anyhow::Result<Box<dyn Merger + Send + Sync>> {
         let rdb_meta_manager = TaskUtil::create_rdb_meta_manager(config)
             .await?
-            .ok_or_else(|| {
-                DtError::InvalidConfig(
-                    "the selected merger requires a relational database endpoint".to_string(),
-                )
-            })?;
+            .or_dt_error(DtError::InvalidConfig(
+                "the selected merger requires a relational database endpoint".to_string(),
+            ))?;
 
         let rdb_merger = RdbMerger { rdb_meta_manager };
         Ok(Box::new(rdb_merger))
@@ -111,11 +107,9 @@ impl ParallelizerUtil {
     async fn create_rdb_partitioner(config: &TaskConfig) -> anyhow::Result<RdbPartitioner> {
         let meta_manager = TaskUtil::create_rdb_meta_manager(config)
             .await?
-            .ok_or_else(|| {
-                DtError::InvalidConfig(
-                    "the selected partitioner requires a relational database endpoint".to_string(),
-                )
-            })?;
+            .or_dt_error(DtError::InvalidConfig(
+                "the selected partitioner requires a relational database endpoint".to_string(),
+            ))?;
         Ok(RdbPartitioner { meta_manager })
     }
 

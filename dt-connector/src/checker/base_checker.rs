@@ -33,7 +33,7 @@ use dt_common::meta::{
     struct_meta::struct_data::StructData,
 };
 use dt_common::{
-    error::{DtError, DtErrorContextExt, Stage},
+    error::{DtError, DtOptionExt, DtResultExt, Stage},
     log_error, log_info, log_summary, log_warn,
     monitor::task_monitor_handle::TaskMonitorHandle,
     utils::limit_queue::LimitedQueue,
@@ -699,10 +699,10 @@ impl RecheckKey {
                     .get(col)
                     .cloned()
                     .map(|value| (col.clone(), value))
-                    .ok_or_else(|| {
-                        DtError::StatementFailed(format!("missing ID column value: {col}"))
-                            .stage(Stage::Checker)
-                    })
+                    .or_dt_error(DtError::StatementFailed(format!(
+                        "missing ID column value: {col}"
+                    )))
+                    .stage(Stage::Checker)
             })
             .collect::<anyhow::Result<BTreeMap<_, _>>>()?;
         Ok(Self {

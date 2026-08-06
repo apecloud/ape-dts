@@ -11,7 +11,7 @@ use crate::{
         global_config::GlobalConfig,
         limiter_config::{CapacityLimiterConfig, RateLimiterConfig},
     },
-    error::DtError,
+    error::{DtError, DtOptionExt},
     meta::mongo::mongo_cdc_source::MongoCdcSource,
     utils::task_util::TaskUtil,
 };
@@ -166,12 +166,10 @@ impl TaskConfig {
                         &sinker_basic.db_type,
                         true,
                     )
-                    .ok_or_else(|| {
-                        DtError::invalid_config(format!(
-                            "checker is not supported for [sinker] db_type={} with [extractor] extract_type={} and [sinker] sink_type={}",
-                            sinker_basic.db_type, extractor_basic.extract_type, sinker_basic.sink_type
-                        ))
-                    })?,
+                    .or_dt_error(DtError::invalid_config(format!(
+                        "checker is not supported for [sinker] db_type={} with [extractor] extract_type={} and [sinker] sink_type={}",
+                        sinker_basic.db_type, extractor_basic.extract_type, sinker_basic.sink_type
+                    )))?,
                 )
             };
 

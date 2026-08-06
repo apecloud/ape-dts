@@ -140,6 +140,19 @@ where
     }
 }
 
+pub trait DtOptionExt<T>: Sized {
+    fn or_dt_error(self, error: DtError) -> anyhow::Result<T>;
+}
+
+impl<T> DtOptionExt<T> for Option<T> {
+    fn or_dt_error(self, error: DtError) -> anyhow::Result<T> {
+        match self {
+            Some(value) => Ok(value),
+            None => Err(error.into()),
+        }
+    }
+}
+
 pub trait DtResultExt<T>: Sized {
     fn dt_error(self, error: DtError) -> anyhow::Result<T>;
 
@@ -201,6 +214,28 @@ mod tests {
     use crate::error::ErrorReport;
     use anyhow::Context;
     use std::io::{Error, ErrorKind};
+
+    #[test]
+    fn option_or_dt_error_returns_value() {
+        let result = Some(42).or_dt_error(DtError::ObjectNotFound("missing value".to_string()));
+
+        assert_eq!(result.unwrap(), 42);
+    }
+
+    #[test]
+    fn option_or_dt_error_creates_classified_error() {
+        let result = None::<()>
+            .or_dt_error(DtError::ObjectNotFound("missing value".to_string()))
+            .stage(Stage::Extractor)
+            .endpoint(EndpointRole::Source);
+
+        let error = result.unwrap_err();
+        assert!(error.downcast_ref::<DtError>().is_some());
+        let report = ErrorReport::from_anyhow(&error);
+        assert_eq!(report.code, ErrorCode::ObjectNotFound);
+        assert_eq!(report.stage, Stage::Extractor);
+        assert_eq!(report.endpoint, Some(EndpointRole::Source));
+    }
 
     #[test]
     fn result_dt_error_preserves_source_and_metadata() {

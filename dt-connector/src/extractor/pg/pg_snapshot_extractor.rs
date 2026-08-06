@@ -25,7 +25,7 @@ use crate::{
 use dt_common::utils::sql_util::PG_ESCAPE;
 use dt_common::{
     config::config_enums::{DbType, RdbParallelType},
-    error::{DtError, DtErrorContextExt, Stage},
+    error::{DtError, DtErrorContextExt, DtOptionExt, Stage},
     log_debug, log_info,
     meta::{
         adaptor::{pg_col_value_convertor::PgColValueConvertor, sqlx_ext::SqlxPgExt},
@@ -307,11 +307,12 @@ impl PgSnapshotExtractor {
                         ),
                     };
 
-                    *running_chunks = running_chunks.checked_sub(1).ok_or_else(|| {
-                        DtError::InvariantViolated(
-                            "PostgreSQL split chunk running count underflow".to_string(),
-                        )
-                    })?;
+                    *running_chunks =
+                        running_chunks
+                            .checked_sub(1)
+                            .or_dt_error(DtError::InvariantViolated(
+                                "PostgreSQL split chunk running count underflow".to_string(),
+                            ))?;
 
                     if let Some(position) =
                         splitter.get_next_checkpoint_position(chunk_id, partition_col_value)
@@ -358,11 +359,13 @@ impl PgSnapshotExtractor {
                             table_id.tb
                         )
                     })?;
-                    let partition_col = finish_partition_col.clone().ok_or_else(|| {
-                        DtError::InvariantViolated(
-                            "finished PostgreSQL split is missing its partition column".to_string(),
-                        )
-                    })?;
+                    let partition_col =
+                        finish_partition_col
+                            .clone()
+                            .or_dt_error(DtError::InvariantViolated(
+                                "finished PostgreSQL split is missing its partition column"
+                                    .to_string(),
+                            ))?;
                     if active_table.tb_meta.basic.is_col_nullable(&partition_col) {
                         state.pending_works.push_back(PgSnapshotWork::NullChunk {
                             table_id: table_id.clone(),
@@ -634,9 +637,12 @@ impl PgSnapshotDispatchState {
             return Ok(None);
         };
 
-        let work = self.pending_works.remove(index).ok_or_else(|| {
-            DtError::InvariantViolated("pending PostgreSQL snapshot work is missing".to_string())
-        })?;
+        let work = self
+            .pending_works
+            .remove(index)
+            .or_dt_error(DtError::InvariantViolated(
+                "pending PostgreSQL snapshot work is missing".to_string(),
+            ))?;
         self.mark_work_started(&work)?;
         Ok(Some(work))
     }
@@ -694,9 +700,11 @@ impl PgSnapshotDispatchState {
                 )
             }
         };
-        *queued_chunks = queued_chunks.checked_sub(1).ok_or_else(|| {
-            DtError::InvariantViolated("PostgreSQL split chunk queued count underflow".to_string())
-        })?;
+        *queued_chunks = queued_chunks
+            .checked_sub(1)
+            .or_dt_error(DtError::InvariantViolated(
+                "PostgreSQL split chunk queued count underflow".to_string(),
+            ))?;
         *running_chunks += 1;
         Ok(())
     }

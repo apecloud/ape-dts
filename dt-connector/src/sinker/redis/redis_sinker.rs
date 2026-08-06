@@ -8,7 +8,7 @@ use redis::ConnectionLike;
 use redis::Value;
 use tokio::{sync::RwLock, time::Instant};
 
-use dt_common::error::{DtError, DtErrorContextExt, ErrorCode};
+use dt_common::error::{DtError, DtErrorContextExt, DtOptionExt, ErrorCode};
 use dt_common::log_debug;
 use dt_common::meta::col_value::ColValue;
 use dt_common::meta::dt_data::DtData;
@@ -369,26 +369,24 @@ impl RedisSinker {
                     // find the hash_tag for the slot which cmd.keys[0] belongs to,
                     // otherwise we may get: (error) CROSSSLOT Keys in request don't hash to the same slot
                     let slot = KeyParser::calc_slot(cmd.keys[0].as_bytes());
+                    let missing_slot_error = DtError::RedisTopology(
+                        "A required Redis cluster slot has no master owner in the loaded topology"
+                            .to_string(),
+                    );
                     node.slot_hash_tag_map
                         .get(&slot)
-                        .ok_or_else(|| {
-                            DtError::RedisTopology(
-                                "A required Redis cluster slot has no master owner in the loaded topology"
-                                    .to_string(),
-                            )
-                        })?
+                        .or_dt_error(missing_slot_error)?
                 } else {
                     // if the redis cmd has no key, find a hash_tag for any slot in current node
+                    let missing_slot_error = DtError::RedisTopology(
+                        "A required Redis cluster slot has no master owner in the loaded topology"
+                            .to_string(),
+                    );
                     let (_, hash_tag) = node
                         .slot_hash_tag_map
                         .iter()
                         .next()
-                        .ok_or_else(|| {
-                            DtError::RedisTopology(
-                                "A required Redis cluster slot has no master owner in the loaded topology"
-                                    .to_string(),
-                            )
-                        })?;
+                        .or_dt_error(missing_slot_error)?;
                     hash_tag
                 };
                 &format!("{}{{{}}}", data_marker.marker, hash_tag)
