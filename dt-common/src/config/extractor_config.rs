@@ -80,6 +80,18 @@ pub enum ExtractorConfig {
         partition_cols: String,
     },
 
+    MssqlSnapshot {
+        url: String,
+        connection_auth: ConnectionAuthConfig,
+        schema: String,
+        tb: String,
+        schema_tbs: HashMap<String, Vec<String>>,
+        parallel_size: usize,
+        parallel_type: RdbParallelType,
+        batch_size: usize,
+        partition_cols: String,
+    },
+
     PgCdc {
         url: String,
         connection_auth: ConnectionAuthConfig,

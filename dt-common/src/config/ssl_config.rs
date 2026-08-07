@@ -3,8 +3,10 @@ use sqlx::{
     postgres::{PgConnectOptions, PgSslMode},
 };
 use strum::{Display, EnumString};
+use tiberius::{Config as MssqlConfig, EncryptionLevel};
 
 use super::ini_loader::IniLoader;
+use crate::error::DtError;
 
 #[derive(Clone, Debug, Display, EnumString, Hash, PartialEq, Eq)]
 pub enum SslMode {
@@ -58,5 +60,29 @@ impl SslConfig {
             options = options.ssl_root_cert(&self.ssl_ca_path);
         }
         options
+    }
+
+    pub fn apply_mssql(&self, options: &mut MssqlConfig) -> anyhow::Result<()> {
+        match self.ssl_mode {
+            SslMode::Disable => options.encryption(EncryptionLevel::Off),
+            SslMode::Require => options.encryption(EncryptionLevel::Required),
+            SslMode::VerifyFull => {
+                if self.ssl_ca_path.is_empty() {
+                    return Err(DtError::invalid_config(
+                        "config ssl_ca_path is required when ssl_mode=verify_full",
+                    )
+                    .into());
+                }
+                options.encryption(EncryptionLevel::Required);
+                options.trust_cert_ca(&self.ssl_ca_path);
+            }
+            SslMode::VerifyCa => {
+                return Err(DtError::invalid_config(
+                    "MSSQL does not support ssl_mode=verify_ca; use require or verify_full",
+                )
+                .into())
+            }
+        }
+        Ok(())
     }
 }

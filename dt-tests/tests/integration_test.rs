@@ -1,6 +1,7 @@
 mod log_reader;
 mod mock_test;
 mod mongo_to_mongo;
+mod mssql_to_mssql;
 mod mysql_to_clickhouse;
 mod mysql_to_doris;
 mod mysql_to_kafka_to_mysql;

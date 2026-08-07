@@ -18,9 +18,9 @@ use dt_common::{
     error::{DtError, DtResultExt, ErrorCode},
     meta::{
         avro::avro_converter::AvroConverter, dt_queue::DtQueue,
-        mysql::mysql_meta_manager::MysqlMetaManager, pg::pg_meta_manager::PgMetaManager,
-        rdb_meta_manager::RdbMetaManager, redis::redis_statistic_type::RedisStatisticType,
-        syncer::Syncer,
+        mssql::mssql_meta_manager::MssqlMetaManager, mysql::mysql_meta_manager::MysqlMetaManager,
+        pg::pg_meta_manager::PgMetaManager, rdb_meta_manager::RdbMetaManager,
+        redis::redis_statistic_type::RedisStatisticType, syncer::Syncer,
     },
     monitor::task_monitor_handle::TaskMonitorHandle,
     rdb_filter::RdbFilter,
@@ -38,6 +38,7 @@ use dt_connector::{
             mongo_snapshot_extractor::MongoSnapshotExtractor,
             mongo_struct_extractor::MongoStructExtractor,
         },
+        mssql::mssql_snapshot_extractor::{MssqlSnapshotExtractor, MssqlSnapshotShared},
         mysql::{
             mysql_cdc_extractor::MysqlCdcExtractor,
             mysql_check_extractor::MysqlCheckExtractor,
@@ -286,6 +287,37 @@ impl ExtractorUtil {
                         batch_size,
                         parallel_type,
                         sample_rate: Self::sample_rate(config, extractor_config),
+                        recovery,
+                    },
+                    parallel_size,
+                    schema_tbs,
+                    extract_state,
+                };
+                Box::new(extractor)
+            }
+
+            ExtractorConfig::MssqlSnapshot {
+                schema_tbs,
+                partition_cols,
+                parallel_size,
+                parallel_type,
+                batch_size,
+                ..
+            } => {
+                let connection_pool = match extractor_client {
+                    ConnClient::Mssql(connection_pool) => connection_pool,
+                    _ => bail!(DtError::MissingSourceClient),
+                };
+                let meta_manager = MssqlMetaManager::new(connection_pool.clone()).await?;
+                let extractor = MssqlSnapshotExtractor {
+                    shared: MssqlSnapshotShared {
+                        base_extractor,
+                        connection_pool,
+                        meta_manager,
+                        filter: Arc::new(filter),
+                        partition_cols: Arc::new(Self::parse_partition_cols(&partition_cols)?),
+                        batch_size,
+                        parallel_type,
                         recovery,
                     },
                     parallel_size,
@@ -766,6 +798,17 @@ impl ExtractorUtil {
                 let meta_manager = PgMetaManager::new(conn_pool.clone()).await?;
                 Some(RdbMetaManager::from_pg(meta_manager))
             }
+            DbType::Mssql => {
+                let connection_pool =
+                    dt_common::meta::mssql::mssql_connection_pool::MssqlConnectionPool::from_config(
+                        extractor_url,
+                        connection_auth,
+                        1,
+                    )
+                    .await?;
+                let meta_manager = MssqlMetaManager::new(connection_pool).await?;
+                Some(RdbMetaManager::from_mssql(meta_manager))
+            }
             _ => None,
         };
         Ok(meta_manager)
@@ -825,5 +868,20 @@ mod tests {
             &mongo_sinker(),
             &SinkType::Write,
         ));
+    }
+
+    #[test]
+    fn partition_cols_preserve_mssql_schema_table_chunk_key() {
+        let partition_cols = ExtractorUtil::parse_partition_cols(
+            r#"json:[{"db":"dbo","tb":"basic_test","partition_col":"id"}]"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            partition_cols
+                .get(&("dbo".to_string(), "basic_test".to_string()))
+                .map(String::as_str),
+            Some("id")
+        );
     }
 }

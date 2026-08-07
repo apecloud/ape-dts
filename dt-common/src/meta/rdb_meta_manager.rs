@@ -5,8 +5,9 @@ use anyhow::bail;
 use crate::error::DtError;
 
 use super::{
-    ddl_meta::ddl_data::DdlData, mysql::mysql_meta_manager::MysqlMetaManager,
-    pg::pg_meta_manager::PgMetaManager, rdb_tb_meta::RdbTbMeta,
+    ddl_meta::ddl_data::DdlData, mssql::mssql_meta_manager::MssqlMetaManager,
+    mysql::mysql_meta_manager::MysqlMetaManager, pg::pg_meta_manager::PgMetaManager,
+    rdb_tb_meta::RdbTbMeta,
 };
 
 pub const RDB_PRIMARY_KEY_FLAG: &str = "primary";
@@ -15,6 +16,8 @@ pub const RDB_PRIMARY_KEY_FLAG: &str = "primary";
 pub struct RdbMetaManager {
     pub mysql_meta_manager: Option<MysqlMetaManager>,
     pub pg_meta_manager: Option<PgMetaManager>,
+    pub mssql_meta_manager: Option<MssqlMetaManager>,
+    mssql_rdb_tb_meta_cache: HashMap<(String, String), RdbTbMeta>,
 }
 
 impl RdbMetaManager {
@@ -22,6 +25,8 @@ impl RdbMetaManager {
         Self {
             mysql_meta_manager: Some(mysql_meta_manager),
             pg_meta_manager: Option::None,
+            mssql_meta_manager: Option::None,
+            mssql_rdb_tb_meta_cache: HashMap::new(),
         }
     }
 
@@ -29,6 +34,17 @@ impl RdbMetaManager {
         Self {
             mysql_meta_manager: Option::None,
             pg_meta_manager: Some(pg_meta_manager),
+            mssql_meta_manager: Option::None,
+            mssql_rdb_tb_meta_cache: HashMap::new(),
+        }
+    }
+
+    pub fn from_mssql(mssql_meta_manager: MssqlMetaManager) -> Self {
+        Self {
+            mysql_meta_manager: Option::None,
+            pg_meta_manager: Option::None,
+            mssql_meta_manager: Some(mssql_meta_manager),
+            mssql_rdb_tb_meta_cache: HashMap::new(),
         }
     }
 
@@ -38,6 +54,9 @@ impl RdbMetaManager {
         }
         if let Some(pg_meta_manager) = &self.pg_meta_manager {
             pg_meta_manager.close().await?;
+        }
+        if let Some(mssql_meta_manager) = &self.mssql_meta_manager {
+            mssql_meta_manager.close().await?;
         }
         Ok(())
     }
@@ -57,6 +76,21 @@ impl RdbMetaManager {
             return Ok(&tb_meta.basic);
         }
 
+        if let Some(mssql_meta_manager) = &self.mssql_meta_manager {
+            let key = (schema.to_string(), tb.to_string());
+            if !self.mssql_rdb_tb_meta_cache.contains_key(&key) {
+                let tb_meta = mssql_meta_manager.get_tb_meta(schema, tb).await?;
+                self.mssql_rdb_tb_meta_cache
+                    .insert(key.clone(), tb_meta.basic);
+            }
+            return self.mssql_rdb_tb_meta_cache.get(&key).ok_or_else(|| {
+                DtError::InvariantViolated(
+                    "MSSQL table metadata cache entry disappeared after insertion".to_string(),
+                )
+                .into()
+            });
+        }
+
         bail! {DtError::InvariantViolated("no available meta_manager in partitioner".to_string())
         }
     }
@@ -68,6 +102,11 @@ impl RdbMetaManager {
         if let Some(pg_meta_manager) = &mut self.pg_meta_manager {
             pg_meta_manager.invalidate_cache_by_ddl_data(ddl_data);
         }
+        if let Some(mssql_meta_manager) = &self.mssql_meta_manager {
+            mssql_meta_manager.invalidate_cache_by_ddl_data(ddl_data);
+        }
+        let (schema, tb) = ddl_data.get_schema_tb();
+        self.invalidate_mssql_rdb_tb_meta_cache(&schema, &tb);
     }
 
     pub fn invalidate_cache(&mut self, schema: &str, tb: &str) {
@@ -77,6 +116,10 @@ impl RdbMetaManager {
         if let Some(pg_meta_manager) = &mut self.pg_meta_manager {
             pg_meta_manager.invalidate_cache(schema, tb);
         }
+        if let Some(mssql_meta_manager) = &self.mssql_meta_manager {
+            mssql_meta_manager.invalidate_cache(schema, tb);
+        }
+        self.invalidate_mssql_rdb_tb_meta_cache(schema, tb);
     }
 
     pub fn invalidate_cache_for_table(&mut self, schema: &str, tb: &str) {
@@ -85,6 +128,25 @@ impl RdbMetaManager {
         }
         if let Some(pg_meta_manager) = &mut self.pg_meta_manager {
             pg_meta_manager.invalidate_cache_for_table(schema, tb);
+        }
+        if let Some(mssql_meta_manager) = &self.mssql_meta_manager {
+            mssql_meta_manager.invalidate_cache_for_table(schema, tb);
+        }
+        if !schema.is_empty() && !tb.is_empty() {
+            self.mssql_rdb_tb_meta_cache
+                .remove(&(schema.to_string(), tb.to_string()));
+        }
+    }
+
+    fn invalidate_mssql_rdb_tb_meta_cache(&mut self, schema: &str, tb: &str) {
+        if schema.is_empty() {
+            self.mssql_rdb_tb_meta_cache.clear();
+        } else if tb.is_empty() {
+            self.mssql_rdb_tb_meta_cache
+                .retain(|(cached_schema, _), _| cached_schema != schema);
+        } else {
+            self.mssql_rdb_tb_meta_cache
+                .remove(&(schema.to_string(), tb.to_string()));
         }
     }
 

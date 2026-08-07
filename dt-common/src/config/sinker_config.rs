@@ -29,6 +29,12 @@ pub enum SinkerConfig {
         disable_foreign_key_checks: bool,
     },
 
+    Mssql {
+        url: String,
+        connection_auth: ConnectionAuthConfig,
+        batch_size: usize,
+    },
+
     Mongo {
         url: String,
         connection_auth: ConnectionAuthConfig,

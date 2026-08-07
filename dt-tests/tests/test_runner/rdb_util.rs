@@ -10,6 +10,8 @@ use dt_connector::rdb_query_builder::RdbQueryBuilder;
 use futures::TryStreamExt;
 use sqlx::{MySql, Pool, Postgres};
 
+use super::mssql_test_client::MssqlTestClient;
+
 pub struct RdbUtil {}
 
 impl RdbUtil {
@@ -78,6 +80,22 @@ impl RdbUtil {
         }
 
         Ok(result)
+    }
+
+    pub async fn fetch_data_mssql(
+        client: &MssqlTestClient,
+        _ignore_cols: Option<&HashSet<String>>,
+        db_tb: &(String, String),
+        where_sql: &str,
+    ) -> anyhow::Result<Vec<RowData>> {
+        client.fetch_table(&db_tb.0, &db_tb.1, where_sql).await
+    }
+
+    pub async fn get_tb_cols_mssql(
+        _client: &MssqlTestClient,
+        _db_tb: &(String, String),
+    ) -> anyhow::Result<Vec<String>> {
+        todo!("mssql test table metadata adapter is not implemented")
     }
 
     pub async fn get_tb_meta_mysql(

@@ -38,7 +38,11 @@ use crate::{
     },
 };
 
-use super::{base_test_runner::BaseTestRunner, rdb_util::RdbUtil};
+use super::{
+    base_test_runner::{BaseTestRunner, SqlLoadStrategy},
+    mssql_test_client::{MssqlTestClient, TestSide},
+    rdb_util::RdbUtil,
+};
 
 #[derive(Clone)]
 pub struct RdbTestRunner {
@@ -47,6 +51,8 @@ pub struct RdbTestRunner {
     pub dst_conn_pool_mysql: Option<Pool<MySql>>,
     pub src_conn_pool_pg: Option<Pool<Postgres>>,
     pub dst_conn_pool_pg: Option<Pool<Postgres>>,
+    pub src_client_mssql: Option<MssqlTestClient>,
+    pub dst_client_mssql: Option<MssqlTestClient>,
     pub meta_center_pool_mysql: Option<Pool<MySql>>,
     pub config: TaskConfig,
     pub router: Option<RdbRouter>,
@@ -92,13 +98,20 @@ impl MockDataPrepare {
 #[allow(dead_code)]
 impl RdbTestRunner {
     pub async fn new(relative_test_dir: &str) -> anyhow::Result<Self> {
-        let mut base = BaseTestRunner::new(relative_test_dir).await.unwrap();
+        let mut base = if relative_test_dir.starts_with("mssql_to_mssql/") {
+            BaseTestRunner::new_with_sql_load_strategy(relative_test_dir, SqlLoadStrategy::MssqlGo)
+                .await?
+        } else {
+            BaseTestRunner::new(relative_test_dir).await?
+        };
 
         // prepare conn pools
         let mut src_conn_pool_mysql = None;
         let mut dst_conn_pool_mysql = None;
         let mut src_conn_pool_pg = None;
         let mut dst_conn_pool_pg = None;
+        let mut src_client_mssql = None;
+        let mut dst_client_mssql = None;
 
         let config = TaskConfig::new(&base.task_config_file).unwrap();
         let src_db_type = config.extractor_basic.db_type.clone();
@@ -147,6 +160,11 @@ impl RdbTestRunner {
                     TaskUtil::create_pg_conn_pool(&src_url, &src_connection_auth, 5, false, true)
                         .await?,
                 );
+            }
+            DbType::Mssql => {
+                let client = MssqlTestClient::from_task_config(&config, TestSide::Source)?;
+                client.ensure_database(client.database()).await?;
+                src_client_mssql = Some(client);
             }
             _ => {}
         }
@@ -223,6 +241,11 @@ impl RdbTestRunner {
                         .await?,
                     );
                 }
+                DbType::Mssql => {
+                    let client = MssqlTestClient::from_task_config(&config, TestSide::Destination)?;
+                    client.ensure_database(client.database()).await?;
+                    dst_client_mssql = Some(client);
+                }
                 _ => {}
             }
         }
@@ -255,6 +278,8 @@ impl RdbTestRunner {
             dst_conn_pool_mysql,
             src_conn_pool_pg,
             dst_conn_pool_pg,
+            src_client_mssql,
+            dst_client_mssql,
             meta_center_pool_mysql,
             config,
             router,
@@ -279,6 +304,12 @@ impl RdbTestRunner {
         }
         if let Some(pool) = &self.dst_conn_pool_pg {
             pool.close().await;
+        }
+        if let Some(client) = &self.src_client_mssql {
+            client.close().await?;
+        }
+        if let Some(client) = &self.dst_client_mssql {
+            client.close().await?;
         }
         Ok(())
     }
@@ -748,6 +779,9 @@ impl RdbTestRunner {
         if let Some(pool) = &self.src_conn_pool_pg {
             RdbUtil::execute_sqls_pg(pool, sqls).await?;
         }
+        if let Some(client) = &self.src_client_mssql {
+            client.execute_batches(sqls).await?;
+        }
         Ok(())
     }
 
@@ -757,6 +791,9 @@ impl RdbTestRunner {
         }
         if let Some(pool) = &self.dst_conn_pool_pg {
             RdbUtil::execute_sqls_pg(pool, sqls).await?;
+        }
+        if let Some(client) = &self.dst_client_mssql {
+            client.execute_batches(sqls).await?;
         }
         Ok(())
     }
@@ -1242,6 +1279,8 @@ impl RdbTestRunner {
             RdbUtil::fetch_data_mysql_compatible(pool, None, db_tb, &db_type, &where_sql).await?
         } else if let Some(pool) = conn_pool_pg {
             RdbUtil::fetch_data_pg(pool, None, db_tb, &where_sql).await?
+        } else if let Some(client) = self.get_mssql_client(from) {
+            RdbUtil::fetch_data_mssql(client, None, db_tb, &where_sql).await?
         } else {
             Vec::new()
         };
@@ -1273,14 +1312,26 @@ impl RdbTestRunner {
         &self,
     ) -> anyhow::Result<(Vec<(String, String)>, Vec<(String, String)>)> {
         let db_type = self.get_db_type(SRC);
-        let mut src_db_tbs =
-            Self::get_compare_db_tbs_from_sqls(&db_type, &self.base.src_prepare_sqls)?;
-        // since tables may be created/dropped in src_test.sql for ddl tests,
-        // we also need to parse src_test.sql.
-        src_db_tbs.extend_from_slice(&Self::get_compare_db_tbs_from_sqls(
-            &db_type,
-            &self.base.src_test_sqls,
-        )?);
+        let mut src_db_tbs = if matches!(db_type, DbType::Mssql) {
+            let compare_tbs_file = format!("{}/compare_tbs.txt", self.base.test_dir);
+            BaseTestRunner::load_file(&compare_tbs_file)
+                .into_iter()
+                .filter_map(|line| {
+                    let line = line.trim();
+                    (!line.is_empty() && !line.starts_with('#'))
+                        .then(|| Self::parse_full_tb_name(line, &db_type))
+                })
+                .collect()
+        } else {
+            Self::get_compare_db_tbs_from_sqls(&db_type, &self.base.src_prepare_sqls)?
+        };
+        if !matches!(db_type, DbType::Mssql) {
+            // Tables may be created or dropped in src_test.sql for DDL tests.
+            src_db_tbs.extend_from_slice(&Self::get_compare_db_tbs_from_sqls(
+                &db_type,
+                &self.base.src_test_sqls,
+            )?);
+        }
 
         let mut dst_db_tbs = vec![];
         for (db, tb) in src_db_tbs.iter() {
@@ -1357,6 +1408,8 @@ impl RdbTestRunner {
         } else if let Some(conn_pool) = conn_pool_pg {
             let tb_meta = RdbUtil::get_tb_meta_pg(conn_pool, db_tb).await?;
             tb_meta.basic.cols.clone()
+        } else if let Some(client) = self.get_mssql_client(from) {
+            RdbUtil::get_tb_cols_mssql(client, db_tb).await?
         } else {
             vec![]
         };
@@ -1368,6 +1421,14 @@ impl RdbTestRunner {
             (&self.src_conn_pool_mysql, &self.src_conn_pool_pg)
         } else {
             (&self.dst_conn_pool_mysql, &self.dst_conn_pool_pg)
+        }
+    }
+
+    fn get_mssql_client(&self, from: &str) -> Option<&MssqlTestClient> {
+        if from == SRC {
+            self.src_client_mssql.as_ref()
+        } else {
+            self.dst_client_mssql.as_ref()
         }
     }
 

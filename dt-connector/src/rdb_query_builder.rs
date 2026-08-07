@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use anyhow::{bail, Context};
 use sqlx::{mysql::MySqlArguments, postgres::PgArguments, query::Query, MySql, Postgres};
+use tiberius::Query as MssqlQuery;
 
 use dt_common::{
     config::config_enums::DbType,
@@ -13,6 +14,7 @@ use dt_common::{
             sqlx_ext::{SqlxMysqlExt, SqlxPgExt},
         },
         col_value::ColValue,
+        mssql::mssql_tb_meta::MssqlTbMeta,
         mysql::{mysql_col_type::MysqlColType, mysql_tb_meta::MysqlTbMeta},
         pg::pg_tb_meta::PgTbMeta,
         rdb_tb_meta::RdbTbMeta,
@@ -48,6 +50,7 @@ pub struct RdbQueryBuilder<'a> {
     ignore_cols: Option<&'a HashSet<String>>,
     pg_tb_meta: Option<&'a PgTbMeta>,
     mysql_tb_meta: Option<&'a MysqlTbMeta>,
+    mssql_tb_meta: Option<&'a MssqlTbMeta>,
 }
 
 impl RdbQueryBuilder<'_> {
@@ -60,6 +63,7 @@ impl RdbQueryBuilder<'_> {
             rdb_tb_meta: &tb_meta.basic,
             pg_tb_meta: None,
             mysql_tb_meta: Some(tb_meta),
+            mssql_tb_meta: None,
             db_type: DbType::Mysql,
             ignore_cols,
         }
@@ -74,7 +78,23 @@ impl RdbQueryBuilder<'_> {
             rdb_tb_meta: &tb_meta.basic,
             pg_tb_meta: Some(tb_meta),
             mysql_tb_meta: None,
+            mssql_tb_meta: None,
             db_type: DbType::Pg,
+            ignore_cols,
+        }
+    }
+
+    #[inline(always)]
+    pub fn new_for_mssql<'a>(
+        tb_meta: &'a MssqlTbMeta,
+        ignore_cols: Option<&'a HashSet<String>>,
+    ) -> RdbQueryBuilder<'a> {
+        RdbQueryBuilder {
+            rdb_tb_meta: &tb_meta.basic,
+            pg_tb_meta: None,
+            mysql_tb_meta: None,
+            mssql_tb_meta: Some(tb_meta),
+            db_type: DbType::Mssql,
             ignore_cols,
         }
     }
@@ -141,12 +161,33 @@ impl RdbQueryBuilder<'_> {
         Ok(query)
     }
 
+    #[inline(always)]
+    pub fn create_mssql_query<'a>(
+        &self,
+        _query_info: &'a RdbQueryInfo<'a>,
+    ) -> anyhow::Result<MssqlQuery<'a>> {
+        todo!("mssql RdbQueryBuilder Tiberius query binding is not implemented")
+    }
+
     pub fn get_query_info<'a>(
         &self,
         row_data: &'a RowData,
         replace: bool,
     ) -> anyhow::Result<RdbQueryInfo<'a>> {
+        if self.mssql_tb_meta.is_some() {
+            todo!("mssql RdbQueryBuilder DML SQL generation is not implemented")
+        }
         self.get_query_info_internal(row_data, replace, true)
+    }
+
+    pub fn get_insert_query_info<'a>(
+        &self,
+        row_data: &'a RowData,
+    ) -> anyhow::Result<RdbQueryInfo<'a>> {
+        if self.mssql_tb_meta.is_some() {
+            todo!("mssql RdbQueryBuilder INSERT SQL generation is not implemented")
+        }
+        self.get_insert_query(row_data, true)
     }
 
     pub fn get_query_sql(&self, row_data: &RowData, replace: bool) -> anyhow::Result<String> {
@@ -703,6 +744,9 @@ impl RdbQueryBuilder<'_> {
     }
 
     pub fn build_extract_cols_str(&self) -> anyhow::Result<String> {
+        if self.mssql_tb_meta.is_some() {
+            todo!("mssql RdbQueryBuilder extract column generation is not implemented")
+        }
         let mut extract_cols = Vec::new();
         for col in self.rdb_tb_meta.cols.iter() {
             if self.ignore_cols.is_some_and(|cols| cols.contains(col)) {
@@ -781,6 +825,9 @@ impl RdbQueryBuilder<'_> {
         col_value: &Option<&ColValue>,
         placeholder: bool,
     ) -> anyhow::Result<String> {
+        if self.mssql_tb_meta.is_some() {
+            todo!("mssql RdbQueryBuilder SQL value generation is not implemented")
+        }
         if placeholder {
             return self.get_placeholder(index, col);
         }
@@ -910,6 +957,10 @@ impl RdbQueryBuilder<'_> {
     }
 
     fn get_placeholder(&self, index: usize, col: &str) -> anyhow::Result<String> {
+        if self.mssql_tb_meta.is_some() {
+            let _ = (index, col);
+            todo!("mssql RdbQueryBuilder placeholder generation is not implemented")
+        }
         if let Some(tb_meta) = self.pg_tb_meta {
             let col_type = tb_meta.get_col_type(col)?;
             if col_type.schema_name != "pg_catalog" {

@@ -6,6 +6,7 @@ pub mod clickhouse;
 pub mod dummy_sinker;
 pub mod kafka;
 pub mod mongo;
+pub mod mssql;
 pub mod mysql;
 pub mod pg;
 pub mod redis;
