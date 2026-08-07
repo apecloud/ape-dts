@@ -1341,6 +1341,7 @@ impl TaskRunner {
             self.config.extractor,
             ExtractorConfig::MysqlSnapshot { .. }
                 | ExtractorConfig::PgSnapshot { .. }
+                | ExtractorConfig::MssqlSnapshot { .. }
                 | ExtractorConfig::MongoSnapshot { .. }
         );
 
@@ -1509,6 +1510,26 @@ impl TaskRunner {
                 parallel_type: parallel_type.clone(),
                 batch_size: *batch_size,
                 partition_cols: String::new(),
+            },
+
+            ExtractorConfig::MssqlSnapshot {
+                url,
+                connection_auth,
+                parallel_size,
+                parallel_type,
+                batch_size,
+                partition_cols,
+                ..
+            } => ExtractorConfig::MssqlSnapshot {
+                url: url.clone(),
+                connection_auth: connection_auth.clone(),
+                schema: String::new(),
+                tb: String::new(),
+                schema_tbs,
+                parallel_size: *parallel_size,
+                parallel_type: parallel_type.clone(),
+                batch_size: *batch_size,
+                partition_cols: partition_cols.clone(),
             },
 
             ExtractorConfig::MongoSnapshot {

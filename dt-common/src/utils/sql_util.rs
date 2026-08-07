@@ -8,6 +8,8 @@ pub struct SqlUtil {}
 
 pub const MYSQL_ESCAPE: char = '`';
 pub const PG_ESCAPE: char = '"';
+pub const MSSQL_ESCAPE_LEFT: char = '[';
+pub const MSSQL_ESCAPE_RIGHT: char = ']';
 pub const REDIS_ESCAPE: char = '"';
 
 #[macro_export]
@@ -37,6 +39,12 @@ impl SqlUtil {
     }
 
     pub fn escape(token: &str, escape_pair: &(char, char)) -> String {
+        if *escape_pair == (MSSQL_ESCAPE_LEFT, MSSQL_ESCAPE_RIGHT) {
+            if Self::is_escaped(token, escape_pair) {
+                return token.to_string();
+            }
+            return format!("[{}]", token.replace(']', "]]"));
+        }
         if !Self::is_escaped(token, escape_pair) {
             return format!(r#"{}{}{}"#, escape_pair.0, token, escape_pair.1);
         }
@@ -55,10 +63,14 @@ impl SqlUtil {
         if !Self::is_escaped(token, escape_pair) {
             return token.to_string();
         }
-        token
-            .trim_start_matches(escape_pair.0)
-            .trim_end_matches(escape_pair.1)
-            .to_string()
+        let unescaped = token
+            .strip_prefix(escape_pair.0)
+            .and_then(|token| token.strip_suffix(escape_pair.1))
+            .unwrap_or(token);
+        if *escape_pair == (MSSQL_ESCAPE_LEFT, MSSQL_ESCAPE_RIGHT) {
+            return unescaped.replace("]]", "]");
+        }
+        unescaped.to_string()
     }
 
     pub fn unescape_by_db_type(token: &str, db_type: &DbType) -> String {
@@ -67,6 +79,22 @@ impl SqlUtil {
             result = Self::unescape(token, &escape_pair);
         }
         result
+    }
+
+    fn is_valid_mssql_escaped_identifier(token: &str) -> bool {
+        let Some(inner) = token
+            .strip_prefix(MSSQL_ESCAPE_LEFT)
+            .and_then(|token| token.strip_suffix(MSSQL_ESCAPE_RIGHT))
+        else {
+            return false;
+        };
+        let mut chars = inner.chars().peekable();
+        while let Some(ch) = chars.next() {
+            if ch == MSSQL_ESCAPE_RIGHT && chars.next_if_eq(&MSSQL_ESCAPE_RIGHT).is_none() {
+                return false;
+            }
+        }
+        true
     }
 
     pub fn escape_cols(cols: &Vec<String>, db_type: &DbType) -> Vec<String> {
@@ -103,6 +131,7 @@ impl SqlUtil {
                 vec![(MYSQL_ESCAPE, MYSQL_ESCAPE)]
             }
             DbType::Pg => vec![(PG_ESCAPE, PG_ESCAPE)],
+            DbType::Mssql => vec![(MSSQL_ESCAPE_LEFT, MSSQL_ESCAPE_RIGHT)],
             DbType::Redis => vec![(REDIS_ESCAPE, REDIS_ESCAPE)],
             _ => vec![],
         }
@@ -146,6 +175,7 @@ impl SqlUtil {
     pub fn is_valid_token(token: &str, db_type: &DbType, escape_pairs: &[(char, char)]) -> bool {
         let max_token_len = match db_type {
             DbType::Mysql | DbType::Pg => 64,
+            DbType::Mssql => 128,
             // TODO
             _ => i32::MAX,
         } as usize;
@@ -165,10 +195,16 @@ impl SqlUtil {
             // token is enclosed by escapes
             if Self::is_escaped(token, escape_pair) {
                 let unescaped_token = Self::unescape(token, escape_pair);
-                return !unescaped_token.contains(escape_pair.0)
-                    && !unescaped_token.contains(escape_pair.1)
+                let valid_escaped_chars = if *escape_pair == (MSSQL_ESCAPE_LEFT, MSSQL_ESCAPE_RIGHT)
+                {
+                    Self::is_valid_mssql_escaped_identifier(token)
+                } else {
+                    !unescaped_token.contains(escape_pair.0)
+                        && !unescaped_token.contains(escape_pair.1)
+                };
+                return valid_escaped_chars
                     && !unescaped_token.is_empty()
-                    && unescaped_token.len() <= max_token_len;
+                    && unescaped_token.chars().count() <= max_token_len;
             }
         }
         // token NOT enclosed by escapes
@@ -284,5 +320,27 @@ mod tests {
             "ST_GeomFromWKB(?)",
             SqlUtil::mysql_spatial_from_wkb_placeholder_expr()
         );
+    }
+
+    #[test]
+    fn test_mssql_identifier_escaping() {
+        assert_eq!(
+            "[order]]detail]",
+            SqlUtil::escape_by_db_type("order]detail", &DbType::Mssql)
+        );
+        assert_eq!(
+            "order]detail",
+            SqlUtil::unescape_by_db_type("[order]]detail]", &DbType::Mssql)
+        );
+        assert!(SqlUtil::is_valid_token(
+            "[order]]detail]",
+            &DbType::Mssql,
+            &SqlUtil::get_escape_pairs(&DbType::Mssql),
+        ));
+        assert!(!SqlUtil::is_valid_token(
+            "[order]detail]",
+            &DbType::Mssql,
+            &SqlUtil::get_escape_pairs(&DbType::Mssql),
+        ));
     }
 }

@@ -6,12 +6,16 @@ impl SystemDb {
     const MYSQL: [&str; 4] = ["information_schema", "mysql", "performance_schema", "sys"];
     const POSTGRES: [&str; 2] = ["pg_catalog", "information_schema"];
     const MONGO: [&str; 3] = ["admin", "config", "local"];
+    const MSSQL: [&str; 2] = ["sys", "INFORMATION_SCHEMA"];
 
     pub fn is_system_db(db: &str, db_type: &DbType) -> bool {
         match db_type {
             DbType::Mysql => Self::MYSQL.contains(&db),
             DbType::Pg => Self::POSTGRES.contains(&db),
             DbType::Mongo => Self::MONGO.contains(&db),
+            DbType::Mssql => Self::MSSQL
+                .iter()
+                .any(|schema| schema.eq_ignore_ascii_case(db)),
             _ => false,
         }
     }
@@ -21,6 +25,7 @@ impl SystemDb {
             DbType::Mysql => Some(Self::MYSQL.to_vec()),
             DbType::Pg => Some(Self::POSTGRES.to_vec()),
             DbType::Mongo => Some(Self::MONGO.to_vec()),
+            DbType::Mssql => Some(Self::MSSQL.to_vec()),
             _ => None,
         }
     }

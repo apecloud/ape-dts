@@ -6,8 +6,8 @@ use dt_common::{
     config::config_enums::DbType,
     error::{DtError, DtOptionExt},
     meta::{
-        adaptor::pg_col_value_convertor::PgColValueConvertor, mysql::mysql_tb_meta::MysqlTbMeta,
-        pg::pg_tb_meta::PgTbMeta, rdb_tb_meta::RdbTbMeta,
+        adaptor::pg_col_value_convertor::PgColValueConvertor, mssql::mssql_tb_meta::MssqlTbMeta,
+        mysql::mysql_tb_meta::MysqlTbMeta, pg::pg_tb_meta::PgTbMeta, rdb_tb_meta::RdbTbMeta,
     },
     utils::sql_util::SqlUtil,
 };
@@ -25,6 +25,7 @@ pub struct RdbSnapshotExtractStatement<'a> {
     rdb_tb_meta: &'a RdbTbMeta,
     pg_tb_meta: Option<&'a PgTbMeta>,
     mysql_tb_meta: Option<&'a MysqlTbMeta>,
+    mssql_tb_meta: Option<&'a MssqlTbMeta>,
     order_cols: Option<&'a Vec<String>>,
     ignore_cols: Option<&'a HashSet<String>>,
     where_condition: Option<&'a String>,
@@ -40,6 +41,7 @@ impl<'r> From<&'r MysqlTbMeta> for RdbSnapshotExtractStatement<'r> {
             rdb_tb_meta: &mysql_tb_meta.basic,
             mysql_tb_meta: Some(mysql_tb_meta),
             pg_tb_meta: None,
+            mssql_tb_meta: None,
             order_cols: None,
             ignore_cols: None,
             where_condition: None,
@@ -57,6 +59,25 @@ impl<'r> From<&'r PgTbMeta> for RdbSnapshotExtractStatement<'r> {
             rdb_tb_meta: &pg_tb_meta.basic,
             mysql_tb_meta: None,
             pg_tb_meta: Some(pg_tb_meta),
+            mssql_tb_meta: None,
+            order_cols: None,
+            ignore_cols: None,
+            where_condition: None,
+            limit: 0,
+            predicate_type: OrderKeyPredicateType::None,
+            placeholder_index: Cell::new(0),
+        }
+    }
+}
+
+impl<'r> From<&'r MssqlTbMeta> for RdbSnapshotExtractStatement<'r> {
+    fn from(mssql_tb_meta: &'r MssqlTbMeta) -> Self {
+        RdbSnapshotExtractStatement {
+            db_type: DbType::Mssql,
+            rdb_tb_meta: &mssql_tb_meta.basic,
+            mysql_tb_meta: None,
+            pg_tb_meta: None,
+            mssql_tb_meta: Some(mssql_tb_meta),
             order_cols: None,
             ignore_cols: None,
             where_condition: None,
@@ -99,6 +120,9 @@ impl<'r> RdbSnapshotExtractStatement<'r> {
     }
 
     pub fn build(&self) -> anyhow::Result<String> {
+        if self.mssql_tb_meta.is_some() {
+            todo!("mssql RdbSnapshotExtractStatement SQL generation is not implemented")
+        }
         let extract_cols_str = self.build_extract_cols_str()?;
         let mut sql = format!(
             "SELECT {} FROM {}.{}",

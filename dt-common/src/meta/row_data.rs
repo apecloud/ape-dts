@@ -4,10 +4,11 @@ use anyhow::Context;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sqlx::{mysql::MySqlRow, postgres::PgRow};
+use tiberius::Row as MssqlRow;
 
 use super::{
-    col_value::ColValue, mysql::mysql_tb_meta::MysqlTbMeta, pg::pg_tb_meta::PgTbMeta,
-    rdb_tb_meta::RdbTbMeta, row_type::RowType,
+    col_value::ColValue, mssql::mssql_tb_meta::MssqlTbMeta, mysql::mysql_tb_meta::MysqlTbMeta,
+    pg::pg_tb_meta::PgTbMeta, rdb_tb_meta::RdbTbMeta, row_type::RowType,
 };
 use crate::{
     config::config_enums::DbType,
@@ -179,6 +180,15 @@ impl RowData {
             after.insert(col.to_string(), col_value);
         }
         Ok(Self::build_insert_row_data(after, &tb_meta.basic, chunk_id))
+    }
+
+    pub fn from_mssql_row(
+        _row: &MssqlRow,
+        _tb_meta: &MssqlTbMeta,
+        _ignore_cols: &Option<&HashSet<String>>,
+        _chunk_id: Option<u64>,
+    ) -> anyhow::Result<Self> {
+        todo!("mssql RowData conversion is not implemented")
     }
 
     pub fn build_insert_row_data(
