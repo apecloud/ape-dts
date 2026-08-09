@@ -248,6 +248,37 @@ impl StreamParser {
             }
         }
 
+        // 3. IDMP (Idempotent Message Producer) config and entries.
+        // refer: https://github.com/redis/redis/blob/unstable/src/rdb.c, rdbLoadStreamIdmpEntries
+        if type_byte >= super::RDB_TYPE_STREAM_LISTPACKS_4 {
+            let _ = reader.read_length().await?; // idmp_duration
+            let _ = reader.read_length().await?; // idmp_max_entries
+
+            // IDMP dedup state can not be expressed as redis commands,
+            // so entries are only consumed to keep the reader in sync.
+            let n_producer = reader.read_length().await?;
+            if n_producer > 0 {
+                log::warn!(
+                    "stream [{}] has {} IDMP producers, their deduplication state will NOT be migrated",
+                    master_key,
+                    n_producer
+                );
+            }
+
+            for _ in 0..n_producer {
+                let _ = reader.read_string().await?; // producer id
+                let n_entry = reader.read_length().await?;
+                for _ in 0..n_entry {
+                    let _ = reader.read_string().await?; // iid
+                    let _ = reader.read_length().await?; // entry id ms
+                    let _ = reader.read_length().await?; // entry id seq
+                }
+            }
+
+            let _ = reader.read_length().await?; // iids_added
+            let _ = reader.read_length().await?; // iids_duplicates
+        }
+
         Ok(obj)
     }
 
