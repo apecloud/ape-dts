@@ -1,9 +1,8 @@
-use anyhow::{bail, Context};
 use dt_common::config::connection_auth_config::ConnectionAuthConfig;
-use tiberius::{AuthMethod, Client, Config};
+use dt_common::meta::mssql::mssql_connection_pool::MssqlConnectionPool;
+use tiberius::Client;
 use tokio::net::TcpStream;
 use tokio_util::compat::{Compat, TokioAsyncWriteCompatExt};
-use url::Url;
 
 type MssqlTestTdsClient = Client<Compat<TcpStream>>;
 
@@ -14,52 +13,32 @@ pub struct MssqlTestClient {
 
 #[derive(Clone)]
 struct MssqlTestEndpoint {
-    host: String,
-    port: u16,
-    database: String,
+    connection_string: String,
     connection_auth: ConnectionAuthConfig,
 }
 
 impl MssqlTestClient {
-    pub fn from_url_and_auth(
-        url: &str,
+    pub fn from_connection_string_and_auth(
+        connection_string: &str,
         connection_auth: ConnectionAuthConfig,
     ) -> anyhow::Result<Self> {
-        let url = Url::parse(url).context("failed to parse MSSQL test endpoint URL")?;
-        let host = url
-            .host_str()
-            .context("MSSQL test endpoint URL must include a host")?
-            .to_string();
-        let port = url.port().unwrap_or(1433);
-        let database = url.path().trim_matches('/').to_string();
-        if database.is_empty() || database.contains('/') {
-            bail!("MSSQL test endpoint URL must include exactly one database");
-        }
+        MssqlConnectionPool::build_client_config(connection_string, &connection_auth, None)?;
 
         Ok(Self {
             endpoint: MssqlTestEndpoint {
-                host,
-                port,
-                database,
+                connection_string: connection_string.to_string(),
                 connection_auth,
             },
         })
     }
 
-    pub fn database(&self) -> &str {
-        &self.endpoint.database
-    }
-
     async fn connect_to(&self, database: &str) -> anyhow::Result<MssqlTestTdsClient> {
-        let (username, password) = Self::credentials(&self.endpoint.connection_auth)?;
-        let mut config = Config::new();
-        config.host(&self.endpoint.host);
-        config.port(self.endpoint.port);
+        let mut config = MssqlConnectionPool::build_client_config(
+            &self.endpoint.connection_string,
+            &self.endpoint.connection_auth,
+            None,
+        )?;
         config.database(database);
-        config.authentication(AuthMethod::sql_server(username, password));
-        if let Some(ssl_config) = self.endpoint.connection_auth.ssl_config() {
-            ssl_config.apply_mssql(&mut config)?;
-        }
 
         let tcp = TcpStream::connect(config.get_addr()).await?;
         tcp.set_nodelay(true)?;
@@ -77,25 +56,13 @@ impl MssqlTestClient {
         Ok(())
     }
 
-    fn credentials(auth: &ConnectionAuthConfig) -> anyhow::Result<(String, String)> {
-        match auth {
-            ConnectionAuthConfig::Basic { username, password } => Ok((
-                username.clone(),
-                password
-                    .clone()
-                    .context("MSSQL test password is required")?,
-            )),
-            ConnectionAuthConfig::BasicSsl {
-                username, password, ..
-            } => Ok((
-                username
-                    .clone()
-                    .context("MSSQL test username is required")?,
-                password
-                    .clone()
-                    .context("MSSQL test password is required")?,
-            )),
-            ConnectionAuthConfig::NoAuth => bail!("MSSQL test SQL authentication is required"),
-        }
+    pub async fn check_connection(&self, database: &str) -> anyhow::Result<()> {
+        let mut client = self.connect_to(database).await?;
+        client
+            .simple_query("SELECT 1")
+            .await?
+            .into_results()
+            .await?;
+        Ok(())
     }
 }

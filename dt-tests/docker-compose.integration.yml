@@ -1410,7 +1410,7 @@ services:
     environment:
       ACCEPT_EULA: "Y"
       MSSQL_PID: Developer
-      MSSQL_SA_PASSWORD: ${MSSQL_SA_PASSWORD}
+      MSSQL_SA_PASSWORD: "ApeDts_mssql_2022!"
     ports:
       - "1433:1433"
     healthcheck:
@@ -1428,7 +1428,7 @@ services:
     environment:
       ACCEPT_EULA: "Y"
       MSSQL_PID: Developer
-      MSSQL_SA_PASSWORD: ${MSSQL_SA_PASSWORD}
+      MSSQL_SA_PASSWORD: "ApeDts_mssql_2022!"
     ports:
       - "1434:1433"
     healthcheck:

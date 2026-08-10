@@ -32,6 +32,7 @@ pub enum SinkerConfig {
     Mssql {
         url: String,
         connection_auth: ConnectionAuthConfig,
+        connection_timeout_secs: u64,
         batch_size: usize,
     },
 

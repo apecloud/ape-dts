@@ -83,6 +83,7 @@ pub enum ExtractorConfig {
     MssqlSnapshot {
         url: String,
         connection_auth: ConnectionAuthConfig,
+        connection_timeout_secs: u64,
         schema: String,
         tb: String,
         schema_tbs: HashMap<String, Vec<String>>,
