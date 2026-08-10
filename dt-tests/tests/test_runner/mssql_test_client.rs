@@ -46,7 +46,14 @@ impl MssqlTestClient {
                 (target.url, target.connection_auth)
             }
         };
-        let url = Url::parse(&url).context("failed to parse MSSQL test endpoint URL")?;
+        Self::from_url_and_auth(&url, connection_auth)
+    }
+
+    pub fn from_url_and_auth(
+        url: &str,
+        connection_auth: ConnectionAuthConfig,
+    ) -> anyhow::Result<Self> {
+        let url = Url::parse(url).context("failed to parse MSSQL test endpoint URL")?;
         let host = url
             .host_str()
             .context("MSSQL test endpoint URL must include a host")?
