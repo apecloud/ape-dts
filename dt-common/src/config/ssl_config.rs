@@ -64,7 +64,9 @@ impl SslConfig {
 
     pub fn apply_mssql(&self, options: &mut MssqlConfig) -> anyhow::Result<()> {
         match self.ssl_mode {
-            SslMode::Disable => options.encryption(EncryptionLevel::Off),
+            // Tiberius `Off` still uses TLS for the login exchange. `disable`
+            // means no TLS at all, which Tiberius calls `NotSupported`.
+            SslMode::Disable => options.encryption(EncryptionLevel::NotSupported),
             SslMode::Require => options.encryption(EncryptionLevel::Required),
             SslMode::VerifyFull => {
                 if self.ssl_ca_path.is_empty() {
