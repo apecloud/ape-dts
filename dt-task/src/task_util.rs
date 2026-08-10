@@ -25,6 +25,7 @@ use dt_common::{
     error::{DtError, DtResultExt, EndpointRole, ErrorCode},
     log_info, log_warn,
     meta::{
+        mssql::mssql_connection_pool::MssqlConnectionPool,
         mysql::{
             mysql_dbengine_meta_center::MysqlDbEngineMetaCenter,
             mysql_meta_manager::MysqlMetaManager,
@@ -821,6 +822,7 @@ pub enum ConnClient {
     MySQL(Pool<MySql>),
     PostgreSQL(Pool<Postgres>),
     MongoDB(mongodb::Client),
+    Mssql(MssqlConnectionPool),
     S3(Operator),
 }
 
@@ -935,6 +937,13 @@ impl ConnClient {
             )
             .await
             .map(ConnClient::MongoDB),
+            ExtractorConfig::MssqlSnapshot {
+                url,
+                connection_auth,
+                ..
+            } => MssqlConnectionPool::from_config(url, connection_auth, extractor_max_connections)
+                .await
+                .map(ConnClient::Mssql),
             _ => Ok(ConnClient::None),
         }
         .endpoint(EndpointRole::Source)?;
@@ -1027,6 +1036,13 @@ impl ConnClient {
                 )
                 .await
                 .map(ConnClient::MongoDB),
+                SinkerConfig::Mssql {
+                    url,
+                    connection_auth,
+                    ..
+                } => MssqlConnectionPool::from_config(url, connection_auth, sinker_max_connections)
+                    .await
+                    .map(ConnClient::Mssql),
                 _ => Ok(ConnClient::None),
             }
         }
@@ -1049,6 +1065,7 @@ impl ConnClient {
             ConnClient::MongoDB(client) => {
                 client.clone().shutdown().await;
             }
+            ConnClient::Mssql(connection_pool) => connection_pool.close().await?,
             _ => {}
         }
         Ok(())

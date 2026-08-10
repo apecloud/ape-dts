@@ -710,6 +710,12 @@ impl ExtractorUtil {
                 Box::new(extractor)
             }
 
+            ExtractorConfig::MssqlSnapshot { .. } => {
+                bail!(DtError::InvalidConfig(
+                    "MSSQL snapshot extractor is not implemented".to_string(),
+                ));
+            }
+
             ExtractorConfig::Kafka {
                 url,
                 group,
