@@ -1872,8 +1872,10 @@ dependencies = [
  "serde_json",
  "serial_test",
  "sqlx",
+ "tiberius",
  "time",
  "tokio",
+ "tokio-util 0.7.15",
  "url",
  "uuid",
 ]
