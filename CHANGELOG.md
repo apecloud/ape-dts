@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [Unreleased]
+
+### Added
+
+#### Redis
+
+- support RDB type byte 26 (`RDB_TYPE_STREAM_LISTPACKS_4`), including the trailing IDMP (Idempotent Message Producer) section, when extracting streams from an RDB snapshot
+
+### Fixed
+
+#### General and Platform
+
+- exit with a non-zero status code when the task panics, instead of leaving the process hanging
+
+#### Redis
+
+- fail the task on unsupported RDB type bytes; the entry length of an unknown type can not be determined, so the parser previously desynchronized and silently produced partial data
+
+---
+
 ## [2.0.26] - 2026-08-03
 
 Data replication involves inherently complex and diverse workloads. Over the past several releases, we have continued to strengthen the foundation of Ape-DTS across three key areas: observability, through clearer metrics, error reporting, and runtime logs; controllability, through explicit resource configuration and the elimination of black-box behaviors that can unexpectedly amplify resource consumption; and usability, through streamlined configuration and CLI-based tooling. Alongside these foundational improvements, we have focused on making replication for four widely adopted open-source database engines—MySQL, PostgreSQL, MongoDB, and Redis—more stable and reliable across real-world workloads:
