@@ -36,3 +36,6 @@ const RDB_TYPE_HASH_METADATA_PRE_GA: u8 = 22;
 const RDB_TYPE_HASH_LISTPACK_EX_PRE_GA: u8 = 23;
 const RDB_TYPE_HASH_METADATA: u8 = 24;
 const RDB_TYPE_HASH_LISTPACK_EX: u8 = 25;
+
+// Stream with IDMP (Idempotent Message Producer) support.
+const RDB_TYPE_STREAM_LISTPACKS_4: u8 = 26;
