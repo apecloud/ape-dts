@@ -1,6 +1,7 @@
 use std::{collections::HashMap, fs, io::ErrorKind};
 
 use anyhow::{bail, Error, Ok};
+use url::Url;
 
 #[cfg(feature = "metrics")]
 use crate::config::metrics_config::MetricsConfig;
@@ -517,6 +518,33 @@ impl TaskConfig {
                 _ => bail! { not_supported_err },
             },
 
+            DbType::Mssql => match extract_type {
+                ExtractType::Snapshot => {
+                    Self::validate_mssql_connection(
+                        EXTRACTOR,
+                        &url,
+                        &connection_auth,
+                        max_connections,
+                    )?;
+                    ExtractorConfig::MssqlSnapshot {
+                        url,
+                        connection_auth,
+                        schema: String::new(),
+                        tb: String::new(),
+                        schema_tbs: HashMap::new(),
+                        parallel_size: Self::load_snapshot_parallel_size(loader)?,
+                        parallel_type: loader.get_with_default(
+                            EXTRACTOR,
+                            "parallel_type",
+                            RdbParallelType::Table,
+                        )?,
+                        batch_size,
+                        partition_cols: loader.get_optional(EXTRACTOR, PARTITION_COLS)?,
+                    }
+                }
+                _ => bail! { not_supported_err },
+            },
+
             DbType::Mongo => match extract_type {
                 ExtractType::Snapshot => {
                     let batch_size = match u32::try_from(batch_size) {
@@ -774,6 +802,23 @@ impl TaskConfig {
                     reverse: loader.get_optional(SINKER, REVERSE)?,
                 },
 
+                _ => bail! { not_supported_err },
+            },
+
+            DbType::Mssql => match sink_type {
+                SinkType::Write => {
+                    Self::validate_mssql_connection(
+                        SINKER,
+                        &url,
+                        &connection_auth,
+                        max_connections,
+                    )?;
+                    SinkerConfig::Mssql {
+                        url,
+                        connection_auth,
+                        batch_size,
+                    }
+                }
                 _ => bail! { not_supported_err },
             },
 
@@ -1350,6 +1395,59 @@ impl TaskConfig {
         })
     }
 
+    fn validate_mssql_connection(
+        section: &str,
+        raw_url: &str,
+        connection_auth: &ConnectionAuthConfig,
+        max_connections: u32,
+    ) -> anyhow::Result<()> {
+        if max_connections == 0 {
+            bail!(DtError::invalid_config(format!(
+                "config [{}].{} must be greater than 0",
+                section, MAX_CONNECTIONS
+            )));
+        }
+
+        let url = Url::parse(raw_url).map_err(|_| {
+            DtError::invalid_config(format!(
+                "config [{}].{} must be a valid mssql URL",
+                section, URL
+            ))
+        })?;
+        let databases = url
+            .path_segments()
+            .map(|segments| segments.filter(|segment| !segment.is_empty()).count())
+            .unwrap_or_default();
+        if url.scheme() != "mssql" || url.host_str().is_none() || databases != 1 {
+            bail!(DtError::invalid_config(format!(
+                "config [{}].{} must use mssql://host[:port]/database with exactly one database",
+                section, URL
+            )));
+        }
+
+        let (username, password) = match connection_auth {
+            ConnectionAuthConfig::Basic { username, password } => {
+                (Some(username.as_str()), password.as_deref())
+            }
+            ConnectionAuthConfig::BasicSsl {
+                username, password, ..
+            } => (username.as_deref(), password.as_deref()),
+            ConnectionAuthConfig::NoAuth => (None, None),
+        };
+        if username.is_none_or(str::is_empty) || password.is_none_or(str::is_empty) {
+            bail!(DtError::invalid_config(format!(
+                "config [{}] requires username and password for MSSQL SQL Server authentication",
+                section
+            )));
+        }
+
+        if let Some(ssl) = connection_auth.ssl_config() {
+            let mut config = tiberius::Config::new();
+            ssl.apply_mssql(&mut config)?;
+        }
+        Ok(())
+    }
+
     #[cfg(feature = "metrics")]
     fn load_metrics_config(loader: &IniLoader) -> anyhow::Result<MetricsConfig> {
         let metrics_section = "metrics";
@@ -1392,8 +1490,8 @@ mod tests {
     use crate::runtime_trace::{TaskSummaryMode, TraceOutputFormat};
 
     use super::{
-        CheckMode, CheckerOutputType, ExtractorConfig, ParallelType, SinkerConfig, TaskConfig,
-        TaskKind, TaskType,
+        CheckMode, CheckerOutputType, DbType, ExtractorConfig, ParallelType, RdbParallelType,
+        SinkerConfig, TaskConfig, TaskKind, TaskType,
     };
 
     static NEXT_CONFIG_ID: AtomicU64 = AtomicU64::new(0);
@@ -1953,5 +2051,88 @@ batch_size=0
             }
             Ok(_) => panic!("expected config validation error"),
         }
+    }
+
+    #[test]
+    fn mssql_snapshot_config_accepts_chunk_and_partition_cols() {
+        let config = load_temp_task_config(
+            r#"[extractor]
+db_type=mssql
+extract_type=snapshot
+url=mssql://127.0.0.1:1433/ape_dts
+username=sa
+password=Password123!
+ssl_mode=disable
+parallel_type=chunk
+partition_cols=json:[{"db":"dbo","tb":"basic_test","partition_col":"id"}]
+max_connections=2
+batch_size=16
+
+[sinker]
+db_type=mssql
+sink_type=write
+url=mssql://127.0.0.1:1434/ape_dts
+username=sa
+password=Password123!
+ssl_mode=disable
+max_connections=2
+batch_size=8
+
+[parallelizer]
+parallel_type=snapshot
+parallel_size=2
+"#,
+        )
+        .expect("MSSQL chunk config should be accepted");
+
+        assert_eq!(config.extractor_basic.db_type, DbType::Mssql);
+        assert_eq!(config.sinker_basic.db_type, DbType::Mssql);
+        assert_eq!(
+            config.task_type(),
+            Some(TaskType::new(TaskKind::Snapshot, None))
+        );
+        match config.extractor {
+            ExtractorConfig::MssqlSnapshot {
+                parallel_type,
+                partition_cols,
+                ..
+            } => {
+                assert_eq!(parallel_type, RdbParallelType::Chunk);
+                assert!(partition_cols.contains("basic_test"));
+            }
+            _ => panic!("expected MSSQL snapshot extractor"),
+        }
+        assert!(matches!(config.sinker, SinkerConfig::Mssql { .. }));
+    }
+
+    #[test]
+    fn mssql_snapshot_config_requires_database_in_url() {
+        let result = load_temp_task_config(
+            r#"[extractor]
+db_type=mssql
+extract_type=snapshot
+url=mssql://127.0.0.1:1433
+username=sa
+password=Password123!
+ssl_mode=disable
+
+[sinker]
+db_type=mssql
+sink_type=write
+url=mssql://127.0.0.1:1434/ape_dts
+username=sa
+password=Password123!
+ssl_mode=disable
+"#,
+        );
+        let error = match result {
+            Err(error) => error,
+            Ok(_) => panic!("MSSQL URL without a database should be rejected"),
+        };
+
+        assert!(error
+            .root_cause()
+            .to_string()
+            .contains("mssql://host[:port]/database"));
     }
 }

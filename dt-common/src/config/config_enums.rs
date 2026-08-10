@@ -20,6 +20,8 @@ pub enum DbType {
     Mysql,
     #[strum(serialize = "pg")]
     Pg,
+    #[strum(serialize = "mssql")]
+    Mssql,
     #[strum(serialize = "kafka")]
     Kafka,
     #[strum(serialize = "mongo")]
@@ -41,6 +43,7 @@ impl DbType {
         match self {
             Self::Mysql => "mysql",
             Self::Pg => "postgresql",
+            Self::Mssql => "sql_server",
             Self::Kafka => "kafka",
             Self::Mongo => "mongodb",
             Self::Redis => "redis",
