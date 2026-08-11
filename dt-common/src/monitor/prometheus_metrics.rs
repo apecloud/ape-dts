@@ -37,10 +37,8 @@ impl PrometheusMetrics {
     }
 
     #[cfg(feature = "tracing")]
-    pub(super) fn runtime_trace_metrics(&self) -> &RuntimeTraceMetrics {
-        self.runtime_trace_metrics
-            .get()
-            .expect("runtime trace metrics should be initialized")
+    pub(super) fn runtime_trace_metrics(&self) -> Option<&RuntimeTraceMetrics> {
+        self.runtime_trace_metrics.get()
     }
 
     pub fn initialization(&self) -> anyhow::Result<&Self> {
