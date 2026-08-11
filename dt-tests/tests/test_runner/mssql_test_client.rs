@@ -1,15 +1,12 @@
-use anyhow::{bail, Context};
+use anyhow::Context;
+use connection_string::{AdoNetString, JdbcString};
 use dt_common::{
-    config::{
-        config_enums::DbType, connection_auth_config::ConnectionAuthConfig, task_config::TaskConfig,
-    },
-    meta::row_data::RowData,
-    utils::sql_util::SqlUtil,
+    config::{connection_auth_config::ConnectionAuthConfig, task_config::TaskConfig},
+    meta::{mssql::mssql_connection_pool::MssqlConnectionPool, row_data::RowData},
 };
-use tiberius::{AuthMethod, Client, Config};
+use tiberius::Client;
 use tokio::net::TcpStream;
 use tokio_util::compat::{Compat, TokioAsyncWriteCompatExt};
-use url::Url;
 
 type MssqlTestTdsClient = Client<Compat<TcpStream>>;
 
@@ -26,68 +23,61 @@ pub struct MssqlTestClient {
 
 #[derive(Clone)]
 struct MssqlTestEndpoint {
-    host: String,
-    port: u16,
-    database: String,
+    connection_string: String,
     connection_auth: ConnectionAuthConfig,
+    database: Option<String>,
 }
 
 impl MssqlTestClient {
     pub fn from_task_config(config: &TaskConfig, side: TestSide) -> anyhow::Result<Self> {
-        let (url, connection_auth) = match side {
+        let (connection_string, connection_auth) = match side {
             TestSide::Source => (
                 config.extractor_basic.url.clone(),
                 config.extractor_basic.connection_auth.clone(),
             ),
             TestSide::Destination => {
-                let target = config.destination_target().ok_or_else(|| {
-                    anyhow::anyhow!("MSSQL test destination endpoint is not configured")
-                })?;
+                let target = config
+                    .destination_target()
+                    .context("MSSQL test destination endpoint is not configured")?;
                 (target.url, target.connection_auth)
             }
         };
-        Self::from_url_and_auth(&url, connection_auth)
+        let database = Self::database_from_connection_string(&connection_string)?;
+        let mut client =
+            Self::from_connection_string_and_auth(&connection_string, connection_auth)?;
+        client.endpoint.database = Some(database);
+        Ok(client)
     }
 
-    pub fn from_url_and_auth(
-        url: &str,
+    pub fn from_connection_string_and_auth(
+        connection_string: &str,
         connection_auth: ConnectionAuthConfig,
     ) -> anyhow::Result<Self> {
-        let url = Url::parse(url).context("failed to parse MSSQL test endpoint URL")?;
-        let host = url
-            .host_str()
-            .context("MSSQL test endpoint URL must include a host")?
-            .to_string();
-        let port = url.port().unwrap_or(1433);
-        let database = url.path().trim_matches('/').to_string();
-        if database.is_empty() || database.contains('/') {
-            bail!("MSSQL test endpoint URL must include exactly one database");
-        }
+        MssqlConnectionPool::build_client_config(connection_string, &connection_auth, None)?;
 
         Ok(Self {
             endpoint: MssqlTestEndpoint {
-                host,
-                port,
-                database,
+                connection_string: connection_string.to_string(),
                 connection_auth,
+                database: None,
             },
         })
     }
 
     pub fn database(&self) -> &str {
-        &self.endpoint.database
+        self.endpoint
+            .database
+            .as_deref()
+            .expect("MSSQL task test client must have a database")
     }
 
     async fn connect_to(&self, database: &str) -> anyhow::Result<MssqlTestTdsClient> {
-        let (username, password) = Self::credentials(&self.endpoint.connection_auth)?;
-        let mut config = Config::new();
-        config.host(&self.endpoint.host);
-        config.port(self.endpoint.port);
+        let mut config = MssqlConnectionPool::build_client_config(
+            &self.endpoint.connection_string,
+            &self.endpoint.connection_auth,
+            None,
+        )?;
         config.database(database);
-        config.authentication(AuthMethod::sql_server(username, password));
-        if let Some(ssl_config) = self.endpoint.connection_auth.ssl_config() {
-            ssl_config.apply_mssql(&mut config)?;
-        }
 
         let tcp = TcpStream::connect(config.get_addr()).await?;
         tcp.set_nodelay(true)?;
@@ -97,8 +87,7 @@ impl MssqlTestClient {
     pub async fn ensure_database(&self, database: &str) -> anyhow::Result<()> {
         let mut client = self.connect_to("master").await?;
         let database_literal = database.replace('\'', "''");
-        let escape_pair = SqlUtil::get_escape_pairs(&DbType::Mssql)[0];
-        let database_identifier = SqlUtil::escape(database, &escape_pair);
+        let database_identifier = format!("[{}]", database.replace(']', "]]"));
         let sql = format!(
             "IF DB_ID(N'{database_literal}') IS NULL CREATE DATABASE {database_identifier}"
         );
@@ -106,8 +95,18 @@ impl MssqlTestClient {
         Ok(())
     }
 
+    pub async fn check_connection(&self, database: &str) -> anyhow::Result<()> {
+        let mut client = self.connect_to(database).await?;
+        client
+            .simple_query("SELECT 1")
+            .await?
+            .into_results()
+            .await?;
+        Ok(())
+    }
+
     pub async fn execute_batches(&self, batches: &[String]) -> anyhow::Result<()> {
-        let mut client = self.connect_to(&self.endpoint.database).await?;
+        let mut client = self.connect_to(self.database()).await?;
         for batch in batches {
             client
                 .simple_query(batch.as_str())
@@ -131,25 +130,20 @@ impl MssqlTestClient {
         Ok(())
     }
 
-    fn credentials(auth: &ConnectionAuthConfig) -> anyhow::Result<(String, String)> {
-        match auth {
-            ConnectionAuthConfig::Basic { username, password } => Ok((
-                username.clone(),
-                password
-                    .clone()
-                    .context("MSSQL test password is required")?,
-            )),
-            ConnectionAuthConfig::BasicSsl {
-                username, password, ..
-            } => Ok((
-                username
-                    .clone()
-                    .context("MSSQL test username is required")?,
-                password
-                    .clone()
-                    .context("MSSQL test password is required")?,
-            )),
-            ConnectionAuthConfig::NoAuth => bail!("MSSQL test SQL authentication is required"),
+    fn database_from_connection_string(connection_string: &str) -> anyhow::Result<String> {
+        if let Ok(ado) = connection_string.parse::<AdoNetString>() {
+            return ado
+                .get("database")
+                .cloned()
+                .context("MSSQL ADO.NET connection string must include database");
         }
+
+        connection_string
+            .parse::<JdbcString>()
+            .context("failed to parse MSSQL JDBC connection string")?
+            .properties()
+            .get("database")
+            .cloned()
+            .context("MSSQL JDBC connection string must include database")
     }
 }

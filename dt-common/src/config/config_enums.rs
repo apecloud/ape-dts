@@ -43,7 +43,7 @@ impl DbType {
         match self {
             Self::Mysql => "mysql",
             Self::Pg => "postgresql",
-            Self::Mssql => "sql_server",
+            Self::Mssql => "mssql",
             Self::Kafka => "kafka",
             Self::Mongo => "mongodb",
             Self::Redis => "redis",
@@ -52,10 +52,6 @@ impl DbType {
             Self::Doris => "doris",
             Self::Tidb => "tidb",
         }
-    }
-
-    pub const fn is_rdb_source(&self) -> bool {
-        matches!(self, Self::Mysql | Self::Pg | Self::Mssql)
     }
 }
 

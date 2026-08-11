@@ -79,7 +79,9 @@ impl TaskUtil {
                 let connection_pool = MssqlConnectionPool::from_config(
                     &target.url,
                     &target.connection_auth,
+                    target.app_name.as_deref(),
                     target.max_connections,
+                    target.connection_timeout_secs,
                 )
                 .await?;
                 let meta_manager = MssqlMetaManager::new(connection_pool).await?;
@@ -889,6 +891,8 @@ impl ConnClient {
         let enable_sqlx_log = TaskUtil::check_enable_sqlx_log(&task_config.runtime.log_level);
         let extractor_max_connections = task_config.extractor_basic.max_connections;
         let sinker_max_connections = task_config.sinker_basic.max_connections;
+        let extractor_connection_timeout_secs = task_config.extractor_basic.connection_timeout_secs;
+        let sinker_connection_timeout_secs = task_config.sinker_basic.connection_timeout_secs;
         if extractor_max_connections < 1 {
             bail!(DtError::invalid_config(
                 "`extractor.max_connections` must be greater than 0"
@@ -898,6 +902,16 @@ impl ConnClient {
         if sinker_exists && sinker_max_connections < 1 {
             bail!(DtError::invalid_config(
                 "`sinker.max_connections` must be greater than 0"
+            ));
+        }
+        if extractor_connection_timeout_secs < 1 {
+            bail!(DtError::invalid_config(
+                "`extractor.connection_timeout_secs` must be greater than 0"
+            ));
+        }
+        if sinker_exists && sinker_connection_timeout_secs < 1 {
+            bail!(DtError::invalid_config(
+                "`sinker.connection_timeout_secs` must be greater than 0"
             ));
         }
 
@@ -999,9 +1013,15 @@ impl ConnClient {
                 url,
                 connection_auth,
                 ..
-            } => MssqlConnectionPool::from_config(url, connection_auth, extractor_max_connections)
-                .await
-                .map(ConnClient::Mssql),
+            } => MssqlConnectionPool::from_config(
+                url,
+                connection_auth,
+                task_config.extractor_basic.app_name.as_deref(),
+                extractor_max_connections,
+                extractor_connection_timeout_secs,
+            )
+            .await
+            .map(ConnClient::Mssql),
             _ => Ok(ConnClient::None),
         }
         .endpoint(EndpointRole::Source)?;
@@ -1098,9 +1118,15 @@ impl ConnClient {
                     url,
                     connection_auth,
                     ..
-                } => MssqlConnectionPool::from_config(url, connection_auth, sinker_max_connections)
-                    .await
-                    .map(ConnClient::Mssql),
+                } => MssqlConnectionPool::from_config(
+                    url,
+                    connection_auth,
+                    task_config.sinker_basic.app_name.as_deref(),
+                    sinker_max_connections,
+                    sinker_connection_timeout_secs,
+                )
+                .await
+                .map(ConnClient::Mssql),
                 _ => Ok(ConnClient::None),
             }
         }

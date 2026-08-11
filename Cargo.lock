@@ -1848,6 +1848,7 @@ dependencies = [
  "clickhouse",
  "concurrent-queue",
  "configparser",
+ "connection-string",
  "dotenv",
  "dt-common",
  "dt-connector",

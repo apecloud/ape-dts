@@ -803,7 +803,9 @@ impl ExtractorUtil {
                     dt_common::meta::mssql::mssql_connection_pool::MssqlConnectionPool::from_config(
                         extractor_url,
                         connection_auth,
+                        task_config.extractor_basic.app_name.as_deref(),
                         1,
+                        task_config.extractor_basic.connection_timeout_secs,
                     )
                     .await?;
                 let meta_manager = MssqlMetaManager::new(connection_pool).await?;

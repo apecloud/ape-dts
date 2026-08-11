@@ -130,6 +130,9 @@ fn install_panic_hook() {
         let backtrace = Backtrace::capture();
         log_error!("panic: {}\nbacktrace:\n{}", panic_info, backtrace);
         log::logger().flush();
+        // A panic in a spawned task or worker thread would otherwise leave the process
+        // hanging, and the task would never be reported as failed.
+        exit(1);
     }));
 }
 

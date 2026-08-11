@@ -11,16 +11,18 @@ use async_trait::async_trait;
 use tokio::{sync::Mutex, time::Instant};
 
 use super::redis_client::RedisClient;
-use crate::extractor::{
-    base_extractor::{BaseExtractor, ExtractState},
-    redis::{
-        rdb::{rdb_parser::RdbParser, reader::rdb_reader::RdbReader},
-        redis_resp_types::Value,
-        StreamReader,
+use crate::{
+    extractor::{
+        base_extractor::{BaseExtractor, ExtractState},
+        redis::{
+            rdb::{rdb_parser::RdbParser, reader::rdb_reader::RdbReader},
+            redis_resp_types::Value,
+            StreamReader,
+        },
+        resumer::{recovery::Recovery, utils::ResumerUtil},
     },
-    resumer::{recovery::Recovery, utils::ResumerUtil},
+    Extractor,
 };
-use crate::Extractor;
 use dt_common::{
     config::{
         config_enums::{DbType, ExtractType},

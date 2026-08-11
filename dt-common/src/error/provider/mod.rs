@@ -2,6 +2,7 @@ mod classification;
 mod http;
 mod kafka;
 mod mongodb;
+mod mssql;
 mod mysql_binlog;
 mod postgres;
 mod redis;

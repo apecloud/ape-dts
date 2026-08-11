@@ -223,6 +223,7 @@ pub struct BasicExtractorConfig {
     pub url: String,
     pub connection_auth: ConnectionAuthConfig,
     pub max_connections: u32,
+    pub connection_timeout_secs: u64,
     pub rate_limiter: RateLimiterConfig,
     pub app_name: Option<String>,
     pub is_direct_connection: Option<bool>,
