@@ -129,7 +129,10 @@ impl RuntimeTraceMetrics {
     }
 
     fn update_snapshot(&self, snapshot: &RuntimeTraceMetricsSnapshot) {
-        let mut previous_snapshot = self.previous_snapshot.lock().unwrap();
+        let mut previous_snapshot = self
+            .previous_snapshot
+            .lock()
+            .unwrap_or_else(|posisoned| posisoned.into_inner());
         for marker in &snapshot.markers {
             let previous_marker = previous_snapshot
                 .markers
@@ -215,7 +218,7 @@ impl FlushableMonitor for RuntimeTraceMonitor {
         #[cfg(all(feature = "metrics", feature = "tracing"))]
         self.prometheus_metrics
             .runtime_trace_metrics()
-            .update_snapshot(&_snapshot);
+            .map(|trace_metrics| trace_metrics.update_snapshot(&_snapshot));
     }
 }
 

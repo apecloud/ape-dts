@@ -76,7 +76,9 @@ impl ErrorReport {
     }
 
     pub fn to_log_json(&self) -> String {
-        serde_json::to_string(self).expect("ErrorReport fields should always serialize to JSON")
+        serde_json::to_string(self).unwrap_or_else(|_| {
+            "Unknown error: failed to serialize ErrorReport fields to JSON.".to_owned()
+        })
     }
 
     fn push_context(&mut self, context: &DtErrorContext) {

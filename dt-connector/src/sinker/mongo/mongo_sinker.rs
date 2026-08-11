@@ -1,6 +1,6 @@
 use std::{cmp, collections::HashMap};
 
-use anyhow::Context;
+use anyhow::{bail, Context, Result};
 use async_trait::async_trait;
 use mongodb::{
     bson::{doc, raw::RawDocumentBuf, Bson, Document},
@@ -16,6 +16,7 @@ use crate::{
     Sinker,
 };
 use dt_common::{
+    error::{DtResultExt, ErrorCode},
     log_error, log_warn,
     meta::{
         col_value::ColValue,
@@ -44,7 +45,7 @@ pub struct MongoSinker {
 
 #[async_trait]
 impl Sinker for MongoSinker {
-    async fn sink_dml(&mut self, mut data: Vec<RowData>, batch: bool) -> anyhow::Result<()> {
+    async fn sink_dml(&mut self, mut data: Vec<RowData>, batch: bool) -> Result<()> {
         if data.is_empty() {
             return Ok(());
         }
@@ -65,11 +66,11 @@ impl Sinker for MongoSinker {
         Ok(())
     }
 
-    async fn close(&mut self) -> anyhow::Result<()> {
+    async fn close(&mut self) -> Result<()> {
         Ok(())
     }
 
-    async fn sink_ddl(&mut self, data: Vec<DdlData>, _batch: bool) -> anyhow::Result<()> {
+    async fn sink_ddl(&mut self, data: Vec<DdlData>, _batch: bool) -> Result<()> {
         for ddl_data in data {
             if !self.is_target_mongos && ddl_data.ddl_type.is_mongo_shard_ddl() {
                 continue;
@@ -83,7 +84,7 @@ impl Sinker for MongoSinker {
 
 #[async_trait]
 impl CheckableSink for MongoSinker {
-    async fn sink_dml_borrowed(&mut self, data: &mut [RowData], batch: bool) -> anyhow::Result<()> {
+    async fn sink_dml_borrowed(&mut self, data: &mut [RowData], batch: bool) -> Result<()> {
         if data.is_empty() {
             return Ok(());
         }
@@ -160,7 +161,7 @@ impl MongoSinker {
     async fn target_shard_collection(
         &mut self,
         row_data: &RowData,
-    ) -> anyhow::Result<Option<MongoShardCollection>> {
+    ) -> Result<Option<MongoShardCollection>> {
         let ns = self.target_ns(row_data);
         self.target_shard_collection_by_ns(&ns).await
     }
@@ -168,7 +169,7 @@ impl MongoSinker {
     async fn target_shard_collection_by_ns(
         &mut self,
         ns: &str,
-    ) -> anyhow::Result<Option<MongoShardCollection>> {
+    ) -> Result<Option<MongoShardCollection>> {
         if let Some(shard_collection) = self.target_shard_collections.get(ns) {
             return Ok(shard_collection.clone());
         }
@@ -183,7 +184,7 @@ impl MongoSinker {
         Ok(shard_collection)
     }
 
-    async fn is_target_sharded(&mut self, row_data: &RowData) -> anyhow::Result<bool> {
+    async fn is_target_sharded(&mut self, row_data: &RowData) -> Result<bool> {
         Ok(self.target_shard_collection(row_data).await?.is_some())
     }
 
@@ -219,7 +220,7 @@ impl MongoSinker {
         &mut self,
         row_data: &RowData,
         raw_doc: &RawDocumentBuf,
-    ) -> anyhow::Result<Document> {
+    ) -> Result<Document> {
         let shard_collection = self.target_shard_collection(row_data).await?;
         let mut filter = Document::new();
 
@@ -241,7 +242,7 @@ impl MongoSinker {
             if filter.contains_key(MongoConstants::ID) {
                 return Ok(filter);
             }
-            anyhow::bail!("mongo raw doc missing `_id`");
+            bail!("mongo raw doc missing `_id`");
         };
 
         let missing_keys: Vec<_> = shard_collection
@@ -251,14 +252,14 @@ impl MongoSinker {
             .cloned()
             .collect();
         if self.require_shard_key_filter && !missing_keys.is_empty() {
-            anyhow::bail!(
+            bail!(
                 "mongo target collection [{}] is sharded, but raw row filter is missing shard key field(s): {:?}",
                 shard_collection.ns,
                 missing_keys
             );
         }
         if filter.is_empty() {
-            anyhow::bail!(
+            bail!(
                 "mongo target collection [{}] is sharded, but raw row filter is empty",
                 shard_collection.ns
             );
@@ -271,7 +272,7 @@ impl MongoSinker {
         row_data: &RowData,
         document_key: Option<&Document>,
         full_doc: Option<&Document>,
-    ) -> anyhow::Result<Document> {
+    ) -> Result<Document> {
         self.complete_shard_filter_with_priority(row_data, document_key, full_doc, false)
             .await
     }
@@ -281,7 +282,7 @@ impl MongoSinker {
         row_data: &RowData,
         document_key: Option<&Document>,
         full_doc: Option<&Document>,
-    ) -> anyhow::Result<Document> {
+    ) -> Result<Document> {
         self.complete_shard_filter_with_priority(row_data, document_key, full_doc, true)
             .await
     }
@@ -292,7 +293,7 @@ impl MongoSinker {
         document_key: Option<&Document>,
         full_doc: Option<&Document>,
         prefer_full_doc_shard_keys: bool,
-    ) -> anyhow::Result<Document> {
+    ) -> Result<Document> {
         let shard_collection = match self.target_shard_collection(row_data).await? {
             Some(shard_collection) => shard_collection,
             None => {
@@ -347,7 +348,7 @@ impl MongoSinker {
             .cloned()
             .collect();
         if self.require_shard_key_filter && !missing_keys.is_empty() {
-            anyhow::bail!(
+            bail!(
                 "mongo target collection [{}] is sharded, but row filter is missing shard key field(s): {:?}",
                 shard_collection.ns,
                 missing_keys
@@ -355,7 +356,7 @@ impl MongoSinker {
         }
 
         if filter.is_empty() {
-            anyhow::bail!(
+            bail!(
                 "mongo target collection [{}] is sharded, but row filter is empty",
                 shard_collection.ns
             );
@@ -369,7 +370,7 @@ impl MongoSinker {
         old_doc: Option<&Document>,
         old_doc_is_pre_image: bool,
         full_doc: Option<&Document>,
-    ) -> anyhow::Result<bool> {
+    ) -> Result<bool> {
         let Some(shard_collection) = self.target_shard_collection(row_data).await? else {
             return Ok(false);
         };
@@ -395,7 +396,7 @@ impl MongoSinker {
         Some(doc! { MongoConstants::ID: id.clone() })
     }
 
-    fn raw_value(doc: &RawDocumentBuf, key: &str) -> anyhow::Result<Option<Bson>> {
+    fn raw_value(doc: &RawDocumentBuf, key: &str) -> Result<Option<Bson>> {
         doc.get(key)?
             .map(Bson::try_from)
             .transpose()
@@ -405,7 +406,7 @@ impl MongoSinker {
     fn raw_id_filter(
         document_key: Option<&Document>,
         full_doc: Option<&RawDocumentBuf>,
-    ) -> anyhow::Result<Option<Document>> {
+    ) -> Result<Option<Document>> {
         let id = if let Some(id) = document_key.and_then(|doc| doc.get(MongoConstants::ID)) {
             Some(id.clone())
         } else if let Some(full_doc) = full_doc {
@@ -422,7 +423,7 @@ impl MongoSinker {
         document_key: Option<&Document>,
         full_doc: Option<&RawDocumentBuf>,
         prefer_full_doc_shard_keys: bool,
-    ) -> anyhow::Result<Document> {
+    ) -> Result<Document> {
         let Some(shard_collection) = self.target_shard_collection(row_data).await? else {
             return Self::raw_id_filter(document_key, full_doc)?
                 .context("mongo raw doc missing `_id`");
@@ -469,14 +470,14 @@ impl MongoSinker {
             .cloned()
             .collect();
         if self.require_shard_key_filter && !missing_keys.is_empty() {
-            anyhow::bail!(
+            bail!(
                 "mongo target collection [{}] is sharded, but raw row filter is missing shard key field(s): {:?}",
                 shard_collection.ns,
                 missing_keys
             );
         }
         if filter.is_empty() {
-            anyhow::bail!(
+            bail!(
                 "mongo target collection [{}] is sharded, but raw row filter is empty",
                 shard_collection.ns
             );
@@ -490,7 +491,7 @@ impl MongoSinker {
         document_key: Option<&Document>,
         pre_image: Option<&RawDocumentBuf>,
         full_doc: Option<&RawDocumentBuf>,
-    ) -> anyhow::Result<bool> {
+    ) -> Result<bool> {
         let Some(shard_collection) = self.target_shard_collection(row_data).await? else {
             return Ok(false);
         };
@@ -514,28 +515,38 @@ impl MongoSinker {
         Ok(false)
     }
 
-    async fn run_ddl(&mut self, ddl_data: &DdlData) -> anyhow::Result<()> {
+    async fn run_ddl(&mut self, ddl_data: &DdlData) -> Result<()> {
         let mut command = query_to_command(&ddl_data.query)?;
         self.rewrite_ddl_command_namespace(ddl_data, &mut command);
 
         match ddl_data.ddl_type {
             DdlType::MongoDropDatabase => {
                 let (db, _) = ddl_data.get_schema_tb();
-                self.mongo_client.database(&db).drop().await?;
+                self.mongo_client
+                    .database(&db)
+                    .drop()
+                    .await
+                    .code(ErrorCode::StatementFailed)?;
             }
 
             DdlType::MongoShardCollection => {
                 if self.ensure_shard_collection_command(&command).await? {
-                    self.run_admin_command(command).await?;
+                    self.run_admin_command(command)
+                        .await
+                        .code(ErrorCode::StatementFailed)?;
                 }
             }
 
             DdlType::MongoReshardCollection | DdlType::MongoRefineCollectionShardKey => {
-                self.run_admin_command(command).await?;
+                self.run_admin_command(command)
+                    .await
+                    .code(ErrorCode::StatementFailed)?;
             }
 
             DdlType::MongoRenameCollection => {
-                self.run_admin_command(command).await?;
+                self.run_admin_command(command)
+                    .await
+                    .code(ErrorCode::StatementFailed)?;
             }
 
             DdlType::MongoCreateCollection
@@ -544,7 +555,11 @@ impl MongoSinker {
             | DdlType::MongoDropIndex
             | DdlType::MongoCollMod => {
                 let (db, _) = ddl_data.get_schema_tb();
-                self.mongo_client.database(&db).run_command(command).await?;
+                self.mongo_client
+                    .database(&db)
+                    .run_command(command)
+                    .await
+                    .code(ErrorCode::StatementFailed)?;
             }
 
             _ => {}
@@ -552,7 +567,7 @@ impl MongoSinker {
         Ok(())
     }
 
-    async fn run_admin_command(&self, command: Document) -> anyhow::Result<()> {
+    async fn run_admin_command(&self, command: Document) -> Result<()> {
         self.mongo_client
             .database("admin")
             .run_command(command)
@@ -560,10 +575,7 @@ impl MongoSinker {
         Ok(())
     }
 
-    async fn ensure_shard_collection_command(
-        &mut self,
-        command: &Document,
-    ) -> anyhow::Result<bool> {
+    async fn ensure_shard_collection_command(&mut self, command: &Document) -> Result<bool> {
         let ns = command
             .get_str("shardCollection")
             .context("mongo shardCollection command missing namespace")?;
@@ -576,7 +588,7 @@ impl MongoSinker {
                 .context("mongo shardCollection command missing key")?;
             let unique = command.get_bool("unique").unwrap_or(false);
             if existing.key != *key || existing.unique != unique {
-                anyhow::bail!(
+                bail!(
                     "mongo target collection [{}] shard key mismatch, source key: {:?}, source unique: {}, target key: {:?}, target unique: {}",
                     ns,
                     key,
@@ -623,7 +635,7 @@ impl MongoSinker {
         }
     }
 
-    async fn serial_sink(&mut self, data: &[RowData]) -> anyhow::Result<()> {
+    async fn serial_sink(&mut self, data: &[RowData]) -> Result<()> {
         let task_id = self.base_sinker.source_task_id_for_rows(data, &self.router);
         self.base_sinker.ensure_monitor_for(&task_id);
         let mut rts = LimitedQueue::new(cmp::min(100, data.len()));
@@ -749,8 +761,16 @@ impl MongoSinker {
                 {
                     let before = row_data.require_before()?;
                     let after = row_data.require_after()?;
-                    let raw_oplog_diff = Self::mongo_raw_doc(after, MongoConstants::OPLOG_DIFF_DOC)
-                        .expect("raw Oplog update match guard checked the diff");
+                    let raw_oplog_diff = if let Some(diff_doc) =
+                        Self::mongo_raw_doc(after, MongoConstants::OPLOG_DIFF_DOC)
+                    {
+                        diff_doc
+                    } else {
+                        bail!(format!(
+                            "Update event missing {} in after diff_doc",
+                            MongoConstants::OPLOG_DIFF_DOC
+                        ))
+                    };
                     let oplog_doc = raw_oplog_diff.to_document().with_context(|| {
                         format!(
                             "mongo oplog update cannot be converted to Document, schema: {}, table: {}",
@@ -844,9 +864,13 @@ impl MongoSinker {
                                 match raw_full_doc.map(RawDocumentBuf::to_document).transpose() {
                                     Ok(full_doc) => full_doc,
                                     Err(error) => {
-                                        let full_doc = raw_full_doc.expect(
-                                            "raw fullDocument exists when its conversion fails",
-                                        );
+                                        let full_doc = if let Some(doc) = raw_full_doc {
+                                            doc
+                                        } else {
+                                            bail!(
+                                                "raw fullDocument must exists when its conversion fails"
+                                            )
+                                        };
                                         log_warn!(
                                             "mongo fullDocument cannot be converted for truncatedArrays, use raw full-document replacement, schema: {}, table: {}, error: {}",
                                             row_data.schema,
@@ -970,7 +994,7 @@ impl MongoSinker {
                             continue;
                         }
 
-                        anyhow::bail!(
+                        bail!(
                             "mongo raw update row missing both updateDescription and fullDocument"
                         );
                     }
@@ -1119,7 +1143,7 @@ impl MongoSinker {
         data: &mut [RowData],
         start_index: usize,
         batch_size: usize,
-    ) -> anyhow::Result<()> {
+    ) -> Result<()> {
         let task_id = self
             .base_sinker
             .source_task_id_for_rows(&data[start_index..start_index + batch_size], &self.router);
@@ -1154,7 +1178,7 @@ impl MongoSinker {
                     .context("mongo raw doc missing `_id`")?;
                 ids.push(id);
             } else {
-                anyhow::bail!("mongo delete row missing document");
+                bail!("mongo delete row missing document");
             }
         }
 
@@ -1179,7 +1203,7 @@ impl MongoSinker {
         data: &mut [RowData],
         start_index: usize,
         batch_size: usize,
-    ) -> anyhow::Result<()> {
+    ) -> Result<()> {
         let task_id = self
             .base_sinker
             .source_task_id_for_rows(&data[start_index..start_index + batch_size], &self.router);
@@ -1203,7 +1227,7 @@ impl MongoSinker {
 
         let insert_result = if !raw_docs.is_empty() {
             if !docs.is_empty() || raw_docs.len() != batch_size {
-                anyhow::bail!("mongo insert batch contains mixed or missing document values");
+                bail!("mongo insert batch contains mixed or missing document values");
             }
             self.mongo_client
                 .database(db)
@@ -1212,7 +1236,7 @@ impl MongoSinker {
                 .await
         } else {
             if docs.len() != batch_size {
-                anyhow::bail!("mongo insert batch contains missing document values");
+                bail!("mongo insert batch contains missing document values");
             }
             self.mongo_client
                 .database(db)
@@ -1242,7 +1266,7 @@ impl MongoSinker {
         collection: &Collection<Document>,
         query_doc: Document,
         update_doc: Document,
-    ) -> anyhow::Result<()> {
+    ) -> Result<()> {
         collection
             .update_one(query_doc, update_doc)
             .upsert(true)
@@ -1255,7 +1279,7 @@ impl MongoSinker {
         collection: &Collection<Document>,
         query_doc: Document,
         update_doc: Document,
-    ) -> anyhow::Result<bool> {
+    ) -> Result<bool> {
         let result = collection.update_one(query_doc, update_doc).await?;
         Ok(result.matched_count > 0)
     }
@@ -1268,7 +1292,7 @@ impl MongoSinker {
         update_doc: Document,
         document_key: Option<&Document>,
         full_doc: &Document,
-    ) -> anyhow::Result<()> {
+    ) -> Result<()> {
         if self
             .update_existing(collection, query_doc, update_doc.clone())
             .await?
@@ -1305,7 +1329,7 @@ impl MongoSinker {
                 return Ok(());
             }
 
-            anyhow::bail!(
+            bail!(
                 "mongo update matched no target document for sharded collection [{}]",
                 self.target_ns(row_data)
             );
@@ -1325,7 +1349,7 @@ impl MongoSinker {
         update_doc: Document,
         document_key: Option<&Document>,
         full_doc: &RawDocumentBuf,
-    ) -> anyhow::Result<()> {
+    ) -> Result<()> {
         let database = self.mongo_client.database(&row_data.schema);
         let collection = database.collection::<Document>(&row_data.tb);
         let raw_collection = database.collection::<RawDocumentBuf>(&row_data.tb);
@@ -1359,7 +1383,7 @@ impl MongoSinker {
                 return Ok(());
             }
 
-            anyhow::bail!(
+            bail!(
                 "mongo update matched no target document for sharded collection [{}]",
                 self.target_ns(row_data)
             );
@@ -1379,7 +1403,7 @@ impl MongoSinker {
         document_key: Option<&Document>,
         pre_image: Option<&RawDocumentBuf>,
         full_doc: &RawDocumentBuf,
-    ) -> anyhow::Result<()> {
+    ) -> Result<()> {
         let old_filter = if let Some(pre_image) = pre_image {
             self.complete_raw_shard_filter(row_data, pre_image).await?
         } else {
@@ -1419,7 +1443,7 @@ impl MongoSinker {
         collection: &Collection<Document>,
         query_doc: Document,
         replacement_doc: Document,
-    ) -> anyhow::Result<()> {
+    ) -> Result<()> {
         collection
             .replace_one(query_doc, replacement_doc)
             .upsert(true)
@@ -1432,7 +1456,7 @@ impl MongoSinker {
         collection: &Collection<Document>,
         query_doc: Document,
         replacement_doc: Document,
-    ) -> anyhow::Result<bool> {
+    ) -> Result<bool> {
         let result = collection.replace_one(query_doc, replacement_doc).await?;
         Ok(result.matched_count > 0)
     }
@@ -1442,7 +1466,7 @@ impl MongoSinker {
         collection: &Collection<RawDocumentBuf>,
         query_doc: Document,
         replacement_doc: &RawDocumentBuf,
-    ) -> anyhow::Result<()> {
+    ) -> Result<()> {
         collection
             .replace_one(query_doc, replacement_doc)
             .upsert(true)
@@ -1455,7 +1479,7 @@ impl MongoSinker {
         collection: &Collection<RawDocumentBuf>,
         query_doc: Document,
         replacement_doc: &RawDocumentBuf,
-    ) -> anyhow::Result<bool> {
+    ) -> Result<bool> {
         let result = collection.replace_one(query_doc, replacement_doc).await?;
         Ok(result.matched_count > 0)
     }

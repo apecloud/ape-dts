@@ -1049,9 +1049,6 @@ impl TaskConfig {
         };
 
         let output_default = CheckerOutputConfig::default();
-        let output_type: String =
-            loader.get_with_default(CHECKER_OUTPUT, "output_type", "logs".to_string())?;
-
         let recheck_queue_size =
             loader.get_with_default(CHECKER, RECHECK_QUEUE_SIZE, default.recheck_queue_size)?;
         if recheck_queue_size == 0 {
@@ -1390,8 +1387,7 @@ mod tests {
     use crate::runtime_trace::{TaskSummaryMode, TraceOutputFormat};
 
     use super::{
-        CheckMode, CheckerOutputType, ExtractorConfig, ParallelType, SinkerConfig, TaskConfig,
-        TaskKind, TaskType,
+        CheckMode, ExtractorConfig, ParallelType, SinkerConfig, TaskConfig, TaskKind, TaskType,
     };
 
     static NEXT_CONFIG_ID: AtomicU64 = AtomicU64::new(0);
