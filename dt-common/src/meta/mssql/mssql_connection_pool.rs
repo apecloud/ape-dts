@@ -21,17 +21,15 @@ pub struct MssqlManagedConnection {
 
 impl MssqlManagedConnection {
     pub fn client_mut(&mut self) -> &mut MssqlClient {
-        self.begin_operation();
         &mut self.client
     }
 
-    pub fn begin_operation(&mut self) {
+    pub fn mark_not_reusable(&mut self) {
         self.reusable = false;
     }
 
-    pub fn mark_reusable(&mut self) -> anyhow::Result<()> {
+    pub fn mark_reusable(&mut self) {
         self.reusable = true;
-        Ok(())
     }
 }
 
@@ -62,8 +60,8 @@ impl ManageConnection for MssqlConnectionManager {
 
     fn has_broken(&self, conn: &mut Self::Connection) -> bool {
         // bb8-tiberius cannot detect session state such as an unfinished
-        // transaction. Discard connections not explicitly marked reusable
-        // instead of returning potentially contaminated sessions to the pool.
+        // transaction. Callers explicitly mark operations that can contaminate
+        // the session, and only mark the connection reusable after cleanup.
         !conn.reusable
     }
 }

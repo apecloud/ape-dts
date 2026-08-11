@@ -362,6 +362,7 @@ impl TaskConfig {
         }
         let max_connections =
             loader.get_with_default(EXTRACTOR, MAX_CONNECTIONS, DEFAULT_MAX_CONNECTIONS)?;
+        let connection_timeout_secs = Self::load_connection_timeout_secs(loader, EXTRACTOR)?;
 
         let connection_auth = ConnectionAuthConfig::from(loader, EXTRACTOR)?;
         let app_name: String = loader.get_with_default(EXTRACTOR, APP_NAME, APE_DTS.to_string())?;
@@ -382,6 +383,7 @@ impl TaskConfig {
             url: url.clone(),
             connection_auth: connection_auth.clone(),
             max_connections,
+            connection_timeout_secs,
             rate_limiter,
             app_name: if matches!(db_type, DbType::Mssql) && !app_name_override {
                 None
@@ -527,20 +529,16 @@ impl TaskConfig {
 
             DbType::Mssql => match extract_type {
                 ExtractType::Snapshot => {
-                    let connection_timeout_secs =
-                        loader.get_with_default(EXTRACTOR, CONNECTION_TIMEOUT_SECS, 15)?;
                     Self::validate_mssql_connection(
                         EXTRACTOR,
                         &url,
                         &connection_auth,
                         basic.app_name.as_deref(),
                         max_connections,
-                        connection_timeout_secs,
                     )?;
                     ExtractorConfig::MssqlSnapshot {
                         url,
                         connection_auth,
-                        connection_timeout_secs,
                         schema: String::new(),
                         tb: String::new(),
                         schema_tbs: HashMap::new(),
@@ -731,6 +729,7 @@ impl TaskConfig {
         }
         let max_connections =
             loader.get_with_default(SINKER, MAX_CONNECTIONS, DEFAULT_MAX_CONNECTIONS)?;
+        let connection_timeout_secs = Self::load_connection_timeout_secs(loader, SINKER)?;
         let connection_auth = ConnectionAuthConfig::from(loader, SINKER)?;
         let app_name: String = loader.get_with_default(SINKER, APP_NAME, APE_DTS.to_string())?;
         let app_name_override = loader.contains(SINKER, APP_NAME);
@@ -752,6 +751,7 @@ impl TaskConfig {
             connection_auth: connection_auth.clone(),
             batch_size,
             max_connections,
+            connection_timeout_secs,
             rate_limiter,
             app_name: if matches!(db_type, DbType::Mssql) && !app_name_override {
                 None
@@ -824,20 +824,16 @@ impl TaskConfig {
 
             DbType::Mssql => match sink_type {
                 SinkType::Write => {
-                    let connection_timeout_secs =
-                        loader.get_with_default(SINKER, CONNECTION_TIMEOUT_SECS, 15)?;
                     Self::validate_mssql_connection(
                         SINKER,
                         &url,
                         &connection_auth,
                         basic.app_name.as_deref(),
                         max_connections,
-                        connection_timeout_secs,
                     )?;
                     SinkerConfig::Mssql {
                         url,
                         connection_auth,
-                        connection_timeout_secs,
                         batch_size,
                     }
                 }
@@ -1423,7 +1419,6 @@ impl TaskConfig {
         connection_auth: &ConnectionAuthConfig,
         application_name: Option<&str>,
         max_connections: u32,
-        connection_timeout_secs: u64,
     ) -> anyhow::Result<()> {
         if max_connections == 0 {
             bail!(DtError::invalid_config(format!(
@@ -1431,13 +1426,6 @@ impl TaskConfig {
                 section, MAX_CONNECTIONS
             )));
         }
-        if connection_timeout_secs == 0 {
-            bail!(DtError::invalid_config(format!(
-                "config [{}].{} must be greater than 0",
-                section, CONNECTION_TIMEOUT_SECS
-            )));
-        }
-
         MssqlConnectionPool::build_client_config(
             connection_string,
             connection_auth,
@@ -1448,6 +1436,18 @@ impl TaskConfig {
             section, URL
         )))?;
         Ok(())
+    }
+
+    fn load_connection_timeout_secs(loader: &IniLoader, section: &str) -> anyhow::Result<u64> {
+        let connection_timeout_secs =
+            loader.get_with_default(section, CONNECTION_TIMEOUT_SECS, 15)?;
+        if connection_timeout_secs == 0 {
+            bail!(DtError::invalid_config(format!(
+                "config [{}].{} must be greater than 0",
+                section, CONNECTION_TIMEOUT_SECS
+            )));
+        }
+        Ok(connection_timeout_secs)
     }
 
     #[cfg(feature = "metrics")]
@@ -1907,6 +1907,28 @@ buffer_size=4
     }
 
     #[test]
+    fn basic_configs_store_connection_timeout() {
+        let config = load_temp_task_config(
+            r#"[extractor]
+db_type=mysql
+extract_type=snapshot
+url=mysql://127.0.0.1:3306
+connection_timeout_secs=7
+
+[sinker]
+db_type=mysql
+sink_type=write
+url=mysql://127.0.0.1:3307
+connection_timeout_secs=9
+"#,
+        )
+        .expect("basic connection timeout config should be accepted");
+
+        assert_eq!(config.extractor_basic.connection_timeout_secs, 7);
+        assert_eq!(config.sinker_basic.connection_timeout_secs, 9);
+    }
+
+    #[test]
     fn snapshot_extractor_batch_size_must_be_greater_than_zero() {
         let result = load_temp_task_config(
             r#"[extractor]
@@ -2089,6 +2111,8 @@ parallel_size=2
 
         assert_eq!(config.extractor_basic.db_type, DbType::Mssql);
         assert_eq!(config.sinker_basic.db_type, DbType::Mssql);
+        assert_eq!(config.extractor_basic.connection_timeout_secs, 7);
+        assert_eq!(config.sinker_basic.connection_timeout_secs, 9);
         assert_eq!(
             config.extractor_basic.app_name.as_deref(),
             Some("task-config-extractor")
@@ -2102,22 +2126,14 @@ parallel_size=2
             ExtractorConfig::MssqlSnapshot {
                 parallel_type,
                 partition_cols,
-                connection_timeout_secs,
                 ..
             } => {
                 assert_eq!(parallel_type, RdbParallelType::Chunk);
                 assert!(partition_cols.contains("basic_test"));
-                assert_eq!(connection_timeout_secs, 7);
             }
             _ => panic!("expected MSSQL snapshot extractor"),
         }
-        match config.sinker {
-            SinkerConfig::Mssql {
-                connection_timeout_secs,
-                ..
-            } => assert_eq!(connection_timeout_secs, 9),
-            _ => panic!("expected MSSQL sinker"),
-        }
+        assert!(matches!(config.sinker, SinkerConfig::Mssql { .. }));
     }
 
     #[test]
@@ -2146,20 +2162,13 @@ parallel_size=1
         )
         .expect("MSSQL connection timeout defaults should be accepted");
 
-        match config.extractor {
-            ExtractorConfig::MssqlSnapshot {
-                connection_timeout_secs,
-                ..
-            } => assert_eq!(connection_timeout_secs, 15),
-            _ => panic!("expected MSSQL snapshot extractor"),
-        }
-        match config.sinker {
-            SinkerConfig::Mssql {
-                connection_timeout_secs,
-                ..
-            } => assert_eq!(connection_timeout_secs, 15),
-            _ => panic!("expected MSSQL sinker"),
-        }
+        assert_eq!(config.extractor_basic.connection_timeout_secs, 15);
+        assert_eq!(config.sinker_basic.connection_timeout_secs, 15);
+        assert!(matches!(
+            config.extractor,
+            ExtractorConfig::MssqlSnapshot { .. }
+        ));
+        assert!(matches!(config.sinker, SinkerConfig::Mssql { .. }));
     }
 
     #[test]
