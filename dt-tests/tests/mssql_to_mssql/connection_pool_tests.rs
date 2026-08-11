@@ -9,7 +9,9 @@ mod test {
             ssl_config::{SslConfig, SslMode},
         },
         error::{ErrorCode, ErrorReport},
-        meta::mssql::mssql_connection_pool::{MssqlConnectionPool, MssqlPooledConnection},
+        meta::mssql::mssql_connection_pool::{
+            MssqlClient, MssqlConnectionPool, MssqlPooledConnection,
+        },
     };
     use serial_test::serial;
     use tiberius::Row;
@@ -109,7 +111,6 @@ mod test {
         connection: &mut MssqlPooledConnection<'_>,
         sql: &str,
     ) -> anyhow::Result<()> {
-        connection.mark_not_reusable();
         connection
             .client_mut()
             .simple_query(sql)
@@ -122,7 +123,6 @@ mod test {
     async fn execute_clean_batch(pool: &MssqlConnectionPool, sql: &str) -> anyhow::Result<()> {
         let mut connection = pool.get().await?;
         execute_batch(&mut connection, sql).await?;
-        connection.mark_reusable();
         Ok(())
     }
 
@@ -130,7 +130,6 @@ mod test {
         connection: &mut MssqlPooledConnection<'_>,
         sql: &str,
     ) -> anyhow::Result<Vec<Row>> {
-        connection.mark_not_reusable();
         Ok(connection
             .client_mut()
             .query(sql, &[])
@@ -147,6 +146,17 @@ mod test {
             .await?
             .into_iter()
             .next()
+            .context("MSSQL scalar query returned no rows")?;
+        row.try_get::<i32, _>(0)?
+            .context("MSSQL scalar query returned NULL")
+    }
+
+    async fn query_i32_from_client(client: &mut MssqlClient, sql: &str) -> anyhow::Result<i32> {
+        let row = client
+            .query(sql, &[])
+            .await?
+            .into_row()
+            .await?
             .context("MSSQL scalar query returned no rows")?;
         row.try_get::<i32, _>(0)?
             .context("MSSQL scalar query returned NULL")
@@ -188,9 +198,41 @@ mod test {
             );
             let mut connection = pool.get().await?;
             assert_eq!(query_i32(&mut connection, "SELECT 1").await?, 1);
-            connection.mark_reusable();
             drop(connection);
         }
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn ordinary_queries_reuse_connections_without_marking() -> anyhow::Result<()> {
+        let pool = create_source_pool(1).await?;
+
+        let first_session_id = {
+            let mut connection = pool.get().await?;
+            assert!(!connection.will_discard());
+            query_i32(&mut connection, "SELECT CAST(@@SPID AS INT)").await?
+        };
+        let second_session_id = {
+            let mut connection = pool.get().await?;
+            query_i32(&mut connection, "SELECT CAST(@@SPID AS INT)").await?
+        };
+
+        assert_eq!(first_session_id, second_session_id);
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn managed_connection_exposes_discard_state() -> anyhow::Result<()> {
+        let pool = create_source_pool(1).await?;
+        let mut connection = pool.get().await?;
+
+        assert!(!connection.will_discard());
+        connection.mark_for_discard();
+        assert!(connection.will_discard());
+        connection.clear_discard_mark();
+        assert!(!connection.will_discard());
         Ok(())
     }
 
@@ -355,7 +397,6 @@ mod test {
             query_string(&mut connection, "SELECT APP_NAME()").await?,
             "from-ado-only"
         );
-        connection.mark_reusable();
         drop(connection);
         drop(pool);
 
@@ -389,7 +430,6 @@ mod test {
                 query_string(&mut connection, "SELECT DB_NAME()").await?,
                 endpoint.database
             );
-            connection.mark_reusable();
         }
         Ok(())
     }
@@ -423,7 +463,6 @@ mod test {
                 task_start.wait().await;
                 let mut connection = task_pool.get().await?;
                 let session_id = query_i32(&mut connection, "SELECT CAST(@@SPID AS INT)").await?;
-                connection.mark_not_reusable();
                 connection
                     .client_mut()
                     .execute(
@@ -435,7 +474,6 @@ mod test {
                     )
                     .await?;
                 execute_batch(&mut connection, "WAITFOR DELAY '00:00:00.050'").await?;
-                connection.mark_reusable();
                 anyhow::Ok(session_id)
             }));
         }
@@ -455,7 +493,6 @@ mod test {
             &format!("SELECT task_id, session_id FROM {CROSS_TASK_TABLE} ORDER BY task_id"),
         )
         .await?;
-        connection.mark_reusable();
         drop(connection);
 
         assert_eq!(rows.len(), TASK_COUNT);
@@ -484,44 +521,42 @@ mod test {
         )
         .await?;
 
-        let mut connection = pool.get().await?;
-        execute_batch(&mut connection, "BEGIN TRANSACTION").await?;
-        assert_eq!(query_i32(&mut connection, "SELECT @@TRANCOUNT").await?, 1);
-        connection.mark_not_reusable();
-        connection
+        let mut transaction = pool.begin().await?;
+        assert_eq!(
+            query_i32_from_client(transaction.client_mut(), "SELECT @@TRANCOUNT").await?,
+            1
+        );
+        let committed_session_id =
+            query_i32_from_client(transaction.client_mut(), "SELECT CAST(@@SPID AS INT)").await?;
+        transaction
             .client_mut()
             .execute(
                 &format!("INSERT INTO {TRANSACTION_TABLE} (id) VALUES (@P1)"),
                 &[&1i32],
             )
             .await?;
-        execute_batch(&mut connection, "COMMIT TRANSACTION").await?;
-        assert_eq!(query_i32(&mut connection, "SELECT @@TRANCOUNT").await?, 0);
-        connection.mark_reusable();
-        drop(connection);
+        transaction.commit().await?;
 
-        let mut connection = pool.get().await?;
-        execute_batch(&mut connection, "BEGIN TRANSACTION").await?;
-        connection.mark_not_reusable();
-        connection
+        let mut transaction = pool.begin().await?;
+        let rolled_back_session_id =
+            query_i32_from_client(transaction.client_mut(), "SELECT CAST(@@SPID AS INT)").await?;
+        assert_eq!(committed_session_id, rolled_back_session_id);
+        transaction
             .client_mut()
             .execute(
                 &format!("INSERT INTO {TRANSACTION_TABLE} (id) VALUES (@P1)"),
                 &[&2i32],
             )
             .await?;
-        execute_batch(&mut connection, "ROLLBACK TRANSACTION").await?;
-        assert_eq!(query_i32(&mut connection, "SELECT @@TRANCOUNT").await?, 0);
-        connection.mark_reusable();
-        drop(connection);
+        transaction.rollback().await?;
 
         let mut connection = pool.get().await?;
+        assert_eq!(query_i32(&mut connection, "SELECT @@TRANCOUNT").await?, 0);
         let rows = query_rows(
             &mut connection,
             &format!("SELECT id FROM {TRANSACTION_TABLE} ORDER BY id"),
         )
         .await?;
-        connection.mark_reusable();
         drop(connection);
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].get::<i32, _>("id"), Some(1));
@@ -530,9 +565,10 @@ mod test {
         Ok(())
     }
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[tokio::test]
     #[serial]
-    async fn dropping_an_unclean_connection_discards_its_session() -> anyhow::Result<()> {
+    async fn dropping_an_active_transaction_rolls_back_by_discarding_its_session(
+    ) -> anyhow::Result<()> {
         let pool = create_source_pool(1).await?;
         execute_clean_batch(
             &pool,
@@ -543,17 +579,16 @@ mod test {
         )
         .await?;
 
-        let mut connection = pool.get().await?;
-        execute_batch(&mut connection, "BEGIN TRANSACTION").await?;
-        connection.mark_not_reusable();
-        connection
-            .client_mut()
-            .execute(
-                &format!("INSERT INTO {POISONED_TABLE} (id) VALUES (@P1)"),
-                &[&1i32],
-            )
-            .await?;
-        drop(connection);
+        {
+            let mut transaction = pool.begin().await?;
+            transaction
+                .client_mut()
+                .execute(
+                    &format!("INSERT INTO {POISONED_TABLE} (id) VALUES (@P1)"),
+                    &[&1i32],
+                )
+                .await?;
+        }
 
         let mut replacement = pool.get().await?;
         let transaction_count = query_i32(&mut replacement, "SELECT @@TRANCOUNT").await?;
@@ -562,7 +597,6 @@ mod test {
             &format!("SELECT COUNT(*) FROM {POISONED_TABLE}"),
         )
         .await?;
-        replacement.mark_reusable();
         drop(replacement);
 
         assert_eq!(transaction_count, 0);

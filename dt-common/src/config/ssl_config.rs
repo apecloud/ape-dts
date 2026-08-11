@@ -67,7 +67,12 @@ impl SslConfig {
             // Tiberius `Off` still uses TLS for the login exchange. `disable`
             // means no TLS at all, which Tiberius calls `NotSupported`.
             SslMode::Disable => options.encryption(EncryptionLevel::NotSupported),
-            SslMode::Require => options.encryption(EncryptionLevel::Required),
+            SslMode::Require => {
+                options.encryption(EncryptionLevel::Required);
+                // `require` guarantees encryption but intentionally skips
+                // certificate-chain and hostname validation.
+                options.trust_cert();
+            }
             SslMode::VerifyFull => {
                 if self.ssl_ca_path.is_empty() {
                     return Err(DtError::invalid_config(

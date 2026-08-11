@@ -16,7 +16,7 @@ pub type MssqlClient = Client<Compat<TcpStream>>;
 
 pub struct MssqlManagedConnection {
     client: MssqlClient,
-    reusable: bool,
+    discard_on_return: bool,
 }
 
 impl MssqlManagedConnection {
@@ -24,12 +24,16 @@ impl MssqlManagedConnection {
         &mut self.client
     }
 
-    pub fn mark_not_reusable(&mut self) {
-        self.reusable = false;
+    pub fn mark_for_discard(&mut self) {
+        self.discard_on_return = true;
     }
 
-    pub fn mark_reusable(&mut self) {
-        self.reusable = true;
+    pub fn clear_discard_mark(&mut self) {
+        self.discard_on_return = false;
+    }
+
+    pub fn will_discard(&self) -> bool {
+        self.discard_on_return
     }
 }
 
@@ -45,24 +49,19 @@ impl ManageConnection for MssqlConnectionManager {
         let client = self.inner.connect().await?;
         Ok(MssqlManagedConnection {
             client,
-            reusable: true,
+            discard_on_return: false,
         })
     }
 
     async fn is_valid(&self, conn: &mut Self::Connection) -> Result<(), Self::Error> {
-        if !conn.reusable {
-            return Err(session_not_reusable_error());
-        }
-
-        self.inner.is_valid(&mut conn.client).await?;
-        Ok(())
+        self.inner.is_valid(conn.client_mut()).await
     }
 
     fn has_broken(&self, conn: &mut Self::Connection) -> bool {
-        // bb8-tiberius cannot detect session state such as an unfinished
-        // transaction. Callers explicitly mark operations that can contaminate
-        // the session, and only mark the connection reusable after cleanup.
-        !conn.reusable
+        // bb8 uses has_broken as its synchronous discard-on-return hook. An
+        // unfinished transaction makes the session unsafe to reuse even when
+        // the underlying TCP connection is still alive.
+        conn.will_discard()
     }
 }
 
@@ -184,12 +183,6 @@ impl MssqlConnectionPool {
     pub fn connection_timeout(&self) -> Duration {
         self.inner.config().connection_timeout
     }
-}
-
-fn session_not_reusable_error() -> bb8_tiberius::Error {
-    bb8_tiberius::Error::Tiberius(tiberius::error::Error::Protocol(
-        "MSSQL session is not reusable".into(),
-    ))
 }
 
 #[allow(dead_code)]
