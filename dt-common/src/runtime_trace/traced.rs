@@ -602,7 +602,9 @@ fn collect_task_snapshots() -> Vec<TaskSnapshot> {
 }
 
 fn collect_global_snapshots() -> (Vec<TaskSnapshot>, Vec<MarkerSnapshot>) {
-    let mut completed = completed_markers().lock().unwrap();
+    let mut completed = completed_markers()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let mut task_snapshots = collect_task_snapshots();
     let mut markers = completed.clone();
     for task in &task_snapshots {
