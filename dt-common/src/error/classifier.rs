@@ -25,6 +25,9 @@ const CHAIN_CLASSIFIERS: &[ChainClassifier] = &[
     classify_chain::<rdkafka::error::KafkaError>,
     classify_chain::<kafka::Error>,
     classify_chain::<BinlogError>,
+    classify_chain::<bb8::RunError<bb8_tiberius::Error>>,
+    classify_chain::<bb8_tiberius::Error>,
+    classify_chain::<tiberius::error::Error>,
     classify_chain::<Error>,
     classify_chain::<JoinError>,
 ];

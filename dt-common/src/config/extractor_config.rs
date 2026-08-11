@@ -80,6 +80,18 @@ pub enum ExtractorConfig {
         partition_cols: String,
     },
 
+    MssqlSnapshot {
+        url: String,
+        connection_auth: ConnectionAuthConfig,
+        schema: String,
+        tb: String,
+        schema_tbs: HashMap<String, Vec<String>>,
+        parallel_size: usize,
+        parallel_type: RdbParallelType,
+        batch_size: usize,
+        partition_cols: String,
+    },
+
     PgCdc {
         url: String,
         connection_auth: ConnectionAuthConfig,
@@ -211,6 +223,7 @@ pub struct BasicExtractorConfig {
     pub url: String,
     pub connection_auth: ConnectionAuthConfig,
     pub max_connections: u32,
+    pub connection_timeout_secs: u64,
     pub rate_limiter: RateLimiterConfig,
     pub app_name: Option<String>,
     pub is_direct_connection: Option<bool>,

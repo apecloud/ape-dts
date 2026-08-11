@@ -29,6 +29,12 @@ pub enum SinkerConfig {
         disable_foreign_key_checks: bool,
     },
 
+    Mssql {
+        url: String,
+        connection_auth: ConnectionAuthConfig,
+        batch_size: usize,
+    },
+
     Mongo {
         url: String,
         connection_auth: ConnectionAuthConfig,
@@ -132,6 +138,7 @@ pub struct BasicSinkerConfig {
     pub connection_auth: ConnectionAuthConfig,
     pub batch_size: usize,
     pub max_connections: u32,
+    pub connection_timeout_secs: u64,
     pub rate_limiter: RateLimiterConfig,
     // mongo special attrs
     pub app_name: Option<String>,
@@ -149,6 +156,7 @@ impl Default for BasicSinkerConfig {
             connection_auth: ConnectionAuthConfig::default(),
             batch_size: 0,
             max_connections: 10,
+            connection_timeout_secs: 15,
             rate_limiter: RateLimiterConfig::default(),
             app_name: Some(APE_DTS.to_string()),
             is_direct_connection: None,

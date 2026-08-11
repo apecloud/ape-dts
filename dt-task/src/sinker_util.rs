@@ -585,6 +585,12 @@ impl SinkerUtil {
                 Self::push_sinker(&mut sub_sinkers, sinker, &sinker_worker_metrics);
             }
 
+            SinkerConfig::Mssql { .. } => {
+                bail!(DtError::InvalidConfig(
+                    "MSSQL sinker is not implemented".to_string(),
+                ));
+            }
+
             SinkerConfig::Sql { reverse } => {
                 let router =
                     RdbRouter::from_config(&config.router, &config.extractor_basic.db_type)?;
