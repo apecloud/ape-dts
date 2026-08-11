@@ -43,7 +43,7 @@ impl DbType {
         match self {
             Self::Mysql => "mysql",
             Self::Pg => "postgresql",
-            Self::Mssql => "sql_server",
+            Self::Mssql => "mssql",
             Self::Kafka => "kafka",
             Self::Mongo => "mongodb",
             Self::Redis => "redis",
