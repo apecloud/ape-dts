@@ -76,6 +76,7 @@ declare -a ALL_SUITES=(
   "mock_test_mysql_8_0"
   "mock_test_pg_13_3_4"
   "mock_test_pg_17_3_4"
+  "mssql_to_mssql"
   "mysql_to_clickhouse"
   # "mysql_to_doris"       # disabled: local/CI Doris suite is temporarily excluded
   "mysql_to_kafka_to_mysql"
@@ -143,6 +144,7 @@ declare -a REQUESTED_SUITES=()
 declare -a EXTRA_TEST_ARGS=()
 declare -a ARM_UNSUPPORTED_SUITES=(
   "mock_test_mysql_5_7"
+  "mssql_to_mssql"
   "redis_to_redis_2_8"
 )
 
@@ -338,6 +340,7 @@ suite_services() {
     mock_test_mysql_8_0) echo "mysql-src-8-0 mysql-dst-8-0" ;;
     mock_test_pg_13_3_4) echo "postgres-src-13-3-4 postgres-dst-13-3-4" ;;
     mock_test_pg_17_3_4) echo "postgres-src-17-3-4 postgres-dst-17-3-4" ;;
+    mssql_to_mssql) echo "mssql-src mssql-dst" ;;
     mysql_to_clickhouse) echo "mysql-src clickhouse" ;;
     mysql_to_doris) echo "mysql-src doris-2-1-0" ;;
     mysql_to_kafka_to_mysql) echo "mysql-src mysql-dst kafka" ;;
@@ -392,6 +395,7 @@ suite_wait_timeout_secs() {
   local suite="$1"
   case "${suite}" in
     mongo_to_mongo | mongo_to_mongo_precheck) echo "${MONGO_SHARDING_WAIT_TIMEOUT_SECS:-120}" ;;
+    mssql_to_mssql) echo "${MSSQL_WAIT_TIMEOUT_SECS:-120}" ;;
     *) echo "${WAIT_TIMEOUT_SECS}" ;;
   esac
 }
@@ -423,6 +427,7 @@ suite_nextest_filter() {
     mock_test_mysql_8_0) echo "test(/^mock_test::mysql_to_mysql::from_8_0_to_8_0::/)" ;;
     mock_test_pg_13_3_4) echo "test(/^mock_test::pg_to_pg::from_13_3_4_to_13_3_4::/)" ;;
     mock_test_pg_17_3_4) echo "test(/^mock_test::pg_to_pg::from_17_3_4_to_17_3_4::/)" ;;
+    mssql_to_mssql) echo "test(/^mssql_to_mssql::/)" ;;
     mysql_to_clickhouse) echo "test(/^mysql_to_clickhouse::/)" ;;
     mysql_to_doris) echo "test(/^mysql_to_doris::/)" ;;
     mysql_to_kafka_to_mysql) echo "test(/^mysql_to_kafka_to_mysql::/)" ;;

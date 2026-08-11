@@ -10,6 +10,7 @@ pub mod dt_queue;
 pub mod foreign_key;
 pub mod kafka;
 pub mod mongo;
+pub mod mssql;
 pub mod mysql;
 pub mod order_key;
 pub mod pg;

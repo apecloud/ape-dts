@@ -31,6 +31,10 @@ regex = { workspace = true }
 rtb-redact = { workspace = true }
 nom = { workspace = true }
 tokio = { workspace = true }
+tokio-util = { workspace = true }
+tiberius = { workspace = true }
+bb8 = { workspace = true }
+bb8-tiberius = { workspace = true }
 tokio-postgres = { workspace = true }
 tokio-metrics = { workspace = true, optional = true }
 thiserror = { workspace = true }

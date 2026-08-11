@@ -11,8 +11,10 @@ use crate::{
         global_config::GlobalConfig,
         limiter_config::{CapacityLimiterConfig, RateLimiterConfig},
     },
-    error::DtError,
-    meta::mongo::mongo_cdc_source::MongoCdcSource,
+    error::{DtError, DtResultExt},
+    meta::{
+        mongo::mongo_cdc_source::MongoCdcSource, mssql::mssql_connection_pool::MssqlConnectionPool,
+    },
     utils::task_util::TaskUtil,
 };
 
@@ -90,6 +92,7 @@ const DB_TYPE: &str = "db_type";
 const URL: &str = "url";
 const BATCH_SIZE: &str = "batch_size";
 const MAX_CONNECTIONS: &str = "max_connections";
+const CONNECTION_TIMEOUT_SECS: &str = "connection_timeout_secs";
 const PARTITION_COLS: &str = "partition_cols";
 const HEARTBEAT_INTERVAL_SECS: &str = "heartbeat_interval_secs";
 const KEEPALIVE_INTERVAL_SECS: &str = "keepalive_interval_secs";
@@ -359,9 +362,11 @@ impl TaskConfig {
         }
         let max_connections =
             loader.get_with_default(EXTRACTOR, MAX_CONNECTIONS, DEFAULT_MAX_CONNECTIONS)?;
+        let connection_timeout_secs = Self::load_connection_timeout_secs(loader, EXTRACTOR)?;
 
         let connection_auth = ConnectionAuthConfig::from(loader, EXTRACTOR)?;
         let app_name: String = loader.get_with_default(EXTRACTOR, APP_NAME, APE_DTS.to_string())?;
+        let app_name_override = loader.contains(EXTRACTOR, APP_NAME);
         let is_direct_connection = if loader.contains(EXTRACTOR, IS_DIRECT_CONNECTION) {
             Some(loader.get_optional(EXTRACTOR, IS_DIRECT_CONNECTION)?)
         } else {
@@ -378,8 +383,13 @@ impl TaskConfig {
             url: url.clone(),
             connection_auth: connection_auth.clone(),
             max_connections,
+            connection_timeout_secs,
             rate_limiter,
-            app_name: Some(app_name.to_owned()),
+            app_name: if matches!(db_type, DbType::Mssql) && !app_name_override {
+                None
+            } else {
+                Some(app_name.to_owned())
+            },
             is_direct_connection,
         };
 
@@ -514,6 +524,34 @@ impl TaskConfig {
                     )?,
                 },
 
+                _ => bail! { not_supported_err },
+            },
+
+            DbType::Mssql => match extract_type {
+                ExtractType::Snapshot => {
+                    Self::validate_mssql_connection(
+                        EXTRACTOR,
+                        &url,
+                        &connection_auth,
+                        basic.app_name.as_deref(),
+                        max_connections,
+                    )?;
+                    ExtractorConfig::MssqlSnapshot {
+                        url,
+                        connection_auth,
+                        schema: String::new(),
+                        tb: String::new(),
+                        schema_tbs: HashMap::new(),
+                        parallel_size: Self::load_snapshot_parallel_size(loader)?,
+                        parallel_type: loader.get_with_default(
+                            EXTRACTOR,
+                            "parallel_type",
+                            RdbParallelType::Table,
+                        )?,
+                        batch_size,
+                        partition_cols: loader.get_optional(EXTRACTOR, PARTITION_COLS)?,
+                    }
+                }
                 _ => bail! { not_supported_err },
             },
 
@@ -691,8 +729,10 @@ impl TaskConfig {
         }
         let max_connections =
             loader.get_with_default(SINKER, MAX_CONNECTIONS, DEFAULT_MAX_CONNECTIONS)?;
+        let connection_timeout_secs = Self::load_connection_timeout_secs(loader, SINKER)?;
         let connection_auth = ConnectionAuthConfig::from(loader, SINKER)?;
         let app_name: String = loader.get_with_default(SINKER, APP_NAME, APE_DTS.to_string())?;
+        let app_name_override = loader.contains(SINKER, APP_NAME);
         let is_direct_connection = if loader.contains(SINKER, IS_DIRECT_CONNECTION) {
             Some(loader.get_optional(SINKER, IS_DIRECT_CONNECTION)?)
         } else {
@@ -711,8 +751,13 @@ impl TaskConfig {
             connection_auth: connection_auth.clone(),
             batch_size,
             max_connections,
+            connection_timeout_secs,
             rate_limiter,
-            app_name: Some(app_name.to_owned()),
+            app_name: if matches!(db_type, DbType::Mssql) && !app_name_override {
+                None
+            } else {
+                Some(app_name.to_owned())
+            },
             is_direct_connection,
             is_cluster,
         };
@@ -774,6 +819,24 @@ impl TaskConfig {
                     reverse: loader.get_optional(SINKER, REVERSE)?,
                 },
 
+                _ => bail! { not_supported_err },
+            },
+
+            DbType::Mssql => match sink_type {
+                SinkType::Write => {
+                    Self::validate_mssql_connection(
+                        SINKER,
+                        &url,
+                        &connection_auth,
+                        basic.app_name.as_deref(),
+                        max_connections,
+                    )?;
+                    SinkerConfig::Mssql {
+                        url,
+                        connection_auth,
+                        batch_size,
+                    }
+                }
                 _ => bail! { not_supported_err },
             },
 
@@ -1347,6 +1410,43 @@ impl TaskConfig {
         })
     }
 
+    fn validate_mssql_connection(
+        section: &str,
+        connection_string: &str,
+        connection_auth: &ConnectionAuthConfig,
+        application_name: Option<&str>,
+        max_connections: u32,
+    ) -> anyhow::Result<()> {
+        if max_connections == 0 {
+            bail!(DtError::invalid_config(format!(
+                "config [{}].{} must be greater than 0",
+                section, MAX_CONNECTIONS
+            )));
+        }
+        MssqlConnectionPool::build_client_config(
+            connection_string,
+            connection_auth,
+            application_name,
+        )
+        .dt_error(DtError::invalid_config(format!(
+            "config [{}].{} is not a valid MSSQL connection configuration",
+            section, URL
+        )))?;
+        Ok(())
+    }
+
+    fn load_connection_timeout_secs(loader: &IniLoader, section: &str) -> anyhow::Result<u64> {
+        let connection_timeout_secs =
+            loader.get_with_default(section, CONNECTION_TIMEOUT_SECS, 15)?;
+        if connection_timeout_secs == 0 {
+            bail!(DtError::invalid_config(format!(
+                "config [{}].{} must be greater than 0",
+                section, CONNECTION_TIMEOUT_SECS
+            )));
+        }
+        Ok(connection_timeout_secs)
+    }
+
     #[cfg(feature = "metrics")]
     fn load_metrics_config(loader: &IniLoader) -> anyhow::Result<MetricsConfig> {
         let metrics_section = "metrics";
@@ -1389,7 +1489,8 @@ mod tests {
     use crate::runtime_trace::{TaskSummaryMode, TraceOutputFormat};
 
     use super::{
-        CheckMode, ExtractorConfig, ParallelType, SinkerConfig, TaskConfig, TaskKind, TaskType,
+        CheckMode, DbType, ExtractorConfig, ParallelType, RdbParallelType, SinkerConfig,
+        TaskConfig, TaskKind, TaskType,
     };
 
     static NEXT_CONFIG_ID: AtomicU64 = AtomicU64::new(0);
@@ -1803,6 +1904,28 @@ buffer_size=4
     }
 
     #[test]
+    fn basic_configs_store_connection_timeout() {
+        let config = load_temp_task_config(
+            r#"[extractor]
+db_type=mysql
+extract_type=snapshot
+url=mysql://127.0.0.1:3306
+connection_timeout_secs=7
+
+[sinker]
+db_type=mysql
+sink_type=write
+url=mysql://127.0.0.1:3307
+connection_timeout_secs=9
+"#,
+        )
+        .expect("basic connection timeout config should be accepted");
+
+        assert_eq!(config.extractor_basic.connection_timeout_secs, 7);
+        assert_eq!(config.sinker_basic.connection_timeout_secs, 9);
+    }
+
+    #[test]
     fn snapshot_extractor_batch_size_must_be_greater_than_zero() {
         let result = load_temp_task_config(
             r#"[extractor]
@@ -1949,5 +2072,161 @@ batch_size=0
             }
             Ok(_) => panic!("expected config validation error"),
         }
+    }
+
+    #[test]
+    fn mssql_snapshot_config_accepts_chunk_and_partition_cols() {
+        let config = load_temp_task_config(
+            r#"[extractor]
+db_type=mssql
+extract_type=snapshot
+url=server=tcp:127.0.0.1,1433;database=ape_dts;User ID=url_user;Password=url_password;Encrypt=true
+username=sa
+password=Password123!
+ssl_mode=disable
+app_name=task-config-extractor
+parallel_type=chunk
+partition_cols=json:[{"db":"dbo","tb":"basic_test","partition_col":"id"}]
+max_connections=2
+connection_timeout_secs=7
+batch_size=16
+
+[sinker]
+db_type=mssql
+sink_type=write
+url=jdbc:sqlserver://127.0.0.1:1434;database=ape_dts;user=sa;password=Password123!;encrypt=DANGER_PLAINTEXT;ApplicationName=from-jdbc
+max_connections=2
+connection_timeout_secs=9
+batch_size=8
+
+[parallelizer]
+parallel_type=snapshot
+parallel_size=2
+"#,
+        )
+        .expect("MSSQL chunk config should be accepted");
+
+        assert_eq!(config.extractor_basic.db_type, DbType::Mssql);
+        assert_eq!(config.sinker_basic.db_type, DbType::Mssql);
+        assert_eq!(config.extractor_basic.connection_timeout_secs, 7);
+        assert_eq!(config.sinker_basic.connection_timeout_secs, 9);
+        assert_eq!(
+            config.extractor_basic.app_name.as_deref(),
+            Some("task-config-extractor")
+        );
+        assert_eq!(config.sinker_basic.app_name, None);
+        assert_eq!(
+            config.task_type(),
+            Some(TaskType::new(TaskKind::Snapshot, None))
+        );
+        match config.extractor {
+            ExtractorConfig::MssqlSnapshot {
+                parallel_type,
+                partition_cols,
+                ..
+            } => {
+                assert_eq!(parallel_type, RdbParallelType::Chunk);
+                assert!(partition_cols.contains("basic_test"));
+            }
+            _ => panic!("expected MSSQL snapshot extractor"),
+        }
+        assert!(matches!(config.sinker, SinkerConfig::Mssql { .. }));
+    }
+
+    #[test]
+    fn mssql_snapshot_config_defaults_connection_timeout_to_15_seconds() {
+        let config = load_temp_task_config(
+            r#"[extractor]
+db_type=mssql
+extract_type=snapshot
+url=server=tcp:127.0.0.1,1433;database=ape_dts
+username=sa
+password=Password123!
+ssl_mode=disable
+
+[sinker]
+db_type=mssql
+sink_type=write
+url=server=tcp:127.0.0.1,1434;database=ape_dts
+username=sa
+password=Password123!
+ssl_mode=disable
+
+[parallelizer]
+parallel_type=snapshot
+parallel_size=1
+"#,
+        )
+        .expect("MSSQL connection timeout defaults should be accepted");
+
+        assert_eq!(config.extractor_basic.connection_timeout_secs, 15);
+        assert_eq!(config.sinker_basic.connection_timeout_secs, 15);
+        assert!(matches!(
+            config.extractor,
+            ExtractorConfig::MssqlSnapshot { .. }
+        ));
+        assert!(matches!(config.sinker, SinkerConfig::Mssql { .. }));
+    }
+
+    #[test]
+    fn mssql_snapshot_config_rejects_invalid_connection_string() {
+        let result = load_temp_task_config(
+            r#"[extractor]
+db_type=mssql
+extract_type=snapshot
+url=not-a-mssql-connection-string
+username=sa
+password=Password123!
+ssl_mode=disable
+
+[sinker]
+db_type=mssql
+sink_type=write
+url=server=tcp:127.0.0.1,1434;database=ape_dts
+username=sa
+password=Password123!
+ssl_mode=disable
+"#,
+        );
+        let error = match result {
+            Err(error) => error,
+            Ok(_) => panic!("invalid MSSQL connection string should be rejected"),
+        };
+
+        assert!(error
+            .to_string()
+            .contains("valid MSSQL connection configuration"));
+    }
+
+    #[test]
+    fn mssql_snapshot_config_rejects_zero_connection_timeout() {
+        let result = load_temp_task_config(
+            r#"[extractor]
+db_type=mssql
+extract_type=snapshot
+url=server=tcp:127.0.0.1,1433;database=ape_dts
+username=sa
+password=Password123!
+ssl_mode=disable
+connection_timeout_secs=0
+
+[sinker]
+db_type=mssql
+sink_type=write
+url=server=tcp:127.0.0.1,1434;database=ape_dts
+username=sa
+password=Password123!
+ssl_mode=disable
+"#,
+        );
+        let error = match result {
+            Err(error) => error,
+            Ok(_) => panic!("zero MSSQL connection timeout should be rejected"),
+        };
+
+        assert_eq!(
+            error.root_cause().to_string(),
+            "config [extractor].connection_timeout_secs must be greater than 0"
+        );
     }
 }

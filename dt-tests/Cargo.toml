@@ -38,6 +38,8 @@ serde_json = { workspace = true }
 serial_test = { workspace = true }
 sqlx = { workspace = true }
 tokio = { workspace = true }
+tokio-util = { workspace = true }
+tiberius = { workspace = true }
 url = { workspace = true }
 rust_decimal = { workspace = true }
 uuid = { workspace = true }
