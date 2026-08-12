@@ -124,7 +124,7 @@ impl ManageConnection for MssqlConnectionManager {
 
 pub type MssqlPooledConnection<'a> = bb8::PooledConnection<'a, MssqlConnectionManager>;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct MssqlConnectionPool {
     inner: bb8::Pool<MssqlConnectionManager>,
     closed: Arc<AtomicBool>,

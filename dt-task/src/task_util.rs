@@ -16,6 +16,7 @@ use dt_common::{
     error::{DtError, DtResultExt, EndpointRole, ErrorCode},
     log_info, log_warn,
     meta::{
+        adaptor::mssql_col_value_convertor::MssqlColValueConvertor,
         mssql::{mssql_connection_pool::MssqlConnectionPool, mssql_meta_manager::MssqlMetaManager},
         mysql::{
             mysql_dbengine_meta_center::MysqlDbEngineMetaCenter,
@@ -572,11 +573,43 @@ WHERE
     }
 
     async fn estimate_mssql_snapshot(
-        _connection_pool: &ConnClient,
-        _schemas: &[String],
-        _filter: &RdbFilter,
+        connection_pool: &ConnClient,
+        schemas: &[String],
+        filter: &RdbFilter,
     ) -> anyhow::Result<u64> {
-        todo!("mssql snapshot row count estimation is not implemented")
+        let connection_pool = match connection_pool {
+            ConnClient::Mssql(connection_pool) => connection_pool,
+            _ => bail!(DtError::MissingTaskClient(DbType::Mssql)),
+        };
+        let sql = "SELECT s.name AS schema_name, t.name AS table_name, \
+                   COALESCE(SUM(CONVERT(bigint, p.rows)), CONVERT(bigint, 0)) AS row_count \
+                   FROM sys.tables AS t \
+                   JOIN sys.schemas AS s ON s.schema_id = t.schema_id \
+                   JOIN sys.partitions AS p ON p.object_id = t.object_id \
+                   WHERE p.index_id IN (0, 1) \
+                   GROUP BY s.name, t.name";
+        let mut connection = connection_pool.get().await?;
+        let rows = connection
+            .client_mut()
+            .query(sql, &[])
+            .await
+            .code(ErrorCode::MetadataReadFailed)?
+            .into_first_result()
+            .await
+            .code(ErrorCode::MetadataReadFailed)?;
+
+        let mut total_records = 0u64;
+        for row in rows {
+            let schema = MssqlColValueConvertor::from_query_required_string(&row, "schema_name")?;
+            let table = MssqlColValueConvertor::from_query_required_string(&row, "table_name")?;
+            if !schemas.contains(&schema) || filter.filter_tb(&schema, &table) {
+                continue;
+            }
+            let row_count =
+                MssqlColValueConvertor::from_query_required_i64(&row, "row_count")?.max(0) as u64;
+            total_records = total_records.saturating_add(row_count);
+        }
+        Ok(total_records)
     }
 
     pub async fn check_tb_exist(

@@ -11,29 +11,33 @@ use super::{
 
 type MssqlPoolError = RunError<Bb8TiberiusError>;
 
+pub fn classify_mssql_error(error: &TiberiusError) -> DtErrorContext {
+    let code = match error {
+        TiberiusError::Io { kind, .. } if is_timeout(*kind) => ErrorCode::ConnectionTimeout,
+        TiberiusError::Io { .. } | TiberiusError::Protocol(_) | TiberiusError::Routing { .. } => {
+            ErrorCode::ConnectionFailed
+        }
+        TiberiusError::Tls(_) => ErrorCode::TlsFailed,
+        TiberiusError::Server(error) => classify_mssql_code(error.code()),
+        TiberiusError::Encoding(_)
+        | TiberiusError::Conversion(_)
+        | TiberiusError::Utf8
+        | TiberiusError::Utf16
+        | TiberiusError::ParseInt(_)
+        | TiberiusError::BulkInput(_) => ErrorCode::StatementFailed,
+        #[allow(unreachable_patterns)]
+        _ => ErrorCode::StatementFailed,
+    };
+
+    provider_context(
+        Some(code),
+        provider_detail("mssql", error.code().map(|code| code.to_string()), error),
+    )
+}
+
 impl ClassifyError for TiberiusError {
     fn classify(&self) -> DtErrorContext {
-        let code = match self {
-            Self::Io { kind, .. } if is_timeout(*kind) => ErrorCode::ConnectionTimeout,
-            Self::Io { .. } | Self::Protocol(_) | Self::Routing { .. } => {
-                ErrorCode::ConnectionFailed
-            }
-            Self::Tls(_) => ErrorCode::TlsFailed,
-            Self::Server(error) => classify_mssql_code(error.code()),
-            Self::Encoding(_)
-            | Self::Conversion(_)
-            | Self::Utf8
-            | Self::Utf16
-            | Self::ParseInt(_)
-            | Self::BulkInput(_) => ErrorCode::StatementFailed,
-            #[allow(unreachable_patterns)]
-            _ => ErrorCode::StatementFailed,
-        };
-
-        provider_context(
-            Some(code),
-            provider_detail("mssql", self.code().map(|code| code.to_string()), self),
-        )
+        classify_mssql_error(self)
     }
 }
 

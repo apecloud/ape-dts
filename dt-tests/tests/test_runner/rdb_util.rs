@@ -92,10 +92,10 @@ impl RdbUtil {
     }
 
     pub async fn get_tb_cols_mssql(
-        _client: &MssqlTestClient,
-        _db_tb: &(String, String),
+        client: &MssqlTestClient,
+        db_tb: &(String, String),
     ) -> anyhow::Result<Vec<String>> {
-        todo!("mssql test table metadata adapter is not implemented")
+        client.get_table_columns(&db_tb.0, &db_tb.1).await
     }
 
     pub async fn get_tb_meta_mysql(

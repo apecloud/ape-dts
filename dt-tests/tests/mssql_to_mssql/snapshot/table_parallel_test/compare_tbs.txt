@@ -1,0 +1,3 @@
+table_parallel_test.identity_rows
+table_parallel_test.regular_rows
+table_parallel_test.string_key_rows

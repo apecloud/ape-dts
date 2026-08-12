@@ -87,15 +87,14 @@ impl BaseTestRunner {
         let tmp_dir = format!("{}/tmp/{}", project_root, relative_test_dir);
         let dst_task_config_file = format!("{}/{}", tmp_dir, task_config_file);
 
-        // update relative path to absolute path in task_config.ini
+        // Resolve connection placeholders before TaskConfig validates the
+        // generated file while updating relative paths.
+        TestConfigUtil::update_task_config_from_env(&src_task_config_file, &dst_task_config_file);
         TestConfigUtil::update_file_paths_in_task_config(
-            &src_task_config_file,
+            &dst_task_config_file,
             &dst_task_config_file,
             &project_root,
         );
-
-        // update extractor / sinker urls from .env
-        TestConfigUtil::update_task_config_from_env(&dst_task_config_file, &dst_task_config_file);
         dst_task_config_file
     }
 
