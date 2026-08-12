@@ -28,6 +28,7 @@ pub struct MssqlSinker {
     pub meta_manager: MssqlMetaManager,
     pub router: Option<RdbRouter>,
     pub batch_size: usize,
+    pub replace: bool,
     pub base_sinker: BaseSinker,
 }
 
@@ -103,6 +104,7 @@ impl MssqlSinker {
         meta_manager: MssqlMetaManager,
         router: Option<RdbRouter>,
         batch_size: usize,
+        replace: bool,
         base_sinker: BaseSinker,
     ) -> Self {
         Self {
@@ -110,6 +112,7 @@ impl MssqlSinker {
             meta_manager,
             router,
             batch_size,
+            replace,
             base_sinker,
         }
     }
@@ -135,12 +138,37 @@ impl MssqlSinker {
             bail!("MSSQL snapshot insert batch contains rows from different tables");
         }
 
-        let query_builder = RdbQueryBuilder::new_for_mssql(&tb_meta, None);
-        let (query_info, data_size) =
-            query_builder.get_batch_insert_query(data, start_index, batch_size, false)?;
-        let identity_insert = self
-            .requires_identity_insert(&tb_meta.basic.schema, &tb_meta.basic.tb, &query_info.cols)
+        let identity_col = self
+            .get_identity_col(&tb_meta.basic.schema, &tb_meta.basic.tb)
             .await?;
+        let query_builder = RdbQueryBuilder::new_for_mssql_with_identity_col(
+            &tb_meta,
+            None,
+            identity_col.as_deref(),
+        );
+        let (query_info, data_size) =
+            query_builder.get_batch_insert_query(data, start_index, batch_size, self.replace)?;
+        let uses_replace_merge = self.replace
+            && !tb_meta.basic.order_cols.is_empty()
+            && tb_meta
+                .basic
+                .order_cols
+                .iter()
+                .all(|col| query_info.cols.contains(col));
+        let allows_noop_matches = uses_replace_merge
+            && query_info.cols.iter().all(|col| {
+                tb_meta.basic.order_cols.contains(col)
+                    || identity_col
+                        .as_ref()
+                        .is_some_and(|identity| identity == col)
+            });
+        let replaces_identity_by_reinsert = uses_replace_merge
+            && identity_col.as_ref().is_some_and(|identity| {
+                query_info.cols.contains(identity) && !tb_meta.basic.order_cols.contains(identity)
+            });
+        let identity_insert = identity_col
+            .as_ref()
+            .is_some_and(|identity_col| query_info.cols.contains(identity_col));
         let query = query_builder.create_mssql_query(&query_info)?;
 
         let start_time = Instant::now();
@@ -152,7 +180,13 @@ impl MssqlSinker {
                     .await?;
             }
             let affected = session.execute(query).await?;
-            if affected != batch_size as u64 {
+            let affected_is_valid = if replaces_identity_by_reinsert {
+                affected >= batch_size as u64 && affected <= (batch_size * 2) as u64
+            } else {
+                affected == batch_size as u64
+                    || (allows_noop_matches && affected < batch_size as u64)
+            };
+            if !affected_is_valid {
                 bail!(
                     "MSSQL snapshot insert affected {affected} rows, expected {batch_size} for {}.{}",
                     tb_meta.basic.schema,
@@ -181,12 +215,7 @@ impl MssqlSinker {
         self.base_sinker.update_monitor_rt_for(&task_id, &rts).await
     }
 
-    async fn requires_identity_insert(
-        &self,
-        schema: &str,
-        tb: &str,
-        insert_cols: &[String],
-    ) -> anyhow::Result<bool> {
+    async fn get_identity_col(&self, schema: &str, tb: &str) -> anyhow::Result<Option<String>> {
         let mut query = MssqlQuery::new(
             "SELECT c.name AS identity_col \
              FROM sys.identity_columns AS c \
@@ -203,13 +232,13 @@ impl MssqlSinker {
             .into_row()
             .await?
         else {
-            return Ok(false);
+            return Ok(None);
         };
         let identity_col = dt_common::meta::adaptor::mssql_col_value_convertor::MssqlColValueConvertor::from_query_required_string(
             &row,
             "identity_col",
         )?;
-        Ok(insert_cols.contains(&identity_col))
+        Ok(Some(identity_col))
     }
 
     fn quote(identifier: &str) -> String {

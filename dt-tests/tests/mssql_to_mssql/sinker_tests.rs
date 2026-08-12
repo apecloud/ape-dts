@@ -136,8 +136,14 @@ mod test {
 
         let result = async {
             let meta_manager = MssqlMetaManager::new(pool.clone()).await?;
-            let mut sinker =
-                MssqlSinker::new(pool.clone(), meta_manager, None, 2, BaseSinker::default());
+            let mut sinker = MssqlSinker::new(
+                pool.clone(),
+                meta_manager,
+                None,
+                2,
+                false,
+                BaseSinker::default(),
+            );
 
             let error = sinker
                 .sink_dml(vec![row(10, "duplicate"), row(11, "duplicate")], true)

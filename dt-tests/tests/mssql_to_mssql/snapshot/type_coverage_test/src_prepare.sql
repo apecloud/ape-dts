@@ -1,0 +1,35 @@
+DROP TABLE IF EXISTS type_coverage.all_supported_types;
+IF SCHEMA_ID(N'type_coverage') IS NULL EXEC(N'CREATE SCHEMA type_coverage');
+CREATE TABLE type_coverage.all_supported_types (
+    id int NOT NULL PRIMARY KEY,
+    bit_value bit NULL,
+    tinyint_value tinyint NULL,
+    smallint_value smallint NULL,
+    int_value int NULL,
+    bigint_value bigint NULL,
+    real_value real NULL,
+    float_value float NULL,
+    smallmoney_value smallmoney NULL,
+    money_value money NULL,
+    decimal_value decimal(38, 4) NULL,
+    numeric_value numeric(20, 6) NULL,
+    char_value char(8) NULL,
+    varchar_value varchar(100) NULL,
+    nchar_value nchar(8) NULL,
+    nvarchar_value nvarchar(100) NULL,
+    binary_value binary(8) NULL,
+    varbinary_value varbinary(100) NULL,
+    text_value text NULL,
+    ntext_value ntext NULL,
+    image_value image NULL,
+    uuid_value uniqueidentifier NULL,
+    xml_value xml NULL,
+    date_value date NULL,
+    time_value time(7) NULL,
+    smalldatetime_value smalldatetime NULL,
+    datetime_value datetime NULL,
+    datetime2_value datetime2(7) NULL,
+    datetimeoffset_value datetimeoffset(7) NULL,
+    json_value nvarchar(max) NULL CHECK (json_value IS NULL OR ISJSON(json_value) = 1)
+);
+GO
