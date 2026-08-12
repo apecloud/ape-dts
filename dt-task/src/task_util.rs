@@ -1099,6 +1099,11 @@ impl ConnClient {
                 url,
                 connection_auth,
                 ..
+            }
+            | ExtractorConfig::MssqlStruct {
+                url,
+                connection_auth,
+                ..
             } => MssqlConnectionPool::from_config(
                 url,
                 connection_auth,
@@ -1201,6 +1206,11 @@ impl ConnClient {
                 .await
                 .map(ConnClient::MongoDB),
                 SinkerConfig::Mssql {
+                    url,
+                    connection_auth,
+                    ..
+                }
+                | SinkerConfig::MssqlStruct {
                     url,
                     connection_auth,
                     ..
