@@ -552,6 +552,26 @@ impl TaskConfig {
                         partition_cols: loader.get_optional(EXTRACTOR, PARTITION_COLS)?,
                     }
                 }
+                ExtractType::Struct => {
+                    Self::validate_mssql_connection(
+                        EXTRACTOR,
+                        &url,
+                        &connection_auth,
+                        basic.app_name.as_deref(),
+                        max_connections,
+                    )?;
+                    ExtractorConfig::MssqlStruct {
+                        url,
+                        connection_auth,
+                        schema: String::new(),
+                        schemas: Vec::new(),
+                        db_batch_size: loader.get_with_default(
+                            EXTRACTOR,
+                            "db_batch_size",
+                            DEFAULT_DB_BATCH_SIZE,
+                        )?,
+                    }
+                }
                 _ => bail! { not_supported_err },
             },
 
@@ -836,6 +856,20 @@ impl TaskConfig {
                         connection_auth,
                         batch_size,
                         replace: loader.get_with_default(SINKER, REPLACE, true)?,
+                    }
+                }
+                SinkType::Struct => {
+                    Self::validate_mssql_connection(
+                        SINKER,
+                        &url,
+                        &connection_auth,
+                        basic.app_name.as_deref(),
+                        max_connections,
+                    )?;
+                    SinkerConfig::MssqlStruct {
+                        url,
+                        connection_auth,
+                        conflict_policy,
                     }
                 }
                 _ => bail! { not_supported_err },
@@ -1490,8 +1524,8 @@ mod tests {
     use crate::runtime_trace::{TaskSummaryMode, TraceOutputFormat};
 
     use super::{
-        CheckMode, DbType, ExtractorConfig, ParallelType, RdbParallelType, SinkerConfig,
-        TaskConfig, TaskKind, TaskType,
+        CheckMode, ConflictPolicyEnum, DbType, ExtractorConfig, ParallelType, RdbParallelType,
+        SinkerConfig, TaskConfig, TaskKind, TaskType,
     };
 
     static NEXT_CONFIG_ID: AtomicU64 = AtomicU64::new(0);
@@ -2135,6 +2169,50 @@ parallel_size=2
         assert!(matches!(
             config.sinker,
             SinkerConfig::Mssql { replace: false, .. }
+        ));
+    }
+
+    #[test]
+    fn mssql_struct_config_is_loaded() {
+        let config = load_temp_task_config(
+            r#"[extractor]
+db_type=mssql
+extract_type=struct
+url=server=tcp:127.0.0.1,1433;database=ape_dts
+username=sa
+password=Password123!
+ssl_mode=disable
+db_batch_size=11
+
+[sinker]
+db_type=mssql
+sink_type=struct
+url=server=tcp:127.0.0.1,1434;database=ape_dts
+username=sa
+password=Password123!
+ssl_mode=disable
+conflict_policy=ignore
+"#,
+        )
+        .expect("MSSQL struct config should be accepted");
+
+        assert_eq!(
+            config.task_type(),
+            Some(TaskType::new(TaskKind::Struct, None))
+        );
+        assert!(matches!(
+            config.extractor,
+            ExtractorConfig::MssqlStruct {
+                db_batch_size: 11,
+                ..
+            }
+        ));
+        assert!(matches!(
+            config.sinker,
+            SinkerConfig::MssqlStruct {
+                conflict_policy: ConflictPolicyEnum::Ignore,
+                ..
+            }
         ));
     }
 

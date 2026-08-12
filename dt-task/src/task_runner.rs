@@ -894,6 +894,7 @@ impl TaskRunner {
             extractor_config,
             ExtractorConfig::MysqlStruct { .. }
                 | ExtractorConfig::PgStruct { .. }
+                | ExtractorConfig::MssqlStruct { .. }
                 | ExtractorConfig::MongoStruct { .. }
         );
 
@@ -1411,6 +1412,24 @@ impl TaskRunner {
                         schema: schema.clone(),
                         schemas,
                         do_global_structs: true,
+                        db_batch_size: *db_batch_size,
+                    },
+                    no_snapshot_data: false,
+                })
+            }
+            ExtractorConfig::MssqlStruct {
+                url,
+                connection_auth,
+                schema,
+                db_batch_size,
+                ..
+            } => {
+                return Ok(TaskInfo {
+                    extractor_config: ExtractorConfig::MssqlStruct {
+                        url: url.clone(),
+                        connection_auth: connection_auth.clone(),
+                        schema: schema.clone(),
+                        schemas,
                         db_batch_size: *db_batch_size,
                     },
                     no_snapshot_data: false,

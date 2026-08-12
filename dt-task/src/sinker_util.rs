@@ -42,7 +42,7 @@ use dt_connector::{
         dummy_sinker::DummySinker,
         kafka::kafka_sinker::KafkaSinker,
         mongo::{mongo_sinker::MongoSinker, mongo_struct_sinker::MongoStructSinker},
-        mssql::mssql_sinker::MssqlSinker,
+        mssql::{mssql_sinker::MssqlSinker, mssql_struct_sinker::MssqlStructSinker},
         mysql::{mysql_sinker::MysqlSinker, mysql_struct_sinker::MysqlStructSinker},
         pg::{pg_sinker::PgSinker, pg_struct_sinker::PgStructSinker},
         redis::{redis_sinker::RedisSinker, redis_statistic_sinker::RedisStatisticSinker},
@@ -374,6 +374,26 @@ impl SinkerUtil {
                 };
                 let sinker = PgStructSinker {
                     conn_pool,
+                    conflict_policy: conflict_policy.clone(),
+                    filter: filter.clone(),
+                    router,
+                    base_sinker: BaseSinker::new(monitor.clone(), monitor_interval),
+                };
+                Self::push_sinker(&mut sub_sinkers, sinker, &sinker_worker_metrics);
+            }
+
+            SinkerConfig::MssqlStruct {
+                conflict_policy, ..
+            } => {
+                let filter = create_filter!(config, Mssql);
+                let router = RdbRouter::from_config(&config.router, &DbType::Mssql)?;
+
+                let connection_pool = match client {
+                    ConnClient::Mssql(connection_pool) => connection_pool,
+                    _ => bail!(DtError::MissingDestinationClient),
+                };
+                let sinker = MssqlStructSinker {
+                    connection_pool,
                     conflict_policy: conflict_policy.clone(),
                     filter: filter.clone(),
                     router,

@@ -201,6 +201,12 @@ impl RdbStructTestRunner {
         Ok(())
     }
 
+    pub async fn run_mssql_struct_test(&mut self) -> anyhow::Result<()> {
+        self.base.execute_prepare_sqls().await?;
+        self.base.base.start_task().await?;
+        todo!("compare source and destination MSSQL table structures")
+    }
+
     pub async fn run_mock_struct_test(&mut self) -> anyhow::Result<()> {
         match self.base.config.extractor_basic.db_type {
             DbType::Mysql => self.run_mysql_mock_struct_test().await,

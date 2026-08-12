@@ -5,3 +5,4 @@ pub mod resumer_tests;
 pub mod sinker_tests;
 pub mod snapshot_extractor_tests;
 pub mod snapshot_tests;
+pub mod struct_tests;

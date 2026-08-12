@@ -38,7 +38,10 @@ use dt_connector::{
             mongo_snapshot_extractor::MongoSnapshotExtractor,
             mongo_struct_extractor::MongoStructExtractor,
         },
-        mssql::mssql_snapshot_extractor::{MssqlSnapshotExtractor, MssqlSnapshotShared},
+        mssql::{
+            mssql_snapshot_extractor::{MssqlSnapshotExtractor, MssqlSnapshotShared},
+            mssql_struct_extractor::MssqlStructExtractor,
+        },
         mysql::{
             mysql_cdc_extractor::MysqlCdcExtractor,
             mysql_check_extractor::MysqlCheckExtractor,
@@ -538,6 +541,27 @@ impl ExtractorUtil {
                     base_extractor,
                     extract_state,
                     db_batch_size: db_batch_size_validated,
+                };
+                Box::new(extractor)
+            }
+
+            ExtractorConfig::MssqlStruct {
+                schemas,
+                db_batch_size,
+                ..
+            } => {
+                let connection_pool = match extractor_client {
+                    ConnClient::Mssql(connection_pool) => connection_pool,
+                    _ => bail!(DtError::MissingSourceClient),
+                };
+                let db_batch_size = MssqlStructExtractor::validate_db_batch_size(db_batch_size)?;
+                let extractor = MssqlStructExtractor {
+                    base_extractor,
+                    extract_state,
+                    connection_pool,
+                    schemas,
+                    filter,
+                    db_batch_size,
                 };
                 Box::new(extractor)
             }
