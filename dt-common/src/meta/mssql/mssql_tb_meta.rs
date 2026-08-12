@@ -1,6 +1,6 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
-use serde::Serialize;
+use serde::{ser::SerializeMap, Serialize, Serializer};
 use serde_json::json;
 
 use crate::{
@@ -14,11 +14,8 @@ use super::mssql_col_type::MssqlColType;
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct MssqlTbMeta {
     pub basic: RdbTbMeta,
-    pub object_id: i32,
+    #[serde(serialize_with = "serialize_col_type_map")]
     pub col_type_map: HashMap<String, MssqlColType>,
-    pub identity_cols: HashSet<String>,
-    pub computed_cols: HashSet<String>,
-    pub rowversion_cols: HashSet<String>,
 }
 
 impl MssqlTbMeta {
@@ -43,26 +40,20 @@ impl MssqlTbMeta {
             })
         })
     }
+}
 
-    pub fn readable_cols(&self) -> &[String] {
-        &self.basic.cols
+fn serialize_col_type_map<S>(
+    col_type_map: &HashMap<String, MssqlColType>,
+    serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    let mut map = serializer.serialize_map(Some(col_type_map.len()))?;
+    for (col, col_type) in col_type_map {
+        map.serialize_entry(col, &format!("{col_type:?}"))?;
     }
-
-    pub fn writable_cols(&self) -> Vec<String> {
-        self.basic
-            .cols
-            .iter()
-            .filter(|col| {
-                !self.computed_cols.contains(*col)
-                    && !self.rowversion_cols.contains(*col)
-                    && self
-                        .col_type_map
-                        .get(*col)
-                        .is_none_or(|col_type| col_type.generated_always_type == 0)
-            })
-            .cloned()
-            .collect()
-    }
+    map.end()
 }
 
 impl std::fmt::Display for MssqlTbMeta {
@@ -76,31 +67,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn writable_cols_exclude_server_generated_values() {
-        let mut tb_meta = MssqlTbMeta {
+    fn serializes_aliased_column_types() {
+        let tb_meta = MssqlTbMeta {
             basic: RdbTbMeta {
-                cols: vec![
-                    "id".to_string(),
-                    "payload".to_string(),
-                    "computed_value".to_string(),
-                    "row_version".to_string(),
-                    "generated_value".to_string(),
-                ],
+                cols: vec!["id".to_string()],
                 ..Default::default()
             },
-            computed_cols: HashSet::from(["computed_value".to_string()]),
-            rowversion_cols: HashSet::from(["row_version".to_string()]),
-            ..Default::default()
+            col_type_map: HashMap::from([("id".to_string(), MssqlColType::Int4)]),
         };
-        tb_meta.col_type_map.insert(
-            "generated_value".to_string(),
-            MssqlColType {
-                generated_always_type: 1,
-                ..Default::default()
-            },
-        );
 
-        assert_eq!(tb_meta.readable_cols(), tb_meta.basic.cols.as_slice());
-        assert_eq!(tb_meta.writable_cols(), vec!["id", "payload"]);
+        assert_eq!(json!(tb_meta)["col_type_map"]["id"], "Int4");
     }
 }

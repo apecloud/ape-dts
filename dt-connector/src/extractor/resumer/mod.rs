@@ -17,7 +17,7 @@ use dt_common::{
     },
     error::DtError,
     log_info, log_warn,
-    meta::position::Position,
+    meta::{mssql::mssql_connection_pool::MssqlConnectionPool, position::Position},
 };
 pub mod recorder;
 pub mod recovery;
@@ -33,6 +33,7 @@ const DEFAULT_POSITION_KEY: &str = "default_key";
 pub enum ResumerDbPool {
     MySql(Pool<MySql>),
     Postgres(Pool<Postgres>),
+    Mssql(MssqlConnectionPool),
     Mongo(Client),
     Redis(RedisResumerConn),
 }

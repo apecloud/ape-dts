@@ -74,6 +74,11 @@ impl CheckerStateStore {
         let backend = match pool {
             ResumerDbPool::MySql(pool) => CheckerStateStoreBackend::MySql(pool),
             ResumerDbPool::Postgres(pool) => CheckerStateStoreBackend::Postgres(pool),
+            ResumerDbPool::Mssql(_) => {
+                anyhow::bail!(DtError::invalid_config(
+                    "checker state persistence does not support an MSSQL metadata backend"
+                ))
+            }
             ResumerDbPool::Mongo(_) => {
                 anyhow::bail!(DtError::invalid_config(
                     "checker state persistence does not support a MongoDB metadata backend"

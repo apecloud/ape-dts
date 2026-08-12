@@ -752,6 +752,17 @@ dependencies = [
 
 [[package]]
 name = "bigdecimal"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a6773ddc0eafc0e509fb60e48dff7f450f8e674a0686ae8605e8d9901bd5eefa"
+dependencies = [
+ "num-bigint",
+ "num-integer",
+ "num-traits",
+]
+
+[[package]]
+name = "bigdecimal"
 version = "0.4.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1a22f228ab7a1b23027ccc6c350b72868017af7ea8356fbdf19f8d991c690013"
@@ -2025,7 +2036,7 @@ version = "4.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f2b0902eb36fbab51c14eda1c186bda119fcff91e5e4e7fc2dd2077298197ce8"
 dependencies = [
- "bigdecimal",
+ "bigdecimal 0.4.8",
  "chrono",
  "deunicode",
  "dummy",
@@ -3611,7 +3622,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "478b0ff3f7d67b79da2b96f56f334431aef65e15ba4b29dd74a4236e29582bdc"
 dependencies = [
  "base64 0.21.7",
- "bigdecimal",
+ "bigdecimal 0.4.8",
  "bindgen",
  "bitflags 2.9.1",
  "bitvec",
@@ -5464,7 +5475,7 @@ dependencies = [
  "async-io 1.13.0",
  "async-std",
  "base64 0.22.1",
- "bigdecimal",
+ "bigdecimal 0.4.8",
  "bit-vec",
  "bytes",
  "chrono",
@@ -5544,7 +5555,7 @@ checksum = "aa003f0038df784eb8fecbbac13affe3da23b45194bd57dba231c8f48199c526"
 dependencies = [
  "atoi",
  "base64 0.22.1",
- "bigdecimal",
+ "bigdecimal 0.4.8",
  "bitflags 2.9.1",
  "byteorder",
  "bytes",
@@ -5590,7 +5601,7 @@ checksum = "db58fcd5a53cf07c184b154801ff91347e4c30d17a3562a635ff028ad5deda46"
 dependencies = [
  "atoi",
  "base64 0.22.1",
- "bigdecimal",
+ "bigdecimal 0.4.8",
  "bit-vec",
  "bitflags 2.9.1",
  "byteorder",
@@ -5891,6 +5902,7 @@ checksum = "a1446cb4198848d1562301a3340424b4f425ef79f35ef9ee034769a9dd92c10d"
 dependencies = [
  "async-trait",
  "asynchronous-codec",
+ "bigdecimal 0.3.1",
  "byteorder",
  "bytes",
  "chrono",
@@ -5902,7 +5914,6 @@ dependencies = [
  "once_cell",
  "pin-project-lite",
  "pretty-hex",
- "rust_decimal",
  "rustls-native-certs",
  "rustls-pemfile",
  "thiserror 1.0.69",

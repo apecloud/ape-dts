@@ -10,6 +10,7 @@ use dt_common::{
     log_warn,
     meta::{
         adaptor::{
+            mssql_col_value_convertor::MssqlColValueConvertor,
             pg_col_value_convertor::PgColValueConvertor,
             sqlx_ext::{SqlxMysqlExt, SqlxPgExt},
         },
@@ -164,9 +165,28 @@ impl RdbQueryBuilder<'_> {
     #[inline(always)]
     pub fn create_mssql_query<'a>(
         &self,
-        _query_info: &'a RdbQueryInfo<'a>,
+        query_info: &'a RdbQueryInfo<'a>,
     ) -> anyhow::Result<MssqlQuery<'a>> {
-        todo!("mssql RdbQueryBuilder Tiberius query binding is not implemented")
+        query_info.validate_bind_layout()?;
+        let tb_meta = self
+            .mssql_tb_meta
+            .context("MSSQL table meta missing when creating MSSQL query")?;
+        let col_types = query_info
+            .cols
+            .iter()
+            .map(|col| tb_meta.get_col_type(col))
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        let mut query = MssqlQuery::new(query_info.sql.as_str());
+        for (index, bind) in query_info.binds.iter().enumerate() {
+            let value = bind.ok_or_else(|| {
+                DtError::InvariantViolated(format!(
+                    "MSSQL query bind for column {} is missing",
+                    query_info.cols[index % query_info.cols.len()]
+                ))
+            })?;
+            MssqlColValueConvertor::bind(&mut query, value, col_types[index % col_types.len()])?;
+        }
+        Ok(query)
     }
 
     pub fn get_query_info<'a>(
@@ -175,7 +195,10 @@ impl RdbQueryBuilder<'_> {
         replace: bool,
     ) -> anyhow::Result<RdbQueryInfo<'a>> {
         if self.mssql_tb_meta.is_some() {
-            todo!("mssql RdbQueryBuilder DML SQL generation is not implemented")
+            if replace || !matches!(row_data.row_type, RowType::Insert) {
+                bail!("MSSQL snapshot sink only supports INSERT rows");
+            }
+            return self.get_insert_query(row_data, true);
         }
         self.get_query_info_internal(row_data, replace, true)
     }
@@ -184,9 +207,6 @@ impl RdbQueryBuilder<'_> {
         &self,
         row_data: &'a RowData,
     ) -> anyhow::Result<RdbQueryInfo<'a>> {
-        if self.mssql_tb_meta.is_some() {
-            todo!("mssql RdbQueryBuilder INSERT SQL generation is not implemented")
-        }
         self.get_insert_query(row_data, true)
     }
 
@@ -304,24 +324,68 @@ impl RdbQueryBuilder<'_> {
         batch_size: usize,
         replace: bool,
     ) -> anyhow::Result<(RdbQueryInfo<'a>, usize)> {
+        if replace && self.mssql_tb_meta.is_some() {
+            bail!("MSSQL snapshot sink does not support replace INSERT");
+        }
         let mut malloc_size = 0;
-        let row_values = self.get_batch_placeholders(&self.rdb_tb_meta.cols, batch_size)?;
+        let first_row = data
+            .get(start_index)
+            .context("batch insert has no first row")?;
+        let first_after = first_row.require_after()?;
+        let cols = if self.mssql_tb_meta.is_some() {
+            self.rdb_tb_meta
+                .cols
+                .iter()
+                .filter(|col| first_after.contains_key(*col))
+                .cloned()
+                .collect::<Vec<_>>()
+        } else {
+            self.rdb_tb_meta.cols.clone()
+        };
+        if cols.is_empty() {
+            bail!(DtError::InvariantViolated(format!(
+                "batch insert for {}.{} has no columns",
+                self.rdb_tb_meta.schema, self.rdb_tb_meta.tb
+            )));
+        }
+        let row_values = self.get_batch_placeholders(&cols, batch_size)?;
 
         let mut sql = format!(
             "INSERT INTO {}.{}({}) VALUES{}",
             self.escape(&self.rdb_tb_meta.schema),
             self.escape(&self.rdb_tb_meta.tb),
-            self.escape_cols(&self.rdb_tb_meta.cols).join(","),
+            self.escape_cols(&cols).join(","),
             row_values
         );
 
-        let cols = self.rdb_tb_meta.cols.clone();
-        let mut binds = Vec::with_capacity(batch_size.saturating_mul(self.rdb_tb_meta.cols.len()));
+        let mut binds = Vec::with_capacity(batch_size.saturating_mul(cols.len()));
         for row_data in data.iter().skip(start_index).take(batch_size) {
             malloc_size += row_data.data_size;
             let after = row_data.require_after()?;
+            if self.mssql_tb_meta.is_some()
+                && self
+                    .rdb_tb_meta
+                    .cols
+                    .iter()
+                    .filter(|col| after.contains_key(*col))
+                    .ne(cols.iter())
+            {
+                bail!(DtError::InvariantViolated(format!(
+                    "MSSQL batch insert rows have inconsistent column layouts for {}.{}",
+                    self.rdb_tb_meta.schema, self.rdb_tb_meta.tb
+                )));
+            }
             for col_name in cols.iter() {
-                binds.push(after.get(col_name));
+                if self.mssql_tb_meta.is_some() {
+                    binds.push(Some(after.get(col_name).ok_or_else(|| {
+                        DtError::InvariantViolated(format!(
+                            "MSSQL batch insert row is missing column {}.{}.{}",
+                            self.rdb_tb_meta.schema, self.rdb_tb_meta.tb, col_name
+                        ))
+                    })?));
+                } else {
+                    binds.push(after.get(col_name));
+                }
             }
         }
 
@@ -490,14 +554,23 @@ impl RdbQueryBuilder<'_> {
         let mut binds = Vec::with_capacity(self.rdb_tb_meta.cols.len());
         let after = row_data.require_after()?;
         for col_name in self.rdb_tb_meta.cols.iter() {
+            if self.mssql_tb_meta.is_some() && !after.contains_key(col_name) {
+                continue;
+            }
             cols.push(col_name.clone());
             binds.push(after.get(col_name));
         }
 
-        let mut col_values = Vec::with_capacity(self.rdb_tb_meta.cols.len());
-        for i in 0..self.rdb_tb_meta.cols.len() {
-            let sql_value =
-                self.get_sql_value(i + 1, &self.rdb_tb_meta.cols[i], &binds[i], placeholder)?;
+        if cols.is_empty() {
+            bail!(DtError::InvariantViolated(format!(
+                "insert for {}.{} has no columns",
+                self.rdb_tb_meta.schema, self.rdb_tb_meta.tb
+            )));
+        }
+
+        let mut col_values = Vec::with_capacity(cols.len());
+        for (index, col) in cols.iter().enumerate() {
+            let sql_value = self.get_sql_value(index + 1, col, &binds[index], placeholder)?;
             col_values.push(sql_value);
         }
 
@@ -505,7 +578,7 @@ impl RdbQueryBuilder<'_> {
             "INSERT INTO {}.{}({}) VALUES({})",
             self.escape(&self.rdb_tb_meta.schema),
             self.escape(&self.rdb_tb_meta.tb),
-            self.escape_cols(&self.rdb_tb_meta.cols).join(","),
+            self.escape_cols(&cols).join(","),
             col_values.join(",")
         );
 
@@ -744,16 +817,15 @@ impl RdbQueryBuilder<'_> {
     }
 
     pub fn build_extract_cols_str(&self) -> anyhow::Result<String> {
-        if self.mssql_tb_meta.is_some() {
-            todo!("mssql RdbQueryBuilder extract column generation is not implemented")
-        }
         let mut extract_cols = Vec::new();
         for col in self.rdb_tb_meta.cols.iter() {
             if self.ignore_cols.is_some_and(|cols| cols.contains(col)) {
                 continue;
             }
 
-            if let Some(tb_meta) = self.pg_tb_meta {
+            if self.mssql_tb_meta.is_some() {
+                extract_cols.push(self.escape(col));
+            } else if let Some(tb_meta) = self.pg_tb_meta {
                 let col_type = tb_meta.get_col_type(col)?;
                 let extract_type = PgColValueConvertor::get_extract_type(col_type);
                 let extract_col = if extract_type.is_empty() {
@@ -825,11 +897,12 @@ impl RdbQueryBuilder<'_> {
         col_value: &Option<&ColValue>,
         placeholder: bool,
     ) -> anyhow::Result<String> {
-        if self.mssql_tb_meta.is_some() {
-            todo!("mssql RdbQueryBuilder SQL value generation is not implemented")
-        }
         if placeholder {
             return self.get_placeholder(index, col);
+        }
+
+        if self.mssql_tb_meta.is_some() {
+            bail!("MSSQL query builder does not support unparameterized values");
         }
 
         let Some(col_value) = col_value else {
@@ -958,8 +1031,10 @@ impl RdbQueryBuilder<'_> {
 
     fn get_placeholder(&self, index: usize, col: &str) -> anyhow::Result<String> {
         if self.mssql_tb_meta.is_some() {
-            let _ = (index, col);
-            todo!("mssql RdbQueryBuilder placeholder generation is not implemented")
+            self.mssql_tb_meta
+                .context("MSSQL table meta missing when building placeholder")?
+                .get_col_type(col)?;
+            return Ok(format!("@P{index}"));
         }
         if let Some(tb_meta) = self.pg_tb_meta {
             let col_type = tb_meta.get_col_type(col)?;
@@ -1020,6 +1095,7 @@ mod tests {
 
     use dt_common::meta::{
         col_value::ColValue,
+        mssql::{mssql_col_type::MssqlColType, mssql_tb_meta::MssqlTbMeta},
         mysql::{mysql_col_type::MysqlColType, mysql_tb_meta::MysqlTbMeta},
         pg::{pg_col_type::PgColType, pg_tb_meta::PgTbMeta, pg_value_type::PgValueType},
         rdb_tb_meta::RdbTbMeta,
@@ -1112,6 +1188,25 @@ mod tests {
             },
             oid: 1,
             col_type_map,
+        }
+    }
+
+    fn build_mssql_tb_meta() -> MssqlTbMeta {
+        MssqlTbMeta {
+            basic: RdbTbMeta {
+                schema: "dbo".to_string(),
+                tb: "t1".to_string(),
+                cols: vec!["id".to_string(), "code".to_string(), "name".to_string()],
+                order_cols: vec!["id".to_string()],
+                partition_col: "id".to_string(),
+                id_cols: vec!["id".to_string()],
+                ..Default::default()
+            },
+            col_type_map: HashMap::from([
+                ("id".to_string(), MssqlColType::Int4),
+                ("code".to_string(), MssqlColType::NVarchar),
+                ("name".to_string(), MssqlColType::NVarchar),
+            ]),
         }
     }
 
@@ -1460,6 +1555,57 @@ mod tests {
         assert_eq!(select_query_info.cols, tb_meta.basic.id_cols);
         assert_eq!(select_query_info.binds.len(), 2);
         let _ = builder.create_pg_query(&select_query_info).unwrap();
+    }
+
+    #[test]
+    fn test_mssql_batch_insert_uses_unique_parameter_indexes() {
+        let tb_meta = build_mssql_tb_meta();
+        let data = vec![build_insert_row_data(false), build_insert_row_data(false)];
+        let builder = RdbQueryBuilder::new_for_mssql(&tb_meta, None);
+
+        let (query_info, _) = builder
+            .get_batch_insert_query(&data, 0, data.len(), false)
+            .unwrap();
+
+        assert_eq!(
+            query_info.sql,
+            "INSERT INTO [dbo].[t1]([id],[code],[name]) VALUES(@P1,@P2,@P3),(@P4,@P5,@P6)"
+        );
+        assert_eq!(query_info.cols, tb_meta.basic.cols);
+        assert_eq!(query_info.binds.len(), 6);
+        let _ = builder.create_mssql_query(&query_info).unwrap();
+    }
+
+    #[test]
+    fn test_mssql_insert_uses_only_columns_present_after_filtering() {
+        let tb_meta = build_mssql_tb_meta();
+        let mut row = build_insert_row_data(false);
+        row.after.as_mut().unwrap().remove("code");
+        let builder = RdbQueryBuilder::new_for_mssql(&tb_meta, None);
+
+        let query_info = builder.get_insert_query_info(&row).unwrap();
+
+        assert_eq!(
+            query_info.sql,
+            "INSERT INTO [dbo].[t1]([id],[name]) VALUES(@P1,@P2)"
+        );
+        assert_eq!(query_info.cols, ["id", "name"]);
+        assert_eq!(query_info.binds.len(), 2);
+        let _ = builder.create_mssql_query(&query_info).unwrap();
+    }
+
+    #[test]
+    fn test_mssql_snapshot_builder_rejects_non_insert_dml() {
+        let tb_meta = build_mssql_tb_meta();
+        let builder = RdbQueryBuilder::new_for_mssql(&tb_meta, None);
+
+        let error = match builder.get_query_info(&build_delete_row_data(), false) {
+            Ok(_) => panic!("MSSQL snapshot builder accepted a DELETE row"),
+            Err(error) => error,
+        };
+        assert!(error
+            .to_string()
+            .contains("snapshot sink only supports INSERT"));
     }
 
     #[test]

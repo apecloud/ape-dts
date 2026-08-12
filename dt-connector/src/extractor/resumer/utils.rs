@@ -18,8 +18,8 @@ use dt_common::{
     config::{config_enums::DbType, connection_auth_config::ConnectionAuthConfig},
     error::DtError,
     log_info,
-    meta::position::Position,
     meta::redis::cluster_node::ClusterNode,
+    meta::{mssql::mssql_connection_pool::MssqlConnectionPool, position::Position},
     utils::redis_util::RedisUtil,
 };
 
@@ -67,6 +67,19 @@ impl ResumerUtil {
         max_connections: u32,
         is_direct_connection: Option<bool>,
     ) -> anyhow::Result<ResumerDbPool> {
+        if matches!(db_type, DbType::Mssql) {
+            let pool = MssqlConnectionPool::from_config(
+                url,
+                connection_auth,
+                Some("ape-dts-resumer"),
+                max_connections,
+                15,
+            )
+            .await
+            .context("failed to create MSSQL connection pool")?;
+            return Ok(ResumerDbPool::Mssql(pool));
+        }
+
         let final_url = ConnectionAuthConfig::merge_url_with_auth(url, connection_auth)
             .context("failed to merge URL with connection auth")?;
 

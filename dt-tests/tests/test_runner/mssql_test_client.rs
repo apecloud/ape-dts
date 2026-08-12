@@ -1,9 +1,15 @@
 use anyhow::Context;
 use connection_string::{AdoNetString, JdbcString};
 use dt_common::{
+    config::config_enums::DbType,
     config::{connection_auth_config::ConnectionAuthConfig, task_config::TaskConfig},
-    meta::{mssql::mssql_connection_pool::MssqlConnectionPool, row_data::RowData},
+    meta::{
+        mssql::{mssql_connection_pool::MssqlConnectionPool, mssql_meta_manager::MssqlMetaManager},
+        row_data::RowData,
+    },
+    utils::sql_util::SqlUtil,
 };
+use dt_connector::rdb_query_builder::RdbQueryBuilder;
 use tiberius::Client;
 use tokio::net::TcpStream;
 use tokio_util::compat::{Compat, TokioAsyncWriteCompatExt};
@@ -119,15 +125,57 @@ impl MssqlTestClient {
 
     pub async fn fetch_table(
         &self,
-        _schema: &str,
-        _tb: &str,
-        _where_sql: &str,
+        schema: &str,
+        tb: &str,
+        where_sql: &str,
     ) -> anyhow::Result<Vec<RowData>> {
-        todo!("mssql test RowData fetch adapter is not implemented")
+        let pool = self.create_pool().await?;
+        let mut meta_manager = MssqlMetaManager::new(pool).await?;
+        let tb_meta = meta_manager.get_tb_meta(schema, tb).await?.clone();
+        let query_builder = RdbQueryBuilder::new_for_mssql(&tb_meta, None);
+        let cols = query_builder.build_extract_cols_str()?;
+        let sql = format!(
+            "SELECT {cols} FROM {}.{} {where_sql} ORDER BY {} ASC",
+            Self::quote(schema),
+            Self::quote(tb),
+            Self::quote(&tb_meta.basic.cols[0]),
+        );
+
+        let mut client = self.connect_to(self.database()).await?;
+        let rows = client.simple_query(sql).await?.into_first_result().await?;
+        rows.iter()
+            .map(|row| RowData::from_mssql_row(row, &tb_meta, &None, None))
+            .collect()
+    }
+
+    pub async fn get_table_columns(&self, schema: &str, tb: &str) -> anyhow::Result<Vec<String>> {
+        let pool = self.create_pool().await?;
+        let mut meta_manager = MssqlMetaManager::new(pool).await?;
+        Ok(meta_manager
+            .get_tb_meta(schema, tb)
+            .await?
+            .basic
+            .cols
+            .clone())
     }
 
     pub async fn close(&self) -> anyhow::Result<()> {
         Ok(())
+    }
+
+    async fn create_pool(&self) -> anyhow::Result<MssqlConnectionPool> {
+        MssqlConnectionPool::from_config(
+            &self.endpoint.connection_string,
+            &self.endpoint.connection_auth,
+            None,
+            2,
+            15,
+        )
+        .await
+    }
+
+    fn quote(identifier: &str) -> String {
+        SqlUtil::escape_by_db_type(identifier, &DbType::Mssql)
     }
 
     fn database_from_connection_string(connection_string: &str) -> anyhow::Result<String> {

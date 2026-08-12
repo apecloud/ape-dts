@@ -14,6 +14,7 @@ use crate::{
     config::config_enums::DbType,
     error::{DtError, DtResultExt, ErrorObject},
     meta::adaptor::{
+        mssql_col_value_convertor::MssqlColValueConvertor,
         mysql_col_value_convertor::MysqlColValueConvertor,
         pg_col_value_convertor::PgColValueConvertor,
     },
@@ -183,12 +184,31 @@ impl RowData {
     }
 
     pub fn from_mssql_row(
-        _row: &MssqlRow,
-        _tb_meta: &MssqlTbMeta,
-        _ignore_cols: &Option<&HashSet<String>>,
-        _chunk_id: Option<u64>,
+        row: &MssqlRow,
+        tb_meta: &MssqlTbMeta,
+        ignore_cols: &Option<&HashSet<String>>,
+        chunk_id: Option<u64>,
     ) -> anyhow::Result<Self> {
-        todo!("mssql RowData conversion is not implemented")
+        let mut after = HashMap::new();
+        for col in &tb_meta.basic.cols {
+            if ignore_cols.as_ref().is_some_and(|cols| cols.contains(col)) {
+                continue;
+            }
+
+            let col_value = MssqlColValueConvertor::from_query(row, col)
+                .context(DtError::StatementFailed(format!(
+                    "failed to convert column {}.{}.{}",
+                    tb_meta.basic.schema, tb_meta.basic.tb, col
+                )))
+                .object(ErrorObject {
+                    schema: Some(tb_meta.basic.schema.clone()),
+                    table: Some(tb_meta.basic.tb.clone()),
+                    column: Some(col.clone()),
+                    ..Default::default()
+                })?;
+            after.insert(col.clone(), col_value);
+        }
+        Ok(Self::build_insert_row_data(after, &tb_meta.basic, chunk_id))
     }
 
     pub fn build_insert_row_data(
