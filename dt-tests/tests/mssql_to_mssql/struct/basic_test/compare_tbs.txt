@@ -1,0 +1,5 @@
+struct_it_mssql2mssql_1.full_column_type
+struct_it_mssql2mssql_1.defaults_and_generated
+struct_it_mssql2mssql_1.constraint_table
+struct_it_mssql2mssql_1.full_index_type
+struct_it_mssql2mssql_1.match
