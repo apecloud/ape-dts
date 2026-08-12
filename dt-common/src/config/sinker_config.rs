@@ -33,6 +33,7 @@ pub enum SinkerConfig {
         url: String,
         connection_auth: ConnectionAuthConfig,
         batch_size: usize,
+        replace: bool,
     },
 
     Mongo {

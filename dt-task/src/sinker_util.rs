@@ -215,7 +215,11 @@ impl SinkerUtil {
                 }
             }
 
-            SinkerConfig::Mssql { batch_size, .. } => {
+            SinkerConfig::Mssql {
+                batch_size,
+                replace,
+                ..
+            } => {
                 let router = RdbRouter::from_config(&config.router, &DbType::Mssql)?;
                 let conn_pool = match client {
                     ConnClient::Mssql(conn_pool) => conn_pool,
@@ -231,6 +235,7 @@ impl SinkerUtil {
                         meta_manager.clone(),
                         router.clone(),
                         batch_size,
+                        replace,
                         BaseSinker::new(monitor.clone(), monitor_interval),
                     );
                     Self::push_sinker(&mut sub_sinkers, sinker, &sinker_worker_metrics);

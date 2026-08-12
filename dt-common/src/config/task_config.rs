@@ -832,6 +832,7 @@ impl TaskConfig {
                         url,
                         connection_auth,
                         batch_size,
+                        replace: loader.get_with_default(SINKER, REPLACE, true)?,
                     }
                 }
                 _ => bail! { not_supported_err },
@@ -2094,6 +2095,7 @@ url=jdbc:sqlserver://127.0.0.1:1434;database=ape_dts;user=sa;password=Password12
 max_connections=2
 connection_timeout_secs=9
 batch_size=8
+replace=false
 
 [parallelizer]
 parallel_type=snapshot
@@ -2126,7 +2128,10 @@ parallel_size=2
             }
             _ => panic!("expected MSSQL snapshot extractor"),
         }
-        assert!(matches!(config.sinker, SinkerConfig::Mssql { .. }));
+        assert!(matches!(
+            config.sinker,
+            SinkerConfig::Mssql { replace: false, .. }
+        ));
     }
 
     #[test]
@@ -2161,7 +2166,10 @@ parallel_size=1
             config.extractor,
             ExtractorConfig::MssqlSnapshot { .. }
         ));
-        assert!(matches!(config.sinker, SinkerConfig::Mssql { .. }));
+        assert!(matches!(
+            config.sinker,
+            SinkerConfig::Mssql { replace: true, .. }
+        ));
     }
 
     #[test]

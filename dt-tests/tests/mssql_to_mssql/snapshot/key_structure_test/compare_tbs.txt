@@ -1,0 +1,5 @@
+key_structure.no_key_rows
+key_structure.composite_primary_rows
+key_structure.unique_rows
+key_structure.default_rows
+key_structure.empty_rows
