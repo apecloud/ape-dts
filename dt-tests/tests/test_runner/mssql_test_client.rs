@@ -163,7 +163,7 @@ impl MssqlTestClient {
         Ok(())
     }
 
-    async fn create_pool(&self) -> anyhow::Result<MssqlConnectionPool> {
+    pub async fn create_pool(&self) -> anyhow::Result<MssqlConnectionPool> {
         MssqlConnectionPool::from_config(
             &self.endpoint.connection_string,
             &self.endpoint.connection_auth,
