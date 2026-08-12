@@ -386,6 +386,17 @@ impl RdbRouterInner {
         let src_db = struct_data.db.clone();
         let mut dst_db = src_db.clone();
         match &mut struct_data.statement {
+            StructStatement::MssqlCreateTable(s) => {
+                let (schema, tb) = (s.table.schema_name.clone(), s.table.table_name.clone());
+                let (dst_schema, dst_tb) = self.get_tb_map(&schema, &tb);
+                s.route(dst_schema, dst_tb)
+            }
+
+            StructStatement::MssqlCreateSchema(s) => {
+                let dst_schema = self.get_schema_map(&s.schema.name).to_string();
+                s.route(&dst_schema)
+            }
+
             StructStatement::MysqlCreateTable(s) => {
                 let (schema, tb) = (s.table.database_name.clone(), s.table.table_name.clone());
                 let (mapped_db, dst_schema, dst_tb) =
