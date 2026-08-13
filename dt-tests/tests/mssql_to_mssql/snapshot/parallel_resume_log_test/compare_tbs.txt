@@ -1,4 +1,0 @@
-parallel_resume_log.integer_rows
-parallel_resume_log.nullable_rows
-[parallel_resume_log].[string rows.*]
-parallel_resume_log.finished_rows

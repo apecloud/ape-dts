@@ -1,6 +1,6 @@
 #[cfg(test)]
 mod test {
-    use std::{collections::HashSet, env, sync::Arc, time::Duration};
+    use std::{collections::HashSet, sync::Arc, time::Duration};
 
     use anyhow::Context;
     use dt_common::{
@@ -17,67 +17,20 @@ mod test {
     use tiberius::Row;
     use tokio::sync::Barrier;
 
-    use crate::{
-        test_config_util::TestConfigUtil, test_runner::mssql_test_client::MssqlTestClient,
-    };
+    use crate::test_runner::mssql_test_endpoint::{MssqlTestEndpoint, TaskConfigEndpoint};
+
+    use super::super::{JDBC_TASK_CONFIG_FILE, TASK_CONFIG_FILE};
 
     const CROSS_TASK_TABLE: &str = "[dbo].[ape_dts_pool_cross_task_test]";
     const TRANSACTION_TABLE: &str = "[dbo].[ape_dts_pool_transaction_test]";
     const POISONED_TABLE: &str = "[dbo].[ape_dts_pool_poisoned_test]";
 
-    #[derive(Clone)]
-    struct TestEndpoint {
-        connection_string: String,
-        jdbc_connection_string: String,
-        database: String,
-        username: String,
-        password: String,
-    }
-
-    impl TestEndpoint {
-        fn from_env(prefix: &str) -> anyhow::Result<Self> {
-            load_test_env()?;
-            Ok(Self {
-                connection_string: required_env(&format!("{prefix}_without_auth_url"))?,
-                jdbc_connection_string: required_env(&format!("{prefix}_jdbc_url"))?,
-                database: required_env(&format!("{prefix}_database"))?,
-                username: required_env(&format!("{prefix}_username"))?,
-                password: required_env(&format!("{prefix}_password"))?,
-            })
-        }
-
-        fn disabled_tls_auth(&self) -> ConnectionAuthConfig {
-            ConnectionAuthConfig::BasicSsl {
-                username: Some(self.username.clone()),
-                password: Some(self.password.clone()),
-                ssl_config: SslConfig {
-                    ssl_mode: SslMode::Disable,
-                    ssl_ca_path: String::new(),
-                },
-            }
-        }
-
-        async fn ensure_database(&self) -> anyhow::Result<()> {
-            let client = MssqlTestClient::from_connection_string_and_auth(
-                &self.connection_string,
-                self.disabled_tls_auth(),
-            )?;
-            client.ensure_database(&self.database).await
-        }
-    }
-
-    fn load_test_env() -> anyhow::Result<()> {
-        let default_env = TestConfigUtil::get_absolute_path(".env");
-        dotenv::from_path(&default_env).with_context(|| format!("failed to load {default_env}"))?;
-        Ok(())
-    }
-
-    fn required_env(key: &str) -> anyhow::Result<String> {
-        env::var(key).with_context(|| format!("required MSSQL test environment variable {key}"))
+    fn load_endpoint(config_endpoint: TaskConfigEndpoint) -> anyhow::Result<MssqlTestEndpoint> {
+        MssqlTestEndpoint::from_config_file(TASK_CONFIG_FILE, config_endpoint)
     }
 
     async fn create_pool_for_endpoint(
-        endpoint: &TestEndpoint,
+        endpoint: &MssqlTestEndpoint,
         auth: &ConnectionAuthConfig,
         max_connections: u32,
         connection_timeout_secs: u64,
@@ -85,7 +38,7 @@ mod test {
         endpoint.ensure_database().await?;
 
         let pool = MssqlConnectionPool::from_config(
-            &endpoint.connection_string,
+            endpoint.connection_string(),
             auth,
             None,
             max_connections,
@@ -97,14 +50,8 @@ mod test {
     }
 
     async fn create_source_pool(max_connections: u32) -> anyhow::Result<MssqlConnectionPool> {
-        let endpoint = TestEndpoint::from_env("mssql_extractor")?;
-        create_pool_for_endpoint(
-            &endpoint,
-            &endpoint.disabled_tls_auth(),
-            max_connections,
-            15,
-        )
-        .await
+        let endpoint = load_endpoint(TaskConfigEndpoint::Extractor)?;
+        create_pool_for_endpoint(&endpoint, endpoint.connection_auth(), max_connections, 15).await
     }
 
     async fn execute_batch(
@@ -117,12 +64,6 @@ mod test {
             .await?
             .into_results()
             .await?;
-        Ok(())
-    }
-
-    async fn execute_clean_batch(pool: &MssqlConnectionPool, sql: &str) -> anyhow::Result<()> {
-        let mut connection = pool.get().await?;
-        execute_batch(&mut connection, sql).await?;
         Ok(())
     }
 
@@ -178,14 +119,17 @@ mod test {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     #[serial]
-    async fn pool_uses_environment_endpoints_and_configured_limits() -> anyhow::Result<()> {
-        let configurations = [("mssql_extractor", 1, 2), ("mssql_sinker", 3, 4)];
+    async fn pool_uses_ini_endpoints_and_configured_limits() -> anyhow::Result<()> {
+        let configurations = [
+            (TaskConfigEndpoint::Extractor, 1, 2),
+            (TaskConfigEndpoint::Sinker, 3, 4),
+        ];
 
-        for (endpoint_prefix, max_connections, connection_timeout_secs) in configurations {
-            let endpoint = TestEndpoint::from_env(endpoint_prefix)?;
+        for (endpoint_section, max_connections, connection_timeout_secs) in configurations {
+            let endpoint = load_endpoint(endpoint_section)?;
             let pool = create_pool_for_endpoint(
                 &endpoint,
-                &endpoint.disabled_tls_auth(),
+                endpoint.connection_auth(),
                 max_connections,
                 connection_timeout_secs,
             )
@@ -247,8 +191,10 @@ mod test {
             connection_timeout_secs: u64,
         }
 
-        let endpoint = TestEndpoint::from_env("mssql_extractor")?;
-        let valid_auth = endpoint.disabled_tls_auth();
+        let endpoint = load_endpoint(TaskConfigEndpoint::Extractor)?;
+        let valid_auth = endpoint.connection_auth().clone();
+        let username = endpoint.username()?.to_string();
+        let password = endpoint.password()?.to_string();
 
         let cases = vec![
             InvalidConfigCase {
@@ -260,26 +206,26 @@ mod test {
             },
             InvalidConfigCase {
                 name: "missing authentication",
-                connection_string: endpoint.connection_string.clone(),
+                connection_string: endpoint.connection_string().to_string(),
                 auth: ConnectionAuthConfig::NoAuth,
                 max_connections: 1,
                 connection_timeout_secs: 15,
             },
             InvalidConfigCase {
                 name: "empty username",
-                connection_string: endpoint.connection_string.clone(),
+                connection_string: endpoint.connection_string().to_string(),
                 auth: ConnectionAuthConfig::Basic {
                     username: String::new(),
-                    password: Some(endpoint.password.clone()),
+                    password: Some(password.clone()),
                 },
                 max_connections: 1,
                 connection_timeout_secs: 15,
             },
             InvalidConfigCase {
                 name: "missing password",
-                connection_string: endpoint.connection_string.clone(),
+                connection_string: endpoint.connection_string().to_string(),
                 auth: ConnectionAuthConfig::Basic {
-                    username: endpoint.username.clone(),
+                    username: username.clone(),
                     password: None,
                 },
                 max_connections: 1,
@@ -287,10 +233,10 @@ mod test {
             },
             InvalidConfigCase {
                 name: "unsupported verify_ca TLS mode",
-                connection_string: endpoint.connection_string.clone(),
+                connection_string: endpoint.connection_string().to_string(),
                 auth: ConnectionAuthConfig::BasicSsl {
-                    username: Some(endpoint.username.clone()),
-                    password: Some(endpoint.password.clone()),
+                    username: Some(username.clone()),
+                    password: Some(password.clone()),
                     ssl_config: SslConfig {
                         ssl_mode: SslMode::VerifyCa,
                         ssl_ca_path: String::new(),
@@ -301,10 +247,10 @@ mod test {
             },
             InvalidConfigCase {
                 name: "verify_full TLS mode without CA",
-                connection_string: endpoint.connection_string.clone(),
+                connection_string: endpoint.connection_string().to_string(),
                 auth: ConnectionAuthConfig::BasicSsl {
-                    username: Some(endpoint.username.clone()),
-                    password: Some(endpoint.password.clone()),
+                    username: Some(username.clone()),
+                    password: Some(password.clone()),
                     ssl_config: SslConfig {
                         ssl_mode: SslMode::VerifyFull,
                         ssl_ca_path: String::new(),
@@ -315,15 +261,15 @@ mod test {
             },
             InvalidConfigCase {
                 name: "zero max connections",
-                connection_string: endpoint.connection_string.clone(),
+                connection_string: endpoint.connection_string().to_string(),
                 auth: valid_auth,
                 max_connections: 0,
                 connection_timeout_secs: 15,
             },
             InvalidConfigCase {
                 name: "zero connection timeout",
-                connection_string: endpoint.connection_string.clone(),
-                auth: endpoint.disabled_tls_auth(),
+                connection_string: endpoint.connection_string().to_string(),
+                auth: endpoint.connection_auth().clone(),
                 max_connections: 1,
                 connection_timeout_secs: 0,
             },
@@ -346,20 +292,20 @@ mod test {
     #[tokio::test]
     #[serial]
     async fn tiberius_provider_classifies_sql_server_authentication_errors() -> anyhow::Result<()> {
-        let endpoint = TestEndpoint::from_env("mssql_extractor")?;
+        let endpoint = load_endpoint(TaskConfigEndpoint::Extractor)?;
         let invalid_auth = ConnectionAuthConfig::BasicSsl {
-            username: Some(endpoint.username.clone()),
+            username: Some(endpoint.username()?.to_string()),
             password: Some("invalid-password".to_string()),
             ssl_config: SslConfig {
                 ssl_mode: SslMode::Disable,
                 ssl_ca_path: String::new(),
             },
         };
-        let client = MssqlTestClient::from_connection_string_and_auth(
-            &endpoint.connection_string,
+        let invalid_endpoint = MssqlTestEndpoint::from_connection_string_and_auth(
+            endpoint.connection_string(),
             invalid_auth,
         )?;
-        let result = client.check_connection(&endpoint.database).await;
+        let result = invalid_endpoint.check_connection().await;
         let error = match result {
             Ok(_) => panic!("invalid MSSQL credentials should be rejected"),
             Err(error) => error,
@@ -377,12 +323,14 @@ mod test {
     #[tokio::test]
     #[serial]
     async fn pool_accepts_ado_and_jdbc_strings_with_task_overrides() -> anyhow::Result<()> {
-        let endpoint = TestEndpoint::from_env("mssql_extractor")?;
+        let endpoint = load_endpoint(TaskConfigEndpoint::Extractor)?;
         endpoint.ensure_database().await?;
-        let auth = endpoint.disabled_tls_auth();
+        let auth = endpoint.connection_auth();
         let ado_only_connection_string = format!(
             "{};User ID={};Password={};Encrypt=DANGER_PLAINTEXT;Application Name=from-ado-only",
-            endpoint.connection_string, endpoint.username, endpoint.password
+            endpoint.connection_string(),
+            endpoint.username()?,
+            endpoint.password()?
         );
         let pool = MssqlConnectionPool::from_config(
             &ado_only_connection_string,
@@ -402,20 +350,21 @@ mod test {
 
         let ado_connection_string = format!(
             "{};User ID=invalid;Password=invalid;Encrypt=true;Application Name=from-ado",
-            endpoint.connection_string
+            endpoint.connection_string()
         );
+        let jdbc_endpoint = MssqlTestEndpoint::from_config_file(
+            JDBC_TASK_CONFIG_FILE,
+            TaskConfigEndpoint::Extractor,
+        )?;
         let configurations = [
             (ado_connection_string.as_str(), "ape-dts-ado-test"),
-            (
-                endpoint.jdbc_connection_string.as_str(),
-                "ape-dts-jdbc-test",
-            ),
+            (jdbc_endpoint.connection_string(), "ape-dts-jdbc-test"),
         ];
 
         for (connection_string, application_name) in configurations {
             let pool = MssqlConnectionPool::from_config(
                 connection_string,
-                &auth,
+                auth,
                 Some(application_name),
                 1,
                 15,
@@ -428,7 +377,7 @@ mod test {
             );
             assert_eq!(
                 query_string(&mut connection, "SELECT DB_NAME()").await?,
-                endpoint.database
+                endpoint.database()
             );
         }
         Ok(())
@@ -442,7 +391,7 @@ mod test {
 
         let pool = create_source_pool(MAX_CONNECTIONS).await?;
         assert_eq!(pool.max_size(), MAX_CONNECTIONS);
-        execute_clean_batch(
+        MssqlTestEndpoint::execute_batch(
             &pool,
             &format!(
                 "DROP TABLE IF EXISTS {CROSS_TASK_TABLE};\
@@ -504,7 +453,11 @@ mod test {
             assert!(distinct_sessions.contains(&session_id));
         }
 
-        execute_clean_batch(&pool, &format!("DROP TABLE IF EXISTS {CROSS_TASK_TABLE}")).await?;
+        MssqlTestEndpoint::execute_batch(
+            &pool,
+            &format!("DROP TABLE IF EXISTS {CROSS_TASK_TABLE}"),
+        )
+        .await?;
         Ok(())
     }
 
@@ -512,7 +465,7 @@ mod test {
     #[serial]
     async fn pooled_connection_supports_commit_and_rollback() -> anyhow::Result<()> {
         let pool = create_source_pool(1).await?;
-        execute_clean_batch(
+        MssqlTestEndpoint::execute_batch(
             &pool,
             &format!(
                 "DROP TABLE IF EXISTS {TRANSACTION_TABLE};\
@@ -561,7 +514,11 @@ mod test {
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].get::<i32, _>("id"), Some(1));
 
-        execute_clean_batch(&pool, &format!("DROP TABLE IF EXISTS {TRANSACTION_TABLE}")).await?;
+        MssqlTestEndpoint::execute_batch(
+            &pool,
+            &format!("DROP TABLE IF EXISTS {TRANSACTION_TABLE}"),
+        )
+        .await?;
         Ok(())
     }
 
@@ -570,7 +527,7 @@ mod test {
     async fn dropping_an_active_transaction_rolls_back_by_discarding_its_session(
     ) -> anyhow::Result<()> {
         let pool = create_source_pool(1).await?;
-        execute_clean_batch(
+        MssqlTestEndpoint::execute_batch(
             &pool,
             &format!(
                 "DROP TABLE IF EXISTS {POISONED_TABLE};\
@@ -602,7 +559,8 @@ mod test {
         assert_eq!(transaction_count, 0);
         assert_eq!(row_count, 0, "the uncommitted insert should be rolled back");
 
-        execute_clean_batch(&pool, &format!("DROP TABLE IF EXISTS {POISONED_TABLE}")).await?;
+        MssqlTestEndpoint::execute_batch(&pool, &format!("DROP TABLE IF EXISTS {POISONED_TABLE}"))
+            .await?;
         Ok(())
     }
 }

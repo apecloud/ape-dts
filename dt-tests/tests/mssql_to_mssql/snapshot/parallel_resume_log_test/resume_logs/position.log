@@ -1,2 +1,3 @@
 2026-08-12 01:00:00.000001 | checkpoint_position | {"type":"RdbSnapshot","db_type":"mssql","schema":"parallel_resume_log","tb":"nullable_rows","order_key":{"single":["split_key","3"]}}
 2026-08-12 01:00:00.000002 | checkpoint_position | {"type":"RdbSnapshot","db_type":"mssql","schema":"parallel_resume_log","tb":"string rows.*","order_key":{"single":["code","c"]}}
+2026-08-12 01:00:00.000004 | checkpoint_position | {"type":"RdbSnapshot","db_type":"mssql","schema":"parallel_resume_log","tb":"position_log_rows","order_key":{"single":["id","3"]}}

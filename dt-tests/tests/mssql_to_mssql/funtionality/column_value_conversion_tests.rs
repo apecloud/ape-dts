@@ -1,87 +1,42 @@
 #[cfg(test)]
 mod test {
-    use std::env;
-
     use anyhow::Context;
-    use dt_common::{
-        config::{
-            connection_auth_config::ConnectionAuthConfig,
-            ssl_config::{SslConfig, SslMode},
+    use dt_common::meta::{
+        adaptor::mssql_col_value_convertor::MssqlColValueConvertor,
+        col_value::ColValue,
+        mssql::{
+            mssql_col_type::{parse_mssql_col_type, MssqlColType},
+            mssql_connection_pool::MssqlConnectionPool,
+            mssql_tb_meta::MssqlTbMeta,
         },
-        meta::{
-            adaptor::mssql_col_value_convertor::MssqlColValueConvertor,
-            col_value::ColValue,
-            mssql::{
-                mssql_col_type::{parse_mssql_col_type, MssqlColType},
-                mssql_connection_pool::MssqlConnectionPool,
-                mssql_tb_meta::MssqlTbMeta,
-            },
-            rdb_tb_meta::RdbTbMeta,
-            row_data::RowData,
-        },
+        rdb_tb_meta::RdbTbMeta,
+        row_data::RowData,
     };
     use serial_test::serial;
     use tiberius::{time::chrono::DateTime, Query};
 
-    use crate::{
-        test_config_util::TestConfigUtil, test_runner::mssql_test_client::MssqlTestClient,
-    };
+    use crate::test_runner::mssql_test_endpoint::{MssqlTestEndpoint, TaskConfigEndpoint};
+
+    use super::super::TASK_CONFIG_FILE;
 
     const TEST_TABLE: &str = "[dbo].[ape_dts_col_value_conversion_test]";
 
-    fn required_env(key: &str) -> anyhow::Result<String> {
-        env::var(key).with_context(|| format!("required MSSQL test environment variable {key}"))
-    }
-
-    fn auth(username: String, password: String) -> ConnectionAuthConfig {
-        ConnectionAuthConfig::BasicSsl {
-            username: Some(username),
-            password: Some(password),
-            ssl_config: SslConfig {
-                ssl_mode: SslMode::Disable,
-                ssl_ca_path: String::new(),
-            },
-        }
-    }
-
     async fn create_pool() -> anyhow::Result<MssqlConnectionPool> {
-        let env_path = TestConfigUtil::get_absolute_path(".env");
-        dotenv::from_path(&env_path)
-            .with_context(|| format!("failed to load MSSQL test environment {env_path}"))?;
-
-        let connection_string = required_env("mssql_extractor_without_auth_url")?;
-        let database = required_env("mssql_extractor_database")?;
-        let auth = auth(
-            required_env("mssql_extractor_username")?,
-            required_env("mssql_extractor_password")?,
-        );
-
-        MssqlTestClient::from_connection_string_and_auth(&connection_string, auth.clone())?
-            .ensure_database(&database)
-            .await?;
-        MssqlConnectionPool::from_config(&connection_string, &auth, None, 1, 15).await
+        let endpoint =
+            MssqlTestEndpoint::from_config_file(TASK_CONFIG_FILE, TaskConfigEndpoint::Extractor)?;
+        endpoint.ensure_database().await?;
+        endpoint.create_pool_with(1, 15).await
     }
 
     fn col_type(type_name: &str) -> MssqlColType {
         parse_mssql_col_type(type_name).unwrap()
     }
 
-    async fn execute_batch(pool: &MssqlConnectionPool, sql: &str) -> anyhow::Result<()> {
-        let mut connection = pool.get().await?;
-        connection
-            .client_mut()
-            .simple_query(sql)
-            .await?
-            .into_results()
-            .await?;
-        Ok(())
-    }
-
     #[tokio::test]
     #[serial]
     async fn values_and_typed_nulls_round_trip_through_real_mssql() -> anyhow::Result<()> {
         let pool = create_pool().await?;
-        execute_batch(
+        MssqlTestEndpoint::execute_batch(
             &pool,
             &format!(
                 "DROP TABLE IF EXISTS {TEST_TABLE};
@@ -318,7 +273,8 @@ mod test {
         }
         .await;
 
-        execute_batch(&pool, &format!("DROP TABLE IF EXISTS {TEST_TABLE}")).await?;
+        MssqlTestEndpoint::execute_batch(&pool, &format!("DROP TABLE IF EXISTS {TEST_TABLE}"))
+            .await?;
         result
     }
 }

@@ -29,4 +29,17 @@ INSERT INTO type_coverage.all_supported_types (
     '2026-08-12T04:34:56.1234567+00:00', N'{}'
 );
 INSERT INTO type_coverage.all_supported_types (id) VALUES (3);
+INSERT INTO type_coverage.all_supported_types VALUES (
+    4, 1, 42, -123, 123456, -123456789012345,
+    12.5, -98765.4321, 123.4567, -123456789.1234,
+    1234567890123456789012345678901234.5678, 12345.678901,
+    'fixed', 'quotes '' and symbols !@#', N'宽字符', N'Mixed 中文 日本語',
+    0x4142434445464748, 0x000102030405FEFF, 'legacy plain text', N'legacy Unicode 中文',
+    0x0123456789ABCDEF, '12345678-1234-5678-90ab-1234567890ab',
+    N'<root><child id="4">text &amp; 中文</child></root>',
+    '2024-02-29', '04:05:06.1234567', '2024-02-29T04:05:00',
+    '2024-02-29T04:05:06.123', '2024-02-29T04:05:06.1234567',
+    '2024-02-29T12:05:06.1234567+08:00',
+    N'{"id":4,"string":"中文","nested":{"ok":true},"array":[1,2,3]}'
+);
 GO

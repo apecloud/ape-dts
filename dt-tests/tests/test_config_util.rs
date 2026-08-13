@@ -38,6 +38,16 @@ impl TestConfigUtil {
         )
     }
 
+    pub fn load_task_config(relative_config_file: &str) -> anyhow::Result<TaskConfig> {
+        let project_root = Self::get_project_root();
+        let src_config_file = Self::get_absolute_path(relative_config_file);
+        let dst_config_file = format!("{project_root}/tmp/{relative_config_file}");
+
+        Self::update_task_config_from_env(&src_config_file, &dst_config_file);
+        Self::update_file_paths_in_task_config(&dst_config_file, &dst_config_file, &project_root);
+        TaskConfig::new(&dst_config_file)
+    }
+
     // result: (absolute_sub_path, sub_path_dir_name)
     pub fn get_absolute_sub_dir(relative_dir: &str) -> Vec<(String, String)> {
         let mut result_dir: Vec<(String, String)> = vec![];
