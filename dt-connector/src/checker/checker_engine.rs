@@ -16,6 +16,7 @@ use crate::{
     sinker::mongo::mongo_cmd,
 };
 use dt_common::{
+    error::{ErrorCode, ErrorReport},
     log_diff, log_miss, log_sql, log_warn,
     meta::{
         col_value::ColValue, mongo::mongo_constant::MongoConstants, pg::pg_value_type::PgValueType,
@@ -30,6 +31,110 @@ use dt_common::{
 
 impl<C: Checker> DataChecker<C> {
     const MAX_DIFF_COLS: usize = 8;
+
+    fn is_missing_target(error: &anyhow::Error) -> bool {
+        matches!(
+            ErrorReport::from_anyhow(error).code,
+            ErrorCode::ObjectNotFound | ErrorCode::DatabaseNotFound
+        )
+    }
+
+    async fn load_source_table_meta(&mut self, source_row: &RowData) -> anyhow::Result<RdbTbMeta> {
+        let meta_manager = self
+            .ctx
+            .extractor_meta_manager
+            .as_mut()
+            .context("source table metadata manager is not initialized")?;
+        Ok(meta_manager
+            .get_tb_meta(&source_row.schema, &source_row.tb)
+            .await?
+            .clone())
+    }
+
+    fn build_missing_target_entry(
+        target_row: &RowData,
+        source_row: &RowData,
+        source_meta: &RdbTbMeta,
+        output_full_row: bool,
+    ) -> anyhow::Result<(u128, CheckEntry)> {
+        let row_key = Self::lookup_match_key(source_row, source_meta)?
+            .context("source row has a NULL key component")?;
+        let key = RecheckKey::from_row_data(source_row, &source_meta.id_cols)?;
+        let target_changed =
+            source_row.schema != target_row.schema || source_row.tb != target_row.tb;
+        let id_col_values = Self::build_id_col_values(source_row, source_meta).unwrap_or_default();
+        let src_row = output_full_row
+            .then(|| Self::clone_row_values(source_row))
+            .flatten();
+        let entry = CheckEntry {
+            key,
+            log: CheckLog {
+                schema: source_row.schema.clone(),
+                tb: source_row.tb.clone(),
+                target_schema: target_changed.then(|| target_row.schema.clone()),
+                target_tb: target_changed.then(|| target_row.tb.clone()),
+                id_col_values,
+                diff_col_values: HashMap::new(),
+                src_row,
+                dst_row: None,
+            },
+            revise_sql: None,
+            diff_cols: None,
+        };
+        Ok((row_key, entry))
+    }
+
+    async fn record_missing_target_rows(
+        &mut self,
+        target_rows: Vec<RowData>,
+    ) -> anyhow::Result<usize> {
+        let first_target_row = target_rows.first().context("checker group is empty")?;
+        let first_source_row = self
+            .ctx
+            .router
+            .as_ref()
+            .map(|router| router.reverse_route_row(first_target_row.clone()))
+            .unwrap_or_else(|| first_target_row.clone());
+        let source_meta = self.load_source_table_meta(&first_source_row).await?;
+        let target_schema = first_target_row.schema.clone();
+        let target_tb = first_target_row.tb.clone();
+        let mut checked_count = 0;
+
+        for target_row in target_rows {
+            let source_row = self
+                .ctx
+                .router
+                .as_ref()
+                .map(|router| router.reverse_route_row(target_row.clone()))
+                .unwrap_or_else(|| target_row.clone());
+            match Self::build_missing_target_entry(
+                &target_row,
+                &source_row,
+                &source_meta,
+                self.ctx.output_full_row,
+            ) {
+                Ok((row_key, entry)) if Self::should_sample_key(self.ctx.sample_rate, row_key) => {
+                    self.store_entry(&target_row, row_key, entry).await;
+                    checked_count += 1;
+                }
+                Ok(_) => {}
+                Err(error) => {
+                    log_warn!(
+                        "Skipping row in missing target table {}.{}: {}",
+                        target_row.schema,
+                        target_row.tb,
+                        error
+                    );
+                    self.ctx.record_row_table_counts(&target_row, 0, 1);
+                    self.ctx.summary.skip_count += 1;
+                }
+            }
+        }
+
+        self.ctx
+            .record_table_counts(&target_schema, &target_tb, checked_count, 0);
+        Ok(checked_count)
+    }
 
     fn build_revise_sql(
         output_revise_sql: bool,
@@ -907,15 +1012,6 @@ impl<C: Checker> DataChecker<C> {
         let mut monitor_task_id = None;
         for rows in grouped {
             let first_row = rows.first().context("checker group is empty")?;
-            let tb_meta = self.checker.load_table_meta(first_row).await?;
-            let prepared_rows = self.prepare_rows_for_fetch(rows, tb_meta.as_ref())?;
-            if prepared_rows.is_empty() {
-                continue;
-            }
-            let rows_to_fetch = prepared_rows.iter().map(|(row, _)| row).collect::<Vec<_>>();
-            let first_row = rows_to_fetch.first().context("checker group is empty")?;
-            let table_schema = first_row.schema.clone();
-            let table_tb = first_row.tb.clone();
             if monitor_task_id.is_none() {
                 let (schema, tb) = match &self.ctx.router {
                     Some(router) => router.reverse_get_tb_map(&first_row.schema, &first_row.tb),
@@ -924,6 +1020,22 @@ impl<C: Checker> DataChecker<C> {
                 monitor_task_id = Some(TaskMonitorHandle::task_id_from_schema_tb(schema, tb))
                     .filter(|id| !id.is_empty());
             }
+            let tb_meta = match self.checker.load_table_meta(first_row).await {
+                Ok(tb_meta) => tb_meta,
+                Err(error) if !self.ctx.is_cdc && Self::is_missing_target(&error) => {
+                    total_checked += self.record_missing_target_rows(rows).await?;
+                    continue;
+                }
+                Err(error) => return Err(error),
+            };
+            let prepared_rows = self.prepare_rows_for_fetch(rows, tb_meta.as_ref())?;
+            if prepared_rows.is_empty() {
+                continue;
+            }
+            let rows_to_fetch = prepared_rows.iter().map(|(row, _)| row).collect::<Vec<_>>();
+            let first_row = rows_to_fetch.first().context("checker group is empty")?;
+            let table_schema = first_row.schema.clone();
+            let table_tb = first_row.tb.clone();
             let dst_rows = self
                 .checker
                 .fetch_rows_by_keys(tb_meta.clone(), &rows_to_fetch)
@@ -983,6 +1095,70 @@ mod tests {
     };
 
     struct NoopChecker;
+
+    #[test]
+    fn missing_target_error_codes_are_recognized() {
+        let database_error = anyhow::Error::new(dt_common::error::DtError::DatabaseNotFound(
+            dt_common::config::config_enums::DbType::Mysql,
+            "test_db".to_string(),
+        ));
+        let table_error = anyhow::Error::new(dt_common::error::DtError::DatabaseObjectNotFound(
+            dt_common::config::config_enums::DbType::Mysql,
+            "test_db.test_tb".to_string(),
+        ));
+
+        assert!(DataChecker::<NoopChecker>::is_missing_target(
+            &database_error
+        ));
+        assert!(DataChecker::<NoopChecker>::is_missing_target(&table_error));
+        assert!(!DataChecker::<NoopChecker>::is_missing_target(
+            &anyhow::anyhow!("network failure")
+        ));
+    }
+
+    #[test]
+    fn missing_target_row_builds_data_miss_from_source_metadata() {
+        let source_row = RowData::new(
+            "source_db".to_string(),
+            "source_tb".to_string(),
+            0,
+            RowType::Insert,
+            None,
+            Some(HashMap::from([
+                ("id".to_string(), ColValue::Long(7)),
+                ("value".to_string(), ColValue::String("src".to_string())),
+            ])),
+        );
+        let mut target_row = source_row.clone();
+        target_row.schema = "target_db".to_string();
+        target_row.tb = "target_tb".to_string();
+        let source_meta = RdbTbMeta {
+            schema: source_row.schema.clone(),
+            tb: source_row.tb.clone(),
+            id_cols: vec!["id".to_string()],
+            ..Default::default()
+        };
+
+        let (_, entry) = DataChecker::<NoopChecker>::build_missing_target_entry(
+            &target_row,
+            &source_row,
+            &source_meta,
+            true,
+        )
+        .unwrap();
+
+        assert!(entry.is_miss());
+        assert_eq!(entry.log.schema, "source_db");
+        assert_eq!(entry.log.tb, "source_tb");
+        assert_eq!(entry.log.target_schema.as_deref(), Some("target_db"));
+        assert_eq!(entry.log.target_tb.as_deref(), Some("target_tb"));
+        assert_eq!(
+            entry.log.id_col_values.get("id"),
+            Some(&Some("7".to_string()))
+        );
+        assert!(entry.log.src_row.is_some());
+        assert!(entry.revise_sql.is_none());
+    }
 
     #[async_trait]
     impl Checker for NoopChecker {
