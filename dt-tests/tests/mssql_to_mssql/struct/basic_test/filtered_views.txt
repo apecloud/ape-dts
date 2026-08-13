@@ -1,0 +1,1 @@
+struct_it_mssql2mssql_1.full_column_type_view

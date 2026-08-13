@@ -139,6 +139,14 @@ WHERE s.name = @P1
 ORDER BY ep.minor_id
 "#;
 
+const VIEW_EXISTS_SQL: &str = r#"
+SELECT CONVERT(nvarchar(max), COUNT_BIG(*)) AS object_count
+FROM sys.views AS v
+JOIN sys.schemas AS s ON s.schema_id = v.schema_id
+WHERE s.name = @P1
+  AND v.name = @P2
+"#;
+
 #[derive(Debug, PartialEq, Eq)]
 pub struct MssqlCheckTableInfo {
     pub columns: Vec<BTreeMap<String, String>>,
@@ -152,6 +160,16 @@ pub struct MssqlStructCheckFetcher {
 }
 
 impl MssqlStructCheckFetcher {
+    pub async fn view_exists(&self, schema: &str, view: &str) -> anyhow::Result<bool> {
+        let rows = self
+            .fetch_rows(VIEW_EXISTS_SQL, schema, view, &["object_count"])
+            .await?;
+        Ok(rows
+            .first()
+            .and_then(|row| row.get("object_count"))
+            .is_some_and(|count| count != "0"))
+    }
+
     pub async fn fetch_table(
         &self,
         schema: &str,

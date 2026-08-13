@@ -1,4 +1,4 @@
-use anyhow::bail;
+use anyhow::{bail, Context};
 use dt_common::{
     config::{config_enums::DbType, task_config::TaskConfig},
     meta::ddl_meta::{ddl_parser::DdlParser, ddl_statement::DdlStatement},
@@ -243,6 +243,25 @@ impl RdbStructTestRunner {
                 src_db_tb, dst_db_tb
             );
             assert_eq!(src_table, dst_table);
+        }
+
+        let filtered_views_file = format!("{}/filtered_views.txt", self.base.base.test_dir);
+        if BaseTestRunner::check_path_exists(&filtered_views_file) {
+            for full_view_name in BaseTestRunner::load_file(&filtered_views_file) {
+                let full_view_name = full_view_name.trim();
+                if full_view_name.is_empty() || full_view_name.starts_with('#') {
+                    continue;
+                }
+                let (schema, view) = full_view_name
+                    .split_once('.')
+                    .with_context(|| format!("invalid MSSQL filtered view: {full_view_name}"))?;
+                assert!(src_check_fetcher.view_exists(schema, view).await?);
+                let (dst_schema, dst_view) = match &self.base.router {
+                    Some(router) => router.get_tb_map(schema, view),
+                    None => (schema, view),
+                };
+                assert!(!dst_check_fetcher.view_exists(dst_schema, dst_view).await?);
+            }
         }
 
         println!(
