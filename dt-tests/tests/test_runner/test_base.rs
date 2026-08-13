@@ -1,7 +1,13 @@
 use std::collections::{HashMap, HashSet};
 
-use dt_common::config::config_enums::DbType;
+use dt_common::{
+    config::config_enums::DbType,
+    utils::sql_util::{CharEscapePair, InnerEscapeMode},
+};
+
 use futures::executor::block_on;
+
+use crate::test_runner::rdb_test_runner::DST;
 
 use super::{
     check_test_runner::CheckTestRunner, mongo_check_test_runner::MongoCheckTestRunner,
@@ -12,7 +18,6 @@ use super::{
     rdb_test_runner::RdbTestRunner, redis_statistic_runner::RedisStatisticTestRunner,
     redis_test_runner::RedisTestRunner,
 };
-use crate::test_runner::rdb_test_runner::DST;
 
 pub struct TestBase {}
 
@@ -276,16 +281,22 @@ impl TestBase {
     }
 
     pub async fn run_redis_rejson_snapshot_test(test_dir: &str) {
-        let mut runner = RedisTestRunner::new(test_dir, vec![('\'', '\'')])
-            .await
-            .unwrap();
+        let mut runner = RedisTestRunner::new(
+            test_dir,
+            vec![CharEscapePair::new('\'', '\'', InnerEscapeMode::None)],
+        )
+        .await
+        .unwrap();
         runner.run_snapshot_test().await.unwrap();
     }
 
     pub async fn run_redis_redisearch_snapshot_test(test_dir: &str) {
-        let mut runner = RedisTestRunner::new(test_dir, vec![('\'', '\'')])
-            .await
-            .unwrap();
+        let mut runner = RedisTestRunner::new(
+            test_dir,
+            vec![CharEscapePair::new('\'', '\'', InnerEscapeMode::None)],
+        )
+        .await
+        .unwrap();
         runner.run_snapshot_test().await.unwrap();
     }
 
@@ -311,9 +322,12 @@ impl TestBase {
     }
 
     pub async fn run_redis_rejson_cdc_test(test_dir: &str, start_millis: u64, parse_millis: u64) {
-        let mut runner = RedisTestRunner::new(test_dir, vec![('\'', '\'')])
-            .await
-            .unwrap();
+        let mut runner = RedisTestRunner::new(
+            test_dir,
+            vec![CharEscapePair::new('\'', '\'', InnerEscapeMode::None)],
+        )
+        .await
+        .unwrap();
         runner
             .run_cdc_test(start_millis, parse_millis)
             .await

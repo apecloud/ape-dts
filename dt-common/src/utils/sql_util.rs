@@ -12,6 +12,29 @@ pub const MSSQL_ESCAPE_LEFT: char = '[';
 pub const MSSQL_ESCAPE_RIGHT: char = ']';
 pub const REDIS_ESCAPE: char = '"';
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InnerEscapeMode {
+    None,
+    DoubleRight,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CharEscapePair {
+    pub left: char,
+    pub right: char,
+    pub inner_escape_mode: InnerEscapeMode,
+}
+
+impl CharEscapePair {
+    pub const fn new(left: char, right: char, inner_escape_mode: InnerEscapeMode) -> Self {
+        Self {
+            left,
+            right,
+            inner_escape_mode,
+        }
+    }
+}
+
 #[macro_export]
 macro_rules! quote_mysql {
     () => {
@@ -34,63 +57,78 @@ macro_rules! quote_pg {
 }
 
 impl SqlUtil {
-    pub fn is_escaped(token: &str, escape_pair: &(char, char)) -> bool {
-        token.starts_with(escape_pair.0) && token.ends_with(escape_pair.1)
+    pub fn is_escaped(token: &str, escape_pair: &CharEscapePair) -> bool {
+        token.starts_with(escape_pair.left) && token.ends_with(escape_pair.right)
     }
 
-    pub fn escape(token: &str, escape_pair: &(char, char)) -> String {
-        if *escape_pair == (MSSQL_ESCAPE_LEFT, MSSQL_ESCAPE_RIGHT) {
-            if Self::is_escaped(token, escape_pair) {
-                return token.to_string();
-            }
-            return format!("[{}]", token.replace(']', "]]"));
+    pub fn escape(token: &str, escape_pair: &CharEscapePair) -> String {
+        if Self::is_escaped(token, escape_pair) {
+            return token.to_string();
         }
-        if !Self::is_escaped(token, escape_pair) {
-            return format!(r#"{}{}{}"#, escape_pair.0, token, escape_pair.1);
-        }
-        token.to_string()
+        let inner = Self::escape_inner_right_delimiters(token, escape_pair);
+        format!(r#"{}{}{}"#, escape_pair.left, inner, escape_pair.right)
     }
 
     pub fn escape_by_db_type(token: &str, db_type: &DbType) -> String {
         let mut result = token.to_string();
         for escape_pair in Self::get_escape_pairs(db_type) {
-            result = Self::escape(token, &escape_pair);
+            result = Self::escape(&result, &escape_pair);
         }
         result
     }
 
-    pub fn unescape(token: &str, escape_pair: &(char, char)) -> String {
+    pub fn unescape(token: &str, escape_pair: &CharEscapePair) -> String {
         if !Self::is_escaped(token, escape_pair) {
             return token.to_string();
         }
         let unescaped = token
-            .strip_prefix(escape_pair.0)
-            .and_then(|token| token.strip_suffix(escape_pair.1))
+            .strip_prefix(escape_pair.left)
+            .and_then(|token| token.strip_suffix(escape_pair.right))
             .unwrap_or(token);
-        if *escape_pair == (MSSQL_ESCAPE_LEFT, MSSQL_ESCAPE_RIGHT) {
-            return unescaped.replace("]]", "]");
-        }
-        unescaped.to_string()
+        Self::unescape_inner_right_delimiters(unescaped, escape_pair)
     }
 
     pub fn unescape_by_db_type(token: &str, db_type: &DbType) -> String {
         let mut result = token.to_string();
         for escape_pair in Self::get_escape_pairs(db_type) {
-            result = Self::unescape(token, &escape_pair);
+            result = Self::unescape(&result, &escape_pair);
         }
         result
     }
 
-    fn is_valid_mssql_escaped_identifier(token: &str) -> bool {
+    fn escape_inner_right_delimiters(token: &str, escape_pair: &CharEscapePair) -> String {
+        match escape_pair.inner_escape_mode {
+            InnerEscapeMode::None => token.to_string(),
+            InnerEscapeMode::DoubleRight => token.replace(
+                escape_pair.right,
+                &format!("{}{}", escape_pair.right, escape_pair.right),
+            ),
+        }
+    }
+
+    fn unescape_inner_right_delimiters(token: &str, escape_pair: &CharEscapePair) -> String {
+        match escape_pair.inner_escape_mode {
+            InnerEscapeMode::None => token.to_string(),
+            InnerEscapeMode::DoubleRight => token.replace(
+                &format!("{}{}", escape_pair.right, escape_pair.right),
+                &escape_pair.right.to_string(),
+            ),
+        }
+    }
+
+    fn has_valid_inner_delimiters(token: &str, escape_pair: &CharEscapePair) -> bool {
         let Some(inner) = token
-            .strip_prefix(MSSQL_ESCAPE_LEFT)
-            .and_then(|token| token.strip_suffix(MSSQL_ESCAPE_RIGHT))
+            .strip_prefix(escape_pair.left)
+            .and_then(|token| token.strip_suffix(escape_pair.right))
         else {
             return false;
         };
+        if escape_pair.inner_escape_mode == InnerEscapeMode::None {
+            return !inner.contains(escape_pair.left) && !inner.contains(escape_pair.right);
+        }
         let mut chars = inner.chars().peekable();
         while let Some(ch) = chars.next() {
-            if ch == MSSQL_ESCAPE_RIGHT && chars.next_if_eq(&MSSQL_ESCAPE_RIGHT).is_none() {
+            if ch == escape_pair.right && chars.next_if_eq(&escape_pair.right).is_none() {
                 return false;
             }
         }
@@ -125,14 +163,30 @@ impl SqlUtil {
         }
     }
 
-    pub fn get_escape_pairs(db_type: &DbType) -> Vec<(char, char)> {
+    pub fn get_escape_pairs(db_type: &DbType) -> Vec<CharEscapePair> {
         match db_type {
             DbType::Mysql | DbType::ClickHouse | DbType::StarRocks => {
-                vec![(MYSQL_ESCAPE, MYSQL_ESCAPE)]
+                vec![CharEscapePair::new(
+                    MYSQL_ESCAPE,
+                    MYSQL_ESCAPE,
+                    InnerEscapeMode::DoubleRight,
+                )]
             }
-            DbType::Pg => vec![(PG_ESCAPE, PG_ESCAPE)],
-            DbType::Mssql => vec![(MSSQL_ESCAPE_LEFT, MSSQL_ESCAPE_RIGHT)],
-            DbType::Redis => vec![(REDIS_ESCAPE, REDIS_ESCAPE)],
+            DbType::Pg => vec![CharEscapePair::new(
+                PG_ESCAPE,
+                PG_ESCAPE,
+                InnerEscapeMode::DoubleRight,
+            )],
+            DbType::Mssql => vec![CharEscapePair::new(
+                MSSQL_ESCAPE_LEFT,
+                MSSQL_ESCAPE_RIGHT,
+                InnerEscapeMode::DoubleRight,
+            )],
+            DbType::Redis => vec![CharEscapePair::new(
+                REDIS_ESCAPE,
+                REDIS_ESCAPE,
+                InnerEscapeMode::None,
+            )],
             _ => vec![],
         }
     }
@@ -172,7 +226,7 @@ impl SqlUtil {
         }
     }
 
-    pub fn is_valid_token(token: &str, db_type: &DbType, escape_pairs: &[(char, char)]) -> bool {
+    pub fn is_valid_token(token: &str, db_type: &DbType, escape_pairs: &[CharEscapePair]) -> bool {
         let max_token_len = match db_type {
             DbType::Mysql | DbType::Pg => 64,
             DbType::Mssql => 128,
@@ -195,14 +249,7 @@ impl SqlUtil {
             // token is enclosed by escapes
             if Self::is_escaped(token, escape_pair) {
                 let unescaped_token = Self::unescape(token, escape_pair);
-                let valid_escaped_chars = if *escape_pair == (MSSQL_ESCAPE_LEFT, MSSQL_ESCAPE_RIGHT)
-                {
-                    Self::is_valid_mssql_escaped_identifier(token)
-                } else {
-                    !unescaped_token.contains(escape_pair.0)
-                        && !unescaped_token.contains(escape_pair.1)
-                };
-                return valid_escaped_chars
+                return Self::has_valid_inner_delimiters(token, escape_pair)
                     && !unescaped_token.is_empty()
                     && unescaped_token.chars().count() <= max_token_len;
             }
@@ -323,7 +370,48 @@ mod tests {
     }
 
     #[test]
-    fn test_mssql_identifier_escaping() {
+    fn test_asymmetric_identifier_escaping() {
+        let escape_pair = CharEscapePair::new('{', '}', InnerEscapeMode::DoubleRight);
+        assert_eq!(
+            "{order}}detail}",
+            SqlUtil::escape("order}detail", &escape_pair)
+        );
+        assert_eq!(
+            "order}detail",
+            SqlUtil::unescape("{order}}detail}", &escape_pair)
+        );
+        assert!(SqlUtil::has_valid_inner_delimiters(
+            "{order}}detail}",
+            &escape_pair
+        ));
+        assert!(!SqlUtil::has_valid_inner_delimiters(
+            "{order}detail}",
+            &escape_pair
+        ));
+
+        let no_inner_escape = CharEscapePair::new('{', '}', InnerEscapeMode::None);
+        assert_eq!(
+            "{order}detail}",
+            SqlUtil::escape("order}detail", &no_inner_escape)
+        );
+        assert!(!SqlUtil::has_valid_inner_delimiters(
+            "{order}detail}",
+            &no_inner_escape
+        ));
+
+        assert_eq!(
+            "`order``detail`",
+            SqlUtil::escape_by_db_type("order`detail", &DbType::Mysql)
+        );
+        assert_eq!(
+            "order`detail",
+            SqlUtil::unescape_by_db_type("`order``detail`", &DbType::Mysql)
+        );
+        assert_eq!(
+            r#""order""detail""#,
+            SqlUtil::escape_by_db_type(r#"order"detail"#, &DbType::Pg)
+        );
+
         assert_eq!(
             "[order]]detail]",
             SqlUtil::escape_by_db_type("order]detail", &DbType::Mssql)
