@@ -1,15 +1,8 @@
 #[cfg(test)]
 mod test {
-    use std::env;
-
     use anyhow::Context;
     use dt_common::{
-        config::{
-            config_enums::DbType,
-            connection_auth_config::ConnectionAuthConfig,
-            resumer_config::ResumerConfig,
-            ssl_config::{SslConfig, SslMode},
-        },
+        config::{config_enums::DbType, resumer_config::ResumerConfig},
         meta::{order_key::OrderKey, position::Position},
     };
     use dt_connector::extractor::resumer::{
@@ -20,46 +13,20 @@ mod test {
     };
     use serial_test::serial;
 
-    use crate::{
-        test_config_util::TestConfigUtil, test_runner::mssql_test_client::MssqlTestClient,
-    };
+    use crate::test_runner::mssql_test_endpoint::{MssqlTestEndpoint, TaskConfigEndpoint};
+
+    use super::super::TASK_CONFIG_FILE;
 
     const TEST_SCHEMA: &str = "ape_dts_resumer_test";
     const TEST_TABLE: &str = "positions";
     const TASK_ID: &str = "mssql-resumer-'quoted-task";
 
-    fn required_env(key: &str) -> anyhow::Result<String> {
-        env::var(key).with_context(|| format!("required MSSQL test environment variable {key}"))
-    }
-
-    fn auth(username: String, password: String) -> ConnectionAuthConfig {
-        ConnectionAuthConfig::BasicSsl {
-            username: Some(username),
-            password: Some(password),
-            ssl_config: SslConfig {
-                ssl_mode: SslMode::Disable,
-                ssl_ca_path: String::new(),
-            },
-        }
-    }
-
     async fn create_resumer_pool() -> anyhow::Result<(ResumerDbPool, ResumerConfig)> {
-        let env_path = TestConfigUtil::get_absolute_path(".env");
-        dotenv::from_path(&env_path)
-            .with_context(|| format!("failed to load MSSQL test environment {env_path}"))?;
-
-        let connection_string = required_env("mssql_extractor_without_auth_url")?;
-        let database = required_env("mssql_extractor_database")?;
-        let connection_auth = auth(
-            required_env("mssql_extractor_username")?,
-            required_env("mssql_extractor_password")?,
-        );
-        MssqlTestClient::from_connection_string_and_auth(
-            &connection_string,
-            connection_auth.clone(),
-        )?
-        .ensure_database(&database)
-        .await?;
+        let endpoint =
+            MssqlTestEndpoint::from_config_file(TASK_CONFIG_FILE, TaskConfigEndpoint::Extractor)?;
+        endpoint.ensure_database().await?;
+        let connection_string = endpoint.connection_string().to_string();
+        let connection_auth = endpoint.connection_auth().clone();
 
         let pool = ResumerUtil::create_pool(
             &connection_string,

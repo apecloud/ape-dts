@@ -1,5 +1,0 @@
-wild_a.keep_orders
-wild_a.keep_private
-wild_a.skip_orders
-wild_b.keep_orders
-wild_skip.keep_orders

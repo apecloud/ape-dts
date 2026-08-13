@@ -1,8 +1,44 @@
+DROP TABLE IF EXISTS [test_db_*.*].[one_pk_no_uk_1_*.*];
+DROP TABLE IF EXISTS [test_db_*.*].[one_pk_no_uk_2_*.*];
+DROP TABLE IF EXISTS [test_db_&.&].[one_pk_no_uk_1_&.&];
+DROP TABLE IF EXISTS [test_db_&.&].[one_pk_no_uk_2_&.&];
+DROP TABLE IF EXISTS [test_db_^.^].[one_pk_no_uk_1_^.^];
+DROP TABLE IF EXISTS [test_db_^.^].[one_pk_no_uk_2_^.^];
+DROP TABLE IF EXISTS [test_db_@.@].[one_pk_no_uk_1_@.@];
+DROP TABLE IF EXISTS [test_db_@.@].[one_pk_no_uk_2_@.@];
+DROP TABLE IF EXISTS [*.*_test_db].[one_pk_no_uk_1_*.*];
+DROP TABLE IF EXISTS [*.*_test_db].[one_pk_no_uk_2_*.*];
+DROP TABLE IF EXISTS [&.&_test_db].[one_pk_no_uk_1_&.&];
+DROP TABLE IF EXISTS [&.&_test_db].[one_pk_no_uk_2_&.&];
+DROP TABLE IF EXISTS [^.^_test_db].[one_pk_no_uk_1_^.^];
+DROP TABLE IF EXISTS [^.^_test_db].[one_pk_no_uk_2_^.^];
+DROP TABLE IF EXISTS [@.@_test_db].[one_pk_no_uk_1_@.@];
+DROP TABLE IF EXISTS [@.@_test_db].[one_pk_no_uk_2_@.@];
 DROP TABLE IF EXISTS [special.* schema].[orders.* detail];
-IF SCHEMA_ID(N'special.* schema') IS NULL EXEC(N'CREATE SCHEMA [special.* schema]');
-CREATE TABLE [special.* schema].[orders.* detail] (
-    [order.id] int NOT NULL PRIMARY KEY,
-    [select] nvarchar(30) NOT NULL,
-    [value with space] decimal(12, 3) NULL
-);
+
+IF SCHEMA_ID(N'test_db_*.*') IS NULL EXEC(N'CREATE SCHEMA [test_db_*.*]');
+IF SCHEMA_ID(N'test_db_&.&') IS NULL EXEC(N'CREATE SCHEMA [test_db_&.&]');
+IF SCHEMA_ID(N'test_db_^.^') IS NULL EXEC(N'CREATE SCHEMA [test_db_^.^]');
+IF SCHEMA_ID(N'test_db_@.@') IS NULL EXEC(N'CREATE SCHEMA [test_db_@.@]');
+IF SCHEMA_ID(N'*.*_test_db') IS NULL EXEC(N'CREATE SCHEMA [*.*_test_db]');
+IF SCHEMA_ID(N'&.&_test_db') IS NULL EXEC(N'CREATE SCHEMA [&.&_test_db]');
+IF SCHEMA_ID(N'^.^_test_db') IS NULL EXEC(N'CREATE SCHEMA [^.^_test_db]');
+IF SCHEMA_ID(N'@.@_test_db') IS NULL EXEC(N'CREATE SCHEMA [@.@_test_db]');
+
+CREATE TABLE [test_db_*.*].[one_pk_no_uk_1_*.*] ([f_0_*.*] int NOT NULL PRIMARY KEY, [f_1_*.*] smallint NULL, [text.*] nvarchar(80) NULL, [binary.*] varbinary(16) NULL, [decimal.*] decimal(20, 4) NULL);
+CREATE TABLE [test_db_*.*].[one_pk_no_uk_2_*.*] ([f_0_*.*] int NOT NULL PRIMARY KEY, [f_1_*.*] smallint NULL, [text.*] nvarchar(80) NULL, [binary.*] varbinary(16) NULL, [decimal.*] decimal(20, 4) NULL);
+CREATE TABLE [test_db_&.&].[one_pk_no_uk_1_&.&] ([f_0_&.&] int NOT NULL PRIMARY KEY, [f_1_&.&] smallint NULL, [text&] nvarchar(80) NULL, [binary&] varbinary(16) NULL, [decimal&] decimal(20, 4) NULL);
+CREATE TABLE [test_db_&.&].[one_pk_no_uk_2_&.&] ([f_0_&.&] int NOT NULL PRIMARY KEY, [f_1_&.&] smallint NULL, [text&] nvarchar(80) NULL, [binary&] varbinary(16) NULL, [decimal&] decimal(20, 4) NULL);
+CREATE TABLE [test_db_^.^].[one_pk_no_uk_1_^.^] ([f_0_^.^] int NOT NULL PRIMARY KEY, [f_1_^.^] smallint NULL, [text^] nvarchar(80) NULL, [binary^] varbinary(16) NULL, [decimal^] decimal(20, 4) NULL);
+CREATE TABLE [test_db_^.^].[one_pk_no_uk_2_^.^] ([f_0_^.^] int NOT NULL PRIMARY KEY, [f_1_^.^] smallint NULL, [text^] nvarchar(80) NULL, [binary^] varbinary(16) NULL, [decimal^] decimal(20, 4) NULL);
+CREATE TABLE [test_db_@.@].[one_pk_no_uk_1_@.@] ([f_0_@.@] int NOT NULL PRIMARY KEY, [f_1_@.@] smallint NULL, [text@] nvarchar(80) NULL, [binary@] varbinary(16) NULL, [decimal@] decimal(20, 4) NULL);
+CREATE TABLE [test_db_@.@].[one_pk_no_uk_2_@.@] ([f_0_@.@] int NOT NULL PRIMARY KEY, [f_1_@.@] smallint NULL, [text@] nvarchar(80) NULL, [binary@] varbinary(16) NULL, [decimal@] decimal(20, 4) NULL);
+CREATE TABLE [*.*_test_db].[one_pk_no_uk_1_*.*] ([f_0_*.*] int NOT NULL PRIMARY KEY, [f_1_*.*] smallint NULL, [text.*] nvarchar(80) NULL, [binary.*] varbinary(16) NULL, [decimal.*] decimal(20, 4) NULL);
+CREATE TABLE [*.*_test_db].[one_pk_no_uk_2_*.*] ([f_0_*.*] int NOT NULL PRIMARY KEY, [f_1_*.*] smallint NULL, [text.*] nvarchar(80) NULL, [binary.*] varbinary(16) NULL, [decimal.*] decimal(20, 4) NULL);
+CREATE TABLE [&.&_test_db].[one_pk_no_uk_1_&.&] ([f_0_&.&] int NOT NULL PRIMARY KEY, [f_1_&.&] smallint NULL, [text&] nvarchar(80) NULL, [binary&] varbinary(16) NULL, [decimal&] decimal(20, 4) NULL);
+CREATE TABLE [&.&_test_db].[one_pk_no_uk_2_&.&] ([f_0_&.&] int NOT NULL PRIMARY KEY, [f_1_&.&] smallint NULL, [text&] nvarchar(80) NULL, [binary&] varbinary(16) NULL, [decimal&] decimal(20, 4) NULL);
+CREATE TABLE [^.^_test_db].[one_pk_no_uk_1_^.^] ([f_0_^.^] int NOT NULL PRIMARY KEY, [f_1_^.^] smallint NULL, [text^] nvarchar(80) NULL, [binary^] varbinary(16) NULL, [decimal^] decimal(20, 4) NULL);
+CREATE TABLE [^.^_test_db].[one_pk_no_uk_2_^.^] ([f_0_^.^] int NOT NULL PRIMARY KEY, [f_1_^.^] smallint NULL, [text^] nvarchar(80) NULL, [binary^] varbinary(16) NULL, [decimal^] decimal(20, 4) NULL);
+CREATE TABLE [@.@_test_db].[one_pk_no_uk_1_@.@] ([f_0_@.@] int NOT NULL PRIMARY KEY, [f_1_@.@] smallint NULL, [text@] nvarchar(80) NULL, [binary@] varbinary(16) NULL, [decimal@] decimal(20, 4) NULL);
+CREATE TABLE [@.@_test_db].[one_pk_no_uk_2_@.@] ([f_0_@.@] int NOT NULL PRIMARY KEY, [f_1_@.@] smallint NULL, [text@] nvarchar(80) NULL, [binary@] varbinary(16) NULL, [decimal@] decimal(20, 4) NULL);
 GO

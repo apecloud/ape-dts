@@ -1,3 +1,0 @@
-resume_test.resume_rows
-resume_test.fresh_rows
-resume_test.finished_rows

@@ -4,10 +4,6 @@ use std::{
 };
 
 use chrono::{Duration, Utc};
-use dt_common::meta::{
-    col_value::ColValue, ddl_meta::ddl_parser::DdlParser,
-    mysql::mysql_meta_manager::MysqlMetaManager, row_data::RowData,
-};
 use dt_common::{
     config::{
         config_enums::{DbType, TaskKind},
@@ -21,20 +17,32 @@ use dt_common::{
     rdb_filter::RdbFilter,
     utils::{sql_util::SqlUtil, time_util::TimeUtil},
 };
+use serde::de::DeserializeOwned;
+
+use dt_common::meta::{
+    col_value::ColValue, ddl_meta::ddl_parser::DdlParser,
+    mysql::mysql_meta_manager::MysqlMetaManager, row_data::RowData,
+};
 use dt_connector::{
     meta_fetcher::mysql::mysql_struct_check_fetcher::MysqlStructCheckFetcher, rdb_router::RdbRouter,
 };
 use dt_task::task_util::TaskUtil;
-use serde::de::DeserializeOwned;
+
 use sqlx::{query, types::BigDecimal, MySql, Pool, Postgres, Row};
 use tokio::{sync::Semaphore, task::JoinHandle};
 
-use super::{base_test_runner::BaseTestRunner, rdb_util::RdbUtil};
 use crate::{
     test_config_util::TestConfigUtil,
     test_runner::mock_data::{
         context::MockDbContext, mysql_type::MysqlType, pg_type::PgType, MockData,
     },
+};
+
+use super::{
+    base_test_runner::{BaseTestRunner, SqlLoadStrategy},
+    mssql_ddl_scanner,
+    mssql_test_endpoint::{MssqlTestEndpoint, TaskConfigEndpoint},
+    rdb_util::RdbUtil,
 };
 
 #[derive(Clone)]
@@ -44,6 +52,8 @@ pub struct RdbTestRunner {
     pub dst_conn_pool_mysql: Option<Pool<MySql>>,
     pub src_conn_pool_pg: Option<Pool<Postgres>>,
     pub dst_conn_pool_pg: Option<Pool<Postgres>>,
+    pub src_mssql_endpoint: Option<MssqlTestEndpoint>,
+    pub dst_mssql_endpoint: Option<MssqlTestEndpoint>,
     pub meta_center_pool_mysql: Option<Pool<MySql>>,
     pub config: TaskConfig,
     pub router: Option<RdbRouter>,
@@ -89,13 +99,20 @@ impl MockDataPrepare {
 #[allow(dead_code)]
 impl RdbTestRunner {
     pub async fn new(relative_test_dir: &str) -> anyhow::Result<Self> {
-        let mut base = BaseTestRunner::new(relative_test_dir).await.unwrap();
+        let mut base = if relative_test_dir.starts_with("mssql_to_mssql/") {
+            BaseTestRunner::new_with_sql_load_strategy(relative_test_dir, SqlLoadStrategy::MssqlGo)
+                .await?
+        } else {
+            BaseTestRunner::new(relative_test_dir).await?
+        };
 
         // prepare conn pools
         let mut src_conn_pool_mysql = None;
         let mut dst_conn_pool_mysql = None;
         let mut src_conn_pool_pg = None;
         let mut dst_conn_pool_pg = None;
+        let mut src_mssql_endpoint = None;
+        let mut dst_mssql_endpoint = None;
 
         let config = TaskConfig::new(&base.task_config_file).unwrap();
         let src_db_type = config.extractor_basic.db_type.clone();
@@ -144,6 +161,12 @@ impl RdbTestRunner {
                     TaskUtil::create_pg_conn_pool(&src_url, &src_connection_auth, 5, false, true)
                         .await?,
                 );
+            }
+            DbType::Mssql => {
+                let endpoint =
+                    MssqlTestEndpoint::from_task_config(&config, TaskConfigEndpoint::Extractor)?;
+                endpoint.ensure_database().await?;
+                src_mssql_endpoint = Some(endpoint);
             }
             _ => {}
         }
@@ -220,6 +243,12 @@ impl RdbTestRunner {
                         .await?,
                     );
                 }
+                DbType::Mssql => {
+                    let endpoint =
+                        MssqlTestEndpoint::from_task_config(&config, TaskConfigEndpoint::Sinker)?;
+                    endpoint.ensure_database().await?;
+                    dst_mssql_endpoint = Some(endpoint);
+                }
                 _ => {}
             }
         }
@@ -252,6 +281,8 @@ impl RdbTestRunner {
             dst_conn_pool_mysql,
             src_conn_pool_pg,
             dst_conn_pool_pg,
+            src_mssql_endpoint,
+            dst_mssql_endpoint,
             meta_center_pool_mysql,
             config,
             router,
@@ -276,6 +307,12 @@ impl RdbTestRunner {
         }
         if let Some(pool) = &self.dst_conn_pool_pg {
             pool.close().await;
+        }
+        if let Some(endpoint) = &self.src_mssql_endpoint {
+            endpoint.close().await?;
+        }
+        if let Some(endpoint) = &self.dst_mssql_endpoint {
+            endpoint.close().await?;
         }
         Ok(())
     }
@@ -745,6 +782,9 @@ impl RdbTestRunner {
         if let Some(pool) = &self.src_conn_pool_pg {
             RdbUtil::execute_sqls_pg(pool, sqls).await?;
         }
+        if let Some(endpoint) = &self.src_mssql_endpoint {
+            endpoint.execute_batches(sqls).await?;
+        }
         Ok(())
     }
 
@@ -754,6 +794,9 @@ impl RdbTestRunner {
         }
         if let Some(pool) = &self.dst_conn_pool_pg {
             RdbUtil::execute_sqls_pg(pool, sqls).await?;
+        }
+        if let Some(endpoint) = &self.dst_mssql_endpoint {
+            endpoint.execute_batches(sqls).await?;
         }
         Ok(())
     }
@@ -1239,6 +1282,8 @@ impl RdbTestRunner {
             RdbUtil::fetch_data_mysql_compatible(pool, None, db_tb, &db_type, &where_sql).await?
         } else if let Some(pool) = conn_pool_pg {
             RdbUtil::fetch_data_pg(pool, None, db_tb, &where_sql).await?
+        } else if let Some(endpoint) = self.get_mssql_endpoint(from) {
+            RdbUtil::fetch_data_mssql(endpoint, None, db_tb, &where_sql).await?
         } else {
             Vec::new()
         };
@@ -1272,12 +1317,21 @@ impl RdbTestRunner {
         let db_type = self.get_db_type(SRC);
         let mut src_db_tbs =
             Self::get_compare_db_tbs_from_sqls(&db_type, &self.base.src_prepare_sqls)?;
-        // since tables may be created/dropped in src_test.sql for ddl tests,
-        // we also need to parse src_test.sql.
-        src_db_tbs.extend_from_slice(&Self::get_compare_db_tbs_from_sqls(
+        // Tables may be created or dropped in src_test.sql for DDL tests.
+        src_db_tbs.extend(Self::get_compare_db_tbs_from_sqls(
             &db_type,
             &self.base.src_test_sqls,
         )?);
+
+        if matches!(db_type, DbType::Mssql) {
+            let mut seen = HashSet::new();
+            src_db_tbs.retain(|db_tb| seen.insert(db_tb.clone()));
+            if src_db_tbs.is_empty() {
+                anyhow::bail!(
+                    "no MSSQL CREATE TABLE statements found in src_prepare.sql or src_test.sql"
+                );
+            }
+        }
 
         let mut dst_db_tbs = vec![];
         for (db, tb) in src_db_tbs.iter() {
@@ -1295,6 +1349,10 @@ impl RdbTestRunner {
         db_type: &DbType,
         sqls: &[String],
     ) -> anyhow::Result<Vec<(String, String)>> {
+        if matches!(db_type, DbType::Mssql) {
+            return mssql_ddl_scanner::extract_created_tables(sqls);
+        }
+
         let mut db_tbs = vec![];
         let parser = DdlParser::new(db_type.to_owned());
 
@@ -1319,7 +1377,6 @@ impl RdbTestRunner {
 
         Ok(db_tbs)
     }
-
     fn get_filtered_db_tbs(&self) -> HashSet<(String, String)> {
         let mut filtered_db_tbs = HashSet::new();
         let db_type = &self.get_db_type(SRC);
@@ -1354,6 +1411,8 @@ impl RdbTestRunner {
         } else if let Some(conn_pool) = conn_pool_pg {
             let tb_meta = RdbUtil::get_tb_meta_pg(conn_pool, db_tb).await?;
             tb_meta.basic.cols.clone()
+        } else if let Some(endpoint) = self.get_mssql_endpoint(from) {
+            RdbUtil::get_tb_cols_mssql(endpoint, db_tb).await?
         } else {
             vec![]
         };
@@ -1365,6 +1424,14 @@ impl RdbTestRunner {
             (&self.src_conn_pool_mysql, &self.src_conn_pool_pg)
         } else {
             (&self.dst_conn_pool_mysql, &self.dst_conn_pool_pg)
+        }
+    }
+
+    fn get_mssql_endpoint(&self, from: &str) -> Option<&MssqlTestEndpoint> {
+        if from == SRC {
+            self.src_mssql_endpoint.as_ref()
+        } else {
+            self.dst_mssql_endpoint.as_ref()
         }
     }
 
@@ -1411,13 +1478,12 @@ impl RdbTestRunner {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use std::{
         fs,
         sync::atomic::{AtomicU64, Ordering},
         time::{SystemTime, UNIX_EPOCH},
     };
-
-    use super::*;
 
     static TMP_CONFIG_SUFFIX: AtomicU64 = AtomicU64::new(0);
 
@@ -1490,5 +1556,14 @@ mod tests {
         fs::remove_file(path).unwrap();
 
         assert!(!prepare_only);
+    }
+
+    #[test]
+    fn test_get_compare_db_tbs_from_mssql_sqls() {
+        let sqls = vec!["CREATE TABLE [audit].[events] (id int);".to_string()];
+
+        let db_tbs = RdbTestRunner::get_compare_db_tbs_from_sqls(&DbType::Mssql, &sqls).unwrap();
+
+        assert_eq!(db_tbs, vec![("audit".to_string(), "events".to_string())]);
     }
 }
