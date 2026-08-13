@@ -1,5 +1,9 @@
 struct_it_mssql2mssql_1.full_column_type
+struct_it_mssql2mssql_1.spatial_column_type
 struct_it_mssql2mssql_1.defaults_and_generated
 struct_it_mssql2mssql_1.constraint_table
 struct_it_mssql2mssql_1.full_index_type
+struct_it_mssql2mssql_1.special_default_and_comment
+struct_it_mssql2mssql_1.case_sensitive_column_name
+[struct_it_mssql2mssql_1].[special_character_$1#@*_table]
 struct_it_mssql2mssql_1.match
