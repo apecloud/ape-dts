@@ -1,7 +1,8 @@
 use std::{
-    fs,
+    fs::{self, File},
+    io::{BufRead, BufReader},
     path::Path,
-    sync::atomic::{AtomicU64, Ordering},
+    sync::atomic::{AtomicU64, AtomicUsize, Ordering},
 };
 
 use anyhow::anyhow;
@@ -46,6 +47,62 @@ impl Filter for SizeLimitFilter {
         } else {
             Response::Reject
         }
+    }
+}
+
+#[derive(Debug)]
+pub struct RowLimitFilter {
+    limit: usize,
+    written: AtomicUsize,
+}
+
+impl RowLimitFilter {
+    pub fn new(path: impl AsRef<Path>, limit: usize) -> Self {
+        let written = File::open(path)
+            .map(|file| BufReader::new(file).lines().count())
+            .unwrap_or(0);
+        Self {
+            limit,
+            written: AtomicUsize::new(written),
+        }
+    }
+}
+
+impl Filter for RowLimitFilter {
+    fn filter(&self, _record: &Record) -> Response {
+        if self
+            .written
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+                (current < self.limit).then_some(current + 1)
+            })
+            .is_ok()
+        {
+            Response::Neutral
+        } else {
+            Response::Reject
+        }
+    }
+}
+
+#[derive(Clone, Debug, SerdeDeserialize)]
+pub struct RowLimitFilterConfig {
+    pub path: String,
+    pub limit: usize,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct RowLimitFilterDeserializer;
+
+impl Deserialize for RowLimitFilterDeserializer {
+    type Trait = dyn Filter;
+    type Config = RowLimitFilterConfig;
+
+    fn deserialize(
+        &self,
+        config: RowLimitFilterConfig,
+        _deserializers: &Deserializers,
+    ) -> anyhow::Result<Box<dyn Filter>> {
+        Ok(Box::new(RowLimitFilter::new(config.path, config.limit)))
     }
 }
 
@@ -152,4 +209,45 @@ where
     }
 
     d.deserialize_any(V)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{fs, path::PathBuf};
+
+    use log::{Level, Record};
+    use log4rs::filter::{Filter, Response};
+
+    use super::RowLimitFilter;
+
+    #[test]
+    fn row_limit_filter_rejects_records_after_limit() {
+        let filter = RowLimitFilter::new("/path/that/does/not/exist", 2);
+        let record = Record::builder()
+            .args(format_args!("test"))
+            .level(Level::Info)
+            .build();
+
+        assert!(matches!(filter.filter(&record), Response::Neutral));
+        assert!(matches!(filter.filter(&record), Response::Neutral));
+        assert!(matches!(filter.filter(&record), Response::Reject));
+    }
+
+    #[test]
+    fn row_limit_filter_counts_existing_newline_terminated_rows() {
+        let path = PathBuf::from(format!(
+            "/tmp/ape-dts-row-limit-filter-{}.log",
+            std::process::id()
+        ));
+        fs::write(&path, "first\nsecond\n").unwrap();
+        let filter = RowLimitFilter::new(&path, 3);
+        fs::remove_file(path).unwrap();
+        let record = Record::builder()
+            .args(format_args!("third"))
+            .level(Level::Info)
+            .build();
+
+        assert!(matches!(filter.filter(&record), Response::Neutral));
+        assert!(matches!(filter.filter(&record), Response::Reject));
+    }
 }

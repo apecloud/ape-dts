@@ -67,6 +67,7 @@ impl PgStructExtractor {
             conn_pool: self.conn_pool.to_owned(),
             schemas,
             filter: Some(self.filter.to_owned()),
+            allow_missing_schemas: false,
         };
 
         // User-Defined Type

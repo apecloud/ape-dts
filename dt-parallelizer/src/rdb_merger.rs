@@ -10,6 +10,7 @@ use crate::{merge_parallelizer::TbMergedData, Merger};
 
 pub struct RdbMerger {
     pub rdb_meta_manager: RdbMetaManager,
+    pub allow_missing_meta: bool,
 }
 
 #[async_trait]
@@ -57,10 +58,24 @@ impl RdbMerger {
             return Ok(());
         }
 
-        let tb_meta = self
+        let tb_meta = match self
             .rdb_meta_manager
             .get_tb_meta(&row_data.schema, &row_data.tb)
-            .await?;
+            .await
+        {
+            Ok(tb_meta) => tb_meta,
+            Err(error)
+                if self.allow_missing_meta
+                    && matches!(
+                        ErrorReport::from_anyhow(&error).code,
+                        ErrorCode::ObjectNotFound | ErrorCode::DatabaseNotFound
+                    ) =>
+            {
+                merged.unmerged_rows.push(row_data);
+                return Ok(());
+            }
+            Err(error) => return Err(error),
+        };
 
         if row_data.contains_unchanged_toast() {
             merged.unmerged_rows.push(row_data);

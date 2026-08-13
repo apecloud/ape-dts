@@ -182,7 +182,7 @@ under `runtime.log_dir/check`.
 | revise_match_full_row| use the complete row in generated repair predicates                 | false         | false   |
 | check_log_dir        | local check-log directory                                           | /tmp/check    | empty (use `runtime.log_dir/check`) |
 | check_log_file_size  | per-file size limit for `diff.log`, `miss.log`, and `sql.log` | 100mb         | 100mb   |
-| check_log_max_rows   | maximum rows in CDC `diff.log`/`miss.log` snapshots             | 1000          | 1000    |
+| check_log_max_rows   | maximum rows in `diff.log`/`miss.log`                            | 1000          | 1000    |
 | s3_bucket            | S3 bucket; required for `output_type=s3`                           | my-bucket     | -       |
 | s3_access_key_id     | S3 access key                                                       | AKIA...       | empty   |
 | s3_secret_access_key | S3 secret key                                                       | ****          | empty   |
