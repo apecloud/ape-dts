@@ -1,0 +1,3 @@
+struct_route_mssql2mssql_1.full_column_type
+struct_route_mssql2mssql_1.constraint_table
+struct_route_mssql2mssql_1.full_index_type

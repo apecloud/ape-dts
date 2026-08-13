@@ -1,0 +1,1 @@
+struct_collation_mssql2mssql_1.collation_table
