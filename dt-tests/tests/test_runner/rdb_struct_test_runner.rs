@@ -1,10 +1,13 @@
 use anyhow::{bail, Context};
 use dt_common::{
     config::{config_enums::DbType, task_config::TaskConfig},
-    meta::ddl_meta::{ddl_parser::DdlParser, ddl_statement::DdlStatement},
+    meta::{
+        ddl_meta::{ddl_parser::DdlParser, ddl_statement::DdlStatement},
+        struct_meta::structure::structure_type::StructureType,
+    },
 };
 use dt_connector::meta_fetcher::{
-    mssql::mssql_struct_check_fetcher::MssqlStructCheckFetcher,
+    mssql::mssql_struct_check_fetcher::{MssqlCheckTableInfo, MssqlStructCheckFetcher},
     mysql::mysql_struct_check_fetcher::MysqlStructCheckFetcher,
     pg::pg_struct_check_fetcher::PgStructCheckFetcher,
 };
@@ -19,6 +22,41 @@ pub struct RdbStructTestRunner {
 const PG_GET_INDEXDEF: &str = "pg_get_indexdef";
 
 impl RdbStructTestRunner {
+    fn filter_expected_mssql_table(&self, mut table: MssqlCheckTableInfo) -> MssqlCheckTableInfo {
+        let table_enabled = !self.base.filter.filter_structure(&StructureType::Table);
+        let constraint_enabled = !self
+            .base
+            .filter
+            .filter_structure(&StructureType::Constraint);
+        let index_enabled = !self.base.filter.filter_structure(&StructureType::Index);
+        let comment_enabled = !self.base.filter.filter_structure(&StructureType::Comment);
+
+        table.constraints.retain(|constraint| {
+            let constraint_type = constraint
+                .get("constraint_type")
+                .map(String::as_str)
+                .unwrap_or_default();
+            match constraint_type {
+                "PK" | "UQ" => table_enabled,
+                "C" => constraint_enabled,
+                _ => false,
+            }
+        });
+        table.indexes.retain(|index| {
+            let is_key = index
+                .get("is_primary_key")
+                .is_some_and(|value| value == "1")
+                || index
+                    .get("is_unique_constraint")
+                    .is_some_and(|value| value == "1");
+            (is_key && table_enabled) || (!is_key && index_enabled)
+        });
+        if !(table_enabled && comment_enabled) {
+            table.comments.clear();
+        }
+        table
+    }
+
     pub async fn new(relative_test_dir: &str) -> anyhow::Result<Self> {
         let base = RdbTestRunner::new(relative_test_dir).await.unwrap();
         Ok(Self { base })
@@ -242,7 +280,7 @@ impl RdbStructTestRunner {
                 "comparing MSSQL src table: {:?} with dst table: {:?}",
                 src_db_tb, dst_db_tb
             );
-            assert_eq!(src_table, dst_table);
+            assert_eq!(self.filter_expected_mssql_table(src_table), dst_table);
         }
 
         let filtered_views_file = format!("{}/filtered_views.txt", self.base.base.test_dir);
