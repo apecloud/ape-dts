@@ -104,7 +104,13 @@ impl ParallelizerUtil {
                 )
             })?;
 
-        let rdb_merger = RdbMerger { rdb_meta_manager };
+        let allow_missing_meta = config
+            .task_type()
+            .is_some_and(|task_type| task_type.is_standalone_snapshot_check());
+        let rdb_merger = RdbMerger {
+            rdb_meta_manager,
+            allow_missing_meta,
+        };
         Ok(Box::new(rdb_merger))
     }
 

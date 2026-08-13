@@ -38,6 +38,7 @@ pub struct PgStructFetcher {
     pub conn_pool: Pool<Postgres>,
     pub schemas: HashSet<String>,
     pub filter: Option<RdbFilter>,
+    pub allow_missing_schemas: bool,
 }
 
 enum ColType {
@@ -196,7 +197,7 @@ impl PgStructFetcher {
             .filter(|&s| !schemas.contains(s))
             .cloned()
             .collect();
-        if !filtered_schemas.is_empty() {
+        if !self.allow_missing_schemas && !filtered_schemas.is_empty() {
             bail! {DtError::DatabaseObjectNotFound(DbType::Pg, format!(
                 "schemas: {} not found",
                 filtered_schemas.join(",")

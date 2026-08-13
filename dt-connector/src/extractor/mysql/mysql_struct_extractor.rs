@@ -59,6 +59,7 @@ impl MysqlStructExtractor {
             dbs,
             filter: Some(self.filter.to_owned()),
             meta_manager,
+            allow_missing_databases: false,
         };
 
         // database
