@@ -84,11 +84,13 @@ impl RdbUtil {
 
     pub async fn fetch_data_mssql(
         endpoint: &MssqlTestEndpoint,
-        _ignore_cols: Option<&HashSet<String>>,
+        ignore_cols: Option<&HashSet<String>>,
         db_tb: &(String, String),
         where_sql: &str,
     ) -> anyhow::Result<Vec<RowData>> {
-        endpoint.fetch_table(&db_tb.0, &db_tb.1, where_sql).await
+        endpoint
+            .fetch_table(&db_tb.0, &db_tb.1, ignore_cols, where_sql)
+            .await
     }
 
     pub async fn get_tb_cols_mssql(

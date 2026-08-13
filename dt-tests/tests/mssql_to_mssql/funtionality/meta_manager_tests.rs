@@ -44,12 +44,19 @@ mod test {
                 "EXEC(N'CREATE SCHEMA [{TEST_SCHEMA}]');
                  CREATE TABLE [{TEST_SCHEMA}].[{TEST_TABLE}] (
                     [tenant_id] int NOT NULL,
-                    [id] bigint NOT NULL,
+                    [id] bigint IDENTITY(1, 1) NOT NULL,
                     [optional_name] nvarchar(100) NULL,
                     [score] float(24) NOT NULL,
                     [alias_name] sysname NOT NULL,
+                    [computed_value] AS ([tenant_id] + 1),
+                    [valid_from] datetime2 GENERATED ALWAYS AS ROW START NOT NULL
+                        DEFAULT SYSUTCDATETIME(),
+                    [valid_to] datetime2 GENERATED ALWAYS AS ROW END NOT NULL
+                        DEFAULT CONVERT(datetime2, '9999-12-31 23:59:59.9999999'),
+                    [version] rowversion NOT NULL,
                     CONSTRAINT [pk_ape_dts_meta_manager] PRIMARY KEY ([tenant_id], [id]),
-                    CONSTRAINT [uq_ape_dts_meta_manager_name] UNIQUE ([optional_name])
+                    CONSTRAINT [uq_ape_dts_meta_manager_name] UNIQUE ([optional_name]),
+                    PERIOD FOR SYSTEM_TIME ([valid_from], [valid_to])
                  );"
             ),
         )
@@ -87,7 +94,17 @@ mod test {
             let meta = manager.get_tb_meta(TEST_SCHEMA, TEST_TABLE).await?;
             assert_eq!(
                 meta.basic.cols,
-                ["tenant_id", "id", "optional_name", "score", "alias_name"]
+                [
+                    "tenant_id",
+                    "id",
+                    "optional_name",
+                    "score",
+                    "alias_name",
+                    "computed_value",
+                    "valid_from",
+                    "valid_to",
+                    "version"
+                ]
             );
             assert_eq!(meta.basic.schema, TEST_SCHEMA);
             assert_eq!(meta.basic.tb, TEST_TABLE);
@@ -108,11 +125,20 @@ mod test {
             assert_eq!(meta.basic.order_cols, ["tenant_id", "id"]);
             assert_eq!(meta.basic.partition_col, "tenant_id");
             assert_eq!(meta.basic.id_cols, ["tenant_id", "id"]);
+            assert_eq!(meta.identity_col.as_deref(), Some("id"));
+            assert_eq!(meta.computed_cols, ["computed_value".to_string()].into());
+            assert_eq!(meta.generated_always_type_map.get("valid_from"), Some(&1));
+            assert_eq!(meta.generated_always_type_map.get("valid_to"), Some(&2));
+            assert_eq!(meta.generated_always_type_map.get("tenant_id"), Some(&0));
+            assert_eq!(meta.rowversion_cols, ["version".to_string()].into());
             assert_eq!(meta.get_col_type("tenant_id")?, &MssqlColType::Int4);
             assert_eq!(meta.get_col_type("id")?, &MssqlColType::Int8);
             assert_eq!(meta.get_col_type("optional_name")?, &MssqlColType::NVarchar);
             assert_eq!(meta.get_col_type("score")?, &MssqlColType::Float4);
             assert_eq!(meta.get_col_type("alias_name")?, &MssqlColType::NVarchar);
+            assert_eq!(meta.get_col_type("computed_value")?, &MssqlColType::Int4);
+            assert_eq!(meta.get_col_type("valid_from")?, &MssqlColType::Datetime2);
+            assert_eq!(meta.get_col_type("version")?, &MssqlColType::BigVarBin);
 
             MssqlTestEndpoint::execute_batch(
                 &pool,

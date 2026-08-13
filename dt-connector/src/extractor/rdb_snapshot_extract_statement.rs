@@ -655,6 +655,10 @@ mod tests {
         MssqlTbMeta {
             basic,
             col_type_map,
+            identity_col: None,
+            computed_cols: HashSet::new(),
+            generated_always_type_map: HashMap::new(),
+            rowversion_cols: HashSet::new(),
         }
     }
 

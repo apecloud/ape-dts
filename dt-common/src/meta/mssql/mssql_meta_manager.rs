@@ -26,7 +26,10 @@ SELECT
     user_type.name AS user_type_name,
     COALESCE(TYPE_NAME(c.system_type_id), user_type.name) AS system_type_name,
     c.max_length,
-    c.is_nullable
+    c.is_nullable,
+    c.is_identity,
+    c.is_computed,
+    c.generated_always_type
 FROM sys.tables AS t
 JOIN sys.schemas AS s ON s.schema_id = t.schema_id
 JOIN sys.columns AS c ON c.object_id = t.object_id
@@ -80,12 +83,16 @@ WHERE s.name = @P1
 ORDER BY t.name
 "#;
 
-type ParsedColumns = (
-    Vec<String>,
-    HashMap<String, String>,
-    HashMap<String, MssqlColType>,
-    HashSet<String>,
-);
+struct ParsedColumns {
+    cols: Vec<String>,
+    col_origin_type_map: HashMap<String, String>,
+    col_type_map: HashMap<String, MssqlColType>,
+    nullable_cols: HashSet<String>,
+    identity_col: Option<String>,
+    computed_cols: HashSet<String>,
+    generated_always_type_map: HashMap<String, u8>,
+    rowversion_cols: HashSet<String>,
+}
 
 #[derive(Clone)]
 pub struct MssqlMetaManager {
@@ -108,8 +115,16 @@ impl MssqlMetaManager {
     ) -> anyhow::Result<&'a MssqlTbMeta> {
         let cache_key = (schema.to_string(), tb.to_string());
         if !self.cache.contains_key(&cache_key) {
-            let (cols, col_origin_type_map, col_type_map, nullable_cols) =
-                self.parse_cols(schema, tb).await?;
+            let ParsedColumns {
+                cols,
+                col_origin_type_map,
+                col_type_map,
+                nullable_cols,
+                identity_col,
+                computed_cols,
+                generated_always_type_map,
+                rowversion_cols,
+            } = self.parse_cols(schema, tb).await?;
             if cols.is_empty() {
                 return Err(Self::table_not_found(schema, tb));
             }
@@ -134,6 +149,10 @@ impl MssqlMetaManager {
                         ref_by_foreign_keys: vec![],
                     },
                     col_type_map,
+                    identity_col,
+                    computed_cols,
+                    generated_always_type_map,
+                    rowversion_cols,
                 },
             );
         }
@@ -234,6 +253,10 @@ impl MssqlMetaManager {
         let mut col_origin_type_map = HashMap::with_capacity(rows.len());
         let mut col_type_map = HashMap::with_capacity(rows.len());
         let mut nullable_cols = HashSet::new();
+        let mut identity_col = None;
+        let mut computed_cols = HashSet::new();
+        let mut generated_always_type_map = HashMap::with_capacity(rows.len());
+        let mut rowversion_cols = HashSet::new();
         for row in rows {
             let col = MssqlColValueConvertor::from_query_required_string(&row, "column_name")
                 .code(ErrorCode::MetadataReadFailed)?;
@@ -247,6 +270,13 @@ impl MssqlMetaManager {
                 .code(ErrorCode::MetadataReadFailed)?;
             let is_nullable = MssqlColValueConvertor::from_query_required_bool(&row, "is_nullable")
                 .code(ErrorCode::MetadataReadFailed)?;
+            let is_identity = MssqlColValueConvertor::from_query_required_bool(&row, "is_identity")
+                .code(ErrorCode::MetadataReadFailed)?;
+            let is_computed = MssqlColValueConvertor::from_query_required_bool(&row, "is_computed")
+                .code(ErrorCode::MetadataReadFailed)?;
+            let generated_always_type =
+                MssqlColValueConvertor::from_query_required_u8(&row, "generated_always_type")
+                    .code(ErrorCode::MetadataReadFailed)?;
             let col_type = parse_mssql_col_type_with_length(&system_type_name, max_length)
                 .map_err(|error| {
                     DtError::DatabaseUnsupportedTableStructure(
@@ -270,11 +300,33 @@ impl MssqlMetaManager {
             col_origin_type_map.insert(col.clone(), user_type_name);
             col_type_map.insert(col.clone(), col_type);
             if is_nullable {
-                nullable_cols.insert(col);
+                nullable_cols.insert(col.clone());
             }
+            if is_identity {
+                identity_col = Some(col.clone());
+            }
+            if is_computed {
+                computed_cols.insert(col.clone());
+            }
+            if matches!(
+                system_type_name.to_ascii_lowercase().as_str(),
+                "rowversion" | "timestamp"
+            ) {
+                rowversion_cols.insert(col.clone());
+            }
+            generated_always_type_map.insert(col, generated_always_type);
         }
 
-        Ok((cols, col_origin_type_map, col_type_map, nullable_cols))
+        Ok(ParsedColumns {
+            cols,
+            col_origin_type_map,
+            col_type_map,
+            nullable_cols,
+            identity_col,
+            computed_cols,
+            generated_always_type_map,
+            rowversion_cols,
+        })
     }
 
     async fn parse_keys(

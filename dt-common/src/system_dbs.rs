@@ -13,9 +13,7 @@ impl SystemDb {
             DbType::Mysql => Self::MYSQL.contains(&db),
             DbType::Pg => Self::POSTGRES.contains(&db),
             DbType::Mongo => Self::MONGO.contains(&db),
-            DbType::Mssql => Self::MSSQL
-                .iter()
-                .any(|schema| schema.eq_ignore_ascii_case(db)),
+            DbType::Mssql => Self::MSSQL.contains(&db),
             _ => false,
         }
     }
