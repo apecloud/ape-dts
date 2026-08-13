@@ -17,7 +17,7 @@ use crate::{
         ddl_meta::ddl_type::DdlType, row_type::RowType,
         struct_meta::structure::structure_type::StructureType,
     },
-    utils::sql_util::SqlUtil,
+    utils::sql_util::{CharEscapePair, SqlUtil},
 };
 
 type IgnoreCols = HashMap<(String, String), HashSet<String>>;
@@ -175,7 +175,7 @@ impl RdbFilter {
         set: &HashSet<(String, String)>,
         schema: &str,
         tb: &str,
-        escape_pairs: &[(char, char)],
+        escape_pairs: &[CharEscapePair],
     ) -> bool {
         for i in set.iter() {
             if Self::match_token(&i.0, schema, escape_pairs)
@@ -187,7 +187,7 @@ impl RdbFilter {
         false
     }
 
-    fn contain_schema(set: &HashSet<String>, item: &str, escape_pairs: &[(char, char)]) -> bool {
+    fn contain_schema(set: &HashSet<String>, item: &str, escape_pairs: &[CharEscapePair]) -> bool {
         for i in set.iter() {
             if Self::match_token(i, item, escape_pairs) {
                 return true;
@@ -196,7 +196,7 @@ impl RdbFilter {
         false
     }
 
-    fn match_token(pattern: &str, item: &str, escape_pairs: &[(char, char)]) -> bool {
+    fn match_token(pattern: &str, item: &str, escape_pairs: &[CharEscapePair]) -> bool {
         // if pattern is enclosed by escapes, it is considered as exactly match
         // example: mysql table name : `aaa*`, it can only match the table `aaa*`, it won't match `aaa_bbb`
         for escape_pair in escape_pairs.iter() {
@@ -699,6 +699,19 @@ mod tests {
         let rdb_filter = RdbFilter::from_config(&config, &db_type).unwrap();
         assert!(!rdb_filter.filter_event("db_test_position.aaa", "b.bbb,.b", &RowType::Insert));
         assert!(!rdb_filter.filter_event("db_test_position.aaa", "c", &RowType::Insert));
+    }
+
+    #[test]
+    fn test_mssql_filter_with_escaped_right_delimiters() {
+        let config = FilterConfig {
+            do_tbs: "[schema]]name].[table]]name]".to_string(),
+            do_events: "insert".to_string(),
+            ..Default::default()
+        };
+        let rdb_filter = RdbFilter::from_config(&config, &DbType::Mssql).unwrap();
+
+        assert!(!rdb_filter.filter_event("schema]name", "table]name", &RowType::Insert));
+        assert!(rdb_filter.filter_event("schema]name", "other", &RowType::Insert));
     }
 
     #[test]
