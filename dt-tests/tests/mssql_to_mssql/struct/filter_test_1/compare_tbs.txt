@@ -1,0 +1,2 @@
+struct_filter_mssql2mssql_1.full_index_type
+struct_filter_mssql2mssql_1.constraint_table
