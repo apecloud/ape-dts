@@ -1,4 +1,6 @@
-use anyhow::Context;
+use std::collections::HashSet;
+
+use anyhow::{bail, Context};
 use connection_string::{AdoNetString, JdbcString};
 use dt_common::{
     config::{
@@ -246,24 +248,39 @@ impl MssqlTestEndpoint {
         &self,
         schema: &str,
         tb: &str,
+        ignore_cols: Option<&HashSet<String>>,
         where_sql: &str,
     ) -> anyhow::Result<Vec<RowData>> {
         let pool = self.create_pool().await?;
         let mut meta_manager = Self::create_meta_manager(pool).await?;
         let tb_meta = meta_manager.get_tb_meta(schema, tb).await?.clone();
-        let query_builder = RdbQueryBuilder::new_for_mssql(&tb_meta, None);
+        let mut compare_ignore_cols = tb_meta.non_comparable_cols();
+        if let Some(ignore_cols) = ignore_cols {
+            compare_ignore_cols.extend(ignore_cols.iter().cloned());
+        }
+        let query_builder = RdbQueryBuilder::new_for_mssql(&tb_meta, Some(&compare_ignore_cols));
         let cols = query_builder.build_extract_cols_str()?;
+        if cols.is_empty() {
+            bail!("MSSQL compare has no comparable columns for {schema}.{tb}");
+        }
+        let order_col = tb_meta
+            .basic
+            .order_cols
+            .iter()
+            .chain(tb_meta.basic.cols.iter())
+            .find(|col| !compare_ignore_cols.contains(*col))
+            .context("MSSQL compare has no column available for ordering")?;
         let sql = format!(
             "SELECT {cols} FROM {}.{} {where_sql} ORDER BY {} ASC",
             Self::quote(schema),
             Self::quote(tb),
-            Self::quote(&tb_meta.basic.cols[0]),
+            Self::quote(order_col),
         );
 
         let mut client = self.connect_to(self.database()).await?;
         let rows = client.simple_query(sql).await?.into_first_result().await?;
         rows.iter()
-            .map(|row| RowData::from_mssql_row(row, &tb_meta, &None, None))
+            .map(|row| RowData::from_mssql_row(row, &tb_meta, &Some(&compare_ignore_cols), None))
             .collect()
     }
 

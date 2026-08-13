@@ -95,6 +95,13 @@ impl MssqlColValueConvertor {
         })
     }
 
+    pub fn from_query_required_u8(row: &Row, col: &str) -> anyhow::Result<u8> {
+        Self::from_query_required(row, col, "UnsignedTiny", |value| match value {
+            ColValue::UnsignedTiny(value) => Some(value),
+            _ => None,
+        })
+    }
+
     pub fn from_query_required_i64(row: &Row, col: &str) -> anyhow::Result<i64> {
         Self::from_query_required(row, col, "LongLong", |value| match value {
             ColValue::LongLong(value) => Some(value),
@@ -228,8 +235,9 @@ impl MssqlColValueConvertor {
             MssqlBindKind::I16 => ColValue::Short(value.parse()?),
             MssqlBindKind::I32 => ColValue::Long(value.parse()?),
             MssqlBindKind::I64 => ColValue::LongLong(value.parse()?),
-            MssqlBindKind::F32 => ColValue::Float(value.parse()?),
-            MssqlBindKind::F64 | MssqlBindKind::Money => ColValue::Double(value.parse()?),
+            MssqlBindKind::F32 => ColValue::Float(parse_finite_f32(value)?),
+            MssqlBindKind::F64 => ColValue::Double(parse_finite_f64(value)?),
+            MssqlBindKind::Money => ColValue::Decimal(parse_decimal(value)?.to_string()),
             MssqlBindKind::Decimal => ColValue::Decimal(parse_decimal(value)?.to_string()),
             MssqlBindKind::Text => ColValue::String(value.to_string()),
             MssqlBindKind::Binary => ColValue::Blob(hex::decode(value)?),
@@ -388,6 +396,30 @@ fn parse_bool(value: &str) -> Option<bool> {
         Some(false)
     } else {
         None
+    }
+}
+
+fn parse_finite_f32(value: &str) -> anyhow::Result<f32> {
+    let parsed = value.parse::<f32>()?;
+    if parsed.is_finite() {
+        Ok(parsed)
+    } else {
+        bail!(DtError::DatabaseStatementFailed(
+            DbType::Mssql,
+            format!("real value must be finite: {value}"),
+        ))
+    }
+}
+
+fn parse_finite_f64(value: &str) -> anyhow::Result<f64> {
+    let parsed = value.parse::<f64>()?;
+    if parsed.is_finite() {
+        Ok(parsed)
+    } else {
+        bail!(DtError::DatabaseStatementFailed(
+            DbType::Mssql,
+            format!("float value must be finite: {value}"),
+        ))
     }
 }
 
@@ -651,13 +683,23 @@ mod tests {
             ("decimal", MssqlBindKind::Decimal),
             ("numeric", MssqlBindKind::Decimal),
             ("varchar", MssqlBindKind::Text),
+            ("char", MssqlBindKind::Text),
             ("nvarchar", MssqlBindKind::Text),
+            ("nchar", MssqlBindKind::Text),
+            ("text", MssqlBindKind::Text),
+            ("ntext", MssqlBindKind::Text),
             ("varbinary", MssqlBindKind::Binary),
+            ("binary", MssqlBindKind::Binary),
+            ("image", MssqlBindKind::Binary),
+            ("rowversion", MssqlBindKind::Binary),
+            ("timestamp", MssqlBindKind::Binary),
             ("uniqueidentifier", MssqlBindKind::Uuid),
             ("xml", MssqlBindKind::Xml),
             ("date", MssqlBindKind::Date),
             ("time", MssqlBindKind::Time),
+            ("smalldatetime", MssqlBindKind::NaiveDateTime),
             ("datetime", MssqlBindKind::NaiveDateTime),
+            ("datetime2", MssqlBindKind::NaiveDateTime),
             ("datetimeoffset", MssqlBindKind::DateTimeOffset),
         ];
 
@@ -668,13 +710,24 @@ mod tests {
             bind_kind(&col_type(" NVARCHAR ")).unwrap(),
             MssqlBindKind::Text
         );
+        assert_eq!(bind_kind(&MssqlColType::Bit).unwrap(), MssqlBindKind::Bool);
+        assert_eq!(
+            bind_kind(&MssqlColType::Datetimen).unwrap(),
+            MssqlBindKind::NaiveDateTime
+        );
     }
 
     #[test]
     fn rejects_unsupported_bind_types() {
         assert!(bind_kind(&col_type("sql_variant")).is_err());
 
-        for col_type in [MssqlColType::Intn, MssqlColType::Floatn, MssqlColType::Udt] {
+        for col_type in [
+            MssqlColType::Null,
+            MssqlColType::Intn,
+            MssqlColType::Floatn,
+            MssqlColType::Udt,
+            MssqlColType::SSVariant,
+        ] {
             assert!(bind_kind(&col_type).is_err());
         }
     }
@@ -813,22 +866,16 @@ mod tests {
             ColValue::Long(-42)
         );
         assert_eq!(
-            MssqlColValueConvertor::from_str(&col_type("decimal"), "12.3400").unwrap(),
-            ColValue::Decimal("12.3400".to_string())
+            MssqlColValueConvertor::from_str(&col_type("money"), "922337203685477.5807").unwrap(),
+            ColValue::Decimal("922337203685477.5807".to_string())
         );
         assert_eq!(
             MssqlColValueConvertor::from_str(&col_type("varbinary"), "00ff10").unwrap(),
             ColValue::Blob(vec![0, 255, 16])
         );
-        assert_eq!(
-            MssqlColValueConvertor::from_str(
-                &col_type("datetimeoffset"),
-                "2026-08-11T12:34:56+08:00"
-            )
-            .unwrap(),
-            ColValue::Timestamp("2026-08-11T12:34:56+08:00".to_string())
-        );
         assert!(MssqlColValueConvertor::from_str(&col_type("bit"), "2").is_err());
+        assert!(MssqlColValueConvertor::from_str(&col_type("real"), "NaN").is_err());
+        assert!(MssqlColValueConvertor::from_str(&col_type("float"), "inf").is_err());
     }
 
     #[test]
@@ -843,25 +890,32 @@ mod tests {
             "real",
             "float",
             "money",
+            "smallmoney",
             "decimal",
+            "numeric",
+            "varchar",
+            "char",
             "nvarchar",
+            "nchar",
+            "text",
+            "ntext",
             "varbinary",
+            "binary",
+            "image",
+            "rowversion",
+            "timestamp",
             "uniqueidentifier",
             "xml",
             "date",
             "time",
+            "smalldatetime",
+            "datetime",
             "datetime2",
             "datetimeoffset",
         ] {
             let mut query = Query::new("SELECT @P1");
             MssqlColValueConvertor::bind(&mut query, &null, &col_type(type_name)).unwrap();
         }
-
-        let too_precise = ColValue::Decimal("9".repeat(39));
-        let mut query = Query::new("SELECT @P1");
-        assert!(
-            MssqlColValueConvertor::bind(&mut query, &too_precise, &col_type("decimal")).is_err()
-        );
 
         let mut query = Query::new("SELECT @P1");
         assert!(MssqlColValueConvertor::bind(

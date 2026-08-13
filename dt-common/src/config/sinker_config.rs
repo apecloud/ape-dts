@@ -34,6 +34,7 @@ pub enum SinkerConfig {
         connection_auth: ConnectionAuthConfig,
         batch_size: usize,
         replace: bool,
+        // todo: support disable_foreign_key_checks for MSSQL, currently not supported
     },
 
     Mongo {

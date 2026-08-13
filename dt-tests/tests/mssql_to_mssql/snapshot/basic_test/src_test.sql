@@ -136,4 +136,12 @@ INSERT INTO basic_test.tbl_4 VALUES
     ('code1', N'name1'), ('code2', N'name2'), ('code3', N'name3');
 INSERT INTO basic_test.tbl_5 VALUES
     ('code1', N'name1'), ('code1', N'name1'), (NULL, NULL);
+
+SET IDENTITY_INSERT basic_test.server_generated_cols ON;
+INSERT INTO basic_test.server_generated_cols (id, base_value) VALUES
+    (10, 5), (42, -7), (100, 0);
+SET IDENTITY_INSERT basic_test.server_generated_cols OFF;
+
+INSERT INTO basic_test.timestamp_alias_cols (id, value) VALUES
+    (1, N'first'), (2, N'中文'), (3, N'last');
 GO

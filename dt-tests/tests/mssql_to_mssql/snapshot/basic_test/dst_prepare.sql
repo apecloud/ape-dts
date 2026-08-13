@@ -27,6 +27,8 @@ DROP TABLE IF EXISTS basic_test.tbl_2;
 DROP TABLE IF EXISTS basic_test.tbl_3;
 DROP TABLE IF EXISTS basic_test.tbl_4;
 DROP TABLE IF EXISTS basic_test.tbl_5;
+DROP TABLE IF EXISTS basic_test.server_generated_cols;
+DROP TABLE IF EXISTS basic_test.timestamp_alias_cols;
 IF SCHEMA_ID(N'basic_test') IS NULL EXEC(N'CREATE SCHEMA basic_test');
 IF SCHEMA_ID(N'Upper_Case_DB') IS NULL EXEC(N'CREATE SCHEMA [Upper_Case_DB]');
 
@@ -150,4 +152,20 @@ CREATE TABLE basic_test.tbl_4 (
     CONSTRAINT tbl_4_code_name_uk UNIQUE (code, name)
 );
 CREATE TABLE basic_test.tbl_5 (code varchar(21) NULL, name nvarchar(30) NULL);
+CREATE TABLE basic_test.server_generated_cols (
+    id int IDENTITY(1, 1) NOT NULL PRIMARY KEY,
+    base_value int NOT NULL,
+    computed_value AS (base_value * 2),
+    valid_from datetime2 GENERATED ALWAYS AS ROW START NOT NULL
+        DEFAULT SYSUTCDATETIME(),
+    valid_to datetime2 GENERATED ALWAYS AS ROW END NOT NULL
+        DEFAULT CONVERT(datetime2, '9999-12-31 23:59:59.9999999'),
+    row_version rowversion NOT NULL,
+    PERIOD FOR SYSTEM_TIME (valid_from, valid_to)
+);
+CREATE TABLE basic_test.timestamp_alias_cols (
+    id int NOT NULL PRIMARY KEY,
+    value nvarchar(30) NOT NULL,
+    legacy_version timestamp NOT NULL
+);
 GO

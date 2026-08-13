@@ -1349,6 +1349,7 @@ impl RdbTestRunner {
         db_type: &DbType,
         sqls: &[String],
     ) -> anyhow::Result<Vec<(String, String)>> {
+        // todo: implement MSSQL DDL parser to extract created tables from SQLs
         if matches!(db_type, DbType::Mssql) {
             return mssql_ddl_scanner::extract_created_tables(sqls);
         }

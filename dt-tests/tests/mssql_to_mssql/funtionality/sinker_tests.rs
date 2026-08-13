@@ -49,6 +49,19 @@ mod test {
             Some(HashMap::from([
                 ("id".to_string(), ColValue::Long(id)),
                 ("code".to_string(), ColValue::String(code.to_string())),
+                (
+                    "computed_code".to_string(),
+                    ColValue::String(code.to_uppercase()),
+                ),
+                (
+                    "valid_from".to_string(),
+                    ColValue::DateTime("2026-08-13 00:00:00".to_string()),
+                ),
+                (
+                    "valid_to".to_string(),
+                    ColValue::DateTime("9999-12-31 23:59:59.9999999".to_string()),
+                ),
+                ("version".to_string(), ColValue::Blob(vec![0; 8])),
             ])),
         )
     }
@@ -79,7 +92,14 @@ mod test {
                 "EXEC(N'CREATE SCHEMA [{TEST_SCHEMA}]');
                  CREATE TABLE [{TEST_SCHEMA}].[{TEST_TABLE}] (
                     id int IDENTITY(1, 1) NOT NULL PRIMARY KEY,
-                    code nvarchar(20) NOT NULL UNIQUE
+                    code nvarchar(20) NOT NULL UNIQUE,
+                    computed_code AS UPPER(code),
+                    valid_from datetime2 GENERATED ALWAYS AS ROW START NOT NULL
+                        DEFAULT SYSUTCDATETIME(),
+                    valid_to datetime2 GENERATED ALWAYS AS ROW END NOT NULL
+                        DEFAULT CONVERT(datetime2, '9999-12-31 23:59:59.9999999'),
+                    version rowversion NOT NULL,
+                    PERIOD FOR SYSTEM_TIME (valid_from, valid_to)
                  );"
             ),
         )
