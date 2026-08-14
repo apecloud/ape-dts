@@ -9,8 +9,12 @@ mod test {
             ssl_config::{SslConfig, SslMode},
         },
         error::{ErrorCode, ErrorReport},
-        meta::mssql::mssql_connection_pool::{
-            MssqlClient, MssqlConnectionPool, MssqlPooledConnection,
+        meta::{
+            mssql::{
+                mssql_connection_pool::{MssqlClient, MssqlConnectionPool, MssqlPooledConnection},
+                mssql_tb_meta::MssqlTbMeta,
+            },
+            rdb_tb_meta::RdbTbMeta,
         },
     };
     use serial_test::serial;
@@ -24,6 +28,8 @@ mod test {
     const CROSS_TASK_TABLE: &str = "[dbo].[ape_dts_pool_cross_task_test]";
     const TRANSACTION_TABLE: &str = "[dbo].[ape_dts_pool_transaction_test]";
     const POISONED_TABLE: &str = "[dbo].[ape_dts_pool_poisoned_test]";
+    const TABLE_SINK_IDENTITY_TABLE: &str = "ape_dts_pool_table_sink_identity_test";
+    const TABLE_SINK_REGULAR_TABLE: &str = "ape_dts_pool_table_sink_regular_test";
 
     fn load_endpoint(config_endpoint: TaskConfigEndpoint) -> anyhow::Result<MssqlTestEndpoint> {
         MssqlTestEndpoint::from_config_file(TASK_CONFIG_FILE, config_endpoint)
@@ -561,6 +567,98 @@ mod test {
 
         MssqlTestEndpoint::execute_batch(&pool, &format!("DROP TABLE IF EXISTS {POISONED_TABLE}"))
             .await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn table_sink_session_uses_table_meta_to_control_identity_insert() -> anyhow::Result<()> {
+        let pool = create_source_pool(1).await?;
+        let identity_table = format!("[dbo].[{TABLE_SINK_IDENTITY_TABLE}]");
+        let regular_table = format!("[dbo].[{TABLE_SINK_REGULAR_TABLE}]");
+        MssqlTestEndpoint::execute_batch(
+            &pool,
+            &format!(
+                "DROP TABLE IF EXISTS {identity_table};
+                 DROP TABLE IF EXISTS {regular_table};
+                 CREATE TABLE {identity_table} (
+                    id INT IDENTITY(1, 1) NOT NULL PRIMARY KEY
+                 );
+                 CREATE TABLE {regular_table} (
+                    id INT NOT NULL PRIMARY KEY
+                 );"
+            ),
+        )
+        .await?;
+
+        let build_tb_meta = |table: &str, identity_col: Option<&str>| MssqlTbMeta {
+            basic: RdbTbMeta {
+                schema: "dbo".to_string(),
+                tb: table.to_string(),
+                ..Default::default()
+            },
+            identity_col: identity_col.map(str::to_string),
+            ..Default::default()
+        };
+        let identity_meta = build_tb_meta(TABLE_SINK_IDENTITY_TABLE, Some("id"));
+        let regular_meta = build_tb_meta(TABLE_SINK_REGULAR_TABLE, None);
+
+        {
+            let mut session = pool.get_table_sink_session(&identity_meta).await?;
+            session.begin().await?;
+            session
+                .client_mut()
+                .simple_query(&format!("INSERT INTO {identity_table} (id) VALUES (10)"))
+                .await?
+                .into_results()
+                .await?;
+            session.commit().await?;
+            session.post().await?;
+        }
+
+        {
+            // SQL Server rejects IDENTITY_INSERT for this table. Successful
+            // construction proves that metadata without an identity column
+            // skips both the pre and post identity statements.
+            let mut session = pool.get_table_sink_session(&regular_meta).await?;
+            session.begin().await?;
+            session
+                .client_mut()
+                .simple_query(&format!("INSERT INTO {regular_table} (id) VALUES (20)"))
+                .await?
+                .into_results()
+                .await?;
+            session.commit().await?;
+            session.post().await?;
+        }
+
+        let mut connection = pool.get().await?;
+        assert_eq!(
+            query_i32(
+                &mut connection,
+                &format!("SELECT COUNT(*) FROM {identity_table} WHERE id = 10"),
+            )
+            .await?,
+            1
+        );
+        assert_eq!(
+            query_i32(
+                &mut connection,
+                &format!("SELECT COUNT(*) FROM {regular_table} WHERE id = 20"),
+            )
+            .await?,
+            1
+        );
+        drop(connection);
+
+        MssqlTestEndpoint::execute_batch(
+            &pool,
+            &format!(
+                "DROP TABLE IF EXISTS {identity_table};
+                 DROP TABLE IF EXISTS {regular_table};"
+            ),
+        )
+        .await?;
         Ok(())
     }
 }

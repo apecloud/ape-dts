@@ -203,21 +203,9 @@ impl RdbQueryBuilder<'_> {
                 let row_values = self.get_batch_placeholders(&query_info.cols, 1)?;
                 query_info.sql = self.get_mssql_replace_sql(&query_info.cols, &row_values)?;
             }
-            query_info.sql = self.wrap_mssql_identity_insert(&query_info.cols, query_info.sql)?;
             return Ok(query_info);
         }
         self.get_query_info_internal(row_data, replace, true)
-    }
-
-    pub fn get_insert_query_info<'a>(
-        &self,
-        row_data: &'a RowData,
-    ) -> anyhow::Result<RdbQueryInfo<'a>> {
-        let mut query_info = self.get_insert_query(row_data, true)?;
-        if self.mssql_tb_meta.is_some() {
-            query_info.sql = self.wrap_mssql_identity_insert(&query_info.cols, query_info.sql)?;
-        }
-        Ok(query_info)
     }
 
     pub fn get_query_sql(&self, row_data: &RowData, replace: bool) -> anyhow::Result<String> {
@@ -404,39 +392,10 @@ impl RdbQueryBuilder<'_> {
             }
         }
 
-        if replace {
-            if self.mssql_tb_meta.is_some() {
-                sql = self.get_mssql_replace_sql(&cols, &row_values)?;
-            } else if self.mysql_tb_meta.is_some() {
-                sql = format!("REPLACE{}", sql.trim_start_matches("INSERT"));
-            }
-        }
-        if self.mssql_tb_meta.is_some() {
-            sql = self.wrap_mssql_identity_insert(&cols, sql)?;
+        if replace && self.mysql_tb_meta.is_some() {
+            sql = format!("REPLACE{}", sql.trim_start_matches("INSERT"));
         }
         Ok((RdbQueryInfo { sql, cols, binds }, malloc_size))
-    }
-
-    fn wrap_mssql_identity_insert(&self, cols: &[String], dml: String) -> anyhow::Result<String> {
-        let tb_meta = self
-            .mssql_tb_meta
-            .context("MSSQL table meta missing when wrapping IDENTITY_INSERT")?;
-        if !tb_meta
-            .identity_col
-            .as_ref()
-            .is_some_and(|identity_col| cols.contains(identity_col))
-        {
-            return Ok(dml);
-        }
-        let table = format!(
-            "{}.{}",
-            self.escape(&self.rdb_tb_meta.schema),
-            self.escape(&self.rdb_tb_meta.tb)
-        );
-        Ok(format!(
-            "SET IDENTITY_INSERT {table} ON; {}; SET IDENTITY_INSERT {table} OFF;",
-            dml.trim_end_matches(';')
-        ))
     }
 
     fn get_mssql_replace_sql(&self, cols: &[String], row_values: &str) -> anyhow::Result<String> {
@@ -1667,7 +1626,7 @@ mod tests {
     }
 
     #[test]
-    fn test_mssql_batch_insert_wraps_identity_and_filters_server_generated_cols() {
+    fn test_mssql_batch_insert_filters_server_generated_cols() {
         let mut tb_meta = build_mssql_tb_meta();
         tb_meta.basic.cols.extend([
             "computed_value".to_string(),
@@ -1705,7 +1664,7 @@ mod tests {
 
         assert_eq!(
             query_info.sql,
-            "SET IDENTITY_INSERT [dbo].[t1] ON; INSERT INTO [dbo].[t1]([id],[code],[name]) VALUES(@P1,@P2,@P3),(@P4,@P5,@P6); SET IDENTITY_INSERT [dbo].[t1] OFF;"
+            "INSERT INTO [dbo].[t1]([id],[code],[name]) VALUES(@P1,@P2,@P3),(@P4,@P5,@P6)"
         );
         assert_eq!(query_info.cols, ["id", "code", "name"]);
         assert_eq!(query_info.binds.len(), 6);
@@ -1713,7 +1672,7 @@ mod tests {
     }
 
     #[test]
-    fn test_mssql_batch_replace_deletes_by_nullable_composite_order_cols() {
+    fn test_mssql_batch_replace_attempts_plain_multi_row_insert() {
         let mut tb_meta = build_mssql_tb_meta();
         tb_meta.basic.order_cols = vec!["id".to_string(), "code".to_string()];
         tb_meta.basic.nullable_cols.insert("code".to_string());
@@ -1726,7 +1685,7 @@ mod tests {
 
         assert_eq!(
             query_info.sql,
-            "DELETE target FROM [dbo].[t1] AS target WITH (HOLDLOCK) INNER JOIN (VALUES(@P1,@P2,@P3),(@P4,@P5,@P6)) AS source ([id],[code],[name]) ON target.[id]=source.[id] AND (target.[code]=source.[code] OR (target.[code] IS NULL AND source.[code] IS NULL)); INSERT INTO [dbo].[t1]([id],[code],[name]) VALUES(@P1,@P2,@P3),(@P4,@P5,@P6);"
+            "INSERT INTO [dbo].[t1]([id],[code],[name]) VALUES(@P1,@P2,@P3),(@P4,@P5,@P6)"
         );
         assert_eq!(query_info.cols, tb_meta.basic.cols);
         assert_eq!(query_info.binds.len(), 6);
@@ -1734,20 +1693,35 @@ mod tests {
     }
 
     #[test]
-    fn test_mssql_batch_replace_deletes_by_order_cols_and_reinserts_identity() {
+    fn test_mssql_single_replace_matches_nullable_composite_order_cols() {
         let mut tb_meta = build_mssql_tb_meta();
-        tb_meta.basic.order_cols = vec!["code".to_string()];
-        tb_meta.identity_col = Some("id".to_string());
-        let data = vec![build_insert_row_data(false)];
+        tb_meta.basic.order_cols = vec!["id".to_string(), "code".to_string()];
+        tb_meta.basic.nullable_cols.insert("code".to_string());
+        let row = build_insert_row_data(false);
         let builder = RdbQueryBuilder::new_for_mssql(&tb_meta, None);
 
-        let (query_info, _) = builder
-            .get_batch_insert_query(&data, 0, data.len(), true)
-            .unwrap();
+        let query_info = builder.get_query_info(&row, true).unwrap();
 
         assert_eq!(
             query_info.sql,
-            "SET IDENTITY_INSERT [dbo].[t1] ON; DELETE target FROM [dbo].[t1] AS target WITH (HOLDLOCK) INNER JOIN (VALUES(@P1,@P2,@P3)) AS source ([id],[code],[name]) ON target.[code]=source.[code]; INSERT INTO [dbo].[t1]([id],[code],[name]) VALUES(@P1,@P2,@P3); SET IDENTITY_INSERT [dbo].[t1] OFF;"
+            "DELETE target FROM [dbo].[t1] AS target WITH (HOLDLOCK) INNER JOIN (VALUES(@P1,@P2,@P3)) AS source ([id],[code],[name]) ON target.[id]=source.[id] AND (target.[code]=source.[code] OR (target.[code] IS NULL AND source.[code] IS NULL)); INSERT INTO [dbo].[t1]([id],[code],[name]) VALUES(@P1,@P2,@P3);"
+        );
+        let _ = builder.create_mssql_query(&query_info).unwrap();
+    }
+
+    #[test]
+    fn test_mssql_single_replace_deletes_by_order_cols_and_reinserts_identity() {
+        let mut tb_meta = build_mssql_tb_meta();
+        tb_meta.basic.order_cols = vec!["code".to_string()];
+        tb_meta.identity_col = Some("id".to_string());
+        let row = build_insert_row_data(false);
+        let builder = RdbQueryBuilder::new_for_mssql(&tb_meta, None);
+
+        let query_info = builder.get_query_info(&row, true).unwrap();
+
+        assert_eq!(
+            query_info.sql,
+            "DELETE target FROM [dbo].[t1] AS target WITH (HOLDLOCK) INNER JOIN (VALUES(@P1,@P2,@P3)) AS source ([id],[code],[name]) ON target.[code]=source.[code]; INSERT INTO [dbo].[t1]([id],[code],[name]) VALUES(@P1,@P2,@P3);"
         );
         assert!(query_info
             .sql
@@ -1755,38 +1729,18 @@ mod tests {
     }
 
     #[test]
-    fn test_mssql_batch_replace_without_key_falls_back_to_insert() {
+    fn test_mssql_single_replace_without_key_falls_back_to_insert() {
         let mut tb_meta = build_mssql_tb_meta();
         tb_meta.basic.order_cols.clear();
-        let data = vec![build_insert_row_data(false), build_insert_row_data(false)];
+        let row = build_insert_row_data(false);
         let builder = RdbQueryBuilder::new_for_mssql(&tb_meta, None);
 
-        let (query_info, _) = builder
-            .get_batch_insert_query(&data, 0, data.len(), true)
-            .unwrap();
+        let query_info = builder.get_query_info(&row, true).unwrap();
 
         assert_eq!(
             query_info.sql,
-            "INSERT INTO [dbo].[t1]([id],[code],[name]) VALUES(@P1,@P2,@P3),(@P4,@P5,@P6)"
+            "INSERT INTO [dbo].[t1]([id],[code],[name]) VALUES(@P1,@P2,@P3)"
         );
-    }
-
-    #[test]
-    fn test_mssql_insert_uses_only_columns_present_after_filtering() {
-        let tb_meta = build_mssql_tb_meta();
-        let mut row = build_insert_row_data(false);
-        row.after.as_mut().unwrap().remove("code");
-        let builder = RdbQueryBuilder::new_for_mssql(&tb_meta, None);
-
-        let query_info = builder.get_insert_query_info(&row).unwrap();
-
-        assert_eq!(
-            query_info.sql,
-            "INSERT INTO [dbo].[t1]([id],[name]) VALUES(@P1,@P2)"
-        );
-        assert_eq!(query_info.cols, ["id", "name"]);
-        assert_eq!(query_info.binds.len(), 2);
-        let _ = builder.create_mssql_query(&query_info).unwrap();
     }
 
     #[test]
