@@ -1,97 +1,179 @@
-pub type MssqlColType = tiberius::ColumnType;
+use tiberius::ColumnType;
 
-pub trait MssqlColTypeExt {
-    fn can_be_splitted(&self) -> bool;
-    fn is_integer(&self) -> bool;
-    fn is_string(&self) -> bool;
-    fn is_binary(&self) -> bool;
-}
+use crate::{config::config_enums::DbType, error::DtError};
 
-#[derive(Clone, Copy)]
-enum MssqlColTypeKind {
-    Null,
-    Bool,
-    Integer,
-    Float,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MssqlColType {
+    Bit,
+    Int1,
+    Int2,
+    Int4,
+    Int8,
+    Datetime4,
+    Float4,
+    Float8,
     Money,
-    Decimal,
-    Temporal,
+    Datetime,
+    Money4,
     Guid,
-    String,
-    LegacyText,
-    Binary,
-    LegacyBinary,
+    Bitn,
+    Decimaln,
+    Numericn,
+    Datetimen,
+    Daten,
+    Timen,
+    Datetime2,
+    DatetimeOffsetn,
+    BigVarBin,
+    BigVarChar,
+    BigBinary,
+    BigChar,
+    NVarchar,
+    NChar,
     Xml,
-    Udt,
-    Variant,
+    Text,
+    Image,
+    NText,
+    // todo: bypass tiberius driver to provide support for the following types:
+    // sql_variant, geometry, geography, hierarchyid and etc.
 }
 
-impl MssqlColTypeExt for MssqlColType {
-    fn can_be_splitted(&self) -> bool {
+impl MssqlColType {
+    pub fn can_be_splitted(&self) -> bool {
         matches!(
-            col_type_kind(self),
-            MssqlColTypeKind::Integer
-                | MssqlColTypeKind::Float
-                | MssqlColTypeKind::Money
-                | MssqlColTypeKind::Decimal
-                | MssqlColTypeKind::Temporal
-                | MssqlColTypeKind::Guid
-                | MssqlColTypeKind::String
-                | MssqlColTypeKind::Binary
+            self,
+            Self::Int1
+                | Self::Int2
+                | Self::Int4
+                | Self::Int8
+                | Self::Float4
+                | Self::Float8
+                | Self::Money
+                | Self::Money4
+                | Self::Decimaln
+                | Self::Numericn
+                | Self::Datetime4
+                | Self::Datetime
+                | Self::Datetimen
+                | Self::Daten
+                | Self::Timen
+                | Self::Datetime2
+                | Self::DatetimeOffsetn
+                | Self::Guid
+                | Self::BigVarChar
+                | Self::BigChar
+                | Self::NVarchar
+                | Self::NChar
+                | Self::BigVarBin
+                | Self::BigBinary
         )
     }
 
-    fn is_integer(&self) -> bool {
-        matches!(col_type_kind(self), MssqlColTypeKind::Integer)
+    pub fn is_integer(&self) -> bool {
+        matches!(self, Self::Int1 | Self::Int2 | Self::Int4 | Self::Int8)
     }
 
-    fn is_string(&self) -> bool {
+    pub fn is_string(&self) -> bool {
         matches!(
-            col_type_kind(self),
-            MssqlColTypeKind::String | MssqlColTypeKind::LegacyText
+            self,
+            Self::BigVarChar
+                | Self::BigChar
+                | Self::NVarchar
+                | Self::NChar
+                | Self::Text
+                | Self::NText
         )
     }
 
-    fn is_binary(&self) -> bool {
-        matches!(
-            col_type_kind(self),
-            MssqlColTypeKind::Binary | MssqlColTypeKind::LegacyBinary
-        )
+    pub fn is_binary(&self) -> bool {
+        matches!(self, Self::BigVarBin | Self::BigBinary | Self::Image)
     }
 }
 
-fn col_type_kind(col_type: &MssqlColType) -> MssqlColTypeKind {
-    match col_type {
-        MssqlColType::Null => MssqlColTypeKind::Null,
-        MssqlColType::Bit | MssqlColType::Bitn => MssqlColTypeKind::Bool,
-        MssqlColType::Int1
-        | MssqlColType::Int2
-        | MssqlColType::Int4
-        | MssqlColType::Int8
-        | MssqlColType::Intn => MssqlColTypeKind::Integer,
-        MssqlColType::Float4 | MssqlColType::Float8 | MssqlColType::Floatn => {
-            MssqlColTypeKind::Float
+impl TryFrom<ColumnType> for MssqlColType {
+    type Error = DtError;
+
+    fn try_from(value: ColumnType) -> Result<Self, Self::Error> {
+        let col_type = match value {
+            ColumnType::Bit => Self::Bit,
+            ColumnType::Int1 => Self::Int1,
+            ColumnType::Int2 => Self::Int2,
+            ColumnType::Int4 => Self::Int4,
+            ColumnType::Int8 => Self::Int8,
+            ColumnType::Datetime4 => Self::Datetime4,
+            ColumnType::Float4 => Self::Float4,
+            ColumnType::Float8 => Self::Float8,
+            ColumnType::Money => Self::Money,
+            ColumnType::Datetime => Self::Datetime,
+            ColumnType::Money4 => Self::Money4,
+            ColumnType::Guid => Self::Guid,
+            ColumnType::Bitn => Self::Bitn,
+            ColumnType::Decimaln => Self::Decimaln,
+            ColumnType::Numericn => Self::Numericn,
+            ColumnType::Datetimen => Self::Datetimen,
+            ColumnType::Daten => Self::Daten,
+            ColumnType::Timen => Self::Timen,
+            ColumnType::Datetime2 => Self::Datetime2,
+            ColumnType::DatetimeOffsetn => Self::DatetimeOffsetn,
+            ColumnType::BigVarBin => Self::BigVarBin,
+            ColumnType::BigVarChar => Self::BigVarChar,
+            ColumnType::BigBinary => Self::BigBinary,
+            ColumnType::BigChar => Self::BigChar,
+            ColumnType::NVarchar => Self::NVarchar,
+            ColumnType::NChar => Self::NChar,
+            ColumnType::Xml => Self::Xml,
+            ColumnType::Text => Self::Text,
+            ColumnType::Image => Self::Image,
+            ColumnType::NText => Self::NText,
+            ColumnType::Null
+            | ColumnType::Intn
+            | ColumnType::Floatn
+            | ColumnType::Udt
+            | ColumnType::SSVariant => {
+                return Err(DtError::DatabaseUnsupportedTableStructure(
+                    DbType::Mssql,
+                    format!("MSSQL column type {value:?} is not supported"),
+                ));
+            }
+        };
+        Ok(col_type)
+    }
+}
+
+impl From<MssqlColType> for ColumnType {
+    fn from(value: MssqlColType) -> Self {
+        match value {
+            MssqlColType::Bit => Self::Bit,
+            MssqlColType::Int1 => Self::Int1,
+            MssqlColType::Int2 => Self::Int2,
+            MssqlColType::Int4 => Self::Int4,
+            MssqlColType::Int8 => Self::Int8,
+            MssqlColType::Datetime4 => Self::Datetime4,
+            MssqlColType::Float4 => Self::Float4,
+            MssqlColType::Float8 => Self::Float8,
+            MssqlColType::Money => Self::Money,
+            MssqlColType::Datetime => Self::Datetime,
+            MssqlColType::Money4 => Self::Money4,
+            MssqlColType::Guid => Self::Guid,
+            MssqlColType::Bitn => Self::Bitn,
+            MssqlColType::Decimaln => Self::Decimaln,
+            MssqlColType::Numericn => Self::Numericn,
+            MssqlColType::Datetimen => Self::Datetimen,
+            MssqlColType::Daten => Self::Daten,
+            MssqlColType::Timen => Self::Timen,
+            MssqlColType::Datetime2 => Self::Datetime2,
+            MssqlColType::DatetimeOffsetn => Self::DatetimeOffsetn,
+            MssqlColType::BigVarBin => Self::BigVarBin,
+            MssqlColType::BigVarChar => Self::BigVarChar,
+            MssqlColType::BigBinary => Self::BigBinary,
+            MssqlColType::BigChar => Self::BigChar,
+            MssqlColType::NVarchar => Self::NVarchar,
+            MssqlColType::NChar => Self::NChar,
+            MssqlColType::Xml => Self::Xml,
+            MssqlColType::Text => Self::Text,
+            MssqlColType::Image => Self::Image,
+            MssqlColType::NText => Self::NText,
         }
-        MssqlColType::Money | MssqlColType::Money4 => MssqlColTypeKind::Money,
-        MssqlColType::Decimaln | MssqlColType::Numericn => MssqlColTypeKind::Decimal,
-        MssqlColType::Datetime4
-        | MssqlColType::Datetime
-        | MssqlColType::Datetimen
-        | MssqlColType::Daten
-        | MssqlColType::Timen
-        | MssqlColType::Datetime2
-        | MssqlColType::DatetimeOffsetn => MssqlColTypeKind::Temporal,
-        MssqlColType::Guid => MssqlColTypeKind::Guid,
-        MssqlColType::BigVarChar
-        | MssqlColType::BigChar
-        | MssqlColType::NVarchar
-        | MssqlColType::NChar => MssqlColTypeKind::String,
-        MssqlColType::Text | MssqlColType::NText => MssqlColTypeKind::LegacyText,
-        MssqlColType::BigVarBin | MssqlColType::BigBinary => MssqlColTypeKind::Binary,
-        MssqlColType::Image => MssqlColTypeKind::LegacyBinary,
-        MssqlColType::Xml => MssqlColTypeKind::Xml,
-        MssqlColType::Udt => MssqlColTypeKind::Udt,
-        MssqlColType::SSVariant => MssqlColTypeKind::Variant,
     }
 }
 
@@ -133,8 +215,6 @@ pub fn parse_mssql_col_type_with_length(
         "text" => MssqlColType::Text,
         "image" => MssqlColType::Image,
         "ntext" => MssqlColType::NText,
-        "sql_variant" => MssqlColType::SSVariant,
-        "geometry" | "geography" | "hierarchyid" => MssqlColType::Udt,
         _ => anyhow::bail!("unsupported MSSQL column type {type_name}"),
     };
     Ok(col_type)
@@ -144,6 +224,60 @@ pub fn parse_mssql_col_type_with_length(
 mod tests {
     use super::*;
 
+    const SUPPORTED_TYPES: [MssqlColType; 30] = [
+        MssqlColType::Bit,
+        MssqlColType::Int1,
+        MssqlColType::Int2,
+        MssqlColType::Int4,
+        MssqlColType::Int8,
+        MssqlColType::Datetime4,
+        MssqlColType::Float4,
+        MssqlColType::Float8,
+        MssqlColType::Money,
+        MssqlColType::Datetime,
+        MssqlColType::Money4,
+        MssqlColType::Guid,
+        MssqlColType::Bitn,
+        MssqlColType::Decimaln,
+        MssqlColType::Numericn,
+        MssqlColType::Datetimen,
+        MssqlColType::Daten,
+        MssqlColType::Timen,
+        MssqlColType::Datetime2,
+        MssqlColType::DatetimeOffsetn,
+        MssqlColType::BigVarBin,
+        MssqlColType::BigVarChar,
+        MssqlColType::BigBinary,
+        MssqlColType::BigChar,
+        MssqlColType::NVarchar,
+        MssqlColType::NChar,
+        MssqlColType::Xml,
+        MssqlColType::Text,
+        MssqlColType::Image,
+        MssqlColType::NText,
+    ];
+
+    #[test]
+    fn converts_supported_tiberius_types_bidirectionally() {
+        for col_type in SUPPORTED_TYPES {
+            let tiberius_type = ColumnType::from(col_type);
+            assert_eq!(MssqlColType::try_from(tiberius_type).unwrap(), col_type);
+        }
+    }
+
+    #[test]
+    fn rejects_unsupported_tiberius_types() {
+        for col_type in [
+            ColumnType::Null,
+            ColumnType::Intn,
+            ColumnType::Floatn,
+            ColumnType::Udt,
+            ColumnType::SSVariant,
+        ] {
+            assert!(MssqlColType::try_from(col_type).is_err());
+        }
+    }
+
     #[test]
     fn classifies_integer_and_splittable_types() {
         for col_type in [
@@ -151,7 +285,6 @@ mod tests {
             MssqlColType::Int2,
             MssqlColType::Int4,
             MssqlColType::Int8,
-            MssqlColType::Intn,
         ] {
             assert!(col_type.is_integer());
             assert!(col_type.can_be_splitted());
@@ -161,7 +294,6 @@ mod tests {
         assert!(MssqlColType::DatetimeOffsetn.can_be_splitted());
         assert!(!MssqlColType::Bitn.can_be_splitted());
         assert!(!MssqlColType::Xml.can_be_splitted());
-        assert!(!MssqlColType::SSVariant.can_be_splitted());
     }
 
     #[test]
@@ -186,10 +318,9 @@ mod tests {
             parse_mssql_col_type_with_length("float", 4).unwrap(),
             MssqlColType::Float4
         );
-        assert_eq!(
-            parse_mssql_col_type("geography").unwrap(),
-            MssqlColType::Udt
-        );
+        for unsupported in ["sql_variant", "geometry", "geography", "hierarchyid"] {
+            assert!(parse_mssql_col_type(unsupported).is_err());
+        }
         assert!(parse_mssql_col_type("unknown_type").is_err());
     }
 }

@@ -91,7 +91,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn serializes_aliased_column_types() {
+    fn serializes_column_types() {
         let tb_meta = MssqlTbMeta {
             basic: RdbTbMeta {
                 cols: vec!["id".to_string()],

@@ -1,37 +1,15 @@
 #[cfg(test)]
 mod test {
-    use std::{
-        collections::HashMap,
-        sync::{atomic::AtomicBool, Arc},
-    };
+    use std::{collections::HashMap, sync::Arc};
 
     use anyhow::{ensure, Context};
-    use dt_common::{
-        config::{
-            config_enums::{DbType, RdbParallelType},
-            filter_config::FilterConfig,
-        },
-        meta::{
-            adaptor::mssql_col_value_convertor::MssqlColValueConvertor,
-            col_value::ColValue,
-            dt_queue::DtQueue,
-            mssql::{mssql_connection_pool::MssqlConnectionPool, mssql_tb_meta::MssqlTbMeta},
-        },
-        monitor::task_monitor_handle::TaskMonitorHandle,
-        rdb_filter::RdbFilter,
-        time_filter::TimeFilter,
+    use dt_common::meta::{
+        adaptor::mssql_col_value_convertor::MssqlColValueConvertor,
+        col_value::ColValue,
+        mssql::{mssql_connection_pool::MssqlConnectionPool, mssql_tb_meta::MssqlTbMeta},
     };
-    use dt_connector::{
-        extractor::{
-            base_extractor::{BaseExtractor, ExtractState},
-            base_splitter::SnapshotChunk,
-            extractor_monitor::ExtractorMonitor,
-            mssql::{
-                mssql_snapshot_extractor::{MssqlSnapshotExtractor, MssqlSnapshotShared},
-                mssql_snapshot_splitter::MssqlSnapshotSplitter,
-            },
-        },
-        Extractor,
+    use dt_connector::extractor::{
+        base_splitter::SnapshotChunk, mssql::mssql_snapshot_splitter::MssqlSnapshotSplitter,
     };
     use serial_test::serial;
 
@@ -41,52 +19,245 @@ mod test {
 
     const TEST_SCHEMA: &str = "ape_dts_snapshot_splitter_type_test";
     const ALL_TYPES_TABLE: &str = "all_types";
-    const COMPUTED_ORDER_TABLE: &str = "computed_order_type";
     const TIMESTAMP_TABLE: &str = "timestamp_type";
     const BATCH_SIZE: usize = 2;
+    const ROW_COUNT: usize = 5;
 
-    const EVEN_INTEGER_COLS: &[&str] = &[
-        "tinyint_value",
-        "smallint_value",
-        "int_value",
-        "bigint_value",
-    ];
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum SplitMode {
+        Even,
+        Uneven,
+        FullTable,
+    }
 
-    const UNEVEN_SPLIT_COLS: &[(&str, &str)] = &[
-        (ALL_TYPES_TABLE, "real_value"),
-        (ALL_TYPES_TABLE, "float_value"),
-        (ALL_TYPES_TABLE, "smallmoney_value"),
-        (ALL_TYPES_TABLE, "money_value"),
-        (ALL_TYPES_TABLE, "decimal_value"),
-        (ALL_TYPES_TABLE, "numeric_value"),
-        (ALL_TYPES_TABLE, "char_value"),
-        (ALL_TYPES_TABLE, "varchar_value"),
-        (ALL_TYPES_TABLE, "nchar_value"),
-        (ALL_TYPES_TABLE, "nvarchar_value"),
-        (ALL_TYPES_TABLE, "binary_value"),
-        (ALL_TYPES_TABLE, "varbinary_value"),
-        (ALL_TYPES_TABLE, "uuid_value"),
-        (ALL_TYPES_TABLE, "date_value"),
-        (ALL_TYPES_TABLE, "time_value"),
-        (ALL_TYPES_TABLE, "smalldatetime_value"),
-        (ALL_TYPES_TABLE, "datetime_value"),
-        (ALL_TYPES_TABLE, "datetime2_value"),
-        (ALL_TYPES_TABLE, "datetimeoffset_value"),
-        (ALL_TYPES_TABLE, "rowversion_value"),
-        (TIMESTAMP_TABLE, "timestamp_value"),
-    ];
+    struct SplitCase {
+        table: &'static str,
+        col: &'static str,
+        sql_type: &'static str,
+        source_expr: Option<&'static str>,
+        mode: SplitMode,
+    }
 
-    const NO_SPLIT_COLS: &[&str] = &[
-        "bit_value",
-        "text_value",
-        "ntext_value",
-        "image_value",
-        "xml_value",
-        "sql_variant_value",
-        "geometry_value",
-        "geography_value",
-        "hierarchyid_value",
-    ];
+    fn split_cases() -> Vec<SplitCase> {
+        vec![
+            SplitCase {
+                table: ALL_TYPES_TABLE,
+                col: "bit_value",
+                sql_type: "bit NOT NULL",
+                source_expr: Some("CONVERT(bit, value_id % 2)"),
+                mode: SplitMode::FullTable,
+            },
+            SplitCase {
+                table: ALL_TYPES_TABLE,
+                col: "tinyint_value",
+                sql_type: "tinyint NOT NULL",
+                source_expr: Some("CONVERT(tinyint, value_id)"),
+                mode: SplitMode::Even,
+            },
+            SplitCase {
+                table: ALL_TYPES_TABLE,
+                col: "smallint_value",
+                sql_type: "smallint NOT NULL",
+                source_expr: Some("CONVERT(smallint, value_id)"),
+                mode: SplitMode::Even,
+            },
+            SplitCase {
+                table: ALL_TYPES_TABLE,
+                col: "int_value",
+                sql_type: "int NOT NULL",
+                source_expr: Some("CONVERT(int, value_id)"),
+                mode: SplitMode::Even,
+            },
+            SplitCase {
+                table: ALL_TYPES_TABLE,
+                col: "bigint_value",
+                sql_type: "bigint NOT NULL",
+                source_expr: Some("CONVERT(bigint, value_id)"),
+                mode: SplitMode::Even,
+            },
+            SplitCase {
+                table: ALL_TYPES_TABLE,
+                col: "real_value",
+                sql_type: "real NOT NULL",
+                source_expr: Some("CONVERT(real, value_id)"),
+                mode: SplitMode::Uneven,
+            },
+            SplitCase {
+                table: ALL_TYPES_TABLE,
+                col: "float_value",
+                sql_type: "float NOT NULL",
+                source_expr: Some("CONVERT(float, value_id)"),
+                mode: SplitMode::Uneven,
+            },
+            SplitCase {
+                table: ALL_TYPES_TABLE,
+                col: "smallmoney_value",
+                sql_type: "smallmoney NOT NULL",
+                source_expr: Some("CONVERT(smallmoney, value_id)"),
+                mode: SplitMode::Uneven,
+            },
+            SplitCase {
+                table: ALL_TYPES_TABLE,
+                col: "money_value",
+                sql_type: "money NOT NULL",
+                source_expr: Some("CONVERT(money, value_id)"),
+                mode: SplitMode::Uneven,
+            },
+            SplitCase {
+                table: ALL_TYPES_TABLE,
+                col: "decimal_value",
+                sql_type: "decimal(18, 4) NOT NULL",
+                source_expr: Some("CONVERT(decimal(18, 4), value_id)"),
+                mode: SplitMode::Uneven,
+            },
+            SplitCase {
+                table: ALL_TYPES_TABLE,
+                col: "numeric_value",
+                sql_type: "numeric(20, 6) NOT NULL",
+                source_expr: Some("CONVERT(numeric(20, 6), value_id)"),
+                mode: SplitMode::Uneven,
+            },
+            SplitCase {
+                table: ALL_TYPES_TABLE,
+                col: "char_value",
+                sql_type: "char(8) NOT NULL",
+                source_expr: Some("CONVERT(char(8), CONCAT('c', value_id))"),
+                mode: SplitMode::Uneven,
+            },
+            SplitCase {
+                table: ALL_TYPES_TABLE,
+                col: "varchar_value",
+                sql_type: "varchar(20) NOT NULL",
+                source_expr: Some("CONVERT(varchar(20), CONCAT('v', value_id))"),
+                mode: SplitMode::Uneven,
+            },
+            SplitCase {
+                table: ALL_TYPES_TABLE,
+                col: "nchar_value",
+                sql_type: "nchar(8) NOT NULL",
+                source_expr: Some("CONVERT(nchar(8), CONCAT(N'nc', value_id))"),
+                mode: SplitMode::Uneven,
+            },
+            SplitCase {
+                table: ALL_TYPES_TABLE,
+                col: "nvarchar_value",
+                sql_type: "nvarchar(20) NOT NULL",
+                source_expr: Some("CONVERT(nvarchar(20), CONCAT(N'nv', value_id))"),
+                mode: SplitMode::Uneven,
+            },
+            SplitCase {
+                table: ALL_TYPES_TABLE,
+                col: "binary_value",
+                sql_type: "binary(8) NOT NULL",
+                source_expr: Some("CONVERT(binary(8), value_id)"),
+                mode: SplitMode::Uneven,
+            },
+            SplitCase {
+                table: ALL_TYPES_TABLE,
+                col: "varbinary_value",
+                sql_type: "varbinary(8) NOT NULL",
+                source_expr: Some("CONVERT(varbinary(8), value_id)"),
+                mode: SplitMode::Uneven,
+            },
+            SplitCase {
+                table: ALL_TYPES_TABLE,
+                col: "text_value",
+                sql_type: "text NULL",
+                source_expr: Some("CONVERT(varchar(20), CONCAT('text', value_id))"),
+                mode: SplitMode::FullTable,
+            },
+            SplitCase {
+                table: ALL_TYPES_TABLE,
+                col: "ntext_value",
+                sql_type: "ntext NULL",
+                source_expr: Some("CONVERT(nvarchar(20), CONCAT(N'ntext', value_id))"),
+                mode: SplitMode::FullTable,
+            },
+            SplitCase {
+                table: ALL_TYPES_TABLE,
+                col: "image_value",
+                sql_type: "image NULL",
+                source_expr: Some("CONVERT(varbinary(8), value_id)"),
+                mode: SplitMode::FullTable,
+            },
+            SplitCase {
+                table: ALL_TYPES_TABLE,
+                col: "uuid_value",
+                sql_type: "uniqueidentifier NOT NULL",
+                source_expr: Some(
+                    "CONVERT(uniqueidentifier, CONCAT('00000000-0000-0000-0000-', \
+                     RIGHT('000000000000' + CONVERT(varchar(12), value_id), 12)))",
+                ),
+                mode: SplitMode::Uneven,
+            },
+            SplitCase {
+                table: ALL_TYPES_TABLE,
+                col: "xml_value",
+                sql_type: "xml NULL",
+                source_expr: Some("CONVERT(xml, CONCAT('<value>', value_id, '</value>'))"),
+                mode: SplitMode::FullTable,
+            },
+            SplitCase {
+                table: ALL_TYPES_TABLE,
+                col: "date_value",
+                sql_type: "date NOT NULL",
+                source_expr: Some("DATEADD(day, value_id, CONVERT(date, '2024-01-01'))"),
+                mode: SplitMode::Uneven,
+            },
+            SplitCase {
+                table: ALL_TYPES_TABLE,
+                col: "time_value",
+                sql_type: "time(7) NOT NULL",
+                source_expr: Some("TIMEFROMPARTS(value_id, 0, 0, 0, 7)"),
+                mode: SplitMode::Uneven,
+            },
+            SplitCase {
+                table: ALL_TYPES_TABLE,
+                col: "smalldatetime_value",
+                sql_type: "smalldatetime NOT NULL",
+                source_expr: Some("DATEADD(day, value_id, CONVERT(smalldatetime, '2024-01-01'))"),
+                mode: SplitMode::Uneven,
+            },
+            SplitCase {
+                table: ALL_TYPES_TABLE,
+                col: "datetime_value",
+                sql_type: "datetime NOT NULL",
+                source_expr: Some("DATEADD(day, value_id, CONVERT(datetime, '2024-01-01'))"),
+                mode: SplitMode::Uneven,
+            },
+            SplitCase {
+                table: ALL_TYPES_TABLE,
+                col: "datetime2_value",
+                sql_type: "datetime2(7) NOT NULL",
+                source_expr: Some("DATEADD(day, value_id, CONVERT(datetime2, '2024-01-01'))"),
+                mode: SplitMode::Uneven,
+            },
+            SplitCase {
+                table: ALL_TYPES_TABLE,
+                col: "datetimeoffset_value",
+                sql_type: "datetimeoffset(7) NOT NULL",
+                source_expr: Some(
+                    "TODATETIMEOFFSET(DATEADD(day, value_id, \
+                     CONVERT(datetime2, '2024-01-01')), '+08:00')",
+                ),
+                mode: SplitMode::Uneven,
+            },
+            SplitCase {
+                table: ALL_TYPES_TABLE,
+                col: "rowversion_value",
+                sql_type: "rowversion NOT NULL",
+                source_expr: None,
+                mode: SplitMode::Uneven,
+            },
+            SplitCase {
+                table: TIMESTAMP_TABLE,
+                col: "timestamp_value",
+                sql_type: "timestamp NOT NULL",
+                source_expr: None,
+                mode: SplitMode::Uneven,
+            },
+        ]
+    }
 
     async fn create_pool() -> anyhow::Result<MssqlConnectionPool> {
         let endpoint =
@@ -100,7 +271,6 @@ mod test {
             pool,
             &format!(
                 "DROP TABLE IF EXISTS [{TEST_SCHEMA}].[{TIMESTAMP_TABLE}];
-                 DROP TABLE IF EXISTS [{TEST_SCHEMA}].[{COMPUTED_ORDER_TABLE}];
                  DROP TABLE IF EXISTS [{TEST_SCHEMA}].[{ALL_TYPES_TABLE}];
                  IF SCHEMA_ID(N'{TEST_SCHEMA}') IS NOT NULL
                     EXEC(N'DROP SCHEMA [{TEST_SCHEMA}]');"
@@ -109,121 +279,59 @@ mod test {
         .await
     }
 
-    async fn prepare(pool: &MssqlConnectionPool) -> anyhow::Result<()> {
+    fn table_setup_sql(cases: &[SplitCase], table: &str) -> String {
+        let table_cases = cases
+            .iter()
+            .filter(|case| case.table == table)
+            .collect::<Vec<_>>();
+        let mut definitions = vec!["[id] int NOT NULL PRIMARY KEY".to_string()];
+        definitions.extend(
+            table_cases
+                .iter()
+                .map(|case| format!("[{}] {}", case.col, case.sql_type)),
+        );
+        let inserted_cases = table_cases
+            .iter()
+            .filter_map(|case| case.source_expr.map(|source_expr| (*case, source_expr)))
+            .collect::<Vec<_>>();
+        let insert_cols = std::iter::once("[id]".to_string())
+            .chain(
+                inserted_cases
+                    .iter()
+                    .map(|(case, _)| format!("[{}]", case.col)),
+            )
+            .collect::<Vec<_>>();
+        let select_exprs = std::iter::once("value_id".to_string())
+            .chain(
+                inserted_cases
+                    .iter()
+                    .map(|(_, source_expr)| (*source_expr).to_string()),
+            )
+            .collect::<Vec<_>>();
+        let rows = (1..=ROW_COUNT)
+            .map(|value| format!("({value})"))
+            .collect::<Vec<_>>();
+
+        format!(
+            "CREATE TABLE [{TEST_SCHEMA}].[{table}] ({}); \
+             INSERT INTO [{TEST_SCHEMA}].[{table}] ({}) \
+             SELECT {} FROM (VALUES {}) AS values_to_insert(value_id);",
+            definitions.join(", "),
+            insert_cols.join(", "),
+            select_exprs.join(", "),
+            rows.join(", "),
+        )
+    }
+
+    async fn prepare(pool: &MssqlConnectionPool, cases: &[SplitCase]) -> anyhow::Result<()> {
+        let all_types_sql = table_setup_sql(cases, ALL_TYPES_TABLE);
+        let timestamp_sql = table_setup_sql(cases, TIMESTAMP_TABLE);
         MssqlTestEndpoint::execute_batch(
             pool,
             &format!(
                 "EXEC(N'CREATE SCHEMA [{TEST_SCHEMA}]');
-                 CREATE TABLE [{TEST_SCHEMA}].[{ALL_TYPES_TABLE}] (
-                    [id] int NOT NULL PRIMARY KEY,
-                    [bit_value] bit NOT NULL,
-                    [tinyint_value] tinyint NOT NULL,
-                    [smallint_value] smallint NOT NULL,
-                    [int_value] int NOT NULL,
-                    [bigint_value] bigint NOT NULL,
-                    [real_value] real NOT NULL,
-                    [float_value] float NOT NULL,
-                    [smallmoney_value] smallmoney NOT NULL,
-                    [money_value] money NOT NULL,
-                    [decimal_value] decimal(18, 4) NOT NULL,
-                    [numeric_value] numeric(20, 6) NOT NULL,
-                    [char_value] char(8) NOT NULL,
-                    [varchar_value] varchar(20) NOT NULL,
-                    [nchar_value] nchar(8) NOT NULL,
-                    [nvarchar_value] nvarchar(20) NOT NULL,
-                    [binary_value] binary(8) NOT NULL,
-                    [varbinary_value] varbinary(8) NOT NULL,
-                    [text_value] text NULL,
-                    [ntext_value] ntext NULL,
-                    [image_value] image NULL,
-                    [uuid_value] uniqueidentifier NOT NULL,
-                    [xml_value] xml NULL,
-                    [date_value] date NOT NULL,
-                    [time_value] time(7) NOT NULL,
-                    [smalldatetime_value] smalldatetime NOT NULL,
-                    [datetime_value] datetime NOT NULL,
-                    [datetime2_value] datetime2(7) NOT NULL,
-                    [datetimeoffset_value] datetimeoffset(7) NOT NULL,
-                    [sql_variant_value] sql_variant NULL,
-                    [geometry_value] geometry NULL,
-                    [geography_value] geography NULL,
-                    [hierarchyid_value] hierarchyid NULL,
-                    [rowversion_value] rowversion NOT NULL,
-                    [computed_value] AS ([id] * 2) PERSISTED,
-                    [valid_from] datetime2 GENERATED ALWAYS AS ROW START NOT NULL
-                        DEFAULT SYSUTCDATETIME(),
-                    [valid_to] datetime2 GENERATED ALWAYS AS ROW END NOT NULL
-                        DEFAULT CONVERT(datetime2, '9999-12-31 23:59:59.9999999'),
-                    PERIOD FOR SYSTEM_TIME ([valid_from], [valid_to])
-                 );
-                 INSERT INTO [{TEST_SCHEMA}].[{ALL_TYPES_TABLE}] (
-                    [id], [bit_value], [tinyint_value], [smallint_value], [int_value],
-                    [bigint_value], [real_value], [float_value], [smallmoney_value],
-                    [money_value], [decimal_value], [numeric_value], [char_value],
-                    [varchar_value], [nchar_value], [nvarchar_value], [binary_value],
-                    [varbinary_value], [text_value], [ntext_value], [image_value],
-                    [uuid_value], [xml_value], [date_value], [time_value],
-                    [smalldatetime_value], [datetime_value], [datetime2_value],
-                    [datetimeoffset_value], [sql_variant_value], [geometry_value],
-                    [geography_value], [hierarchyid_value]
-                 )
-                 SELECT
-                    value_id,
-                    CONVERT(bit, value_id % 2),
-                    CONVERT(tinyint, value_id),
-                    CONVERT(smallint, value_id),
-                    CONVERT(int, value_id),
-                    CONVERT(bigint, value_id),
-                    CONVERT(real, value_id),
-                    CONVERT(float, value_id),
-                    CONVERT(smallmoney, value_id),
-                    CONVERT(money, value_id),
-                    CONVERT(decimal(18, 4), value_id),
-                    CONVERT(numeric(20, 6), value_id),
-                    CONVERT(char(8), CONCAT('c', value_id)),
-                    CONVERT(varchar(20), CONCAT('v', value_id)),
-                    CONVERT(nchar(8), CONCAT(N'nc', value_id)),
-                    CONVERT(nvarchar(20), CONCAT(N'nv', value_id)),
-                    CONVERT(binary(8), value_id),
-                    CONVERT(varbinary(8), value_id),
-                    CONVERT(varchar(20), CONCAT('text', value_id)),
-                    CONVERT(nvarchar(20), CONCAT(N'ntext', value_id)),
-                    CONVERT(varbinary(8), value_id),
-                    CONVERT(uniqueidentifier, CONCAT(
-                        '00000000-0000-0000-0000-',
-                        RIGHT('000000000000' + CONVERT(varchar(12), value_id), 12)
-                    )),
-                    CONVERT(xml, CONCAT('<value>', value_id, '</value>')),
-                    DATEADD(day, value_id, CONVERT(date, '2024-01-01')),
-                    TIMEFROMPARTS(value_id, 0, 0, 0, 7),
-                    DATEADD(day, value_id, CONVERT(smalldatetime, '2024-01-01')),
-                    DATEADD(day, value_id, CONVERT(datetime, '2024-01-01')),
-                    DATEADD(day, value_id, CONVERT(datetime2, '2024-01-01')),
-                    TODATETIMEOFFSET(
-                        DATEADD(day, value_id, CONVERT(datetime2, '2024-01-01')),
-                        '+08:00'
-                    ),
-                    CONVERT(sql_variant, value_id),
-                    geometry::Point(CONVERT(float, value_id), CONVERT(float, value_id), 0),
-                    geography::Point(CONVERT(float, value_id), CONVERT(float, value_id), 4326),
-                    hierarchyid::Parse(CONCAT('/', value_id, '/'))
-                 FROM (VALUES (1), (2), (3), (4), (5)) AS values_to_insert(value_id);
-
-                 CREATE TABLE [{TEST_SCHEMA}].[{COMPUTED_ORDER_TABLE}] (
-                    [base_value] int NOT NULL,
-                    [computed_value] AS ([base_value] * 2) PERSISTED
-                 );
-                 CREATE UNIQUE INDEX [uk_computed_order_type]
-                    ON [{TEST_SCHEMA}].[{COMPUTED_ORDER_TABLE}] ([computed_value]);
-                 INSERT INTO [{TEST_SCHEMA}].[{COMPUTED_ORDER_TABLE}] ([base_value])
-                 VALUES (1), (2), (3);
-
-                 CREATE TABLE [{TEST_SCHEMA}].[{TIMESTAMP_TABLE}] (
-                    [id] int NOT NULL PRIMARY KEY,
-                    [timestamp_value] timestamp NOT NULL
-                 );
-                 INSERT INTO [{TEST_SCHEMA}].[{TIMESTAMP_TABLE}] ([id])
-                 VALUES (1), (2), (3), (4), (5);"
+                 {all_types_sql}
+                 {timestamp_sql}"
             ),
         )
         .await
@@ -231,12 +339,14 @@ mod test {
 
     async fn ordered_values(
         pool: &MssqlConnectionPool,
-        table: &str,
-        col: &str,
+        tb_meta: &MssqlTbMeta,
+        case: &SplitCase,
     ) -> anyhow::Result<Vec<ColValue>> {
+        let col_type = tb_meta.get_col_type(case.col)?;
         let sql = format!(
-            "SELECT [{col}] AS [split_value] FROM [{TEST_SCHEMA}].[{table}] \
-             WHERE [{col}] IS NOT NULL ORDER BY [{col}] ASC"
+            "SELECT [{0}] AS [split_value] FROM [{TEST_SCHEMA}].[{1}] \
+             WHERE [{0}] IS NOT NULL ORDER BY [{0}] ASC",
+            case.col, case.table,
         );
         let mut connection = pool.get().await?;
         let rows = connection
@@ -246,7 +356,7 @@ mod test {
             .into_first_result()
             .await?;
         rows.iter()
-            .map(|row| MssqlColValueConvertor::from_query(row, "split_value"))
+            .map(|row| MssqlColValueConvertor::from_query(row, "split_value", col_type))
             .collect()
     }
 
@@ -259,13 +369,14 @@ mod test {
     }
 
     fn ensure_chunk_sequence(
-        col: &str,
+        case: &SplitCase,
         chunks: &[SnapshotChunk],
         expected_ends: &[ColValue],
     ) -> anyhow::Result<()> {
+        let label = format!("{}.{}", case.table, case.col);
         ensure!(
             chunks.len() == expected_ends.len(),
-            "split column {col}: expected {} chunks, got {}",
+            "split column {label}: expected {} chunks, got {}",
             expected_ends.len(),
             chunks.len()
         );
@@ -278,12 +389,12 @@ mod test {
             ensure_same(
                 &chunk.chunk_range.0,
                 expected_start,
-                &format!("split column {col}, chunk {index} start"),
+                &format!("split column {label}, chunk {index} start"),
             )?;
             ensure_same(
                 &chunk.chunk_range.1,
                 expected_end,
-                &format!("split column {col}, chunk {index} end"),
+                &format!("split column {label}, chunk {index} end"),
             )?;
         }
         Ok(())
@@ -292,145 +403,83 @@ mod test {
     fn new_splitter(
         pool: &MssqlConnectionPool,
         tb_meta: &MssqlTbMeta,
-        col: &str,
+        case: &SplitCase,
     ) -> anyhow::Result<MssqlSnapshotSplitter> {
         let mut splitter = MssqlSnapshotSplitter::new(
             Arc::new(tb_meta.clone()),
             pool.clone(),
             BATCH_SIZE,
-            col.to_string(),
+            case.col.to_string(),
         );
         splitter.init(&HashMap::new())?;
         Ok(splitter)
     }
 
-    async fn verify_even_integer_split(
+    async fn verify_split_case(
         pool: &MssqlConnectionPool,
         tb_meta: &MssqlTbMeta,
-        col: &str,
+        case: &SplitCase,
     ) -> anyhow::Result<()> {
-        let values = ordered_values(pool, ALL_TYPES_TABLE, col).await?;
-        ensure!(values.len() == 5, "split column {col}: expected 5 values");
-        let expected_ends = vec![values[2].clone(), values[4].clone()];
-        let mut splitter = new_splitter(pool, tb_meta, col)?;
-        let chunks = splitter
-            .get_next_chunks()
-            .await
-            .with_context(|| format!("failed to evenly split {col}"))?;
-        ensure_chunk_sequence(col, &chunks, &expected_ends)?;
-        ensure!(
-            splitter.get_next_chunks().await?.is_empty(),
-            "split column {col}: integer splitter should be exhausted"
-        );
-        Ok(())
-    }
+        let label = format!("{}.{}", case.table, case.col);
+        let mut splitter = new_splitter(pool, tb_meta, case)?;
 
-    async fn verify_uneven_split(
-        pool: &MssqlConnectionPool,
-        tb_meta: &MssqlTbMeta,
-        table: &str,
-        col: &str,
-    ) -> anyhow::Result<()> {
-        let values = ordered_values(pool, table, col).await?;
-        ensure!(values.len() == 5, "split column {col}: expected 5 values");
-        let expected_ends = values
-            .chunks(BATCH_SIZE)
-            .filter_map(|values| values.last().cloned())
-            .collect::<Vec<_>>();
-        let mut splitter = new_splitter(pool, tb_meta, col)?;
-        let mut chunks = Vec::with_capacity(expected_ends.len());
-        for _ in 0..expected_ends.len() {
-            let next = splitter
+        if case.mode == SplitMode::FullTable {
+            let chunks = splitter
                 .get_next_chunks()
                 .await
-                .with_context(|| format!("failed to unevenly split {table}.{col}"))?;
+                .with_context(|| format!("failed to split {label}"))?;
             ensure!(
-                next.len() == 1,
-                "split column {col}: uneven splitter must return one chunk at a time"
+                chunks.len() == 1
+                    && matches!(chunks[0].chunk_range, (ColValue::None, ColValue::None)),
+                "split column {label}: non-splittable type must return one full-table chunk"
             );
-            chunks.extend(next);
+        } else {
+            let values = ordered_values(pool, tb_meta, case).await?;
+            ensure!(
+                values.len() == ROW_COUNT,
+                "split column {label}: expected {ROW_COUNT} values"
+            );
+            let expected_ends = match case.mode {
+                SplitMode::Even => vec![
+                    values[values.len() / 2].clone(),
+                    values.last().unwrap().clone(),
+                ],
+                SplitMode::Uneven => values
+                    .chunks(BATCH_SIZE)
+                    .filter_map(|values| values.last().cloned())
+                    .collect(),
+                SplitMode::FullTable => unreachable!(),
+            };
+            let mut chunks = Vec::with_capacity(expected_ends.len());
+            while chunks.len() < expected_ends.len() {
+                let next = splitter
+                    .get_next_chunks()
+                    .await
+                    .with_context(|| format!("failed to split {label} in {:?} mode", case.mode))?;
+                ensure!(
+                    !next.is_empty(),
+                    "split column {label}: splitter was exhausted too early"
+                );
+                if case.mode == SplitMode::Uneven {
+                    ensure!(
+                        next.len() == 1,
+                        "split column {label}: uneven splitter must return one chunk at a time"
+                    );
+                }
+                chunks.extend(next);
+                ensure!(
+                    chunks.len() <= expected_ends.len(),
+                    "split column {label}: splitter returned too many chunks"
+                );
+            }
+            ensure_chunk_sequence(case, &chunks, &expected_ends)?;
         }
-        ensure!(
-            splitter.get_next_chunks().await?.is_empty(),
-            "split column {col}: uneven splitter should be exhausted"
-        );
-        ensure_chunk_sequence(col, &chunks, &expected_ends)
-    }
 
-    async fn verify_no_split(
-        pool: &MssqlConnectionPool,
-        tb_meta: &MssqlTbMeta,
-        col: &str,
-    ) -> anyhow::Result<()> {
-        let mut splitter = new_splitter(pool, tb_meta, col)?;
-        let chunks = splitter
-            .get_next_chunks()
-            .await
-            .with_context(|| format!("failed to handle non-splittable column {col}"))?;
-        ensure!(
-            chunks.len() == 1,
-            "split column {col}: non-splittable type must return one chunk"
-        );
-        ensure!(
-            matches!(chunks[0].chunk_range, (ColValue::None, ColValue::None)),
-            "split column {col}: non-splittable type must use the full-table range"
-        );
         ensure!(
             splitter.get_next_chunks().await?.is_empty(),
-            "split column {col}: non-splittable splitter should be exhausted"
+            "split column {label}: splitter should be exhausted"
         );
         Ok(())
-    }
-
-    async fn extractor_order_col_error(
-        pool: &MssqlConnectionPool,
-        table: &str,
-        partition_col: Option<&str>,
-    ) -> anyhow::Result<(anyhow::Error, Arc<DtQueue>)> {
-        let buffer = Arc::new(DtQueue::new(16, 0, None, None));
-        let partition_cols = partition_col
-            .map(|col| {
-                HashMap::from([(
-                    (TEST_SCHEMA.to_string(), table.to_string()),
-                    col.to_string(),
-                )])
-            })
-            .unwrap_or_default();
-        let mut extractor = MssqlSnapshotExtractor {
-            shared: MssqlSnapshotShared {
-                base_extractor: BaseExtractor {
-                    buffer: Arc::clone(&buffer),
-                    router: None,
-                    shut_down: Arc::new(AtomicBool::new(false)),
-                },
-                connection_pool: pool.clone(),
-                meta_manager: MssqlTestEndpoint::create_meta_manager(pool.clone()).await?,
-                filter: Arc::new(RdbFilter::from_config(
-                    &FilterConfig::default(),
-                    &DbType::Mssql,
-                )?),
-                partition_cols: Arc::new(partition_cols),
-                batch_size: BATCH_SIZE,
-                parallel_type: if partition_col.is_some() {
-                    RdbParallelType::Chunk
-                } else {
-                    RdbParallelType::Table
-                },
-                recovery: None,
-            },
-            extract_state: ExtractState {
-                monitor: ExtractorMonitor::new(TaskMonitorHandle::default(), String::new()).await,
-                data_marker: None,
-                time_filter: TimeFilter::default(),
-            },
-            parallel_size: 1,
-            schema_tbs: HashMap::from([(TEST_SCHEMA.to_string(), vec![table.to_string()])]),
-        };
-        let error = extractor
-            .extract()
-            .await
-            .expect_err("generated MSSQL order column should fail before table extraction");
-        Ok((error, buffer))
     }
 
     #[tokio::test]
@@ -438,7 +487,8 @@ mod test {
     async fn splits_all_mssql_order_column_types_as_expected() -> anyhow::Result<()> {
         let pool = create_pool().await?;
         cleanup(&pool).await?;
-        prepare(&pool).await?;
+        let cases = split_cases();
+        prepare(&pool, &cases).await?;
 
         let result = async {
             let mut meta_manager = MssqlTestEndpoint::create_meta_manager(pool.clone()).await?;
@@ -451,70 +501,13 @@ mod test {
                 .await?
                 .clone();
 
-            for col in EVEN_INTEGER_COLS {
-                verify_even_integer_split(&pool, &all_types_meta, col).await?;
-            }
-            for (table, col) in UNEVEN_SPLIT_COLS {
-                let tb_meta = if *table == ALL_TYPES_TABLE {
+            for case in &cases {
+                let tb_meta = if case.table == ALL_TYPES_TABLE {
                     &all_types_meta
                 } else {
                     &timestamp_meta
                 };
-                verify_uneven_split(&pool, tb_meta, table, col).await?;
-            }
-            for col in NO_SPLIT_COLS {
-                verify_no_split(&pool, &all_types_meta, col).await?;
-            }
-            anyhow::Ok(())
-        }
-        .await;
-
-        let cleanup_result = cleanup(&pool).await;
-        result?;
-        cleanup_result
-    }
-
-    #[tokio::test]
-    #[serial]
-    async fn rejects_server_generated_order_columns_before_extracting_table() -> anyhow::Result<()>
-    {
-        let pool = create_pool().await?;
-        cleanup(&pool).await?;
-        prepare(&pool).await?;
-
-        let result = async {
-            for (table, partition_col, expected_col, expected_kind) in [
-                (COMPUTED_ORDER_TABLE, None, "computed_value", "computed"),
-                (
-                    ALL_TYPES_TABLE,
-                    Some("valid_from"),
-                    "valid_from",
-                    "generated always",
-                ),
-                (
-                    ALL_TYPES_TABLE,
-                    Some("rowversion_value"),
-                    "rowversion_value",
-                    "rowversion/timestamp",
-                ),
-                (
-                    TIMESTAMP_TABLE,
-                    Some("timestamp_value"),
-                    "timestamp_value",
-                    "rowversion/timestamp",
-                ),
-            ] {
-                let (error, buffer) =
-                    extractor_order_col_error(&pool, table, partition_col).await?;
-                let error_chain = format!("{error:#}");
-                ensure!(
-                    error_chain.contains(expected_col) && error_chain.contains(expected_kind),
-                    "unexpected order column validation error: {error_chain}"
-                );
-                ensure!(
-                    buffer.is_empty(),
-                    "extractor emitted data before rejecting {table}.{expected_col}"
-                );
+                verify_split_case(&pool, tb_meta, case).await?;
             }
             anyhow::Ok(())
         }

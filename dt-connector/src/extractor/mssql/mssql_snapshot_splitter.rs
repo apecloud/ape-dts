@@ -7,10 +7,7 @@ use dt_common::{
     meta::{
         adaptor::mssql_col_value_convertor::MssqlColValueConvertor,
         col_value::ColValue,
-        mssql::{
-            mssql_col_type::MssqlColTypeExt, mssql_connection_pool::MssqlConnectionPool,
-            mssql_tb_meta::MssqlTbMeta,
-        },
+        mssql::{mssql_connection_pool::MssqlConnectionPool, mssql_tb_meta::MssqlTbMeta},
         position::Position,
         rdb_tb_meta::RdbTbMeta,
     },
@@ -153,6 +150,7 @@ impl MssqlSnapshotSplitter {
         tb_meta: &MssqlTbMeta,
     ) -> anyhow::Result<ChunkRange> {
         let partition_col = Self::quote(&self.partition_col);
+        let partition_col_type = tb_meta.get_col_type(&self.partition_col)?;
         let sql = format!(
             "SELECT MIN({partition_col}) AS min_value, MAX({partition_col}) AS max_value \
              FROM {}.{}",
@@ -167,20 +165,20 @@ impl MssqlSnapshotSplitter {
             .into_row()
             .await?
             .context("MSSQL snapshot partition range query returned no row")?;
-        let min_value =
-            MssqlColValueConvertor::from_query(&row, "min_value").with_context(|| {
-                format!(
-                    "schema: {}, table: {}, column: {}, failed to get minimum value",
-                    tb_meta.basic.schema, tb_meta.basic.tb, self.partition_col
-                )
-            })?;
-        let max_value =
-            MssqlColValueConvertor::from_query(&row, "max_value").with_context(|| {
-                format!(
-                    "schema: {}, table: {}, column: {}, failed to get maximum value",
-                    tb_meta.basic.schema, tb_meta.basic.tb, self.partition_col
-                )
-            })?;
+        let min_value = MssqlColValueConvertor::from_query(&row, "min_value", partition_col_type)
+            .with_context(|| {
+            format!(
+                "schema: {}, table: {}, column: {}, failed to get minimum value",
+                tb_meta.basic.schema, tb_meta.basic.tb, self.partition_col
+            )
+        })?;
+        let max_value = MssqlColValueConvertor::from_query(&row, "max_value", partition_col_type)
+            .with_context(|| {
+            format!(
+                "schema: {}, table: {}, column: {}, failed to get maximum value",
+                tb_meta.basic.schema, tb_meta.basic.tb, self.partition_col
+            )
+        })?;
         Ok((min_value, max_value))
     }
 
@@ -264,7 +262,8 @@ impl MssqlSnapshotSplitter {
             .into_row()
             .await?
             .context("MSSQL next snapshot chunk query returned no row")?;
-        let next_chunk_end_value = MssqlColValueConvertor::from_query(&row, "max_value")?;
+        let next_chunk_end_value =
+            MssqlColValueConvertor::from_query(&row, "max_value", partition_col_type)?;
         log_debug!("next MSSQL chunk end value: {:?}", next_chunk_end_value);
         if matches!(next_chunk_end_value, ColValue::None) {
             self.basic.mark_no_next_chunks();

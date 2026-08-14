@@ -9,7 +9,7 @@ mod test {
         time::Duration,
     };
 
-    use anyhow::Context;
+    use anyhow::{ensure, Context};
     use dt_common::{
         config::{
             config_enums::{DbType, RdbParallelType},
@@ -47,6 +47,45 @@ mod test {
     const TEST_SCHEMA: &str = "ape_dts_snapshot_extractor_test";
     const TEST_TABLE: &str = "snapshot_rows";
     const TEST_COMPOSITE_TABLE: &str = "composite_rows";
+    const GENERATED_ORDER_TABLE: &str = "generated_order_rows";
+    const COMPUTED_ORDER_TABLE: &str = "computed_order_rows";
+    const TIMESTAMP_ORDER_TABLE: &str = "timestamp_order_rows";
+
+    struct InvalidOrderCase {
+        table: &'static str,
+        partition_col: Option<&'static str>,
+        expected_col: &'static str,
+        expected_kind: &'static str,
+    }
+
+    fn invalid_order_cases() -> [InvalidOrderCase; 4] {
+        [
+            InvalidOrderCase {
+                table: COMPUTED_ORDER_TABLE,
+                partition_col: None,
+                expected_col: "computed_value",
+                expected_kind: "computed",
+            },
+            InvalidOrderCase {
+                table: GENERATED_ORDER_TABLE,
+                partition_col: Some("valid_from"),
+                expected_col: "valid_from",
+                expected_kind: "generated always",
+            },
+            InvalidOrderCase {
+                table: GENERATED_ORDER_TABLE,
+                partition_col: Some("rowversion_value"),
+                expected_col: "rowversion_value",
+                expected_kind: "rowversion/timestamp",
+            },
+            InvalidOrderCase {
+                table: TIMESTAMP_ORDER_TABLE,
+                partition_col: Some("timestamp_value"),
+                expected_col: "timestamp_value",
+                expected_kind: "rowversion/timestamp",
+            },
+        ]
+    }
 
     async fn create_pool() -> anyhow::Result<MssqlConnectionPool> {
         let endpoint =
@@ -59,7 +98,10 @@ mod test {
         MssqlTestEndpoint::execute_batch(
             pool,
             &format!(
-                "DROP TABLE IF EXISTS [{TEST_SCHEMA}].[{TEST_COMPOSITE_TABLE}];
+                "DROP TABLE IF EXISTS [{TEST_SCHEMA}].[{TIMESTAMP_ORDER_TABLE}];
+                 DROP TABLE IF EXISTS [{TEST_SCHEMA}].[{COMPUTED_ORDER_TABLE}];
+                 DROP TABLE IF EXISTS [{TEST_SCHEMA}].[{GENERATED_ORDER_TABLE}];
+                 DROP TABLE IF EXISTS [{TEST_SCHEMA}].[{TEST_COMPOSITE_TABLE}];
                  DROP TABLE IF EXISTS [{TEST_SCHEMA}].[{TEST_TABLE}];
                  IF SCHEMA_ID(N'{TEST_SCHEMA}') IS NOT NULL
                     EXEC(N'DROP SCHEMA [{TEST_SCHEMA}]');"
@@ -101,6 +143,121 @@ mod test {
                 Err(error).context("MSSQL snapshot extractor timed out")
             }
         }
+    }
+
+    async fn extractor_order_col_error(
+        pool: &MssqlConnectionPool,
+        table: &str,
+        partition_col: Option<&str>,
+    ) -> anyhow::Result<(anyhow::Error, Arc<DtQueue>)> {
+        let buffer = Arc::new(DtQueue::new(16, 0, None, None));
+        let partition_cols = partition_col
+            .map(|col| {
+                HashMap::from([(
+                    (TEST_SCHEMA.to_string(), table.to_string()),
+                    col.to_string(),
+                )])
+            })
+            .unwrap_or_default();
+        let mut extractor = MssqlSnapshotExtractor {
+            shared: MssqlSnapshotShared {
+                base_extractor: BaseExtractor {
+                    buffer: Arc::clone(&buffer),
+                    router: None,
+                    shut_down: Arc::new(AtomicBool::new(false)),
+                },
+                connection_pool: pool.clone(),
+                meta_manager: MssqlTestEndpoint::create_meta_manager(pool.clone()).await?,
+                filter: Arc::new(RdbFilter::from_config(
+                    &FilterConfig::default(),
+                    &DbType::Mssql,
+                )?),
+                partition_cols: Arc::new(partition_cols),
+                batch_size: 2,
+                parallel_type: if partition_col.is_some() {
+                    RdbParallelType::Chunk
+                } else {
+                    RdbParallelType::Table
+                },
+                recovery: None,
+            },
+            extract_state: ExtractState {
+                monitor: ExtractorMonitor::new(TaskMonitorHandle::default(), String::new()).await,
+                data_marker: None,
+                time_filter: TimeFilter::default(),
+            },
+            parallel_size: 1,
+            schema_tbs: HashMap::from([(TEST_SCHEMA.to_string(), vec![table.to_string()])]),
+        };
+        let error = extractor
+            .extract()
+            .await
+            .expect_err("generated MSSQL order column should fail before table extraction");
+        Ok((error, buffer))
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn rejects_server_generated_order_columns_before_extracting_table() -> anyhow::Result<()>
+    {
+        let pool = create_pool().await?;
+        cleanup(&pool).await?;
+        MssqlTestEndpoint::execute_batch(
+            &pool,
+            &format!(
+                "EXEC(N'CREATE SCHEMA [{TEST_SCHEMA}]');
+                 CREATE TABLE [{TEST_SCHEMA}].[{GENERATED_ORDER_TABLE}] (
+                    [id] int NOT NULL PRIMARY KEY,
+                    [rowversion_value] rowversion NOT NULL,
+                    [valid_from] datetime2 GENERATED ALWAYS AS ROW START NOT NULL
+                        DEFAULT SYSUTCDATETIME(),
+                    [valid_to] datetime2 GENERATED ALWAYS AS ROW END NOT NULL
+                        DEFAULT CONVERT(datetime2, '9999-12-31 23:59:59.9999999'),
+                    PERIOD FOR SYSTEM_TIME ([valid_from], [valid_to])
+                 );
+                 INSERT INTO [{TEST_SCHEMA}].[{GENERATED_ORDER_TABLE}] ([id]) VALUES (1);
+
+                 CREATE TABLE [{TEST_SCHEMA}].[{COMPUTED_ORDER_TABLE}] (
+                    [base_value] int NOT NULL,
+                    [computed_value] AS ([base_value] * 2) PERSISTED
+                 );
+                 CREATE UNIQUE INDEX [uk_computed_order_rows]
+                    ON [{TEST_SCHEMA}].[{COMPUTED_ORDER_TABLE}] ([computed_value]);
+                 INSERT INTO [{TEST_SCHEMA}].[{COMPUTED_ORDER_TABLE}] ([base_value]) VALUES (1);
+
+                 CREATE TABLE [{TEST_SCHEMA}].[{TIMESTAMP_ORDER_TABLE}] (
+                    [id] int NOT NULL PRIMARY KEY,
+                    [timestamp_value] timestamp NOT NULL
+                 );
+                 INSERT INTO [{TEST_SCHEMA}].[{TIMESTAMP_ORDER_TABLE}] ([id]) VALUES (1);"
+            ),
+        )
+        .await?;
+
+        let result = async {
+            for case in invalid_order_cases() {
+                let (error, buffer) =
+                    extractor_order_col_error(&pool, case.table, case.partition_col).await?;
+                let error_chain = format!("{error:#}");
+                ensure!(
+                    error_chain.contains(case.expected_col)
+                        && error_chain.contains(case.expected_kind),
+                    "unexpected order column validation error: {error_chain}"
+                );
+                ensure!(
+                    buffer.is_empty(),
+                    "extractor emitted data before rejecting {}.{}",
+                    case.table,
+                    case.expected_col,
+                );
+            }
+            anyhow::Ok(())
+        }
+        .await;
+
+        let cleanup_result = cleanup(&pool).await;
+        result?;
+        cleanup_result
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
