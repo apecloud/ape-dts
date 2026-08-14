@@ -9,7 +9,7 @@ use tokio::{
     time::{Duration, Instant},
 };
 
-use crate::{lua_processor::LuaProcessor, Pipeline};
+use crate::{component::lua_processor::LuaProcessor, Pipeline};
 use dt_common::{
     config::sinker_config::SinkerConfig,
     error::{DtResultExt, Stage},
@@ -18,7 +18,6 @@ use dt_common::{
         dcl_meta::dcl_data::DclData,
         ddl_meta::ddl_data::DdlData,
         dt_data::{DtData, DtItem},
-        dt_queue::DtQueue,
         position::Position,
         row_data::RowData,
         syncer::Syncer,
@@ -27,6 +26,7 @@ use dt_common::{
         counter_type::CounterType, task_metrics::TaskMetricsType, task_monitor::MonitorType,
         task_monitor_handle::TaskMonitorHandle,
     },
+    queue::{DtQueue, DtQueueBatch},
     runtime_trace,
 };
 use dt_connector::{
@@ -37,7 +37,7 @@ use dt_connector::{
 use dt_parallelizer::{DataSize, Parallelizer};
 
 pub struct BasePipeline {
-    pub buffer: Arc<DtQueue>,
+    pub buffer: DtQueue,
     pub parallelizer: Box<dyn Parallelizer + Send + Sync>,
     pub sinker_config: SinkerConfig,
     pub sinkers: Vec<Arc<async_mutex::Mutex<Box<dyn Sinker + Send>>>>,
@@ -64,6 +64,7 @@ enum SinkMethod {
 #[async_trait]
 impl Pipeline for BasePipeline {
     async fn stop(&mut self) -> anyhow::Result<()> {
+        self.buffer.close().await;
         let final_position = {
             let syncer = self.syncer.lock().await;
             Self::final_commit_position(&syncer)
@@ -94,7 +95,7 @@ impl Pipeline for BasePipeline {
 
         loop {
             let shutting_down = self.shut_down.load(Ordering::Acquire);
-            let buffer_empty = self.buffer.is_empty();
+            let buffer_empty = self.buffer.is_empty().await;
             let pending_finish_empty = self.pending_snapshot_finished.is_empty();
             let has_pending_work = !buffer_empty || !pending_finish_empty;
 
@@ -107,17 +108,17 @@ impl Pipeline for BasePipeline {
             }
 
             // to avoid too many sub counters, only add counter when buffer is not empty
-            if !self.buffer.is_empty() {
+            if !self.buffer.is_empty().await {
                 self.monitor
                     .add_counter(
                         self.monitor.default_task_id(),
                         CounterType::BufferSize,
-                        self.buffer.len() as u64,
+                        self.buffer.len().await as u64,
                     )
                     .await;
             }
             if record_time.elapsed().as_secs() > 1 {
-                let len = self.buffer.len() as u64;
+                let len = self.buffer.len().await as u64;
                 let size = self.buffer.get_curr_size();
                 self.monitor.set_counter(
                     self.monitor.default_task_id(),
@@ -136,14 +137,15 @@ impl Pipeline for BasePipeline {
             let data = if last_sink_time.elapsed().as_secs() < self.batch_sink_interval_secs
                 && !self.buffer.is_full()
             {
-                Vec::new()
+                DtQueueBatch::default()
             } else {
                 last_sink_time = Instant::now();
                 self.parallelizer
-                    .drain(self.buffer.as_ref())
+                    .drain(&self.buffer)
                     .await
                     .stage(Stage::Parallelizer)?
             };
+            let (data, ack) = data.into_parts();
 
             if let Some(data_marker) = &mut self.data_marker {
                 if !data.is_empty() {
@@ -152,13 +154,23 @@ impl Pipeline for BasePipeline {
             }
 
             // process all row_data_items in buffer at a time
-            let (data_size, last_received, last_commits) = match self.get_sink_method(&data) {
-                SinkMethod::Ddl => self.sink_ddl(data).await?,
-                SinkMethod::Dcl => self.sink_dcl(data).await?,
-                SinkMethod::Dml => self.sink_dml(data).await?,
-                SinkMethod::Raw => self.sink_raw(data).await?,
-                SinkMethod::Struct => self.sink_struct(data).await?,
+            let sink_result = match self.get_sink_method(&data) {
+                SinkMethod::Ddl => self.sink_ddl(data).await,
+                SinkMethod::Dcl => self.sink_dcl(data).await,
+                SinkMethod::Dml => self.sink_dml(data).await,
+                SinkMethod::Raw => self.sink_raw(data).await,
+                SinkMethod::Struct => self.sink_struct(data).await,
             };
+            let (data_size, last_received, last_commits) = match sink_result {
+                Ok(result) => result,
+                Err(error) => {
+                    self.buffer
+                        .fail(format!("pipeline sink failed: {error:#}"))
+                        .await;
+                    return Err(error);
+                }
+            };
+            self.buffer.ack(ack).await?;
 
             if let Some(position) = &last_received {
                 self.syncer.lock().await.received_position = position.to_owned();

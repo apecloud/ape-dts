@@ -10,6 +10,7 @@ use crate::{
         connection_auth_config::ConnectionAuthConfig,
         global_config::GlobalConfig,
         limiter_config::{CapacityLimiterConfig, RateLimiterConfig},
+        pipeline_config::PipelineType,
     },
     error::{DtError, DtResultExt},
     meta::{
@@ -1032,7 +1033,10 @@ impl TaskConfig {
             buffer_size: loader.get_with_default(PIPELINE, "buffer_size", 16000)?,
             buffer_memory_mb: loader.get_optional(PIPELINE, "buffer_memory_mb")?,
         };
+        let pipeline_type =
+            loader.get_with_default(PIPELINE, "pipeline_type", PipelineType::Basic)?;
         let mut config = PipelineConfig {
+            pipeline_type,
             capacity_limiter,
             checkpoint_interval_secs: loader.get_with_default(
                 PIPELINE,

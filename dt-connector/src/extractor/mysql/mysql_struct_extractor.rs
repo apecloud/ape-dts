@@ -64,16 +64,24 @@ impl MysqlStructExtractor {
 
         // database
         let database_statements = fetcher.get_create_database_statements("").await?;
-        for database_statement in database_statements {
-            self.push_dt_data(StructStatement::MysqlCreateDatabase(database_statement))
-                .await?;
-        }
+        self.push_dt_data_batch(
+            database_statements
+                .into_iter()
+                .map(StructStatement::MysqlCreateDatabase)
+                .collect(),
+        )
+        .await?;
 
         // tables
-        for table_statement in fetcher.get_create_table_statements("", "").await? {
-            self.push_dt_data(StructStatement::MysqlCreateTable(table_statement))
-                .await?;
-        }
+        self.push_dt_data_batch(
+            fetcher
+                .get_create_table_statements("", "")
+                .await?
+                .into_iter()
+                .map(StructStatement::MysqlCreateTable)
+                .collect(),
+        )
+        .await?;
         Ok(())
     }
 
@@ -84,6 +92,19 @@ impl MysqlStructExtractor {
         };
         self.base_extractor
             .push_struct(&mut self.extract_state, struct_data)
+            .await
+    }
+
+    async fn push_dt_data_batch(&mut self, statements: Vec<StructStatement>) -> anyhow::Result<()> {
+        let data = statements
+            .into_iter()
+            .map(|statement| StructData {
+                schema: String::new(),
+                statement,
+            })
+            .collect();
+        self.base_extractor
+            .push_struct_batch(&mut self.extract_state, data)
             .await
     }
 

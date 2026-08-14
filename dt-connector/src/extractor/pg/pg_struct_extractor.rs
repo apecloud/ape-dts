@@ -73,40 +73,59 @@ impl PgStructExtractor {
         // User-Defined Type
         if do_global_structs && !self.filter.filter_structure(&StructureType::Udt) {
             let udt_statements = pg_fetcher.get_udt_statements().await?;
-            for statement in udt_statements {
-                self.push_dt_data(StructStatement::PgCreateUdt(statement))
-                    .await?;
-            }
+            self.push_dt_data_batch(
+                udt_statements
+                    .into_iter()
+                    .map(StructStatement::PgCreateUdt)
+                    .collect(),
+            )
+            .await?;
         }
 
         // User-Defined Function
         if do_global_structs && !self.filter.filter_structure(&StructureType::Udf) {
             let udf_statements = pg_fetcher.get_udf_statements().await?;
-            for statement in udf_statements {
-                self.push_dt_data(StructStatement::PgCreateUdf(statement))
-                    .await?;
-            }
+            self.push_dt_data_batch(
+                udf_statements
+                    .into_iter()
+                    .map(StructStatement::PgCreateUdf)
+                    .collect(),
+            )
+            .await?;
         }
 
         // schemas
-        for schema_statement in pg_fetcher.get_create_schema_statements("").await? {
-            self.push_dt_data(StructStatement::PgCreateSchema(schema_statement))
-                .await?;
-        }
+        self.push_dt_data_batch(
+            pg_fetcher
+                .get_create_schema_statements("")
+                .await?
+                .into_iter()
+                .map(StructStatement::PgCreateSchema)
+                .collect(),
+        )
+        .await?;
 
         // tables
-        for table_statement in pg_fetcher.get_create_table_statements("", "").await? {
-            self.push_dt_data(StructStatement::PgCreateTable(table_statement))
-                .await?;
-        }
+        self.push_dt_data_batch(
+            pg_fetcher
+                .get_create_table_statements("", "")
+                .await?
+                .into_iter()
+                .map(StructStatement::PgCreateTable)
+                .collect(),
+        )
+        .await?;
 
         if do_global_structs && !self.filter.filter_structure(&StructureType::Rbac) {
             // do rbac init
             let rbac_statements = pg_fetcher.get_create_rbac_statements().await?;
-            for statement in rbac_statements {
-                self.push_dt_data(StructStatement::PgCreateRbac(statement))
-                    .await?;
-            }
+            self.push_dt_data_batch(
+                rbac_statements
+                    .into_iter()
+                    .map(StructStatement::PgCreateRbac)
+                    .collect(),
+            )
+            .await?;
         }
 
         Ok(())
@@ -119,6 +138,19 @@ impl PgStructExtractor {
         };
         self.base_extractor
             .push_struct(&mut self.extract_state, struct_data)
+            .await
+    }
+
+    async fn push_dt_data_batch(&mut self, statements: Vec<StructStatement>) -> anyhow::Result<()> {
+        let data = statements
+            .into_iter()
+            .map(|statement| StructData {
+                schema: String::new(),
+                statement,
+            })
+            .collect();
+        self.base_extractor
+            .push_struct_batch(&mut self.extract_state, data)
             .await
     }
 

@@ -4,7 +4,8 @@ use async_trait::async_trait;
 
 use dt_common::{
     config::parallelizer_config::ChunkPartitionerRebalanceConfig,
-    meta::{dt_data::DtItem, dt_queue::DtQueue, row_data::RowData},
+    meta::{dt_data::DtItem, row_data::RowData},
+    queue::{DtQueue, DtQueueBatch},
 };
 use dt_connector::Sinker;
 
@@ -23,8 +24,8 @@ impl Parallelizer for SnapshotParallelizer {
         "SnapshotParallelizer".to_string()
     }
 
-    async fn drain(&mut self, buffer: &DtQueue) -> anyhow::Result<Vec<DtItem>> {
-        self.base_parallelizer.drain(buffer).await
+    async fn drain(&mut self, queue: &DtQueue) -> anyhow::Result<DtQueueBatch> {
+        self.base_parallelizer.drain(queue).await
     }
 
     async fn sink_dml(

@@ -2,9 +2,12 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 
-use dt_common::meta::{
-    dcl_meta::dcl_data::DclData, ddl_meta::ddl_data::DdlData, dt_data::DtItem, dt_queue::DtQueue,
-    row_data::RowData, struct_meta::struct_data::StructData,
+use dt_common::{
+    meta::{
+        dcl_meta::dcl_data::DclData, ddl_meta::ddl_data::DdlData, dt_data::DtItem,
+        row_data::RowData, struct_meta::struct_data::StructData,
+    },
+    queue::{DtQueue, DtQueueBatch},
 };
 use dt_connector::Sinker;
 
@@ -21,8 +24,8 @@ impl Parallelizer for SerialParallelizer {
         "SerialParallelizer".to_string()
     }
 
-    async fn drain(&mut self, buffer: &DtQueue) -> anyhow::Result<Vec<DtItem>> {
-        self.base_parallelizer.drain(buffer).await
+    async fn drain(&mut self, queue: &DtQueue) -> anyhow::Result<DtQueueBatch> {
+        self.base_parallelizer.drain(queue).await
     }
 
     async fn sink_dml(

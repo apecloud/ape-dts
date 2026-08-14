@@ -2,11 +2,13 @@ use std::{collections::HashMap, sync::Arc};
 
 use crate::{DataSize, Parallelizer};
 use async_trait::async_trait;
-use dt_common::meta::{
-    ddl_meta::ddl_data::DdlData,
-    dt_data::{DtData, DtItem},
-    dt_queue::DtQueue,
-    row_data::RowData,
+use dt_common::{
+    meta::{
+        ddl_meta::ddl_data::DdlData,
+        dt_data::{DtData, DtItem},
+        row_data::RowData,
+    },
+    queue::{DtQueue, DtQueueBatch},
 };
 use dt_connector::Sinker;
 
@@ -23,8 +25,8 @@ impl Parallelizer for TableParallelizer {
         "TableParallelizer".to_string()
     }
 
-    async fn drain(&mut self, buffer: &DtQueue) -> anyhow::Result<Vec<DtItem>> {
-        self.base_parallelizer.drain(buffer).await
+    async fn drain(&mut self, queue: &DtQueue) -> anyhow::Result<DtQueueBatch> {
+        self.base_parallelizer.drain(queue).await
     }
 
     async fn sink_dml(

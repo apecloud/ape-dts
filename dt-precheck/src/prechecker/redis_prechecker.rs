@@ -18,8 +18,9 @@ use dt_common::{
         task_config::TaskConfig,
     },
     error::DtError,
-    meta::{dt_queue::DtQueue, redis::cluster_node::ClusterNode, syncer::Syncer},
+    meta::{redis::cluster_node::ClusterNode, syncer::Syncer},
     monitor::{task_monitor::MonitorType, task_monitor_handle::TaskMonitorHandle},
+    queue::{basic_queue::BasicQueue, DtQueue},
     rdb_filter::RdbFilter,
     time_filter::TimeFilter,
     utils::redis_util::RedisUtil,
@@ -175,13 +176,13 @@ impl Prechecker for RedisPrechecker {
             self.fetcher.url.clone()
         };
 
-        let buffer = Arc::new(DtQueue::new(1, 0, None, None));
+        let buffer = Arc::new(BasicQueue::new(1, 0, None, None));
 
         let filter = RdbFilter::from_config(&self.task_config.filter, &DbType::Redis)?;
         let monitor = TaskMonitorHandle::noop(MonitorType::Extractor);
 
         let base_extractor = BaseExtractor {
-            buffer,
+            queue_writer: DtQueue::Basic(buffer),
             router: RdbRouter::from_config(&self.task_config.router, &DbType::Redis)?,
             shut_down: Arc::new(AtomicBool::new(false)),
         };

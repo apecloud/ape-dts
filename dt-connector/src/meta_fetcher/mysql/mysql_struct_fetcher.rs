@@ -459,6 +459,9 @@ impl MysqlStructFetcher {
                 constraint_name,
                 constraint_type: ConstraintType::Check,
                 definition,
+                referenced_database_name: String::new(),
+                referenced_schema_name: String::new(),
+                referenced_table_name: String::new(),
             };
             self.push_to_results(&mut results, &database_name, &table_name, constraint);
         }
@@ -520,6 +523,8 @@ impl MysqlStructFetcher {
             let table_name = Self::get_str_with_null(&row, "TABLE_NAME")?;
             let column_name = Self::get_str_with_null(&row, "COLUMN_NAME")?;
             let referenced_table_name = Self::get_str_with_null(&row, "REFERENCED_TABLE_NAME")?;
+            let referenced_database_name =
+                Self::get_str_with_null(&row, "REFERENCED_TABLE_SCHEMA")?;
             let referenced_column_name = Self::get_str_with_null(&row, "REFERENCED_COLUMN_NAME")?;
             let definition = format!(
                 "(`{}`) REFERENCES `{}`.`{}`(`{}`)",
@@ -532,6 +537,9 @@ impl MysqlStructFetcher {
                 constraint_name,
                 constraint_type: ConstraintType::Foreign,
                 definition,
+                referenced_database_name,
+                referenced_schema_name: String::new(),
+                referenced_table_name,
             };
             self.push_to_results(&mut results, &database_name, &table_name, constraint);
         }

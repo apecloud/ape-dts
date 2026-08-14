@@ -626,12 +626,18 @@ impl PgStructFetcher {
                 rel.relname,
                 con.conname AS constraint_name,
                 con.contype::text AS constraint_type,
-                pg_get_constraintdef(con.oid) AS constraint_definition
+                pg_get_constraintdef(con.oid) AS constraint_definition,
+                COALESCE(ref_nsp.nspname, '') AS referenced_schema_name,
+                COALESCE(ref_rel.relname, '') AS referenced_table_name
             FROM pg_catalog.pg_constraint con
             JOIN pg_catalog.pg_class rel
                 ON rel.oid = con.conrelid
             JOIN pg_catalog.pg_namespace nsp
                 ON nsp.oid = connamespace
+            LEFT JOIN pg_catalog.pg_class ref_rel
+                ON ref_rel.oid = con.confrelid
+            LEFT JOIN pg_catalog.pg_namespace ref_nsp
+                ON ref_nsp.oid = ref_rel.relnamespace
             WHERE {} 
             ORDER BY nsp.nspname,rel.relname",
             tb_filter
@@ -649,6 +655,9 @@ impl PgStructFetcher {
                 constraint_name: Self::get_str_with_null(&row, "constraint_name")?,
                 constraint_type: ConstraintType::from_str(&constraint_type, DbType::Pg),
                 definition: Self::get_str_with_null(&row, "constraint_definition")?,
+                referenced_database_name: String::new(),
+                referenced_schema_name: Self::get_str_with_null(&row, "referenced_schema_name")?,
+                referenced_table_name: Self::get_str_with_null(&row, "referenced_table_name")?,
             };
             self.push_to_results(
                 &mut results,

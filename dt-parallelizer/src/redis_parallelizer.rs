@@ -8,9 +8,9 @@ use dt_common::{
     log_warn,
     meta::{
         dt_data::{DtData, DtItem},
-        dt_queue::DtQueue,
         redis::command::key_parser::KeyParser,
     },
+    queue::{DtQueue, DtQueueBatch},
 };
 use dt_connector::Sinker;
 
@@ -32,8 +32,8 @@ impl Parallelizer for RedisParallelizer {
         "RedisParallelizer".to_string()
     }
 
-    async fn drain(&mut self, buffer: &DtQueue) -> anyhow::Result<Vec<DtItem>> {
-        self.base_parallelizer.drain(buffer).await
+    async fn drain(&mut self, queue: &DtQueue) -> anyhow::Result<DtQueueBatch> {
+        self.base_parallelizer.drain(queue).await
     }
 
     async fn sink_raw(

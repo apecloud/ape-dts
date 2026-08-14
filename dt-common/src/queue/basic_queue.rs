@@ -3,22 +3,15 @@ use std::sync::{
     Arc,
 };
 
-use concurrent_queue::{ConcurrentQueue, PopError, PushError};
+use concurrent_queue::{ConcurrentQueue, PushError};
 use tokio::{pin, sync::Notify, time::timeout, time::Duration};
 
-use super::dt_data::DtItem;
-use crate::{limiter::buffer_limiter::BufferLimiter, runtime_trace::instrument_wait};
+use crate::{
+    limiter::buffer_limiter::BufferLimiter, meta::dt_data::DtItem, queue::DtQueuePopError,
+    runtime_trace::instrument_wait,
+};
 
-#[derive(Debug, thiserror::Error)]
-pub enum DtQueuePopError {
-    #[error("queue pop error: {0}")]
-    Queue(#[from] PopError),
-
-    #[error("dequeue limiter error: {0}")]
-    DequeueLimiter(#[source] anyhow::Error),
-}
-
-pub struct DtQueue {
+pub struct BasicQueue {
     queue: ConcurrentQueue<DtItem>,
     check_memory: bool,
     max_bytes: u64,
@@ -29,7 +22,7 @@ pub struct DtQueue {
     dequeue_limiter: Option<BufferLimiter>,
 }
 
-impl DtQueue {
+impl BasicQueue {
     pub fn new(
         capacity: usize,
         max_bytes: u64,
@@ -154,6 +147,20 @@ impl DtQueue {
         .await;
     }
 
+    pub async fn wait_until_empty(&self) {
+        loop {
+            let notified = self.not_full.notified();
+            pin!(notified);
+            notified.as_mut().enable();
+
+            if self.queue.is_empty() {
+                return;
+            }
+
+            instrument_wait("dtqueue.empty.wait", notified).await;
+        }
+    }
+
     #[inline(always)]
     fn is_mem_full(&self) -> bool {
         if self.check_memory {
@@ -180,7 +187,7 @@ mod tests {
         time::{sleep, timeout},
     };
 
-    use super::{DtQueue, DtQueuePopError};
+    use super::{BasicQueue, DtQueuePopError};
     use crate::{
         config::limiter_config::RateLimiterConfig,
         limiter::buffer_limiter::BufferLimiter,
@@ -191,6 +198,7 @@ mod tests {
             row_data::RowData,
             row_type::RowType,
         },
+        queue::DtQueue,
     };
 
     #[tokio::test]
@@ -235,7 +243,7 @@ mod tests {
 
     #[tokio::test]
     async fn wait_for_data_wakes_after_push() {
-        let queue = Arc::new(DtQueue::new(8, 0, None, None));
+        let queue = Arc::new(BasicQueue::new(8, 0, None, None));
         let waiter_queue = queue.clone();
         let waiter = tokio::spawn(async move {
             waiter_queue.wait_for_data(Duration::from_secs(30)).await;
@@ -252,11 +260,31 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn queue_enum_preserves_fifo_push_and_empty_barrier() {
+        let queue = Arc::new(BasicQueue::new(1, 0, None, None));
+        let writer = DtQueue::Basic(queue.clone());
+        writer.push(heartbeat_item()).await.unwrap();
+
+        let waiter_writer = writer.clone();
+        let waiter = tokio::spawn(async move {
+            waiter_writer.wait_until_empty().await;
+        });
+        tokio::task::yield_now().await;
+        assert!(!waiter.is_finished());
+
+        queue.pop().await.unwrap();
+        timeout(Duration::from_secs(1), waiter)
+            .await
+            .expect("empty barrier should wake after pop")
+            .unwrap();
+    }
+
+    #[tokio::test]
     async fn bounded_queue_wakes_all_concurrent_producers() {
         const PRODUCERS: usize = 32;
         const ITEMS_PER_PRODUCER: usize = 16;
 
-        let queue = Arc::new(DtQueue::new(4, 0, None, None));
+        let queue = Arc::new(BasicQueue::new(4, 0, None, None));
         let mut producers = Vec::with_capacity(PRODUCERS);
         for _ in 0..PRODUCERS {
             let queue = queue.clone();
@@ -299,7 +327,7 @@ mod tests {
             max_rps: 0,
         };
         let dequeue_limiter = BufferLimiter::from_config(Some(&rate_config), None).unwrap();
-        let queue = DtQueue::new(1, 0, None, Some(dequeue_limiter));
+        let queue = BasicQueue::new(1, 0, None, Some(dequeue_limiter));
         queue.push(bytes_item(2 * 1024 * 1024)).await.unwrap();
 
         let error = queue.pop().await.unwrap_err();

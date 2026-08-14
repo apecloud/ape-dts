@@ -323,6 +323,17 @@ impl RdbRouterInner {
         match &mut struct_data.statement {
             StructStatement::MysqlCreateTable(s) => {
                 let (schema, tb) = (s.table.database_name.clone(), s.table.table_name.clone());
+                for constraint in &mut s.constraints {
+                    if !constraint.referenced_table_name.is_empty() {
+                        let (dst_schema, dst_tb) = self.get_tb_map(
+                            &constraint.referenced_database_name,
+                            &constraint.referenced_table_name,
+                        );
+                        let (dst_schema, dst_tb) = (dst_schema.to_string(), dst_tb.to_string());
+                        constraint.referenced_database_name = dst_schema;
+                        constraint.referenced_table_name = dst_tb;
+                    }
+                }
                 let (dst_schema, dst_tb) = self.get_tb_map(&schema, &tb);
                 s.route(dst_schema, dst_tb)
             }
@@ -348,6 +359,17 @@ impl RdbRouterInner {
 
             StructStatement::PgCreateTable(s) => {
                 let (schema, tb) = (s.table.schema_name.clone(), s.table.table_name.clone());
+                for constraint in &mut s.constraints {
+                    if !constraint.referenced_table_name.is_empty() {
+                        let (dst_schema, dst_tb) = self.get_tb_map(
+                            &constraint.referenced_schema_name,
+                            &constraint.referenced_table_name,
+                        );
+                        let (dst_schema, dst_tb) = (dst_schema.to_string(), dst_tb.to_string());
+                        constraint.referenced_schema_name = dst_schema;
+                        constraint.referenced_table_name = dst_tb;
+                    }
+                }
                 let (dst_schema, dst_tb) = self.get_tb_map(&schema, &tb);
                 s.route(dst_schema, dst_tb)
             }

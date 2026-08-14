@@ -1,21 +1,18 @@
 use std::{collections::VecDeque, future::Future, sync::Arc};
 
 use async_mutex::Mutex;
-use concurrent_queue::PopError;
 use tokio::task::JoinSet;
 
 use dt_common::{
     error::DtError,
     meta::{
-        dcl_meta::dcl_data::DclData,
-        ddl_meta::ddl_data::DdlData,
-        dt_data::DtItem,
-        dt_queue::{DtQueue, DtQueuePopError},
+        dcl_meta::dcl_data::DclData, ddl_meta::ddl_data::DdlData, dt_data::DtItem,
         row_data::RowData,
     },
     monitor::{
         counter::Counter, counter_type::CounterType, task_monitor_handle::TaskMonitorHandle,
     },
+    queue::{DtQueue, DtQueueBatch, DtQueueItem},
 };
 use dt_connector::Sinker;
 
@@ -23,23 +20,23 @@ type SharedSinker = Arc<Mutex<Box<dyn Sinker + Send>>>;
 
 #[derive(Default)]
 pub struct BaseParallelizer {
-    pub popped_data: VecDeque<DtItem>,
+    pub popped_data: VecDeque<DtQueueItem>,
     pub monitor: TaskMonitorHandle,
 }
 
 impl BaseParallelizer {
-    pub async fn drain(&mut self, buffer: &DtQueue) -> anyhow::Result<Vec<DtItem>> {
-        let mut data = Vec::new();
+    pub async fn drain(&mut self, queue: &DtQueue) -> anyhow::Result<DtQueueBatch> {
+        let mut data = DtQueueBatch::default();
         while let Some(item) = self.popped_data.pop_front() {
             data.push(item);
         }
 
         let mut record_size_counter = Counter::new(0, 0);
         // ddls and dmls should be drained separately
-        while let Some(item) = self.pop(buffer, &mut record_size_counter).await? {
-            if data.is_empty()
-                || (data[0].get_row_sql_type() == item.get_row_sql_type()
-                    && data[0].data_origin_node == item.data_origin_node)
+        while let Some(item) = self.pop(queue, &mut record_size_counter).await? {
+            if data.items.is_empty()
+                || (data.items[0].get_row_sql_type() == item.item.get_row_sql_type()
+                    && data.items[0].data_origin_node == item.item.data_origin_node)
             {
                 // merge when sql type is the same
                 data.push(item);
@@ -55,14 +52,14 @@ impl BaseParallelizer {
 
     pub async fn drain_by_count(
         &mut self,
-        buffer: &DtQueue,
+        queue: &DtQueue,
         max_count: usize,
-    ) -> anyhow::Result<Vec<DtItem>> {
-        let mut data = Vec::new();
+    ) -> anyhow::Result<DtQueueBatch> {
+        let mut data = DtQueueBatch::with_capacity(max_count);
         let mut record_size_counter = Counter::new(0, 0);
-        while let Some(item) = self.pop(buffer, &mut record_size_counter).await? {
+        while let Some(item) = self.pop(queue, &mut record_size_counter).await? {
             data.push(item);
-            if data.len() >= max_count {
+            if data.items.len() >= max_count {
                 break;
             }
         }
@@ -72,19 +69,18 @@ impl BaseParallelizer {
 
     pub async fn pop(
         &self,
-        buffer: &DtQueue,
+        queue: &DtQueue,
         record_size_counter: &mut Counter,
-    ) -> anyhow::Result<Option<DtItem>> {
-        match buffer.pop().await {
-            Ok(item) => {
+    ) -> anyhow::Result<Option<DtQueueItem>> {
+        match queue.try_pop().await? {
+            Some(item) => {
                 record_size_counter.add(
-                    item.dt_data.get_data_size(),
-                    item.dt_data.get_data_count() as u64,
+                    item.item.dt_data.get_data_size(),
+                    item.item.dt_data.get_data_count() as u64,
                 );
                 Ok(Some(item))
             }
-            Err(DtQueuePopError::Queue(PopError::Empty)) => Ok(None),
-            Err(error) => Err(error.into()),
+            None => Ok(None),
         }
     }
 
@@ -271,7 +267,10 @@ mod tests {
     use std::sync::Arc;
 
     use async_mutex::Mutex;
-    use dt_common::{meta::dt_queue::DtQueue, monitor::counter::Counter};
+    use dt_common::{
+        monitor::counter::Counter,
+        queue::{basic_queue::BasicQueue, DtQueue},
+    };
     use dt_connector::{sinker::dummy_sinker::DummySinker, Sinker};
 
     use super::BaseParallelizer;
@@ -279,7 +278,7 @@ mod tests {
     #[tokio::test]
     async fn pop_returns_none_when_queue_is_empty() {
         let parallelizer = BaseParallelizer::default();
-        let queue = DtQueue::new(1, 0, None, None);
+        let queue = DtQueue::Basic(Arc::new(BasicQueue::new(1, 0, None, None)));
         let mut counter = Counter::new(0, 0);
 
         let item = parallelizer.pop(&queue, &mut counter).await.unwrap();

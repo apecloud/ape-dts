@@ -17,12 +17,11 @@ use dt_common::{
         dcl_meta::{dcl_data::DclData, dcl_parser::DclParser},
         ddl_meta::{ddl_data::DdlData, ddl_parser::DdlParser},
         dt_data::{DtData, DtItem},
-        dt_queue::DtQueue,
         position::Position,
         row_data::RowData,
         struct_meta::struct_data::StructData,
     },
-    runtime_trace,
+    queue::DtQueue,
     time_filter::TimeFilter,
     utils::sql_util::SqlUtil,
 };
@@ -134,7 +133,7 @@ impl ExtractState {
 
 #[derive(Clone)]
 pub struct BaseExtractor {
-    pub buffer: Arc<DtQueue>,
+    pub queue_writer: DtQueue,
     pub router: Option<RdbRouter>,
     pub shut_down: Arc<AtomicBool>,
 }
@@ -157,7 +156,7 @@ impl BaseExtractor {
             data_origin_node,
         };
         log_debug!("extracted item: {:?}", item);
-        self.buffer.push(item).await
+        self.queue_writer.push(item).await
     }
 
     pub async fn push_dt_data(
@@ -195,14 +194,7 @@ impl BaseExtractor {
         } else {
             ddl_data
         };
-        // can not use `buffer.wait_util_empty` since `push_ddl` is used with `push_row`
-        while !self.buffer.is_empty() {
-            runtime_trace::instrument_wait(
-                "yield_now.extractor.push_ddl",
-                tokio::task::yield_now(),
-            )
-            .await;
-        }
+        self.queue_writer.wait_until_empty().await;
         self.push_dt_data(state, DtData::Ddl { ddl_data }, position)
             .await
     }
@@ -229,6 +221,38 @@ impl BaseExtractor {
         };
         self.push_dt_data(state, DtData::Struct { struct_data }, Position::None)
             .await
+    }
+
+    pub async fn push_struct_batch(
+        &self,
+        state: &mut ExtractState,
+        struct_data: Vec<StructData>,
+    ) -> anyhow::Result<()> {
+        let mut items = Vec::with_capacity(struct_data.len());
+        for struct_data in struct_data {
+            let struct_data = if let Some(router) = &self.router {
+                router.route_struct(struct_data)
+            } else {
+                struct_data
+            };
+            let dt_data = DtData::Struct { struct_data };
+            state
+                .record_extracted_metrics(dt_data.get_data_count() as u64, dt_data.get_data_size());
+            let Some(data_origin_node) = state.preprocess_dt_data(&dt_data).await? else {
+                continue;
+            };
+            state.monitor.counters.pushed_record_count += dt_data.get_data_count() as u64;
+            state.monitor.counters.pushed_data_size += dt_data.get_data_size();
+            state.monitor.try_flush(false).await;
+            let item = DtItem {
+                dt_data,
+                position: Position::None,
+                data_origin_node,
+            };
+            log_debug!("extracted item: {:?}", item);
+            items.push(item);
+        }
+        self.queue_writer.push_batch(items).await
     }
 
     pub async fn parse_ddl(
@@ -335,13 +359,7 @@ impl BaseExtractor {
     }
 
     pub async fn wait_task_finish(&self, state: &mut ExtractState) -> anyhow::Result<()> {
-        while !self.buffer.is_empty() {
-            runtime_trace::instrument_wait(
-                "yield_now.extractor.wait_task_finish",
-                tokio::task::yield_now(),
-            )
-            .await;
-        }
+        self.queue_writer.wait_until_empty().await;
 
         state.monitor.try_flush(true).await;
         self.shut_down.store(true, Ordering::Release);

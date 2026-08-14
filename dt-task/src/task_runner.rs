@@ -25,6 +25,7 @@ use dt_common::{
         config_token_parser::{ConfigTokenParser, TokenEscapePair},
         extractor_config::ExtractorConfig,
         limiter_config::CapacityLimiterConfig,
+        pipeline_config::PipelineType,
         sinker_config::SinkerConfig,
         task_config::TaskConfig,
     },
@@ -33,7 +34,7 @@ use dt_common::{
     log_error,
     log_filter::parse_size_limit,
     log_finished, log_info, log_warn,
-    meta::{dt_queue::DtQueue, position::Position, row_type::RowType, syncer::Syncer},
+    meta::{position::Position, row_type::RowType, syncer::Syncer},
     monitor::{
         runtime_trace_monitor::RuntimeTraceMonitor,
         task_metrics::TaskMetricsType,
@@ -41,6 +42,7 @@ use dt_common::{
         task_monitor_handle::TaskMonitorHandle,
         FlushableMonitor,
     },
+    queue::{basic_queue::BasicQueue, dependency_queue::DependencyQueue, DtQueue},
     rdb_filter::RdbFilter,
     runtime_trace,
     utils::sql_util::SqlUtil,
@@ -59,8 +61,8 @@ use dt_connector::{
     Extractor, Sinker,
 };
 use dt_pipeline::{
-    base_pipeline::BasePipeline, checker_pipeline::CheckerPipeline, lua_processor::LuaProcessor,
-    Pipeline,
+    base_pipeline::BasePipeline, checker_pipeline::CheckerPipeline,
+    component::lua_processor::LuaProcessor, dependency_pipeline::DependencyPipeline, Pipeline,
 };
 
 use super::{
@@ -383,6 +385,22 @@ impl TaskRunner {
         format!("{base}/{scope}")
     }
 
+    fn use_dependency_pipeline(
+        pipeline_type: &PipelineType,
+        standalone_check: bool,
+        task_type: Option<TaskType>,
+    ) -> anyhow::Result<bool> {
+        if standalone_check || matches!(pipeline_type, PipelineType::Basic) {
+            return Ok(false);
+        }
+        if task_type.is_some_and(|task_type| task_type.kind == TaskKind::Struct) {
+            return Ok(true);
+        }
+        bail!(DtError::invalid_config(
+            "pipeline_type=dependency currently supports only struct tasks"
+        ))
+    }
+
     async fn create_task(
         self,
         extractor_config: ExtractorConfig,
@@ -394,25 +412,40 @@ impl TaskRunner {
         check_summary: Option<Arc<AsyncMutex<CheckSummaryLog>>>,
         checker_state_store: Option<Arc<CheckerStateStore>>,
     ) -> anyhow::Result<()> {
-        // DtQueue is already bounded by buffer_size. Keep only byte capacity in
-        // the enqueue limiter to avoid a duplicate records semaphore.
-        let enqueue_capacity_limiter = CapacityLimiterConfig {
-            buffer_size: 0,
-            buffer_memory_mb: self.config.pipeline.capacity_limiter.buffer_memory_mb,
+        let standalone_check = matches!(self.config.sinker_basic.sink_type, SinkType::Check);
+        let dependency_requested = Self::use_dependency_pipeline(
+            &self.config.pipeline.pipeline_type,
+            standalone_check,
+            self.task_type,
+        )?;
+
+        let pipeline_queue = if dependency_requested {
+            DtQueue::Dependency(Arc::new(DependencyQueue::with_rate_limiter(
+                self.config.pipeline.capacity_limiter.buffer_size,
+                Some(&self.config.extractor_basic.rate_limiter),
+            )))
+        } else {
+            // DtQueue is already bounded by buffer_size. Keep only byte capacity
+            // in the enqueue limiter to avoid a duplicate records semaphore.
+            let enqueue_capacity_limiter = CapacityLimiterConfig {
+                buffer_size: 0,
+                buffer_memory_mb: self.config.pipeline.capacity_limiter.buffer_memory_mb,
+            };
+            let enqueue_limiter = BufferLimiter::from_config(
+                Some(&self.config.extractor_basic.rate_limiter),
+                Some(&enqueue_capacity_limiter),
+            );
+            let dequeue_limiter =
+                BufferLimiter::from_config(Some(&self.config.sinker_basic.rate_limiter), None);
+            let max_bytes = self.config.pipeline.capacity_limiter.buffer_memory_mb * 1024 * 1024;
+            DtQueue::Basic(Arc::new(BasicQueue::new(
+                self.config.pipeline.capacity_limiter.buffer_size,
+                max_bytes as u64,
+                enqueue_limiter,
+                dequeue_limiter,
+            )))
         };
-        let enqueue_limiter = BufferLimiter::from_config(
-            Some(&self.config.extractor_basic.rate_limiter),
-            Some(&enqueue_capacity_limiter),
-        );
-        let dequeue_limiter =
-            BufferLimiter::from_config(Some(&self.config.sinker_basic.rate_limiter), None);
-        let max_bytes = self.config.pipeline.capacity_limiter.buffer_memory_mb * 1024 * 1024;
-        let buffer = Arc::new(DtQueue::new(
-            self.config.pipeline.capacity_limiter.buffer_size,
-            max_bytes as u64,
-            enqueue_limiter,
-            dequeue_limiter,
-        ));
+        let queue_writer = pipeline_queue.clone();
 
         let shut_down = Arc::new(AtomicBool::new(false));
         let syncer = Arc::new(Mutex::new(Syncer {
@@ -461,7 +494,7 @@ impl TaskRunner {
             &self.config,
             &extractor_config,
             extractor_client.clone(),
-            buffer.clone(),
+            queue_writer,
             shut_down.clone(),
             syncer.clone(),
             extractor_monitor_handle,
@@ -505,7 +538,6 @@ impl TaskRunner {
             monitor_count_window,
         );
         let sinker_monitor = sinker_monitor_handle.build_monitor("sinker", &task_id);
-        let standalone_check = matches!(self.config.sinker_basic.sink_type, SinkType::Check);
         let sinkers = if standalone_check {
             Vec::new()
         } else {
@@ -530,7 +562,7 @@ impl TaskRunner {
         );
         let pipeline = self
             .create_pipeline(
-                buffer,
+                pipeline_queue,
                 shut_down.clone(),
                 syncer,
                 sinkers,
@@ -758,7 +790,7 @@ impl TaskRunner {
 
     async fn create_pipeline(
         &self,
-        buffer: Arc<DtQueue>,
+        queue: DtQueue,
         shut_down: Arc<AtomicBool>,
         syncer: Arc<Mutex<Syncer>>,
         sinkers: Vec<Arc<AsyncMutex<Box<dyn Sinker + Send>>>>,
@@ -767,44 +799,62 @@ impl TaskRunner {
         recorder: Option<Arc<dyn Recorder + Send + Sync>>,
         checker: Option<CheckerHandle>,
     ) -> anyhow::Result<Box<dyn Pipeline + Send>> {
-        let lua_processor = self
-            .config
-            .processor
-            .as_ref()
-            .map(|processor_config| LuaProcessor {
-                lua_code: processor_config.lua_code.clone(),
-            });
-
-        let parallelizer =
-            ParallelizerUtil::create_parallelizer(&self.config, monitor.clone()).await?;
-
-        let propagate_checkpoint_to_sinker = checker.is_some();
-        let pipeline = BasePipeline {
-            buffer,
-            parallelizer,
-            sinker_config: self.config.sinker.clone(),
-            sinkers,
-            shut_down,
-            checkpoint_interval_secs: self.config.pipeline.checkpoint_interval_secs,
-            batch_sink_interval_secs: self.config.pipeline.batch_sink_interval_secs,
-            syncer,
-            monitor,
-            pending_snapshot_finished: HashMap::new(),
-            data_marker,
-            lua_processor,
-            recorder,
-            propagate_checkpoint_to_sinker,
-        };
-        if matches!(self.config.sinker_basic.sink_type, SinkType::Check) {
-            let checker = checker.ok_or_else(|| {
-                DtError::invalid_config("standalone check requires a direct checker runtime")
-            })?;
-            if checker.is_async() {
-                bail!("standalone check must not use async checker runtime");
+        match queue {
+            queue @ DtQueue::Basic(_) => {
+                let parallelizer =
+                    ParallelizerUtil::create_parallelizer(&self.config, monitor.clone()).await?;
+                let lua_processor =
+                    self.config
+                        .processor
+                        .as_ref()
+                        .map(|processor_config| LuaProcessor {
+                            lua_code: processor_config.lua_code.clone(),
+                        });
+                let propagate_checkpoint_to_sinker = checker.is_some();
+                let pipeline = BasePipeline {
+                    buffer: queue,
+                    parallelizer,
+                    sinker_config: self.config.sinker.clone(),
+                    sinkers,
+                    shut_down,
+                    checkpoint_interval_secs: self.config.pipeline.checkpoint_interval_secs,
+                    batch_sink_interval_secs: self.config.pipeline.batch_sink_interval_secs,
+                    syncer,
+                    monitor,
+                    pending_snapshot_finished: HashMap::new(),
+                    data_marker,
+                    lua_processor,
+                    recorder,
+                    propagate_checkpoint_to_sinker,
+                };
+                if matches!(self.config.sinker_basic.sink_type, SinkType::Check) {
+                    let checker = checker.ok_or_else(|| {
+                        DtError::invalid_config(
+                            "standalone check requires a direct checker runtime",
+                        )
+                    })?;
+                    if checker.is_async() {
+                        bail!("standalone check must not use async checker runtime");
+                    }
+                    Ok(Box::new(CheckerPipeline::new(pipeline, checker))
+                        as Box<dyn Pipeline + Send>)
+                } else {
+                    Ok(Box::new(pipeline) as Box<dyn Pipeline + Send>)
+                }
             }
-            Ok(Box::new(CheckerPipeline::new(pipeline, checker)) as Box<dyn Pipeline + Send>)
-        } else {
-            Ok(Box::new(pipeline) as Box<dyn Pipeline + Send>)
+            queue @ DtQueue::Dependency(_) => {
+                let max_batch_size = sinkers.len().max(1);
+                let dequeue_limiter =
+                    BufferLimiter::from_config(Some(&self.config.sinker_basic.rate_limiter), None);
+                Ok(Box::new(DependencyPipeline {
+                    queue,
+                    sinkers,
+                    shut_down,
+                    monitor,
+                    max_batch_size,
+                    dequeue_limiter,
+                }) as Box<dyn Pipeline + Send>)
+            }
         }
     }
 
@@ -1546,6 +1596,10 @@ mod tests {
     use std::{fs, time::SystemTime};
 
     use super::TaskRunner;
+    use dt_common::config::{
+        config_enums::{CheckMode, TaskKind, TaskType},
+        pipeline_config::PipelineType,
+    };
     use opendal::{services::Memory, Operator};
 
     #[tokio::test]
@@ -1582,5 +1636,32 @@ mod tests {
             b"{\"is_consistent\":false}\n"
         );
         fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn standalone_check_always_uses_basic_pipeline() {
+        let task_type = TaskType::new(TaskKind::Struct, Some(CheckMode::Standalone));
+        assert!(!TaskRunner::use_dependency_pipeline(
+            &PipelineType::Dependency,
+            true,
+            Some(task_type),
+        )
+        .unwrap());
+    }
+
+    #[test]
+    fn dependency_pipeline_is_limited_to_struct_tasks() {
+        assert!(TaskRunner::use_dependency_pipeline(
+            &PipelineType::Dependency,
+            false,
+            Some(TaskType::new(TaskKind::Struct, None)),
+        )
+        .unwrap());
+        assert!(TaskRunner::use_dependency_pipeline(
+            &PipelineType::Dependency,
+            false,
+            Some(TaskType::new(TaskKind::Cdc, None)),
+        )
+        .is_err());
     }
 }
