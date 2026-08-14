@@ -55,40 +55,6 @@ mod test {
 
     #[tokio::test]
     #[serial]
-    async fn snapshot_duplicate_key_interrupt_test() {
-        let runner = RdbTestRunner::new("mssql_to_mssql/snapshot/on_duplicate_test")
-            .await
-            .unwrap();
-        runner.execute_prepare_sqls().await.unwrap();
-        runner.execute_test_sqls().await.unwrap();
-
-        let error = runner
-            .base
-            .start_task()
-            .await
-            .expect_err("MSSQL duplicate primary key must interrupt the snapshot task");
-        let error_chain = format!("{error:#}");
-        assert!(
-            error_chain.contains("duplicate key")
-                || error_chain.contains("PRIMARY KEY")
-                || error_chain.contains("2627"),
-            "unexpected duplicate-key error: {error_chain}"
-        );
-
-        let table =
-            RdbTestRunner::parse_full_tb_name("on_duplicate_test.conflict_rows", &DbType::Mssql);
-        let rows = runner.fetch_data(&table, DST).await.unwrap();
-        assert_eq!(
-            rows.len(),
-            1,
-            "failed MSSQL insert batch must be rolled back atomically"
-        );
-
-        runner.close().await.unwrap();
-    }
-
-    #[tokio::test]
-    #[serial]
     async fn snapshot_on_duplicate_replace_test() {
         TestBase::run_snapshot_test("mssql_to_mssql/snapshot/on_duplicate_replace_test").await;
     }

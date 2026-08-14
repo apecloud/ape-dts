@@ -23,6 +23,10 @@ pub struct MssqlTbMeta {
 }
 
 impl MssqlTbMeta {
+    pub fn has_identity_col(&self) -> bool {
+        self.identity_col.is_some()
+    }
+
     pub fn is_writable_col(&self, col: &str) -> bool {
         !self.computed_cols.contains(col)
             && self
@@ -106,6 +110,7 @@ mod tests {
 
         assert_eq!(json!(tb_meta)["col_type_map"]["id"], "Int4");
         assert_eq!(json!(tb_meta)["identity_col"], "id");
+        assert!(tb_meta.has_identity_col());
         assert_eq!(json!(tb_meta)["computed_cols"][0], "computed_id");
         assert_eq!(json!(tb_meta)["generated_always_type_map"]["valid_from"], 1);
         assert_eq!(json!(tb_meta)["rowversion_cols"][0], "version");
