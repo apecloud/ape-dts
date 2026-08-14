@@ -195,17 +195,18 @@ impl RowData {
                 continue;
             }
 
-            let col_value = MssqlColValueConvertor::from_query(row, col)
-                .context(DtError::StatementFailed(format!(
-                    "failed to convert column {}.{}.{}",
-                    tb_meta.basic.schema, tb_meta.basic.tb, col
-                )))
-                .object(ErrorObject {
-                    schema: Some(tb_meta.basic.schema.clone()),
-                    table: Some(tb_meta.basic.tb.clone()),
-                    column: Some(col.clone()),
-                    ..Default::default()
-                })?;
+            let col_value =
+                MssqlColValueConvertor::from_query(row, col, tb_meta.get_col_type(col)?)
+                    .context(DtError::StatementFailed(format!(
+                        "failed to convert column {}.{}.{}",
+                        tb_meta.basic.schema, tb_meta.basic.tb, col
+                    )))
+                    .object(ErrorObject {
+                        schema: Some(tb_meta.basic.schema.clone()),
+                        table: Some(tb_meta.basic.tb.clone()),
+                        column: Some(col.clone()),
+                        ..Default::default()
+                    })?;
             after.insert(col.clone(), col_value);
         }
         Ok(Self::build_insert_row_data(after, &tb_meta.basic, chunk_id))

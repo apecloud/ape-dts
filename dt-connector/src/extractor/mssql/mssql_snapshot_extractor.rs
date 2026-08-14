@@ -465,7 +465,8 @@ impl MssqlSnapshotExtractor {
         let mut partition_col_value = ColValue::None;
         while let Some(row) = rows.try_next().await? {
             extracted_count += 1;
-            partition_col_value = MssqlColValueConvertor::from_query(&row, &partition_col)?;
+            partition_col_value =
+                MssqlColValueConvertor::from_query(&row, &partition_col, &partition_col_type)?;
             let row_data =
                 RowData::from_mssql_row(&row, &tb_meta, &ignore_cols.as_ref(), Some(chunk_id))?;
             shared
@@ -1096,7 +1097,11 @@ impl MssqlTableCtx {
             let mut slice_count = 0usize;
             while let Some(row) = rows.try_next().await? {
                 for order_col in &tb_meta.basic.order_cols {
-                    let value = MssqlColValueConvertor::from_query(&row, order_col)?;
+                    let value = MssqlColValueConvertor::from_query(
+                        &row,
+                        order_col,
+                        tb_meta.get_col_type(order_col)?,
+                    )?;
                     start_values.insert(order_col.clone(), value);
                 }
                 extracted_count += 1;

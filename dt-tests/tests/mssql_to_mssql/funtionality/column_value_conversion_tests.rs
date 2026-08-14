@@ -6,11 +6,8 @@ mod test {
         col_value::ColValue,
         mssql::{
             mssql_col_type::{parse_mssql_col_type, MssqlColType},
-            mssql_connection_pool::MssqlConnectionPool,
-            mssql_tb_meta::MssqlTbMeta,
+            mssql_connection_pool::{MssqlClient, MssqlConnectionPool},
         },
-        rdb_tb_meta::RdbTbMeta,
-        row_data::RowData,
     };
     use serial_test::serial;
     use tiberius::Query;
@@ -19,9 +16,391 @@ mod test {
 
     use super::super::TASK_CONFIG_FILE;
 
-    const TEST_TABLE: &str = "[dbo].[ape_dts_col_value_conversion_test]";
-    const TIMESTAMP_TABLE: &str = "[dbo].[ape_dts_timestamp_conversion_test]";
-    const BOUNDARY_TABLE: &str = "[dbo].[ape_dts_col_value_boundary_test]";
+    const SOURCE_TABLE: &str = "[dbo].[ape_dts_col_value_conversion_source]";
+    const DESTINATION_TABLE: &str = "[dbo].[ape_dts_col_value_conversion_destination]";
+    const ROW_COUNT: usize = 4;
+
+    struct ColumnCase {
+        col: &'static str,
+        source_sql_type: &'static str,
+        destination_sql_type: &'static str,
+        type_name: &'static str,
+        source_values: [&'static str; ROW_COUNT],
+        generated: bool,
+    }
+
+    fn conversion_cases() -> Vec<ColumnCase> {
+        vec![
+            ColumnCase {
+                col: "bit_value",
+                source_sql_type: "bit NULL",
+                destination_sql_type: "bit NULL",
+                type_name: "bit",
+                source_values: ["0", "1", "1", "NULL"],
+                generated: false,
+            },
+            ColumnCase {
+                col: "tinyint_value",
+                source_sql_type: "tinyint NULL",
+                destination_sql_type: "tinyint NULL",
+                type_name: "tinyint",
+                source_values: ["0", "255", "128", "NULL"],
+                generated: false,
+            },
+            ColumnCase {
+                col: "smallint_value",
+                source_sql_type: "smallint NULL",
+                destination_sql_type: "smallint NULL",
+                type_name: "smallint",
+                source_values: ["-32768", "32767", "0", "NULL"],
+                generated: false,
+            },
+            ColumnCase {
+                col: "int_value",
+                source_sql_type: "int NULL",
+                destination_sql_type: "int NULL",
+                type_name: "int",
+                source_values: ["-2147483648", "2147483647", "0", "NULL"],
+                generated: false,
+            },
+            ColumnCase {
+                col: "bigint_value",
+                source_sql_type: "bigint NULL",
+                destination_sql_type: "bigint NULL",
+                type_name: "bigint",
+                source_values: [
+                    "CONVERT(bigint, '-9223372036854775808')",
+                    "CONVERT(bigint, '9223372036854775807')",
+                    "0",
+                    "NULL",
+                ],
+                generated: false,
+            },
+            ColumnCase {
+                col: "real_value",
+                source_sql_type: "real NULL",
+                destination_sql_type: "real NULL",
+                type_name: "real",
+                source_values: [
+                    "CONVERT(real, '-3.402823466E+38')",
+                    "CONVERT(real, '3.402823466E+38')",
+                    "CONVERT(real, '1.175494351E-38')",
+                    "NULL",
+                ],
+                generated: false,
+            },
+            ColumnCase {
+                col: "float_value",
+                source_sql_type: "float NULL",
+                destination_sql_type: "float NULL",
+                type_name: "float",
+                source_values: [
+                    "CONVERT(float, '-1.7976931348623157E+308')",
+                    "CONVERT(float, '1.7976931348623157E+308')",
+                    "CONVERT(float, '2.2250738585072014E-308')",
+                    "NULL",
+                ],
+                generated: false,
+            },
+            ColumnCase {
+                col: "smallmoney_value",
+                source_sql_type: "smallmoney NULL",
+                destination_sql_type: "smallmoney NULL",
+                type_name: "smallmoney",
+                source_values: ["-214748.3648", "214748.3647", "0.0001", "NULL"],
+                generated: false,
+            },
+            ColumnCase {
+                col: "money_value",
+                source_sql_type: "money NULL",
+                destination_sql_type: "money NULL",
+                type_name: "money",
+                // Tiberius maps money to f64. The absolute endpoints cannot retain four
+                // decimal places, so use the nearest stable values for this round trip.
+                source_values: [
+                    "CONVERT(money, '-922337203685477.5000')",
+                    "CONVERT(money, '922337203685477.5000')",
+                    "0.0001",
+                    "NULL",
+                ],
+                generated: false,
+            },
+            ColumnCase {
+                col: "decimal_value",
+                source_sql_type: "decimal(38, 0) NULL",
+                destination_sql_type: "decimal(38, 0) NULL",
+                type_name: "decimal",
+                source_values: [
+                    "CONVERT(decimal(38, 0), '-99999999999999999999999999999999999999')",
+                    "CONVERT(decimal(38, 0), '99999999999999999999999999999999999999')",
+                    "0",
+                    "NULL",
+                ],
+                generated: false,
+            },
+            ColumnCase {
+                col: "numeric_value",
+                source_sql_type: "numeric(38, 37) NULL",
+                destination_sql_type: "numeric(38, 37) NULL",
+                type_name: "numeric",
+                source_values: [
+                    "CONVERT(numeric(38, 37), '-9.9999999999999999999999999999999999999')",
+                    "CONVERT(numeric(38, 37), '9.9999999999999999999999999999999999999')",
+                    "CONVERT(numeric(38, 37), '0.0000000000000000000000000000000000001')",
+                    "NULL",
+                ],
+                generated: false,
+            },
+            ColumnCase {
+                col: "char_latin1_value",
+                source_sql_type: "char(16) COLLATE Latin1_General_100_CI_AS NULL",
+                destination_sql_type: "char(16) COLLATE Latin1_General_100_CI_AS NULL",
+                type_name: "char",
+                source_values: ["''", "'0123456789ABCDEF'", "N'España français'", "NULL"],
+                generated: false,
+            },
+            ColumnCase {
+                col: "char_chinese_value",
+                source_sql_type: "char(16) COLLATE Chinese_PRC_CI_AS NULL",
+                destination_sql_type: "char(16) COLLATE Chinese_PRC_CI_AS NULL",
+                type_name: "char",
+                source_values: ["''", "N'中文边界'", "N'数据A'", "NULL"],
+                generated: false,
+            },
+            ColumnCase {
+                col: "varchar_latin1_value",
+                source_sql_type: "varchar(32) COLLATE Latin1_General_100_CI_AS NULL",
+                destination_sql_type: "varchar(32) COLLATE Latin1_General_100_CI_AS NULL",
+                type_name: "varchar",
+                source_values: [
+                    "''",
+                    "'0123456789ABCDEF0123456789ABCDEF'",
+                    "N'España français'",
+                    "NULL",
+                ],
+                generated: false,
+            },
+            ColumnCase {
+                col: "varchar_chinese_value",
+                source_sql_type: "varchar(32) COLLATE Chinese_PRC_CI_AS NULL",
+                destination_sql_type: "varchar(32) COLLATE Chinese_PRC_CI_AS NULL",
+                type_name: "varchar",
+                source_values: ["''", "REPLICATE(N'中', 16)", "N'中文数据传输'", "NULL"],
+                generated: false,
+            },
+            ColumnCase {
+                col: "nchar_value",
+                source_sql_type: "nchar(16) COLLATE Latin1_General_100_CI_AS_SC NULL",
+                destination_sql_type: "nchar(16) COLLATE Latin1_General_100_CI_AS_SC NULL",
+                type_name: "nchar",
+                source_values: ["N''", "N'中文边界测试'", "N'中文😀'", "NULL"],
+                generated: false,
+            },
+            ColumnCase {
+                col: "nvarchar_value",
+                source_sql_type: "nvarchar(32) COLLATE Latin1_General_100_CI_AS_SC NULL",
+                destination_sql_type: "nvarchar(32) COLLATE Latin1_General_100_CI_AS_SC NULL",
+                type_name: "nvarchar",
+                source_values: [
+                    "N''",
+                    "REPLICATE(N'中', 32)",
+                    "N'简体中文-繁體中文-😀'",
+                    "NULL",
+                ],
+                generated: false,
+            },
+            ColumnCase {
+                col: "text_latin1_value",
+                source_sql_type: "text COLLATE Latin1_General_100_CI_AS NULL",
+                destination_sql_type: "text COLLATE Latin1_General_100_CI_AS NULL",
+                type_name: "text",
+                source_values: [
+                    "''",
+                    "REPLICATE(CONVERT(varchar(max), 'z'), 1024)",
+                    "N'España français'",
+                    "NULL",
+                ],
+                generated: false,
+            },
+            ColumnCase {
+                col: "text_chinese_value",
+                source_sql_type: "text COLLATE Chinese_PRC_CI_AS NULL",
+                destination_sql_type: "text COLLATE Chinese_PRC_CI_AS NULL",
+                type_name: "text",
+                source_values: [
+                    "''",
+                    "REPLICATE(CONVERT(varchar(max), N'中') COLLATE Chinese_PRC_CI_AS, 512)",
+                    "N'中文数据传输'",
+                    "NULL",
+                ],
+                generated: false,
+            },
+            ColumnCase {
+                col: "ntext_value",
+                source_sql_type: "ntext COLLATE Latin1_General_100_CI_AS NULL",
+                destination_sql_type: "ntext COLLATE Latin1_General_100_CI_AS NULL",
+                type_name: "ntext",
+                source_values: [
+                    "N''",
+                    "REPLICATE(CONVERT(nvarchar(max), N'中'), 512)",
+                    "N'中文-日本語-대한민국-😀'",
+                    "NULL",
+                ],
+                generated: false,
+            },
+            ColumnCase {
+                col: "binary_value",
+                source_sql_type: "binary(8) NULL",
+                destination_sql_type: "binary(8) NULL",
+                type_name: "binary",
+                source_values: [
+                    "0x0000000000000000",
+                    "0xFFFFFFFFFFFFFFFF",
+                    "0x000102030405FEFF",
+                    "NULL",
+                ],
+                generated: false,
+            },
+            ColumnCase {
+                col: "varbinary_value",
+                source_sql_type: "varbinary(32) NULL",
+                destination_sql_type: "varbinary(32) NULL",
+                type_name: "varbinary",
+                source_values: [
+                    "0x",
+                    "0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF",
+                    "0x000102030405FEFF",
+                    "NULL",
+                ],
+                generated: false,
+            },
+            ColumnCase {
+                col: "image_value",
+                source_sql_type: "image NULL",
+                destination_sql_type: "image NULL",
+                type_name: "image",
+                source_values: [
+                    "0x",
+                    "CONVERT(varbinary(max), REPLICATE(CONVERT(varchar(max), 'x'), 1024))",
+                    "0x000102030405FEFF",
+                    "NULL",
+                ],
+                generated: false,
+            },
+            ColumnCase {
+                col: "uuid_value",
+                source_sql_type: "uniqueidentifier NULL",
+                destination_sql_type: "uniqueidentifier NULL",
+                type_name: "uniqueidentifier",
+                source_values: [
+                    "'00000000-0000-0000-0000-000000000000'",
+                    "'ffffffff-ffff-ffff-ffff-ffffffffffff'",
+                    "'550e8400-e29b-41d4-a716-446655440000'",
+                    "NULL",
+                ],
+                generated: false,
+            },
+            ColumnCase {
+                col: "xml_value",
+                source_sql_type: "xml NULL",
+                destination_sql_type: "xml NULL",
+                type_name: "xml",
+                source_values: [
+                    "CONVERT(xml, N'<a/>')",
+                    "CONVERT(xml, N'<根 属性=\"边界\">中文😀</根>')",
+                    "CONVERT(xml, N'<root><child>text &amp; value</child></root>')",
+                    "NULL",
+                ],
+                generated: false,
+            },
+            ColumnCase {
+                col: "date_value",
+                source_sql_type: "date NULL",
+                destination_sql_type: "date NULL",
+                type_name: "date",
+                source_values: [
+                    "CONVERT(date, '00010101')",
+                    "CONVERT(date, '99991231')",
+                    "CONVERT(date, '20240229')",
+                    "NULL",
+                ],
+                generated: false,
+            },
+            ColumnCase {
+                col: "time_value",
+                source_sql_type: "time(7) NULL",
+                destination_sql_type: "time(7) NULL",
+                type_name: "time",
+                source_values: [
+                    "CONVERT(time(7), '00:00:00')",
+                    "CONVERT(time(7), '23:59:59.9999999')",
+                    "CONVERT(time(7), '12:34:56.1234567')",
+                    "NULL",
+                ],
+                generated: false,
+            },
+            ColumnCase {
+                col: "smalldatetime_value",
+                source_sql_type: "smalldatetime NULL",
+                destination_sql_type: "smalldatetime NULL",
+                type_name: "smalldatetime",
+                source_values: [
+                    "CONVERT(smalldatetime, '19000101 00:00:00')",
+                    "CONVERT(smalldatetime, '20790606 23:59:00')",
+                    "CONVERT(smalldatetime, '20240814 12:34:00')",
+                    "NULL",
+                ],
+                generated: false,
+            },
+            ColumnCase {
+                col: "datetime_value",
+                source_sql_type: "datetime NULL",
+                destination_sql_type: "datetime NULL",
+                type_name: "datetime",
+                source_values: [
+                    "CONVERT(datetime, '17530101 00:00:00.000')",
+                    "CONVERT(datetime, '99991231 23:59:59.997')",
+                    "CONVERT(datetime, '20240814 12:34:56.123')",
+                    "NULL",
+                ],
+                generated: false,
+            },
+            ColumnCase {
+                col: "datetime2_value",
+                source_sql_type: "datetime2(7) NULL",
+                destination_sql_type: "datetime2(7) NULL",
+                type_name: "datetime2",
+                source_values: [
+                    "CONVERT(datetime2(7), '0001-01-01 00:00:00')",
+                    "CONVERT(datetime2(7), '9999-12-31 23:59:59.9999999')",
+                    "CONVERT(datetime2(7), '2024-08-14 12:34:56.1234567')",
+                    "NULL",
+                ],
+                generated: false,
+            },
+            ColumnCase {
+                col: "offset_value",
+                source_sql_type: "datetimeoffset(7) NULL",
+                destination_sql_type: "datetimeoffset(7) NULL",
+                type_name: "datetimeoffset",
+                source_values: [
+                    "CONVERT(datetimeoffset(7), '0001-01-01T00:00:00+00:00')",
+                    "CONVERT(datetimeoffset(7), '9999-12-31T23:59:59.9999999+00:00')",
+                    "CONVERT(datetimeoffset(7), '2024-08-14T12:34:56.1234567+14:00')",
+                    "NULL",
+                ],
+                generated: false,
+            },
+            ColumnCase {
+                col: "rowversion_value",
+                source_sql_type: "rowversion NOT NULL",
+                destination_sql_type: "binary(8) NOT NULL",
+                type_name: "rowversion",
+                source_values: ["", "", "", ""],
+                generated: true,
+            },
+        ]
+    }
 
     async fn create_pool() -> anyhow::Result<MssqlConnectionPool> {
         let endpoint =
@@ -30,872 +409,198 @@ mod test {
         endpoint.create_pool_with(1, 15).await
     }
 
-    fn col_type(type_name: &str) -> MssqlColType {
-        parse_mssql_col_type(type_name).unwrap()
-    }
-
     async fn cleanup(pool: &MssqlConnectionPool) -> anyhow::Result<()> {
         MssqlTestEndpoint::execute_batch(
             pool,
             &format!(
-                "DROP TABLE IF EXISTS {TIMESTAMP_TABLE};
-                 DROP TABLE IF EXISTS {BOUNDARY_TABLE};
-                 DROP TABLE IF EXISTS {TEST_TABLE};"
+                "DROP TABLE IF EXISTS {DESTINATION_TABLE};
+                 DROP TABLE IF EXISTS {SOURCE_TABLE};"
             ),
         )
         .await
     }
 
-    fn bindable_values() -> Vec<(&'static str, &'static str, ColValue)> {
-        vec![
-            ("id", "int", ColValue::Long(1)),
-            ("bit_value", "bit", ColValue::Bool(true)),
-            ("tinyint_value", "tinyint", ColValue::UnsignedTiny(u8::MAX)),
-            ("smallint_value", "smallint", ColValue::Short(-123)),
-            ("int_value", "int", ColValue::Long(456_789)),
-            ("bigint_value", "bigint", ColValue::LongLong(9_876_543_210)),
-            ("real_value", "real", ColValue::Float(1.25)),
-            ("float_value", "float", ColValue::Double(2.5)),
-            ("smallmoney_value", "smallmoney", ColValue::Double(12.34)),
-            ("money_value", "money", ColValue::Double(-56.78)),
-            (
-                "decimal_value",
-                "decimal",
-                ColValue::Decimal("12345678901234.5678".to_string()),
-            ),
-            (
-                "numeric_value",
-                "numeric",
-                ColValue::Decimal("12345678901234.123456".to_string()),
-            ),
-            (
-                "char_value",
-                "char",
-                ColValue::String("char-001".to_string()),
-            ),
-            (
-                "varchar_value",
-                "varchar",
-                ColValue::String("plain ' varchar".to_string()),
-            ),
-            (
-                "nchar_value",
-                "nchar",
-                ColValue::String("nchar001".to_string()),
-            ),
-            (
-                "nvarchar_value",
-                "nvarchar",
-                ColValue::String("Ape-DTS \u{6570}\u{636e}".to_string()),
-            ),
-            (
-                "text_value",
-                "text",
-                ColValue::String("legacy text".to_string()),
-            ),
-            (
-                "ntext_value",
-                "ntext",
-                ColValue::String("legacy \u{4e2d}\u{6587}".to_string()),
-            ),
-            (
-                "binary_value",
-                "binary",
-                ColValue::Blob(vec![0, 1, 2, 3, 4, 5, 254, 255]),
-            ),
-            (
-                "varbinary_value",
-                "varbinary",
-                ColValue::Blob(vec![0, 1, 2, 255]),
-            ),
-            (
-                "image_value",
-                "image",
-                ColValue::Blob(vec![202, 254, 1, 35]),
-            ),
-            (
-                "uuid_value",
-                "uniqueidentifier",
-                ColValue::String("550e8400-e29b-41d4-a716-446655440000".to_string()),
-            ),
-            (
-                "xml_value",
-                "xml",
-                ColValue::String("<root attr=\"value\"><child>text</child></root>".to_string()),
-            ),
-            (
-                "date_value",
-                "date",
-                ColValue::Date("2026-08-11".to_string()),
-            ),
-            (
-                "time_value",
-                "time",
-                ColValue::Time("12:34:56.1234567".to_string()),
-            ),
-            (
-                "smalldatetime_value",
-                "smalldatetime",
-                ColValue::DateTime("2026-08-11 12:34:00".to_string()),
-            ),
-            (
-                "datetime_value",
-                "datetime",
-                ColValue::DateTime("2026-08-11 12:34:56.123".to_string()),
-            ),
-            (
-                "datetime2_value",
-                "datetime2",
-                ColValue::DateTime("2026-08-11 12:34:56.1234567".to_string()),
-            ),
-            (
-                "offset_value",
-                "datetimeoffset",
-                ColValue::Timestamp("2026-08-11T12:34:56.1234567+08:00".to_string()),
-            ),
-        ]
-    }
-
-    fn expected_query_value(col: &str, value: &ColValue) -> ColValue {
-        match col {
-            "time_value" => ColValue::Time("12:34:56.123456700".to_string()),
-            "datetime_value" => ColValue::DateTime("2026-08-11 12:34:56.123333333".to_string()),
-            "datetime2_value" => ColValue::DateTime("2026-08-11 12:34:56.123456700".to_string()),
-            "offset_value" => {
-                ColValue::Timestamp("2026-08-11T12:34:56.123456700+08:00".to_string())
-            }
-            _ => value.clone(),
-        }
-    }
-
-    struct BoundaryCase {
-        col: &'static str,
-        sql_type: &'static str,
-        type_name: &'static str,
-        min: &'static str,
-        max: &'static str,
-    }
-
-    fn boundary_cases() -> Vec<BoundaryCase> {
-        vec![
-            BoundaryCase {
-                col: "bit_value",
-                sql_type: "bit",
-                type_name: "bit",
-                min: "0",
-                max: "TRUE",
-            },
-            BoundaryCase {
-                col: "tinyint_value",
-                sql_type: "tinyint",
-                type_name: "tinyint",
-                min: "0",
-                max: "255",
-            },
-            BoundaryCase {
-                col: "smallint_value",
-                sql_type: "smallint",
-                type_name: "smallint",
-                min: "-32768",
-                max: "32767",
-            },
-            BoundaryCase {
-                col: "int_value",
-                sql_type: "int",
-                type_name: "int",
-                min: "-2147483648",
-                max: "2147483647",
-            },
-            BoundaryCase {
-                col: "bigint_value",
-                sql_type: "bigint",
-                type_name: "bigint",
-                min: "-9223372036854775808",
-                max: "9223372036854775807",
-            },
-            BoundaryCase {
-                col: "real_value",
-                sql_type: "real",
-                type_name: "real",
-                min: "-3.4028235e38",
-                max: "3.4028235e38",
-            },
-            BoundaryCase {
-                col: "float_value",
-                sql_type: "float",
-                type_name: "float",
-                min: "-1.7976931348623157e308",
-                max: "1.7976931348623157e308",
-            },
-            BoundaryCase {
-                col: "smallmoney_value",
-                sql_type: "smallmoney",
-                type_name: "smallmoney",
-                min: "-214748.3648",
-                max: "214748.3647",
-            },
-            BoundaryCase {
-                col: "money_value",
-                sql_type: "money",
-                type_name: "money",
-                min: "-922337203685477.5808",
-                max: "922337203685477.5807",
-            },
-            BoundaryCase {
-                col: "decimal_value",
-                sql_type: "decimal(38, 0)",
-                type_name: "decimal",
-                min: "-99999999999999999999999999999999999999",
-                max: "99999999999999999999999999999999999999",
-            },
-            BoundaryCase {
-                col: "numeric_value",
-                sql_type: "numeric(38, 37)",
-                type_name: "numeric",
-                min: "-9.9999999999999999999999999999999999999",
-                max: "9.9999999999999999999999999999999999999",
-            },
-            BoundaryCase {
-                col: "char_value",
-                sql_type: "char(8)",
-                type_name: "char",
-                min: "00000000",
-                max: "zzzzzzzz",
-            },
-            BoundaryCase {
-                col: "varchar_value",
-                sql_type: "varchar(8)",
-                type_name: "varchar",
-                min: "",
-                max: "zzzzzzzz",
-            },
-            BoundaryCase {
-                col: "nchar_value",
-                sql_type: "nchar(8)",
-                type_name: "nchar",
-                min: "00000000",
-                max: "ZZZZZZZZ",
-            },
-            BoundaryCase {
-                col: "nvarchar_value",
-                sql_type: "nvarchar(8)",
-                type_name: "nvarchar",
-                min: "",
-                max: "\u{6570}\u{636e}\u{8fb9}\u{754c}",
-            },
-            BoundaryCase {
-                col: "text_value",
-                sql_type: "text",
-                type_name: "text",
-                min: "",
-                max: "legacy text",
-            },
-            BoundaryCase {
-                col: "ntext_value",
-                sql_type: "ntext",
-                type_name: "ntext",
-                min: "",
-                max: "legacy \u{4e2d}\u{6587}",
-            },
-            BoundaryCase {
-                col: "binary_value",
-                sql_type: "binary(8)",
-                type_name: "binary",
-                min: "0000000000000000",
-                max: "ffffffffffffffff",
-            },
-            BoundaryCase {
-                col: "varbinary_value",
-                sql_type: "varbinary(8)",
-                type_name: "varbinary",
-                min: "",
-                max: "ffffffffffffffff",
-            },
-            BoundaryCase {
-                col: "image_value",
-                sql_type: "image",
-                type_name: "image",
-                min: "",
-                max: "ffffffffffffffff",
-            },
-            BoundaryCase {
-                col: "uuid_value",
-                sql_type: "uniqueidentifier",
-                type_name: "uniqueidentifier",
-                min: "00000000-0000-0000-0000-000000000000",
-                max: "ffffffff-ffff-ffff-ffff-ffffffffffff",
-            },
-            BoundaryCase {
-                col: "xml_value",
-                sql_type: "xml",
-                type_name: "xml",
-                min: "<a/>",
-                max: "<z>text</z>",
-            },
-            BoundaryCase {
-                col: "date_value",
-                sql_type: "date",
-                type_name: "date",
-                min: "0001-01-01",
-                max: "9999-12-31",
-            },
-            BoundaryCase {
-                col: "time_value",
-                sql_type: "time(7)",
-                type_name: "time",
-                min: "00:00:00",
-                max: "23:59:59.9999999",
-            },
-            BoundaryCase {
-                col: "smalldatetime_value",
-                sql_type: "smalldatetime",
-                type_name: "smalldatetime",
-                min: "1900-01-01 00:00:00",
-                max: "2079-06-06 23:59:00",
-            },
-            BoundaryCase {
-                col: "datetime_value",
-                sql_type: "datetime",
-                type_name: "datetime",
-                min: "1753-01-01 00:00:00",
-                max: "9999-12-31 23:59:59.997",
-            },
-            BoundaryCase {
-                col: "datetime2_value",
-                sql_type: "datetime2(7)",
-                type_name: "datetime2",
-                min: "0001-01-01 00:00:00",
-                max: "9999-12-31 23:59:59.9999999",
-            },
-            BoundaryCase {
-                col: "offset_value",
-                sql_type: "datetimeoffset(7)",
-                type_name: "datetimeoffset",
-                min: "0001-01-01T00:00:00+00:00",
-                max: "9999-12-31T23:59:59.9999999+00:00",
-            },
-        ]
-    }
-
-    fn expected_boundary_query_value(type_name: &str, input: &str, parsed: &ColValue) -> ColValue {
-        match (type_name, input) {
-            ("datetime", "9999-12-31 23:59:59.997") => {
-                ColValue::DateTime("9999-12-31 23:59:59.996666666".to_string())
-            }
-            ("money" | "smallmoney", _) => ColValue::Double(input.parse().unwrap()),
-            _ => parsed.clone(),
-        }
-    }
-
-    fn assert_bind_rejected(type_name: &str, value: ColValue) {
-        let mut query = Query::new("SELECT @P1");
-        assert!(
-            MssqlColValueConvertor::bind(&mut query, &value, &col_type(type_name)).is_err(),
-            "MSSQL {type_name} accepted invalid {value:?}"
-        );
-    }
-
-    #[tokio::test]
-    #[serial]
-    async fn all_mssql_column_types_have_explicit_conversion_behavior() -> anyhow::Result<()> {
-        let pool = create_pool().await?;
-        cleanup(&pool).await?;
-        MssqlTestEndpoint::execute_batch(
-            &pool,
-            &format!(
-                "CREATE TABLE {TEST_TABLE} (
-                    [id] int NOT NULL PRIMARY KEY,
-                    [bit_value] bit NULL,
-                    [tinyint_value] tinyint NULL,
-                    [smallint_value] smallint NULL,
-                    [int_value] int NULL,
-                    [bigint_value] bigint NULL,
-                    [real_value] real NULL,
-                    [float_value] float NULL,
-                    [smallmoney_value] smallmoney NULL,
-                    [money_value] money NULL,
-                    [decimal_value] decimal(18, 4) NULL,
-                    [numeric_value] numeric(20, 6) NULL,
-                    [char_value] char(8) NULL,
-                    [varchar_value] varchar(100) NULL,
-                    [nchar_value] nchar(8) NULL,
-                    [nvarchar_value] nvarchar(100) NULL,
-                    [text_value] text NULL,
-                    [ntext_value] ntext NULL,
-                    [binary_value] binary(8) NULL,
-                    [varbinary_value] varbinary(100) NULL,
-                    [image_value] image NULL,
-                    [uuid_value] uniqueidentifier NULL,
-                    [xml_value] xml NULL,
-                    [date_value] date NULL,
-                    [time_value] time(7) NULL,
-                    [smalldatetime_value] smalldatetime NULL,
-                    [datetime_value] datetime NULL,
-                    [datetime2_value] datetime2(7) NULL,
-                    [offset_value] datetimeoffset(7) NULL,
-                    [sql_variant_value] sql_variant NULL,
-                    [geometry_value] geometry NULL,
-                    [geography_value] geography NULL,
-                    [hierarchyid_value] hierarchyid NULL,
-                    [rowversion_value] rowversion NOT NULL
-                 );
-                 CREATE TABLE {TIMESTAMP_TABLE} (
-                    [id] int NOT NULL PRIMARY KEY,
-                    [timestamp_value] timestamp NOT NULL
-                 );"
-            ),
-        )
-        .await?;
-
-        let result = async {
-            let values = bindable_values();
-            let cols = values
-                .iter()
-                .map(|(col, _, _)| format!("[{col}]"))
-                .collect::<Vec<_>>();
-            let placeholders = (1..=values.len())
-                .map(|index| format!("@P{index}"))
-                .collect::<Vec<_>>();
-            let mut query = Query::new(format!(
-                "INSERT INTO {TEST_TABLE} ({}) VALUES ({})",
-                cols.join(", "),
-                placeholders.join(", ")
-            ));
-            for (_, type_name, value) in &values {
-                MssqlColValueConvertor::bind(&mut query, value, &col_type(type_name))?;
-            }
-
-            let mut connection = pool.get().await?;
-            query.execute(connection.client_mut()).await?;
-            connection
-                .client_mut()
-                .simple_query(format!(
-                    "UPDATE {TEST_TABLE} SET
-                        [sql_variant_value] = CONVERT(sql_variant, 42),
-                        [geometry_value] = geometry::Point(1, 2, 0),
-                        [geography_value] = geography::Point(1, 2, 4326),
-                        [hierarchyid_value] = hierarchyid::Parse('/1/')
-                     WHERE [id] = 1;
-                     INSERT INTO {TIMESTAMP_TABLE} ([id]) VALUES (1);"
-                ))
-                .await?
-                .into_results()
-                .await?;
-
-            let row = connection
-                .client_mut()
-                .query(
-                    format!(
-                        "SELECT {}, [rowversion_value] FROM {TEST_TABLE} WHERE [id] = 1",
-                        cols.join(", ")
-                    ),
-                    &[],
-                )
-                .await?
-                .into_row()
-                .await?
-                .context("MSSQL value conversion query returned no row")?;
-            for (col, _, value) in &values {
-                let actual = MssqlColValueConvertor::from_query(&row, col)?;
-                let expected = expected_query_value(col, value);
-                ensure!(
-                    actual.is_same_value(&expected),
-                    "unexpected converted value for {col}: expected {expected:?}, got {actual:?}"
-                );
-            }
-
-            let rowversion = MssqlColValueConvertor::from_query(&row, "rowversion_value")?;
-            ensure!(
-                matches!(rowversion, ColValue::Blob(ref value) if value.len() == 8),
-                "rowversion should convert to an 8-byte blob, got {rowversion:?}"
-            );
-            drop(connection);
-            {
-                let mut meta_manager = MssqlTestEndpoint::create_meta_manager(pool.clone()).await?;
-                let tb_meta = meta_manager
-                    .get_tb_meta("dbo", "ape_dts_col_value_conversion_test")
-                    .await?;
-                for (col, expected_type) in [
-                    ("sql_variant_value", MssqlColType::SSVariant),
-                    ("geometry_value", MssqlColType::Udt),
-                    ("geography_value", MssqlColType::Udt),
-                    ("hierarchyid_value", MssqlColType::Udt),
-                ] {
-                    ensure!(
-                        tb_meta.get_col_type(col)? == &expected_type,
-                        "unexpected metadata type for {col}"
-                    );
-                    let error = MssqlColValueConvertor::from_str(&expected_type, "unsupported")
-                        .expect_err("unsupported MSSQL type should return a conversion error");
-                    ensure!(
-                        error.to_string().contains("not supported"),
-                        "unexpected conversion error for {col}: {error:#}"
-                    );
-                }
-            }
-            let mut connection = pool.get().await?;
-
-            let timestamp_row = connection
-                .client_mut()
-                .query(
-                    format!("SELECT [timestamp_value] FROM {TIMESTAMP_TABLE} WHERE [id] = 1"),
-                    &[],
-                )
-                .await?
-                .into_row()
-                .await?
-                .context("MSSQL timestamp conversion query returned no row")?;
-            let timestamp = MssqlColValueConvertor::from_query(&timestamp_row, "timestamp_value")?;
-            ensure!(
-                matches!(timestamp, ColValue::Blob(ref value) if value.len() == 8),
-                "timestamp should convert to an 8-byte blob, got {timestamp:?}"
-            );
-
-            let tb_meta = MssqlTbMeta {
-                basic: RdbTbMeta {
-                    schema: "dbo".to_string(),
-                    tb: "ape_dts_col_value_conversion_test".to_string(),
-                    cols: vec![
-                        "bit_value".to_string(),
-                        "decimal_value".to_string(),
-                        "nvarchar_value".to_string(),
-                    ],
-                    ..Default::default()
-                },
-                ..Default::default()
-            };
-            let row_data = RowData::from_mssql_row(&row, &tb_meta, &None, Some(7))?;
-            ensure!(row_data.chunk_id == 7, "unexpected RowData chunk id");
-            let after = row_data.require_after()?;
-            ensure!(after.get("bit_value") == Some(&ColValue::Bool(true)));
-            ensure!(
-                after.get("nvarchar_value")
-                    == Some(&ColValue::String("Ape-DTS \u{6570}\u{636e}".to_string()))
-            );
-
-            let null_values = values
-                .iter()
-                .map(|(col, type_name, _)| {
-                    if *col == "id" {
-                        (*col, *type_name, ColValue::Long(2))
-                    } else {
-                        (*col, *type_name, ColValue::None)
-                    }
-                })
-                .collect::<Vec<_>>();
-            let mut query = Query::new(format!(
-                "INSERT INTO {TEST_TABLE} ({}) VALUES ({})",
-                cols.join(", "),
-                placeholders.join(", ")
-            ));
-            for (_, type_name, value) in &null_values {
-                MssqlColValueConvertor::bind(&mut query, value, &col_type(type_name))?;
-            }
-            query.execute(connection.client_mut()).await?;
-
-            let null_row = connection
-                .client_mut()
-                .query(
-                    format!(
-                        "SELECT {} FROM {TEST_TABLE} WHERE [id] = 2",
-                        cols.join(", ")
-                    ),
-                    &[],
-                )
-                .await?
-                .into_row()
-                .await?
-                .context("MSSQL typed NULL query returned no row")?;
-            for (col, _, _) in null_values.iter().filter(|(col, _, _)| *col != "id") {
-                ensure!(
-                    MssqlColValueConvertor::from_query(&null_row, col)? == ColValue::None,
-                    "unexpected typed NULL conversion for {col}"
-                );
-            }
-
-            anyhow::Ok(())
-        }
-        .await;
-
-        let cleanup_result = cleanup(&pool).await;
-        result?;
-        cleanup_result
-    }
-
-    #[tokio::test]
-    #[serial]
-    async fn from_str_and_bind_round_trip_all_supported_type_boundaries() -> anyhow::Result<()> {
-        let pool = create_pool().await?;
-        cleanup(&pool).await?;
-        let cases = boundary_cases();
-        let columns = cases
+    async fn prepare(pool: &MssqlConnectionPool, cases: &[ColumnCase]) -> anyhow::Result<()> {
+        let source_columns = cases
             .iter()
-            .map(|case| format!("[{}] {} NULL", case.col, case.sql_type))
+            .map(|case| format!("[{}] {}", case.col, case.source_sql_type))
             .collect::<Vec<_>>();
+        let destination_columns = cases
+            .iter()
+            .map(|case| format!("[{}] {}", case.col, case.destination_sql_type))
+            .collect::<Vec<_>>();
+        let inserted_cases = cases
+            .iter()
+            .filter(|case| !case.generated)
+            .collect::<Vec<_>>();
+        let inserted_columns = inserted_cases
+            .iter()
+            .map(|case| format!("[{}]", case.col))
+            .collect::<Vec<_>>();
+        let source_rows = (0..ROW_COUNT)
+            .map(|row_index| {
+                let values = inserted_cases
+                    .iter()
+                    .map(|case| case.source_values[row_index])
+                    .collect::<Vec<_>>();
+                format!("({}, {})", row_index + 1, values.join(", "))
+            })
+            .collect::<Vec<_>>();
+
         MssqlTestEndpoint::execute_batch(
-            &pool,
+            pool,
             &format!(
-                "CREATE TABLE {BOUNDARY_TABLE} (
+                "CREATE TABLE {SOURCE_TABLE} (
                     [case_id] tinyint NOT NULL PRIMARY KEY,
                     {}
-                 );",
-                columns.join(",\n")
+                 );
+                 CREATE TABLE {DESTINATION_TABLE} (
+                    [case_id] tinyint NOT NULL PRIMARY KEY,
+                    {}
+                 );
+                 INSERT INTO {SOURCE_TABLE} ([case_id], {}) VALUES {};",
+                source_columns.join(",\n"),
+                destination_columns.join(",\n"),
+                inserted_columns.join(", "),
+                source_rows.join(",\n")
             ),
         )
-        .await?;
+        .await
+    }
+
+    fn col_type(type_name: &str) -> anyhow::Result<MssqlColType> {
+        parse_mssql_col_type(type_name)
+    }
+
+    fn column_names(cases: &[ColumnCase]) -> Vec<String> {
+        cases.iter().map(|case| format!("[{}]", case.col)).collect()
+    }
+
+    async fn copy_source_rows(
+        client: &mut MssqlClient,
+        cases: &[ColumnCase],
+    ) -> anyhow::Result<Vec<(u8, Vec<ColValue>)>> {
+        let columns = column_names(cases);
+        let rows = client
+            .query(
+                format!(
+                    "SELECT [case_id], {} FROM {SOURCE_TABLE} ORDER BY [case_id]",
+                    columns.join(", ")
+                ),
+                &[],
+            )
+            .await?
+            .into_first_result()
+            .await?;
+        ensure!(rows.len() == ROW_COUNT, "unexpected source row count");
+
+        let placeholders = (2..=cases.len() + 1)
+            .map(|index| format!("@P{index}"))
+            .collect::<Vec<_>>();
+        let mut expected_rows = Vec::with_capacity(rows.len());
+        for row in rows {
+            let case_id = row
+                .try_get::<u8, _>("case_id")?
+                .context("source case_id is NULL")?;
+            let mut source_values = Vec::with_capacity(cases.len());
+            let mut parsed_values = Vec::with_capacity(cases.len());
+            for case in cases {
+                let case_col_type = col_type(case.type_name)?;
+                let source_value =
+                    MssqlColValueConvertor::from_query(&row, case.col, &case_col_type)?;
+                let option_string = source_value.to_option_string();
+                let parsed_value = match option_string.as_deref() {
+                    Some(value) => MssqlColValueConvertor::from_str(&case_col_type, value)
+                        .with_context(|| {
+                            format!(
+                                "failed to parse {} value {value:?} from source row {case_id}",
+                                case.col
+                            )
+                        })?,
+                    None => ColValue::None,
+                };
+                source_values.push(source_value);
+                parsed_values.push(parsed_value);
+            }
+
+            let mut insert = Query::new(format!(
+                "INSERT INTO {DESTINATION_TABLE} ([case_id], {}) VALUES (@P1, {})",
+                columns.join(", "),
+                placeholders.join(", ")
+            ));
+            insert.bind(case_id);
+            for (case, value) in cases.iter().zip(&parsed_values) {
+                MssqlColValueConvertor::bind(&mut insert, value, &col_type(case.type_name)?)
+                    .with_context(|| {
+                        format!("failed to bind {} for source row {case_id}", case.col)
+                    })?;
+            }
+            insert.execute(client).await?;
+            expected_rows.push((case_id, source_values));
+        }
+
+        Ok(expected_rows)
+    }
+
+    async fn assert_destination_rows(
+        client: &mut MssqlClient,
+        cases: &[ColumnCase],
+        expected_rows: &[(u8, Vec<ColValue>)],
+    ) -> anyhow::Result<()> {
+        let columns = column_names(cases);
+        let rows = client
+            .query(
+                format!(
+                    "SELECT [case_id], {} FROM {DESTINATION_TABLE} ORDER BY [case_id]",
+                    columns.join(", ")
+                ),
+                &[],
+            )
+            .await?
+            .into_first_result()
+            .await?;
+        ensure!(
+            rows.len() == expected_rows.len(),
+            "unexpected destination row count"
+        );
+
+        for (row, (expected_case_id, expected_values)) in rows.iter().zip(expected_rows) {
+            let actual_case_id = row
+                .try_get::<u8, _>("case_id")?
+                .context("destination case_id is NULL")?;
+            ensure!(actual_case_id == *expected_case_id, "case_id changed");
+            for (case, expected) in cases.iter().zip(expected_values) {
+                let actual =
+                    MssqlColValueConvertor::from_query(row, case.col, &col_type(case.type_name)?)?;
+                ensure!(
+                    actual.is_same_value(expected),
+                    "{} row {} changed after from_query -> ColValue -> Option<String> -> from_str -> bind: expected {expected:?}, got {actual:?}",
+                    case.col,
+                    actual_case_id
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn all_supported_values_round_trip_from_database_through_string_and_bind(
+    ) -> anyhow::Result<()> {
+        let pool = create_pool().await?;
+        cleanup(&pool).await?;
+        let cases = conversion_cases();
+        prepare(&pool, &cases).await?;
 
         let result = async {
-            let col_names = cases
-                .iter()
-                .map(|case| format!("[{}]", case.col))
-                .collect::<Vec<_>>();
-            let placeholders = (2..=cases.len() + 1)
-                .map(|index| format!("@P{index}"))
-                .collect::<Vec<_>>();
-
-            for (case_id, select_value) in [(1_u8, false), (2_u8, true)] {
-                let parsed_values = cases
-                    .iter()
-                    .map(|case| {
-                        let input = if select_value { case.max } else { case.min };
-                        MssqlColValueConvertor::from_str(&col_type(case.type_name), input)
-                            .with_context(|| {
-                                format!(
-                                    "failed to parse {} boundary {input:?}",
-                                    case.type_name
-                                )
-                            })
-                    })
-                    .collect::<anyhow::Result<Vec<_>>>()?;
-                let mut query = Query::new(format!(
-                    "INSERT INTO {BOUNDARY_TABLE} ([case_id], {}) VALUES (@P1, {})",
-                    col_names.join(", "),
-                    placeholders.join(", ")
-                ));
-                query.bind(case_id);
-                for (case, value) in cases.iter().zip(&parsed_values) {
-                    MssqlColValueConvertor::bind(
-                        &mut query,
-                        value,
-                        &col_type(case.type_name),
-                    )?;
-                }
-                let mut connection = pool.get().await?;
-                query.execute(connection.client_mut()).await?;
-            }
-
             let mut connection = pool.get().await?;
-            for (case_id, select_value) in [(1_u8, false), (2_u8, true)] {
-                let row = connection
-                    .client_mut()
-                    .query(
-                        format!(
-                            "SELECT {} FROM {BOUNDARY_TABLE} WHERE [case_id] = @P1",
-                            col_names.join(", ")
-                        ),
-                        &[&case_id],
-                    )
-                    .await?
-                    .into_row()
-                    .await?
-                    .context("MSSQL boundary query returned no row")?;
-                for case in &cases {
-                    let input = if select_value { case.max } else { case.min };
-                    let parsed =
-                        MssqlColValueConvertor::from_str(&col_type(case.type_name), input)?;
-                    let expected = expected_boundary_query_value(case.type_name, input, &parsed);
-                    let actual = MssqlColValueConvertor::from_query(&row, case.col)?;
-                    ensure!(
-                        actual.is_same_value(&expected),
-                        "unexpected {} boundary round trip for {}: input {input:?}, expected {expected:?}, got {actual:?}",
-                        if select_value { "maximum" } else { "minimum" },
-                        case.type_name
-                    );
-                }
-            }
-            drop(connection);
-
-            for type_name in ["rowversion", "timestamp"] {
-                let expected = ColValue::Blob(vec![0, 1, 2, 3, 4, 5, 254, 255]);
-                let parsed = MssqlColValueConvertor::from_str(
-                    &col_type(type_name),
-                    "000102030405feff",
-                )?;
-                ensure!(parsed == expected, "unexpected {type_name} string conversion");
-                let mut query = Query::new("SELECT @P1 AS [value]");
-                MssqlColValueConvertor::bind(&mut query, &parsed, &col_type(type_name))?;
-                let mut connection = pool.get().await?;
-                let row = query
-                    .query(connection.client_mut())
-                    .await?
-                    .into_row()
-                    .await?
-                    .context("MSSQL binary alias query returned no row")?;
-                ensure!(
-                    MssqlColValueConvertor::from_query(&row, "value")? == expected,
-                    "unexpected {type_name} bind conversion"
-                );
-            }
-
-            for type_name in cases
-                .iter()
-                .map(|case| case.type_name)
-                .chain(["rowversion", "timestamp"])
-            {
-                let null = ColValue::None;
-                let mut query = Query::new(
-                    "SELECT CASE WHEN @P1 IS NULL THEN CONVERT(bit, 1) ELSE CONVERT(bit, 0) END AS [is_null]",
-                );
-                MssqlColValueConvertor::bind(&mut query, &null, &col_type(type_name))?;
-                let mut connection = pool.get().await?;
-                let row = query
-                    .query(connection.client_mut())
-                    .await?
-                    .into_row()
-                    .await?
-                    .context("MSSQL typed NULL boundary query returned no row")?;
-                ensure!(
-                    MssqlColValueConvertor::from_query_required_bool(&row, "is_null")?,
-                    "typed NULL bind failed for {type_name}"
-                );
-            }
-
-            anyhow::Ok(())
+            let expected_rows = copy_source_rows(connection.client_mut(), &cases).await?;
+            assert_destination_rows(connection.client_mut(), &cases, &expected_rows).await
         }
         .await;
 
         let cleanup_result = cleanup(&pool).await;
         result?;
         cleanup_result
-    }
-
-    #[tokio::test]
-    #[serial]
-    async fn invalid_from_str_and_bind_boundaries_are_rejected() -> anyhow::Result<()> {
-        let invalid_strings = [
-            ("bit", "2"),
-            ("bit", " true "),
-            ("tinyint", "-1"),
-            ("tinyint", "256"),
-            ("smallint", "-32769"),
-            ("smallint", "32768"),
-            ("int", "-2147483649"),
-            ("int", "2147483648"),
-            ("bigint", "-9223372036854775809"),
-            ("bigint", "9223372036854775808"),
-            ("real", "NaN"),
-            ("real", "3.5e38"),
-            ("float", "inf"),
-            ("money", "-inf"),
-            ("decimal", "999999999999999999999999999999999999999"),
-            ("numeric", "0.11111111111111111111111111111111111111"),
-            ("decimal", "1e2"),
-            ("varbinary", "0"),
-            ("binary", "zz"),
-            ("uniqueidentifier", "not-a-uuid"),
-            ("date", "2026-02-29"),
-            ("time", "24:00:00"),
-            ("datetime", "2026-08-11T12:34:56"),
-            ("datetime2", "2026-02-29 00:00:00"),
-            ("datetimeoffset", "2026-08-11 12:34:56"),
-        ];
-        for (type_name, input) in invalid_strings {
-            ensure!(
-                MssqlColValueConvertor::from_str(&col_type(type_name), input).is_err(),
-                "MSSQL {type_name} accepted invalid string {input:?}"
-            );
-        }
-
-        for (type_name, value) in [
-            ("bit", ColValue::Long(2)),
-            ("tinyint", ColValue::Long(-1)),
-            ("tinyint", ColValue::UnsignedShort(256)),
-            ("smallint", ColValue::Long(i16::MAX as i32 + 1)),
-            ("int", ColValue::UnsignedLong(i32::MAX as u32 + 1)),
-            ("bigint", ColValue::UnsignedLongLong(u64::MAX)),
-            ("real", ColValue::Double(f64::MAX)),
-            ("real", ColValue::Float(f32::NAN)),
-            ("float", ColValue::Double(f64::INFINITY)),
-            ("money", ColValue::Double(f64::NAN)),
-            ("decimal", ColValue::Decimal("9".repeat(39))),
-            (
-                "numeric",
-                ColValue::Decimal(format!("0.{}", "1".repeat(38))),
-            ),
-            ("decimal", ColValue::Decimal("1e2".to_string())),
-            ("decimal", ColValue::Double(1.0)),
-            ("nvarchar", ColValue::Double(f64::NAN)),
-            ("varchar", ColValue::RawString(vec![0xff])),
-            ("text", ColValue::Blob(vec![1])),
-            ("varbinary", ColValue::String("00ff".to_string())),
-            ("uniqueidentifier", ColValue::String("invalid".to_string())),
-            ("xml", ColValue::Long(1)),
-            ("date", ColValue::Date("2026-02-29".to_string())),
-            ("time", ColValue::Time("24:00:00".to_string())),
-            (
-                "datetime",
-                ColValue::DateTime("2026-08-11T12:34:56".to_string()),
-            ),
-            (
-                "datetimeoffset",
-                ColValue::Timestamp("2026-08-11 12:34:56".to_string()),
-            ),
-        ] {
-            assert_bind_rejected(type_name, value);
-        }
-
-        for unsupported in [
-            MssqlColType::Null,
-            MssqlColType::Intn,
-            MssqlColType::Floatn,
-            MssqlColType::Udt,
-            MssqlColType::SSVariant,
-        ] {
-            ensure!(
-                MssqlColValueConvertor::from_str(&unsupported, "1").is_err(),
-                "unsupported type {unsupported:?} was parsed"
-            );
-            let mut query = Query::new("SELECT @P1");
-            ensure!(
-                MssqlColValueConvertor::bind(&mut query, &ColValue::None, &unsupported).is_err(),
-                "unsupported type {unsupported:?} was bound"
-            );
-        }
-
-        assert_bind_rejected("int", ColValue::UnchangedToast);
-
-        let pool = create_pool().await?;
-        for (type_name, sql_type, input) in [
-            ("smallmoney", "smallmoney", "214748.3648"),
-            ("money", "money", "922337203685477.5808"),
-            ("decimal", "decimal(5, 2)", "1000.00"),
-            ("varchar", "varchar(8)", "123456789"),
-            ("nvarchar", "nvarchar(8)", "123456789"),
-            ("varbinary", "varbinary(8)", "000102030405060708"),
-            ("binary", "binary(8)", "000102030405060708"),
-            ("smalldatetime", "smalldatetime", "2079-06-07 00:00:00"),
-            ("datetime", "datetime", "1752-12-31 23:59:59"),
-            (
-                "datetimeoffset",
-                "datetimeoffset(7)",
-                "2026-08-11T12:34:56+15:00",
-            ),
-            ("xml", "xml", "<unclosed>"),
-        ] {
-            let value = MssqlColValueConvertor::from_str(&col_type(type_name), input)?;
-            let mut query = Query::new(format!(
-                "DECLARE @values TABLE ([value] {sql_type});
-                 INSERT INTO @values ([value]) VALUES (@P1);"
-            ));
-            MssqlColValueConvertor::bind(&mut query, &value, &col_type(type_name))?;
-            let mut connection = pool.get().await?;
-            let result = query.execute(connection.client_mut()).await;
-            ensure!(
-                result.is_err(),
-                "SQL Server accepted out-of-range {type_name} value {input:?}"
-            );
-        }
-
-        Ok(())
     }
 }
