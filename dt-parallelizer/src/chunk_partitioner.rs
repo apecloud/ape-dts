@@ -280,7 +280,7 @@ impl ChunkPartitioner {
         target_partitions: usize,
         config: &ChunkPartitionerRebalanceConfig,
     ) -> anyhow::Result<Vec<Vec<RowData>>> {
-        if target_partitions <= 1 {
+        if target_partitions == 0 {
             return Ok(vec![data]);
         }
 
@@ -1005,22 +1005,23 @@ mod tests {
     }
 
     #[test]
-    fn target_partitions_one_returns_single_partition() {
-        let data = vec![
-            row(1, RowType::Insert),
-            row(2, RowType::Insert),
-            row(1, RowType::Insert),
-        ];
+    fn target_partitions_one_accepts_single_row() {
+        for strategy in [
+            ChunkPartitionerRebalanceStrategy::None,
+            ChunkPartitionerRebalanceStrategy::ChunkLargestFirst,
+            ChunkPartitionerRebalanceStrategy::AutoSplit,
+            ChunkPartitionerRebalanceStrategy::TableMinRows,
+            ChunkPartitionerRebalanceStrategy::TableEven,
+        ] {
+            let partitions = ChunkPartitioner::partition_dml(
+                vec![row(1, RowType::Insert)],
+                1,
+                &config(strategy),
+            )
+            .unwrap();
 
-        let partitions = ChunkPartitioner::partition_dml(
-            data,
-            1,
-            &config(ChunkPartitionerRebalanceStrategy::AutoSplit),
-        )
-        .unwrap();
-
-        assert_eq!(partitions.len(), 1);
-        assert_eq!(partitions[0].len(), 3);
+            assert_eq!(chunk_ids(&partitions), vec![vec![1]]);
+        }
     }
 
     #[test]
