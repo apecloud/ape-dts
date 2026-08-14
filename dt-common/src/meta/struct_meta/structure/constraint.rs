@@ -8,6 +8,11 @@ pub struct Constraint {
     pub constraint_name: String,
     pub constraint_type: ConstraintType,
     pub definition: String,
+    /// Referenced object for a foreign-key constraint. These fields are empty
+    /// for non-foreign constraints.
+    pub referenced_database_name: String,
+    pub referenced_schema_name: String,
+    pub referenced_table_name: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

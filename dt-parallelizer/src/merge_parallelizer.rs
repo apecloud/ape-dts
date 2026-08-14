@@ -7,10 +7,10 @@ use dt_common::{
     config::sinker_config::BasicSinkerConfig,
     error::DtError,
     meta::{
-        dcl_meta::dcl_data::DclData, ddl_meta::ddl_data::DdlData, dt_data::DtItem,
-        dt_queue::DtQueue, rdb_meta_manager::RdbMetaManager, row_data::RowData, row_type::RowType,
-        struct_meta::struct_data::StructData,
+        dcl_meta::dcl_data::DclData, ddl_meta::ddl_data::DdlData, rdb_meta_manager::RdbMetaManager,
+        row_data::RowData, row_type::RowType, struct_meta::struct_data::StructData,
     },
+    queue::{DtQueue, DtQueueBatch},
 };
 use dt_connector::Sinker;
 
@@ -51,8 +51,8 @@ impl Parallelizer for MergeParallelizer {
         "MergeParallelizer".to_string()
     }
 
-    async fn drain(&mut self, buffer: &DtQueue) -> anyhow::Result<Vec<DtItem>> {
-        self.base_parallelizer.drain(buffer).await
+    async fn drain(&mut self, queue: &DtQueue) -> anyhow::Result<DtQueueBatch> {
+        self.base_parallelizer.drain(queue).await
     }
 
     async fn sink_dml(

@@ -2,8 +2,9 @@ use std::{collections::BTreeMap, path::Path};
 
 use anyhow::{bail, Context, Result};
 use clap::ValueEnum;
-use dt_common::error::{DtError, DtResultExt, ErrorCode, Stage};
 use url::Url;
+
+use dt_common::error::{DtError, DtResultExt, ErrorCode, Stage};
 
 const SERVER_ID_MIN: u64 = 10001;
 const SERVER_ID_MAX: u64 = 4_294_836_224;

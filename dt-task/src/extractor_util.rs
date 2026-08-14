@@ -17,12 +17,12 @@ use dt_common::{
     },
     error::{DtError, DtResultExt, ErrorCode},
     meta::{
-        avro::avro_converter::AvroConverter, dt_queue::DtQueue,
-        mysql::mysql_meta_manager::MysqlMetaManager, pg::pg_meta_manager::PgMetaManager,
-        rdb_meta_manager::RdbMetaManager, redis::redis_statistic_type::RedisStatisticType,
-        syncer::Syncer,
+        avro::avro_converter::AvroConverter, mysql::mysql_meta_manager::MysqlMetaManager,
+        pg::pg_meta_manager::PgMetaManager, rdb_meta_manager::RdbMetaManager,
+        redis::redis_statistic_type::RedisStatisticType, syncer::Syncer,
     },
     monitor::task_monitor_handle::TaskMonitorHandle,
+    queue::DtQueue,
     rdb_filter::RdbFilter,
     time_filter::TimeFilter,
     utils::redis_util::RedisUtil,
@@ -63,9 +63,8 @@ use dt_connector::{
     Extractor,
 };
 
-use crate::task_util::ConnClient;
-
 use super::task_util::TaskUtil;
+use crate::task_util::ConnClient;
 
 pub type PartitionCols = HashMap<(String, String), String>;
 
@@ -104,7 +103,7 @@ impl ExtractorUtil {
         config: &TaskConfig,
         extractor_config: &ExtractorConfig,
         extractor_client: ConnClient,
-        buffer: Arc<DtQueue>,
+        queue_writer: DtQueue,
         shut_down: Arc<AtomicBool>,
         syncer: Arc<Mutex<Syncer>>,
         monitor: TaskMonitorHandle,
@@ -114,7 +113,7 @@ impl ExtractorUtil {
         recovery: Option<Arc<dyn Recovery + Send + Sync>>,
     ) -> anyhow::Result<Box<dyn Extractor + Send>> {
         let base_extractor = BaseExtractor {
-            buffer,
+            queue_writer,
             router,
             shut_down,
         };
