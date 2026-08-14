@@ -1,6 +1,7 @@
 pub mod base_pipeline;
 pub mod checker_pipeline;
-pub mod lua_processor;
+pub mod component;
+pub mod dependency_pipeline;
 
 use async_trait::async_trait;
 

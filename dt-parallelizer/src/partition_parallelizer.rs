@@ -1,12 +1,9 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use dt_common::meta::{
-    dt_data::{DtData, DtItem},
-    dt_queue::DtQueue,
-    row_data::RowData,
-};
+use dt_common::meta::{dt_data::DtData, row_data::RowData};
 use dt_common::monitor::counter::Counter;
+use dt_common::queue::{DtQueue, DtQueueBatch};
 use dt_connector::Sinker;
 
 use super::{base_parallelizer::BaseParallelizer, rdb_partitioner::RdbPartitioner};
@@ -28,15 +25,15 @@ impl Parallelizer for PartitionParallelizer {
         self.partitioner.close().await
     }
 
-    async fn drain(&mut self, buffer: &DtQueue) -> anyhow::Result<Vec<DtItem>> {
-        let mut data = Vec::new();
+    async fn drain(&mut self, queue: &DtQueue) -> anyhow::Result<DtQueueBatch> {
+        let mut data = DtQueueBatch::default();
         let mut record_size_counter = Counter::new(0, 0);
         while let Some(item) = self
             .base_parallelizer
-            .pop(buffer, &mut record_size_counter)
+            .pop(queue, &mut record_size_counter)
             .await?
         {
-            match &item.dt_data {
+            match &item.item.dt_data {
                 DtData::Dml { row_data } => {
                     if self.parallel_size > 1
                         && !self.partitioner.can_be_partitioned(row_data).await?
@@ -52,7 +49,7 @@ impl Parallelizer for PartitionParallelizer {
                     data.push(item);
                 }
 
-                _ => {}
+                _ => data.consume(item),
             }
         }
 

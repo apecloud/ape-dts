@@ -388,6 +388,18 @@ impl RdbRouterInner {
         match &mut struct_data.statement {
             StructStatement::MysqlCreateTable(s) => {
                 let (schema, tb) = (s.table.database_name.clone(), s.table.table_name.clone());
+                for constraint in &mut s.constraints {
+                    if !constraint.referenced_table_name.is_empty() {
+                        let (_, dst_schema, dst_tb) = self.get_tb_map_with_db(
+                            EMPTY_DB,
+                            &constraint.referenced_database_name,
+                            &constraint.referenced_table_name,
+                        );
+                        let (dst_schema, dst_tb) = (dst_schema.to_string(), dst_tb.to_string());
+                        constraint.referenced_database_name = dst_schema;
+                        constraint.referenced_table_name = dst_tb;
+                    }
+                }
                 let (mapped_db, dst_schema, dst_tb) =
                     self.get_tb_map_with_db(&src_db, &schema, &tb);
                 dst_db = mapped_db.to_string();
@@ -420,6 +432,18 @@ impl RdbRouterInner {
 
             StructStatement::PgCreateTable(s) => {
                 let (schema, tb) = (s.table.schema_name.clone(), s.table.table_name.clone());
+                for constraint in &mut s.constraints {
+                    if !constraint.referenced_table_name.is_empty() {
+                        let (_, dst_schema, dst_tb) = self.get_tb_map_with_db(
+                            EMPTY_DB,
+                            &constraint.referenced_schema_name,
+                            &constraint.referenced_table_name,
+                        );
+                        let (dst_schema, dst_tb) = (dst_schema.to_string(), dst_tb.to_string());
+                        constraint.referenced_schema_name = dst_schema;
+                        constraint.referenced_table_name = dst_tb;
+                    }
+                }
                 let (mapped_db, dst_schema, dst_tb) =
                     self.get_tb_map_with_db(&src_db, &schema, &tb);
                 dst_db = mapped_db.to_string();

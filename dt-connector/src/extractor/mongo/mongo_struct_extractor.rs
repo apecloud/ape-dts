@@ -60,17 +60,27 @@ impl MongoStructExtractor {
         };
 
         if !self.filter.filter_structure(&StructureType::Collection) {
-            for statement in fetcher.get_create_collection_statements().await? {
-                self.push_dt_data(StructStatement::MongoCreateCollection(statement))
-                    .await?;
-            }
+            self.push_dt_data_batch(
+                fetcher
+                    .get_create_collection_statements()
+                    .await?
+                    .into_iter()
+                    .map(StructStatement::MongoCreateCollection)
+                    .collect(),
+            )
+            .await?;
         }
 
         if !self.filter.filter_structure(&StructureType::ShardKey) {
-            for statement in fetcher.get_shard_key_statements().await? {
-                self.push_dt_data(StructStatement::MongoShardKey(statement))
-                    .await?;
-            }
+            self.push_dt_data_batch(
+                fetcher
+                    .get_shard_key_statements()
+                    .await?
+                    .into_iter()
+                    .map(StructStatement::MongoShardKey)
+                    .collect(),
+            )
+            .await?;
         }
         Ok(())
     }
@@ -84,6 +94,21 @@ impl MongoStructExtractor {
         };
         self.base_extractor
             .push_struct(&mut self.extract_state, struct_data)
+            .await
+    }
+
+    async fn push_dt_data_batch(&mut self, statements: Vec<StructStatement>) -> anyhow::Result<()> {
+        let data = statements
+            .into_iter()
+            .map(|statement| StructData {
+                db: String::new(),
+                schema: String::new(),
+                tb: String::new(),
+                statement,
+            })
+            .collect();
+        self.base_extractor
+            .push_struct_batch(&mut self.extract_state, data)
             .await
     }
 

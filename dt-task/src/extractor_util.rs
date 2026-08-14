@@ -16,7 +16,6 @@ use dt_common::{
     error::{DtError, DtResultExt, ErrorCode},
     meta::{
         avro::avro_converter::AvroConverter,
-        dt_queue::DtQueue,
         mssql::{mssql_meta_manager::MssqlMetaManager, MSSQL_DEFAULT_SCHEMA},
         mysql::mysql_meta_manager::MysqlMetaManager,
         pg::pg_meta_manager::PgMetaManager,
@@ -25,6 +24,7 @@ use dt_common::{
         syncer::Syncer,
     },
     monitor::task_monitor_handle::TaskMonitorHandle,
+    queue::DtQueue,
     rdb_filter::RdbFilter,
     time_filter::TimeFilter,
     utils::{redis_util::RedisUtil, sql_util::SqlUtil},
@@ -108,7 +108,7 @@ impl ExtractorUtil {
         config: &TaskConfig,
         extractor_config: &ExtractorConfig,
         extractor_client: ConnClient,
-        buffer: Arc<DtQueue>,
+        queue_writer: DtQueue,
         shut_down: Arc<AtomicBool>,
         syncer: Arc<Mutex<Syncer>>,
         monitor: TaskMonitorHandle,
@@ -118,7 +118,7 @@ impl ExtractorUtil {
         recovery: Option<Arc<dyn Recovery + Send + Sync>>,
     ) -> anyhow::Result<Box<dyn Extractor + Send>> {
         let base_extractor = BaseExtractor {
-            buffer,
+            queue_writer,
             router,
             shut_down,
         };
