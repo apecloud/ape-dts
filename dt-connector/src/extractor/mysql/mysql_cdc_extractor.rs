@@ -33,7 +33,7 @@ use crate::{
 };
 use dt_common::{
     config::{config_enums::DbType, connection_auth_config::ConnectionAuthConfig},
-    error::DtError,
+    error::{DtError, DtOptionExt},
     log_debug, log_error, log_info, log_warn,
     meta::{
         adaptor::mysql_col_value_convertor::MysqlColValueConvertor, col_value::ColValue,
@@ -242,10 +242,9 @@ impl MysqlCdcExtractor {
 
             EventData::WriteRows(mut w) => {
                 for event in w.rows.iter_mut() {
-                    let table_map_event =
-                        ctx.table_map_event_map.get(&w.table_id).ok_or_else(|| {
-                            DtError::mysql_binlog_table_map_missing(w.table_id, "write rows")
-                        })?;
+                    let table_map_event = ctx.table_map_event_map.get(&w.table_id).or_dt_error(
+                        DtError::mysql_binlog_table_map_missing(w.table_id, "write rows"),
+                    )?;
                     if self.filter_event(table_map_event, RowType::Insert) {
                         self.extract_state
                             .record_extracted_metrics(1, size_of_val(event) as u64);
@@ -269,10 +268,9 @@ impl MysqlCdcExtractor {
 
             EventData::UpdateRows(mut u) => {
                 for event in u.rows.iter_mut() {
-                    let table_map_event =
-                        ctx.table_map_event_map.get(&u.table_id).ok_or_else(|| {
-                            DtError::mysql_binlog_table_map_missing(u.table_id, "update rows")
-                        })?;
+                    let table_map_event = ctx.table_map_event_map.get(&u.table_id).or_dt_error(
+                        DtError::mysql_binlog_table_map_missing(u.table_id, "update rows"),
+                    )?;
                     if self.filter_event(table_map_event, RowType::Update) {
                         self.extract_state
                             .record_extracted_metrics(1, size_of_val(event) as u64);
@@ -299,10 +297,9 @@ impl MysqlCdcExtractor {
 
             EventData::DeleteRows(mut d) => {
                 for event in d.rows.iter_mut() {
-                    let table_map_event =
-                        ctx.table_map_event_map.get(&d.table_id).ok_or_else(|| {
-                            DtError::mysql_binlog_table_map_missing(d.table_id, "delete rows")
-                        })?;
+                    let table_map_event = ctx.table_map_event_map.get(&d.table_id).or_dt_error(
+                        DtError::mysql_binlog_table_map_missing(d.table_id, "delete rows"),
+                    )?;
                     if self.filter_event(table_map_event, RowType::Delete) {
                         self.extract_state
                             .record_extracted_metrics(1, size_of_val(event) as u64);
@@ -385,12 +382,14 @@ impl MysqlCdcExtractor {
         let mut data = HashMap::new();
         let col_count = cmp::min(tb_meta.basic.cols.len(), included_columns.len());
         for i in (0..col_count).rev() {
-            let col = tb_meta.basic.cols.get(i).ok_or_else(|| {
-                DtError::DatabaseInvariant(
+            let col = tb_meta
+                .basic
+                .cols
+                .get(i)
+                .or_dt_error(DtError::DatabaseInvariant(
                     DbType::Mysql,
                     format!("column index {i} is missing from MySQL table metadata"),
-                )
-            })?;
+                ))?;
             if ignore_cols.is_some_and(|cols| cols.contains(col)) {
                 continue;
             }

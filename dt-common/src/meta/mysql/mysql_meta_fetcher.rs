@@ -7,7 +7,7 @@ use sqlx::{mysql::MySqlRow, MySql, Pool, Row};
 use super::{mysql_col_type::MysqlColType, mysql_tb_meta::MysqlTbMeta};
 use crate::{
     config::config_enums::DbType,
-    error::{DtError, DtErrorContextExt, ErrorObject},
+    error::{DtError, DtErrorContextExt, DtOptionExt, DtResultExt, ErrorObject},
     meta::{
         ddl_meta::ddl_data::DdlData, foreign_key::ForeignKey, rdb_meta_manager::RdbMetaManager,
         rdb_meta_manager::RDB_PRIMARY_KEY_FLAG, rdb_tb_meta::RdbTbMeta, row_data::RowData,
@@ -114,20 +114,20 @@ impl MysqlMetaFetcher {
             };
             self.cache.insert(full_name.clone(), tb_meta);
         }
-        self.cache.get(&full_name).ok_or_else(|| {
-            DtError::DatabaseObjectNotFound(self.db_type.clone(), format!(
+        self.cache
+            .get(&full_name)
+            .or_dt_error(DtError::DatabaseObjectNotFound(self.db_type.clone(), format!(
                 "Ape-DTS could not find the previously loaded definition for source table {full_name}"
-            ))
-                .message("The source table definition could not be loaded")
-                .hint(
-                    "Verify that the source table still exists and is readable, then restart the task.",
-                )
-                .object(ErrorObject {
-                    schema: Some(schema.to_string()),
-                    table: Some(tb.to_string()),
-                    ..Default::default()
-                })
-        })
+            )))
+            .message("The source table definition could not be loaded")
+            .hint(
+                "Verify that the source table still exists and is readable, then restart the task.",
+            )
+            .object(ErrorObject {
+                schema: Some(schema.to_string()),
+                table: Some(tb.to_string()),
+                ..Default::default()
+            })
     }
 
     async fn parse_cols(

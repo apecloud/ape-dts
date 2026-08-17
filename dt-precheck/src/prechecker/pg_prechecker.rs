@@ -4,7 +4,7 @@ use anyhow::{bail, Error};
 use async_trait::async_trait;
 use dt_common::{
     config::{config_enums::DbType, filter_config::FilterConfig},
-    error::DtError,
+    error::{DtError, DtOptionExt},
 };
 
 use crate::{
@@ -343,15 +343,24 @@ impl Prechecker for PostgresqlPrechecker {
         }
 
         let (schemas, tb_schemas, _) = DbTable::get_config_maps(&db_tables)?;
-        let primary = ConstraintTypeEnum::Primary.to_str().ok_or_else(|| {
-            DtError::InvariantViolated("missing PostgreSQL primary constraint code".to_string())
-        })?;
-        let unique = ConstraintTypeEnum::Unique.to_str().ok_or_else(|| {
-            DtError::InvariantViolated("missing PostgreSQL unique constraint code".to_string())
-        })?;
-        let foreign = ConstraintTypeEnum::Foreign.to_str().ok_or_else(|| {
-            DtError::InvariantViolated("missing PostgreSQL foreign constraint code".to_string())
-        })?;
+        let primary =
+            ConstraintTypeEnum::Primary
+                .to_str()
+                .or_dt_error(DtError::InvariantViolated(
+                    "missing PostgreSQL primary constraint code".to_string(),
+                ))?;
+        let unique =
+            ConstraintTypeEnum::Unique
+                .to_str()
+                .or_dt_error(DtError::InvariantViolated(
+                    "missing PostgreSQL unique constraint code".to_string(),
+                ))?;
+        let foreign =
+            ConstraintTypeEnum::Foreign
+                .to_str()
+                .or_dt_error(DtError::InvariantViolated(
+                    "missing PostgreSQL foreign constraint code".to_string(),
+                ))?;
         let mut all_schemas = Vec::new();
         all_schemas.extend(&schemas);
         all_schemas.extend(&tb_schemas);

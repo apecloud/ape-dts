@@ -17,7 +17,7 @@ use dt_common::{
         extractor_config::ExtractorConfig,
         task_config::TaskConfig,
     },
-    error::DtError,
+    error::{DtError, DtOptionExt},
     meta::{dt_queue::DtQueue, redis::cluster_node::ClusterNode, syncer::Syncer},
     monitor::{task_monitor::MonitorType, task_monitor_handle::TaskMonitorHandle},
     rdb_filter::RdbFilter,
@@ -57,9 +57,9 @@ fn redis_cdc_precheck_mode(is_cluster: bool) -> RedisCdcPrecheckMode {
 }
 
 fn redis_cluster_psync_url(base_url: &str, nodes: &[ClusterNode]) -> anyhow::Result<String> {
-    let node = nodes.first().ok_or_else(|| {
-        DtError::PrerequisiteNotMet("source Redis cluster has no master nodes".to_string())
-    })?;
+    let node = nodes.first().or_dt_error(DtError::PrerequisiteNotMet(
+        "source Redis cluster has no master nodes".to_string(),
+    ))?;
 
     let mut url = Url::parse(base_url).context(DtError::DatabaseInvalidConfig(
         DbType::Redis,
@@ -143,20 +143,24 @@ impl Prechecker for RedisPrechecker {
             _ => (0, None),
         };
         let precheck_mode = {
-            let conn = self.fetcher.conn.as_mut().ok_or_else(|| {
-                DtError::InvariantViolated(
+            let conn = self
+                .fetcher
+                .conn
+                .as_mut()
+                .or_dt_error(DtError::InvariantViolated(
                     "the Redis precheck connection is not initialized".to_string(),
-                )
-            })?;
+                ))?;
             redis_cdc_precheck_mode(RedisUtil::is_redis_cluster(conn, is_cluster))
         };
 
         let psync_url = if let RedisCdcPrecheckMode::ClusterNodePsync = precheck_mode {
-            let conn = self.fetcher.conn.as_mut().ok_or_else(|| {
-                DtError::InvariantViolated(
+            let conn = self
+                .fetcher
+                .conn
+                .as_mut()
+                .or_dt_error(DtError::InvariantViolated(
                     "the Redis precheck connection is not initialized".to_string(),
-                )
-            })?;
+                ))?;
             match RedisUtil::get_cluster_master_nodes(conn)
                 .and_then(|nodes| redis_cluster_psync_url(&self.fetcher.url, &nodes))
             {

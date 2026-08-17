@@ -2,7 +2,7 @@ use std::{collections::BTreeMap, path::Path};
 
 use anyhow::{bail, Context, Result};
 use clap::ValueEnum;
-use dt_common::error::{DtError, DtResultExt, ErrorCode, Stage};
+use dt_common::error::{DtError, DtOptionExt, DtResultExt, ErrorCode, Stage};
 use url::Url;
 
 const SERVER_ID_MIN: u64 = 10001;
@@ -87,11 +87,9 @@ pub fn infer_db_type(url: &str, explicit: Option<DbType>) -> Result<DbType> {
     let scheme = url
         .split_once("://")
         .map(|(scheme, _)| scheme)
-        .ok_or_else(|| {
-            DtError::invalid_config(format!(
-                "Invalid endpoint URL [{url}]; expected <scheme>://..."
-            ))
-        })?;
+        .or_dt_error(DtError::invalid_config(format!(
+            "Invalid endpoint URL [{url}]; expected <scheme>://..."
+        )))?;
     let inferred = DbType::from_scheme(scheme)?;
     if let Some(value) = explicit {
         if value != inferred {
@@ -226,16 +224,16 @@ pub fn build_task_config(
     }
 
     for item in &create.set {
-        let (path, value) = item.split_once('=').ok_or_else(|| {
-            DtError::invalid_config(format!(
+        let (path, value) = item
+            .split_once('=')
+            .or_dt_error(DtError::invalid_config(format!(
                 "--set must use section.key=value; received [{item}]"
-            ))
-        })?;
-        let (section, key) = path.split_once('.').ok_or_else(|| {
-            DtError::invalid_config(format!(
+            )))?;
+        let (section, key) = path
+            .split_once('.')
+            .or_dt_error(DtError::invalid_config(format!(
                 "--set must use section.key=value; received [{item}]"
-            ))
-        })?;
+            )))?;
         ini.set(section, key, value);
     }
 

@@ -12,7 +12,7 @@ use anyhow::{bail, Context, Result};
 use clap::{error::ErrorKind, Args, CommandFactory, Parser, Subcommand};
 use clap_complete::generate;
 use configparser::ini::Ini;
-use dt_common::error::{DtError, DtResultExt, ErrorCode, ErrorReport, Stage};
+use dt_common::error::{DtError, DtOptionExt, DtResultExt, ErrorCode, ErrorReport, Stage};
 use serde::{Deserialize, Serialize};
 
 mod config;
@@ -458,16 +458,16 @@ impl CreateArgs {
     fn into_config(self) -> Result<CreateConfig> {
         Ok(CreateConfig {
             task_name: self.task_name,
-            mode: self.mode.ok_or_else(|| {
-                DtError::invalid_config("--mode is required unless --file is provided")
-            })?,
+            mode: self.mode.or_dt_error(DtError::invalid_config(
+                "--mode is required unless --file is provided",
+            ))?,
             preflight: self.preflight,
-            source_url: self.source_url.ok_or_else(|| {
-                DtError::invalid_config("--source is required unless --file is provided")
-            })?,
-            target_url: self.target_url.ok_or_else(|| {
-                DtError::invalid_config("--target is required unless --file is provided")
-            })?,
+            source_url: self.source_url.or_dt_error(DtError::invalid_config(
+                "--source is required unless --file is provided",
+            ))?,
+            target_url: self.target_url.or_dt_error(DtError::invalid_config(
+                "--target is required unless --file is provided",
+            ))?,
             source_db: self.source_db,
             target_db: self.target_db,
             source_user: self.source_user,
@@ -1113,9 +1113,10 @@ fn handle_logs(logs: LogsArgs) -> Result<()> {
 
 fn handle_stop(stop: StopArgs) -> Result<()> {
     let task_dir = task_root()?.join(&stop.task_name);
-    let pid = read_pid(&task_dir).ok_or_else(|| {
-        DtError::PrerequisiteNotMet(format!("PID was not found for task [{}]", stop.task_name))
-    })?;
+    let pid = read_pid(&task_dir).or_dt_error(DtError::PrerequisiteNotMet(format!(
+        "PID was not found for task [{}]",
+        stop.task_name
+    )))?;
     if !process_exists(pid) {
         println!("task '{}' is already stopped", stop.task_name);
         return Ok(());
