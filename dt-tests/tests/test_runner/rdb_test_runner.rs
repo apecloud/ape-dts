@@ -4,6 +4,10 @@ use std::{
 };
 
 use chrono::{Duration, Utc};
+use dt_common::meta::{
+    col_value::ColValue, ddl_meta::ddl_parser::DdlParser,
+    mysql::mysql_meta_manager::MysqlMetaManager, row_data::RowData,
+};
 use dt_common::{
     config::{
         config_enums::{DbType, TaskKind},
@@ -17,20 +21,15 @@ use dt_common::{
     rdb_filter::RdbFilter,
     utils::{sql_util::SqlUtil, time_util::TimeUtil},
 };
-use serde::de::DeserializeOwned;
-
-use dt_common::meta::{
-    col_value::ColValue, ddl_meta::ddl_parser::DdlParser,
-    mysql::mysql_meta_manager::MysqlMetaManager, row_data::RowData,
-};
 use dt_connector::{
     meta_fetcher::mysql::mysql_struct_check_fetcher::MysqlStructCheckFetcher, rdb_router::RdbRouter,
 };
 use dt_task::task_util::TaskUtil;
-
+use serde::de::DeserializeOwned;
 use sqlx::{query, types::BigDecimal, MySql, Pool, Postgres, Row};
 use tokio::{sync::Semaphore, task::JoinHandle};
 
+use super::{base_test_runner::BaseTestRunner, rdb_util::RdbUtil};
 use crate::{
     test_config_util::TestConfigUtil,
     test_runner::mock_data::{
@@ -1479,12 +1478,13 @@ impl RdbTestRunner {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::{
         fs,
         sync::atomic::{AtomicU64, Ordering},
         time::{SystemTime, UNIX_EPOCH},
     };
+
+    use super::*;
 
     static TMP_CONFIG_SUFFIX: AtomicU64 = AtomicU64::new(0);
 

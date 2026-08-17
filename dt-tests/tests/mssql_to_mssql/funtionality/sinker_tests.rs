@@ -3,11 +3,20 @@ mod test {
     use std::collections::HashMap;
 
     use anyhow::Context;
-    use dt_common::meta::{
-        adaptor::mssql_col_value_convertor::MssqlColValueConvertor, col_value::ColValue,
-        mssql::mssql_connection_pool::MssqlConnectionPool, row_data::RowData, row_type::RowType,
+    use dt_common::{
+        config::{config_enums::DbType, router_config::RouterConfig},
+        meta::{
+            adaptor::mssql_col_value_convertor::MssqlColValueConvertor,
+            col_value::ColValue,
+            dt_data::{DtData, DtItem},
+            mssql::mssql_connection_pool::MssqlConnectionPool,
+            position::Position,
+            row_data::RowData,
+            row_type::RowType,
+        },
     };
     use dt_connector::{
+        rdb_router::RdbRouter,
         sinker::{base_sinker::BaseSinker, mssql::mssql_sinker::MssqlSinker},
         Sinker,
     };
@@ -210,6 +219,76 @@ mod test {
             )
             .await?;
             assert_eq!(row_count(&pool).await?, 4);
+            anyhow::Ok(())
+        }
+        .await;
+
+        let cleanup_result = cleanup(&pool).await;
+        result?;
+        cleanup_result
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn snapshot_finished_invalidates_routed_table_meta() -> anyhow::Result<()> {
+        let pool = create_pool().await?;
+        prepare(&pool).await?;
+
+        let result = async {
+            let router = RdbRouter::from_config(
+                &RouterConfig::Rdb {
+                    schema_map: String::new(),
+                    tb_map: format!("source_schema.source_table:{TEST_SCHEMA}.{TEST_TABLE}"),
+                    col_map: String::new(),
+                    topic_map: String::new(),
+                },
+                &DbType::Mssql,
+            )?
+            .context("MSSQL sinker test router has no route rules")?;
+            let meta_manager = MssqlTestEndpoint::create_meta_manager(pool.clone()).await?;
+            let mut sinker = MssqlSinker::new(
+                pool.clone(),
+                meta_manager,
+                Some(router),
+                1,
+                false,
+                BaseSinker::default(),
+            );
+
+            assert!(!sinker
+                .meta_manager
+                .get_tb_meta(TEST_SCHEMA, TEST_TABLE)
+                .await?
+                .basic
+                .cols
+                .contains(&"added_after_cache".to_string()));
+            MssqlTestEndpoint::execute_batch(
+                &pool,
+                &format!(
+                    "ALTER TABLE [{TEST_SCHEMA}].[{TEST_TABLE}] ADD [added_after_cache] int NULL;"
+                ),
+            )
+            .await?;
+
+            sinker
+                .handle_control_item(&DtItem {
+                    dt_data: DtData::Commit { xid: String::new() },
+                    position: Position::RdbSnapshotFinished {
+                        db_type: "mssql".to_string(),
+                        schema: "source_schema".to_string(),
+                        tb: "source_table".to_string(),
+                    },
+                    data_origin_node: String::new(),
+                })
+                .await?;
+
+            assert!(sinker
+                .meta_manager
+                .get_tb_meta(TEST_SCHEMA, TEST_TABLE)
+                .await?
+                .basic
+                .cols
+                .contains(&"added_after_cache".to_string()));
             anyhow::Ok(())
         }
         .await;

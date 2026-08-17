@@ -3,24 +3,26 @@ use std::str::FromStr;
 use anyhow::{bail, Context, Result};
 use async_trait::async_trait;
 use dashmap::DashMap;
-use dt_common::{
-    config::resumer_config::ResumerConfig,
-    error::{
-        classify_sqlx_error, DtError, DtErrorContextExt, DtResultExt, EndpointRole, ErrorCode,
-        ErrorObject, Stage,
-    },
-    log_info, log_warn,
-    meta::position::Position,
-    utils::redis_util::RedisUtil,
-};
 use futures::TryStreamExt;
 use mongodb::bson::doc;
 use sqlx::{query, Error as SqlxError, Row};
+use tiberius::Query;
 
 use crate::extractor::resumer::{
     recovery::Recovery,
     utils::{RedisResumerRecord, ResumerUtil},
     ResumerDbPool, ResumerType,
+};
+use dt_common::{
+    config::config_enums::DbType,
+    config::resumer_config::ResumerConfig,
+    error::{
+        classify_mssql_error, classify_sqlx_error, DtError, DtErrorContextExt, DtResultExt,
+        EndpointRole, ErrorCode, ErrorObject, Stage,
+    },
+    log_info, log_warn,
+    meta::{adaptor::mssql_col_value_convertor::MssqlColValueConvertor, position::Position},
+    utils::{redis_util::RedisUtil, sql_util::SqlUtil},
 };
 
 pub struct DatabaseRecovery {
@@ -99,17 +101,14 @@ impl DatabaseRecovery {
     }
 
     async fn initialization(&self) -> Result<()> {
-        let sql = format!(
-            r#"SELECT resumer_type, position_key, position_data 
-               FROM {}.{} 
-               WHERE task_id = '{}'
-            "#,
-            self.schema, self.table, self.task_id
-        );
-
         match &self.pool {
             ResumerDbPool::MySql(pool) => {
-                let mut position_rows = query(&sql).fetch(pool);
+                let sql = format!(
+                    "SELECT resumer_type, position_key, position_data \
+                     FROM {}.{} WHERE task_id = ?",
+                    self.schema, self.table
+                );
+                let mut position_rows = query(&sql).bind(&self.task_id).fetch(pool);
                 loop {
                     match position_rows.try_next().await {
                         Ok(Some(row)) => {
@@ -159,7 +158,12 @@ impl DatabaseRecovery {
                 }
             }
             ResumerDbPool::Postgres(pool) => {
-                let mut position_rows = query(&sql).fetch(pool);
+                let sql = format!(
+                    "SELECT resumer_type, position_key, position_data \
+                     FROM {}.{} WHERE task_id = $1",
+                    self.schema, self.table
+                );
+                let mut position_rows = query(&sql).bind(&self.task_id).fetch(pool);
                 loop {
                     match position_rows.try_next().await {
                         Ok(Some(row)) => {
@@ -206,6 +210,51 @@ impl DatabaseRecovery {
                             }
                         },
                     }
+                }
+            }
+            ResumerDbPool::Mssql(pool) => {
+                let full_table_name = format!(
+                    "{}.{}",
+                    SqlUtil::escape_by_db_type(&self.schema, &DbType::Mssql),
+                    SqlUtil::escape_by_db_type(&self.table, &DbType::Mssql)
+                );
+                let mut query = Query::new(format!(
+                    "SELECT resumer_type, position_key, position_data \
+                     FROM {full_table_name} WHERE task_id = @P1"
+                ));
+                query.bind(self.task_id.as_str());
+
+                let mut connection = pool
+                    .get()
+                    .await
+                    .code(ErrorCode::CheckpointReadFailed)
+                    .message("failed to acquire MSSQL checkpoint connection")?;
+                let stream = match query.query(connection.client_mut()).await {
+                    Ok(stream) => stream,
+                    Err(error) => return self.handle_mssql_query_error(error),
+                };
+                let position_rows = match stream.into_first_result().await {
+                    Ok(rows) => rows,
+                    Err(error) => return self.handle_mssql_query_error(error),
+                };
+
+                for row in position_rows {
+                    let resumer_type_str =
+                        MssqlColValueConvertor::from_query_required_string(&row, "resumer_type")
+                            .code(ErrorCode::CheckpointReadFailed)
+                            .message("failed to parse MSSQL checkpoint resumer_type")
+                            .object(self.checkpoint_error_object())?;
+                    let position_key =
+                        MssqlColValueConvertor::from_query_required_string(&row, "position_key")
+                            .code(ErrorCode::CheckpointReadFailed)
+                            .message("failed to parse MSSQL checkpoint position_key")
+                            .object(self.checkpoint_error_object())?;
+                    let position_data =
+                        MssqlColValueConvertor::from_query_optional_string(&row, "position_data")
+                            .code(ErrorCode::CheckpointReadFailed)
+                            .message("failed to parse MSSQL checkpoint position_data")
+                            .object(self.checkpoint_error_object())?;
+                    self.cache_resumer_record(&resumer_type_str, position_key, position_data);
                 }
             }
             ResumerDbPool::Mongo(client) => {
@@ -272,6 +321,33 @@ impl DatabaseRecovery {
             }
         }
         Ok(())
+    }
+
+    fn handle_mssql_query_error(&self, error: tiberius::error::Error) -> Result<()> {
+        let is_missing_resume_store = classify_mssql_error(&error)
+            .error_code()
+            .is_some_and(Self::is_missing_resume_store);
+        if is_missing_resume_store {
+            log::info!(
+                "Resume table {}.{} does not exist, will start from beginning",
+                self.schema,
+                self.table
+            );
+            return Ok(());
+        }
+
+        Err(error
+            .code(ErrorCode::CheckpointReadFailed)
+            .message("failed to query resume position from MSSQL")
+            .object(self.checkpoint_error_object()))
+    }
+
+    fn checkpoint_error_object(&self) -> ErrorObject {
+        ErrorObject {
+            schema: Some(self.schema.clone()),
+            table: Some(self.table.clone()),
+            ..Default::default()
+        }
     }
 
     fn is_missing_resume_store(code: ErrorCode) -> bool {

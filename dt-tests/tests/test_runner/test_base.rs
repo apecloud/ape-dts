@@ -7,8 +7,6 @@ use dt_common::{
 
 use futures::executor::block_on;
 
-use crate::test_runner::rdb_test_runner::DST;
-
 use super::{
     check_test_runner::CheckTestRunner, mongo_check_test_runner::MongoCheckTestRunner,
     mongo_test_runner::MongoTestRunner, precheck_test_runner::PrecheckTestRunner,
@@ -18,6 +16,7 @@ use super::{
     rdb_test_runner::RdbTestRunner, redis_statistic_runner::RedisStatisticTestRunner,
     redis_test_runner::RedisTestRunner,
 };
+use crate::test_runner::rdb_test_runner::DST;
 
 pub struct TestBase {}
 

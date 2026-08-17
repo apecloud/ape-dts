@@ -1,14 +1,6 @@
 use std::{str::FromStr, time::Duration};
 
 use anyhow::{bail, Context, Result};
-use dt_common::{
-    config::{config_enums::DbType, connection_auth_config::ConnectionAuthConfig},
-    error::DtError,
-    log_info,
-    meta::position::Position,
-    meta::redis::cluster_node::ClusterNode,
-    utils::redis_util::RedisUtil,
-};
 use mongodb::options::ClientOptions;
 use redis::Connection;
 use serde::{Deserialize, Serialize};
@@ -21,6 +13,14 @@ use url::Url;
 use crate::extractor::resumer::{
     RedisResumerConn, ResumerDbPool, ResumerType, DEFAULT_POSITION_KEY, DEFAULT_RESUMER_SCHEMA,
     DEFAULT_RESUMER_TABLE,
+};
+use dt_common::{
+    config::{config_enums::DbType, connection_auth_config::ConnectionAuthConfig},
+    error::DtError,
+    log_info,
+    meta::redis::cluster_node::ClusterNode,
+    meta::{mssql::mssql_connection_pool::MssqlConnectionPool, position::Position},
+    utils::redis_util::RedisUtil,
 };
 
 pub struct ResumerUtil {}
@@ -67,6 +67,19 @@ impl ResumerUtil {
         max_connections: u32,
         is_direct_connection: Option<bool>,
     ) -> anyhow::Result<ResumerDbPool> {
+        if matches!(db_type, DbType::Mssql) {
+            let pool = MssqlConnectionPool::from_config(
+                url,
+                connection_auth,
+                Some("ape-dts-resumer"),
+                max_connections,
+                15,
+            )
+            .await
+            .context("failed to create MSSQL connection pool")?;
+            return Ok(ResumerDbPool::Mssql(pool));
+        }
+
         let final_url = ConnectionAuthConfig::merge_url_with_auth(url, connection_auth)
             .context("failed to merge URL with connection auth")?;
 
@@ -276,11 +289,10 @@ impl ResumerUtil {
 
 #[cfg(test)]
 mod tests {
-    use dt_common::meta::position::Position;
-
     use crate::extractor::resumer::{
         utils::ResumerUtil, DEFAULT_RESUMER_SCHEMA, DEFAULT_RESUMER_TABLE,
     };
+    use dt_common::meta::position::Position;
 
     #[test]
     fn test_get_full_table_name() {

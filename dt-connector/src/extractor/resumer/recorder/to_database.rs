@@ -1,20 +1,24 @@
 use anyhow::{bail, Context, Result};
 use async_trait::async_trait;
-use dt_common::{
-    config::resumer_config::ResumerConfig, error::DtError, log_info, meta::position::Position,
-    utils::redis_util::RedisUtil,
-};
 use mongodb::{
     bson::{doc, DateTime},
     options::IndexOptions,
     IndexModel,
 };
 use sqlx::query;
+use tiberius::Query;
 
 use crate::extractor::resumer::{
     recorder::Recorder,
     utils::{RedisResumerRecord, ResumerUtil},
     ResumerDbPool, ResumerType,
+};
+use dt_common::{
+    config::{config_enums::DbType, resumer_config::ResumerConfig},
+    error::DtError,
+    log_info,
+    meta::position::Position,
+    utils::{redis_util::RedisUtil, sql_util::SqlUtil},
 };
 
 pub struct DatabaseRecorder {
@@ -147,6 +151,69 @@ impl DatabaseRecorder {
                 }
                 Ok(())
             }
+            ResumerDbPool::Mssql(pool) => {
+                let mut connection = pool
+                    .get()
+                    .await
+                    .context("failed to acquire MSSQL checkpoint connection")?;
+
+                let mut create_schema = Query::new(
+                    "IF SCHEMA_ID(@P1) IS NULL \
+                     BEGIN \
+                         DECLARE @schema_sql nvarchar(300) = \
+                             N'CREATE SCHEMA ' + QUOTENAME(@P1); \
+                         EXEC sp_executesql @schema_sql; \
+                     END",
+                );
+                create_schema.bind(self.schema.as_str());
+                create_schema
+                    .execute(connection.client_mut())
+                    .await
+                    .with_context(|| {
+                        format!("failed to create MSSQL checkpoint schema: {}", self.schema)
+                    })?;
+
+                let full_table_name = self.mssql_full_table_name();
+                let object_name = full_table_name.clone();
+                let create_table_sql = format!(
+                    r#"IF OBJECT_ID(@P1, N'U') IS NULL
+                       BEGIN
+                           CREATE TABLE {full_table_name} (
+                               id bigint IDENTITY(1, 1) PRIMARY KEY,
+                               task_id nvarchar(255) NOT NULL,
+                               resumer_type nvarchar(100) NOT NULL,
+                               position_key nvarchar(475) NOT NULL,
+                               position_data nvarchar(max) NULL,
+                               created_at datetime2(7) NOT NULL DEFAULT SYSUTCDATETIME(),
+                               updated_at datetime2(7) NOT NULL DEFAULT SYSUTCDATETIME(),
+                               UNIQUE (task_id, resumer_type, position_key)
+                           );
+                       END"#
+                );
+                let mut create_table = Query::new(create_table_sql);
+                create_table.bind(object_name.as_str());
+                create_table
+                    .execute(connection.client_mut())
+                    .await
+                    .with_context(|| {
+                        format!("failed to create MSSQL checkpoint table: {full_table_name}")
+                    })?;
+
+                if is_init {
+                    let mut delete_records =
+                        Query::new(format!("DELETE FROM {full_table_name} WHERE task_id = @P1"));
+                    delete_records.bind(task_id);
+                    delete_records
+                        .execute(connection.client_mut())
+                        .await
+                        .with_context(|| {
+                            format!(
+                                "failed to delete MSSQL checkpoint records for task_id={task_id}"
+                            )
+                        })?;
+                }
+                Ok(())
+            }
             ResumerDbPool::Mongo(client) => {
                 let database = client.database(&self.schema);
                 let collection_names = database
@@ -245,6 +312,14 @@ impl DatabaseRecorder {
             escaped_table_full_name, table_full_name, table_full_name
         )
     }
+
+    fn mssql_full_table_name(&self) -> String {
+        format!(
+            "{}.{}",
+            SqlUtil::escape_by_db_type(&self.schema, &DbType::Mssql),
+            SqlUtil::escape_by_db_type(&self.table, &DbType::Mssql)
+        )
+    }
 }
 
 #[async_trait]
@@ -298,6 +373,53 @@ impl Recorder for DatabaseRecorder {
                     .execute(pool)
                     .await
                     .with_context(|| format!("failed to upsert position record with sql: {sql}"))?;
+                Ok(())
+            }
+            ResumerDbPool::Mssql(pool) => {
+                let full_table_name = self.mssql_full_table_name();
+                let sql = format!(
+                    r#"BEGIN TRY
+                           BEGIN TRANSACTION;
+                           UPDATE {full_table_name} WITH (UPDLOCK, SERIALIZABLE)
+                           SET position_data = @P4,
+                               updated_at = SYSUTCDATETIME()
+                           WHERE task_id = @P1
+                             AND resumer_type = @P2
+                             AND position_key = @P3;
+                           IF @@ROWCOUNT = 0
+                           BEGIN
+                               INSERT INTO {full_table_name}
+                                   (task_id, resumer_type, position_key, position_data)
+                               VALUES (@P1, @P2, @P3, @P4);
+                           END;
+                           COMMIT TRANSACTION;
+                       END TRY
+                       BEGIN CATCH
+                           IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION;
+                           THROW;
+                       END CATCH"#
+                );
+                let resumer_type = resumer_type.to_string();
+                let position_key = ResumerUtil::get_key_from_position(position);
+                let position_data = position.to_string();
+                let mut query = Query::new(sql);
+                query.bind(self.task_id.as_str());
+                query.bind(resumer_type.as_str());
+                query.bind(position_key.as_str());
+                query.bind(position_data.as_str());
+
+                let mut connection = pool
+                    .get()
+                    .await
+                    .context("failed to acquire MSSQL checkpoint connection")?;
+                connection.mark_for_discard();
+                query
+                    .execute(connection.client_mut())
+                    .await
+                    .with_context(|| {
+                        format!("failed to upsert MSSQL checkpoint record in {full_table_name}")
+                    })?;
+                connection.clear_discard_mark();
                 Ok(())
             }
             ResumerDbPool::Mongo(client) => {

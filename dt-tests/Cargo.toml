@@ -22,6 +22,7 @@ chrono = { workspace = true }
 clickhouse = { workspace = true, features = ["time"] }
 concurrent-queue = { workspace = true }
 configparser = { workspace = true }
+connection-string = { workspace = true }
 dotenv = { workspace = true }
 futures = { workspace = true }
 hex = { workspace = true }

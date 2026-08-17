@@ -10,10 +10,12 @@ use dt_common::{
     log_error,
     meta::{
         ddl_meta::ddl_data::DdlData,
+        dt_data::{DtData, DtItem},
         mssql::{
             mssql_connection_pool::MssqlConnectionPool, mssql_meta_manager::MssqlMetaManager,
             mssql_tb_meta::MssqlTbMeta,
         },
+        position::Position,
         row_data::RowData,
         row_type::RowType,
     },
@@ -233,6 +235,21 @@ impl Sinker for MssqlSinker {
 
     async fn sink_ddl(&mut self, _data: Vec<DdlData>, _batch: bool) -> anyhow::Result<()> {
         bail!("MSSQL snapshot sinker does not support DDL")
+    }
+
+    async fn handle_control_item(&mut self, item: &DtItem) -> anyhow::Result<()> {
+        if let (DtData::Commit { .. }, Position::RdbSnapshotFinished { schema, tb, .. }) =
+            (&item.dt_data, &item.position)
+        {
+            let (routed_schema, routed_tb) = if let Some(router) = &self.router {
+                router.get_tb_map(schema, tb)
+            } else {
+                (schema.as_str(), tb.as_str())
+            };
+            self.meta_manager
+                .invalidate_cache_for_table(routed_schema, routed_tb);
+        }
+        Ok(())
     }
 
     async fn close(&mut self) -> anyhow::Result<()> {
