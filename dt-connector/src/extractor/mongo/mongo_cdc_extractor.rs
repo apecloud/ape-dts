@@ -28,7 +28,7 @@ use crate::{
 };
 use dt_common::{
     config::config_enums::DbType,
-    error::DtError,
+    error::{DtError, DtOptionExt},
     log_error, log_info, log_warn,
     meta::{
         col_value::ColValue,
@@ -400,12 +400,16 @@ impl MongoCdcExtractor {
         before: HashMap<String, ColValue>,
         after: HashMap<String, ColValue>,
     ) -> anyhow::Result<(RowData, Position)> {
-        let ts = ts.and_then(Bson::as_timestamp).ok_or_else(|| {
-            DtError::mongo_statement("oplog field ts is missing or is not a timestamp")
-        })?;
-        let ns = ns.and_then(Bson::as_str).ok_or_else(|| {
-            DtError::mongo_statement("oplog field ns is missing or is not a string")
-        })?;
+        let ts = ts
+            .and_then(Bson::as_timestamp)
+            .or_dt_error(DtError::mongo_statement(
+                "oplog field ts is missing or is not a timestamp",
+            ))?;
+        let ns = ns
+            .and_then(Bson::as_str)
+            .or_dt_error(DtError::mongo_statement(
+                "oplog field ns is missing or is not a string",
+            ))?;
 
         Self::build_oplog_row_data_from_parts(ns, ts, row_type, before, after)
     }
@@ -419,7 +423,9 @@ impl MongoCdcExtractor {
     ) -> anyhow::Result<(RowData, Position)> {
         let (db, tb) = ns
             .split_once('.')
-            .ok_or_else(|| DtError::mongo_statement(format!("invalid oplog namespace: {ns}")))?;
+            .or_dt_error(DtError::mongo_statement(format!(
+                "invalid oplog namespace: {ns}"
+            )))?;
         let before = if before.is_empty() {
             None
         } else {
@@ -438,11 +444,11 @@ impl MongoCdcExtractor {
     }
 
     fn oplog_document<'a>(value: Option<&'a Bson>, field: &str) -> anyhow::Result<&'a Document> {
-        Ok(value.and_then(Bson::as_document).ok_or_else(|| {
-            DtError::mongo_statement(format!(
+        Ok(value
+            .and_then(Bson::as_document)
+            .or_dt_error(DtError::mongo_statement(format!(
                 "oplog field {field} is missing or is not a document"
-            ))
-        })?)
+            )))?)
     }
 
     // Event example:

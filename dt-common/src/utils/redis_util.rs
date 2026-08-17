@@ -5,7 +5,7 @@ use anyhow::{bail, Context};
 use redis::{Connection, ConnectionLike, Value};
 
 use crate::config::{config_enums::DbType, connection_auth_config::ConnectionAuthConfig};
-use crate::error::DtError;
+use crate::error::{DtError, DtOptionExt};
 use crate::log_info;
 use crate::meta::redis::{
     cluster_node::ClusterNode,
@@ -98,12 +98,12 @@ impl RedisUtil {
                 DbType::Redis,
                 "the Redis version matcher is invalid".to_string(),
             ))?;
-            let cap = re.captures(&info).ok_or_else(|| {
-                DtError::UnsupportedDatabaseVersion(
+            let cap = re
+                .captures(&info)
+                .or_dt_error(DtError::UnsupportedDatabaseVersion(
                     DbType::Redis,
                     "can not get redis version from the INFO response".to_string(),
-                )
-            })?;
+                ))?;
 
             let version_str = cap[1].to_string();
             let tokens: Vec<&str> = version_str.split('.').collect();
@@ -210,17 +210,18 @@ impl RedisUtil {
             let master_id = words[3].to_string();
             let is_master = words[2].contains("master");
 
-            let raw_address = words[1].split('@').next().ok_or_else(|| {
-                DtError::RedisTopology(format!(
+            let raw_address = words[1]
+                .split('@')
+                .next()
+                .or_dt_error(DtError::RedisTopology(format!(
                     "Redis cluster node has an invalid address: {}",
                     words[1]
-                ))
-            })?;
-            let (host, port) = raw_address.rsplit_once(':').ok_or_else(|| {
-                DtError::RedisTopology(format!(
+                )))?;
+            let (host, port) = raw_address
+                .rsplit_once(':')
+                .or_dt_error(DtError::RedisTopology(format!(
                     "Redis cluster node has an invalid address: {raw_address}"
-                ))
-            })?;
+                )))?;
             let host = host.trim_matches(['[', ']']).to_string();
             if host.is_empty() || port.is_empty() {
                 return Err(DtError::RedisTopology(format!(
@@ -303,12 +304,12 @@ impl RedisUtil {
             if !slots.is_empty() {
                 let mut node_slot_hash_tag_map = HashMap::with_capacity(slots.len());
                 for i in slots.iter() {
-                    let hash_tag = all_slot_hash_tag_map.get(i).cloned().ok_or_else(|| {
+                    let hash_tag = all_slot_hash_tag_map.get(i).cloned().or_dt_error(
                         DtError::DatabaseInvariant(
                             DbType::Redis,
                             format!("Redis slot {i} has no generated hash tag"),
-                        )
-                    })?;
+                        ),
+                    )?;
                     node_slot_hash_tag_map.insert(*i, hash_tag);
                 }
                 node.slot_hash_tag_map = node_slot_hash_tag_map;

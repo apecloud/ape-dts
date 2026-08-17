@@ -173,7 +173,7 @@ recheck_queue_memory_mb=256
 | revise_match_full_row| 生成修复语句时是否用完整行作为匹配条件                       | false         | false |
 | check_log_dir        | 本地校验日志目录                                             | /tmp/check    | 空（使用 `runtime.log_dir/check`） |
 | check_log_file_size  | `diff.log`、`miss.log`、`sql.log` 单文件大小上限       | 100mb         | 100mb |
-| check_log_max_rows   | CDC `diff.log`/`miss.log` 快照最大行数                   | 1000          | 1000 |
+| check_log_max_rows   | `diff.log`/`miss.log` 最大行数                           | 1000          | 1000 |
 | s3_bucket            | S3 bucket，`output_type=s3` 时必填                          | my-bucket     | - |
 | s3_access_key_id     | S3 access key                                                | AKIA...       | 空 |
 | s3_secret_access_key | S3 secret key                                                | ****          | 空 |

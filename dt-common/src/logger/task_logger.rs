@@ -18,7 +18,7 @@ use crate::{
         extractor_config::ExtractorConfig, sinker_config::SinkerConfig, task_config::TaskConfig,
     },
     error::DtError,
-    log_filter::SizeLimitFilterDeserializer,
+    log_filter::{RowLimitFilterDeserializer, SizeLimitFilterDeserializer},
 };
 
 static LOG_HANDLE: Mutex<Option<log4rs::Handle>> = Mutex::new(None);
@@ -28,10 +28,18 @@ const STATISTIC_LOG_DIR_PLACEHOLDER: &str = "STATISTIC_LOG_DIR_PLACEHOLDER";
 const LOG_LEVEL_PLACEHOLDER: &str = "LOG_LEVEL_PLACEHOLDER";
 const LOG_DIR_PLACEHOLDER: &str = "LOG_DIR_PLACEHOLDER";
 const CHECK_LOG_FILE_SIZE_PLACEHOLDER: &str = "CHECK_LOG_FILE_SIZE_PLACEHOLDER";
+const CHECK_LOG_MAX_ROWS_PLACEHOLDER: &str = "CHECK_LOG_MAX_ROWS_PLACEHOLDER";
 const RUNTIME_STDOUT_APPENDER_PLACEHOLDER: &str = "RUNTIME_STDOUT_APPENDER_PLACEHOLDER";
 const CHECK_RESULT_STDOUT_APPENDER_PLACEHOLDER: &str = "CHECK_RESULT_STDOUT_APPENDER_PLACEHOLDER";
 const DEFAULT_CHECK_LOG_DIR_PLACEHOLDER: &str = "LOG_DIR_PLACEHOLDER/check";
 const DEFAULT_STATISTIC_LOG_DIR_PLACEHOLDER: &str = "LOG_DIR_PLACEHOLDER/statistic";
+
+fn log_deserializers() -> Deserializers {
+    let mut deserializers = Deserializers::default();
+    deserializers.insert("size_limit", SizeLimitFilterDeserializer);
+    deserializers.insert("row_limit", RowLimitFilterDeserializer);
+    deserializers
+}
 
 pub struct TaskLogger<'a> {
     task_config: &'a TaskConfig,
@@ -144,6 +152,10 @@ impl<'a> TaskLogger<'a> {
                     }
                     config_str =
                         config_str.replace(CHECK_LOG_FILE_SIZE_PLACEHOLDER, cfg.log_file_size());
+                    config_str = config_str.replace(
+                        CHECK_LOG_MAX_ROWS_PLACEHOLDER,
+                        &cfg.log_max_rows().max(1).to_string(),
+                    );
                 }
             }
         }
@@ -155,6 +167,10 @@ impl<'a> TaskLogger<'a> {
                 DEFAULT_STATISTIC_LOG_DIR_PLACEHOLDER,
             )
             .replace(CHECK_LOG_FILE_SIZE_PLACEHOLDER, DEFAULT_CHECK_LOG_FILE_SIZE)
+            .replace(
+                CHECK_LOG_MAX_ROWS_PLACEHOLDER,
+                &crate::config::checker_config::DEFAULT_CHECK_LOG_MAX_ROWS.to_string(),
+            )
             .replace(LOG_DIR_PLACEHOLDER, &self.task_config.runtime.log_dir)
             .replace(LOG_LEVEL_PLACEHOLDER, &self.task_config.runtime.log_level);
 
@@ -178,8 +194,7 @@ impl<'a> TaskLogger<'a> {
         }
 
         let raw: RawConfig = serde_yaml::from_str(&config_str)?;
-        let mut deserializers = Deserializers::default();
-        deserializers.insert("size_limit", SizeLimitFilterDeserializer);
+        let deserializers = log_deserializers();
         let (appenders, errors) = raw.appenders_lossy(&deserializers);
         if !errors.is_empty() {
             log::error!(target: "default_logger", "errors deserializing log appenders: {errors:?}");
@@ -210,7 +225,9 @@ impl<'a> TaskLogger<'a> {
 mod tests {
     use std::env::current_dir;
 
-    use super::TaskLogger;
+    use log4rs::config::RawConfig;
+
+    use super::{log_deserializers, TaskLogger};
     use crate::config::{
         config_enums::{CheckMode, TaskKind, TaskType},
         connection_auth_config::ConnectionAuthConfig,
@@ -250,5 +267,35 @@ mod tests {
             &extractor,
             "/tmp/ape-dts/other"
         ));
+    }
+
+    #[test]
+    fn bundled_log4rs_config_accepts_check_log_limits() {
+        let bundled_config = include_str!("../../../log4rs.yaml");
+        let yaml: serde_yaml::Value = serde_yaml::from_str(bundled_config).unwrap();
+        for appender in ["miss_appender", "diff_appender"] {
+            let filters = yaml["appenders"][appender]["filters"]
+                .as_sequence()
+                .unwrap();
+            assert_eq!(filters[0]["kind"].as_str(), Some("size_limit"));
+            assert_eq!(filters[1]["kind"].as_str(), Some("row_limit"));
+        }
+
+        let config = bundled_config
+            .replace("CHECK_LOG_DIR_PLACEHOLDER", "/tmp/ape-dts/check")
+            .replace("STATISTIC_LOG_DIR_PLACEHOLDER", "/tmp/ape-dts/statistic")
+            .replace("CHECK_LOG_FILE_SIZE_PLACEHOLDER", "100mb")
+            .replace("CHECK_LOG_MAX_ROWS_PLACEHOLDER", "1000")
+            .replace("LOG_DIR_PLACEHOLDER", "/tmp/ape-dts")
+            .replace("LOG_LEVEL_PLACEHOLDER", "info")
+            .replace("RUNTIME_STDOUT_APPENDER_PLACEHOLDER", "stdout")
+            .replace(
+                "CHECK_RESULT_STDOUT_APPENDER_PLACEHOLDER",
+                "silent_stdout_appender",
+            );
+        let raw: RawConfig = serde_yaml::from_str(&config).unwrap();
+        let (_, errors) = raw.appenders_lossy(&log_deserializers());
+
+        assert!(errors.is_empty(), "{errors:?}");
     }
 }

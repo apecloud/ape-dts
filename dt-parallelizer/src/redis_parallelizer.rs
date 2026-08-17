@@ -4,7 +4,7 @@ use anyhow::bail;
 use async_trait::async_trait;
 
 use dt_common::{
-    error::DtError,
+    error::{DtError, DtOptionExt},
     log_warn,
     meta::{
         dt_data::{DtData, DtItem},
@@ -100,21 +100,17 @@ impl Parallelizer for RedisParallelizer {
             }
 
             // find the dst node for entry by slot
-            let node = self.slot_node_map.get(&slots[0]).copied().ok_or_else(|| {
-                DtError::InvariantViolated("parallelizer invariant violated".to_string())
-            })?;
-            let sinker_index = self
-                .node_sinker_index_map
-                .get(node)
-                .copied()
-                .ok_or_else(|| {
-                    DtError::InvariantViolated("parallelizer invariant violated".to_string())
-                })?;
+            let node = self.slot_node_map.get(&slots[0]).copied().or_dt_error(
+                DtError::InvariantViolated("parallelizer invariant violated".to_string()),
+            )?;
+            let sinker_index = self.node_sinker_index_map.get(node).copied().or_dt_error(
+                DtError::InvariantViolated("parallelizer invariant violated".to_string()),
+            )?;
             node_data_items
                 .get_mut(sinker_index)
-                .ok_or_else(|| {
-                    DtError::InvariantViolated("parallelizer invariant violated".to_string())
-                })?
+                .or_dt_error(DtError::InvariantViolated(
+                    "parallelizer invariant violated".to_string(),
+                ))?
                 .push(dt_item);
         }
 

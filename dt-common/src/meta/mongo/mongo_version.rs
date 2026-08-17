@@ -6,7 +6,7 @@ use mongodb::{
 
 use crate::{
     config::config_enums::DbType,
-    error::{DtError, DtResultExt, ErrorCode},
+    error::{DtError, DtOptionExt, DtResultExt, ErrorCode},
 };
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -63,12 +63,10 @@ pub async fn get_server_version(client: &Client) -> anyhow::Result<MongoServerVe
 }
 
 fn parse_version_part(part: Option<&str>, original: &str, field: &str) -> anyhow::Result<u32> {
-    let part = part.ok_or_else(|| {
-        DtError::UnsupportedDatabaseVersion(
-            DbType::Mongo,
-            format!("MongoDB version is missing {field}: {original}"),
-        )
-    })?;
+    let part = part.or_dt_error(DtError::UnsupportedDatabaseVersion(
+        DbType::Mongo,
+        format!("MongoDB version is missing {field}: {original}"),
+    ))?;
     let digits: String = part.chars().take_while(|c| c.is_ascii_digit()).collect();
     if digits.is_empty() {
         return Err(DtError::UnsupportedDatabaseVersion(

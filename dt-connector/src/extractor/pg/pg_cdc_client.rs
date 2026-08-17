@@ -16,7 +16,7 @@ use dt_common::{
         connection_auth_config::ConnectionAuthConfig,
         ssl_config::{SslConfig, SslMode},
     },
-    error::{DtError, DtErrorContextExt, DtResultExt, ErrorCode},
+    error::{DtError, DtOptionExt, DtResultExt, ErrorCode},
     log_info, log_warn,
 };
 
@@ -281,19 +281,17 @@ impl PgCdcClient {
                     Row(row) => row.get("consistent_point").map(str::to_string),
                     _ => None,
                 })
-                .ok_or_else(|| {
-                    DtError::DatabaseStatementFailed(
+                .or_dt_error(DtError::DatabaseStatementFailed(
                         DbType::Pg,
                         "the CREATE_REPLICATION_SLOT response is missing consistent_point"
                             .to_string(),
-                    )
-                        .message(
-                            "PostgreSQL did not return a start position for the new replication slot",
-                        )
-                        .hint(
-                            "Remove the incomplete replication slot and restart the task. If it repeats, check PostgreSQL replication logs.",
-                        )
-                })?;
+                    ))
+                .message(
+                    "PostgreSQL did not return a start position for the new replication slot",
+                )
+                .hint(
+                    "Remove the incomplete replication slot and restart the task. If it repeats, check PostgreSQL replication logs.",
+                )?;
 
             log_info!(
                 "slot created, returned start_sln: {}",
