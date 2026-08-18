@@ -2,22 +2,6 @@ use std::{collections::HashMap, fs, io::ErrorKind};
 
 use anyhow::{bail, Error, Ok};
 
-#[cfg(feature = "metrics")]
-use crate::config::metrics_config::MetricsConfig;
-use crate::{
-    config::{
-        config_enums::{RdbParallelType, ResumeType},
-        connection_auth_config::ConnectionAuthConfig,
-        global_config::GlobalConfig,
-        limiter_config::{CapacityLimiterConfig, RateLimiterConfig},
-    },
-    error::{DtError, DtOptionExt, DtResultExt},
-    meta::{
-        mongo::mongo_cdc_source::MongoCdcSource, mssql::mssql_connection_pool::MssqlConnectionPool,
-    },
-    utils::task_util::TaskUtil,
-};
-
 use super::{
     checker_config::{
         CheckerConfig, CheckerOutputConfig, CheckerOutputType, InlineCheckConfig,
@@ -43,6 +27,21 @@ use super::{
     runtime_config::RuntimeConfig,
     sinker_config::{BasicSinkerConfig, SinkerConfig},
     tracing_config::TracingConfig,
+};
+#[cfg(feature = "metrics")]
+use crate::config::metrics_config::MetricsConfig;
+use crate::{
+    config::{
+        config_enums::{RdbParallelType, ResumeType},
+        connection_auth_config::ConnectionAuthConfig,
+        global_config::GlobalConfig,
+        limiter_config::{CapacityLimiterConfig, RateLimiterConfig},
+    },
+    error::{DtError, DtOptionExt, DtResultExt},
+    meta::{
+        mongo::mongo_cdc_source::MongoCdcSource, mssql::mssql_connection_pool::MssqlConnectionPool,
+    },
+    utils::task_util::TaskUtil,
 };
 
 #[derive(Clone)]
@@ -1480,16 +1479,15 @@ mod tests {
         sync::atomic::{AtomicU64, Ordering},
     };
 
+    use super::{
+        CheckMode, DbType, ExtractorConfig, ParallelType, RdbParallelType, SinkerConfig,
+        TaskConfig, TaskKind, TaskType,
+    };
     use crate::config::parallelizer_config::{
         ChunkPartitionerRebalanceCost, ChunkPartitionerRebalanceStrategy,
     };
     use crate::error::{ErrorCode, ErrorReport};
     use crate::runtime_trace::{TaskSummaryMode, TraceOutputFormat};
-
-    use super::{
-        CheckMode, DbType, ExtractorConfig, ParallelType, RdbParallelType, SinkerConfig,
-        TaskConfig, TaskKind, TaskType,
-    };
 
     static NEXT_CONFIG_ID: AtomicU64 = AtomicU64::new(0);
 

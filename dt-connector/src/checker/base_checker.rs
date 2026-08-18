@@ -11,6 +11,25 @@ use anyhow::{Context, Result};
 use async_mutex::Mutex;
 use async_trait::async_trait;
 use chrono::Local;
+use dt_common::{
+    error::{DtError, DtOptionExt, DtResultExt, Stage},
+    log_error, log_info, log_summary, log_warn,
+    meta::{
+        col_value::ColValue,
+        ddl_meta::ddl_data::DdlData,
+        dt_data::{DtData, DtItem},
+        mysql::mysql_tb_meta::MysqlTbMeta,
+        pg::pg_tb_meta::PgTbMeta,
+        position::Position,
+        rdb_meta_manager::RdbMetaManager,
+        rdb_tb_meta::RdbTbMeta,
+        row_data::RowData,
+        row_type::RowType,
+        struct_meta::struct_data::StructData,
+    },
+    monitor::task_monitor_handle::TaskMonitorHandle,
+    utils::limit_queue::LimitedQueue,
+};
 use indexmap::{IndexMap, IndexSet};
 use opendal::Operator;
 use serde::{Deserialize, Serialize};
@@ -30,25 +49,6 @@ use crate::{
     rdb_router::RdbRouter,
     sinker::base_sinker::BaseSinker,
     sinker::mongo::mongo_cmd,
-};
-use dt_common::{
-    error::{DtError, DtOptionExt, DtResultExt, Stage},
-    log_error, log_info, log_summary, log_warn,
-    meta::{
-        col_value::ColValue,
-        ddl_meta::ddl_data::DdlData,
-        dt_data::{DtData, DtItem},
-        mysql::mysql_tb_meta::MysqlTbMeta,
-        pg::pg_tb_meta::PgTbMeta,
-        position::Position,
-        rdb_meta_manager::RdbMetaManager,
-        rdb_tb_meta::RdbTbMeta,
-        row_data::RowData,
-        row_type::RowType,
-        struct_meta::struct_data::StructData,
-    },
-    monitor::task_monitor_handle::TaskMonitorHandle,
-    utils::limit_queue::LimitedQueue,
 };
 
 #[path = "cdc_state.rs"]
@@ -1141,16 +1141,18 @@ impl<C: Checker> DirectDataChecker for DataChecker<C> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
     use anyhow::bail;
     use async_trait::async_trait;
     use dt_common::meta::row_type::RowType;
-    use std::collections::HashMap;
-    use std::sync::Arc;
     use tokio::{
         sync::{mpsc, Notify},
         time::{timeout, Duration},
     };
+
+    use super::*;
 
     #[derive(Clone)]
     struct BlockingFetchChecker {

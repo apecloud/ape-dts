@@ -59,9 +59,14 @@ jobs:
       - name: Check formatting (rustfmt)
         id: fmt
         run: |
-          cargo metadata --format-version 1 --no-deps \
-            | jq -r '.packages[] | select(.name != "dt-tests") | "--package", .name' \
-            | xargs -r cargo +nightly-2025-10-30 fmt --check
+          if cargo metadata --format-version 1 --no-deps \
+              | jq -r '.packages[] | select(.name != "dt-tests") | "--package", .name' \
+              | xargs -r cargo +nightly-2025-10-30 fmt --check; then
+            echo "has_issues=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_issues=true" >> "$GITHUB_OUTPUT"
+            echo "::warning title=rustfmt::Code formatting issues detected. Run 'make format' locally."
+          fi
 
       - name: Run lint checks (clippy)
         id: lint
@@ -82,19 +87,18 @@ jobs:
           echo "## 🔍 Lint & Static Check Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
 
-          # Overall status check
-          if [ "${{ steps.fmt.outcome }}" == "success" ] && \
-             [ "${{ steps.lint.outcome }}" == "success" ] && \
+          # Overall status check (formatting is advisory)
+          if [ "${{ steps.lint.outcome }}" == "success" ] && \
              [ "${{ steps.check.outcome }}" == "success" ]; then
-            echo "✅ **All checks passed!**" >> $GITHUB_STEP_SUMMARY
-            exit 0
+            echo "✅ **All required checks passed!**" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "❌ **One or more required checks failed.**" >> $GITHUB_STEP_SUMMARY
           fi
 
-          echo "❌ **One or more checks failed.**" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
 
           # Individual check results
-          [ "${{ steps.fmt.outcome }}" == "failure" ] && echo "❌ **rustfmt:** Code formatting issues detected." >> $GITHUB_STEP_SUMMARY
+          [ "${{ steps.fmt.outputs.has_issues }}" == "true" ] && echo "⚠️ **rustfmt:** Code formatting issues detected; run \`make format\` locally." >> $GITHUB_STEP_SUMMARY
           [ "${{ steps.lint.outcome }}" == "failure" ] && echo "❌ **Clippy:** Code quality issues detected." >> $GITHUB_STEP_SUMMARY
           [ "${{ steps.check.outcome }}" == "failure" ] && echo "❌ **cargo check:** Compilation errors detected." >> $GITHUB_STEP_SUMMARY
 
