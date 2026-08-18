@@ -131,18 +131,17 @@ impl MssqlCreateTableStatement {
 
         if table_enabled && !filter.filter_structure(&StructureType::Comment) {
             for comment in &self.comments {
-                let suffix = if comment.column_name.is_empty() {
-                    String::new()
-                } else {
-                    format!(".{}", comment.column_name)
-                };
-                sqls.push((
-                    format!(
-                        "comment.{}.{}{}",
-                        comment.schema_name, comment.table_name, suffix
+                let key = match &comment.comment_type {
+                    CommentType::Table => format!(
+                        "table_comment.{}.{}",
+                        comment.schema_name, comment.table_name
                     ),
-                    Self::comment_to_sql(comment),
-                ));
+                    CommentType::Column => format!(
+                        "column_comment.{}.{}.{}",
+                        comment.schema_name, comment.table_name, comment.column_name
+                    ),
+                };
+                sqls.push((key, Self::comment_to_sql(comment)));
             }
         }
 
@@ -327,5 +326,72 @@ impl MssqlCreateTableStatement {
 
     fn quote(identifier: &str) -> String {
         SqlUtil::escape_by_db_type(identifier, &DbType::Mssql)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        config::filter_config::FilterConfig, meta::struct_meta::structure::column::Column,
+    };
+
+    #[test]
+    fn comment_sqls_use_summary_compatible_keys() {
+        let filter = RdbFilter::from_config(
+            &FilterConfig {
+                do_schemas: "*".to_string(),
+                do_structures: "*".to_string(),
+                ..Default::default()
+            },
+            &DbType::Mssql,
+        )
+        .unwrap();
+        let mut statement = MssqlCreateTableStatement {
+            table: Table {
+                schema_name: "dbo".to_string(),
+                table_name: "users".to_string(),
+                columns: vec![Column {
+                    column_name: "id".to_string(),
+                    ordinal_position: 1,
+                    column_type: "INT".to_string(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+            identity_columns: Vec::new(),
+            computed_columns: Vec::new(),
+            default_constraints: Vec::new(),
+            constraints: Vec::new(),
+            indexes: Vec::new(),
+            comments: vec![
+                Comment {
+                    comment_type: CommentType::Table,
+                    database_name: String::new(),
+                    schema_name: "dbo".to_string(),
+                    table_name: "users".to_string(),
+                    column_name: String::new(),
+                    comment: "users table".to_string(),
+                },
+                Comment {
+                    comment_type: CommentType::Column,
+                    database_name: String::new(),
+                    schema_name: "dbo".to_string(),
+                    table_name: "users".to_string(),
+                    column_name: "id".to_string(),
+                    comment: "primary identifier".to_string(),
+                },
+            ],
+        };
+
+        let keys = statement
+            .to_sqls(&filter)
+            .unwrap()
+            .into_iter()
+            .map(|(key, _)| key)
+            .collect::<Vec<_>>();
+
+        assert!(keys.contains(&"table_comment.dbo.users".to_string()));
+        assert!(keys.contains(&"column_comment.dbo.users.id".to_string()));
     }
 }

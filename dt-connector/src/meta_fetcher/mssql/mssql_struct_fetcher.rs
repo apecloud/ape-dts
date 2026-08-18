@@ -25,9 +25,10 @@ use dt_common::{
             },
         },
     },
-    rdb_filter::RdbFilter,
     utils::sql_util::SqlUtil,
 };
+
+use crate::rdb_struct_filter::RdbStructFilter;
 
 const SCHEMAS_SQL: &str = r#"
 SELECT s.name AS schema_name
@@ -179,7 +180,8 @@ type IndexDetails = (
 pub struct MssqlStructFetcher {
     pub connection_pool: MssqlConnectionPool,
     pub schemas: HashSet<String>,
-    pub filter: Option<RdbFilter>,
+    pub filter: RdbStructFilter,
+    pub allow_missing_schemas: bool,
 }
 
 impl MssqlStructFetcher {
@@ -225,7 +227,7 @@ impl MssqlStructFetcher {
             .cloned()
             .collect::<Vec<_>>();
         missing.sort();
-        if !missing.is_empty() {
+        if !self.allow_missing_schemas && !missing.is_empty() {
             bail!(DtError::DatabaseObjectNotFound(
                 DbType::Mssql,
                 format!("schemas: {} not found", missing.join(",")),
@@ -650,18 +652,11 @@ impl MssqlStructFetcher {
         self.schemas.contains(schema)
             && (requested_schema.is_empty() || requested_schema == schema)
             && (requested_table.is_empty() || requested_table == table)
-            && self
-                .filter
-                .as_ref()
-                .map(|filter| !filter.filter_tb(schema, table))
-                .unwrap_or(true)
+            && !self.filter.filter_tb(schema, table)
     }
 
     fn filter_schema(&self, schema: &str) -> bool {
-        self.filter
-            .as_ref()
-            .map(|filter| filter.filter_schema(schema))
-            .unwrap_or(false)
+        self.filter.filter_schema(schema)
     }
 
     fn required_string(row: &tiberius::Row, column: &str) -> anyhow::Result<String> {
